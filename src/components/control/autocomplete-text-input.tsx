@@ -2,11 +2,20 @@ import * as React from 'react';
 import {TextInput, TextInputProps} from './text-input';
 
 // Invisible separator used to detect datalist selection
-export const DATALIST_SELECTION_MARKER = '\u2063';
+const DATALIST_SELECTION_MARKER = '\u2063';
 
-export interface AutocompleteTextInputProps extends TextInputProps {
+export interface AutocompleteMetadata {
+	autocompleted: boolean;
+}
+
+export interface AutocompleteTextInputProps
+	extends Omit<TextInputProps, 'onChange'> {
 	completions: string[];
 	id: string;
+	onChange?: (
+		event: React.ChangeEvent<HTMLInputElement>,
+		metadata?: AutocompleteMetadata
+	) => void;
 }
 
 export const AutocompleteTextInput = React.forwardRef<
@@ -14,6 +23,26 @@ export const AutocompleteTextInput = React.forwardRef<
 	AutocompleteTextInputProps
 >((props, ref) => {
 	const datalistId = `${props.id}-datalist`;
+
+	function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
+		const target = event.target;
+
+		if (target.value.endsWith(DATALIST_SELECTION_MARKER)) {
+			// User selected from datalist. Strip the marker and notify with metadata.
+			const cleanedValue = target.value.slice(0, -1);
+			
+			// Create a new event with the cleaned value
+			Object.defineProperty(event, 'target', {
+				writable: true,
+				value: {...target, value: cleanedValue}
+			});
+			
+			props.onChange?.(event, {autocompleted: true});
+			return;
+		}
+
+		props.onChange?.(event);
+	}
 
 	function handleInput(event: React.FormEvent<HTMLInputElement>) {
 		const target = event.target as HTMLInputElement;
@@ -62,6 +91,7 @@ export const AutocompleteTextInput = React.forwardRef<
 		<>
 			<TextInput
 				list={datalistId}
+				onChange={handleChange}
 				onInput={handleInput}
 				ref={ref}
 				{...props}

@@ -3,10 +3,8 @@ import {useTranslation} from 'react-i18next';
 import {CardButton} from '../control/card-button';
 import {IconPlus, IconTag} from '@tabler/icons';
 import {CardContent} from '../container/card';
-import {
-	AutocompleteTextInput,
-	DATALIST_SELECTION_MARKER
-} from '../control/autocomplete-text-input';
+import {AutocompleteTextInput} from '../control/autocomplete-text-input';
+import type {AutocompleteMetadata} from '../control/autocomplete-text-input';
 import {IconButton} from '../control/icon-button';
 import {Color} from '../../util/color';
 import {TagButton} from './tag-button';
@@ -55,11 +53,14 @@ export const TagCardButton: React.FC<TagCardButtonProps> = props => {
 		}
 	}
 
-	function handleNewTagNameChange(event: React.ChangeEvent<HTMLInputElement>) {
+	function handleNewTagNameChange(
+		event: React.ChangeEvent<HTMLInputElement>,
+		metadata?: AutocompleteMetadata
+	) {
 		let value = event.target.value;
 
-		if (value.endsWith(DATALIST_SELECTION_MARKER)) {
-			value = value.slice(0, -1).replaceAll(' ', '-');
+		if (metadata?.autocompleted) {
+			value = value.replaceAll(' ', '-');
 			onAdd(value);
 			setNewTagName('');
 			return;
