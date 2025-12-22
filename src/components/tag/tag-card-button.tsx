@@ -57,7 +57,7 @@ export const TagCardButton: React.FC<TagCardButtonProps> = props => {
 		event: React.ChangeEvent<HTMLInputElement>,
 		metadata?: AutocompleteMetadata
 	) {
-		let value = event.target.value;
+		const value = event.target.value.replaceAll(' ', '-');
 
 		if (metadata?.autocompleted) {
 			value = value.replaceAll(' ', '-');
