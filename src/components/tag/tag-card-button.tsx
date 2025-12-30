@@ -60,13 +60,12 @@ export const TagCardButton: React.FC<TagCardButtonProps> = props => {
 		const value = event.target.value.replaceAll(' ', '-');
 
 		if (metadata?.autocompleted) {
-			value = value.replaceAll(' ', '-');
 			onAdd(value);
 			setNewTagName('');
 			return;
 		}
 
-		setNewTagName(value.replaceAll(' ', '-'));
+		setNewTagName(value);
 	}
 
 	function handleSubmit(event: React.FormEvent) {
