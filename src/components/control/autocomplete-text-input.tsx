@@ -29,8 +29,8 @@ export const AutocompleteTextInput = React.forwardRef<
 
 		if (target.value.endsWith(DATALIST_SELECTION_MARKER)) {
 			// User selected from datalist. Strip the marker and notify with metadata.
-			const cleanedValue = target.value.slice(0, -1);
-			target.value = cleanedValue;
+
+			target.value = target.value.slice(0, -1);
 			props.onChange?.(event, {autocompleted: true});
 			return;
 		}
@@ -64,6 +64,7 @@ export const AutocompleteTextInput = React.forwardRef<
 		// Only autocomplete with exactly one match. Multiple matches would fill
 		// the input with the first match and prevent the datalist dropdown from
 		// showing all available options.
+
 		const matches = props.completions.filter(completion =>
 			completion.toLowerCase().startsWith(target.value.toLowerCase())
 		);
