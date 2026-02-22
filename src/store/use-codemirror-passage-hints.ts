@@ -16,7 +16,7 @@ export function useCodeMirrorPassageHints(story: Story) {
 					const from = {...cursor};
 					const to = {...cursor};
 
-					// Expand the range to the first `[` or `->` before the cursor,
+					// Expand the range to the first `[`, '|', or `->` before the cursor,
 					// preferring `->` if it's present because it means we're in a
 					// `[[label->link]]` situation. lastIndexOf() will either give us -1,
 					// if there was no match, or the first `[` or `-` (the first character
@@ -27,7 +27,7 @@ export function useCodeMirrorPassageHints(story: Story) {
 					let startIndex = line.lastIndexOf('->', from.ch);
 
 					if (startIndex === -1) {
-						startIndex = line.lastIndexOf('[', from.ch);
+						startIndex = Math.max(line.lastIndexOf('[', from.ch), line.lastIndexOf('|', from.ch));
 					} else {
 						// We matched an arrow and need to move one character forward to
 						// match the behavior of searching for a single bracket.
