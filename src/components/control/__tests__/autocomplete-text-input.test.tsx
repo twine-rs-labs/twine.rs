@@ -3,19 +3,27 @@ import {axe} from 'jest-axe';
 import * as React from 'react';
 import {
 	AutocompleteTextInput,
-	AutocompleteTextInputProps
+	AutocompleteTextInputProps,
+	DATALIST_SELECTION_MARKER
 } from '../autocomplete-text-input';
 
 function AutocompleteTextInputDemo(
-	props: Omit<AutocompleteTextInputProps, 'children' | 'onChange'>
+	props: Omit<AutocompleteTextInputProps, 'children'>
 ) {
 	const [value, setValue] = React.useState(props.value);
+	const handleChange: AutocompleteTextInputProps["onChange"] = (event, metadata) => {
+		props.onChange?.(event, metadata);
+		setValue(event.target.value);
+
+		// We need to persist the event for assertion purposes; otherwise, we get repeated warnings.
+		event.persist();
+	}
 
 	return (
 		<AutocompleteTextInput
 			completions={props.completions}
 			id={props.id}
-			onChange={event => setValue(event.target.value)}
+			onChange={handleChange}
 			value={value}
 		>
 			children
@@ -169,9 +177,34 @@ describe('<AutocompleteTextInput>', () => {
 		
 		const options = datalist!.querySelectorAll('option');
 		expect(options).toHaveLength(3);
-		expect(options[0].value).toBe('apple\u2063');
-		expect(options[1].value).toBe('banana\u2063');
-		expect(options[2].value).toBe('cherry\u2063');
+		expect(options[0].value).toBe(`apple${DATALIST_SELECTION_MARKER}`);
+		expect(options[1].value).toBe(`banana${DATALIST_SELECTION_MARKER}`);
+		expect(options[2].value).toBe(`cherry${DATALIST_SELECTION_MARKER}`);
+	});
+
+	it('calls the onChange prop with autocompleted false when the user types into the field', () => {
+		const onChange = jest.fn();
+
+		renderComponent({onChange});
+		expect(onChange).not.toHaveBeenCalled();
+		fireEvent.change(screen.getByRole('combobox'), { target: { value: 'a' }});
+		expect(onChange).toHaveBeenCalledTimes(1);
+		expect(onChange.mock.calls[0][0].target.value).toBe('a');
+		expect(onChange.mock.calls[0][1]).toEqual({autocompleted: false});
+	});
+
+	it('calls the onChange prop with autocompleted true and correct value when the user chooses a value from the datalist', () => {
+		const onChange = jest.fn();
+
+		renderComponent({onChange, completions: ['apple']});
+		expect(onChange).not.toHaveBeenCalled();
+
+		// Fake picking a value from the datalist by changing the value to what it would result in.
+
+		fireEvent.change(screen.getByRole('combobox'), { target: { value: `apple${DATALIST_SELECTION_MARKER}` }});
+		expect(onChange).toHaveBeenCalledTimes(1);
+		expect(onChange.mock.calls[0][0].target.value).toBe('apple');
+		expect(onChange.mock.calls[0][1]).toEqual({autocompleted: true});
 	});
 
 	it('uses the id prop to generate the datalist id', () => {

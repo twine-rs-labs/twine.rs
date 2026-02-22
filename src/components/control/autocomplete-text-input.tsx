@@ -1,8 +1,9 @@
 import * as React from 'react';
 import {TextInput, TextInputProps} from './text-input';
 
-// Invisible separator used to detect datalist selection
-const DATALIST_SELECTION_MARKER = '\u2063';
+// Invisible separator used to detect datalist selection, as opposed to the user
+// typing into the field. Exported for testing only
+export const DATALIST_SELECTION_MARKER = '\u2063';
 
 export interface AutocompleteMetadata {
 	autocompleted: boolean;
@@ -14,7 +15,7 @@ export interface AutocompleteTextInputProps
 	id: string;
 	onChange?: (
 		event: React.ChangeEvent<HTMLInputElement>,
-		metadata?: AutocompleteMetadata
+		metadata: AutocompleteMetadata
 	) => void;
 }
 
@@ -22,26 +23,34 @@ export const AutocompleteTextInput = React.forwardRef<
 	HTMLInputElement,
 	AutocompleteTextInputProps
 >((props, ref) => {
+	// Isolate the onChange prop so spreading props on <TextInput> doesn't clobber
+	// our own onChange handler.
+	const { onChange, ...otherProps} = props;
 	const datalistId = `${props.id}-datalist`;
 
 	function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
-		const target = event.target;
-
-		if (target.value.endsWith(DATALIST_SELECTION_MARKER)) {
-			// User selected from datalist. Strip the marker and notify with metadata.
-
-			target.value = target.value.slice(0, -1);
-			props.onChange?.(event, {autocompleted: true});
+		if (!onChange) {
 			return;
 		}
 
-		props.onChange?.(event);
+		if (event.target.value.endsWith(DATALIST_SELECTION_MARKER)) {
+			// User selected from datalist. Strip the marker and notify with metadata.
+
+			event.target.value = event.target.value.slice(0, -1);
+			onChange(event, {autocompleted: true});
+			return;
+		}
+
+		onChange(event, {autocompleted: false});
 	}
 
 	function handleInput(event: React.FormEvent<HTMLInputElement>) {
 		const target = event.target as HTMLInputElement;
 
 		if (target.value.endsWith(DATALIST_SELECTION_MARKER)) {
+			// The user picked an option from the autocomplete. Don't do any more
+			// processing.
+
 			props.onInput?.(event);
 			return;
 		}
@@ -58,6 +67,7 @@ export const AutocompleteTextInput = React.forwardRef<
 			//  - the cursor isn't at the end of the field
 			// ... don't try to autocomplete anything.
 
+			props.onInput?.(event);
 			return;
 		}
 
@@ -89,7 +99,7 @@ export const AutocompleteTextInput = React.forwardRef<
 				onChange={handleChange}
 				onInput={handleInput}
 				ref={ref}
-				{...props}
+				{...otherProps}
 			/>
 			<datalist id={datalistId}>
 				{props.completions.map(completion => (

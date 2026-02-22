@@ -55,11 +55,11 @@ export const TagCardButton: React.FC<TagCardButtonProps> = props => {
 
 	function handleNewTagNameChange(
 		event: React.ChangeEvent<HTMLInputElement>,
-		metadata?: AutocompleteMetadata
+		metadata: AutocompleteMetadata
 	) {
 		const value = event.target.value.replaceAll(' ', '-');
 
-		if (metadata?.autocompleted) {
+		if (metadata.autocompleted) {
 			onAdd(value);
 			setNewTagName('');
 			return;
