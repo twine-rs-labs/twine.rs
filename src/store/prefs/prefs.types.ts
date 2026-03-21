@@ -19,7 +19,7 @@ export type PrefsAction =
 
 export interface PrefsState {
 	/**
-	 *
+	 * What theme to use for the application.
 	 */
 	appTheme: 'dark' | 'light' | 'system';
 	/**
