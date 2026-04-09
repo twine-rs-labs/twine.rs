@@ -7,7 +7,10 @@ export const locales = [
 	{code: 'cs', name: 'Čeština'},
 	{code: 'da', name: 'Dansk'},
 	{code: 'de', name: 'Deutsch'},
-	{code: 'en', name: 'English'},
+	// If and when we have a British/other localization, then we'll need multiple
+	// English entries; default to en-us now to speed up loads and avoid trying to
+	// load a nonexistent `en.json` file.
+	{code: 'en-us', name: 'English'},
 	{code: 'es', name: 'Castellano'},
 	{code: 'fi', name: 'Suomi'},
 	{code: 'fr', name: 'Français'},
@@ -48,5 +51,5 @@ export function closestAppLocale(code: string) {
 		}
 	}
 
-	return 'en';
+	return 'en-us';
 }
