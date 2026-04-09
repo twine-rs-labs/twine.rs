@@ -56,9 +56,9 @@ describe('<AppPrefsDialog>', () => {
 	});
 
 	it('uses the closest app locale possible', () => {
-		renderComponent({locale: 'en-US'});
+		renderComponent({locale: 'fr-CA'});
 		expect(screen.getByLabelText('dialogs.appPrefs.language')).toHaveValue(
-			'en'
+			'fr'
 		);
 	});
 
