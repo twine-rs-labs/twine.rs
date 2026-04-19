@@ -182,6 +182,11 @@
 			"language": "Język",
 			"passageEditorFont": "Czcionka edytora scen",
 			"passageEditorFontScale": "Rozmiar czcionki edytora scen",
+			"passageTagDisplay": "Wyświetl tagi edytora scen jako",
+			"passageTagDisplays": {
+				"color": "Kolor",
+				"name": "Nazwa"
+			},
 			"themeLight": "Jasny",
 			"themeDark": "Ciemny",
 			"themeSystem": "Systemowy",
