@@ -27,7 +27,7 @@ This system was built from the local planning materials available when the packa
 ### Font substitution — please confirm
 
 The legacy app shipped **Nunito Light**. To hit the "more professional, crisp" brief,
-twine.rs deliberately moves to a sharper trio, loaded from **Google Fonts CDN**:
+twine.rs deliberately moves to a sharper trio, self-hosted from local `woff2` files:
 
 | Role | twine.rs | was |
 |---|---|---|
@@ -35,10 +35,9 @@ twine.rs deliberately moves to a sharper trio, loaded from **Google Fonts CDN**:
 | UI / body | **Hanken Grotesk** | system font |
 | Mono / code | **JetBrains Mono** | SFMono / system mono |
 
-These are an intentional evolution, not a forced match. **If you'd rather keep Nunito,
-or want self-hosted font files instead of the Google CDN, tell me and I'll swap them.**
-(The compiler currently reports 0 `@font-face` rules because fonts load via a Google
-`@import`; swapping to local woff2 files would make them first-class.)
+These are an intentional evolution, not a forced match. They are bundled under `fonts/`
+so the design-system previews and desktop app work offline without a font CDN round
+trip.
 
 ---
 

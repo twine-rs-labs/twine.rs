@@ -1,12 +1,14 @@
+import {renderHook} from '@testing-library/react-hooks';
+import * as React from 'react';
 import {
 	deleteAssetCommand,
 	importAssetCommand,
 	insertAssetSnippetCommand,
 	renameAssetCommand
 } from '..';
-import {StoreCoreProjectHost} from '../project-host';
+import {StoreCoreProjectHost, useCoreProjectHost} from '../project-host';
 import {reducer as storiesReducer} from '../../store/stories/reducer';
-import {StoriesState} from '../../store/stories';
+import {StoriesContext, StoriesState} from '../../store/stories';
 import {StoriesActionOrThunk} from '../../store/undoable-stories';
 import {fakePassage, fakeStory} from '../../test-util';
 
@@ -108,5 +110,20 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(context.stories[0].passages[0].text).not.toContain(
 			'assets/hero.png'
 		);
+	});
+});
+
+describe('useCoreProjectHost', () => {
+	it('uses stories context when no undoable stories provider exists', () => {
+		const story = fakeStory();
+		const wrapper: React.FC = ({children}) =>
+			React.createElement(
+				StoriesContext.Provider,
+				{value: {dispatch: jest.fn(), stories: [story]}},
+				children
+			);
+		const {result} = renderHook(() => useCoreProjectHost(), {wrapper});
+
+		expect(result.current.queryStoryIndex(story.id).storyId).toBe(story.id);
 	});
 });

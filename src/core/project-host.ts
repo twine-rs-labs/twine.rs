@@ -21,7 +21,8 @@ import {
 	deletePassages,
 	storyWithId,
 	updatePassage,
-	updateStory
+	updateStory,
+	useStoriesContext
 } from '../store/stories';
 import type {StoriesActionOrThunk} from '../store/undoable-stories';
 import {useUndoableStoriesContext} from '../store/undoable-stories';
@@ -642,7 +643,14 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 }
 
 export function useCoreProjectHost() {
-	const {dispatch, stories} = useUndoableStoriesContext();
+	const undoableStories = useUndoableStoriesContext();
+	const {dispatch: storiesDispatch, stories: plainStories} = useStoriesContext();
+	const dispatch: UndoableDispatch = undoableStories.isUndoable
+		? undoableStories.dispatch
+		: action => storiesDispatch(action);
+	const stories = undoableStories.isUndoable
+		? undoableStories.stories
+		: plainStories;
 	const hostRef = React.useRef<StoreCoreProjectHost>();
 
 	if (!hostRef.current) {

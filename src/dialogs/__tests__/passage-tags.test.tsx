@@ -28,7 +28,12 @@ describe('<PassageTagsDialog>', () => {
 
 		const result = render(
 			<UndoableStoriesContext.Provider
-				value={{dispatch: jest.fn(), stories: [story], ...storiesContext}}
+				value={{
+					dispatch: jest.fn(),
+					isUndoable: true,
+					stories: [story],
+					...storiesContext
+				}}
 			>
 				<PassageTagsDialog
 					collapsed={false}

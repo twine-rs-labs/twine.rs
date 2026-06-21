@@ -2,7 +2,7 @@ import {PrefsState} from './prefs.types';
 
 export const defaults = (): PrefsState => ({
 	appTheme: 'system',
-	codeEditorFontFamily: 'var(--font-monospaced)',
+	codeEditorFontFamily: 'var(--font-mono)',
 	codeEditorFontScale: 1,
 	dialogWidth: 600,
 	disabledStoryFormatEditorExtensions: [],
@@ -11,12 +11,13 @@ export const defaults = (): PrefsState => ({
 	firstRunTime: new Date().getTime(),
 	lastUpdateSeen: '',
 	lastUpdateCheckTime: new Date().getTime(),
-	locale: (window.navigator as any).userLanguage ||
+	locale:
+		(window.navigator as any).userLanguage ||
 		window.navigator.language ||
 		(window.navigator as any).browserLanguage ||
 		(window.navigator as any).systemLanguage ||
 		'en-us',
-	passageEditorFontFamily: 'var(--font-system)',
+	passageEditorFontFamily: 'var(--font-ui)',
 	passageEditorFontScale: 1,
 	passageTagDisplay: 'color',
 	proofingFormat: {
@@ -32,5 +33,5 @@ export const defaults = (): PrefsState => ({
 	storyListTagFilter: [],
 	storyTagColors: {},
 	useCodeMirror: true,
-	welcomeSeen: false,
+	welcomeSeen: false
 });

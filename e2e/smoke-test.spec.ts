@@ -1,4 +1,4 @@
-import {test, expect, Page} from '@playwright/test';
+import {test, expect, Locator, Page} from '@playwright/test';
 
 async function skipWelcome(page: Page) {
 	await page.goto('http://localhost:5173');
@@ -18,14 +18,23 @@ async function createStory(page: Page, name = 'E2E Test Story') {
 	await page.getByRole('button', {name: 'Create'}).click();
 }
 
-async function openPassageEditor(page: Page, name: string) {
-	await page.getByRole('button', {name}).click();
-	await expect(page.getByRole('button', {name})).toHaveAttribute(
-		'aria-pressed',
+async function openPassageEditor(page: Page, name: string): Promise<Locator> {
+	const passageButton = page
+		.locator('.story-edit-passage-list')
+		.getByRole('button', {name});
+
+	await passageButton.click();
+	await expect(passageButton).toHaveAttribute(
+		'aria-current',
 		'true'
 	);
-	await page.getByRole('tab', {name: 'Passage'}).click();
-	await page.getByRole('button', {name: 'Edit'}).click();
+	await page
+		.locator('.route-toolbar-top')
+		.getByRole('tab', {name: 'Passage', exact: true})
+		.click();
+	await page.getByRole('button', {name: 'Edit', exact: true}).click();
+
+	return page.getByRole('dialog', {name}).getByLabel('Passage Text');
 }
 
 async function waitForPassageChange() {
@@ -54,8 +63,16 @@ test('Can create a story', async ({page}) => {
 
 	// If these tabs are visible, we're in the story editor.
 
-	await expect(page.getByRole('tab', {name: 'Passage'})).toBeVisible();
-	await expect(page.getByRole('tab', {name: 'Story'})).toBeVisible();
+	await expect(
+		page
+			.locator('.route-toolbar-top')
+			.getByRole('tab', {name: 'Passage', exact: true})
+	).toBeVisible();
+	await expect(
+		page
+			.locator('.route-toolbar-top')
+			.getByRole('tab', {name: 'Story', exact: true})
+	).toBeVisible();
 
 	// Go back to the story list and make sure the story is present there.
 
@@ -69,15 +86,15 @@ test('Can create a story', async ({page}) => {
 
 test('Persists passage edits', async ({page}) => {
 	await createStory(page, 'Edit passage test');
-	await openPassageEditor(page, 'Untitled Passage');
+	const passageText = await openPassageEditor(page, 'Untitled Passage');
 
 	// Test different typing speeds to try to shake out any problems with the
 	// debounced update.
 
-	await page.getByLabel('Passage Text').type('abcdef', {delay: 0});
-	await page.getByLabel('Passage Text').type('ghijkl', {delay: 100});
-	await page.getByLabel('Passage Text').type('mnopqr', {delay: 250});
-	await page.getByLabel('Passage Text').type('stuvwx', {delay: 500});
+	await passageText.type('abcdef', {delay: 0});
+	await passageText.type('ghijkl', {delay: 100});
+	await passageText.type('mnopqr', {delay: 250});
+	await passageText.type('stuvwx', {delay: 500});
 	await expect(page.getByText('abcdefghijklmnopqrstuvwx')).toBeVisible();
 	await waitForPassageChange();
 	await page.reload();
@@ -101,21 +118,21 @@ test('Persists passage renames', async ({page}) => {
 
 test('Creates a simple story and plays it', async ({context, page}) => {
 	await createStory(page, 'Publish test');
-	await openPassageEditor(page, 'Untitled Passage');
-	await page
-		.getByLabel('Passage Text')
-		.type('Which way to go? [[Left]] or [[right]]?');
+	let passageText = await openPassageEditor(page, 'Untitled Passage');
+
+	await passageText.type('Which way to go? [[Left]] or [[right]]?');
+	await waitForPassageChange();
 	await page.getByRole('button', {name: 'Close'}).click();
-	await openPassageEditor(page, 'Left');
-	await page.getByLabel('Passage Text').type('Monsters!');
+	passageText = await openPassageEditor(page, 'Left');
+	await passageText.type('Monsters!');
 	await waitForPassageChange();
 	await page.getByRole('button', {name: 'Close'}).click();
 
 	// Wait for the editor to close.
 
-	await expect(page.getByLabel('Passage Text')).not.toBeVisible();
-	await openPassageEditor(page, 'right');
-	await page.getByLabel('Passage Text').type('Puppies!');
+	await expect(passageText).not.toBeVisible();
+	passageText = await openPassageEditor(page, 'right');
+	await passageText.type('Puppies!');
 	await waitForPassageChange();
 	await page.getByRole('button', {name: 'Close'}).click();
 	await page.getByRole('tab', {name: 'Build'}).click();

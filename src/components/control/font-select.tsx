@@ -4,7 +4,7 @@ import {TextInput} from './text-input';
 import {TextSelect} from './text-select';
 import './font-select.css';
 
-const families = ['var(--font-monospaced)', 'var(--font-system)'];
+const families = ['var(--font-ui)', 'var(--font-mono)'];
 const scales = [0.8, 0.9, 1, 1.25, 1.5, 2];
 
 export interface FontSelectProps {
@@ -85,11 +85,11 @@ export const FontSelect: React.FC<FontSelectProps> = props => {
 				options={[
 					{
 						label: t('components.fontSelect.fonts.system'),
-						value: 'var(--font-system)'
+						value: 'var(--font-ui)'
 					},
 					{
 						label: t('components.fontSelect.fonts.monospaced'),
-						value: 'var(--font-monospaced)'
+						value: 'var(--font-mono)'
 					},
 					{
 						label: t('common.custom'),

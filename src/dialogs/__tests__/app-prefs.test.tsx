@@ -147,12 +147,12 @@ describe('<AppPrefsDialog>', () => {
 
 	it('displays the passage font preference', () => {
 		renderComponent({
-			passageEditorFontFamily: 'var(--font-monospaced)',
+			passageEditorFontFamily: 'var(--font-mono)',
 			passageEditorFontScale: 2
 		});
 		expect(
 			screen.getByLabelText('dialogs.appPrefs.passageEditorFont')
-		).toHaveValue('var(--font-monospaced)');
+		).toHaveValue('var(--font-mono)');
 		expect(
 			screen.getByLabelText('dialogs.appPrefs.passageEditorFontScale')
 		).toHaveValue('2');
@@ -163,12 +163,12 @@ describe('<AppPrefsDialog>', () => {
 		fireEvent.change(
 			screen.getByLabelText('dialogs.appPrefs.passageEditorFont'),
 			{
-				target: {value: 'var(--font-monospaced)'}
+				target: {value: 'var(--font-mono)'}
 			}
 		);
 		expect(
 			screen.getByTestId('pref-inspector-passageEditorFontFamily')
-		).toHaveTextContent('var(--font-monospaced)');
+		).toHaveTextContent('var(--font-mono)');
 	});
 
 	it('changes the passage font scale preference when edited', () => {
@@ -186,12 +186,12 @@ describe('<AppPrefsDialog>', () => {
 
 	it('displays the code font preference', () => {
 		renderComponent({
-			codeEditorFontFamily: 'var(--font-system)',
+			codeEditorFontFamily: 'var(--font-ui)',
 			codeEditorFontScale: 2
 		});
 		expect(
 			screen.getByLabelText('dialogs.appPrefs.codeEditorFont')
-		).toHaveValue('var(--font-system)');
+		).toHaveValue('var(--font-ui)');
 		expect(
 			screen.getByLabelText('dialogs.appPrefs.codeEditorFontScale')
 		).toHaveValue('2');
@@ -200,11 +200,11 @@ describe('<AppPrefsDialog>', () => {
 	it('changes the code font family preference when edited', () => {
 		renderComponent();
 		fireEvent.change(screen.getByLabelText('dialogs.appPrefs.codeEditorFont'), {
-			target: {value: 'var(--font-system)'}
+			target: {value: 'var(--font-ui)'}
 		});
 		expect(
 			screen.getByTestId('pref-inspector-codeEditorFontFamily')
-		).toHaveTextContent('var(--font-system)');
+		).toHaveTextContent('var(--font-ui)');
 	});
 
 	it('changes the code font scale preference when edited', () => {

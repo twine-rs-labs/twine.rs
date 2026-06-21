@@ -2,7 +2,9 @@ import {render, waitFor} from '@testing-library/react';
 import {createHashHistory} from 'history';
 import * as React from 'react';
 import {HashRouter, Route} from 'react-router-dom';
+import {StoriesContext} from '../../../store/stories';
 import {usePublishing} from '../../../store/use-publishing';
+import {fakeStory} from '../../../test-util';
 import {StoryProofRoute} from '../story-proof-route';
 
 jest.mock('../../../store/use-publishing');
@@ -12,14 +14,17 @@ describe('<StoryProofRoute>', () => {
 
 	function renderComponent(route: string) {
 		const history = createHashHistory();
+		const story = {...fakeStory(), id: '123'};
 
 		history.push(route);
 		return render(
-			<HashRouter>
-				<Route path="/stories/:storyId/proof">
-					<StoryProofRoute />
-				</Route>
-			</HashRouter>
+			<StoriesContext.Provider value={{dispatch: jest.fn(), stories: [story]}}>
+				<HashRouter>
+					<Route path="/stories/:storyId/proof">
+						<StoryProofRoute />
+					</Route>
+				</HashRouter>
+			</StoriesContext.Provider>
 		);
 	}
 

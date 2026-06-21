@@ -8,7 +8,7 @@ describe('<FontSelect>', () => {
 		return render(
 			<FontSelect
 				familyLabel="mock-family-label"
-				fontFamily="var(--font-system)"
+				fontFamily="var(--font-ui)"
 				fontScale={1}
 				onChangeFamily={jest.fn()}
 				onChangeScale={jest.fn()}
@@ -36,9 +36,9 @@ describe('<FontSelect>', () => {
 	});
 
 	it('selects the family set by the fontFamily prop', () => {
-		renderComponent({fontFamily: 'var(--font-monospaced)'});
+		renderComponent({fontFamily: 'var(--font-mono)'});
 		expect(screen.getByLabelText('mock-family-label')).toHaveValue(
-			'var(--font-monospaced)'
+			'var(--font-mono)'
 		);
 	});
 
@@ -48,9 +48,9 @@ describe('<FontSelect>', () => {
 		renderComponent({onChangeFamily});
 		expect(onChangeFamily).not.toHaveBeenCalled();
 		fireEvent.change(screen.getByLabelText('mock-family-label'), {
-			target: {value: 'var(--font-monospaced)'}
+			target: {value: 'var(--font-mono)'}
 		});
-		expect(onChangeFamily.mock.calls).toEqual([['var(--font-monospaced)']]);
+		expect(onChangeFamily.mock.calls).toEqual([['var(--font-mono)']]);
 	});
 
 	it('does not render a text field for custom font families', () => {
@@ -61,7 +61,7 @@ describe('<FontSelect>', () => {
 	});
 
 	it('displays a blank custom family field when changing from a builtin family to a custom one', () => {
-		renderComponent({fontFamily: 'var(--font-monospaced)'});
+		renderComponent({fontFamily: 'var(--font-mono)'});
 		fireEvent.change(screen.getByLabelText('mock-family-label'), {
 			target: {value: 'custom'}
 		});

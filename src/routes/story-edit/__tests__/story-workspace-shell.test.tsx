@@ -56,7 +56,7 @@ function renderComponent(
 	render(
 		<DialogsContext.Provider value={{dialogs: [], dispatch: dialogsDispatch}}>
 			<UndoableStoriesContext.Provider
-				value={{dispatch: storyDispatch, stories: [story]}}
+				value={{dispatch: storyDispatch, isUndoable: true, stories: [story]}}
 			>
 				<StoryWorkspaceShell
 					bottomDrawerOpen={false}

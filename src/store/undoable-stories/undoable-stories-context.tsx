@@ -17,6 +17,7 @@ import {useStoriesContext} from '../stories';
 export const UndoableStoriesContext = React.createContext<UndoableStoriesContextProps>(
 	{
 		dispatch: () => {},
+		isUndoable: false,
 		stories: []
 	}
 );
@@ -80,6 +81,7 @@ export const UndoableStoriesContextProvider: React.FC = props => {
 		<UndoableStoriesContext.Provider
 			value={{
 				dispatch: dispatchAndRecordStoryAction,
+				isUndoable: true,
 				redo,
 				redoLabel,
 				stories,

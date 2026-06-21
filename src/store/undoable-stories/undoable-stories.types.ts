@@ -44,6 +44,7 @@ export type StoriesUndoDispatch = React.Dispatch<UndoableStoriesAction>;
 
 export interface UndoableStoriesContextProps {
 	dispatch: (actionOrThunk: StoriesActionOrThunk, annotation?: string) => void;
+	isUndoable?: boolean;
 	redo?: () => void;
 	redoLabel?: string;
 	stories: StoriesState;

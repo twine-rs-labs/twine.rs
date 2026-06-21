@@ -1,5 +1,3 @@
-@import './workbench-tokens.css';
-
 .story-edit-workspace {
 	background: var(--bg-app);
 	color: var(--text-body);

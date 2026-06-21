@@ -1,0 +1,11 @@
+/* ============================================================
+   twine.rs Design System — global entry point.
+   Consumers link THIS file. It is import-only by contract;
+   every token, font, and base rule is reached from here.
+   ============================================================ */
+
+@import './tokens/colors.css';
+@import './tokens/typography.css';
+@import './tokens/spacing.css';
+@import './tokens/elevation.css';
+@import './tokens/base.css';

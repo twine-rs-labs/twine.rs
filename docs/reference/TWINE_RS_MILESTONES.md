@@ -264,6 +264,13 @@ Must do: expose startup mode, default project folder, generated layout behavior,
 
 ## Milestone Roadmap
 
+> **GUI spine:** the M-series adds capability; the parallel **D-series** in
+> [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md) installs
+> `docs/design-system/` as the actual UI of the app (tokens, primitives, shell,
+> screen-by-screen migration, preview surface). M7+ must build on the DS shell,
+> not add new legacy chrome. The M6 preview/debug and graph-projection handoffs
+> are satisfied by D8 and D5 respectively.
+
 ### M0: Core Model, Project Format, and Persistence
 
 Make the Rust story model, source layout, import/export, save semantics, identifiers, backups, and project-library metadata trustworthy before UI cleverness depends on them.

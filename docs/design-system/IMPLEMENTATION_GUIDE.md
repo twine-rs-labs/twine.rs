@@ -92,9 +92,8 @@ React and the CSS custom properties; no other runtime deps.
 | Mono | **JetBrains Mono** | source, paths, IDs, numeric data (`--font-mono`) |
 
 These replace the legacy **Nunito Light** for a sharper, more professional feel
-(confirmed with the team). The previews load them from Google Fonts. **For the desktop
-app, self-host** — download the woff2 files and replace the `@import` at the top of
-`tokens/typography.css` with local `@font-face` rules:
+(confirmed with the team). The previews and app self-host the fonts from local `woff2`
+files through `tokens/typography.css`:
 
 ```css
 @font-face { font-family: 'Space Grotesk'; src: url('./fonts/SpaceGrotesk-Medium.woff2') format('woff2');
@@ -102,7 +101,7 @@ app, self-host** — download the woff2 files and replace the `@import` at the t
 /* …repeat for each weight/family… */
 ```
 
-Self-hosting also makes the fonts first-class to the compiler (it reads `@font-face`
+Self-hosting makes the fonts first-class to the compiler (it reads `@font-face`
 from the token closure) and removes a network dependency at startup.
 
 ---
@@ -257,7 +256,7 @@ preserved, and unresolved conflicts open a review panel rather than guessing.
 ## 10. Production checklist
 
 - [ ] Port `components/**/<Name>.jsx` + token CSS into the app's Vite/React build.
-- [ ] Self-host the three fonts; replace the Google `@import` in `tokens/typography.css`.
+- [x] Self-host the three fonts; replace the Google `@import` in `tokens/typography.css`.
 - [ ] Wire `@tabler/icons-react`; map component `icon` names to icon components.
 - [ ] Replace mock screen state with subscriptions to the Rust core's patch/selection stream.
 - [ ] Implement the virtualized + canvas/WebGL graph renderer behind the `PassageNode` visual spec.

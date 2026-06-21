@@ -1,0 +1,51 @@
+/* ============================================================
+   twine.rs — Spacing, sizing & radius tokens
+
+   Built on a 4px base unit. A workbench is dense, so the
+   common steps live between 4–16px; larger steps are for
+   launcher / empty-state layouts.
+   ============================================================ */
+
+:root {
+	/* Spacing scale (4px base) */
+	--sp-0: 0; /* @kind spacing */
+	--sp-1: 2px;
+	--sp-2: 4px;
+	--sp-3: 6px;
+	--sp-4: 8px;
+	--sp-5: 12px;
+	--sp-6: 16px;
+	--sp-7: 20px;
+	--sp-8: 24px;
+	--sp-9: 32px;
+	--sp-10: 40px;
+	--sp-11: 56px;
+	--sp-12: 72px;
+
+	/* Control sizing — compact IDE rhythm */
+	--ctl-h-sm: 24px;
+	--ctl-h: 30px; /* default button / input height        */
+	--ctl-h-lg: 38px;
+	--ctl-pad-x: 12px;
+	--ctl-pad-x-sm: 8px;
+
+	/* Standing chrome dimensions (reference) */
+	--bar-h: 44px; /* top command bar                       */
+	--statusbar-h: 26px;
+	--dock-w: 264px; /* left/right docks                    */
+	--rail-w: 48px; /* icon activity rail                  */
+
+	/* Radii — small & crisp, never pill-y for UI chrome */
+	--r-xs: 3px;
+	--r-sm: 5px;
+	--r-md: 7px;
+	--r-lg: 10px;
+	--r-xl: 14px;
+	--r-pill: 999px;
+
+	/* Hairline width */
+	--hair: 1px;
+
+	/* Focus ring offset */
+	--focus-w: 2px;
+}
