@@ -1,7 +1,7 @@
 #![doc = "Incremental story graph indexing primitives."]
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use twine_model::{PassageId, Story};
 use twine_parse::{LinkParseOptions, parse_standard_links};
 
@@ -29,10 +29,10 @@ pub struct GraphStats {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphIndex {
-    backlinks: HashMap<PassageId, Vec<PassageId>>,
+    backlinks: BTreeMap<PassageId, Vec<PassageId>>,
     broken_links: Vec<BrokenLink>,
-    outgoing: HashMap<PassageId, Vec<LinkEdge>>,
-    passage_names: HashMap<String, PassageId>,
+    outgoing: BTreeMap<PassageId, Vec<LinkEdge>>,
+    passage_names: BTreeMap<String, PassageId>,
     self_links: Vec<PassageId>,
     stats: GraphStats,
 }
@@ -43,7 +43,7 @@ impl GraphIndex {
             .passages
             .iter()
             .map(|passage| (passage.name.clone(), passage.id.clone()))
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
         let mut graph = Self {
             passage_names,
             stats: GraphStats {

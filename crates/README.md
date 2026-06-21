@@ -5,14 +5,20 @@ port.
 
 ## Crates
 
-- `twine_model`: canonical story, passage, ID, and geometry types.
-- `twine_parse`: parsing primitives, currently standard Twine link extraction.
+- `twine_model`: canonical story, passage, ID, geometry, project metadata,
+  graph-layout sidecar, storage-policy, and structural undo types.
+- `twine_parse`: standard Twine link extraction plus Twee, Twine 2 HTML,
+  practical Twine 1 tiddler HTML, JSON interchange, and TwineJS localStorage
+  importers.
 - `twine_graph`: story graph index for outgoing links, backlinks, self links,
   and broken links.
 - `twine_search`: search-index traits plus a baseline linear implementation.
-- `twine_store`: persistence traits plus JSON fixture load/save helpers.
-- `twine_export`: export interfaces, currently JSON export.
-- `twine_cli`: smoke-test CLI for loading fixtures and reporting graph stats.
+- `twine_store`: persistence traits, JSON fixture helpers, and transactional
+  canonical project-folder load/save with backups.
+- `twine_export`: JSON, Twee, Twine HTML, story-format binding, and archive
+  exporters.
+- `twine_cli`: smoke-test CLI for inspecting/importing/exporting supported
+  story and project formats.
 
 ## Commands
 
@@ -25,9 +31,22 @@ cargo test --workspace
 Inspect a generated fixture:
 
 ```sh
-cargo run -p twine_cli -- benchmarks/fixtures/generated/story-50000.story.json
+cargo run -p twine_cli -- inspect benchmarks/fixtures/generated/story-50000.story.json
 ```
 
-The first real Rust/WASM interop milestone should build on `twine_parse` and
-`twine_graph`: expose graph indexing to TypeScript, compare it with the current
-`passageConnections()` helper, and benchmark it against the generated fixtures.
+Import a Twee/HTML/JSON source into the M0 project layout:
+
+```sh
+cargo run -p twine_cli -- import story.twee /tmp/example.twine
+```
+
+Export a project:
+
+```sh
+cargo run -p twine_cli -- export /tmp/example.twine twee /tmp/example.twee
+```
+
+The first Rust/WASM interop milestone can now build on the M0 core: import
+fixtures into the canonical project layout, expose graph indexing to
+TypeScript, compare it with the current `passageConnections()` helper, and
+benchmark it against generated fixtures.
