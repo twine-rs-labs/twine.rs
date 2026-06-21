@@ -1,0 +1,27 @@
+<!-- @dsCard group="Brand" viewport="700x150" name="Focus & selection" subtitle="Bright blue focus ring; blue wash for editor & marquee selection" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+	body { padding: 22px 24px; background: var(--bg-panel); display: flex; gap: 28px; align-items: center; }
+	.grp { display: flex; flex-direction: column; gap: 10px; }
+	.lab { font-family: var(--font-mono); font-size: 9.5px; color: var(--tx-4); }
+	.btn { height: 30px; padding: 0 14px; border-radius: var(--r-sm); border: 1px solid var(--line-2);
+		background: var(--bg-raised); color: var(--tx-1); font-family: var(--font-ui); font-size: 12.5px;
+		display: inline-flex; align-items: center; box-shadow: var(--edge-hi); }
+	.btn.focus { outline: none; box-shadow: var(--glow-focus), var(--edge-hi); border-color: var(--focus-ring); }
+	.sel { font-family: var(--font-mono); font-size: 13px; color: var(--tx-2); }
+	.sel mark { background: var(--sel-wash); color: var(--tx-1); border-radius: 2px; box-shadow: 0 0 0 1px var(--sel-line); }
+	.node { width: 150px; height: 56px; border-radius: var(--r-sm); background: var(--bg-card);
+		border: 1px solid var(--sel-line); box-shadow: 0 0 0 3px var(--sel-wash); padding: 8px 10px; }
+	.node b { font-size: 11px; color: var(--tx-1); } .node span { font-family: var(--font-mono); font-size: 9px; color: var(--tx-4); display:block; margin-top:3px; }
+</style>
+</head>
+<body>
+	<div class="grp"><span class="lab">focus-ring</span><button class="btn focus">Save Layout</button></div>
+	<div class="grp"><span class="lab">text selection</span><div class="sel">go to the <mark>[[clearing]]</mark></div></div>
+	<div class="grp"><span class="lab">graph marquee</span><div class="node"><b>Forest Entrance</b><span>3 links · selected</span></div></div>
+</body>
+</html>

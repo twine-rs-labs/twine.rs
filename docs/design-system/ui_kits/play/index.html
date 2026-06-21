@@ -1,0 +1,146 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Play / Test / Debug" subtitle="Runtime testing attached to source & graph — variables, history, console" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Play</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="../workbench/workbench.css" />
+<style>
+	html, body { height: 100%; } body { margin: 0; overflow: hidden; }
+	.kit { position: absolute; inset: 0; display: flex; font-family: var(--font-ui); color: var(--text-body); background: var(--bg-app); }
+	.kit__main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+	.pl__strip { display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 14px; background: var(--ink-1); border-bottom: 1px solid var(--line-1); }
+	.pl__strip .sep { width: 1px; height: 22px; background: var(--line-2); margin: 0 4px; }
+	.pl__cur { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--tx-2); }
+	.pl__cur b { color: var(--tx-1); font-weight: 600; }
+	.pl__cur .ti { color: var(--acc-green); font-size: 15px; }
+	.pl__body { flex: 1; display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
+	.pl__stage { display: flex; align-items: flex-start; justify-content: center; overflow: auto; padding: 36px 24px;
+		background: radial-gradient(120% 90% at 50% 0%, oklch(0.21 0.015 240) 0%, var(--ink-void) 70%); }
+	.pl__frame { width: 600px; max-width: 100%; background: var(--ink-2); border: 1px solid var(--line-2); border-radius: var(--r-lg);
+		box-shadow: var(--shadow-pop); overflow: hidden; }
+	.pl__frame-bar { display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border-bottom: 1px solid var(--line-1); background: var(--ink-1); }
+	.pl__frame-bar .dot { width: 9px; height: 9px; border-radius: 50%; }
+	.pl__frame-bar .url { margin-left: 8px; font-family: var(--font-mono); font-size: 10.5px; color: var(--tx-4); }
+	.pl__story { padding: 32px 36px 40px; font-family: 'Hanken Grotesk', serif; }
+	.pl__story h2 { font-family: var(--font-display); font-size: 23px; color: var(--tx-1); margin-bottom: 16px; font-weight: 500; }
+	.pl__story p { font-size: 16px; line-height: 1.72; color: var(--tx-2); margin: 0 0 16px; max-width: 52ch; }
+	.pl__choices { display: flex; flex-direction: column; gap: 9px; margin-top: 26px; }
+	.pl__choice { display: flex; align-items: center; gap: 10px; padding: 12px 15px; border-radius: var(--r-md);
+		border: 1px solid var(--sem-link-soft); background: var(--sem-link-soft); color: var(--sem-link); font-size: 15px; cursor: pointer;
+		transition: background var(--dur-1), border-color var(--dur-1); }
+	.pl__choice:hover { background: var(--sem-link); color: var(--tx-on-accent); border-color: var(--sem-link); }
+	.pl__choice .ti { font-size: 17px; }
+	/* debug panel */
+	.pl__debug { background: var(--ink-1); border-left: 1px solid var(--line-1); display: flex; flex-direction: column; min-height: 0; }
+	.pl__tabs { display: flex; gap: 2px; padding: 8px 8px 0; border-bottom: 1px solid var(--line-1); }
+	.pl__tab { height: 28px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-3);
+		border-radius: var(--r-sm) var(--r-sm) 0 0; cursor: pointer; }
+	.pl__tab.is-on { background: var(--ink-3); color: var(--tx-1); box-shadow: inset 0 -2px 0 var(--acc-blue); }
+	.pl__dbody { flex: 1; overflow: auto; padding: 14px; }
+	.pl__dlabel { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); margin: 4px 0 10px; }
+	.pl__var { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--line-1); font-family: var(--font-mono); font-size: 12px; }
+	.pl__var .k { color: var(--sem-var); } .pl__var .v { color: var(--tx-1); }
+	.pl__var .v.bool { color: var(--sem-saved); }
+	.pl__hist { display: flex; align-items: center; gap: 9px; padding: 6px 0; font-size: 12.5px; color: var(--tx-2); }
+	.pl__hist .n { width: 18px; height: 18px; border-radius: 50%; background: var(--ink-4); color: var(--tx-3); font-family: var(--font-mono); font-size: 9px; display: flex; align-items: center; justify-content: center; flex: none; }
+	.pl__hist.cur { color: var(--tx-1); } .pl__hist.cur .n { background: var(--acc-blue); color: var(--tx-on-accent); }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { Button, IconButton, Badge, SegmentedControl } = NS;
+		const { TwineRail } = window;
+
+		function App() {
+			const [tab, setTab] = React.useState('vars');
+			return (
+				<div className="kit">
+					<TwineRail active="play" />
+					<div className="kit__main">
+						<div className="pl__strip">
+							<IconButton icon="refresh" label="Restart" solid />
+							<IconButton icon="arrow-back-up" label="Back" solid />
+							<div className="sep" />
+							<div className="pl__cur"><i className="ti ti-rocket" /> Testing from <b>The Gravel Path</b></div>
+							<div style={{flex:1}} />
+							<SegmentedControl size="sm" value="desktop" onChange={()=>{}} options={[
+								{value:'mobile',label:'Mobile',icon:'device-mobile'},
+								{value:'desktop',label:'Desktop',icon:'device-desktop'}]} />
+							<div className="sep" />
+							<Button size="sm" variant="ghost" icon="file-text">Open Source</Button>
+							<Button size="sm" variant="ghost" icon="binary-tree">Reveal in Graph</Button>
+						</div>
+						<div className="pl__body">
+							<div className="pl__stage">
+								<div className="pl__frame">
+									<div className="pl__frame-bar">
+										<span className="dot" style={{background:'var(--sem-error)'}} />
+										<span className="dot" style={{background:'var(--sem-warn)'}} />
+										<span className="dot" style={{background:'var(--sem-saved)'}} />
+										<span className="url">play://the-lighthouse/the-gravel-path</span>
+									</div>
+									<div className="pl__story">
+										<h2>The Gravel Path</h2>
+										<p>Two ruts wind uphill through salt-bleached grass. A gull watches you from a leaning fencepost, unimpressed, then lifts away toward the water.</p>
+										<p>The lighthouse stands at the crest, its lamp dark in the afternoon glare. Somewhere below, you can hear the tide working at the rocks.</p>
+										<div className="pl__choices">
+											<div className="pl__choice"><i className="ti ti-arrow-right" /> Climb to the keeper's door</div>
+											<div className="pl__choice"><i className="ti ti-arrow-right" /> Pick your way down below the bluff</div>
+										</div>
+									</div>
+								</div>
+							</div>
+							<aside className="pl__debug">
+								<div className="pl__tabs">
+									<span className={'pl__tab'+(tab==='vars'?' is-on':'')} onClick={()=>setTab('vars')}><i className="ti ti-variable" /> Variables</span>
+									<span className={'pl__tab'+(tab==='hist'?' is-on':'')} onClick={()=>setTab('hist')}><i className="ti ti-history" /> Visited</span>
+									<span className={'pl__tab'+(tab==='console'?' is-on':'')} onClick={()=>setTab('console')}><i className="ti ti-terminal-2" /> Console</span>
+								</div>
+								<div className="pl__dbody">
+									{tab==='vars' && <React.Fragment>
+										<div className="pl__dlabel">State · 4 variables</div>
+										<div className="pl__var"><span className="k">$arrived</span><span className="v bool">true</span></div>
+										<div className="pl__var"><span className="k">$torchLit</span><span className="v bool">false</span></div>
+										<div className="pl__var"><span className="k">$visitedBefore</span><span className="v bool">false</span></div>
+										<div className="pl__var"><span className="k">$keeperTrust</span><span className="v">2</span></div>
+									</React.Fragment>}
+									{tab==='hist' && <React.Fragment>
+										<div className="pl__dlabel">Path · 2 passages</div>
+										<div className="pl__hist"><span className="n">1</span> Arrival</div>
+										<div className="pl__hist cur"><span className="n">2</span> The Gravel Path</div>
+									</React.Fragment>}
+									{tab==='console' && <React.Fragment>
+										<div className="pl__dlabel">Runtime log</div>
+										<div style={{fontFamily:'var(--font-mono)',fontSize:11.5,lineHeight:1.7,color:'var(--tx-3)'}}>
+											<div style={{color:'var(--sem-saved)'}}>✓ story started · start: Arrival</div>
+											<div>→ (set: $arrived to true)</div>
+											<div>→ navigated → The Gravel Path</div>
+											<div style={{color:'var(--sem-warn)'}}>⚠ (datavalue:) is deprecated</div>
+										</div>
+									</React.Fragment>}
+								</div>
+								<div style={{padding:'12px 14px',borderTop:'1px solid var(--line-1)',display:'flex',flexDirection:'column',gap:7}}>
+									<Button size="sm" icon="player-skip-back" block>Restart Story</Button>
+									<Button size="sm" variant="ghost" icon="eraser" block>Clear State</Button>
+								</div>
+							</aside>
+						</div>
+					</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

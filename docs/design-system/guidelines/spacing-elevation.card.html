@@ -1,0 +1,22 @@
+<!-- @dsCard group="Spacing" viewport="700x180" name="Elevation" subtitle="Short dark shadows + 1px top highlight; brand glow for focus" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+	body { padding: 26px 24px; background: var(--bg-app); display: flex; gap: 20px; align-items: center; }
+	.col { display: flex; flex-direction: column; align-items: center; gap: 11px; flex: 1; }
+	.box { width: 100%; height: 70px; background: var(--bg-card); border: 1px solid var(--line-1);
+		border-radius: var(--r-md); }
+	.t { font-family: var(--font-mono); font-size: 10px; color: var(--tx-3); }
+</style>
+</head>
+<body>
+	<div class="col"><div class="box" style="box-shadow:var(--shadow-sm)"></div><span class="t">shadow-sm</span></div>
+	<div class="col"><div class="box" style="box-shadow:var(--shadow-card),var(--edge-hi)"></div><span class="t">shadow-card</span></div>
+	<div class="col"><div class="box" style="box-shadow:var(--shadow-pop),var(--edge-hi)"></div><span class="t">shadow-pop</span></div>
+	<div class="col"><div class="box" style="box-shadow:var(--shadow-modal)"></div><span class="t">shadow-modal</span></div>
+	<div class="col"><div class="box" style="box-shadow:var(--glow-accent)"></div><span class="t">glow-accent</span></div>
+</body>
+</html>

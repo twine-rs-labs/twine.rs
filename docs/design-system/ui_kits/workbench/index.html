@@ -1,0 +1,165 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Workbench — Split / Text / Graph" subtitle="The mode-native workbench: synchronized graph + source, command palette, diagnostics" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Workbench</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="workbench.css" />
+<style>
+	html, body { height: 100%; }
+	body { margin: 0; overflow: hidden; }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script src="data.js"></script>
+	<script type="text/babel" src="GraphMode.jsx"></script>
+	<script type="text/babel" src="TextMode.jsx"></script>
+	<script type="text/babel" src="CommandPalette.jsx"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { SegmentedControl, IconButton, Button, Badge } = NS;
+
+		function SplitMode({ selected, setSelected }) {
+			const { GraphMode, TextMode } = window;
+			return (
+				<div className="sp">
+					<div className="sp__graph">
+						<div className="sp__sync">
+							<span className="sp__sync-chip is-on"><i className="ti ti-arrow-bar-to-down" /> Follow Source</span>
+							<span className="sp__sync-chip"><i className="ti ti-pin" /> Pin Selection</span>
+							<span className="sp__sync-chip"><i className="ti ti-eye" /> Reveal Both</span>
+						</div>
+						<GraphMode selected={selected} setSelected={setSelected} />
+					</div>
+					<div className="sp__divider" />
+					<div className="sp__text"><TextMode compact /></div>
+				</div>
+			);
+		}
+
+		function Drawer() {
+			const [tab, setTab] = React.useState('diag');
+			return (
+				<div className="wb__drawer">
+					<div className="wb__drawer-tabs">
+						<span className={'wb__dtab' + (tab==='diag'?' is-on':'')} onClick={()=>setTab('diag')}>
+							<i className="ti ti-alert-triangle" /> Diagnostics <span className="cnt err">37</span></span>
+						<span className={'wb__dtab' + (tab==='search'?' is-on':'')} onClick={()=>setTab('search')}>
+							<i className="ti ti-search" /> Search Results</span>
+						<span className={'wb__dtab' + (tab==='build'?' is-on':'')} onClick={()=>setTab('build')}>
+							<i className="ti ti-package-export" /> Build Output</span>
+						<span className={'wb__dtab' + (tab==='logs'?' is-on':'')} onClick={()=>setTab('logs')}>
+							<i className="ti ti-terminal-2" /> Logs</span>
+					</div>
+					<div className="wb__drawer-body">
+						{[
+							['err','unlink','Broken link: Tide Pools → “Tide Pools” target renamed','passages/shore/tide-pools.twee · 11:24','Fix'],
+							['warn','arrows-split','Unreachable passage: Epilogue (no inbound links)','passages/lighthouse/epilogue.twee','Mark Start'],
+							['warn','copy','Duplicate passage name: “Arrival” in 2 files','passages/arrival.twee · 1:1','Rename'],
+							['err','photo-off','Missing asset: portraits/keeper.png','passages/lighthouse/keeper.twee · 8:3','Locate'],
+							['warn','variable','Variable $torchLit set but never read','scripts/story.js · 42:7','Ignore']
+						].map((d,i)=>(
+							<div className="wb__diag" key={i}>
+								<i className={'ti ti-' + d[1] + ' sev ' + d[0]} />
+								<span className="msg">{d[2]}</span>
+								<span className="loc">{d[3]}</span>
+								<span className="qf">{d[4]}</span>
+							</div>
+						))}
+					</div>
+				</div>
+			);
+		}
+
+		function App() {
+			const [mode, setMode] = React.useState('split');
+			const [selected, setSelected] = React.useState(2);
+			const [palette, setPalette] = React.useState(false);
+			const [drawer, setDrawer] = React.useState(true);
+
+			React.useEffect(() => {
+				const h = e => {
+					if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(p => !p); }
+					if (e.key === 'Escape') setPalette(false);
+				};
+				window.addEventListener('keydown', h);
+				return () => window.removeEventListener('keydown', h);
+			}, []);
+
+			const Center = mode === 'graph'
+				? <window.GraphMode selected={selected} setSelected={setSelected} />
+				: mode === 'text'
+				? <window.TextMode />
+				: <SplitMode selected={selected} setSelected={setSelected} />;
+
+			return (
+				<div className="wb">
+					{/* Top command bar */}
+					<div className="wb__bar">
+						<div className="wb__brand">
+							<img src="../../assets/twine-mark.svg" alt="" />
+							<b>twine<span>.rs</span></b>
+						</div>
+						<div className="wb__bar-sep" />
+						<div className="wb__crumbs">
+							<i className="ti ti-folder" /> Documents <i className="ti ti-chevron-right" />
+							<b>the-lighthouse</b>
+						</div>
+						<div className="wb__bar-sp" />
+						<SegmentedControl value={mode} onChange={setMode} options={[
+							{ value: 'text', label: 'Text', icon: 'file-text' },
+							{ value: 'graph', label: 'Graph', icon: 'binary-tree' },
+							{ value: 'split', label: 'Split', icon: 'layout-columns' }]} />
+						<div className="wb__bar-sep" />
+						<div className="wb__bar-group">
+							<Button size="sm" variant="ghost" icon="player-play">Play</Button>
+							<Button size="sm" variant="ghost" icon="tool">Test</Button>
+							<Button size="sm" variant="ghost" icon="book">Proof</Button>
+							<Button size="sm" variant="primary" icon="package-export">Export</Button>
+						</div>
+						<div className="wb__bar-sep" />
+						<div className="wb__pill" onClick={() => setPalette(true)}>
+							<i className="ti ti-command" /> Command Palette <kbd>⌘K</kbd>
+						</div>
+					</div>
+
+					{/* Mid */}
+					<div className="wb__mid">
+						<window.TwineRail active="workbench" />
+						<div className="wb__center">
+							{Center}
+							{drawer && <Drawer />}
+						</div>
+					</div>
+
+					{/* Status bar */}
+					<div className="wb__status">
+						<span className="s"><i className="ti ti-git-branch" /> main</span>
+						<span className="s ok"><i className="ti ti-circle-check" /> Saved</span>
+						<span className="s"><i className="ti ti-file-text" /> Arrival · Ln 4, Col 18</span>
+						<span className="s dirty"><i className="ti ti-point-filled" /> 1 unsaved file</span>
+						<div className="wb__status-sp" />
+						<span className="s err" onClick={()=>setDrawer(d=>!d)} style={{cursor:'pointer'}}><i className="ti ti-alert-octagon" /> 37</span>
+						<span className="s"><i className="ti ti-circle-dashed" /> Generated Layout</span>
+						<span className="s"><i className="ti ti-database" /> 12,483 passages · 248,917 words</span>
+						<span className="s"><i className="ti ti-puzzle" /> Harlowe 3.3</span>
+					</div>
+
+					{palette && <window.CommandPalette onClose={() => setPalette(false)} />}
+				</div>
+			);
+		}
+
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

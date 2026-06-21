@@ -1,0 +1,49 @@
+<!-- @dsCard group="Components" viewport="700x300" name="Passage nodes & panels" subtitle="Graph passage cards and the dock/inspector Panel container" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<style>
+	body { margin: 0; padding: 22px; background: var(--bg-canvas);
+		background-image: radial-gradient(var(--line-1) 1px, transparent 1px); background-size: 22px 22px; }
+	.row { display: flex; gap: 16px; align-items: flex-start; }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script type="text/babel">
+		const { PassageNode, Panel, Badge, IconButton } = window.TwineRsDesignSystem_073217;
+		function Demo() {
+			const [sel, setSel] = React.useState('b');
+			return (
+				<div className="row">
+					<PassageNode title="Forest Entrance" start links={3}
+						tags={['green','purple']}
+						excerpt="The path forks here. Two ways lead onward into the dark wood." />
+					<PassageNode title="The Ravine" links={2} broken={1} accent="red"
+						selected={sel==='b'} onClick={()=>setSel('b')}
+						excerpt="A narrow bridge sways over the gorge. Below, water roars." />
+					<div style={{width:'210px', height:'164px'}}>
+						<Panel title="Diagnostics" icon="alert-triangle" count={4}
+							actions={<IconButton icon="refresh" label="Recheck" size="sm" />}
+							style={{height:'100%'}} bodyClassName="" pad>
+							<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+								<Badge tone="error" icon="unlink">Broken: ravine → cave</Badge>
+								<Badge tone="warn" icon="alert-triangle">Unreachable: epilogue</Badge>
+								<Badge tone="warn" icon="copy">Duplicate name: start</Badge>
+							</div>
+						</Panel>
+					</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+	</script>
+</body>
+</html>

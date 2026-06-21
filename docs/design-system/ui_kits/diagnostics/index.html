@@ -1,0 +1,155 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Diagnostics" subtitle="A compiler/language-server panel: severity, location, explanation, fix" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Diagnostics</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="../workbench/workbench.css" />
+<style>
+	html, body { height: 100%; } body { margin: 0; overflow: hidden; }
+	.kit { position: absolute; inset: 0; display: flex; font-family: var(--font-ui); color: var(--text-body); background: var(--bg-app); }
+	.kit__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+	.dg__body { flex: 1; display: grid; grid-template-columns: 232px 1fr 326px; min-height: 0; }
+	.dg__filters { background: var(--ink-1); border-right: 1px solid var(--line-1); padding: 14px 12px; overflow: auto; }
+	.dg__flabel { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tx-4); padding: 12px 8px 8px; }
+	.dg__filter { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); cursor: pointer; font-size: 12.5px; color: var(--tx-2); white-space: nowrap; }
+	.dg__filter:hover { background: var(--ink-2); }
+	.dg__filter .ti { font-size: 16px; }
+	.dg__filter .cnt { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--tx-4); }
+	.dg__sw { width: 13px; height: 13px; border-radius: 3px; border: 1px solid var(--line-3); display: inline-flex; align-items: center; justify-content: center; }
+	.dg__sw.on { background: var(--acc-blue); border-color: var(--acc-blue); color: var(--tx-on-accent); }
+	.dg__sw .ti { font-size: 11px; }
+	.dg__list { overflow: auto; border-right: 1px solid var(--line-1); }
+	.dg__toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line-1); }
+	.dg__grp { position: sticky; top: 0; background: var(--ink-0); padding: 7px 16px; font-size: 10px; font-weight: 700;
+		letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); border-bottom: 1px solid var(--line-1); display: flex; gap: 8px; }
+	.dg__row { display: flex; align-items: flex-start; gap: 11px; padding: 11px 16px; border-bottom: 1px solid var(--line-1); cursor: pointer; }
+	.dg__row:hover { background: var(--ink-2); }
+	.dg__row.is-on { background: var(--sem-link-soft); box-shadow: inset 2px 0 0 var(--acc-blue); }
+	.dg__sev { font-size: 17px; flex: none; margin-top: 1px; }
+	.dg__sev.err { color: var(--sem-error); } .dg__sev.warn { color: var(--sem-warn); } .dg__sev.info { color: var(--sem-link); }
+	.dg__rtext { flex: 1; min-width: 0; }
+	.dg__rmsg { font-size: 13px; color: var(--tx-1); }
+	.dg__rloc { font-family: var(--font-mono); font-size: 10.5px; color: var(--tx-4); margin-top: 3px; }
+	.dg__rfix { flex: none; font-size: 11px; color: var(--acc-blue); margin-top: 2px; }
+	.dg__detail { background: var(--ink-1); border-left: 1px solid var(--line-1); overflow: auto; padding: 18px; }
+	.dg__d-sev { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
+		text-transform: uppercase; }
+	.dg__d-title { font-size: 16px; font-weight: 600; color: var(--tx-1); margin: 10px 0 4px; }
+	.dg__d-loc { font-family: var(--font-mono); font-size: 11px; color: var(--tx-4); }
+	.dg__d-body { font-size: 13px; line-height: 1.55; color: var(--tx-2); margin: 16px 0; }
+	.dg__code { font-family: var(--font-mono); font-size: 12px; background: var(--ink-void); border: 1px solid var(--line-2);
+		border-radius: var(--r-sm); padding: 10px 12px; color: var(--tx-2); margin: 12px 0; overflow-x: auto; }
+	.dg__code .err { color: var(--sem-error); text-decoration: underline wavy var(--sem-error); }
+	.dg__d-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); margin: 18px 0 8px; }
+	.dg__actions { display: flex; flex-direction: column; gap: 7px; }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { Button, IconButton, Badge, Input } = NS;
+		const { TwineRail } = window;
+
+		const DIAGS = [
+			['err','unlink','Broken link','[[Tide Pools]] target was renamed to “The Tide Pools”.','passages/shore/tide-pools.twee · 11:24','Broken Links'],
+			['err','photo-off','Missing asset','portraits/keeper.png is referenced but not found in assets/.','passages/lighthouse/keepers-door.twee · 8:3','Missing Assets'],
+			['warn','copy','Duplicate passage name','“Arrival” is defined in two source files.','passages/arrival.twee · 1:1','Duplicate Names'],
+			['warn','circle-off','Unreachable passage','“Epilogue” has no inbound links and is not the start.','passages/lighthouse/epilogue.twee','Unreachable'],
+			['warn','variable','Unused variable','$torchLit is set but never read.','scripts/story.js · 42:7','Format Errors'],
+			['info','alert-circle','Deprecated macro','(datavalue:) is deprecated in Harlowe 3.3; use (dataentries:).','passages/lighthouse/lamp-room.twee · 16:2','Format Errors']
+		];
+
+		function App() {
+			const [sel, setSel] = React.useState(0);
+			const cur = DIAGS[sel];
+			const sevName = { err: 'Error', warn: 'Warning', info: 'Info' };
+			const sevColor = { err: 'var(--sem-error)', warn: 'var(--sem-warn)', info: 'var(--sem-link)' };
+			let lastGrp = null;
+			return (
+				<div className="kit">
+					<TwineRail active="diagnostics" />
+					<div className="kit__main">
+						<div className="wb__bar">
+							<div className="wb__crumbs"><i className="ti ti-alert-triangle" style={{color:'var(--sem-error)'}} /> <b>Diagnostics</b> <i className="ti ti-chevron-right" /> the-lighthouse</div>
+							<div className="wb__bar-sp" />
+							<Button size="sm" variant="ghost" icon="refresh">Recheck Project</Button>
+							<Button size="sm" variant="primary" icon="wand">Fix All Safe</Button>
+						</div>
+						<div className="dg__body">
+							{/* filters */}
+							<aside className="dg__filters">
+								<div className="dg__flabel">Severity</div>
+								{[['err','alert-octagon','Errors','9',true],['warn','alert-triangle','Warnings','23',true],['info','info-circle','Info','5',false]].map(f=>(
+									<div className="dg__filter" key={f[2]}>
+										<span className={'dg__sw' + (f[4]?' on':'')}>{f[4] && <i className="ti ti-check" />}</span>
+										<i className={'ti ti-'+f[1]} style={{color: f[0]==='err'?'var(--sem-error)':f[0]==='warn'?'var(--sem-warn)':'var(--sem-link)'}} /> {f[2]} <span className="cnt">{f[3]}</span>
+									</div>
+								))}
+								<div className="dg__flabel">Type</div>
+								{[['Broken Links','37'],['Missing Assets','5'],['Duplicate Names','2'],['Invalid Metadata','1'],['Format Errors','6'],['Export Blockers','2']].map(t=>(
+									<div className="dg__filter" key={t[0]}>
+										<span className="dg__sw on"><i className="ti ti-check" /></span>
+										{t[0]} <span className="cnt">{t[1]}</span>
+									</div>
+								))}
+							</aside>
+
+							{/* list */}
+							<div className="dg__list">
+								<div className="dg__toolbar">
+									<Input icon="search" placeholder="Filter diagnostics" block />
+									<span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--tx-4)',whiteSpace:'nowrap'}}>37 issues</span>
+								</div>
+								{DIAGS.map((d,i)=>{
+									const grp = d[5]; const showGrp = grp !== lastGrp; lastGrp = grp;
+									return (
+										<React.Fragment key={i}>
+											{showGrp && <div className="dg__grp"><i className="ti ti-chevron-down" /> {grp}</div>}
+											<div className={'dg__row' + (sel===i?' is-on':'')} onClick={()=>setSel(i)}>
+												<i className={'ti ti-'+d[1]+' dg__sev '+d[0]} />
+												<div className="dg__rtext">
+													<div className="dg__rmsg"><b style={{color:'var(--tx-1)'}}>{d[2]}</b> — {d[3]}</div>
+													<div className="dg__rloc">{d[4]}</div>
+												</div>
+												<span className="dg__rfix">Fix</span>
+											</div>
+										</React.Fragment>
+									);
+								})}
+							</div>
+
+							{/* detail */}
+							<aside className="dg__detail">
+								<span className="dg__d-sev" style={{color: sevColor[cur[0]]}}><i className={'ti ti-'+cur[1]} /> {sevName[cur[0]]}</span>
+								<div className="dg__d-title">{cur[2]}</div>
+								<div className="dg__d-loc">{cur[4]}</div>
+								<div className="dg__d-body">{cur[3]}</div>
+								<div className="dg__code">You can go to the <span className="err">[[Tide Pools]]</span> while the light still holds.</div>
+								<div className="dg__d-label">Proposed Fix</div>
+								<div className="dg__d-body" style={{marginTop:0}}>Update the link target to <b style={{color:'var(--tx-1)',fontFamily:'var(--font-mono)',fontSize:12}}>[[The Tide Pools]]</b>, matching the renamed passage. Backlinks update automatically.</div>
+								<div className="dg__actions">
+									<Button size="sm" variant="primary" icon="wand" block>Fix</Button>
+									<Button size="sm" icon="file-text" block>Reveal in Source</Button>
+									<Button size="sm" icon="binary-tree" block>Reveal in Graph</Button>
+									<Button size="sm" variant="ghost" icon="eye-off" block>Ignore</Button>
+								</div>
+							</aside>
+						</div>
+					</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

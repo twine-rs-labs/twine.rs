@@ -1,0 +1,18 @@
+[package]
+name = "twine_cli"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+twine_graph.workspace = true
+twine_store.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "twine-rs"
+path = "src/main.rs"

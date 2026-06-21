@@ -1,0 +1,17 @@
+[package]
+name = "twine_graph"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+twine_model.workspace = true
+twine_parse.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

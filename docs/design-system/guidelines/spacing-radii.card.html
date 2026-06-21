@@ -1,0 +1,24 @@
+<!-- @dsCard group="Spacing" viewport="700x160" name="Radii" subtitle="Small and crisp; pills only for status dots & toggles" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+	body { padding: 22px 24px; background: var(--bg-panel); display: flex; gap: 16px; align-items: flex-end; }
+	.col { display: flex; flex-direction: column; align-items: center; gap: 9px; }
+	.box { width: 66px; height: 66px; background: var(--bg-raised); border: 1px solid var(--line-2);
+		box-shadow: var(--edge-hi); }
+	.t { font-family: var(--font-mono); font-size: 10px; color: var(--tx-3); }
+	.p { font-family: var(--font-mono); font-size: 9px; color: var(--tx-4); }
+</style>
+</head>
+<body>
+	<div class="col"><div class="box" style="border-radius:var(--r-xs)"></div><span class="t">r-xs</span><span class="p">3</span></div>
+	<div class="col"><div class="box" style="border-radius:var(--r-sm)"></div><span class="t">r-sm</span><span class="p">5</span></div>
+	<div class="col"><div class="box" style="border-radius:var(--r-md)"></div><span class="t">r-md</span><span class="p">7</span></div>
+	<div class="col"><div class="box" style="border-radius:var(--r-lg)"></div><span class="t">r-lg</span><span class="p">10</span></div>
+	<div class="col"><div class="box" style="border-radius:var(--r-xl)"></div><span class="t">r-xl</span><span class="p">14</span></div>
+	<div class="col"><div class="box" style="border-radius:var(--r-pill)"></div><span class="t">r-pill</span><span class="p">999</span></div>
+</body>
+</html>

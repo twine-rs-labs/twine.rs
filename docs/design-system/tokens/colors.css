@@ -1,0 +1,116 @@
+/* ============================================================
+   twine.rs — Color tokens
+   A unique, professional dark workbench palette.
+
+   Built in OKLCH for perceptual evenness, emitted as oklch().
+   The surface ramp carries a faint cool blue-green undertone
+   (hue ~235) that ties every panel back to the twine mark's
+   blue→green gradient without ever reading as "blue UI".
+
+   Naming:
+     --ink-N    surfaces, deepest (0) → raised (5)
+     --line-N   hairline borders / dividers
+     --tx-N     text, primary → faint
+     --acc-*    brand accents (the twine gradient)
+     --sem-*    semantic role colors (links, tags, build, etc.)
+   ============================================================ */
+
+:root {
+	/* ---- Surface ramp (cool ink) -------------------------- */
+	--ink-0: oklch(0.155 0.012 240); /* app frame / deepest gutter */
+	--ink-1: oklch(0.185 0.012 240); /* docks, side rails        */
+	--ink-2: oklch(0.215 0.012 239); /* panels, toolbars         */
+	--ink-3: oklch(0.245 0.013 238); /* cards, editor body       */
+	--ink-4: oklch(0.285 0.014 237); /* raised / hover surface   */
+	--ink-5: oklch(0.335 0.016 236); /* popovers, active rows    */
+
+	/* A near-black for graph canvas / focus voids */
+	--ink-void: oklch(0.115 0.010 242);
+
+	/* ---- Hairlines & dividers ----------------------------- */
+	--line-1: oklch(0.305 0.013 236); /* faint divider          */
+	--line-2: oklch(0.375 0.016 236); /* default border         */
+	--line-3: oklch(0.46 0.02 235); /* strong / focused border  */
+
+	/* ---- Text -------------------------------------------- */
+	--tx-1: oklch(0.955 0.006 230); /* primary, headings       */
+	--tx-2: oklch(0.80 0.009 233); /* body / secondary         */
+	--tx-3: oklch(0.655 0.011 236); /* muted labels             */
+	--tx-4: oklch(0.50 0.012 238); /* faint / placeholder      */
+	--tx-on-accent: oklch(0.16 0.012 245); /* text on bright accent fills */
+
+	/* ---- Brand accents — the twine gradient --------------- */
+	--acc-blue: oklch(0.705 0.135 248); /* primary action       */
+	--acc-blue-hi: oklch(0.76 0.13 248); /* hover / lifted       */
+	--acc-blue-lo: oklch(0.50 0.10 250); /* pressed / deep       */
+	--acc-blue-soft: oklch(0.45 0.07 250 / 0.22); /* tint fill   */
+
+	--acc-green: oklch(0.78 0.155 152); /* secondary brand pole  */
+	--acc-green-hi: oklch(0.83 0.15 152);
+	--acc-green-soft: oklch(0.55 0.10 152 / 0.20);
+
+	/* The signature mark gradient */
+	--acc-twine: linear-gradient(
+		135deg,
+		oklch(0.66 0.16 252) 0%,
+		oklch(0.74 0.15 196) 42%,
+		oklch(0.80 0.16 152) 100%
+	); /* @kind color */
+
+	/* Focus ring — bright blue, used on a 2px outline */
+	--focus-ring: oklch(0.74 0.14 246);
+
+	/* ---- Semantic roles ----------------------------------- */
+	/* Each authoring concept gets its own hue so layers stay
+	   distinguishable when stacked (per UI spec). */
+	--sem-link: oklch(0.72 0.13 248); /* [[links]] / outgoing    */
+	--sem-link-soft: oklch(0.50 0.09 248 / 0.20);
+
+	--sem-tag: oklch(0.74 0.125 304); /* tags                    */
+	--sem-tag-soft: oklch(0.52 0.09 304 / 0.22);
+
+	--sem-var: oklch(0.78 0.115 196); /* variables / macros      */
+	--sem-var-soft: oklch(0.55 0.08 196 / 0.20);
+
+	--sem-warn: oklch(0.80 0.135 78); /* warnings                */
+	--sem-warn-soft: oklch(0.60 0.10 78 / 0.22);
+
+	--sem-error: oklch(0.66 0.185 26); /* errors / broken links   */
+	--sem-error-soft: oklch(0.50 0.13 26 / 0.24);
+
+	--sem-dirty: oklch(0.76 0.155 56); /* unsaved / changed       */
+	--sem-dirty-soft: oklch(0.58 0.11 56 / 0.22);
+
+	--sem-saved: oklch(0.78 0.15 152); /* saved layout / success  */
+	--sem-saved-soft: oklch(0.55 0.10 152 / 0.20);
+
+	--sem-generated: oklch(0.76 0.11 212); /* generated layout    */
+	--sem-generated-soft: oklch(0.55 0.08 212 / 0.20);
+
+	--sem-build: oklch(0.74 0.13 268); /* build / running         */
+	--sem-build-soft: oklch(0.52 0.09 268 / 0.22);
+
+	/* Selection wash used in editor & graph marquee */
+	--sel-wash: oklch(0.62 0.12 248 / 0.26);
+	--sel-line: oklch(0.74 0.14 248);
+
+	/* ---- Semantic surface aliases ------------------------- */
+	--bg-app: var(--ink-0);
+	--bg-dock: var(--ink-1);
+	--bg-panel: var(--ink-2);
+	--bg-card: var(--ink-3);
+	--bg-raised: var(--ink-4);
+	--bg-pop: var(--ink-5);
+	--bg-canvas: var(--ink-void);
+
+	--text-strong: var(--tx-1);
+	--text-body: var(--tx-2);
+	--text-muted: var(--tx-3);
+	--text-faint: var(--tx-4);
+
+	--border-default: var(--line-2);
+	--border-faint: var(--line-1);
+	--border-strong: var(--line-3);
+
+	color-scheme: dark;
+}

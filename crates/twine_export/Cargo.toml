@@ -1,0 +1,14 @@
+[package]
+name = "twine_export"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+twine_model.workspace = true
+
+[lints]
+workspace = true

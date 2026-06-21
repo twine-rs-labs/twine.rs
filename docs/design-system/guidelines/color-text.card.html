@@ -1,0 +1,31 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Text & hairlines" subtitle="Four text weights and three border strengths on ink" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+	body { padding: 20px; background: var(--bg-panel); display: flex; gap: 24px; align-items: center; }
+	.txt { flex: 1; display: flex; flex-direction: column; gap: 7px; }
+	.txt div { font-size: 15px; }
+	.lab { font-family: var(--font-mono); font-size: 10px; color: var(--tx-4); }
+	.lines { width: 230px; display: flex; flex-direction: column; gap: 12px; }
+	.ln { display: flex; align-items: center; gap: 10px; }
+	.bar { flex: 1; height: 0; }
+	.ll { font-family: var(--font-mono); font-size: 10px; color: var(--tx-3); width: 48px; }
+</style>
+</head>
+<body>
+	<div class="txt">
+		<div style="color:var(--tx-1)">Primary — passage title <span class="lab">tx-1</span></div>
+		<div style="color:var(--tx-2)">Body — the canonical project model <span class="lab">tx-2</span></div>
+		<div style="color:var(--tx-3)">Muted — 14 backlinks, 3 tags <span class="lab">tx-3</span></div>
+		<div style="color:var(--tx-4)">Faint — placeholder / disabled <span class="lab">tx-4</span></div>
+	</div>
+	<div class="lines">
+		<div class="ln"><span class="ll">line-1</span><div class="bar" style="border-top:1px solid var(--line-1)"></div></div>
+		<div class="ln"><span class="ll">line-2</span><div class="bar" style="border-top:1px solid var(--line-2)"></div></div>
+		<div class="ln"><span class="ll">line-3</span><div class="bar" style="border-top:1px solid var(--line-3)"></div></div>
+	</div>
+</body>
+</html>

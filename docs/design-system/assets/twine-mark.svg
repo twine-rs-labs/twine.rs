@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+
+
+<svg xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:svg="http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="1200" height="1200" viewBox="0 0 1200 1200" id="svg2" version="1.1">
+&#x9;<defs id="defs4">
+&#x9;&#x9;<linearGradient id="linearGradient3761">
+&#x9;&#x9;&#x9;<stop style="stop-color:#127aee;stop-opacity:1;" offset="0" id="stop3763"></stop>
+&#x9;&#x9;&#x9;<stop style="stop-color:#117aef;stop-opacity:0.25098041;" offset="1" id="stop3765"></stop>
+&#x9;&#x9;</linearGradient>
+&#x9;&#x9;<linearGradient id="linearGradient3753">
+&#x9;&#x9;&#x9;<stop style="stop-color:#10f05e;stop-opacity:0.25098041;" offset="0" id="stop3755"></stop>
+&#x9;&#x9;&#x9;<stop style="stop-color:#10f05e;stop-opacity:1;" offset="1" id="stop3757"></stop>
+&#x9;&#x9;</linearGradient>
+&#x9;&#x9;<linearGradient xlink:href="#linearGradient3753" id="linearGradient3759" x1="52" y1="604.36218" x2="972" y2="604.36218" gradientUnits="userSpaceOnUse"></linearGradient>
+&#x9;&#x9;<linearGradient xlink:href="#linearGradient3761" id="linearGradient3767" x1="256" y1="0" x2="231.9866" y2="725.54773" gradientUnits="userSpaceOnUse" gradientTransform="translate(0,28.362168)"></linearGradient>
+&#x9;</defs>
+&#x9;<namedview id="base" pagecolor="#ffffff" bordercolor="#666666" borderopacity="1.0" showgrid="false" showguides="true">
+&#x9;&#x9;<grid type="xygrid" id="grid2985" empspacing="8" visible="true" enabled="true" snapvisiblegridlinesonly="false" units="px" spacingx="64px" spacingy="64px" originx="0px" dotted="false"></grid>
+&#x9;</namedview>
+&#x9;<metadata id="metadata7">
+&#x9;&#x9;<RDF>
+&#x9;&#x9;&#x9;<Work>
+&#x9;&#x9;&#x9;&#x9;<format>image/svg+xml</format>
+&#x9;&#x9;&#x9;&#x9;<type></type>
+&#x9;&#x9;&#x9;&#x9;<title></title>
+&#x9;&#x9;&#x9;</Work>
+&#x9;&#x9;</RDF>
+&#x9;</metadata>
+&#x9;<g id="layer1" transform="translate(0,147.63783)">
+&#x9;&#x9;<g id="g4530" transform="translate(88,-88.000014)">
+&#x9;&#x9;&#x9;<rect y="28.362167" x="64" height="1024" width="384" id="rect3009" style="fill:url(#linearGradient3767);fill-opacity:1;stroke:none"></rect>
+&#x9;&#x9;&#x9;<path id="path3785" d="m 64,860.36217 c 0,-704 896,-704 896,-704 l 0,384 c 0,0 -512,0 -512,320 l 0,192.00003 -384,0 z" style="fill:url(#linearGradient3759);fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:24;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:0.94117647"></path>
+&#x9;&#x9;</g>
+&#x9;</g>
+</svg>

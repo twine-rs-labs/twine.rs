@@ -1,0 +1,176 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Asset Manager" subtitle="Media as first-class project files: preview, references, missing/unused detection" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Assets</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="../workbench/workbench.css" />
+<style>
+	html, body { height: 100%; } body { margin: 0; overflow: hidden; }
+	.kit { position: absolute; inset: 0; display: flex; font-family: var(--font-ui); color: var(--text-body); background: var(--bg-app); }
+	.kit__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+	.as__body { flex: 1; display: grid; grid-template-columns: 196px 1fr 320px; min-height: 0; }
+	.as__folders { background: var(--ink-1); border-right: 1px solid var(--line-1); padding: 12px 10px; overflow: auto; }
+	.as__flabel { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tx-4); padding: 10px 8px 6px; }
+	.as__folder { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border-radius: var(--r-sm); cursor: pointer; font-size: 12.5px; color: var(--tx-2); }
+	.as__folder:hover { background: var(--ink-2); }
+	.as__folder.is-on { background: var(--sem-link-soft); color: var(--tx-1); }
+	.as__folder .ti { font-size: 16px; color: var(--sem-warn); }
+	.as__folder .cnt { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--tx-4); }
+	.as__main { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line-1); }
+	.as__toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line-1); }
+	.as__grid { flex: 1; overflow: auto; padding: 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; align-content: start; }
+	.as__card { background: var(--ink-2); border: 1px solid var(--line-1); border-radius: var(--r-md); overflow: hidden; cursor: pointer;
+		transition: border-color var(--dur-1), transform var(--dur-1); }
+	.as__card:hover { border-color: var(--line-3); transform: translateY(-2px); }
+	.as__card.is-on { border-color: var(--acc-blue); box-shadow: 0 0 0 1px var(--acc-blue); }
+	.as__thumb { height: 96px; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+	.as__thumb .ti { font-size: 34px; color: var(--tx-4); }
+	.as__thumb.unused::after { content: "Unused"; position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 700;
+		color: var(--sem-warn); background: var(--sem-warn-soft); border: 1px solid var(--sem-warn); padding: 1px 6px; border-radius: var(--r-pill); }
+	.as__thumb.missing { background: var(--sem-error-soft) !important; }
+	.as__thumb.missing .ti { color: var(--sem-error); }
+	.as__cap { padding: 8px 9px; }
+	.as__cname { font-size: 12px; color: var(--tx-1); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	.as__cmeta { font-family: var(--font-mono); font-size: 9.5px; color: var(--tx-4); margin-top: 3px; display: flex; justify-content: space-between; }
+	.as__cmeta .refs { color: var(--sem-link); }
+	/* preview pane */
+	.as__prev { background: var(--ink-1); border-left: 1px solid var(--line-1); overflow: auto; }
+	.as__prev-img { height: 200px; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--line-1); position: relative; }
+	.as__prev-img .ti { font-size: 56px; color: var(--tx-3); }
+	.as__prev-body { padding: 16px; }
+	.as__prev-name { font-size: 15px; font-weight: 600; color: var(--tx-1); }
+	.as__prev-path { font-family: var(--font-mono); font-size: 10.5px; color: var(--tx-4); margin-top: 3px; }
+	.as__field { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; border-bottom: 1px solid var(--line-1); }
+	.as__field span { color: var(--tx-3); } .as__field b { color: var(--tx-1); font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
+	.as__label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); margin: 16px 0 8px; }
+	.as__usage { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12px; color: var(--tx-2); cursor: pointer; }
+	.as__usage:hover { color: var(--tx-1); }
+	.as__usage .ti { font-size: 14px; color: var(--tx-4); }
+	.as__usage .sp { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; color: var(--tx-4); }
+	.as__actions { display: flex; flex-direction: column; gap: 7px; margin-top: 16px; }
+	.as__snippet { font-family: var(--font-mono); font-size: 11px; background: var(--ink-void); border: 1px solid var(--line-2);
+		border-radius: var(--r-sm); padding: 8px 10px; color: var(--sem-var); margin-top: 6px; word-break: break-all; }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { Button, IconButton, Input, Select, Badge } = NS;
+		const { TwineRail } = window;
+
+		const G1 = 'linear-gradient(135deg, oklch(0.4 0.08 250), oklch(0.5 0.1 200))';
+		const G2 = 'linear-gradient(135deg, oklch(0.45 0.1 300), oklch(0.4 0.08 250))';
+		const G3 = 'linear-gradient(135deg, oklch(0.45 0.1 150), oklch(0.5 0.09 195))';
+		const G4 = 'linear-gradient(135deg, oklch(0.5 0.1 60), oklch(0.45 0.1 30))';
+		const ASSETS = [
+			['keeper.png','image','PNG','512×640','420 KB',3,'img',G2,'portraits/'],
+			['marian.png','image','PNG','512×640','388 KB',2,'img',G2,'portraits/'],
+			['lighthouse-ext.jpg','image','JPEG','1920×1080','1.4 MB',5,'img',G1,'scenes/'],
+			['storm-loop.mp3','audio','MP3','—','2.1 MB',4,'music','',''],
+			['foghorn.wav','audio','WAV','—','840 KB',0,'wav','',''],
+			['gull.png','image','PNG','128×128','22 KB',0,'img',G3,'sprites/'],
+			['title-card.jpg','image','JPEG','1280×720','710 KB',1,'img',G4,'scenes/'],
+			['keeper-old.png','image','PNG','—','—',1,'missing','',''],
+			['waves-amb.ogg','audio','OGG','—','1.8 MB',2,'music','','']
+		];
+
+		function thumb(a, big) {
+			if (a[6] === 'missing') return <div className={'as__thumb missing'}><i className="ti ti-photo-off" /></div>;
+			if (a[1] === 'audio') return <div className={'as__thumb' + (a[5]===0?' unused':'')} style={{background:'var(--ink-void)'}}><i className="ti ti-music" /></div>;
+			return <div className={'as__thumb' + (a[5]===0?' unused':'')} style={{background:a[7]}}><i className="ti ti-photo" style={{color:'oklch(1 0 0 / 0.5)'}} /></div>;
+		}
+
+		function App() {
+			const [sel, setSel] = React.useState(0);
+			const a = ASSETS[sel];
+			return (
+				<div className="kit">
+					<TwineRail active="assets" />
+					<div className="kit__main">
+						<div className="wb__bar">
+							<div className="wb__crumbs"><i className="ti ti-photo" /> <b>Assets</b> <i className="ti ti-chevron-right" /> the-lighthouse</div>
+							<div className="wb__bar-sp" />
+							<Button size="sm" variant="ghost" icon="search-off">Find Unused</Button>
+							<Button size="sm" variant="ghost" icon="folder-plus">New Folder</Button>
+							<Button size="sm" variant="primary" icon="upload">Import Asset</Button>
+						</div>
+						<div className="as__body">
+							<aside className="as__folders">
+								<div className="as__flabel">Folders</div>
+								<div className="as__folder is-on"><i className="ti ti-folder-open" /> assets <span className="cnt">53</span></div>
+								<div className="as__folder" style={{paddingLeft:20}}><i className="ti ti-folder" /> portraits <span className="cnt">8</span></div>
+								<div className="as__folder" style={{paddingLeft:20}}><i className="ti ti-folder" /> scenes <span className="cnt">21</span></div>
+								<div className="as__folder" style={{paddingLeft:20}}><i className="ti ti-folder" /> sprites <span className="cnt">12</span></div>
+								<div className="as__folder" style={{paddingLeft:20}}><i className="ti ti-folder" /> audio <span className="cnt">12</span></div>
+								<div className="as__flabel">Issues</div>
+								<div className="as__folder"><i className="ti ti-photo-off" style={{color:'var(--sem-error)'}} /> Missing <span className="cnt" style={{color:'var(--sem-error)'}}>1</span></div>
+								<div className="as__folder"><i className="ti ti-circle-off" style={{color:'var(--sem-warn)'}} /> Unused <span className="cnt" style={{color:'var(--sem-warn)'}}>2</span></div>
+							</aside>
+
+							<main className="as__main">
+								<div className="as__toolbar">
+									<Input icon="search" placeholder="Search assets" block />
+									<Select size="sm" value="Name" onChange={()=>{}} options={['Name','Type','Size','References','Modified']} />
+									<IconButton icon="layout-grid" label="Grid view" active solid />
+									<IconButton icon="list" label="Table view" solid />
+								</div>
+								<div className="as__grid">
+									{ASSETS.map((x,i)=>(
+										<div key={x[0]} className={'as__card' + (sel===i?' is-on':'')} onClick={()=>setSel(i)}>
+											{thumb(x)}
+											<div className="as__cap">
+												<div className="as__cname">{x[0]}</div>
+												<div className="as__cmeta"><span>{x[2]} · {x[4]}</span><span className={x[5]>0?'refs':''}>{x[5]} refs</span></div>
+											</div>
+										</div>
+									))}
+								</div>
+							</main>
+
+							<aside className="as__prev">
+								<div className="as__prev-img" style={{background: a[6]==='missing'?'var(--sem-error-soft)':a[1]==='audio'?'var(--ink-void)':a[7]}}>
+									<i className={'ti ti-'+(a[6]==='missing'?'photo-off':a[1]==='audio'?'music':'photo')} style={{color: a[1]==='audio'||a[6]==='missing'?undefined:'oklch(1 0 0 / 0.55)'}} />
+								</div>
+								<div className="as__prev-body">
+									<div className="as__prev-name">{a[0]}</div>
+									<div className="as__prev-path">assets/{a[8]}{a[0]}</div>
+									{a[6]==='missing' && <div style={{marginTop:10}}><Badge tone="error" icon="photo-off">File not found</Badge></div>}
+									{a[5]===0 && a[6]!=='missing' && <div style={{marginTop:10}}><Badge tone="warn" icon="circle-off">Unused</Badge></div>}
+									<div className="as__label">Details</div>
+									<div className="as__field"><span>Type</span><b>{a[2]}</b></div>
+									<div className="as__field"><span>Dimensions</span><b>{a[3]}</b></div>
+									<div className="as__field"><span>Size</span><b>{a[4]}</b></div>
+									<div className="as__field"><span>References</span><b>{a[5]}</b></div>
+									<div className="as__field"><span>Publish</span><b>{a[5]>0?'included':'excluded'}</b></div>
+									<div className="as__label">Insert Snippet</div>
+									<div className="as__snippet">(print: (passage-image: "{a[0]}"))</div>
+									<div className="as__label">Used In ({a[5]})</div>
+									{a[5]>0 ? [['keepers-door.twee','8:3'],['lamp-room.twee','22:7'],['marians-letters.twee','4:1']].slice(0,Math.min(a[5],3)).map((u,j)=>(
+										<div className="as__usage" key={j}><i className="ti ti-file-text" /> {u[0]} <span className="sp">{u[1]}</span></div>
+									)) : <div style={{fontSize:12,color:'var(--tx-4)'}}>No passages reference this asset.</div>}
+									<div className="as__actions">
+										<Button size="sm" variant="primary" icon="clipboard" block>Copy Snippet</Button>
+										<Button size="sm" icon="arrow-bar-to-down" block>Insert into Passage</Button>
+										<Button size="sm" variant="ghost" icon="folder-open" block>Reveal in Folder</Button>
+									</div>
+								</div>
+							</aside>
+						</div>
+					</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

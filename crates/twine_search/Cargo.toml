@@ -1,0 +1,13 @@
+[package]
+name = "twine_search"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+twine_model.workspace = true
+
+[lints]
+workspace = true

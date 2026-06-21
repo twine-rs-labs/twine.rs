@@ -1,0 +1,81 @@
+<!-- @dsCard group="Components" viewport="700x430" name="Forms & controls" subtitle="Button, IconButton, Input, Select, SegmentedControl, Switch, Checkbox" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<style>
+	body { margin: 0; padding: 22px; background: var(--bg-panel); }
+	.wrap { display: flex; flex-direction: column; gap: 18px; }
+	.row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+	.lbl { font-family: var(--font-ui); font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em;
+		text-transform: uppercase; color: var(--tx-4); margin-bottom: 9px; }
+	.sec { border-top: 1px solid var(--line-1); padding-top: 14px; }
+	.sec:first-child { border-top: 0; padding-top: 0; }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script type="text/babel">
+		const { Button, IconButton, Input, Select, SegmentedControl, Switch, Checkbox } = window.TwineRsDesignSystem_073217;
+		function Demo() {
+			const [mode, setMode] = React.useState('split');
+			const [snap, setSnap] = React.useState(true);
+			const [mc, setMc] = React.useState(false);
+			return (
+				<div className="wrap">
+					<div className="sec">
+						<div className="lbl">Button — variants</div>
+						<div className="row">
+							<Button variant="primary" icon="package-export">Export HTML</Button>
+							<Button icon="plus">New Passage</Button>
+							<Button variant="ghost" icon="search">Find</Button>
+							<Button variant="danger" icon="trash">Delete</Button>
+							<Button variant="primary" loading>Building</Button>
+							<Button disabled icon="rocket">Start Here</Button>
+						</div>
+					</div>
+					<div className="sec">
+						<div className="lbl">Button — sizes &amp; IconButton</div>
+						<div className="row">
+							<Button size="sm">Small</Button>
+							<Button size="md">Medium</Button>
+							<Button size="lg" variant="primary">Large</Button>
+							<span style={{width:'12px'}}></span>
+							<IconButton icon="player-play" label="Play" />
+							<IconButton icon="tool" label="Test" />
+							<IconButton icon="grid-dots" label="Snap" active />
+							<IconButton icon="command" label="Palette" solid />
+						</div>
+					</div>
+					<div className="sec">
+						<div className="lbl">Inputs &amp; Select</div>
+						<div className="row">
+							<Input label="Project Name" placeholder="Untitled Story" defaultValue="The Lighthouse" />
+							<Input icon="search" placeholder="Filter contents" kbd="⌘P" />
+							<Select value="Harlowe 3.3" options={['Harlowe 3.3','SugarCube 2.36','Snowman 2.0']} />
+						</div>
+					</div>
+					<div className="sec">
+						<div className="lbl">SegmentedControl, Switch, Checkbox</div>
+						<div className="row" style={{alignItems:'center', gap:'22px'}}>
+							<SegmentedControl value={mode} onChange={setMode} options={[
+								{value:'text',label:'Text',icon:'file-text'},
+								{value:'graph',label:'Graph',icon:'binary-tree'},
+								{value:'split',label:'Split',icon:'layout-columns'}]} />
+							<Switch checked={snap} onChange={setSnap} label="Snap to grid" />
+							<Checkbox checked={mc} onChange={setMc} label="Match Case" />
+						</div>
+					</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+	</script>
+</body>
+</html>

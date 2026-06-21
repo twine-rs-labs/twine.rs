@@ -1,0 +1,658 @@
+# twine.rs Milestones and Enhancement Catalogue
+
+This reference records the detailed `M0`-`M7` roadmap, the current Twine UI catalogue, the target `twine.rs` UI, and the 170 open Twine enhancement requests captured during planning.
+
+This document records the current Twine UI, the desired `twine.rs` UI, and every open Twine enhancement request from `klembot/twinejs` with the `enhancement` label.
+
+Source snapshot: GitHub API, open issues with `enhancement`, fetched on 2026-06-20. Query: [open enhancement issues](https://github.com/klembot/twinejs/issues?q=is%3Aopen%20is%3Aissue%20label%3A%22enhancement%22). Total recorded requests: **170**.
+
+Classification rule: every request has one primary milestone so the roadmap is buildable. Cross-cutting implications are captured in the screen specs and milestone deliverables. The catalogue keeps the exact issue title, priority label, comment count, link, primary screen, primary milestone, and `twine.rs` interpretation.
+
+Important product correction: `twine.rs` should be mode-native. It is not graph-first and it is not text-only. The base experience can be an incredible Twine-aware text editor; the graph can be a dreamy native GUI editor; split mode can make them feel like one instrument. Some projects will have saved story positions and graph layouts. Some projects will have no graph metadata at all. Both cases must feel native.
+
+## What People Want Most
+
+The strongest demand signal is not one isolated feature. It is a repeated desire for author ownership, scale, and navigation: people want visible local files, safer import/export, a map that does not bog down, richer search/contents tooling, better tags/organization, stronger code editing, real asset handling, format extensibility, and platform/accessibility reliability.
+
+Most-commented open enhancement requests in the snapshot:
+
+- [#477](https://github.com/klembot/twinejs/issues/477) Unable to choose where stories save. (P3 (could), 18 comments)
+- [#1466](https://github.com/klembot/twinejs/issues/1466) Shareable Twinery story links (unprioritized, 16 comments)
+- [#232](https://github.com/klembot/twinejs/issues/232) Advanced Passage Connectivity Testing (P4 (maybe), 12 comments)
+- [#249](https://github.com/klembot/twinejs/issues/249) Firefox spellchecking cannot be enabled in Twine2 online (P4 (maybe), 10 comments)
+- [#1509](https://github.com/klembot/twinejs/issues/1509) Project folder structure (P4 (maybe), 9 comments)
+- [#1440](https://github.com/klembot/twinejs/issues/1440) Add story title and tags as data attributes to the editor HTML (P3 (could), 9 comments)
+- [#1252](https://github.com/klembot/twinejs/issues/1252) "Extending Twine" suggestion: a preprocessing function for engine code and engine CSS (P3 (could), 9 comments)
+- [#1180](https://github.com/klembot/twinejs/issues/1180) 2.4.x Allow passage windows/dialogs to be moved & resized (P4 (maybe), 9 comments)
+- [#114](https://github.com/klembot/twinejs/issues/114) Importing image resources (P2 (should), 9 comments)
+- [#103](https://github.com/klembot/twinejs/issues/103) Feature: Mechanism to exclude passages from published files (P4 (maybe), 9 comments)
+- [#1497](https://github.com/klembot/twinejs/issues/1497) Scroll to search results in find & replace (P3 (could), 8 comments)
+- [#1467](https://github.com/klembot/twinejs/issues/1467) Not able to edit two passages side-by-side (P3 (could), 8 comments)
+- [#1372](https://github.com/klembot/twinejs/issues/1372) [2.6] Restore the right-click to create a passage function (P3 (could), 8 comments)
+- [#1345](https://github.com/klembot/twinejs/issues/1345) Tool for drawing comment blocks in editor (P3 (could), 8 comments)
+
+Demand clusters to design around:
+
+- File ownership and persistence: choose save locations, project folders, local-only clarity, backups, export/import fidelity, Twine 1/Twee/JSON paths, metadata preservation, and revision-control hooks.
+- Mode-native authoring: the app must be excellent as a text editor, excellent as a graph editor, and excellent when both are synchronized side by side.
+- Graph scale and map ergonomics: faster link rendering, clearer arrows, snap/align/layers/groups, double-click creation, drag-to-connect, copy/paste, right-click menus, annotations, and quick reveal.
+- Search, contents, and organization: a real Story Contents view, variable search, passage-title proof search, result lists, tag counts/colors/filtering, bulk tagging, and advanced connectivity diagnostics.
+- Source editing as a first-class mode: CodeMirror 6, side-by-side passages, scripts/stylesheets as files, syntax highlighting, cursor memory, fold/wrap/spellcheck, and format-aware autocomplete.
+- Assets and media: import images, preview and insert references, keep media in files, detect usages, and package assets correctly.
+- Format/build/runtime extensibility: story-format docs, default/version management, preprocessing hooks, statistics hooks, runtime/debug affordances, excluded passages, localization, and publish targets.
+- Accessibility and platform polish: reduced motion, high contrast, keyboard shortcuts, customizable keymaps, update/install channels, mobile/online constraints, command-line behavior, and share/cloud options.
+
+## Core Product Model: Text-Native, Graph-Native, Split-Native
+
+Modal means authoring modes, not a dependence on blocking modal dialogs. `twine.rs` should have three native authoring modes: Text, Graph, and Split. Each mode has its own layout, tools, navigation rules, and performance contract. A user should never feel like the text editor is merely a decompiled export, or that graph editing is merely a decoration on top of text.
+
+Text mode is the base capability. A project with no story positions, no graph metadata, and no saved layout should still open into a powerful Twine-aware IDE: project tree, passage files, syntax, links, backlinks, variables, tags, diagnostics, search, preview, build, import/export, and format-aware tools. This is the minimum viable professional experience.
+
+Graph mode is optional but native. If the project has saved positions, graph mode loads them. If it does not, graph mode can generate an ephemeral layout from the link graph and clearly label it as generated. The user can inspect it, rearrange it, and choose to save layout metadata. The app should not silently write graph coordinates into a source-only project.
+
+Split mode is the showcase. It synchronizes source and graph without forcing either to be the truth. Selecting a passage in graph opens source; moving through source highlights graph nodes and edges; editing links updates the graph index; diagnostics and search reveal both projections when available.
+
+Project format implication: story content and graph layout must be separable. Textual story data is canonical. Graph layout, card size, groups, annotations, and workspace view state are optional metadata. This lets imported Twee, hand-edited source folders, and graph-authored stories all live in the same app without coercion.
+
+## Current Twine UI: Screen-by-Screen Catalogue
+
+### Welcome Screen
+
+Current appearance: this is a first-run route shown before `prefs.welcomeSeen` is true. It uses centered welcome content, welcome cards, the same light/dark-aware CSS variable system as the rest of Twine, and no story-map toolbar. The content is friendly and educational rather than project-centric.
+
+What works well: it gives beginners a calm entry point, avoids throwing them directly into an empty library, and keeps the first-run experience lightweight.
+
+Current limits: it does not teach the file model because Twine does not really have a project-folder model. It also does not make text/graph mode choice visible.
+
+What `twine.rs` should look like: first launch should be a concrete project launcher, not a marketing page. The first viewport should show New Project, Open Folder, Import Twine HTML/Twee, Open Recent, Try Sample Project, and a short storage/status line that tells the user where projects will live. It should also make clear that projects can be text-native, graph-native, or split-mode.
+
+### Story Library Screen
+
+Current appearance: the root route has a top `RouteToolbar` with tab groups for Story, Library, Build, View, and App/Twine. A storage quota indicator is pinned to the toolbar. The main content area shows a heading with the visible story count, an optional Safari warning card, and a responsive grid of story cards. Each card is roughly card-sized rather than row-dense, can be selected and double-clicked, and displays an SVG miniature story map, story title, last-updated date, passage count, and story tag buttons.
+
+What works well: the library is visual and approachable. Story cards reinforce that stories may be spatial graphs. Tag filtering and sorting already exist. Selection plus toolbar actions is simple and understandable.
+
+Current limits: it is a story list, not a project dashboard. It does not show project path, source layout, Git state, dirty state, backup state, asset count, word count, broken links, story format health, saved layout status, or export/build status. Users who care about local files and huge projects do not get enough operational information.
+
+What `twine.rs` should look like: the launcher should support both grid and table modes. Each project entry should show name, path, format, preferred mode, saved graph layout status, passage count, word count, asset count, broken-link count, last modified, Git/dirty state, backup state, and last build. The toolbar should include New, Open Folder, Import, Search Projects, Sort, Filter, Settings, and a clear default project folder control.
+
+### Story Edit / Story Map Screen
+
+Current appearance: opening a story shows the map as the main screen. The top toolbar has Passage, Story, Build, and App tabs, with zoom controls and undo/redo pinned. The main content area is a large grabbable graph-paper surface. Passages are absolutely positioned draggable cards with title, excerpt, tag display, selection state, and start/highlight states. SVG passage connections render behind the cards. Marquee selection and a fuzzy passage finder overlay sit on top of the map.
+
+What works well: this is the core visual Twine feeling. The author can see nonlinear structure, move passages spatially, and understand links visually. The card metaphor is still excellent.
+
+Current limits: the map is a React/DOM/SVG surface that gets expensive as passages and links grow. It assumes the map is the main editing surface. Link clutter, search reveal, selection, grouping, and large-scale navigation are limited. Every feature competes for the same surface.
+
+What `twine.rs` should look like: graph mode should be a dedicated high-performance editor, but not mandatory for every project. It should pan/zoom smoothly at 10k to 50k passages, render only visible nodes, draw edges on canvas/WebGL, expose link layers and diagnostics layers, include a minimap, support lasso selection, group/collapse, align/distribute, snap/grid, annotations, double-click creation, drag-to-connect, and reveal-in-source. If no saved layout exists, it should generate a temporary layout and offer to persist it.
+
+### Passage Editor / Dialog Stack
+
+Current appearance: passage editing happens in a dialog stack over the map. Each dialog has a header, a passage toolbar, optional story-format toolbar, and a CodeMirror-backed text area. The toolbar includes editor undo/redo, tag editing, passage size selection, rename, and test. Multiple passage editors can be opened and stacked; background cards remain visible/collapsed.
+
+What works well: editing does not destroy map context. Multiple open passages give Twine a lightweight multi-document feel. Story-format editor extensions already prove that editor behavior can be format-aware.
+
+Current limits: the editor is modal-dialog-first instead of workspace-mode-first. Side-by-side editing is awkward. Cursor state, scroll state, multi-file source, script/style files, compare views, and external editor workflows are incomplete. CodeMirror 5 era assumptions show through.
+
+What `twine.rs` should look like: passage editing should be a dockable text workspace and optional focus dialog. Text mode must be complete without graph mode. Selecting a node can open its passage source in a right pane or tab, but source users can also navigate entirely from files, contents, search, backlinks, diagnostics, and command palette. Users should split editors, compare passages, preserve cursor/scroll per file, reveal a passage in graph when graph exists, and use CodeMirror 6-style extensions for syntax, completions, diagnostics, folding, and format snippets.
+
+### Fuzzy Finder and Find/Replace
+
+Current appearance: the story map can open a fuzzy finder overlay for passage navigation. Find/Replace is a fixed-size dialog with two CodeArea fields, checkboxes for passage names, case, and regex, a match count/no-match message, and a replace-all button. Search highlights matching passages on the map.
+
+What works well: quick passage navigation exists, find/replace has undoable replacement behavior, and visual map highlighting makes text search spatial when the map is present.
+
+Current limits: search is fragmented and mostly dialog-bound. It does not act like a persistent project index. Results are counts rather than durable grouped results. Variable search, tags, assets, diagnostics, commands, and settings are not unified.
+
+What `twine.rs` should look like: one command/search system should search passages, files, tags, variables, assets, commands, settings, and diagnostics. A persistent search panel should show grouped results, snippets, match counts, replace preview, reveal-in-source, reveal-in-graph when graph exists, select results, and export result list.
+
+### Story Details, Stats, Tags, JavaScript, and Stylesheet Dialogs
+
+Current appearance: story-level state is split across fixed-size dialogs. Story Details shows a format selector, a link to story format explanation, Snap to Grid, and story statistics. Passage Tags and Story Tags list tag editors with colors and rename controls. Story JavaScript and Story Stylesheet are code dialogs for global script/style text.
+
+What works well: the dialog system keeps the map uncluttered. Tags, stats, story format, JavaScript, and stylesheet are discoverable from the toolbar. Tag color editing is built in.
+
+Current limits: story contents are fragmented across dialogs. Variables, assets, scripts, styles, metadata, passage lists, diagnostics, and export targets are not one coherent index. Multiple scripts/stylesheets and source-file organization are limited.
+
+What `twine.rs` should look like: story-level information should live in a Contents/Inspector workspace that is equally useful in text mode and graph mode. Metadata, passages, tags, variables, assets, scripts, styles, diagnostics, layout metadata, and build targets should be tabs or sections in one index-backed panel. Scripts and styles should be real source files under `scripts/` and `styles/`.
+
+### Story Formats Dialog
+
+Current appearance: the Story Formats dialog lists loaded/pending/failed formats, provides Add Story Format and filter controls, shows format cards/details, and allows setting default/proofing formats, disabling editor extensions, and deleting formats.
+
+What works well: Twine's story-format ecosystem is one of its strongest design choices. Existing editor-extension hooks are an important bridge to format-aware editing.
+
+Current limits: capabilities are implicit. The UI does not present a typed SDK-like contract for parser, compiler, syntax, autocomplete, diagnostics, preprocessing, docs, migration, test behavior, or statistics.
+
+What `twine.rs` should look like: formats should behave like capability-declared plugins. Each format card should show parser/exporter status, syntax support, diagnostics support, docs link, migration compatibility, default/proofing role, and extension health. Custom Harlowe forks should be first-class.
+
+### Import Dialog
+
+Current appearance: import is a fixed-size dialog. It starts with a file chooser, parses stories from the selected file, imports immediately when there are no conflicts, and shows a story chooser when conflicts or multiple choices require user selection. If no stories are found, it shows a simple message.
+
+What works well: the flow is short for common imports and avoids unnecessary wizard steps when a file is straightforward.
+
+Current limits: large migrations need review. The current dialog does not give a complete preview of stories, passages, formats, assets, unknown metadata, conflicts, conversion choices, or whether graph positions/layout metadata exists before committing.
+
+What `twine.rs` should look like: import should be a migration review screen. It should show source files, detected stories, passages, formats, assets, graph layout availability, conflicts, unknown metadata, and proposed project layout. Users should choose import as new project, merge into current project, convert to multi-file, preserve unknown fields, map assets, and decide whether to preserve/generate graph layout before applying.
+
+### Build / Play / Test / Proof Screens
+
+Current appearance: build actions route to Play, Test, and Proof screens that render generated story output. Passage toolbar actions can test a selected passage. Publishing/archive flows are toolbar/dialog driven rather than a full build dashboard.
+
+What works well: the loop from edit to play/test/proof is quick. Proofing gives authors a text-review path separate from play.
+
+Current limits: build targets are not presented as a pipeline with blockers, warnings, output paths, logs, source maps, assets, or format-specific options. Debugging is separate from graph/source diagnostics.
+
+What `twine.rs` should look like: Build should be mode-independent. It should work perfectly from text mode, graph mode, or split mode. Targets should include Play, Test From Selection, Proof, Export HTML, Export Twee, Export JSON, Package Project, Validate, and Publish. Each target should show format, output path, last run, warnings, logs, and options. Play/Test should include debug controls for current passage, variable/state inspection, console/log, reveal current passage in graph if graph is available, and open source at runtime location.
+
+### Preferences, About, Donation, Warning, and Platform UI
+
+Current appearance: preferences are a fixed-size dialog with language, theme, dialog width, passage tag display, enhanced editor toggle, cursor blink, and editor font controls. About/donation/platform warnings are separate dialogs or contextual cards. Storage quota can be pinned in the library toolbar.
+
+What works well: app preferences are centralized and localized. Theme and editor font controls matter. Storage quota visibility is useful for browser builds.
+
+Current limits: settings are too shallow for a serious desktop/source project app. Reduced motion, high contrast, custom keybindings, backup cadence, cache cleanup, project paths, cloud/revision integrations, installer/update policy, graph-layout behavior, default mode, and storage health are not one cohesive surface.
+
+What `twine.rs` should look like: Settings should be a large structured screen with General, Workspace, Editor, Graph, Modes, Accessibility, Keyboard Shortcuts, Storage, Backups, Story Formats, Build, Integrations, Platform, and About. Every reliability and accessibility choice should be findable from search/command palette. Users should be able to set preferred startup mode and decide how generated graph layouts are saved.
+
+## Target twine.rs Screens: Exact Desired Shape
+
+### Project Launcher
+
+Looks like: a dense project dashboard, not a landing page. Left rail has Recent, Favorites, Examples, Templates, and maybe Archived. Main area defaults to a table with optional card mode. Each row/card shows project name, path, format, preferred mode, saved graph layout status, passage count, word count, asset count, broken-link count, last modified, Git/dirty state, backup state, and last build state.
+
+Top bar: New Project, Open Folder, Import, Search Projects, Sort, Filter, Settings. Empty state: New Project, Open Existing Folder, Import Twine HTML/Twee, Try Sample Project.
+
+Must do: make storage location explicit. A user should know whether a project is local-only, synced, backed up, not yet saved, text-only, graph-backed, or mixed.
+
+### New Project Screen
+
+Looks like: a focused creation form with project name, folder/path picker, story format selector, template/sample selector, source layout choice, initial mode choice, and initial passage/title options. The preview side shows the exact files that will be created.
+
+Must do: default to a real folder project. Story format should be chosen before creation. Custom Harlowe forks should appear as supported formats with compatibility status. Initial graph layout should be optional.
+
+### Main Workspace Shell
+
+Looks like: an IDE-like workbench with a mode switch, not a graph-only app. Left dock has Project Explorer and Contents. Center has Text, Graph, or Split mode. Right dock has Inspector, Outline, and selected passage/source details. Bottom drawer has Diagnostics, Search Results, Build Output, and Logs.
+
+Top command bar: project name, breadcrumbs, Text/Graph/Split segmented control, play/test/export buttons, command palette, save/dirty indicator, mode/layout status badge, and status badges. Panels collapse with icons and remember size/position.
+
+Must do: Text mode, Graph mode, and Split mode are all native. Modal dialogs are allowed for short tasks, but the main authoring workflow lives in modes, docks, and tabs.
+
+### Text Mode
+
+Looks like: a polished source IDE. File tree on the left, editor tabs/splits in the center, outline/inspector on the right, diagnostics/search/build drawer below. The tree contains `twine.toml`, `passages/`, `scripts/`, `styles/`, `assets/`, and generated/cache areas.
+
+Editor features: syntax highlighting, folding, wrap controls, tabs/spaces preference, spellcheck, dictionary/thesaurus hooks, passage autocomplete, variable references, snippets, linting, backlinks, find references, rename support, preview, build actions, and optional source/graph reveal.
+
+Must do: text editing must not be a second-class export path. It is the base native app.
+
+### Graph Mode
+
+Looks like: full-bleed center surface with subtle grid, minimap, zoom indicator, layout status, selection count, layer toggles, and graph-tool strip. Passage cards are virtualized nodes. Links are canvas/WebGL paths behind nodes. Broken links are red/dashed by default; selected-neighborhood links become visually stronger.
+
+Interactions: pan, zoom, lasso select, drag nodes, double-click empty space to create, drag connector to create link, right-click context menu, align/distribute, snap/grid, group/collapse, annotations, copy/paste, reveal source, reveal backlinks.
+
+Must do: remain smooth at huge scale. If no saved positions exist, generate an ephemeral layout and show Save Layout / Keep Text-Only choices. Link rendering and node rendering must be independently toggleable and virtualized.
+
+### Split Mode
+
+Looks like: graph and source visible together, commonly graph left/center and editor right, but user-resizable. Selecting a node opens its source. Moving the cursor inside a passage highlights the node. Editing a link updates graph edges immediately.
+
+Must do: this is the showcase `twine.rs` experience, but not the only valid experience. Diagnostics, search results, and build errors select both the source span and the graph object when graph metadata or generated layout is available.
+
+### Passage Inspector
+
+Looks like: right dock for the current selection. Single selection shows title, tags, source file, graph position if any, card size if any, outgoing links, backlinks, variables, diagnostics, asset references, publish/exclude flags, and history. Multi-select shows bulk tag, align, distribute, group, move, export selection, copy, and delete.
+
+Must do: inspector complements text and graph. In a source-only project it still provides links, tags, diagnostics, metadata, and build state; graph fields appear as absent/generated instead of broken.
+
+### Contents Navigator
+
+Looks like: index-backed tree/list of the whole project: metadata, passages, groups, sections, tags, variables, assets, scripts, styles, broken links, orphans, entry points, excluded passages, graph layouts, and build blockers. Rows have counts, status dots, and context actions.
+
+Must do: clicking any row reveals source first and graph where relevant. It should stay instant on 50k passages.
+
+### Command Palette
+
+Looks like: centered overlay with a single input and grouped results for commands, passages, files, variables, tags, assets, diagnostics, settings, modes, and build targets. Results use icons and keyboard hints.
+
+Must do: every important screen/action should be reachable here, including Create Passage, Rename Passage, Switch to Text, Switch to Graph, Generate Layout, Reveal in Graph, Reveal in Source, Select Matching Passages, Rebuild Indexes, Export Story, and Open Settings Section.
+
+### Search and Replace Panel
+
+Looks like: bottom drawer or side panel with query, replace field, scope chips, regex/case/title/tag/variable toggles, grouped result list, snippets, count badges, and per-result reveal buttons.
+
+Must do: replacement should support preview/review-before-apply and produce an undoable transaction. Search cannot require a graph.
+
+### Diagnostics Panel
+
+Looks like: compiler-style panel grouped by severity and type. Broken links, duplicate names, invalid metadata, missing assets, unreachable passages, format errors, syntax errors, export blockers, and migration warnings appear with file/span and graph location when available.
+
+Must do: every diagnostic should have a clear explanation and, when safe, a fix action. Source location is mandatory; graph location is optional.
+
+### Asset Manager
+
+Looks like: table/grid hybrid with preview thumbnail, name, type, size, dimensions/duration where relevant, references, used/unused state, modified time, and publish status. Actions include import, reveal in folder, rename, copy snippet, preview, find usages, replace file, and delete.
+
+Must do: assets live in files and remain visible to Git/external editors. Asset references participate in search, diagnostics, import review, and export packaging.
+
+### Build / Export / Publish
+
+Looks like: target list with cards or rows for Play, Test From Selection, Proof, Validate, Export HTML, Export Twee, Export JSON, Package, and Publish. Each target shows selected format, output path, last run, warnings, and options.
+
+Must do: running a target streams logs into the bottom drawer and turns build warnings into diagnostics. Export should explain exactly which files are created. Build must work from any mode.
+
+### Play / Test / Debug
+
+Looks like: embedded runtime preview with a top debug strip: restart, run from passage, current passage, visited stack, variables/state, console/log, open source, reveal in graph if available, and viewport controls.
+
+Must do: play/test should feel integrated with authoring. Runtime errors should link back to source and graph when graph exists.
+
+### Import / Migration Review
+
+Looks like: wizard-like review. Left side shows source file(s). Center shows detected stories, passages, assets, formats, metadata, and whether saved graph positions exist. Right side shows conflicts, warnings, and decisions. Bottom action bar has Import as New Project, Merge, Convert to Multi-file, Generate Layout, Preserve Layout, and Cancel.
+
+Must do: never silently discard unknown metadata, tags, IFIDs, custom attributes, assets, format data, or graph coordinates. Never require graph coordinates for source projects.
+
+### Settings
+
+Looks like: large searchable settings screen. Sections: General, Workspace, Modes, Editor, Graph, Accessibility, Keyboard Shortcuts, Storage, Backups, Story Formats, Build, Integrations, Platform, About.
+
+Must do: expose startup mode, default project folder, generated layout behavior, reduced motion, high contrast, custom keybindings, cache cleanup, backup cadence, external editor, cloud/revision hooks, update channel, and local-only warnings.
+
+## Milestone Roadmap
+
+### M0: Core Model, Project Format, and Persistence
+
+Make the Rust story model, source layout, import/export, save semantics, identifiers, backups, and project-library metadata trustworthy before UI cleverness depends on them.
+
+Primary screen: Project Launcher / Project Files.
+
+Recorded enhancement requests: **26**. Priority mix: P2=5, P3=12, P4=8, unprioritized=1.
+
+Core deliverables:
+
+- A canonical multi-file project layout with `twine.toml`, `passages/`, `scripts/`, `styles/`, `assets/`, and generated indexes clearly separated.
+- Optional graph layout metadata. Passage positions, card sizes, groups, and saved layouts are sidecar/project metadata, not required for a valid source project.
+- Importers for Twine HTML, Twee, JSON-style interchange, Twine 1.x where practical, and existing browser/localStorage stories.
+- Lossless preservation of IFID, story tags, passage tags, custom passage attributes, unknown metadata, sort order, color metadata, start passage, and story format selection.
+- A transactional save model with undoable structural edits, dirty-state indicators, backup reminders, explicit local/cloud/storage messaging, and user-selected project locations.
+
+Highest-signal requests in this milestone:
+
+- [#1685](https://github.com/klembot/twinejs/issues/1685) Option to choose a max number of cache folders (P2 (should), 6 comments)
+- [#987](https://github.com/klembot/twinejs/issues/987) 2.4: Renaming a passage or checking "Start Story Here" should be undoable actions (P2 (should), 1 comments)
+- [#981](https://github.com/klembot/twinejs/issues/981) 2.4: More story sorting options (P2 (should), 1 comments)
+- [#153](https://github.com/klembot/twinejs/issues/153) Copying passages between stories (P2 (should), 1 comments)
+- [#24](https://github.com/klembot/twinejs/issues/24) It's not obvious enough that story files are local only (P2 (should), 0 comments)
+- [#477](https://github.com/klembot/twinejs/issues/477) Unable to choose where stories save. (P3 (could), 18 comments)
+- [#724](https://github.com/klembot/twinejs/issues/724) Story ID in LocalStorage appears to be different than its IFID (P3 (could), 7 comments)
+- [#1646](https://github.com/klembot/twinejs/issues/1646) Use filename when importing Twee if no StoryTitle passage exists; allow for skipping StoryTitle when exporting to Twee (P3 (could), 6 comments)
+
+### M1: Modal Text/Graph Workspace Shell
+
+Create a mode-native shell where Text, Graph, and Split are first-class authoring modes. Modal here means workspace modes, not pop-up modal dependency: the text editor can be the whole app, the graph editor can be the whole app, and split can bind them together.
+
+Primary screen: Main Workspace Shell.
+
+Recorded enhancement requests: **9**. Priority mix: P2=2, P3=4, P4=2, unprioritized=1.
+
+Core deliverables:
+
+- A stable three-pane workbench with collapsible left/right docks, center Text/Graph/Split modes, bottom drawer, route scroll memory, and commandable toolbar slots.
+- Per-project and per-workspace mode memory: source-only projects open text-first; graph-backed projects can open graph-first; mixed projects can open split.
+- A replacement for stacked modal editing that keeps focus, cursor state, dialog state, and ESC/menu behavior predictable without making modal dialogs the core authoring surface.
+- A toolbar model that supports pinned/custom actions, collapsible groups, context-sensitive actions, and extension-provided menu items.
+
+Highest-signal requests in this milestone:
+
+- [#1355](https://github.com/klembot/twinejs/issues/1355) [2.6] Auto-expand collapsed editor stack on new editor selected (P2 (should), 1 comments)
+- [#1169](https://github.com/klembot/twinejs/issues/1169) 2.4: Esc presses should close any open dropdown menus before closing the passage editor/other dialogs (P2 (should), 0 comments)
+- [#1177](https://github.com/klembot/twinejs/issues/1177) 2.4.0 Allow editor toolbars to collapse (P3 (could), 5 comments)
+- [#1051](https://github.com/klembot/twinejs/issues/1051) Unclear when navigating to story format list that you have changed view (P3 (could), 5 comments)
+- [#1404](https://github.com/klembot/twinejs/issues/1404) Add custom or pinned top toolbar items (P3 (could), 2 comments)
+- [#1045](https://github.com/klembot/twinejs/issues/1045) Remember position of scrolling in routes (P3 (could), 0 comments)
+- [#1180](https://github.com/klembot/twinejs/issues/1180) 2.4.x Allow passage windows/dialogs to be moved & resized (P4 (maybe), 9 comments)
+- [#1015](https://github.com/klembot/twinejs/issues/1015) 2.4: Story menu buttons should also close the relevant windows (P4 (maybe), 3 comments)
+
+### M2: Fast Native Story Graph
+
+Turn graph mode into a native-feeling story editor that can pan, zoom, select, link, group, annotate, and inspect huge stories without DOM/SVG exhaustion. Graph mode must be excellent when layout exists and graceful when it does not.
+
+Primary screen: Graph Canvas.
+
+Recorded enhancement requests: **25**. Priority mix: P2=1, P3=16, P4=7, unprioritized=1.
+
+Core deliverables:
+
+- Virtualized node rendering, canvas/WebGL link rendering, index-backed link layers, link visibility toggles, and selected-neighborhood focus.
+- Ephemeral auto-layout for projects with no saved positions, plus an explicit Save Layout action if the author wants to persist graph coordinates.
+- Map interactions authors expect: double-click create, right-click menus, connector-drag linking, snap/grid, align/distribute, copy/paste, layers/groups, annotations, and minimap reveal.
+- Graph-specific visual states for broken links, self links, start passage, empty tagged passages, tag indicators, search highlights, and duplicate/renamed passages.
+
+Highest-signal requests in this milestone:
+
+- [#540](https://github.com/klembot/twinejs/issues/540) Ability to Copy and Paste Passages (P2 (should), 1 comments)
+- [#1372](https://github.com/klembot/twinejs/issues/1372) [2.6] Restore the right-click to create a passage function (P3 (could), 8 comments)
+- [#1345](https://github.com/klembot/twinejs/issues/1345) Tool for drawing comment blocks in editor (P3 (could), 8 comments)
+- [#1354](https://github.com/klembot/twinejs/issues/1354) Multiple Multi-Purpose Story Maps (high-concept feature proposal with story spec changes) (P3 (could), 7 comments)
+- [#1451](https://github.com/klembot/twinejs/issues/1451) enable/disable passage link-connectors for better performance and clear view (P3 (could), 6 comments)
+- [#469](https://github.com/klembot/twinejs/issues/469) Add an improved Snap to Grid option (P3 (could), 6 comments)
+- [#73](https://github.com/klembot/twinejs/issues/73) Feature: right-click context menu (P3 (could), 6 comments)
+- [#412](https://github.com/klembot/twinejs/issues/412) Allow adding floating annotations to the story view (P3 (could), 4 comments)
+
+### M3: Twine-Aware Text Editor and IDE Ergonomics
+
+Make the decompiled/text workflow first-class: an incredible Twine-aware text editor that stands on its own even when a project has no graph positions at all.
+
+Primary screen: Source Workspace / Passage Editor.
+
+Recorded enhancement requests: **26**. Priority mix: P2=1, P3=15, P4=10, unprioritized=0.
+
+Core deliverables:
+
+- CodeMirror 6 or equivalent editor architecture with cursor/scroll memory, split editors, compare view, folding, spellcheck options, wrapping, dictionary/thesaurus hooks, and accessibility-aware focus flow.
+- Dedicated source files for passages, scripts, stylesheets, and format-specific tagged passages, with syntax highlighting and tabs/spaces/font/keymap preferences.
+- Format-aware editor services: passage autocomplete, JavaScript/CSS linting or REPL hooks, rename safety, formatter-aware links, backlinks, references, snippets, and stable external-editor integration points.
+- Text-native navigation: outline, backlinks, outgoing links, variables, tags, diagnostics, build actions, and preview must all be available without opening graph mode.
+
+Highest-signal requests in this milestone:
+
+- [#957](https://github.com/klembot/twinejs/issues/957) 2.4: Upgrade to CodeMirror 6? (P2 (should), 4 comments)
+- [#1467](https://github.com/klembot/twinejs/issues/1467) Not able to edit two passages side-by-side (P3 (could), 8 comments)
+- [#1574](https://github.com/klembot/twinejs/issues/1574) Multiple scripts and stylesheets (P3 (could), 4 comments)
+- [#1421](https://github.com/klembot/twinejs/issues/1421) Apply JS/CSS highlighting to passges with script/stylesheet tags (P3 (could), 3 comments)
+- [#209](https://github.com/klembot/twinejs/issues/209) zero-width characters and wrapping? (P3 (could), 3 comments)
+- [#1285](https://github.com/klembot/twinejs/issues/1285) Open "Find & Replace" using keyboard shortcut ctrl+f/cmd+f (P3 (could), 2 comments)
+- [#1160](https://github.com/klembot/twinejs/issues/1160) Consider rewording passageTextPlaceholder from "To link to another passage, put two square brackets around its name, [[like this]]." (P3 (could), 2 comments)
+- [#973](https://github.com/klembot/twinejs/issues/973) 2.4: Don't put the "Size" button in the passage text editor when it belongs in the Delete/Edit/Test menu (P3 (could), 2 comments)
+
+### M4: Project Intelligence, Search, Contents, and Diagnostics
+
+Build the Rust indexes that make enormous projects navigable from either mode: contents, tags, variables, backlinks, broken links, search results, proof output, and organization views.
+
+Primary screen: Contents / Search / Diagnostics.
+
+Recorded enhancement requests: **23**. Priority mix: P2=3, P3=14, P4=5, unprioritized=1.
+
+Core deliverables:
+
+- A persistent Contents Navigator that lists metadata, passages, groups, tags, variables, assets, scripts, styles, diagnostics, entry points, orphans, and broken links.
+- Unified search and replace across passage text, titles, tags, variables, proof output, assets, files, commands, and settings, with reveal-in-source and optional reveal-in-graph actions.
+- Bulk tag workflows, tag counts/colors/filtering, advanced connectivity diagnostics, highlighted tag/query results, and durable organization constructs such as sections/chapters/groups.
+
+Highest-signal requests in this milestone:
+
+- [#984](https://github.com/klembot/twinejs/issues/984) 2.4: UX for adding passage tags is a bit clunky (P2 (should), 3 comments)
+- [#1275](https://github.com/klembot/twinejs/issues/1275) Enhancement: 'Find & Replace' to list passages & allow click to open (P2 (should), 2 comments)
+- [#1201](https://github.com/klembot/twinejs/issues/1201) 2.4.0 Change how tags are added when there are many unique tags (P2 (should), 1 comments)
+- [#1497](https://github.com/klembot/twinejs/issues/1497) Scroll to search results in find & replace (P3 (could), 8 comments)
+- [#1391](https://github.com/klembot/twinejs/issues/1391) Show count of tagged passages in the "Passage Tags" dialog (P3 (could), 6 comments)
+- [#1387](https://github.com/klembot/twinejs/issues/1387) Let us tag multiple passages at the same time (P3 (could), 5 comments)
+- [#1079](https://github.com/klembot/twinejs/issues/1079) Be able to mark the back section for better organization (P3 (could), 4 comments)
+- [#983](https://github.com/klembot/twinejs/issues/983) 2.4: More tag colours (P3 (could), 4 comments)
+
+### M5: Assets, Media, and Resource Management
+
+Stop treating media as an awkward author-side chore; make assets visible, file-backed, searchable, previewable, reference-aware, and export-safe.
+
+Primary screen: Asset Manager.
+
+Recorded enhancement requests: **3**. Priority mix: P2=2, P3=0, P4=1, unprioritized=0.
+
+Core deliverables:
+
+- An `assets/` folder with image/media import, preview thumbnails, file metadata, find usages, unused-file detection, snippet insertion, and publish-copy rules.
+- Editor-side image handling that lets authors insert, preview, rename, and validate references without manually juggling base64 or fragile relative paths.
+- Integration with Contents, diagnostics, import review, export packaging, and custom format rules.
+
+Highest-signal requests in this milestone:
+
+- [#114](https://github.com/klembot/twinejs/issues/114) Importing image resources (P2 (should), 9 comments)
+- [#205](https://github.com/klembot/twinejs/issues/205) Better handle images while editing (P2 (should), 1 comments)
+- [#695](https://github.com/klembot/twinejs/issues/695) A Problem To Do With Working With Media and Assets That Could Be Simply Fixed. (P4 (maybe), 4 comments)
+
+### M6: Story Formats, Build, Test, and Publishing
+
+Preserve Twine's format ecosystem while making format capabilities explicit, typed, testable, and fast.
+
+Primary screen: Build / Formats / Test.
+
+Recorded enhancement requests: **30**. Priority mix: P2=3, P3=16, P4=10, unprioritized=1.
+
+Core deliverables:
+
+- A story-format capability manifest for parser, exporter, syntax, completions, diagnostics, docs, editor toolbar actions, menu items, preprocessing, statistics, and migration compatibility.
+- Build targets for Play, Test From Selection, Proof, Export HTML, Export Twee, Export JSON, Package, Publish, and source/HTML inspection with warnings before output.
+- Runtime/debug hooks for current passage, variable/state inspection, launched-from-editor detection, Open Graph metadata, localization, compression, excluded passages, and format-version rollback.
+
+Highest-signal requests in this milestone:
+
+- [#134](https://github.com/klembot/twinejs/issues/134) Passage autocomplete should really be on the story format side (P2 (should), 2 comments)
+- [#947](https://github.com/klembot/twinejs/issues/947) "Extending Twine" suggestion: toolbar toggle-button support (P2 (should), 1 comments)
+- [#301](https://github.com/klembot/twinejs/issues/301) Link to format documentation (P2 (should), 1 comments)
+- [#1440](https://github.com/klembot/twinejs/issues/1440) Add story title and tags as data attributes to the editor HTML (P3 (could), 9 comments)
+- [#1252](https://github.com/klembot/twinejs/issues/1252) "Extending Twine" suggestion: a preprocessing function for engine code and engine CSS (P3 (could), 9 comments)
+- [#1060](https://github.com/klembot/twinejs/issues/1060) Passage renames don't affect story format-specific links (P3 (could), 8 comments)
+- [#942](https://github.com/klembot/twinejs/issues/942) "Extending Twine" proposal suggestions (P3 (could), 6 comments)
+- [#1262](https://github.com/klembot/twinejs/issues/1262) Add a "Use as story format" button in Twine - Story Formats menu (P3 (could), 5 comments)
+
+### M7: Preferences, Accessibility, Platform, Sharing, and Distribution
+
+Make the app reliable and respectful across operating systems, input modes, accessibility needs, packaging channels, sharing workflows, and backup habits.
+
+Primary screen: Settings / Platform / Sharing.
+
+Recorded enhancement requests: **28**. Priority mix: P2=4, P3=4, P4=18, unprioritized=2.
+
+Core deliverables:
+
+- Settings for reduced motion, high contrast, keybindings, keyboard-only editing, editor focus, fullscreen persistence, cache cleanup, backup cadence, default project folders, external editor, and integrations.
+- Platform support for command-line help/open, installer documentation, 32-bit decisions, Linux launcher/Flatpak, Mac update path, auto-update strategy, mobile/online constraints, and link-handling behavior.
+- Sharing and collaboration-adjacent features: shareable story links, cloud save hooks, revision-control integration, hosting/FTP publish hooks, and clear warnings about local-only data.
+
+Highest-signal requests in this milestone:
+
+- [#1211](https://github.com/klembot/twinejs/issues/1211) Windows app: colours are removed by Electron if Windows is in a High Contrast theme (P2 (should), 3 comments)
+- [#1089](https://github.com/klembot/twinejs/issues/1089) add keyboard shortcuts for accessibility (P2 (should), 2 comments)
+- [#260](https://github.com/klembot/twinejs/issues/260) Make editing passages keyboard accessible (P2 (should), 2 comments)
+- [#23](https://github.com/klembot/twinejs/issues/23) Warn users if they have not backed up in a given time period (P2 (should), 1 comments)
+- [#651](https://github.com/klembot/twinejs/issues/651) Provide a Flatpak for Linux (P3 (could), 8 comments)
+- [#659](https://github.com/klembot/twinejs/issues/659) Mobile version (P3 (could), 5 comments)
+- [#1550](https://github.com/klembot/twinejs/issues/1550) Document options for Windows installer (P3 (could), 4 comments)
+- [#613](https://github.com/klembot/twinejs/issues/613) auto update (P3 (could), 1 comments)
+
+## Complete Enhancement Request Catalogue
+
+Every open enhancement request from the source snapshot is recorded below. `Target screen` is the primary place the request should show up in `twine.rs`; `Milestone` is the roadmap home. The exact issue title is preserved in the final column.
+
+| Issue | Priority | Comments | Target screen | Milestone | Demand theme | twine.rs interpretation | Exact request title |
+|---:|---|---:|---|---|---|---|---|
+| [#1688](https://github.com/klembot/twinejs/issues/1688) | P4 (maybe) | 2 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Make this the Contents Navigator, not just a modal: metadata, passages, tags, variables, and asset references should all be indexed and cross-linked. | Add a "Story contents" dialog: metadata, passages, tags, variables, and image assets |
+| [#1685](https://github.com/klembot/twinejs/issues/1685) | P2 (should) | 6 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Option to choose a max number of cache folders | Option to choose a max number of cache folders |
+| [#1683](https://github.com/klembot/twinejs/issues/1683) | P4 (maybe) | 2 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Expose reduced-motion controls in Accessibility and ensure animation is never required for comprehension. | An option to disable UI animations |
+| [#1679](https://github.com/klembot/twinejs/issues/1679) | P3 (could) | 2 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Improve edge affordances on the graph with clearer arrow origins, hover states, and selected-link highlighting. | Make arrow origin points more clear |
+| [#1667](https://github.com/klembot/twinejs/issues/1667) | P3 (could) | 1 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Persist cursor and scroll state per passage/source tab so text work survives navigation. | Preserve text cursor location when swapping between passages |
+| [#1654](https://github.com/klembot/twinejs/issues/1654) | P3 (could) | 2 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Support empty-space double-click creation directly in the graph canvas. | Double-click Story Map to create new Passage |
+| [#1652](https://github.com/klembot/twinejs/issues/1652) | P3 (could) | 4 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Story tags are not preserved in Twee export/import | Story tags are not preserved in Twee export/import |
+| [#1648](https://github.com/klembot/twinejs/issues/1648) | P3 (could) | 0 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Add preference for tabs vs. spaces in code editors | Add preference for tabs vs. spaces in code editors |
+| [#1646](https://github.com/klembot/twinejs/issues/1646) | P3 (could) | 6 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Use filename when importing Twee if no StoryTitle passage exists; allow for skipping StoryTitle when exporting to Twee | Use filename when importing Twee if no StoryTitle passage exists; allow for skipping StoryTitle when exporting to Twee |
+| [#1641](https://github.com/klembot/twinejs/issues/1641) | P3 (could) | 1 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: 2.11 tag autocomplete is case-sensitive | 2.11 tag autocomplete is case-sensitive |
+| [#1627](https://github.com/klembot/twinejs/issues/1627) | P4 (maybe) | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Proposal: unify story formats into a single modular format | Proposal: unify story formats into a single modular format |
+| [#1593](https://github.com/klembot/twinejs/issues/1593) | unprioritized | 4 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: JSON import/export for stories | JSON import/export for stories |
+| [#1592](https://github.com/klembot/twinejs/issues/1592) | P4 (maybe) | 7 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Obsidian Support: TwineJS Plugin for Seamless Workflow | Obsidian Support: TwineJS Plugin for Seamless Workflow |
+| [#1578](https://github.com/klembot/twinejs/issues/1578) | P3 (could) | 1 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Keyboard shortcut to open editor on selected passage | Keyboard shortcut to open editor on selected passage |
+| [#1574](https://github.com/klembot/twinejs/issues/1574) | P3 (could) | 4 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Multiple scripts and stylesheets | Multiple scripts and stylesheets |
+| [#1573](https://github.com/klembot/twinejs/issues/1573) | P3 (could) | 1 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Apply syntax highlighters to script/stylesheet tagged passages | Apply syntax highlighters to script/stylesheet tagged passages |
+| [#1562](https://github.com/klembot/twinejs/issues/1562) | unprioritized | 3 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Searching for variables | Searching for variables |
+| [#1550](https://github.com/klembot/twinejs/issues/1550) | P3 (could) | 4 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Document options for Windows installer | Document options for Windows installer |
+| [#1511](https://github.com/klembot/twinejs/issues/1511) | P4 (maybe) | 5 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Accessing the html code for a Twine story without an external download | Accessing the html code for a Twine story without an external download |
+| [#1509](https://github.com/klembot/twinejs/issues/1509) | P4 (maybe) | 9 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Use this as a first-class project layout requirement, including folders authors can inspect and version. | Project folder structure |
+| [#1507](https://github.com/klembot/twinejs/issues/1507) | P3 (could) | 1 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Passage titles should be findable on the "Proof" webpage | Passage titles should be findable on the "Proof" webpage |
+| [#1497](https://github.com/klembot/twinejs/issues/1497) | P3 (could) | 8 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Scroll to search results in find & replace | Scroll to search results in find & replace |
+| [#1481](https://github.com/klembot/twinejs/issues/1481) | P4 (maybe) | 3 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Add `--help` command line argument | Add `--help` command line argument |
+| [#1467](https://github.com/klembot/twinejs/issues/1467) | P3 (could) | 8 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Not able to edit two passages side-by-side | Not able to edit two passages side-by-side |
+| [#1466](https://github.com/klembot/twinejs/issues/1466) | unprioritized | 16 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Treat sharing as a publishing/integration workflow with privacy and persistence made explicit. | Shareable Twinery story links |
+| [#1451](https://github.com/klembot/twinejs/issues/1451) | P3 (could) | 6 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make link rendering optional/layered so huge maps can stay fast and readable. | enable/disable passage link-connectors for better performance and clear view |
+| [#1443](https://github.com/klembot/twinejs/issues/1443) | P4 (maybe) | 4 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Add connector-drag link creation to the graph interaction model. | Ability to connect passages by holding left mouse button on passage 1 and dragging mouse to passage 2 creating line in result |
+| [#1440](https://github.com/klembot/twinejs/issues/1440) | P3 (could) | 9 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Add story title and tags as data attributes to the editor HTML | Add story title and tags as data attributes to the editor HTML |
+| [#1438](https://github.com/klembot/twinejs/issues/1438) | P3 (could) | 3 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Add passage tags to `passage-card` element using data-tags | Add passage tags to `passage-card` element using data-tags |
+| [#1436](https://github.com/klembot/twinejs/issues/1436) | P3 (could) | 2 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Duplicate passages in a story… | Duplicate passages in a story… |
+| [#1421](https://github.com/klembot/twinejs/issues/1421) | P3 (could) | 3 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Apply JS/CSS highlighting to passges with script/stylesheet tags | Apply JS/CSS highlighting to passges with script/stylesheet tags |
+| [#1408](https://github.com/klembot/twinejs/issues/1408) | P3 (could) | 3 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Have an option to select Story Format when a New (story) is clicked in Library | Have an option to select Story Format when a New (story) is clicked in Library |
+| [#1405](https://github.com/klembot/twinejs/issues/1405) | P3 (could) | 0 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Allow user reordering of stories in library view | Allow user reordering of stories in library view |
+| [#1404](https://github.com/klembot/twinejs/issues/1404) | P3 (could) | 2 | Main Workspace Shell | M1: Modal Text/Graph Workspace Shell | Authoring modes, workspace chrome, docks, toolbar, navigation | Design into the mode-aware workspace shell: Add custom or pinned top toolbar items | Add custom or pinned top toolbar items |
+| [#1403](https://github.com/klembot/twinejs/issues/1403) | P3 (could) | 4 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Set to example or template and load temporarily at will | Set to example or template and load temporarily at will |
+| [#1395](https://github.com/klembot/twinejs/issues/1395) | P4 (maybe) | 2 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Open story from command line | Open story from command line |
+| [#1391](https://github.com/klembot/twinejs/issues/1391) | P3 (could) | 6 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Show count of tagged passages in the "Passage Tags" dialog | Show count of tagged passages in the "Passage Tags" dialog |
+| [#1389](https://github.com/klembot/twinejs/issues/1389) | unprioritized | 5 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Feature: Sub-Storys, or Passage Grouping | Feature: Sub-Storys, or Passage Grouping |
+| [#1387](https://github.com/klembot/twinejs/issues/1387) | P3 (could) | 5 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Let us tag multiple passages at the same time | Let us tag multiple passages at the same time |
+| [#1372](https://github.com/klembot/twinejs/issues/1372) | P3 (could) | 8 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: [2.6] Restore the right-click to create a passage function | [2.6] Restore the right-click to create a passage function |
+| [#1363](https://github.com/klembot/twinejs/issues/1363) | P3 (could) | 1 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: [2.6] Slightly increase time before removing empty passages | [2.6] Slightly increase time before removing empty passages |
+| [#1355](https://github.com/klembot/twinejs/issues/1355) | P2 (should) | 1 | Main Workspace Shell | M1: Modal Text/Graph Workspace Shell | Authoring modes, workspace chrome, docks, toolbar, navigation | Design into the mode-aware workspace shell: [2.6] Auto-expand collapsed editor stack on new editor selected | [2.6] Auto-expand collapsed editor stack on new editor selected |
+| [#1354](https://github.com/klembot/twinejs/issues/1354) | P3 (could) | 7 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Multiple Multi-Purpose Story Maps (high-concept feature proposal with story spec changes) | Multiple Multi-Purpose Story Maps (high-concept feature proposal with story spec changes) |
+| [#1345](https://github.com/klembot/twinejs/issues/1345) | P3 (could) | 8 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Tool for drawing comment blocks in editor | Tool for drawing comment blocks in editor |
+| [#1343](https://github.com/klembot/twinejs/issues/1343) | P4 (maybe) | 6 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Mac AppStore for automatic updates | Mac AppStore for automatic updates |
+| [#1337](https://github.com/klembot/twinejs/issues/1337) | P3 (could) | 3 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Debug view defaults from clicking play from a node | Debug view defaults from clicking play from a node |
+| [#1334](https://github.com/klembot/twinejs/issues/1334) | P4 (maybe) | 2 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Allow story authors to provide material to be included in the head of the story file | Allow story authors to provide material to be included in the head of the story file |
+| [#1331](https://github.com/klembot/twinejs/issues/1331) | P4 (maybe) | 2 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Empty passages with a tag should still be translucent | Empty passages with a tag should still be translucent |
+| [#1322](https://github.com/klembot/twinejs/issues/1322) | P4 (maybe) | 1 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Flowchart: Quickly Snap (graphically) to located/found passage | Flowchart: Quickly Snap (graphically) to located/found passage |
+| [#1317](https://github.com/klembot/twinejs/issues/1317) | P4 (maybe) | 3 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Confirm Passage Deletion | Confirm Passage Deletion |
+| [#1303](https://github.com/klembot/twinejs/issues/1303) | P3 (could) | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Information/notification message when a story uses an outdated version of a format | Information/notification message when a story uses an outdated version of a format |
+| [#1296](https://github.com/klembot/twinejs/issues/1296) | unprioritized | 2 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Offline Play and Foreign Language Support | Offline Play and Foreign Language Support |
+| [#1285](https://github.com/klembot/twinejs/issues/1285) | P3 (could) | 2 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Open "Find & Replace" using keyboard shortcut ctrl+f/cmd+f | Open "Find & Replace" using keyboard shortcut ctrl+f/cmd+f |
+| [#1275](https://github.com/klembot/twinejs/issues/1275) | P2 (should) | 2 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Search results must be a navigable result list, not only a count. | Enhancement: 'Find & Replace' to list passages & allow click to open |
+| [#1274](https://github.com/klembot/twinejs/issues/1274) | unprioritized | 1 | Main Workspace Shell | M1: Modal Text/Graph Workspace Shell | Authoring modes, workspace chrome, docks, toolbar, navigation | Design into the mode-aware workspace shell: Idea: Separate the concept of moving a dialog to the left column from the concept of maximising a dialog | Idea: Separate the concept of moving a dialog to the left column from the concept of maximising a dialog |
+| [#1262](https://github.com/klembot/twinejs/issues/1262) | P3 (could) | 5 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Add a "Use as story format" button in Twine - Story Formats menu | Add a "Use as story format" button in Twine - Story Formats menu |
+| [#1252](https://github.com/klembot/twinejs/issues/1252) | P3 (could) | 9 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: "Extending Twine" suggestion: a preprocessing function for engine code and engine CSS | "Extending Twine" suggestion: a preprocessing function for engine code and engine CSS |
+| [#1243](https://github.com/klembot/twinejs/issues/1243) | P3 (could) | 2 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Attempting to do the space+left click input from 2.3 should do nothing in 2.4 instead of falling back to the browser built-in page-down scroll | Attempting to do the space+left click input from 2.3 should do nothing in 2.4 instead of falling back to the browser built-in page-down scroll |
+| [#1232](https://github.com/klembot/twinejs/issues/1232) | P3 (could) | 2 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Add the list element to the passage list in the twine editor | Add the list element to the passage list in the twine editor |
+| [#1231](https://github.com/klembot/twinejs/issues/1231) | P3 (could) | 1 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Keyboard shortcuts for edit selected, test selected, and create new passage | Keyboard shortcuts for edit selected, test selected, and create new passage |
+| [#1224](https://github.com/klembot/twinejs/issues/1224) | P3 (could) | 1 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Add "Tag" to multi-passage edit function | Add "Tag" to multi-passage edit function |
+| [#1223](https://github.com/klembot/twinejs/issues/1223) | P3 (could) | 1 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Show story format on story summary card | Show story format on story summary card |
+| [#1218](https://github.com/klembot/twinejs/issues/1218) | P4 (maybe) | 3 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Let us pick the story's color in the story library | Let us pick the story's color in the story library |
+| [#1214](https://github.com/klembot/twinejs/issues/1214) | P4 (maybe) | 3 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Add JS linter and/or REPL | Add JS linter and/or REPL |
+| [#1211](https://github.com/klembot/twinejs/issues/1211) | P2 (should) | 3 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Respect OS high-contrast colors without losing meaning or tag distinction. | Windows app: colours are removed by Electron if Windows is in a High Contrast theme |
+| [#1201](https://github.com/klembot/twinejs/issues/1201) | P2 (should) | 1 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: 2.4.0 Change how tags are added when there are many unique tags | 2.4.0 Change how tags are added when there are many unique tags |
+| [#1184](https://github.com/klembot/twinejs/issues/1184) | P3 (could) | 2 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: 2.4.x Allow filter passages by tag | 2.4.x Allow filter passages by tag |
+| [#1182](https://github.com/klembot/twinejs/issues/1182) | P3 (could) | 3 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Add "Search" to the top bar | Add "Search" to the top bar |
+| [#1180](https://github.com/klembot/twinejs/issues/1180) | P4 (maybe) | 9 | Main Workspace Shell | M1: Modal Text/Graph Workspace Shell | Authoring modes, workspace chrome, docks, toolbar, navigation | Design into the mode-aware workspace shell: 2.4.x Allow passage windows/dialogs to be moved & resized | 2.4.x Allow passage windows/dialogs to be moved & resized |
+| [#1177](https://github.com/klembot/twinejs/issues/1177) | P3 (could) | 5 | Main Workspace Shell | M1: Modal Text/Graph Workspace Shell | Authoring modes, workspace chrome, docks, toolbar, navigation | Design into the mode-aware workspace shell: 2.4.0 Allow editor toolbars to collapse | 2.4.0 Allow editor toolbars to collapse |
+| [#1169](https://github.com/klembot/twinejs/issues/1169) | P2 (should) | 0 | Main Workspace Shell | M1: Modal Text/Graph Workspace Shell | Authoring modes, workspace chrome, docks, toolbar, navigation | Design into the mode-aware workspace shell: 2.4: Esc presses should close any open dropdown menus before closing the passage editor/other dialogs | 2.4: Esc presses should close any open dropdown menus before closing the passage editor/other dialogs |
+| [#1164](https://github.com/klembot/twinejs/issues/1164) | P3 (could) | 1 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Idea: passage search highlighter should show number of occurrences of search term as a badge on the passage | Idea: passage search highlighter should show number of occurrences of search term as a badge on the passage |
+| [#1160](https://github.com/klembot/twinejs/issues/1160) | P3 (could) | 2 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Consider rewording passageTextPlaceholder from "To link to another passage, put two square brackets around its name, [[like this]]." | Consider rewording passageTextPlaceholder from "To link to another passage, put two square brackets around its name, [[like this]]." |
+| [#1156](https://github.com/klembot/twinejs/issues/1156) | P4 (maybe) | 1 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: 32-bit Windows version | 32-bit Windows version |
+| [#1125](https://github.com/klembot/twinejs/issues/1125) | unprioritized | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: "Extending Twine" suggestion: menu items should be able to have icons | "Extending Twine" suggestion: menu items should be able to have icons |
+| [#1101](https://github.com/klembot/twinejs/issues/1101) | P3 (could) | 2 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: 2.4 UX: "Import" should be under "Story", not "Library" | 2.4 UX: "Import" should be under "Story", not "Library" |
+| [#1089](https://github.com/klembot/twinejs/issues/1089) | P2 (should) | 2 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: add keyboard shortcuts for accessibility | add keyboard shortcuts for accessibility |
+| [#1083](https://github.com/klembot/twinejs/issues/1083) | P4 (maybe) | 1 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Add being able to save to the cloud | Add being able to save to the cloud |
+| [#1082](https://github.com/klembot/twinejs/issues/1082) | P4 (maybe) | 1 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Customization for hotkeys and keybinds | Customization for hotkeys and keybinds |
+| [#1079](https://github.com/klembot/twinejs/issues/1079) | P3 (could) | 4 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Be able to mark the back section for better organization | Be able to mark the back section for better organization |
+| [#1060](https://github.com/klembot/twinejs/issues/1060) | P3 (could) | 8 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Passage renames don't affect story format-specific links | Passage renames don't affect story format-specific links |
+| [#1059](https://github.com/klembot/twinejs/issues/1059) | P3 (could) | 0 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: JavaScript editor doesn't maintain indent on newline, does not support indenting blocks | JavaScript editor doesn't maintain indent on newline, does not support indenting blocks |
+| [#1052](https://github.com/klembot/twinejs/issues/1052) | P4 (maybe) | 1 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Add shotcut keys for frequently used functions | Add shotcut keys for frequently used functions |
+| [#1051](https://github.com/klembot/twinejs/issues/1051) | P3 (could) | 5 | Main Workspace Shell | M1: Modal Text/Graph Workspace Shell | Authoring modes, workspace chrome, docks, toolbar, navigation | Design into the mode-aware workspace shell: Unclear when navigating to story format list that you have changed view | Unclear when navigating to story format list that you have changed view |
+| [#1045](https://github.com/klembot/twinejs/issues/1045) | P3 (could) | 0 | Main Workspace Shell | M1: Modal Text/Graph Workspace Shell | Authoring modes, workspace chrome, docks, toolbar, navigation | Design into the mode-aware workspace shell: Remember position of scrolling in routes | Remember position of scrolling in routes |
+| [#1042](https://github.com/klembot/twinejs/issues/1042) | P4 (maybe) | 0 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Compare text in passages side-by-side | Compare text in passages side-by-side |
+| [#1039](https://github.com/klembot/twinejs/issues/1039) | P4 (maybe) | 1 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Right click action in Stories and Passages | Right click action in Stories and Passages |
+| [#1027](https://github.com/klembot/twinejs/issues/1027) | P3 (could) | 3 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Auto-centring a passage in the story map if found uniquely in Quick Find | Auto-centring a passage in the story map if found uniquely in Quick Find |
+| [#1016](https://github.com/klembot/twinejs/issues/1016) | P3 (could) | 1 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: 2.4: Use lz-string compression to get extra localStorage space? | 2.4: Use lz-string compression to get extra localStorage space? |
+| [#1015](https://github.com/klembot/twinejs/issues/1015) | P4 (maybe) | 3 | Main Workspace Shell | M1: Modal Text/Graph Workspace Shell | Authoring modes, workspace chrome, docks, toolbar, navigation | Design into the mode-aware workspace shell: 2.4: Story menu buttons should also close the relevant windows | 2.4: Story menu buttons should also close the relevant windows |
+| [#1013](https://github.com/klembot/twinejs/issues/1013) | P4 (maybe) | 3 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: 2.4: Rename Passage titles by clicking on them | 2.4: Rename Passage titles by clicking on them |
+| [#1008](https://github.com/klembot/twinejs/issues/1008) | P3 (could) | 0 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Find or find/replace In the desktop passage open window | Find or find/replace In the desktop passage open window |
+| [#994](https://github.com/klembot/twinejs/issues/994) | P4 (maybe) | 2 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Isn't it about time to change the default story format to SugarCube? | Isn't it about time to change the default story format to SugarCube? |
+| [#987](https://github.com/klembot/twinejs/issues/987) | P2 (should) | 1 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: 2.4: Renaming a passage or checking "Start Story Here" should be undoable actions | 2.4: Renaming a passage or checking "Start Story Here" should be undoable actions |
+| [#984](https://github.com/klembot/twinejs/issues/984) | P2 (should) | 3 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: 2.4: UX for adding passage tags is a bit clunky | 2.4: UX for adding passage tags is a bit clunky |
+| [#983](https://github.com/klembot/twinejs/issues/983) | P3 (could) | 4 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: 2.4: More tag colours | 2.4: More tag colours |
+| [#981](https://github.com/klembot/twinejs/issues/981) | P2 (should) | 1 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: 2.4: More story sorting options | 2.4: More story sorting options |
+| [#976](https://github.com/klembot/twinejs/issues/976) | P4 (maybe) | 0 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: 2.4: "Edit Story Javascript" and "Edit Story Stylesheet" could have some visual indication of how much text is in each section already | 2.4: "Edit Story Javascript" and "Edit Story Stylesheet" could have some visual indication of how much text is in each section already |
+| [#973](https://github.com/klembot/twinejs/issues/973) | P3 (could) | 2 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: 2.4: Don't put the "Size" button in the passage text editor when it belongs in the Delete/Edit/Test menu | 2.4: Don't put the "Size" button in the passage text editor when it belongs in the Delete/Edit/Test menu |
+| [#971](https://github.com/klembot/twinejs/issues/971) | P4 (maybe) | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: "Extending Twine" suggestion: hydrate-JSONP property collisions should favour the hydrate property instead of the JSONP | "Extending Twine" suggestion: hydrate-JSONP property collisions should favour the hydrate property instead of the JSONP |
+| [#957](https://github.com/klembot/twinejs/issues/957) | P2 (should) | 4 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Use the editor rewrite moment to move to a modern extension-based editor architecture. | 2.4: Upgrade to CodeMirror 6? |
+| [#950](https://github.com/klembot/twinejs/issues/950) | P3 (could) | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: "Extending Twine" suggestion: option to provide format-specific story statistics functions | "Extending Twine" suggestion: option to provide format-specific story statistics functions |
+| [#949](https://github.com/klembot/twinejs/issues/949) | P3 (could) | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: "Extending Twine" suggestion: option to use Tabler icons for toolbar buttons instead of having to supply icons oneself | "Extending Twine" suggestion: option to use Tabler icons for toolbar buttons instead of having to supply icons oneself |
+| [#947](https://github.com/klembot/twinejs/issues/947) | P2 (should) | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: "Extending Twine" suggestion: toolbar toggle-button support | "Extending Twine" suggestion: toolbar toggle-button support |
+| [#942](https://github.com/klembot/twinejs/issues/942) | P3 (could) | 6 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: "Extending Twine" proposal suggestions | "Extending Twine" proposal suggestions |
+| [#922](https://github.com/klembot/twinejs/issues/922) | P3 (could) | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Force browser opening instead of using default application for .html | Force browser opening instead of using default application for .html |
+| [#911](https://github.com/klembot/twinejs/issues/911) | P3 (could) | 1 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Point view to center of screen when open a story | Point view to center of screen when open a story |
+| [#910](https://github.com/klembot/twinejs/issues/910) | P4 (maybe) | 2 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Enable fold support | Enable fold support |
+| [#889](https://github.com/klembot/twinejs/issues/889) | P4 (maybe) | 1 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Multiple Stylesheets/tabs suggesiton | Multiple Stylesheets/tabs suggesiton |
+| [#827](https://github.com/klembot/twinejs/issues/827) | P3 (could) | 0 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Export all stories | Export all stories |
+| [#777](https://github.com/klembot/twinejs/issues/777) | P3 (could) | 2 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Remove Auto Replacing Story Formats | Remove Auto Replacing Story Formats |
+| [#765](https://github.com/klembot/twinejs/issues/765) | P3 (could) | 0 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Allow users to walk back story format versions. | Allow users to walk back story format versions. |
+| [#750](https://github.com/klembot/twinejs/issues/750) | P4 (maybe) | 2 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Themes and IFID | Themes and IFID |
+| [#724](https://github.com/klembot/twinejs/issues/724) | P3 (could) | 7 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Story ID in LocalStorage appears to be different than its IFID | Story ID in LocalStorage appears to be different than its IFID |
+| [#717](https://github.com/klembot/twinejs/issues/717) | P4 (maybe) | 3 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Do not open links in browser | Do not open links in browser |
+| [#711](https://github.com/klembot/twinejs/issues/711) | P3 (could) | 4 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Be able to set an environment variable for the story file path | Be able to set an environment variable for the story file path |
+| [#707](https://github.com/klembot/twinejs/issues/707) | P4 (maybe) | 4 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: suggested feature chapter | suggested feature chapter |
+| [#695](https://github.com/klembot/twinejs/issues/695) | P4 (maybe) | 4 | Asset Manager | M5: Assets, Media, and Resource Management | Images, media, file-backed assets, references | Implement as file-backed asset management with reference tracking: A Problem To Do With Working With Media and Assets That Could Be Simply Fixed. | A Problem To Do With Working With Media and Assets That Could Be Simply Fixed. |
+| [#669](https://github.com/klembot/twinejs/issues/669) | P4 (maybe) | 1 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Fullscreen state is not remembered across sessions | Fullscreen state is not remembered across sessions |
+| [#659](https://github.com/klembot/twinejs/issues/659) | P3 (could) | 5 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Mobile version | Mobile version |
+| [#651](https://github.com/klembot/twinejs/issues/651) | P3 (could) | 8 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Provide a Flatpak for Linux | Provide a Flatpak for Linux |
+| [#620](https://github.com/klembot/twinejs/issues/620) | P3 (could) | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: A method to detect when HTML is launched from Twine | A method to detect when HTML is launched from Twine |
+| [#613](https://github.com/klembot/twinejs/issues/613) | P3 (could) | 1 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: auto update | auto update |
+| [#606](https://github.com/klembot/twinejs/issues/606) | P4 (maybe) | 2 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Mouse Click/Key combo to move or create links AND Link Words Visible Creation alternative | Mouse Click/Key combo to move or create links AND Link Words Visible Creation alternative |
+| [#583](https://github.com/klembot/twinejs/issues/583) | P3 (could) | 4 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Categorisation and organisation proposals | Categorisation and organisation proposals |
+| [#558](https://github.com/klembot/twinejs/issues/558) | P4 (maybe) | 0 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Feature Request: Don't remove custom attributes from tw-passagedata | Feature Request: Don't remove custom attributes from tw-passagedata |
+| [#540](https://github.com/klembot/twinejs/issues/540) | P2 (should) | 1 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Ability to Copy and Paste Passages | Ability to Copy and Paste Passages |
+| [#539](https://github.com/klembot/twinejs/issues/539) | P3 (could) | 0 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: [IDEA/FEATURE] Play story starting here button | [IDEA/FEATURE] Play story starting here button |
+| [#536](https://github.com/klembot/twinejs/issues/536) | P4 (maybe) | 2 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Idea(+visuals): mass add and edit tags. | Idea(+visuals): mass add and edit tags. |
+| [#509](https://github.com/klembot/twinejs/issues/509) | P4 (maybe) | 3 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: A module loading system. | A module loading system. |
+| [#498](https://github.com/klembot/twinejs/issues/498) | P4 (maybe) | 0 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: ASCII Art support in Twine | ASCII Art support in Twine |
+| [#497](https://github.com/klembot/twinejs/issues/497) | P3 (could) | 0 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Resulting HTML code compression | Resulting HTML code compression |
+| [#483](https://github.com/klembot/twinejs/issues/483) | P4 (maybe) | 4 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Open Graph support | Open Graph support |
+| [#477](https://github.com/klembot/twinejs/issues/477) | P3 (could) | 18 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Make user-chosen save location and visible local files a foundational project decision. | Unable to choose where stories save. |
+| [#469](https://github.com/klembot/twinejs/issues/469) | P3 (could) | 6 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Add an improved Snap to Grid option | Add an improved Snap to Grid option |
+| [#467](https://github.com/klembot/twinejs/issues/467) | P4 (maybe) | 0 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Add "Prevent passage from being deleted" function | Add "Prevent passage from being deleted" function |
+| [#459](https://github.com/klembot/twinejs/issues/459) | P4 (maybe) | 0 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: GoogleDrive Style Passage Duplicates - Feature suggestion | GoogleDrive Style Passage Duplicates - Feature suggestion |
+| [#419](https://github.com/klembot/twinejs/issues/419) | P4 (maybe) | 2 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Linux desktop launcher files | Linux desktop launcher files |
+| [#415](https://github.com/klembot/twinejs/issues/415) | P3 (could) | 0 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Snapping UX notes | Snapping UX notes |
+| [#412](https://github.com/klembot/twinejs/issues/412) | P3 (could) | 4 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Allow adding floating annotations to the story view | Allow adding floating annotations to the story view |
+| [#366](https://github.com/klembot/twinejs/issues/366) | P4 (maybe) | 1 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Sorting stories by alphabetical order puts lower-case letters at the end | Sorting stories by alphabetical order puts lower-case letters at the end |
+| [#345](https://github.com/klembot/twinejs/issues/345) | P4 (maybe) | 2 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Allow stories to be localized by authors | Allow stories to be localized by authors |
+| [#301](https://github.com/klembot/twinejs/issues/301) | P2 (should) | 1 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Link to format documentation | Link to format documentation |
+| [#296](https://github.com/klembot/twinejs/issues/296) | P4 (maybe) | 1 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Feature request: passage "layers" for editor | Feature request: passage "layers" for editor |
+| [#289](https://github.com/klembot/twinejs/issues/289) | P4 (maybe) | 7 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Export formats | Export formats |
+| [#267](https://github.com/klembot/twinejs/issues/267) | P4 (maybe) | 1 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Multiple Story Javascript Slots | Multiple Story Javascript Slots |
+| [#260](https://github.com/klembot/twinejs/issues/260) | P2 (should) | 2 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Make editing passages keyboard accessible | Make editing passages keyboard accessible |
+| [#249](https://github.com/klembot/twinejs/issues/249) | P4 (maybe) | 10 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Firefox spellchecking cannot be enabled in Twine2 online | Firefox spellchecking cannot be enabled in Twine2 online |
+| [#242](https://github.com/klembot/twinejs/issues/242) | P4 (maybe) | 5 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Embed Ace Editor in Twine | Embed Ace Editor in Twine |
+| [#235](https://github.com/klembot/twinejs/issues/235) | P4 (maybe) | 3 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Twine integrated revision control | Twine integrated revision control |
+| [#232](https://github.com/klembot/twinejs/issues/232) | P4 (maybe) | 12 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Advanced Passage Connectivity Testing | Advanced Passage Connectivity Testing |
+| [#231](https://github.com/klembot/twinejs/issues/231) | P4 (maybe) | 2 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Highlight all Passage Containing Specific Tag(s) | Highlight all Passage Containing Specific Tag(s) |
+| [#209](https://github.com/klembot/twinejs/issues/209) | P3 (could) | 3 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: zero-width characters and wrapping? | zero-width characters and wrapping? |
+| [#207](https://github.com/klembot/twinejs/issues/207) | P4 (maybe) | 3 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: external editor hook (automatic) | external editor hook (automatic) |
+| [#205](https://github.com/klembot/twinejs/issues/205) | P2 (should) | 1 | Asset Manager | M5: Assets, Media, and Resource Management | Images, media, file-backed assets, references | Implement as file-backed asset management with reference tracking: Better handle images while editing | Better handle images while editing |
+| [#192](https://github.com/klembot/twinejs/issues/192) | P3 (could) | 0 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Feature: Aligning a group of selected passages | Feature: Aligning a group of selected passages |
+| [#189](https://github.com/klembot/twinejs/issues/189) | P4 (maybe) | 2 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Feature Request: ability to directly manipulate tw-passagedata pid numbers? | Feature Request: ability to directly manipulate tw-passagedata pid numbers? |
+| [#169](https://github.com/klembot/twinejs/issues/169) | P3 (could) | 4 | Contents / Search / Diagnostics | M4: Project Intelligence, Search, Contents, and Diagnostics | Search, contents, tags, variables, organization, diagnostics | Implement through indexed contents/search/tag/diagnostic services: Tags, filtering, and other organisation improvements | Tags, filtering, and other organisation improvements |
+| [#153](https://github.com/klembot/twinejs/issues/153) | P2 (should) | 1 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Copying passages between stories | Copying passages between stories |
+| [#149](https://github.com/klembot/twinejs/issues/149) | P4 (maybe) | 2 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Use Twine Online with iPhone | Use Twine Online with iPhone |
+| [#145](https://github.com/klembot/twinejs/issues/145) | P4 (maybe) | 1 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Implement as settings, accessibility, platform, sharing, or integration reliability: Publish to FTP or other hosting services | Publish to FTP or other hosting services |
+| [#134](https://github.com/klembot/twinejs/issues/134) | P2 (should) | 2 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Passage autocomplete should really be on the story format side | Passage autocomplete should really be on the story format side |
+| [#121](https://github.com/klembot/twinejs/issues/121) | P4 (maybe) | 3 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Indicators and prompts to save | Indicators and prompts to save |
+| [#114](https://github.com/klembot/twinejs/issues/114) | P2 (should) | 9 | Asset Manager | M5: Assets, Media, and Resource Management | Images, media, file-backed assets, references | Create a real asset pipeline for image import, preview, references, and publish packaging. | Importing image resources |
+| [#103](https://github.com/klembot/twinejs/issues/103) | P4 (maybe) | 9 | Build / Formats / Test | M6: Story Formats, Build, Test, and Publishing | Story formats, build/export, runtime, extension SDK | Implement through format capabilities, build targets, or runtime/debug hooks: Feature: Mechanism to exclude passages from published files | Feature: Mechanism to exclude passages from published files |
+| [#73](https://github.com/klembot/twinejs/issues/73) | P3 (could) | 6 | Graph Canvas | M2: Fast Native Story Graph | Graph canvas, passage cards, links, layout, map interaction | Make native graph-canvas behavior backed by Rust indexes: Feature: right-click context menu | Feature: right-click context menu |
+| [#67](https://github.com/klembot/twinejs/issues/67) | P4 (maybe) | 6 | Source Workspace / Passage Editor | M3: Twine-Aware Text Editor and IDE Ergonomics | Text editor, code editor, source files, syntax, splits | Implement in the Twine-aware source editor and editor-service layer: Thesaurus / Dictionary integration | Thesaurus / Dictionary integration |
+| [#66](https://github.com/klembot/twinejs/issues/66) | P3 (could) | 4 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | Treat as a project-model or persistence requirement: Add Twine 1.x import | Add Twine 1.x import |
+| [#24](https://github.com/klembot/twinejs/issues/24) | P2 (should) | 0 | Project Launcher / Project Files | M0: Core Model, Project Format, and Persistence | Project files, persistence, import/export, metadata | The launcher and storage settings must state clearly when data is local-only and where it lives. | It's not obvious enough that story files are local only |
+| [#23](https://github.com/klembot/twinejs/issues/23) | P2 (should) | 1 | Settings / Platform / Sharing | M7: Preferences, Accessibility, Platform, Sharing, and Distribution | Accessibility, preferences, platform, sharing, integrations | Backups should be visible, scheduled, and actionable rather than hidden advice. | Warn users if they have not backed up in a given time period |
+
+## Coverage and Review Check
+
+- Total enhancement requests recorded: 170.
+- M0 Core Model, Project Format, and Persistence: 26 requests.
+- M1 Modal Text/Graph Workspace Shell: 9 requests.
+- M2 Fast Native Story Graph: 25 requests.
+- M3 Twine-Aware Text Editor and IDE Ergonomics: 26 requests.
+- M4 Project Intelligence, Search, Contents, and Diagnostics: 23 requests.
+- M5 Assets, Media, and Resource Management: 3 requests.
+- M6 Story Formats, Build, Test, and Publishing: 30 requests.
+- M7 Preferences, Accessibility, Platform, Sharing, and Distribution: 28 requests.
+- Manual classification review applied to avoid misleading keyword matches. Examples: reduced motion goes to Settings/Accessibility; arrow origins and connector dragging go to Graph Canvas; cursor preservation and side-by-side editing go to Source Editing; JSON/Twee/import/export fidelity goes to Core Project Format; installer/update/mobile/keybinding items go to Platform/Settings.
+- Modal product correction applied: Text, Graph, and Split are first-class modes; graph coordinates are optional metadata; source-only projects remain fully native; graph mode can generate non-destructive temporary layouts.
+- Current UI source reviewed: `src/routes/index.tsx`, `src/routes/story-list/*`, `src/routes/story-edit/*`, `src/components/passage/*`, `src/dialogs/*`, `src/components/story-format/*`, and route files for play/test/proof/welcome.
+- Update this document when the GitHub issue list changes, when a request is intentionally rejected, or when a request is absorbed into a broader `twine.rs` design decision.

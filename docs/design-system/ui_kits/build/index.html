@@ -1,0 +1,174 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Build, Export & Publish" subtitle="Targets with visible blockers, output paths, options and streaming logs" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Build</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="../workbench/workbench.css" />
+<style>
+	html, body { height: 100%; } body { margin: 0; overflow: hidden; }
+	.kit { position: absolute; inset: 0; display: flex; font-family: var(--font-ui); color: var(--text-body); background: var(--bg-app); }
+	.kit__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+	.bd__body { flex: 1; display: grid; grid-template-columns: 256px 1fr; min-height: 0; }
+	.bd__targets { background: var(--ink-1); border-right: 1px solid var(--line-1); overflow: auto; padding: 12px 10px; }
+	.bd__tlabel { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tx-4); padding: 12px 8px 6px; }
+	.bd__target { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 10px; border-radius: var(--r-sm); cursor: pointer; font-size: 13px; color: var(--tx-2); }
+	.bd__target:hover { background: var(--ink-2); }
+	.bd__target.is-on { background: var(--sem-link-soft); color: var(--tx-1); }
+	.bd__target .ti { font-size: 17px; color: var(--tx-3); }
+	.bd__target.is-on .ti { color: var(--acc-blue); }
+	.bd__target .st { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; }
+	.bd__main { display: flex; flex-direction: column; min-width: 0; }
+	.bd__detail { flex: 1; overflow: auto; padding: 24px 28px; }
+	.bd__d-head { display: flex; align-items: center; gap: 14px; }
+	.bd__d-icon { width: 46px; height: 46px; border-radius: var(--r-md); background: var(--acc-blue-soft); color: var(--acc-blue);
+		display: flex; align-items: center; justify-content: center; }
+	.bd__d-icon .ti { font-size: 24px; }
+	.bd__d-title { font-family: var(--font-display); font-size: 22px; font-weight: 500; color: var(--tx-1); letter-spacing: -0.02em; }
+	.bd__d-sub { font-size: 12.5px; color: var(--tx-3); margin-top: 2px; }
+	.bd__warn { display: flex; align-items: center; gap: 10px; margin: 18px 0; padding: 11px 14px; border-radius: var(--r-md);
+		background: var(--sem-warn-soft); border: 1px solid color-mix(in oklab, var(--sem-warn) 35%, transparent); }
+	.bd__warn .ti { font-size: 18px; color: var(--sem-warn); }
+	.bd__warn-t { font-size: 12.5px; color: var(--tx-1); } .bd__warn-d { font-size: 11.5px; color: var(--tx-3); }
+	.bd__warn-fix { margin-left: auto; font-size: 11.5px; color: var(--sem-link); white-space: nowrap; }
+	.bd__opts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 24px; margin: 8px 0 4px; }
+	.bd__opt { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line-1); font-size: 12.5px; }
+	.bd__opt span { color: var(--tx-3); }
+	.bd__opt b { color: var(--tx-1); font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
+	.bd__label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); margin: 22px 0 6px; }
+	.bd__run { display: flex; gap: 10px; margin-top: 22px; }
+	/* output log */
+	.bd__log { height: 188px; flex: none; border-top: 1px solid var(--line-1); background: var(--ink-void); display: flex; flex-direction: column; }
+	.bd__log-h { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 14px; border-bottom: 1px solid var(--line-1); background: var(--ink-1); }
+	.bd__log-h .t { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-3); }
+	.bd__log-body { flex: 1; overflow: auto; padding: 10px 14px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7; }
+	.bd__ln { display: flex; gap: 10px; }
+	.bd__ln .ts { color: var(--tx-4); flex: none; }
+	.bd__ln .ok { color: var(--sem-saved); } .bd__ln .warn { color: var(--sem-warn); } .bd__ln .info { color: var(--tx-2); } .bd__ln .acc { color: var(--sem-link); }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { Button, IconButton, Badge } = NS;
+		const { TwineRail } = window;
+
+		const TARGETS = [
+			['run','player-play','Play','green'],
+			['test','tool','Test From Selection','green'],
+			['proof','book','Proof','green'],
+			['validate','checkup','Validate','warn'],
+			['html','file-code','Export HTML','blue'],
+			['twee','file-text','Export Twee','green'],
+			['json','braces','Export JSON','green'],
+			['pkg','package','Package Project','green'],
+			['publish','cloud-upload','Publish','warn']
+		];
+		const DOT = { green:'var(--sem-saved)', warn:'var(--sem-warn)', blue:'var(--acc-blue)', err:'var(--sem-error)' };
+
+		function App() {
+			const [sel, setSel] = React.useState(4); // Export HTML
+			const t = TARGETS[sel];
+			return (
+				<div className="kit">
+					<TwineRail active="build" />
+					<div className="kit__main">
+						<div className="wb__bar">
+							<div className="wb__crumbs"><i className="ti ti-package-export" /> <b>Build &amp; Export</b> <i className="ti ti-chevron-right" /> the-lighthouse</div>
+							<div className="wb__bar-sp" />
+							<Badge tone="warn" icon="alert-triangle">2 warnings</Badge>
+							<Badge tone="error" icon="alert-octagon">1 blocker</Badge>
+						</div>
+						<div className="bd__body">
+							<aside className="bd__targets">
+								<div className="bd__tlabel">Run</div>
+								{TARGETS.slice(0,4).map((x,i)=>(
+									<div key={x[0]} className={'bd__target' + (sel===i?' is-on':'')} onClick={()=>setSel(i)}>
+										<i className={'ti ti-'+x[1]} /> {x[2]} <span className="st" style={{background:DOT[x[3]]}} />
+									</div>
+								))}
+								<div className="bd__tlabel">Export &amp; Publish</div>
+								{TARGETS.slice(4).map((x,i)=>(
+									<div key={x[0]} className={'bd__target' + (sel===i+4?' is-on':'')} onClick={()=>setSel(i+4)}>
+										<i className={'ti ti-'+x[1]} /> {x[2]} <span className="st" style={{background:DOT[x[3]]}} />
+									</div>
+								))}
+							</aside>
+
+							<div className="bd__main">
+								<div className="bd__detail">
+									<div className="bd__d-head">
+										<div className="bd__d-icon"><i className={'ti ti-'+t[1]} /></div>
+										<div>
+											<div className="bd__d-title">{t[2]}</div>
+											<div className="bd__d-sub">Single-file HTML with all assets inlined · Saltmarsh 1.4.0-dev</div>
+										</div>
+										<div style={{flex:1}} />
+										<span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--tx-4)'}}>Last run 14m ago</span>
+									</div>
+
+									<div className="bd__warn">
+										<i className="ti ti-alert-octagon" style={{color:'var(--sem-error)'}} />
+										<div><div className="bd__warn-t">1 export blocker — 1 broken link</div><div className="bd__warn-d">[[Tide Pools]] resolves to a missing passage. Fix before export.</div></div>
+										<span className="bd__warn-fix">Open Diagnostics →</span>
+									</div>
+									<div className="bd__warn">
+										<i className="ti ti-alert-triangle" />
+										<div><div className="bd__warn-t">2 warnings</div><div className="bd__warn-d">1 missing asset · 1 unreachable passage. These will not block export.</div></div>
+										<span className="bd__warn-fix">Review →</span>
+									</div>
+
+									<div className="bd__label">Output</div>
+									<div className="bd__opts">
+										<div className="bd__opt"><span>Output path</span><b>dist/the-lighthouse.html</b></div>
+										<div className="bd__opt"><span>Format</span><b>Saltmarsh 1.4.0</b></div>
+										<div className="bd__opt"><span>Estimated size</span><b>2.8 MB</b></div>
+										<div className="bd__opt"><span>Estimated files</span><b>1</b></div>
+										<div className="bd__opt"><span>Include assets</span><b>inlined (53)</b></div>
+										<div className="bd__opt"><span>Exclude marked passages</span><b>3 excluded</b></div>
+									</div>
+
+									<div className="bd__run">
+										<Button variant="primary" icon="player-play" disabled>Run (fix blocker first)</Button>
+										<Button icon="shield-check">Validate Before Export</Button>
+										<Button variant="ghost" icon="folder">Choose Output Folder</Button>
+									</div>
+								</div>
+
+								<div className="bd__log">
+									<div className="bd__log-h">
+										<span className="t">Build Output</span>
+										<div style={{flex:1}} />
+										<IconButton icon="copy" label="Copy log" size="sm" />
+										<IconButton icon="trash" label="Clear" size="sm" />
+									</div>
+									<div className="bd__log-body">
+										<div className="bd__ln"><span className="ts">10:24:01</span><span className="info">twine build --target html --validate</span></div>
+										<div className="bd__ln"><span className="ts">10:24:01</span><span className="acc">→ indexing 12,483 passages…</span></div>
+										<div className="bd__ln"><span className="ts">10:24:01</span><span className="ok">✓ index built in 84ms</span></div>
+										<div className="bd__ln"><span className="ts">10:24:01</span><span className="acc">→ validating links &amp; assets…</span></div>
+										<div className="bd__ln"><span className="ts">10:24:02</span><span className="warn">⚠ missing asset: portraits/keeper.png (1 ref)</span></div>
+										<div className="bd__ln"><span className="ts">10:24:02</span><span className="warn">⚠ unreachable passage: Epilogue</span></div>
+										<div className="bd__ln"><span className="ts">10:24:02</span><span className="err" style={{color:'var(--sem-error)'}}>✗ export blocker: broken link [[Tide Pools]] · tide-pools.twee:11</span></div>
+										<div className="bd__ln"><span className="ts">10:24:02</span><span className="err" style={{color:'var(--sem-error)'}}>Build halted — 1 blocker must be resolved.</span></div>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

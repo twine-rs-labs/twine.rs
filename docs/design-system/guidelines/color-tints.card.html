@@ -1,0 +1,25 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Semantic tints" subtitle="Soft fills for badges, gutters and selection washes" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+	body { padding: 20px; background: var(--bg-app); display: flex; gap: 9px; flex-wrap: wrap; }
+	.chip { flex: 1 1 0; min-width: 90px; padding: 9px 10px; border-radius: var(--r-sm);
+		font-family: var(--font-mono); font-size: 10px; display: flex; flex-direction: column; gap: 3px; }
+	.chip b { font-weight: 600; }
+	.chip span { opacity: 0.75; font-size: 8.5px; }
+</style>
+</head>
+<body>
+	<div class="chip" style="background:var(--sem-link-soft);color:var(--sem-link);border:1px solid var(--sem-link)"><b>link</b><span>·soft</span></div>
+	<div class="chip" style="background:var(--sem-tag-soft);color:var(--sem-tag);border:1px solid var(--sem-tag)"><b>tag</b><span>·soft</span></div>
+	<div class="chip" style="background:var(--sem-var-soft);color:var(--sem-var);border:1px solid var(--sem-var)"><b>var</b><span>·soft</span></div>
+	<div class="chip" style="background:var(--sem-warn-soft);color:var(--sem-warn);border:1px solid var(--sem-warn)"><b>warn</b><span>·soft</span></div>
+	<div class="chip" style="background:var(--sem-error-soft);color:var(--sem-error);border:1px solid var(--sem-error)"><b>error</b><span>·soft</span></div>
+	<div class="chip" style="background:var(--sem-dirty-soft);color:var(--sem-dirty);border:1px solid var(--sem-dirty)"><b>dirty</b><span>·soft</span></div>
+	<div class="chip" style="background:var(--sem-saved-soft);color:var(--sem-saved);border:1px solid var(--sem-saved)"><b>saved</b><span>·soft</span></div>
+	<div class="chip" style="background:var(--sem-generated-soft);color:var(--sem-generated);border:1px solid var(--sem-generated)"><b>gen</b><span>·soft</span></div>
+</body>
+</html>

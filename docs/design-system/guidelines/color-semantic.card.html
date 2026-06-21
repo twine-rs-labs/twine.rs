@@ -1,0 +1,33 @@
+<!-- @dsCard group="Colors" viewport="700x250" name="Semantic roles" subtitle="One hue per authoring concept so map layers stay legible" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+	body { padding: 20px; background: var(--bg-panel); }
+	.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+	.cell { background: var(--bg-card); border: 1px solid var(--line-1); border-radius: var(--r-sm);
+		padding: 10px 11px; display: flex; align-items: center; gap: 10px; }
+	.dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+	.txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+	.role { font-size: 12px; color: var(--tx-1); font-weight: 600; }
+	.use { font-family: var(--font-mono); font-size: 9.5px; color: var(--tx-4); }
+	.chip { margin-left: auto; font-family: var(--font-mono); font-size: 9px; padding: 2px 6px;
+		border-radius: var(--r-xs); }
+</style>
+</head>
+<body>
+	<div class="grid">
+		<div class="cell"><span class="dot" style="background:var(--sem-link)"></span><span class="txt"><span class="role">Link</span><span class="use">[[outgoing]]</span></span></div>
+		<div class="cell"><span class="dot" style="background:var(--sem-tag)"></span><span class="txt"><span class="role">Tag</span><span class="use">passage tags</span></span></div>
+		<div class="cell"><span class="dot" style="background:var(--sem-var)"></span><span class="txt"><span class="role">Variable</span><span class="use">$macros</span></span></div>
+		<div class="cell"><span class="dot" style="background:var(--sem-warn)"></span><span class="txt"><span class="role">Warning</span><span class="use">format note</span></span></div>
+		<div class="cell"><span class="dot" style="background:var(--sem-error)"></span><span class="txt"><span class="role">Error</span><span class="use">broken link</span></span></div>
+		<div class="cell"><span class="dot" style="background:var(--sem-dirty)"></span><span class="txt"><span class="role">Dirty</span><span class="use">unsaved</span></span></div>
+		<div class="cell"><span class="dot" style="background:var(--sem-saved)"></span><span class="txt"><span class="role">Saved</span><span class="use">saved layout</span></span></div>
+		<div class="cell"><span class="dot" style="background:var(--sem-generated)"></span><span class="txt"><span class="role">Generated</span><span class="use">temp layout</span></span></div>
+		<div class="cell"><span class="dot" style="background:var(--sem-build)"></span><span class="txt"><span class="role">Build</span><span class="use">running</span></span></div>
+	</div>
+</body>
+</html>

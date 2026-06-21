@@ -1,0 +1,32 @@
+/* Settings screen styles */
+.st { position: relative; flex: 1; min-width: 0; height: 100%; display: grid; grid-template-rows: var(--bar-h) 1fr;
+	background: var(--bg-app); font-family: var(--font-ui); color: var(--text-body); }
+.st__body { display: grid; grid-template-columns: 248px 1fr; min-height: 0; }
+
+.st__nav { background: var(--ink-1); border-right: 1px solid var(--line-1); padding: 12px 10px; overflow: auto; }
+.st__search { padding: 4px 6px 12px; }
+.st__nlabel { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--tx-4); padding: 12px 10px 6px; }
+.st__nav-item { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border-radius: var(--r-sm);
+	color: var(--tx-2); font-size: 12.5px; cursor: pointer; }
+.st__nav-item .ti { font-size: 16px; color: var(--tx-3); }
+.st__nav-item:hover { background: var(--ink-2); color: var(--tx-1); }
+.st__nav-item.is-on { background: var(--sem-link-soft); color: var(--tx-1); }
+.st__nav-item.is-on .ti { color: var(--acc-blue); }
+
+.st__content { overflow: auto; }
+.st__inner { max-width: 720px; margin: 0 auto; padding: 28px 32px 60px; }
+.st__h { font-family: var(--font-display); font-size: 26px; font-weight: 500; color: var(--tx-1); letter-spacing: -0.02em; }
+.st__hsub { color: var(--tx-3); font-size: 13px; margin-top: 6px; }
+.st__group { margin-top: 26px; }
+.st__group-h { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4);
+	padding-bottom: 10px; border-bottom: 1px solid var(--line-1); margin-bottom: 4px; }
+.st__row { display: flex; align-items: center; gap: 18px; padding: 14px 2px; border-bottom: 1px solid var(--line-1); }
+.st__row-txt { flex: 1; min-width: 0; }
+.st__row-name { font-size: 13.5px; color: var(--tx-1); font-weight: 500; }
+.st__row-desc { font-size: 12px; color: var(--tx-3); margin-top: 3px; line-height: 1.4; }
+.st__row-ctl { flex: none; display: flex; align-items: center; gap: 10px; }
+.st__pathbox { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px 0 10px; background: var(--ink-1);
+	border: 1px solid var(--line-2); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 11.5px; color: var(--tx-2); }
+.st__kbd { font-family: var(--font-mono); font-size: 11px; color: var(--tx-2); background: var(--ink-1);
+	border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: var(--r-xs); padding: 2px 7px; }
+.st__kbd + .st__kbd { margin-left: 4px; }

@@ -1,0 +1,30 @@
+<!-- @dsCard group="Colors" viewport="700x190" name="Brand accents" subtitle="The twine blue→green gradient and its solid poles" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+	body { padding: 20px; background: var(--bg-app); display: flex; flex-direction: column; gap: 12px; }
+	.grad { height: 70px; border-radius: var(--r-md); background: var(--acc-twine);
+		display: flex; align-items: flex-end; padding: 9px; }
+	.grad span { font-family: var(--font-mono); font-size: 10px; color: oklch(0.16 0.012 245); font-weight: 600; }
+	.row { display: flex; gap: 10px; }
+	.sw { flex: 1; height: 64px; border-radius: var(--r-sm); display: flex; flex-direction: column;
+		justify-content: flex-end; padding: 8px; }
+	.n { font-family: var(--font-mono); font-size: 10.5px; }
+	.v { font-family: var(--font-mono); font-size: 9px; opacity: 0.7; }
+	.dark { color: oklch(0.16 0.012 245); }
+</style>
+</head>
+<body>
+	<div class="grad"><span>--acc-twine · linear-gradient 135°</span></div>
+	<div class="row">
+		<div class="sw dark" style="background:var(--acc-blue)"><span class="n">acc-blue</span><span class="v">primary action</span></div>
+		<div class="sw dark" style="background:var(--acc-blue-hi)"><span class="n">acc-blue-hi</span><span class="v">hover</span></div>
+		<div class="sw" style="background:var(--acc-blue-lo);color:var(--tx-1)"><span class="n">acc-blue-lo</span><span class="v">pressed</span></div>
+		<div class="sw dark" style="background:var(--acc-green)"><span class="n">acc-green</span><span class="v">brand pole</span></div>
+		<div class="sw dark" style="background:var(--acc-green-hi)"><span class="n">acc-green-hi</span><span class="v">hover</span></div>
+	</div>
+</body>
+</html>

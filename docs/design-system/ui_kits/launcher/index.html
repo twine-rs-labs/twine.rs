@@ -1,0 +1,242 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Project Launcher" subtitle="Home base: find, create, import and inspect projects with health at a glance" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Projects</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<style>
+	html, body { height: 100%; }
+	body { margin: 0; overflow: hidden; }
+	.lc { position: relative; flex: 1; min-width: 0; height: 100%; display: grid; grid-template-columns: 220px 1fr;
+		background: var(--bg-app); font-family: var(--font-ui); color: var(--text-body); }
+
+	/* Left rail */
+	.lc__rail { background: var(--ink-1); border-right: 1px solid var(--line-1); display: flex; flex-direction: column; padding: 16px 12px; }
+	.lc__brand { display: flex; align-items: center; gap: 9px; padding: 4px 8px 18px; }
+	.lc__brand img { width: 22px; height: 22px; }
+	.lc__brand b { font-family: var(--font-display); font-weight: 500; font-size: 16px; color: var(--tx-1); letter-spacing: -0.02em; }
+	.lc__brand b span { color: var(--acc-green); }
+	.lc__navlabel { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+		color: var(--tx-4); padding: 8px 10px 6px; }
+	.lc__nav { display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 10px; border-radius: var(--r-sm);
+		color: var(--tx-2); font-size: 13px; cursor: pointer; }
+	.lc__nav .ti { font-size: 17px; color: var(--tx-3); }
+	.lc__nav:hover { background: var(--ink-2); color: var(--tx-1); }
+	.lc__nav.is-on { background: var(--sem-link-soft); color: var(--tx-1); }
+	.lc__nav.is-on .ti { color: var(--acc-blue); }
+	.lc__nav .cnt { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--tx-4); }
+	.lc__rail-sp { flex: 1; }
+	.lc__storage { background: var(--ink-2); border: 1px solid var(--line-2); border-radius: var(--r-md); padding: 11px; }
+	.lc__storage-h { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--tx-1); }
+	.lc__storage-h .ti { color: var(--sem-saved); font-size: 15px; }
+	.lc__storage p { margin: 6px 0 9px; font-size: 11px; line-height: 1.45; color: var(--tx-3); }
+	.lc__storage button { width: 100%; height: 28px; font-size: 11.5px; font-weight: 600; color: var(--tx-1);
+		background: var(--ink-4); border: 1px solid var(--line-2); border-radius: var(--r-sm); cursor: pointer; }
+	.lc__storage button:hover { background: var(--ink-5); }
+
+	/* Main */
+	.lc__main { display: flex; flex-direction: column; min-width: 0; }
+	.lc__top { display: flex; align-items: center; gap: 10px; padding: 16px 22px; }
+	.lc__title { font-family: var(--font-display); font-size: 24px; font-weight: 500; color: var(--tx-1); letter-spacing: -0.02em; }
+	.lc__title .sub { font-family: var(--font-mono); font-size: 11px; color: var(--tx-4); margin-left: 10px; letter-spacing: 0; }
+	.lc__top-sp { flex: 1; }
+	.lc__sub { display: flex; align-items: center; gap: 10px; padding: 0 22px 14px; }
+	.lc__viewtoggle { display: inline-flex; padding: 2px; background: var(--ink-1); border: 1px solid var(--line-1); border-radius: var(--r-md); }
+	.lc__vt { width: 30px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+		color: var(--tx-3); border-radius: var(--r-sm); cursor: pointer; }
+	.lc__vt .ti { font-size: 16px; }
+	.lc__vt.is-on { background: var(--ink-4); color: var(--tx-1); box-shadow: var(--edge-hi); }
+	.lc__count { font-family: var(--font-mono); font-size: 11px; color: var(--tx-4); }
+
+	/* Table */
+	.lc__tablewrap { flex: 1; overflow: auto; padding: 0 22px 22px; }
+	.lc__table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+	.lc__table thead th { position: sticky; top: 0; background: var(--ink-0); text-align: left;
+		font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4);
+		padding: 8px 10px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+	.lc__table tbody td { padding: 11px 10px; border-bottom: 1px solid var(--line-1); color: var(--tx-2); white-space: nowrap; }
+	.lc__table tbody tr { cursor: pointer; }
+	.lc__table tbody tr:hover { background: var(--ink-2); }
+	.lc__table tbody tr.is-sel { background: var(--sem-link-soft); }
+	.lc__name { display: flex; align-items: center; gap: 10px; }
+	.lc__mini { width: 34px; height: 24px; border-radius: var(--r-xs); border: 1px solid var(--line-2);
+		background: var(--ink-void); position: relative; overflow: hidden; flex: none; }
+	.lc__mini i { position: absolute; width: 3px; height: 3px; border-radius: 1px; background: var(--tx-4); }
+	.lc__pname { color: var(--tx-1); font-weight: 600; }
+	.lc__path { font-family: var(--font-mono); font-size: 10.5px; color: var(--tx-4); }
+	.lc__num { font-family: var(--font-mono); font-size: 11px; color: var(--tx-2); }
+	.lc__badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: var(--r-xs);
+		font-size: 10px; font-weight: 600; border: 1px solid transparent; }
+	.b-mixed { color: var(--sem-link); background: var(--sem-link-soft); }
+	.b-graph { color: var(--sem-saved); background: var(--sem-saved-soft); }
+	.b-text  { color: var(--tx-2); background: var(--ink-4); border-color: var(--line-2); }
+	.b-broken { color: var(--sem-error); background: var(--sem-error-soft); }
+	.b-clean { color: var(--tx-4); }
+	.lc__git { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 10.5px; color: var(--tx-3); }
+	.lc__dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+	/* Cards */
+	.lc__cards { flex: 1; overflow: auto; padding: 0 22px 22px; display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; align-content: start; }
+	.lc__card { background: var(--ink-2); border: 1px solid var(--line-1); border-radius: var(--r-lg); overflow: hidden;
+		cursor: pointer; box-shadow: var(--shadow-card); transition: border-color var(--dur-1), transform var(--dur-1); }
+	.lc__card:hover { border-color: var(--line-3); transform: translateY(-2px); box-shadow: var(--shadow-pop); }
+	.lc__card-map { height: 96px; background: var(--ink-void); position: relative; overflow: hidden;
+		background-image: radial-gradient(var(--line-1) 1px, transparent 1px); background-size: 16px 16px; }
+	.lc__card-body { padding: 12px; }
+	.lc__card-name { font-size: 14px; font-weight: 600; color: var(--tx-1); }
+	.lc__card-path { font-family: var(--font-mono); font-size: 10px; color: var(--tx-4); margin-top: 3px; }
+	.lc__card-meta { display: flex; align-items: center; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
+	.lc__card-stat { font-family: var(--font-mono); font-size: 10px; color: var(--tx-3); }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { Button, Input, Select, IconButton, Badge } = NS;
+		const { TwineRail } = window;
+
+		const PROJECTS = [
+			{ name: 'The Lighthouse', path: '~/Documents/stories/the-lighthouse', mode: 'mixed', fmt: 'Harlowe 3.3', p: '12,483', w: '248,917', assets: 53, broken: 37, mod: '2m ago', git: ['main', 'dirty'], fav: true },
+			{ name: 'Saltmarsh', path: '~/Documents/stories/saltmarsh', mode: 'graph', fmt: 'SugarCube 2.36', p: '3,902', w: '88,400', assets: 21, broken: 0, mod: '1h ago', git: ['main', 'clean'] },
+			{ name: 'The Glasshouse Cycle', path: '~/work/glasshouse', mode: 'text', fmt: 'Harlowe-fork', p: '54,210', w: '1.2M', assets: 308, broken: 4, mod: 'Yesterday', git: ['draft', 'dirty'] },
+			{ name: 'Tutorial — First Story', path: '~/Documents/stories/tutorial', mode: 'mixed', fmt: 'Snowman 2.0', p: '24', w: '1,902', assets: 2, broken: 0, mod: '3 days ago', git: ['—', 'none'] },
+			{ name: 'Nightjar', path: '~/Documents/stories/nightjar', mode: 'text', fmt: 'Harlowe 3.3', p: '8,140', w: '196,330', assets: 64, broken: 0, mod: 'Last week', git: ['main', 'clean'] },
+			{ name: 'Archipelago (import)', path: '~/Downloads/archipelago.html', mode: 'graph', fmt: 'Harlowe 2.1', p: '1,204', w: '40,887', assets: 0, broken: 12, mod: 'Last week', git: ['—', 'none'] }
+		];
+		const dotColor = s => s === 'clean' ? 'var(--sem-saved)' : s === 'dirty' ? 'var(--sem-dirty)' : 'var(--tx-4)';
+		const modeBadge = m => m === 'mixed' ? ['b-mixed','Mixed'] : m === 'graph' ? ['b-graph','Saved Layout'] : ['b-text','Source-Only'];
+
+		function Mini({ seed }) {
+			const dots = React.useMemo(() => Array.from({length: 7}, (_, i) => ({
+				l: 4 + ((seed * 7 + i * 11) % 26), t: 3 + ((seed * 13 + i * 5) % 18)
+			})), [seed]);
+			return <span className="lc__mini">{dots.map((d,i)=><i key={i} style={{left:d.l,top:d.t}} />)}</span>;
+		}
+		function CardMap({ seed }) {
+			const dots = Array.from({length: 22}, (_, i) => ({
+				l: 6 + ((seed*9 + i*23) % 88), t: 8 + ((seed*7 + i*17) % 80),
+				c: i % 11 === 0 ? 'var(--sem-error)' : i % 4 === 0 ? 'var(--acc-blue)' : 'var(--tx-4)'
+			}));
+			return (
+				<div className="lc__card-map">
+					<svg width="100%" height="100%" style={{position:'absolute',inset:0,opacity:0.5}}>
+						{dots.slice(0,12).map((d,i)=>{ const e=dots[(i+3)%dots.length];
+							return <line key={i} x1={d.l+'%'} y1={d.t+'%'} x2={e.l+'%'} y2={e.t+'%'} stroke="var(--line-2)" strokeWidth="1" />; })}
+					</svg>
+					{dots.map((d,i)=><span key={i} style={{position:'absolute',left:d.l+'%',top:d.t+'%',width:4,height:4,borderRadius:1,background:d.c}} />)}
+				</div>
+			);
+		}
+
+		function App() {
+			const [view, setView] = React.useState('table');
+			const [q, setQ] = React.useState('');
+			const [sel, setSel] = React.useState(0);
+			const rows = PROJECTS.filter(p => p.name.toLowerCase().includes(q.toLowerCase()));
+			return (
+				<div className="kit">
+					<TwineRail active="projects" />
+				<div className="lc">
+					<aside className="lc__rail">
+						<div className="lc__brand"><img src="../../assets/twine-mark.svg" alt="" /><b>twine<span>.rs</span></b></div>
+						<div className="lc__navlabel">Library</div>
+						<div className="lc__nav is-on"><i className="ti ti-clock" /> Recent <span className="cnt">6</span></div>
+						<div className="lc__nav"><i className="ti ti-star" /> Favorites <span className="cnt">1</span></div>
+						<div className="lc__nav"><i className="ti ti-book" /> Examples <span className="cnt">12</span></div>
+						<div className="lc__nav"><i className="ti ti-template" /> Templates <span className="cnt">5</span></div>
+						<div className="lc__nav"><i className="ti ti-archive" /> Archived <span className="cnt">9</span></div>
+						<div className="lc__rail-sp" />
+						<div className="lc__storage">
+							<div className="lc__storage-h"><i className="ti ti-folder-check" /> Storage &amp; Backups</div>
+							<p>Projects live on disk. Local backups every 10 min to <b>~/.twine/backups</b>.</p>
+							<button>Open Backups Folder</button>
+						</div>
+					</aside>
+
+					<main className="lc__main">
+						<div className="lc__top">
+							<div className="lc__title">Projects <span className="sub">~/Documents/stories</span></div>
+							<div className="lc__top-sp" />
+							<Button variant="ghost" icon="folder-open">Open Folder</Button>
+							<Button variant="ghost" icon="file-import">Import</Button>
+							<Button variant="primary" icon="plus">New Project</Button>
+						</div>
+						<div className="lc__sub">
+							<Input icon="search" placeholder="Search projects" value={q} onChange={e=>setQ(e.target.value)} kbd="⌘P" />
+							<Select size="sm" value="Last Modified" onChange={()=>{}} options={['Last Modified','Name','Passages','Words','Broken Links']} />
+							<IconButton icon="filter" label="Filter" solid />
+							<div className="lc__top-sp" />
+							<span className="lc__count">{rows.length} projects</span>
+							<div className="lc__viewtoggle">
+								<span className={'lc__vt' + (view==='table'?' is-on':'')} onClick={()=>setView('table')}><i className="ti ti-list" /></span>
+								<span className={'lc__vt' + (view==='cards'?' is-on':'')} onClick={()=>setView('cards')}><i className="ti ti-layout-grid" /></span>
+							</div>
+						</div>
+
+						{view === 'table' ? (
+							<div className="lc__tablewrap">
+								<table className="lc__table">
+									<thead><tr>
+										<th>Name</th><th>Path</th><th>Mode</th><th>Format</th><th>Passages</th>
+										<th>Words</th><th>Assets</th><th>Broken</th><th>Modified</th><th>Git</th>
+									</tr></thead>
+									<tbody>
+										{rows.map((p, i) => { const mb = modeBadge(p.mode); return (
+											<tr key={p.name} className={sel===i?'is-sel':''} onClick={()=>setSel(i)}>
+												<td><div className="lc__name"><Mini seed={i+2} />
+													<span><div className="lc__pname">{p.name}{p.fav && <i className="ti ti-star-filled" style={{color:'var(--sem-warn)',fontSize:12,marginLeft:6}} />}</div></span></div></td>
+												<td><span className="lc__path">{p.path}</span></td>
+												<td><span className={'lc__badge ' + mb[0]}>{mb[1]}</span></td>
+												<td>{p.fmt}</td>
+												<td className="lc__num">{p.p}</td>
+												<td className="lc__num">{p.w}</td>
+												<td className="lc__num">{p.assets}</td>
+												<td>{p.broken > 0 ? <span className="lc__badge b-broken"><i className="ti ti-unlink" style={{fontSize:12}} />{p.broken}</span> : <span className="b-clean">—</span>}</td>
+												<td><span className="lc__path">{p.mod}</span></td>
+												<td><span className="lc__git"><span className="lc__dot" style={{background:dotColor(p.git[1])}} />{p.git[0]}</span></td>
+											</tr>
+										); })}
+									</tbody>
+								</table>
+							</div>
+						) : (
+							<div className="lc__cards">
+								{rows.map((p, i) => { const mb = modeBadge(p.mode); return (
+									<div className="lc__card" key={p.name}>
+										<CardMap seed={i+2} />
+										<div className="lc__card-body">
+											<div className="lc__card-name">{p.name}</div>
+											<div className="lc__card-path">{p.path}</div>
+											<div className="lc__card-meta">
+												<span className={'lc__badge ' + mb[0]}>{mb[1]}</span>
+												<span className="lc__badge b-text">{p.fmt}</span>
+												{p.broken > 0 && <span className="lc__badge b-broken"><i className="ti ti-unlink" style={{fontSize:12}} />{p.broken}</span>}
+											</div>
+											<div className="lc__card-meta">
+												<span className="lc__card-stat">{p.p} passages</span>
+												<span className="lc__card-stat">· {p.w} words</span>
+											</div>
+										</div>
+									</div>
+								); })}
+							</div>
+						)}
+					</main>
+				</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

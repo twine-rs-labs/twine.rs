@@ -1,0 +1,56 @@
+/* ============================================================
+   twine.rs — Typography tokens
+
+   Three voices:
+   - Display  · Space Grotesk · brand, big titles, mode labels.
+     Technical-but-literary geometric grotesk; gives twine.rs
+     its "serious creative IDE" character.
+   - UI       · Hanken Grotesk · all interface text & body.
+     Crisp, even, highly legible at small sizes; not overused.
+   - Mono     · JetBrains Mono · passage source, paths, code,
+     numeric badges, IDs. The editor workhorse.
+
+   NOTE: the legacy Twine app shipped Nunito Light. twine.rs
+   deliberately moves to this trio for a sharper, more
+   professional feel. Loaded from Google Fonts CDN.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+	--font-display: 'Space Grotesk', 'Hanken Grotesk', system-ui, sans-serif;
+	--font-ui: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+	--font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo,
+		Consolas, monospace;
+
+	/* Type scale — tuned for a dense workbench. 13px UI base. */
+	--fs-micro: 10.5px; /* status bar, meta chips             */
+	--fs-xs: 11.5px; /* secondary labels, badges             */
+	--fs-sm: 12.5px; /* dense UI, table cells                */
+	--fs-base: 13px; /* default UI / body                    */
+	--fs-md: 14px; /* emphasized body, inputs                */
+	--fs-lg: 16px; /* section titles                         */
+	--fs-xl: 20px; /* panel headings                         */
+	--fs-2xl: 26px; /* screen titles                         */
+	--fs-3xl: 34px; /* launcher / hero                       */
+	--fs-display: 46px; /* brand moments                     */
+
+	/* Weights */
+	--fw-regular: 400; /* @kind font */
+	--fw-medium: 500; /* @kind font */
+	--fw-semibold: 600; /* @kind font */
+	--fw-bold: 700; /* @kind font */
+
+	/* Line heights */
+	--lh-tight: 1.15; /* @kind font */
+	--lh-snug: 1.3; /* @kind font */
+	--lh-normal: 1.5; /* @kind font */
+	--lh-code: 1.6; /* @kind font */
+
+	/* Tracking */
+	--ls-tight: -0.02em; /* @kind font */
+	--ls-snug: -0.01em; /* @kind font */
+	--ls-normal: 0; /* @kind font */
+	--ls-wide: 0.04em; /* @kind font */
+	--ls-caps: 0.08em; /* @kind font */
+}

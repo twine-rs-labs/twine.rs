@@ -1,0 +1,159 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Contents Navigator" subtitle="A durable, indexed table of contents for 50k-passage projects" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Contents</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="../workbench/workbench.css" />
+<link rel="stylesheet" href="contents.css" />
+<style> html, body { height: 100%; } body { margin: 0; overflow: hidden; } </style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { Input, Select, IconButton, Button, Badge, Tag } = NS;
+		const { TwineRail } = window;
+
+		const TYPES = [
+			['all','list','All','12,483'],['passages','file-text','Passages','12,483'],
+			['tags','tags','Tags','28'],['variables','variable','Variables','116'],
+			['assets','photo','Assets','53'],['scripts','braces','Scripts','7'],
+			['styles','hash','Styles','3'],['groups','folders','Groups','19']
+		];
+		const PROBS = [
+			['broken','unlink','Broken Links','37'],['orphans','arrows-split','Orphans','4'],
+			['dupes','copy','Duplicate Names','2'],['missing','photo-off','Missing Assets','5'],
+			['unreach','circle-off','Unreachable','11']
+		];
+
+		// sample rows for the "Passages" grouping
+		const ROWS = [
+			['Arrival','passages/arrival.twee','intro',2,5,0,true],
+			['The Gravel Path','passages/shore/gravel-path.twee','shore',3,1,0],
+			['Tide Pools','passages/shore/tide-pools.twee','shore',2,1,1],
+			['The Keeper\u2019s Door','passages/lighthouse/keepers-door.twee','keeper',4,2,0],
+			['The Lamp Room','passages/lighthouse/lamp-room.twee','lighthouse',3,3,0],
+			['Marian\u2019s Letters','passages/lighthouse/marians-letters.twee','flashback',2,1,0],
+			['Below the Bluff','passages/shore/below-bluff.twee','sea',2,2,0],
+			['The Storm Breaks','passages/lighthouse/storm.twee','danger',3,4,0],
+			['What the Light Kept','passages/endings/light-kept.twee','ending',0,3,0],
+			['The Long Dark','passages/endings/long-dark.twee','ending',0,2,0],
+			['Epilogue','passages/lighthouse/epilogue.twee','ending',1,0,0]
+		];
+		const HUE = { intro:'blue', shore:'teal', lighthouse:'yellow', keeper:'purple',
+			sea:'cyan', ending:'green', flashback:'orange', danger:'red' };
+
+		function App() {
+			const [type, setType] = React.useState('passages');
+			const [sel, setSel] = React.useState(0);
+			const [q, setQ] = React.useState('');
+			const rows = ROWS.filter(r => r[0].toLowerCase().includes(q.toLowerCase()));
+			const cur = ROWS[sel] || ROWS[0];
+			return (
+				<div className="kit">
+					<TwineRail active="contents" />
+				<div className="cn">
+					{/* top bar (shared workbench chrome) */}
+					<div className="wb__bar">
+						<div className="wb__brand"><img src="../../assets/twine-mark.svg" alt="" /><b>twine<span>.rs</span></b></div>
+						<div className="wb__bar-sep" />
+						<div className="wb__crumbs"><i className="ti ti-list-tree" /> <b>Contents</b> <i className="ti ti-chevron-right" /> the-lighthouse</div>
+						<div className="wb__bar-sp" />
+						<div className="wb__pill"><i className="ti ti-command" /> Command Palette <kbd>⌘K</kbd></div>
+					</div>
+
+					<div className="cn__body">
+						{/* type rail */}
+						<aside className="cn__types">
+							<div className="cn__tlabel">Browse</div>
+							{TYPES.map(t => (
+								<div key={t[0]} className={'cn__type' + (type===t[0]?' is-on':'')} onClick={()=>setType(t[0])}>
+									<i className={'ti ti-'+t[1]} /> {t[2]} <span className="cnt">{t[3]}</span>
+								</div>
+							))}
+							<div className="cn__tlabel">Problems</div>
+							{PROBS.map(p => (
+								<div key={p[0]} className="cn__type is-prob">
+									<i className={'ti ti-'+p[1]} /> {p[2]} <span className="cnt" style={{color:'var(--sem-error)'}}>{p[3]}</span>
+								</div>
+							))}
+						</aside>
+
+						{/* list */}
+						<main className="cn__main">
+							<div className="cn__toolbar">
+								<Input icon="search" placeholder="Filter contents" value={q} onChange={e=>setQ(e.target.value)} kbd="⌘P" />
+								<Select size="sm" value="Folder" onChange={()=>{}} options={['Folder','Tag','Name','Issues','Build status']} />
+								<div style={{flex:1}} />
+								<span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--tx-4)'}}>{rows.length} of 12,483</span>
+								<Button size="sm" variant="ghost" icon="checkbox">Select</Button>
+								<Button size="sm" variant="ghost" icon="tags">Bulk Tag</Button>
+							</div>
+							<div className="cn__list">
+								<div className="cn__group-h"><i className="ti ti-folder" /> passages/ · showing first {rows.length}</div>
+								{rows.map((r, i) => (
+									<div key={r[0]} className={'cn__row' + (sel===ROWS.indexOf(r)?' is-on':'')} onClick={()=>setSel(ROWS.indexOf(r))}>
+										<i className={'ti ti-'+(r[6]?'rocket':'file-text')+' cn__ricon'} style={r[6]?{color:'var(--acc-green)'}:null} />
+										<div className="cn__rname">
+											<b>{r[0]}</b>
+											<Tag color={HUE[r[2]]}>{r[2]}</Tag>
+										</div>
+										<div className="cn__rstats">
+											<span className="s"><i className="ti ti-arrow-up-right" />{r[3]}</span>
+											<span className="s"><i className="ti ti-arrow-back-up" />{r[4]}</span>
+											{r[5]>0 && <span className="s err"><i className="ti ti-unlink" />{r[5]}</span>}
+										</div>
+										<i className="ti ti-chevron-right cn__ricon" style={{fontSize:15}} />
+									</div>
+								))}
+							</div>
+						</main>
+
+						{/* inspector */}
+						<aside className="cn__insp">
+							<div className="cn__insp-h">
+								<div className="cn__insp-title">{cur[0]}</div>
+								<div className="cn__insp-path">{cur[1]}</div>
+								<div style={{display:'flex',gap:6,marginTop:10,flexWrap:'wrap'}}>
+									<Tag color={HUE[cur[2]]}>{cur[2]}</Tag>
+									{cur[6] && <Badge tone="saved" dot>Start</Badge>}
+									{cur[5]>0 && <Badge tone="error" icon="unlink">{cur[5]} broken</Badge>}
+								</div>
+							</div>
+							<div className="cn__insp-sec">
+								<div className="cn__insp-label">Metadata</div>
+								<div className="cn__field"><span>Source file</span><b>{cur[1].split('/').pop()}</b></div>
+								<div className="cn__field"><span>Outgoing links</span><b>{cur[3]}</b></div>
+								<div className="cn__field"><span>Backlinks</span><b>{cur[4]}</b></div>
+								<div className="cn__field"><span>Graph position</span><b>{cur[6]?'60, 200':'—'}</b></div>
+								<div className="cn__field"><span>Publish</span><b>included</b></div>
+							</div>
+							<div className="cn__insp-sec">
+								<div className="cn__insp-label">Variables</div>
+								<div className="cn__field"><span style={{fontFamily:'var(--font-mono)',color:'var(--sem-var)'}}>$arrived</span><b>set</b></div>
+								<div className="cn__field"><span style={{fontFamily:'var(--font-mono)',color:'var(--sem-var)'}}>$visitedBefore</span><b>read</b></div>
+							</div>
+							<div className="cn__insp-actions">
+								<Button size="sm" icon="file-text" block>Reveal in Source</Button>
+								<Button size="sm" icon="binary-tree" block>Reveal in Graph</Button>
+								<Button size="sm" variant="ghost" icon="rocket" block>Mark as Start</Button>
+							</div>
+						</aside>
+					</div>
+				</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

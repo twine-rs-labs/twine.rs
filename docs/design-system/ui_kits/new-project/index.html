@@ -1,0 +1,261 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="New Project / Import" subtitle="Create a source-first project, or review a transparent non-destructive import" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — New Project</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="../workbench/workbench.css" />
+<style>
+	html, body { height: 100%; } body { margin: 0; overflow: hidden; }
+	.kit { position: absolute; inset: 0; display: flex; font-family: var(--font-ui); color: var(--text-body); background: var(--bg-app); }
+	.kit__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+	.np__bar { display: flex; align-items: center; gap: 14px; padding: 0 18px; height: var(--bar-h); border-bottom: 1px solid var(--line-1); background: var(--ink-1); }
+	.np__bar h1 { font-family: var(--font-display); font-size: 16px; font-weight: 500; color: var(--tx-1); letter-spacing: -0.02em; }
+
+	/* New Project */
+	.np__body { flex: 1; display: grid; grid-template-columns: 1fr 380px; min-height: 0; }
+	.np__form { overflow: auto; padding: 28px 36px; }
+	.np__form-inner { max-width: 560px; }
+	.np__group { margin-bottom: 24px; }
+	.np__group-h { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); margin-bottom: 14px; }
+	.np__field { margin-bottom: 14px; }
+	.np__flabel { font-size: 12px; font-weight: 500; color: var(--tx-2); margin-bottom: 6px; display: block; }
+	.np__hint { font-size: 11px; color: var(--tx-4); margin-top: 5px; }
+	.np__opts { display: flex; gap: 8px; }
+	.np__opt { flex: 1; padding: 11px 12px; border: 1px solid var(--line-2); border-radius: var(--r-md); cursor: pointer; background: var(--ink-2); }
+	.np__opt.is-on { border-color: var(--acc-blue); background: var(--acc-blue-soft); }
+	.np__opt-t { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--tx-1); }
+	.np__opt-t .ti { font-size: 16px; }
+	.np__opt-d { font-size: 11px; color: var(--tx-3); margin-top: 4px; }
+	.np__rec { font-size: 9.5px; font-weight: 700; color: var(--sem-saved); margin-left: auto; }
+
+	.np__preview { background: var(--ink-1); border-left: 1px solid var(--line-1); display: flex; flex-direction: column; }
+	.np__prev-h { padding: 14px 16px; border-bottom: 1px solid var(--line-1); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); }
+	.np__tree { flex: 1; overflow: auto; padding: 12px 8px; font-family: var(--font-mono); font-size: 12px; }
+	.np__tnode { display: flex; align-items: center; gap: 7px; height: 24px; color: var(--tx-2); }
+	.np__tnode .ti { font-size: 15px; }
+	.np__tnode.new { color: var(--sem-saved); }
+	.np__tnode .badge { margin-left: auto; font-size: 8.5px; color: var(--sem-saved); background: var(--sem-saved-soft); padding: 0 5px; border-radius: var(--r-pill); }
+	.np__footer { display: flex; align-items: center; gap: 10px; padding: 14px 36px; border-top: 1px solid var(--line-1); background: var(--ink-1); }
+	.np__foot-note { font-size: 11px; color: var(--tx-4); }
+
+	/* Import */
+	.im__body { flex: 1; display: grid; grid-template-columns: 260px 1fr 300px; min-height: 0; }
+	.im__src { background: var(--ink-1); border-right: 1px solid var(--line-1); overflow: auto; padding: 14px; }
+	.im__label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); margin: 6px 0 10px; }
+	.im__file { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: var(--r-sm); font-size: 12px; color: var(--tx-2); cursor: pointer; }
+	.im__file.is-on { background: var(--sem-link-soft); color: var(--tx-1); }
+	.im__file .ti { font-size: 16px; color: var(--tx-3); }
+	.im__file .meta { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; color: var(--tx-4); }
+	.im__main { overflow: auto; border-right: 1px solid var(--line-1); }
+	.im__summary { display: flex; gap: 20px; padding: 16px 20px; border-bottom: 1px solid var(--line-1); }
+	.im__stat { } .im__stat b { font-family: var(--font-display); font-size: 22px; color: var(--tx-1); display: block; }
+	.im__stat span { font-size: 11px; color: var(--tx-4); }
+	.im__row { display: grid; grid-template-columns: 22px 1fr 130px 90px; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--line-1); font-size: 12.5px; }
+	.im__row .ti { font-size: 16px; color: var(--tx-3); }
+	.im__row .nm { color: var(--tx-1); }
+	.im__row .ty { font-family: var(--font-mono); font-size: 10px; color: var(--tx-4); }
+	.im__act { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 3px 8px; border-radius: var(--r-xs); }
+	.im__act.new { color: var(--sem-saved); background: var(--sem-saved-soft); }
+	.im__act.conflict { color: var(--sem-warn); background: var(--sem-warn-soft); }
+	.im__decisions { background: var(--ink-1); border-left: 1px solid var(--line-1); overflow: auto; padding: 18px; }
+	.im__dec { margin-bottom: 14px; }
+	.im__dec-q { font-size: 12.5px; color: var(--tx-1); font-weight: 500; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { Button, Input, Select, SegmentedControl, Badge, Checkbox } = NS;
+		const { TwineRail } = window;
+
+		function NewProject() {
+			const [layout, setLayout] = React.useState('multi');
+			const [mode, setMode] = React.useState('split');
+			return (
+				<React.Fragment>
+					<div className="np__body">
+						<div className="np__form">
+							<div className="np__form-inner">
+								<div className="np__group">
+									<div className="np__group-h">Project</div>
+									<div className="np__field"><Input label="Project Name" defaultValue="The Lighthouse" block /></div>
+									<div className="np__field">
+										<label className="np__flabel">Project Folder</label>
+										<div style={{display:'flex',gap:8}}>
+											<Input mono value="~/Documents/stories/the-lighthouse" readOnly block />
+											<Button icon="folder">Choose…</Button>
+										</div>
+										<div className="np__hint">This folder is empty. Project files will be written here.</div>
+									</div>
+									<div className="np__field"><Input label="Start Passage Name" defaultValue="Arrival" block /></div>
+								</div>
+
+								<div className="np__group">
+									<div className="np__group-h">Format</div>
+									<div style={{display:'flex',gap:10}}>
+										<div className="np__field" style={{flex:1,marginBottom:0}}>
+											<label className="np__flabel">Story Format</label>
+											<Select value="Saltmarsh (Harlowe fork)" onChange={()=>{}} block options={['Saltmarsh (Harlowe fork)','Harlowe 3.3.7','SugarCube 2.36.1','Snowman 2.0.2']} />
+											<div className="np__hint">Format supports editor extensions.</div>
+										</div>
+										<div className="np__field" style={{width:130,marginBottom:0}}>
+											<label className="np__flabel">Version</label>
+											<Select value="1.4.0-dev" onChange={()=>{}} block options={['1.4.0-dev','1.3.0','1.2.0']} />
+										</div>
+									</div>
+								</div>
+
+								<div className="np__group">
+									<div className="np__group-h">Source Layout</div>
+									<div className="np__opts">
+										<div className={'np__opt' + (layout==='single'?' is-on':'')} onClick={()=>setLayout('single')}>
+											<div className="np__opt-t"><i className="ti ti-file-text" /> Single-file Twee</div>
+											<div className="np__opt-d">One story.twee file.</div>
+										</div>
+										<div className={'np__opt' + (layout==='multi'?' is-on':'')} onClick={()=>setLayout('multi')}>
+											<div className="np__opt-t"><i className="ti ti-folders" /> Multi-file <span className="np__rec">RECOMMENDED</span></div>
+											<div className="np__opt-d">A passages/ directory. Git-friendly.</div>
+										</div>
+									</div>
+								</div>
+
+								<div className="np__group">
+									<div className="np__group-h">Initial Mode</div>
+									<SegmentedControl value={mode} onChange={setMode} options={[
+										{value:'text',label:'Text',icon:'file-text'},
+										{value:'graph',label:'Graph',icon:'binary-tree'},
+										{value:'split',label:'Split',icon:'layout-columns'}]} />
+									<div style={{marginTop:12}}><Checkbox checked={false} onChange={()=>{}} label="Create empty graph layout (no graph metadata will be saved yet)" /></div>
+								</div>
+							</div>
+						</div>
+
+						<div className="np__preview">
+							<div className="np__prev-h">Files that will be written</div>
+							<div className="np__tree">
+								<div className="np__tnode new"><i className="ti ti-folder-open" style={{color:'var(--sem-saved)'}} /> the-lighthouse/</div>
+								<div className="np__tnode new" style={{paddingLeft:16}}><i className="ti ti-settings" /> twine.toml</div>
+								<div className="np__tnode new" style={{paddingLeft:16}}><i className="ti ti-folder" /> passages/</div>
+								<div className="np__tnode new" style={{paddingLeft:32}}><i className="ti ti-file-text" /> arrival.twee</div>
+								<div className="np__tnode new" style={{paddingLeft:16}}><i className="ti ti-folder" /> scripts/</div>
+								<div className="np__tnode new" style={{paddingLeft:32}}><i className="ti ti-braces" /> story.js</div>
+								<div className="np__tnode new" style={{paddingLeft:16}}><i className="ti ti-folder" /> styles/</div>
+								<div className="np__tnode new" style={{paddingLeft:32}}><i className="ti ti-hash" /> story.css</div>
+								<div className="np__tnode new" style={{paddingLeft:16}}><i className="ti ti-folder" /> assets/</div>
+								<div className="np__tnode" style={{paddingLeft:16,color:'var(--tx-4)'}}><i className="ti ti-folder" /> .twine/ <span className="badge" style={{color:'var(--tx-4)',background:'var(--ink-3)'}}>optional</span></div>
+							</div>
+						</div>
+					</div>
+					<div className="np__footer">
+						<span className="np__foot-note">No graph layout will be saved yet · graph layout can be generated later</span>
+						<div style={{flex:1}} />
+						<Button variant="ghost">Cancel</Button>
+						<Button variant="primary" icon="check">Create Project</Button>
+					</div>
+				</React.Fragment>
+			);
+		}
+
+		function Import() {
+			const [sel, setSel] = React.useState(1);
+			return (
+				<React.Fragment>
+					<div className="im__body">
+						<aside className="im__src">
+							<div className="im__label">Source Files</div>
+							{[['archipelago.html','Twine HTML','1.2 MB',false],['lighthouse-backup.twee','Twee 3','480 KB',true],['old-story.json','JSON snapshot','2.1 MB',false],['legacy-archive.zip','Archive','8.4 MB',false]].map((f,i)=>(
+								<div key={f[0]} className={'im__file' + (sel===i?' is-on':'')} onClick={()=>setSel(i)}>
+									<i className={'ti ti-'+(f[1].includes('HTML')?'file-code':f[1].includes('Archive')?'file-zip':'file-text')} /> {f[0]} <span className="meta">{f[2]}</span>
+								</div>
+							))}
+							<div style={{marginTop:12}}><Button size="sm" variant="ghost" icon="file-import" block>Choose Files…</Button></div>
+						</aside>
+
+						<main className="im__main">
+							<div className="im__summary">
+								<div className="im__stat"><b>1,204</b><span>Passages</span></div>
+								<div className="im__stat"><b>2</b><span>Stories</span></div>
+								<div className="im__stat"><b>40,887</b><span>Words</span></div>
+								<div className="im__stat"><b style={{color:'var(--sem-saved)'}}>1,204</b><span>Graph positions</span></div>
+								<div className="im__stat"><b style={{color:'var(--sem-error)'}}>12</b><span>Broken links</span></div>
+							</div>
+							<div style={{padding:'10px 20px',fontSize:10,fontWeight:700,letterSpacing:'0.06em',textTransform:'uppercase',color:'var(--tx-4)',borderBottom:'1px solid var(--line-1)'}}>Detected · lighthouse-backup.twee</div>
+							{[['rocket','Saltmarsh (story)','story · Harlowe fork','new'],['file-text','1,204 passages','passages','new'],['tags','18 tags','metadata','new'],['variable','42 variables','metadata','new'],['photo','0 assets','assets · base64 inline','conflict'],['settings','Story metadata','IFID, format, start','conflict']].map((r,i)=>(
+								<div className="im__row" key={i}>
+									<i className={'ti ti-'+r[0]} />
+									<div><div className="nm">{r[1]}</div><div className="ty">{r[2]}</div></div>
+									<div className="ty">{i===4?'inline → assets/':i===5?'IFID differs':'—'}</div>
+									<span className={'im__act '+r[3]}>{r[3]==='new'?<><i className="ti ti-plus" />Import</>:<><i className="ti ti-alert-triangle" />Review</>}</span>
+								</div>
+							))}
+						</main>
+
+						<aside className="im__decisions">
+							<div className="im__label">Decisions</div>
+							<div className="im__dec">
+								<div className="im__dec-q">How should this be imported?</div>
+								<div style={{display:'flex',flexDirection:'column',gap:6}}>
+									<Button size="sm" variant="primary" icon="folder-plus" block>Import as New Project</Button>
+									<Button size="sm" icon="git-merge" block>Merge into Current</Button>
+								</div>
+							</div>
+							<div className="im__dec">
+								<div className="im__dec-q">Source layout</div>
+								<SegmentedControl size="sm" value="multi" onChange={()=>{}} options={[{value:'single',label:'Single'},{value:'multi',label:'Multi-file'}]} />
+							</div>
+							<div className="im__dec">
+								<div className="im__dec-q">Graph layout</div>
+								<SegmentedControl size="sm" value="preserve" onChange={()=>{}} options={[{value:'preserve',label:'Preserve'},{value:'text',label:'Text-Only'}]} />
+							</div>
+							<div className="im__dec">
+								<div className="im__dec-q">Conflicts &amp; metadata</div>
+								<div style={{display:'flex',flexDirection:'column',gap:9,marginTop:4}}>
+									<Checkbox checked={true} onChange={()=>{}} label="Preserve unknown metadata" />
+									<Checkbox checked={true} onChange={()=>{}} label="Extract inline assets to assets/" />
+									<Checkbox checked={false} onChange={()=>{}} label="Rename on IFID conflict" />
+								</div>
+							</div>
+						</aside>
+					</div>
+					<div className="np__footer">
+						<span className="np__foot-note"><i className="ti ti-shield-check" style={{color:'var(--sem-saved)',verticalAlign:'-2px'}} /> Non-destructive · originals are never modified</span>
+						<div style={{flex:1}} />
+						<Button variant="ghost">Cancel</Button>
+						<Button variant="primary" icon="player-play">Run Import</Button>
+					</div>
+				</React.Fragment>
+			);
+		}
+
+		function App() {
+			const [tab, setTab] = React.useState('new');
+			return (
+				<div className="kit">
+					<TwineRail active="new" />
+					<div className="kit__main">
+						<div className="np__bar">
+							<h1>{tab==='new'?'New Project':'Import & Migration Review'}</h1>
+							<div style={{flex:1}} />
+							<SegmentedControl value={tab} onChange={setTab} options={[
+								{value:'new',label:'New Project',icon:'square-rounded-plus'},
+								{value:'import',label:'Import',icon:'file-import'}]} />
+						</div>
+						{tab==='new' ? <NewProject /> : <Import />}
+					</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

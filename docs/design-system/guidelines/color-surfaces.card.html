@@ -1,0 +1,27 @@
+<!-- @dsCard group="Colors" viewport="700x190" name="Surface ramp" subtitle="Cool-ink surfaces, deepest gutter → raised popover" -->
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../styles.css" />
+<style>
+	body { padding: 20px; background: var(--bg-app); }
+	.row { display: flex; gap: 10px; }
+	.sw { flex: 1; height: 96px; border-radius: var(--r-md); border: 1px solid var(--line-1);
+		display: flex; flex-direction: column; justify-content: flex-end; padding: 9px; gap: 1px; }
+	.n { font-family: var(--font-mono); font-size: 11px; color: var(--tx-1); }
+	.v { font-family: var(--font-mono); font-size: 9.5px; color: var(--tx-4); }
+</style>
+</head>
+<body>
+	<div class="row">
+		<div class="sw" style="background:var(--ink-void)"><span class="n">void</span><span class="v">canvas</span></div>
+		<div class="sw" style="background:var(--ink-0)"><span class="n">ink-0</span><span class="v">app</span></div>
+		<div class="sw" style="background:var(--ink-1)"><span class="n">ink-1</span><span class="v">dock</span></div>
+		<div class="sw" style="background:var(--ink-2)"><span class="n">ink-2</span><span class="v">panel</span></div>
+		<div class="sw" style="background:var(--ink-3)"><span class="n">ink-3</span><span class="v">card</span></div>
+		<div class="sw" style="background:var(--ink-4)"><span class="n">ink-4</span><span class="v">raised</span></div>
+		<div class="sw" style="background:var(--ink-5)"><span class="n">ink-5</span><span class="v">pop</span></div>
+	</div>
+</body>
+</html>

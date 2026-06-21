@@ -126,6 +126,8 @@
 		"build:electron": "npm-run-all --parallel build:web build:electron-main --serial build:electron-bundle",
 		"build:electron-main": "tsc --project tsconfig.electron.json",
 		"build:electron-bundle": "electron-builder --config electron-builder.config.js --linux --mac --windows --publish=never",
+		"bench:fixtures": "node benchmarks/generate-fixtures.mjs",
+		"bench:fixtures:large": "node benchmarks/generate-fixtures.mjs --large",
 		"clean": "rimraf dist electron-build",
 		"e2e": "playwright test",
 		"lint": "eslint src",

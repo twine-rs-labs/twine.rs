@@ -9,3 +9,5 @@ docs/en/book/*
 /test-results/
 /playwright-report/
 /playwright/.cache/
+target/
+.local/

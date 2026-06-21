@@ -1,0 +1,174 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Settings" subtitle="Editor, modes, graph, accessibility, storage & backups — not buried in dialogs" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Settings</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="../workbench/workbench.css" />
+<link rel="stylesheet" href="settings.css" />
+<style> html, body { height: 100%; } body { margin: 0; overflow: hidden; } </style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { Input, Select, SegmentedControl, Switch, Checkbox, Button, IconButton } = NS;
+		const { TwineRail } = window;
+
+		const NAV = [
+			['general','settings','General'],['workspace','layout','Workspace'],['modes','columns','Modes'],
+			['editor','file-text','Editor'],['graph','binary-tree','Graph'],['a11y','accessibility','Accessibility'],
+			['keys','keyboard','Keyboard Shortcuts'],['storage','database','Storage'],['backups','history','Backups'],
+			['formats','puzzle','Story Formats'],['build','package-export','Build'],['integrations','plug','Integrations'],
+			['platform','device-desktop','Platform'],['about','info-circle','About']
+		];
+
+		function Row({ name, desc, children }) {
+			return (
+				<div className="st__row">
+					<div className="st__row-txt">
+						<div className="st__row-name">{name}</div>
+						{desc && <div className="st__row-desc">{desc}</div>}
+					</div>
+					<div className="st__row-ctl">{children}</div>
+				</div>
+			);
+		}
+
+		function App() {
+			const [nav, setNav] = React.useState('editor');
+			const [mode, setMode] = React.useState('split');
+			const [wrap, setWrap] = React.useState(true);
+			const [spell, setSpell] = React.useState(true);
+			const [fold, setFold] = React.useState(true);
+			const [snippets, setSnippets] = React.useState(true);
+			const [snap, setSnap] = React.useState(true);
+			const [mini, setMini] = React.useState(true);
+			const [anim, setAnim] = React.useState(true);
+			const [reduced, setReduced] = React.useState(false);
+			const [contrast, setContrast] = React.useState(false);
+			const [askLayout, setAskLayout] = React.useState(true);
+			const [efont, setEfont] = React.useState('JetBrains Mono');
+			const [esize, setEsize] = React.useState('13');
+			const [cadence, setCadence] = React.useState('Every 10 minutes');
+
+			return (
+				<div className="kit">
+					<TwineRail active="settings" />
+				<div className="st">
+					<div className="wb__bar">
+						<div className="wb__brand"><img src="../../assets/twine-mark.svg" alt="" /><b>twine<span>.rs</span></b></div>
+						<div className="wb__bar-sep" />
+						<div className="wb__crumbs"><i className="ti ti-settings" /> <b>Settings</b></div>
+						<div className="wb__bar-sp" />
+						<div className="wb__pill"><i className="ti ti-command" /> Command Palette <kbd>⌘K</kbd></div>
+					</div>
+
+					<div className="st__body">
+						<aside className="st__nav">
+							<div className="st__search"><Input icon="search" placeholder="Search Settings" block /></div>
+							{NAV.map(n => (
+								<div key={n[0]} className={'st__nav-item' + (nav===n[0]?' is-on':'')} onClick={()=>setNav(n[0])}>
+									<i className={'ti ti-'+n[1]} /> {n[2]}
+								</div>
+							))}
+						</aside>
+
+						<div className="st__content">
+							<div className="st__inner">
+								<div className="st__h">Editor</div>
+								<div className="st__hsub">How the Twine-aware source editor behaves. Applies to all modes.</div>
+
+								<div className="st__group">
+									<div className="st__group-h">Typography</div>
+									<Row name="Passage Editor Font" desc="Used for passage source and the text workspace.">
+										<Select value={efont} onChange={setEfont} options={['JetBrains Mono','Hanken Grotesk','IBM Plex Mono','System Mono']} />
+									</Row>
+									<Row name="Font Size" desc="Editor font size in pixels.">
+										<Select size="sm" value={esize} onChange={setEsize} options={['11','12','13','14','16','18']} />
+									</Row>
+									<Row name="Line Wrapping" desc="Wrap long lines instead of scrolling horizontally.">
+										<Switch checked={wrap} onChange={setWrap} />
+									</Row>
+								</div>
+
+								<div className="st__group">
+									<div className="st__group-h">Authoring</div>
+									<Row name="Spellcheck" desc="Check spelling in passage prose (not in macros or links).">
+										<Switch checked={spell} onChange={setSpell} />
+									</Row>
+									<Row name="Code Folding" desc="Collapse passages, macros, and comment blocks in the gutter.">
+										<Switch checked={fold} onChange={setFold} />
+									</Row>
+									<Row name="Snippets &amp; Autocomplete" desc="Format-aware completions for links, macros, and variables.">
+										<Switch checked={snippets} onChange={setSnippets} />
+									</Row>
+									<Row name="Indentation">
+										<SegmentedControl size="sm" value="spaces" onChange={()=>{}} options={[
+											{value:'spaces',label:'Spaces'},{value:'tabs',label:'Tabs'}]} />
+									</Row>
+								</div>
+
+								<div className="st__group">
+									<div className="st__group-h">Modes &amp; Graph</div>
+									<Row name="Default Startup Mode" desc="Which projection opens when a project has no remembered mode.">
+										<SegmentedControl size="sm" value={mode} onChange={setMode} options={[
+											{value:'text',label:'Text'},{value:'graph',label:'Graph'},{value:'split',label:'Split'}]} />
+									</Row>
+									<Row name="Ask Before Saving Layout Metadata" desc="Prompt before writing .twine/graph.json for source-only projects.">
+										<Switch checked={askLayout} onChange={setAskLayout} />
+									</Row>
+									<Row name="Snap to Grid"><Switch checked={snap} onChange={setSnap} /></Row>
+									<Row name="Minimap" desc="Show the overview minimap in Graph mode.">
+										<Switch checked={mini} onChange={setMini} />
+									</Row>
+									<Row name="Graph Animation" desc="Animate pan, zoom, and node transitions.">
+										<Switch checked={anim} onChange={setAnim} />
+									</Row>
+								</div>
+
+								<div className="st__group">
+									<div className="st__group-h">Accessibility</div>
+									<Row name="Reduced Motion" desc="Disable non-essential animation across the app.">
+										<Switch checked={reduced} onChange={setReduced} />
+									</Row>
+									<Row name="High Contrast" desc="Increase border and text contrast for legibility.">
+										<Switch checked={contrast} onChange={setContrast} />
+									</Row>
+									<Row name="Go to Passage" desc="Open the fuzzy passage finder.">
+										<span className="st__kbd">⌘</span><span className="st__kbd">P</span>
+									</Row>
+								</div>
+
+								<div className="st__group">
+									<div className="st__group-h">Storage &amp; Backups</div>
+									<Row name="Project Folder" desc="Where new projects are created by default.">
+										<span className="st__pathbox"><i className="ti ti-folder" style={{fontSize:14,color:'var(--sem-warn)'}} /> ~/Documents/stories</span>
+										<Button size="sm" variant="ghost">Change…</Button>
+									</Row>
+									<Row name="Backup Cadence" desc="How often local backups are written.">
+										<Select size="sm" value={cadence} onChange={setCadence} options={['Every 5 minutes','Every 10 minutes','Every 30 minutes','On save only']} />
+									</Row>
+									<Row name="Backups Folder">
+										<Button size="sm" variant="ghost" icon="folder-open">Open Backups Folder</Button>
+									</Row>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

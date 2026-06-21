@@ -1,0 +1,160 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Story Formats" subtitle="Typed format plugins with declared capabilities — incl. custom Harlowe forks" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Story Formats</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="../workbench/workbench.css" />
+<style>
+	html, body { height: 100%; } body { margin: 0; overflow: hidden; }
+	.kit { position: absolute; inset: 0; display: flex; font-family: var(--font-ui); color: var(--text-body); background: var(--bg-app); }
+	.kit__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+	.sf__body { flex: 1; display: grid; grid-template-columns: 188px 1fr 360px; min-height: 0; }
+	.sf__filters { background: var(--ink-1); border-right: 1px solid var(--line-1); padding: 14px 10px; }
+	.sf__filter { display: flex; align-items: center; height: 30px; padding: 0 10px; border-radius: var(--r-sm); cursor: pointer; font-size: 12.5px; color: var(--tx-2); }
+	.sf__filter:hover { background: var(--ink-2); }
+	.sf__filter.is-on { background: var(--sem-link-soft); color: var(--tx-1); }
+	.sf__filter .cnt { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--tx-4); }
+	.sf__list { overflow: auto; border-right: 1px solid var(--line-1); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+	.sf__card { background: var(--ink-2); border: 1px solid var(--line-1); border-radius: var(--r-md); padding: 13px 14px; cursor: pointer;
+		transition: border-color var(--dur-1); }
+	.sf__card:hover { border-color: var(--line-3); }
+	.sf__card.is-on { border-color: var(--acc-blue); box-shadow: 0 0 0 1px var(--acc-blue); }
+	.sf__card-top { display: flex; align-items: center; gap: 10px; }
+	.sf__logo { width: 34px; height: 34px; border-radius: var(--r-sm); display: flex; align-items: center; justify-content: center;
+		font-family: var(--font-display); font-weight: 600; font-size: 15px; color: var(--tx-on-accent); flex: none; }
+	.sf__name { font-size: 13.5px; font-weight: 600; color: var(--tx-1); display: flex; align-items: center; gap: 8px; }
+	.sf__ver { font-family: var(--font-mono); font-size: 10px; color: var(--tx-4); }
+	.sf__caps { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 11px; }
+	.sf__cap { display: inline-flex; align-items: center; gap: 4px; height: 19px; padding: 0 7px; font-size: 10px; font-weight: 600;
+		border-radius: var(--r-xs); background: var(--ink-4); color: var(--tx-3); border: 1px solid var(--line-2); }
+	.sf__cap.on { background: var(--sem-saved-soft); color: var(--sem-saved); border-color: color-mix(in oklab, var(--sem-saved) 35%, transparent); }
+	.sf__cap .ti { font-size: 12px; }
+	/* detail */
+	.sf__detail { background: var(--ink-1); border-left: 1px solid var(--line-1); overflow: auto; padding: 20px; }
+	.sf__d-top { display: flex; align-items: center; gap: 12px; }
+	.sf__d-name { font-size: 18px; font-weight: 600; color: var(--tx-1); }
+	.sf__d-meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--tx-4); margin-top: 2px; }
+	.sf__d-status { display: flex; align-items: center; gap: 7px; margin-top: 14px; padding: 9px 11px; border-radius: var(--r-sm);
+		background: var(--sem-saved-soft); color: var(--sem-saved); font-size: 12px; }
+	.sf__d-status .ti { font-size: 16px; }
+	.sf__label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); margin: 18px 0 9px; }
+	.sf__field { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; border-bottom: 1px solid var(--line-1); }
+	.sf__field span { color: var(--tx-3); } .sf__field b { color: var(--tx-1); font-weight: 500; }
+	.sf__caprow { display: flex; align-items: center; gap: 9px; padding: 7px 0; font-size: 12.5px; color: var(--tx-2); border-bottom: 1px solid var(--line-1); }
+	.sf__caprow .ti.y { color: var(--sem-saved); } .sf__caprow .ti.n { color: var(--tx-4); }
+	.sf__caprow .ti { font-size: 16px; }
+	.sf__actions { display: flex; flex-direction: column; gap: 7px; margin-top: 18px; }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { Button, Input, Badge } = NS;
+		const { TwineRail } = window;
+
+		const CAPS = ['Parser','Exporter','Autocomplete','Diagnostics','Proofing','Editor Extensions'];
+		const FORMATS = [
+			{ k:'Saltmarsh', sub:'Harlowe fork', logo:'Sm', bg:'var(--acc-twine)', ver:'1.4.0-dev', author:'You', license:'MIT',
+			  def:true, caps:[1,1,1,1,0,1], status:['ok','Validated · editor extensions active'], custom:true },
+			{ k:'Harlowe', sub:'built in', logo:'H', bg:'linear-gradient(135deg,oklch(0.5 0.12 20),oklch(0.55 0.13 40))', ver:'3.3.7', author:'Leon Arnott', license:'Zlib',
+			  def:false, caps:[1,1,1,1,0,1], status:['ok','Compatible'] },
+			{ k:'SugarCube', sub:'built in', logo:'SC', bg:'linear-gradient(135deg,oklch(0.5 0.12 250),oklch(0.5 0.1 210))', ver:'2.36.1', author:'Thomas M. Edwards', license:'BSD',
+			  def:false, caps:[1,1,0,1,0,0], status:['ok','Compatible'] },
+			{ k:'Snowman', sub:'built in', logo:'Sn', bg:'linear-gradient(135deg,oklch(0.45 0.02 250),oklch(0.4 0.02 250))', ver:'2.0.2', author:'Chris Klimas', license:'MIT',
+			  def:false, caps:[1,1,0,0,0,0], status:['ok','Compatible'] },
+			{ k:'Chapbook', sub:'needs update', logo:'Cb', bg:'linear-gradient(135deg,oklch(0.5 0.1 150),oklch(0.5 0.09 180))', ver:'1.2.3', author:'Chris Klimas', license:'MIT',
+			  def:false, caps:[1,1,0,1,1,0], status:['warn','Update available · 1.3.0'] },
+			{ k:'Paperthin', sub:'proofing · failed', logo:'Pt', bg:'linear-gradient(135deg,oklch(0.45 0.1 30),oklch(0.4 0.12 20))', ver:'1.0.0', author:'Chris Klimas', license:'MIT',
+			  def:false, caps:[0,0,0,0,1,0], status:['err','Failed to load · invalid manifest'] }
+		];
+
+		function App() {
+			const [sel, setSel] = React.useState(0);
+			const f = FORMATS[sel];
+			const sc = { ok:['circle-check','var(--sem-saved)','var(--sem-saved-soft)'], warn:['alert-triangle','var(--sem-warn)','var(--sem-warn-soft)'], err:['alert-octagon','var(--sem-error)','var(--sem-error-soft)'] };
+			const s = sc[f.status[0]];
+			return (
+				<div className="kit">
+					<TwineRail active="formats" />
+					<div className="kit__main">
+						<div className="wb__bar">
+							<div className="wb__crumbs"><i className="ti ti-puzzle" /> <b>Story Formats</b></div>
+							<div className="wb__bar-sp" />
+							<Button size="sm" variant="ghost" icon="refresh">Check for Updates</Button>
+							<Button size="sm" variant="primary" icon="plus">Add Story Format</Button>
+						</div>
+						<div className="sf__body">
+							<aside className="sf__filters">
+								{[['All','6'],['Current','1'],['Built In','4'],['User-Added','1'],['Needs Update','1'],['Failed','1']].map((t,i)=>(
+									<div key={t[0]} className={'sf__filter' + (i===0?' is-on':'')}>{t[0]} <span className="cnt">{t[1]}</span></div>
+								))}
+							</aside>
+							<div className="sf__list">
+								{FORMATS.map((x,i)=>(
+									<div key={x.k} className={'sf__card' + (sel===i?' is-on':'')} onClick={()=>setSel(i)}>
+										<div className="sf__card-top">
+											<div className="sf__logo" style={{background:x.bg}}>{x.logo}</div>
+											<div style={{flex:1,minWidth:0}}>
+												<div className="sf__name">{x.k}
+													{x.def && <Badge tone="saved" dot>Default</Badge>}
+													{x.custom && <Badge tone="tag">Custom</Badge>}
+												</div>
+												<div className="sf__ver">v{x.ver} · {x.sub}</div>
+											</div>
+											<i className={'ti ti-'+sc[x.status[0]][0]} style={{fontSize:18,color:sc[x.status[0]][1]}} />
+										</div>
+										<div className="sf__caps">
+											{CAPS.map((c,j)=> x.caps[j] ? <span key={c} className="sf__cap on"><i className="ti ti-check" />{c}</span> : null)}
+										</div>
+									</div>
+								))}
+							</div>
+							<aside className="sf__detail">
+								<div className="sf__d-top">
+									<div className="sf__logo" style={{background:f.bg,width:46,height:46,fontSize:19,borderRadius:'var(--r-md)'}}>{f.logo}</div>
+									<div>
+										<div className="sf__d-name">{f.k}</div>
+										<div className="sf__d-meta">v{f.ver} · {f.author} · {f.license}</div>
+									</div>
+								</div>
+								<div className="sf__d-status" style={{background:s[2],color:s[1]}}><i className={'ti ti-'+s[0]} /> {f.status[1]}</div>
+								<div className="sf__label">Capabilities</div>
+								{CAPS.map((c,j)=>(
+									<div className="sf__caprow" key={c}>
+										<i className={'ti ti-'+(f.caps[j]?'circle-check y':'circle-x n')} /> {c}
+										<span style={{marginLeft:'auto',fontSize:11,color:f.caps[j]?'var(--sem-saved)':'var(--tx-4)'}}>{f.caps[j]?'Supported':'—'}</span>
+									</div>
+								))}
+								<div className="sf__label">Details</div>
+								<div className="sf__field"><span>Documentation</span><b style={{color:'var(--sem-link)'}}>Open docs ↗</b></div>
+								<div className="sf__field"><span>Source</span><b style={{fontFamily:'var(--font-mono)',fontSize:11}}>{f.custom?'~/dev/saltmarsh':'bundled'}</b></div>
+								<div className="sf__field"><span>Compatibility</span><b>{f.status[0]==='err'?'Unknown':'twine.rs ≥ 0.4'}</b></div>
+								<div className="sf__actions">
+									{!f.def && f.status[0]!=='err' && <Button size="sm" variant="primary" icon="star" block>Use as Default</Button>}
+									{f.custom && <Button size="sm" icon="code" block>Enable Editor Extensions</Button>}
+									<Button size="sm" icon="book" block>Use for Proofing</Button>
+									{f.status[0]==='warn' && <Button size="sm" icon="download" block>Update Format</Button>}
+									{f.status[0]==='err' && <Button size="sm" icon="refresh" block>Validate Format</Button>}
+									<Button size="sm" variant="ghost" icon="external-link" block>Open Documentation</Button>
+									<Button size="sm" variant="danger" icon="trash" block>Remove</Button>
+								</div>
+							</aside>
+						</div>
+					</div>
+				</div>
+			);
+		}
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>
