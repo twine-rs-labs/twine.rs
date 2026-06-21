@@ -4,8 +4,9 @@ import {IndentButtons, UndoRedoButtons} from '../components/codemirror';
 import {ButtonBar} from '../components/container/button-bar';
 import {DialogCard, DialogEditor} from '../components/container/dialog-card';
 import {CodeArea} from '../components/control/code-area';
+import {updateStoryScriptCommand, useCoreProjectHost} from '../core';
 import {usePrefsContext} from '../store/prefs';
-import {storyWithId, updateStory, useStoriesContext} from '../store/stories';
+import {storyWithId, useStoriesContext} from '../store/stories';
 import {codeMirrorOptionsFromPrefs} from '../util/codemirror-options';
 import {DialogComponentProps} from './dialogs.types';
 import './story-javascript.css';
@@ -14,16 +15,19 @@ export interface StoryJavaScriptDialogProps extends DialogComponentProps {
 	storyId: string;
 }
 
-export const StoryJavaScriptDialog: React.FC<StoryJavaScriptDialogProps> = props => {
+export const StoryJavaScriptDialog: React.FC<
+	StoryJavaScriptDialogProps
+> = props => {
 	const {storyId, ...other} = props;
 	const [cmEditor, setCmEditor] = React.useState<CodeMirror.Editor>();
-	const {dispatch, stories} = useStoriesContext();
+	const {stories} = useStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const {prefs} = usePrefsContext();
 	const story = storyWithId(stories, storyId);
 	const {t} = useTranslation();
 
 	const handleChangeText = (text: string) => {
-		dispatch(updateStory(stories, story, {script: text}));
+		coreProjectHost.applyStoryCommand(updateStoryScriptCommand(story.id, text));
 	};
 
 	return (

@@ -2,7 +2,8 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import useErrorBoundary from 'use-error-boundary';
 import {ErrorMessage} from '../../components/error';
-import {passageWithId, storyWithId, updatePassage} from '../../store/stories';
+import {updatePassageTextCommand, useCoreProjectHost} from '../../core';
+import {passageWithId, storyWithId} from '../../store/stories';
 import {
 	formatWithNameAndVersion,
 	useStoryFormatsContext
@@ -30,7 +31,8 @@ export const PassageEditContents: React.FC<
 	const [cmEditor, setCmEditor] = React.useState<CodeMirror.Editor>();
 	const {ErrorBoundary, error, reset: resetError} = useErrorBoundary();
 	const {prefs} = usePrefsContext();
-	const {dispatch, stories} = useUndoableStoriesContext();
+	const {stories} = useUndoableStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const {formats} = useStoryFormatsContext();
 	const passage = passageWithId(stories, storyId, passageId);
 	const story = storyWithId(stories, storyId);
@@ -59,9 +61,11 @@ export const PassageEditContents: React.FC<
 
 	const handlePassageTextChange = React.useCallback(
 		(text: string) => {
-			dispatch(updatePassage(story, passage, {text}));
+			coreProjectHost.applyStoryCommand(
+				updatePassageTextCommand(story.id, passage.id, text)
+			);
 		},
-		[dispatch, passage, story]
+		[coreProjectHost, passage.id, story.id]
 	);
 
 	function handleExecCommand(name: string) {

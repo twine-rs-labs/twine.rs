@@ -4,8 +4,13 @@ import {
 	SourceEditor,
 	SourceEditorLanguage
 } from '../../components/control/source-editor';
-import {Passage, Story, updatePassage, updateStory} from '../../store/stories';
-import {useUndoableStoriesContext} from '../../store/undoable-stories';
+import {
+	updatePassageTextCommand,
+	updateStoryScriptCommand,
+	updateStoryStylesheetCommand,
+	useCoreProjectHost
+} from '../../core';
+import {Passage, Story} from '../../store/stories';
 import {parseLinks} from '../../util/parse-links';
 import {TagGrid} from '../../components/tag';
 import {VisibleWhitespace} from '../../components/visible-whitespace';
@@ -64,7 +69,7 @@ function linkedPassages(story: Story, names: string[]) {
 export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 	const {onSelectPassage, selectedPassageId, story} = props;
 	const selectedPassage = passageWithFallback(story, selectedPassageId);
-	const {dispatch, stories} = useUndoableStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const {t} = useTranslation();
 	const [activeSource, setActiveSource] =
 		React.useState<StorySourceTab>('passage');
@@ -151,15 +156,21 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 		(text: string, sourceTab: StorySourceTab, passage: Passage | undefined) => {
 			if (sourceTab === 'passage' && passage) {
 				if (text !== passage.text) {
-					dispatch(updatePassage(story, passage, {text}));
+					coreProjectHost.applyStoryCommand(
+						updatePassageTextCommand(story.id, passage.id, text)
+					);
 				}
 			} else if (sourceTab === 'script' && text !== story.script) {
-				dispatch(updateStory(stories, story, {script: text}));
+				coreProjectHost.applyStoryCommand(
+					updateStoryScriptCommand(story.id, text)
+				);
 			} else if (sourceTab === 'stylesheet' && text !== story.stylesheet) {
-				dispatch(updateStory(stories, story, {stylesheet: text}));
+				coreProjectHost.applyStoryCommand(
+					updateStoryStylesheetCommand(story.id, text)
+				);
 			}
 		},
-		[dispatch, stories, story]
+		[coreProjectHost, story.id, story.script, story.stylesheet]
 	);
 
 	React.useEffect(() => {

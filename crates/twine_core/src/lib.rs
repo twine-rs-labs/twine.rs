@@ -1045,9 +1045,21 @@ impl ProjectSession {
     pub fn apply(&mut self, command: StoryCommand) -> Result<PatchBatch, CoreError> {
         let before = self.project.clone();
         let dirty_before = self.dirty;
+        let redo_before = self.redo_stack.clone();
+        let undo_before = self.undo_stack.clone();
         let transaction_id = self.next_transaction_id;
         self.next_transaction_id += 1;
-        let mut patches = self.apply_without_transaction(command.clone())?;
+        let mut patches = match self.apply_without_transaction(command.clone()) {
+            Ok(patches) => patches,
+            Err(error) => {
+                self.project = before;
+                self.dirty = dirty_before;
+                self.next_transaction_id = transaction_id;
+                self.redo_stack = redo_before;
+                self.undo_stack = undo_before;
+                return Err(error);
+            }
+        };
 
         if command.mutates_project() {
             self.dirty = !matches!(command, StoryCommand::MarkSaved);
@@ -3098,6 +3110,106 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn rolls_back_batch_when_child_command_fails() {
+        let mut session = session();
+        let error = session
+            .apply(StoryCommand::Batch {
+                commands: vec![
+                    StoryCommand::UpdatePassageText {
+                        story_id: "story-1".into(),
+                        passage_id: "a".into(),
+                        text: "Changed".into(),
+                    },
+                    StoryCommand::SetStartPassage {
+                        story_id: "story-1".into(),
+                        passage_id: "missing".into(),
+                    },
+                ],
+            })
+            .expect_err("batch should fail");
+
+        assert!(matches!(error, CoreError::PassageNotFound(_)));
+        assert_eq!(
+            session
+                .story("story-1")
+                .expect("story")
+                .passage_by_id(&PassageId::new("a"))
+                .expect("passage")
+                .text,
+            "[[Next]] [[Label->Next]] [[Next<-Back]]"
+        );
+        assert!(!session.dirty());
+        assert!(!session.can_undo());
+        assert!(!session.can_redo());
+
+        let follow_up = session
+            .apply(StoryCommand::QueryStoryIndex {
+                story_id: "story-1".into(),
+                options: CoreStoryIndexOptions::default(),
+            })
+            .expect("follow-up query should apply");
+
+        assert_eq!(follow_up.transaction_id, 1);
+    }
+
+    #[test]
+    fn rolls_back_move_passages_when_one_move_fails() {
+        let mut session = session();
+        let error = session
+            .apply(StoryCommand::MovePassages {
+                story_id: "story-1".into(),
+                moves: vec![
+                    PassageMove {
+                        passage_id: "a".into(),
+                        bounds: CoreRect {
+                            height: DEFAULT_CARD_HEIGHT,
+                            left: 50.0,
+                            top: 60.0,
+                            width: DEFAULT_CARD_WIDTH,
+                        },
+                    },
+                    PassageMove {
+                        passage_id: "missing".into(),
+                        bounds: CoreRect {
+                            height: DEFAULT_CARD_HEIGHT,
+                            left: 70.0,
+                            top: 80.0,
+                            width: DEFAULT_CARD_WIDTH,
+                        },
+                    },
+                ],
+            })
+            .expect_err("move should fail");
+
+        assert!(matches!(error, CoreError::PassageNotFound(_)));
+        assert_eq!(
+            session
+                .story("story-1")
+                .expect("story")
+                .passage_by_id(&PassageId::new("a"))
+                .expect("passage")
+                .layout
+                .expect("layout")
+                .left,
+            0.0
+        );
+        assert_eq!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&PassageId::new("a"))
+                .expect("project layout")
+                .bounds
+                .left,
+            0.0
+        );
+        assert!(!session.dirty());
+        assert!(!session.can_undo());
+        assert!(!session.can_redo());
     }
 
     #[test]

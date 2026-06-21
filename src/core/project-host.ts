@@ -47,20 +47,20 @@ function storyCommandAnnotation(command: StoryCommand) {
 			return 'undoChange.changeTags';
 		case 'setStartPassage':
 			return 'undoChange.startPassage';
-			case 'updatePassageText':
-			case 'updateStoryScript':
-			case 'updateStoryStylesheet':
-				return 'undoChange.editPassage';
-			case 'deleteAsset':
-			case 'importAsset':
-			case 'insertAssetSnippet':
-			case 'renameAsset':
-			case 'replaceAsset':
-				return 'undoChange.editPassage';
-			default:
-				return undefined;
-		}
+		case 'updatePassageText':
+		case 'updateStoryScript':
+		case 'updateStoryStylesheet':
+			return 'undoChange.editPassage';
+		case 'deleteAsset':
+		case 'importAsset':
+		case 'insertAssetSnippet':
+		case 'renameAsset':
+		case 'replaceAsset':
+			return 'undoChange.editPassage';
+		default:
+			return undefined;
 	}
+}
 
 function storyForId(stories: Story[], storyId: string) {
 	return storyWithId(stories, storyId);
@@ -220,21 +220,21 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				return;
 			}
 
-				case 'markSaved':
-				case 'copyAssetSnippet':
-				case 'deleteAsset':
-				case 'importAsset':
-				case 'insertAssetSnippet':
-				case 'queryGraphProjection':
-				case 'queryStoryIndex':
-				case 'renameAsset':
-				case 'replaceAsset':
-				case 'revealAsset':
-				case 'saveGeneratedLayout':
-				case 'validateAssetReferences':
-					return;
-			}
+			case 'markSaved':
+			case 'copyAssetSnippet':
+			case 'deleteAsset':
+			case 'importAsset':
+			case 'insertAssetSnippet':
+			case 'queryGraphProjection':
+			case 'queryStoryIndex':
+			case 'renameAsset':
+			case 'replaceAsset':
+			case 'revealAsset':
+			case 'saveGeneratedLayout':
+			case 'validateAssetReferences':
+				return;
 		}
+	}
 
 	publishStoryIndexPatches() {
 		const patches = this.stories
