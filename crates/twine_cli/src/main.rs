@@ -7,7 +7,7 @@ use twine_export::{
     HtmlExportOptions, archive_to_twine_html, stories_to_json_pretty, story_to_html_document,
     story_to_twee,
 };
-use twine_graph::GraphIndex;
+use twine_graph::{AutoLayoutOptions, GraphIndex, GraphProjectionOptions};
 use twine_model::{GraphLayout, LibraryMetadata, Project, ProjectManifest, Story};
 use twine_parse::{stories_from_json_interchange, stories_from_twine_html, story_from_twee_named};
 use twine_store::{FileProjectStore, SaveOptions, load_project_path};
@@ -22,6 +22,10 @@ fn main() -> Result<()> {
         [] => bail!("{}", usage()),
         [path] => inspect(path),
         [command, path] if is_command(command, "inspect") => inspect(path),
+        [command, path] if is_command(command, "graph") => graph(path, None),
+        [command, path, story_id] if is_command(command, "graph") => {
+            graph(path, Some(&story_id.to_string_lossy()))
+        }
         [command, source, project_dir] if is_command(command, "import") => {
             import_project(source, project_dir)
         }
@@ -42,6 +46,7 @@ fn is_command(path: &Path, expected: &str) -> bool {
 fn usage() -> &'static str {
     "usage:
   twine-rs inspect <story-json|twee|html|project-dir>
+  twine-rs graph <story-json|twee|html|project-dir> [story-id-or-name]
   twine-rs import <story-json|twee|html> <project-dir>
   twine-rs export <project-dir> <json|twee|html|archive> [output-file]"
 }
@@ -69,6 +74,44 @@ fn import_project(source: &Path, project_dir: &Path) -> Result<()> {
     }
     println!("{}", report.storage_message);
 
+    Ok(())
+}
+
+fn graph(path: &Path, requested_story: Option<&str>) -> Result<()> {
+    let (stories, layout) = load_stories_with_layout(path)?;
+    let mut reports = Vec::new();
+
+    for story in &stories {
+        if requested_story.is_some_and(|requested| {
+            requested != story.id.as_ref() && requested != story.name.as_str()
+        }) {
+            continue;
+        }
+
+        let graph = GraphIndex::from_story(story);
+        let projection = graph.canvas_projection(
+            story,
+            &layout,
+            &AutoLayoutOptions::default(),
+            &GraphProjectionOptions::default(),
+        );
+
+        reports.push(serde_json::json!({
+            "storyId": story.id,
+            "storyName": story.name,
+            "projection": projection
+        }));
+    }
+
+    if reports.is_empty() {
+        if let Some(requested_story) = requested_story {
+            bail!("story not found: {requested_story}");
+        }
+
+        bail!("no stories found");
+    }
+
+    println!("{}", serde_json::to_string_pretty(&reports)?);
     Ok(())
 }
 
@@ -115,6 +158,17 @@ fn export_project(project_dir: &Path, format: &Path, output: Option<&PathBuf>) -
     }
 
     Ok(())
+}
+
+fn load_stories_with_layout(path: &Path) -> Result<(Vec<Story>, GraphLayout)> {
+    if path.is_dir() {
+        let project = load_project_path(path)
+            .with_context(|| format!("failed to load project at {}", path.display()))?;
+
+        return Ok((project.stories, project.layout));
+    }
+
+    Ok((load_stories(path)?, GraphLayout::default()))
 }
 
 fn load_stories(path: &Path) -> Result<Vec<Story>> {

@@ -191,6 +191,7 @@ name = "twine_cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde_json",
  "twine_export",
  "twine_graph",
  "twine_model",

@@ -10,8 +10,9 @@ port.
 - `twine_parse`: standard Twine link extraction plus Twee, Twine 2 HTML,
   practical Twine 1 tiddler HTML, JSON interchange, and TwineJS localStorage
   importers.
-- `twine_graph`: story graph index for outgoing links, backlinks, self links,
-  and broken links.
+- `twine_graph`: story graph facts for outgoing links, backlinks, self links,
+  broken links, node states, generated layouts, focus neighborhoods, link
+  layers, and viewport-sized canvas projections.
 - `twine_search`: search-index traits plus a baseline linear implementation.
 - `twine_store`: persistence traits, JSON fixture helpers, and transactional
   canonical project-folder load/save with backups.
@@ -40,6 +41,12 @@ Inspect a generated fixture:
 
 ```sh
 cargo run -p twine_cli -- inspect benchmarks/fixtures/generated/story-50000.story.json
+```
+
+Inspect the native graph projection for a fixture:
+
+```sh
+cargo run -p twine_cli -- graph benchmarks/fixtures/generated/story-1000.story.json
 ```
 
 Import a Twee/HTML/JSON source into the M0 project layout:

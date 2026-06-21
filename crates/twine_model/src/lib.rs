@@ -529,7 +529,21 @@ pub struct SavedLayout {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GraphAnnotation {
+    pub id: String,
+    #[serde(default)]
+    pub bounds: GraphPosition,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GraphLayout {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub annotations: BTreeMap<String, GraphAnnotation>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub groups: BTreeMap<String, GraphGroup>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

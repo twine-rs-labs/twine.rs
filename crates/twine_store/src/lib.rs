@@ -283,7 +283,8 @@ fn write_project_to_dir(
         }
     }
 
-    if !project.layout.passages.is_empty()
+    if !project.layout.annotations.is_empty()
+        || !project.layout.passages.is_empty()
         || !project.layout.groups.is_empty()
         || !project.layout.saved_layouts.is_empty()
         || !project.layout.metadata.is_empty()
@@ -944,6 +945,55 @@ mod tests {
 
         let loaded = load_project_path(&root).expect("project should load");
 
+        assert!(loaded.stories[0].passages[0].layout.is_none());
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn graph_annotations_are_sidecar_metadata() {
+        let root = temp_path("graph-annotation-project");
+        let story: Story = serde_json::from_str(
+            r#"{
+                "ifid": "IFID",
+                "id": "story-1",
+                "name": "Example",
+                "passages": [{
+                    "id": "passage-1",
+                    "name": "Start",
+                    "story": "story-1",
+                    "text": "Plain text source"
+                }],
+                "startPassage": "passage-1",
+                "storyFormat": "Harlowe",
+                "storyFormatVersion": "3.3.9"
+            }"#,
+        )
+        .expect("story should deserialize");
+        let mut project = Project::from_story(story);
+
+        project.layout.annotations.insert(
+            "note-1".into(),
+            twine_model::GraphAnnotation {
+                id: "note-1".into(),
+                bounds: twine_model::GraphPosition {
+                    height: 120.0,
+                    left: 40.0,
+                    top: 80.0,
+                    width: 240.0,
+                },
+                text: "Act break".into(),
+                ..twine_model::GraphAnnotation::default()
+            },
+        );
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+
+        assert!(root.join(".twine/graph.json").exists());
+
+        let loaded = load_project_path(&root).expect("project should load");
+
+        assert_eq!(loaded.layout.annotations["note-1"].text, "Act break");
         assert!(loaded.stories[0].passages[0].layout.is_none());
 
         fs::remove_dir_all(&root).expect("project should be removed");
