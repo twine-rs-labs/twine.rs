@@ -33,6 +33,7 @@ export type CoreProjectPatchListener = (patches: PatchBatch) => void;
 
 export interface CoreProjectHost {
 	applyStoryCommand(command: StoryCommand, annotation?: string): void;
+	isDirty(): boolean;
 	queryStoryIndex(storyId: string, options?: StoryIndexQuery): CoreStoryIndex;
 	subscribeToPatches(listener: CoreProjectPatchListener): () => void;
 }
@@ -158,17 +159,54 @@ function restoredPassageProps(
 	}));
 }
 
+function persistableStoryFingerprint(story: Story) {
+	return JSON.stringify({
+		ifid: story.ifid,
+		id: story.id,
+		name: story.name,
+		passages: story.passages.map(passage => ({
+			height: passage.height,
+			id: passage.id,
+			left: passage.left,
+			name: passage.name,
+			story: passage.story,
+			tags: passage.tags,
+			text: passage.text,
+			top: passage.top,
+			width: passage.width
+		})),
+		script: story.script,
+		snapToGrid: story.snapToGrid,
+		startPassage: story.startPassage,
+		storyFormat: story.storyFormat,
+		storyFormatVersion: story.storyFormatVersion,
+		stylesheet: story.stylesheet,
+		tagColors: story.tagColors,
+		tags: story.tags,
+		zoom: story.zoom
+	});
+}
+
+function storyFingerprintMap(stories: StoriesState) {
+	return new Map(
+		stories.map(story => [story.id, persistableStoryFingerprint(story)])
+	);
+}
+
 export class StoreCoreProjectHost implements CoreProjectHost {
 	private assetInventoryByStory = sharedAssetInventoryByStory;
+	private dirty = false;
 	private dispatch: UndoableDispatch;
 	private listeners = new Set<CoreProjectPatchListener>();
 	private publishedStories = new Map<string, Story>();
+	private savedStoryFingerprints: Map<string, string>;
 	private stories: StoriesState;
 	private transactionId = BigInt(0);
 
 	constructor(stories: StoriesState, dispatch: UndoableDispatch) {
 		this.dispatch = dispatch;
 		this.stories = stories;
+		this.savedStoryFingerprints = storyFingerprintMap(stories);
 	}
 
 	applyStoryCommand(command: StoryCommand, annotation?: string) {
@@ -430,11 +468,18 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				return;
 
 			case 'markSaved':
+				this.markSaved();
+				return;
+
 			case 'queryGraphProjection':
 			case 'queryStoryIndex':
 			case 'saveGeneratedLayout':
 				return;
 		}
+	}
+
+	isDirty() {
+		return this.dirty;
 	}
 
 	private assetForPath(storyId: string, path: string) {
@@ -525,6 +570,38 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
+	private currentDirtyState() {
+		const currentIds = new Set(this.stories.map(story => story.id));
+
+		for (const story of this.stories) {
+			if (
+				this.savedStoryFingerprints.get(story.id) !==
+				persistableStoryFingerprint(story)
+			) {
+				return true;
+			}
+		}
+
+		for (const storyId of this.savedStoryFingerprints.keys()) {
+			if (!currentIds.has(storyId)) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private markSaved() {
+		this.savedStoryFingerprints = storyFingerprintMap(this.stories);
+
+		if (this.dirty) {
+			this.dirty = false;
+			this.publishPatches('mark-saved', [
+				{dirty: false, type: 'dirtyStateChanged'}
+			]);
+		}
+	}
+
 	private renameAsset(storyId: string, path: string, newPath: string) {
 		const oldAsset = this.assetForPath(storyId, path);
 		const renamed = {
@@ -588,17 +665,25 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	}
 
 	publishStoryIndexPatches() {
-		const patches = this.stories
+		const storyIndexPatches = this.stories
 			.filter(story => this.publishedStories.get(story.id) !== story)
 			.map(story => ({
 				index: this.queryStoryIndex(story.id),
 				story_id: story.id,
 				type: 'storyIndexUpdated' as const
 			}));
+		const dirty = this.currentDirtyState();
+		const patches: Patch[] = [
+			...(dirty !== this.dirty
+				? [{dirty, type: 'dirtyStateChanged' as const}]
+				: []),
+			...storyIndexPatches
+		];
 
 		this.publishedStories = new Map(
 			this.stories.map(story => [story.id, story])
 		);
+		this.dirty = dirty;
 
 		if (patches.length > 0) {
 			this.transactionId++;

@@ -3,9 +3,9 @@ import {IconReplace} from '@tabler/icons';
 import debounce from 'lodash/debounce';
 import {useTranslation} from 'react-i18next';
 import {DialogCard} from '../components/container/dialog-card';
-import {CheckboxButton} from '../components/control/checkbox-button';
 import {CodeArea} from '../components/control/code-area';
 import {IconButton} from '../components/control/icon-button';
+import {Checkbox} from '../components/design-system';
 import {useCoreProjectHost} from '../core';
 import type {CoreSearchHit} from '../core/bindings/CoreSearchHit';
 import {usePrefsContext} from '../store/prefs';
@@ -203,20 +203,20 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 				/>
 			</div>
 			<div className="search-flags">
-				<CheckboxButton
+				<Checkbox
+					checked={flags.includePassageNames ?? false}
 					label={t('dialogs.storySearch.includePassageNames')}
 					onChange={() => toggleFlag('includePassageNames')}
-					value={flags.includePassageNames ?? false}
 				/>
-				<CheckboxButton
+				<Checkbox
+					checked={flags.matchCase ?? false}
 					label={t('dialogs.storySearch.matchCase')}
 					onChange={() => toggleFlag('matchCase')}
-					value={flags.matchCase ?? false}
 				/>
-				<CheckboxButton
+				<Checkbox
+					checked={flags.useRegexes ?? false}
 					label={t('dialogs.storySearch.useRegexes')}
 					onChange={() => toggleFlag('useRegexes')}
-					value={flags.useRegexes ?? false}
 				/>
 			</div>
 			{errorText && <p className="search-error">{errorText}</p>}

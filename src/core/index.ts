@@ -93,6 +93,12 @@ export function updateStoryStylesheetCommand(
 	};
 }
 
+export function markSavedCommand(): StoryCommand {
+	return {
+		type: 'markSaved'
+	};
+}
+
 export function renamePassageCommand(
 	storyId: string,
 	passageId: string,

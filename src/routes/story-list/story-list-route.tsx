@@ -14,7 +14,7 @@ import {
 	TablerIcon,
 	Tag
 } from '../../components/design-system';
-import {storyToCoreIndex} from '../../core/story-index';
+import {storyLinkFacts, storyToCoreIndex} from '../../core';
 import {
 	AppDonationDialog,
 	DialogsContextProvider,
@@ -31,7 +31,6 @@ import {
 	useStoriesContext
 } from '../../store/stories';
 import {UndoableStoriesContextProvider} from '../../store/undoable-stories';
-import {parseLinks} from '../../util/parse-links';
 import './story-list-route.css';
 
 type LauncherView = 'table' | 'cards';
@@ -67,21 +66,19 @@ function storyHealth(story: Story) {
 function ProjectMiniMap({story}: {story: Story}) {
 	const passages = story.passages.slice(0, 18);
 	const passageIndex = React.useMemo(
-		() => new Map(story.passages.map((passage, index) => [passage.name, index])),
+		() => new Map(story.passages.map((passage, index) => [passage.id, index])),
 		[story.passages]
 	);
 	const links = React.useMemo(
 		() =>
-			story.passages
-				.flatMap((passage, from) =>
-					parseLinks(passage.text, true).map(target => ({
-						from,
-						to: passageIndex.get(target) ?? -1
-					}))
-				)
+			storyLinkFacts(story)
+				.map(link => ({
+					from: passageIndex.get(link.sourceId) ?? -1,
+					to: link.targetId ? (passageIndex.get(link.targetId) ?? -1) : -1
+				}))
 				.filter(link => link.to >= 0)
 				.slice(0, 12),
-		[passageIndex, story.passages]
+		[passageIndex, story]
 	);
 
 	return (

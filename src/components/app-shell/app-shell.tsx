@@ -1,7 +1,7 @@
 import * as React from 'react';
 import classNames from 'classnames';
 import {useHistory, useLocation} from 'react-router-dom';
-import {storyToCoreIndex} from '../../core/story-index';
+import {markSavedCommand, useCoreProjectHost} from '../../core';
 import {storyFileName} from '../../electron/shared';
 import {Story, useStoriesContext} from '../../store/stories';
 import {usePublishing} from '../../store/use-publishing';
@@ -118,14 +118,16 @@ export const AppShell: React.FC = ({children}) => {
 	const history = useHistory();
 	const location = useLocation();
 	const {stories} = useStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const {publishStory} = usePublishing();
 	const {playStory, proofStory, testStory} = useStoryLaunch();
 	const [paletteOpen, setPaletteOpen] = React.useState(false);
 	const [drawerOpen, setDrawerOpen] = React.useState(false);
 	const [toolbar, setToolbar] = React.useState<ShellToolbarRegistration>();
 	const [activeToolbarTab, setActiveToolbarTab] = React.useState('');
-	const [saveState, setSaveState] = React.useState<'saved' | 'saving'>('saved');
-	const hasSeenStoryState = React.useRef(false);
+	const [dirty, setDirty] = React.useState(() => coreProjectHost.isDirty());
+	const [patchVersion, setPatchVersion] = React.useState(0);
+	const markSavedQueued = React.useRef(false);
 	const [buildState, setBuildState] = React.useState<BuildState>({
 		kind: 'idle',
 		label: 'Ready'
@@ -140,8 +142,9 @@ export const AppShell: React.FC = ({children}) => {
 		[toolbar]
 	);
 	const storyIndex = React.useMemo(
-		() => (currentStory ? storyToCoreIndex(currentStory) : undefined),
-		[currentStory]
+		() =>
+			currentStory ? coreProjectHost.queryStoryIndex(currentStory.id) : undefined,
+		[coreProjectHost, currentStory, patchVersion]
 	);
 	const diagnosticCount = storyIndex?.diagnostics.length ?? 0;
 	const wordCount = storyWordCount(currentStory);
@@ -157,16 +160,46 @@ export const AppShell: React.FC = ({children}) => {
 	}, [routeTabs]);
 
 	React.useEffect(() => {
-		if (!hasSeenStoryState.current) {
-			hasSeenStoryState.current = true;
-			return;
+		function queueMarkSaved() {
+			if (markSavedQueued.current) {
+				return;
+			}
+
+			markSavedQueued.current = true;
+			Promise.resolve().then(() => {
+				markSavedQueued.current = false;
+				coreProjectHost.applyStoryCommand(markSavedCommand());
+			});
 		}
 
-		setSaveState('saving');
-		const id = window.setTimeout(() => setSaveState('saved'), 450);
+		const currentDirty = coreProjectHost.isDirty();
 
-		return () => window.clearTimeout(id);
-	}, [stories]);
+		setDirty(currentDirty);
+
+		if (currentDirty) {
+			queueMarkSaved();
+		}
+
+		return coreProjectHost.subscribeToPatches(batch => {
+			let sawStoryIndexPatch = false;
+
+			for (const patch of batch.patches) {
+				if (patch.type === 'dirtyStateChanged') {
+					setDirty(patch.dirty);
+
+					if (patch.dirty) {
+						queueMarkSaved();
+					}
+				} else if (patch.type === 'storyIndexUpdated') {
+					sawStoryIndexPatch = true;
+				}
+			}
+
+			if (sawStoryIndexPatch) {
+				setPatchVersion(version => version + 1);
+			}
+		});
+	}, [coreProjectHost, stories]);
 
 	React.useEffect(() => {
 		function handleKeyDown(event: KeyboardEvent) {
@@ -528,8 +561,8 @@ export const AppShell: React.FC = ({children}) => {
 						{storySelectionLabel(currentStory)}
 					</span>
 					<span className="app-shell__status-item">
-						<TablerIcon icon="database" />
-						{saveState === 'saving' ? 'Saving' : 'Saved'}
+						<TablerIcon icon={dirty ? 'database-import' : 'database'} />
+						{dirty ? 'Saving' : 'Saved'}
 					</span>
 					<button
 						className="app-shell__status-item app-shell__status-button"

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import {Badge as DesignSystemBadge} from '../design-system';
 import './badge.css';
 
 export interface BadgeProps {
@@ -6,5 +7,5 @@ export interface BadgeProps {
 }
 
 export const Badge: React.FC<BadgeProps> = ({label}) => (
-	<span className="badge">{label}</span>
+	<DesignSystemBadge className="badge">{label}</DesignSystemBadge>
 );

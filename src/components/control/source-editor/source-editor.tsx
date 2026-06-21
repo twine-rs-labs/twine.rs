@@ -533,6 +533,7 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 			</label>
 			<div
 				aria-label={props.label}
+				data-testid={props.id}
 				id={props.id}
 				ref={editorContainer}
 				role="textbox"

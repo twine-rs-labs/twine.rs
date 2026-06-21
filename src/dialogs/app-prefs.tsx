@@ -2,7 +2,7 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {CardContent} from '../components/container/card';
 import {DialogCard, DialogCardProps} from '../components/container/dialog-card';
-import {CheckboxButton} from '../components/control/checkbox-button';
+import {Checkbox} from '../components/design-system';
 import {FontSelect} from '../components/control/font-select';
 import {TextSelect} from '../components/control/text-select';
 import {setPref, usePrefsContext} from '../store/prefs';
@@ -75,16 +75,16 @@ export const AppPrefsDialog: React.FC<
 					]}
 					value={prefs.passageTagDisplay}
 				>{t('dialogs.appPrefs.passageTagDisplay')}</TextSelect>
-				<CheckboxButton
+				<Checkbox
+					checked={prefs.editorCursorBlinks}
 					disabled={!prefs.useCodeMirror}
 					label={t('dialogs.appPrefs.editorCursorBlinks')}
 					onChange={value => dispatch(setPref('editorCursorBlinks', value))}
-					value={prefs.editorCursorBlinks}
 				/>
-				<CheckboxButton
+				<Checkbox
+					checked={prefs.useCodeMirror}
 					label={t('dialogs.appPrefs.useEnhancedEditors')}
 					onChange={handleUseCodeMirrorChange}
-					value={prefs.useCodeMirror}
 				/>
 				<p className="font-explanation">
 					{t('dialogs.appPrefs.fontExplanation')}

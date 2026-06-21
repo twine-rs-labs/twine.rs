@@ -4,6 +4,7 @@ import {TablerIcon} from './tabler-icon';
 import './design-system.css';
 
 export interface SelectOption {
+	disabled?: boolean;
 	value: string;
 	label: string;
 }
@@ -48,7 +49,11 @@ export const Select: React.FC<SelectProps> = ({
 				const optionLabel = typeof option === 'string' ? option : option.label;
 
 				return (
-					<option key={optionValue} value={optionValue}>
+					<option
+						disabled={typeof option === 'string' ? undefined : option.disabled}
+						key={optionValue}
+						value={optionValue}
+					>
 						{optionLabel}
 					</option>
 				);

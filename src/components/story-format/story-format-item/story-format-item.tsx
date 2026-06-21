@@ -3,10 +3,10 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {formatImageUrl, StoryFormat} from '../../../store/story-formats';
 import {Badge} from '../../badge/badge';
+import {Checkbox} from '../../design-system';
 import {IconLoading} from '../../image/icon';
 import {StoryFormatItemDetails} from './story-format-item-details';
 import './story-format-item.css';
-import {CheckboxButton} from '../../control/checkbox-button';
 import {IconButton} from '../../control/icon-button';
 import classNames from 'classnames';
 
@@ -113,10 +113,10 @@ export const StoryFormatItem: React.FC<StoryFormatItemProps> = props => {
 					/>
 				)}
 				{format.loadState === 'loaded' && !format.properties.proofing && (
-					<CheckboxButton
+					<Checkbox
+						checked={!editorExtensionsDisabled}
 						label={t('components.storyFormatItem.useEditorExtensions')}
 						onChange={value => onChangeEditorExtensionsDisabled(!value)}
-						value={!editorExtensionsDisabled}
 					/>
 				)}
 			</div>

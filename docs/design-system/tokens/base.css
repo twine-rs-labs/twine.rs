@@ -27,7 +27,7 @@ body {
 h1, h2, h3, h4, h5, h6 {
 	font-family: var(--font-display);
 	font-weight: var(--fw-medium);
-	letter-spacing: var(--ls-tight);
+	letter-spacing: 0;
 	color: var(--text-strong);
 	line-height: var(--lh-tight);
 	margin: 0;
@@ -56,7 +56,7 @@ code, kbd, samp, pre {
 	font-family: var(--font-ui);
 	font-size: var(--fs-micro);
 	font-weight: var(--fw-semibold);
-	letter-spacing: var(--ls-caps);
+	letter-spacing: 0;
 	text-transform: uppercase;
 	color: var(--text-faint);
 }

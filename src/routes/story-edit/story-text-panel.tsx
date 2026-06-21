@@ -9,40 +9,22 @@ import {
 	updatePassageTextCommand,
 	updateStoryScriptCommand,
 	updateStoryStylesheetCommand,
-	useCoreProjectHost
+	useCoreProjectHost,
+	workbenchSelection
 } from '../../core';
+import type {CoreStoryIndex, WorkbenchSelection} from '../../core';
 import {Passage, Story} from '../../store/stories';
-import {parseLinks} from '../../util/parse-links';
 import {VisibleWhitespace} from '../../components/visible-whitespace';
 
 export interface StoryTextPanelProps {
+	index?: CoreStoryIndex;
 	onSelectPassage?: (passage: Passage) => void;
 	selectedPassageId?: string;
+	selection?: WorkbenchSelection;
 	story: Story;
 }
 
 type StorySourceTab = 'passage' | 'script' | 'stylesheet';
-
-function countWords(text: string) {
-	const trimmed = text.trim();
-
-	if (trimmed === '') {
-		return 0;
-	}
-
-	return trimmed.split(/\s+/).length;
-}
-
-function passageWithFallback(
-	story: Story,
-	passageId?: string
-): Passage | undefined {
-	return (
-		story.passages.find(passage => passage.id === passageId) ??
-		story.passages.find(passage => passage.id === story.startPassage) ??
-		story.passages[0]
-	);
-}
 
 function languageForPassage(passage: Passage): SourceEditorLanguage {
 	if (passage.tags.includes('stylesheet') && !passage.tags.includes('script')) {
@@ -60,12 +42,6 @@ function languageForPassage(passage: Passage): SourceEditorLanguage {
 	return 'twine';
 }
 
-function linkedPassages(story: Story, names: string[]) {
-	return names
-		.map(name => story.passages.find(passage => passage.name === name))
-		.filter((passage): passage is Passage => !!passage);
-}
-
 function sourceIcon(source: StorySourceTab) {
 	switch (source) {
 		case 'passage':
@@ -78,9 +54,19 @@ function sourceIcon(source: StorySourceTab) {
 }
 
 export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
-	const {onSelectPassage, selectedPassageId, story} = props;
-	const selectedPassage = passageWithFallback(story, selectedPassageId);
+	const {index, onSelectPassage, selectedPassageId, story} = props;
 	const coreProjectHost = useCoreProjectHost();
+	const storyIndex = React.useMemo(
+		() => index ?? coreProjectHost.queryStoryIndex(story.id),
+		[coreProjectHost, index, story.id]
+	);
+	const selection = React.useMemo(
+		() =>
+			props.selection ??
+			workbenchSelection(story, storyIndex, selectedPassageId),
+		[props.selection, selectedPassageId, story, storyIndex]
+	);
+	const selectedPassage = selection.passage;
 	const {t} = useTranslation();
 	const [activeSource, setActiveSource] =
 		React.useState<StorySourceTab>('passage');
@@ -130,34 +116,17 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 	const [localText, setLocalText] = React.useState(source.value);
 	const pendingText = React.useRef<string>();
 	const pendingTimeout = React.useRef<number>();
-	const links = React.useMemo(
-		() => (selectedPassage ? parseLinks(selectedPassage.text, true) : []),
-		[selectedPassage]
-	);
-	const passageNames = React.useMemo(
-		() => story.passages.map(passage => passage.name),
-		[story.passages]
-	);
-	const brokenLinks = React.useMemo(() => {
-		const nameSet = new Set(passageNames);
-
-		return links.filter(link => !nameSet.has(link));
-	}, [links, passageNames]);
-	const outgoingPassages = React.useMemo(
-		() => linkedPassages(story, links),
-		[links, story]
-	);
-	const backlinks = React.useMemo(() => {
-		if (!selectedPassage) {
-			return [];
-		}
-
-		return story.passages.filter(
-			passage =>
-				passage.id !== selectedPassage.id &&
-				parseLinks(passage.text, true).includes(selectedPassage.name)
-		);
-	}, [selectedPassage, story.passages]);
+	const passageNames = selection.passageNames;
+	const links = selection.links;
+	const brokenLinks = selection.brokenLinks.map(fact => fact.targetName);
+	const outgoingPassages = selection.linkFacts
+		.map(fact =>
+			fact.targetId
+				? story.passages.find(passage => passage.id === fact.targetId)
+				: undefined
+		)
+		.filter((passage): passage is Passage => !!passage);
+	const backlinks = selection.backlinks;
 
 	React.useEffect(() => {
 		setLocalText(source.value);
@@ -280,7 +249,7 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 								{backlinks.length} backlinks
 							</Badge>
 							<Badge mono tone="neutral">
-								{countWords(selectedPassage?.text ?? '')} words
+								{selection.wordCount} words
 							</Badge>
 						</>
 					) : (

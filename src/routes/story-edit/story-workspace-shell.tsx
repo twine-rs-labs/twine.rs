@@ -44,7 +44,6 @@ import {
 	openStorySourceDialog
 } from '../../dialogs/story-source-dialog';
 import {Passage, Story} from '../../store/stories';
-import {parseLinks} from '../../util/parse-links';
 import {StoryEditMode} from './workspace-state';
 import {StoryTextPanel} from './story-text-panel';
 
@@ -612,18 +611,6 @@ const OutlineItem: React.FC<{
 	return <div className="story-edit-outline-item">{content}</div>;
 };
 
-function backlinksForPassage(story: Story, selectedPassage?: Passage) {
-	if (!selectedPassage) {
-		return [];
-	}
-
-	return story.passages.filter(
-		passage =>
-			passage.id !== selectedPassage.id &&
-			parseLinks(passage.text, true).includes(selectedPassage.name)
-	);
-}
-
 const Inspector: React.FC<{
 	assets: AssetManagerViewModel;
 	diagnostics: DiagnosticsViewModel;
@@ -637,10 +624,7 @@ const Inspector: React.FC<{
 		props;
 	const {passage} = selection;
 	const {t} = useTranslation();
-	const backlinks = React.useMemo(
-		() => backlinksForPassage(story, passage),
-		[passage, story]
-	);
+	const backlinks = selection.backlinks;
 	const symbolsByName = React.useMemo(() => {
 		const result = new Map<string, number>();
 
@@ -658,11 +642,11 @@ const Inspector: React.FC<{
 				icon="arrow-up-right"
 				title={t('routes.storyEdit.workspace.links')}
 			>
-				{selection.links.length > 0 ? (
-					selection.links.map(link => {
-						const linkedPassage = story.passages.find(
-							passage => passage.name === link
-						);
+				{selection.linkFacts.length > 0 ? (
+					selection.linkFacts.map(link => {
+						const linkedPassage = link.targetId
+							? story.passages.find(passage => passage.id === link.targetId)
+							: undefined;
 
 						return (
 							<OutlineItem
@@ -670,8 +654,8 @@ const Inspector: React.FC<{
 								color={
 									linkedPassage ? 'var(--sem-link)' : 'var(--sem-error)'
 								}
-								key={link}
-								label={link}
+								key={`${link.sourceId}:${link.targetName}`}
+								label={link.targetName}
 								onClick={
 									linkedPassage
 										? () => onSelectPassage(linkedPassage)
@@ -692,15 +676,25 @@ const Inspector: React.FC<{
 				title={t('routes.storyEdit.workspace.backlinks')}
 			>
 				{backlinks.length > 0 ? (
-					backlinks.slice(0, 8).map(backlink => (
-						<OutlineItem
-							color="var(--tx-4)"
-							key={backlink.id}
-							label={backlink.name}
-							onClick={() => onSelectPassage(backlink)}
-							sub={t('common.passage')}
-						/>
-					))
+					backlinks.slice(0, 8).map(backlink => {
+						const sourcePassage = story.passages.find(
+							passage => passage.id === backlink.sourceId
+						);
+
+						return (
+							<OutlineItem
+								color="var(--tx-4)"
+								key={`${backlink.sourceId}:${backlink.targetName}`}
+								label={backlink.sourceName}
+								onClick={
+									sourcePassage
+										? () => onSelectPassage(sourcePassage)
+										: undefined
+								}
+								sub={t('common.passage')}
+							/>
+						);
+					})
 				) : (
 					<OutlineItem label={t('routes.storyEdit.workspace.noLinks')} muted />
 				)}
@@ -858,7 +852,7 @@ const BottomDrawer: React.FC<{
 }> = props => {
 	const {onChangeOpen, onSelectPassage, open, selection, story} = props;
 	const {t} = useTranslation();
-	const {links} = selection;
+	const links = selection.linkFacts;
 
 	if (!open) {
 		return null;
@@ -886,22 +880,24 @@ const BottomDrawer: React.FC<{
 				{links.length > 0 ? (
 					<ul>
 						{links.map(link => {
-							const linkedPassage = story.passages.find(
-								passage => passage.name === link
-							);
+							const linkedPassage = link.targetId
+								? story.passages.find(passage => passage.id === link.targetId)
+								: undefined;
 
 							return (
-								<li key={link}>
+								<li key={`${link.sourceId}:${link.targetName}`}>
 									{linkedPassage ? (
 										<button
 											className="story-edit-link-chip"
 											onClick={() => onSelectPassage(linkedPassage)}
 											type="button"
 										>
-											{link}
+											{link.targetName}
 										</button>
 									) : (
-										<span className="story-edit-link-chip missing">{link}</span>
+										<span className="story-edit-link-chip missing">
+											{link.targetName}
+										</span>
 									)}
 								</li>
 							);
@@ -1038,8 +1034,10 @@ export const StoryWorkspaceShell: React.FC<
 			{showText && (
 				<div className="story-edit-text-layer">
 					<StoryTextPanel
+						index={index}
 						onSelectPassage={onSelectPassage}
 						selectedPassageId={passage?.id}
+						selection={selection}
 						story={story}
 					/>
 				</div>

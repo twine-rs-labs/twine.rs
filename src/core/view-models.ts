@@ -79,11 +79,24 @@ export interface AssetManagerViewModel {
 
 export interface WorkbenchSelection {
 	assetReferences: CoreAssetReference[];
+	backlinks: PassageLinkFact[];
+	brokenLinks: PassageLinkFact[];
 	diagnostics: CoreDiagnostic[];
+	linkFacts: PassageLinkFact[];
 	links: string[];
 	passage?: Passage;
+	passageNames: string[];
 	sourceId?: string;
 	wordCount: number;
+}
+
+export interface PassageLinkFact {
+	broken: boolean;
+	self: boolean;
+	sourceId: string;
+	sourceName: string;
+	targetId: string | null;
+	targetName: string;
 }
 
 function contentsGroup(kind: CoreContentsEntryKind) {
@@ -147,6 +160,37 @@ function countWords(text: string) {
 
 	return trimmed.split(/\s+/).length;
 }
+
+function passageNamesFromIndex(index: CoreStoryIndex) {
+	return index.files
+		.filter(file => file.kind === 'passage')
+		.map(file => file.name);
+}
+
+export function storyLinkFacts(story: Story): PassageLinkFact[] {
+	const passagesByName = new Map(
+		story.passages.map(passage => [passage.name, passage])
+	);
+	const facts: PassageLinkFact[] = [];
+
+	for (const source of story.passages) {
+		for (const targetName of parseLinks(source.text, true)) {
+			const target = passagesByName.get(targetName);
+
+			facts.push({
+				broken: !target,
+				self: target?.id === source.id,
+				sourceId: source.id,
+				sourceName: source.name,
+				targetId: target?.id ?? null,
+				targetName
+			});
+		}
+	}
+
+	return facts;
+}
+
 
 function diagnosticLocation(story: Story, diagnostic: CoreDiagnostic) {
 	const passage = diagnostic.passageId
@@ -337,16 +381,28 @@ export function workbenchSelection(
 		story.passages.find(passage => passage.id === story.startPassage) ??
 		story.passages[0];
 	const sourceId = passage?.id;
+	const allLinkFacts = storyLinkFacts(story);
+	const linkFacts = sourceId
+		? allLinkFacts.filter(fact => fact.sourceId === sourceId)
+		: [];
 
 	return {
 		assetReferences: sourceId
 			? index.assets.filter(asset => asset.sourceId === sourceId)
 			: [],
+		backlinks: passage
+			? allLinkFacts.filter(
+					fact => fact.sourceId !== passage.id && fact.targetName === passage.name
+				)
+			: [],
+		brokenLinks: linkFacts.filter(fact => fact.broken),
 		diagnostics: sourceId
 			? index.diagnostics.filter(diagnostic => diagnostic.sourceId === sourceId)
 			: [],
-		links: passage ? parseLinks(passage.text, true) : [],
+		linkFacts,
+		links: linkFacts.map(fact => fact.targetName),
 		passage,
+		passageNames: passageNamesFromIndex(index),
 		sourceId,
 		wordCount: passage ? countWords(passage.text) : 0
 	};

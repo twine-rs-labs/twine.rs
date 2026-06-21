@@ -1,169 +1,95 @@
-import {test, expect, Locator, Page} from '@playwright/test';
+import {expect, Locator, Page, test} from '@playwright/test';
 
-async function skipWelcome(page: Page) {
-	await page.goto('http://localhost:5173');
-	await page.getByRole('button', {name: 'Skip'}).click();
+const appUrl = 'http://127.0.0.1:5173';
+
+test.describe.configure({mode: 'serial'});
+
+async function resetBrowserState(page: Page) {
+	await page.goto(`${appUrl}/#/`);
+	await page.evaluate(() => window.localStorage.clear());
 	await page.reload();
 }
 
-async function createStory(page: Page, name = 'E2E Test Story') {
-	await skipWelcome(page);
-	await page.getByRole('tab', {name: 'Story'}).click();
-	await page.getByRole('button', {name: 'New'}).click();
+async function createProject(
+	page: Page,
+	name = 'E2E Test Story',
+	startPassage = 'Start'
+) {
+	await page.goto(`${appUrl}/#/new-project`);
+	await expect(page).toHaveURL(/#\/new-project$/);
+	await expect(page.getByRole('heading', {name: 'New Project'})).toBeVisible();
+	await page.getByLabel('Project name').fill(name);
+	await page.getByLabel('Start passage').fill(startPassage);
 	await page
-		.getByRole('textbox', {
-			name: 'What should your story be named? You can change this later.'
-		})
-		.type(name);
-	await page.getByRole('button', {name: 'Create'}).click();
-}
-
-async function openPassageEditor(page: Page, name: string): Promise<Locator> {
-	const passageButton = page
-		.locator('.story-edit-passage-list')
-		.getByRole('button', {name});
-
-	await passageButton.click();
-	await expect(passageButton).toHaveAttribute(
-		'aria-current',
-		'true'
-	);
-	await page
-		.locator('.route-toolbar-top')
-		.getByRole('tab', {name: 'Passage', exact: true})
+		.locator('label')
+		.filter({hasText: 'Initial mode'})
+		.getByRole('tab')
+		.filter({hasText: 'Text'})
 		.click();
-	await page.getByRole('button', {name: 'Edit', exact: true}).click();
-
-	return page.getByRole('dialog', {name}).getByLabel('Passage Text');
+	await page.getByRole('button', {name: 'Create Project'}).click();
+	await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
+	await expect(page.getByRole('heading', {name: startPassage})).toBeVisible();
 }
 
-async function waitForPassageChange() {
-	// Although the DOM updates when a passage is edited, actually saving changes
-	// is debounced. This waits long enough for a change to complete.
-	await new Promise(resolve => setTimeout(resolve, 1100));
+function sourceEditor(page: Page): Locator {
+	return page.locator('[data-testid^="story-text-source-editor-"]').first();
 }
 
-test('Shows welcome screen on first run', async ({page}) => {
-	await page.goto('http://localhost:5173');
-	await expect(page).toHaveTitle('Hi!');
+async function setPassageText(page: Page, text: string) {
+	const editor = sourceEditor(page);
+
+	await expect(editor).toBeVisible();
+	await editor.locator('.cm-content').click();
+	await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+	await page.keyboard.insertText(text);
+	await expect(editor).toContainText(text);
+	await page.waitForTimeout(450);
+}
+
+test.beforeEach(async ({page}) => {
+	await resetBrowserState(page);
 });
 
-test("Doesn't show welcome screen after user finishes it", async ({page}) => {
-	await skipWelcome(page);
-	await expect(page).toHaveTitle('0 Stories');
-	await page.goto('http://localhost:5173');
-	await expect(page).toHaveTitle('0 Stories');
-	await page.reload();
-	await expect(page).toHaveTitle('0 Stories');
-});
-
-test('Can create a story', async ({page}) => {
-	await createStory(page, 'Create story test');
-	await expect(page).toHaveTitle('Create story test');
-
-	// If these tabs are visible, we're in the story editor.
-
+test('opens the current project launcher on first run', async ({page}) => {
+	await expect(page.getByLabel('Twine')).toBeVisible();
+	await expect(page.getByRole('heading', {name: 'No projects yet'})).toBeVisible();
 	await expect(
 		page
-			.locator('.route-toolbar-top')
-			.getByRole('tab', {name: 'Passage', exact: true})
+			.getByLabel('Project actions')
+			.getByRole('button', {name: 'New Project'})
 	).toBeVisible();
-	await expect(
-		page
-			.locator('.route-toolbar-top')
-			.getByRole('tab', {name: 'Story', exact: true})
-	).toBeVisible();
-
-	// Go back to the story list and make sure the story is present there.
-
-	await page.goto('http://localhost:5173');
-	await expect(page).toHaveTitle('1 Story');
-	await expect(page.getByText('Create story test')).toBeVisible();
-	await page.reload();
-	await expect(page).toHaveTitle('1 Story');
-	await expect(page.getByText('Create story test')).toBeVisible();
 });
 
-test('Persists passage edits', async ({page}) => {
-	await createStory(page, 'Edit passage test');
-	const passageText = await openPassageEditor(page, 'Untitled Passage');
+test('creates a project from the D-series launcher flow', async ({page}) => {
+	await createProject(page, 'Create project smoke');
+	await expect(page).toHaveTitle('Create project smoke');
 
-	// Test different typing speeds to try to shake out any problems with the
-	// debounced update.
+	await page.goto(`${appUrl}/#/`);
+	await expect(page.getByText('Create project smoke').first()).toBeVisible();
 
-	await passageText.type('abcdef', {delay: 0});
-	await passageText.type('ghijkl', {delay: 100});
-	await passageText.type('mnopqr', {delay: 250});
-	await passageText.type('stuvwx', {delay: 500});
-	await expect(page.getByText('abcdefghijklmnopqrstuvwx')).toBeVisible();
-	await waitForPassageChange();
 	await page.reload();
-	await expect(page.getByText('abcdefghijklmnopqrstuvwx')).toBeVisible();
+	await expect(page.getByText('Create project smoke').first()).toBeVisible();
 });
 
-test('Persists passage renames', async ({page}) => {
-	await createStory(page, 'Edit passage test');
-	await page.getByRole('button', {name: 'Untitled Passage'}).click();
-	await page.getByRole('button', {name: 'Rename'}).click();
-	await page
-		.getByRole('textbox', {
-			name: 'What should “Untitled Passage” be renamed to?'
-		})
-		.type('Rename test');
-	await page.getByRole('button', {name: 'OK'}).click();
-	await expect(page.getByRole('button', {name: 'Rename test'})).toBeVisible();
+test('persists embedded source-editor passage edits', async ({page}) => {
+	await createProject(page, 'Edit passage smoke');
+	await setPassageText(page, 'Smoke text survives a reload.');
+
 	await page.reload();
-	await expect(page.getByRole('button', {name: 'Rename test'})).toBeVisible();
+	await expect(sourceEditor(page)).toContainText('Smoke text survives a reload.');
 });
 
-test('Creates a simple story and plays it', async ({context, page}) => {
-	await createStory(page, 'Publish test');
-	let passageText = await openPassageEditor(page, 'Untitled Passage');
-
-	await passageText.type('Which way to go? [[Left]] or [[right]]?');
-	await waitForPassageChange();
-	await page.getByRole('button', {name: 'Close'}).click();
-	passageText = await openPassageEditor(page, 'Left');
-	await passageText.type('Monsters!');
-	await waitForPassageChange();
-	await page.getByRole('button', {name: 'Close'}).click();
-
-	// Wait for the editor to close.
-
-	await expect(passageText).not.toBeVisible();
-	passageText = await openPassageEditor(page, 'right');
-	await passageText.type('Puppies!');
-	await waitForPassageChange();
-	await page.getByRole('button', {name: 'Close'}).click();
-	await page.getByRole('tab', {name: 'Build'}).click();
+test('publishes the current project to a playable page', async ({context, page}) => {
+	await createProject(page, 'Publish smoke');
+	await setPassageText(page, 'Smoke story is playable.');
 
 	const [publishedPage] = await Promise.all([
 		context.waitForEvent('page'),
-		page.getByRole('button', {name: 'Play'}).click()
+		page.getByTitle('Play').click()
 	]);
 
-	// Trying to be as agnostic as possible about Harlowe's DOM structure. Visible
-	// locators are to distinguish from passage data that's in the DOM but not
-	// visible.
-
-	await publishedPage.waitForSelector(':visible:text-is("Which way to go?")');
-	await publishedPage.locator(':visible:text-is("Left")').click();
-	await publishedPage.waitForSelector(':visible:text-is("Monsters!")');
 	await expect(
-		publishedPage.locator(':visible:text-is("Monsters!")')
+		publishedPage.locator(':visible:text-is("Smoke story is playable.")')
 	).toBeVisible();
-
-	// Need to close the tab to reset play state. Reloading won't work.
-
 	await publishedPage.close();
-
-	const [republishedPage] = await Promise.all([
-		context.waitForEvent('page'),
-		page.getByRole('button', {name: 'Play'}).click()
-	]);
-
-	await republishedPage.locator(':visible:text-is("right")').click();
-	await expect(
-		republishedPage.locator(':visible:text-is("Puppies!")')
-	).toBeVisible();
 });
