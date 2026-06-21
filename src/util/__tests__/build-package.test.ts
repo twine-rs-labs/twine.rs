@@ -74,14 +74,79 @@ describe('M6 build package', () => {
 
 		expect(result.html).toContain('<tw-storydata');
 		expect(result.assets).toHaveLength(1);
+		expect(result.files).toEqual([
+			expect.objectContaining({
+				kind: 'html',
+				role: 'primary'
+			})
+		]);
 		expect(result.report).toEqual(
 			expect.objectContaining({
 				assetCount: 1,
 				copiedAssetCount: 1,
+				outputCount: 1,
 				publishSafe: true,
 				target: 'play'
 			})
 		);
+	});
+
+	it('builds JSON export packages without rendering story format HTML', () => {
+		const story = fakeStory();
+		const result = createStoryBuildPackage(story, fakeAppInfo(), {
+			formatProperties: fakeStoryFormatProperties(),
+			target: 'export-json'
+		});
+
+		expect(result.html).toBe('');
+		expect(result.files).toEqual([
+			expect.objectContaining({
+				kind: 'json',
+				role: 'primary'
+			})
+		]);
+		expect(JSON.parse(result.files[0].contents)).toEqual(
+			expect.objectContaining({
+				id: story.id,
+				ifid: story.ifid,
+				name: story.name
+			})
+		);
+		expect(result.report.fidelity.preserves).toContain(
+			'current story store fields'
+		);
+	});
+
+	it('builds package targets with a manifest, compatibility outputs, and assets', () => {
+		const story = fakeStory();
+		const result = createStoryBuildPackage(story, fakeAppInfo(), {
+			assetInventory: [asset()],
+			formatProperties: fakeStoryFormatProperties(),
+			target: 'package'
+		});
+		const manifest = JSON.parse(result.files[0].contents);
+
+		expect(result.files.map(file => file.kind)).toEqual([
+			'package-manifest',
+			'html',
+			'json',
+			'twee'
+		]);
+		expect(manifest).toEqual(
+			expect.objectContaining({
+				type: 'twine.rs/story-build-package',
+				story: expect.objectContaining({id: story.id})
+			})
+		);
+		expect(manifest.assets).toEqual([
+			expect.objectContaining({outputPath: 'assets/cover.png'})
+		]);
+		expect(result.report.outputs.map(output => output.kind)).toEqual([
+			'package-manifest',
+			'html',
+			'json',
+			'twee'
+		]);
 	});
 
 	it('blocks publish packages when dev-only format code would ship', () => {
@@ -95,6 +160,20 @@ describe('M6 build package', () => {
 			createStoryBuildPackage(story, fakeAppInfo(), {
 				formatProperties: properties,
 				target: 'publish'
+			})
+		).toThrow('not publish-safe');
+
+		expect(() =>
+			createStoryBuildPackage(story, fakeAppInfo(), {
+				formatProperties: properties,
+				target: 'export-html'
+			})
+		).toThrow('not publish-safe');
+
+		expect(() =>
+			createStoryBuildPackage(story, fakeAppInfo(), {
+				formatProperties: properties,
+				target: 'package'
 			})
 		).toThrow('not publish-safe');
 

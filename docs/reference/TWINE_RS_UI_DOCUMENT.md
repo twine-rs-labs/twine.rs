@@ -1,6 +1,6 @@
 # twine.rs UI Document
 
-This reference describes the target mode-native UI: Text, Graph, and Split workspaces over one Rust project model. The companion design system lives in `docs/design-system/`.
+This reference describes the target mode-native UI: Text, Graph, and Split workspaces over one Rust project model. The companion design system in `docs/design-system/` is the **UI source of truth**, and [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md) (the D-series) is the roadmap that installs it as the app's real UI. The screens described below map to D-milestones: Main Workspace Shell + Command Palette → **D2**; Project Launcher + New Project → **D3**; Text Mode → **D4**; Graph Mode + Split → **D5**; Contents, Diagnostics, Asset Manager, Story Formats → **D6**; Build/Export/Publish + Settings → **D7**; Play/Test/Debug → **D8**. D0–D2 (tokens, primitives, app shell) are prerequisites for every screen below; build in that order.
 
 ## Product Thesis
 

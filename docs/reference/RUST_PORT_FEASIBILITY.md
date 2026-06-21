@@ -2,6 +2,8 @@
 
 This reference records the initial TwineJS codebase analysis, the performance chokepoints, and the first incremental interop ideas. The current product direction is a greenfield, mode-native editor with a Rust core; the older strangler-port notes remain useful as parity-harness thinking.
 
+That direction is now tracked concretely in [`TWINE_RS_STACK_STRATEGY.md`](./TWINE_RS_STACK_STRATEGY.md) (architecture), [`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) (M-series feature roadmap), and [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md) (D-series UI-spine roadmap).
+
 Local checkout:
 
 - Repository: `https://github.com/klembot/twinejs`

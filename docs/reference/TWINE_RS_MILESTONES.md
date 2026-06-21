@@ -42,6 +42,10 @@ Demand clusters to design around:
 - Format/build/runtime extensibility: story-format docs, default/version management, preprocessing hooks, statistics hooks, runtime/debug affordances, excluded passages, localization, and publish targets.
 - Accessibility and platform polish: reduced motion, high contrast, keyboard shortcuts, customizable keymaps, update/install channels, mobile/online constraints, command-line behavior, and share/cloud options.
 
+## Plain-Language Answer To Passage Map Scale And External Edits
+
+`twine.rs` addresses large passage maps by giving authors real project structure first, then letting them work through Text, Contents, Graph, or Split views instead of forcing the whole story into one giant visual map. Visual groups, collapsed areas, saved map layouts, and generated layouts live in the full-fidelity `twine.rs` project folder/archive; when files are edited outside `twine.rs`, the app detects and reindexes safe changes, then shows review/merge choices for conflicts instead of silently overwriting either side.
+
 ## Core Product Model: Text-Native, Graph-Native, Split-Native
 
 Modal means authoring modes, not a dependence on blocking modal dialogs. `twine.rs` should have three native authoring modes: Text, Graph, and Split. Each mode has its own layout, tools, navigation rules, and performance contract. A user should never feel like the text editor is merely a decompiled export, or that graph editing is merely a decoration on top of text.
@@ -53,6 +57,20 @@ Graph mode is optional but native. If the project has saved positions, graph mod
 Split mode is the showcase. It synchronizes source and graph without forcing either to be the truth. Selecting a passage in graph opens source; moving through source highlights graph nodes and edges; editing links updates the graph index; diagnostics and search reveal both projections when available.
 
 Project format implication: story content, author-defined passage hierarchy, and graph layout must be separable. Textual story data is canonical. Folders, sections, chapters, books, and other structural scopes organize passages and source files without changing link semantics. Graph layout, card size, visual groups, annotations, and workspace view state are optional metadata. This lets imported Twee, hand-edited source folders, scoped chapter work, and graph-authored stories all live in the same app without coercion.
+
+## Fidelity Boundaries For Structure And Map Metadata
+
+The full-fidelity interchange format is the `twine.rs` project folder or project archive. It must preserve story content, source files, assets, IFIDs, tags, custom attributes, unknown metadata, author-defined hierarchy, graph positions, visual groups, collapsed state, annotations, saved views, and workspace/editor metadata.
+
+Twee export is a portable source interchange format. It should preserve story content and compatible metadata where the Twee notation can carry it, but full visual grouping, collapsed map state, workspace views, and editor-only layout may be omitted or emitted only through an explicit namespaced `twine.rs` metadata extension.
+
+Story HTML export is a playable/runtime artifact and a legacy import/export path, not the canonical home for editor-only structure. It should preserve standard Twine story and passage data, but tools should not be required to understand `twine.rs` graph metadata unless they opt into the `twine.rs` project/archive contract.
+
+Import rule: never silently discard recognized or unknown metadata. Anything that cannot be represented losslessly in the target format must either remain in the project model, be preserved in a sidecar/archive, or appear in migration/export review with a clear warning.
+
+External edit rule: desktop projects are live folders, so files may change through another editor, Git operation, script, or tooling command. `twine.rs` should watch project files, re-read changed sources incrementally, reparse and reindex affected passages/assets/layout files, apply non-conflicting disk changes automatically, and show a conflict review panel when disk changes overlap unsaved app changes or graph metadata.
+
+Conflict review must offer explicit choices: accept disk changes, keep app changes, compare, merge manually, duplicate as a new passage/file, or reload the project. The app should preserve backups and dirty state, avoid rewriting unrelated files, and never silently discard external source edits or unsaved in-app graph/layout edits.
 
 ## Current Twine UI: Screen-by-Screen Catalogue
 
@@ -269,7 +287,9 @@ Must do: expose startup mode, default project folder, generated layout behavior,
 > `docs/design-system/` as the actual UI of the app (tokens, primitives, shell,
 > screen-by-screen migration, preview surface). M7+ must build on the DS shell,
 > not add new legacy chrome. The M6 preview/debug and graph-projection handoffs
-> are satisfied by D8 and D5 respectively.
+> are satisfied by D8 and D5 respectively. The Phase 1–8 sequence in
+> [`TWINE_RS_STACK_STRATEGY.md`](./TWINE_RS_STACK_STRATEGY.md) is the architecture
+> view of the same path.
 
 ### M0: Core Model, Project Format, and Persistence
 
@@ -286,6 +306,7 @@ Core deliverables:
 - Optional graph layout metadata. Passage positions, card sizes, groups, and saved layouts are sidecar/project metadata, not required for a valid source project.
 - Importers for Twine HTML, Twee, JSON-style interchange, Twine 1.x where practical, and existing browser/localStorage stories.
 - Lossless preservation of IFID, story tags, passage tags, custom passage attributes, unknown metadata, sort order, folder/chapter/book membership, color metadata, start passage, and story format selection.
+- External edit handling: watch project folders, detect edits from external editors/Git/scripts, incrementally reparse and reindex changed files, auto-apply non-conflicting disk changes, and route conflicts through an explicit review/merge flow rather than clobbering either source or in-app changes.
 - A transactional save model with undoable structural edits, dirty-state indicators, backup reminders, explicit local/cloud/storage messaging, and user-selected project locations.
 
 Highest-signal requests in this milestone:
@@ -472,14 +493,32 @@ Core deliverables:
 - A format host API that lets custom formats add editor/workbench UI enhancements through declared app-owned extension points instead of injecting UI code into the final story runtime.
 - Local story-format development workflow: load a format from a folder, connect to a dev server, hot reload/HMR editor extensions and preview code, surface source maps/logs, and reload formats without restarting the app.
 - Build targets for Play, Test From Selection, Proof, Export HTML, Export Twee, Export JSON, Package, Publish, and source/HTML inspection with warnings before output.
+- Export/import fidelity boundaries: project folder/archive is the full-fidelity format; Twee, Story HTML, JSON, package, and publish targets must clearly state which story data, sidecar graph metadata, author hierarchy, and editor/workspace metadata they preserve or intentionally omit.
 - Runtime/debug hooks for current passage, variable/state inspection, launched-from-editor detection, format devtools panels, JSON/story-data injection inspection, Open Graph metadata, localization, compression, excluded passages, and format-version rollback.
 - Publish-safety checks that prove dev-only tooling, editor UI extensions, diagnostics helpers, HMR clients, and local dev-server glue are excluded from exported HTML/packages unless explicitly marked as runtime code.
 
 Preview/debug handoff from the M1-M5 path:
 
 - Fully functional GUI previews depend on the M3 source editor, M4 story index, M5 asset inventory, and M2 graph projection all reporting through host/query contracts. M6 should wire Play/Test/Proof previews to those contracts instead of launching isolated preview code that cannot reveal source, reveal graph, inspect assets, or report diagnostics.
-- The graph panel migration to `QueryGraphProjection` can be postponed until after the M5 asset work, but it must be queued before claiming fully functional GUI previews. The legacy passage map should be replaced or wrapped so preview/reveal flows use Rust-backed visible nodes, edges, generated layout state, selection focus, and save-layout behavior.
+- The graph panel migration to `QueryGraphProjection` is owned by **D5** (Workbench Graph Mode) and is a hard dependency for fully functional GUI previews (**D8**) — it is not optional and must not be deferred past D5. The Rust contract already exists: the generated `CoreGraphProjection` DTO, the `queryGraphProjection` command, and the `graphProjectionUpdated`/`layoutSaved` patches are in place, and `CoreProjectHost` already has a query case. What remains is replacing the legacy passage map with DS `PassageNode` rendering on that projection (visible nodes, edges, generated layout, selection focus, save-layout).
 - Runtime previews should support "run from here" from Text, Graph, Split, search results, diagnostics, and asset references, with source/graph reveal kept optional when graph metadata is absent.
+
+M6 implementation status (audited 2026-06-21 — **partially done**):
+
+M6 splits along an engine/UI seam. The **engine** (Rust contracts plus the TypeScript data layer) is largely in place; almost all remaining work is *rendering existing contracts in the design system*, which belongs to the D-series and must not be built in legacy chrome.
+
+- Capability manifest (deliverable 1): **DONE** — `src/util/story-format/capabilities.ts` derives the full manifest; tested.
+- Publish-safety checks (deliverable 6): **DONE** — `inspectStoryFormatPublishSafety()` + `assertPublishSafety()` enforce dev-only exclusion on the publish target; tested.
+- Build targets (deliverable 4): **PARTIAL** — `play`/`test`/`proof`/`publish` run through `createStoryBuildPackage()`; Twee export (`src/util/twee.ts`) and Rust HTML/JSON export (`twine_export`) exist, but Export HTML/JSON/Package have no first-class UI. *Finish the engine wiring now; the Build screen is D7.*
+- Export/import fidelity boundary: **PSEUDO SPEC** — the roadmap now treats the `twine.rs` project folder/archive as the full-fidelity format and treats Twee/Story HTML as compatibility outputs with explicit preservation/omission rules. Existing Rust model/store/export work already supports sidecar layout and metadata preservation in part; remaining work is archive packaging, export warnings, and any opt-in namespaced metadata extension.
+- Format host API (deliverable 2): **PARTIAL** — module slots/types declared (`StoryFormatModuleSlot`, `StoryFormatDeclaredModule`); no loader/resolver/UI. *Loader/resolver is engine work; the extension-point UI lands with D6 (Formats) on the D2 shell.*
+- Local format dev workflow (deliverable 3): **MISSING** — only option types exist. *Dev-server/HMR plumbing pairs with the D6 Formats screen.*
+- Runtime/debug hooks (deliverable 5): **MISSING**. *Owned by D8.*
+- H1 (previews on host/query contracts): **PARTIAL** — previews call `usePublishing()` → `CoreProjectHost`, but still render via `replaceDom()`/scratch HTML. The app-owned preview surface is **D8**.
+- H2 (graph projection): **contract DONE, rendering MISSING** — see the bullet above; **D5**.
+- H3 ("run from here" everywhere): **MISSING** — `startId` is plumbed but there are no affordances; lands across **D4/D5/D8**.
+
+Sequencing implication: **do not build any M6 UI in the legacy shell.** Finish the engine gaps now (export/package targets, format-module loader, stricter publish-safety) as core-first work in parallel with **D0**; then the screen migrations close out M6 as they bring the engine onscreen — **D5** closes H2, **D6** surfaces deliverables 1–3, **D7** surfaces deliverables 4 and 6, and **D8** closes H1, H3, and deliverable 5. Full closure map in [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md).
 
 Highest-signal requests in this milestone:
 

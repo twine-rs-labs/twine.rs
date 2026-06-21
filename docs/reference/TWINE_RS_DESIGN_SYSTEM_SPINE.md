@@ -91,6 +91,34 @@ push. M7 (Preferences/Platform) and any further M-work must build _on the DS
 shell_, not add new legacy chrome. The M6 preview/debug handoff is satisfied by
 D8, and the M6 graph-projection requirement is satisfied by D5.
 
+## M6 ↔ D-series closure map
+
+M6 (Story Formats, Build, Test, Publishing) is **partially done** and is closed
+out *by* the D-series rather than as a standalone push. Its engine (Rust
+contracts + the TS data layer) is largely in place — the capability manifest and
+publish-safety are done, and the graph-projection contract
+(`CoreGraphProjection`, `queryGraphProjection`, `graphProjectionUpdated`) plus
+the asset/command contracts (`importAsset`, `insertAssetSnippet`,
+`renameAsset`, …) are generated from Rust and already host-wired. What remains is
+overwhelmingly *rendering those contracts in the design system*:
+
+| M6 item | Status | Closed by |
+| --- | --- | --- |
+| Capability manifest (1) | done (engine) | surfaced in D6 |
+| Format host API (2) | partial — types only | loader = engine now; UI = D6 on the D2 shell |
+| Local format dev workflow (3) | missing | D6 (+ engine plumbing) |
+| Build / export / package targets (4) | partial — play/test/proof/publish + Twee/Rust export | engine now; Build screen = D7 |
+| Runtime/debug hooks (5) | missing | D8 |
+| Publish-safety (6) | done (engine) | surfaced in D7 |
+| H1 previews on host/query | partial — still `replaceDom` | D8 |
+| H2 graph projection | contract done, rendering missing | D5 |
+| H3 run-from-here | missing (`startId` plumbed) | D4 / D5 / D8 |
+
+**Do not build M6's UI in legacy chrome.** Finish the engine gaps (export/package
+targets, format-module loader, stricter publish-safety) as core-first work in
+parallel with D0; let D5–D8 bring them onscreen. The engine half is tracked in
+[`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) (M6 section).
+
 ---
 
 ## D0: Design System Foundation — Tokens, Fonts, and the Compatibility Bridge

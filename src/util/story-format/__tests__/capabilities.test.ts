@@ -33,6 +33,9 @@ describe('story format M6 capabilities', () => {
 				exporter: true,
 				parser: true,
 				publishSafe: true,
+				resolvedModules: expect.objectContaining({
+					runtime: []
+				}),
 				syntax: true
 			})
 		);
@@ -66,5 +69,27 @@ describe('story format M6 capabilities', () => {
 		]);
 		expect(capabilities.devOnlyTools).toBe(true);
 		expect(capabilities.publishSafe).toBe(false);
+	});
+
+	it('flags development module bases in publish-included code', () => {
+		const properties = fakeStoryFormatProperties();
+
+		properties.twineRs = {
+			development: {
+				devServerUrl: 'http://localhost:5173/formats/mock/',
+				hmr: true
+			},
+			modules: [{id: 'runtime', slot: 'runtime'}]
+		};
+
+		expect(
+			inspectStoryFormatPublishSafety(properties).issues.map(
+				issue => issue.code
+			)
+		).toEqual([
+			'development-dev-server-url',
+			'development-hmr',
+			'module-dev-server-url'
+		]);
 	});
 });

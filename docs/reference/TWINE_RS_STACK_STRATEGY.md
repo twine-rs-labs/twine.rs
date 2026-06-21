@@ -6,6 +6,8 @@ This project should not be "TwineJS rewritten in Rust" as a single heroic port. 
 
 The dream is not pure Rust UI and not pure web app. It is a Rust-native core with a first-class desktop shell, a shared browser target through WASM, and a UI that can move quickly enough to become beautiful.
 
+> **Companion roadmaps:** the feature milestones live in [`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) (M-series) and the UI-realization track lives in [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md) (D-series), which installs `docs/design-system/` as the app's actual UI. The architecture below is the *why*; those docs are the *when*.
+
 ## Executive Decision
 
 Recommended target:
@@ -433,7 +435,7 @@ Goal: prove the new app spine.
 - Add `twine_core` command/event layer.
 - Generate TypeScript types from Rust.
 - Create a Tauri app shell.
-- Import the design system tokens.
+- Import the design system tokens (this is **D0** in the D-series).
 - Build Launcher, Workbench shell, and status bar.
 - Open a directory.
 - Parse a project.
@@ -529,6 +531,8 @@ Goal: make it a complete Twine successor.
 
 This phase catches up to Twine's expected publishing loop.
 
+> **D-series ownership:** this phase's UI is realized by the D-series — the Build/Export screen is **D7**, format management is **D6**, and the fully functional preview/debug surface is **D8** (which depends on **D5** graph projection). M6 in [`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) tracks the engine half (capability manifest, publish-safety, export/package assembly); do not build these screens in legacy chrome.
+
 ### Phase 8: Browser Target
 
 Goal: same app architecture, reduced native powers.
@@ -582,6 +586,8 @@ Important boundary:
 - `twine_wasm` adapts browser worker messages to `twine_core`.
 
 ## Best UI Architecture Principles
+
+> These principles are realized screen-by-screen in the D-series: design tokens = **D0**, component library = **D1**, app shell / command palette / status bar = **D2**, mode surfaces = **D4/D5**. See [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md).
 
 The UI should be command-driven and view-driven, not model-owned.
 

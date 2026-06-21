@@ -4,6 +4,12 @@ import type {
 	StoryFormatModuleSlot,
 	StoryFormatProperties
 } from '../../store/story-formats';
+import {
+	declaredStoryFormatModules,
+	resolveStoryFormatModules,
+	storyFormatModuleSlots,
+	type StoryFormatResolvedModule
+} from './modules';
 
 export type StoryFormatBundleInclusionPolicy =
 	| 'legacy-monolith'
@@ -26,6 +32,7 @@ export interface StoryFormatCapabilityManifest {
 	parser: boolean;
 	preprocessing: boolean;
 	publishSafe: boolean;
+	resolvedModules: Record<StoryFormatModuleSlot, StoryFormatResolvedModule[]>;
 	statistics: boolean;
 	syntax: boolean;
 }
@@ -40,14 +47,6 @@ export interface StoryFormatPublishSafetyReport {
 	issues: StoryFormatPublishSafetyIssue[];
 	publishSafe: boolean;
 }
-
-const moduleSlots: StoryFormatModuleSlot[] = [
-	'runtime',
-	'preview',
-	'editor',
-	'diagnostics',
-	'devtools'
-];
 
 const devRuntimeMarkers: {code: string; pattern: RegExp; message: string}[] = [
 	{
@@ -77,15 +76,13 @@ const devRuntimeMarkers: {code: string; pattern: RegExp; message: string}[] = [
 	}
 ];
 
-function declaredModules(properties: StoryFormatProperties) {
-	return properties.twineRs?.modules ?? [];
-}
-
 function modulesBySlot(properties: StoryFormatProperties) {
 	return Object.fromEntries(
-		moduleSlots.map(slot => [
+		storyFormatModuleSlots.map(slot => [
 			slot,
-			declaredModules(properties).filter(module => module.slot === slot)
+			declaredStoryFormatModules(properties).filter(
+				module => module.slot === slot
+			)
 		])
 	) as Record<StoryFormatModuleSlot, StoryFormatDeclaredModule[]>;
 }
@@ -120,8 +117,13 @@ export function inspectStoryFormatPublishSafety(
 	const issues: StoryFormatPublishSafetyIssue[] = [];
 	const allowRuntimeDevMarkers =
 		properties.twineRs?.publish?.allowDevMarkersInRuntime === true;
+	const publishIncludedModules = Object.values(
+		resolveStoryFormatModules(properties)
+	)
+		.flat()
+		.filter(module => module.includeInPublish);
 
-	for (const module of declaredModules(properties)) {
+	for (const module of publishIncludedModules) {
 		if (module.slot !== 'runtime' && module.includeInPublish) {
 			issues.push({
 				code: `publish-includes-${module.slot}-module`,
@@ -132,6 +134,24 @@ export function inspectStoryFormatPublishSafety(
 	}
 
 	if (!allowRuntimeDevMarkers) {
+		const development = properties.twineRs?.development;
+
+		if (development?.devServerUrl) {
+			issues.push({
+				code: 'development-dev-server-url',
+				message: 'Story format declares a local development server URL.',
+				severity: 'error'
+			});
+		}
+
+		if (development?.hmr) {
+			issues.push({
+				code: 'development-hmr',
+				message: 'Story format declares hot-module reloading for development.',
+				severity: 'error'
+			});
+		}
+
 		for (const marker of devRuntimeMarkers) {
 			if (marker.pattern.test(source)) {
 				issues.push({
@@ -139,6 +159,22 @@ export function inspectStoryFormatPublishSafety(
 					message: marker.message,
 					severity: 'error'
 				});
+			}
+		}
+
+		for (const module of publishIncludedModules) {
+			const moduleSource = `${module.declaredUrl} ${module.resolvedUrl ?? ''}`;
+
+			for (const marker of devRuntimeMarkers) {
+				if (marker.pattern.test(moduleSource)) {
+					issues.push({
+						code: `module-${marker.code}`,
+						message: `Publish-included module "${module.id}" ${marker.message
+							.charAt(0)
+							.toLowerCase()}${marker.message.slice(1)}`,
+						severity: 'error'
+					});
+				}
 			}
 		}
 	}
@@ -153,6 +189,7 @@ export function storyFormatCapabilities(
 	properties: StoryFormatProperties
 ): StoryFormatCapabilityManifest {
 	const modules = modulesBySlot(properties);
+	const resolvedModules = resolveStoryFormatModules(properties);
 	const safety = inspectStoryFormatPublishSafety(properties);
 	const syntax = hasEditorExtension(
 		properties,
@@ -172,7 +209,7 @@ export function storyFormatCapabilities(
 			!!extension.codeMirror?.toolbar?.toString().includes("type: 'menu'") ||
 			!!extension.codeMirror?.toolbar?.toString().includes('type:"menu"')
 	);
-	const lazyLoadedModules = declaredModules(properties).some(
+	const lazyLoadedModules = declaredStoryFormatModules(properties).some(
 		module => module.lazy
 	);
 	const devOnlyTools =
@@ -185,7 +222,7 @@ export function storyFormatCapabilities(
 	return {
 		autocomplete: declared(properties, 'autocomplete', false),
 		bundleInclusionPolicy:
-			declaredModules(properties).length > 0
+			declaredStoryFormatModules(properties).length > 0
 				? 'declared-modules'
 				: devOnlyTools
 					? 'runtime-only'
@@ -227,6 +264,7 @@ export function storyFormatCapabilities(
 		parser: declared(properties, 'parser', parser),
 		preprocessing: declared(properties, 'preprocessing', false),
 		publishSafe: safety.publishSafe,
+		resolvedModules,
 		statistics: declared(properties, 'statistics', false),
 		syntax: declared(properties, 'syntax', syntax)
 	};

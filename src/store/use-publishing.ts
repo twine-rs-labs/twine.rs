@@ -3,6 +3,7 @@ import {publishArchive, publishStory, PublishOptions} from '../util/publish';
 import {
 	createStoryBuildPackage,
 	StoryBuildPackage,
+	StoryHtmlBuildTarget,
 	StoryBuildTarget
 } from '../util/build-package';
 import {useCoreProjectHost} from '../core/project-host';
@@ -16,16 +17,25 @@ import {storyWithId, useStoriesContext} from './stories';
 import {getAppInfo} from '../util/app-info';
 
 export type PublishStoryOptions = PublishOptions & {
+	buildTarget?: StoryHtmlBuildTarget;
+};
+
+export type BuildStoryPackageOptions = PublishOptions & {
 	buildTarget?: StoryBuildTarget;
 };
 
 export interface UsePublishingProps {
+	buildStoryPackage: (
+		storyId: string,
+		target: StoryBuildTarget,
+		publishOptions?: PublishOptions
+	) => Promise<StoryBuildPackage>;
 	proofStoryPackage: (storyId: string) => Promise<StoryBuildPackage>;
 	proofStory: (storyId: string) => Promise<string>;
 	publishArchive: (storyIds?: string[]) => Promise<string>;
 	publishStoryPackage: (
 		storyId: string,
-		publishOptions?: PublishStoryOptions
+		publishOptions?: BuildStoryPackageOptions
 	) => Promise<StoryBuildPackage>;
 	publishStory: (
 		storyId: string,
@@ -55,9 +65,46 @@ export function usePublishing(): UsePublishingProps {
 		[coreProjectHost]
 	);
 
+	const buildStoryPackage = React.useCallback(
+		async (
+			storyId: string,
+			target: StoryBuildTarget,
+			publishOptions?: PublishOptions
+		) => {
+			const story = storyWithId(stories, storyId);
+			const format = formatWithNameAndVersion(
+				formats,
+				story.storyFormat,
+				story.storyFormatVersion
+			);
+			const formatProperties =
+				await loadFormatProperties(format)(storyFormatsDispatch);
+
+			if (!formatProperties) {
+				throw new Error(`Couldn't load story format properties`);
+			}
+
+			return createStoryBuildPackage(story, getAppInfo(), {
+				...publishOptions,
+				assetInventory:
+					publishOptions?.assetInventory ?? assetInventoryForStory(storyId),
+				formatProperties,
+				target
+			});
+		},
+		[assetInventoryForStory, formats, stories, storyFormatsDispatch]
+	);
+
 	return {
+		buildStoryPackage,
 		publishArchive: React.useCallback(
-			async () => publishArchive(stories, getAppInfo()),
+			async storyIds =>
+				publishArchive(
+					storyIds
+						? stories.filter(story => storyIds.includes(story.id))
+						: stories,
+					getAppInfo()
+				),
 			[stories]
 		),
 		proofStory: React.useCallback(
@@ -122,57 +169,20 @@ export function usePublishing(): UsePublishingProps {
 		),
 		publishStory: React.useCallback(
 			async (storyId, publishOptions) => {
-				const story = storyWithId(stories, storyId);
-				const format = formatWithNameAndVersion(
-					formats,
-					story.storyFormat,
-					story.storyFormatVersion
-				);
-				const formatProperties =
-					await loadFormatProperties(format)(storyFormatsDispatch);
-
-				if (!formatProperties) {
-					throw new Error(`Couldn't load story format properties`);
-				}
-
 				const {buildTarget = 'play', ...htmlOptions} = publishOptions ?? {};
 
-				return createStoryBuildPackage(story, getAppInfo(), {
-					...htmlOptions,
-					assetInventory:
-						publishOptions?.assetInventory ?? assetInventoryForStory(storyId),
-					formatProperties,
-					target: buildTarget
-				}).html;
+				return (await buildStoryPackage(storyId, buildTarget, htmlOptions))
+					.html;
 			},
-			[assetInventoryForStory, formats, stories, storyFormatsDispatch]
+			[buildStoryPackage]
 		),
 		publishStoryPackage: React.useCallback(
 			async (storyId, publishOptions) => {
-				const story = storyWithId(stories, storyId);
-				const format = formatWithNameAndVersion(
-					formats,
-					story.storyFormat,
-					story.storyFormatVersion
-				);
-				const formatProperties =
-					await loadFormatProperties(format)(storyFormatsDispatch);
-
-				if (!formatProperties) {
-					throw new Error(`Couldn't load story format properties`);
-				}
-
 				const {buildTarget = 'play', ...htmlOptions} = publishOptions ?? {};
 
-				return createStoryBuildPackage(story, getAppInfo(), {
-					...htmlOptions,
-					assetInventory:
-						publishOptions?.assetInventory ?? assetInventoryForStory(storyId),
-					formatProperties,
-					target: buildTarget
-				});
+				return buildStoryPackage(storyId, buildTarget, htmlOptions);
 			},
-			[assetInventoryForStory, formats, stories, storyFormatsDispatch]
+			[buildStoryPackage]
 		),
 		publishStoryData: React.useCallback(
 			(storyId: string) => {
