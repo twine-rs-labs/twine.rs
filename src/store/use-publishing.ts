@@ -5,6 +5,8 @@ import {
 	publishStoryWithFormat,
 	PublishOptions
 } from '../util/publish';
+import {knownAssetInventoryForStory} from '../core/project-host';
+import {storyToCoreIndex} from '../core/story-index';
 import {usePrefsContext} from './prefs';
 import {
 	formatWithNameAndVersion,
@@ -37,6 +39,17 @@ export function usePublishing(): UsePublishingProps {
 	const {dispatch: storyFormatsDispatch, formats} = useStoryFormatsContext();
 	const {stories} = useStoriesContext();
 
+	const assetInventoryForStory = React.useCallback(
+		(storyId: string) => {
+			const story = storyWithId(stories, storyId);
+
+			return storyToCoreIndex(story, {
+				knownAssets: knownAssetInventoryForStory(storyId)
+			}).assetInventory;
+		},
+		[stories]
+	);
+
 	return {
 		publishArchive: React.useCallback(
 			async () => publishArchive(stories, getAppInfo()),
@@ -61,10 +74,12 @@ export function usePublishing(): UsePublishingProps {
 				return publishStoryWithFormat(
 					story,
 					formatProperties.source,
-					getAppInfo()
+					getAppInfo(),
+					{assetInventory: assetInventoryForStory(storyId)}
 				);
 			},
 			[
+				assetInventoryForStory,
 				formats,
 				prefs.proofingFormat.name,
 				prefs.proofingFormat.version,
@@ -92,18 +107,26 @@ export function usePublishing(): UsePublishingProps {
 					story,
 					formatProperties.source,
 					getAppInfo(),
-					publishOptions
+					{
+						...publishOptions,
+						assetInventory:
+							publishOptions?.assetInventory ??
+							assetInventoryForStory(storyId)
+					}
 				);
 			},
-			[formats, stories, storyFormatsDispatch]
+			[assetInventoryForStory, formats, stories, storyFormatsDispatch]
 		),
 		publishStoryData: React.useCallback(
 			(storyId: string) => {
 				const story = storyWithId(stories, storyId);
 
-				return publishStory(story, getAppInfo(), {startOptional: true});
+				return publishStory(story, getAppInfo(), {
+					assetInventory: assetInventoryForStory(storyId),
+					startOptional: true
+				});
 			},
-			[stories]
+			[assetInventoryForStory, stories]
 		)
 	};
 }

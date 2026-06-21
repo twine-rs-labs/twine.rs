@@ -1,9 +1,16 @@
 import escape from 'lodash/escape';
+import type {CoreAssetInventoryEntry} from '../core/bindings/CoreAssetInventoryEntry';
 import {Passage, Story} from '../store/stories';
 import {AppInfo} from './app-info';
 import {i18n} from './i18n';
 
 export interface PublishOptions {
+	/**
+	 * File-backed asset inventory from the core project host. When present, missing
+	 * referenced assets block publish/preview output.
+	 */
+	assetInventory?: CoreAssetInventoryEntry[];
+
 	/**
 	 * Options that will be passed as-is to the format in the `options` attribute
 	 * of the published `<tw-storydata>` tag.
@@ -21,6 +28,24 @@ export interface PublishOptions {
 	 * set and one wasn't set manually.
 	 */
 	startOptional?: boolean;
+}
+
+export function assertAssetInventoryPublishable(
+	assetInventory: CoreAssetInventoryEntry[] = []
+) {
+	const missingAssets = assetInventory.filter(asset => asset.missing);
+
+	if (missingAssets.length === 0) {
+		return;
+	}
+
+	throw new Error(
+		`Cannot publish because ${
+			missingAssets.length === 1
+				? `asset "${missingAssets[0].path}" is missing`
+				: `${missingAssets.length} referenced assets are missing`
+		}.`
+	);
 }
 
 /**
@@ -68,8 +93,10 @@ export function publishPassage(passage: Passage, localId: number) {
 export function publishStory(
 	story: Story,
 	appInfo: AppInfo,
-	{formatOptions, startId, startOptional}: PublishOptions = {}
+	{assetInventory, formatOptions, startId, startOptional}: PublishOptions = {}
 ) {
+	assertAssetInventoryPublishable(assetInventory);
+
 	startId = startId ?? story.startPassage;
 
 	// Verify that the start passage exists.
@@ -142,7 +169,7 @@ export function publishStoryWithFormat(
 	story: Story,
 	formatSource: string,
 	appInfo: AppInfo,
-	{formatOptions, startId}: PublishOptions = {}
+	options: PublishOptions = {}
 ) {
 	if (!formatSource) {
 		throw new Error('Story format source cannot be empty.');
@@ -155,7 +182,7 @@ export function publishStoryWithFormat(
 
 	output = output.replace(/{{STORY_NAME}}/g, () => escape(story.name));
 	output = output.replace(/{{STORY_DATA}}/g, () =>
-		publishStory(story, appInfo, {formatOptions, startId})
+		publishStory(story, appInfo, options)
 	);
 
 	return output;

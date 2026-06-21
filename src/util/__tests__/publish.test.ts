@@ -116,15 +116,51 @@ describe('publishPassage()', () => {
 	});
 });
 
-describe('publishStory()', () => {
-	it('publishes a story to HTML', () => {
+	describe('publishStory()', () => {
+		it('publishes a story to HTML', () => {
 		const result = publish.publishStory(story, appInfo);
 
 		expect(typeof result).toBe('string');
 		checkStoryElAgainstData(toDOM(result), story, appInfo);
-	});
+		});
 
-	it('passes through format options', () => {
+		it('throws an error when a referenced asset is missing', () => {
+			expect(() =>
+				publish.publishStory(story, appInfo, {
+					assetInventory: [
+						{
+							durationMs: null,
+							exists: false,
+							height: null,
+							kind: 'image',
+							missing: true,
+							modifiedAt: null,
+							normalizedPath: 'assets/missing.png',
+							path: 'assets/missing.png',
+							previewUrl: null,
+							publish: {
+								copy: false,
+								outputPath: 'assets/missing.png',
+								reason: 'Referenced file is missing'
+							},
+							referenceCount: 1,
+							references: [],
+							sizeBytes: null,
+							snippet: {
+								label: 'Insert asset reference',
+								mediaType: 'image',
+								text: '<img src="assets/missing.png" alt="">'
+							},
+							thumbnailUrl: null,
+							unused: false,
+							width: null
+						}
+					]
+				})
+			).toThrow('asset "assets/missing.png" is missing');
+		});
+
+		it('passes through format options', () => {
 		const result = toDOM(
 			publish.publishStory(story, appInfo, {
 				formatOptions: '<<test option>>'

@@ -60,11 +60,12 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(
 			context.host.queryStoryIndex(context.story.id).assetInventory
 		).toEqual([
-			expect.objectContaining({
-				exists: true,
-				path: 'assets/cover.png',
-				unused: true
-			})
+				expect.objectContaining({
+					exists: true,
+					path: 'assets/cover.png',
+					thumbnailUrl: 'file:///tmp/cover.png',
+					unused: true
+				})
 		]);
 
 		context.host.applyStoryCommand(

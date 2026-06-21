@@ -2508,15 +2508,12 @@ struct AssetPath {
 
 impl AssetPath {
     fn parse(path: &str) -> Result<Self, CoreError> {
-        let mut normalized = path.replace('\\', "/");
-
-        while let Some(stripped) = normalized.strip_prefix("./") {
-            normalized = stripped.into();
-        }
-
-        if let Some(stripped) = normalized.strip_prefix("assets/") {
-            normalized = stripped.into();
-        }
+        let Some(normalized) = local_asset_reference_path(path) else {
+            return Err(CoreError::UnsafeAssetPath(path.into()));
+        };
+        let normalized = normalized
+            .strip_prefix("assets/")
+            .expect("local asset reference path should use assets/ prefix");
 
         if normalized.trim().is_empty() {
             return Err(CoreError::UnsafeAssetPath(path.into()));
@@ -2524,7 +2521,7 @@ impl AssetPath {
 
         let mut asset_relative_path = PathBuf::new();
 
-        for component in Path::new(&normalized).components() {
+        for component in Path::new(normalized).components() {
             match component {
                 Component::Normal(value) => asset_relative_path.push(value),
                 Component::CurDir => {}
@@ -2554,6 +2551,33 @@ fn path_string(path: &Path) -> String {
         .map(|component| component.to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+fn file_url(path: &Path) -> String {
+    let mut path = path.to_string_lossy().replace('\\', "/");
+
+    if !path.starts_with('/') {
+        path = format!("/{path}");
+    }
+
+    format!("file://{}", percent_encode_file_path(&path))
+}
+
+fn percent_encode_file_path(path: &str) -> String {
+    let mut output = String::new();
+
+    for byte in path.bytes() {
+        let is_unreserved =
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/' | b':');
+
+        if is_unreserved {
+            output.push(char::from(byte));
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+
+    output
 }
 
 fn file_asset_inventory(asset_root: &Path) -> Result<Vec<CoreAssetInventoryEntry>, CoreError> {
@@ -2600,7 +2624,7 @@ fn file_asset_inventory_entry(
     let metadata = fs::metadata(disk_path).map_err(core_io_error)?;
     let missing = false;
     let dimensions = image_dimensions(disk_path);
-    let preview_url = Some(format!("asset://{path}"));
+    let preview_url = Some(file_url(disk_path));
     let thumbnail_url = if kind == "image" {
         preview_url.clone()
     } else {
@@ -3182,13 +3206,14 @@ fn asset_references_in_source(
         .filter_map(|captures| {
             let path = captures.name("path")?;
             let extension = captures.name("ext")?.as_str();
+            let path_string = local_asset_reference_path(path.as_str())?;
 
             Some(CoreAssetReference {
                 end: path.end(),
                 kind: asset_kind(extension).into(),
                 line: line_number_at(source, path.start()),
                 passage_id: passage_id.map(str::to_owned),
-                path: path.as_str().to_owned(),
+                path: path_string,
                 source_id: source_id.to_owned(),
                 source_name: source_name.to_owned(),
                 start: path.start(),
@@ -3215,9 +3240,55 @@ fn asset_kind_for_path(path: &str) -> String {
 }
 
 fn normalized_asset_path(path: &str) -> String {
-    path.replace('\\', "/")
-        .trim_start_matches("./")
+    local_asset_reference_path(path)
+        .unwrap_or_else(|| path.replace('\\', "/").trim_start_matches("./").into())
         .to_ascii_lowercase()
+}
+
+fn local_asset_reference_path(path: &str) -> Option<String> {
+    let mut normalized = path.replace('\\', "/");
+
+    while let Some(stripped) = normalized.strip_prefix("./") {
+        normalized = stripped.into();
+    }
+
+    if has_url_scheme(&normalized) || normalized.starts_with("//") {
+        return None;
+    }
+
+    let segments = normalized
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let asset_segments = segments
+        .iter()
+        .position(|segment| segment.eq_ignore_ascii_case("assets"))
+        .map(|index| &segments[index + 1..])
+        .unwrap_or(segments.as_slice());
+
+    if asset_segments.is_empty()
+        || asset_segments
+            .iter()
+            .any(|segment| *segment == "." || *segment == "..")
+    {
+        return None;
+    }
+
+    Some(format!("assets/{}", asset_segments.join("/")))
+}
+
+fn has_url_scheme(path: &str) -> bool {
+    let Some((scheme, _)) = path.split_once(':') else {
+        return false;
+    };
+
+    let mut bytes = scheme.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+
+    first.is_ascii_alphabetic()
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-'))
 }
 
 fn asset_snippet(path: &str, kind: &str) -> CoreAssetSnippet {
@@ -4320,6 +4391,34 @@ mod tests {
     }
 
     #[test]
+    fn story_index_ignores_external_asset_urls_and_normalizes_local_asset_references() {
+        let mut session = session();
+
+        {
+            let story = session.story_mut("story-1").expect("story");
+            let passage = story
+                .passage_by_id_mut(&PassageId::new("a"))
+                .expect("passage");
+
+            passage.text = r#"<img src="https://cdn.example.com/cover.png"> <img src="/assets/local.png"> <img src="../assets/icon.svg"> poster.jpg"#.into();
+        }
+
+        let index = session
+            .story_index("story-1", CoreStoryIndexOptions::default())
+            .expect("index should build");
+        let asset_paths = index
+            .asset_inventory
+            .iter()
+            .map(|asset| asset.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(!asset_paths.iter().any(|path| path.starts_with("https://")));
+        assert!(asset_paths.contains(&"assets/local.png"));
+        assert!(asset_paths.contains(&"assets/icon.svg"));
+        assert!(asset_paths.contains(&"assets/poster.jpg"));
+    }
+
+    #[test]
     fn asset_commands_require_file_backed_project_root() {
         let mut session = session();
         let error = session
@@ -4383,10 +4482,10 @@ mod tests {
         assert_eq!(cover_asset.reference_count, 1);
         assert_eq!(cover_asset.width, Some(320));
         assert_eq!(cover_asset.height, Some(200));
-        assert_eq!(
-            cover_asset.thumbnail_url.as_deref(),
-            Some("asset://assets/cover.png")
-        );
+        assert!(cover_asset
+            .thumbnail_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("file://") && url.ends_with("/assets/cover.png")));
         assert_eq!(missing_asset.exists, Some(false));
         assert!(missing_asset.missing);
         assert!(unused_asset.unused);

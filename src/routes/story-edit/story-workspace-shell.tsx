@@ -30,10 +30,12 @@ import type {
 	DiagnosticsViewModel,
 	WorkbenchSelection
 } from '../../core';
+import type {PatchBatch} from '../../core/bindings/PatchBatch';
 import type {CoreStoryIndex} from '../../core/bindings/CoreStoryIndex';
 import type {CoreContentsEntry} from '../../core/bindings/CoreContentsEntry';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {CoreProjectHost} from '../../core/project-host';
+import type {TwineElectronWindow} from '../../electron/shared';
 import {useDialogsContext} from '../../dialogs/context';
 import {
 	canOpenStorySource,
@@ -124,6 +126,35 @@ const DockHeader: React.FC<{
 		</header>
 	);
 };
+
+function copyText(text: string) {
+	const {twineElectron} = window as TwineElectronWindow;
+
+	if (twineElectron?.copyText) {
+		twineElectron.copyText(text);
+		return;
+	}
+
+	void navigator.clipboard?.writeText(text);
+}
+
+function revealPath(path: string) {
+	const {twineElectron} = window as TwineElectronWindow;
+
+	twineElectron?.revealPath(path);
+}
+
+function handlePatchSideEffects(batch: PatchBatch) {
+	for (const patch of batch.patches) {
+		if (patch.type === 'assetSnippetCopied') {
+			copyText(patch.snippet);
+		}
+
+		if (patch.type === 'assetRevealed') {
+			revealPath(patch.reveal_path);
+		}
+	}
+}
 
 const PassageNavigator: React.FC<{
 	index: CoreStoryIndex;
@@ -755,9 +786,10 @@ export const StoryWorkspaceShell: React.FC<
 
 	React.useEffect(
 		() =>
-			coreProjectHost.subscribeToPatches(() =>
-				setPatchVersion(version => version + 1)
-			),
+			coreProjectHost.subscribeToPatches(batch => {
+				handlePatchSideEffects(batch);
+				setPatchVersion(version => version + 1);
+			}),
 		[coreProjectHost]
 	);
 

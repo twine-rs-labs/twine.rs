@@ -1,4 +1,4 @@
-import {app, dialog, ipcMain} from 'electron';
+import {app, clipboard, dialog, ipcMain, shell} from 'electron';
 import debounce from 'lodash/debounce';
 import type {DebouncedFunc} from 'lodash';
 import {i18n} from './locales';
@@ -23,14 +23,20 @@ export function initIpc() {
 	// These still take an argument because the individual invocations will see a
 	// different story object each time.
 
-	const storySavers: Record<
+		const storySavers: Record<
 		string,
 		DebouncedFunc<
 			(event: any, story: Story, storyHtml: string) => Promise<void>
 		>
-	> = {};
+		> = {};
 
-	ipcMain.on('delete-story', async (event, story) => {
+		ipcMain.on('copy-text', (_event, text: string) => {
+			if (typeof text === 'string') {
+				clipboard.writeText(text);
+			}
+		});
+
+		ipcMain.on('delete-story', async (event, story) => {
 		try {
 			await deleteStory(story);
 			event.sender.send('story-deleted', story);
@@ -67,14 +73,20 @@ export function initIpc() {
 		}
 	});
 
-	ipcMain.on(
-		'open-with-scratch-file',
+		ipcMain.on(
+			'open-with-scratch-file',
 		(event, data: string, filename: string) => {
 			openWithScratchFile(data, filename);
 		}
-	);
+		);
 
-	// This doesn't use handle() because state reducers in the renderer process
+		ipcMain.on('reveal-path', (_event, path: string) => {
+			if (typeof path === 'string' && path.trim() !== '') {
+				shell.showItemInFolder(path);
+			}
+		});
+
+		// This doesn't use handle() because state reducers in the renderer process
 	// can't be be asynchronous--we have to send a signal back.
 
 	ipcMain.on('rename-story', async (event, oldStory, newStory) => {

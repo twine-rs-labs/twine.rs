@@ -1,7 +1,6 @@
 import type {CoreAssetReference} from './bindings/CoreAssetReference';
 import type {CoreAssetInventoryEntry} from './bindings/CoreAssetInventoryEntry';
 import type {CoreAssetPublishRule} from './bindings/CoreAssetPublishRule';
-import type {CoreAssetSnippet} from './bindings/CoreAssetSnippet';
 import type {CoreContentsEntry} from './bindings/CoreContentsEntry';
 import type {CoreDiagnostic} from './bindings/CoreDiagnostic';
 import type {CoreDiagnosticSeverity} from './bindings/CoreDiagnosticSeverity';
@@ -14,6 +13,12 @@ import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
 import type {CoreSymbol} from './bindings/CoreSymbol';
 import type {CoreTagEntry} from './bindings/CoreTagEntry';
+import {
+	assetKindForPath,
+	assetReferencesInSource,
+	assetSnippet,
+	normalizedAssetPath
+} from './asset-paths';
 import {Passage, Story} from '../store/stories';
 import {parseLinks} from '../util/parse-links';
 import {createRegExp} from '../util/regexp';
@@ -511,63 +516,6 @@ function symbolsInSource(
 	return symbols;
 }
 
-function assetKind(extension: string) {
-	const normalized = extension.toLocaleLowerCase();
-
-	if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(normalized)) {
-		return 'image';
-	}
-
-	if (['mp3', 'm4a', 'ogg', 'wav'].includes(normalized)) {
-		return 'audio';
-	}
-
-	if (['mp4', 'webm'].includes(normalized)) {
-		return 'video';
-	}
-
-	if (normalized === 'css') {
-		return 'stylesheet';
-	}
-
-	if (normalized === 'js') {
-		return 'script';
-	}
-
-	return 'file';
-}
-
-function assetKindForPath(path: string) {
-	const extension = path.split('.').pop();
-
-	return extension ? assetKind(extension) : 'file';
-}
-
-function normalizedAssetPath(path: string) {
-	return path.replace(/\\/g, '/').replace(/^\.\//, '').toLocaleLowerCase();
-}
-
-function assetSnippet(path: string, kind: string): CoreAssetSnippet {
-	const text =
-		kind === 'image'
-			? `<img src="${path}" alt="">`
-			: kind === 'audio'
-				? `<audio src="${path}" controls></audio>`
-				: kind === 'video'
-					? `<video src="${path}" controls></video>`
-					: kind === 'stylesheet'
-						? `<link rel="stylesheet" href="${path}">`
-						: kind === 'script'
-							? `<script src="${path}"></script>`
-							: path;
-
-	return {
-		label: 'Insert asset reference',
-		mediaType: kind,
-		text
-	};
-}
-
 function assetPublishRule(path: string, missing: boolean): CoreAssetPublishRule {
 	return {
 		copy: !missing,
@@ -680,32 +628,6 @@ function assetInventoryFromReferences(
 	return Array.from(inventory.values()).sort((left, right) =>
 		left.path.localeCompare(right.path)
 	);
-}
-
-function assetReferencesInSource(
-	sourceId: string,
-	sourceName: string,
-	source: string,
-	passageId: string | null
-): CoreAssetReference[] {
-	const assets: CoreAssetReference[] = [];
-	const matcher =
-		/[A-Za-z0-9_./~%:@?&=+-]+\.(png|jpe?g|gif|svg|webp|mp3|m4a|ogg|wav|mp4|webm|css|js)/gi;
-
-	for (let match = matcher.exec(source); match; match = matcher.exec(source)) {
-		assets.push({
-			end: match.index + match[0].length,
-			kind: assetKind(match[1]),
-			line: lineNumberAt(source, match.index),
-			passageId,
-			path: match[0],
-			sourceId,
-			sourceName,
-			start: match.index
-		});
-	}
-
-	return assets;
 }
 
 function tagEntries(story: Story): CoreTagEntry[] {

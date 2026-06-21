@@ -7,6 +7,7 @@ import type {CoreContentsEntryKind} from './bindings/CoreContentsEntryKind';
 import type {CoreDiagnostic} from './bindings/CoreDiagnostic';
 import type {CoreDiagnosticSeverity} from './bindings/CoreDiagnosticSeverity';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
+import {assetSnippet, normalizedAssetPath} from './asset-paths';
 import type {Passage, Story} from '../store/stories';
 import {parseLinks} from '../util/parse-links';
 
@@ -178,31 +179,6 @@ function diagnosticGroup(diagnostic: CoreDiagnostic) {
 		default:
 			return 'Format Errors';
 	}
-}
-
-function normalizedAssetPath(path: string) {
-	return path.replace(/\\/g, '/').replace(/^\.\//, '').toLocaleLowerCase();
-}
-
-function assetSnippet(path: string, kind: string): CoreAssetSnippet {
-	const text =
-		kind === 'image'
-			? `<img src="${path}" alt="">`
-			: kind === 'audio'
-				? `<audio src="${path}" controls></audio>`
-				: kind === 'video'
-					? `<video src="${path}" controls></video>`
-					: kind === 'stylesheet'
-						? `<link rel="stylesheet" href="${path}">`
-						: kind === 'script'
-							? `<script src="${path}"></script>`
-							: path;
-
-	return {
-		label: 'Insert asset reference',
-		mediaType: kind,
-		text
-	};
 }
 
 function assetPublishRule(path: string): CoreAssetPublishRule {

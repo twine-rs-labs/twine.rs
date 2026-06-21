@@ -11,6 +11,9 @@ import {contextBridge, ipcRenderer} from 'electron';
 import {Story} from '../../store/stories/stories.types';
 
 contextBridge.exposeInMainWorld('twineElectron', {
+	copyText(text: string) {
+		ipcRenderer.send('copy-text', text);
+	},
 	deleteStory(story: Story) {
 		ipcRenderer.send('delete-story', story);
 	},
@@ -28,6 +31,9 @@ contextBridge.exposeInMainWorld('twineElectron', {
 	},
 	openWithScratchFile(data: string, filename: string) {
 		ipcRenderer.send('open-with-scratch-file', data, filename);
+	},
+	revealPath(path: string) {
+		ipcRenderer.send('reveal-path', path);
 	},
 	renameStory(oldStory: Story, newStory: Story) {
 		ipcRenderer.send('rename-story', oldStory, newStory);

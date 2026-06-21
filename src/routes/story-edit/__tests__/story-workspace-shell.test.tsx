@@ -82,6 +82,10 @@ function renderComponent(
 describe('<StoryWorkspaceShell>', () => {
 	beforeEach(() => window.localStorage.clear());
 
+	afterEach(() => {
+		delete (window as any).twineElectron;
+	});
+
 	it('renders only the text panel in text mode', () => {
 		renderComponent('text');
 
@@ -215,6 +219,30 @@ describe('<StoryWorkspaceShell>', () => {
 			expect.any(Function),
 			'undoChange.editPassage'
 		);
+	});
+
+	it('handles asset snippet copy and reveal side effects from host patches', () => {
+		const copyText = jest.fn();
+		const revealPath = jest.fn();
+
+		(window as any).twineElectron = {copyText, revealPath};
+		renderComponent('text');
+
+		within(
+			screen.getByRole('complementary', {
+				name: 'routes.storyEdit.workspace.leftDock'
+			})
+		)
+			.getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
+			.click();
+
+		screen.getByRole('button', {name: 'Copy Snippet'}).click();
+		expect(copyText).toHaveBeenCalledWith(
+			'<img src="assets/cover.png" alt="">'
+		);
+
+		screen.getByRole('button', {name: 'Reveal'}).click();
+		expect(revealPath).toHaveBeenCalledWith('assets/cover.png');
 	});
 
 	it('dispatches executable diagnostic quick fixes', () => {

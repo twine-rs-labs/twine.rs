@@ -166,7 +166,7 @@ describe('storyToCoreIndex', () => {
 			);
 		});
 
-	it('merges known file assets and reports missing and unused asset diagnostics', () => {
+		it('merges known file assets and reports missing and unused asset diagnostics', () => {
 		const story = fakeStory(0);
 		const start = fakePassage({
 			id: 'start',
@@ -245,10 +245,39 @@ describe('storyToCoreIndex', () => {
 			expect.arrayContaining([
 				expect.objectContaining({scope: 'asset', sourceName: 'Assets'})
 			])
-		);
-	});
+			);
+		});
 
-	it('supports regex search options and replacement previews', () => {
+		it('ignores external asset URLs and normalizes local asset references', () => {
+			const story = fakeStory(0);
+			const start = fakePassage({
+				id: 'start',
+				name: 'Start',
+				story: story.id,
+				text:
+					'<img src="https://cdn.example.com/cover.png"> ' +
+					'<img src="/assets/local.png"> ' +
+					'<img src="../assets/icon.svg"> poster.jpg'
+			});
+
+			story.passages = [start];
+			story.startPassage = start.id;
+
+			const assetPaths = storyToCoreIndex(story).assetInventory.map(
+				asset => asset.path
+			);
+
+			expect(assetPaths).not.toContain('https://cdn.example.com/cover.png');
+			expect(assetPaths).toEqual(
+				expect.arrayContaining([
+					'assets/local.png',
+					'assets/icon.svg',
+					'assets/poster.jpg'
+				])
+			);
+		});
+
+		it('supports regex search options and replacement previews', () => {
 		const story = fakeStory(1);
 
 		story.passages[0].name = 'Start';

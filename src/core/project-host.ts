@@ -5,6 +5,14 @@ import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
 import type {Patch} from './bindings/Patch';
 import type {PatchBatch} from './bindings/PatchBatch';
 import type {StoryCommand} from './bindings/StoryCommand';
+import {
+	assetKindForPath,
+	assetSnippet,
+	fileUrlForPath,
+	normalizedAssetPath,
+	projectAssetPath,
+	replaceAssetReferencesInSource
+} from './asset-paths';
 import {storyToCoreIndex} from './story-index';
 import {
 	StoriesAction,
@@ -28,13 +36,16 @@ export interface CoreProjectHost {
 	subscribeToPatches(listener: CoreProjectPatchListener): () => void;
 }
 
+const sharedAssetInventoryByStory = new Map<string, CoreAssetInventoryEntry[]>();
+
+export function knownAssetInventoryForStory(storyId: string) {
+	return sharedAssetInventoryByStory.get(storyId) ?? [];
+}
+
 type UndoableDispatch = (
 	action: StoriesActionOrThunk,
 	annotation?: string
 ) => void;
-
-const assetReferenceRegex =
-	/([A-Za-z0-9_./~%:@?&=+-]+\.(png|jpe?g|gif|svg|webp|mp3|m4a|ogg|wav|mp4|webm|css|js))/gi;
 
 function storyCommandAnnotation(command: StoryCommand) {
 	switch (command.type) {
@@ -83,75 +94,13 @@ function passageForId(story: Story, passageId: string) {
 	return passage;
 }
 
-function normalizedAssetPath(path: string) {
-	return path
-		.replace(/\\/g, '/')
-		.replace(/^\.\//, '')
-		.replace(/^assets\//i, 'assets/')
-		.toLowerCase();
-}
-
-function projectAssetPath(path: string) {
-	const normalized = path.replace(/\\/g, '/').replace(/^(\.\/)+/, '');
-	const withoutPrefix = normalized.replace(/^assets\//i, '');
-	const safeSegments = withoutPrefix
-		.split('/')
-		.filter(segment => segment && segment !== '.' && segment !== '..');
-
-	return `assets/${safeSegments.join('/') || 'asset'}`;
-}
-
-function assetKind(path: string) {
-	const extension = path.split('.').pop()?.toLowerCase() ?? '';
-
-	if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(extension)) {
-		return 'image';
-	}
-
-	if (['mp3', 'm4a', 'ogg', 'wav'].includes(extension)) {
-		return 'audio';
-	}
-
-	if (['mp4', 'webm'].includes(extension)) {
-		return 'video';
-	}
-
-	if (extension === 'css') {
-		return 'stylesheet';
-	}
-
-	if (extension === 'js') {
-		return 'script';
-	}
-
-	return 'file';
-}
-
-function assetSnippet(path: string, kind = assetKind(path)) {
-	const text =
-		kind === 'image'
-			? `<img src="${path}" alt="">`
-			: kind === 'audio'
-				? `<audio src="${path}" controls></audio>`
-				: kind === 'video'
-					? `<video src="${path}" controls></video>`
-					: kind === 'stylesheet'
-						? `<link rel="stylesheet" href="${path}">`
-						: kind === 'script'
-							? `<script src="${path}"></script>`
-							: path;
-
-	return {
-		label: 'Insert asset reference',
-		mediaType: kind,
-		text
-	};
-}
-
-function assetInventoryEntry(path: string): CoreAssetInventoryEntry {
+function assetInventoryEntry(
+	path: string,
+	options: {previewUrl?: string | null} = {}
+): CoreAssetInventoryEntry {
 	const normalizedPath = normalizedAssetPath(path);
-	const kind = assetKind(path);
-	const previewUrl = `asset://${path}`;
+	const kind = assetKindForPath(path);
+	const previewUrl = options.previewUrl ?? null;
 
 	return {
 		durationMs: null,
@@ -176,18 +125,6 @@ function assetInventoryEntry(path: string): CoreAssetInventoryEntry {
 		unused: true,
 		width: null
 	};
-}
-
-function replaceAssetReferences(
-	source: string,
-	oldPath: string,
-	newPath: string
-) {
-	const oldNormalized = normalizedAssetPath(oldPath);
-
-	return source.replace(assetReferenceRegex, match =>
-		normalizedAssetPath(match) === oldNormalized ? newPath : match
-	);
 }
 
 function insertAtPosition(source: string, position: number, text: string) {
@@ -221,7 +158,7 @@ function restoredPassageProps(
 }
 
 export class StoreCoreProjectHost implements CoreProjectHost {
-	private assetInventoryByStory = new Map<string, CoreAssetInventoryEntry[]>();
+	private assetInventoryByStory = sharedAssetInventoryByStory;
 	private dispatch: UndoableDispatch;
 	private listeners = new Set<CoreProjectPatchListener>();
 	private publishedStories = new Map<string, Story>();
@@ -387,7 +324,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					return;
 				}
 
-				const asset = assetInventoryEntry(path);
+					const asset = assetInventoryEntry(path, {
+						previewUrl: fileUrlForPath(command.source_path)
+					});
 
 				this.upsertAsset(command.story_id, asset);
 				this.publishAssetInventory(command.story_id, 'Import Asset', {
@@ -451,10 +390,15 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 			case 'replaceAsset': {
 				const asset = {
-					...(this.assetForPath(command.story_id, command.path) ??
-						assetInventoryEntry(projectAssetPath(command.path))),
-					modifiedAt: new Date().toISOString()
-				};
+						...(this.assetForPath(command.story_id, command.path) ??
+							assetInventoryEntry(projectAssetPath(command.path))),
+						modifiedAt: new Date().toISOString(),
+						previewUrl: fileUrlForPath(command.source_path),
+						thumbnailUrl:
+							assetKindForPath(command.path) === 'image'
+								? fileUrlForPath(command.source_path)
+								: null
+					};
 
 				this.upsertAsset(command.story_id, asset);
 				this.publishAssetInventory(command.story_id, 'Replace Asset', {
@@ -584,7 +528,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		const oldAsset = this.assetForPath(storyId, path);
 		const renamed = {
 			...(oldAsset ?? assetInventoryEntry(projectAssetPath(path))),
-			...assetInventoryEntry(projectAssetPath(newPath)),
+			...assetInventoryEntry(projectAssetPath(newPath), {
+				previewUrl: oldAsset?.previewUrl ?? null
+			}),
 			references: oldAsset?.references ?? [],
 			referenceCount: oldAsset?.referenceCount ?? 0
 		};
@@ -603,20 +549,24 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		const story = storyForId(this.stories, storyId);
 
 		for (const passage of story.passages) {
-			const text = replaceAssetReferences(passage.text, oldPath, newPath);
+			const text = replaceAssetReferencesInSource(
+				passage.text,
+				oldPath,
+				newPath
+			);
 
 			if (text !== passage.text) {
 				dispatch(updatePassage(story, passage, {text}));
 			}
 		}
 
-		const script = replaceAssetReferences(story.script, oldPath, newPath);
+		const script = replaceAssetReferencesInSource(story.script, oldPath, newPath);
 
 		if (script !== story.script) {
 			dispatch(updateStory(this.stories, story, {script}));
 		}
 
-		const stylesheet = replaceAssetReferences(
+		const stylesheet = replaceAssetReferencesInSource(
 			story.stylesheet,
 			oldPath,
 			newPath

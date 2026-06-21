@@ -99,10 +99,10 @@ describe('asset M5 contract', () => {
 			storyToCoreIndex(story, {
 				knownAssets: [
 					{
-						...referenceBacked.entries[0].inventory,
-						exists: true,
-						sizeBytes: 2048,
-						thumbnailUrl: 'asset://thumb'
+							...referenceBacked.entries[0].inventory,
+							exists: true,
+							sizeBytes: 2048,
+							thumbnailUrl: 'file:///project/assets/cover.png'
 					}
 				]
 			})
@@ -111,11 +111,11 @@ describe('asset M5 contract', () => {
 		expect(inventoryBacked.entries).toEqual([
 			expect.objectContaining({
 				exists: true,
-				path: 'assets/cover.png',
-				referenceCount: 1,
-				sizeBytes: 2048,
-				thumbnailUrl: 'asset://thumb'
-			})
+					path: 'assets/cover.png',
+					referenceCount: 1,
+					sizeBytes: 2048,
+					thumbnailUrl: 'file:///project/assets/cover.png'
+				})
 		]);
 	});
 });

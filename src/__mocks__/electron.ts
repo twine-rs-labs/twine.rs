@@ -32,6 +32,10 @@ export const dialog = {
 	showMessageBox: jest.fn().mockResolvedValue({response: 0})
 };
 
+export const clipboard = {
+	writeText: jest.fn()
+};
+
 export const ipcMain = {
 	handle: jest.fn(),
 	on: jest.fn()
@@ -46,6 +50,7 @@ export const screen = {
 export const shell = {
 	openExternal: jest.fn(),
 	openPath: jest.fn(),
+	showItemInFolder: jest.fn(),
 	trashItem: jest.fn()
 };
 
