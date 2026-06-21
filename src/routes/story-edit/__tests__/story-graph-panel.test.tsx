@@ -112,7 +112,9 @@ describe('<StoryGraphPanel>', () => {
 		expect(screen.getByRole('button', {name: /Start/})).toBeInTheDocument();
 		expect(nodeButton(result.container, 'next')).toHaveTextContent('Next');
 		expect(screen.getByText('saved')).toBeInTheDocument();
-		expect(result.container.querySelector('[data-kind="resolved"]')).toBeTruthy();
+		expect(
+			result.container.querySelector('[data-kind="resolved"]')
+		).toBeTruthy();
 		expect(result.container.querySelector('[data-kind="broken"]')).toBeTruthy();
 	});
 
@@ -121,7 +123,9 @@ describe('<StoryGraphPanel>', () => {
 
 		fireEvent.click(screen.getByRole('button', {name: 'Broken links'}));
 
-		expect(result.container.querySelector('[data-kind="resolved"]')).toBeTruthy();
+		expect(
+			result.container.querySelector('[data-kind="resolved"]')
+		).toBeTruthy();
 		expect(result.container.querySelector('[data-kind="broken"]')).toBeNull();
 	});
 
@@ -183,6 +187,97 @@ describe('<StoryGraphPanel>', () => {
 				})
 			)
 		);
+	});
+
+	it('pans the graph viewport from the minimap preview', async () => {
+		const widthSpy = jest
+			.spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+			.mockReturnValue(320);
+		const heightSpy = jest
+			.spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+			.mockReturnValue(240);
+		const rectSpy = jest
+			.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+			.mockReturnValue({
+				bottom: 120,
+				height: 120,
+				left: 0,
+				right: 170,
+				toJSON: () => ({}),
+				top: 0,
+				width: 170,
+				x: 0,
+				y: 0
+			});
+		const {result} = renderComponent();
+		const minimap = result.container.querySelector(
+			'.story-edit-graph-minimap'
+		) as HTMLElement;
+		const viewport = result.container.querySelector(
+			'.story-edit-graph-viewport'
+		) as HTMLElement;
+
+		await waitFor(() => expect(minimap).toBeTruthy());
+		fireEvent.pointerDown(
+			minimap,
+			new PointerEvent('pointerdown', {
+				button: 0,
+				clientX: 20,
+				clientY: 60,
+				pointerId: 8
+			})
+		);
+		expect(viewport.scrollLeft).toBe(0);
+
+		fireEvent.pointerMove(
+			minimap,
+			new PointerEvent('pointermove', {
+				button: 0,
+				clientX: 160,
+				clientY: 60,
+				pointerId: 8
+			})
+		);
+
+		expect(viewport.scrollLeft).toBeGreaterThan(0);
+
+		widthSpy.mockRestore();
+		heightSpy.mockRestore();
+		rectSpy.mockRestore();
+	});
+
+	it('shows pointer-down selection feedback and additive selection immediately', () => {
+		const {next, onSelect, result, start} = renderComponent();
+		const startNode = result.container.querySelector(
+			'[data-passage-id="start"]'
+		) as HTMLElement;
+		const nextNode = result.container.querySelector(
+			'[data-passage-id="next"]'
+		) as HTMLElement;
+
+		fireEvent.pointerDown(
+			startNode,
+			new PointerEvent('pointerdown', {
+				button: 0,
+				pointerId: 12
+			})
+		);
+
+		expect(startNode).toHaveAttribute('data-selected', 'true');
+		expect(onSelect).toHaveBeenCalledWith(start, true);
+
+		fireEvent.pointerDown(
+			nextNode,
+			new PointerEvent('pointerdown', {
+				button: 0,
+				pointerId: 13,
+				shiftKey: true
+			})
+		);
+
+		expect(startNode).toHaveAttribute('data-selected', 'true');
+		expect(nextNode).toHaveAttribute('data-selected', 'true');
+		expect(onSelect).toHaveBeenCalledWith(next, false);
 	});
 
 	it('selects, edits, and creates passages from graph interactions', () => {

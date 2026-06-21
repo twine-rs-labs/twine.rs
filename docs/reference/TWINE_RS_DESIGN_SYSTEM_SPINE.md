@@ -94,7 +94,7 @@ D8, and the M6 graph-projection requirement is satisfied by D5.
 ## M6 ↔ D-series closure map
 
 M6 (Story Formats, Build, Test, Publishing) is **partially done** and is closed
-out *by* the D-series rather than as a standalone push. Its engine (Rust
+out _by_ the D-series rather than as a standalone push. Its engine (Rust
 contracts + the TS data layer) is largely in place, and the 2026-06-21 M6
 closure pass promoted the primary Formats and Build surfaces into DS shell
 routes. The capability manifest and publish-safety are done, and the
@@ -106,17 +106,17 @@ projection is a TypeScript parity bridge that implements the generated contract;
 a native/WASM runtime `ProjectSession` bridge is still a core follow-up. What
 remains is deeper integration and retiring compatibility surfaces:
 
-| M6 item | Status | Closed by |
-| --- | --- | --- |
-| Capability manifest (1) | done (engine); surfaced in `/formats` and `/stories/:storyId/build` | D6/D7 polish |
-| Format host API (2) | partial — types/loader/resolver done; `/formats` surfaces capabilities/modules/defaults/proofing/extensions | D6 completion |
-| Local format dev workflow (3) | partial — dev metadata and URL-add surfaced | D6 + engine plumbing |
-| Build / export / package targets (4) | partial — package builder plus `/stories/:storyId/build` for Play/Test/Proof/HTML/Twee/JSON/Package/Publish | D7 advanced policy |
-| Runtime/debug hooks (5) | missing | D8 |
-| Publish-safety (6) | done (engine); surfaced in Build/Formats routes | D7 polish |
-| H1 previews on host/query | partial — app-owned iframe routes; debugger/reveal bridge still missing | D8 |
-| H2 graph projection | D5 done on the app side; native/WASM host bridge still follow-up | D5 + core bridge |
-| H3 run-from-here | partial (`startId` plumbed; not everywhere) | D4 / D5 / D8 |
+| M6 item                              | Status                                                                                                      | Closed by            |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------- | -------------------- |
+| Capability manifest (1)              | done (engine); surfaced in `/formats` and `/stories/:storyId/build`                                         | D6/D7 polish         |
+| Format host API (2)                  | partial — types/loader/resolver done; `/formats` surfaces capabilities/modules/defaults/proofing/extensions | D6 completion        |
+| Local format dev workflow (3)        | partial — dev metadata and URL-add surfaced                                                                 | D6 + engine plumbing |
+| Build / export / package targets (4) | partial — package builder plus `/stories/:storyId/build` for Play/Test/Proof/HTML/Twee/JSON/Package/Publish | D7 advanced policy   |
+| Runtime/debug hooks (5)              | missing                                                                                                     | D8                   |
+| Publish-safety (6)                   | done (engine); surfaced in Build/Formats routes                                                             | D7 polish            |
+| H1 previews on host/query            | partial — app-owned iframe routes; debugger/reveal bridge still missing                                     | D8                   |
+| H2 graph projection                  | D5 done on the app side; native/WASM host bridge still follow-up                                            | D5 + core bridge     |
+| H3 run-from-here                     | partial (`startId` plumbed; not everywhere)                                                                 | D4 / D5 / D8         |
 
 **Do not build M6's UI in legacy chrome.** Finish the remaining gaps
 (compatibility export mode, archive/project-folder packaging, full format-dev
@@ -315,6 +315,12 @@ contract; reveal-in-graph works from text, search, and diagnostics; Split mode i
 live; viewport/focus options are passed through the query boundary; generated
 layout save flows through the host.
 
+Implementation note (2026-06-21): the DS graph now includes immediate
+pointer-down selection feedback, shift/ctrl/meta additive selection, group drag
+from the current selection, live edge/arrow geometry while nodes move, one-shot
+selection centering that no longer fights ordinary scrolling, and a draggable
+minimap preview for graph navigation.
+
 Depends on: D4; Rust `QueryGraphProjection`.
 
 ## D6: Contents, Diagnostics, Assets, and Formats as DS Screens
@@ -336,11 +342,20 @@ Core deliverables:
 - **Story Formats** manager as a DS screen replacing
   [`src/dialogs/story-formats`](../../src/dialogs/story-formats).
 
-Implementation note (2026-06-21): `/formats` now exists as a DS shell screen for
-format capabilities, publish safety, module/development metadata, defaults,
-proofing, editor extension enablement, URL-added formats, and custom-format
-removal. D6 still owns the surrounding Contents/Diagnostics/Assets surfaces and
-full retirement of the legacy dialog entry point.
+Implementation note (2026-06-21): D6-A is now onscreen. `/formats` exists as a
+DS shell screen for format capabilities, publish safety, module/development
+metadata, defaults, proofing, editor extension enablement, URL-added formats,
+and custom-format removal. `/stories/:storyId/contents`,
+`/stories/:storyId/diagnostics`, and `/stories/:storyId/assets` are also
+first-class shell routes with rail/command-palette access. Contents consumes the
+story index for passages, tags, variables, assets, scripts/styles, entry points,
+orphans, and diagnostics; Diagnostics groups severities/types and exposes
+quick-fix/reveal actions; Assets exposes the current reference-backed inventory
+with snippet copy/insert, usage reveal, validation, rename/replace/delete command
+hooks, and publish/missing/unused status affordances. Remaining D6 work is full
+file-backed asset inventory integration once project roots are opened through the
+live core host, deeper virtualization/perf for huge lists, and full retirement of
+legacy dialog entry points as primary paths.
 
 Exit criteria: each of the four is a DS-built screen/panel reachable from the
 shell, consuming host/query data, with no legacy dialog as the primary surface.

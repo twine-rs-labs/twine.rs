@@ -82,7 +82,9 @@ function passageRect(passage: Passage): CoreRect {
 }
 
 function edgePath(edge: CoreGraphEdge, nodeById: Map<string, CoreGraphNode>) {
-	const source = visualRect(nodeById.get(edge.sourceId)?.bounds ?? edge.sourceBounds);
+	const source = visualRect(
+		nodeById.get(edge.sourceId)?.bounds ?? edge.sourceBounds
+	);
 	const sourceRight = source.left + source.width;
 	const sourceMiddle = source.top + source.height / 2;
 
@@ -150,7 +152,13 @@ function snapBounds(story: Story, bounds: CoreRect): CoreRect {
 }
 
 function eventHasModifier(event: DraggableEvent | React.MouseEvent) {
-	return 'shiftKey' in event && (event.shiftKey || event.ctrlKey || event.metaKey);
+	return (
+		'shiftKey' in event && (event.shiftKey || event.ctrlKey || event.metaKey)
+	);
+}
+
+function selectedIdKey(ids: string[]) {
+	return ids.join('\u0000');
 }
 
 function minimapTransform(bounds: CoreRect | null) {
@@ -198,6 +206,12 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	});
 	const viewportRef = React.useRef<HTMLDivElement>(null);
 	const canvasRef = React.useRef<HTMLDivElement>(null);
+	const minimapRef = React.useRef<HTMLDivElement>(null);
+	const lastAutoCenteredSelection = React.useRef<string>();
+	const optimisticSelectedIds = React.useRef<Set<string>>();
+	const selectionHandledOnPointerDown = React.useRef<string>();
+	const [optimisticSelectionKey, setOptimisticSelectionKey] =
+		React.useState('');
 	const panRef = React.useRef<{
 		left: number;
 		moved: boolean;
@@ -208,6 +222,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		x: number;
 		y: number;
 	}>();
+	const minimapDragRef = React.useRef<number>();
 	const recentlyDragged = React.useRef(false);
 	const selectedPassageIds = React.useMemo(() => {
 		const selectedIds = story.passages
@@ -220,6 +235,14 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				? [selectedPassageId]
 				: [];
 	}, [selectedPassageId, story.passages]);
+	const persistedSelectionKey = React.useMemo(
+		() => selectedIdKey(selectedPassageIds),
+		[selectedPassageIds]
+	);
+	const selectedIdSet = React.useMemo(
+		() => optimisticSelectedIds.current ?? new Set(selectedPassageIds),
+		[optimisticSelectionKey, persistedSelectionKey, selectedPassageIds]
+	);
 	const selectedPassage = selectedPassageId
 		? story.passages.find(passage => passage.id === selectedPassageId)
 		: undefined;
@@ -245,12 +268,45 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				layers,
 				viewport: queryViewport
 			}),
-		[focusSelection, host, layers, queryViewport, selectedPassageIds, story.id, story]
+		[
+			focusSelection,
+			host,
+			layers,
+			queryViewport,
+			selectedPassageIds,
+			story.id,
+			story
+		]
 	);
 	const nodeById = React.useMemo(
 		() => new Map(projection.nodes.map(node => [node.id, node])),
 		[projection.nodes]
 	);
+	const liveNodeById = React.useMemo(() => {
+		if (!drag) {
+			return nodeById;
+		}
+
+		const deltaLeft = (drag.left - drag.startLeft) / visibleZoom;
+		const deltaTop = (drag.top - drag.startTop) / visibleZoom;
+		const dragIds = new Set(drag.ids);
+
+		return new Map(
+			projection.nodes.map(node => [
+				node.id,
+				dragIds.has(node.id)
+					? {
+							...node,
+							bounds: {
+								...node.bounds,
+								left: node.bounds.left + deltaLeft,
+								top: node.bounds.top + deltaTop
+							}
+						}
+					: node
+			])
+		);
+	}, [drag, nodeById, projection.nodes, visibleZoom]);
 	const canvasSize = React.useMemo(() => {
 		const bounds = projection.bounds;
 
@@ -305,12 +361,30 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	}, [updateViewport]);
 
 	React.useEffect(() => {
-		const element = viewportRef.current;
-		const node = selectedPassageId ? nodeById.get(selectedPassageId) : undefined;
+		optimisticSelectedIds.current = undefined;
+		setOptimisticSelectionKey('');
+	}, [persistedSelectionKey]);
 
-		if (!element || !node) {
+	React.useEffect(() => {
+		const element = viewportRef.current;
+		const node = selectedPassageId
+			? nodeById.get(selectedPassageId)
+			: undefined;
+
+		if (!selectedPassageId) {
+			lastAutoCenteredSelection.current = undefined;
 			return;
 		}
+
+		if (
+			!element ||
+			!node ||
+			lastAutoCenteredSelection.current === selectedPassageId
+		) {
+			return;
+		}
+
+		lastAutoCenteredSelection.current = selectedPassageId;
 
 		const bounds = visualRect(node.bounds);
 		const left =
@@ -329,7 +403,9 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		}
 	}, [nodeById, selectedPassageId, visibleZoom]);
 
-	function pointFromEvent(event: React.MouseEvent<HTMLElement>): Point | undefined {
+	function pointFromEvent(
+		event: React.MouseEvent<HTMLElement>
+	): Point | undefined {
 		if (
 			!canvasRef.current ||
 			(event.target as HTMLElement).closest(
@@ -364,7 +440,9 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		}
 	}
 
-	function handleViewportPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+	function handleViewportPointerDown(
+		event: React.PointerEvent<HTMLDivElement>
+	) {
 		if (
 			event.button !== 2 ||
 			(event.target as HTMLElement).closest(
@@ -395,7 +473,9 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		event.preventDefault();
 	}
 
-	function handleViewportPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+	function handleViewportPointerMove(
+		event: React.PointerEvent<HTMLDivElement>
+	) {
 		const pan = panRef.current;
 		const element = viewportRef.current;
 
@@ -422,19 +502,104 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		panRef.current = undefined;
 	}
 
-	function handleNodeMouseDown(
-		event: DraggableEvent,
+	function centerViewportOnMinimapPoint(clientX: number, clientY: number) {
+		const viewportElement = viewportRef.current;
+		const minimapElement = minimapRef.current;
+
+		if (!viewportElement || !minimapElement || !projection.bounds) {
+			return;
+		}
+
+		const rect = minimapElement.getBoundingClientRect();
+		const localLeft = Math.max(0, Math.min(clientX - rect.left, rect.width));
+		const localTop = Math.max(0, Math.min(clientY - rect.top, rect.height));
+		const logicalLeft = (localLeft - minimap.x) / minimap.scale;
+		const logicalTop = (localTop - minimap.y) / minimap.scale;
+		const nextLeft = (logicalLeft - viewport.width / 2) * visibleZoom;
+		const nextTop = (logicalTop - viewport.height / 2) * visibleZoom;
+
+		viewportElement.scrollLeft = Math.max(0, nextLeft);
+		viewportElement.scrollTop = Math.max(0, nextTop);
+		updateViewport();
+	}
+
+	function handleMinimapPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+		if (event.button !== 0) {
+			return;
+		}
+
+		minimapDragRef.current = event.pointerId;
+		event.currentTarget.setPointerCapture(event.pointerId);
+		centerViewportOnMinimapPoint(event.clientX, event.clientY);
+		event.preventDefault();
+		event.stopPropagation();
+	}
+
+	function handleMinimapPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+		if (minimapDragRef.current !== event.pointerId) {
+			return;
+		}
+
+		centerViewportOnMinimapPoint(event.clientX, event.clientY);
+		event.preventDefault();
+		event.stopPropagation();
+	}
+
+	function stopMinimapDrag(event: React.PointerEvent<HTMLDivElement>) {
+		if (minimapDragRef.current !== event.pointerId) {
+			return;
+		}
+
+		event.currentTarget.releasePointerCapture(event.pointerId);
+		minimapDragRef.current = undefined;
+		event.preventDefault();
+		event.stopPropagation();
+	}
+
+	function updateOptimisticSelection(ids: Set<string>) {
+		optimisticSelectedIds.current = ids;
+		setOptimisticSelectionKey(selectedIdKey(Array.from(ids).sort()));
+	}
+
+	function nextSelectionIds(
+		event: DraggableEvent | React.MouseEvent,
 		passage: Passage
 	) {
+		const current = new Set(
+			optimisticSelectedIds.current ?? selectedPassageIds
+		);
+
 		if (eventHasModifier(event)) {
-			if (passage.selected) {
+			if (current.has(passage.id)) {
+				current.delete(passage.id);
 				onDeselect(passage);
 			} else {
+				current.add(passage.id);
 				onSelect(passage, false);
 			}
-		} else if (!passage.selected) {
+		} else {
+			current.clear();
+			current.add(passage.id);
 			onSelect(passage, true);
 		}
+
+		return current;
+	}
+
+	function handleNodePress(
+		node: CoreGraphNode,
+		event: DraggableEvent | React.MouseEvent
+	) {
+		const passage = passageForNode(story, node);
+
+		if (!passage) {
+			return undefined;
+		}
+
+		const next = nextSelectionIds(event, passage);
+
+		updateOptimisticSelection(next);
+		return next;
 	}
 
 	function handleDragStart(
@@ -448,14 +613,14 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			return;
 		}
 
-		handleNodeMouseDown(event, passage);
+		const selectedForDrag =
+			optimisticSelectedIds.current ?? handleNodePress(node, event);
+
 		document.body.classList.add('dragging-passages');
 
 		const ids =
-			passage.selected && story.passages.some(candidate => candidate.selected)
-				? story.passages
-						.filter(candidate => candidate.selected)
-						.map(candidate => candidate.id)
+			selectedForDrag?.has(passage.id) && selectedForDrag.size > 0
+				? Array.from(selectedForDrag)
 				: [node.id];
 
 		setDrag({
@@ -516,15 +681,24 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			return;
 		}
 
-		if (eventHasModifier(event)) {
-			if (passage.selected) {
-				onDeselect(passage);
-			} else {
-				onSelect(passage, false);
-			}
-		} else {
-			onSelect(passage, true);
+		if (selectionHandledOnPointerDown.current === node.id) {
+			selectionHandledOnPointerDown.current = undefined;
+			return;
 		}
+
+		handleNodePress(node, event);
+	}
+
+	function handleNodePointerDown(
+		node: CoreGraphNode,
+		event: React.PointerEvent<HTMLDivElement>
+	) {
+		if (event.button !== 0) {
+			return;
+		}
+
+		selectionHandledOnPointerDown.current = node.id;
+		handleNodePress(node, event as unknown as React.MouseEvent);
 	}
 
 	function handleNodeDoubleClick(node: CoreGraphNode) {
@@ -587,7 +761,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 						{projection.edges.map((edge, index) => (
 							<path
 								className={`story-edit-graph-edge story-edit-graph-edge--${edge.kind}`}
-								d={edgePath(edge, nodeById)}
+								d={edgePath(edge, liveNodeById)}
 								data-kind={edge.kind}
 								key={`${edge.sourceId}:${edge.targetId ?? 'broken'}:${edge.targetName}:${index}`}
 								markerEnd="url(#story-edit-graph-arrow)"
@@ -611,15 +785,15 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 								<DraggableCore
 									key={node.id}
 									onDrag={(event, data) => handleDrag(data)}
-									onStart={(event, data) =>
-										handleDragStart(node, event, data)
-									}
+									onStart={(event, data) => handleDragStart(node, event, data)}
 									onStop={handleDragStop}
 								>
 									<div
 										className="story-edit-graph-node"
 										data-layout-source={node.layoutSource}
 										data-passage-id={node.id}
+										data-selected={selectedIdSet.has(node.id)}
+										onPointerDown={event => handleNodePointerDown(node, event)}
 										style={{
 											left: node.bounds.left + offset.left,
 											top: node.bounds.top + offset.top
@@ -630,6 +804,8 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 											broken={node.brokenLinkCount}
 											className={classNames(
 												nodeTone(node),
+												drag?.ids.includes(node.id) &&
+													'story-edit-graph-node--dragging',
 												node.layoutSource === 'generated' &&
 													'story-edit-graph-node--generated'
 											)}
@@ -641,7 +817,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 											links={node.outgoingCount}
 											onClick={event => handleNodeClick(node, event)}
 											onDoubleClick={() => handleNodeDoubleClick(node)}
-											selected={passage.selected || node.id === selectedPassageId}
+											selected={selectedIdSet.has(node.id)}
 											start={node.isStart}
 											tags={density === 'structure' ? [] : tagColors}
 											title={node.name}
@@ -749,7 +925,11 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 					className="story-edit-graph-minimap"
 					onContextMenu={event => event.stopPropagation()}
 					onDoubleClick={event => event.stopPropagation()}
-					onPointerDown={event => event.stopPropagation()}
+					onPointerCancel={stopMinimapDrag}
+					onPointerDown={handleMinimapPointerDown}
+					onPointerMove={handleMinimapPointerMove}
+					onPointerUp={stopMinimapDrag}
+					ref={minimapRef}
 				>
 					<div className="story-edit-graph-minimap__surface">
 						{projection.nodes.map(node => (

@@ -97,8 +97,7 @@ body.dragging-passages .story-edit-route * {
 .story-edit-graph-layer {
 	background:
 		linear-gradient(var(--line-1) 1px, transparent 1px),
-		linear-gradient(90deg, var(--line-1) 1px, transparent 1px),
-		var(--bg-app);
+		linear-gradient(90deg, var(--line-1) 1px, transparent 1px), var(--bg-app);
 	background-size: 48px 48px;
 	bottom: var(--story-edit-bottom-offset);
 	color: var(--tx-2);
@@ -189,6 +188,22 @@ body.dragging-passages .story-edit-route * {
 	min-height: 100px;
 }
 
+.story-edit-graph-node[data-selected='true'] .tw-node {
+	border-color: var(--sel-line);
+	box-shadow:
+		0 0 0 2px var(--sel-wash),
+		0 0 0 1px var(--sel-line),
+		var(--shadow-pop);
+}
+
+.tw-node.story-edit-graph-node--dragging {
+	border-color: var(--acc-blue);
+	box-shadow:
+		0 0 0 3px var(--sem-link-soft),
+		var(--shadow-pop);
+	transform: translateY(-2px);
+}
+
 .story-edit-graph-node--generated {
 	border-style: dashed;
 }
@@ -273,10 +288,15 @@ body.dragging-passages .story-edit-route * {
 	border-radius: var(--r-sm);
 	bottom: var(--sp-3);
 	box-shadow: var(--shadow-card);
+	cursor: grab;
 	height: 120px;
 	overflow: hidden;
 	right: var(--sp-3);
 	width: 170px;
+}
+
+.story-edit-graph-minimap:active {
+	cursor: grabbing;
 }
 
 .story-edit-graph-minimap__surface {

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {useParams} from 'react-router-dom';
+import {useLocation, useParams} from 'react-router-dom';
 import {MainContent} from '../../components/container/main-content';
 import {DocumentTitle} from '../../components/document-title/document-title';
 import {DialogsContextProvider} from '../../dialogs';
@@ -25,18 +25,17 @@ import './story-edit-route.css';
 
 export const InnerStoryEditRoute: React.FC = () => {
 	const {storyId} = useParams<{storyId: string}>();
+	const location = useLocation();
 	const {dispatch, stories} = useUndoableStoriesContext();
 	const story = storyWithId(stories, storyId);
 	const [fuzzyFinderOpen, setFuzzyFinderOpen] = React.useState(false);
 	const mainContent = React.useRef<HTMLDivElement>(null);
 	const workspace = useStoryEditWorkspace(story);
 	const {getCenter, setCenter} = useViewCenter(story, mainContent);
-	const {
-		handleCreatePassage,
-		handleDeselectPassage,
-		handleSelectPassage
-	} = usePassageChangeHandlers(story);
+	const {handleCreatePassage, handleDeselectPassage, handleSelectPassage} =
+		usePassageChangeHandlers(story);
 	const visibleZoom = useZoomTransition(story.zoom, mainContent.current);
+	const handledRevealQuery = React.useRef('');
 
 	useZoomShortcuts(story);
 	useInitialPassageCreation(story, getCenter);
@@ -78,6 +77,29 @@ export const InnerStoryEditRoute: React.FC = () => {
 		[handleSelectPassage, workspace]
 	);
 
+	React.useEffect(() => {
+		if (!location.search || handledRevealQuery.current === location.search) {
+			return;
+		}
+
+		const search = new URLSearchParams(location.search);
+		const mode = search.get('mode');
+		const passageId = search.get('passage');
+		const passage = passageId
+			? story.passages.find(passage => passage.id === passageId)
+			: undefined;
+
+		handledRevealQuery.current = location.search;
+
+		if (mode === 'text' || mode === 'graph' || mode === 'split') {
+			workspace.setMode(mode);
+		}
+
+		if (passage) {
+			handleChoosePassage(passage);
+		}
+	}, [handleChoosePassage, location.search, story.passages, workspace]);
+
 	return (
 		<div className="story-edit-route">
 			<DocumentTitle title={story.name} />
@@ -94,11 +116,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 				rightDockCollapsed={workspace.rightDockCollapsed}
 				story={story}
 			/>
-			<MainContent
-				grabbable={false}
-				padded={false}
-				ref={mainContent}
-			>
+			<MainContent grabbable={false} padded={false} ref={mainContent}>
 				<StoryWorkspaceShell
 					bottomDrawerOpen={workspace.bottomDrawerOpen}
 					graphPanel={
@@ -114,23 +132,23 @@ export const InnerStoryEditRoute: React.FC = () => {
 								zoom={story.zoom}
 							/>
 							<PassageFuzzyFinder
-									onClose={() => setFuzzyFinderOpen(false)}
-									onOpen={() => setFuzzyFinderOpen(true)}
-									onRevealPassageInGraph={handleRevealPassageInGraph}
-									open={fuzzyFinderOpen}
-									setCenter={setCenter}
-									story={story}
+								onClose={() => setFuzzyFinderOpen(false)}
+								onOpen={() => setFuzzyFinderOpen(true)}
+								onRevealPassageInGraph={handleRevealPassageInGraph}
+								open={fuzzyFinderOpen}
+								setCenter={setCenter}
+								story={story}
 							/>
 						</>
 					}
 					leftDockCollapsed={workspace.leftDockCollapsed}
 					mode={workspace.mode}
 					onChangeBottomDrawerOpen={workspace.setBottomDrawerOpen}
-						onChangeLeftDockCollapsed={workspace.setLeftDockCollapsed}
-						onChangeRightDockCollapsed={workspace.setRightDockCollapsed}
-						onRevealPassageInGraph={handleRevealPassageInGraph}
-						onSelectPassage={handleChoosePassage}
-						rightDockCollapsed={workspace.rightDockCollapsed}
+					onChangeLeftDockCollapsed={workspace.setLeftDockCollapsed}
+					onChangeRightDockCollapsed={workspace.setRightDockCollapsed}
+					onRevealPassageInGraph={handleRevealPassageInGraph}
+					onSelectPassage={handleChoosePassage}
+					rightDockCollapsed={workspace.rightDockCollapsed}
 					selectedPassageId={workspace.selectedPassageId}
 					story={story}
 				/>

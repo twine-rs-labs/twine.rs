@@ -40,7 +40,9 @@ async function setPassageText(page: Page, text: string) {
 
 	await expect(editor).toBeVisible();
 	await editor.locator('.cm-content').click();
-	await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+	await page.keyboard.press(
+		process.platform === 'darwin' ? 'Meta+A' : 'Control+A'
+	);
 	await page.keyboard.insertText(text);
 	await expect(editor).toContainText(text);
 	await page.waitForTimeout(450);
@@ -52,7 +54,9 @@ test.beforeEach(async ({page}) => {
 
 test('opens the current project launcher on first run', async ({page}) => {
 	await expect(page.getByLabel('Twine')).toBeVisible();
-	await expect(page.getByRole('heading', {name: 'No projects yet'})).toBeVisible();
+	await expect(
+		page.getByRole('heading', {name: 'No projects yet'})
+	).toBeVisible();
 	await expect(
 		page
 			.getByLabel('Project actions')
@@ -76,10 +80,15 @@ test('persists embedded source-editor passage edits', async ({page}) => {
 	await setPassageText(page, 'Smoke text survives a reload.');
 
 	await page.reload();
-	await expect(sourceEditor(page)).toContainText('Smoke text survives a reload.');
+	await expect(sourceEditor(page)).toContainText(
+		'Smoke text survives a reload.'
+	);
 });
 
-test('publishes the current project to a playable page', async ({context, page}) => {
+test('publishes the current project to a playable page', async ({
+	context,
+	page
+}) => {
 	await createProject(page, 'Publish smoke');
 	await setPassageText(page, 'Smoke story is playable.');
 
@@ -111,4 +120,43 @@ test('opens the M6 Build and Formats surfaces', async ({page}) => {
 	await expect(page).toHaveURL(/#\/formats$/);
 	await expect(page.getByLabel('Story formats')).toBeVisible();
 	await expect(page.getByLabel('Story format URL')).toBeVisible();
+});
+
+test('opens the D6 Contents, Diagnostics, and Assets surfaces', async ({
+	page
+}) => {
+	await createProject(page, 'D6 surface smoke');
+	await setPassageText(
+		page,
+		'Set $score. Go to [[Missing]]. Portrait: <img src="assets/cover.png">'
+	);
+
+	await page.getByTitle('Contents').click();
+	await expect(page).toHaveURL(/#\/stories\/[^/]+\/contents$/);
+	await expect(page.getByLabel('Contents', {exact: true})).toBeVisible();
+	await expect(page.getByLabel('Filter contents')).toBeVisible();
+	await expect(page.getByText('$score').first()).toBeVisible();
+	await expect(page.getByText('assets/cover.png').first()).toBeVisible();
+	await expect(
+		page.getByRole('button', {name: 'Reveal in Source'})
+	).toBeVisible();
+
+	await page.getByTitle('Diagnostics').click();
+	await expect(page).toHaveURL(/#\/stories\/[^/]+\/diagnostics$/);
+	await expect(page.getByLabel('Diagnostics', {exact: true})).toBeVisible();
+	await expect(page.getByLabel('Filter diagnostics')).toBeVisible();
+	await expect(
+		page.getByRole('button', {name: 'Recheck Project'})
+	).toBeVisible();
+	await expect(page.getByRole('button', {name: 'Fix All Safe'})).toBeVisible();
+
+	await page.getByTitle('Assets').click();
+	await expect(page).toHaveURL(/#\/stories\/[^/]+\/assets$/);
+	await expect(page.getByLabel('Assets', {exact: true})).toBeVisible();
+	await expect(page.getByLabel('Search assets')).toBeVisible();
+	await expect(page.getByText('assets/cover.png').first()).toBeVisible();
+	await expect(
+		page.getByText('<img src="assets/cover.png" alt="">').first()
+	).toBeVisible();
+	await expect(page.getByRole('button', {name: 'Find Usages'})).toBeVisible();
 });

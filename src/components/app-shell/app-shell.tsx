@@ -72,6 +72,18 @@ function routeMode(pathname: string): RouteMode {
 		return {icon: 'package-export', label: 'Build'};
 	}
 
+	if (routeHasSegment(pathname, 'contents')) {
+		return {icon: 'list-tree', label: 'Contents'};
+	}
+
+	if (routeHasSegment(pathname, 'diagnostics')) {
+		return {icon: 'alert-triangle', label: 'Diagnostics'};
+	}
+
+	if (routeHasSegment(pathname, 'assets')) {
+		return {icon: 'photo', label: 'Assets'};
+	}
+
 	if (pathname.startsWith('/stories/')) {
 		return {icon: 'layout-columns', label: 'Edit'};
 	}
@@ -339,6 +351,34 @@ export const AppShell: React.FC = ({children}) => {
 			},
 			{
 				disabled: !currentStory,
+				group: 'Navigation',
+				icon: 'list-tree',
+				id: 'nav.contents',
+				label: 'Contents',
+				run: () =>
+					currentStory && history.push(`/stories/${currentStory.id}/contents`)
+			},
+			{
+				disabled: !currentStory,
+				group: 'Navigation',
+				icon: 'alert-triangle',
+				id: 'nav.diagnostics',
+				label: 'Diagnostics',
+				run: () =>
+					currentStory &&
+					history.push(`/stories/${currentStory.id}/diagnostics`)
+			},
+			{
+				disabled: !currentStory,
+				group: 'Navigation',
+				icon: 'photo',
+				id: 'nav.assets',
+				label: 'Assets',
+				run: () =>
+					currentStory && history.push(`/stories/${currentStory.id}/assets`)
+			},
+			{
+				disabled: !currentStory,
 				group: 'Build',
 				icon: 'tool',
 				id: 'build.test',
@@ -498,7 +538,10 @@ export const AppShell: React.FC = ({children}) => {
 							!routeHasSegment(location.pathname, 'play') &&
 							!routeHasSegment(location.pathname, 'proof') &&
 							!routeHasSegment(location.pathname, 'test') &&
-							!routeHasSegment(location.pathname, 'build')
+							!routeHasSegment(location.pathname, 'build') &&
+							!routeHasSegment(location.pathname, 'contents') &&
+							!routeHasSegment(location.pathname, 'diagnostics') &&
+							!routeHasSegment(location.pathname, 'assets')
 								? 'page'
 								: undefined
 						}
@@ -511,6 +554,37 @@ export const AppShell: React.FC = ({children}) => {
 						type="button"
 					>
 						<TablerIcon icon="layout-columns" />
+					</button>
+					<button
+						aria-current={
+							routeHasSegment(location.pathname, 'contents')
+								? 'page'
+								: undefined
+						}
+						className="app-shell__rail-button"
+						disabled={!currentStory}
+						onClick={() =>
+							currentStory &&
+							history.push(`/stories/${currentStory.id}/contents`)
+						}
+						title="Contents"
+						type="button"
+					>
+						<TablerIcon icon="list-tree" />
+					</button>
+					<button
+						aria-current={
+							routeHasSegment(location.pathname, 'assets') ? 'page' : undefined
+						}
+						className="app-shell__rail-button"
+						disabled={!currentStory}
+						onClick={() =>
+							currentStory && history.push(`/stories/${currentStory.id}/assets`)
+						}
+						title="Assets"
+						type="button"
+					>
+						<TablerIcon icon="photo" />
 					</button>
 					<button
 						className="app-shell__rail-button"
@@ -536,9 +610,17 @@ export const AppShell: React.FC = ({children}) => {
 						<TablerIcon icon="package-export" />
 					</button>
 					<button
+						aria-current={
+							routeHasSegment(location.pathname, 'diagnostics')
+								? 'page'
+								: undefined
+						}
 						className="app-shell__rail-button"
 						disabled={!currentStory}
-						onClick={() => setDrawerOpen(open => !open)}
+						onClick={() =>
+							currentStory &&
+							history.push(`/stories/${currentStory.id}/diagnostics`)
+						}
 						title="Diagnostics"
 						type="button"
 					>
