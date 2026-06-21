@@ -1,5 +1,8 @@
 @import '../../styles/colors.css';
 @import '../../styles/metrics.css';
+@import '../../styles/workbench.css';
+@import '../../styles/contents.css';
+@import '../../styles/diagnostics.css';
 
 .story-edit-route .marquee-selection {
 	/* Above .passage-map. */
@@ -164,10 +167,48 @@ body.dragging-passages .story-edit-route * {
 }
 
 .story-edit-passage-list {
+	flex: 1 1 auto;
 	list-style: none;
 	margin: 0;
+	min-height: 0;
 	overflow: auto;
 	padding: var(--control-inner-padding);
+}
+
+.story-edit-navigator-tabs {
+	align-items: stretch;
+	border-bottom: 1px solid var(--light-gray);
+	display: grid;
+	flex: 0 0 34px;
+	grid-template-columns: 1fr 1fr;
+}
+
+.story-edit-navigator-tabs button {
+	background: transparent;
+	border: 0;
+	border-right: 1px solid var(--light-gray);
+	color: var(--dark-gray);
+	cursor: pointer;
+	font: 90% var(--font-system);
+	min-width: 0;
+	padding: 0 var(--control-inner-padding);
+}
+
+.story-edit-navigator-tabs button:last-child {
+	border-right: 0;
+}
+
+.story-edit-navigator-tabs button[aria-selected='true'] {
+	background: var(--faint-blue);
+	box-shadow: inset 0 -2px 0 var(--blue);
+	color: var(--dark-blue);
+}
+
+.story-edit-navigator-tabs button:focus-visible {
+	box-shadow:
+		inset 0 0 0 2px var(--blue),
+		inset 0 -2px 0 var(--blue);
+	outline: none;
 }
 
 .story-edit-passage-list li {
@@ -246,6 +287,118 @@ body.dragging-passages .story-edit-route * {
 	grid-column: 3;
 	justify-self: end;
 	padding: 2px var(--control-inner-padding);
+	white-space: nowrap;
+}
+
+.story-edit-passage-diagnostic-count {
+	background: var(--light-red-translucent);
+	border-radius: var(--corner-round);
+	color: var(--dark-red);
+	font-size: 80%;
+	grid-column: 3;
+	justify-self: end;
+	padding: 2px var(--control-inner-padding);
+}
+
+.story-edit-passage-start + .story-edit-passage-diagnostic-count {
+	margin-left: var(--control-inner-padding);
+}
+
+.story-edit-contents-list {
+	flex: 1 1 auto;
+	list-style: none;
+	margin: 0;
+	min-height: 0;
+	overflow: auto;
+	padding: var(--control-inner-padding);
+}
+
+.story-edit-contents-list li {
+	margin: 0;
+	padding: 0;
+}
+
+.story-edit-contents-item {
+	background: transparent;
+	border: 0;
+	border-radius: var(--corner-round);
+	color: var(--dark-gray);
+	display: grid;
+	font: 90% var(--font-system);
+	gap: 2px var(--control-inner-padding);
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	min-height: var(--control-height);
+	padding: var(--control-inner-padding);
+	text-align: left;
+	width: 100%;
+}
+
+button.story-edit-contents-item {
+	cursor: pointer;
+}
+
+button.story-edit-contents-item:hover {
+	background: var(--light-gray-translucent);
+}
+
+button.story-edit-contents-item:focus-visible {
+	box-shadow: inset 0 0 0 2px var(--blue);
+	outline: none;
+}
+
+.story-edit-contents-item.inert {
+	cursor: default;
+}
+
+.story-edit-contents-kind {
+	background: var(--light-gray-translucent);
+	border-radius: var(--corner-round);
+	color: var(--gray);
+	font-size: 75%;
+	grid-column: 1;
+	padding: 2px var(--control-inner-padding);
+	white-space: nowrap;
+}
+
+.story-edit-contents-kind.diagnostic,
+.story-edit-contents-kind.brokenLink {
+	background: var(--light-red-translucent);
+	color: var(--dark-red);
+}
+
+.story-edit-contents-kind.variable {
+	background: var(--light-green-translucent);
+	color: var(--dark-green);
+}
+
+.story-edit-contents-kind.asset {
+	background: var(--light-blue-translucent);
+	color: var(--dark-blue);
+}
+
+.story-edit-contents-label {
+	grid-column: 2;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.story-edit-contents-count {
+	background: var(--faint-blue);
+	border-radius: var(--corner-round);
+	color: var(--dark-blue);
+	font-size: 80%;
+	grid-column: 3;
+	padding: 2px var(--control-inner-padding);
+}
+
+.story-edit-contents-detail {
+	color: var(--gray);
+	grid-column: 2 / 4;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
@@ -427,6 +580,45 @@ body.dragging-passages .story-edit-route * {
 	text-align: right;
 }
 
+.story-edit-index-list {
+	display: grid;
+	gap: var(--control-inner-padding);
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.story-edit-index-list li {
+	align-items: center;
+	display: grid;
+	gap: var(--control-inner-padding);
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	margin: 0;
+	min-width: 0;
+	padding: 0;
+}
+
+.story-edit-index-list span:not(.story-edit-tag-swatch) {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.story-edit-index-list strong {
+	color: var(--gray);
+	font-size: 85%;
+	font-weight: normal;
+}
+
+.story-edit-tag-swatch {
+	border: 1px solid var(--light-gray);
+	border-radius: var(--corner-round);
+	display: block;
+	height: 14px;
+	width: 14px;
+}
+
 .story-edit-diagnostic-list {
 	display: grid;
 	gap: var(--control-inner-padding);
@@ -454,15 +646,24 @@ body.dragging-passages .story-edit-route * {
 	width: 100%;
 }
 
-button.story-edit-diagnostic {
+.story-edit-diagnostic-source {
+	background: transparent;
+	border: 0;
+	color: inherit;
 	cursor: pointer;
+	display: grid;
+	font: inherit;
+	gap: 2px;
+	padding: 0;
+	text-align: left;
+	width: 100%;
 }
 
-button.story-edit-diagnostic:hover {
-	background: var(--light-blue-translucent);
+.story-edit-diagnostic-source:hover {
+	color: var(--dark-blue);
 }
 
-button.story-edit-diagnostic:focus-visible {
+.story-edit-diagnostic-source:focus-visible {
 	box-shadow: inset 0 0 0 2px var(--blue);
 	outline: none;
 }
@@ -484,6 +685,32 @@ button.story-edit-diagnostic:focus-visible {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.story-edit-diagnostic-message {
+	white-space: normal;
+}
+
+.story-edit-diagnostic-fixes {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--control-inner-padding);
+	margin-top: 2px;
+}
+
+.story-edit-diagnostic-fixes button {
+	background: var(--white);
+	border: 1px solid var(--gray);
+	border-radius: var(--corner-round);
+	color: var(--dark-gray);
+	cursor: pointer;
+	font: 85% var(--font-system);
+	padding: 2px var(--control-inner-padding);
+}
+
+.story-edit-diagnostic-fixes button:disabled {
+	cursor: default;
+	opacity: 0.55;
 }
 
 .story-edit-bottom-drawer {

@@ -1,14 +1,51 @@
+import type {CoreAssetReference} from './bindings/CoreAssetReference';
+import type {CoreContentsEntry} from './bindings/CoreContentsEntry';
 import type {CoreDiagnostic} from './bindings/CoreDiagnostic';
+import type {CoreDiagnosticSeverity} from './bindings/CoreDiagnosticSeverity';
 import type {CoreGraphStats} from './bindings/CoreGraphStats';
+import type {CoreReplacePreview} from './bindings/CoreReplacePreview';
 import type {CoreSearchHit} from './bindings/CoreSearchHit';
 import type {CoreSearchScope} from './bindings/CoreSearchScope';
 import type {CoreSourceFile} from './bindings/CoreSourceFile';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
+import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
+import type {CoreSymbol} from './bindings/CoreSymbol';
+import type {CoreTagEntry} from './bindings/CoreTagEntry';
 import {Passage, Story} from '../store/stories';
 import {parseLinks} from '../util/parse-links';
+import {createRegExp} from '../util/regexp';
+
+type StoryIndexQuery = string | Partial<CoreStoryIndexOptions>;
+
+const defaultOptions: CoreStoryIndexOptions = {
+	fuzzy: false,
+	includeAssets: true,
+	includePassageNames: true,
+	includePassageText: true,
+	includeScript: true,
+	includeStylesheet: true,
+	includeTags: true,
+	includeVariables: true,
+	matchCase: false,
+	query: null,
+	replacement: null,
+	useRegexes: false
+};
+
+const maxSearchHits = 500;
+
+function normalizeOptions(query: StoryIndexQuery = {}): CoreStoryIndexOptions {
+	return typeof query === 'string'
+		? {...defaultOptions, query}
+		: {...defaultOptions, ...query};
+}
 
 function lineCount(text: string) {
 	return Math.max(text.split(/\r?\n/).length, 1);
+}
+
+function lineNumberAt(source: string, start: number) {
+	return source.slice(0, start).split(/\r?\n/).length;
 }
 
 function excerptAround(source: string, start: number, length: number) {
@@ -29,38 +66,22 @@ function excerptAround(source: string, start: number, length: number) {
 		.trim()}${windowEnd < end ? '...' : ''}`;
 }
 
-function searchHitsInSource(
-	query: string,
-	sourceId: string,
-	sourceName: string,
+function replacementPreview(
 	source: string,
-	scope: CoreSearchScope
-): CoreSearchHit[] {
-	const needle = query.trim().toLocaleLowerCase();
+	start: number,
+	end: number,
+	replacement: string
+) {
+	const lineStart = source.lastIndexOf('\n', start - 1) + 1;
+	const lineEnd = source.indexOf('\n', start);
+	const sourceLineEnd = lineEnd === -1 ? source.length : lineEnd;
+	const before = source.slice(lineStart, sourceLineEnd).trim();
+	const after = `${source.slice(lineStart, start)}${replacement}${source.slice(
+		end,
+		sourceLineEnd
+	)}`.trim();
 
-	if (needle === '') {
-		return [];
-	}
-
-	const haystack = source.toLocaleLowerCase();
-	const result: CoreSearchHit[] = [];
-	let cursor = 0;
-	let start = haystack.indexOf(needle, cursor);
-
-	while (start !== -1) {
-		result.push({
-			excerpt: excerptAround(source, start, query.length),
-			line: source.slice(0, start).split(/\r?\n/).length,
-			scope,
-			sourceId,
-			sourceName,
-			start
-		});
-		cursor = start + Math.max(needle.length, 1);
-		start = haystack.indexOf(needle, cursor);
-	}
-
-	return result;
+	return {after, before};
 }
 
 function sourceFileForPassage(passage: Passage): CoreSourceFile {
@@ -73,6 +94,197 @@ function sourceFileForPassage(passage: Passage): CoreSourceFile {
 		passageId: passage.id,
 		tags: passage.tags
 	};
+}
+
+function scopeRank(scope: CoreSearchScope) {
+	switch (scope) {
+		case 'passageName':
+			return 100;
+		case 'passageTag':
+			return 88;
+		case 'variable':
+			return 82;
+		case 'metadata':
+			return 78;
+		case 'passageText':
+			return 70;
+		case 'script':
+			return 62;
+		case 'stylesheet':
+			return 58;
+		case 'asset':
+			return 52;
+	}
+}
+
+function exactRankBonus(start: number) {
+	return 1 / (1 + start);
+}
+
+function fuzzyMatch(source: string, query: string, matchCase: boolean) {
+	const haystack = matchCase ? source : source.toLocaleLowerCase();
+	const needle = matchCase ? query : query.toLocaleLowerCase();
+	let needleIndex = 0;
+	let start: number | undefined;
+	let end = 0;
+
+	for (let index = 0; index < haystack.length; index++) {
+		if (haystack[index] === needle[needleIndex]) {
+			start ??= index;
+			end = index + 1;
+			needleIndex++;
+
+			if (needleIndex === needle.length) {
+				const span = Math.max(end - start, 1);
+
+				return {end, score: needle.length / span, start};
+			}
+		}
+	}
+}
+
+function createSearchMatcher(options: CoreStoryIndexOptions) {
+	const query = options.query?.trim() ?? '';
+
+	if (query === '') {
+		return;
+	}
+
+	return createRegExp(query, {
+		matchCase: options.matchCase,
+		useRegexes: options.useRegexes
+	});
+}
+
+function replacementForMatch(
+	match: RegExpExecArray | undefined,
+	matcher: RegExp | undefined,
+	options: CoreStoryIndexOptions
+) {
+	if (options.replacement === null) {
+		return null;
+	}
+
+	if (!options.useRegexes || !match || !matcher) {
+		return options.replacement;
+	}
+
+	const localFlags = matcher.flags.replace(/g/g, '');
+
+	return match[0].replace(
+		new RegExp(matcher.source, localFlags),
+		options.replacement
+	);
+}
+
+function searchHit(
+	options: CoreStoryIndexOptions,
+	match: RegExpExecArray | undefined,
+	matcher: RegExp | undefined,
+	sourceId: string,
+	sourceName: string,
+	source: string,
+	scope: CoreSearchScope,
+	passageId: string | null,
+	start: number,
+	end: number,
+	rank: number
+): CoreSearchHit {
+	const replacement = replacementForMatch(match, matcher, options);
+	const preview =
+		replacement !== null
+			? replacementPreview(source, start, end, replacement)
+			: {after: null, before: null};
+
+	return {
+		after: preview.after ?? null,
+		before: preview.before ?? null,
+		end,
+		excerpt: excerptAround(source, start, end - start),
+		line: lineNumberAt(source, start),
+		matchText: source.slice(start, end),
+		passageId,
+		rank,
+		replacement,
+		scope,
+		sourceId,
+		sourceName,
+		start
+	};
+}
+
+function searchHitsInSource(
+	options: CoreStoryIndexOptions,
+	matcher: RegExp | undefined,
+	sourceId: string,
+	sourceName: string,
+	source: string,
+	scope: CoreSearchScope,
+	passageId: string | null
+): CoreSearchHit[] {
+	const query = options.query?.trim() ?? '';
+
+	if (!matcher || query === '') {
+		return [];
+	}
+
+	const hits: CoreSearchHit[] = [];
+
+	matcher.lastIndex = 0;
+
+	for (let match = matcher.exec(source); match; match = matcher.exec(source)) {
+		const start = match.index;
+		const end = start + match[0].length;
+
+		if (start === end) {
+			matcher.lastIndex++;
+			continue;
+		}
+
+		hits.push(
+			searchHit(
+				options,
+				match,
+				matcher,
+				sourceId,
+				sourceName,
+				source,
+				scope,
+				passageId,
+				start,
+				end,
+				scopeRank(scope) + exactRankBonus(start)
+			)
+		);
+
+		if (hits.length >= maxSearchHits) {
+			break;
+		}
+	}
+
+	if (hits.length === 0 && options.fuzzy) {
+		const fuzzy = fuzzyMatch(source, query, options.matchCase);
+
+		if (fuzzy) {
+			hits.push(
+				searchHit(
+					options,
+					undefined,
+					undefined,
+					sourceId,
+					sourceName,
+					source,
+					scope,
+					passageId,
+					fuzzy.start,
+					fuzzy.end,
+					scopeRank(scope) * 0.7 + fuzzy.score
+				)
+			);
+		}
+	}
+
+	return hits;
 }
 
 function graphStats(story: Story): CoreGraphStats {
@@ -102,30 +314,7 @@ function graphStats(story: Story): CoreGraphStats {
 		}
 	}
 
-	const reachable = new Set<string>();
-	const queue = [story.startPassage];
-
-	while (queue.length > 0) {
-		const id = queue.shift()!;
-
-		if (reachable.has(id)) {
-			continue;
-		}
-
-		reachable.add(id);
-
-		const passage = story.passages.find(candidate => candidate.id === id);
-
-		if (passage) {
-			for (const link of parseLinks(passage.text, true)) {
-				const target = passageByName.get(link);
-
-				if (target && target.id !== id) {
-					queue.push(target.id);
-				}
-			}
-		}
-	}
+	const reachable = reachablePassageIds(story);
 
 	return {
 		brokenLinks,
@@ -148,27 +337,12 @@ function graphStats(story: Story): CoreGraphStats {
 	};
 }
 
-function diagnosticsForStory(story: Story): CoreDiagnostic[] {
+function reachablePassageIds(story: Story) {
 	const passageByName = new Map(
 		story.passages.map(passage => [passage.name, passage])
 	);
 	const reachable = new Set<string>();
 	const queue = [story.startPassage];
-	const diagnostics: CoreDiagnostic[] = [];
-
-	for (const passage of story.passages) {
-		for (const link of parseLinks(passage.text, true)) {
-			if (!passageByName.has(link)) {
-				diagnostics.push({
-					code: 'broken-link',
-					message: `Broken link to "${link}"`,
-					passageId: passage.id,
-					severity: 'warning',
-					sourceId: passage.id
-				});
-			}
-		}
-	}
 
 	while (queue.length > 0) {
 		const id = queue.shift()!;
@@ -192,11 +366,424 @@ function diagnosticsForStory(story: Story): CoreDiagnostic[] {
 		}
 	}
 
+	return reachable;
+}
+
+function locateLinkTarget(text: string, target: string) {
+	const start = text.indexOf(target);
+
+	if (start === -1) {
+		return {end: target.length, line: 1, start: 0};
+	}
+
+	return {end: start + target.length, line: lineNumberAt(text, start), start};
+}
+
+function diagnosticsForStory(story: Story): CoreDiagnostic[] {
+	const passageByName = new Map(
+		story.passages.map(passage => [passage.name, passage])
+	);
+	const reachable = reachablePassageIds(story);
+	const diagnostics: CoreDiagnostic[] = [];
+	const names = new Map<string, Passage[]>();
+
+	for (const passage of story.passages) {
+		const sameName = names.get(passage.name) ?? [];
+
+		sameName.push(passage);
+		names.set(passage.name, sameName);
+
+		for (const link of parseLinks(passage.text, true)) {
+			if (!passageByName.has(link)) {
+				const range = locateLinkTarget(passage.text, link);
+
+				diagnostics.push({
+					code: 'broken-link',
+					end: range.end,
+					line: range.line,
+					message: `Broken link to "${link}"`,
+					passageId: passage.id,
+					quickFixes: [
+						{command: `create-passage:${link}`, title: `Create "${link}"`},
+						{command: 'rename-link-target', title: 'Change link target'}
+					],
+					severity: 'warning',
+					sourceId: passage.id,
+					start: range.start
+				});
+			}
+		}
+	}
+
 	for (const passage of story.passages) {
 		if (!reachable.has(passage.id)) {
 			diagnostics.push({
 				code: 'unreachable-passage',
+				end: passage.name.length,
+				line: 1,
 				message: 'Passage is not reachable from the start passage',
+				passageId: passage.id,
+				quickFixes: [
+					{command: 'link-from-start', title: 'Link from the start passage'}
+				],
+				severity: 'info',
+				sourceId: passage.id,
+				start: 0
+			});
+		}
+	}
+
+	for (const passages of names.values()) {
+		if (passages.length > 1) {
+			for (const passage of passages) {
+				diagnostics.push({
+					code: 'duplicate-passage-name',
+					end: passage.name.length,
+					line: 1,
+					message: `Duplicate passage name "${passage.name}"`,
+					passageId: passage.id,
+					quickFixes: [{command: 'rename-passage', title: 'Rename passage'}],
+					severity: 'error',
+					sourceId: passage.id,
+					start: 0
+				});
+			}
+		}
+	}
+
+	if (!story.passages.some(passage => passage.id === story.startPassage)) {
+		diagnostics.push({
+			code: 'missing-start-passage',
+			end: 0,
+			line: 1,
+			message: 'Story start passage is missing',
+			passageId: null,
+			quickFixes: [
+				{command: 'set-start-passage', title: 'Choose a start passage'}
+			],
+			severity: 'error',
+			sourceId: `${story.id}:metadata`,
+			start: 0
+		});
+	}
+
+	return diagnostics;
+}
+
+function symbolsInSource(
+	sourceId: string,
+	sourceName: string,
+	source: string,
+	scope: CoreSearchScope,
+	passageId: string | null
+): CoreSymbol[] {
+	const symbols: CoreSymbol[] = [];
+	const matcher =
+		/(^|[^A-Za-z0-9_])(\$[A-Za-z_]\w*|_[A-Za-z_]\w*|\|[A-Za-z_]\w*>|\?[A-Za-z_]\w*)/g;
+
+	for (let match = matcher.exec(source); match; match = matcher.exec(source)) {
+		const start = match.index + match[1].length;
+		const name = match[2];
+		const end = start + name.length;
+
+		symbols.push({
+			end,
+			excerpt: excerptAround(source, start, name.length),
+			kind: name.startsWith('$')
+				? 'variable'
+				: name.startsWith('_')
+					? 'temporaryVariable'
+					: 'hook',
+			line: lineNumberAt(source, start),
+			name,
+			passageId,
+			scope,
+			sourceId,
+			sourceName,
+			start
+		});
+	}
+
+	return symbols;
+}
+
+function assetKind(extension: string) {
+	const normalized = extension.toLocaleLowerCase();
+
+	if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(normalized)) {
+		return 'image';
+	}
+
+	if (['mp3', 'm4a', 'ogg', 'wav'].includes(normalized)) {
+		return 'audio';
+	}
+
+	if (['mp4', 'webm'].includes(normalized)) {
+		return 'video';
+	}
+
+	if (normalized === 'css') {
+		return 'stylesheet';
+	}
+
+	if (normalized === 'js') {
+		return 'script';
+	}
+
+	return 'file';
+}
+
+function assetReferencesInSource(
+	sourceId: string,
+	sourceName: string,
+	source: string,
+	passageId: string | null
+): CoreAssetReference[] {
+	const assets: CoreAssetReference[] = [];
+	const matcher =
+		/[A-Za-z0-9_./~%:@?&=+-]+\.(png|jpe?g|gif|svg|webp|mp3|m4a|ogg|wav|mp4|webm|css|js)/gi;
+
+	for (let match = matcher.exec(source); match; match = matcher.exec(source)) {
+		assets.push({
+			end: match.index + match[0].length,
+			kind: assetKind(match[1]),
+			line: lineNumberAt(source, match.index),
+			passageId,
+			path: match[0],
+			sourceId,
+			sourceName,
+			start: match.index
+		});
+	}
+
+	return assets;
+}
+
+function tagEntries(story: Story): CoreTagEntry[] {
+	const entries = new Map<string, Set<string>>();
+
+	for (const passage of story.passages) {
+		for (const tag of passage.tags) {
+			const passageIds = entries.get(tag) ?? new Set<string>();
+
+			passageIds.add(passage.id);
+			entries.set(tag, passageIds);
+		}
+	}
+
+	return Array.from(entries)
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([name, passageIds]) => ({
+			color: story.tagColors[name] ?? null,
+			count: passageIds.size,
+			name,
+			passageIds: Array.from(passageIds).sort()
+		}));
+}
+
+function groupKind(tagName: string) {
+	const normalized = tagName.toLocaleLowerCase();
+
+	return normalized.startsWith('chapter') ||
+		normalized.startsWith('section') ||
+		normalized.startsWith('group')
+		? 'group'
+		: 'tag';
+}
+
+function countedSymbolEntries(symbols: CoreSymbol[]) {
+	const result = new Map<
+		string,
+		{count: number; passageId: string | null; sourceId: string}
+	>();
+
+	for (const symbol of symbols) {
+		const existing = result.get(symbol.name);
+
+		if (existing) {
+			existing.count++;
+		} else {
+			result.set(symbol.name, {
+				count: 1,
+				passageId: symbol.passageId,
+				sourceId: symbol.sourceId
+			});
+		}
+	}
+
+	return Array.from(result).sort(([left], [right]) =>
+		left.localeCompare(right)
+	);
+}
+
+function countedAssetEntries(assets: CoreAssetReference[]) {
+	const result = new Map<
+		string,
+		{count: number; passageId: string | null; sourceId: string}
+	>();
+
+	for (const asset of assets) {
+		const existing = result.get(asset.path);
+
+		if (existing) {
+			existing.count++;
+		} else {
+			result.set(asset.path, {
+				count: 1,
+				passageId: asset.passageId,
+				sourceId: asset.sourceId
+			});
+		}
+	}
+
+	return Array.from(result).sort(([left], [right]) =>
+		left.localeCompare(right)
+	);
+}
+
+function contentsEntries(
+	story: Story,
+	files: CoreSourceFile[],
+	tags: CoreTagEntry[],
+	symbols: CoreSymbol[],
+	assets: CoreAssetReference[],
+	diagnostics: CoreDiagnostic[]
+): CoreContentsEntry[] {
+	const entries: CoreContentsEntry[] = [
+		{
+			count: story.passages.length,
+			detail: story.name,
+			id: `metadata:${story.id}`,
+			kind: 'metadata',
+			label: 'Story metadata',
+			passageId: null,
+			severity: null,
+			sourceId: `${story.id}:metadata`
+		},
+		{
+			count: 1,
+			detail: `${story.storyFormat} ${story.storyFormatVersion}`,
+			id: `format:${story.id}`,
+			kind: 'metadata',
+			label: 'Story format',
+			passageId: null,
+			severity: null,
+			sourceId: `${story.id}:metadata`
+		}
+	];
+	const startPassage = story.passages.find(
+		passage => passage.id === story.startPassage
+	);
+
+	if (startPassage) {
+		entries.push({
+			count: 1,
+			detail: startPassage.name,
+			id: `entry:${startPassage.id}`,
+			kind: 'entryPoint',
+			label: 'Start passage',
+			passageId: startPassage.id,
+			severity: null,
+			sourceId: startPassage.id
+		});
+	}
+
+	for (const file of files) {
+		entries.push({
+			count: file.lineCount,
+			detail: `${file.characterCount} characters`,
+			id: `source:${file.id}`,
+			kind:
+				file.kind === 'script'
+					? 'script'
+					: file.kind === 'stylesheet'
+						? 'stylesheet'
+						: 'passage',
+			label: file.name,
+			passageId: file.passageId,
+			severity: null,
+			sourceId: file.id
+		});
+	}
+
+	for (const tag of tags) {
+		entries.push({
+			count: tag.count,
+			detail: tag.color,
+			id: `tag:${tag.name}`,
+			kind: groupKind(tag.name),
+			label: tag.name,
+			passageId: tag.passageIds[0] ?? null,
+			severity: null,
+			sourceId: tag.passageIds[0] ?? null
+		});
+	}
+
+	for (const [name, entry] of countedSymbolEntries(symbols)) {
+		entries.push({
+			count: entry.count,
+			detail: null,
+			id: `symbol:${name}`,
+			kind: 'variable',
+			label: name,
+			passageId: entry.passageId,
+			severity: null,
+			sourceId: entry.sourceId
+		});
+	}
+
+	for (const [path, entry] of countedAssetEntries(assets)) {
+		entries.push({
+			count: entry.count,
+			detail: null,
+			id: `asset:${path}`,
+			kind: 'asset',
+			label: path,
+			passageId: entry.passageId,
+			severity: null,
+			sourceId: entry.sourceId
+		});
+	}
+
+	for (const diagnostic of diagnostics) {
+		entries.push({
+			count: 1,
+			detail: diagnostic.message,
+			id: `diagnostic:${diagnostic.code}:${diagnostic.sourceId}:${diagnostic.start}`,
+			kind: diagnostic.code === 'broken-link' ? 'brokenLink' : 'diagnostic',
+			label: diagnostic.code,
+			passageId: diagnostic.passageId,
+			severity: diagnostic.severity,
+			sourceId: diagnostic.sourceId
+		});
+	}
+
+	const incoming = new Map(story.passages.map(passage => [passage.id, 0]));
+	const passageByName = new Map(
+		story.passages.map(passage => [passage.name, passage])
+	);
+
+	for (const passage of story.passages) {
+		for (const link of parseLinks(passage.text, true)) {
+			const target = passageByName.get(link);
+
+			if (target && target.id !== passage.id) {
+				incoming.set(target.id, (incoming.get(target.id) ?? 0) + 1);
+			}
+		}
+	}
+
+	for (const passage of story.passages) {
+		if (
+			passage.id !== story.startPassage &&
+			(incoming.get(passage.id) ?? 0) === 0
+		) {
+			entries.push({
+				count: 1,
+				detail: passage.name,
+				id: `orphan:${passage.id}`,
+				kind: 'orphan',
+				label: 'Orphan passage',
 				passageId: passage.id,
 				severity: 'info',
 				sourceId: passage.id
@@ -204,16 +791,48 @@ function diagnosticsForStory(story: Story): CoreDiagnostic[] {
 		}
 	}
 
-	return diagnostics;
+	return entries;
 }
 
-export function storyToCoreIndex(story: Story, query = ''): CoreStoryIndex {
-	const tags = Array.from(
-		story.passages.reduce((result, passage) => {
-			passage.tags.forEach(tag => result.add(tag));
-			return result;
-		}, new Set<string>())
-	).sort();
+function storyMetadataSource(story: Story) {
+	return [
+		`Name: ${story.name}`,
+		`IFID: ${story.ifid}`,
+		`Story format: ${story.storyFormat} ${story.storyFormatVersion}`,
+		`Story tags: ${story.tags.join(', ')}`
+	].join('\n');
+}
+
+function invalidRegexDiagnostic(story: Story, query: string): CoreDiagnostic {
+	return {
+		code: 'invalid-search-regex',
+		end: query.length,
+		line: 1,
+		message: 'Search regular expression is invalid',
+		passageId: null,
+		quickFixes: [
+			{command: 'disable-regex-search', title: 'Turn off regular expressions'}
+		],
+		severity: 'error' as CoreDiagnosticSeverity,
+		sourceId: `${story.id}:metadata`,
+		start: 0
+	};
+}
+
+export function storyToCoreIndex(
+	story: Story,
+	query: StoryIndexQuery = {}
+): CoreStoryIndex {
+	const options = normalizeOptions(query);
+	let matcher: RegExp | undefined;
+	const diagnostics = diagnosticsForStory(story);
+
+	try {
+		matcher = createSearchMatcher(options);
+	} catch {
+		diagnostics.push(invalidRegexDiagnostic(story, options.query ?? ''));
+	}
+
 	const files: CoreSourceFile[] = [
 		...story.passages.map(sourceFileForPassage),
 		{
@@ -235,49 +854,236 @@ export function storyToCoreIndex(story: Story, query = ''): CoreStoryIndex {
 			tags: []
 		}
 	];
-	const searchHits = story.passages.flatMap(passage => [
-		...searchHitsInSource(
-			query,
-			passage.id,
-			passage.name,
-			passage.name,
-			'passageName'
-		),
-		...searchHitsInSource(
-			query,
-			passage.id,
-			passage.name,
-			passage.text,
-			'passageText'
-		),
-		...passage.tags.flatMap(tag =>
-			searchHitsInSource(query, passage.id, passage.name, tag, 'passageTag')
-		)
-	]);
+	const searchHits: CoreSearchHit[] = [];
+	const symbols: CoreSymbol[] = [];
+	const assets: CoreAssetReference[] = [];
+
+	for (const passage of story.passages) {
+		if (options.includePassageNames) {
+			searchHits.push(
+				...searchHitsInSource(
+					options,
+					matcher,
+					passage.id,
+					passage.name,
+					passage.name,
+					'passageName',
+					passage.id
+				)
+			);
+		}
+
+		if (options.includePassageText) {
+			searchHits.push(
+				...searchHitsInSource(
+					options,
+					matcher,
+					passage.id,
+					passage.name,
+					passage.text,
+					'passageText',
+					passage.id
+				)
+			);
+		}
+
+		if (options.includeTags) {
+			for (const tag of passage.tags) {
+				searchHits.push(
+					...searchHitsInSource(
+						options,
+						matcher,
+						passage.id,
+						passage.name,
+						tag,
+						'passageTag',
+						passage.id
+					)
+				);
+			}
+		}
+
+		if (options.includeVariables) {
+			symbols.push(
+				...symbolsInSource(
+					passage.id,
+					passage.name,
+					passage.text,
+					'passageText',
+					passage.id
+				)
+			);
+		}
+
+		if (options.includeAssets) {
+			assets.push(
+				...assetReferencesInSource(
+					passage.id,
+					passage.name,
+					passage.text,
+					passage.id
+				)
+			);
+		}
+	}
 
 	searchHits.push(
 		...searchHitsInSource(
-			query,
-			`${story.id}:script`,
-			'Story JavaScript',
-			story.script,
-			'script'
-		),
-		...searchHitsInSource(
-			query,
-			`${story.id}:stylesheet`,
-			'Story Stylesheet',
-			story.stylesheet,
-			'stylesheet'
+			options,
+			matcher,
+			`${story.id}:metadata`,
+			'Story Metadata',
+			storyMetadataSource(story),
+			'metadata',
+			null
 		)
 	);
 
+	if (options.includeScript) {
+		searchHits.push(
+			...searchHitsInSource(
+				options,
+				matcher,
+				`${story.id}:script`,
+				'Story JavaScript',
+				story.script,
+				'script',
+				null
+			)
+		);
+	}
+
+	if (options.includeStylesheet) {
+		searchHits.push(
+			...searchHitsInSource(
+				options,
+				matcher,
+				`${story.id}:stylesheet`,
+				'Story Stylesheet',
+				story.stylesheet,
+				'stylesheet',
+				null
+			)
+		);
+	}
+
+	if (options.includeVariables) {
+		symbols.push(
+			...symbolsInSource(
+				`${story.id}:script`,
+				'Story JavaScript',
+				story.script,
+				'script',
+				null
+			),
+			...symbolsInSource(
+				`${story.id}:stylesheet`,
+				'Story Stylesheet',
+				story.stylesheet,
+				'stylesheet',
+				null
+			)
+		);
+	}
+
+	if (options.includeAssets) {
+		assets.push(
+			...assetReferencesInSource(
+				`${story.id}:script`,
+				'Story JavaScript',
+				story.script,
+				null
+			),
+			...assetReferencesInSource(
+				`${story.id}:stylesheet`,
+				'Story Stylesheet',
+				story.stylesheet,
+				null
+			)
+		);
+	}
+
+	if (options.includeVariables) {
+		for (const symbol of symbols) {
+			searchHits.push(
+				...searchHitsInSource(
+					options,
+					matcher,
+					symbol.sourceId,
+					symbol.sourceName,
+					symbol.name,
+					'variable',
+					symbol.passageId
+				)
+			);
+		}
+	}
+
+	if (options.includeAssets) {
+		for (const asset of assets) {
+			searchHits.push(
+				...searchHitsInSource(
+					options,
+					matcher,
+					asset.sourceId,
+					asset.sourceName,
+					asset.path,
+					'asset',
+					asset.passageId
+				)
+			);
+		}
+	}
+
+	searchHits.sort((left, right) => {
+		if (right.rank !== left.rank) {
+			return right.rank - left.rank;
+		}
+
+		if (left.sourceName !== right.sourceName) {
+			return left.sourceName.localeCompare(right.sourceName);
+		}
+
+		return left.line - right.line || left.start - right.start;
+	});
+	searchHits.splice(maxSearchHits);
+
+	const tags = tagEntries(story);
+	const replacePreviews: CoreReplacePreview[] = searchHits
+		.filter(
+			(
+				hit
+			): hit is CoreSearchHit & {
+				after: string;
+				before: string;
+				replacement: string;
+			} => hit.after !== null && hit.before !== null && hit.replacement !== null
+		)
+		.map(hit => ({
+			after: hit.after,
+			before: hit.before,
+			end: hit.end,
+			line: hit.line,
+			matchText: hit.matchText,
+			passageId: hit.passageId,
+			replacement: hit.replacement,
+			scope: hit.scope,
+			sourceId: hit.sourceId,
+			sourceName: hit.sourceName,
+			start: hit.start
+		}));
+
 	return {
-		diagnostics: diagnosticsForStory(story),
+		assets,
+		contents: contentsEntries(story, files, tags, symbols, assets, diagnostics),
+		diagnostics,
 		files,
 		graph: graphStats(story),
+		replacePreviews,
 		searchHits,
 		storyId: story.id,
-		tags
+		tags: tags.map(tag => tag.name),
+		tagEntries: tags,
+		symbols
 	};
 }

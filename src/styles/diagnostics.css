@@ -1,0 +1,115 @@
+.story-edit-diagnostic-list.dg {
+	background: var(--bg-dock);
+	border: 1px solid var(--border-faint);
+	border-radius: var(--r-sm);
+	overflow: hidden;
+}
+
+.story-edit-diagnostic-list .dg__row {
+	align-items: flex-start;
+	background: transparent;
+	border-bottom: 1px solid var(--border-faint);
+	display: flex;
+	gap: var(--sp-4);
+	padding: var(--sp-4);
+}
+
+.story-edit-diagnostic-list .dg__row:last-child {
+	border-bottom: 0;
+}
+
+.story-edit-diagnostic-list .dg__row.is-on {
+	background: var(--sem-link-soft);
+	box-shadow: inset 2px 0 0 var(--acc-blue);
+}
+
+.story-edit-diagnostic-list .dg__sev {
+	flex: 0 0 auto;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	font-weight: var(--fw-bold);
+	line-height: 1.2;
+	margin-top: 1px;
+}
+
+.story-edit-diagnostic-list .dg__sev.err {
+	color: var(--sem-error);
+}
+
+.story-edit-diagnostic-list .dg__sev.warn {
+	color: var(--sem-warn);
+}
+
+.story-edit-diagnostic-list .dg__sev.info {
+	color: var(--sem-link);
+}
+
+.story-edit-diagnostic-list .dg__rtext {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.story-edit-diagnostic-list .dg__rloc {
+	color: var(--text-faint);
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	margin-top: var(--sp-1);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.story-edit-diagnostic-source,
+.story-edit-diagnostic-message {
+	background: transparent;
+	border: 0;
+	color: var(--text-strong);
+	display: block;
+	font-family: var(--font-ui);
+	font-size: var(--fs-sm);
+	line-height: 1.35;
+	padding: 0;
+	text-align: left;
+}
+
+.story-edit-diagnostic-source {
+	cursor: pointer;
+}
+
+.story-edit-diagnostic-source:hover,
+.story-edit-diagnostic-source:focus-visible {
+	color: var(--acc-blue);
+	outline: none;
+}
+
+.story-edit-diagnostic-source span {
+	color: var(--text-muted);
+	display: block;
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+}
+
+.story-edit-diagnostic-fixes {
+	display: flex;
+	flex: 0 0 auto;
+	flex-direction: column;
+	gap: var(--sp-2);
+}
+
+.story-edit-diagnostic-fixes button {
+	background: var(--acc-blue-soft);
+	border: 1px solid color-mix(in oklab, var(--acc-blue) 36%, transparent);
+	border-radius: var(--r-sm);
+	color: var(--acc-blue);
+	cursor: pointer;
+	font: var(--fs-xs) var(--font-ui);
+	padding: var(--sp-2) var(--sp-3);
+	white-space: nowrap;
+}
+
+.story-edit-diagnostic-fixes button:disabled {
+	background: transparent;
+	border-color: var(--border-faint);
+	color: var(--text-faint);
+	cursor: default;
+}

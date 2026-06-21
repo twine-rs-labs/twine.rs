@@ -268,7 +268,7 @@ describe('<StorySearchDialog>', () => {
 
 		story.passages[0].name = 'aaa';
 		story.passages[0].text = 'bbb';
-		renderComponent({find: 'e'}, {stories: [story]});
+		renderComponent({find: 'needle-that-is-not-present'}, {stories: [story]});
 		expect(
 			await screen.findByText('dialogs.storySearch.noMatches')
 		).toBeInTheDocument();
@@ -330,6 +330,20 @@ describe('<StorySearchDialog>', () => {
 		expect(
 			screen.getByTestId(`passage-${story.passages[0].id}`)
 		).toHaveTextContent('mock-replace');
+	});
+
+	it('opens a source dialog for a non-passage search result', () => {
+		const story = fakeStory(1);
+
+		story.passages[0].text = '';
+		story.script = 'const mockFind = true;';
+		renderComponent({find: 'mockFind'}, {stories: [story]});
+		fireEvent.click(screen.getByRole('button', {name: /Story JavaScript/}));
+		expect(
+			screen.getByRole('textbox', {
+				name: 'dialogs.storyJavaScript.editorLabel'
+			})
+		).toHaveValue('const mockFind = true;');
 	});
 
 	it('disables the replace button if there are no matches for the search', () => {

@@ -58,6 +58,15 @@ describe('<PassageTagsDialog>', () => {
 		expect(screen.getByTestId('mock-tag-editor-mock-tag2')).toBeInTheDocument();
 	});
 
+	it('shows how many passages use each tag', async () => {
+		const story = fakeStory(2);
+
+		story.passages[0].tags = ['mock-tag'];
+		story.passages[1].tags = ['mock-tag'];
+		await renderComponent({storyId: story.id}, {stories: [story]});
+		expect(screen.getByText('dialogs.passageTags.count')).toBeInTheDocument();
+	});
+
 	it('dispatches a story action if a tag is renamed', async () => {
 		const dispatch = jest.fn();
 		const story = fakeStory(1);

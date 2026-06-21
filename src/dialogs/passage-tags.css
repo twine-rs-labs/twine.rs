@@ -1,0 +1,26 @@
+@import '../styles/metrics.css';
+@import '../styles/colors.css';
+
+.passage-tags-dialog .passage-tag-entry {
+	align-items: center;
+	display: grid;
+	gap: var(--grid-size);
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.passage-tags-dialog .passage-tag-entry + .passage-tag-entry {
+	margin-top: var(--grid-size);
+}
+
+.passage-tags-dialog .tag-editor {
+	min-width: 0;
+}
+
+.passage-tags-dialog .passage-tag-count {
+	background: var(--faint-blue);
+	border-radius: var(--corner-round);
+	color: var(--dark-blue);
+	font-size: 90%;
+	padding: var(--control-inner-padding);
+	white-space: nowrap;
+}

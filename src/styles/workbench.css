@@ -1,0 +1,61 @@
+@import './workbench-tokens.css';
+
+.story-edit-workspace {
+	background: var(--bg-app);
+	color: var(--text-body);
+	font-family: var(--font-ui);
+	font-size: var(--fs-base);
+}
+
+.story-edit-workspace .story-edit-dock {
+	background: var(--bg-dock);
+	border-color: var(--border-faint);
+	color: var(--text-body);
+}
+
+.story-edit-workspace .story-edit-dock-header {
+	background: var(--ink-1);
+	border-bottom-color: var(--border-faint);
+	box-shadow: var(--edge-hi);
+}
+
+.story-edit-workspace .story-edit-dock-header h2 {
+	color: var(--text-strong);
+	font-family: var(--font-ui);
+	font-size: var(--fs-sm);
+	font-weight: var(--fw-bold);
+	letter-spacing: var(--ls-normal);
+	text-transform: uppercase;
+}
+
+.story-edit-workspace .story-edit-navigator-tabs {
+	background: var(--ink-1);
+	border-bottom-color: var(--border-faint);
+}
+
+.story-edit-workspace .story-edit-navigator-tabs button {
+	border-right-color: var(--border-faint);
+	color: var(--text-muted);
+	font-family: var(--font-ui);
+}
+
+.story-edit-workspace .story-edit-navigator-tabs button[aria-selected='true'] {
+	background: var(--sem-link-soft);
+	box-shadow: inset 0 -2px 0 var(--acc-blue);
+	color: var(--text-strong);
+}
+
+.story-edit-workspace .story-edit-text-layer {
+	background: var(--bg-card);
+}
+
+.story-edit-bottom-drawer {
+	background: var(--bg-dock);
+	border-top-color: var(--border-faint);
+	color: var(--text-body);
+}
+
+.story-edit-bottom-drawer header {
+	background: var(--ink-1);
+	border-bottom-color: var(--border-faint);
+}

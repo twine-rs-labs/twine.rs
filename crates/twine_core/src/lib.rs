@@ -112,6 +112,7 @@ pub enum CoreSourceKind {
     Passage,
     Script,
     Stylesheet,
+    StoryMetadata,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
@@ -138,18 +139,159 @@ pub enum CoreSearchScope {
     PassageTag,
     Script,
     Stylesheet,
+    Variable,
+    Asset,
+    Metadata,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreSearchHit {
+    #[serde(default)]
+    pub after: Option<String>,
+    #[serde(default)]
+    pub before: Option<String>,
+    pub end: usize,
     pub excerpt: String,
     pub line: usize,
+    pub match_text: String,
+    #[serde(default)]
+    pub passage_id: Option<String>,
+    pub rank: f32,
+    #[serde(default)]
+    pub replacement: Option<String>,
     pub scope: CoreSearchScope,
     pub source_id: String,
     pub source_name: String,
     pub start: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreSymbolKind {
+    Variable,
+    TemporaryVariable,
+    Hook,
+    StoryMetadata,
+    StoryFormat,
+    Asset,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreSymbol {
+    pub end: usize,
+    pub excerpt: String,
+    pub kind: CoreSymbolKind,
+    pub line: usize,
+    pub name: String,
+    #[serde(default)]
+    pub passage_id: Option<String>,
+    pub scope: CoreSearchScope,
+    pub source_id: String,
+    pub source_name: String,
+    pub start: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreAssetReference {
+    pub end: usize,
+    pub kind: String,
+    pub line: usize,
+    #[serde(default)]
+    pub passage_id: Option<String>,
+    pub path: String,
+    pub source_id: String,
+    pub source_name: String,
+    pub start: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreTagEntry {
+    #[serde(default)]
+    pub color: Option<String>,
+    pub count: usize,
+    pub name: String,
+    pub passage_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreContentsEntryKind {
+    Metadata,
+    Passage,
+    Script,
+    Stylesheet,
+    Tag,
+    Variable,
+    Asset,
+    Diagnostic,
+    EntryPoint,
+    Orphan,
+    BrokenLink,
+    Group,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreContentsEntry {
+    pub count: usize,
+    #[serde(default)]
+    pub detail: Option<String>,
+    pub id: String,
+    pub kind: CoreContentsEntryKind,
+    pub label: String,
+    #[serde(default)]
+    pub passage_id: Option<String>,
+    #[serde(default)]
+    pub severity: Option<CoreDiagnosticSeverity>,
+    #[serde(default)]
+    pub source_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreReplacePreview {
+    pub after: String,
+    pub before: String,
+    pub end: usize,
+    pub line: usize,
+    pub match_text: String,
+    #[serde(default)]
+    pub passage_id: Option<String>,
+    pub replacement: String,
+    pub scope: CoreSearchScope,
+    pub source_id: String,
+    pub source_name: String,
+    pub start: usize,
+}
+
+impl CoreReplacePreview {
+    fn from_hit(hit: &CoreSearchHit) -> Option<Self> {
+        Some(Self {
+            after: hit.after.clone()?,
+            before: hit.before.clone()?,
+            end: hit.end,
+            line: hit.line,
+            match_text: hit.match_text.clone(),
+            passage_id: hit.passage_id.clone(),
+            replacement: hit.replacement.clone()?,
+            scope: hit.scope.clone(),
+            source_id: hit.source_id.clone(),
+            source_name: hit.source_name.clone(),
+            start: hit.start,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -166,31 +308,95 @@ pub enum CoreDiagnosticSeverity {
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreDiagnostic {
     pub code: String,
+    pub end: usize,
+    pub line: usize,
     pub message: String,
     #[serde(default)]
     pub passage_id: Option<String>,
+    #[serde(default)]
+    pub quick_fixes: Vec<CoreQuickFix>,
     pub severity: CoreDiagnosticSeverity,
     pub source_id: String,
+    pub start: usize,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreQuickFix {
+    pub command: String,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreStoryIndexOptions {
     #[serde(default)]
+    pub fuzzy: bool,
+    #[serde(default = "default_true")]
+    pub include_assets: bool,
+    #[serde(default = "default_true")]
+    pub include_passage_names: bool,
+    #[serde(default = "default_true")]
+    pub include_passage_text: bool,
+    #[serde(default = "default_true")]
+    pub include_script: bool,
+    #[serde(default = "default_true")]
+    pub include_stylesheet: bool,
+    #[serde(default = "default_true")]
+    pub include_tags: bool,
+    #[serde(default = "default_true")]
+    pub include_variables: bool,
+    #[serde(default)]
+    pub match_case: bool,
+    #[serde(default)]
     pub query: Option<String>,
+    #[serde(default)]
+    pub replacement: Option<String>,
+    #[serde(default)]
+    pub use_regexes: bool,
+}
+
+impl Default for CoreStoryIndexOptions {
+    fn default() -> Self {
+        Self {
+            fuzzy: false,
+            include_assets: true,
+            include_passage_names: true,
+            include_passage_text: true,
+            include_script: true,
+            include_stylesheet: true,
+            include_tags: true,
+            include_variables: true,
+            match_case: false,
+            query: None,
+            replacement: None,
+            use_regexes: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreStoryIndex {
+    #[serde(default)]
+    pub assets: Vec<CoreAssetReference>,
+    #[serde(default)]
+    pub contents: Vec<CoreContentsEntry>,
     pub diagnostics: Vec<CoreDiagnostic>,
     pub files: Vec<CoreSourceFile>,
     pub graph: CoreGraphStats,
+    #[serde(default)]
+    pub replace_previews: Vec<CoreReplacePreview>,
     pub search_hits: Vec<CoreSearchHit>,
     pub story_id: String,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub tag_entries: Vec<CoreTagEntry>,
+    #[serde(default)]
+    pub symbols: Vec<CoreSymbol>,
 }
 
 impl From<&Story> for StorySnapshot {
@@ -1200,15 +1406,23 @@ impl ProjectSession {
     ) -> Result<CoreStoryIndex, CoreError> {
         let story = self.story(story_id)?;
         let graph = GraphIndex::from_story(story);
+        let metadata_source_id = format!("{}:metadata", story.id.as_ref());
+        let script_source_id = format!("{}:script", story.id.as_ref());
+        let stylesheet_source_id = format!("{}:stylesheet", story.id.as_ref());
+        let search_pattern = search_pattern(&options);
         let mut diagnostics = Vec::new();
         let mut files = Vec::new();
-        let mut tags = BTreeSet::new();
+        let mut tag_usage = BTreeMap::<String, BTreeSet<String>>::new();
         let mut search_hits = Vec::new();
-        let query = options.query.unwrap_or_default();
+        let mut symbols = Vec::new();
+        let mut assets = Vec::new();
 
         for passage in story.passages.iter() {
             for tag in &passage.tags {
-                tags.insert(tag.clone());
+                tag_usage
+                    .entry(tag.clone())
+                    .or_default()
+                    .insert(passage.id.as_ref().to_owned());
             }
 
             files.push(CoreSourceFile {
@@ -1221,35 +1435,67 @@ impl ProjectSession {
                 tags: passage.tags.clone(),
             });
 
-            search_hits.extend(search_hits_in_source(
-                &query,
-                passage.id.as_ref(),
-                &passage.name,
-                &passage.name,
-                CoreSearchScope::PassageName,
-            ));
-            search_hits.extend(search_hits_in_source(
-                &query,
-                passage.id.as_ref(),
-                &passage.name,
-                &passage.text,
-                CoreSearchScope::PassageText,
-            ));
-
-            for tag in &passage.tags {
+            if options.include_passage_names {
                 search_hits.extend(search_hits_in_source(
-                    &query,
+                    &options,
+                    search_pattern.as_ref(),
                     passage.id.as_ref(),
                     &passage.name,
-                    tag,
-                    CoreSearchScope::PassageTag,
+                    &passage.name,
+                    CoreSearchScope::PassageName,
+                    Some(passage.id.as_ref()),
+                ));
+            }
+
+            if options.include_passage_text {
+                search_hits.extend(search_hits_in_source(
+                    &options,
+                    search_pattern.as_ref(),
+                    passage.id.as_ref(),
+                    &passage.name,
+                    &passage.text,
+                    CoreSearchScope::PassageText,
+                    Some(passage.id.as_ref()),
+                ));
+            }
+
+            if options.include_tags {
+                for tag in &passage.tags {
+                    search_hits.extend(search_hits_in_source(
+                        &options,
+                        search_pattern.as_ref(),
+                        passage.id.as_ref(),
+                        &passage.name,
+                        tag,
+                        CoreSearchScope::PassageTag,
+                        Some(passage.id.as_ref()),
+                    ));
+                }
+            }
+
+            if options.include_variables {
+                symbols.extend(symbols_in_source(
+                    passage.id.as_ref(),
+                    &passage.name,
+                    &passage.text,
+                    CoreSearchScope::PassageText,
+                    Some(passage.id.as_ref()),
+                ));
+            }
+
+            if options.include_assets {
+                assets.extend(asset_references_in_source(
+                    passage.id.as_ref(),
+                    &passage.name,
+                    &passage.text,
+                    Some(passage.id.as_ref()),
                 ));
             }
         }
 
         files.push(CoreSourceFile {
             character_count: story.script.len(),
-            id: format!("{}:script", story.id.as_ref()),
+            id: script_source_id.clone(),
             kind: CoreSourceKind::Script,
             line_count: line_count(&story.script),
             name: "Story JavaScript".into(),
@@ -1258,7 +1504,7 @@ impl ProjectSession {
         });
         files.push(CoreSourceFile {
             character_count: story.stylesheet.len(),
-            id: format!("{}:stylesheet", story.id.as_ref()),
+            id: stylesheet_source_id.clone(),
             kind: CoreSourceKind::Stylesheet,
             line_count: line_count(&story.stylesheet),
             name: "Story Stylesheet".into(),
@@ -1266,28 +1512,143 @@ impl ProjectSession {
             tags: Vec::new(),
         });
 
+        if let Err(error) = &search_pattern {
+            diagnostics.push(CoreDiagnostic {
+                code: "invalid-search-regex".into(),
+                end: options.query.as_ref().map_or(0, String::len),
+                line: 1,
+                message: format!("Search regular expression is invalid: {error}"),
+                passage_id: None,
+                quick_fixes: vec![CoreQuickFix {
+                    command: "disable-regex-search".into(),
+                    title: "Turn off regular expressions".into(),
+                }],
+                severity: CoreDiagnosticSeverity::Error,
+                source_id: metadata_source_id.clone(),
+                start: 0,
+            });
+        }
+
+        let metadata_source = story_metadata_source(story);
         search_hits.extend(search_hits_in_source(
-            &query,
-            &format!("{}:script", story.id.as_ref()),
-            "Story JavaScript",
-            &story.script,
-            CoreSearchScope::Script,
-        ));
-        search_hits.extend(search_hits_in_source(
-            &query,
-            &format!("{}:stylesheet", story.id.as_ref()),
-            "Story Stylesheet",
-            &story.stylesheet,
-            CoreSearchScope::Stylesheet,
+            &options,
+            search_pattern.as_ref(),
+            &metadata_source_id,
+            "Story Metadata",
+            &metadata_source,
+            CoreSearchScope::Metadata,
+            None,
         ));
 
+        if options.include_script {
+            search_hits.extend(search_hits_in_source(
+                &options,
+                search_pattern.as_ref(),
+                &script_source_id,
+                "Story JavaScript",
+                &story.script,
+                CoreSearchScope::Script,
+                None,
+            ));
+        }
+
+        if options.include_stylesheet {
+            search_hits.extend(search_hits_in_source(
+                &options,
+                search_pattern.as_ref(),
+                &stylesheet_source_id,
+                "Story Stylesheet",
+                &story.stylesheet,
+                CoreSearchScope::Stylesheet,
+                None,
+            ));
+        }
+
+        if options.include_variables {
+            symbols.extend(symbols_in_source(
+                &script_source_id,
+                "Story JavaScript",
+                &story.script,
+                CoreSearchScope::Script,
+                None,
+            ));
+            symbols.extend(symbols_in_source(
+                &stylesheet_source_id,
+                "Story Stylesheet",
+                &story.stylesheet,
+                CoreSearchScope::Stylesheet,
+                None,
+            ));
+        }
+
+        if options.include_assets {
+            assets.extend(asset_references_in_source(
+                &script_source_id,
+                "Story JavaScript",
+                &story.script,
+                None,
+            ));
+            assets.extend(asset_references_in_source(
+                &stylesheet_source_id,
+                "Story Stylesheet",
+                &story.stylesheet,
+                None,
+            ));
+        }
+
+        if options.include_variables {
+            for symbol in &symbols {
+                search_hits.extend(search_hits_in_source(
+                    &options,
+                    search_pattern.as_ref(),
+                    &symbol.source_id,
+                    &symbol.source_name,
+                    &symbol.name,
+                    CoreSearchScope::Variable,
+                    symbol.passage_id.as_deref(),
+                ));
+            }
+        }
+
+        if options.include_assets {
+            for asset in &assets {
+                search_hits.extend(search_hits_in_source(
+                    &options,
+                    search_pattern.as_ref(),
+                    &asset.source_id,
+                    &asset.source_name,
+                    &asset.path,
+                    CoreSearchScope::Asset,
+                    asset.passage_id.as_deref(),
+                ));
+            }
+        }
+
         for broken_link in graph.broken_links() {
+            let (line, start, end) = story
+                .passage_by_id(&broken_link.source)
+                .and_then(|passage| locate_link_target(&passage.text, &broken_link.target_name))
+                .unwrap_or((1, 0, broken_link.target_name.len()));
+
             diagnostics.push(CoreDiagnostic {
                 code: "broken-link".into(),
+                end,
+                line,
                 message: format!("Broken link to \"{}\"", broken_link.target_name),
                 passage_id: Some(broken_link.source.as_ref().to_owned()),
+                quick_fixes: vec![
+                    CoreQuickFix {
+                        command: format!("create-passage:{}", broken_link.target_name),
+                        title: format!("Create \"{}\"", broken_link.target_name),
+                    },
+                    CoreQuickFix {
+                        command: "rename-link-target".into(),
+                        title: "Change link target".into(),
+                    },
+                ],
                 severity: CoreDiagnosticSeverity::Warning,
                 source_id: broken_link.source.as_ref().to_owned(),
+                start,
             });
         }
 
@@ -1295,21 +1656,97 @@ impl ProjectSession {
             if node.is_unreachable {
                 diagnostics.push(CoreDiagnostic {
                     code: "unreachable-passage".into(),
+                    end: node.name.len(),
+                    line: 1,
                     message: "Passage is not reachable from the start passage".into(),
                     passage_id: Some(node.id.as_ref().to_owned()),
+                    quick_fixes: vec![CoreQuickFix {
+                        command: "link-from-start".into(),
+                        title: "Link from the start passage".into(),
+                    }],
                     severity: CoreDiagnosticSeverity::Info,
                     source_id: node.id.as_ref().to_owned(),
+                    start: 0,
                 });
             }
         }
 
+        for duplicate in duplicate_passage_names(story) {
+            diagnostics.push(CoreDiagnostic {
+                code: "duplicate-passage-name".into(),
+                end: duplicate.name.len(),
+                line: 1,
+                message: format!("Duplicate passage name \"{}\"", duplicate.name),
+                passage_id: Some(duplicate.passage_id.clone()),
+                quick_fixes: vec![CoreQuickFix {
+                    command: "rename-passage".into(),
+                    title: "Rename passage".into(),
+                }],
+                severity: CoreDiagnosticSeverity::Error,
+                source_id: duplicate.passage_id,
+                start: 0,
+            });
+        }
+
+        if story.passage_by_id(&story.start_passage).is_none() {
+            diagnostics.push(CoreDiagnostic {
+                code: "missing-start-passage".into(),
+                end: 0,
+                line: 1,
+                message: "Story start passage is missing".into(),
+                passage_id: None,
+                quick_fixes: vec![CoreQuickFix {
+                    command: "set-start-passage".into(),
+                    title: "Choose a start passage".into(),
+                }],
+                severity: CoreDiagnosticSeverity::Error,
+                source_id: metadata_source_id.clone(),
+                start: 0,
+            });
+        }
+
+        search_hits.sort_by(|left, right| {
+            right
+                .rank
+                .total_cmp(&left.rank)
+                .then_with(|| left.source_name.cmp(&right.source_name))
+                .then_with(|| left.line.cmp(&right.line))
+                .then_with(|| left.start.cmp(&right.start))
+        });
+        search_hits.truncate(MAX_SEARCH_HITS);
+
+        let replace_previews = search_hits
+            .iter()
+            .filter_map(CoreReplacePreview::from_hit)
+            .collect::<Vec<_>>();
+        let tag_entries = tag_entries(story, tag_usage);
+        let tags = tag_entries
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>();
+        let contents = contents_entries(
+            story,
+            &files,
+            &tag_entries,
+            &symbols,
+            &assets,
+            &diagnostics,
+            &graph,
+            &metadata_source_id,
+        );
+
         Ok(CoreStoryIndex {
+            assets,
+            contents,
             diagnostics,
             files,
             graph: graph.stats().clone().into(),
+            replace_previews,
             search_hits,
             story_id: story_id.to_owned(),
-            tags: tags.into_iter().collect(),
+            tags,
+            tag_entries,
+            symbols,
         })
     }
 
@@ -1425,43 +1862,220 @@ fn line_count(text: &str) -> usize {
     text.lines().count().max(1)
 }
 
+const MAX_SEARCH_HITS: usize = 500;
+
 fn search_hits_in_source(
-    query: &str,
+    options: &CoreStoryIndexOptions,
+    search_pattern: Result<&regex::Regex, &String>,
     source_id: &str,
     source_name: &str,
     source: &str,
     scope: CoreSearchScope,
+    passage_id: Option<&str>,
 ) -> Vec<CoreSearchHit> {
-    let query = query.trim();
+    let query = options.query.as_deref().unwrap_or_default().trim();
 
-    if query.is_empty() {
+    if query.is_empty() || search_pattern.is_err() {
         return Vec::new();
     }
 
-    let haystack = source.to_ascii_lowercase();
-    let needle = query.to_ascii_lowercase();
-    let mut cursor = 0;
+    let Ok(regex) = search_pattern else {
+        return Vec::new();
+    };
     let mut hits = Vec::new();
 
-    while let Some(offset) = haystack[cursor..].find(&needle) {
-        let start = cursor + offset;
+    for captures in regex.captures_iter(source).take(MAX_SEARCH_HITS) {
+        let Some(matched) = captures.get(0) else {
+            continue;
+        };
 
-        hits.push(CoreSearchHit {
-            excerpt: excerpt_around(source, start, query.len()),
-            line: source[..start]
-                .chars()
-                .filter(|character| *character == '\n')
-                .count()
-                + 1,
-            scope: scope.clone(),
-            source_id: source_id.to_owned(),
-            source_name: source_name.to_owned(),
-            start,
-        });
-        cursor = start + needle.len().max(1);
+        if matched.start() == matched.end() {
+            continue;
+        }
+
+        hits.push(search_hit(
+            options,
+            Some(&captures),
+            source_id,
+            source_name,
+            source,
+            scope.clone(),
+            passage_id,
+            matched.start(),
+            matched.end(),
+            scope_rank(&scope) + exact_rank_bonus(matched.start()),
+        ));
+    }
+
+    if hits.is_empty() && options.fuzzy {
+        if let Some((start, end, score)) = fuzzy_match(source, query, options.match_case) {
+            hits.push(search_hit(
+                options,
+                None,
+                source_id,
+                source_name,
+                source,
+                scope.clone(),
+                passage_id,
+                start,
+                end,
+                scope_rank(&scope) * 0.7 + score,
+            ));
+        }
     }
 
     hits
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_hit(
+    options: &CoreStoryIndexOptions,
+    captures: Option<&regex::Captures<'_>>,
+    source_id: &str,
+    source_name: &str,
+    source: &str,
+    scope: CoreSearchScope,
+    passage_id: Option<&str>,
+    start: usize,
+    end: usize,
+    rank: f32,
+) -> CoreSearchHit {
+    let replacement = options.replacement.as_ref().map(|replacement| {
+        if options.use_regexes {
+            let mut expanded = String::new();
+
+            if let Some(captures) = captures {
+                captures.expand(replacement, &mut expanded);
+            } else {
+                expanded.push_str(replacement);
+            }
+
+            expanded
+        } else {
+            replacement.clone()
+        }
+    });
+    let (before, after) = replacement
+        .as_ref()
+        .map(|replacement| replacement_preview(source, start, end, replacement))
+        .map_or((None, None), |(before, after)| (Some(before), Some(after)));
+
+    CoreSearchHit {
+        after,
+        before,
+        end,
+        excerpt: excerpt_around(source, start, end.saturating_sub(start)),
+        line: line_number_at(source, start),
+        match_text: source[start..end].to_owned(),
+        passage_id: passage_id.map(str::to_owned),
+        rank,
+        replacement,
+        scope,
+        source_id: source_id.to_owned(),
+        source_name: source_name.to_owned(),
+        start,
+    }
+}
+
+fn search_pattern(options: &CoreStoryIndexOptions) -> Result<regex::Regex, String> {
+    let query = options.query.as_deref().unwrap_or_default().trim();
+
+    if query.is_empty() {
+        return regex::Regex::new("$^").map_err(|error| error.to_string());
+    }
+
+    let pattern = if options.use_regexes {
+        query.to_owned()
+    } else {
+        regex::escape(query)
+    };
+
+    regex::RegexBuilder::new(&pattern)
+        .case_insensitive(!options.match_case)
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+fn scope_rank(scope: &CoreSearchScope) -> f32 {
+    match scope {
+        CoreSearchScope::PassageName => 100.0,
+        CoreSearchScope::PassageTag => 88.0,
+        CoreSearchScope::Variable => 82.0,
+        CoreSearchScope::Metadata => 78.0,
+        CoreSearchScope::PassageText => 70.0,
+        CoreSearchScope::Script => 62.0,
+        CoreSearchScope::Stylesheet => 58.0,
+        CoreSearchScope::Asset => 52.0,
+    }
+}
+
+fn exact_rank_bonus(start: usize) -> f32 {
+    1.0 / (1.0 + start as f32)
+}
+
+fn fuzzy_match(source: &str, query: &str, match_case: bool) -> Option<(usize, usize, f32)> {
+    let searchable = if match_case {
+        source.to_owned()
+    } else {
+        source.to_lowercase()
+    };
+    let needle = if match_case {
+        query.to_owned()
+    } else {
+        query.to_lowercase()
+    };
+    let mut needle_chars = needle.chars();
+    let mut current = needle_chars.next()?;
+    let mut start = None;
+    let mut end;
+    let mut matched = 0usize;
+
+    for (index, character) in searchable.char_indices() {
+        if character == current {
+            start.get_or_insert(index);
+            end = index + character.len_utf8();
+            matched += 1;
+
+            if let Some(next) = needle_chars.next() {
+                current = next;
+            } else {
+                let span = end.saturating_sub(start.unwrap_or(0)).max(1);
+                let density = matched as f32 / span as f32;
+
+                return Some((start.unwrap_or(0), end, density));
+            }
+        }
+    }
+
+    None
+}
+
+fn replacement_preview(
+    source: &str,
+    start: usize,
+    end: usize,
+    replacement: &str,
+) -> (String, String) {
+    let line_start = source[..start].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = source[start..]
+        .find('\n')
+        .map_or(source.len(), |index| start + index);
+    let before = source[line_start..line_end].trim().to_owned();
+    let mut after = String::new();
+
+    after.push_str(&source[line_start..start]);
+    after.push_str(replacement);
+    after.push_str(&source[end..line_end]);
+
+    (before, after.trim().to_owned())
+}
+
+fn line_number_at(source: &str, start: usize) -> usize {
+    source[..start]
+        .chars()
+        .filter(|character| *character == '\n')
+        .count()
+        + 1
 }
 
 fn excerpt_around(source: &str, start: usize, length: usize) -> String {
@@ -1487,6 +2101,407 @@ fn excerpt_around(source: &str, start: usize, length: usize) -> String {
 
     if window_end < line_end {
         result.push_str("...");
+    }
+
+    result
+}
+
+fn story_metadata_source(story: &Story) -> String {
+    format!(
+        "Name: {}\nIFID: {}\nStory format: {} {}\nStory tags: {}",
+        story.name,
+        story.ifid,
+        story.story_format,
+        story.story_format_version,
+        story.tags.join(", ")
+    )
+}
+
+fn symbols_in_source(
+    source_id: &str,
+    source_name: &str,
+    source: &str,
+    scope: CoreSearchScope,
+    passage_id: Option<&str>,
+) -> Vec<CoreSymbol> {
+    let mut symbols = Vec::new();
+    let bytes = source.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        let prefix = bytes[index];
+
+        if (prefix == b'$' || prefix == b'_')
+            && (index == 0 || !is_identifier_byte(bytes[index.saturating_sub(1)]))
+            && bytes
+                .get(index + 1)
+                .is_some_and(|byte| is_identifier_start(*byte))
+        {
+            let start = index;
+
+            index += 2;
+            while bytes
+                .get(index)
+                .is_some_and(|byte| is_identifier_byte(*byte))
+            {
+                index += 1;
+            }
+
+            symbols.push(CoreSymbol {
+                end: index,
+                excerpt: excerpt_around(source, start, index - start),
+                kind: if prefix == b'$' {
+                    CoreSymbolKind::Variable
+                } else {
+                    CoreSymbolKind::TemporaryVariable
+                },
+                line: line_number_at(source, start),
+                name: source[start..index].to_owned(),
+                passage_id: passage_id.map(str::to_owned),
+                scope: scope.clone(),
+                source_id: source_id.to_owned(),
+                source_name: source_name.to_owned(),
+                start,
+            });
+            continue;
+        }
+
+        if (prefix == b'|' || prefix == b'?')
+            && bytes
+                .get(index + 1)
+                .is_some_and(|byte| is_identifier_start(*byte))
+        {
+            let start = index;
+
+            index += 2;
+            while bytes
+                .get(index)
+                .is_some_and(|byte| is_identifier_byte(*byte))
+            {
+                index += 1;
+            }
+
+            if prefix == b'?' || bytes.get(index) == Some(&b'>') {
+                let end = if prefix == b'|' { index + 1 } else { index };
+
+                symbols.push(CoreSymbol {
+                    end,
+                    excerpt: excerpt_around(source, start, end - start),
+                    kind: CoreSymbolKind::Hook,
+                    line: line_number_at(source, start),
+                    name: source[start..end].to_owned(),
+                    passage_id: passage_id.map(str::to_owned),
+                    scope: scope.clone(),
+                    source_id: source_id.to_owned(),
+                    source_name: source_name.to_owned(),
+                    start,
+                });
+            }
+        }
+
+        index += 1;
+    }
+
+    symbols
+}
+
+fn is_identifier_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn asset_references_in_source(
+    source_id: &str,
+    source_name: &str,
+    source: &str,
+    passage_id: Option<&str>,
+) -> Vec<CoreAssetReference> {
+    let Ok(regex) = regex::RegexBuilder::new(
+        r#"(?x)
+        (?P<path>
+            [A-Za-z0-9_./~%:@?&=+\-]+
+            \.
+            (?P<ext>png|jpe?g|gif|svg|webp|mp3|m4a|ogg|wav|mp4|webm|css|js)
+        )
+    "#,
+    )
+    .case_insensitive(true)
+    .build() else {
+        return Vec::new();
+    };
+
+    regex
+        .captures_iter(source)
+        .filter_map(|captures| {
+            let path = captures.name("path")?;
+            let extension = captures.name("ext")?.as_str();
+
+            Some(CoreAssetReference {
+                end: path.end(),
+                kind: asset_kind(extension).into(),
+                line: line_number_at(source, path.start()),
+                passage_id: passage_id.map(str::to_owned),
+                path: path.as_str().to_owned(),
+                source_id: source_id.to_owned(),
+                source_name: source_name.to_owned(),
+                start: path.start(),
+            })
+        })
+        .collect()
+}
+
+fn asset_kind(extension: &str) -> &'static str {
+    match extension.to_ascii_lowercase().as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" => "image",
+        "mp3" | "m4a" | "ogg" | "wav" => "audio",
+        "mp4" | "webm" => "video",
+        "css" => "stylesheet",
+        "js" => "script",
+        _ => "file",
+    }
+}
+
+fn locate_link_target(text: &str, target: &str) -> Option<(usize, usize, usize)> {
+    let start = text.find(target)?;
+    let end = start + target.len();
+
+    Some((line_number_at(text, start), start, end))
+}
+
+struct DuplicatePassageName {
+    name: String,
+    passage_id: String,
+}
+
+fn duplicate_passage_names(story: &Story) -> Vec<DuplicatePassageName> {
+    let mut names = BTreeMap::<String, Vec<String>>::new();
+
+    for passage in &story.passages {
+        names
+            .entry(passage.name.clone())
+            .or_default()
+            .push(passage.id.as_ref().to_owned());
+    }
+
+    names
+        .into_iter()
+        .filter(|(_, passage_ids)| passage_ids.len() > 1)
+        .flat_map(|(name, passage_ids)| {
+            passage_ids
+                .into_iter()
+                .map(move |passage_id| DuplicatePassageName {
+                    name: name.clone(),
+                    passage_id,
+                })
+        })
+        .collect()
+}
+
+fn tag_entries(story: &Story, tag_usage: BTreeMap<String, BTreeSet<String>>) -> Vec<CoreTagEntry> {
+    tag_usage
+        .into_iter()
+        .map(|(name, passage_ids)| CoreTagEntry {
+            color: story.tag_colors.get(&name).cloned(),
+            count: passage_ids.len(),
+            name,
+            passage_ids: passage_ids.into_iter().collect(),
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn contents_entries(
+    story: &Story,
+    files: &[CoreSourceFile],
+    tag_entries: &[CoreTagEntry],
+    symbols: &[CoreSymbol],
+    assets: &[CoreAssetReference],
+    diagnostics: &[CoreDiagnostic],
+    graph: &GraphIndex,
+    metadata_source_id: &str,
+) -> Vec<CoreContentsEntry> {
+    let mut entries = vec![
+        CoreContentsEntry {
+            count: story.passages.len(),
+            detail: Some(story.name.clone()),
+            id: format!("metadata:{}", story.id.as_ref()),
+            kind: CoreContentsEntryKind::Metadata,
+            label: "Story metadata".into(),
+            passage_id: None,
+            severity: None,
+            source_id: Some(metadata_source_id.into()),
+        },
+        CoreContentsEntry {
+            count: 1,
+            detail: Some(format!(
+                "{} {}",
+                story.story_format, story.story_format_version
+            )),
+            id: format!("format:{}", story.id.as_ref()),
+            kind: CoreContentsEntryKind::Metadata,
+            label: "Story format".into(),
+            passage_id: None,
+            severity: None,
+            source_id: Some(metadata_source_id.into()),
+        },
+    ];
+
+    if let Some(start) = story.passage_by_id(&story.start_passage) {
+        entries.push(CoreContentsEntry {
+            count: 1,
+            detail: Some(start.name.clone()),
+            id: format!("entry:{}", start.id.as_ref()),
+            kind: CoreContentsEntryKind::EntryPoint,
+            label: "Start passage".into(),
+            passage_id: Some(start.id.as_ref().to_owned()),
+            severity: None,
+            source_id: Some(start.id.as_ref().to_owned()),
+        });
+    }
+
+    for file in files {
+        entries.push(CoreContentsEntry {
+            count: file.line_count,
+            detail: Some(format!("{} characters", file.character_count)),
+            id: format!("source:{}", file.id),
+            kind: match &file.kind {
+                CoreSourceKind::Passage => CoreContentsEntryKind::Passage,
+                CoreSourceKind::Script => CoreContentsEntryKind::Script,
+                CoreSourceKind::Stylesheet => CoreContentsEntryKind::Stylesheet,
+                CoreSourceKind::StoryMetadata => CoreContentsEntryKind::Metadata,
+            },
+            label: file.name.clone(),
+            passage_id: file.passage_id.clone(),
+            severity: None,
+            source_id: Some(file.id.clone()),
+        });
+    }
+
+    for tag in tag_entries {
+        entries.push(CoreContentsEntry {
+            count: tag.count,
+            detail: tag.color.clone(),
+            id: format!("tag:{}", tag.name),
+            kind: group_kind(&tag.name),
+            label: tag.name.clone(),
+            passage_id: tag.passage_ids.first().cloned(),
+            severity: None,
+            source_id: tag.passage_ids.first().cloned(),
+        });
+    }
+
+    for (name, source) in symbol_entries(symbols) {
+        entries.push(CoreContentsEntry {
+            count: source.count,
+            detail: None,
+            id: format!("symbol:{name}"),
+            kind: CoreContentsEntryKind::Variable,
+            label: name,
+            passage_id: source.passage_id,
+            severity: None,
+            source_id: Some(source.source_id),
+        });
+    }
+
+    for (path, source) in asset_entries(assets) {
+        entries.push(CoreContentsEntry {
+            count: source.count,
+            detail: None,
+            id: format!("asset:{path}"),
+            kind: CoreContentsEntryKind::Asset,
+            label: path,
+            passage_id: source.passage_id,
+            severity: None,
+            source_id: Some(source.source_id),
+        });
+    }
+
+    for diagnostic in diagnostics {
+        entries.push(CoreContentsEntry {
+            count: 1,
+            detail: Some(diagnostic.message.clone()),
+            id: format!(
+                "diagnostic:{}:{}:{}",
+                diagnostic.code, diagnostic.source_id, diagnostic.start
+            ),
+            kind: match diagnostic.code.as_str() {
+                "broken-link" => CoreContentsEntryKind::BrokenLink,
+                _ => CoreContentsEntryKind::Diagnostic,
+            },
+            label: diagnostic.code.clone(),
+            passage_id: diagnostic.passage_id.clone(),
+            severity: Some(diagnostic.severity.clone()),
+            source_id: Some(diagnostic.source_id.clone()),
+        });
+    }
+
+    for node in graph.nodes().filter(|node| node.is_orphan) {
+        entries.push(CoreContentsEntry {
+            count: 1,
+            detail: Some(node.name.clone()),
+            id: format!("orphan:{}", node.id.as_ref()),
+            kind: CoreContentsEntryKind::Orphan,
+            label: "Orphan passage".into(),
+            passage_id: Some(node.id.as_ref().to_owned()),
+            severity: Some(CoreDiagnosticSeverity::Info),
+            source_id: Some(node.id.as_ref().to_owned()),
+        });
+    }
+
+    entries
+}
+
+fn group_kind(tag_name: &str) -> CoreContentsEntryKind {
+    let normalized = tag_name.to_ascii_lowercase();
+
+    if normalized.starts_with("chapter")
+        || normalized.starts_with("section")
+        || normalized.starts_with("group")
+    {
+        CoreContentsEntryKind::Group
+    } else {
+        CoreContentsEntryKind::Tag
+    }
+}
+
+struct IndexedContentSource {
+    count: usize,
+    passage_id: Option<String>,
+    source_id: String,
+}
+
+fn symbol_entries(symbols: &[CoreSymbol]) -> BTreeMap<String, IndexedContentSource> {
+    let mut result = BTreeMap::new();
+
+    for symbol in symbols {
+        result
+            .entry(symbol.name.clone())
+            .and_modify(|entry: &mut IndexedContentSource| entry.count += 1)
+            .or_insert_with(|| IndexedContentSource {
+                count: 1,
+                passage_id: symbol.passage_id.clone(),
+                source_id: symbol.source_id.clone(),
+            });
+    }
+
+    result
+}
+
+fn asset_entries(assets: &[CoreAssetReference]) -> BTreeMap<String, IndexedContentSource> {
+    let mut result = BTreeMap::new();
+
+    for asset in assets {
+        result
+            .entry(asset.path.clone())
+            .and_modify(|entry: &mut IndexedContentSource| entry.count += 1)
+            .or_insert_with(|| IndexedContentSource {
+                count: 1,
+                passage_id: asset.passage_id.clone(),
+                source_id: asset.source_id.clone(),
+            });
     }
 
     result
@@ -1836,6 +2851,7 @@ mod tests {
                 story_id: "story-1".into(),
                 options: CoreStoryIndexOptions {
                     query: Some("missing".into()),
+                    ..CoreStoryIndexOptions::default()
                 },
             })
             .expect("index query should apply");
@@ -1860,6 +2876,94 @@ mod tests {
                 .search_hits
                 .iter()
                 .any(|hit| hit.source_name == "Next")
+        );
+    }
+
+    #[test]
+    fn story_index_includes_m4_project_intelligence() {
+        let mut session = session();
+
+        {
+            let story = session.story_mut("story-1").expect("story");
+            let passage = story
+                .passage_by_id_mut(&PassageId::new("a"))
+                .expect("passage");
+
+            passage.text = "Set $score. assets/cover.png [[Next]]".into();
+            passage.tags = vec!["chapter-one".into(), "scene".into()];
+            story.tag_colors.insert("scene".into(), "red".into());
+            story.script = "const coin = 1;".into();
+        }
+
+        let batch = session
+            .apply(StoryCommand::QueryStoryIndex {
+                story_id: "story-1".into(),
+                options: CoreStoryIndexOptions {
+                    query: Some("coin".into()),
+                    replacement: Some("gem".into()),
+                    ..CoreStoryIndexOptions::default()
+                },
+            })
+            .expect("index query should apply");
+
+        let Patch::StoryIndexUpdated { index, .. } = &batch.patches[0] else {
+            panic!("expected story index patch");
+        };
+
+        assert!(index.symbols.iter().any(|symbol| symbol.name == "$score"));
+        assert!(
+            index
+                .assets
+                .iter()
+                .any(|asset| asset.path == "assets/cover.png")
+        );
+        assert!(index.tag_entries.iter().any(|tag| {
+            tag.name == "scene" && tag.count == 1 && tag.color.as_deref() == Some("red")
+        }));
+        assert!(index.replace_previews.iter().any(|preview| {
+            preview.before == "const coin = 1;" && preview.after == "const gem = 1;"
+        }));
+        assert!(index.contents.iter().any(|entry| {
+            entry.kind == CoreContentsEntryKind::Group && entry.label == "chapter-one"
+        }));
+        assert!(index.contents.iter().any(|entry| {
+            entry.kind == CoreContentsEntryKind::Asset && entry.label == "assets/cover.png"
+        }));
+        assert!(index.contents.iter().any(|entry| {
+            entry.kind == CoreContentsEntryKind::Asset
+                && entry.label == "assets/cover.png"
+                && entry.passage_id.as_deref() == Some("a")
+                && entry.source_id.as_deref() == Some("a")
+        }));
+        assert!(index.contents.iter().any(|entry| {
+            entry.kind == CoreContentsEntryKind::Variable
+                && entry.label == "$score"
+                && entry.passage_id.as_deref() == Some("a")
+                && entry.source_id.as_deref() == Some("a")
+        }));
+
+        let variable_batch = session
+            .apply(StoryCommand::QueryStoryIndex {
+                story_id: "story-1".into(),
+                options: CoreStoryIndexOptions {
+                    query: Some("$score".into()),
+                    ..CoreStoryIndexOptions::default()
+                },
+            })
+            .expect("variable index query should apply");
+        let Patch::StoryIndexUpdated {
+            index: variable_index,
+            ..
+        } = &variable_batch.patches[0]
+        else {
+            panic!("expected story index patch");
+        };
+
+        assert!(
+            variable_index
+                .search_hits
+                .iter()
+                .any(|hit| hit.scope == CoreSearchScope::Variable)
         );
     }
 

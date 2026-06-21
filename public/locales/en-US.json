@@ -206,6 +206,8 @@
 			"sizeWide": "Wide"
 		},
 		"passageTags": {
+			"count": "{{count}} passage",
+			"count_plural": "{{count}} passages",
 			"noTags": "No tags have been added to passages in this story.",
 			"title": "Passage Tags"
 		},
@@ -266,11 +268,21 @@
 			"find": "Find",
 			"includePassageNames": "Include Passage Names",
 			"matchCase": "Match Case",
-			"matchCount": "{{count}} matching passage",
-			"matchCount_plural": "{{count}} matching passages",
-			"noMatches": "No matching passages",
-			"replaceAll": "Replace In All Passages",
+			"matchCount": "{{count}} matching result",
+			"matchCount_plural": "{{count}} matching results",
+			"noMatches": "No matching results",
+			"replaceAll": "Replace In Story Sources",
 			"replaceWith": "Replace With",
+			"scope": {
+				"asset": "Asset",
+				"metadata": "Metadata",
+				"passageName": "Passage name",
+				"passageTag": "Tag",
+				"passageText": "Passage text",
+				"script": "JavaScript",
+				"stylesheet": "Stylesheet",
+				"variable": "Variable"
+			},
 			"useRegexes": "Use Regular Expressions"
 		},
 		"storyStylesheet": {
@@ -360,6 +372,7 @@
 				"collapseDock": "Collapse {{dock}}",
 				"collapseLeftDock": "Collapse Passages",
 				"collapseRightDock": "Collapse Inspector",
+				"contents": "Contents",
 				"diagnostics": "Diagnostics",
 				"expandDock": "Expand {{dock}}",
 				"expandLeftDock": "Expand Passages",
@@ -378,11 +391,14 @@
 				"resolvedLinks": "Links",
 				"rightDock": "Inspector",
 				"selfLinks": "Self",
+				"assets": "Assets",
+				"sourceFiles": "Source Files",
 				"sourceStats": "{{lineCount}} lines, {{characterCount}} chars",
 				"splitMode": "Split",
 				"startPassage": "Start",
 				"textMode": "Text",
 				"unreachablePassages": "Unreachable",
+				"variables": "Variables",
 				"words": "Words"
 			},
 			"zoomButtons": {
@@ -478,6 +494,7 @@
 		"newPassage": "New Passage",
 		"deletePassage": "Delete Passage",
 		"deletePassages": "Delete Passages",
+		"linkPassage": "Link Passage",
 		"movePassage": "Move Passage",
 		"movePassages": "Move Passages",
 		"renamePassage": "Rename Passage",

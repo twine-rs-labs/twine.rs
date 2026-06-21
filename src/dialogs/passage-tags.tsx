@@ -3,15 +3,12 @@ import {useTranslation} from 'react-i18next';
 import {DialogCard} from '../components/container/dialog-card';
 import {CardContent} from '../components/container/card';
 import {DialogComponentProps} from './dialogs.types';
-import {
-	setTagColor,
-	storyWithId,
-	renamePassageTag,
-	storyPassageTags
-} from '../store/stories';
+import {setTagColor, storyWithId, renamePassageTag} from '../store/stories';
 import {useUndoableStoriesContext} from '../store/undoable-stories';
 import {Color} from '../util/color';
 import {TagEditor} from '../components/tag/tag-editor';
+import {useCoreProjectHost} from '../core';
+import './passage-tags.css';
 
 export interface PassageTagsDialogProps extends DialogComponentProps {
 	storyId: string;
@@ -23,7 +20,12 @@ export const PassageTagsDialog: React.FC<PassageTagsDialogProps> = props => {
 	const {t} = useTranslation();
 
 	const story = storyWithId(stories, storyId);
-	const tags = storyPassageTags(story);
+	const coreProjectHost = useCoreProjectHost();
+	const tags = React.useMemo(
+		() => coreProjectHost.queryStoryIndex(story.id).tagEntries,
+		[coreProjectHost, story]
+	);
+	const tagNames = React.useMemo(() => tags.map(tag => tag.name), [tags]);
 
 	function handleChangeColor(tagName: string, color: Color) {
 		dispatch(
@@ -49,14 +51,18 @@ export const PassageTagsDialog: React.FC<PassageTagsDialogProps> = props => {
 			<CardContent>
 				{tags.length > 0 ? (
 					tags.map(tag => (
-						<TagEditor
-							allTags={tags}
-							color={story.tagColors[tag]}
-							key={tag}
-							name={tag}
-							onChangeColor={color => handleChangeColor(tag, color)}
-							onChangeName={newName => handleChangeTagName(tag, newName)}
-						/>
+						<div className="passage-tag-entry" key={tag.name}>
+							<TagEditor
+								allTags={tagNames}
+								color={story.tagColors[tag.name]}
+								name={tag.name}
+								onChangeColor={color => handleChangeColor(tag.name, color)}
+								onChangeName={newName => handleChangeTagName(tag.name, newName)}
+							/>
+							<span className="passage-tag-count">
+								{t('dialogs.passageTags.count', {count: tag.count})}
+							</span>
+						</div>
 					))
 				) : (
 					<p>{t('dialogs.passageTags.noTags')}</p>

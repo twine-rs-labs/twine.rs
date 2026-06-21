@@ -9,6 +9,8 @@ import type {ProjectSnapshot} from './bindings/ProjectSnapshot';
 import type {StoryCommand} from './bindings/StoryCommand';
 
 export * from './story-index';
+export * from './project-host';
+export * from './view-models';
 
 export type {
 	CoreGraphProjectionOptions,
@@ -141,7 +143,20 @@ export function queryGraphProjectionCommand(
 
 export function queryStoryIndexCommand(
 	storyId: string,
-	options: CoreStoryIndexOptions = {query: null}
+	options: CoreStoryIndexOptions = {
+		fuzzy: false,
+		includeAssets: true,
+		includePassageNames: true,
+		includePassageText: true,
+		includeScript: true,
+		includeStylesheet: true,
+		includeTags: true,
+		includeVariables: true,
+		matchCase: false,
+		query: null,
+		replacement: null,
+		useRegexes: false
+	}
 ): StoryCommand {
 	return {
 		type: 'queryStoryIndex',

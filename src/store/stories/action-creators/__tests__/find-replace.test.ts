@@ -203,6 +203,8 @@ describe('replaceInStory', () => {
 		story.passages[0].name = 'AaYyZz';
 		story.passages[1].text = 'AaDdEe';
 		story.passages[1].name = 'AaWwXx';
+		story.script = '';
+		story.stylesheet = '';
 	});
 
 	it.each([
@@ -331,5 +333,21 @@ describe('replaceInStory', () => {
 				storyId: story.id
 			}
 		]);
+	});
+
+	it('replaces text in story JavaScript and stylesheet', () => {
+		story.script = 'const coin = 1;';
+		story.stylesheet = '.coin { color: gold; }';
+
+		replaceInStory(story, 'coin', 'gem', {})(dispatch, () => [story]);
+
+		expect(dispatch).toHaveBeenCalledWith({
+			props: {
+				script: 'const gem = 1;',
+				stylesheet: '.gem { color: gold; }'
+			},
+			storyId: story.id,
+			type: 'updateStory'
+		});
 	});
 });

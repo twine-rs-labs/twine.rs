@@ -1,6 +1,7 @@
 import {Thunk} from 'react-hook-thunk-reducer';
 import {createRegExp, escapeRegExpReplace} from '../../../util/regexp';
 import {updatePassage} from './update-passage';
+import {updateStory} from './update-story';
 import {
 	Passage,
 	StoriesAction,
@@ -12,12 +13,15 @@ import {
 /**
  * Core logic for replacing text using flags.
  */
-function replaceText(source: string, searchFor: string, replaceWith: string, flags: StorySearchFlags) {
+function replaceText(
+	source: string,
+	searchFor: string,
+	replaceWith: string,
+	flags: StorySearchFlags
+) {
 	const {matchCase, useRegexes} = flags;
 	const matcher = createRegExp(searchFor, {matchCase, useRegexes});
-	const replacer = useRegexes
-	? replaceWith
-	: escapeRegExpReplace(replaceWith);
+	const replacer = useRegexes ? replaceWith : escapeRegExpReplace(replaceWith);
 
 	return source.replace(matcher, replacer);
 }
@@ -126,7 +130,7 @@ export function replaceInStory(
 			// both a link and a passage name, the updatePassage action will see that
 			// the passage exists when the link is changed, and not create a new
 			// passage that will conflict with the existing one.
-			
+
 			for (const passage of story.passages) {
 				const name = replaceText(passage.name, searchFor, replaceWith, flags);
 
@@ -154,6 +158,27 @@ export function replaceInStory(
 					flags
 				)(dispatch, getState);
 			}
+		}
+
+		const script = replaceText(story.script, searchFor, replaceWith, flags);
+		const stylesheet = replaceText(
+			story.stylesheet,
+			searchFor,
+			replaceWith,
+			flags
+		);
+		const storyChanges: Partial<Story> = {};
+
+		if (script !== story.script) {
+			storyChanges.script = script;
+		}
+
+		if (stylesheet !== story.stylesheet) {
+			storyChanges.stylesheet = stylesheet;
+		}
+
+		if (Object.keys(storyChanges).length > 0) {
+			dispatch(updateStory(getState(), story, storyChanges));
 		}
 	};
 }

@@ -6,17 +6,21 @@ import {DialogCard} from '../components/container/dialog-card';
 import {CheckboxButton} from '../components/control/checkbox-button';
 import {CodeArea} from '../components/control/code-area';
 import {IconButton} from '../components/control/icon-button';
+import {useCoreProjectHost} from '../core';
+import type {CoreSearchHit} from '../core/bindings/CoreSearchHit';
 import {usePrefsContext} from '../store/prefs';
 import {
 	StorySearchFlags,
 	highlightPassages,
 	passageReplaceError,
-	passagesMatchingSearch,
 	replaceInStory,
+	selectPassage,
 	storyWithId
 } from '../store/stories';
 import {useUndoableStoriesContext} from '../store/undoable-stories';
+import {useDialogsContext} from './context';
 import {DialogComponentProps} from './dialogs.types';
+import {canOpenStorySource, openStorySourceDialog} from './story-source-dialog';
 import './story-search.css';
 
 // See https://github.com/codemirror/CodeMirror/issues/5444
@@ -40,10 +44,13 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 	const {find, flags, replace, storyId, onClose, onChangeProps, ...other} =
 		props;
 	const closingRef = React.useRef(false);
+	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {prefs} = usePrefsContext();
 	const {dispatch, stories} = useUndoableStoriesContext();
 	const {t} = useTranslation();
 	const story = storyWithId(stories, storyId);
+	const coreProjectHost = useCoreProjectHost();
+	const storyRef = React.useRef(story);
 	const errorText = React.useMemo(() => {
 		const error = passageReplaceError(story.passages, find, replace, flags);
 
@@ -57,13 +64,48 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 			return t(`dialogs.storySearch.error.${error.error}`);
 		}
 	}, [find, flags, replace, story.passages]);
-	const matches = React.useMemo(
-		() => passagesMatchingSearch(story.passages, find, flags).map(({id}) => id),
-		[find, flags, story.passages]
+	const index = React.useMemo(
+		() =>
+			coreProjectHost.queryStoryIndex(story.id, {
+				includePassageNames: flags.includePassageNames ?? false,
+				matchCase: flags.matchCase ?? false,
+				query: find,
+				replacement: replace,
+				useRegexes: flags.useRegexes ?? false
+			}),
+		[coreProjectHost, find, flags, replace, story]
+	);
+	const matches = React.useMemo(() => {
+		const passageIds = index.searchHits
+			.map(hit => hit.passageId)
+			.filter((id): id is string => !!id);
+
+		return Array.from(new Set(passageIds));
+	}, [index.searchHits]);
+	const replaceableHits = React.useMemo(
+		() =>
+			index.searchHits.filter(hit =>
+				['passageName', 'passageText', 'script', 'stylesheet'].includes(
+					hit.scope
+				)
+			),
+		[index.searchHits]
 	);
 	const debouncedDispatch = React.useMemo(
 		() => debounce(dispatch, 250, {leading: false, trailing: true}),
 		[dispatch]
+	);
+
+	React.useEffect(() => {
+		storyRef.current = story;
+	}, [story]);
+
+	React.useEffect(
+		() => () => {
+			debouncedDispatch.cancel();
+			dispatch(highlightPassages(storyRef.current, []));
+		},
+		[debouncedDispatch, dispatch]
 	);
 
 	React.useEffect(() => {
@@ -94,6 +136,7 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 
 	function handleClose() {
 		closingRef.current = true;
+		debouncedDispatch.cancel();
 		dispatch(highlightPassages(story, []));
 		onClose();
 	}
@@ -111,6 +154,19 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 			replaceInStory(story, find, replace, flags),
 			'undoChange.replaceAllText'
 		);
+	}
+
+	function handleSelectResult(hit: CoreSearchHit) {
+		const passage = hit.passageId
+			? story.passages.find(passage => passage.id === hit.passageId)
+			: undefined;
+
+		if (passage) {
+			dispatch(selectPassage(story, passage, true));
+			dispatch(highlightPassages(story, [passage.id]));
+		} else {
+			openStorySourceDialog(dialogsDispatch, story.id, hit.sourceId, hit.scope);
+		}
 	}
 
 	function toggleFlag(name: keyof StorySearchFlags) {
@@ -166,7 +222,7 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 			{errorText && <p className="search-error">{errorText}</p>}
 			<div className="search-results">
 				<IconButton
-					disabled={!!errorText || matches.length === 0}
+					disabled={!!errorText || replaceableHits.length === 0}
 					icon={<IconReplace />}
 					label={t('dialogs.storySearch.replaceAll')}
 					onClick={handleReplace}
@@ -174,11 +230,45 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 				/>
 				<span>
 					{find &&
-						(matches.length > 0
-							? t('dialogs.storySearch.matchCount', {count: matches.length})
+						(index.searchHits.length > 0
+							? t('dialogs.storySearch.matchCount', {
+									count: index.searchHits.length
+								})
 							: t('dialogs.storySearch.noMatches'))}
 				</span>
 			</div>
+			{index.searchHits.length > 0 && (
+				<ol className="search-result-list">
+					{index.searchHits.slice(0, 50).map((hit, index) => (
+						<li key={`${hit.sourceId}-${hit.scope}-${hit.start}-${index}`}>
+							<button
+								className="search-result"
+								disabled={
+									!hit.passageId && !canOpenStorySource(hit.sourceId, hit.scope)
+								}
+								onClick={() => handleSelectResult(hit)}
+								type="button"
+							>
+								<span className="search-result-title">
+									{hit.sourceName}
+									<span>{scopeLabel(hit.scope, t)}</span>
+								</span>
+								<span className="search-result-excerpt">{hit.excerpt}</span>
+								{hit.before && hit.after && (
+									<span className="search-result-preview">
+										<del>{hit.before}</del>
+										<ins>{hit.after}</ins>
+									</span>
+								)}
+							</button>
+						</li>
+					))}
+				</ol>
+			)}
 		</DialogCard>
 	);
 };
+
+function scopeLabel(scope: CoreSearchHit['scope'], t: (key: string) => string) {
+	return t(`dialogs.storySearch.scope.${scope}`);
+}
