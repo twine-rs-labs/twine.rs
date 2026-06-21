@@ -986,8 +986,17 @@ my-story.twine/
 - View preferences
 - Custom map layers
 - UI-only annotations
+- Derived grouping rules and manual graph groups
 
 This keeps narrative source clean while preserving graph-native editing. A source-only project does not need this file. Graph view may create an in-memory generated layout, but it should only write `.twine/graph.json` after the author chooses to save layout metadata.
+
+### `StoryGraph` Export Bundle
+
+For single-file Twee or project-compatible Story HTML round trips, `twine.rs` can deterministically bundle `.twine/graph.json` into a reserved passage named `StoryGraph`. This passage is an export/import carrier for sidecar graph metadata, not a normal story passage and not the canonical editable model.
+
+When exporting a full-fidelity single file, the app writes `StoryGraph` with validated JSON for graph positions, groups, collapsed state, annotations, saved layouts, workspace view state, and auto-grouping rules. When importing, the app parses `StoryGraph` back into sidecar graph metadata, hides it from normal passage lists, and excludes it from play/test/publish unless the author explicitly asks to include editor metadata.
+
+Auto-grouping rules may derive organization views from passage names, folder paths, tags, link topology, connected components, reachability islands, hub/spoke neighborhoods, or graph clustering. Derived groups remain refreshable and explainable until the author pins or edits them, at which point stable IDs preserve the author's intent across external edits and reindexes.
 
 ## Round-Trip Rules
 
@@ -996,11 +1005,12 @@ Round-trip quality is central.
 Rules:
 
 1. Text edits should not reorder or reformat unrelated passages.
-2. Graph edits should update only the minimal source metadata needed.
+2. Graph edits should update sidecar graph metadata; source prose changes only when the edit intentionally changes story content, such as creating a link.
 3. Unknown metadata should be preserved.
 4. Comments should survive parse/write cycles.
 5. Generated files should be clearly marked.
 6. If a conflict cannot be resolved losslessly, the UI should show a review panel instead of guessing.
+7. `StoryGraph` should be regenerated deterministically from sidecar graph metadata on export and parsed back into sidecar graph metadata on import.
 
 ## Canonical Data Model
 
