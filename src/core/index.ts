@@ -10,6 +10,7 @@ import type {ProjectSnapshot} from './bindings/ProjectSnapshot';
 import type {StoryCommand} from './bindings/StoryCommand';
 
 export * from './story-index';
+export * from './graph-projection';
 export * from './project-host';
 export * from './view-models';
 

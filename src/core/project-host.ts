@@ -1,10 +1,12 @@
 import * as React from 'react';
 import type {CoreAssetInventoryEntry} from './bindings/CoreAssetInventoryEntry';
+import type {CoreGraphProjection} from './bindings/CoreGraphProjection';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
 import type {Patch} from './bindings/Patch';
 import type {PatchBatch} from './bindings/PatchBatch';
 import type {StoryCommand} from './bindings/StoryCommand';
+import type {GraphProjectionQuery} from './graph-projection';
 import {
 	assetKindForPath,
 	assetSnippet,
@@ -13,6 +15,10 @@ import {
 	projectAssetPath,
 	replaceAssetReferencesInSource
 } from './asset-paths';
+import {
+	saveGeneratedGraphLayout,
+	storyToCoreGraphProjection
+} from './graph-projection';
 import {storyToCoreIndex} from './story-index';
 import {
 	StoriesAction,
@@ -34,6 +40,10 @@ export type CoreProjectPatchListener = (patches: PatchBatch) => void;
 export interface CoreProjectHost {
 	applyStoryCommand(command: StoryCommand, annotation?: string): void;
 	isDirty(): boolean;
+	queryGraphProjection(
+		storyId: string,
+		options?: GraphProjectionQuery
+	): CoreGraphProjection;
 	queryStoryIndex(storyId: string, options?: StoryIndexQuery): CoreStoryIndex;
 	subscribeToPatches(listener: CoreProjectPatchListener): () => void;
 }
@@ -471,10 +481,53 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				this.markSaved();
 				return;
 
-			case 'queryGraphProjection':
-			case 'queryStoryIndex':
-			case 'saveGeneratedLayout':
+			case 'queryGraphProjection': {
+				this.publishPatches('Query Graph Projection', [
+					{
+						projection: this.queryGraphProjection(
+							command.story_id,
+							command.options
+						),
+						story_id: command.story_id,
+						type: 'graphProjectionUpdated'
+					}
+				]);
 				return;
+			}
+
+			case 'queryStoryIndex':
+				this.publishPatches('Query Story Index', [
+					{
+						index: this.queryStoryIndex(command.story_id, command.options),
+						story_id: command.story_id,
+						type: 'storyIndexUpdated'
+					}
+				]);
+				return;
+
+			case 'saveGeneratedLayout': {
+				const story = storyForId(this.stories, command.story_id);
+				const {moves, projection} = saveGeneratedGraphLayout(story);
+
+				if (moves.length > 0) {
+					dispatch({
+						passageUpdates: Object.fromEntries(
+							moves.map(move => [move.passageId, move.bounds])
+						),
+						storyId: command.story_id,
+						type: 'updatePassages'
+					});
+				}
+
+				this.publishPatches('Save Generated Layout', [
+					{
+						projection,
+						story_id: command.story_id,
+						type: 'layoutSaved'
+					}
+				]);
+				return;
+			}
 		}
 	}
 
@@ -695,6 +748,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				})
 			);
 		}
+	}
+
+	queryGraphProjection(storyId: string, options: GraphProjectionQuery = {}) {
+		return storyToCoreGraphProjection(storyForId(this.stories, storyId), options);
 	}
 
 	queryStoryIndex(storyId: string, options: StoryIndexQuery = {}) {

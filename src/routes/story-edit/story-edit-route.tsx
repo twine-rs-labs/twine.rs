@@ -4,14 +4,13 @@ import {MainContent} from '../../components/container/main-content';
 import {DocumentTitle} from '../../components/document-title/document-title';
 import {DialogsContextProvider} from '../../dialogs';
 import {StoryEditActions} from '../../route-actions';
-import {usePrefsContext} from '../../store/prefs';
 import {Passage, selectPassage, storyWithId} from '../../store/stories';
 import {
 	UndoableStoriesContextProvider,
 	useUndoableStoriesContext
 } from '../../store/undoable-stories';
-import {MarqueeablePassageMap} from './marqueeable-passage-map';
 import {PassageFuzzyFinder} from './passage-fuzzy-finder';
+import {StoryGraphPanel} from './story-graph-panel';
 import {useInitialPassageCreation} from './use-initial-passage-creation';
 import {usePassageChangeHandlers} from './use-passage-change-handlers';
 import {useViewCenter} from './use-view-center';
@@ -26,7 +25,6 @@ import './story-edit-route.css';
 
 export const InnerStoryEditRoute: React.FC = () => {
 	const {storyId} = useParams<{storyId: string}>();
-	const {prefs} = usePrefsContext();
 	const {dispatch, stories} = useUndoableStoriesContext();
 	const story = storyWithId(stories, storyId);
 	const [fuzzyFinderOpen, setFuzzyFinderOpen] = React.useState(false);
@@ -36,9 +34,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 	const {
 		handleCreatePassage,
 		handleDeselectPassage,
-		handleDragPassages,
-		handleSelectPassage,
-		handleSelectRect
+		handleSelectPassage
 	} = usePassageChangeHandlers(story);
 	const visibleZoom = useZoomTransition(story.zoom, mainContent.current);
 
@@ -89,7 +85,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 				story={story}
 			/>
 			<MainContent
-				grabbable={workspace.mode !== 'text'}
+				grabbable={false}
 				padded={false}
 				ref={mainContent}
 			>
@@ -97,20 +93,13 @@ export const InnerStoryEditRoute: React.FC = () => {
 					bottomDrawerOpen={workspace.bottomDrawerOpen}
 					graphPanel={
 						<>
-							<MarqueeablePassageMap
-								container={mainContent}
-								formatName={story.storyFormat}
-								formatVersion={story.storyFormatVersion}
+							<StoryGraphPanel
 								onCreate={handleCreatePassage}
 								onDeselect={handleDeselectPassage}
-								onDrag={handleDragPassages}
 								onEdit={handleEditPassage}
 								onSelect={handleSelectPassageInMap}
-								onSelectRect={handleSelectRect}
-								passages={story.passages}
-								startPassageId={story.startPassage}
-								tagColors={story.tagColors}
-								tagDisplay={prefs.passageTagDisplay}
+								selectedPassageId={workspace.selectedPassageId}
+								story={story}
 								visibleZoom={visibleZoom}
 								zoom={story.zoom}
 							/>

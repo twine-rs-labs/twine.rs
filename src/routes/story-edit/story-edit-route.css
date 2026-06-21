@@ -94,6 +94,218 @@ body.dragging-passages .story-edit-route * {
 	--story-edit-bottom-offset: 130px;
 }
 
+.story-edit-graph-layer {
+	background:
+		linear-gradient(var(--line-1) 1px, transparent 1px),
+		linear-gradient(90deg, var(--line-1) 1px, transparent 1px),
+		var(--bg-app);
+	background-size: 48px 48px;
+	bottom: var(--story-edit-bottom-offset);
+	color: var(--tx-2);
+	left: var(--story-edit-left-offset);
+	min-width: 0;
+	overflow: hidden;
+	position: absolute;
+	right: var(--story-edit-right-offset);
+	top: 0;
+	transition:
+		bottom var(--dur-3) var(--ease-out),
+		left var(--dur-3) var(--ease-out),
+		right var(--dur-3) var(--ease-out);
+	z-index: 2;
+}
+
+.story-edit-workspace.mode-split .story-edit-graph-layer {
+	border-right: 1px solid var(--line-2);
+	right: calc(
+		var(--story-edit-right-offset) +
+			(
+				(
+						100% - var(--story-edit-left-offset) -
+							var(--story-edit-right-offset)
+					) *
+					0.54
+			)
+	);
+}
+
+.story-edit-graph-viewport {
+	cursor: default;
+	height: 100%;
+	overflow: auto;
+	position: relative;
+	width: 100%;
+}
+
+.story-edit-graph-viewport--panning {
+	cursor: grabbing;
+}
+
+.story-edit-graph-canvas {
+	min-height: 100%;
+	min-width: 100%;
+	position: relative;
+	transform-origin: top left;
+}
+
+.story-edit-graph-edges {
+	inset: 0;
+	overflow: visible;
+	pointer-events: none;
+	position: absolute;
+}
+
+.story-edit-graph-edges marker path {
+	fill: var(--sem-link);
+}
+
+.story-edit-graph-edge {
+	fill: none;
+	marker-end: url('#story-edit-graph-arrow');
+	stroke: var(--sem-link);
+	stroke-linecap: round;
+	stroke-width: 2;
+}
+
+.story-edit-graph-edge--broken {
+	stroke: var(--sem-error);
+	stroke-dasharray: 7 7;
+}
+
+.story-edit-graph-edge--selfLink {
+	stroke: var(--sem-var);
+}
+
+.story-edit-graph-nodes {
+	inset: 0;
+	position: absolute;
+}
+
+.story-edit-graph-node {
+	position: absolute;
+}
+
+.story-edit-graph-node .tw-node {
+	min-height: 100px;
+}
+
+.story-edit-graph-node--generated {
+	border-style: dashed;
+}
+
+.story-edit-graph-node--empty {
+	opacity: 0.82;
+}
+
+.story-edit-graph-node--orphan {
+	box-shadow:
+		inset 0 0 0 1px color-mix(in oklab, var(--sem-var) 40%, transparent),
+		var(--shadow-card);
+}
+
+.story-edit-graph-node--unreachable {
+	box-shadow:
+		inset 0 0 0 1px color-mix(in oklab, var(--sem-warn) 46%, transparent),
+		var(--shadow-card);
+}
+
+.story-edit-graph-toolbar,
+.story-edit-graph-status,
+.story-edit-graph-minimap {
+	position: absolute;
+	z-index: 3;
+}
+
+.story-edit-graph-toolbar,
+.story-edit-graph-status {
+	align-items: center;
+	backdrop-filter: blur(10px);
+	background: color-mix(in oklab, var(--ink-2) 92%, transparent);
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-sm);
+	box-shadow: var(--shadow-card);
+	display: flex;
+	gap: var(--sp-2);
+}
+
+.story-edit-graph-toolbar {
+	flex-wrap: wrap;
+	left: var(--sp-3);
+	max-width: calc(100% - 2 * var(--sp-3));
+	padding: var(--sp-2);
+	top: var(--sp-3);
+}
+
+.story-edit-graph-toolbar-group {
+	align-items: center;
+	border-right: 1px solid var(--line-2);
+	display: flex;
+	gap: var(--sp-1);
+	padding-right: var(--sp-2);
+}
+
+.story-edit-graph-status {
+	bottom: var(--sp-3);
+	font-size: var(--fs-xs);
+	left: var(--sp-3);
+	padding: var(--sp-2);
+}
+
+.story-edit-graph-status > span {
+	align-items: center;
+	display: inline-flex;
+	gap: 4px;
+	white-space: nowrap;
+}
+
+.story-edit-graph-status .tw-ds-icon {
+	color: var(--tx-4);
+	font-size: 14px;
+}
+
+.story-edit-graph-status-broken {
+	color: var(--sem-error);
+}
+
+.story-edit-graph-minimap {
+	background: color-mix(in oklab, var(--ink-2) 90%, transparent);
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-sm);
+	bottom: var(--sp-3);
+	box-shadow: var(--shadow-card);
+	height: 120px;
+	overflow: hidden;
+	right: var(--sp-3);
+	width: 170px;
+}
+
+.story-edit-graph-minimap__surface {
+	height: 100%;
+	position: relative;
+	width: 100%;
+}
+
+.story-edit-graph-minimap__node,
+.story-edit-graph-minimap__viewport {
+	position: absolute;
+}
+
+.story-edit-graph-minimap__node {
+	background: var(--tx-4);
+	border-radius: 2px;
+	opacity: 0.55;
+}
+
+.story-edit-graph-minimap__node--selected {
+	background: var(--sel-line);
+	opacity: 1;
+}
+
+.story-edit-graph-minimap__viewport {
+	border: 1px solid var(--focus-ring);
+	box-shadow: 0 0 0 999px oklch(0 0 0 / 0.14);
+}
+
 .story-edit-dock {
 	background: var(--bg-dock);
 	border-color: var(--line-1);

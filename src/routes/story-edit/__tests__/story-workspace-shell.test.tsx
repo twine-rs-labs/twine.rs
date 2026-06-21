@@ -100,6 +100,38 @@ describe('<StoryWorkspaceShell>', () => {
 		expect(screen.getByTestId('text-panel')).toBeInTheDocument();
 	});
 
+	it('keeps dock collapse controls active in graph mode', () => {
+		const onChangeLeftDockCollapsed = jest.fn();
+		const onChangeRightDockCollapsed = jest.fn();
+
+		renderComponent('graph', {
+			onChangeLeftDockCollapsed,
+			onChangeRightDockCollapsed
+		});
+
+		within(
+			screen.getByRole('complementary', {
+				name: 'routes.storyEdit.workspace.leftDock'
+			})
+		)
+			.getByRole('button', {
+				name: 'routes.storyEdit.workspace.collapseDock'
+			})
+			.click();
+		within(
+			screen.getByRole('complementary', {
+				name: 'routes.storyEdit.workspace.rightDock'
+			})
+		)
+			.getByRole('button', {
+				name: 'routes.storyEdit.workspace.collapseDock'
+			})
+			.click();
+
+		expect(onChangeLeftDockCollapsed).toHaveBeenCalledWith(true);
+		expect(onChangeRightDockCollapsed).toHaveBeenCalledWith(true);
+	});
+
 	it('marks the active passage in the navigator', () => {
 		renderComponent('text');
 

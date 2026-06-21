@@ -17,7 +17,6 @@ import {InnerStoryEditRoute} from '../story-edit-route';
 import {useZoomShortcuts} from '../use-zoom-shortcuts';
 
 jest.mock('../use-zoom-shortcuts');
-jest.mock('../../../components/passage/passage-map/passage-map');
 
 const TestStoryEditRoute: React.FC = () => {
 	const {stories} = useStoriesContext();
@@ -92,9 +91,9 @@ describe('<StoryEditRoute>', () => {
 		).toBeInTheDocument();
 	});
 
-	it('displays a passage map', async () => {
+	it('displays a story graph panel', async () => {
 		await renderComponent(fakeStory());
-		expect(screen.getByTestId('mock-passage-map')).toBeInTheDocument();
+		expect(screen.getByLabelText('Story graph')).toBeInTheDocument();
 	});
 
 	it('sets up zoom keyboard shortcuts', async () => {

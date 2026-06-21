@@ -4,7 +4,9 @@ import {
 	deleteAssetCommand,
 	importAssetCommand,
 	insertAssetSnippetCommand,
-	renameAssetCommand
+	queryGraphProjectionCommand,
+	renameAssetCommand,
+	saveGeneratedLayoutCommand
 } from '..';
 import {StoreCoreProjectHost, useCoreProjectHost} from '../project-host';
 import {reducer as storiesReducer} from '../../store/stories/reducer';
@@ -109,6 +111,47 @@ describe('StoreCoreProjectHost asset commands', () => {
 
 		expect(context.stories[0].passages[0].text).not.toContain(
 			'assets/hero.png'
+		);
+	});
+
+	it('publishes graph projection and layout save patches through commands', () => {
+		const context = hostWithStory();
+		const listener = jest.fn();
+
+		context.host.subscribeToPatches(listener);
+		context.host.applyStoryCommand(
+			queryGraphProjectionCommand(context.story.id, {
+				focus: null,
+				layers: {broken: true, resolved: true, selfLinks: true},
+				viewport: null
+			})
+		);
+		expect(listener).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				patches: [
+					expect.objectContaining({
+						projection: expect.objectContaining({
+							layoutState: 'saved',
+							nodes: [expect.objectContaining({id: 'start'})]
+						}),
+						story_id: context.story.id,
+						type: 'graphProjectionUpdated'
+					})
+				]
+			})
+		);
+
+		context.host.applyStoryCommand(saveGeneratedLayoutCommand(context.story.id));
+		expect(listener).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				patches: [
+					expect.objectContaining({
+						projection: expect.objectContaining({layoutState: 'saved'}),
+						story_id: context.story.id,
+						type: 'layoutSaved'
+					})
+				]
+			})
 		);
 	});
 });
