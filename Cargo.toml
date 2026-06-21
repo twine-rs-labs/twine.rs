@@ -1,12 +1,12 @@
 [workspace]
 members = [
-	"crates/twine_cli",
-	"crates/twine_export",
-	"crates/twine_graph",
-	"crates/twine_model",
-	"crates/twine_parse",
-	"crates/twine_search",
-	"crates/twine_store"
+    "crates/twine_cli",
+    "crates/twine_export",
+    "crates/twine_graph",
+    "crates/twine_model",
+    "crates/twine_parse",
+    "crates/twine_search",
+    "crates/twine_store",
 ]
 resolver = "3"
 
@@ -18,17 +18,17 @@ version = "0.1.0"
 
 [workspace.dependencies]
 anyhow = "1"
-indexmap = {version = "2", features = ["serde"]}
-serde = {version = "1", features = ["derive"]}
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 toml = "0.8"
-twine_export = {path = "crates/twine_export"}
-twine_graph = {path = "crates/twine_graph"}
-twine_model = {path = "crates/twine_model"}
-twine_parse = {path = "crates/twine_parse"}
-twine_search = {path = "crates/twine_search"}
-twine_store = {path = "crates/twine_store"}
+twine_export = { path = "crates/twine_export" }
+twine_graph = { path = "crates/twine_graph" }
+twine_model = { path = "crates/twine_model" }
+twine_parse = { path = "crates/twine_parse" }
+twine_search = { path = "crates/twine_search" }
+twine_store = { path = "crates/twine_store" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

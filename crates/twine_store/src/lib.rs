@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::BufReader,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -30,6 +30,9 @@ pub enum StoreError {
 
     #[error("project manifest not found: {0}")]
     ProjectManifestNotFound(PathBuf),
+
+    #[error("project-relative path is unsafe: {0}")]
+    UnsafeProjectPath(PathBuf),
 
     #[error("story not found: {0}")]
     StoryNotFound(StoryId),
@@ -568,11 +571,30 @@ fn read_optional(root: &Path, relative: &str) -> Result<String, StoreError> {
         return Ok(String::new());
     }
 
+    let relative = safe_project_relative_path(relative)?;
+
     match fs::read_to_string(root.join(relative)) {
         Ok(value) => Ok(value),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
         Err(error) => Err(StoreError::Io(error)),
     }
+}
+
+fn safe_project_relative_path(relative: &str) -> Result<PathBuf, StoreError> {
+    let path = Path::new(relative);
+    let mut safe_path = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Normal(value) => safe_path.push(value),
+            Component::CurDir => {}
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
+                return Err(StoreError::UnsafeProjectPath(path.to_path_buf()));
+            }
+        }
+    }
+
+    Ok(safe_path)
 }
 
 fn unique_passage_file(
@@ -923,6 +945,38 @@ mod tests {
         let loaded = load_project_path(&root).expect("project should load");
 
         assert!(loaded.stories[0].passages[0].layout.is_none());
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn rejects_manifest_paths_outside_project_root() {
+        let root = temp_path("unsafe-project-path");
+
+        fs::create_dir_all(&root).expect("project directory should be created");
+        fs::write(
+            root.join("twine.toml"),
+            r#"
+name = "Unsafe"
+
+[[stories]]
+id = "story-1"
+name = "Example"
+
+[[stories.passages]]
+id = "passage-1"
+name = "Start"
+file = "../outside.twee"
+"#,
+        )
+        .expect("manifest should be written");
+
+        let error = load_project_path(&root).expect_err("project path should be rejected");
+
+        assert!(matches!(
+            error,
+            StoreError::UnsafeProjectPath(path) if path == PathBuf::from("../outside.twee")
+        ));
 
         fs::remove_dir_all(&root).expect("project should be removed");
     }

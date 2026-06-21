@@ -28,6 +28,14 @@ Run all Rust tests:
 cargo test --workspace
 ```
 
+Run the full Rust M0 quality loop:
+
+```sh
+cargo fmt-check
+cargo lint
+cargo ci
+```
+
 Inspect a generated fixture:
 
 ```sh
@@ -50,3 +58,6 @@ The first Rust/WASM interop milestone can now build on the M0 core: import
 fixtures into the canonical project layout, expose graph indexing to
 TypeScript, compare it with the current `passageConnections()` helper, and
 benchmark it against generated fixtures.
+
+See `docs/reference/RUST_CORE_STYLE_GUIDE.md` for the Rust core conventions that
+should guide the remaining milestone work.

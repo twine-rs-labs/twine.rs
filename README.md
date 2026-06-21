@@ -39,4 +39,5 @@ cargo run -q -p twine_cli -- benchmarks/fixtures/generated/story-50000.story.jso
 - Stack strategy: `docs/reference/TWINE_RS_STACK_STRATEGY.md`
 - UI document: `docs/reference/TWINE_RS_UI_DOCUMENT.md`
 - Milestones and enhancement catalogue: `docs/reference/TWINE_RS_MILESTONES.md`
+- Rust core style guide: `docs/reference/RUST_CORE_STYLE_GUIDE.md`
 - Design system: `docs/design-system/`

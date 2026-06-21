@@ -252,15 +252,9 @@ fn parse_twee_header(header: &str) -> Result<(String, Vec<String>, MetadataMap),
     };
     let mut rest = rest.trim().to_owned();
     let metadata = if rest.ends_with('}') {
-        if let Some(index) = find_last_unescaped(&rest, '{') {
-            let raw_metadata = rest[index..].trim();
-            let parsed = serde_json::from_str(raw_metadata).unwrap_or(Value::Null);
-
+        if let Some((index, metadata)) = trailing_json_object(&rest) {
             rest.truncate(index);
-            match parsed {
-                Value::Object(object) => object.into_iter().collect(),
-                _ => BTreeMap::new(),
-            }
+            metadata
         } else {
             BTreeMap::new()
         }
@@ -890,26 +884,38 @@ fn custom_attrs(attrs: &BTreeMap<String, String>, known: &[&str]) -> BTreeMap<St
 }
 
 fn find_last_unescaped(value: &str, needle: char) -> Option<usize> {
-    let mut escaped = false;
-    let mut found = None;
+    unescaped_char_indices(value, needle).last()
+}
 
-    for (index, character) in value.char_indices() {
+fn trailing_json_object(value: &str) -> Option<(usize, MetadataMap)> {
+    unescaped_char_indices(value, '{').find_map(|index| {
+        match serde_json::from_str(&value[index..]) {
+            Ok(Value::Object(object)) => Some((index, object.into_iter().collect())),
+            _ => None,
+        }
+    })
+}
+
+fn unescaped_char_indices(value: &str, needle: char) -> impl Iterator<Item = usize> + '_ {
+    let mut escaped = false;
+
+    value.char_indices().filter_map(move |(index, character)| {
         if escaped {
             escaped = false;
-            continue;
+            return None;
         }
 
         if character == '\\' {
             escaped = true;
-            continue;
+            return None;
         }
 
         if character == needle {
-            found = Some(index);
+            Some(index)
+        } else {
+            None
         }
-    }
-
-    found
+    })
 }
 
 pub fn escape_for_twee_header(value: &str) -> String {
@@ -1148,6 +1154,27 @@ Hello [[Next]]
         assert_eq!(
             story.metadata["storyData"]["extra"],
             Value::Number(1.into())
+        );
+    }
+
+    #[test]
+    fn parses_nested_twee_passage_metadata() {
+        let story = story_from_twee_named(
+            r#":: Start {"position":"25,50","diagnostics":{"reviewed":true}}
+Hello
+"#,
+            "Example",
+        )
+        .expect("twee should parse");
+
+        assert_eq!(story.passages[0].name, "Start");
+        assert_eq!(
+            story.passages[0].metadata["diagnostics"]["reviewed"],
+            Value::Bool(true)
+        );
+        assert_eq!(
+            story.passages[0].layout.expect("position metadata").top,
+            50.0
         );
     }
 
