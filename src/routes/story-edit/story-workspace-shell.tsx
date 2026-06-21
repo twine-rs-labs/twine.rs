@@ -1,13 +1,15 @@
 import classNames from 'classnames';
-import {
-	IconChevronDown,
-	IconChevronLeft,
-	IconChevronRight
-} from '@tabler/icons';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {IconButton} from '../../components/control/icon-button';
-import {TagGrid} from '../../components/tag';
+import {
+	Badge,
+	Button,
+	IconButton,
+	Panel,
+	SegmentedControl,
+	Tag,
+	TablerIcon
+} from '../../components/design-system';
 import {VisibleWhitespace} from '../../components/visible-whitespace';
 import {
 	assetManagerViewModel,
@@ -42,6 +44,7 @@ import {
 	openStorySourceDialog
 } from '../../dialogs/story-source-dialog';
 import {Passage, Story} from '../../store/stories';
+import {parseLinks} from '../../util/parse-links';
 import {StoryEditMode} from './workspace-state';
 import {StoryTextPanel} from './story-text-panel';
 
@@ -95,35 +98,49 @@ function usePersistedNavigatorTab(storyId: string) {
 	return [tab, setTab] as const;
 }
 
-const DockHeader: React.FC<{
+const DockPanel: React.FC<{
 	children: React.ReactNode;
 	collapsed: boolean;
+	icon: string;
 	label: string;
 	onChangeCollapsed: (value: boolean) => void;
 	side: 'left' | 'right';
+	title: string;
 }> = props => {
-	const {children, collapsed, label, onChangeCollapsed, side} = props;
+	const {children, collapsed, icon, label, onChangeCollapsed, side, title} =
+		props;
 	const {t} = useTranslation();
-	const collapseIcon =
-		side === 'left' ? <IconChevronLeft /> : <IconChevronRight />;
-	const expandIcon =
-		side === 'left' ? <IconChevronRight /> : <IconChevronLeft />;
+	const toggleIcon =
+		side === 'left'
+			? collapsed
+				? 'layout-sidebar-left-expand'
+				: 'layout-sidebar-left-collapse'
+			: collapsed
+				? 'layout-sidebar-right-expand'
+				: 'layout-sidebar-right-collapse';
 
 	return (
-		<header className="story-edit-dock-header">
-			{!collapsed && <h2>{children}</h2>}
-			<IconButton
-				icon={collapsed ? expandIcon : collapseIcon}
-				iconOnly
-				label={t(
-					collapsed
-						? 'routes.storyEdit.workspace.expandDock'
-						: 'routes.storyEdit.workspace.collapseDock',
-					{dock: label}
-				)}
-				onClick={() => onChangeCollapsed(!collapsed)}
-			/>
-		</header>
+		<Panel
+			actions={
+				<IconButton
+					icon={toggleIcon}
+					label={t(
+						collapsed
+							? 'routes.storyEdit.workspace.expandDock'
+							: 'routes.storyEdit.workspace.collapseDock',
+						{dock: label}
+					)}
+					onClick={() => onChangeCollapsed(!collapsed)}
+					size="sm"
+				/>
+			}
+			className="story-edit-dock-panel"
+			flush
+			icon={collapsed ? toggleIcon : icon}
+			title={collapsed ? undefined : title}
+		>
+			{!collapsed && children}
+		</Panel>
 	);
 };
 
@@ -191,10 +208,19 @@ const PassageNavigator: React.FC<{
 						onClick={() => onSelectPassage(passage)}
 						type="button"
 					>
-						<TagGrid tags={passage.tags} tagColors={story.tagColors} />
+						<span className="story-edit-passage-file-icon">
+							<TablerIcon
+								icon={story.startPassage === passage.id ? 'rocket' : 'file-text'}
+							/>
+						</span>
 						<span className="story-edit-passage-list-name">
 							<VisibleWhitespace value={passage.name} />
 						</span>
+						{passage.tags.length > 0 && (
+							<span className="story-edit-passage-tag-count">
+								{passage.tags.length}
+							</span>
+						)}
 						{story.startPassage === passage.id && (
 							<span className="story-edit-passage-start">
 								{t('routes.storyEdit.workspace.startPassage')}
@@ -224,18 +250,13 @@ const NavigatorTabs: React.FC<{
 	];
 
 	return (
-		<div className="story-edit-navigator-tabs" role="tablist">
-			{tabs.map(tab => (
-				<button
-					aria-selected={activeTab === tab.value}
-					key={tab.value}
-					onClick={() => onChange(tab.value)}
-					role="tab"
-					type="button"
-				>
-					{tab.label}
-				</button>
-			))}
+		<div className="story-edit-navigator-tabs">
+			<SegmentedControl
+				onChange={value => onChange(value as NavigatorTab)}
+				options={tabs}
+				size="sm"
+				value={activeTab}
+			/>
 		</div>
 	);
 };
@@ -523,6 +544,86 @@ const ContentsNavigator: React.FC<{
 	);
 };
 
+const OutlineSection: React.FC<{
+	children?: React.ReactNode;
+	count?: number | string;
+	icon: string;
+	title: string;
+}> = ({children, count, icon, title}) => (
+	<section className="story-edit-outline-section">
+		<header className="story-edit-outline-head">
+			<TablerIcon icon={icon} />
+			<span>{title}</span>
+			{count !== undefined && (
+				<span className="story-edit-outline-count">{count}</span>
+			)}
+		</header>
+		{children}
+	</section>
+);
+
+const OutlineItem: React.FC<{
+	broken?: boolean;
+	color?: string;
+	label: string;
+	mono?: boolean;
+	muted?: boolean;
+	onClick?: () => void;
+	sub?: string;
+}> = ({broken, color, label, mono, muted, onClick, sub}) => {
+	const content = (
+		<>
+			<span
+				className="story-edit-outline-dot"
+				style={{background: color ?? 'var(--tx-4)'}}
+			/>
+			<span
+				className={classNames('story-edit-outline-label', {
+					'is-mono': mono,
+					'is-muted': muted
+				})}
+			>
+				{label}
+			</span>
+			{sub && (
+				<span
+					className={classNames('story-edit-outline-sub', {
+						'is-broken': broken
+					})}
+				>
+					{sub}
+				</span>
+			)}
+		</>
+	);
+
+	if (onClick) {
+		return (
+			<button
+				className="story-edit-outline-item"
+				onClick={onClick}
+				type="button"
+			>
+				{content}
+			</button>
+		);
+	}
+
+	return <div className="story-edit-outline-item">{content}</div>;
+};
+
+function backlinksForPassage(story: Story, selectedPassage?: Passage) {
+	if (!selectedPassage) {
+		return [];
+	}
+
+	return story.passages.filter(
+		passage =>
+			passage.id !== selectedPassage.id &&
+			parseLinks(passage.text, true).includes(selectedPassage.name)
+	);
+}
+
 const Inspector: React.FC<{
 	assets: AssetManagerViewModel;
 	diagnostics: DiagnosticsViewModel;
@@ -536,6 +637,10 @@ const Inspector: React.FC<{
 		props;
 	const {passage} = selection;
 	const {t} = useTranslation();
+	const backlinks = React.useMemo(
+		() => backlinksForPassage(story, passage),
+		[passage, story]
+	);
 	const symbolsByName = React.useMemo(() => {
 		const result = new Map<string, number>();
 
@@ -548,85 +653,104 @@ const Inspector: React.FC<{
 
 	return (
 		<div className="story-edit-inspector">
-			<section>
-				<h3>{t('common.story')}</h3>
-				<dl>
-					<dt>{t('common.storyFormat')}</dt>
-					<dd>
-						{story.storyFormat} {story.storyFormatVersion}
-					</dd>
-					<dt>{t('routes.storyEdit.workspace.passages')}</dt>
-					<dd>{story.passages.length}</dd>
-					<dt>{t('routes.storyEdit.workspace.brokenLinks')}</dt>
-					<dd>{index.graph.brokenLinks}</dd>
-					<dt>{t('routes.storyEdit.workspace.orphanPassages')}</dt>
-					<dd>{index.graph.orphanPassages}</dd>
-					<dt>{t('routes.storyEdit.workspace.unreachablePassages')}</dt>
-					<dd>{index.graph.unreachablePassages}</dd>
-					<dt>{t('routes.storyEdit.workspace.sourceFiles')}</dt>
-					<dd>{index.files.length}</dd>
-				</dl>
-			</section>
-			{passage && (
-				<section>
-					<h3>{t('common.passage')}</h3>
-					<dl>
-						<dt>{t('routes.storyEdit.workspace.words')}</dt>
-						<dd>{selection.wordCount}</dd>
-						<dt>{t('routes.storyEdit.workspace.links')}</dt>
-						<dd>{selection.links.length}</dd>
-						<dt>{t('common.tags')}</dt>
-						<dd>{passage.tags.length || t('colors.none')}</dd>
-					</dl>
-				</section>
-			)}
-			{index.tagEntries.length > 0 && (
-				<section>
-					<h3>{t('common.tags')}</h3>
-					<ul className="story-edit-index-list">
-						{index.tagEntries.slice(0, 8).map(tag => (
-							<li key={tag.name}>
-								<span
-									className="story-edit-tag-swatch"
-									style={{backgroundColor: tag.color ?? 'transparent'}}
-								/>
-								<span>{tag.name}</span>
-								<strong>{tag.count}</strong>
-							</li>
+			<OutlineSection
+				count={selection.links.length}
+				icon="arrow-up-right"
+				title={t('routes.storyEdit.workspace.links')}
+			>
+				{selection.links.length > 0 ? (
+					selection.links.map(link => {
+						const linkedPassage = story.passages.find(
+							passage => passage.name === link
+						);
+
+						return (
+							<OutlineItem
+								broken={!linkedPassage}
+								color={
+									linkedPassage ? 'var(--sem-link)' : 'var(--sem-error)'
+								}
+								key={link}
+								label={link}
+								onClick={
+									linkedPassage
+										? () => onSelectPassage(linkedPassage)
+										: undefined
+								}
+								sub={linkedPassage ? t('common.passage') : 'broken'}
+							/>
+						);
+					})
+				) : (
+					<OutlineItem label={t('routes.storyEdit.workspace.noLinks')} muted />
+				)}
+			</OutlineSection>
+
+			<OutlineSection
+				count={backlinks.length}
+				icon="arrow-back-up"
+				title={t('routes.storyEdit.workspace.backlinks')}
+			>
+				{backlinks.length > 0 ? (
+					backlinks.slice(0, 8).map(backlink => (
+						<OutlineItem
+							color="var(--tx-4)"
+							key={backlink.id}
+							label={backlink.name}
+							onClick={() => onSelectPassage(backlink)}
+							sub={t('common.passage')}
+						/>
+					))
+				) : (
+					<OutlineItem label={t('routes.storyEdit.workspace.noLinks')} muted />
+				)}
+			</OutlineSection>
+
+			<OutlineSection
+				count={symbolsByName.length}
+				icon="variable"
+				title={t('routes.storyEdit.workspace.variables')}
+			>
+				{symbolsByName.length > 0 ? (
+					symbolsByName.map(([name, count]) => (
+						<OutlineItem
+							color="var(--sem-var)"
+							key={name}
+							label={name}
+							mono
+							sub={`${count}`}
+						/>
+					))
+				) : (
+					<OutlineItem label={t('colors.none')} muted />
+				)}
+			</OutlineSection>
+
+			<OutlineSection
+				count={passage?.tags.length ?? 0}
+				icon="tags"
+				title={t('common.tags')}
+			>
+				{passage && passage.tags.length > 0 ? (
+					<div className="story-edit-outline-tags">
+						{passage.tags.map(tag => (
+							<Tag color={story.tagColors[tag] ?? 'blue'} key={tag}>
+								{tag}
+							</Tag>
 						))}
-					</ul>
-				</section>
-			)}
-			{symbolsByName.length > 0 && (
-				<section>
-					<h3>{t('routes.storyEdit.workspace.variables')}</h3>
-					<ul className="story-edit-index-list">
-						{symbolsByName.map(([name, count]) => (
-							<li key={name}>
-								<span>{name}</span>
-								<strong>{count}</strong>
-							</li>
-						))}
-					</ul>
-				</section>
-			)}
-			{assets.entries.length > 0 && (
-				<section>
-					<h3>{t('routes.storyEdit.workspace.assets')}</h3>
-					<ul className="story-edit-index-list">
-						{assets.entries.slice(0, 8).map(asset => (
-							<li key={asset.id}>
-								<span>{asset.path}</span>
-								<strong>{asset.referenceCount}</strong>
-							</li>
-						))}
-					</ul>
-				</section>
-			)}
-			{diagnostics.items.length > 0 && (
-				<section>
-					<h3>{t('routes.storyEdit.workspace.diagnostics')}</h3>
-					<div className="story-edit-diagnostic-list dg">
+					</div>
+				) : (
+					<OutlineItem label={t('colors.none')} muted />
+				)}
+			</OutlineSection>
+
+			<OutlineSection
+				count={diagnostics.totalCount}
+				icon="alert-triangle"
+				title={t('routes.storyEdit.workspace.diagnostics')}
+			>
+				{diagnostics.items.length > 0 ? (
+					<div className="story-edit-diagnostic-list">
 						{diagnostics.items.slice(0, 8).map(item => {
 							const diagnosticPassage = item.core.passageId
 								? story.passages.find(
@@ -642,7 +766,6 @@ const Inspector: React.FC<{
 							return (
 								<div
 									className={classNames(
-										'dg__row',
 										'story-edit-diagnostic',
 										item.severity,
 										{
@@ -651,45 +774,45 @@ const Inspector: React.FC<{
 									)}
 									key={item.id}
 								>
-									<span
-										className={`dg__sev ${
+									<Badge
+										icon={
 											item.severity === 'error'
-												? 'err'
-												: item.severity === 'warning'
-													? 'warn'
-													: 'info'
-										}`}
+												? 'alert-octagon'
+												: 'alert-triangle'
+										}
+										tone={item.severity === 'error' ? 'error' : 'warn'}
 									>
-										!
-									</span>
-									<div className="dg__rtext">
-										{diagnosticPassage ? (
-											<button
-												className="story-edit-diagnostic-source"
-												onClick={() => onSelectPassage(diagnosticPassage)}
-												type="button"
-											>
-												<span>{diagnosticPassage.name}</span>
-												{item.message}
-											</button>
-										) : (
-											<span className="story-edit-diagnostic-message">
-												{item.message}
-											</span>
-										)}
-										<div className="dg__rloc">{item.location}</div>
+										{item.core.code}
+									</Badge>
+									{diagnosticPassage ? (
+										<button
+											className="story-edit-diagnostic-source"
+											onClick={() => onSelectPassage(diagnosticPassage)}
+											type="button"
+										>
+											<span>{diagnosticPassage.name}</span>
+											{item.message}
+										</button>
+									) : (
+										<span className="story-edit-diagnostic-message">
+											{item.message}
+										</span>
+									)}
+									<div className="story-edit-diagnostic-location">
+										{item.location}
 									</div>
 									{actions.length > 0 && (
 										<div className="story-edit-diagnostic-fixes">
 											{actions.map(action => (
-												<button
+												<Button
 													disabled={!action.enabled}
 													key={action.command}
 													onClick={action.apply}
-													type="button"
+													size="sm"
+													variant="ghost"
 												>
 													{action.title}
-												</button>
+												</Button>
 											))}
 										</div>
 									)}
@@ -697,8 +820,31 @@ const Inspector: React.FC<{
 							);
 						})}
 					</div>
-				</section>
-			)}
+				) : (
+					<OutlineItem label={t('colors.none')} muted />
+				)}
+			</OutlineSection>
+
+			<OutlineSection icon="info-circle" title={t('common.story')}>
+				<dl className="story-edit-project-stats">
+					<dt>{t('common.storyFormat')}</dt>
+					<dd>
+						{story.storyFormat} {story.storyFormatVersion}
+					</dd>
+					<dt>{t('routes.storyEdit.workspace.passages')}</dt>
+					<dd>{story.passages.length}</dd>
+					<dt>{t('routes.storyEdit.workspace.brokenLinks')}</dt>
+					<dd>{index.graph.brokenLinks}</dd>
+					<dt>{t('routes.storyEdit.workspace.orphanPassages')}</dt>
+					<dd>{index.graph.orphanPassages}</dd>
+					<dt>{t('routes.storyEdit.workspace.unreachablePassages')}</dt>
+					<dd>{index.graph.unreachablePassages}</dd>
+					<dt>{t('routes.storyEdit.workspace.sourceFiles')}</dt>
+					<dd>{index.files.length}</dd>
+					<dt>{t('routes.storyEdit.workspace.assets')}</dt>
+					<dd>{assets.entries.length}</dd>
+				</dl>
+			</OutlineSection>
 		</div>
 	);
 };
@@ -723,16 +869,20 @@ const BottomDrawer: React.FC<{
 			aria-label={t('routes.storyEdit.workspace.bottomDrawer')}
 			className="story-edit-bottom-drawer"
 		>
-			<header>
-				<h2>{t('routes.storyEdit.workspace.bottomDrawer')}</h2>
-				<IconButton
-					icon={<IconChevronDown />}
-					iconOnly
-					label={t('routes.storyEdit.workspace.closeBottomDrawer')}
-					onClick={() => onChangeOpen(false)}
-				/>
-			</header>
-			<div className="story-edit-bottom-drawer-content">
+			<Panel
+				actions={
+					<IconButton
+						icon="chevron-down"
+						label={t('routes.storyEdit.workspace.closeBottomDrawer')}
+						onClick={() => onChangeOpen(false)}
+						size="sm"
+					/>
+				}
+				bodyClassName="story-edit-bottom-drawer-content"
+				flush
+				icon="link"
+				title={t('routes.storyEdit.workspace.bottomDrawer')}
+			>
 				{links.length > 0 ? (
 					<ul>
 						{links.map(link => {
@@ -760,7 +910,7 @@ const BottomDrawer: React.FC<{
 				) : (
 					<p>{t('routes.storyEdit.workspace.noLinks')}</p>
 				)}
-			</div>
+			</Panel>
 		</section>
 	);
 };
@@ -835,49 +985,54 @@ export const StoryWorkspaceShell: React.FC<
 				aria-label={t('routes.storyEdit.workspace.leftDock')}
 				className="story-edit-dock story-edit-left-dock"
 			>
-				<DockHeader
+				<DockPanel
 					collapsed={leftDockCollapsed}
+					icon={
+						navigatorTab === 'contents'
+							? 'list-details'
+							: navigatorTab === 'assets'
+								? 'photo'
+								: 'files'
+					}
 					label={t('routes.storyEdit.workspace.leftDock')}
 					onChangeCollapsed={onChangeLeftDockCollapsed}
 					side="left"
+					title={
+						navigatorTab === 'contents'
+							? t('routes.storyEdit.workspace.contents')
+							: navigatorTab === 'assets'
+								? t('routes.storyEdit.workspace.assets')
+								: t('routes.storyEdit.workspace.passages')
+					}
 				>
-					{navigatorTab === 'contents'
-						? t('routes.storyEdit.workspace.contents')
-						: navigatorTab === 'assets'
-							? t('routes.storyEdit.workspace.assets')
-							: t('routes.storyEdit.workspace.passages')}
-				</DockHeader>
-				{!leftDockCollapsed && (
-					<>
-						<NavigatorTabs
-							activeTab={navigatorTab}
-							onChange={setNavigatorTab}
+					<NavigatorTabs
+						activeTab={navigatorTab}
+						onChange={setNavigatorTab}
+					/>
+					{navigatorTab === 'passages' ? (
+						<PassageNavigator
+							index={index}
+							onSelectPassage={onSelectPassage}
+							selectedPassageId={passage?.id}
+							story={story}
 						/>
-						{navigatorTab === 'passages' ? (
-							<PassageNavigator
-								index={index}
-								onSelectPassage={onSelectPassage}
-								selectedPassageId={passage?.id}
-								story={story}
-							/>
-						) : navigatorTab === 'contents' ? (
-							<ContentsNavigator
-								contents={contents}
-								onOpenSource={handleOpenContentsSource}
-								onSelectPassage={onSelectPassage}
-								story={story}
-							/>
-						) : (
-							<AssetManager
-								assets={assets}
-								host={coreProjectHost}
-								onSelectPassage={onSelectPassage}
-								selection={selection}
-								story={story}
-							/>
-						)}
-					</>
-				)}
+					) : navigatorTab === 'contents' ? (
+						<ContentsNavigator
+							contents={contents}
+							onOpenSource={handleOpenContentsSource}
+							onSelectPassage={onSelectPassage}
+							story={story}
+						/>
+					) : (
+						<AssetManager
+							assets={assets}
+							host={coreProjectHost}
+							onSelectPassage={onSelectPassage}
+							selection={selection}
+							story={story}
+						/>
+					)}
+				</DockPanel>
 			</aside>
 			{showGraph && graphPanel}
 			{showText && (
@@ -893,15 +1048,14 @@ export const StoryWorkspaceShell: React.FC<
 				aria-label={t('routes.storyEdit.workspace.rightDock')}
 				className="story-edit-dock story-edit-right-dock"
 			>
-				<DockHeader
+				<DockPanel
 					collapsed={rightDockCollapsed}
+					icon="focus-2"
 					label={t('routes.storyEdit.workspace.rightDock')}
 					onChangeCollapsed={onChangeRightDockCollapsed}
 					side="right"
+					title={t('routes.storyEdit.workspace.inspector')}
 				>
-					{t('routes.storyEdit.workspace.inspector')}
-				</DockHeader>
-				{!rightDockCollapsed && (
 					<Inspector
 						assets={assets}
 						diagnostics={diagnostics}
@@ -911,7 +1065,7 @@ export const StoryWorkspaceShell: React.FC<
 						selection={selection}
 						story={story}
 					/>
-				)}
+				</DockPanel>
 			</aside>
 			<BottomDrawer
 				onChangeOpen={onChangeBottomDrawerOpen}

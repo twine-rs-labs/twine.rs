@@ -4,6 +4,7 @@ import {
 	SourceEditor,
 	SourceEditorLanguage
 } from '../../components/control/source-editor';
+import {Badge, TablerIcon} from '../../components/design-system';
 import {
 	updatePassageTextCommand,
 	updateStoryScriptCommand,
@@ -12,7 +13,6 @@ import {
 } from '../../core';
 import {Passage, Story} from '../../store/stories';
 import {parseLinks} from '../../util/parse-links';
-import {TagGrid} from '../../components/tag';
 import {VisibleWhitespace} from '../../components/visible-whitespace';
 
 export interface StoryTextPanelProps {
@@ -64,6 +64,17 @@ function linkedPassages(story: Story, names: string[]) {
 	return names
 		.map(name => story.passages.find(passage => passage.name === name))
 		.filter((passage): passage is Passage => !!passage);
+}
+
+function sourceIcon(source: StorySourceTab) {
+	switch (source) {
+		case 'passage':
+			return 'file-text';
+		case 'script':
+			return 'braces';
+		case 'stylesheet':
+			return 'file-code';
+	}
 }
 
 export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
@@ -220,7 +231,11 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 				aria-label={t('routes.storyEdit.workspace.textMode')}
 				className="story-edit-text-panel empty"
 			>
-				<SourceTabs activeSource={activeSource} onChange={setActiveSource} />
+				<SourceTabs
+					activeSource={activeSource}
+					onChange={setActiveSource}
+					passageName={source.name}
+				/>
 				<p>{t('routes.storyEdit.workspace.noPassages')}</p>
 			</section>
 		);
@@ -231,25 +246,49 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 			aria-label={t('routes.storyEdit.workspace.textMode')}
 			className="story-edit-text-panel"
 		>
-			<SourceTabs activeSource={activeSource} onChange={setActiveSource} />
+			<SourceTabs
+				activeSource={activeSource}
+				onChange={setActiveSource}
+				passageName={selectedPassage?.name}
+			/>
 			<header className="story-edit-text-panel-header">
-				{activeSource === 'passage' && selectedPassage && (
-					<TagGrid tags={selectedPassage.tags} tagColors={story.tagColors} />
-				)}
+				<TablerIcon icon="folder" />
+				<span className="story-edit-crumb-root">
+					{activeSource === 'passage'
+						? t('routes.storyEdit.workspace.passages')
+						: t('common.story')}
+				</span>
+				<TablerIcon className="story-edit-crumb-sep" icon="chevron-right" />
 				<h2>
 					<VisibleWhitespace value={source.name ?? ''} />
 				</h2>
-				<span>
-					{activeSource === 'passage'
-						? t('routes.storyEdit.workspace.passageStats', {
-								linkCount: links.length,
-								wordCount: countWords(selectedPassage?.text ?? '')
-							})
-						: t('routes.storyEdit.workspace.sourceStats', {
-								characterCount: source.value.length,
-								lineCount: source.value.split(/\r?\n/).length
-							})}
-				</span>
+				<div className="story-edit-text-panel-meta">
+					<Badge mono tone="neutral">
+						{story.storyFormat} {story.storyFormatVersion}
+					</Badge>
+					{activeSource === 'passage' ? (
+						<>
+							{brokenLinks.length > 0 && (
+								<Badge icon="unlink" tone="error">
+									{brokenLinks.length}
+								</Badge>
+							)}
+							<Badge icon="arrow-up-right" tone="link">
+								{links.length}
+							</Badge>
+							<Badge icon="arrow-back-up" tone="neutral">
+								{backlinks.length} backlinks
+							</Badge>
+							<Badge mono tone="neutral">
+								{countWords(selectedPassage?.text ?? '')} words
+							</Badge>
+						</>
+					) : (
+						<Badge mono tone="neutral">
+							{source.value.split(/\r?\n/).length} lines
+						</Badge>
+					)}
+				</div>
 			</header>
 			<div className="story-edit-text-editor">
 				<SourceEditor
@@ -268,38 +307,20 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 					value={localText}
 				/>
 			</div>
-			{activeSource === 'passage' && selectedPassage && (
-				<footer className="story-edit-source-outline">
-					<SourceOutlineSection
-						label={t('routes.storyEdit.workspace.links')}
-						onSelectPassage={onSelectPassage}
-						passages={outgoingPassages}
-					/>
-					<SourceOutlineSection
-						label={t('routes.storyEdit.workspace.backlinks')}
-						onSelectPassage={onSelectPassage}
-						passages={backlinks}
-					/>
-					{selectedPassage.tags.length > 0 && (
-						<div className="story-edit-source-outline-section">
-							<span>{t('common.tags')}</span>
-							<TagGrid
-								tags={selectedPassage.tags}
-								tagColors={story.tagColors}
-							/>
-						</div>
+			{activeSource === 'passage' && brokenLinks.length > 0 && (
+				<div className="story-edit-inline-diagnostic">
+					<TablerIcon icon="alert-octagon" />
+					<strong>{t('routes.storyEdit.workspace.brokenLinks')}</strong>
+					<span>{brokenLinks.join(', ')}</span>
+					{outgoingPassages.length > 0 && onSelectPassage && (
+						<button
+							onClick={() => onSelectPassage(outgoingPassages[0])}
+							type="button"
+						>
+							{t('routes.storyEdit.workspace.links')}
+						</button>
 					)}
-					{brokenLinks.length > 0 && (
-						<div className="story-edit-source-outline-section missing">
-							<span>{t('routes.storyEdit.workspace.brokenLinks')}</span>
-							{brokenLinks.map(link => (
-								<span className="story-edit-link-chip missing" key={link}>
-									{link}
-								</span>
-							))}
-						</div>
-					)}
-				</footer>
+				</div>
 			)}
 		</section>
 	);
@@ -308,10 +329,11 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 const SourceTabs: React.FC<{
 	activeSource: StorySourceTab;
 	onChange: (source: StorySourceTab) => void;
-}> = ({activeSource, onChange}) => {
+	passageName?: string;
+}> = ({activeSource, onChange, passageName}) => {
 	const {t} = useTranslation();
 	const tabs: {label: string; value: StorySourceTab}[] = [
-		{label: t('common.passage'), value: 'passage'},
+		{label: passageName ?? t('common.passage'), value: 'passage'},
 		{label: t('routes.storyEdit.toolbar.javaScript'), value: 'script'},
 		{label: t('routes.storyEdit.toolbar.stylesheet'), value: 'stylesheet'}
 	];
@@ -326,33 +348,8 @@ const SourceTabs: React.FC<{
 					role="tab"
 					type="button"
 				>
+					<TablerIcon icon={sourceIcon(tab.value)} />
 					{tab.label}
-				</button>
-			))}
-		</div>
-	);
-};
-
-const SourceOutlineSection: React.FC<{
-	label: string;
-	onSelectPassage?: (passage: Passage) => void;
-	passages: Passage[];
-}> = ({label, onSelectPassage, passages}) => {
-	if (passages.length === 0) {
-		return null;
-	}
-
-	return (
-		<div className="story-edit-source-outline-section">
-			<span>{label}</span>
-			{passages.map(passage => (
-				<button
-					className="story-edit-link-chip"
-					key={passage.id}
-					onClick={() => onSelectPassage?.(passage)}
-					type="button"
-				>
-					{passage.name}
 				</button>
 			))}
 		</div>

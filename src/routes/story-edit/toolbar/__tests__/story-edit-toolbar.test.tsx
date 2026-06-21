@@ -78,7 +78,7 @@ describe('<StoryEditToolbar>', () => {
 
 		await renderComponent({mode: 'graph', onChangeMode});
 		screen
-			.getByRole('button', {name: 'routes.storyEdit.workspace.textMode'})
+			.getByRole('tab', {name: 'routes.storyEdit.workspace.textMode'})
 			.click();
 		expect(onChangeMode).toHaveBeenCalledWith('text');
 	});

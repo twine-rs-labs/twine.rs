@@ -505,15 +505,7 @@
 }
 
 .app-shell__route .story-edit-workspace.mode-split .story-edit-text-layer {
-	right: calc(
-		var(--story-edit-right-offset) +
-			(
-				(
-						100% - var(--story-edit-left-offset) -
-							var(--story-edit-right-offset)
-					) * 0.5
-			)
-	);
+	right: var(--story-edit-right-offset);
 }
 
 .app-shell__route .dialogs {
@@ -544,6 +536,11 @@
 		justify-content: flex-start;
 	}
 
+	.app-shell--story-edit .app-shell__crumbs,
+	.app-shell--story-edit .app-shell__route-tabs {
+		display: none;
+	}
+
 	.app-shell__bar-actions .tw-btn span {
 		display: none;
 	}
@@ -557,6 +554,17 @@
 
 	.app-shell__route .story-edit-left-dock {
 		width: 42px;
+	}
+
+	.app-shell__route .story-edit-left-dock .tw-panel__head {
+		justify-content: center;
+		padding: 0;
+	}
+
+	.app-shell__route .story-edit-left-dock .tw-panel__icon,
+	.app-shell__route .story-edit-left-dock .tw-panel__title,
+	.app-shell__route .story-edit-left-dock .tw-panel__body {
+		display: none;
 	}
 
 	.app-shell__route .story-edit-right-dock {

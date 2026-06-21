@@ -1,7 +1,5 @@
-@import '../../../styles/colors.css';
-@import '../../../styles/metrics.css';
-
 .source-editor {
+	background: var(--ink-3);
 	display: flex;
 	flex: 1;
 	min-height: 0;
@@ -10,17 +8,32 @@
 }
 
 .source-editor .cm-editor {
-	background: var(--white);
-	color: var(--dark-gray);
+	background: var(--ink-3);
+	color: var(--tx-2);
 	flex: 1;
-	font-family: var(--font-monospace);
-	font-size: 100%;
+	font-family: var(--font-mono);
+	font-size: 13px;
+	height: 100%;
+	line-height: var(--lh-code);
 	min-height: 0;
 	outline: none;
 }
 
 .source-editor .cm-scroller {
+	flex: 1;
 	font-family: inherit;
+	height: 100%;
+	line-height: inherit;
+	min-height: 0;
+}
+
+.source-editor .cm-content {
+	caret-color: var(--acc-blue);
+	padding: 10px 0;
+}
+
+.source-editor .cm-line {
+	padding: 0 16px 0 8px;
 }
 
 .source-editor .cm-focused {
@@ -30,38 +43,88 @@
 .source-editor .cm-focused .cm-selectionBackground,
 .source-editor .cm-selectionBackground,
 .source-editor .cm-content ::selection {
-	background: var(--light-blue-translucent);
+	background: var(--sel-wash);
 }
 
 .source-editor .cm-gutters {
-	background: var(--off-white);
-	border-right: 1px solid var(--light-gray);
-	color: var(--gray);
+	background: var(--ink-2);
+	border-right: 1px solid var(--line-1);
+	color: var(--tx-4);
+	font-family: var(--font-mono);
+	min-width: 52px;
 }
 
-.source-editor .cm-activeLine,
+.source-editor .cm-lineNumbers .cm-gutterElement {
+	padding: 0 14px 0 8px;
+}
+
+.source-editor .cm-foldGutter {
+	color: var(--tx-4);
+}
+
+.source-editor .cm-activeLine {
+	background: oklch(0.62 0.12 248 / 0.07);
+	box-shadow: inset 2px 0 0 var(--acc-blue);
+}
+
 .source-editor .cm-activeLineGutter {
-	background: var(--faint-blue);
+	background: var(--ink-3);
+	color: var(--tx-2);
 }
 
 .source-editor .cm-placeholder {
-	color: var(--gray);
+	color: var(--tx-4);
+}
+
+.source-editor .cm-specialChar {
+	color: var(--sem-var);
+}
+
+.source-editor .cm-matchingBracket,
+.source-editor .cm-nonmatchingBracket {
+	background: var(--sem-link-soft);
+	color: var(--tx-1);
+	outline: 1px solid var(--sem-link);
+}
+
+.source-editor .cm-searchMatch {
+	background: var(--sem-warn-soft);
+	outline: 1px solid var(--sem-warn);
+}
+
+.source-editor .cm-selectionMatch {
+	background: var(--sem-link-soft);
+}
+
+.source-editor .cm-tooltip {
+	background: var(--bg-pop);
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-sm);
+	box-shadow: var(--shadow-pop);
+	color: var(--tx-2);
+	font-family: var(--font-ui);
+}
+
+.source-editor .cm-tooltip-autocomplete ul li[aria-selected] {
+	background: var(--sem-link-soft);
+	color: var(--tx-1);
 }
 
 .source-editor .cm-twine-link {
-	background: var(--faint-blue);
-	border-radius: 2px;
-	color: var(--dark-blue);
+	color: var(--sem-link);
+	text-decoration: underline;
+	text-decoration-color: var(--sem-link-soft);
+	text-underline-offset: 2px;
 }
 
 .source-editor .cm-twine-link-self {
-	background: var(--light-green-translucent);
-	color: var(--dark-green);
+	background: var(--sem-saved-soft);
+	border-radius: 2px;
+	color: var(--sem-saved);
 }
 
 .source-editor .cm-twine-link-broken {
-	background: var(--light-red-translucent);
-	color: var(--dark-red);
-	text-decoration: underline wavy var(--dark-red);
+	color: var(--sem-error);
+	text-decoration: underline wavy var(--sem-error);
 	text-underline-offset: 2px;
 }

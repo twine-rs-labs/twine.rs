@@ -339,7 +339,13 @@ export const AppShell: React.FC = ({children}) => {
 
 	return (
 		<AppShellContext.Provider value={shellContext}>
-			<div className="app-shell" data-testid="app-shell">
+			<div
+				className={classNames(
+					'app-shell',
+					mode.label === 'Edit' && 'app-shell--story-edit'
+				)}
+				data-testid="app-shell"
+			>
 				<div className="app-shell__top">
 					<header className="app-shell__bar">
 						<div className="app-shell__brand" aria-label="Twine">

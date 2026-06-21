@@ -1,21 +1,10 @@
-import {
-	IconBinaryTree,
-	IconFileText,
-	IconLayoutColumns,
-	IconLayoutBottombarCollapse,
-	IconLayoutBottombarExpand,
-	IconLayoutSidebarLeftCollapse,
-	IconLayoutSidebarLeftExpand,
-	IconLayoutSidebarRightCollapse,
-	IconLayoutSidebarRightExpand
-} from '@tabler/icons';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
+import {IconButton, SegmentedControl} from '../../../components/design-system';
 import {RouteToolbar} from '../../../components/route-toolbar';
 import {AppActions, BuildActions} from '../../../route-actions';
 import {Story} from '../../../store/stories';
 import {Point} from '../../../util/geometry';
-import {IconButton} from '../../../components/control/icon-button';
 import {StoryEditMode} from '../workspace-state';
 import {PassageActions} from './passage/passage-actions';
 import {StoryActions} from './story/story-actions';
@@ -52,22 +41,22 @@ export const StoryEditToolbar: React.FC<StoryEditToolbarProps> = props => {
 	} = props;
 	const {t} = useTranslation();
 	const modeButtons: {
-		icon: React.ReactNode;
+		icon: string;
 		label: string;
 		mode: StoryEditMode;
 	}[] = [
 		{
-			icon: <IconFileText />,
+			icon: 'file-text',
 			label: t('routes.storyEdit.workspace.textMode'),
 			mode: 'text'
 		},
 		{
-			icon: <IconBinaryTree />,
+			icon: 'binary-tree',
 			label: t('routes.storyEdit.workspace.graphMode'),
 			mode: 'graph'
 		},
 		{
-			icon: <IconLayoutColumns />,
+			icon: 'layout-columns',
 			label: t('routes.storyEdit.workspace.splitMode'),
 			mode: 'split'
 		}
@@ -82,27 +71,24 @@ export const StoryEditToolbar: React.FC<StoryEditToolbarProps> = props => {
 						className="story-edit-mode-controls"
 						role="group"
 					>
-						{modeButtons.map(button => (
-							<IconButton
-								icon={button.icon}
-								key={button.mode}
-								label={button.label}
-								onClick={() => onChangeMode?.(button.mode)}
-								selectable
-								selected={mode === button.mode}
-							/>
-						))}
+						<SegmentedControl
+							onChange={value => onChangeMode?.(value as StoryEditMode)}
+							options={modeButtons.map(button => ({
+								icon: button.icon,
+								label: button.label,
+								value: button.mode
+							}))}
+							size="sm"
+							value={mode}
+						/>
 					</div>
 					<div className="story-edit-dock-controls">
 						<IconButton
 							icon={
-								leftDockCollapsed ? (
-									<IconLayoutSidebarLeftExpand />
-								) : (
-									<IconLayoutSidebarLeftCollapse />
-								)
+								leftDockCollapsed
+									? 'layout-sidebar-left-expand'
+									: 'layout-sidebar-left-collapse'
 							}
-							iconOnly
 							label={t(
 								leftDockCollapsed
 									? 'routes.storyEdit.workspace.expandLeftDock'
@@ -112,13 +98,10 @@ export const StoryEditToolbar: React.FC<StoryEditToolbarProps> = props => {
 						/>
 						<IconButton
 							icon={
-								bottomDrawerOpen ? (
-									<IconLayoutBottombarCollapse />
-								) : (
-									<IconLayoutBottombarExpand />
-								)
+								bottomDrawerOpen
+									? 'layout-bottombar-collapse'
+									: 'layout-bottombar-expand'
 							}
-							iconOnly
 							label={t(
 								bottomDrawerOpen
 									? 'routes.storyEdit.workspace.closeBottomDrawer'
@@ -128,13 +111,10 @@ export const StoryEditToolbar: React.FC<StoryEditToolbarProps> = props => {
 						/>
 						<IconButton
 							icon={
-								rightDockCollapsed ? (
-									<IconLayoutSidebarRightExpand />
-								) : (
-									<IconLayoutSidebarRightCollapse />
-								)
+								rightDockCollapsed
+									? 'layout-sidebar-right-expand'
+									: 'layout-sidebar-right-collapse'
 							}
-							iconOnly
 							label={t(
 								rightDockCollapsed
 									? 'routes.storyEdit.workspace.expandRightDock'

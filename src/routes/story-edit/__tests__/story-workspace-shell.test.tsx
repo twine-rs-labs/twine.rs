@@ -125,7 +125,7 @@ describe('<StoryWorkspaceShell>', () => {
 			.getByRole('button', {name: 'Next'})
 			.click();
 		expect(onSelectPassage).toHaveBeenCalledWith(next);
-		expect(screen.getByText('Missing')).toBeInTheDocument();
+		expect(screen.getAllByText('Missing').length).toBeGreaterThan(0);
 	});
 
 	it('shows indexed contents and project intelligence in the docks', () => {
@@ -151,7 +151,7 @@ describe('<StoryWorkspaceShell>', () => {
 
 		expect(screen.getAllByText('$score').length).toBeGreaterThan(0);
 		expect(screen.getAllByText('assets/cover.png').length).toBeGreaterThan(0);
-		expect(screen.getByText('broken-link')).toBeInTheDocument();
+		expect(screen.getAllByText('broken-link').length).toBeGreaterThan(0);
 	});
 
 	it('opens indexed story sources from the contents navigator', () => {
