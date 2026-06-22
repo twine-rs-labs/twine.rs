@@ -112,9 +112,9 @@ remains is deeper integration and retiring compatibility surfaces:
 | Format host API (2)                  | partial — types/loader/resolver done; `/formats` is now the primary capabilities/modules/defaults/proofing/extensions route | D6 + engine plumbing |
 | Local format dev workflow (3)        | partial — dev metadata and URL-add surfaced                                                                                 | D6 + engine plumbing |
 | Build / export / package targets (4) | partial — package builder plus `/stories/:storyId/build` for Play/Test/Proof/HTML/Twee/JSON/Package/Publish/Compatibility/Inspect | D7 advanced policy   |
-| Runtime/debug hooks (5)              | partial — preview debug strip plus source/graph reveal actions; runtime state/devtools still missing                       | D8                   |
+| Runtime/debug hooks (5)              | partial — preview debug strip plus current-passage bridge, logs, viewport presets, and source/graph reveal actions; variables/state/devtools still missing | D8                   |
 | Publish-safety (6)                   | done (engine); surfaced in Build/Formats routes                                                                             | D7 polish            |
-| H1 previews on host/query            | partial — app-owned iframe routes; debugger/reveal bridge still missing                                                     | D8                   |
+| H1 previews on host/query            | partial — app-owned iframe routes with live debug bridge; desktop scratch-window parity and richer runtime inspection remain | D8                   |
 | H2 graph projection                  | D5 done on the app side; native/WASM host bridge still follow-up                                                            | D5 + core bridge     |
 | H3 run-from-here                     | partial (`startId` plumbed; not everywhere)                                                                                 | D4 / D5 / D8         |
 
@@ -431,16 +431,22 @@ Current implementation snapshot:
 
 - Play/Test/Proof preview frames are app-owned iframe surfaces with debug strips
   for target, story, start passage, HTML/story-data status, story-index
-  diagnostics, graph/link health, and asset health. Source, Graph, Build, and
-  Test From Start actions are exposed from the strip.
+  diagnostics, graph/link health, and asset health. Source, Graph, Build,
+  Test From Start, and current-passage Test actions are exposed from the strip.
+- Browser previews now inject a small app-owned debug bridge into `srcDoc`
+  output. The bridge reports current passage best-effort across formats,
+  viewport size/hash/scroll, console output, runtime errors, and DOM-driven
+  passage changes back to the React preview frame. The strip can reveal the
+  observed passage in Source/Graph, relaunch Test from the observed passage,
+  reload the frame, and switch fit/desktop/tablet/phone viewport presets.
 - Run-from-here is now native-aware through `useStoryLaunch()` from the text
   header, graph toolbar, split/right inspector, passage fuzzy-search result
   action, standalone Contents and Diagnostics inspectors, asset inspector first
   usage, and editor asset usage buttons.
-- Remaining D8 closures are runtime-to-editor inspection: current passage events
-  from the iframe, variable/state inspection, logs, format devtools panels,
-  viewport/runtime controls, and richer asset/runtime source reveal from inside
-  the running story.
+- Remaining D8 closures are deeper runtime-to-editor inspection: variables/state,
+  visited stack, format devtools panels, richer asset/runtime source reveal from
+  inside the running story, and bringing the same bridge into the Electron
+  scratch-window path instead of only browser `srcDoc` previews.
 
 Exit criteria: Play/Test/Proof open inside the DS preview surface in both browser
 and desktop contexts with a working debug strip; the app is never swapped out via

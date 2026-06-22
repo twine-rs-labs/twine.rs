@@ -11,6 +11,12 @@ builds launch a scratch HTML package through the desktop bridge so local project
 assets are available alongside the story. You can test a story multiple times at
 once.
 
+Browser previews include a debug strip above the running story. It shows the
+story target, build health, current passage when the runtime can report it,
+runtime logs, and viewport size. You can reveal the current passage in Source or
+Graph, reload the preview, and switch between fit, desktop, tablet, and phone
+viewport widths.
+
 ## Testing a Story From the Beginning
 
 You can test a story from its start passage from either the Story Library or
@@ -39,3 +45,5 @@ context:
   passage-specific test action for the selected result or first usage.
 - In a preview window, choose _Test From Start_ to relaunch the current preview's
   start passage in test mode.
+- In a browser preview window, choose _Test Current_ after the runtime reports a
+  current passage to relaunch from the passage currently being inspected.

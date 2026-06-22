@@ -39,10 +39,9 @@ describe('<StoryTestRoute>', () => {
 		usePublishingMock.mockReturnValue({publishStory});
 		renderComponent('/stories/123/test');
 		await waitFor(() =>
-			expect(screen.getByTitle('Story test preview')).toHaveAttribute(
-				'srcdoc',
-				'mock-published-story'
-			)
+			expect(
+				screen.getByTitle('Story test preview').getAttribute('srcdoc')
+			).toContain('mock-published-story')
 		);
 		expect(screen.getByText('Test')).toBeInTheDocument();
 		expect(publishStory.mock.calls).toEqual([
@@ -58,10 +57,9 @@ describe('<StoryTestRoute>', () => {
 		usePublishingMock.mockReturnValue({publishStory});
 		renderComponent('/stories/123/test/456');
 		await waitFor(() =>
-			expect(screen.getByTitle('Story test preview')).toHaveAttribute(
-				'srcdoc',
-				'mock-published-story'
-			)
+			expect(
+				screen.getByTitle('Story test preview').getAttribute('srcdoc')
+			).toContain('mock-published-story')
 		);
 		expect(publishStory.mock.calls).toEqual([
 			['123', {buildTarget: 'test', formatOptions: 'debug', startId: '456'}]

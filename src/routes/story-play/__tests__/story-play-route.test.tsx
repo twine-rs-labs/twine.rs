@@ -36,8 +36,7 @@ describe('<StoryPlayRoute>', () => {
 		usePublishingMock.mockReturnValue({publishStory});
 		renderComponent('/stories/123/play');
 		await waitFor(() =>
-			expect(screen.getByTitle('Story preview')).toHaveAttribute(
-				'srcdoc',
+			expect(screen.getByTitle('Story preview').getAttribute('srcdoc')).toContain(
 				'mock-published-story'
 			)
 		);

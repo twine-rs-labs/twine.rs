@@ -36,10 +36,9 @@ describe('<StoryProofRoute>', () => {
 		usePublishingMock.mockReturnValue({proofStory});
 		renderComponent('/stories/123/proof');
 		await waitFor(() =>
-			expect(screen.getByTitle('Story proofing preview')).toHaveAttribute(
-				'srcdoc',
-				'mock-proofed-story'
-			)
+			expect(
+				screen.getByTitle('Story proofing preview').getAttribute('srcdoc')
+			).toContain('mock-proofed-story')
 		);
 		expect(screen.getByText('Proof')).toBeInTheDocument();
 		expect(proofStory.mock.calls).toEqual([['123']]);
