@@ -174,7 +174,7 @@
 .story-list-launcher__table td {
 	border-bottom: 1px solid var(--line-1);
 	color: var(--tx-2);
-	height: 56px;
+	height: 74px;
 	padding: 8px 12px;
 	vertical-align: middle;
 }
@@ -195,7 +195,7 @@
 }
 
 .story-list-launcher__row {
-	cursor: default;
+	cursor: pointer;
 }
 
 .story-list-launcher__row:hover td {
@@ -225,6 +225,18 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.story-list-launcher__project-actions {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 7px;
+}
+
+.story-list-launcher__project-actions .tw-btn {
+	min-height: 28px;
 }
 
 .story-list-launcher__health {

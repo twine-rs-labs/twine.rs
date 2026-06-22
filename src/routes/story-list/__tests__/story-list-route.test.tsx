@@ -88,7 +88,7 @@ describe('<StoryListRoute>', () => {
 
 		renderComponent({stories: [story]});
 		fireEvent.click(
-			screen.getByRole('button', {name: /delete project trigaea/i})
+			screen.getByRole('button', {name: /delete story trigaea/i})
 		);
 
 		await waitFor(() => expect(deleteProjectFolder).toHaveBeenCalledWith(rootPath));
@@ -117,12 +117,30 @@ describe('<StoryListRoute>', () => {
 
 		renderComponent({stories: [story]});
 		fireEvent.click(
-			screen.getByRole('button', {name: /delete project moon castle/i})
+			screen.getByRole('button', {name: /delete story moon castle/i})
 		);
 
 		expect(deleteProjectFolder).not.toHaveBeenCalled();
 		expect(screen.getByTestId('story-list-row')).toBeInTheDocument();
 		expect(loadProjectMetadata(story.id)?.rootPath).toBe(rootPath);
+	});
+
+	it('deletes a non-project story from the library after confirming', async () => {
+		const story = fakeStory();
+		const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+
+		story.name = 'Standalone Story';
+		renderComponent({stories: [story]});
+		fireEvent.click(
+			screen.getByRole('button', {name: /delete story standalone story/i})
+		);
+
+		expect(confirmSpy).toHaveBeenCalledWith(
+			expect.stringContaining('Delete story "Standalone Story"?')
+		);
+		await waitFor(() =>
+			expect(screen.queryByTestId('story-list-row')).not.toBeInTheDocument()
+		);
 	});
 
 	it('displays an empty launcher state if there are no stories in state', () => {

@@ -50,7 +50,7 @@ function graphStory(generatedLayout = false) {
 function renderComponent(
 	generatedLayout = false,
 	configure?: (context: ReturnType<typeof graphStory>) => void,
-	options: {visibleZoom?: number; zoom?: number} = {}
+	options: {selectedPassageId?: string; visibleZoom?: number; zoom?: number} = {}
 ) {
 	const {next, start, story} = graphStory(generatedLayout);
 
@@ -96,7 +96,7 @@ function renderComponent(
 				onEdit={onEdit}
 				onSelect={onSelect}
 				onTestPassage={onTestPassage}
-				selectedPassageId={start.id}
+				selectedPassageId={options.selectedPassageId ?? start.id}
 				story={story}
 				visibleZoom={options.visibleZoom ?? story.zoom}
 				zoom={story.zoom}
@@ -233,6 +233,50 @@ describe('<StoryGraphPanel>', () => {
 				})
 			)
 		);
+
+		widthSpy.mockRestore();
+		heightSpy.mockRestore();
+	});
+
+	it('keeps graph projection viewport-bounded when the selected passage is offscreen', async () => {
+		const widthSpy = jest
+			.spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+			.mockReturnValue(320);
+		const heightSpy = jest
+			.spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+			.mockReturnValue(240);
+		const querySpy = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'queryGraphProjection'
+		);
+		const {story} = renderComponent(
+			false,
+			({next}) => {
+				next.left = 5600;
+				next.top = 4200;
+			},
+			{selectedPassageId: 'next'}
+		);
+
+		await waitFor(() =>
+			expect(querySpy).toHaveBeenCalledWith(
+				story.id,
+				expect.objectContaining({
+					viewport: expect.objectContaining({
+						height: 1800,
+						left: 0,
+						top: 0,
+						width: 1800
+					})
+				})
+			)
+		);
+
+		const viewportQueries = querySpy.mock.calls.flatMap(([storyId, query]) =>
+			storyId === story.id && query ? [query.viewport] : []
+		);
+
+		expect(viewportQueries).not.toContain(null);
 
 		widthSpy.mockRestore();
 		heightSpy.mockRestore();

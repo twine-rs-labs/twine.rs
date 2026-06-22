@@ -124,6 +124,30 @@ describe('<StoryEditRoute>', () => {
 		).toBeTruthy();
 	});
 
+	it('opens story find and replace from shell toolbar story actions', async () => {
+		await renderComponent(fakeStory());
+
+		fireEvent.click(await screen.findByRole('tab', {name: 'common.story'}));
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'routes.storyEdit.toolbar.findAndReplace'
+			})
+		);
+
+		expect(screen.getByText('dialogs.storySearch.title')).toBeInTheDocument();
+	});
+
+	it('opens story details from shell toolbar story actions', async () => {
+		await renderComponent(fakeStory());
+
+		fireEvent.click(await screen.findByRole('tab', {name: 'common.story'}));
+		fireEvent.click(screen.getByRole('button', {name: 'common.details'}));
+
+		expect(
+			screen.getByLabelText('dialogs.storyDetails.snapToGrid')
+		).toBeInTheDocument();
+	});
+
 	it('sets up zoom keyboard shortcuts', async () => {
 		await renderComponent(fakeStory());
 		expect(useZoomShortcutsMock).toBeCalled();

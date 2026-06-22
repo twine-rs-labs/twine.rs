@@ -1,16 +1,22 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {IconButton} from '../../../components/design-system';
-import {StorySearchDialog, useDialogsContext} from '../../../dialogs';
+import {
+	StorySearchDialog,
+	useDialogsContext,
+	type DialogsContextProps
+} from '../../../dialogs';
 import {Story} from '../../../store/stories';
 
 export interface FindReplaceButtonProps {
+	dialogsDispatch?: DialogsContextProps['dispatch'];
 	story: Story;
 }
 
 export const FindReplaceButton: React.FC<FindReplaceButtonProps> = props => {
-	const {story} = props;
-	const {dispatch} = useDialogsContext();
+	const {dialogsDispatch, story} = props;
+	const {dispatch: contextDispatch} = useDialogsContext();
+	const dispatch = dialogsDispatch ?? contextDispatch;
 	const {t} = useTranslation();
 
 	return (

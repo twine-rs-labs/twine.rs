@@ -1,6 +1,7 @@
 import * as React from 'react';
 import {RenamePassageButton} from '../../../components/passage/rename-passage-button';
 import {renamePassageCommand, useCoreProjectHost} from '../../../core';
+import type {DialogsContextProps} from '../../../dialogs';
 import {Passage, Story} from '../../../store/stories';
 import {Point} from '../../../util/geometry';
 import {CreatePassageButton} from './create-passage-button';
@@ -13,13 +14,14 @@ import {StartAtPassageButton} from './start-at-passage-button';
 import {TestPassageButton} from './test-passage-button';
 
 export interface PassageActionsProps {
+	dialogsDispatch?: DialogsContextProps['dispatch'];
 	getCenter: () => Point;
 	onOpenFuzzyFinder: () => void;
 	story: Story;
 }
 
 export const PassageActions: React.FC<PassageActionsProps> = props => {
-	const {getCenter, onOpenFuzzyFinder, story} = props;
+	const {dialogsDispatch, getCenter, onOpenFuzzyFinder, story} = props;
 	const coreProjectHost = useCoreProjectHost();
 	const selectedPassages = React.useMemo(
 		() => story.passages.filter(passage => passage.selected),
@@ -48,7 +50,11 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 	return (
 		<div className="route-action-group">
 			<CreatePassageButton getCenter={getCenter} story={story} />
-			<EditPassagesButton passages={selectedPassages} story={story} />
+			<EditPassagesButton
+				dialogsDispatch={dialogsDispatch}
+				passages={selectedPassages}
+				story={story}
+			/>
 			<RenamePassageButton
 				onRename={name => handleRename(name, soloSelectedPassage)}
 				passage={soloSelectedPassage}

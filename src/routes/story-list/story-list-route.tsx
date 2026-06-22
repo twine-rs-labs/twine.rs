@@ -233,39 +233,61 @@ export const InnerStoryListRoute: React.FC = () => {
 		storiesDispatch(selectStory(story, !additive));
 	}
 
-	async function deleteProject(story: Story) {
+	async function deleteStory(story: Story) {
 		const rootPath = fileBackedProjectRoot(story);
 		const twineElectron = desktopBridge();
-
-		if (!rootPath || !twineElectron?.deleteProjectFolder) {
-			return;
-		}
-
-		const projectStories = stories.filter(
-			candidate => fileBackedProjectRoot(candidate) === rootPath
-		);
-		const confirmed = window.confirm(
-			[
-				`Delete project "${story.name}"?`,
-				'',
-				`This will delete files from ${rootPath}.`,
-				'',
-				`It will remove ${projectStories.length} ${
-					projectStories.length === 1 ? 'story' : 'stories'
-				} from this library. This cannot be undone.`
-			].join('\n')
-		);
+		const canDeleteProjectFolder = rootPath && twineElectron?.deleteProjectFolder;
+		const projectStories = canDeleteProjectFolder
+			? stories.filter(candidate => fileBackedProjectRoot(candidate) === rootPath)
+			: [story];
+		const confirmed = canDeleteProjectFolder
+			? window.confirm(
+					[
+						`Delete project "${story.name}"?`,
+						'',
+						`This will delete files from ${rootPath}.`,
+						'',
+						`It will remove ${projectStories.length} ${
+							projectStories.length === 1 ? 'story' : 'stories'
+						} from this library. This cannot be undone.`
+					].join('\n')
+			  )
+			: window.confirm(
+					[
+						`Delete story "${story.name}"?`,
+						'',
+						'This will remove it from this library. This cannot be undone.'
+					].join('\n')
+			  );
 
 		if (!confirmed) {
 			return;
 		}
 
-		await twineElectron.deleteProjectFolder(rootPath);
+		if (canDeleteProjectFolder) {
+			await twineElectron.deleteProjectFolder(rootPath);
+		}
 
 		for (const projectStory of projectStories) {
 			deleteProjectMetadata(projectStory.id);
 			storiesDispatch(deleteStoryAction(projectStory));
 		}
+	}
+
+	function stopAndOpenStory(
+		story: Story,
+		event: React.MouseEvent<HTMLButtonElement>
+	) {
+		event.stopPropagation();
+		openStory(story);
+	}
+
+	function stopAndDeleteStory(
+		story: Story,
+		event: React.MouseEvent<HTMLButtonElement>
+	) {
+		event.stopPropagation();
+		void deleteStory(story);
 	}
 
 	return (
@@ -462,6 +484,26 @@ export const InnerStoryListRoute: React.FC = () => {
 													<div className="story-list-launcher__project-meta">
 														{storyFileName(story)} · {story.ifid}
 													</div>
+													<div className="story-list-launcher__project-actions">
+														<Button
+															aria-label={`Open ${story.name}`}
+															icon="arrow-up-right"
+															onClick={event => stopAndOpenStory(story, event)}
+															size="sm"
+															variant="ghost"
+														>
+															Open
+														</Button>
+														<Button
+															aria-label={`Delete story ${story.name}`}
+															icon="trash"
+															onClick={event => stopAndDeleteStory(story, event)}
+															size="sm"
+															variant="danger"
+														>
+															Delete
+														</Button>
+													</div>
 												</td>
 												<td>
 													<Badge icon="binary-tree" tone="generated">
@@ -488,19 +530,6 @@ export const InnerStoryListRoute: React.FC = () => {
 															}}
 															size="sm"
 														/>
-														{fileBackedProjectRoot(story) &&
-															desktopBridge()?.deleteProjectFolder && (
-																<IconButton
-																	className="story-list-launcher__danger-action"
-																	icon="trash"
-																	label={`Delete project ${story.name}`}
-																	onClick={event => {
-																		event.stopPropagation();
-																		void deleteProject(story);
-																	}}
-																	size="sm"
-																/>
-															)}
 													</div>
 												</td>
 											</tr>
@@ -541,19 +570,15 @@ export const InnerStoryListRoute: React.FC = () => {
 												</Badge>
 												<div className="story-list-launcher__card-actions">
 													<span>{formatDate(story.lastUpdate)}</span>
-													{fileBackedProjectRoot(story) &&
-														desktopBridge()?.deleteProjectFolder && (
-															<IconButton
-																className="story-list-launcher__danger-action"
-																icon="trash"
-																label={`Delete project ${story.name}`}
-																onClick={event => {
-																	event.stopPropagation();
-																	void deleteProject(story);
-																}}
-																size="sm"
-															/>
-														)}
+													<Button
+														aria-label={`Delete story ${story.name}`}
+														icon="trash"
+														onClick={event => stopAndDeleteStory(story, event)}
+														size="sm"
+														variant="danger"
+													>
+														Delete
+													</Button>
 												</div>
 											</div>
 										</div>

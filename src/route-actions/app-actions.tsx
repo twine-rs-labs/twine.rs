@@ -2,10 +2,19 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {useHistory} from 'react-router-dom';
 import {IconButton} from '../components/design-system';
-import {AboutTwineDialog, useDialogsContext} from '../dialogs';
+import {
+	AboutTwineDialog,
+	useDialogsContext,
+	type DialogsContextProps
+} from '../dialogs';
 
-export const AppActions: React.FC = () => {
-	const {dispatch} = useDialogsContext();
+export interface AppActionsProps {
+	dialogsDispatch?: DialogsContextProps['dispatch'];
+}
+
+export const AppActions: React.FC<AppActionsProps> = props => {
+	const {dispatch: contextDispatch} = useDialogsContext();
+	const dispatch = props.dialogsDispatch ?? contextDispatch;
 	const history = useHistory();
 	const {t} = useTranslation();
 

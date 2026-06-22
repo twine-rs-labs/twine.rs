@@ -24,7 +24,7 @@ import type {CoreGraphProjection} from '../../core/bindings/CoreGraphProjection'
 import type {CoreLinkLayerOptions} from '../../core/bindings/CoreLinkLayerOptions';
 import type {CoreRect} from '../../core/bindings/CoreRect';
 import {Passage, Story} from '../../store/stories';
-import {Point, rectsIntersect} from '../../util/geometry';
+import {Point} from '../../util/geometry';
 import {markPerformanceAfterPaint} from '../../util/performance';
 
 export interface StoryGraphPanelProps {
@@ -142,6 +142,14 @@ function passageRect(passage: Passage): CoreRect {
 		top: passage.top,
 		width: passage.width
 	};
+}
+
+function validRect(rect: CoreRect) {
+	return (
+		Object.values(rect).every(Number.isFinite) &&
+		rect.height > 0 &&
+		rect.width > 0
+	);
 }
 
 function bufferedViewport(rect: CoreRect): CoreRect {
@@ -896,16 +904,8 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 		return measuredViewport ? bufferedViewport(source) : source;
 	}, [projectionViewportKey]);
-	const selectedPassageInViewport =
-		!selectedPassage ||
-		!measuredViewport ||
-		rectsIntersect(passageRect(selectedPassage), measuredViewport);
 	const queryViewport =
-		focusSelection ||
-		(measuredViewport && !selectedPassageInViewport) ||
-		orientation !== 'right'
-			? null
-			: projectionViewport;
+		focusSelection || orientation !== 'right' ? null : projectionViewport;
 	const projectionQuery = React.useMemo(
 		() => ({
 			focus:
@@ -1055,6 +1055,22 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		() => minimapTransform(displayBounds),
 		[displayBounds]
 	);
+	const minimapNodes = React.useMemo(
+		() =>
+			story.passages.flatMap(passage => {
+				const bounds = passageRect(passage);
+
+				return validRect(bounds)
+					? [
+							{
+								bounds: displayRect(bounds, orientation, projection.bounds),
+								id: passage.id
+							}
+						]
+					: [];
+			}),
+		[orientation, projection.bounds, story.passages]
+	);
 	const showSaveLayoutAction =
 		projection.layoutState !== 'generated' ||
 		prefs.graphGeneratedLayoutSavePrompt;
@@ -1142,6 +1158,13 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		const node = selectedPassageId
 			? displayNodeById.get(selectedPassageId)
 			: undefined;
+		const fallbackBounds =
+			selectedPassage &&
+			orientation === 'right' &&
+			validRect(passageRect(selectedPassage))
+				? passageRect(selectedPassage)
+				: undefined;
+		const bounds = node?.bounds ?? fallbackBounds;
 
 		if (!selectedPassageId) {
 			lastAutoCenteredSelection.current = undefined;
@@ -1150,7 +1173,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 		if (
 			!element ||
-			!node ||
+			!bounds ||
 			lastAutoCenteredSelection.current === selectedPassageId
 		) {
 			return;
@@ -1158,7 +1181,6 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 		lastAutoCenteredSelection.current = selectedPassageId;
 
-		const bounds = node.bounds;
 		const left =
 			(bounds.left + bounds.width / 2) * visibleZoom - element.clientWidth / 2;
 		const top =
@@ -1173,7 +1195,13 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			element.scrollLeft = Math.max(left, 0);
 			element.scrollTop = Math.max(top, 0);
 		}
-	}, [displayNodeById, selectedPassageId, visibleZoom]);
+	}, [
+		displayNodeById,
+		orientation,
+		selectedPassage,
+		selectedPassageId,
+		visibleZoom
+	]);
 
 	function pointFromEvent(
 		event: React.MouseEvent<HTMLElement>
@@ -1917,7 +1945,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 					ref={minimapRef}
 				>
 					<div className="story-edit-graph-minimap__surface">
-						{displayNodes.map(node => (
+						{minimapNodes.map(node => (
 							<span
 								className={classNames(
 									'story-edit-graph-minimap__node',

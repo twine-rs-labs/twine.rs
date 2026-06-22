@@ -2,6 +2,7 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {useAppShellContext} from '../components/app-shell';
 import {IconButton, SegmentedControl} from '../components/design-system';
+import {useDialogsContext} from '../dialogs';
 import {Story} from '../store/stories';
 import {Point} from '../util/geometry';
 import {StoryEditMode} from '../routes/story-edit/workspace-state';
@@ -42,6 +43,7 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 	} = props;
 	const {t} = useTranslation();
 	const appShell = useAppShellContext();
+	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const modeButtons = React.useMemo<
 		{
 			icon: string;
@@ -150,16 +152,19 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 		() => ({
 			[t('common.passage')]: (
 				<PassageActions
+					dialogsDispatch={dialogsDispatch}
 					getCenter={getCenter}
 					onOpenFuzzyFinder={onOpenFuzzyFinder}
 					story={story}
 				/>
 			),
-			[t('common.story')]: <StoryActions story={story} />,
+			[t('common.story')]: (
+				<StoryActions dialogsDispatch={dialogsDispatch} story={story} />
+			),
 			[t('common.build')]: <BuildActions story={story} />,
-			[t('common.appName')]: <AppActions />
+			[t('common.appName')]: <AppActions dialogsDispatch={dialogsDispatch} />
 		}),
-		[getCenter, onOpenFuzzyFinder, story, t]
+		[dialogsDispatch, getCenter, onOpenFuzzyFinder, story, t]
 	);
 
 	React.useEffect(() => {
