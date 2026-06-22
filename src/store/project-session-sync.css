@@ -1,0 +1,60 @@
+.project-session-sync {
+	background: var(--bg-pop);
+	border: 1px solid var(--border-default);
+	border-radius: 8px;
+	bottom: 16px;
+	box-shadow: var(--shadow-large);
+	color: var(--text-body);
+	inline-size: min(380px, calc(100vw - 32px));
+	padding: 14px;
+	position: fixed;
+	right: 16px;
+	z-index: 20;
+}
+
+.project-session-sync__title {
+	font-size: 0.95rem;
+	font-weight: 700;
+	margin-block-end: 4px;
+}
+
+.project-session-sync p {
+	color: var(--text-muted);
+	font-size: 0.85rem;
+	line-height: 1.4;
+	margin: 0;
+}
+
+.project-session-sync__error {
+	color: var(--sem-error);
+	margin-block-start: 8px;
+}
+
+.project-session-sync__actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-block-start: 12px;
+}
+
+.project-session-sync__actions button {
+	background: var(--bg-raised);
+	border: 1px solid var(--border-default);
+	border-radius: 6px;
+	color: var(--text-body);
+	cursor: pointer;
+	font: inherit;
+	font-size: 0.85rem;
+	font-weight: 600;
+	min-block-size: 32px;
+	padding: 0 10px;
+}
+
+.project-session-sync__actions button:hover:not(:disabled) {
+	background: var(--bg-card);
+}
+
+.project-session-sync__actions button:disabled {
+	cursor: default;
+	opacity: 0.6;
+}

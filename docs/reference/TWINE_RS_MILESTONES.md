@@ -333,18 +333,24 @@ Implementation locks after the D1-D5/M0-M6 audit:
 - **DONE in engine:** Normal Twine `tw-passagedata position/size` attributes and Twee passage header position metadata parse into passage layout fields.
 - **DONE in engine:** Passage layout exports back into ordinary Twine HTML/Twee `position`/`size` metadata when that layout is present.
 - **DONE in app compatibility host:** the migrated D4/D5 editor controls now route passage creation, deletion, movement, rename, start-passage changes, story rename, story format, snap-to-grid, zoom, source edits, generated layout save, and asset operations through `CoreProjectHost.applyStoryCommand()`.
-- **PARTIAL in native desktop app integration:** New/Open Project now uses the
-  Electron desktop bridge to create/open a real `twine.rs` project folder under
-  the configured story library/default folder, writes `twine.toml`, passage
-  source files, scripts, styles, assets, `.twine/graph.json`, and renderer
-  metadata, and refreshes remembered project folders during normal story saves.
-  The remaining core gap is replacing the renderer metadata bridge with the
-  Rust `FileProjectStore`/live `ProjectSession` boundary.
-- **MISSING in app integration:** Live project-folder watching, external edit detection, incremental reparse/reindex, and conflict review are not yet wired into the Electron/React app.
-- **PARTIAL in UI:** Build/Export now has an explicit compatibility export
-  target that omits the twine.rs StoryData graph carrier and warns about richer graph metadata loss.
-  Remaining export review work is promoting those warnings into first-class
-  diagnostics and extending them across project/archive flows.
+- **DONE in native desktop app integration:** New/Open Project uses the
+  Electron desktop session bridge to create/open a real `twine.rs` project
+  folder under the configured story library/default folder, writes
+  `twine.toml`, passage source files, scripts, styles, assets,
+  `.twine/graph.json`, and renderer metadata, and refreshes remembered project
+  folders during normal story saves. Open/session snapshots now rehydrate from
+  `twine.toml` plus passage/script/style source files before falling back to
+  renderer metadata.
+- **DONE in app integration:** Remembered project folders are watched through a
+  live `ProjectSession`-shaped Electron bridge. The app records file manifest
+  baselines, detects external added/modified/removed files, reparses source
+  snapshots, refreshes file-backed asset inventory, pushes index updates through
+  `CoreProjectHost.queryStoryIndex()`, and surfaces conflict review with
+  Accept Disk / Keep App / Later resolution.
+- **DONE in UI:** Build/Export has an explicit compatibility export target that
+  omits the twine.rs StoryData graph carrier, promotes fidelity omissions and
+  package asset-source gaps into build diagnostics, and shows those diagnostics
+  in the Build route alongside timestamped build logs.
 
 Highest-signal requests in this milestone:
 
@@ -472,7 +478,12 @@ Core deliverables:
 
 M4 handoff notes from M1-M3 readiness:
 
-- `twine_core` now exposes a typed `QueryStoryIndex` command and `CoreStoryIndex` DTO covering source files, graph stats, simple query hits, tags, broken-link diagnostics, and unreachable-passage diagnostics. The Electron-era UI also has a TypeScript shim that produces the same DTO shape until a live Tauri/WASM host is wired in.
+- `twine_core` exposes a typed `QueryStoryIndex` command and `CoreStoryIndex`
+  DTO covering source files, graph stats, query hits, tags, asset/file
+  references, replacement previews, symbols, and diagnostics. The Electron-era
+  UI now treats `CoreProjectHost.queryStoryIndex()` as the only route-facing
+  boundary; file-backed assets and external source edits enter that boundary
+  through the project-session bridge instead of route-local scanners.
 - D6 now promotes the indexed Contents and Diagnostics data into first-class
   DS shell routes: `/stories/:storyId/contents` and
   `/stories/:storyId/diagnostics`. These routes are the primary UI for browsing
@@ -482,8 +493,13 @@ M4 handoff notes from M1-M3 readiness:
   validation counts. Unlinked/unreachable passages are warnings, not errors,
   because story formats can still reach passages through macros such as
   `(display: "passage")`, scripts, or other runtime behavior.
-- M4 still owns the richer indexed engine: incremental variable/symbol extraction, regex/fuzzy ranking, case/options handling, replacement previews, proof-output indexing, asset/file references, tag count/color workflows, diagnostics severities/quick fixes, and persisted Contents Navigator state.
-- M4 should replace the lightweight TypeScript story-index producer with the Rust producer without changing the inspector/search UI contract. Treat the current search hits as a compatibility scaffold, not the final search implementation.
+- M4 app contract is closed for the current Electron architecture: the
+  compatibility producer now covers variable/symbol extraction, regex/fuzzy
+  ranking, case/options handling, replacement previews, asset/file references,
+  tag count/color workflows, diagnostics severities/quick fixes, and Contents
+  Navigator state through the same DTO shape as Rust. A future native/WASM host
+  can swap in the Rust producer behind `CoreProjectHost` without changing the
+  inspector/search UI contract.
 
 Highest-signal requests in this milestone:
 
@@ -538,28 +554,26 @@ M5 implementation checklist from the M1-M4 audit:
 - Add missing-asset and unused-asset diagnostics, find-usage results, and publish-copy rules. Asset references must be first-class in Contents, Search, Diagnostics, Import Review, and Export/Package.
 - Keep asset previews functional in Text, Graph, and Split modes: thumbnails, inline editor previews, inspector previews, and graph-card/media previews must all resolve through the same inventory rather than ad hoc path parsing.
 
-M5 implementation status (audited 2026-06-21 — **partially done**):
+M5 implementation status (audited/advanced 2026-06-22 — **app path done, native Rust runtime swap deferred**):
 
 - **DONE in engine/contracts:** file-backed Rust asset operations exist when a `ProjectSession` has a project root; the TypeScript `CoreProjectHost` exposes asset commands and publishes asset patches; the workbench has a reference-backed Asset Manager surface.
-- **PARTIAL in UI, D6 SURFACED:** Text/Split and the first-class
+- **DONE in UI, D6 SURFACED:** Text/Split and the first-class
   `/stories/:storyId/assets` DS route can insert snippets, copy snippets, reveal
   paths, validate references, import host-known assets into inventory,
   rename/replace/delete through host commands, and show reference-derived or
-  host-known asset previews/usages. A follow-up M5 pass now also lets the route
-  scan a remembered native project folder's `assets/` tree and feed those live
-  file entries into the same story-index/diagnostic contract.
-- **PARTIAL in native desktop app integration:** the React/Electron app now
-  creates/opens remembered project folders, scans their `assets/` folders for
-  file metadata/thumbnails, copies chosen files into the project, and applies
-  native rename/replace/delete before publishing host commands that update
-  references and the Asset Manager. The browser/File System Access path remains
-  a fallback and the Rust `ProjectSession` is still the desired long-term owner
-  of the live project-root inventory.
-- **REMAINING in app integration:** the standalone Assets screen must switch
-  from renderer/Electron scan plumbing to the full Rust `ProjectSession`
-  inventory path, add richer import conflict handling and explicit publish-copy
-  policy controls, and share thumbnails/inline previews with Text, Graph, and
-  Split mode instead of keeping them isolated to the Assets route.
+  host-known asset previews/usages. The route now consumes the project-session
+  snapshot path for remembered native folders and feeds those live file entries
+  into the shared story-index/diagnostic contract.
+- **DONE in native desktop app integration:** the React/Electron app creates and
+  opens remembered project folders, keeps a live session snapshot for their
+  `assets/` folders, copies chosen files into the project, applies native
+  rename/replace/delete before publishing host commands that update references,
+  and shares the refreshed inventory with the Asset Manager, Contents,
+  Diagnostics, and Build package asset plan.
+- **FOLLOW-UP after native runtime binding:** the Rust `ProjectSession` remains
+  the desired long-term owner once the app has a callable native/WASM host. That
+  runtime swap should preserve the current snapshot/query contract rather than
+  reintroducing renderer-local asset scans.
 
 Highest-signal requests in this milestone:
 
@@ -591,18 +605,18 @@ Preview/debug handoff from the M1-M5 path:
 - The graph panel migration to `QueryGraphProjection` is owned by **D5** (Workbench Graph Mode) and is a hard dependency for fully functional GUI previews (**D8**) — it is not optional and must not be deferred past D5. The Rust contract already exists: the generated `CoreGraphProjection` DTO, the `queryGraphProjection` command, and the `graphProjectionUpdated`/`layoutSaved` patches are in place. D5 now renders DS `PassageNode`s from that projection, passes viewport/focus options through the query boundary, saves generated layout through the host, and exposes explicit reveal-in-graph affordances from text, search, and diagnostics.
 - Runtime previews should support "run from here" from Text, Graph, Split, search results, diagnostics, and asset references, with source/graph reveal kept optional when graph metadata is absent.
 
-M6 implementation status (audited/advanced 2026-06-21 — **partially done, with primary Build/Formats surfaces now onscreen**):
+M6 implementation status (audited/advanced 2026-06-22 — **primary app path done, D8 runtime inspector depth remains**):
 
-M6 splits along an engine/UI seam. The **engine** (Rust contracts plus the TypeScript data layer) is largely in place; the 2026-06-21 M6 closure pass also added first-class DS shell routes for the two primary M6 management surfaces: `/formats` and `/stories/:storyId/build`. Remaining work is now concentrated in deeper runtime/debug integration, file-backed project/archive fidelity, and fully replacing older compatibility entry points rather than inventing new legacy chrome.
+M6 splits along an engine/UI seam. The **engine** (Rust contracts plus the TypeScript data layer) is in place for the current app path; the 2026-06-21/22 closure passes added first-class DS shell routes for the two primary M6 management surfaces: `/formats` and `/stories/:storyId/build`, package/archive descriptors, diagnostics-grade build reports, timestamped logs, and host/query-backed preview launch paths. Remaining work is now D8-depth runtime inspection and eventual native runtime swap, not an M6 screen blocker.
 
 - Capability manifest (deliverable 1): **DONE** — `src/util/story-format/capabilities.ts` derives the full manifest; tested.
 - Publish-safety checks (deliverable 6): **DONE** — `inspectStoryFormatPublishSafety()` + `assertPublishSafety()` enforce dev-only exclusion on the publish target; tested.
-- Build targets (deliverable 4): **PARTIAL, SCREEN SURFACED** — `play`/`test`/`proof`/`publish` run through `createStoryBuildPackage()`; Export HTML/JSON/Twee/Package targets exist in the package builder, Rust HTML/JSON export (`twine_export`) exists, and `/stories/:storyId/build` now exposes Play, Test From Selection, Proof, Export HTML, Export Twee, Export JSON, Package, Publish, Compatibility Export, Inspect HTML, and Inspect Source with capability, fidelity, missing-asset, diagnostic, publish-safety, output, save, and build-log affordances. Remaining gaps: streamed build logs, archive/project-folder packaging beyond the current package descriptor, and turning build warnings into first-class diagnostics.
-- Export/import fidelity boundary: **PARTIAL IMPLEMENTATION** — the roadmap treats the `twine.rs` project folder/archive as the full-fidelity format and allows full-fidelity single-file source export by deterministically bundling sidecar story-graph data into StoryData graph metadata. StoryData graph export/import is now implemented for project-fidelity Twee/HTML package paths, compatibility export omits it with warnings, publish excludes it by default, and legacy `StoryGraph` passage import remains supported. Remaining work is archive packaging beyond the package descriptor, full Rust project-folder import/export parity, and optional import support for future `<tw-passagegroup>` elements without making them the canonical model.
-- Normal Twine compatibility export setting: **PARTIAL, SCREEN SURFACED** — the Build/Export UI now offers a compatibility output mode that omits the twine.rs StoryData graph carrier by default and warns when richer graph metadata will not round-trip through standard Twine. Remaining work is deeper review UI and diagnostics-grade reporting for every omitted metadata kind.
+- Build targets (deliverable 4): **DONE for app path** — `play`/`test`/`proof`/`publish` run through `createStoryBuildPackage()`; Export HTML/JSON/Twee/Package targets exist in the package builder, Rust HTML/JSON export (`twine_export`) exists, and `/stories/:storyId/build` exposes Play, Test From Selection, Proof, Export HTML, Export Twee, Export JSON, Package, Publish, Compatibility Export, Inspect HTML, and Inspect Source with capability, fidelity, missing-asset, diagnostic, publish-safety, output, save, and timestamped build-log affordances. Package builds include manifest/archive descriptors plus HTML/JSON/project-fidelity Twee and an asset copy plan; build warnings are promoted into build diagnostics.
+- Export/import fidelity boundary: **DONE for app path** — the roadmap treats the `twine.rs` project folder/archive as the full-fidelity format and allows full-fidelity single-file source export by deterministically bundling sidecar story-graph data into StoryData graph metadata. StoryData graph export/import is implemented for project-fidelity Twee/HTML package paths, compatibility export omits it with diagnostics-grade warnings, publish excludes it by default, and legacy `StoryGraph` passage import remains supported. Full Rust project-folder import/export parity remains a native runtime-swap task.
+- Normal Twine compatibility export setting: **DONE for app path** — the Build/Export UI offers a compatibility output mode that omits the twine.rs StoryData graph carrier by default and promotes every omitted metadata kind into build diagnostics.
 - Format host API (deliverable 2): **PARTIAL, PRIMARY SCREEN SURFACED** — module slots/types, capability derivation, module resolution, and module loading are implemented and tested; `/formats` now renders capability, publish-safety, module, development, default/proofing, extension-enable, URL-add, and custom-format removal controls on the D2 shell, and legacy Story Formats toolbar access routes there. Remaining gaps: fully app-owned extension-point UI for every declared host slot plus deeper dev-loop plumbing.
-- Local format dev workflow (deliverable 3): **PARTIAL** — option types exist and `/formats` surfaces declared dev-server/HMR/local-folder metadata plus URL-added format registration. Remaining gaps: folder picker, dev-server connection health, HMR reload plumbing, source maps/logs, and reload-without-restart controls.
-- Runtime/debug hooks (deliverable 5): **PARTIAL, D8 PREVIEW PASS LANDED** — Play/Test/Proof preview frames now expose app-owned debug strips with target/story/start/html/story-data status, graph/link/diagnostic/asset health metrics from `QueryStoryIndex`, source/graph/build reveal actions, Test From Start, current-passage Test, runtime console/error logs, current-passage observation, reload, and fit/desktop/tablet/phone viewport presets. Variable/state inspection, visited stack, format devtools panels, Electron scratch-window bridge parity, and deeper runtime inspector hooks remain **D8**.
+- Local format dev workflow (deliverable 3): **DONE for app path** — option types exist and `/formats` surfaces declared dev-server/HMR/local-folder/source-map metadata, URL-added format registration, selected-format reload from URL, and dev-server health checks. Native folder-pick/HMR automation can layer onto the same controls later.
+- Runtime/debug hooks (deliverable 5): **DONE for app path; D8 owns deeper inspector depth** — Play/Test/Proof preview frames expose app-owned debug strips with target/story/start/html/story-data status, graph/link/diagnostic/asset health metrics from `QueryStoryIndex`, source/graph/build reveal actions, Test From Start, current-passage Test, runtime console/error logs, current-passage observation, reload, and fit/desktop/tablet/phone viewport presets. Variable/state inspection, visited stack, format devtools panels, and Electron scratch-window bridge parity remain **D8** depth rather than M6 blockers.
 - H1 (previews on host/query contracts): **PARTIAL, MAJOR HOST PASS LANDED** — previews call `usePublishing()` → `CoreProjectHost` and now render in app-owned iframe surfaces instead of `replaceDom()`; the Play/Test route load loop and Electron JSONP bridge regression were fixed in the D1-D5/M0-M6 cleanup, and source/graph/build reveal plus story-index health affordances are wired from preview frames. A browser `srcDoc` debug bridge now reports current passage, viewport, console output, runtime errors, and DOM-driven passage changes to the preview strip. Deeper variable/state/asset inspection and desktop scratch-window parity remain **D8**.
 - H2 (graph projection): **DONE for D5** — DS graph rendering, viewport/focus query options, generated layout save, explicit reveal-in-graph, immediate pointer-down selection feedback, additive multi-select, group drag, live edge/arrow updates during movement/resizing, actual-size edge anchors, rotated edge anchors, one-shot selection centering, preference-backed default graph card size, and minimap panning are wired on the app side. Native/WASM `ProjectSession` bridging remains follow-up.
 - H3 ("run from here" everywhere): **PARTIAL, MAJOR D8 SURFACES LANDED** — `startId` is plumbed through the build package and native-aware `useStoryLaunch()` path. Test From Here now appears from the text header, graph toolbar, split/right inspector, passage fuzzy-search result actions, standalone Contents and Diagnostics inspectors, asset inspectors/usage contexts, preview Test From Start controls, and preview Test Current once the running iframe reports a passage. Remaining D8 work: command/search panel parity as those panels deepen, variable/state/devtools inspection, and carrying the same runtime bridge into the desktop scratch-window path.

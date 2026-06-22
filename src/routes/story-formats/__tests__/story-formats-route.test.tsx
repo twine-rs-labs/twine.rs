@@ -100,6 +100,24 @@ describe('<StoryFormatsRoute>', () => {
 		);
 	});
 
+	it('reloads the selected format from its URL for the dev loop', async () => {
+		(fetchStoryFormatProperties as jest.Mock).mockResolvedValue({
+			...fakeStoryFormatProperties(),
+			name: 'Chapbook',
+			source: '{{STORY_DATA}} reloaded',
+			version: '2.1.1'
+		});
+		const {format} = renderComponent();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Reload Format'}));
+
+		expect(
+			await screen.findByText('Reloaded Chapbook 2.1.1')
+		).toBeInTheDocument();
+		expect(screen.getAllByText(/v2.1.1/).length).toBeGreaterThan(0);
+		expect(fetchStoryFormatProperties).toHaveBeenCalledWith(format.url);
+	});
+
 	it('registers a URL-added story format', async () => {
 		(fetchStoryFormatProperties as jest.Mock).mockResolvedValue({
 			...fakeStoryFormatProperties(),

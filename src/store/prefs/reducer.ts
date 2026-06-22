@@ -67,7 +67,7 @@ export const reducer: React.Reducer<PrefsState, PrefsAction> = (
 
 					if (
 						key === 'graphDefaultCardSize' &&
-						!['small', 'medium', 'large', 'tall', 'wide'].includes(
+						!['small', 'narrow', 'medium', 'large', 'tall', 'wide'].includes(
 							state[prefKey] as string
 						)
 					) {

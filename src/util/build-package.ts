@@ -70,10 +70,19 @@ export interface StoryBuildFidelityReport {
 	preserves: string[];
 }
 
+export interface StoryBuildDiagnostic {
+	code: string;
+	message: string;
+	outputPath: string | null;
+	severity: 'error' | 'info' | 'warning';
+	target: StoryBuildTarget;
+}
+
 export interface StoryBuildReport {
 	assetCount: number;
 	capabilities: StoryFormatCapabilityManifest;
 	copiedAssetCount: number;
+	diagnostics: StoryBuildDiagnostic[];
 	fidelity: StoryBuildFidelityReport;
 	generatedAt: string;
 	missingAssets: string[];
@@ -288,6 +297,64 @@ function reportOutputs(files: StoryBuildFile[]): StoryBuildOutput[] {
 		sizeBytes: file.sizeBytes,
 		target: file.target
 	}));
+}
+
+function buildDiagnostics(
+	target: StoryBuildTarget,
+	fidelity: StoryBuildFidelityReport,
+	safetyIssues: StoryFormatPublishSafetyIssue[],
+	missingAssets: string[],
+	assets: StoryBuildAsset[]
+): StoryBuildDiagnostic[] {
+	const diagnostics: StoryBuildDiagnostic[] = [];
+
+	for (const issue of safetyIssues) {
+		diagnostics.push({
+			code: `format-${issue.code}`,
+			message: issue.message,
+			outputPath: null,
+			severity: issue.severity,
+			target
+		});
+	}
+
+	for (const path of missingAssets) {
+		diagnostics.push({
+			code: 'missing-asset',
+			message: `Referenced asset "${path}" cannot be copied into this build.`,
+			outputPath: path,
+			severity: 'error',
+			target
+		});
+	}
+
+	if (target === 'package') {
+		for (const asset of assets) {
+			if (!asset.sourcePath) {
+				diagnostics.push({
+					code: 'asset-copy-source-missing',
+					message: `Asset "${asset.path}" is in the package plan but has no file-backed source path.`,
+					outputPath: asset.outputPath,
+					severity: 'warning',
+					target
+				});
+			}
+		}
+	}
+
+	if (target === 'compatibility-export' || target === 'export-twee') {
+		for (const omission of fidelity.omits) {
+			diagnostics.push({
+				code: 'fidelity-omission',
+				message: omission,
+				outputPath: null,
+				severity: 'warning',
+				target
+			});
+		}
+	}
+
+	return diagnostics;
 }
 
 function packageManifest(
@@ -575,6 +642,14 @@ export function createStoryBuildPackage(
 	const missingAssets = (publishOptions.assetInventory ?? [])
 		.filter(asset => asset.missing)
 		.map(asset => asset.path);
+	const fidelity = targetFidelity(target);
+	const buildReportDiagnostics = buildDiagnostics(
+		target,
+		fidelity,
+		safety.issues,
+		missingAssets,
+		assets
+	);
 
 	return {
 		assets,
@@ -584,7 +659,8 @@ export function createStoryBuildPackage(
 			assetCount: publishOptions.assetInventory?.length ?? 0,
 			capabilities,
 			copiedAssetCount: assets.filter(asset => !!asset.sourcePath).length,
-			fidelity: targetFidelity(target),
+			diagnostics: buildReportDiagnostics,
+			fidelity,
 			generatedAt,
 			missingAssets,
 			outputCount: files.length,

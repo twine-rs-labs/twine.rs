@@ -211,6 +211,18 @@
 	text-align: right;
 }
 
+.story-formats-route__row-value--error {
+	color: var(--sem-error);
+}
+
+.story-formats-route__row-value--ok {
+	color: var(--sem-saved);
+}
+
+.story-formats-route__row-value--pending {
+	color: var(--sem-build);
+}
+
 .story-formats-route__actions {
 	display: flex;
 	flex-direction: column;

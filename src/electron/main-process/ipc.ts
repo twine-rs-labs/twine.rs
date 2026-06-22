@@ -25,9 +25,14 @@ import {
 	deleteProjectAsset,
 	listProjectAssets,
 	openProjectFolder,
+	projectSessionSnapshot,
 	renameProjectAsset,
 	replaceProjectAsset,
-	saveProjectFolder
+	resolveProjectSessionConflicts,
+	saveProjectFolder,
+	startProjectSession,
+	stopProjectSession,
+	unsubscribeProjectSession
 } from './project-folder';
 
 export function initIpc() {
@@ -45,6 +50,20 @@ export function initIpc() {
 			(event: any, story: Story, storyHtml: string) => Promise<void>
 		>
 	> = {};
+	const projectSessionSubscriptions = new Map<string, () => void>();
+
+	function projectSessionSubscriptionKey(senderId: number, rootPath: string) {
+		return `${senderId}:${rootPath}`;
+	}
+
+	function stopProjectSessionSubscription(senderId: number, rootPath: string) {
+		const key = projectSessionSubscriptionKey(senderId, rootPath);
+		const hadSubscription = projectSessionSubscriptions.has(key);
+
+		projectSessionSubscriptions.get(key)?.();
+		projectSessionSubscriptions.delete(key);
+		return hadSubscription;
+	}
 
 	ipcMain.on('copy-text', (_event, text: string) => {
 		if (typeof text === 'string') {
@@ -64,6 +83,52 @@ export function initIpc() {
 
 	ipcMain.handle('list-project-assets', async (_event, rootPath: string) =>
 		listProjectAssets(rootPath)
+	);
+
+	ipcMain.handle(
+		'project-session-snapshot',
+		async (_event, rootPath: string) => projectSessionSnapshot(rootPath)
+	);
+
+	ipcMain.handle('start-project-session', async (event, rootPath: string) => {
+		stopProjectSessionSubscription(event.sender.id, rootPath);
+
+		const listener = (
+			snapshot: Awaited<ReturnType<typeof projectSessionSnapshot>>
+		) => {
+			if (!event.sender.isDestroyed()) {
+				event.sender.send('project-session-changed', snapshot);
+			}
+		};
+		const subscriptionKey = projectSessionSubscriptionKey(
+			event.sender.id,
+			rootPath
+		);
+		const cleanup = () => {
+			unsubscribeProjectSession(rootPath, listener);
+			projectSessionSubscriptions.delete(subscriptionKey);
+		};
+
+		projectSessionSubscriptions.set(subscriptionKey, cleanup);
+		event.sender.once('destroyed', cleanup);
+
+		return startProjectSession(rootPath, listener);
+	});
+
+	ipcMain.handle('stop-project-session', async (event, rootPath: string) => {
+		if (!stopProjectSessionSubscription(event.sender.id, rootPath)) {
+			stopProjectSession(rootPath);
+		}
+	});
+
+	ipcMain.handle(
+		'resolve-project-session-conflicts',
+		async (
+			_event,
+			rootPath: string,
+			resolution: Parameters<typeof resolveProjectSessionConflicts>[1],
+			stories?: Story[]
+		) => resolveProjectSessionConflicts(rootPath, resolution, stories)
 	);
 
 	ipcMain.handle(

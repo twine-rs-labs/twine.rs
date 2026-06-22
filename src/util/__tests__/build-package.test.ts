@@ -160,6 +160,28 @@ describe('M6 build package', () => {
 			'json',
 			'twee'
 		]);
+		expect(result.report.diagnostics).toEqual([]);
+	});
+
+	it('promotes package asset-source gaps into build diagnostics', () => {
+		const result = createStoryBuildPackage(fakeStory(), fakeAppInfo(), {
+			assetInventory: [
+				asset({
+					previewUrl: null,
+					thumbnailUrl: null
+				})
+			],
+			formatProperties: fakeStoryFormatProperties(),
+			target: 'package'
+		});
+
+		expect(result.report.diagnostics).toEqual([
+			expect.objectContaining({
+				code: 'asset-copy-source-missing',
+				outputPath: 'assets/cover.png',
+				severity: 'warning'
+			})
+		]);
 	});
 
 	it('builds compatibility exports without twine.rs StoryData graph metadata', () => {
@@ -175,6 +197,14 @@ describe('M6 build package', () => {
 		expect(result.files[1].contents).not.toContain('"twine.rs"');
 		expect(result.report.fidelity.omits).toContain(
 			'twine.rs StoryData graph metadata carrier'
+		);
+		expect(result.report.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: 'fidelity-omission',
+					severity: 'warning'
+				})
+			])
 		);
 	});
 

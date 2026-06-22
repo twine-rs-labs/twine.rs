@@ -1,5 +1,6 @@
 import {render, screen, within} from '@testing-library/react';
 import * as React from 'react';
+import {MemoryRouter} from 'react-router-dom';
 import {DialogsContext} from '../../../dialogs/context';
 import {StoryJavaScriptDialog} from '../../../dialogs/story-javascript';
 import {UndoableStoriesContext} from '../../../store/undoable-stories';
@@ -55,27 +56,33 @@ function renderComponent(
 	const storyDispatch = context?.storyDispatch ?? jest.fn();
 
 	render(
-		<DialogsContext.Provider value={{dialogs: [], dispatch: dialogsDispatch}}>
-			<UndoableStoriesContext.Provider
-				value={{dispatch: storyDispatch, isUndoable: true, stories: [story]}}
-			>
-				<StoryWorkspaceShell
-					bottomDrawerOpen={false}
-					graphPanel={<div data-testid="graph-panel" />}
-					leftDockCollapsed={false}
-					mode={mode}
+		<MemoryRouter>
+			<DialogsContext.Provider value={{dialogs: [], dispatch: dialogsDispatch}}>
+				<UndoableStoriesContext.Provider
+					value={{
+						dispatch: storyDispatch,
+						isUndoable: true,
+						stories: [story]
+					}}
+				>
+					<StoryWorkspaceShell
+						bottomDrawerOpen={false}
+						graphPanel={<div data-testid="graph-panel" />}
+						leftDockCollapsed={false}
+						mode={mode}
 						onChangeBottomDrawerOpen={jest.fn()}
 						onChangeLeftDockCollapsed={jest.fn()}
 						onChangeRightDockCollapsed={jest.fn()}
 						onRevealPassageInGraph={onRevealPassageInGraph}
 						onSelectPassage={onSelectPassage}
-					rightDockCollapsed={false}
-					selectedPassageId={start.id}
-					story={story}
-					{...props}
-				/>
-			</UndoableStoriesContext.Provider>
-		</DialogsContext.Provider>
+						rightDockCollapsed={false}
+						selectedPassageId={start.id}
+						story={story}
+						{...props}
+					/>
+				</UndoableStoriesContext.Provider>
+			</DialogsContext.Provider>
+		</MemoryRouter>
 	);
 
 	return {
@@ -263,11 +270,29 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 	});
 
-	it('handles asset snippet copy and reveal side effects from host patches', () => {
-		const copyText = jest.fn();
-		const revealPath = jest.fn();
+	it('keeps asset management in the full asset route', () => {
+		renderComponent('text');
 
-		(window as any).twineElectron = {copyText, revealPath};
+		within(
+			screen.getByRole('complementary', {
+				name: 'routes.storyEdit.workspace.leftDock'
+			})
+		)
+			.getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
+			.click();
+
+		expect(
+			screen.getByRole('button', {name: 'Asset Manager'})
+		).toBeInTheDocument();
+		expect(screen.queryByRole('button', {name: 'Import Asset'})).toBeNull();
+		expect(screen.queryByRole('button', {name: 'Rename'})).toBeNull();
+		expect(screen.queryByRole('button', {name: 'Delete'})).toBeNull();
+	});
+
+	it('handles asset snippet copy side effects from host patches', () => {
+		const copyText = jest.fn();
+
+		(window as any).twineElectron = {copyText};
 		renderComponent('text');
 
 		within(
@@ -282,9 +307,6 @@ describe('<StoryWorkspaceShell>', () => {
 		expect(copyText).toHaveBeenCalledWith(
 			'<img src="assets/cover.png" alt="">'
 		);
-
-		screen.getByRole('button', {name: 'Reveal'}).click();
-		expect(revealPath).toHaveBeenCalledWith('assets/cover.png');
 	});
 
 	it('dispatches executable diagnostic quick fixes', () => {

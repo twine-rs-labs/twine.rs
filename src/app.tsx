@@ -8,6 +8,7 @@ import {PrefsContextProvider} from './store/prefs';
 import {Routes} from './routes';
 import {StoriesContextProvider} from './store/stories';
 import {StoryFormatsContextProvider} from './store/story-formats';
+import {ProjectSessionSync} from './store/project-session-sync';
 import {StateLoader} from './store/state-loader';
 import {ThemeSetter} from './store/theme-setter';
 
@@ -19,6 +20,7 @@ export const App: React.FC = () => (
 			<StoryFormatsContextProvider>
 				<StoriesContextProvider>
 					<StateLoader>
+						<ProjectSessionSync />
 						<React.Suspense fallback={<LoadingCurtain />}>
 							<Routes />
 						</React.Suspense>

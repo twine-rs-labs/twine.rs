@@ -277,7 +277,11 @@ export const AssetsRoute: React.FC = () => {
 	);
 
 	const refreshProjectAssets = React.useCallback(async () => {
-		if (!projectRoot || !twineElectron?.listProjectAssets) {
+		if (
+			!projectRoot ||
+			(!twineElectron?.projectSessionSnapshot &&
+				!twineElectron?.listProjectAssets)
+		) {
 			setProjectAssets([]);
 			setInventoryState('fallback');
 			return;
@@ -286,7 +290,11 @@ export const AssetsRoute: React.FC = () => {
 		setInventoryState('loading');
 
 		try {
-			const inventory = await twineElectron.listProjectAssets(projectRoot);
+			const snapshot = twineElectron.projectSessionSnapshot
+				? await twineElectron.projectSessionSnapshot(projectRoot)
+				: undefined;
+			const inventory =
+				snapshot?.assets ?? (await twineElectron.listProjectAssets(projectRoot));
 
 			if (story) {
 				replaceKnownAssetInventoryForStory(story.id, inventory);

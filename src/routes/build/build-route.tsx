@@ -44,6 +44,11 @@ interface BuildTargetDefinition {
 	target: StoryBuildTarget;
 }
 
+interface BuildLogEntry {
+	line: string;
+	time: string;
+}
+
 const buildTargets: BuildTargetDefinition[] = [
 	{
 		description: 'Launch an app-owned iframe preview using the story runtime.',
@@ -192,8 +197,11 @@ export const BuildRoute: React.FC = () => {
 	const [busy, setBusy] = React.useState(false);
 	const [error, setError] = React.useState<string>();
 	const [build, setBuild] = React.useState<StoryBuildPackage>();
-	const [logs, setLogs] = React.useState<string[]>([
-		'Build surface ready. Choose a target to validate outputs.'
+	const [logs, setLogs] = React.useState<BuildLogEntry[]>([
+		{
+			line: 'Build surface ready. Choose a target to validate outputs.',
+			time: logTime()
+		}
 	]);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
 	const definition = targetDefinition(target);
@@ -243,9 +251,16 @@ export const BuildRoute: React.FC = () => {
 	const errorDiagnostics = diagnostics.filter(
 		diagnostic => diagnostic.severity === 'error'
 	);
+	const buildWarningDiagnosticCount =
+		build?.report.diagnostics.filter(
+			diagnostic => diagnostic.severity === 'warning'
+		).length ?? 0;
 	const blockingIssueCount =
 		errorDiagnostics.length +
-		safetyIssues.filter(issue => issue.severity === 'error').length;
+		safetyIssues.filter(issue => issue.severity === 'error').length +
+		(build?.report.diagnostics.filter(
+			diagnostic => diagnostic.severity === 'error'
+		).length ?? 0);
 	const startPassageOptions =
 		story?.passages.map(passage => ({
 			label: passage.name,
@@ -278,7 +293,7 @@ export const BuildRoute: React.FC = () => {
 	}, []);
 
 	const appendLog = React.useCallback((line: string) => {
-		setLogs(current => [...current.slice(-80), line]);
+		setLogs(current => [...current.slice(-80), {line, time: logTime()}]);
 	}, []);
 
 	const buildSelectedTarget = React.useCallback(async () => {
@@ -309,6 +324,11 @@ export const BuildRoute: React.FC = () => {
 			appendLog(
 				`Prepared ${nextBuild.files.length} output file(s), ${nextBuild.assets.length} asset plan item(s).`
 			);
+			if (nextBuild.report.diagnostics.length > 0) {
+				appendLog(
+					`${nextBuild.report.diagnostics.length} build diagnostic(s) promoted into the report.`
+				);
+			}
 			return nextBuild;
 		} catch (error) {
 			const message = (error as Error).message;
@@ -495,6 +515,24 @@ export const BuildRoute: React.FC = () => {
 										</div>
 									</div>
 								)}
+								{buildWarningDiagnosticCount > 0 && (
+									<div className="build-route__warning">
+										<TablerIcon
+											className="build-route__warning-icon"
+											icon="alert-triangle"
+										/>
+										<div>
+											<div className="build-route__warning-title">
+												Build diagnostics need review
+											</div>
+											<div className="build-route__warning-detail">
+												{buildWarningDiagnosticCount} warning
+												{buildWarningDiagnosticCount === 1 ? '' : 's'} were
+												promoted into the package report.
+											</div>
+										</div>
+									</div>
+								)}
 							</div>
 
 							<div className="build-route__section-title">Output</div>
@@ -655,6 +693,27 @@ export const BuildRoute: React.FC = () => {
 									)}
 								</ul>
 							</Panel>
+							<Panel
+								count={build?.report.diagnostics.length ?? 0}
+								icon="alert-triangle"
+								pad
+								title="Build Diagnostics"
+							>
+								<ul className="build-route__output-list">
+									{build?.report.diagnostics.length ? (
+										build.report.diagnostics.map((diagnostic, index) => (
+											<li key={`${diagnostic.code}-${index}`}>
+												<b>{diagnostic.code}</b>
+												<span>
+													{diagnostic.severity} · {diagnostic.message}
+												</span>
+											</li>
+										))
+									) : (
+										<li>No build diagnostics prepared yet.</li>
+									)}
+								</ul>
+							</Panel>
 						</div>
 					</div>
 					<div className="build-route__log">
@@ -671,10 +730,13 @@ export const BuildRoute: React.FC = () => {
 							</Button>
 						</div>
 						<div className="build-route__log-body">
-							{logs.map((line, index) => (
-								<div className="build-route__log-line" key={`${line}-${index}`}>
-									<span className="build-route__log-time">{logTime()}</span>
-									<span>{line}</span>
+							{logs.map((entry, index) => (
+								<div
+									className="build-route__log-line"
+									key={`${entry.line}-${index}`}
+								>
+									<span className="build-route__log-time">{entry.time}</span>
+									<span>{entry.line}</span>
 								</div>
 							))}
 						</div>

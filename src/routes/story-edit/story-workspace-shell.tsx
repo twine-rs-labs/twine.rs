@@ -1,11 +1,11 @@
 import classNames from 'classnames';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
+import {useHistory} from 'react-router-dom';
 import {
 	Badge,
 	Button,
 	IconButton,
-	Input,
 	Panel,
 	SegmentedControl,
 	Tag,
@@ -16,18 +16,12 @@ import {
 	assetManagerViewModel,
 	contentsViewModel,
 	copyAssetSnippetCommand,
-	deleteAssetCommand,
 	diagnosticDismissalsChangedEvent,
 	diagnosticIdentity,
 	diagnosticsViewModel,
-	importAssetCommand,
 	insertAssetSnippetCommand,
 	loadDismissedDiagnosticIds,
-	renameAssetCommand,
-	replaceAssetCommand,
-	revealAssetCommand,
 	useCoreProjectHost,
-	validateAssetReferencesCommand,
 	workbenchSelection
 } from '../../core';
 import type {
@@ -277,61 +271,8 @@ const AssetManager: React.FC<{
 	selection: WorkbenchSelection;
 	story: Story;
 }> = ({assets, host, onSelectPassage, onTestPassage, selection, story}) => {
+	const history = useHistory();
 	const selectedPassage = selection.passage;
-	const [importPath, setImportPath] = React.useState('');
-	const [assetEdit, setAssetEdit] = React.useState<
-		| {
-				mode: 'rename' | 'replace';
-				path: string;
-				value: string;
-		  }
-		| undefined
-	>();
-
-	function importAsset() {
-		const sourcePath = importPath.trim();
-
-		if (sourcePath) {
-			host.applyStoryCommand(importAssetCommand(story.id, sourcePath));
-			setImportPath('');
-		}
-	}
-
-	function startRenameAsset(path: string) {
-		setAssetEdit({mode: 'rename', path, value: path});
-	}
-
-	function startReplaceAsset(path: string) {
-		setAssetEdit({mode: 'replace', path, value: ''});
-	}
-
-	function applyAssetEdit(event: React.FormEvent) {
-		event.preventDefault();
-
-		if (!assetEdit) {
-			return;
-		}
-
-		const value = assetEdit.value.trim();
-
-		if (!value) {
-			return;
-		}
-
-		if (assetEdit.mode === 'rename' && value !== assetEdit.path) {
-			host.applyStoryCommand(
-				renameAssetCommand(story.id, assetEdit.path, value)
-			);
-		}
-
-		if (assetEdit.mode === 'replace') {
-			host.applyStoryCommand(
-				replaceAssetCommand(story.id, assetEdit.path, value)
-			);
-		}
-
-		setAssetEdit(undefined);
-	}
 
 	function revealFirstUsage(path: string) {
 		const asset = assets.entries.find(entry => entry.path === path);
@@ -362,31 +303,13 @@ const AssetManager: React.FC<{
 	return (
 		<div className="story-edit-asset-manager">
 			<div className="story-edit-asset-toolbar">
-				<Input
-					aria-label="Asset path"
-					className="story-edit-asset-path-input"
-					icon="folder"
-					onChange={event => setImportPath(event.target.value)}
-					placeholder="Asset path"
-					value={importPath}
-				/>
 				<Button
-					disabled={importPath.trim() === ''}
-					icon="file-import"
-					onClick={importAsset}
+					icon="photo"
+					onClick={() => history.push(`/stories/${story.id}/assets`)}
 					size="sm"
+					variant="primary"
 				>
-					Import Asset
-				</Button>
-				<Button
-					icon="refresh"
-					onClick={() =>
-						host.applyStoryCommand(validateAssetReferencesCommand(story.id))
-					}
-					size="sm"
-					variant="ghost"
-				>
-					Validate
+					Asset Manager
 				</Button>
 				<span className="story-edit-asset-stat">
 					{assets.entries.length} files
@@ -491,93 +414,7 @@ const AssetManager: React.FC<{
 									>
 										Test Usage
 									</Button>
-									<Button
-										icon="edit"
-										onClick={() => startRenameAsset(asset.path)}
-										size="sm"
-										variant="ghost"
-									>
-										Rename
-									</Button>
-									<Button
-										icon="refresh"
-										onClick={() => startReplaceAsset(asset.path)}
-										size="sm"
-										variant="ghost"
-									>
-										Replace
-									</Button>
-									<Button
-										icon="trash"
-										onClick={() =>
-											host.applyStoryCommand(
-												deleteAssetCommand(story.id, asset.path, true)
-											)
-										}
-										size="sm"
-										variant="danger"
-									>
-										Delete
-									</Button>
-									<Button
-										icon="folder-open"
-										onClick={() =>
-											host.applyStoryCommand(
-												revealAssetCommand(story.id, asset.path)
-											)
-										}
-										size="sm"
-										variant="ghost"
-									>
-										Reveal
-									</Button>
 								</div>
-								{assetEdit?.path === asset.path && (
-									<form
-										className="story-edit-asset-edit"
-										onSubmit={applyAssetEdit}
-									>
-										<Input
-											autoFocus
-											aria-label={
-												assetEdit.mode === 'rename'
-													? 'New asset path'
-													: 'Replacement file path'
-											}
-											block
-											icon={assetEdit.mode === 'rename' ? 'edit' : 'refresh'}
-											onChange={event =>
-												setAssetEdit(current =>
-													current
-														? {...current, value: event.target.value}
-														: current
-												)
-											}
-											placeholder={
-												assetEdit.mode === 'rename'
-													? 'New asset path'
-													: 'Replacement file path'
-											}
-											value={assetEdit.value}
-										/>
-										<Button
-											icon="check"
-											size="sm"
-											type="submit"
-											variant="primary"
-										>
-											Apply
-										</Button>
-										<Button
-											icon="x"
-											onClick={() => setAssetEdit(undefined)}
-											size="sm"
-											variant="ghost"
-										>
-											Cancel
-										</Button>
-									</form>
-								)}
 							</li>
 						);
 					})}

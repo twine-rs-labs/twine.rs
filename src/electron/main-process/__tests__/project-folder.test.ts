@@ -3,6 +3,7 @@ import {
 	copy,
 	mkdirp,
 	move,
+	readFile,
 	readJson,
 	readdir,
 	remove,
@@ -18,9 +19,11 @@ import {
 	deleteProjectAsset,
 	listProjectAssets,
 	openProjectFolder,
+	projectSessionSnapshot,
 	renameProjectAsset,
 	replaceProjectAsset,
-	saveProjectFolder
+	saveProjectFolder,
+	stopProjectSession
 } from '../project-folder';
 
 jest.mock('electron');
@@ -33,6 +36,7 @@ describe('project-folder native bridge', () => {
 	const mkdirpMock = mkdirp as jest.Mock;
 	const copyMock = copy as jest.Mock;
 	const moveMock = move as jest.Mock;
+	const readFileMock = readFile as jest.Mock;
 	const readJsonMock = readJson as jest.Mock;
 	const readdirMock = readdir as jest.Mock;
 	const removeMock = remove as jest.Mock;
@@ -50,9 +54,15 @@ describe('project-folder native bridge', () => {
 		moveMock.mockResolvedValue(undefined);
 		removeMock.mockResolvedValue(undefined);
 		mkdirpMock.mockResolvedValue(undefined);
+		readFileMock.mockResolvedValue('');
 		createFromPathMock.mockReturnValue({
 			getSize: () => ({height: 480, width: 640})
 		});
+	});
+
+	afterEach(() => {
+		stopProjectSession('/native/project.twine.rs');
+		stopProjectSession('/native/moon-castle.twine.rs');
 	});
 
 	it('creates a native project folder with manifest, source files, and metadata', async () => {
@@ -126,6 +136,103 @@ describe('project-folder native bridge', () => {
 			})
 		);
 		expect(result?.stories[0].lastUpdate).toBeInstanceOf(Date);
+	});
+
+	it('opens a native project folder from manifest source files when present', async () => {
+		const story = {
+			...fakeStory(1),
+			id: 'story-id',
+			name: 'Moon Castle',
+			passages: [
+				{
+					...fakeStory(1).passages[0],
+					id: 'start',
+					name: 'Start',
+					story: 'story-id',
+					text: 'old text'
+				}
+			],
+			script: 'old script',
+			stylesheet: 'old stylesheet'
+		};
+
+		showOpenDialogMock.mockResolvedValue({
+			canceled: false,
+			filePaths: ['/native/moon-castle.twine.rs']
+		});
+		readJsonMock.mockImplementation(async path => {
+			if (path.endsWith('.twine/project.json')) {
+				return {
+					stories: [{...story, lastUpdate: story.lastUpdate.toISOString()}]
+				};
+			}
+
+			if (path.endsWith('.twine/graph.json')) {
+				return {passages: {start: {height: 144, left: 22, top: 33, width: 155}}};
+			}
+
+			return {};
+		});
+		readFileMock.mockImplementation(async path => {
+			if (path.endsWith('twine.toml')) {
+				return [
+					'[[stories]]',
+					'id = "story-id"',
+					'ifid = "ifid-1"',
+					'last_update = "2026-06-21T16:00:00.000Z"',
+					'name = "Moon Castle"',
+					'script = "scripts/moon-castle.js"',
+					'start_passage = "start"',
+					'story_format = "Chapbook"',
+					'story_format_version = "2.1.0"',
+					'stylesheet = "styles/moon-castle.css"',
+					'tags = ["night"]',
+					'zoom = 1',
+					'[[stories.passages]]',
+					'id = "start"',
+					'name = "Start"',
+					'file = "passages/moon-castle/001-start.twee"',
+					'tags = ["entry"]'
+				].join('\n');
+			}
+
+			if (path.endsWith('001-start.twee')) {
+				return 'edited passage text';
+			}
+
+			if (path.endsWith('moon-castle.js')) {
+				return 'edited script';
+			}
+
+			if (path.endsWith('moon-castle.css')) {
+				return 'edited stylesheet';
+			}
+
+			return '';
+		});
+
+		const result = await openProjectFolder();
+
+		expect(result?.stories[0]).toEqual(
+			expect.objectContaining({
+				id: 'story-id',
+				name: 'Moon Castle',
+				script: 'edited script',
+				stylesheet: 'edited stylesheet',
+				storyFormat: 'Chapbook',
+				tags: ['night']
+			})
+		);
+		expect(result?.stories[0].passages[0]).toEqual(
+			expect.objectContaining({
+				height: 144,
+				left: 22,
+				tags: ['entry'],
+				text: 'edited passage text',
+				top: 33,
+				width: 155
+			})
+		);
 	});
 
 	it('returns undefined when opening a project folder is canceled', async () => {
@@ -215,6 +322,56 @@ describe('project-folder native bridge', () => {
 
 		await expect(listProjectAssets('/native/project.twine.rs')).resolves.toEqual(
 			[]
+		);
+	});
+
+	it('reports project session conflicts when watched files change', async () => {
+		const story = fakeStory(1);
+		let manifestVersion = 1;
+
+		readJsonMock.mockImplementation(async path => {
+			if (path.endsWith('.twine/project.json')) {
+				return {stories: [story]};
+			}
+
+			throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+		});
+		readdirMock.mockRejectedValue(Object.assign(new Error('missing'), {
+			code: 'ENOENT'
+		}));
+		statMock.mockImplementation(async path => {
+			if (path.endsWith('twine.toml')) {
+				return {
+					isDirectory: () => false,
+					isFile: () => true,
+					mtime: new Date(`2026-06-21T16:00:0${manifestVersion}.000Z`),
+					mtimeMs: manifestVersion,
+					size: 42
+				};
+			}
+
+			throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+		});
+
+		await expect(
+			projectSessionSnapshot('/native/project.twine.rs')
+		).resolves.toEqual(expect.objectContaining({conflicts: []}));
+
+		manifestVersion = 2;
+
+		await expect(
+			projectSessionSnapshot('/native/project.twine.rs')
+		).resolves.toEqual(
+			expect.objectContaining({
+				changedPaths: ['twine.toml'],
+				conflicts: [
+					expect.objectContaining({
+						change: 'modified',
+						kind: 'manifest',
+						path: 'twine.toml'
+					})
+				]
+			})
 		);
 	});
 

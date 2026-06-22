@@ -1,7 +1,13 @@
 import {Color} from '../../util/color';
 import {StoryFormat} from '../story-formats';
 
-export type GraphCardSizePreference = 'large' | 'medium' | 'small' | 'tall' | 'wide';
+export type GraphCardSizePreference =
+	| 'large'
+	| 'medium'
+	| 'narrow'
+	| 'small'
+	| 'tall'
+	| 'wide';
 
 export type StoryEditModePreference = 'auto' | 'graph' | 'split' | 'text';
 

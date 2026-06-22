@@ -16,6 +16,7 @@ import {
 	useCoreProjectHost
 } from '../../core';
 import {setPref, usePrefsContext} from '../../store/prefs';
+import type {GraphCardSizePreference} from '../../store/prefs';
 import type {CoreGraphEdge} from '../../core/bindings/CoreGraphEdge';
 import type {CoreGraphLayoutState} from '../../core/bindings/CoreGraphLayoutState';
 import type {CoreGraphNode} from '../../core/bindings/CoreGraphNode';
@@ -38,18 +39,24 @@ export interface StoryGraphPanelProps {
 
 type GraphDensity = 'structure' | 'names' | 'excerpt';
 type GraphOrientation = 'right' | 'down' | 'left' | 'up';
-type GraphSizePreset = 'small' | 'medium' | 'large' | 'tall' | 'wide';
+type GraphSizePreset = GraphCardSizePreference;
+type ResizeCorner = 'bottom-left' | 'bottom-right' | 'top-left';
 
 const graphSizePresets: Record<
 	GraphSizePreset,
 	{height: number; label: string; width: number}
 > = {
 	small: {height: 92, label: 'Small', width: 150},
+	narrow: {height: 132, label: 'Narrow', width: 150},
 	medium: {height: 110, label: 'Medium', width: 184},
 	large: {height: 148, label: 'Large', width: 240},
 	tall: {height: 190, label: 'Tall', width: 184},
 	wide: {height: 110, label: 'Wide', width: 292}
 };
+
+const graphSizePresetEntries = Object.entries(graphSizePresets) as Array<
+	[GraphSizePreset, (typeof graphSizePresets)[GraphSizePreset]]
+>;
 
 interface DragState {
 	ids: string[];
@@ -64,6 +71,8 @@ interface ResizeState {
 	currentWidth: number;
 	height: number;
 	ids: string[];
+	startLeft: number;
+	startTop: number;
 	width: number;
 }
 
@@ -78,6 +87,7 @@ const minimapSize = {height: 120, width: 170};
 const canvasPad = 900;
 const graphInteractiveSelector =
 	'.story-edit-graph-node, .story-edit-graph-toolbar, .story-edit-graph-status, .story-edit-graph-minimap, .story-edit-graph-card-tools';
+const resizeSnapActivationDistance = 18;
 
 function excerpt(text: string) {
 	const compact = text.replace(/\s+/g, ' ').trim();
@@ -215,17 +225,49 @@ function selectedPresetForSize(
 	width: number,
 	height: number
 ): GraphSizePreset | undefined {
-	const entry = (Object.entries(graphSizePresets) as Array<
-		[GraphSizePreset, (typeof graphSizePresets)[GraphSizePreset]]
-	>).find(([, preset]) => preset.width === width && preset.height === height);
+	const entry = graphSizePresetEntries.find(
+		([, preset]) => preset.width === width && preset.height === height
+	);
 
 	return entry?.[0];
+}
+
+function nearestPresetForSize(size: {height: number; width: number}) {
+	return graphSizePresetEntries.reduce<{
+		preset: GraphSizePreset;
+		score: number;
+	}>(
+		(best, [preset, dimensions]) => {
+			const widthScore = (size.width - dimensions.width) / 48;
+			const heightScore = (size.height - dimensions.height) / 48;
+			const aspectScore =
+				size.height > 0
+					? size.width / size.height - dimensions.width / dimensions.height
+					: 0;
+			const score =
+				widthScore * widthScore +
+				heightScore * heightScore +
+				aspectScore * aspectScore * 0.4;
+
+			return score < best.score ? {preset, score} : best;
+		},
+		{preset: 'medium', score: Number.POSITIVE_INFINITY}
+	).preset;
 }
 
 function displaySizeLimits(orientation: GraphOrientation) {
 	return orientation === 'down' || orientation === 'up'
 		? {height: 110, width: 74}
 		: {height: 74, width: 110};
+}
+
+function displaySizeForLogicalSize(
+	size: {height: number; width: number},
+	orientation: GraphOrientation
+) {
+	return orientation === 'down' || orientation === 'up'
+		? {height: size.width, width: size.height}
+		: size;
 }
 
 function logicalSizeFromDisplaySize(
@@ -235,6 +277,23 @@ function logicalSizeFromDisplaySize(
 	return orientation === 'down' || orientation === 'up'
 		? {height: size.width, width: size.height}
 		: size;
+}
+
+function displaySizeForPreset(
+	preset: GraphSizePreset,
+	orientation: GraphOrientation
+) {
+	return displaySizeForLogicalSize(graphSizePresets[preset], orientation);
+}
+
+function snappedResizeDisplaySize(
+	size: {height: number; width: number},
+	orientation: GraphOrientation
+) {
+	return displaySizeForPreset(
+		nearestPresetForSize(logicalSizeFromDisplaySize(size, orientation)),
+		orientation
+	);
 }
 
 function displayDeltaToLogical(
@@ -250,7 +309,43 @@ function displayDeltaToLogical(
 		case 'up':
 			return {left: -deltaTop, top: -deltaLeft};
 		default:
-	return {left: deltaLeft, top: deltaTop};
+			return {left: deltaLeft, top: deltaTop};
+	}
+}
+
+function resizeCorner(orientation: GraphOrientation): ResizeCorner {
+	switch (orientation) {
+		case 'left':
+			return 'bottom-left';
+		case 'up':
+			return 'top-left';
+		default:
+			return 'bottom-right';
+	}
+}
+
+function resizeHandleIcon(corner: ResizeCorner) {
+	return corner === 'bottom-left' ? 'arrows-diagonal' : 'arrows-diagonal-2';
+}
+
+function resizeOffset(
+	resize: ResizeState | undefined,
+	orientation: GraphOrientation
+) {
+	if (!resize) {
+		return {left: 0, top: 0};
+	}
+
+	const widthDelta = resize.currentWidth - resize.width;
+	const heightDelta = resize.currentHeight - resize.height;
+
+	switch (orientation) {
+		case 'left':
+			return {left: -widthDelta, top: 0};
+		case 'up':
+			return {left: -widthDelta, top: -heightDelta};
+		default:
+			return {left: 0, top: 0};
 	}
 }
 
@@ -541,6 +636,7 @@ function interactionBounds(
 	node: CoreGraphNode,
 	drag: DragState | undefined,
 	resize: ResizeState | undefined,
+	orientation: GraphOrientation,
 	visibleZoom: number
 ): CoreRect {
 	const offset = drag?.ids.includes(node.id)
@@ -550,11 +646,12 @@ function interactionBounds(
 			}
 		: {left: 0, top: 0};
 	const activeResize = resize?.ids.includes(node.id) ? resize : undefined;
+	const resizeAnchorOffset = resizeOffset(activeResize, orientation);
 
 	return {
 		height: activeResize ? activeResize.currentHeight : node.bounds.height,
-		left: node.bounds.left + offset.left,
-		top: node.bounds.top + offset.top,
+		left: node.bounds.left + offset.left + resizeAnchorOffset.left,
+		top: node.bounds.top + offset.top + resizeAnchorOffset.top,
 		width: activeResize ? activeResize.currentWidth : node.bounds.width
 	};
 }
@@ -749,11 +846,17 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				node.id,
 				{
 					...node,
-					bounds: interactionBounds(node, drag, resize, visibleZoom)
+					bounds: interactionBounds(
+						node,
+						drag,
+						resize,
+						orientation,
+						visibleZoom
+					)
 				}
 			])
 		);
-	}, [displayNodeById, displayNodes, drag, resize, visibleZoom]);
+	}, [displayNodeById, displayNodes, drag, orientation, resize, visibleZoom]);
 	const canvasSize = React.useMemo(() => {
 		const bounds = displayBounds;
 
@@ -1163,7 +1266,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		applySizeToSelection(graphSizePresets[defaultSize]);
 	}
 
-	function handleResizeStart(node: CoreGraphNode) {
+	function handleResizeStart(node: CoreGraphNode, data: DraggableData) {
 		const ids =
 			selectedIdSet.has(node.id) && selectedIdSet.size > 0
 				? Array.from(selectedIdSet)
@@ -1175,6 +1278,8 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			currentWidth: bounds.width,
 			height: bounds.height,
 			ids,
+			startLeft: data.x,
+			startTop: data.y,
 			width: bounds.width
 		});
 	}
@@ -1186,19 +1291,38 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			}
 
 			const minimum = displaySizeLimits(orientation);
-			const width = Math.max(
-				minimum.width,
-				current.width + data.x / visibleZoom
-			);
-			const height = Math.max(
-				minimum.height,
-				current.height + data.y / visibleZoom
+			const corner = resizeCorner(orientation);
+			const widthDelta =
+				(corner === 'bottom-left' || corner === 'top-left'
+					? current.startLeft - data.x
+					: data.x - current.startLeft) / visibleZoom;
+			const heightDelta =
+				(corner === 'top-left'
+					? current.startTop - data.y
+					: data.y - current.startTop) / visibleZoom;
+
+			if (
+				Math.hypot(widthDelta, heightDelta) < resizeSnapActivationDistance
+			) {
+				return {
+					...current,
+					currentHeight: current.height,
+					currentWidth: current.width
+				};
+			}
+
+			const displaySize = snappedResizeDisplaySize(
+				{
+					height: Math.max(minimum.height, current.height + heightDelta),
+					width: Math.max(minimum.width, current.width + widthDelta)
+				},
+				orientation
 			);
 
 			return {
 				...current,
-				currentHeight: Math.round(height),
-				currentWidth: Math.round(width)
+				currentHeight: displaySize.height,
+				currentWidth: displaySize.width
 			};
 		});
 	}
@@ -1209,18 +1333,21 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				return undefined;
 			}
 
+			const size = logicalSizeFromDisplaySize(
+				{
+					height: current.currentHeight,
+					width: current.currentWidth
+				},
+				orientation
+			);
 			const moves = current.ids
 				.map(id => story.passages.find(passage => passage.id === id))
 				.filter((passage): passage is Passage => !!passage)
+				.filter(
+					passage =>
+						passage.height !== size.height || passage.width !== size.width
+				)
 				.map(passage => {
-					const size = logicalSizeFromDisplaySize(
-						{
-							height: current.currentHeight,
-							width: current.currentWidth
-						},
-						orientation
-					);
-
 					return {
 						bounds: {
 							...passageRect(passage),
@@ -1275,7 +1402,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	}
 
 	function nodeDisplayBounds(node: CoreGraphNode) {
-		return interactionBounds(node, drag, resize, visibleZoom);
+		return interactionBounds(node, drag, resize, orientation, visibleZoom);
 	}
 
 	function nodeSizeClass(bounds: CoreRect) {
@@ -1317,6 +1444,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 						{displayNodes.map(node => {
 							const passage = passageForNode(story, node);
 							const bounds = nodeDisplayBounds(node);
+							const resizeHandleCorner = resizeCorner(orientation);
 							const tagColors = node.tags.map(
 								tag => story.tagColors[tag] ?? 'blue'
 							);
@@ -1380,18 +1508,25 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 										{selectedIdSet.has(node.id) && (
 											<DraggableCore
 												onDrag={(event, data) => handleResize(data)}
-												onStart={() => handleResizeStart(node)}
+												onStart={(event, data) =>
+													handleResizeStart(node, data)
+												}
 												onStop={handleResizeStop}
 											>
 												<button
 													aria-label={`Resize ${node.name}`}
-													className="story-edit-graph-node__resize"
+													className={classNames(
+														'story-edit-graph-node__resize',
+														`story-edit-graph-node__resize--${resizeHandleCorner}`
+													)}
 													onClick={event => event.stopPropagation()}
 													onDoubleClick={event => event.stopPropagation()}
 													onPointerDown={event => event.stopPropagation()}
 													type="button"
 												>
-													<TablerIcon icon="arrows-diagonal" />
+													<TablerIcon
+														icon={resizeHandleIcon(resizeHandleCorner)}
+													/>
 												</button>
 											</DraggableCore>
 										)}
@@ -1479,9 +1614,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 					<Select
 						ariaLabel="Default card size"
 						onChange={handleDefaultSizeChange}
-						options={(Object.entries(graphSizePresets) as Array<
-							[GraphSizePreset, (typeof graphSizePresets)[GraphSizePreset]]
-						>).map(([value, preset]) => ({
+						options={graphSizePresetEntries.map(([value, preset]) => ({
 							label: preset.label,
 							value
 						}))}

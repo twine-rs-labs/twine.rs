@@ -555,9 +555,6 @@ export const DiagnosticsRoute: React.FC = () => {
 							>
 								Reveal Graph
 							</Button>
-							<Button block icon="book" size="sm" variant="ghost">
-								Open Format Docs
-							</Button>
 						</div>
 						{enabledActions.length > 0 && (
 							<p className="diagnostics-route__muted">

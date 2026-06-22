@@ -63,6 +63,9 @@ contextBridge.exposeInMainWorld('twineElectron', {
 	openProjectFolder() {
 		return ipcRenderer.invoke('open-project-folder');
 	},
+	projectSessionSnapshot(rootPath: string) {
+		return ipcRenderer.invoke('project-session-snapshot', rootPath);
+	},
 	revealStoryLibraryFolder() {
 		return ipcRenderer.invoke('reveal-story-library-folder');
 	},
@@ -83,6 +86,18 @@ contextBridge.exposeInMainWorld('twineElectron', {
 			sourcePath
 		);
 	},
+	resolveProjectSessionConflicts(
+		rootPath: string,
+		resolution: string,
+		stories?: Story[]
+	) {
+		return ipcRenderer.invoke(
+			'resolve-project-session-conflicts',
+			rootPath,
+			resolution,
+			stories
+		);
+	},
 	saveJson(filename: string, data: any) {
 		ipcRenderer.send('save-json', filename, data);
 	},
@@ -91,5 +106,18 @@ contextBridge.exposeInMainWorld('twineElectron', {
 	},
 	saveStoryHtml(story: Story, data: string) {
 		ipcRenderer.send('save-story-html', story, data);
+	},
+	startProjectSession(rootPath: string) {
+		return ipcRenderer.invoke('start-project-session', rootPath);
+	},
+	stopProjectSession(rootPath: string) {
+		return ipcRenderer.invoke('stop-project-session', rootPath);
+	},
+	onProjectSessionChanged(callback: (snapshot: unknown) => void) {
+		const listener = (_event: unknown, snapshot: unknown) => callback(snapshot);
+
+		ipcRenderer.on('project-session-changed', listener);
+
+		return () => ipcRenderer.removeListener('project-session-changed', listener);
 	}
 });

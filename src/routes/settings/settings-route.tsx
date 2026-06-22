@@ -52,6 +52,7 @@ const modeOptions = [
 
 const graphCardSizeOptions = [
 	{label: 'Small', value: 'small'},
+	{label: 'Narrow', value: 'narrow'},
 	{label: 'Medium', value: 'medium'},
 	{label: 'Large', value: 'large'},
 	{label: 'Tall', value: 'tall'},

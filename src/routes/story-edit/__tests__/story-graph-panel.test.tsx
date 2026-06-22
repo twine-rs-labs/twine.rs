@@ -444,6 +444,33 @@ describe('<StoryGraphPanel>', () => {
 		);
 	});
 
+	it('snaps handle resizing to passage size bands', async () => {
+		const {story, undoableDispatch} = renderComponent();
+		const resizeHandle = screen.getByRole('button', {name: 'Resize Start'});
+
+		fireEvent.mouseDown(resizeHandle, {button: 0, clientX: 200, clientY: 160});
+		fireEvent.mouseMove(document, {clientX: 430, clientY: 162});
+		fireEvent.mouseUp(document, {clientX: 430, clientY: 162});
+
+		await waitFor(() =>
+			expect(undoableDispatch).toHaveBeenCalledWith(
+				{
+					passageUpdates: {
+						start: expect.objectContaining({
+							height: 110,
+							left: 0,
+							top: 0,
+							width: 292
+						})
+					},
+					storyId: story.id,
+					type: 'updatePassages'
+				},
+				'undoChange.movePassage'
+			)
+		);
+	});
+
 	it('rotates the graph view without changing story layout data', () => {
 		const querySpy = jest.spyOn(
 			StoreCoreProjectHost.prototype,

@@ -24,9 +24,13 @@ import {
 	deleteProjectAsset,
 	listProjectAssets,
 	openProjectFolder,
+	projectSessionSnapshot,
 	renameProjectAsset,
 	replaceProjectAsset,
-	saveProjectFolder
+	resolveProjectSessionConflicts,
+	saveProjectFolder,
+	startProjectSession,
+	stopProjectSession
 } from '../project-folder';
 
 jest.mock('../json-file');
@@ -51,9 +55,14 @@ describe('initIpc()', () => {
 	const getStoryDirectoryPathMock = getStoryDirectoryPath as jest.Mock;
 	const listProjectAssetsMock = listProjectAssets as jest.Mock;
 	const openProjectFolderMock = openProjectFolder as jest.Mock;
+	const projectSessionSnapshotMock = projectSessionSnapshot as jest.Mock;
 	const renameProjectAssetMock = renameProjectAsset as jest.Mock;
 	const replaceProjectAssetMock = replaceProjectAsset as jest.Mock;
+	const resolveProjectSessionConflictsMock =
+		resolveProjectSessionConflicts as jest.Mock;
 	const saveProjectFolderMock = saveProjectFolder as jest.Mock;
+	const startProjectSessionMock = startProjectSession as jest.Mock;
+	const stopProjectSessionMock = stopProjectSession as jest.Mock;
 	const revealStoryDirectoryMock = revealStoryDirectory as jest.Mock;
 	const onMock = ipcMain.on as jest.Mock;
 	const appOnMock = app.on as jest.Mock;
@@ -78,9 +87,29 @@ describe('initIpc()', () => {
 		listProjectAssetsMock.mockResolvedValue([
 			{path: 'assets/asset.png', sizeBytes: 100}
 		]);
+		projectSessionSnapshotMock.mockResolvedValue({
+			assets: [],
+			changedPaths: [],
+			conflicts: [],
+			files: [],
+			rootPath: '/mock/project',
+			scannedAt: '2026-06-21T16:00:00.000Z',
+			stories: [],
+			storyIds: []
+		});
 		renameProjectAssetMock.mockResolvedValue({
 			sourcePath: '/mock/project/assets/renamed.png',
 			targetPath: 'assets/renamed.png'
+		});
+		resolveProjectSessionConflictsMock.mockResolvedValue({
+			assets: [],
+			changedPaths: [],
+			conflicts: [],
+			files: [],
+			rootPath: '/mock/project',
+			scannedAt: '2026-06-21T16:00:00.000Z',
+			stories: [],
+			storyIds: []
 		});
 		replaceProjectAssetMock.mockResolvedValue({
 			sourcePath: '/mock/project/assets/asset.png',
@@ -99,6 +128,17 @@ describe('initIpc()', () => {
 			stories: [],
 			storyIds: []
 		});
+		startProjectSessionMock.mockResolvedValue({
+			assets: [],
+			changedPaths: [],
+			conflicts: [],
+			files: [],
+			rootPath: '/mock/project',
+			scannedAt: '2026-06-21T16:00:00.000Z',
+			stories: [],
+			storyIds: []
+		});
+		stopProjectSessionMock.mockReturnValue(undefined);
 		revealStoryDirectoryMock.mockResolvedValue(undefined);
 		saveStoryHtmlMock.mockResolvedValue(undefined);
 		initIpc();
@@ -128,6 +168,18 @@ describe('initIpc()', () => {
 		);
 		const listAssets = handleMock.mock.calls.find(
 			call => call[0] === 'list-project-assets'
+		);
+		const sessionSnapshot = handleMock.mock.calls.find(
+			call => call[0] === 'project-session-snapshot'
+		);
+		const startSession = handleMock.mock.calls.find(
+			call => call[0] === 'start-project-session'
+		);
+		const stopSession = handleMock.mock.calls.find(
+			call => call[0] === 'stop-project-session'
+		);
+		const resolveSession = handleMock.mock.calls.find(
+			call => call[0] === 'resolve-project-session-conflicts'
 		);
 		const renameAsset = handleMock.mock.calls.find(
 			call => call[0] === 'rename-project-asset'
@@ -165,6 +217,44 @@ describe('initIpc()', () => {
 			{path: 'assets/asset.png', sizeBytes: 100}
 		]);
 		expect(listProjectAssetsMock).toHaveBeenCalledWith('/mock/project');
+		expect(await sessionSnapshot[1]({}, '/mock/project')).toEqual(
+			expect.objectContaining({rootPath: '/mock/project'})
+		);
+		expect(projectSessionSnapshotMock).toHaveBeenCalledWith('/mock/project');
+		expect(
+			await startSession[1](
+				{
+					sender: {
+						id: 7,
+						isDestroyed: () => false,
+						once: jest.fn(),
+						send: jest.fn()
+					}
+				},
+				'/mock/project'
+			)
+		).toEqual(expect.objectContaining({rootPath: '/mock/project'}));
+		expect(startProjectSessionMock).toHaveBeenCalledWith(
+			'/mock/project',
+			expect.any(Function)
+		);
+		await stopSession[1]({sender: {id: 7}}, '/mock/project');
+		expect(stopProjectSessionMock).not.toHaveBeenCalled();
+		await stopSession[1]({sender: {id: 8}}, '/mock/project');
+		expect(stopProjectSessionMock).toHaveBeenCalledWith('/mock/project');
+		expect(
+			await resolveSession[1](
+				{},
+				'/mock/project',
+				'keepApp',
+				[story]
+			)
+		).toEqual(expect.objectContaining({rootPath: '/mock/project'}));
+		expect(resolveProjectSessionConflictsMock).toHaveBeenCalledWith(
+			'/mock/project',
+			'keepApp',
+			[story]
+		);
 		expect(
 			await renameAsset[1](
 				{},

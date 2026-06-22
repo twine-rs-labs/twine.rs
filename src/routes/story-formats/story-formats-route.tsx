@@ -25,6 +25,12 @@ import './story-formats-route.css';
 
 type FormatFilter = 'all' | 'current' | 'dev' | 'failed' | 'user';
 
+type DevLoopStatus =
+	| {kind: 'error'; message: string}
+	| {kind: 'idle'; message: string}
+	| {kind: 'ok'; message: string}
+	| {kind: 'pending'; message: string};
+
 const filters: Array<{id: FormatFilter; label: string}> = [
 	{id: 'all', label: 'All'},
 	{id: 'current', label: 'Current'},
@@ -148,6 +154,10 @@ export const StoryFormatsRoute: React.FC = () => {
 	const [newFormatUrl, setNewFormatUrl] = React.useState('');
 	const [addError, setAddError] = React.useState<string>();
 	const [adding, setAdding] = React.useState(false);
+	const [devLoopStatus, setDevLoopStatus] = React.useState<DevLoopStatus>({
+		kind: 'idle',
+		message: 'Ready'
+	});
 	const sortedFormats = React.useMemo(() => sortFormats([...formats]), [formats]);
 	const visibleFormats = React.useMemo(
 		() => filteredFormatList(sortedFormats, filter),
@@ -187,6 +197,10 @@ export const StoryFormatsRoute: React.FC = () => {
 			setSelectedId(visibleFormats[0].id);
 		}
 	}, [selectedId, visibleFormats]);
+
+	React.useEffect(() => {
+		setDevLoopStatus({kind: 'idle', message: 'Ready'});
+	}, [selectedFormat?.id]);
 
 	async function handleAddFormat() {
 		setAdding(true);
@@ -237,6 +251,63 @@ export const StoryFormatsRoute: React.FC = () => {
 					{name: format.name, version: format.version}
 				])
 			);
+		}
+	}
+
+	async function reloadSelectedFormat() {
+		if (!selectedFormat) {
+			return;
+		}
+
+		setDevLoopStatus({kind: 'pending', message: 'Reloading format'});
+
+		try {
+			const properties = await fetchStoryFormatProperties(selectedFormat.url);
+
+			formatsDispatch({
+				id: selectedFormat.id,
+				props: {
+					loadState: 'loaded',
+					name: properties.name,
+					properties,
+					version: properties.version
+				},
+				type: 'update'
+			});
+			setDevLoopStatus({
+				kind: 'ok',
+				message: `Reloaded ${properties.name} ${properties.version}`
+			});
+		} catch (error) {
+			setDevLoopStatus({
+				kind: 'error',
+				message: (error as Error).message
+			});
+		}
+	}
+
+	async function checkDevelopmentServer() {
+		if (!selectedDevelopment?.devServerUrl) {
+			return;
+		}
+
+		setDevLoopStatus({kind: 'pending', message: 'Checking dev server'});
+
+		try {
+			await fetch(selectedDevelopment.devServerUrl, {
+				cache: 'no-store',
+				method: 'HEAD',
+				mode: 'no-cors'
+			});
+			setDevLoopStatus({
+				kind: 'ok',
+				message: 'Dev server responded'
+			});
+		} catch (error) {
+			setDevLoopStatus({
+				kind: 'error',
+				message: (error as Error).message
+			});
 		}
 	}
 
@@ -445,8 +516,37 @@ export const StoryFormatsRoute: React.FC = () => {
 									{selectedDevelopment?.localFolderPath ?? '-'}
 								</span>
 							</div>
+							<div className="story-formats-route__row">
+								<span className="story-formats-route__row-label">
+									Dev loop
+								</span>
+								<span
+									className={`story-formats-route__row-value story-formats-route__row-value--${devLoopStatus.kind}`}
+								>
+									{devLoopStatus.message}
+								</span>
+							</div>
 
 							<div className="story-formats-route__actions">
+								<Button
+									disabled={devLoopStatus.kind === 'pending'}
+									icon="refresh"
+									loading={devLoopStatus.kind === 'pending'}
+									onClick={reloadSelectedFormat}
+								>
+									Reload Format
+								</Button>
+								<Button
+									disabled={
+										!selectedDevelopment?.devServerUrl ||
+										devLoopStatus.kind === 'pending'
+									}
+									icon="terminal-2"
+									loading={devLoopStatus.kind === 'pending'}
+									onClick={checkDevelopmentServer}
+								>
+									Check Dev Server
+								</Button>
 								<Button
 									disabled={
 										prefs.storyFormat.name === selectedFormat.name &&

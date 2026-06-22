@@ -113,30 +113,23 @@ body.dragging-passages .story-edit-route * {
 
 .story-edit-graph-layer {
 	background:
-		linear-gradient(
-			180deg,
-			color-mix(in oklab, var(--ink-2) 80%, transparent),
-			color-mix(in oklab, var(--bg-app) 96%, var(--ink-void))
+		radial-gradient(
+			circle,
+			color-mix(in oklab, var(--tx-4) 22%, transparent) 0 1px,
+			transparent 1.5px
 		),
 		radial-gradient(
 			circle,
-			color-mix(in oklab, var(--tx-4) 35%, transparent) 1px,
-			transparent 1.4px
-		),
-		radial-gradient(
-			circle,
-			color-mix(in oklab, var(--line-2) 55%, transparent) 1px,
-			transparent 1.4px
+			color-mix(in oklab, var(--sem-generated) 18%, transparent) 0 1px,
+			transparent 1.7px
 		);
-	background-blend-mode: normal, normal, screen;
+	background-color: var(--ink-void);
 	background-position:
 		0 0,
-		0 0,
-		16px 16px;
+		0 0;
 	background-size:
-		100% 100%,
-		32px 32px,
-		32px 32px;
+		26px 26px,
+		130px 130px;
 	bottom: var(--story-edit-bottom-offset);
 	color: var(--tx-2);
 	left: var(--story-edit-left-offset);
@@ -172,28 +165,6 @@ body.dragging-passages .story-edit-route * {
 	overflow: auto;
 	position: relative;
 	width: 100%;
-}
-
-.story-edit-graph-viewport::before {
-	background:
-		linear-gradient(
-			90deg,
-			color-mix(in oklab, var(--bg-app) 72%, transparent),
-			transparent 16%,
-			transparent 84%,
-			color-mix(in oklab, var(--bg-app) 72%, transparent)
-		),
-		linear-gradient(
-			color-mix(in oklab, var(--bg-app) 72%, transparent),
-			transparent 18%,
-			transparent 82%,
-			color-mix(in oklab, var(--bg-app) 72%, transparent)
-		);
-	content: '';
-	inset: 0;
-	pointer-events: none;
-	position: fixed;
-	z-index: 1;
 }
 
 .story-edit-graph-viewport--panning {
@@ -276,7 +247,6 @@ body.dragging-passages .story-edit-route * {
 	background: var(--ink-1);
 	border: 1px solid var(--sel-line);
 	border-radius: var(--r-xs);
-	bottom: -7px;
 	box-shadow: var(--shadow-pop);
 	color: var(--sel-line);
 	cursor: nwse-resize;
@@ -286,9 +256,25 @@ body.dragging-passages .story-edit-route * {
 	justify-content: center;
 	padding: 0;
 	position: absolute;
-	right: -7px;
 	width: 20px;
 	z-index: 4;
+}
+
+.story-edit-graph-node__resize--bottom-right {
+	bottom: -7px;
+	right: -7px;
+}
+
+.story-edit-graph-node__resize--bottom-left {
+	bottom: -7px;
+	cursor: nesw-resize;
+	left: -7px;
+}
+
+.story-edit-graph-node__resize--top-left {
+	cursor: nwse-resize;
+	left: -7px;
+	top: -7px;
 }
 
 .story-edit-graph-node__resize:hover {
@@ -438,9 +424,12 @@ body.dragging-passages .story-edit-route * {
 
 .story-edit-graph-minimap__surface {
 	background-image:
-		linear-gradient(var(--line-1) 1px, transparent 1px),
-		linear-gradient(90deg, var(--line-1) 1px, transparent 1px);
-	background-size: 16px 16px;
+		radial-gradient(
+			circle,
+			color-mix(in oklab, var(--tx-4) 28%, transparent) 0 1px,
+			transparent 1.5px
+		);
+	background-size: 18px 18px;
 	height: 100%;
 	position: relative;
 	width: 100%;
@@ -868,11 +857,6 @@ button.story-edit-contents-item:focus-visible {
 	gap: var(--sp-2);
 }
 
-.story-edit-asset-path-input {
-	flex: 1 1 150px;
-	min-width: 140px;
-}
-
 .story-edit-asset-stat,
 .story-edit-empty-assets {
 	color: var(--tx-3);
@@ -935,16 +919,6 @@ button.story-edit-contents-item:focus-visible {
 
 .story-edit-asset-actions {
 	grid-column: 1 / -1;
-}
-
-.story-edit-asset-edit {
-	align-items: center;
-	border-top: 1px solid var(--line-1);
-	display: grid;
-	gap: var(--sp-2);
-	grid-column: 1 / -1;
-	grid-template-columns: minmax(0, 1fr) auto auto;
-	padding-top: var(--sp-2);
 }
 
 .story-edit-text-layer {

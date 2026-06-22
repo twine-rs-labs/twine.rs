@@ -83,6 +83,19 @@ function assetStory() {
 	return {start, story};
 }
 
+function projectSnapshot(assets: CoreAssetInventoryEntry[]) {
+	return {
+		assets,
+		changedPaths: [],
+		conflicts: [],
+		files: [],
+		rootPath: '/native/project.twine.rs',
+		scannedAt: '2026-06-21T16:00:00.000Z',
+		stories: [],
+		storyIds: ['story-id']
+	};
+}
+
 function renderComponent() {
 	const {story} = assetStory();
 	const result = render(
@@ -235,10 +248,12 @@ describe('<AssetsRoute>', () => {
 			storageKind: 'electron-project-folder'
 		});
 		(window as any).twineElectron = {
-			listProjectAssets: jest.fn(async () => [
-				inventoryAsset('assets/cover.png'),
-				inventoryAsset('assets/unused.png')
-			])
+			projectSessionSnapshot: jest.fn(async () =>
+				projectSnapshot([
+					inventoryAsset('assets/cover.png'),
+					inventoryAsset('assets/unused.png')
+				])
+			)
 		};
 
 		render(
@@ -259,6 +274,9 @@ describe('<AssetsRoute>', () => {
 			'assets/cover.png',
 			'assets/unused.png'
 		]);
+		expect((window as any).twineElectron.projectSessionSnapshot).toHaveBeenCalledWith(
+			'/native/project.twine.rs'
+		);
 		fireEvent.click(assetCard('assets/cover.png'));
 		await waitFor(() =>
 			expect(screen.getByText('File + references')).toBeInTheDocument()
@@ -267,10 +285,10 @@ describe('<AssetsRoute>', () => {
 
 	it('renames native asset files before updating story references', async () => {
 		const {story} = assetStory();
-		const listProjectAssets = jest
+		const projectSessionSnapshot = jest
 			.fn()
-			.mockResolvedValueOnce([inventoryAsset('assets/cover.png')])
-			.mockResolvedValue([inventoryAsset('assets/hero.png')]);
+			.mockResolvedValueOnce(projectSnapshot([inventoryAsset('assets/cover.png')]))
+			.mockResolvedValue(projectSnapshot([inventoryAsset('assets/hero.png')]));
 		const renameProjectAsset = jest.fn(async () => ({
 			sourcePath: '/native/project.twine.rs/assets/hero.png',
 			targetPath: 'assets/hero.png'
@@ -282,7 +300,7 @@ describe('<AssetsRoute>', () => {
 			storageKind: 'electron-project-folder'
 		});
 		(window as any).twineElectron = {
-			listProjectAssets,
+			projectSessionSnapshot,
 			renameProjectAsset
 		};
 

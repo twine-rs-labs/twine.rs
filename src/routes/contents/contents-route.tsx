@@ -365,12 +365,6 @@ export const ContentsRoute: React.FC = () => {
 					<span className="contents-route__toolbar-stat">
 						{visibleEntries.length} of {contents.totalCount}
 					</span>
-					<Button icon="checkbox" size="sm" variant="ghost">
-						Select
-					</Button>
-					<Button icon="tags" size="sm" variant="ghost">
-						Bulk Tag
-					</Button>
 				</div>
 				<div className="contents-route__list">
 					{visibleEntries.length === 0 ? (
@@ -544,9 +538,6 @@ export const ContentsRoute: React.FC = () => {
 								variant="ghost"
 							>
 								Mark as Start
-							</Button>
-							<Button block icon="download" size="sm" variant="ghost">
-								Export Selection
 							</Button>
 						</div>
 					</>

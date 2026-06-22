@@ -106,6 +106,21 @@ describe('<BuildRoute>', () => {
 		expect(screen.getByText('standard Twine story data')).toBeInTheDocument();
 	});
 
+	it('surfaces promoted build diagnostics for compatibility exports', async () => {
+		renderComponent();
+
+		fireEvent.click(screen.getByRole('button', {name: /Compatibility Export/}));
+		fireEvent.click(screen.getByRole('button', {name: 'Prepare Report'}));
+
+		expect(
+			await screen.findByText('Build diagnostics need review')
+		).toBeInTheDocument();
+		expect(screen.getAllByText('fidelity-omission').length).toBeGreaterThan(0);
+		expect(
+			screen.getByText(/build diagnostic\(s\) promoted into the report/)
+		).toBeInTheDocument();
+	});
+
 	it('saves the primary output for export targets', async () => {
 		renderComponent();
 
