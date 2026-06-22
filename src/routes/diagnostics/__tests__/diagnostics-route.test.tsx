@@ -9,6 +9,14 @@ import {
 } from '../../../test-util';
 import {DiagnosticsRoute} from '../diagnostics-route';
 
+const mockTestStory = jest.fn();
+
+jest.mock('../../../store/use-story-launch', () => ({
+	useStoryLaunch: () => ({
+		testStory: mockTestStory
+	})
+}));
+
 function diagnosticStory() {
 	const story = {
 		...fakeStory(0),
@@ -55,6 +63,7 @@ function renderComponent() {
 describe('<DiagnosticsRoute>', () => {
 	beforeEach(() => {
 		window.localStorage.clear();
+		mockTestStory.mockReset();
 	});
 
 	it('groups diagnostics and exposes source/graph reveal actions', () => {
@@ -122,5 +131,13 @@ describe('<DiagnosticsRoute>', () => {
 				result.container.querySelector('[data-name="Missing"]')
 			).toBeTruthy()
 		);
+	});
+
+	it('tests the passage attached to the selected diagnostic', () => {
+		const {story} = renderComponent();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Test From Here'}));
+
+		expect(mockTestStory).toHaveBeenCalledWith(story.id, story.passages[0].id);
 	});
 });

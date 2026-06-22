@@ -427,6 +427,21 @@ Core deliverables:
   references, wired through `use-story-launch` + the build package, with
   source/graph reveal optional when graph metadata is absent.
 
+Current implementation snapshot:
+
+- Play/Test/Proof preview frames are app-owned iframe surfaces with debug strips
+  for target, story, start passage, HTML/story-data status, story-index
+  diagnostics, graph/link health, and asset health. Source, Graph, Build, and
+  Test From Start actions are exposed from the strip.
+- Run-from-here is now native-aware through `useStoryLaunch()` from the text
+  header, graph toolbar, split/right inspector, passage fuzzy-search result
+  action, standalone Contents and Diagnostics inspectors, asset inspector first
+  usage, and editor asset usage buttons.
+- Remaining D8 closures are runtime-to-editor inspection: current passage events
+  from the iframe, variable/state inspection, logs, format devtools panels,
+  viewport/runtime controls, and richer asset/runtime source reveal from inside
+  the running story.
+
 Exit criteria: Play/Test/Proof open inside the DS preview surface in both browser
 and desktop contexts with a working debug strip; the app is never swapped out via
 `replaceDom`.

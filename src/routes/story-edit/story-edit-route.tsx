@@ -5,6 +5,7 @@ import {DocumentTitle} from '../../components/document-title/document-title';
 import {DialogsContextProvider} from '../../dialogs';
 import {StoryEditActions} from '../../route-actions';
 import {Passage, selectPassage, storyWithId} from '../../store/stories';
+import {useStoryLaunch} from '../../store/use-story-launch';
 import {
 	UndoableStoriesContextProvider,
 	useUndoableStoriesContext
@@ -28,6 +29,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 	const location = useLocation();
 	const {dispatch, stories} = useUndoableStoriesContext();
 	const story = storyWithId(stories, storyId);
+	const {testStory} = useStoryLaunch();
 	const [fuzzyFinderOpen, setFuzzyFinderOpen] = React.useState(false);
 	const mainContent = React.useRef<HTMLDivElement>(null);
 	const workspace = useStoryEditWorkspace(story);
@@ -75,6 +77,12 @@ export const InnerStoryEditRoute: React.FC = () => {
 			handleSelectPassage(passage, exclusive);
 		},
 		[handleSelectPassage, workspace]
+	);
+	const handleTestPassage = React.useCallback(
+		(passage: Passage) => {
+			void testStory(story.id, passage.id);
+		},
+		[story.id, testStory]
 	);
 
 	React.useEffect(() => {
@@ -125,6 +133,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 							onDeselect={handleDeselectPassage}
 							onEdit={handleEditPassage}
 							onSelect={handleSelectPassageInMap}
+							onTestPassage={handleTestPassage}
 							selectedPassageId={workspace.selectedPassageId}
 							story={story}
 							visibleZoom={visibleZoom}
@@ -138,11 +147,13 @@ export const InnerStoryEditRoute: React.FC = () => {
 					onChangeRightDockCollapsed={workspace.setRightDockCollapsed}
 					onRevealPassageInGraph={handleRevealPassageInGraph}
 					onSelectPassage={handleChoosePassage}
+					onTestPassage={handleTestPassage}
 					overlay={
 						<PassageFuzzyFinder
 							onClose={() => setFuzzyFinderOpen(false)}
 							onOpen={() => setFuzzyFinderOpen(true)}
 							onRevealPassageInGraph={handleChoosePassage}
+							onTestPassage={handleTestPassage}
 							open={fuzzyFinderOpen}
 							setCenter={setCenter}
 							story={story}

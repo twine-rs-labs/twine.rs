@@ -6,9 +6,10 @@ additional information to help you debug problems. You should look at the
 documentation for the story format you're using for more information on what is
 available during testing mode.
 
-Testing a story in browser Twine will open a new browser tab with the story. App
-Twine will open the story in your default web browser. You can test a story
-multiple times at once.
+Testing a story in browser Twine opens an app-owned preview tab. Native desktop
+builds launch a scratch HTML package through the desktop bridge so local project
+assets are available alongside the story. You can test a story multiple times at
+once.
 
 ## Testing a Story From the Beginning
 
@@ -27,5 +28,14 @@ the passage you've chosen is truly its first. If there is setup work done in
 your story's start passage, your story may not behave correctly if you test from
 a later point.
 
-You can only test from a specific passage in the Story Map screen. Select a
-passage card, then choose _Test From Here_ from the _Passage_ top toolbar tab.
+You can test from a specific passage anywhere the editor can identify a passage
+context:
+
+- In Text or Split mode, choose _Test From Here_ from the source header or the
+  inspector.
+- In Graph or Split mode, select a passage node and choose _Test From Here_ from
+  the graph toolbar.
+- In search results, diagnostics, contents, or asset usage views, use the
+  passage-specific test action for the selected result or first usage.
+- In a preview window, choose _Test From Start_ to relaunch the current preview's
+  start passage in test mode.

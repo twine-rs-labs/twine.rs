@@ -19,6 +19,39 @@
 	user-select: none;
 }
 
+.fuzzy-finder-result-row {
+	align-items: center;
+	display: grid;
+	gap: calc(0.5 * var(--grid-size));
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.fuzzy-finder-result-action {
+	appearance: none;
+	align-items: center;
+	background: none;
+	border: 0;
+	border-radius: var(--corner-round);
+	color: var(--dark-blue);
+	cursor: pointer;
+	display: inline-flex;
+	height: 28px;
+	justify-content: center;
+	padding: 0;
+	width: 28px;
+}
+
+.fuzzy-finder-result-action:hover,
+.fuzzy-finder-result-action:focus-visible {
+	background-color: var(--light-gray-translucent);
+	outline: none;
+}
+
+.fuzzy-finder-result-action svg {
+	height: 16px;
+	width: 16px;
+}
+
 .fuzzy-finder-result svg {
 	color: var(--dark-blue);
 	flex-shrink: 0;

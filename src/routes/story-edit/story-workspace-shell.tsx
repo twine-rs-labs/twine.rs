@@ -61,6 +61,7 @@ export interface StoryWorkspaceShellProps {
 	onChangeRightDockCollapsed: (value: boolean) => void;
 	onRevealPassageInGraph: (passage: Passage) => void;
 	onSelectPassage: (passage: Passage) => void;
+	onTestPassage?: (passage: Passage) => void;
 	overlay?: React.ReactNode;
 	rightDockCollapsed: boolean;
 	selectedPassageId?: string;
@@ -272,9 +273,10 @@ const AssetManager: React.FC<{
 	assets: AssetManagerViewModel;
 	host: CoreProjectHost;
 	onSelectPassage: (passage: Passage) => void;
+	onTestPassage?: (passage: Passage) => void;
 	selection: WorkbenchSelection;
 	story: Story;
-}> = ({assets, host, onSelectPassage, selection, story}) => {
+}> = ({assets, host, onSelectPassage, onTestPassage, selection, story}) => {
 	const selectedPassage = selection.passage;
 	const [importPath, setImportPath] = React.useState('');
 	const [assetEdit, setAssetEdit] = React.useState<
@@ -341,6 +343,19 @@ const AssetManager: React.FC<{
 
 		if (passage) {
 			onSelectPassage(passage);
+		}
+	}
+
+	function testFirstUsage(path: string) {
+		const asset = assets.entries.find(entry => entry.path === path);
+		const passage = asset?.firstReference?.passageId
+			? story.passages.find(
+					passage => passage.id === asset.firstReference?.passageId
+				)
+			: undefined;
+
+		if (passage) {
+			onTestPassage?.(passage);
 		}
 	}
 
@@ -466,6 +481,15 @@ const AssetManager: React.FC<{
 										variant="ghost"
 									>
 										Usages
+									</Button>
+									<Button
+										disabled={!asset.firstReference?.passageId}
+										icon="tool"
+										onClick={() => testFirstUsage(asset.path)}
+										size="sm"
+										variant="ghost"
+									>
+										Test Usage
 									</Button>
 									<Button
 										icon="edit"
@@ -737,6 +761,7 @@ const Inspector: React.FC<{
 	index: CoreStoryIndex;
 	onRevealPassageInGraph: (passage: Passage) => void;
 	onSelectPassage: (passage: Passage) => void;
+	onTestPassage?: (passage: Passage) => void;
 	selection: WorkbenchSelection;
 	story: Story;
 }> = props => {
@@ -747,6 +772,7 @@ const Inspector: React.FC<{
 		index,
 		onRevealPassageInGraph,
 		onSelectPassage,
+		onTestPassage,
 		selection,
 		story
 	} = props;
@@ -765,6 +791,28 @@ const Inspector: React.FC<{
 
 	return (
 		<div className="story-edit-inspector">
+			{passage && onTestPassage && (
+				<section className="story-edit-inspector-run">
+					<Button
+						block
+						icon="tool"
+						onClick={() => onTestPassage(passage)}
+						size="sm"
+						variant="primary"
+					>
+						{t('routes.storyEdit.toolbar.testFromHere')}
+					</Button>
+					<Button
+						block
+						icon="focus-2"
+						onClick={() => onRevealPassageInGraph(passage)}
+						size="sm"
+						variant="ghost"
+					>
+						{t('routes.storyEdit.workspace.revealInGraph')}
+					</Button>
+				</section>
+			)}
 			<OutlineSection
 				count={selection.links.length}
 				icon="arrow-up-right"
@@ -935,6 +983,16 @@ const Inspector: React.FC<{
 													{t('routes.storyEdit.workspace.revealInGraph')}
 												</Button>
 											)}
+											{diagnosticPassage && onTestPassage && (
+												<Button
+													icon="tool"
+													onClick={() => onTestPassage(diagnosticPassage)}
+													size="sm"
+													variant="ghost"
+												>
+													{t('routes.storyEdit.toolbar.testFromHere')}
+												</Button>
+											)}
 											{actions.map(action => (
 												<Button
 													disabled={!action.enabled}
@@ -1062,6 +1120,7 @@ export const StoryWorkspaceShell: React.FC<
 		onChangeRightDockCollapsed,
 		onRevealPassageInGraph,
 		onSelectPassage,
+		onTestPassage,
 		overlay,
 		rightDockCollapsed,
 		selectedPassageId,
@@ -1203,12 +1262,13 @@ export const StoryWorkspaceShell: React.FC<
 							story={story}
 						/>
 					) : (
-						<AssetManager
-							assets={assets}
-							host={coreProjectHost}
-							onSelectPassage={onSelectPassage}
-							selection={selection}
-							story={story}
+							<AssetManager
+								assets={assets}
+								host={coreProjectHost}
+								onSelectPassage={onSelectPassage}
+								onTestPassage={onTestPassage}
+								selection={selection}
+								story={story}
 						/>
 					)}
 				</DockPanel>
@@ -1218,9 +1278,10 @@ export const StoryWorkspaceShell: React.FC<
 				<div className="story-edit-text-layer">
 					<StoryTextPanel
 						index={activeIndex}
-						onRevealPassageInGraph={onRevealPassageInGraph}
-						onSelectPassage={onSelectPassage}
-						selectedPassageId={passage?.id}
+							onRevealPassageInGraph={onRevealPassageInGraph}
+							onSelectPassage={onSelectPassage}
+							onTestPassage={onTestPassage}
+							selectedPassageId={passage?.id}
 						selection={selection}
 						story={story}
 					/>
@@ -1243,9 +1304,10 @@ export const StoryWorkspaceShell: React.FC<
 						diagnostics={diagnostics}
 						host={coreProjectHost}
 						index={index}
-						onRevealPassageInGraph={onRevealPassageInGraph}
-						onSelectPassage={onSelectPassage}
-						selection={selection}
+							onRevealPassageInGraph={onRevealPassageInGraph}
+							onSelectPassage={onSelectPassage}
+							onTestPassage={onTestPassage}
+							selection={selection}
 						story={story}
 					/>
 				</DockPanel>

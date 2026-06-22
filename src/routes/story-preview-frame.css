@@ -12,6 +12,7 @@
 	background: var(--ink-2);
 	border-bottom: 1px solid var(--line-1);
 	display: flex;
+	flex-wrap: wrap;
 	flex: none;
 	gap: 12px;
 	min-height: 42px;
@@ -33,10 +34,21 @@
 	overflow-wrap: anywhere;
 }
 
+.story-preview-route__story-name {
+	color: var(--tx-1);
+	font-weight: var(--fw-semibold);
+	max-width: min(360px, 42vw);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .story-preview-route__debug-actions {
 	display: flex;
 	flex: none;
+	flex-wrap: wrap;
 	gap: 6px;
+	margin-left: auto;
 }
 
 .story-preview-route__frame {

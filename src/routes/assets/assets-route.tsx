@@ -24,6 +24,7 @@ import {
 	validateAssetReferencesCommand
 } from '../../core';
 import type {CoreAssetInventoryEntry, PatchBatch} from '../../core';
+import type {CoreAssetReference} from '../../core/bindings/CoreAssetReference';
 import type {AssetManagerViewModelEntry} from '../../core/view-models';
 import {
 	Passage,
@@ -31,6 +32,7 @@ import {
 	Story,
 	useStoriesContext
 } from '../../store/stories';
+import {useStoryLaunch} from '../../store/use-story-launch';
 import {usePrefsContext} from '../../store/prefs';
 import {loadProjectMetadata} from '../../store/project-metadata';
 import './assets-route.css';
@@ -188,6 +190,12 @@ function firstUsagePassage(story: Story, asset: AssetManagerViewModelEntry) {
 		: undefined;
 }
 
+function passageForAssetReference(story: Story, reference: CoreAssetReference) {
+	return reference.passageId
+		? story.passages.find(passage => passage.id === reference.passageId)
+		: undefined;
+}
+
 function sourceTarget(story: Story, passage?: Passage) {
 	const query = new URLSearchParams({mode: 'text'});
 
@@ -226,6 +234,7 @@ export const AssetsRoute: React.FC = () => {
 	const {storyId} = useParams<{storyId: string}>();
 	const {dispatch, stories} = useStoriesContext();
 	const {prefs} = usePrefsContext();
+	const {testStory} = useStoryLaunch();
 	const history = useHistory();
 	const coreProjectHost = useCoreProjectHost();
 	const story = storyForId(stories, storyId);
@@ -468,6 +477,32 @@ export const AssetsRoute: React.FC = () => {
 		}
 
 		history.push(sourceTarget(story, target));
+	}
+
+	function revealReference(reference: CoreAssetReference) {
+		if (!story) {
+			return;
+		}
+
+		const target = passageForAssetReference(story, reference);
+
+		if (target) {
+			dispatch(selectPassage(story, target, true));
+		}
+
+		history.push(sourceTarget(story, target));
+	}
+
+	function testFirstUsage(asset: AssetManagerViewModelEntry) {
+		if (!story) {
+			return;
+		}
+
+		const target = firstUsagePassage(story, asset);
+
+		if (target) {
+			void testStory(story.id, target.id);
+		}
 	}
 
 	async function applyAssetEdit(event: React.FormEvent) {
@@ -867,7 +902,7 @@ export const AssetsRoute: React.FC = () => {
 									<button
 										className="assets-route__usage"
 										key={`${reference.sourceId}:${reference.start}:${reference.path}`}
-										onClick={() => revealUsage(selectedAsset)}
+										onClick={() => revealReference(reference)}
 										type="button"
 									>
 										<TablerIcon icon="file-text" />
@@ -908,6 +943,16 @@ export const AssetsRoute: React.FC = () => {
 									variant="ghost"
 								>
 									Find Usages
+								</Button>
+								<Button
+									block
+									disabled={!firstUsage}
+									icon="tool"
+									onClick={() => testFirstUsage(selectedAsset)}
+									size="sm"
+									variant="primary"
+								>
+									Test First Usage
 								</Button>
 								<Button
 									block

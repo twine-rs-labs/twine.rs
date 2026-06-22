@@ -28,7 +28,10 @@ jest.mock('../../../components/control/source-editor', () => ({
 describe('<StoryTextPanel>', () => {
 	let applyStoryCommandSpy: jest.SpyInstance;
 
-	function renderComponent(contexts?: FakeStateProviderProps) {
+	function renderComponent(
+		contexts?: FakeStateProviderProps,
+		props?: Partial<React.ComponentProps<typeof StoryTextPanel>>
+	) {
 		const story = contexts?.stories?.[0] ?? fakeStory(2);
 
 		render(
@@ -36,6 +39,7 @@ describe('<StoryTextPanel>', () => {
 				<StoryTextPanel
 					selectedPassageId={story.passages[0]?.id}
 					story={story}
+					{...props}
 				/>
 				<StoryInspector />
 			</FakeStateProvider>
@@ -139,5 +143,18 @@ describe('<StoryTextPanel>', () => {
 			text: '',
 			type: 'createPassage'
 		});
+	});
+
+	it('tests the selected passage from the text header', () => {
+		const onTestPassage = jest.fn();
+		const story = renderComponent(undefined, {onTestPassage});
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'routes.storyEdit.toolbar.testFromHere'
+			})
+		);
+
+		expect(onTestPassage).toHaveBeenCalledWith(story.passages[0]);
 	});
 });

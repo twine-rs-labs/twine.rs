@@ -1,4 +1,4 @@
-import {IconX} from '@tabler/icons';
+import {IconTool, IconX} from '@tabler/icons';
 import classnames from 'classnames';
 import * as React from 'react';
 import {useHotkeys} from 'react-hotkeys-hook';
@@ -18,7 +18,14 @@ export interface FuzzyFinderProps {
 	onClose: () => void;
 	onSelectResult: (index: number) => void;
 	prompt: string;
-	results: Omit<FuzzyFinderResultProps, 'onClick'>[];
+	results: Array<
+		Omit<FuzzyFinderResultProps, 'onClick'> & {
+			action?: {
+				label: string;
+				onClick: () => void;
+			};
+		}
+	>;
 	search: string;
 }
 
@@ -121,13 +128,29 @@ export const FuzzyFinder: React.FC<FuzzyFinderProps> = props => {
 					)}
 					{search.length > 0 && results.length > 0 && (
 						<ol>
-							{results.map((props, index) => (
-								<li key={props.heading}>
+							{results.map(({action, ...props}, index) => (
+								<li
+									className="fuzzy-finder-result-row"
+									key={`${props.heading}:${index}`}
+								>
 									<FuzzyFinderResult
 										{...props}
 										onClick={() => onSelectResult(index)}
 										selected={index === selectedResult}
 									/>
+									{action && (
+										<button
+											aria-label={action.label}
+											className="fuzzy-finder-result-action"
+											onClick={event => {
+												event.stopPropagation();
+												action.onClick();
+											}}
+											type="button"
+										>
+											<IconTool />
+										</button>
+									)}
 								</li>
 							))}
 						</ol>

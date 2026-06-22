@@ -23,6 +23,7 @@ export interface StoryTextPanelProps {
 	index?: CoreStoryIndex;
 	onRevealPassageInGraph?: (passage: Passage) => void;
 	onSelectPassage?: (passage: Passage) => void;
+	onTestPassage?: (passage: Passage) => void;
 	selectedPassageId?: string;
 	selection?: WorkbenchSelection;
 	story: Story;
@@ -62,6 +63,7 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 		index,
 		onRevealPassageInGraph,
 		onSelectPassage,
+		onTestPassage,
 		selectedPassageId,
 		story
 	} = props;
@@ -266,6 +268,16 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 					</Badge>
 						{activeSource === 'passage' ? (
 							<>
+								{selectedPassage && onTestPassage && (
+									<Button
+										icon="tool"
+										onClick={() => onTestPassage(selectedPassage)}
+										size="sm"
+										variant="primary"
+									>
+										{t('routes.storyEdit.toolbar.testFromHere')}
+									</Button>
+								)}
 								{selectedPassage && onRevealPassageInGraph && (
 									<Button
 										icon="focus-2"

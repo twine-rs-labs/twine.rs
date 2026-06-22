@@ -56,6 +56,7 @@ function renderComponent(
 	const onDeselect = jest.fn();
 	const onEdit = jest.fn();
 	const onSelect = jest.fn();
+	const onTestPassage = jest.fn();
 	const storiesDispatch = jest.fn();
 	const undoableDispatch = jest.fn();
 	const result = render(
@@ -74,6 +75,7 @@ function renderComponent(
 					onDeselect={onDeselect}
 					onEdit={onEdit}
 					onSelect={onSelect}
+					onTestPassage={onTestPassage}
 					selectedPassageId={start.id}
 					story={story}
 					visibleZoom={1}
@@ -89,6 +91,7 @@ function renderComponent(
 		onDeselect,
 		onEdit,
 		onSelect,
+		onTestPassage,
 		result,
 		start,
 		storiesDispatch,
@@ -140,6 +143,14 @@ describe('<StoryGraphPanel>', () => {
 			'data-edge-kinds',
 			expect.stringContaining('broken')
 		);
+	});
+
+	it('tests the selected passage from the graph toolbar', () => {
+		const {onTestPassage, start} = renderComponent();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Test From Here'}));
+
+		expect(onTestPassage).toHaveBeenCalledWith(start);
 	});
 
 	it('passes the measured viewport into graph projection queries', async () => {

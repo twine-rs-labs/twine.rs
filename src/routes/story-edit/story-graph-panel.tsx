@@ -28,6 +28,7 @@ export interface StoryGraphPanelProps {
 	onDeselect: (passage: Passage) => void;
 	onEdit: (passage: Passage) => void;
 	onSelect: (passage: Passage, exclusive: boolean) => void;
+	onTestPassage?: (passage: Passage) => void;
 	selectedPassageId?: string;
 	story: Story;
 	visibleZoom: number;
@@ -505,6 +506,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		onDeselect,
 		onEdit,
 		onSelect,
+		onTestPassage,
 		selectedPassageId,
 		story,
 		visibleZoom,
@@ -584,6 +586,8 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				.filter((passage): passage is Passage => !!passage),
 		[selectedPassageIds, story.passages]
 	);
+	const soloSelectedPassage =
+		selectedPassages.length === 1 ? selectedPassages[0] : undefined;
 	const defaultSizePreset = graphSizePresets[defaultSize];
 	const currentSizePreset = selectedPassages[0]
 		? selectedPresetForSize(selectedPassages[0].width, selectedPassages[0].height)
@@ -1350,6 +1354,19 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				onPointerDown={event => event.stopPropagation()}
 			>
 				<div className="story-edit-graph-toolbar-group">
+					{onTestPassage && (
+						<Button
+							disabled={!soloSelectedPassage}
+							icon="tool"
+							onClick={() =>
+								soloSelectedPassage && onTestPassage(soloSelectedPassage)
+							}
+							size="sm"
+							variant="primary"
+						>
+							Test From Here
+						</Button>
+					)}
 					<IconButton
 						active={layers.resolved}
 						icon="link"

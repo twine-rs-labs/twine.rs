@@ -23,6 +23,7 @@ import {
 	Story,
 	useStoriesContext
 } from '../../store/stories';
+import {useStoryLaunch} from '../../store/use-story-launch';
 import './contents-route.css';
 
 type ContentsFilter =
@@ -199,6 +200,7 @@ export const ContentsRoute: React.FC = () => {
 	const {storyId} = useParams<{storyId: string}>();
 	const {dispatch, stories} = useStoriesContext();
 	const history = useHistory();
+	const {testStory} = useStoryLaunch();
 	const coreProjectHost = useCoreProjectHost();
 	const story = storyForId(stories, storyId);
 	const [filter, setFilter] = React.useState<ContentsFilter>('all');
@@ -286,6 +288,12 @@ export const ContentsRoute: React.FC = () => {
 			coreProjectHost.applyStoryCommand(
 				setStartPassageCommand(story.id, selectedPassage.id)
 			);
+		}
+	}
+
+	function testSelectedPassage() {
+		if (story && selectedPassage) {
+			void testStory(story.id, selectedPassage.id);
 		}
 	}
 
@@ -500,6 +508,16 @@ export const ContentsRoute: React.FC = () => {
 							</section>
 						)}
 						<div className="contents-route__actions">
+							<Button
+								block
+								disabled={!selectedPassage}
+								icon="tool"
+								onClick={testSelectedPassage}
+								size="sm"
+								variant="primary"
+							>
+								Test From Here
+							</Button>
 							<Button
 								block
 								icon="file-text"

@@ -9,6 +9,14 @@ import {
 } from '../../../test-util';
 import {ContentsRoute} from '../contents-route';
 
+const mockTestStory = jest.fn();
+
+jest.mock('../../../store/use-story-launch', () => ({
+	useStoryLaunch: () => ({
+		testStory: mockTestStory
+	})
+}));
+
 function indexedStory() {
 	const story = {
 		...fakeStory(0),
@@ -56,6 +64,10 @@ function renderComponent() {
 }
 
 describe('<ContentsRoute>', () => {
+	beforeEach(() => {
+		mockTestStory.mockReset();
+	});
+
 	it('surfaces indexed passages, variables, assets, and diagnostic groups', () => {
 		renderComponent();
 
@@ -74,5 +86,13 @@ describe('<ContentsRoute>', () => {
 
 		expect(screen.getAllByText('assets/cover.png').length).toBeGreaterThan(0);
 		expect(screen.queryByText('$score')).not.toBeInTheDocument();
+	});
+
+	it('tests the selected indexed passage from the inspector', () => {
+		const {story} = renderComponent();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Test From Here'}));
+
+		expect(mockTestStory).toHaveBeenCalledWith(story.id, story.passages[0].id);
 	});
 });

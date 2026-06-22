@@ -1087,6 +1087,13 @@ button.story-edit-contents-item:focus-visible {
 	padding: var(--sp-2) 0;
 }
 
+.story-edit-inspector-run {
+	border-bottom: 1px solid var(--line-1);
+	display: grid;
+	gap: var(--sp-2);
+	padding: var(--sp-3) var(--sp-5);
+}
+
 .story-edit-outline-section {
 	border-bottom: 1px solid var(--line-1);
 	padding: var(--sp-3) 0;

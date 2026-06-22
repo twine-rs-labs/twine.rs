@@ -16,13 +16,22 @@ export interface PassageFuzzyFinderProps {
 	onClose: () => void;
 	onOpen: () => void;
 	onRevealPassageInGraph?: (passage: Story['passages'][number]) => void;
+	onTestPassage?: (passage: Story['passages'][number]) => void;
 	open?: boolean;
 	setCenter: (value: Point) => void;
 	story: Story;
 }
 
 export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
-	const {onClose, onOpen, onRevealPassageInGraph, open, setCenter, story} =
+	const {
+		onClose,
+		onOpen,
+		onRevealPassageInGraph,
+		onTestPassage,
+		open,
+		setCenter,
+		story
+	} =
 		props;
 	const {dispatch} = useStoriesContext();
 	const [search, setSearch] = React.useState('');
@@ -44,11 +53,17 @@ export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
 	);
 	const results = React.useMemo(
 		() =>
-			matches.map(({name, text}) => ({
-				heading: name,
-				detail: text
+			matches.map(match => ({
+				action: onTestPassage
+					? {
+							label: `Test "${match.name}" from here`,
+							onClick: () => onTestPassage(match)
+						}
+					: undefined,
+				detail: match.text,
+				heading: match.name
 			})),
-		[matches]
+		[matches, onTestPassage]
 	);
 	useHotkeys('p', onOpen);
 	const {t} = useTranslation();

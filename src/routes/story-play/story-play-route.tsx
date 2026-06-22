@@ -1,8 +1,12 @@
 import * as React from 'react';
 import {useHistory, useParams} from 'react-router-dom';
+import {useCoreProjectHost} from '../../core';
 import {usePublishing} from '../../store/use-publishing';
 import {useStoriesContext} from '../../store/stories';
-import {StoryPreviewFrame} from '../story-preview-frame';
+import {
+	StoryPreviewFrame,
+	storyPreviewDebugMetrics
+} from '../story-preview-frame';
 
 export const StoryPlayRoute: React.FC = () => {
 	const [publishError, setPublishError] = React.useState<Error>();
@@ -10,12 +14,17 @@ export const StoryPlayRoute: React.FC = () => {
 	const {storyId} = useParams<{storyId: string}>();
 	const history = useHistory();
 	const {publishStory} = usePublishing();
+	const coreProjectHost = useCoreProjectHost();
 	const publishStoryRef = React.useRef(publishStory);
 	const {stories} = useStoriesContext();
 	const story = stories.find(story => story.id === storyId);
 	const storyExists = !!story;
 	const startPassage = story?.passages.find(
 		passage => passage.id === story.startPassage
+	);
+	const index = React.useMemo(
+		() => (story ? coreProjectHost.queryStoryIndex(story.id) : undefined),
+		[coreProjectHost, story]
 	);
 
 	React.useEffect(() => {
@@ -55,9 +64,11 @@ export const StoryPlayRoute: React.FC = () => {
 
 	return (
 		<StoryPreviewFrame
+			debugMetrics={storyPreviewDebugMetrics(index)}
 			error={publishError}
 			html={html}
 			missingStoryMessage={`There is no story with ID "${storyId}".`}
+			onOpenBuild={() => history.push(`/stories/${storyId}/build`)}
 			onRevealGraph={() =>
 				history.push(
 					`/stories/${storyId}?mode=graph${
@@ -71,6 +82,16 @@ export const StoryPlayRoute: React.FC = () => {
 						startPassage ? `&passage=${startPassage.id}` : ''
 					}`
 				)
+			}
+			onTestFromStart={
+				startPassage
+					? () =>
+							history.push(
+								`/stories/${storyId}/test/${encodeURIComponent(
+									startPassage.id
+								)}`
+							)
+					: undefined
 			}
 			startPassageName={startPassage?.name}
 			storyExists={storyExists}

@@ -20,15 +20,29 @@ describe('<AppActions>', () => {
 		);
 	}
 
-	it('displays a button that shows the preferences dialog', () => {
-		renderComponent();
-		expect(
-			screen.queryByText('dialogs.appPrefs.title')
-		).not.toBeInTheDocument();
+	it('navigates to the Settings route instead of opening the legacy preferences dialog', () => {
+		const history = createMemoryHistory({initialEntries: ['/']});
+
+		renderComponent(undefined, history);
 		fireEvent.click(
 			screen.getByRole('button', {name: 'routeActions.app.preferences'})
 		);
-		expect(screen.getByText('dialogs.appPrefs.title')).toBeInTheDocument();
+
+		expect(history.location.pathname).toBe('/settings');
+		expect(
+			screen.queryByText('dialogs.appPrefs.title')
+		).not.toBeInTheDocument();
+	});
+
+	it('disables the preferences action on the Settings route', () => {
+		renderComponent(
+			undefined,
+			createMemoryHistory({initialEntries: ['/settings']})
+		);
+
+		expect(
+			screen.getByRole('button', {name: 'routeActions.app.preferences'})
+		).toBeDisabled();
 	});
 
 	it('displays a button that shows the about dialog', () => {

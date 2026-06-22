@@ -14,6 +14,14 @@ import {
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {AssetsRoute} from '../assets-route';
 
+const mockTestStory = jest.fn();
+
+jest.mock('../../../store/use-story-launch', () => ({
+	useStoryLaunch: () => ({
+		testStory: mockTestStory
+	})
+}));
+
 function inventoryAsset(
 	path: string,
 	options: Partial<CoreAssetInventoryEntry> = {}
@@ -102,6 +110,7 @@ function assetCard(path: string) {
 describe('<AssetsRoute>', () => {
 	beforeEach(() => {
 		window.localStorage.clear();
+		mockTestStory.mockReset();
 	});
 
 	afterEach(() => {
@@ -131,6 +140,14 @@ describe('<AssetsRoute>', () => {
 				result.container.querySelector('[data-id="start"]')
 			).toHaveTextContent('<img src="assets/cover.png" alt="">')
 		);
+	});
+
+	it('tests the first passage that references the selected asset', () => {
+		const {story} = renderComponent();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Test First Usage'}));
+
+		expect(mockTestStory).toHaveBeenCalledWith(story.id, story.passages[0].id);
 	});
 
 	it('imports a host-known asset into the inventory and marks it unused', async () => {

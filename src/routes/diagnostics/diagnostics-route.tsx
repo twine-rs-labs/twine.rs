@@ -20,6 +20,7 @@ import {
 	Story,
 	useStoriesContext
 } from '../../store/stories';
+import {useStoryLaunch} from '../../store/use-story-launch';
 import './diagnostics-route.css';
 
 type SeverityFilter = CoreDiagnosticSeverity | 'all';
@@ -128,6 +129,7 @@ export const DiagnosticsRoute: React.FC = () => {
 	const {storyId} = useParams<{storyId: string}>();
 	const {dispatch, stories} = useStoriesContext();
 	const history = useHistory();
+	const {testStory} = useStoryLaunch();
 	const coreProjectHost = useCoreProjectHost();
 	const story = storyForId(stories, storyId);
 	const [severity, setSeverity] = React.useState<SeverityFilter>('all');
@@ -285,6 +287,12 @@ export const DiagnosticsRoute: React.FC = () => {
 
 		setDismissedIds(next);
 		saveDismissedDiagnosticIds(story.id, next);
+	}
+
+	function testSelectedPassage() {
+		if (story && selectedPassage) {
+			void testStory(story.id, selectedPassage.id);
+		}
 	}
 
 	if (!story || !diagnostics) {
@@ -520,6 +528,16 @@ export const DiagnosticsRoute: React.FC = () => {
 						)}
 						<div className="diagnostics-route__section-title">Navigation</div>
 						<div className="diagnostics-route__actions">
+							<Button
+								block
+								disabled={!selectedPassage}
+								icon="tool"
+								onClick={testSelectedPassage}
+								size="sm"
+								variant="primary"
+							>
+								Test From Here
+							</Button>
 							<Button
 								block
 								icon="file-text"

@@ -83,6 +83,21 @@ describe('PassageFuzzyFinder', () => {
 				fireEvent.click(screen.getByRole('button', {name: 'a name text'}));
 				expect(onClose).toBeCalledTimes(1);
 			});
+
+			it('tests a result from the search row action', () => {
+				const onTestPassage = jest.fn();
+				const story = fakeStory(1);
+
+				story.passages[0].name = 'a name';
+				story.passages[0].text = 'text';
+				renderComponent({onTestPassage}, story);
+				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
+				fireEvent.click(
+					screen.getByRole('button', {name: 'Test "a name" from here'})
+				);
+
+				expect(onTestPassage).toHaveBeenCalledWith(story.passages[0]);
+			});
 		});
 	});
 
