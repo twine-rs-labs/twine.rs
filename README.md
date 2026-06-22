@@ -1,43 +1,93 @@
 # twine.rs
 
-Rust-first exploration of a faster, directory-native Twine editor.
+`twine.rs` is a Rust-backed Twine editor.
 
-This work begins from [TwineJS](https://github.com/klembot/twinejs), the browser and Electron version of [Twine](https://twinery.org) created by Chris Klimas and maintained with many contributors. `twine.rs` keeps that project close for reference, compatibility, and respect for the existing Twine ecosystem while exploring a new Rust-centered architecture.
+It is built from TwineJS, keeping the React/Electron workbench and Twine story
+format compatibility while adding native project folders, asset handling, graph
+tools, import/export code, and CLI workflows through Rust crates.
 
-This repository currently contains:
+Use this repo to run the web or desktop editor, work on directory-backed Twine
+projects, and test the Rust core that supports parsing, storage, graph
+projection, search, and export.
 
-- The upstream TwineJS codebase for reference and parity work.
-- A Rust workspace skeleton under `crates/`.
-- Benchmark fixture tooling under `benchmarks/`.
-- Planning and design references under `docs/reference/` and `docs/design-system/`.
+## Prerequisites
 
-## Current Focus
+- Node.js 20+
+- npm 10+
+- Rust stable toolchain with `cargo`, `rustfmt`, and `clippy`
+- `mdbook` only if you build or serve the docs
 
-D-series workbench migration plus Rust-first project/asset integration. The current app has a store-backed `CoreProjectHost` compatibility layer while the remaining M0/M5 work connects New/Open Project and Assets to file-backed `ProjectSession` roots.
-
-## License
-
-The upstream TwineJS code is licensed under GPL-3.0. This repository currently preserves that license; see `LICENSE` for the full text.
-
-Original upstream README: `docs/reference/UPSTREAM_TWINEJS_README.md`
-
-## Useful Commands
+## Setup
 
 ```sh
 npm install
-npm run lint
-npm run build:web
 cargo test --workspace
-cargo run -q -p twine_cli -- benchmarks/fixtures/generated/story-50000.story.json
 ```
 
-## References
+## Run
 
-- Original TwineJS README: `docs/reference/UPSTREAM_TWINEJS_README.md`
-- Upstream TwineJS project docs and GitHub config: `docs/reference/upstream/`
-- Rust port feasibility: `docs/reference/RUST_PORT_FEASIBILITY.md`
-- Stack strategy: `docs/reference/TWINE_RS_STACK_STRATEGY.md`
-- UI document: `docs/reference/TWINE_RS_UI_DOCUMENT.md`
-- Milestones and enhancement catalogue: `docs/reference/TWINE_RS_MILESTONES.md`
-- Rust core style guide: `docs/reference/RUST_CORE_STYLE_GUIDE.md`
-- Design system: `docs/design-system/`
+```sh
+npm start
+```
+
+Starts the Vite web app.
+
+```sh
+npm run start:electron
+```
+
+Builds the renderer and Electron main process, then launches the desktop app.
+
+```sh
+npm run start:docs
+```
+
+Serves the documentation from `docs/en`.
+
+## Build and Check
+
+```sh
+npm run lint
+npm run build:web
+npm run build
+npm test
+npm run test:coverage
+npm run e2e
+```
+
+```sh
+cargo fmt-check
+cargo lint
+cargo test --workspace
+```
+
+`npm test` runs Jest in watch mode. `npm run build` creates the Electron build.
+
+## Fixtures and CLI
+
+```sh
+npm run bench:fixtures
+npm run bench:fixtures:large
+```
+
+```sh
+cargo run -p twine_cli -- inspect benchmarks/fixtures/generated/story-50000.story.json
+cargo run -p twine_cli -- graph benchmarks/fixtures/generated/story-1000.story.json
+cargo run -p twine_cli -- import story.twee /tmp/example.twine
+cargo run -p twine_cli -- export /tmp/example.twine twee /tmp/example.twee
+```
+
+## Project Layout
+
+- `src/`: React UI, Electron shell, store integration, and TypeScript bridge code.
+- `crates/`: Rust model, parser, graph, core, search, store, export, and CLI crates.
+- `benchmarks/`: generated story fixtures and benchmark helpers.
+- `docs/`: user docs, design references, and upstream/reference material.
+- `public/locales/`: app localization files.
+
+## License
+
+The upstream TwineJS code is licensed under GPL-3.0. This repository preserves
+that license; see `LICENSE`.
+
+Original upstream README: `docs/reference/UPSTREAM_TWINEJS_README.md`
