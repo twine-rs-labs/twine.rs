@@ -50,7 +50,11 @@ function graphStory(generatedLayout = false) {
 function renderComponent(
 	generatedLayout = false,
 	configure?: (context: ReturnType<typeof graphStory>) => void,
-	options: {selectedPassageId?: string; visibleZoom?: number; zoom?: number} = {}
+	options: {
+		selectedPassageId?: string;
+		visibleZoom?: number;
+		zoom?: number;
+	} = {}
 ) {
 	const {next, start, story} = graphStory(generatedLayout);
 

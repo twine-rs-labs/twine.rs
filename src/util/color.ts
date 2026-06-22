@@ -10,7 +10,7 @@ export const colors = [
 	'purple'
 ];
 
-export type Color = typeof colors[number];
+export type Color = (typeof colors)[number];
 
 /**
  * Generates a hue (as in the HSL colorspace) for a string.

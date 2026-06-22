@@ -117,51 +117,51 @@ describe('publishPassage()', () => {
 	});
 });
 
-	describe('publishStory()', () => {
-		it('publishes a story to HTML', () => {
+describe('publishStory()', () => {
+	it('publishes a story to HTML', () => {
 		const result = publish.publishStory(story, appInfo);
 
 		expect(typeof result).toBe('string');
 		checkStoryElAgainstData(toDOM(result), story, appInfo);
-		});
+	});
 
-		it('throws an error when a referenced asset is missing', () => {
-			expect(() =>
-				publish.publishStory(story, appInfo, {
-					assetInventory: [
-						{
-							durationMs: null,
-							exists: false,
-							height: null,
-							kind: 'image',
-							missing: true,
-							modifiedAt: null,
-							normalizedPath: 'assets/missing.png',
-							path: 'assets/missing.png',
-							previewUrl: null,
-							publish: {
-								copy: false,
-								outputPath: 'assets/missing.png',
-								reason: 'Referenced file is missing'
-							},
-							referenceCount: 1,
-							references: [],
-							sizeBytes: null,
-							snippet: {
-								label: 'Insert asset reference',
-								mediaType: 'image',
-								text: '<img src="assets/missing.png" alt="">'
-							},
-							thumbnailUrl: null,
-							unused: false,
-							width: null
-						}
-					]
-				})
-			).toThrow('asset "assets/missing.png" is missing');
-		});
+	it('throws an error when a referenced asset is missing', () => {
+		expect(() =>
+			publish.publishStory(story, appInfo, {
+				assetInventory: [
+					{
+						durationMs: null,
+						exists: false,
+						height: null,
+						kind: 'image',
+						missing: true,
+						modifiedAt: null,
+						normalizedPath: 'assets/missing.png',
+						path: 'assets/missing.png',
+						previewUrl: null,
+						publish: {
+							copy: false,
+							outputPath: 'assets/missing.png',
+							reason: 'Referenced file is missing'
+						},
+						referenceCount: 1,
+						references: [],
+						sizeBytes: null,
+						snippet: {
+							label: 'Insert asset reference',
+							mediaType: 'image',
+							text: '<img src="assets/missing.png" alt="">'
+						},
+						thumbnailUrl: null,
+						unused: false,
+						width: null
+					}
+				]
+			})
+		).toThrow('asset "assets/missing.png" is missing');
+	});
 
-		it('passes through format options', () => {
+	it('passes through format options', () => {
 		const result = toDOM(
 			publish.publishStory(story, appInfo, {
 				formatOptions: '<<test option>>'
@@ -214,9 +214,7 @@ describe('publishPassage()', () => {
 			const runner = passageEls[story.passages.length];
 
 			expect(passageEls.length).toBe(story.passages.length + 1);
-			expect(result.getAttribute('startnode')).toBe(
-				runner.getAttribute('pid')
-			);
+			expect(result.getAttribute('startnode')).toBe(runner.getAttribute('pid'));
 			expect(runner.getAttribute('name')).toBe('twine.rs Test Start');
 			expect(runner.textContent).toBe(expectedText);
 		}
@@ -245,7 +243,9 @@ describe('publishPassage()', () => {
 	it('adds StoryData graph metadata only when requested', () => {
 		let result = toDOM(publish.publishStory(story, appInfo));
 
-		expect(result.querySelector('tw-passagedata[name="StoryGraph"]')).toBeNull();
+		expect(
+			result.querySelector('tw-passagedata[name="StoryGraph"]')
+		).toBeNull();
 		expect(result.getAttribute(TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE)).toBeNull();
 
 		result = toDOM(
@@ -256,7 +256,9 @@ describe('publishPassage()', () => {
 			result.getAttribute(TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE)!
 		);
 
-		expect(result.querySelector('tw-passagedata[name="StoryGraph"]')).toBeNull();
+		expect(
+			result.querySelector('tw-passagedata[name="StoryGraph"]')
+		).toBeNull();
 		expect(storyGraph).toEqual(
 			expect.objectContaining({
 				kind: 'storyGraph',

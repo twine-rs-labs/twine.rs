@@ -17,8 +17,10 @@ export type PromptButtonValidator = (
 	value: string
 ) => PromptValidationResponse | Promise<PromptValidationResponse>;
 
-export interface PromptButtonProps
-	extends Omit<CardButtonProps, 'ariaLabel' | 'onChangeOpen' | 'open'> {
+export interface PromptButtonProps extends Omit<
+	CardButtonProps,
+	'ariaLabel' | 'onChangeOpen' | 'open'
+> {
 	cancelIcon?: React.ReactNode;
 	cancelLabel?: string;
 	onChange: React.ChangeEventHandler<HTMLInputElement>;

@@ -19,7 +19,11 @@
 	Using a gradient here so that Firefox won't try to apply it to the dropdown
 	when it's opened. It will do this with a simple color.
 	*/
-	background: linear-gradient(to right, var(--white-translucent), var(--white-translucent));
+	background: linear-gradient(
+		to right,
+		var(--white-translucent),
+		var(--white-translucent)
+	);
 	border-radius: var(--corner-round);
 	border: 1px solid var(--light-gray-translucent);
 	color: var(--dark-gray);

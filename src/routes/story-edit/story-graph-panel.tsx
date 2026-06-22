@@ -1475,7 +1475,9 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		}
 
 		const ids = idsInMarqueeRect(selection.rect);
-		const next = selection.additive ? new Set(selectedIdSet) : new Set<string>();
+		const next = selection.additive
+			? new Set(selectedIdSet)
+			: new Set<string>();
 
 		for (const id of ids) {
 			next.add(id);

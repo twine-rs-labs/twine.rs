@@ -36,7 +36,7 @@ export const locales = [
  * default.
  */
 export function closestAppLocale(code: string) {
-	// Exact match? 
+	// Exact match?
 
 	if (locales.some(locale => locale.code === code)) {
 		return code;
@@ -44,7 +44,11 @@ export function closestAppLocale(code: string) {
 
 	if (code.includes('-')) {
 		const roughCode = code.replace(/-.+/, '');
-		const roughMatch = locales.find(locale => locale.code === roughCode || locale.code.replace(/-.+/, '') === roughCode);
+		const roughMatch = locales.find(
+			locale =>
+				locale.code === roughCode ||
+				locale.code.replace(/-.+/, '') === roughCode
+		);
 
 		if (roughMatch) {
 			return roughMatch.code;

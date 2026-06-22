@@ -4,8 +4,10 @@ import {Passage} from '../../store/stories';
 import {PassageCard, PassageCardProps} from './passage-card';
 import '../../styles/animations.css';
 
-export interface PassageCardGroupProps
-	extends Omit<PassageCardProps, 'passage'> {
+export interface PassageCardGroupProps extends Omit<
+	PassageCardProps,
+	'passage'
+> {
 	passages: Passage[];
 }
 

@@ -11,13 +11,16 @@ function AutocompleteTextInputDemo(
 	props: Omit<AutocompleteTextInputProps, 'children'>
 ) {
 	const [value, setValue] = React.useState(props.value);
-	const handleChange: AutocompleteTextInputProps["onChange"] = (event, metadata) => {
+	const handleChange: AutocompleteTextInputProps['onChange'] = (
+		event,
+		metadata
+	) => {
 		props.onChange?.(event, metadata);
 		setValue(event.target.value);
 
 		// We need to persist the event for assertion purposes; otherwise, we get repeated warnings.
 		event.persist();
-	}
+	};
 
 	return (
 		<AutocompleteTextInput
@@ -174,7 +177,7 @@ describe('<AutocompleteTextInput>', () => {
 		const datalist = document.querySelector('datalist');
 
 		expect(datalist).toBeInTheDocument();
-		
+
 		const options = datalist!.querySelectorAll('option');
 		expect(options).toHaveLength(3);
 		expect(options[0].value).toBe(`apple${DATALIST_SELECTION_MARKER}`);
@@ -187,7 +190,7 @@ describe('<AutocompleteTextInput>', () => {
 
 		renderComponent({onChange});
 		expect(onChange).not.toHaveBeenCalled();
-		fireEvent.change(screen.getByRole('combobox'), { target: { value: 'a' }});
+		fireEvent.change(screen.getByRole('combobox'), {target: {value: 'a'}});
 		expect(onChange).toHaveBeenCalledTimes(1);
 		expect(onChange.mock.calls[0][0].target.value).toBe('a');
 		expect(onChange.mock.calls[0][1]).toEqual({autocompleted: false});
@@ -201,7 +204,9 @@ describe('<AutocompleteTextInput>', () => {
 
 		// Fake picking a value from the datalist by changing the value to what it would result in.
 
-		fireEvent.change(screen.getByRole('combobox'), { target: { value: `apple${DATALIST_SELECTION_MARKER}` }});
+		fireEvent.change(screen.getByRole('combobox'), {
+			target: {value: `apple${DATALIST_SELECTION_MARKER}`}
+		});
 		expect(onChange).toHaveBeenCalledTimes(1);
 		expect(onChange.mock.calls[0][0].target.value).toBe('apple');
 		expect(onChange.mock.calls[0][1]).toEqual({autocompleted: true});

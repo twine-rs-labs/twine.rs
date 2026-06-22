@@ -51,8 +51,7 @@ export function commandLineHelpText(appName = 'Twine RS') {
 export function commandLineOpenPaths(argv: string[], cwd = process.cwd()) {
 	const args = parseCommandLine(argv);
 
-	return args._
-		.filter((value): value is string => typeof value === 'string')
+	return args._.filter((value): value is string => typeof value === 'string')
 		.filter(value => value.trim() !== '')
 		.map(value => resolve(cwd, value));
 }

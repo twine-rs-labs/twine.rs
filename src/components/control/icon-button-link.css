@@ -129,7 +129,8 @@
 	color: var(--dark-red);
 }
 
-.icon-button.selected, .icon-link.selected {
+.icon-button.selected,
+.icon-link.selected {
 	background: var(--faint-blue);
 	color: var(--dark-blue);
 }

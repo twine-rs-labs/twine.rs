@@ -184,7 +184,10 @@ function storyLooksLikeSugarCube(story: ImportedStory) {
 }
 
 function inferMissingStoryFormat(story: ImportedStory): ImportedStory {
-	if (typeof story.storyFormat === 'string' && story.storyFormat.trim() !== '') {
+	if (
+		typeof story.storyFormat === 'string' &&
+		story.storyFormat.trim() !== ''
+	) {
 		return story;
 	}
 

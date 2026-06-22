@@ -6,7 +6,7 @@ This project should not be "TwineJS rewritten in Rust" as a single heroic port. 
 
 The dream is not pure Rust UI and not pure web app. It is a Rust-native core with a first-class desktop shell, a shared browser target through WASM, and a UI that can move quickly enough to become beautiful.
 
-> **Companion roadmaps:** the feature milestones live in [`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) (M-series) and the UI-realization track lives in [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md) (D-series), which installs `docs/design-system/` as the app's actual UI. The architecture below is the *why*; those docs are the *when*.
+> **Companion roadmaps:** the feature milestones live in [`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) (M-series) and the UI-realization track lives in [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md) (D-series), which installs `docs/design-system/` as the app's actual UI. The architecture below is the _why_; those docs are the _when_.
 
 ## Executive Decision
 

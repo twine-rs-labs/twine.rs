@@ -9,7 +9,7 @@ import {Passage, TagColors} from '../../store/stories';
 import {TagStripe} from '../tag/tag-stripe';
 import {passageIsEmpty} from '../../util/passage-is-empty';
 import './passage-card.css';
-import { TagBadges } from '../tag/tag-badges';
+import {TagBadges} from '../tag/tag-badges';
 
 export interface PassageCardProps {
 	onEdit: (passage: Passage) => void;
@@ -111,7 +111,12 @@ export const PassageCard: React.FC<PassageCardProps> = React.memo(props => {
 			onDrag={onDrag}
 			onStop={onDragStop}
 		>
-			<div className={className} ref={container} style={style} data-passage-tags={passage.tags.join(' ')}>
+			<div
+				className={className}
+				ref={container}
+				style={style}
+				data-passage-tags={passage.tags.join(' ')}
+			>
 				<SelectableCard
 					highlighted={passage.highlighted}
 					label={passage.name}
@@ -119,10 +124,14 @@ export const PassageCard: React.FC<PassageCardProps> = React.memo(props => {
 					onSelect={handleSelect}
 					selected={passage.selected}
 				>
-					{tagDisplay === 'color' && <TagStripe tagColors={tagColors} tags={passage.tags} />}
+					{tagDisplay === 'color' && (
+						<TagStripe tagColors={tagColors} tags={passage.tags} />
+					)}
 					<h2>{passage.name}</h2>
 					<CardContent>{excerpt}</CardContent>
-					{tagDisplay === 'name' && <TagBadges tagColors={tagColors} tags={passage.tags} />}
+					{tagDisplay === 'name' && (
+						<TagBadges tagColors={tagColors} tags={passage.tags} />
+					)}
 				</SelectableCard>
 			</div>
 		</DraggableCore>

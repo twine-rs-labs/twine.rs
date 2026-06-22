@@ -13,8 +13,8 @@ export interface PassageConnectionGroupProps {
 	variant?: 'link' | 'reference';
 }
 
-export const PassageConnectionGroup: React.FC<PassageConnectionGroupProps> = React.memo(
-	props => {
+export const PassageConnectionGroup: React.FC<PassageConnectionGroupProps> =
+	React.memo(props => {
 		const {broken, connections, offset, self, variant = 'link'} = props;
 
 		return (
@@ -47,7 +47,6 @@ export const PassageConnectionGroup: React.FC<PassageConnectionGroupProps> = Rea
 				))}
 			</>
 		);
-	}
-);
+	});
 
 PassageConnectionGroup.displayName = 'PassageConnectionGroup';

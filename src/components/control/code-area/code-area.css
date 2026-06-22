@@ -18,7 +18,8 @@
 	position: relative;
 }
 
-.code-area .CodeMirror, .code-area textarea.visible {
+.code-area .CodeMirror,
+.code-area textarea.visible {
 	background: var(--white-translucent);
 	border-radius: var(--corner-round);
 	border: 1px solid var(--faint-gray);

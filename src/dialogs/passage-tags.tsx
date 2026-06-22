@@ -3,11 +3,15 @@ import {useTranslation} from 'react-i18next';
 import {DialogCard} from '../components/container/dialog-card';
 import {CardContent} from '../components/container/card';
 import {DialogComponentProps} from './dialogs.types';
-import {setTagColor, storyWithId, renamePassageTag} from '../store/stories';
+import {storyWithId} from '../store/stories';
 import {useUndoableStoriesContext} from '../store/undoable-stories';
 import {Color} from '../util/color';
 import {TagEditor} from '../components/tag/tag-editor';
-import {useCoreProjectHost} from '../core';
+import {
+	renamePassageTagCommand,
+	setStoryTagColorCommand,
+	useCoreProjectHost
+} from '../core';
 import './passage-tags.css';
 
 export interface PassageTagsDialogProps extends DialogComponentProps {
@@ -16,7 +20,7 @@ export interface PassageTagsDialogProps extends DialogComponentProps {
 
 export const PassageTagsDialog: React.FC<PassageTagsDialogProps> = props => {
 	const {storyId, ...other} = props;
-	const {dispatch, stories} = useUndoableStoriesContext();
+	const {stories} = useUndoableStoriesContext();
 	const {t} = useTranslation();
 
 	const story = storyWithId(stories, storyId);
@@ -28,15 +32,19 @@ export const PassageTagsDialog: React.FC<PassageTagsDialogProps> = props => {
 	const tagNames = React.useMemo(() => tags.map(tag => tag.name), [tags]);
 
 	function handleChangeColor(tagName: string, color: Color) {
-		dispatch(
-			setTagColor(story, tagName, color),
+		coreProjectHost.applyStoryCommand(
+			setStoryTagColorCommand(
+				story.id,
+				tagName,
+				color === 'none' ? null : color
+			),
 			t('undoChange.changeTagColor')
 		);
 	}
 
 	function handleChangeTagName(tagName: string, newName: string) {
-		dispatch(
-			renamePassageTag(story, tagName, newName),
+		coreProjectHost.applyStoryCommand(
+			renamePassageTagCommand(story.id, tagName, newName),
 			t('undoChange.renameTag')
 		);
 	}

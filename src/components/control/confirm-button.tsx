@@ -7,8 +7,10 @@ import {CardButton, CardButtonProps} from './card-button';
 import {IconButton, IconButtonProps} from './icon-button';
 import './confirm-button.css';
 
-export interface ConfirmButtonProps
-	extends Omit<CardButtonProps, 'ariaLabel' | 'open' | 'onChangeOpen'> {
+export interface ConfirmButtonProps extends Omit<
+	CardButtonProps,
+	'ariaLabel' | 'open' | 'onChangeOpen'
+> {
 	cancelIcon?: React.ReactNode;
 	cancelLabel?: string;
 	confirmIcon?: React.ReactNode;

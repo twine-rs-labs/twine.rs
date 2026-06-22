@@ -1,8 +1,7 @@
 import type {Passage, Story} from '../store/stories';
 
 export const TWINE_RS_STORY_DATA_KEY = 'twine.rs';
-export const TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE =
-	'data-twine-rs-story-graph';
+export const TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE = 'data-twine-rs-story-graph';
 
 export interface StoryGraphPassageMetadata {
 	bounds: {
@@ -42,9 +41,12 @@ function finiteNumber(value: unknown): value is number {
 }
 
 function sortedPassages(story: Story) {
-	return story.passages.slice().sort((left, right) =>
-		left.name.localeCompare(right.name) || left.id.localeCompare(right.id)
-	);
+	return story.passages
+		.slice()
+		.sort(
+			(left, right) =>
+				left.name.localeCompare(right.name) || left.id.localeCompare(right.id)
+		);
 }
 
 export function storyGraphMetadata(story: Story): TwineRsStoryGraphMetadata {
@@ -181,7 +183,10 @@ function passageMatchesMetadataEntry(passage: Passage, entry: unknown) {
 	);
 }
 
-export function applyStoryGraphMetadataToStory(story: Story, metadata: unknown) {
+export function applyStoryGraphMetadataToStory(
+	story: Story,
+	metadata: unknown
+) {
 	const entries = passageLayoutEntries(metadata);
 
 	for (const entry of entries) {

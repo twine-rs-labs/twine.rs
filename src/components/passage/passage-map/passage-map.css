@@ -1,12 +1,11 @@
 @import '../../../styles/colors.css';
 
 .passage-map {
-	background:
-		radial-gradient(
-			circle,
-			color-mix(in oklab, var(--tx-4) 22%, transparent) 0 1px,
-			transparent 1.5px
-		);
+	background: radial-gradient(
+		circle,
+		color-mix(in oklab, var(--tx-4) 22%, transparent) 0 1px,
+		transparent 1.5px
+	);
 	background-color: var(--ink-void);
 	background-size: 26px 26px;
 

@@ -20,15 +20,17 @@ const rustupToolchain = path.join(
 			? 'apple-darwin'
 			: process.platform === 'win32'
 				? 'pc-windows-msvc'
-			: 'unknown-linux-gnu'
+				: 'unknown-linux-gnu'
 	}`
 );
 const cargoName = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
 const rustcName = process.platform === 'win32' ? 'rustc.exe' : 'rustc';
 const rustupCargo = path.join(rustupToolchain, 'bin', cargoName);
 const rustupRustc = path.join(rustupToolchain, 'bin', rustcName);
-const cargo = process.env.CARGO ?? ((await exists(rustupCargo)) ? rustupCargo : 'cargo');
-const rustc = process.env.RUSTC ?? ((await exists(rustupRustc)) ? rustupRustc : undefined);
+const cargo =
+	process.env.CARGO ?? ((await exists(rustupCargo)) ? rustupCargo : 'cargo');
+const rustc =
+	process.env.RUSTC ?? ((await exists(rustupRustc)) ? rustupRustc : undefined);
 const nativeSource = path.join(
 	rootDir,
 	'target',

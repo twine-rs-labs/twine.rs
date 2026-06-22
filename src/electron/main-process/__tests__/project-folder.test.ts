@@ -1294,9 +1294,9 @@ describe('project-folder native bridge', () => {
 			throw Object.assign(new Error('missing'), {code: 'ENOENT'});
 		});
 
-		await expect(deleteProjectFolder('/native/project.twine.rs')).rejects.toThrow(
-			'no twine.toml project manifest was found'
-		);
+		await expect(
+			deleteProjectFolder('/native/project.twine.rs')
+		).rejects.toThrow('no twine.toml project manifest was found');
 		expect(removeMock).not.toHaveBeenCalled();
 	});
 

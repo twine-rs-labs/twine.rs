@@ -25,6 +25,16 @@ export type WasmWorkerRequest =
 	  }
 	| {
 			id: number;
+			kind: 'undo';
+			revision: number;
+	  }
+	| {
+			id: number;
+			kind: 'redo';
+			revision: number;
+	  }
+	| {
+			id: number;
 			kind: 'queryGraphProjection';
 			options: CoreGraphProjectionOptions;
 			revision: number;
@@ -51,6 +61,20 @@ export type WasmWorkerSuccess =
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: PatchBatch;
+	  }
+	| {
+			id: number;
+			kind: 'undo';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: PatchBatch | null;
+	  }
+	| {
+			id: number;
+			kind: 'redo';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: PatchBatch | null;
 	  }
 	| {
 			id: number;

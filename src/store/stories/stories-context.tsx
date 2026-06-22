@@ -9,7 +9,10 @@ import {
 } from './stories.types';
 import {useStoryFormatsContext} from '../story-formats';
 import {useStoreErrorReporter} from '../use-store-error-reporter';
-import {publishStorySaveStatus, StorySaveStatus} from '../persistence/save-status';
+import {
+	publishStorySaveStatus,
+	StorySaveStatus
+} from '../persistence/save-status';
 
 export const StoriesContext = React.createContext<StoriesContextProps>({
 	dispatch: () => {},
@@ -28,26 +31,24 @@ export const StoriesContextProvider: React.FC = props => {
 	const {stories: storiesPersistence} = usePersistence();
 	const {formats} = useStoryFormatsContext();
 	const {reportError} = useStoreErrorReporter();
-	const persistedReducer: React.Reducer<
-		StoriesState,
-		StoriesAction
-	> = React.useMemo(
-		() => (state, action) => {
-			const newState = reducer(state, action);
+	const persistedReducer: React.Reducer<StoriesState, StoriesAction> =
+		React.useMemo(
+			() => (state, action) => {
+				const newState = reducer(state, action);
 
-			try {
-				if (storiesPersistence.saveMiddleware(newState, action, formats)) {
-					queueStorySaveStatus({kind: 'saved', savedAt: Date.now()});
+				try {
+					if (storiesPersistence.saveMiddleware(newState, action, formats)) {
+						queueStorySaveStatus({kind: 'saved', savedAt: Date.now()});
+					}
+				} catch (error) {
+					queueStorySaveStatus({kind: 'error', error: error as Error});
+					reportError(error as Error, 'store.errors.cantPersistStories');
 				}
-			} catch (error) {
-				queueStorySaveStatus({kind: 'error', error: error as Error});
-				reportError(error as Error, 'store.errors.cantPersistStories');
-			}
 
-			return newState;
-		},
-		[formats, reportError, storiesPersistence]
-	);
+				return newState;
+			},
+			[formats, reportError, storiesPersistence]
+		);
 	const [stories, dispatch] = useThunkReducer(persistedReducer, []);
 
 	return (

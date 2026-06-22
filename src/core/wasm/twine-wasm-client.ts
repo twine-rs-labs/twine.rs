@@ -178,6 +178,45 @@ export class WasmCoreWorkerClient {
 		}
 
 		this.clearQueryCaches();
+		this.readyRevision = revision + 1;
+
+		return response.result;
+	}
+
+	async undo(revision: number): Promise<PatchBatch | null> {
+		const response = await this.send({
+			id: 0,
+			kind: 'undo',
+			revision
+		});
+
+		if (response.kind !== 'undo') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
+
+		if (response.result) {
+			this.clearQueryCaches();
+			this.readyRevision = revision + 1;
+		}
+
+		return response.result;
+	}
+
+	async redo(revision: number): Promise<PatchBatch | null> {
+		const response = await this.send({
+			id: 0,
+			kind: 'redo',
+			revision
+		});
+
+		if (response.kind !== 'redo') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
+
+		if (response.result) {
+			this.clearQueryCaches();
+			this.readyRevision = revision + 1;
+		}
 
 		return response.result;
 	}

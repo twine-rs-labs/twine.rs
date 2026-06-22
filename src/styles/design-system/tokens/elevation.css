@@ -12,15 +12,16 @@
 	--shadow-sm: 0 1px 2px oklch(0 0 0 / 0.4);
 	--shadow-card: 0 1px 2px oklch(0 0 0 / 0.35), 0 2px 6px oklch(0 0 0 / 0.3);
 	--shadow-pop: 0 4px 10px oklch(0 0 0 / 0.4), 0 12px 28px oklch(0 0 0 / 0.45);
-	--shadow-modal: 0 18px 50px oklch(0 0 0 / 0.55), 0 4px 14px oklch(0 0 0 / 0.4);
+	--shadow-modal:
+		0 18px 50px oklch(0 0 0 / 0.55), 0 4px 14px oklch(0 0 0 / 0.4);
 
 	/* Top edge highlight for raised surfaces (use as inset). */
 	--edge-hi: inset 0 1px 0 oklch(1 0 0 / 0.045); /* @kind shadow */
 
 	/* Focus & active glow — the brand blue. */
 	--glow-focus: 0 0 0 var(--focus-w) oklch(0.74 0.14 246 / 0.55);
-	--glow-accent: 0 0 0 1px oklch(0.70 0.135 248 / 0.5),
-		0 0 14px oklch(0.66 0.14 250 / 0.35);
+	--glow-accent:
+		0 0 0 1px oklch(0.7 0.135 248 / 0.5), 0 0 14px oklch(0.66 0.14 250 / 0.35);
 
 	/* ---- Motion ------------------------------------------- */
 	/* IDE motion is quick and unfussy: short, eased, no bounce. */

@@ -12,7 +12,9 @@ export interface StoryDetailsDialogStatsProps {
 	story: Story;
 }
 
-export const StoryDetailsDialogStats: React.FC<StoryDetailsDialogStatsProps> = props => {
+export const StoryDetailsDialogStats: React.FC<
+	StoryDetailsDialogStatsProps
+> = props => {
 	const {story} = props;
 	const stats = storyStats(story);
 	const {t} = useTranslation();

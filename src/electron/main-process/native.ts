@@ -18,10 +18,7 @@ interface NativeProjectAddon {
 	findTwineHtmlFilesJson(rootPath: string): string;
 	healthJson(): string;
 	listProjectAssetsJson(rootPath: string): string;
-	loadProjectFolderJson(
-		rootPath: string,
-		loadPassageText?: boolean
-	): string;
+	loadProjectFolderJson(rootPath: string, loadPassageText?: boolean): string;
 	prepareProjectImportJson(sourcePath: string): string;
 	prepareHtmlImportJson(
 		sourcePath: string,
@@ -124,7 +121,10 @@ function parseNativeJson<T>(label: string, source: string): T | undefined {
 	}
 }
 
-function callNative<T>(label: string, callback: (addon: NativeProjectAddon) => string) {
+function callNative<T>(
+	label: string,
+	callback: (addon: NativeProjectAddon) => string
+) {
 	const loaded = loadAddon();
 
 	if (!loaded) {
@@ -238,11 +238,13 @@ export function diffNativeProjectFileManifest(
 	previousFiles: NativeProjectFileEntry[],
 	currentFiles: NativeProjectFileEntry[]
 ) {
-	return callNative<NativeProjectSessionConflict[]>('file manifest diff', addon =>
-		addon.diffProjectFileManifestJson(
-			JSON.stringify(previousFiles),
-			JSON.stringify(currentFiles)
-		)
+	return callNative<NativeProjectSessionConflict[]>(
+		'file manifest diff',
+		addon =>
+			addon.diffProjectFileManifestJson(
+				JSON.stringify(previousFiles),
+				JSON.stringify(currentFiles)
+			)
 	);
 }
 
@@ -253,9 +255,10 @@ export function findNativeTwineHtmlFiles(rootPath: string) {
 }
 
 export function prepareNativeProjectImport(sourcePath: string) {
-	return callNative<Omit<NativeProjectImportSource, 'id'> & {cleanupPath?: string}>(
-		'project import preparation',
-		addon => addon.prepareProjectImportJson(sourcePath)
+	return callNative<
+		Omit<NativeProjectImportSource, 'id'> & {cleanupPath?: string}
+	>('project import preparation', addon =>
+		addon.prepareProjectImportJson(sourcePath)
 	);
 }
 

@@ -14,13 +14,12 @@ import {
 import {reducer} from './reducer';
 import {useStoriesContext} from '../stories';
 
-export const UndoableStoriesContext = React.createContext<UndoableStoriesContextProps>(
-	{
+export const UndoableStoriesContext =
+	React.createContext<UndoableStoriesContextProps>({
 		dispatch: () => {},
 		isUndoable: false,
 		stories: []
-	}
-);
+	});
 
 UndoableStoriesContext.displayName = 'UndoableStories';
 

@@ -642,17 +642,13 @@
 	bottom: calc(var(--app-shell-status-h) + var(--sp-2));
 	left: calc(var(--app-shell-rail-w) + var(--sp-2));
 	right: var(--sp-2);
-	top: calc(
-		var(--app-shell-bar-h) + var(--app-shell-toolbar-h) + var(--sp-2)
-	);
+	top: calc(var(--app-shell-bar-h) + var(--app-shell-toolbar-h) + var(--sp-2));
 	z-index: 60;
 }
 
 .app-shell__route .fuzzy-finder {
 	left: calc(var(--app-shell-rail-w) + var(--sp-3));
-	top: calc(
-		var(--app-shell-bar-h) + var(--app-shell-toolbar-h) + var(--sp-3)
-	);
+	top: calc(var(--app-shell-bar-h) + var(--app-shell-toolbar-h) + var(--sp-3));
 }
 
 @media (max-width: 760px) {

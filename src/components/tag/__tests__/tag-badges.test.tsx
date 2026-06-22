@@ -2,7 +2,7 @@ import {faker} from '@faker-js/faker';
 import {render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import { TagBadges, TagBadgesProps } from '../tag-badges';
+import {TagBadges, TagBadgesProps} from '../tag-badges';
 
 describe('<TagBadges>', () => {
 	function renderComponent(props?: Partial<TagBadgesProps>) {

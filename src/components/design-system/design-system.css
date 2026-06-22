@@ -805,9 +805,7 @@
 	background: var(--ink-3);
 	border: 1px solid var(--line-2);
 	border-radius: var(--r-md);
-	box-shadow:
-		var(--shadow-card),
-		var(--edge-hi);
+	box-shadow: var(--shadow-card), var(--edge-hi);
 	cursor: pointer;
 	display: block;
 	font-family: var(--font-ui);
@@ -823,16 +821,12 @@
 
 .tw-node:hover {
 	border-color: var(--line-3);
-	box-shadow:
-		var(--shadow-pop),
-		var(--edge-hi);
+	box-shadow: var(--shadow-pop), var(--edge-hi);
 	transform: translateY(-1px);
 }
 
 .tw-node:focus-visible {
-	box-shadow:
-		var(--glow-focus),
-		var(--shadow-pop);
+	box-shadow: var(--glow-focus), var(--shadow-pop);
 	outline: none;
 }
 

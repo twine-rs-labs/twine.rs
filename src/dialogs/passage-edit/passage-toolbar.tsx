@@ -8,16 +8,17 @@ import {MenuButton} from '../../components/control/menu-button';
 import {RenamePassageButton} from '../../components/passage/rename-passage-button';
 import {TestPassageButton} from '../../route-actions/story-edit/passage/test-passage-button';
 import {
-	addPassageTag,
 	Passage,
-	removePassageTag,
-	setTagColor,
 	Story,
-	storyPassageTags,
-	updatePassage
+	storyPassageTags
 } from '../../store/stories';
-import {useUndoableStoriesContext} from '../../store/undoable-stories';
-import {Color} from '../../util/color';
+import {
+	setPassageTagsCommand,
+	setStoryTagColorCommand,
+	updatePassageCommand,
+	useCoreProjectHost
+} from '../../core';
+import {Color, colorString} from '../../util/color';
 import {TagCardButton} from '../../components/tag/tag-card-button';
 
 export interface PassageToolbarProps {
@@ -30,33 +31,81 @@ export interface PassageToolbarProps {
 
 export const PassageToolbar: React.FC<PassageToolbarProps> = props => {
 	const {disabled, editor, passage, story, useCodeMirror} = props;
-	const {dispatch} = useUndoableStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const {t} = useTranslation();
 	const passageTags = storyPassageTags(story);
 
 	function handleAddTag(name: string) {
-		dispatch(addPassageTag(story, passage, name), t('undoChange.addTag'));
+		coreProjectHost.applyStoryCommand(
+			{
+				type: 'batch',
+				commands: [
+					...(passageTags.includes(name)
+						? []
+						: [
+								setStoryTagColorCommand(
+									story.id,
+									name,
+									colorString(name)
+								)
+							]),
+					setPassageTagsCommand(story.id, passage.id, [
+						...passage.tags,
+						name
+					])
+				]
+			},
+			t('undoChange.addTag')
+		);
 	}
 
 	function handleChangeTagColor(name: string, color: Color) {
-		dispatch(setTagColor(story, name, color));
+		coreProjectHost.applyStoryCommand(
+			setStoryTagColorCommand(story.id, name, color === 'none' ? null : color)
+		);
 	}
 
 	function handleRemoveTag(name: string) {
-		dispatch(removePassageTag(story, passage, name), t('undoChange.removeTag'));
+		coreProjectHost.applyStoryCommand(
+			setPassageTagsCommand(
+				story.id,
+				passage.id,
+				passage.tags.filter(tag => tag !== name)
+			),
+			t('undoChange.removeTag')
+		);
 	}
 
 	function handleRename(name: string) {
-		// Don't create newly linked passages here because the update action will
-		// try to recreate the passage as it's been renamed--it sees new links in
-		// existing passages, updates them, but does not see that the passage name
-		// has been updated since that hasn't happened yet.
-
-		dispatch(updatePassage(story, passage, {name}, {dontUpdateOthers: true}));
+		coreProjectHost.applyStoryCommand(
+			updatePassageCommand(
+				story.id,
+				passage.id,
+				{
+					layout: null,
+					name,
+					tags: null,
+					text: null
+				},
+				false
+			)
+		);
 	}
 
 	function handleSetSize({height, width}: {height: number; width: number}) {
-		dispatch(updatePassage(story, passage, {height, width}));
+		coreProjectHost.applyStoryCommand(
+			updatePassageCommand(story.id, passage.id, {
+				layout: {
+					height,
+					left: passage.left,
+					top: passage.top,
+					width
+				},
+				name: null,
+				tags: null,
+				text: null
+			})
+		);
 	}
 
 	return (

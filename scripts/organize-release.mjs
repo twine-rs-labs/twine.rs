@@ -20,18 +20,18 @@ const checksumsName = 'SHA256SUMS.txt';
 const buckets = [
 	{
 		dir: 'windows',
-		match: (name) => name.includes('-win-'),
-		primary: (name) => name.endsWith('.exe')
+		match: name => name.includes('-win-'),
+		primary: name => name.endsWith('.exe')
 	},
 	{
 		dir: 'mac',
-		match: (name) => name.includes('-mac-'),
-		primary: (name) => name.endsWith('.dmg') && name.includes('-universal.')
+		match: name => name.includes('-mac-'),
+		primary: name => name.endsWith('.dmg') && name.includes('-universal.')
 	},
 	{
 		dir: 'linux',
-		match: (name) => name.includes('-linux-'),
-		primary: (name) => name.endsWith('.AppImage')
+		match: name => name.includes('-linux-'),
+		primary: name => name.endsWith('.AppImage')
 	}
 ];
 
@@ -222,9 +222,7 @@ function releaseGuide(version, downloads) {
 		preferredWindows ? `- Windows: \`${preferredWindows}\`` : null,
 		preferredMac ? `- Mac: \`${preferredMac}\`` : null,
 		preferredLinuxX64 ? `- Linux x64: \`${preferredLinuxX64}\`` : null,
-		preferredLinuxArm64
-			? `- Linux ARM64: \`${preferredLinuxArm64}\``
-			: null
+		preferredLinuxArm64 ? `- Linux ARM64: \`${preferredLinuxArm64}\`` : null
 	]
 		.filter(Boolean)
 		.join('\n');
@@ -262,14 +260,20 @@ function downloadList(files, platform) {
 		return 'No downloads generated for this platform.';
 	}
 
-	return files.map(file => `- \`${file}\`: ${downloadNote(file, platform)}`).join('\n');
+	return files
+		.map(file => `- \`${file}\`: ${downloadNote(file, platform)}`)
+		.join('\n');
 }
 
 function downloadNote(file, platform) {
 	const name = file.split('/').pop() ?? file;
 	const notes = [];
 
-	notes.push(file.includes('/alternatives/') ? 'alternative download' : 'recommended first download');
+	notes.push(
+		file.includes('/alternatives/')
+			? 'alternative download'
+			: 'recommended first download'
+	);
 
 	if (platform === 'windows') {
 		if (name.endsWith('.exe')) {
@@ -281,7 +285,9 @@ function downloadNote(file, platform) {
 		}
 
 		if (name.endsWith('.dmg')) {
-			notes.push('open the DMG, drag the app to Applications, then right-click Open the first time if macOS warns');
+			notes.push(
+				'open the DMG, drag the app to Applications, then right-click Open the first time if macOS warns'
+			);
 		}
 	} else if (platform === 'linux') {
 		if (name.includes('-x64.')) {
@@ -301,7 +307,9 @@ function downloadNote(file, platform) {
 		}
 
 		if (name.endsWith('.zip')) {
-			notes.push('unzip first; use this if AppImage does not work on your setup');
+			notes.push(
+				'unzip first; use this if AppImage does not work on your setup'
+			);
 		}
 	}
 

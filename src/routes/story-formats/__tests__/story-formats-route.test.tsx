@@ -71,7 +71,9 @@ describe('<StoryFormatsRoute>', () => {
 		expect(screen.getAllByText('Diagnostics').length).toBeGreaterThan(0);
 		expect(screen.getByText('Declared modules')).toBeInTheDocument();
 		expect(screen.getByText('2')).toBeInTheDocument();
-		expect(screen.getByText('http://localhost:5173/format.js')).toBeInTheDocument();
+		expect(
+			screen.getByText('http://localhost:5173/format.js')
+		).toBeInTheDocument();
 		expect(screen.getByText('/formats/chapbook')).toBeInTheDocument();
 		expect(screen.getByText(/publish-safety issue/)).toBeInTheDocument();
 	});
@@ -82,9 +84,9 @@ describe('<StoryFormatsRoute>', () => {
 		fireEvent.click(screen.getByRole('button', {name: 'Use as Default'}));
 
 		await waitFor(() =>
-			expect(screen.getByTestId('pref-inspector-storyFormat')).toHaveTextContent(
-				JSON.stringify({name: 'Chapbook', version: '2.1.0'})
-			)
+			expect(
+				screen.getByTestId('pref-inspector-storyFormat')
+			).toHaveTextContent(JSON.stringify({name: 'Chapbook', version: '2.1.0'}))
 		);
 	});
 
@@ -96,7 +98,9 @@ describe('<StoryFormatsRoute>', () => {
 		await waitFor(() =>
 			expect(
 				screen.getByTestId('pref-inspector-disabledStoryFormatEditorExtensions')
-			).toHaveTextContent(JSON.stringify([{name: 'Chapbook', version: '2.1.0'}]))
+			).toHaveTextContent(
+				JSON.stringify([{name: 'Chapbook', version: '2.1.0'}])
+			)
 		);
 	});
 

@@ -1,7 +1,4 @@
-import {
-	commandIdForKeyboardEvent,
-	shortcutLabel
-} from '../keyboard-shortcuts';
+import {commandIdForKeyboardEvent, shortcutLabel} from '../keyboard-shortcuts';
 
 describe('keyboard shortcuts', () => {
 	it('labels default shortcuts with Command on macOS', () => {
@@ -11,9 +8,7 @@ describe('keyboard shortcuts', () => {
 	});
 
 	it('labels default shortcuts with Ctrl off macOS', () => {
-		expect(shortcutLabel('build.play', 'default', 'other')).toBe(
-			'Ctrl Enter'
-		);
+		expect(shortcutLabel('build.play', 'default', 'other')).toBe('Ctrl Enter');
 		expect(shortcutLabel('build.test', 'default', 'other')).toBe(
 			'Ctrl Shift Enter'
 		);

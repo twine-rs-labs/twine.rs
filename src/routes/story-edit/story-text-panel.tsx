@@ -266,31 +266,31 @@ export const StoryTextPanel: React.FC<StoryTextPanelProps> = props => {
 					<Badge mono tone="neutral">
 						{story.storyFormat} {story.storyFormatVersion}
 					</Badge>
-						{activeSource === 'passage' ? (
-							<>
-								{selectedPassage && onTestPassage && (
-									<Button
-										icon="tool"
-										onClick={() => onTestPassage(selectedPassage)}
-										size="sm"
-										variant="primary"
-									>
-										{t('routes.storyEdit.toolbar.testFromHere')}
-									</Button>
-								)}
-								{selectedPassage && onRevealPassageInGraph && (
-									<Button
-										icon="focus-2"
-										onClick={() => onRevealPassageInGraph(selectedPassage)}
-										size="sm"
-										variant="ghost"
-									>
-										{t('routes.storyEdit.workspace.revealInGraph')}
-									</Button>
-								)}
-								{brokenLinks.length > 0 && (
-									<Badge icon="unlink" tone="error">
-										{brokenLinks.length}
+					{activeSource === 'passage' ? (
+						<>
+							{selectedPassage && onTestPassage && (
+								<Button
+									icon="tool"
+									onClick={() => onTestPassage(selectedPassage)}
+									size="sm"
+									variant="primary"
+								>
+									{t('routes.storyEdit.toolbar.testFromHere')}
+								</Button>
+							)}
+							{selectedPassage && onRevealPassageInGraph && (
+								<Button
+									icon="focus-2"
+									onClick={() => onRevealPassageInGraph(selectedPassage)}
+									size="sm"
+									variant="ghost"
+								>
+									{t('routes.storyEdit.workspace.revealInGraph')}
+								</Button>
+							)}
+							{brokenLinks.length > 0 && (
+								<Badge icon="unlink" tone="error">
+									{brokenLinks.length}
 								</Badge>
 							)}
 							<Badge icon="arrow-up-right" tone="link">

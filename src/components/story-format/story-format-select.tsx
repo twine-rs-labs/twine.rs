@@ -3,8 +3,10 @@ import {useTranslation} from 'react-i18next';
 import {StoryFormat, sortFormats} from '../../store/story-formats';
 import {TextSelect, TextSelectProps} from '../control/text-select';
 
-export interface StoryFormatSelectProps
-	extends Omit<TextSelectProps, 'options' | 'value'> {
+export interface StoryFormatSelectProps extends Omit<
+	TextSelectProps,
+	'options' | 'value'
+> {
 	formats: StoryFormat[];
 	selectedFormat: StoryFormat;
 }

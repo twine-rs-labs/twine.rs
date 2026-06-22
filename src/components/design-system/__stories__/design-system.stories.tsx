@@ -105,4 +105,3 @@ export const Specimen: React.FC = () => {
 		</div>
 	);
 };
-

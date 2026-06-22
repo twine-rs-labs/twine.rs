@@ -10,9 +10,7 @@ import {Story} from '../../store/stories';
 const DisabledRenameStoryButton: React.FC = () => {
 	const {t} = useTranslation();
 
-	return (
-		<IconButton disabled icon="writing" label={t('common.rename')} />
-	);
+	return <IconButton disabled icon="writing" label={t('common.rename')} />;
 };
 
 interface EnabledRenameStoryButtonProps {
@@ -21,7 +19,9 @@ interface EnabledRenameStoryButtonProps {
 	story: Story;
 }
 
-const EnabledRenameStoryButton: React.FC<EnabledRenameStoryButtonProps> = props => {
+const EnabledRenameStoryButton: React.FC<
+	EnabledRenameStoryButtonProps
+> = props => {
 	const {existingStories, onRename, story} = props;
 	const [newName, setNewName] = React.useState(story.name);
 	const {t} = useTranslation();
@@ -68,8 +68,10 @@ const EnabledRenameStoryButton: React.FC<EnabledRenameStoryButtonProps> = props 
 	);
 };
 
-export interface RenameStoryButtonProps
-	extends Omit<EnabledRenameStoryButtonProps, 'story'> {
+export interface RenameStoryButtonProps extends Omit<
+	EnabledRenameStoryButtonProps,
+	'story'
+> {
 	story?: Story;
 }
 

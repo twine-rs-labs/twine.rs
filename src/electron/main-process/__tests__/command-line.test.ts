@@ -23,9 +23,7 @@ describe('command-line helpers', () => {
 		expect(commandLineHelpText()).toContain(
 			'twine-rs [options] [project-folder...]'
 		);
-		expect(commandLineHelpText()).toContain(
-			'--backupCadenceMinutes=<minutes>'
-		);
+		expect(commandLineHelpText()).toContain('--backupCadenceMinutes=<minutes>');
 		expect(commandLineHelpText()).toContain('project-folder');
 	});
 
@@ -41,11 +39,7 @@ describe('command-line helpers', () => {
 	it('does not treat app-pref values as open paths', () => {
 		expect(
 			commandLineOpenPaths(
-				[
-					'--storyLibraryFolderPath',
-					'/tmp/library',
-					'project.twine.rs'
-				],
+				['--storyLibraryFolderPath', '/tmp/library', 'project.twine.rs'],
 				'/tmp/root'
 			)
 		).toEqual(['/tmp/root/project.twine.rs']);

@@ -291,7 +291,7 @@
 			"error": "在检查Twine更新版本时遇到了错误。",
 			"updateAvailable": "较新版本的Twine现已可用。",
 			"upToDate": "已经是Twine可用的最新版本。"
-		}		
+		}
 	},
 	"routes": {
 		"storyEdit": {

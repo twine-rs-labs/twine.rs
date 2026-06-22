@@ -99,7 +99,9 @@ describe('<SettingsRoute>', () => {
 			</FakeStateProvider>
 		);
 
-		expect(await screen.findByDisplayValue('/native/library')).toBeInTheDocument();
+		expect(
+			await screen.findByDisplayValue('/native/library')
+		).toBeInTheDocument();
 
 		fireEvent.change(screen.getByLabelText('Backup reminder'), {
 			target: {value: '14'}

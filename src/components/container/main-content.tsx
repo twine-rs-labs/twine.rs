@@ -4,8 +4,7 @@ import {Point} from '../../util/geometry';
 import {DocumentTitle} from '../document-title/document-title';
 import './main-content.css';
 
-export interface MainContentProps
-	extends React.ComponentPropsWithoutRef<'div'> {
+export interface MainContentProps extends React.ComponentPropsWithoutRef<'div'> {
 	grabbable?: boolean;
 	padded?: boolean;
 	title?: string;

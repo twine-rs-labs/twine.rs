@@ -53,4 +53,3 @@ export const Panel: React.FC<PanelProps> = ({
 		</div>
 	</section>
 );
-

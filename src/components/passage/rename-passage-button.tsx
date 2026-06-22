@@ -6,9 +6,7 @@ import {Passage, Story} from '../../store/stories';
 const DisabledRenamePassageButton: React.FC = () => {
 	const {t} = useTranslation();
 
-	return (
-		<IconButton disabled icon="writing" label={t('common.rename')} />
-	);
+	return <IconButton disabled icon="writing" label={t('common.rename')} />;
 };
 
 export interface EnabledRenamePassageButtonProps {
@@ -17,7 +15,9 @@ export interface EnabledRenamePassageButtonProps {
 	story: Story;
 }
 
-export const EnabledRenamePassageButton: React.FC<EnabledRenamePassageButtonProps> = props => {
+export const EnabledRenamePassageButton: React.FC<
+	EnabledRenamePassageButtonProps
+> = props => {
 	const {onRename, passage, story} = props;
 	const [newName, setNewName] = React.useState(passage.name);
 	const {t} = useTranslation();
@@ -58,8 +58,10 @@ export const EnabledRenamePassageButton: React.FC<EnabledRenamePassageButtonProp
 	);
 };
 
-export interface RenamePassageButtonProps
-	extends Omit<EnabledRenamePassageButtonProps, 'passage'> {
+export interface RenamePassageButtonProps extends Omit<
+	EnabledRenamePassageButtonProps,
+	'passage'
+> {
 	disabled?: boolean;
 	passage?: Passage;
 }

@@ -31,7 +31,8 @@
 	z-index: 60;
 }
 
-.dialogs .dialog-card, .dialogs .background-dialog-card {
+.dialogs .dialog-card,
+.dialogs .background-dialog-card {
 	flex: 1;
 	pointer-events: auto;
 }

@@ -1,10 +1,7 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {IconButton} from '../../../components/design-system';
-import {
-	createUntitledPassageCommand,
-	useCoreProjectHost
-} from '../../../core';
+import {createUntitledPassageCommand, useCoreProjectHost} from '../../../core';
 import {Story} from '../../../store/stories';
 import {Point} from '../../../util/geometry';
 

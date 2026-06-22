@@ -136,7 +136,7 @@ export const DialogStack: React.FC<DialogStackProps> = ({
 								stackHasOverflow
 									? index - (children.length - maxExpandedDialogs)
 									: index
-						  })`;
+							})`;
 
 					// When the stack is expanded, all cards get equal height.
 

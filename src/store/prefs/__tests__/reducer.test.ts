@@ -91,7 +91,7 @@ describe('Pref reducer', () => {
 		});
 
 		it.each(['color', 'name'])(
-			'leaves passageTagDisplay intact if it is \'%s\'',
+			"leaves passageTagDisplay intact if it is '%s'",
 			value => {
 				const result = reducer({...defs, passageTagDisplay: value} as any, {
 					allFormats,

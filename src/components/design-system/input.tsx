@@ -10,8 +10,10 @@ function nextInputId() {
 	return `tw-in-${inputId}`;
 }
 
-export interface InputProps
-	extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size'> {
+export interface InputProps extends Omit<
+	React.InputHTMLAttributes<HTMLInputElement>,
+	'size'
+> {
 	label?: string;
 	icon?: string;
 	kbd?: string;

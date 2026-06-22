@@ -217,7 +217,8 @@ export const SettingsRoute: React.FC = () => {
 	React.useEffect(() => {
 		let cancelled = false;
 
-		(window as TwineElectronWindow).twineElectron?.getStoryLibraryFolder?.()
+		(window as TwineElectronWindow).twineElectron
+			?.getStoryLibraryFolder?.()
 			.then(path => {
 				if (!cancelled) {
 					setStoryLibraryFolder(path);
@@ -225,7 +226,8 @@ export const SettingsRoute: React.FC = () => {
 			})
 			.catch(() => undefined);
 
-		(window as TwineElectronWindow).twineElectron?.getPlatformSettings?.()
+		(window as TwineElectronWindow).twineElectron
+			?.getPlatformSettings?.()
 			.then(settings => {
 				if (!cancelled) {
 					setPlatformSettings(settings);
@@ -249,8 +251,9 @@ export const SettingsRoute: React.FC = () => {
 	}
 
 	async function chooseStoryLibraryFolder() {
-		const path = await (window as TwineElectronWindow).twineElectron
-			?.chooseStoryLibraryFolder?.();
+		const path = await (
+			window as TwineElectronWindow
+		).twineElectron?.chooseStoryLibraryFolder?.();
 
 		if (path) {
 			setStoryLibraryFolder(path);
@@ -258,7 +261,9 @@ export const SettingsRoute: React.FC = () => {
 	}
 
 	function revealStoryLibraryFolder() {
-		void (window as TwineElectronWindow).twineElectron?.revealStoryLibraryFolder?.();
+		void (
+			window as TwineElectronWindow
+		).twineElectron?.revealStoryLibraryFolder?.();
 	}
 
 	function revealBackupFolder() {
@@ -319,7 +324,10 @@ export const SettingsRoute: React.FC = () => {
 				<div>
 					<h1>Settings</h1>
 					<div className="settings-route__subhead">
-						<Badge icon="device-desktop" tone={nativeDesktop ? 'saved' : 'neutral'}>
+						<Badge
+							icon="device-desktop"
+							tone={nativeDesktop ? 'saved' : 'neutral'}
+						>
 							{nativeDesktop ? 'Native desktop' : 'Filesystem fallback'}
 						</Badge>
 						<Badge icon="keyboard" tone="neutral">
@@ -519,9 +527,7 @@ export const SettingsRoute: React.FC = () => {
 							checked={prefs.editorCursorBlinks}
 							disabled={!prefs.useCodeMirror}
 							label="Blinking cursor"
-							onChange={value =>
-								dispatch(setPref('editorCursorBlinks', value))
-							}
+							onChange={value => dispatch(setPref('editorCursorBlinks', value))}
 						/>
 						<div className="settings-route__field">
 							<span>Passage type</span>
@@ -802,9 +808,7 @@ export const SettingsRoute: React.FC = () => {
 							onBlur={() =>
 								void updatePlatformSettings({externalEditorCommand})
 							}
-							onChange={event =>
-								setExternalEditorCommand(event.target.value)
-							}
+							onChange={event => setExternalEditorCommand(event.target.value)}
 							placeholder="Use system default"
 							value={externalEditorCommand}
 						/>
@@ -865,9 +869,7 @@ export const SettingsRoute: React.FC = () => {
 							icon="database"
 							label="Storage mode"
 							value={
-								prefs.defaultProjectFolder
-									? 'Project folder'
-									: 'App library'
+								prefs.defaultProjectFolder ? 'Project folder' : 'App library'
 							}
 						/>
 					</div>
@@ -930,8 +932,7 @@ export const SettingsRoute: React.FC = () => {
 								disabled={!platformControlsAvailable}
 								onChange={value =>
 									void updatePlatformSettings({
-										linkHandlingMode:
-											value === 'block' ? 'block' : 'system'
+										linkHandlingMode: value === 'block' ? 'block' : 'system'
 									})
 								}
 								options={linkHandlingOptions}

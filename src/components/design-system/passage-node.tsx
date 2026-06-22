@@ -4,8 +4,7 @@ import {colorToCss} from './colors';
 import {TablerIcon} from './tabler-icon';
 import './design-system.css';
 
-export interface PassageNodeProps
-	extends React.HTMLAttributes<HTMLDivElement> {
+export interface PassageNodeProps extends React.HTMLAttributes<HTMLDivElement> {
 	title: string;
 	excerpt?: string;
 	tags?: string[];
@@ -100,4 +99,3 @@ export const PassageNode: React.FC<PassageNodeProps> = ({
 		</div>
 	);
 };
-

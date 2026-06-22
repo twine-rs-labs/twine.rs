@@ -4,8 +4,10 @@ import {Tooltip, TooltipProps} from '../tooltip';
 import {TablerIcon} from './tabler-icon';
 import './design-system.css';
 
-export interface IconButtonProps
-	extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label'> {
+export interface IconButtonProps extends Omit<
+	React.ButtonHTMLAttributes<HTMLButtonElement>,
+	'aria-label'
+> {
 	icon: string;
 	label: string;
 	active?: boolean;

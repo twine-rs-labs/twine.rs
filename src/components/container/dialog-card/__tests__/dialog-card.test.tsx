@@ -109,7 +109,6 @@ describe('<DialogCard>', () => {
 		expect(onChangeCollapsed.mock.calls).toEqual([[false]]);
 	});
 
-
 	it('calls the onClose prop when the close button is clicked', () => {
 		const onClose = jest.fn();
 

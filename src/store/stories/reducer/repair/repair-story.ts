@@ -196,7 +196,10 @@ export function repairStory(
 		const bundledName = bundledStoryFormatName(storyFormatName);
 
 		if (bundledName) {
-			if (story.storyFormat !== bundledName || story.storyFormatVersion !== '') {
+			if (
+				story.storyFormat !== bundledName ||
+				story.storyFormatVersion !== ''
+			) {
 				logRepair(
 					story,
 					'storyFormat',

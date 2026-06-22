@@ -4,8 +4,8 @@ import {CSSTransition, TransitionGroup} from 'react-transition-group';
 import {CardGroup} from '../../components/container/card-group';
 import {StoryCard} from '../../components/story/story-card';
 import {setPref, usePrefsContext} from '../../store/prefs';
-import {Story, updateStory} from '../../store/stories';
-import {useUndoableStoriesContext} from '../../store/undoable-stories';
+import {Story} from '../../store/stories';
+import {setStoryTagsCommand, useCoreProjectHost} from '../../core';
 import {Color} from '../../util/color';
 
 /**
@@ -21,7 +21,7 @@ export interface StoryCardsProps {
 export const StoryCards: React.FC<StoryCardsProps> = props => {
 	const {onSelectStory, stories} = props;
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
-	const {dispatch: storiesDispatch} = useUndoableStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const history = useHistory();
 
 	function handleChangeTagColor(tagName: string, color: Color) {
@@ -34,10 +34,11 @@ export const StoryCards: React.FC<StoryCardsProps> = props => {
 	}
 
 	function handleRemoveTag(story: Story, tagName: string) {
-		storiesDispatch(
-			updateStory(stories, story, {
-				tags: story.tags.filter(tag => tag !== tagName)
-			})
+		coreProjectHost.applyStoryCommand(
+			setStoryTagsCommand(
+				story.id,
+				story.tags.filter(tag => tag !== tagName)
+			)
 		);
 	}
 

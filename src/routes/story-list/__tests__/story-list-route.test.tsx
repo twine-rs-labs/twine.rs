@@ -74,7 +74,8 @@ describe('<StoryListRoute>', () => {
 
 	it('deletes a file-backed project folder after confirming the directory', async () => {
 		const story = fakeStory();
-		const rootPath = '/Users/ben/Documents/Twine RS/Stories/Projects/trigaea.twine.rs';
+		const rootPath =
+			'/Users/ben/Documents/Twine RS/Stories/Projects/trigaea.twine.rs';
 		const deleteProjectFolder = jest.fn().mockResolvedValue(undefined);
 		const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
 
@@ -91,7 +92,9 @@ describe('<StoryListRoute>', () => {
 			screen.getByRole('button', {name: /delete story trigaea/i})
 		);
 
-		await waitFor(() => expect(deleteProjectFolder).toHaveBeenCalledWith(rootPath));
+		await waitFor(() =>
+			expect(deleteProjectFolder).toHaveBeenCalledWith(rootPath)
+		);
 		expect(confirmSpy).toHaveBeenCalledWith(
 			expect.stringContaining(`This will delete files from ${rootPath}.`)
 		);

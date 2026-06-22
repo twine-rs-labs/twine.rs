@@ -13,7 +13,7 @@ export const CardGroup: React.FC<CardGroupProps> = props => {
 						typeof props.columnWidth === 'number'
 							? props.columnWidth + 'px'
 							: props.columnWidth
-				  })`
+					})`
 				: `repeat(${props.columns}, 1fr)`,
 		maxWidth: props.maxWidth ?? 'auto'
 	};

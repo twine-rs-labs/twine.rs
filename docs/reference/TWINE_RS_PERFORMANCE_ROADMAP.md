@@ -3,15 +3,15 @@
 This roadmap makes `twine.rs` open, navigate, and edit massive real projects (the
 `Transylvania0.6.01` sample: **4,622 passages, 2,889 links, 2,656 asset files, ~404 MB**)
 feel instant. It is **fully aligned with the dream architecture**, not a parallel plan:
-every major item here is a step toward *making the Rust/WASM/native `ProjectSession` the
-live product authority*
+every major item here is a step toward _making the Rust/WASM/native `ProjectSession` the
+live product authority_
 that [`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) already names as the remaining
 scale risk for **M2** and the foundation for **M4**. We are not inventing a new engine — we
 are letting the engine that already exists do the work it was built for.
 
 > **The one fact that explains everything.** The Rust core already loads and projects the
 > real Transylvania folder in **~0.7–1.1s cold from the CLI** (`twine_cli graph <folder>`).
-> The Electron app takes **~7s** for the same project because the live app *reimplements*
+> The Electron app takes **~7s** for the same project because the live app _reimplements_
 > parsing, indexing, graph projection, and search in TypeScript, on the main thread, and
 > re-reads/re-scans the project several times on open. The generated bindings in
 > [`src/core/bindings/`](../../src/core/bindings/) were emitted by `ts-rs` "for the workbench
@@ -65,16 +65,16 @@ the contents screen, project-open lifecycle, and file-scan duplication.
 
 ### 1.1 Where the ~7 seconds goes (project open, critical path)
 
-| # | Step | Location | Cost at Transylvania scale | Critical path |
-|---|------|----------|----------------------------|---------------|
-| 1 | Read **all** passage files | [project-folder.ts](../../src/electron/main-process/project-folder.ts) `readProjectStories()` | ~4,622 file reads, **~2–3s** | YES |
-| 2 | Scan `assets/` tree (1st time) | `listProjectAssets()` / `scanAssetDirectory()` | ~2,656 `stat()` + walk, ~80–150ms | YES |
-| 3 | Scan `assets/` tree (2nd) | `projectSessionSnapshot()` → manifest | duplicate walk | YES |
-| 4 | Scan `assets/` tree (3rd) | `startProjectSession()` baseline | duplicate walk | YES |
-| 5 | Synchronous HTML DOM parse of story | [import.ts](../../src/util/import.ts) `importStories()` | `innerHTML` + `querySelectorAll` over 4,622 nodes, ~200–400ms | YES |
-| 6 | Build story index on first view | [story-index.ts](../../src/core/story-index.ts) `storyToCoreIndex()` | O(n²)-ish link/diagnostic pass, **~500–1000ms** | YES (if a passage opens) |
-| 7 | Graph projection / layout (JS) | [graph-projection.ts](../../src/core/graph-projection.ts) | O(n) build + O(n) layout, WeakMap-cached | on demand |
-| 8 | PassageMap mount | [passage-map.tsx](../../src/components/passage/passage-map/passage-map.tsx) | O(n) bounding-rect + visible filter on first render | YES |
+| #   | Step                                | Location                                                                                      | Cost at Transylvania scale                                    | Critical path            |
+| --- | ----------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------ |
+| 1   | Read **all** passage files          | [project-folder.ts](../../src/electron/main-process/project-folder.ts) `readProjectStories()` | ~4,622 file reads, **~2–3s**                                  | YES                      |
+| 2   | Scan `assets/` tree (1st time)      | `listProjectAssets()` / `scanAssetDirectory()`                                                | ~2,656 `stat()` + walk, ~80–150ms                             | YES                      |
+| 3   | Scan `assets/` tree (2nd)           | `projectSessionSnapshot()` → manifest                                                         | duplicate walk                                                | YES                      |
+| 4   | Scan `assets/` tree (3rd)           | `startProjectSession()` baseline                                                              | duplicate walk                                                | YES                      |
+| 5   | Synchronous HTML DOM parse of story | [import.ts](../../src/util/import.ts) `importStories()`                                       | `innerHTML` + `querySelectorAll` over 4,622 nodes, ~200–400ms | YES                      |
+| 6   | Build story index on first view     | [story-index.ts](../../src/core/story-index.ts) `storyToCoreIndex()`                          | O(n²)-ish link/diagnostic pass, **~500–1000ms**               | YES (if a passage opens) |
+| 7   | Graph projection / layout (JS)      | [graph-projection.ts](../../src/core/graph-projection.ts)                                     | O(n) build + O(n) layout, WeakMap-cached                      | on demand                |
+| 8   | PassageMap mount                    | [passage-map.tsx](../../src/components/passage/passage-map/passage-map.tsx)                   | O(n) bounding-rect + visible filter on first render           | YES                      |
 
 **Total critical path: ~3.2–5.2s minimum**, plus GC pauses on ~4.6k Story/Passage object
 allocations, persistence write-back, and React render churn → ~7s observed.
@@ -130,21 +130,21 @@ allocations, persistence write-back, and React render churn → ~7s observed.
 These extend the M2 contract ("10k pan/zoom smooth, 50k navigable, sub-ms projection") into
 measurable, CI-enforceable budgets. Reference machine: Apple Silicon dev laptop, release build.
 
-| Surface | Metric | Target | Stretch | Hard fail (CI gate) |
-|---------|--------|--------|---------|---------------------|
-| **Project open** (Transylvania) | cold open → interactive | ≤ **1.5s** | ≤ 800ms | > 3s |
-| Project open | time to first paint (shell visible) | ≤ 400ms | ≤ 200ms | > 1s |
-| **Graph pan/zoom** | viewport projection (10k) | < **1ms** p50 | sub-ms p99 | > 4ms p50 |
-| Graph pan/zoom | frame time during drag | ≤ 16.6ms (60fps) | ≤ 8ms (120fps) | any frame > 50ms |
-| Graph | no node/edge popping | 0 frames with edges lagging nodes | — | visible desync |
-| **Editor** | keystroke → paint (50k story) | ≤ 16ms | ≤ 8ms | > 50ms |
-| **Search / contents** | query over 50k passages | ≤ 50ms | ≤ 10ms | > 250ms |
-| **Incremental edit** | reindex after 1 passage change | ≤ 5ms | ≤ 1ms | full-story rebuild |
-| **Memory** | resident set, Transylvania open | ≤ 600MB | ≤ 350MB | > 1.2GB |
-| **Asset listing** | first asset grid paint | ≤ 300ms | ≤ 100ms | blocks open |
-| **Rust authority** | command/index/projection owner | Rust/WASM/native | TS applies patches only | TS computes core facts |
-| **Boundary overhead** | serialized bytes per graph query | viewport-bounded | no full story transfer | sends full `Story` |
-| **React render shape** | rows/nodes mounted at 50k | O(viewport) | stable under scroll | O(n) mount |
+| Surface                         | Metric                              | Target                            | Stretch                 | Hard fail (CI gate)    |
+| ------------------------------- | ----------------------------------- | --------------------------------- | ----------------------- | ---------------------- |
+| **Project open** (Transylvania) | cold open → interactive             | ≤ **1.5s**                        | ≤ 800ms                 | > 3s                   |
+| Project open                    | time to first paint (shell visible) | ≤ 400ms                           | ≤ 200ms                 | > 1s                   |
+| **Graph pan/zoom**              | viewport projection (10k)           | < **1ms** p50                     | sub-ms p99              | > 4ms p50              |
+| Graph pan/zoom                  | frame time during drag              | ≤ 16.6ms (60fps)                  | ≤ 8ms (120fps)          | any frame > 50ms       |
+| Graph                           | no node/edge popping                | 0 frames with edges lagging nodes | —                       | visible desync         |
+| **Editor**                      | keystroke → paint (50k story)       | ≤ 16ms                            | ≤ 8ms                   | > 50ms                 |
+| **Search / contents**           | query over 50k passages             | ≤ 50ms                            | ≤ 10ms                  | > 250ms                |
+| **Incremental edit**            | reindex after 1 passage change      | ≤ 5ms                             | ≤ 1ms                   | full-story rebuild     |
+| **Memory**                      | resident set, Transylvania open     | ≤ 600MB                           | ≤ 350MB                 | > 1.2GB                |
+| **Asset listing**               | first asset grid paint              | ≤ 300ms                           | ≤ 100ms                 | blocks open            |
+| **Rust authority**              | command/index/projection owner      | Rust/WASM/native                  | TS applies patches only | TS computes core facts |
+| **Boundary overhead**           | serialized bytes per graph query    | viewport-bounded                  | no full story transfer  | sends full `Story`     |
+| **React render shape**          | rows/nodes mounted at 50k           | O(viewport)                       | stable under scroll     | O(n) mount             |
 
 ---
 
@@ -256,30 +256,30 @@ Wins that need no Rust and remove the most egregious main-thread waste.
 
 - **P0.1 — Collapse the triple asset scan to one.** Scan `assets/` once on open; reuse the
   inventory for the manifest fingerprint and the session baseline.
-  *Test:* main-process Jest spy asserting `scanAssetDirectory` is called exactly once per open
+  _Test:_ main-process Jest spy asserting `scanAssetDirectory` is called exactly once per open
   (fixture with a known asset tree); CLI `bench-open` asserts wall time drops.
-- **P0.2 — Don't read passage bodies to paint the graph.** Load passage *identity + layout*
+- **P0.2 — Don't read passage bodies to paint the graph.** Load passage _identity + layout_
   first; lazy-load body text when a passage opens. Graph paint needs name/position/size, not prose.
-  *Test:* Jest asserting the open snapshot carries no body text; Playwright asserting graph is
+  _Test:_ Jest asserting the open snapshot carries no body text; Playwright asserting graph is
   interactive before bodies resolve.
 - **P0.3 — Move story parse off the synchronous DOM path.** Stream stories into state in chunks
   via `requestIdleCallback`/microtask batches so first paint precedes full parse.
-  *Test:* Playwright `performance.mark` between goto and shell-visible vs. all-passages-ready.
+  _Test:_ Playwright `performance.mark` between goto and shell-visible vs. all-passages-ready.
 - **P0.4 — Defer the story index.** Build it lazily and only for the opened story, never on shell
-  mount. *Test:* Jest asserting `storyToCoreIndex` is not called during initial load.
+  mount. _Test:_ Jest asserting `storyToCoreIndex` is not called during initial load.
 - **P0.5 — Make Contents cheap immediately.** Window the contents list, avoid decoding image/audio
   previews until a row/inspector is visible, and split "contents skeleton" from the full
   `CoreStoryIndex`. The first contents paint should be passage names/tags/assets from metadata;
   diagnostics/symbols can stream in after.
-  *Test:* render-count test asserting O(viewport) rows; Playwright contents route first-paint
+  _Test:_ render-count test asserting O(viewport) rows; Playwright contents route first-paint
   budget at the Transylvania fixture.
 - **P0.6 — Add app-level performance marks now.** Instrument `open-start`, `shell-visible`,
   `graph-visible`, `contents-visible`, `all-passages-ready`, `asset-inventory-ready`, and
-  `session-baseline-ready`. *Test:* Playwright reads `performance.measure()` and writes a JSON
+  `session-baseline-ready`. _Test:_ Playwright reads `performance.measure()` and writes a JSON
   artifact even before the Rust bridge lands.
 - **P0.7 — Prevent open-time write-back churn.** Opening/importing a project should not
   immediately trigger persistence or session-sync rewrites unless data actually changed.
-  *Test:* main-process/renderer integration test asserting a clean open produces no save writes.
+  _Test:_ main-process/renderer integration test asserting a clean open produces no save writes.
 
 **Exit gate:** Transylvania cold open ≤ 3s (off the hard-fail line) with zero behavior change.
 
@@ -289,60 +289,60 @@ The headline phase: the live graph and indexes stop being TypeScript-owned.
 
 - **P1.1 — Build `twine_wasm` crate.** `wasm-bindgen` wrapper exposing `ProjectSession::apply`
   for `QueryGraphProjection` / `QueryStoryIndex`, returning the existing `ts-rs` types.
-  *Test:* `wasm-pack test --headless` parity vs. golden CLI projections on the fixture corpus.
+  _Test:_ `wasm-pack test --headless` parity vs. golden CLI projections on the fixture corpus.
 - **P1.2 — Cut the graph projection over to WASM as authority.** Replace
   [graph-projection.ts](../../src/core/graph-projection.ts)'s `storyToCoreGraphProjection` call
   site with a WASM `ProjectSession` query. The JS projector becomes a temporary diagnostic/test
   fallback, not a production owner.
-  *Test:* parity during cutover, then a regression test asserting the product path uses the WASM
+  _Test:_ parity during cutover, then a regression test asserting the product path uses the WASM
   worker and does not call the JS projector for graph mode.
 - **P1.3 — Move WASM into a Web Worker.** Projection/index/search run off the main thread;
   React receives small projections over `postMessage`/`Comlink`.
-  *Test:* Worker round-trip latency harness; Playwright frame-time trace during a scripted pan
+  _Test:_ Worker round-trip latency harness; Playwright frame-time trace during a scripted pan
   asserting no frame > 50ms.
 - **P1.4 — Cut story index + search over to WASM as authority.** Replace
   [story-index.ts](../../src/core/story-index.ts) with `QueryStoryIndex`; search uses
   `twine_search`. The TypeScript indexer becomes test-only or deleted.
-  *Test:* product-path assertion that route-facing search/contents call Rust; bench search < 50ms
+  _Test:_ product-path assertion that route-facing search/contents call Rust; bench search < 50ms
   at 50k.
 - **P1.5 — Prove serialization does not eat the win.** Measure query payload size and
   structured-clone time for projection/index/search. If JSON transfer is too large, switch hot
   paths to compact arrays or binary buffers while keeping `ts-rs` types at the API edge.
-  *Test:* worker benchmark reports compute time, transfer time, payload bytes, and React apply
+  _Test:_ worker benchmark reports compute time, transfer time, payload bytes, and React apply
   time separately.
 - **P1.6 — Delete renderer core producers from product imports.** After graph/index/search are on
   Rust, remove or quarantine `storyToCoreGraphProjection`, `saveGeneratedGraphLayout`, and
   `storyToCoreIndex` so normal app code cannot call them.
-  *Test:* forbidden-import check over `src/routes`, `src/store`, and `src/components`.
+  _Test:_ forbidden-import check over `src/routes`, `src/store`, and `src/components`.
 
 **Exit gate:** pan/zoom meets the projection + frame budgets at 10k; index/search budgets at 50k.
 
 ### Phase 2 — Native session in the main process · aligns M0 + M5
 
 - **P2.1 — Build `twine_native` (napi-rs) addon.** Expose `twine_store` project-folder
-  load/save and `twine_parse` import. *Test:* Jest against the addon loading the fixture corpus;
+  load/save and `twine_parse` import. _Test:_ Jest against the addon loading the fixture corpus;
   CLI parity on round-trip.
 - **P2.2 — Replace `readProjectStories` with native load.** `twine_store::load_project_path`
   returns the snapshot directly; no JS TOML/passage-file loop.
-  *Test:* `bench-open` wall time at Transylvania; parity test vs current JS loader output.
+  _Test:_ `bench-open` wall time at Transylvania; parity test vs current JS loader output.
 - **P2.3 — Native asset scan (rayon) + native file-watch diff.** One parallel walk feeds
   inventory + fingerprints; watcher emits incremental change sets.
-  *Test:* bench asset scan at 2,656 files; Jest watcher-diff test (touch 1 file → 1-entry diff).
+  _Test:_ bench asset scan at 2,656 files; Jest watcher-diff test (touch 1 file → 1-entry diff).
 - **P2.4 — Native zip/html import.** Move extraction + reference rewrite into Rust (it already
-  exists in `twine_parse`/`twine_export`). *Test:* import the real `exampleproje/*.zip`, assert
+  exists in `twine_parse`/`twine_export`). _Test:_ import the real `exampleproje/*.zip`, assert
   `images/…`→`assets/images/…` rewrite and asset copy, headless.
 - **P2.5 — Package the native addon like product code.** Add prebuilds or deterministic local
   builds for macOS/Windows/Linux, notarization/code-signing checks, and a runtime health check
   that falls back to the JS loader with a visible diagnostic.
-  *Test:* CI smoke launches the packaged Electron app on each target and calls `nativeLoad`.
+  _Test:_ CI smoke launches the packaged Electron app on each target and calls `nativeLoad`.
 - **P2.6 — Asset manifests become reusable infrastructure.** The same native scan result should
   feed asset grid, publish, project open, file-watch baseline, import copy results, and contents
   asset entries.
-  *Test:* one fixture open asserts one asset manifest revision is reused by all consumers.
+  _Test:_ one fixture open asserts one asset manifest revision is reused by all consumers.
 - **P2.7 — Delete JS project-folder readers/scanners from product paths.** Remove the JS TOML
   project reader, recursive asset scanner, and HTML/zip import preparer from normal Electron
   paths after the native equivalents land. Keep only legacy import compatibility if needed.
-  *Test:* forbidden-import/static grep plus mocked native load asserting no JS filesystem loop runs
+  _Test:_ forbidden-import/static grep plus mocked native load asserting no JS filesystem loop runs
   during open/session/asset list/import.
 
 **Exit gate:** Transylvania cold open ≤ 1.5s (target).
@@ -352,36 +352,36 @@ The headline phase: the live graph and indexes stop being TypeScript-owned.
 - **P3.0 — Delete the TypeScript command owner.** `StoreCoreProjectHost.applyStoryCommand`
   must stop translating core commands into Redux mutations. Commands go to `ProjectSession`
   first; TypeScript applies the returned `PatchBatch` to the visible store.
-  *Test:* command-path test asserting create/rename/move/text/asset/story-detail operations call
+  _Test:_ command-path test asserting create/rename/move/text/asset/story-detail operations call
   Rust/WASM/native `apply` and never invoke route-local reducers as the source of truth.
 - **P3.1 — Patch-level index updates.** A passage edit emits a `PatchBatch` that updates only
   affected index/graph slices (`ProjectSession::apply` already returns patches; honor them
-  instead of rebuilding). *Test:* bench reindex-after-1-edit ≤ 5ms at 50k; assert no full rebuild
+  instead of rebuilding). _Test:_ bench reindex-after-1-edit ≤ 5ms at 50k; assert no full rebuild
   and no full `ProjectSnapshotReplaced` for a single-passage edit.
 - **P3.2 — Incremental external-edit reingest.** Native watcher diff → reparse only changed
-  files → merge/conflict review. *Test:* Jest simulating an external edit to 1 passage asserting
+  files → merge/conflict review. _Test:_ Jest simulating an external edit to 1 passage asserting
   a single-file reparse.
 - **P3.3 — Persist `graph_cache` warm.** Reuse `ProjectSession` graph/layout cache across views;
-  invalidate per-story on mutation. *Test:* second-open / view-switch bench shows cache hit.
+  invalidate per-story on mutation. _Test:_ second-open / view-switch bench shows cache hit.
 - **P3.4 — Lazy body hydration remains conflict-safe.** If a passage body is loaded lazily and
   the file changes externally before edit/save, the session must surface a revision conflict
   instead of overwriting disk.
-  *Test:* open shell-only snapshot → modify one passage on disk → hydrate/edit that passage →
+  _Test:_ open shell-only snapshot → modify one passage on disk → hydrate/edit that passage →
   conflict review shows the single changed file.
 - **P3.5 — Undo/redo moves into Rust.** The current Redux undo path is another
   whole-story invalidation source. Undo/redo must call `ProjectSession::undo` / `redo`, receive
   patch batches, and update only touched ids.
-  *Test:* undo a rename/text edit at 50k and assert no full index/projection rebuild.
+  _Test:_ undo a rename/text edit at 50k and assert no full index/projection rebuild.
 - **P3.6 — TypeScript compatibility producers are removed from product routes.** Route-facing
   graph, contents, diagnostics, assets, publish preparation, and project-session sync must all
   consume Rust command/query results. Any remaining TS producer must be explicitly named as
   import/export compatibility code or test scaffolding.
-  *Test:* static guard or Jest module mock fails if product routes import `story-index.ts` /
+  _Test:_ static guard or Jest module mock fails if product routes import `story-index.ts` /
   `graph-projection.ts` producers directly.
 - **P3.7 — Remove Redux undo as a product feature.** Once Rust undo/redo patches land, delete or
   quarantine `src/store/undoable-stories` from route-facing product code. The UI can expose undo
   buttons, but their implementation calls Rust session undo/redo.
-  *Test:* undo/redo route tests mock Rust session undo/redo and fail if Redux reverse-action logic
+  _Test:_ undo/redo route tests mock Rust session undo/redo and fail if Redux reverse-action logic
   is invoked.
 
 **Exit gate:** keystroke→paint ≤ 16ms at 50k; incremental edit budget met.
@@ -390,15 +390,15 @@ The headline phase: the live graph and indexes stop being TypeScript-owned.
 
 - **P4.1 — Canvas/WebGL edge + node virtualization.** Draw only viewport nodes/edges; widen the
   edge draw-band and update viewport synchronously on drag to kill node/edge popping.
-  *Test:* Playwright frame trace; visual assertion that edge count tracks node count per frame.
+  _Test:_ Playwright frame trace; visual assertion that edge count tracks node count per frame.
 - **P4.2 — Minimap + scoped views** from index queries (folders/chapters), so 50k is editable a
-  scope at a time. *Test:* bench scoped projection; Playwright scope-switch latency.
+  scope at a time. _Test:_ bench scoped projection; Playwright scope-switch latency.
 - **P4.3 — Remove debug-route string from production edges** (keep for Jest only) — already a
-  known per-edge DOM cost. *Test:* assert attribute absent in production render path.
+  known per-edge DOM cost. _Test:_ assert attribute absent in production render path.
 - **P4.4 — Measure draw time separately from projection.** Canvas edge routing/drawing still runs
   in JS today. Track `projectionMs`, `routeMs`, `drawMs`, and `reactCommitMs` independently so a
   fast Rust projection does not hide a slow paint.
-  *Test:* Playwright trace exports these four marks during pan/zoom.
+  _Test:_ Playwright trace exports these four marks during pan/zoom.
 
 **Exit gate:** 50k navigable/filterable with frame budget held; memory ceiling respected.
 
@@ -414,7 +414,7 @@ The headline phase: the live graph and indexes stop being TypeScript-owned.
 - **P5.5 — Find/replace preview is paginated.** Large replacements should stream preview groups
   and apply as a session command, avoiding the known undo/mutation fragility around passage-name
   replacements.
-  *Tests:* Jest render-count assertions (windowing); Playwright editor keystroke trace; asset
+  _Tests:_ Jest render-count assertions (windowing); Playwright editor keystroke trace; asset
   grid first-paint budget.
 
 ---
@@ -440,7 +440,7 @@ fixtures (1k/5k/10k/50k) so numbers track the JS/E2E layers.
 ### 5.2 Full-project load bench — extend `twine_cli`
 
 Add a `bench-open <project-folder>` command (sibling to `bench-graph`) that times native load +
-index + projection of a *real folder* and prints JSON (`loadMs`, `indexMs`, `projectionMs`,
+index + projection of a _real folder_ and prints JSON (`loadMs`, `indexMs`, `projectionMs`,
 `assets`, `passages`). Wrap in a script that records against a committed budget file:
 
 ```sh
@@ -449,7 +449,7 @@ node benchmarks/check-budget.mjs --metric open --max 1500   # exits non-zero ove
 ```
 
 Commit a **tracked perf fixture** so CI has a stable large project without the 404MB asset blob:
-generate a 5k-passage story *with a synthetic asset tree of the same shape* (counts, nesting,
+generate a 5k-passage story _with a synthetic asset tree of the same shape_ (counts, nesting,
 reference density) via an extended `generate-fixtures.mjs --with-assets`. Keep the real
 Transylvania as a local-only manual benchmark (document its path; never commit 404MB).
 
@@ -522,16 +522,16 @@ from parse to transfer, from transfer to React commit, or from open to backgroun
 
 ## 6. Regression Budget Summary (the gate table)
 
-| Layer | Command | Gate |
-|-------|---------|------|
-| Rust core | `cargo bench --baseline main` | no metric regresses > 10% |
-| Full load | `twine_cli bench-open` | Transylvania-shape open ≤ 1.5s |
-| Projection | `npm run perf:unit` | viewport projection < 1ms p50 @10k |
-| Search | `npm run perf:unit` | query ≤ 50ms @50k |
-| Incremental | `npm run perf:unit` | 1-edit reindex ≤ 5ms @50k |
-| Startup | `npm run perf:e2e` | shell ≤ 400ms, interactive ≤ 1.5s |
-| Frame | `npm run perf:e2e` | no frame > 50ms during pan |
-| Memory | `npm run perf:e2e` | ≤ 600MB resident @Transylvania |
+| Layer       | Command                       | Gate                               |
+| ----------- | ----------------------------- | ---------------------------------- |
+| Rust core   | `cargo bench --baseline main` | no metric regresses > 10%          |
+| Full load   | `twine_cli bench-open`        | Transylvania-shape open ≤ 1.5s     |
+| Projection  | `npm run perf:unit`           | viewport projection < 1ms p50 @10k |
+| Search      | `npm run perf:unit`           | query ≤ 50ms @50k                  |
+| Incremental | `npm run perf:unit`           | 1-edit reindex ≤ 5ms @50k          |
+| Startup     | `npm run perf:e2e`            | shell ≤ 400ms, interactive ≤ 1.5s  |
+| Frame       | `npm run perf:e2e`            | no frame > 50ms during pan         |
+| Memory      | `npm run perf:e2e`            | ≤ 600MB resident @Transylvania     |
 
 ---
 
@@ -553,16 +553,16 @@ from parse to transfer, from transfer to React commit, or from open to backgroun
 
 ---
 
-## 7. Milestone Alignment (this roadmap *is* the dream architecture)
+## 7. Milestone Alignment (this roadmap _is_ the dream architecture)
 
-| Phase | Completes in the dream architecture |
-|-------|--------------------------------------|
-| 0 | M0 persistence hygiene; removes obvious main-thread waste before the bridge |
-| 1 | **M2** "Rust/WASM `ProjectSession` bridge" (named remaining risk) + **M4** Rust indexes |
-| 2 | **M0** transactional folder load/save via `twine_store`; **M5** native asset/import |
-| 3 | **M4** incremental indexes + External-edit rule (watch → incremental reparse → review) |
-| 4 | **M2** virtualized canvas/WebGL render, scoped views, minimap, performance contract |
-| 5 | **M3** Twine-aware editor ergonomics at scale |
+| Phase | Completes in the dream architecture                                                     |
+| ----- | --------------------------------------------------------------------------------------- |
+| 0     | M0 persistence hygiene; removes obvious main-thread waste before the bridge             |
+| 1     | **M2** "Rust/WASM `ProjectSession` bridge" (named remaining risk) + **M4** Rust indexes |
+| 2     | **M0** transactional folder load/save via `twine_store`; **M5** native asset/import     |
+| 3     | **M4** incremental indexes + External-edit rule (watch → incremental reparse → review)  |
+| 4     | **M2** virtualized canvas/WebGL render, scoped views, minimap, performance contract     |
+| 5     | **M3** Twine-aware editor ergonomics at scale                                           |
 
 Nothing here adds a feature the architecture didn't already ask for. The graph already queries
 `QueryGraphProjection`; the bindings already exist; M2 already states the contract. This roadmap
@@ -575,52 +575,52 @@ the app becomes more fully what it was always meant to be.
 
 The milestones are functionally complete, but several pieces are explicitly **stand-ins** —
 flagged as such in the codebase and the planning docs. They are exactly the seams this roadmap
-closes, so the perf work *finishes* the architecture rather than diverging from it. In rough
+closes, so the perf work _finishes_ the architecture rather than diverging from it. In rough
 priority order:
 
 1. **The entire Rust core is bypassed in the live app — the central temporary thing.**
    [project-host.ts](../../src/core/project-host.ts):237 `StoreCoreProjectHost` is, in the
-   milestones doc's own words, "*still a compatibility host while the legacy store backs the
-   app*" ([MILESTONES](./TWINE_RS_MILESTONES.md):530). It translates every `StoryCommand` into a
+   milestones doc's own words, "_still a compatibility host while the legacy store backs the
+   app_" ([MILESTONES](./TWINE_RS_MILESTONES.md):530). It translates every `StoryCommand` into a
    Redux dispatch; graph projection and indexing run through TS re-implementations
    ([graph-projection.ts](../../src/core/graph-projection.ts),
    [story-index.ts](../../src/core/story-index.ts)); the `ts-rs` bindings are imported
    `type`-only. **There is no `wasm-bindgen` / `napi` / `neon` anywhere in the tree** (verified).
-   → *Retired by Phases 1–2.*
+   → _Retired by Phases 1–2._
 
 2. **Search is a "baseline linear implementation."** `twine_search::LinearSearchIndex`
    ([lib.rs](../../crates/twine_search/src/lib.rs):24) is an O(n) case-insensitive
    `.contains()` scan with a 1.0/0.5 name-vs-text score and no inverted index, trie, or ranking
    — and the live app doesn't even call it (search runs in TS). Correct, not scalable.
-   → *Retired by Phase 1.4.*
+   → _Retired by Phase 1.4._
 
-3. **A legacy store + DS dual path still exists.** The design spine installs a "*temporary,
-   clearly-flagged bridge so unmigrated legacy screens keep [working]*"
-   ([DESIGN_SPINE](./TWINE_RS_DESIGN_SYSTEM_SPINE.md):132), and "*dialog-era screens that are not
-   part of the migrated D4/D5 workbench can still mutate legacy state directly*"
+3. **A legacy store + DS dual path still exists.** The design spine installs a "_temporary,
+   clearly-flagged bridge so unmigrated legacy screens keep [working]_"
+   ([DESIGN_SPINE](./TWINE_RS_DESIGN_SYSTEM_SPINE.md):132), and "_dialog-era screens that are not
+   part of the migrated D4/D5 workbench can still mutate legacy state directly_"
    ([MILESTONES](./TWINE_RS_MILESTONES.md):531). Two mutation paths = double the surface to keep
-   fast and correct. → *Folds away as Phases 1–3 route everything through the host/session.*
+   fast and correct. → _Folds away as Phases 1–3 route everything through the host/session._
 
 4. **M2 perf is self-flagged as unvalidated.** [MILESTONES](./TWINE_RS_MILESTONES.md):422 —
    "**REMAINING:** performance validation still needs 50k passage projects, pan/zoom latency
    traces, viewport projection latency, edge-layer filtering, search/filter responsiveness, and
    memory ceilings in the running app," and the "remaining scale risk is … the Rust/WASM
    `ProjectSession` bridge." This roadmap's §5 headless harness is precisely that missing
-   validation. → *Delivered by §5 + Phase 4.*
+   validation. → _Delivered by §5 + Phase 4._
 
 5. **`.twine/project.json` carries a tolerate-corruption fallback.** The recent fix writes the
-   sidecar atomically and the loader *ignores invalid JSON and falls back to twine.toml*; older
+   sidecar atomically and the loader _ignores invalid JSON and falls back to twine.toml_; older
    big projects only slim down "on next save." That fallback is a guard around a format that used
    to duplicate all passage text — fine as a safety net, but a temporary shape until the native
-   session owns load/save. → *Hardened by Phase 2.2.*
+   session owns load/save. → _Hardened by Phase 2.2._
 
 6. **Preload runs without context isolation.** [preload.ts](../../src/electron/main-process/preload.ts):5
-   — "*For now, we cannot use context isolation here because of jsonp*," placing a privileged
+   — "_For now, we cannot use context isolation here because of jsonp_," placing a privileged
    `jsonp` into renderer context (and using `Date.now()` for callback names). Long-lived "for
    now" with a real security dimension; worth scheduling alongside the format/runtime work.
 
 7. **Known latent undo crash.** [reverse-action.ts](../../src/store/undoable-stories/reverse-action.ts):57
-   — "*TODO: crashes on a replace all that affects a passage name, unclear why*." A real bug, not
+   — "_TODO: crashes on a replace all that affects a passage name, unclear why_." A real bug, not
    a perf item, but it lives on the mutation path Phase 1–3 reworks; fix it during that cutover.
 
 8. **D-series PARTIALs (mostly runtime depth, not blockers).** Per

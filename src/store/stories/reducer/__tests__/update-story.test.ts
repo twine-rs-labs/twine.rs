@@ -5,11 +5,9 @@ describe('Story reducer updateStory action handler', () => {
 	it('changes an existing story', () => {
 		const story = fakeStory();
 
-		expect(
-			updateStory([story], story.id, {name: story.name + 'test'})
-		).toEqual([
-			{...story, lastUpdate: expect.any(Date), name: story.name + 'test'}
-		]);
+		expect(updateStory([story], story.id, {name: story.name + 'test'})).toEqual(
+			[{...story, lastUpdate: expect.any(Date), name: story.name + 'test'}]
+		);
 	});
 
 	it('does not alter the old story object', () => {

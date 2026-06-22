@@ -36,10 +36,13 @@ function postBridgeMessage(sessionId: string, data: Record<string, unknown>) {
 
 describe('instrumentPreviewHtml()', () => {
 	it('injects the preview bridge into an HTML head', () => {
-		const html = '<html><head><title>Story</title></head><body>Story</body></html>';
+		const html =
+			'<html><head><title>Story</title></head><body>Story</body></html>';
 		const result = instrumentPreviewHtml(html, 'session-1');
 
-		expect(result.indexOf('<script>')).toBeGreaterThan(result.indexOf('<head>'));
+		expect(result.indexOf('<script>')).toBeGreaterThan(
+			result.indexOf('<head>')
+		);
 		expect(result.indexOf('<script>')).toBeLessThan(result.indexOf('<title>'));
 		expect(result).toContain('twine.rs.preview.bridge');
 		expect(result).toContain('var SESSION = "session-1"');

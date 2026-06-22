@@ -61,7 +61,10 @@ export function assetKindForPath(path: string) {
 	return 'file';
 }
 
-export function assetSnippet(path: string, kind = assetKindForPath(path)): CoreAssetSnippet {
+export function assetSnippet(
+	path: string,
+	kind = assetKindForPath(path)
+): CoreAssetSnippet {
 	const text =
 		kind === 'image'
 			? `<img src="${path}" alt="">`

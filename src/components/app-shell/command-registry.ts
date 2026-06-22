@@ -1,8 +1,4 @@
-export type AppCommandGroup =
-	| 'Navigation'
-	| 'Build'
-	| 'Story'
-	| 'Toolbar';
+export type AppCommandGroup = 'Navigation' | 'Build' | 'Story' | 'Toolbar';
 
 export interface AppCommand {
 	disabled?: boolean;
@@ -31,7 +27,5 @@ export function commandMatches(command: AppCommand, query: string) {
 		.join(' ')
 		.toLocaleLowerCase();
 
-	return normalizedQuery
-		.split(/\s+/)
-		.every(part => haystack.includes(part));
+	return normalizedQuery.split(/\s+/).every(part => haystack.includes(part));
 }

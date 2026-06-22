@@ -9,8 +9,10 @@ export interface AutocompleteMetadata {
 	autocompleted: boolean;
 }
 
-export interface AutocompleteTextInputProps
-	extends Omit<TextInputProps, 'onChange'> {
+export interface AutocompleteTextInputProps extends Omit<
+	TextInputProps,
+	'onChange'
+> {
 	completions: string[];
 	id: string;
 	onChange?: (
@@ -25,7 +27,7 @@ export const AutocompleteTextInput = React.forwardRef<
 >((props, ref) => {
 	// Isolate the onChange prop so spreading props on <TextInput> doesn't clobber
 	// our own onChange handler.
-	const { onChange, ...otherProps} = props;
+	const {onChange, ...otherProps} = props;
 	const datalistId = `${props.id}-datalist`;
 
 	function handleChange(event: React.ChangeEvent<HTMLInputElement>) {

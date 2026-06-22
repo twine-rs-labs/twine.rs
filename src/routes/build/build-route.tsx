@@ -101,7 +101,8 @@ const buildTargets: BuildTargetDefinition[] = [
 		target: 'export-json'
 	},
 	{
-		description: 'Text report for generated HTML structure and publish markers.',
+		description:
+			'Text report for generated HTML structure and publish markers.',
 		group: 'Export',
 		icon: 'search',
 		label: 'Inspect HTML',

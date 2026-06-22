@@ -54,7 +54,7 @@ describe('<PassageCardGroup>', () => {
 			`mock-passage-card-${passages[2].name}`
 		);
 	});
-	
+
 	it.todo('passes through drag-related props');
 
 	it('is accessible', async () => {

@@ -31,8 +31,7 @@ export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
 		open,
 		setCenter,
 		story
-	} =
-		props;
+	} = props;
 	const {dispatch} = useStoriesContext();
 	const [search, setSearch] = React.useState('');
 	const [debouncedSearch, setDebouncedSearch] = React.useState('');

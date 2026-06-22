@@ -201,122 +201,122 @@ function twineTokenDecorations(
 	return [
 		ViewPlugin.fromClass(
 			class {
-			decorations: DecorationSet;
+				decorations: DecorationSet;
 
-			constructor(view: EditorView) {
-				this.decorations = this.build(view);
-			}
-
-			update(update: ViewUpdate) {
-				if (update.docChanged || update.viewportChanged) {
-					this.decorations = this.build(update.view);
+				constructor(view: EditorView) {
+					this.decorations = this.build(view);
 				}
-			}
 
-			build(view: EditorView) {
-				const entries: DecorationEntry[] = [];
-				const builder = new RangeSetBuilder<Decoration>();
-				const linkRanges: LinkRange[] = [];
-				const diagnosticLines = new Set<number>();
-
-				for (const {from, to} of view.visibleRanges) {
-					const text = view.state.doc.sliceString(from, to);
-					const linkPattern = /\[\[(.*?)\]\]/g;
-					let match: RegExpExecArray | null;
-
-					while ((match = linkPattern.exec(text))) {
-						const target = targetFromLinkContent(match[1]);
-						const absoluteFrom = from + match.index;
-						const absoluteTo = absoluteFrom + match[0].length;
-						const line = view.state.doc.lineAt(absoluteFrom);
-						const brokenLink = broken.has(target);
-						const className =
-							target === selfLinkName
-								? 'cm-twine-link-self'
-								: brokenLink
-									? 'cm-twine-link-broken'
-									: 'cm-twine-link';
-
-						linkRanges.push({
-							from: absoluteFrom,
-							to: absoluteTo
-						});
-						entries.push({
-							decoration: Decoration.mark({class: className}),
-							from: absoluteFrom,
-							to: absoluteTo
-						});
-
-						if (brokenLink && !diagnosticLines.has(line.from)) {
-							diagnosticLines.add(line.from);
-							entries.push({
-								decoration: Decoration.line({
-									class: 'cm-twine-diagnostic-line'
-								}),
-								from: line.from,
-								line: true,
-								to: line.from
-							});
-						}
+				update(update: ViewUpdate) {
+					if (update.docChanged || update.viewportChanged) {
+						this.decorations = this.build(update.view);
 					}
+				}
 
-					const tokenPatterns: Array<{
-						className: string;
-						regexp: RegExp;
-						tokenGroup?: number;
-					}> = [
-						{
-							className: 'cm-twine-macro',
-							regexp: /(?:\(|<<)\s*[A-Za-z][\w-]*/g
-						},
-						{
-							className: 'cm-twine-variable',
-							regexp:
-								/(^|[^A-Za-z0-9_])(\$[A-Za-z_]\w*|_[A-Za-z_]\w*|\?[A-Za-z_]\w*|\|[A-Za-z_]\w*>)/g,
-							tokenGroup: 2
-						},
-						{
-							className: 'cm-twine-tag',
-							regexp: /(^|[\s([,{])#[-A-Za-z0-9_]+/g
-						}
-					];
+				build(view: EditorView) {
+					const entries: DecorationEntry[] = [];
+					const builder = new RangeSetBuilder<Decoration>();
+					const linkRanges: LinkRange[] = [];
+					const diagnosticLines = new Set<number>();
 
-					for (const {className, regexp, tokenGroup} of tokenPatterns) {
-						while ((match = regexp.exec(text))) {
-							const token = tokenGroup ? match[tokenGroup] : match[0];
-							const matchOffset = tokenGroup
-								? match.index + match[0].lastIndexOf(token)
-								: match.index + match[0].search(/\S/);
-							const absoluteFrom = from + matchOffset;
-							const absoluteTo = absoluteFrom + token.trimStart().length;
+					for (const {from, to} of view.visibleRanges) {
+						const text = view.state.doc.sliceString(from, to);
+						const linkPattern = /\[\[(.*?)\]\]/g;
+						let match: RegExpExecArray | null;
 
-							if (
-								absoluteFrom < absoluteTo &&
-								!rangeOverlaps(linkRanges, absoluteFrom, absoluteTo)
-							) {
+						while ((match = linkPattern.exec(text))) {
+							const target = targetFromLinkContent(match[1]);
+							const absoluteFrom = from + match.index;
+							const absoluteTo = absoluteFrom + match[0].length;
+							const line = view.state.doc.lineAt(absoluteFrom);
+							const brokenLink = broken.has(target);
+							const className =
+								target === selfLinkName
+									? 'cm-twine-link-self'
+									: brokenLink
+										? 'cm-twine-link-broken'
+										: 'cm-twine-link';
+
+							linkRanges.push({
+								from: absoluteFrom,
+								to: absoluteTo
+							});
+							entries.push({
+								decoration: Decoration.mark({class: className}),
+								from: absoluteFrom,
+								to: absoluteTo
+							});
+
+							if (brokenLink && !diagnosticLines.has(line.from)) {
+								diagnosticLines.add(line.from);
 								entries.push({
-									decoration: Decoration.mark({class: className}),
-									from: absoluteFrom,
-									to: absoluteTo
+									decoration: Decoration.line({
+										class: 'cm-twine-diagnostic-line'
+									}),
+									from: line.from,
+									line: true,
+									to: line.from
 								});
 							}
 						}
+
+						const tokenPatterns: Array<{
+							className: string;
+							regexp: RegExp;
+							tokenGroup?: number;
+						}> = [
+							{
+								className: 'cm-twine-macro',
+								regexp: /(?:\(|<<)\s*[A-Za-z][\w-]*/g
+							},
+							{
+								className: 'cm-twine-variable',
+								regexp:
+									/(^|[^A-Za-z0-9_])(\$[A-Za-z_]\w*|_[A-Za-z_]\w*|\?[A-Za-z_]\w*|\|[A-Za-z_]\w*>)/g,
+								tokenGroup: 2
+							},
+							{
+								className: 'cm-twine-tag',
+								regexp: /(^|[\s([,{])#[-A-Za-z0-9_]+/g
+							}
+						];
+
+						for (const {className, regexp, tokenGroup} of tokenPatterns) {
+							while ((match = regexp.exec(text))) {
+								const token = tokenGroup ? match[tokenGroup] : match[0];
+								const matchOffset = tokenGroup
+									? match.index + match[0].lastIndexOf(token)
+									: match.index + match[0].search(/\S/);
+								const absoluteFrom = from + matchOffset;
+								const absoluteTo = absoluteFrom + token.trimStart().length;
+
+								if (
+									absoluteFrom < absoluteTo &&
+									!rangeOverlaps(linkRanges, absoluteFrom, absoluteTo)
+								) {
+									entries.push({
+										decoration: Decoration.mark({class: className}),
+										from: absoluteFrom,
+										to: absoluteTo
+									});
+								}
+							}
+						}
 					}
+
+					entries
+						.sort(
+							(left, right) =>
+								left.from - right.from ||
+								(left.line === right.line ? 0 : left.line ? -1 : 1) ||
+								left.to - right.to
+						)
+						.forEach(entry =>
+							builder.add(entry.from, entry.to, entry.decoration)
+						);
+
+					return builder.finish();
 				}
-
-				entries
-					.sort(
-						(left, right) =>
-							left.from - right.from ||
-							(left.line === right.line ? 0 : left.line ? -1 : 1) ||
-							left.to - right.to
-					)
-					.forEach(entry =>
-						builder.add(entry.from, entry.to, entry.decoration)
-					);
-
-				return builder.finish();
-			}
 			},
 			{
 				decorations: value => value.decorations

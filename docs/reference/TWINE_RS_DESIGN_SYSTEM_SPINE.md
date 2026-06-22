@@ -106,17 +106,17 @@ projection is a TypeScript parity bridge that implements the generated contract;
 a native/WASM runtime `ProjectSession` bridge is still a core follow-up. What
 remains is deeper integration and retiring compatibility surfaces:
 
-| M6 item                              | Status                                                                                                                      | Closed by            |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| Capability manifest (1)              | done (engine); surfaced in `/formats` and `/stories/:storyId/build`                                                         | D6/D7 polish         |
-| Format host API (2)                  | partial — types/loader/resolver done; `/formats` is now the primary capabilities/modules/defaults/proofing/extensions route | D6 + engine plumbing |
-| Local format dev workflow (3)        | partial — dev metadata and URL-add surfaced                                                                                 | D6 + engine plumbing |
-| Build / export / package targets (4) | partial — package builder plus `/stories/:storyId/build` for Play/Test/Proof/HTML/Twee/JSON/Package/Publish/Compatibility/Inspect | D7 advanced policy   |
+| M6 item                              | Status                                                                                                                                                     | Closed by            |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Capability manifest (1)              | done (engine); surfaced in `/formats` and `/stories/:storyId/build`                                                                                        | D6/D7 polish         |
+| Format host API (2)                  | partial — types/loader/resolver done; `/formats` is now the primary capabilities/modules/defaults/proofing/extensions route                                | D6 + engine plumbing |
+| Local format dev workflow (3)        | partial — dev metadata and URL-add surfaced                                                                                                                | D6 + engine plumbing |
+| Build / export / package targets (4) | partial — package builder plus `/stories/:storyId/build` for Play/Test/Proof/HTML/Twee/JSON/Package/Publish/Compatibility/Inspect                          | D7 advanced policy   |
 | Runtime/debug hooks (5)              | partial — preview debug strip plus current-passage bridge, logs, viewport presets, and source/graph reveal actions; variables/state/devtools still missing | D8                   |
-| Publish-safety (6)                   | done (engine); surfaced in Build/Formats routes                                                                             | D7 polish            |
-| H1 previews on host/query            | partial — app-owned iframe routes with live debug bridge; desktop scratch-window parity and richer runtime inspection remain | D8                   |
-| H2 graph projection                  | D5 done on the app side; native/WASM host bridge still follow-up                                                            | D5 + core bridge     |
-| H3 run-from-here                     | partial (`startId` plumbed; not everywhere)                                                                                 | D4 / D5 / D8         |
+| Publish-safety (6)                   | done (engine); surfaced in Build/Formats routes                                                                                                            | D7 polish            |
+| H1 previews on host/query            | partial — app-owned iframe routes with live debug bridge; desktop scratch-window parity and richer runtime inspection remain                               | D8                   |
+| H2 graph projection                  | D5 done on the app side; native/WASM host bridge still follow-up                                                                                           | D5 + core bridge     |
+| H3 run-from-here                     | partial (`startId` plumbed; not everywhere)                                                                                                                | D4 / D5 / D8         |
 
 **Do not build M6's UI in legacy chrome.** Finish the remaining gaps
 (archive/project-folder packaging, full format-dev reload loop, runtime state

@@ -11,7 +11,7 @@ const ColorBlock: React.FC<{color: string}> = ({color}) => (
 			height: 50,
 			margin: 5,
 			width: 50,
-			background: `var(--${color})`,
+			background: `var(--${color})`
 		}}
 	/>
 );
@@ -26,7 +26,7 @@ export const Specimen: React.FC = () => {
 		'yellow',
 		'green',
 		'blue',
-		'purple',
+		'purple'
 	];
 
 	return (

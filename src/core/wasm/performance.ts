@@ -2,7 +2,13 @@ export type CoreBridgeMode = 'js-fallback' | 'unavailable' | 'wasm-worker';
 
 export interface CoreBridgeMetric {
 	computeMs: number;
-	kind: 'apply' | 'queryGraphProjection' | 'queryStoryIndex' | 'replaceProject';
+	kind:
+		| 'apply'
+		| 'queryGraphProjection'
+		| 'queryStoryIndex'
+		| 'redo'
+		| 'replaceProject'
+		| 'undo';
 	mode: CoreBridgeMode;
 	payloadBytes: number;
 	queuedMs: number;

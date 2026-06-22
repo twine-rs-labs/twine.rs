@@ -25,9 +25,9 @@ describe('<ThemeSetter>', () => {
 		expect(document.body.dataset.appTheme).toBe('light');
 		expect(document.body.dataset.highContrast).toBe('true');
 		expect(document.body.dataset.reducedMotion).toBe('true');
-		expect(document.documentElement.style.getPropertyValue('color-scheme')).toBe(
-			'light'
-		);
+		expect(
+			document.documentElement.style.getPropertyValue('color-scheme')
+		).toBe('light');
 		useComputedThemeMock.mockReturnValue('dark');
 		render(
 			<PrefsContext.Provider
@@ -42,8 +42,8 @@ describe('<ThemeSetter>', () => {
 		expect(document.body.dataset.appTheme).toBe('dark');
 		expect(document.body.dataset.highContrast).toBe('false');
 		expect(document.body.dataset.reducedMotion).toBe('false');
-		expect(document.documentElement.style.getPropertyValue('color-scheme')).toBe(
-			'dark'
-		);
+		expect(
+			document.documentElement.style.getPropertyValue('color-scheme')
+		).toBe('dark');
 	});
 });

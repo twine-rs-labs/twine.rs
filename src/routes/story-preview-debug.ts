@@ -363,7 +363,9 @@ export function storyPreviewDebugMetrics(
 		return [];
 	}
 
-	const missingAssets = index.assetInventory.filter(asset => asset.missing).length;
+	const missingAssets = index.assetInventory.filter(
+		asset => asset.missing
+	).length;
 
 	return [
 		{
@@ -393,8 +395,7 @@ export function storyPreviewDebugMetrics(
 					: index.assetInventory.length
 		},
 		{
-			icon:
-				index.diagnostics.length > 0 ? 'alert-triangle' : 'circle-check',
+			icon: index.diagnostics.length > 0 ? 'alert-triangle' : 'circle-check',
 			label: 'diagnostics',
 			tone: index.diagnostics.length > 0 ? diagnosticTone(index) : 'saved',
 			value: index.diagnostics.length

@@ -807,8 +807,9 @@ function storyTagsLookLikeSugarCube(story: Story) {
 
 function parsedStoryTagsLookLikeSugarCube(story?: ParsedProjectStory) {
 	return (
-		story?.passages.some(passage => passageTagsLookLikeSugarCube(passage.tags)) ??
-		false
+		story?.passages.some(passage =>
+			passageTagsLookLikeSugarCube(passage.tags)
+		) ?? false
 	);
 }
 
@@ -1441,11 +1442,11 @@ async function storiesFromProjectManifest(
 				const text =
 					options.loadPassageText === false
 						? ''
-						: (passagePath
+						: ((passagePath
 								? await readTextIfPresent(passagePath)
 								: undefined) ??
 							metadataPassage?.text ??
-							'';
+							'');
 
 				return {
 					height: numberOrFallback(
@@ -1566,7 +1567,8 @@ async function mergeNativeProjectMetadata(
 		)
 	);
 	const stories = projectFolder.stories.map((story, storyIndex) => {
-		const metadataStory = metadataById.get(story.id) ?? metadataStories[storyIndex];
+		const metadataStory =
+			metadataById.get(story.id) ?? metadataStories[storyIndex];
 
 		if (!metadataStory) {
 			return story;
@@ -1614,7 +1616,7 @@ async function mergeNativeProjectMetadata(
 			tagColors:
 				Object.keys(story.tagColors).length > 0
 					? story.tagColors
-					: metadataStory.tagColors ?? story.tagColors,
+					: (metadataStory.tagColors ?? story.tagColors),
 			zoom: numberOrFallback(story.zoom, metadataStory.zoom ?? 1)
 		};
 	});
@@ -1763,7 +1765,11 @@ async function primeProjectSessionBaseline(
 ) {
 	const session = ensureProjectSession(rootPath);
 
-	session.baseline = await readProjectSessionSnapshot(rootPath, undefined, hints);
+	session.baseline = await readProjectSessionSnapshot(
+		rootPath,
+		undefined,
+		hints
+	);
 	session.pending = undefined;
 	session.baselineReusableUntil = Date.now() + projectSessionPollMs;
 
@@ -2022,7 +2028,9 @@ export async function hydrateProjectFolder(
 	rootPath: string,
 	storyIds?: string[]
 ): Promise<NativeProjectFolderResult> {
-	const projectFolder = await readProjectFolder(rootPath, {loadPassageText: true});
+	const projectFolder = await readProjectFolder(rootPath, {
+		loadPassageText: true
+	});
 	const {stories} = projectFolder;
 	const filteredStories = storyIds?.length
 		? stories.filter(story => storyIds.includes(story.id))
@@ -2092,7 +2100,9 @@ export async function listProjectAssets(rootPath: string) {
 	const nativeAssets = listNativeProjectAssets(rootPath);
 
 	if (nativeAssets) {
-		return nativeAssets.sort((left, right) => left.path.localeCompare(right.path));
+		return nativeAssets.sort((left, right) =>
+			left.path.localeCompare(right.path)
+		);
 	}
 
 	const assets: CoreAssetInventoryEntry[] = [];

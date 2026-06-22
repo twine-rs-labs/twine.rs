@@ -191,9 +191,7 @@ describe('M6 build package', () => {
 		});
 
 		expect(result.files.map(file => file.kind)).toEqual(['html', 'twee']);
-		expect(result.files[0].contents).not.toContain(
-			'data-twine-rs-story-graph'
-		);
+		expect(result.files[0].contents).not.toContain('data-twine-rs-story-graph');
 		expect(result.files[1].contents).not.toContain('"twine.rs"');
 		expect(result.report.fidelity.omits).toContain(
 			'twine.rs StoryData graph metadata carrier'
@@ -209,10 +207,14 @@ describe('M6 build package', () => {
 	});
 
 	it('builds source and HTML inspection reports', () => {
-		const sourceInspection = createStoryBuildPackage(fakeStory(), fakeAppInfo(), {
-			formatProperties: fakeStoryFormatProperties(),
-			target: 'inspect-source'
-		});
+		const sourceInspection = createStoryBuildPackage(
+			fakeStory(),
+			fakeAppInfo(),
+			{
+				formatProperties: fakeStoryFormatProperties(),
+				target: 'inspect-source'
+			}
+		);
 		const htmlInspection = createStoryBuildPackage(fakeStory(), fakeAppInfo(), {
 			formatProperties: fakeStoryFormatProperties(),
 			target: 'inspect-html'

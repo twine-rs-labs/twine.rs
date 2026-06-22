@@ -268,7 +268,8 @@ export function storyFromTwee(source: string) {
 	}
 
 	const storyGraphPassageIndex = story.passages.findIndex(
-		passage => passage.name === 'StoryGraph' && passage.tags.includes('metadata')
+		passage =>
+			passage.name === 'StoryGraph' && passage.tags.includes('metadata')
 	);
 
 	if (storyGraphPassageIndex !== -1) {
@@ -279,7 +280,9 @@ export function storyFromTwee(source: string) {
 		try {
 			legacyStoryGraphMetadata = JSON.parse(storyGraphPassage.text);
 		} catch (error) {
-			console.warn(`Couldn't parse StoryGraph metadata: ${storyGraphPassage.text}`);
+			console.warn(
+				`Couldn't parse StoryGraph metadata: ${storyGraphPassage.text}`
+			);
 		}
 	}
 

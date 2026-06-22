@@ -35,6 +35,22 @@ impl TwineWasmProjectSession {
         to_js(&batch)
     }
 
+    pub fn undo(&mut self) -> Result<JsValue, JsValue> {
+        to_js(&self.session.undo())
+    }
+
+    pub fn redo(&mut self) -> Result<JsValue, JsValue> {
+        to_js(&self.session.redo())
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.session.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.session.can_redo()
+    }
+
     pub fn query_graph_projection(
         &mut self,
         story_id: String,

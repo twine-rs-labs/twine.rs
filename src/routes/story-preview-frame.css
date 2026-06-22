@@ -101,8 +101,7 @@
 	align-items: stretch;
 	background:
 		linear-gradient(var(--line-1) 1px, transparent 1px),
-		linear-gradient(90deg, var(--line-1) 1px, transparent 1px),
-		var(--ink-1);
+		linear-gradient(90deg, var(--line-1) 1px, transparent 1px), var(--ink-1);
 	background-size: 32px 32px;
 	display: flex;
 	flex: 1 1 auto;

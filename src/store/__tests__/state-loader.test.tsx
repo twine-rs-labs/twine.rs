@@ -149,7 +149,7 @@ describe('<StateLoader>', () => {
 							name: defaultFormat.name,
 							version: defaultFormat.version
 						}
-				  }
+					}
 		}));
 		(useStoryFormatsContext as jest.Mock).mockImplementation(() => ({
 			dispatch(action: StoryFormatsAction) {

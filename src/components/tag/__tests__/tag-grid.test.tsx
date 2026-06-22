@@ -2,7 +2,7 @@ import {faker} from '@faker-js/faker';
 import {render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import { TagGrid, TagGridProps } from '../tag-grid';
+import {TagGrid, TagGridProps} from '../tag-grid';
 
 describe('<TagGrid>', () => {
 	function renderComponent(props?: Partial<TagGridProps>) {

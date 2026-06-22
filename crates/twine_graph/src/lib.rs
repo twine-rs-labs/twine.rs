@@ -48,7 +48,7 @@ fn layout_block_shape(count: usize, options: &AutoLayoutOptions) -> (usize, usiz
     let mut best = (1, count, f64::INFINITY);
 
     for columns in 1..=best_column_count {
-        let rows = (count + columns - 1) / columns;
+        let rows = count.div_ceil(columns);
         let width = options.card_width + columns.saturating_sub(1) as f64 * options.column_gap;
         let height = options.card_height + rows.saturating_sub(1) as f64 * options.row_gap;
         let aspect = width / height.max(1.0);
@@ -1191,9 +1191,7 @@ mod tests {
         let graph = GraphIndex::from_story(&story);
         let layout = graph.generate_ephemeral_layout(&AutoLayoutOptions::default());
         let target_bounds = (0..target_count)
-            .map(|index| {
-                layout.passages[&PassageId::new(format!("target-{index}"))].bounds
-            })
+            .map(|index| layout.passages[&PassageId::new(format!("target-{index}"))].bounds)
             .collect::<Vec<_>>();
         let target_lefts = target_bounds
             .iter()

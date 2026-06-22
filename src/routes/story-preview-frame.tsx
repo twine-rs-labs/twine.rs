@@ -62,7 +62,9 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		StoryPreviewRuntimeLogEntry[]
 	>([]);
 	const [runtimeState, setRuntimeState] =
-		React.useState<StoryPreviewRuntimeState>({status: html ? 'waiting' : 'idle'});
+		React.useState<StoryPreviewRuntimeState>({
+			status: html ? 'waiting' : 'idle'
+		});
 	const [viewportPreset, setViewportPreset] =
 		React.useState<StoryPreviewViewportPreset>('fit');
 	const bridgeSessionId = React.useMemo(
@@ -105,8 +107,8 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 			setRuntimeLogs(currentLogs => {
 				const message =
 					data.type === 'runtime-error'
-						? data.message ?? 'Runtime error'
-						: data.args?.join(' ') ?? '';
+						? (data.message ?? 'Runtime error')
+						: (data.args?.join(' ') ?? '');
 
 				return [
 					{

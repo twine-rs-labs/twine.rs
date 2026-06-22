@@ -128,7 +128,7 @@ export function useFormatCodeMirrorToolbar(
 																: {
 																		...subitem,
 																		command: namespace + subitem.command
-																  }
+																	}
 														)
 												}
 											];

@@ -50,10 +50,7 @@ export const Tag: React.FC<TagProps> = ({
 			tabIndex={interactive ? 0 : undefined}
 			{...rest}
 		>
-			<span
-				className="tw-tag__dot"
-				style={{background: colorToCss(color)}}
-			/>
+			<span className="tw-tag__dot" style={{background: colorToCss(color)}} />
 			{hash && <span className="tw-tag__hash">#</span>}
 			{children}
 			{onRemove && (
@@ -72,4 +69,3 @@ export const Tag: React.FC<TagProps> = ({
 		</span>
 	);
 };
-

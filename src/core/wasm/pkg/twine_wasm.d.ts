@@ -5,10 +5,14 @@ export class TwineWasmProjectSession {
     free(): void;
     [Symbol.dispose](): void;
     apply(command: any): any;
+    can_redo(): boolean;
+    can_undo(): boolean;
     constructor(snapshot: any);
     query_graph_projection(story_id: string, options: any): any;
     query_story_index(story_id: string, options: any): any;
+    redo(): any;
     snapshot(): any;
+    undo(): any;
 }
 
 export function query_graph_projection(snapshot: any, story_id: string, options: any): any;
@@ -23,10 +27,14 @@ export interface InitOutput {
     readonly query_graph_projection: (a: any, b: number, c: number, d: any) => [number, number, number];
     readonly query_story_index: (a: any, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_apply: (a: number, b: any) => [number, number, number];
+    readonly twinewasmprojectsession_can_redo: (a: number) => number;
+    readonly twinewasmprojectsession_can_undo: (a: number) => number;
     readonly twinewasmprojectsession_new: (a: any) => [number, number, number];
     readonly twinewasmprojectsession_query_graph_projection: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_story_index: (a: number, b: number, c: number, d: any) => [number, number, number];
+    readonly twinewasmprojectsession_redo: (a: number) => [number, number, number];
     readonly twinewasmprojectsession_snapshot: (a: number) => [number, number, number];
+    readonly twinewasmprojectsession_undo: (a: number) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

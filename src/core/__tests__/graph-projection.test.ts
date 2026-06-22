@@ -167,9 +167,9 @@ describe('storyToCoreGraphProjection', () => {
 		);
 
 		expect(projection.layoutState).toBe('generated');
-		expect(new Set(targetNodes.map(node => node.bounds.left)).size).toBeGreaterThan(
-			1
-		);
+		expect(
+			new Set(targetNodes.map(node => node.bounds.left)).size
+		).toBeGreaterThan(1);
 		expect(new Set(targetNodes.map(node => node.bounds.top)).size).toBeLessThan(
 			targetNodes.length
 		);

@@ -1,8 +1,7 @@
 import {act, fireEvent, render, screen, within} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {renamePassageTag} from '../../store/stories/action-creators/rename-passage-tag';
-import {setTagColor} from '../../store/stories/action-creators/tag-color';
+import {StoreCoreProjectHost} from '../../core';
 import {
 	UndoableStoriesContext,
 	UndoableStoriesContextProps
@@ -11,12 +10,9 @@ import {fakeStory} from '../../test-util';
 import {PassageTagsDialog, PassageTagsDialogProps} from '../passage-tags';
 
 jest.mock('../../components/tag/tag-editor');
-jest.mock('../../store/stories/action-creators/rename-passage-tag');
-jest.mock('../../store/stories/action-creators/tag-color');
 
 describe('<PassageTagsDialog>', () => {
-	const renamePassageTagMock = renamePassageTag as jest.Mock;
-	const setTagColorMock = setTagColor as jest.Mock;
+	afterEach(() => jest.restoreAllMocks());
 
 	async function renderComponent(
 		props?: Partial<PassageTagsDialogProps>,
@@ -72,13 +68,15 @@ describe('<PassageTagsDialog>', () => {
 		expect(screen.getByText('dialogs.passageTags.count')).toBeInTheDocument();
 	});
 
-	it('dispatches a story action if a tag is renamed', async () => {
+	it('applies a core command if a tag is renamed', async () => {
 		const dispatch = jest.fn();
 		const story = fakeStory(1);
 		const stories = [story];
+		const applyStoryCommand = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.mockImplementation(() => {});
 
 		story.passages[0].tags = ['mock-tag'];
-		renamePassageTagMock.mockImplementation((...args) => [...args]);
 		await renderComponent({storyId: story.id}, {dispatch, stories});
 		expect(dispatch).not.toHaveBeenCalled();
 		fireEvent.click(
@@ -86,16 +84,23 @@ describe('<PassageTagsDialog>', () => {
 				'onChangeName'
 			)
 		);
-		expect(renamePassageTagMock).toBeCalledTimes(1);
-		expect(dispatch.mock.calls).toEqual([
-			[renamePassageTagMock.mock.calls[0], 'undoChange.renameTag']
-		]);
+		expect(applyStoryCommand).toHaveBeenCalledWith(
+			{
+				type: 'renamePassageTag',
+				new_name: 'mock-new-name',
+				old_name: 'mock-tag',
+				story_id: story.id
+			},
+			'undoChange.renameTag'
+		);
 	});
 
-	it('dispatches a story action if a tag color is changed', async () => {
+	it('applies a core command if a tag color is changed', async () => {
 		const dispatch = jest.fn();
+		const applyStoryCommand = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.mockImplementation(() => {});
 
-		setTagColorMock.mockImplementation((...args) => [...args]);
 		await renderComponent({}, {dispatch});
 		expect(dispatch).not.toHaveBeenCalled();
 		fireEvent.click(
@@ -103,10 +108,15 @@ describe('<PassageTagsDialog>', () => {
 				'onChangeColor'
 			)
 		);
-		expect(setTagColorMock).toBeCalledTimes(1);
-		expect(dispatch.mock.calls).toEqual([
-			[setTagColorMock.mock.calls[0], 'undoChange.changeTagColor']
-		]);
+		expect(applyStoryCommand).toHaveBeenCalledWith(
+			{
+				type: 'setStoryTagColor',
+				color: 'mock-color',
+				name: 'mock-tag',
+				story_id: expect.any(String)
+			},
+			'undoChange.changeTagColor'
+		);
 	});
 
 	it('shows a message if there are no passage tags', async () => {

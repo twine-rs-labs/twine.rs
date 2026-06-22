@@ -4,11 +4,15 @@ import type {CoreRect} from './bindings/CoreRect';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
 import type {PassageMove} from './bindings/PassageMove';
+import type {PassagePatch} from './bindings/PassagePatch';
 import type {Patch} from './bindings/Patch';
 import type {PatchBatch} from './bindings/PatchBatch';
 import type {ProjectSnapshot} from './bindings/ProjectSnapshot';
+import type {StoryMetadataPatch} from './bindings/StoryMetadataPatch';
 import type {StoryCommand} from './bindings/StoryCommand';
+import type {StorySnapshot} from './bindings/StorySnapshot';
 import {createUntitledPassage, Story} from '../store/stories';
+import {storyToSnapshot} from './project-snapshot';
 
 export * from './story-index';
 export * from './graph-projection';
@@ -25,9 +29,12 @@ export type {
 	CoreStoryIndex,
 	CoreStoryIndexOptions,
 	PassageMove,
+	PassagePatch,
 	Patch,
 	PatchBatch,
 	ProjectSnapshot,
+	StoryMetadataPatch,
+	StorySnapshot,
 	StoryCommand
 };
 
@@ -49,6 +56,31 @@ export function createPassageCommand(
 		story_id: storyId,
 		tags: options.tags ?? [],
 		text: options.text ?? ''
+	};
+}
+
+export function createStoryCommand(story: Story | StorySnapshot): StoryCommand {
+	return {
+		type: 'createStory',
+		story: 'startPassage' in story ? storyToSnapshot(story) : story
+	};
+}
+
+export function deleteStoryCommand(storyId: string): StoryCommand {
+	return {
+		type: 'deleteStory',
+		story_id: storyId
+	};
+}
+
+export function replaceStoryCommand(
+	storyId: string,
+	story: Story | StorySnapshot
+): StoryCommand {
+	return {
+		type: 'replaceStory',
+		story: 'startPassage' in story ? storyToSnapshot(story) : story,
+		story_id: storyId
 	};
 }
 
@@ -151,6 +183,30 @@ export function renameStoryCommand(
 	};
 }
 
+export function renamePassageTagCommand(
+	storyId: string,
+	oldName: string,
+	newName: string
+): StoryCommand {
+	return {
+		type: 'renamePassageTag',
+		new_name: newName,
+		old_name: oldName,
+		story_id: storyId
+	};
+}
+
+export function renameStoryTagCommand(
+	oldName: string,
+	newName: string
+): StoryCommand {
+	return {
+		type: 'renameStoryTag',
+		new_name: newName,
+		old_name: oldName
+	};
+}
+
 export function setPassageTagsCommand(
 	storyId: string,
 	passageId: string,
@@ -164,6 +220,21 @@ export function setPassageTagsCommand(
 	};
 }
 
+export function updatePassageCommand(
+	storyId: string,
+	passageId: string,
+	changes: PassagePatch,
+	updateReferences = true
+): StoryCommand {
+	return {
+		type: 'updatePassage',
+		changes,
+		passage_id: passageId,
+		story_id: storyId,
+		update_references: updateReferences
+	};
+}
+
 export function setStartPassageCommand(
 	storyId: string,
 	passageId: string
@@ -172,6 +243,30 @@ export function setStartPassageCommand(
 		type: 'setStartPassage',
 		passage_id: passageId,
 		story_id: storyId
+	};
+}
+
+export function setStoryTagColorCommand(
+	storyId: string,
+	name: string,
+	color: string | null
+): StoryCommand {
+	return {
+		type: 'setStoryTagColor',
+		color,
+		name,
+		story_id: storyId
+	};
+}
+
+export function setStoryTagsCommand(
+	storyId: string,
+	tags: string[]
+): StoryCommand {
+	return {
+		type: 'setStoryTags',
+		story_id: storyId,
+		tags
 	};
 }
 

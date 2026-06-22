@@ -1,8 +1,8 @@
 import {act, fireEvent, render, screen, within} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
+import {StoreCoreProjectHost} from '../../core';
 import {PrefsContext, PrefsContextProps} from '../../store/prefs';
-import {renameStoryTag} from '../../store/stories';
 import {
 	UndoableStoriesContext,
 	UndoableStoriesContextProps
@@ -11,10 +11,9 @@ import {fakePrefs, fakeStory} from '../../test-util';
 import {StoryTagsDialog, StoryTagsDialogProps} from '../story-tags';
 
 jest.mock('../../components/tag/tag-editor');
-jest.mock('../../store/stories/action-creators/rename-story-tag');
 
 describe('<StoryTagsDialog>', () => {
-	const renameStoryTagMock = renameStoryTag as jest.Mock;
+	afterEach(() => jest.restoreAllMocks());
 
 	async function renderComponent(
 		props?: Partial<StoryTagsDialogProps>,
@@ -70,13 +69,15 @@ describe('<StoryTagsDialog>', () => {
 		expect(screen.getByTestId('mock-tag-editor-mock-tag2')).toBeInTheDocument();
 	});
 
-	it('dispatches a story action if a tag is renamed', async () => {
+	it('applies a core command if a tag is renamed', async () => {
 		const dispatch = jest.fn();
 		const story = fakeStory();
 		const stories = [story];
+		const applyStoryCommand = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.mockImplementation(() => {});
 
 		story.tags = ['mock-tag'];
-		renameStoryTagMock.mockImplementation((...args) => [...args]);
 		await renderComponent({}, {dispatch, stories});
 		expect(dispatch).not.toHaveBeenCalled();
 		fireEvent.click(
@@ -84,8 +85,14 @@ describe('<StoryTagsDialog>', () => {
 				'onChangeName'
 			)
 		);
-		expect(renameStoryTagMock).toBeCalledTimes(1);
-		expect(dispatch.mock.calls).toEqual([[renameStoryTagMock.mock.calls[0]]]);
+		expect(applyStoryCommand).toHaveBeenCalledWith(
+			{
+				type: 'renameStoryTag',
+				new_name: 'mock-new-name',
+				old_name: 'mock-tag'
+			},
+			'undoChange.renameTag'
+		);
 	});
 
 	it('dispatches a pref action if a tag color is changed', async () => {

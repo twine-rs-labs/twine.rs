@@ -78,7 +78,9 @@ export const StoryProofRoute: React.FC = () => {
 				history.push(`/stories/${storyId}?mode=text${passageQuery(passageId)}`)
 			}
 			onTestCurrentPassage={passageId =>
-				history.push(`/stories/${storyId}/test/${encodeURIComponent(passageId)}`)
+				history.push(
+					`/stories/${storyId}/test/${encodeURIComponent(passageId)}`
+				)
 			}
 			onTestFromStart={
 				startPassage

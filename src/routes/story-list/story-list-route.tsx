@@ -14,7 +14,12 @@ import {
 	TablerIcon,
 	Tag
 } from '../../components/design-system';
-import {storyLinkFacts, storyToCoreIndex} from '../../core';
+import {
+	deleteStoryCommand,
+	storyLinkFacts,
+	storyToCoreIndex,
+	useCoreProjectHost
+} from '../../core';
 import {
 	AppDonationDialog,
 	DialogsContextProvider,
@@ -26,7 +31,6 @@ import {useDonationCheck} from '../../store/prefs/use-donation-check';
 import {
 	deselectAllStories,
 	deselectStory,
-	deleteStory as deleteStoryAction,
 	selectStory,
 	Story,
 	useStoriesContext
@@ -159,6 +163,7 @@ export const InnerStoryListRoute: React.FC = () => {
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const {dispatch: storiesDispatch, stories} = useStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const {shouldShowDonationPrompt} = useDonationCheck();
 	const [query, setQuery] = React.useState('');
 	const [view, setView] = React.useState<LauncherView>('table');
@@ -174,7 +179,7 @@ export const InnerStoryListRoute: React.FC = () => {
 			prefs.storyListTagFilter.length > 0
 				? stories.filter(story =>
 						story.tags.some(tag => prefs.storyListTagFilter.includes(tag))
-				  )
+					)
 				: stories;
 		const searchedStories =
 			normalizedQuery.length > 0
@@ -190,7 +195,7 @@ export const InnerStoryListRoute: React.FC = () => {
 							.toLowerCase();
 
 						return haystack.includes(normalizedQuery);
-				  })
+					})
 				: taggedStories;
 
 		switch (prefs.storyListSort) {
@@ -236,9 +241,12 @@ export const InnerStoryListRoute: React.FC = () => {
 	async function deleteStory(story: Story) {
 		const rootPath = fileBackedProjectRoot(story);
 		const twineElectron = desktopBridge();
-		const canDeleteProjectFolder = rootPath && twineElectron?.deleteProjectFolder;
+		const canDeleteProjectFolder =
+			rootPath && twineElectron?.deleteProjectFolder;
 		const projectStories = canDeleteProjectFolder
-			? stories.filter(candidate => fileBackedProjectRoot(candidate) === rootPath)
+			? stories.filter(
+					candidate => fileBackedProjectRoot(candidate) === rootPath
+				)
 			: [story];
 		const confirmed = canDeleteProjectFolder
 			? window.confirm(
@@ -251,14 +259,14 @@ export const InnerStoryListRoute: React.FC = () => {
 							projectStories.length === 1 ? 'story' : 'stories'
 						} from this library. This cannot be undone.`
 					].join('\n')
-			  )
+				)
 			: window.confirm(
 					[
 						`Delete story "${story.name}"?`,
 						'',
 						'This will remove it from this library. This cannot be undone.'
 					].join('\n')
-			  );
+				);
 
 		if (!confirmed) {
 			return;
@@ -270,7 +278,7 @@ export const InnerStoryListRoute: React.FC = () => {
 
 		for (const projectStory of projectStories) {
 			deleteProjectMetadata(projectStory.id);
-			storiesDispatch(deleteStoryAction(projectStory));
+			coreProjectHost.applyStoryCommand(deleteStoryCommand(projectStory.id));
 		}
 	}
 
@@ -497,7 +505,9 @@ export const InnerStoryListRoute: React.FC = () => {
 														<Button
 															aria-label={`Delete story ${story.name}`}
 															icon="trash"
-															onClick={event => stopAndDeleteStory(story, event)}
+															onClick={event =>
+																stopAndDeleteStory(story, event)
+															}
 															size="sm"
 															variant="danger"
 														>
@@ -561,7 +571,8 @@ export const InnerStoryListRoute: React.FC = () => {
 												)}
 											</div>
 											<div className="story-list-launcher__project-meta">
-												{story.passages.length} passages · {wordCount(story)} words
+												{story.passages.length} passages · {wordCount(story)}{' '}
+												words
 											</div>
 											<HealthBadges story={story} />
 											<div className="story-list-launcher__card-foot">

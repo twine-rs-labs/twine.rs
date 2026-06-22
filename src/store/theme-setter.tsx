@@ -9,7 +9,9 @@ export function ThemeSetter() {
 	React.useEffect(() => {
 		document.body.dataset.appTheme = computedTheme;
 		document.body.dataset.highContrast = prefs.highContrast ? 'true' : 'false';
-		document.body.dataset.reducedMotion = prefs.reducedMotion ? 'true' : 'false';
+		document.body.dataset.reducedMotion = prefs.reducedMotion
+			? 'true'
+			: 'false';
 		if (computedTheme === 'dark') {
 			document.documentElement.style.setProperty('color-scheme', 'dark');
 		} else {

@@ -1,7 +1,9 @@
 import {DialogCardProps} from '../components/container/dialog-card';
 
-export interface DialogComponentProps
-	extends Omit<DialogCardProps, 'headerLabel'> {
+export interface DialogComponentProps extends Omit<
+	DialogCardProps,
+	'headerLabel'
+> {
 	onChangeProps: (props: Record<string, any>) => void;
 }
 

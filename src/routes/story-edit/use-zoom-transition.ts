@@ -47,7 +47,7 @@ interface ZoomTransition {
  * @param start Value of the zoom when the transition began
  * @param change Change in zoom value for the entire transition
  * @param time Elapsed time in seconds--assumes total time is 1 second
- * 
+ *
  * @return transitioned value of zoom
  */
 function transitionStep(

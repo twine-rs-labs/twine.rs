@@ -46,4 +46,3 @@ export const Badge: React.FC<BadgeProps> = ({
 		{children}
 	</span>
 );
-

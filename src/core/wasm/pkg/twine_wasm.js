@@ -23,6 +23,20 @@ export class TwineWasmProjectSession {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * @returns {boolean}
+     */
+    can_redo() {
+        const ret = wasm.twinewasmprojectsession_can_redo(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * @returns {boolean}
+     */
+    can_undo() {
+        const ret = wasm.twinewasmprojectsession_can_undo(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * @param {any} snapshot
      */
     constructor(snapshot) {
@@ -65,8 +79,28 @@ export class TwineWasmProjectSession {
     /**
      * @returns {any}
      */
+    redo() {
+        const ret = wasm.twinewasmprojectsession_redo(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @returns {any}
+     */
     snapshot() {
         const ret = wasm.twinewasmprojectsession_snapshot(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @returns {any}
+     */
+    undo() {
+        const ret = wasm.twinewasmprojectsession_undo(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

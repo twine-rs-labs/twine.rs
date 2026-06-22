@@ -52,10 +52,7 @@ export function useProjectStoryHydration(storyId: string | undefined) {
 	const [currentRevision, setCurrentRevision] = React.useState(revision);
 
 	React.useEffect(
-		() =>
-			subscribeProjectStoryHydration(() =>
-				setCurrentRevision(revision)
-			),
+		() => subscribeProjectStoryHydration(() => setCurrentRevision(revision)),
 		[]
 	);
 

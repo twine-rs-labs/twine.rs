@@ -18,9 +18,7 @@ export interface SegmentedControlProps {
 }
 
 function normalizeOption(option: string | SegmentOption): SegmentOption {
-	return typeof option === 'string'
-		? {label: option, value: option}
-		: option;
+	return typeof option === 'string' ? {label: option, value: option} : option;
 }
 
 export const SegmentedControl: React.FC<SegmentedControlProps> = ({
@@ -41,10 +39,7 @@ export const SegmentedControl: React.FC<SegmentedControlProps> = ({
 			return (
 				<button
 					aria-selected={selected}
-					className={classNames(
-						'tw-seg__opt',
-						selected && 'tw-seg__opt--on'
-					)}
+					className={classNames('tw-seg__opt', selected && 'tw-seg__opt--on')}
 					key={optionValue}
 					onClick={() => onChange?.(optionValue)}
 					role="tab"
@@ -57,4 +52,3 @@ export const SegmentedControl: React.FC<SegmentedControlProps> = ({
 		})}
 	</div>
 );
-

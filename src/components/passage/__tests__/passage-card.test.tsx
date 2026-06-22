@@ -107,7 +107,7 @@ describe('<PassageCard>', () => {
 	});
 
 	describe("When the tagDisplay prop is 'color'", () => {
-		it("displays a <TagStripe> of passage tags", () => {
+		it('displays a <TagStripe> of passage tags', () => {
 			const passage = fakePassage({tags: ['mock-tag-1', 'mock-tag-2']});
 
 			renderComponent({passage});
@@ -125,7 +125,7 @@ describe('<PassageCard>', () => {
 	});
 
 	describe("When the tagDisplay prop is 'name'", () => {
-		it("displays <TagBadges> containing passage tags", () => {
+		it('displays <TagBadges> containing passage tags', () => {
 			const passage = fakePassage({tags: ['mock-tag-1', 'mock-tag-2']});
 
 			renderComponent({passage, tagDisplay: 'name'});

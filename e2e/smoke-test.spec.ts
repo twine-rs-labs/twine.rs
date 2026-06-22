@@ -66,7 +66,7 @@ test('opens the current project launcher on first run', async ({page}) => {
 
 test('creates a project from the D-series launcher flow', async ({page}) => {
 	await createProject(page, 'Create project smoke');
-	await expect(page).toHaveTitle('Create project smoke');
+	await expect(page).toHaveTitle('Create project smoke - Twine RS');
 
 	await page.goto(`${appUrl}/#/`);
 	await expect(page.getByText('Create project smoke').first()).toBeVisible();

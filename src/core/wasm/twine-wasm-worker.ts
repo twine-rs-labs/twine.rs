@@ -81,6 +81,23 @@ async function handleRequest(
 
 			case 'apply':
 				result = ensureSession(request.revision).apply(request.command);
+				sessionRevision = request.revision + 1;
+				break;
+
+			case 'undo':
+				result = ensureSession(request.revision).undo();
+
+				if (result) {
+					sessionRevision = request.revision + 1;
+				}
+				break;
+
+			case 'redo':
+				result = ensureSession(request.revision).redo();
+
+				if (result) {
+					sessionRevision = request.revision + 1;
+				}
 				break;
 
 			case 'queryGraphProjection':

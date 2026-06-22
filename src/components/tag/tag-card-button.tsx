@@ -23,8 +23,16 @@ export interface TagCardButtonProps {
 }
 
 export const TagCardButton: React.FC<TagCardButtonProps> = props => {
-	const {allTags, disabled, id, onAdd, onChangeColor, onRemove, tagColors, tags} =
-		props;
+	const {
+		allTags,
+		disabled,
+		id,
+		onAdd,
+		onChangeColor,
+		onRemove,
+		tagColors,
+		tags
+	} = props;
 	const [newTagName, setNewTagName] = React.useState('');
 	const [open, setOpen] = React.useState(false);
 	const {t} = useTranslation();
@@ -37,7 +45,7 @@ export const TagCardButton: React.FC<TagCardButtonProps> = props => {
 			? t('common.tags')
 			: t('components.tagCardButton.tagsWithCount_plural', {
 					count: tags.length
-			  });
+				});
 	let validationMessage: string | undefined = undefined;
 	let canAdd = isValidTagName(newTagName);
 

@@ -21,20 +21,24 @@ describe('asset M5 contract', () => {
 			story_id: 'story',
 			target_path: null
 		});
-		expect(renameAssetCommand('story', 'assets/a.png', 'assets/b.png')).toEqual({
-			type: 'renameAsset',
-			new_path: 'assets/b.png',
-			path: 'assets/a.png',
-			story_id: 'story',
-			update_references: true
-		});
+		expect(renameAssetCommand('story', 'assets/a.png', 'assets/b.png')).toEqual(
+			{
+				type: 'renameAsset',
+				new_path: 'assets/b.png',
+				path: 'assets/a.png',
+				story_id: 'story',
+				update_references: true
+			}
+		);
 		expect(deleteAssetCommand('story', 'assets/a.png', true)).toEqual({
 			type: 'deleteAsset',
 			path: 'assets/a.png',
 			remove_references: true,
 			story_id: 'story'
 		});
-		expect(replaceAssetCommand('story', 'assets/a.png', '/tmp/new.png')).toEqual({
+		expect(
+			replaceAssetCommand('story', 'assets/a.png', '/tmp/new.png')
+		).toEqual({
 			type: 'replaceAsset',
 			path: 'assets/a.png',
 			source_path: '/tmp/new.png',
@@ -99,10 +103,10 @@ describe('asset M5 contract', () => {
 			storyToCoreIndex(story, {
 				knownAssets: [
 					{
-							...referenceBacked.entries[0].inventory,
-							exists: true,
-							sizeBytes: 2048,
-							thumbnailUrl: 'file:///project/assets/cover.png'
+						...referenceBacked.entries[0].inventory,
+						exists: true,
+						sizeBytes: 2048,
+						thumbnailUrl: 'file:///project/assets/cover.png'
 					}
 				]
 			})
@@ -111,11 +115,11 @@ describe('asset M5 contract', () => {
 		expect(inventoryBacked.entries).toEqual([
 			expect.objectContaining({
 				exists: true,
-					path: 'assets/cover.png',
-					referenceCount: 1,
-					sizeBytes: 2048,
-					thumbnailUrl: 'file:///project/assets/cover.png'
-				})
+				path: 'assets/cover.png',
+				referenceCount: 1,
+				sizeBytes: 2048,
+				thumbnailUrl: 'file:///project/assets/cover.png'
+			})
 		]);
 	});
 });

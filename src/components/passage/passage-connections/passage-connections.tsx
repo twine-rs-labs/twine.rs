@@ -24,13 +24,11 @@ export const PassageConnections: React.FC<PassageConnectionsProps> = props => {
 		() => passageConnections(passages),
 		[passages]
 	);
-	const {
-		draggable: draggableReferences,
-		fixed: fixedReferences
-	} = React.useMemo(() => passageConnections(passages, referenceParser), [
-		passages,
-		referenceParser
-	]);
+	const {draggable: draggableReferences, fixed: fixedReferences} =
+		React.useMemo(
+			() => passageConnections(passages, referenceParser),
+			[passages, referenceParser]
+		);
 
 	const startPassage = React.useMemo(
 		() => passages.find(passage => passage.id === startPassageId),

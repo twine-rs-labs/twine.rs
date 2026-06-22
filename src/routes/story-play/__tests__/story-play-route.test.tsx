@@ -36,9 +36,9 @@ describe('<StoryPlayRoute>', () => {
 		usePublishingMock.mockReturnValue({publishStory});
 		renderComponent('/stories/123/play');
 		await waitFor(() =>
-			expect(screen.getByTitle('Story preview').getAttribute('srcdoc')).toContain(
-				'mock-published-story'
-			)
+			expect(
+				screen.getByTitle('Story preview').getAttribute('srcdoc')
+			).toContain('mock-published-story')
 		);
 		expect(screen.getByText('Play')).toBeInTheDocument();
 		expect(screen.getByRole('button', {name: 'Source'})).toBeInTheDocument();

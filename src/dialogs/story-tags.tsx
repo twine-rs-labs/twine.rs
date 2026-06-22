@@ -3,17 +3,19 @@ import {useTranslation} from 'react-i18next';
 import {DialogCard} from '../components/container/dialog-card';
 import {CardContent} from '../components/container/card';
 import {DialogComponentProps} from './dialogs.types';
-import {renameStoryTag, storyTags} from '../store/stories';
+import {storyTags} from '../store/stories';
 import {setPref, usePrefsContext} from '../store/prefs';
 import {useUndoableStoriesContext} from '../store/undoable-stories';
 import {Color} from '../util/color';
 import {TagEditor} from '../components/tag/tag-editor';
+import {renameStoryTagCommand, useCoreProjectHost} from '../core';
 
 export type StoryTagsDialogProps = DialogComponentProps;
 
 export const StoryTagsDialog: React.FC<StoryTagsDialogProps> = props => {
-	const {dispatch: storiesDispatch, stories} = useUndoableStoriesContext();
+	const {stories} = useUndoableStoriesContext();
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
+	const coreProjectHost = useCoreProjectHost();
 	const {t} = useTranslation();
 
 	const tags = storyTags(stories);
@@ -25,7 +27,10 @@ export const StoryTagsDialog: React.FC<StoryTagsDialogProps> = props => {
 	}
 
 	function handleChangeTagName(tagName: string, newName: string) {
-		storiesDispatch(renameStoryTag(stories, tagName, newName));
+		coreProjectHost.applyStoryCommand(
+			renameStoryTagCommand(tagName, newName),
+			t('undoChange.renameTag')
+		);
 	}
 
 	return (

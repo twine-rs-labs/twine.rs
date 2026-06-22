@@ -469,7 +469,8 @@ function generateLayout(index: GraphIndex) {
 				});
 			});
 
-			levelLeft += shape.columns * (generatedLayout.cardWidth + generatedLayout.columnGap);
+			levelLeft +=
+				shape.columns * (generatedLayout.cardWidth + generatedLayout.columnGap);
 		}
 
 		componentTop +=

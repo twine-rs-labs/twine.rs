@@ -2,8 +2,10 @@ import * as React from 'react';
 import {IconSquare, IconSquareCheck} from '@tabler/icons';
 import {IconButton, IconButtonProps} from './icon-button';
 
-export interface CheckboxButtonProps
-	extends Omit<IconButtonProps, 'icon' | 'onClick'> {
+export interface CheckboxButtonProps extends Omit<
+	IconButtonProps,
+	'icon' | 'onClick'
+> {
 	checkedIcon?: React.ReactNode;
 	icon?: React.ReactNode;
 	onChange: (value: boolean) => void;
@@ -12,17 +14,11 @@ export interface CheckboxButtonProps
 }
 
 export const CheckboxButton: React.FC<CheckboxButtonProps> = props => {
-	const {
-		checkedIcon,
-		icon,
-		onChange,
-		uncheckedIcon,
-		value,
-		...otherProps
-	} = props;
+	const {checkedIcon, icon, onChange, uncheckedIcon, value, ...otherProps} =
+		props;
 	const calculatedIcon = value
-		? checkedIcon ?? <IconSquareCheck />
-		: uncheckedIcon ?? <IconSquare />;
+		? (checkedIcon ?? <IconSquareCheck />)
+		: (uncheckedIcon ?? <IconSquare />);
 
 	return (
 		<IconButton

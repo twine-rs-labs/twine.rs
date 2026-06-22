@@ -500,6 +500,34 @@ impl From<&Story> for StorySnapshot {
     }
 }
 
+impl StorySnapshot {
+    fn into_story(self) -> Story {
+        let story_id = StoryId::new(self.id);
+        let passages = self
+            .passages
+            .into_iter()
+            .map(|passage| passage.into_passage(&story_id))
+            .collect::<Vec<_>>();
+
+        Story {
+            id: story_id,
+            ifid: self.ifid,
+            name: self.name,
+            passages: PassageIndex::from(passages),
+            script: self.script,
+            snap_to_grid: self.snap_to_grid,
+            start_passage: PassageId::new(self.start_passage_id),
+            story_format: self.story_format,
+            story_format_version: self.story_format_version,
+            stylesheet: self.stylesheet,
+            tags: self.tags,
+            tag_colors: self.tag_colors,
+            zoom: self.zoom,
+            ..Story::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
@@ -530,6 +558,38 @@ pub struct PassagePatch {
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct StoryMetadataPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub snap_to_grid: Option<bool>,
+    #[serde(default)]
+    pub story_format: Option<String>,
+    #[serde(default)]
+    pub story_format_version: Option<String>,
+    #[serde(default)]
+    pub tag_colors: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub zoom: Option<f64>,
+}
+
+impl StoryMetadataPatch {
+    fn is_empty(&self) -> bool {
+        self.name.is_none()
+            && self.snap_to_grid.is_none()
+            && self.story_format.is_none()
+            && self.story_format_version.is_none()
+            && self.tag_colors.is_none()
+            && self.tags.is_none()
+            && self.zoom.is_none()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -815,6 +875,9 @@ pub enum StoryCommand {
         snippet: Option<String>,
         story_id: String,
     },
+    CreateStory {
+        story: StorySnapshot,
+    },
     CreatePassage {
         #[serde(default)]
         id: Option<String>,
@@ -830,6 +893,9 @@ pub enum StoryCommand {
     },
     DeletePassages {
         passage_ids: Vec<String>,
+        story_id: String,
+    },
+    DeleteStory {
         story_id: String,
     },
     DeleteAsset {
@@ -875,9 +941,18 @@ pub enum StoryCommand {
         #[serde(default = "default_true")]
         update_references: bool,
     },
+    RenamePassageTag {
+        new_name: String,
+        old_name: String,
+        story_id: String,
+    },
     RenameStory {
         name: String,
         story_id: String,
+    },
+    RenameStoryTag {
+        new_name: String,
+        old_name: String,
     },
     RenameAsset {
         new_path: String,
@@ -889,6 +964,10 @@ pub enum StoryCommand {
     ReplaceAsset {
         path: String,
         source_path: String,
+        story_id: String,
+    },
+    ReplaceStory {
+        story: StorySnapshot,
         story_id: String,
     },
     RevealAsset {
@@ -907,6 +986,16 @@ pub enum StoryCommand {
     SetStartPassage {
         passage_id: String,
         story_id: String,
+    },
+    SetStoryTagColor {
+        #[serde(default)]
+        color: Option<String>,
+        name: String,
+        story_id: String,
+    },
+    SetStoryTags {
+        story_id: String,
+        tags: Vec<String>,
     },
     SetStoryFormat {
         story_format: String,
@@ -929,6 +1018,13 @@ pub enum StoryCommand {
         story_id: String,
         text: String,
     },
+    UpdatePassage {
+        changes: PassagePatch,
+        passage_id: String,
+        story_id: String,
+        #[serde(default = "default_true")]
+        update_references: bool,
+    },
     UpdateStoryScript {
         script: String,
         story_id: String,
@@ -947,9 +1043,11 @@ impl StoryCommand {
         match self {
             Self::Batch { .. } => "Batch",
             Self::CopyAssetSnippet { .. } => "Copy Asset Snippet",
+            Self::CreateStory { .. } => "New Story",
             Self::CreatePassage { .. } => "New Passage",
             Self::DeleteAsset { .. } => "Delete Asset",
             Self::DeletePassages { .. } => "Delete Passages",
+            Self::DeleteStory { .. } => "Delete Story",
             Self::ImportAsset { .. } => "Import Asset",
             Self::InsertAssetSnippet { .. } => "Insert Asset Snippet",
             Self::MarkSaved => "Mark Saved",
@@ -958,8 +1056,11 @@ impl StoryCommand {
             Self::QueryStoryIndex { .. } => "Query Story Index",
             Self::RenameAsset { .. } => "Rename Asset",
             Self::RenamePassage { .. } => "Rename Passage",
+            Self::RenamePassageTag { .. } => "Rename Passage Tag",
             Self::RenameStory { .. } => "Rename Story",
+            Self::RenameStoryTag { .. } => "Rename Story Tag",
             Self::ReplaceAsset { .. } => "Replace Asset",
+            Self::ReplaceStory { .. } => "Replace Story",
             Self::RestorePassages { .. } => "Restore Passages",
             Self::RevealAsset { .. } => "Reveal Asset",
             Self::SaveGeneratedLayout { .. } => "Save Layout",
@@ -967,7 +1068,10 @@ impl StoryCommand {
             Self::SetStartPassage { .. } => "Set Start Passage",
             Self::SetStoryFormat { .. } => "Set Story Format",
             Self::SetStorySnapToGrid { .. } => "Set Story Snap To Grid",
+            Self::SetStoryTagColor { .. } => "Set Story Tag Color",
+            Self::SetStoryTags { .. } => "Set Story Tags",
             Self::SetStoryZoom { .. } => "Set Story Zoom",
+            Self::UpdatePassage { .. } => "Update Passage",
             Self::UpdatePassageText { .. } => "Update Passage Text",
             Self::UpdateStoryScript { .. } => "Update Story JavaScript",
             Self::UpdateStoryStylesheet { .. } => "Update Story Stylesheet",
@@ -1059,8 +1163,18 @@ pub enum Patch {
         passage_id: String,
         story_id: String,
     },
+    StoryCreated {
+        story: StorySnapshot,
+    },
+    StoryDeleted {
+        story_id: String,
+    },
     StoryIndexUpdated {
         index: CoreStoryIndex,
+        story_id: String,
+    },
+    StoryMetadataUpdated {
+        changes: StoryMetadataPatch,
         story_id: String,
     },
     StoryScriptUpdated {
@@ -1095,6 +1209,12 @@ pub enum CoreError {
 
     #[error("duplicate passage name: {0}")]
     DuplicatePassageName(String),
+
+    #[error("duplicate story id: {0}")]
+    DuplicateStoryId(String),
+
+    #[error("duplicate story name: {0}")]
+    DuplicateStoryName(String),
 
     #[error("I/O error: {0}")]
     Io(String),
@@ -1223,16 +1343,19 @@ impl ProjectSession {
 
     pub fn redo(&mut self) -> Option<PatchBatch> {
         let transaction = self.redo_stack.pop()?;
+        let before = self.project.clone();
+        let dirty_before = self.dirty;
 
         self.project = transaction.after.clone();
         self.dirty = transaction.dirty_after;
         self.graph_cache.clear();
         self.undo_stack.push(transaction.clone());
+        let mut patches = project_diff_patches(&before, &self.project);
+
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
         Some(PatchBatch {
             label: transaction.label,
-            patches: vec![Patch::ProjectSnapshotReplaced {
-                snapshot: self.snapshot(),
-            }],
+            patches,
             transaction_id: transaction.id,
         })
     }
@@ -1253,16 +1376,19 @@ impl ProjectSession {
 
     pub fn undo(&mut self) -> Option<PatchBatch> {
         let transaction = self.undo_stack.pop()?;
+        let before = self.project.clone();
+        let dirty_before = self.dirty;
 
         self.project = transaction.before.clone();
         self.dirty = transaction.dirty_before;
         self.graph_cache.clear();
         self.redo_stack.push(transaction.clone());
+        let mut patches = project_diff_patches(&before, &self.project);
+
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
         Some(PatchBatch {
             label: format!("Undo {}", transaction.label),
-            patches: vec![Patch::ProjectSnapshotReplaced {
-                snapshot: self.snapshot(),
-            }],
+            patches,
             transaction_id: transaction.id,
         })
     }
@@ -1292,6 +1418,7 @@ impl ProjectSession {
                 snippet,
                 story_id,
             } => self.copy_asset_snippet(&story_id, &path, snippet),
+            StoryCommand::CreateStory { story } => self.create_story(story),
             StoryCommand::CreatePassage {
                 id,
                 layout,
@@ -1304,6 +1431,7 @@ impl ProjectSession {
                 story_id,
                 passage_ids,
             } => self.delete_passages(&story_id, &passage_ids),
+            StoryCommand::DeleteStory { story_id } => self.delete_story(&story_id),
             StoryCommand::DeleteAsset {
                 path,
                 remove_references,
@@ -1354,7 +1482,15 @@ impl ProjectSession {
                 story_id,
                 update_references,
             } => self.rename_passage(&story_id, &passage_id, name, update_references),
+            StoryCommand::RenamePassageTag {
+                new_name,
+                old_name,
+                story_id,
+            } => self.rename_passage_tag(&story_id, &old_name, new_name),
             StoryCommand::RenameStory { name, story_id } => self.rename_story(&story_id, name),
+            StoryCommand::RenameStoryTag { new_name, old_name } => {
+                self.rename_story_tag(&old_name, new_name)
+            }
             StoryCommand::RenameAsset {
                 new_path,
                 path,
@@ -1366,6 +1502,7 @@ impl ProjectSession {
                 source_path,
                 story_id,
             } => self.replace_asset(&story_id, &path, &source_path),
+            StoryCommand::ReplaceStory { story, story_id } => self.replace_story(&story_id, story),
             StoryCommand::RevealAsset { path, story_id } => self.reveal_asset(&story_id, &path),
             StoryCommand::RestorePassages { story_id, passages } => {
                 self.restore_passages(&story_id, passages)
@@ -1380,6 +1517,12 @@ impl ProjectSession {
                 passage_id,
                 story_id,
             } => self.set_start_passage(&story_id, &passage_id),
+            StoryCommand::SetStoryTagColor {
+                color,
+                name,
+                story_id,
+            } => self.set_story_tag_color(&story_id, name, color),
+            StoryCommand::SetStoryTags { story_id, tags } => self.set_story_tags(&story_id, tags),
             StoryCommand::SetStoryFormat {
                 story_format,
                 story_format_version,
@@ -1394,6 +1537,12 @@ impl ProjectSession {
                 story_id,
                 text,
             } => self.update_passage_text(&story_id, &passage_id, text),
+            StoryCommand::UpdatePassage {
+                changes,
+                passage_id,
+                story_id,
+                update_references,
+            } => self.update_passage(&story_id, &passage_id, changes, update_references),
             StoryCommand::UpdateStoryScript { script, story_id } => {
                 self.update_story_script(&story_id, script)
             }
@@ -1451,6 +1600,74 @@ impl ProjectSession {
             passage: PassageSnapshot::from(&passage),
             story_id,
         }])
+    }
+
+    fn create_story(&mut self, story: StorySnapshot) -> Result<Vec<Patch>, CoreError> {
+        if self
+            .project
+            .stories
+            .iter()
+            .any(|existing| existing.id.as_ref() == story.id)
+        {
+            return Err(CoreError::DuplicateStoryId(story.id));
+        }
+
+        if self
+            .project
+            .stories
+            .iter()
+            .any(|existing| existing.name.eq_ignore_ascii_case(&story.name))
+        {
+            return Err(CoreError::DuplicateStoryName(story.name));
+        }
+
+        let story = story.into_story();
+        let snapshot = StorySnapshot::from(&story);
+
+        self.project.stories.push(story);
+        Ok(vec![Patch::StoryCreated { story: snapshot }])
+    }
+
+    fn delete_story(&mut self, story_id: &str) -> Result<Vec<Patch>, CoreError> {
+        let initial_len = self.project.stories.len();
+
+        self.project
+            .stories
+            .retain(|story| story.id.as_ref() != story_id);
+
+        if self.project.stories.len() == initial_len {
+            return Err(CoreError::StoryNotFound(story_id.to_owned()));
+        }
+
+        Ok(vec![Patch::StoryDeleted {
+            story_id: story_id.to_owned(),
+        }])
+    }
+
+    fn replace_story(
+        &mut self,
+        story_id: &str,
+        story: StorySnapshot,
+    ) -> Result<Vec<Patch>, CoreError> {
+        let story = story.into_story();
+        let before = self.project.clone();
+        let target = self.story_mut(story_id)?;
+
+        *target = Story {
+            id: StoryId::new(story_id),
+            passages: story
+                .passages
+                .iter()
+                .cloned()
+                .map(|mut passage| {
+                    passage.story = StoryId::new(story_id);
+                    passage
+                })
+                .collect(),
+            ..story
+        };
+
+        Ok(project_diff_patches(&before, &self.project))
     }
 
     fn delete_passages(
@@ -1678,6 +1895,40 @@ impl ProjectSession {
         Ok(patches)
     }
 
+    fn update_passage(
+        &mut self,
+        story_id: &str,
+        passage_id: &str,
+        changes: PassagePatch,
+        update_references: bool,
+    ) -> Result<Vec<Patch>, CoreError> {
+        let mut patches = Vec::new();
+
+        if let Some(name) = changes.name {
+            patches.extend(self.rename_passage(story_id, passage_id, name, update_references)?);
+        }
+
+        if let Some(text) = changes.text {
+            patches.extend(self.update_passage_text(story_id, passage_id, text)?);
+        }
+
+        if let Some(tags) = changes.tags {
+            patches.extend(self.set_passage_tags(story_id, passage_id, tags)?);
+        }
+
+        if let Some(layout) = changes.layout {
+            patches.extend(self.move_passages(
+                story_id,
+                vec![PassageMove {
+                    bounds: layout,
+                    passage_id: passage_id.to_owned(),
+                }],
+            )?);
+        }
+
+        Ok(patches)
+    }
+
     fn restore_passages(
         &mut self,
         story_id: &str,
@@ -1746,12 +1997,106 @@ impl ProjectSession {
         {
             let story = self.story_mut(story_id)?;
 
-            story.name = name;
+            if story.name == name {
+                return Ok(Vec::new());
+            }
+
+            story.name = name.clone();
         }
 
-        Ok(vec![Patch::ProjectSnapshotReplaced {
-            snapshot: self.snapshot(),
+        Ok(vec![Patch::StoryMetadataUpdated {
+            changes: StoryMetadataPatch {
+                name: Some(name),
+                ..StoryMetadataPatch::default()
+            },
+            story_id: story_id.to_owned(),
         }])
+    }
+
+    fn rename_passage_tag(
+        &mut self,
+        story_id: &str,
+        old_name: &str,
+        new_name: String,
+    ) -> Result<Vec<Patch>, CoreError> {
+        let story = self.story_mut(story_id)?;
+        let mut patches = Vec::new();
+
+        for passage in story.passages.iter_mut() {
+            if passage.tags.iter().any(|tag| tag == old_name) {
+                passage.tags = passage
+                    .tags
+                    .iter()
+                    .map(|tag| {
+                        if tag == old_name {
+                            new_name.clone()
+                        } else {
+                            tag.clone()
+                        }
+                    })
+                    .collect();
+                patches.push(Patch::PassageUpdated {
+                    changes: PassagePatch {
+                        tags: Some(passage.tags.clone()),
+                        ..PassagePatch::default()
+                    },
+                    passage_id: passage.id.as_ref().to_owned(),
+                    story_id: story_id.to_owned(),
+                });
+            }
+        }
+
+        if !patches.is_empty() && story.tag_colors.contains_key(old_name) {
+            let mut tag_colors = story.tag_colors.clone();
+
+            if let Some(color) = tag_colors.remove(old_name) {
+                tag_colors.insert(new_name, color);
+            }
+
+            story.tag_colors = tag_colors.clone();
+            patches.push(Patch::StoryMetadataUpdated {
+                changes: StoryMetadataPatch {
+                    tag_colors: Some(tag_colors),
+                    ..StoryMetadataPatch::default()
+                },
+                story_id: story_id.to_owned(),
+            });
+        }
+
+        Ok(patches)
+    }
+
+    fn rename_story_tag(
+        &mut self,
+        old_name: &str,
+        new_name: String,
+    ) -> Result<Vec<Patch>, CoreError> {
+        let mut patches = Vec::new();
+
+        for story in &mut self.project.stories {
+            if story.tags.iter().any(|tag| tag == old_name) {
+                story.tags = story
+                    .tags
+                    .iter()
+                    .map(|tag| {
+                        if tag == old_name {
+                            new_name.clone()
+                        } else {
+                            tag.clone()
+                        }
+                    })
+                    .collect();
+                patches.push(Patch::StoryMetadataUpdated {
+                    changes: StoryMetadataPatch {
+                        tags: Some(story.tags.clone()),
+                        ..StoryMetadataPatch::default()
+                    },
+                    story_id: story.id.as_ref().to_owned(),
+                });
+            }
+        }
+
+        Ok(patches)
     }
 
     fn set_story_format(
@@ -1763,12 +2108,23 @@ impl ProjectSession {
         {
             let story = self.story_mut(story_id)?;
 
-            story.story_format = story_format;
-            story.story_format_version = story_format_version;
+            if story.story_format == story_format
+                && story.story_format_version == story_format_version
+            {
+                return Ok(Vec::new());
+            }
+
+            story.story_format = story_format.clone();
+            story.story_format_version = story_format_version.clone();
         }
 
-        Ok(vec![Patch::ProjectSnapshotReplaced {
-            snapshot: self.snapshot(),
+        Ok(vec![Patch::StoryMetadataUpdated {
+            changes: StoryMetadataPatch {
+                story_format: Some(story_format),
+                story_format_version: Some(story_format_version),
+                ..StoryMetadataPatch::default()
+            },
+            story_id: story_id.to_owned(),
         }])
     }
 
@@ -1780,11 +2136,72 @@ impl ProjectSession {
         {
             let story = self.story_mut(story_id)?;
 
+            if story.snap_to_grid == enabled {
+                return Ok(Vec::new());
+            }
+
             story.snap_to_grid = enabled;
         }
 
-        Ok(vec![Patch::ProjectSnapshotReplaced {
-            snapshot: self.snapshot(),
+        Ok(vec![Patch::StoryMetadataUpdated {
+            changes: StoryMetadataPatch {
+                snap_to_grid: Some(enabled),
+                ..StoryMetadataPatch::default()
+            },
+            story_id: story_id.to_owned(),
+        }])
+    }
+
+    fn set_story_tag_color(
+        &mut self,
+        story_id: &str,
+        name: String,
+        color: Option<String>,
+    ) -> Result<Vec<Patch>, CoreError> {
+        let story = self.story_mut(story_id)?;
+        let mut tag_colors = story.tag_colors.clone();
+
+        match color {
+            Some(color) => {
+                tag_colors.insert(name, color);
+            }
+            None => {
+                tag_colors.remove(&name);
+            }
+        }
+
+        if story.tag_colors == tag_colors {
+            return Ok(Vec::new());
+        }
+
+        story.tag_colors = tag_colors.clone();
+        Ok(vec![Patch::StoryMetadataUpdated {
+            changes: StoryMetadataPatch {
+                tag_colors: Some(tag_colors),
+                ..StoryMetadataPatch::default()
+            },
+            story_id: story_id.to_owned(),
+        }])
+    }
+
+    fn set_story_tags(
+        &mut self,
+        story_id: &str,
+        tags: Vec<String>,
+    ) -> Result<Vec<Patch>, CoreError> {
+        let story = self.story_mut(story_id)?;
+
+        if story.tags == tags {
+            return Ok(Vec::new());
+        }
+
+        story.tags = tags.clone();
+        Ok(vec![Patch::StoryMetadataUpdated {
+            changes: StoryMetadataPatch {
+                tags: Some(tags),
+                ..StoryMetadataPatch::default()
+            },
+            story_id: story_id.to_owned(),
         }])
     }
 
@@ -1792,11 +2209,19 @@ impl ProjectSession {
         {
             let story = self.story_mut(story_id)?;
 
+            if (story.zoom - zoom).abs() <= f64::EPSILON {
+                return Ok(Vec::new());
+            }
+
             story.zoom = zoom;
         }
 
-        Ok(vec![Patch::ProjectSnapshotReplaced {
-            snapshot: self.snapshot(),
+        Ok(vec![Patch::StoryMetadataUpdated {
+            changes: StoryMetadataPatch {
+                zoom: Some(zoom),
+                ..StoryMetadataPatch::default()
+            },
+            story_id: story_id.to_owned(),
         }])
     }
 
@@ -2629,6 +3054,144 @@ impl ProjectSession {
             story_id: story_id.to_owned(),
             stylesheet,
         }])
+    }
+}
+
+fn project_diff_patches(before: &Project, after: &Project) -> Vec<Patch> {
+    let before_by_id = before
+        .stories
+        .iter()
+        .map(|story| (story.id.as_ref().to_owned(), story))
+        .collect::<BTreeMap<_, _>>();
+    let after_by_id = after
+        .stories
+        .iter()
+        .map(|story| (story.id.as_ref().to_owned(), story))
+        .collect::<BTreeMap<_, _>>();
+    let mut patches = Vec::new();
+
+    for (story_id, before_story) in &before_by_id {
+        match after_by_id.get(story_id) {
+            Some(after_story) => patches.extend(story_diff_patches(before_story, after_story)),
+            None => patches.push(Patch::StoryDeleted {
+                story_id: story_id.clone(),
+            }),
+        }
+    }
+
+    for (story_id, after_story) in &after_by_id {
+        if !before_by_id.contains_key(story_id) {
+            patches.push(Patch::StoryCreated {
+                story: StorySnapshot::from(*after_story),
+            });
+        }
+    }
+
+    patches
+}
+
+fn story_diff_patches(before: &Story, after: &Story) -> Vec<Patch> {
+    let story_id = after.id.as_ref().to_owned();
+    let before_by_id = before
+        .passages
+        .iter()
+        .map(|passage| (passage.id.as_ref().to_owned(), passage))
+        .collect::<BTreeMap<_, _>>();
+    let after_by_id = after
+        .passages
+        .iter()
+        .map(|passage| (passage.id.as_ref().to_owned(), passage))
+        .collect::<BTreeMap<_, _>>();
+    let mut patches = Vec::new();
+
+    for (passage_id, before_passage) in &before_by_id {
+        match after_by_id.get(passage_id) {
+            Some(after_passage) => {
+                let changes = passage_diff_patch(before_passage, after_passage);
+
+                if !passage_patch_is_empty(&changes) {
+                    patches.push(Patch::PassageUpdated {
+                        changes,
+                        passage_id: passage_id.clone(),
+                        story_id: story_id.clone(),
+                    });
+                }
+            }
+            None => patches.push(Patch::PassageDeleted {
+                passage_id: passage_id.clone(),
+                story_id: story_id.clone(),
+            }),
+        }
+    }
+
+    for (passage_id, after_passage) in &after_by_id {
+        if !before_by_id.contains_key(passage_id) {
+            patches.push(Patch::PassageCreated {
+                passage: PassageSnapshot::from(*after_passage),
+                story_id: story_id.clone(),
+            });
+        }
+    }
+
+    if before.start_passage != after.start_passage {
+        patches.push(Patch::StartPassageChanged {
+            passage_id: after.start_passage.as_ref().to_owned(),
+            story_id: story_id.clone(),
+        });
+    }
+
+    let metadata = story_metadata_diff_patch(before, after);
+
+    if !metadata.is_empty() {
+        patches.push(Patch::StoryMetadataUpdated {
+            changes: metadata,
+            story_id: story_id.clone(),
+        });
+    }
+
+    if before.script != after.script {
+        patches.push(Patch::StoryScriptUpdated {
+            script: after.script.clone(),
+            story_id: story_id.clone(),
+        });
+    }
+
+    if before.stylesheet != after.stylesheet {
+        patches.push(Patch::StoryStylesheetUpdated {
+            story_id,
+            stylesheet: after.stylesheet.clone(),
+        });
+    }
+
+    patches
+}
+
+fn passage_diff_patch(before: &Passage, after: &Passage) -> PassagePatch {
+    PassagePatch {
+        layout: (before.layout != after.layout)
+            .then(|| after.layout.map(CoreRect::from))
+            .flatten(),
+        name: (before.name != after.name).then(|| after.name.clone()),
+        tags: (before.tags != after.tags).then(|| after.tags.clone()),
+        text: (before.text != after.text).then(|| after.text.clone()),
+    }
+}
+
+fn passage_patch_is_empty(patch: &PassagePatch) -> bool {
+    patch.layout.is_none() && patch.name.is_none() && patch.tags.is_none() && patch.text.is_none()
+}
+
+fn story_metadata_diff_patch(before: &Story, after: &Story) -> StoryMetadataPatch {
+    StoryMetadataPatch {
+        name: (before.name != after.name).then(|| after.name.clone()),
+        snap_to_grid: (before.snap_to_grid != after.snap_to_grid).then_some(after.snap_to_grid),
+        story_format: (before.story_format != after.story_format)
+            .then(|| after.story_format.clone()),
+        story_format_version: (before.story_format_version != after.story_format_version)
+            .then(|| after.story_format_version.clone()),
+        tag_colors: (before.tag_colors != after.tag_colors).then(|| after.tag_colors.clone()),
+        tags: (before.tags != after.tags).then(|| after.tags.clone()),
+        zoom: ((before.zoom - after.zoom).abs() > f64::EPSILON).then_some(after.zoom),
     }
 }
 
@@ -4186,6 +4749,56 @@ mod tests {
         bytes
     }
 
+    fn touched_story_ids(patches: &[Patch]) -> BTreeSet<String> {
+        patches
+            .iter()
+            .filter_map(|patch| match patch {
+                Patch::AssetDeleted { story_id, .. }
+                | Patch::AssetImported { story_id, .. }
+                | Patch::AssetInventoryUpdated { story_id, .. }
+                | Patch::AssetRenamed { story_id, .. }
+                | Patch::AssetReplaced { story_id, .. }
+                | Patch::AssetRevealed { story_id, .. }
+                | Patch::AssetSnippetCopied { story_id, .. }
+                | Patch::AssetSnippetInserted { story_id, .. }
+                | Patch::GraphProjectionUpdated { story_id, .. }
+                | Patch::LayoutSaved { story_id, .. }
+                | Patch::PassageCreated { story_id, .. }
+                | Patch::PassageDeleted { story_id, .. }
+                | Patch::PassageUpdated { story_id, .. }
+                | Patch::StartPassageChanged { story_id, .. }
+                | Patch::StoryDeleted { story_id }
+                | Patch::StoryIndexUpdated { story_id, .. }
+                | Patch::StoryMetadataUpdated { story_id, .. }
+                | Patch::StoryScriptUpdated { story_id, .. }
+                | Patch::StoryStylesheetUpdated { story_id, .. } => Some(story_id.clone()),
+                Patch::StoryCreated { story } => Some(story.id.clone()),
+                Patch::DirtyStateChanged { .. } | Patch::ProjectSnapshotReplaced { .. } => None,
+            })
+            .collect()
+    }
+
+    fn touched_passage_ids(patches: &[Patch]) -> BTreeSet<String> {
+        patches
+            .iter()
+            .filter_map(|patch| match patch {
+                Patch::PassageCreated { passage, .. } => Some(passage.id.clone()),
+                Patch::PassageDeleted { passage_id, .. }
+                | Patch::PassageUpdated { passage_id, .. } => Some(passage_id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn assert_no_snapshot_replacement(patches: &[Patch]) {
+        assert!(
+            !patches
+                .iter()
+                .any(|patch| matches!(patch, Patch::ProjectSnapshotReplaced { .. })),
+            "patch batch should not contain ProjectSnapshotReplaced: {patches:#?}"
+        );
+    }
+
     #[test]
     fn applies_text_edit_as_minimal_patch() {
         let mut session = session();
@@ -4200,6 +4813,15 @@ mod tests {
         assert_eq!(batch.label, "Update Passage Text");
         assert!(session.dirty());
         assert_eq!(batch.patches.len(), 2);
+        assert_no_snapshot_replacement(&batch.patches);
+        assert_eq!(
+            touched_story_ids(&batch.patches),
+            BTreeSet::from(["story-1".into()])
+        );
+        assert_eq!(
+            touched_passage_ids(&batch.patches),
+            BTreeSet::from(["b".into()])
+        );
         assert_eq!(
             batch.patches[0],
             Patch::PassageUpdated {
@@ -4429,10 +5051,124 @@ mod tests {
         assert!(!story.snap_to_grid);
         assert_eq!(story.zoom, 0.6);
         assert_eq!(zoom_batch.label, "Set Story Zoom");
-        assert!(matches!(
+        assert_eq!(
             zoom_batch.patches[0],
-            Patch::ProjectSnapshotReplaced { .. }
-        ));
+            Patch::StoryMetadataUpdated {
+                changes: StoryMetadataPatch {
+                    zoom: Some(0.6),
+                    ..StoryMetadataPatch::default()
+                },
+                story_id: "story-1".into(),
+            }
+        );
+        assert_no_snapshot_replacement(&zoom_batch.patches);
+        assert_eq!(
+            touched_story_ids(&zoom_batch.patches),
+            BTreeSet::from(["story-1".into()])
+        );
+        assert!(touched_passage_ids(&zoom_batch.patches).is_empty());
+    }
+
+    #[test]
+    fn generic_passage_update_returns_only_touched_passage_patch() {
+        let mut session = session();
+        let batch = session
+            .apply(StoryCommand::UpdatePassage {
+                changes: PassagePatch {
+                    layout: Some(CoreRect {
+                        height: 120.0,
+                        left: 15.0,
+                        top: 25.0,
+                        width: 180.0,
+                    }),
+                    tags: Some(vec!["scene".into()]),
+                    ..PassagePatch::default()
+                },
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                update_references: true,
+            })
+            .expect("generic passage update should apply");
+
+        assert_no_snapshot_replacement(&batch.patches);
+        assert_eq!(
+            touched_story_ids(&batch.patches),
+            BTreeSet::from(["story-1".into()])
+        );
+        assert_eq!(
+            touched_passage_ids(&batch.patches),
+            BTreeSet::from(["a".into()])
+        );
+        assert!(batch.patches.iter().any(|patch| {
+            matches!(
+                patch,
+                Patch::PassageUpdated {
+                    changes: PassagePatch {
+                        layout: Some(_),
+                        ..
+                    },
+                    passage_id,
+                    ..
+                } if passage_id == "a"
+            )
+        }));
+    }
+
+    #[test]
+    fn undo_redo_return_touched_id_patches_only() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "b".into(),
+                text: "Changed".into(),
+            })
+            .expect("text update should apply");
+
+        let undo = session.undo().expect("undo should be available");
+        assert_no_snapshot_replacement(&undo.patches);
+        assert_eq!(
+            touched_story_ids(&undo.patches),
+            BTreeSet::from(["story-1".into()])
+        );
+        assert_eq!(
+            touched_passage_ids(&undo.patches),
+            BTreeSet::from(["b".into()])
+        );
+        assert_eq!(
+            undo.patches[0],
+            Patch::PassageUpdated {
+                changes: PassagePatch {
+                    text: Some("[[Missing]]".into()),
+                    ..PassagePatch::default()
+                },
+                passage_id: "b".into(),
+                story_id: "story-1".into(),
+            }
+        );
+
+        let redo = session.redo().expect("redo should be available");
+        assert_no_snapshot_replacement(&redo.patches);
+        assert_eq!(
+            touched_story_ids(&redo.patches),
+            BTreeSet::from(["story-1".into()])
+        );
+        assert_eq!(
+            touched_passage_ids(&redo.patches),
+            BTreeSet::from(["b".into()])
+        );
+        assert_eq!(
+            redo.patches[0],
+            Patch::PassageUpdated {
+                changes: PassagePatch {
+                    text: Some("Changed".into()),
+                    ..PassagePatch::default()
+                },
+                passage_id: "b".into(),
+                story_id: "story-1".into(),
+            }
+        );
     }
 
     #[test]

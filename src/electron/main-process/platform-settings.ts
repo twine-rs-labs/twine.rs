@@ -141,7 +141,10 @@ export async function updateNativeAppPlatformSettings(
 		updates.push(
 			setAppPref(
 				'backupCadenceMinutes',
-				Math.max(5, Math.min(24 * 60, Math.round(settings.backupCadenceMinutes)))
+				Math.max(
+					5,
+					Math.min(24 * 60, Math.round(settings.backupCadenceMinutes))
+				)
 			)
 		);
 	}
@@ -174,7 +177,10 @@ export async function updateNativeAppPlatformSettings(
 	}
 
 	if (settings.cacheCleanupDays !== undefined) {
-		const days = Math.max(1, Math.min(365, Math.round(settings.cacheCleanupDays)));
+		const days = Math.max(
+			1,
+			Math.min(365, Math.round(settings.cacheCleanupDays))
+		);
 
 		updates.push(setAppPref('scratchFileCleanupAge', days * 24 * 60));
 	}

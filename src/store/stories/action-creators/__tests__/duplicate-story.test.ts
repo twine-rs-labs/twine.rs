@@ -79,7 +79,9 @@ describe('duplicateStory action creator', () => {
 
 		const startPassageName = story.passages[2].name;
 		const result = duplicateStory(story, [story]);
-		const duplicatedStartPassage = result.props.passages?.find(({name}) => name === startPassageName);
+		const duplicatedStartPassage = result.props.passages?.find(
+			({name}) => name === startPassageName
+		);
 
 		expect(duplicatedStartPassage).not.toBeUndefined();
 		expect(result.props.startPassage).toBe(duplicatedStartPassage!.id);

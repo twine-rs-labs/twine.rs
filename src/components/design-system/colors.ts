@@ -22,4 +22,3 @@ export const hueToToken: Record<DesignSystemHue, string> = {
 export function colorToCss(color: string) {
 	return hueToToken[color as DesignSystemHue] ?? color;
 }
-

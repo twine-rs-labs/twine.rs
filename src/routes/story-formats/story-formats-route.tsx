@@ -63,7 +63,8 @@ function filteredFormatList(
 		case 'dev':
 			return formats.filter(
 				format =>
-					format.loadState === 'loaded' && !!format.properties.twineRs?.development
+					format.loadState === 'loaded' &&
+					!!format.properties.twineRs?.development
 			);
 
 		case 'failed':
@@ -158,7 +159,10 @@ export const StoryFormatsRoute: React.FC = () => {
 		kind: 'idle',
 		message: 'Ready'
 	});
-	const sortedFormats = React.useMemo(() => sortFormats([...formats]), [formats]);
+	const sortedFormats = React.useMemo(
+		() => sortFormats([...formats]),
+		[formats]
+	);
 	const visibleFormats = React.useMemo(
 		() => filteredFormatList(sortedFormats, filter),
 		[filter, sortedFormats]
@@ -171,14 +175,16 @@ export const StoryFormatsRoute: React.FC = () => {
 		? capabilityEntries(selectedFormat)
 		: [];
 	const selectedStatus = selectedFormat ? status(selectedFormat) : undefined;
-	const selectedSafety = selectedFormat ? loadedSafety(selectedFormat) : undefined;
+	const selectedSafety = selectedFormat
+		? loadedSafety(selectedFormat)
+		: undefined;
 	const selectedDevelopment =
 		selectedFormat?.loadState === 'loaded'
 			? selectedFormat.properties.twineRs?.development
 			: undefined;
 	const selectedModules =
 		selectedFormat?.loadState === 'loaded'
-			? selectedFormat.properties.twineRs?.modules ?? []
+			? (selectedFormat.properties.twineRs?.modules ?? [])
 			: [];
 	const editorExtensionsDisabled = selectedFormat
 		? prefs.disabledStoryFormatEditorExtensions.some(
@@ -219,17 +225,21 @@ export const StoryFormatsRoute: React.FC = () => {
 	}
 
 	function setDefault(format: StoryFormat) {
-		prefsDispatch(setPref('storyFormat', {
-			name: format.name,
-			version: format.version
-		}));
+		prefsDispatch(
+			setPref('storyFormat', {
+				name: format.name,
+				version: format.version
+			})
+		);
 	}
 
 	function setProofing(format: StoryFormat) {
-		prefsDispatch(setPref('proofingFormat', {
-			name: format.name,
-			version: format.version
-		}));
+		prefsDispatch(
+			setPref('proofingFormat', {
+				name: format.name,
+				version: format.version
+			})
+		);
 	}
 
 	function setEditorExtensionsEnabled(format: StoryFormat, enabled: boolean) {
@@ -314,7 +324,10 @@ export const StoryFormatsRoute: React.FC = () => {
 	return (
 		<FormatLoader block={false}>
 			<div className="story-formats-route">
-				<aside className="story-formats-route__filters" aria-label="Format filters">
+				<aside
+					className="story-formats-route__filters"
+					aria-label="Format filters"
+				>
 					{filters.map(candidate => (
 						<button
 							aria-current={candidate.id === filter}
@@ -330,7 +343,10 @@ export const StoryFormatsRoute: React.FC = () => {
 						</button>
 					))}
 				</aside>
-				<section className="story-formats-route__list" aria-label="Story formats">
+				<section
+					className="story-formats-route__list"
+					aria-label="Story formats"
+				>
 					<div className="story-formats-route__add">
 						<Input
 							aria-label="Story format URL"
@@ -390,7 +406,8 @@ export const StoryFormatsRoute: React.FC = () => {
 											{format.userAdded && <Badge tone="tag">Custom</Badge>}
 										</div>
 										<div className="story-formats-route__meta">
-											v{format.version} · {format.userAdded ? 'user-added' : 'built in'}
+											v{format.version} ·{' '}
+											{format.userAdded ? 'user-added' : 'built in'}
 										</div>
 									</div>
 									<TablerIcon icon={formatStatus.icon} />
@@ -419,7 +436,10 @@ export const StoryFormatsRoute: React.FC = () => {
 						);
 					})}
 				</section>
-				<aside className="story-formats-route__detail" aria-label="Format details">
+				<aside
+					className="story-formats-route__detail"
+					aria-label="Format details"
+				>
 					{selectedFormat && selectedStatus ? (
 						<>
 							<div className="story-formats-route__detail-top">
@@ -446,7 +466,9 @@ export const StoryFormatsRoute: React.FC = () => {
 							{selectedCapabilities.map(([label, enabled]) => (
 								<div className="story-formats-route__row" key={label}>
 									<TablerIcon icon={enabled ? 'circle-check' : 'circle'} />
-									<span className="story-formats-route__row-label">{label}</span>
+									<span className="story-formats-route__row-label">
+										{label}
+									</span>
 									<span className="story-formats-route__row-value">
 										{enabled ? 'Supported' : '-'}
 									</span>
@@ -517,9 +539,7 @@ export const StoryFormatsRoute: React.FC = () => {
 								</span>
 							</div>
 							<div className="story-formats-route__row">
-								<span className="story-formats-route__row-label">
-									Dev loop
-								</span>
+								<span className="story-formats-route__row-label">Dev loop</span>
 								<span
 									className={`story-formats-route__row-value story-formats-route__row-value--${devLoopStatus.kind}`}
 								>
@@ -581,7 +601,9 @@ export const StoryFormatsRoute: React.FC = () => {
 								{selectedFormat.userAdded && (
 									<Button
 										icon="trash"
-										onClick={() => formatsDispatch(deleteFormat(selectedFormat))}
+										onClick={() =>
+											formatsDispatch(deleteFormat(selectedFormat))
+										}
 										variant="danger"
 									>
 										Remove Format

@@ -30,7 +30,6 @@ describe('<TagStripe>', () => {
 		expect(screen.getByTitle('tag-2')).toBeInTheDocument();
 	});
 
-
 	it('is accessible', async () => {
 		const {container} = renderComponent();
 

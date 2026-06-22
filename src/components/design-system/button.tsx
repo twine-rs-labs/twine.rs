@@ -6,8 +6,7 @@ import './design-system.css';
 export type ButtonVariant = 'primary' | 'default' | 'ghost' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
-export interface ButtonProps
-	extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 	children?: React.ReactNode;
 	variant?: ButtonVariant;
 	size?: ButtonSize;

@@ -419,7 +419,9 @@ function packageArchive(
 function htmlInspection(story: Story, html: string, assets: StoryBuildAsset[]) {
 	const storyDataCount = (html.match(/<tw-storydata\b/g) ?? []).length;
 	const passageCount = (html.match(/<tw-passagedata\b/g) ?? []).length;
-	const hasStoryDataGraph = html.includes(`${TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE}=`);
+	const hasStoryDataGraph = html.includes(
+		`${TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE}=`
+	);
 
 	return [
 		`HTML inspection for ${story.name}`,
@@ -436,7 +438,11 @@ function htmlInspection(story: Story, html: string, assets: StoryBuildAsset[]) {
 	].join('\n');
 }
 
-function sourceInspection(story: Story, twee: string, assets: StoryBuildAsset[]) {
+function sourceInspection(
+	story: Story,
+	twee: string,
+	assets: StoryBuildAsset[]
+) {
 	return [
 		`Source inspection for ${story.name}`,
 		'',

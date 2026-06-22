@@ -27,7 +27,10 @@ export function useCodeMirrorPassageHints(story: Story) {
 					let startIndex = line.lastIndexOf('->', from.ch);
 
 					if (startIndex === -1) {
-						startIndex = Math.max(line.lastIndexOf('[', from.ch), line.lastIndexOf('|', from.ch));
+						startIndex = Math.max(
+							line.lastIndexOf('[', from.ch),
+							line.lastIndexOf('|', from.ch)
+						);
 					} else {
 						// We matched an arrow and need to move one character forward to
 						// match the behavior of searching for a single bracket.

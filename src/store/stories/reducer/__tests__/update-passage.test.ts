@@ -56,7 +56,6 @@ describe('Story reducer updatePassage action handler', () => {
 		expect(result[0].lastUpdate).toBe(oldDate);
 	});
 
-
 	it('issues a warning and makes no changes if another passage has the name being updated to', () => {
 		story.passages.push(fakePassage());
 

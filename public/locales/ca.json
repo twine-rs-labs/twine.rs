@@ -1,13 +1,12 @@
 {
 	"colors": {
-	        "none": "Cap color",
+		"none": "Cap color",
 		"red": "Vermell",
 		"orange": "Carabassa",
 		"yellow": "Groc",
 		"green": "Verd",
 		"blue": "Blau",
 		"purple": "Morat"
-
 	},
 	"common": {
 		"add": "Afegeix",

@@ -79,8 +79,7 @@ function matchesModifier(
 	platform: Platform
 ) {
 	if (shortcut.primaryKey) {
-		const primaryPressed =
-			platform === 'mac' ? event.metaKey : event.ctrlKey;
+		const primaryPressed = platform === 'mac' ? event.metaKey : event.ctrlKey;
 		const alternatePrimaryPressed =
 			platform === 'mac' ? event.ctrlKey : event.metaKey;
 
