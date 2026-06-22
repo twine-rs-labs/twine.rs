@@ -113,30 +113,30 @@ body.dragging-passages .story-edit-route * {
 
 .story-edit-graph-layer {
 	background:
-		radial-gradient(
-			circle at 18% 12%,
-			color-mix(in oklab, var(--sem-link-soft) 42%, transparent) 0,
-			transparent 28%
-		),
 		linear-gradient(
-			135deg,
-			color-mix(in oklab, var(--ink-2) 82%, transparent),
-			var(--bg-app) 55%,
-			var(--ink-void)
+			180deg,
+			color-mix(in oklab, var(--ink-2) 80%, transparent),
+			color-mix(in oklab, var(--bg-app) 96%, var(--ink-void))
 		),
-		linear-gradient(var(--line-1) 1px, transparent 1px),
-		linear-gradient(90deg, var(--line-1) 1px, transparent 1px),
 		radial-gradient(
-			color-mix(in oklab, var(--tx-4) 28%, transparent) 1px,
-			transparent 1px
+			circle,
+			color-mix(in oklab, var(--tx-4) 35%, transparent) 1px,
+			transparent 1.4px
+		),
+		radial-gradient(
+			circle,
+			color-mix(in oklab, var(--line-2) 55%, transparent) 1px,
+			transparent 1.4px
 		);
-	background-blend-mode: screen, normal, normal, normal, normal;
+	background-blend-mode: normal, normal, screen;
+	background-position:
+		0 0,
+		0 0,
+		16px 16px;
 	background-size:
 		100% 100%,
-		100% 100%,
-		48px 48px,
-		48px 48px,
-		16px 16px;
+		32px 32px,
+		32px 32px;
 	bottom: var(--story-edit-bottom-offset);
 	color: var(--tx-2);
 	left: var(--story-edit-left-offset);
@@ -219,12 +219,56 @@ body.dragging-passages .story-edit-route * {
 }
 
 .story-edit-graph-node {
+	box-sizing: border-box;
 	position: absolute;
 }
 
 .story-edit-graph-node .tw-node {
-	min-height: 100px;
+	box-sizing: border-box;
+	height: 100%;
+	min-height: 0;
 	width: 100%;
+}
+
+.story-edit-graph-node .tw-node__body {
+	display: flex;
+	flex-direction: column;
+	height: calc(100% - 3px);
+	min-height: 0;
+	overflow: hidden;
+}
+
+.story-edit-graph-node .tw-node__excerpt {
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+.story-edit-graph-node .tw-node__foot,
+.story-edit-graph-node .tw-node__tags {
+	flex: 0 0 auto;
+}
+
+.story-edit-graph-node--compact .tw-node__body {
+	padding: 7px 9px 8px;
+}
+
+.story-edit-graph-node--compact .tw-node__excerpt {
+	-webkit-line-clamp: 1;
+	margin-top: 3px;
+}
+
+.story-edit-graph-node--compact .tw-node__tags {
+	display: none;
+}
+
+.story-edit-graph-node--compact .tw-node__foot {
+	margin-top: 5px;
+}
+
+.story-edit-graph-node--tiny .tw-node__excerpt,
+.story-edit-graph-node--tiny .tw-node__foot,
+.story-edit-graph-node--tiny .tw-node__tags {
+	display: none;
 }
 
 .story-edit-graph-node__resize {

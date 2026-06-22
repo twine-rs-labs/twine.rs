@@ -53,6 +53,30 @@ export const reducer: React.Reducer<PrefsState, PrefsAction> = (
 						return {...result, [prefKey]: value};
 					}
 
+					if (
+						key === 'preferredStoryEditMode' &&
+						!['auto', 'text', 'graph', 'split'].includes(
+							state[prefKey] as string
+						)
+					) {
+						console.info(
+							`Repairing preference "${key}" by setting it to ${value}, was ${state[prefKey]} (not a valid value)`
+						);
+						return {...result, [prefKey]: value};
+					}
+
+					if (
+						key === 'graphDefaultCardSize' &&
+						!['small', 'medium', 'large', 'tall', 'wide'].includes(
+							state[prefKey] as string
+						)
+					) {
+						console.info(
+							`Repairing preference "${key}" by setting it to ${value}, was ${state[prefKey]} (not a valid value)`
+						);
+						return {...result, [prefKey]: value};
+					}
+
 					return result;
 				},
 				{}

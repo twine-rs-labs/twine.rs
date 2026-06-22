@@ -317,11 +317,15 @@ layout save flows through the host.
 
 Implementation note (2026-06-21): the DS graph now includes immediate
 pointer-down selection feedback, shift/ctrl/meta additive selection, group drag
-from the current selection, live edge/arrow geometry while nodes move, one-shot
-selection centering that no longer fights ordinary scrolling, and a draggable
-minimap preview for graph navigation. A later pass moved dense edge rendering to
-Canvas2D and added a 10k-passage viewport-bounded projection test; 50k
-browser-level interaction traces remain a core performance follow-up.
+from the current selection, live edge/arrow geometry while nodes move or resize,
+actual passage-size edge anchors, rotated edge anchors for top-to-bottom /
+right-to-left / bottom-to-top views, one-shot selection centering that no longer
+fights ordinary scrolling, and a draggable minimap preview for graph navigation.
+The graph surface has returned to a dot-grid map texture, and the default graph
+card size is now a real Settings preference instead of a private route-local
+value. A later pass moved dense edge rendering to Canvas2D and added a
+10k-passage viewport-bounded projection test; 50k browser-level interaction
+traces remain a core performance follow-up.
 
 Depends on: D4; Rust `QueryGraphProjection`.
 
@@ -398,9 +402,15 @@ capability/fidelity/output panels, missing-asset and publish-safety warnings, an
 build output logs. A follow-up D7 pass added `/settings`, native story-library
 folder controls, accessibility toggles, default project/asset folders, a
 compatibility export target, source/HTML inspection targets, and project-fidelity
-StoryData graph package carriers. Remaining advanced Build/Settings work is streamed
-logs, archive/project-folder packaging beyond the current descriptor, diagnostic
-promotion, and fully retiring the legacy App Prefs dialog compatibility surface.
+StoryData graph package carriers. The D7 Settings pass now presents the full
+target section set — General, Workspace, Modes, Graph, Editors, Accessibility,
+Keyboard, Storage, Backups, Story Formats, Build, Integrations, Platform, and
+About — with native story-library controls, preferred editor mode, default graph
+card size, generated-layout save behavior, default story/proofing formats, and
+platform/storage status in the DS shell. Remaining advanced Build/Settings work
+is streamed logs, archive/project-folder packaging beyond the current descriptor,
+diagnostic promotion, deeper backup/revision-control automation, and fully
+retiring the legacy App Prefs dialog compatibility surface.
 
 Exit criteria: build and settings are DS screens; App Prefs dialog retired as a
 primary path, with any remaining legacy compatibility surface isolated for

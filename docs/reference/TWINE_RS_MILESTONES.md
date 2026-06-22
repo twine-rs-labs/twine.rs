@@ -182,6 +182,15 @@ Current limits: settings are too shallow for a serious desktop/source project ap
 
 What `twine.rs` should look like: Settings should be a large structured screen with General, Workspace, Editor, Graph, Modes, Accessibility, Keyboard Shortcuts, Storage, Backups, Story Formats, Build, Integrations, Platform, and About. Every reliability and accessibility choice should be findable from search/command palette. Users should be able to set preferred startup mode and decide how generated graph layouts are saved.
 
+Implementation status (advanced 2026-06-21): `/settings` now uses that full
+section set in the DS shell. It wires existing real preferences for theme,
+locale, story-list sort, format filtering, preferred editor startup mode, default
+graph card size, generated-layout save behavior, editor toggles/font scale,
+accessibility, shortcut profile, default project/asset folders, story/proofing
+formats, dialog width, and native story-library folder controls when the desktop
+bridge is present. Platform, storage, backup, build, and integration rows expose
+current status without reviving the App Prefs dialog as the primary path.
+
 ## Target twine.rs Screens: Exact Desired Shape
 
 ### Project Launcher
@@ -396,10 +405,11 @@ Implementation locks after the D5 audit/advance pass:
 
 - **PARTIAL, PRIMARY ROUTE WIRED:** the D5 Workbench graph now queries through
   `QueryGraphProjection`, renders DS `PassageNode`s for projected nodes, draws
-  dense edges on Canvas2D, supports focus/viewport options, and has a
-  10k-passage viewport-bounded projection test. The remaining scale risk is
-  browser-level interaction validation and the Rust/WASM `ProjectSession`
-  bridge.
+  dense edges on Canvas2D, supports focus/viewport options, keeps arrows anchored
+  to actual passage card sizes during move/resize, rotates edge anchors with the
+  view orientation, restores a dot-grid graph background, and has a 10k-passage
+  viewport-bounded projection test. The remaining scale risk is browser-level
+  interaction validation and the Rust/WASM `ProjectSession` bridge.
 - **PARTIAL:** compatibility import/export now preserves normal Twine
   position/size metadata and lifts it into sidecar layout; remaining work is
   end-to-end project-folder parity through the live Rust session.
@@ -594,7 +604,7 @@ M6 splits along an engine/UI seam. The **engine** (Rust contracts plus the TypeS
 - Local format dev workflow (deliverable 3): **PARTIAL** — option types exist and `/formats` surfaces declared dev-server/HMR/local-folder metadata plus URL-added format registration. Remaining gaps: folder picker, dev-server connection health, HMR reload plumbing, source maps/logs, and reload-without-restart controls.
 - Runtime/debug hooks (deliverable 5): **PARTIAL, D8 PREVIEW PASS LANDED** — Play/Test/Proof preview frames now expose app-owned debug strips with target/story/start/html/story-data status, graph/link/diagnostic/asset health metrics from `QueryStoryIndex`, source/graph/build reveal actions, Test From Start, current-passage Test, runtime console/error logs, current-passage observation, reload, and fit/desktop/tablet/phone viewport presets. Variable/state inspection, visited stack, format devtools panels, Electron scratch-window bridge parity, and deeper runtime inspector hooks remain **D8**.
 - H1 (previews on host/query contracts): **PARTIAL, MAJOR HOST PASS LANDED** — previews call `usePublishing()` → `CoreProjectHost` and now render in app-owned iframe surfaces instead of `replaceDom()`; the Play/Test route load loop and Electron JSONP bridge regression were fixed in the D1-D5/M0-M6 cleanup, and source/graph/build reveal plus story-index health affordances are wired from preview frames. A browser `srcDoc` debug bridge now reports current passage, viewport, console output, runtime errors, and DOM-driven passage changes to the preview strip. Deeper variable/state/asset inspection and desktop scratch-window parity remain **D8**.
-- H2 (graph projection): **DONE for D5** — DS graph rendering, viewport/focus query options, generated layout save, explicit reveal-in-graph, immediate pointer-down selection feedback, additive multi-select, group drag, live edge/arrow updates during movement, one-shot selection centering, and minimap panning are wired on the app side. Native/WASM `ProjectSession` bridging remains follow-up.
+- H2 (graph projection): **DONE for D5** — DS graph rendering, viewport/focus query options, generated layout save, explicit reveal-in-graph, immediate pointer-down selection feedback, additive multi-select, group drag, live edge/arrow updates during movement/resizing, actual-size edge anchors, rotated edge anchors, one-shot selection centering, preference-backed default graph card size, and minimap panning are wired on the app side. Native/WASM `ProjectSession` bridging remains follow-up.
 - H3 ("run from here" everywhere): **PARTIAL, MAJOR D8 SURFACES LANDED** — `startId` is plumbed through the build package and native-aware `useStoryLaunch()` path. Test From Here now appears from the text header, graph toolbar, split/right inspector, passage fuzzy-search result actions, standalone Contents and Diagnostics inspectors, asset inspectors/usage contexts, preview Test From Start controls, and preview Test Current once the running iframe reports a passage. Remaining D8 work: command/search panel parity as those panels deepen, variable/state/devtools inspection, and carrying the same runtime bridge into the desktop scratch-window path.
 
 Sequencing implication: **do not build any M6 UI in the legacy shell.** The core-first work is now mostly in place and the primary Build/Formats screens have been promoted into the DS shell; the remaining closures are deeper screen replacement and app integration — **D5** closes H2, **D6** has promoted Contents/Diagnostics/Assets/Formats into the shell and retired legacy Story Formats toolbar access as a primary path, **D7** finishes Settings plus advanced Build/export policy, and **D8** closes H1, H3, and deliverable 5. Full closure map in [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md).

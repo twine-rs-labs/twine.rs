@@ -43,8 +43,8 @@
 .settings-route__grid {
 	display: grid;
 	gap: 14px;
-	grid-template-columns: repeat(2, minmax(280px, 1fr));
-	max-width: 1100px;
+	grid-template-columns: repeat(3, minmax(260px, 1fr));
+	max-width: 1320px;
 }
 
 .settings-route__stack {
@@ -68,6 +68,40 @@
 .settings-route__field > span {
 	color: var(--tx-3);
 	font-size: var(--fs-sm);
+}
+
+.settings-route__status {
+	align-items: center;
+	background: var(--ink-2);
+	border: 1px solid var(--line-1);
+	border-radius: var(--r-sm);
+	display: grid;
+	gap: var(--sp-2);
+	grid-template-columns: 18px minmax(0, 1fr) auto;
+	min-height: 34px;
+	padding: 0 var(--sp-3);
+}
+
+.settings-route__status > .tw-ds-icon {
+	color: var(--tx-4);
+	font-size: 16px;
+}
+
+.settings-route__status span {
+	color: var(--tx-3);
+	font-size: var(--fs-sm);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.settings-route__status b {
+	color: var(--tx-1);
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	font-weight: var(--fw-semibold);
+	white-space: nowrap;
 }
 
 .settings-route__integration {
@@ -102,10 +136,16 @@
 	}
 
 	.settings-route__grid {
-		grid-template-columns: 1fr;
+		grid-template-columns: repeat(2, minmax(260px, 1fr));
 	}
 
 	.settings-route__field {
+		grid-template-columns: 1fr;
+	}
+}
+
+@media (max-width: 900px) {
+	.settings-route__grid {
 		grid-template-columns: 1fr;
 	}
 }

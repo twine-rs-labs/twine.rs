@@ -1,6 +1,10 @@
 import {Color} from '../../util/color';
 import {StoryFormat} from '../story-formats';
 
+export type GraphCardSizePreference = 'large' | 'medium' | 'small' | 'tall' | 'wide';
+
+export type StoryEditModePreference = 'auto' | 'graph' | 'split' | 'text';
+
 export type PrefsAction =
 	| {type: 'init'; state: Partial<PrefsState>}
 	| {
@@ -59,6 +63,14 @@ export interface PrefsState {
 	 */
 	defaultAssetFolder: string;
 	/**
+	 * Default graph card size for newly-created passages and graph resize presets.
+	 */
+	graphDefaultCardSize: GraphCardSizePreference;
+	/**
+	 * Whether generated graph layouts should be treated as explicit save candidates.
+	 */
+	graphGeneratedLayoutSavePrompt: boolean;
+	/**
 	 * Timestamp when the app was first run.
 	 */
 	firstRunTime: number;
@@ -96,6 +108,10 @@ export interface PrefsState {
 	 * cards in the story map.
 	 */
 	passageTagDisplay: 'color' | 'name';
+	/**
+	 * Preferred initial story editor mode. Auto preserves per-story/project logic.
+	 */
+	preferredStoryEditMode: StoryEditModePreference;
 	/**
 	 * Reduce nonessential UI motion.
 	 */

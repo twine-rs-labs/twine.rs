@@ -1,4 +1,6 @@
 import * as React from 'react';
+import {usePrefsContext} from '../../store/prefs';
+import type {StoryEditModePreference} from '../../store/prefs';
 import {Story} from '../../store/stories';
 
 export const storyEditModes = ['text', 'graph', 'split'] as const;
@@ -143,19 +145,24 @@ function firstAvailablePassageId(story: Story, preferredId?: string) {
 export function initialModeForStory(
 	story: Story,
 	projectMode?: StoryEditMode,
-	workspaceMode?: StoryEditMode
+	workspaceMode?: StoryEditMode,
+	preferredMode: StoryEditModePreference = 'auto'
 ): StoryEditMode {
 	if (projectMode) {
 		return projectMode;
 	}
 
-	const preferredMode = preferredModeForStory(story);
-
-	if (preferredMode === 'text') {
+	if (preferredMode !== 'auto') {
 		return preferredMode;
 	}
 
-	return workspaceMode ?? preferredMode;
+	const storyPreferredMode = preferredModeForStory(story);
+
+	if (storyPreferredMode === 'text') {
+		return storyPreferredMode;
+	}
+
+	return workspaceMode ?? storyPreferredMode;
 }
 
 export function setStoryEditScrollMemory(
@@ -210,6 +217,7 @@ export function useStoryEditScrollMemory(
 }
 
 export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
+	const {prefs} = usePrefsContext();
 	const initialProjectWorkspace = React.useMemo(
 		() => readProjectWorkspace(story.id),
 		[story.id]
@@ -219,7 +227,8 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		initialModeForStory(
 			story,
 			initialProjectWorkspace.mode,
-			initialWorkspace.mode
+			initialWorkspace.mode,
+			prefs.preferredStoryEditMode
 		)
 	);
 	const [selectedPassageId, setSelectedPassageId] = React.useState<
@@ -241,11 +250,18 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		const projectWorkspace = readProjectWorkspace(story.id);
 		const workspace = readWorkspace();
 
-		setMode(initialModeForStory(story, projectWorkspace.mode, workspace.mode));
+		setMode(
+			initialModeForStory(
+				story,
+				projectWorkspace.mode,
+				workspace.mode,
+				prefs.preferredStoryEditMode
+			)
+		);
 		setSelectedPassageId(
 			firstAvailablePassageId(story, projectWorkspace.selectedPassageId)
 		);
-	}, [story.id]);
+	}, [prefs.preferredStoryEditMode, story.id]);
 
 	React.useEffect(() => {
 		setSelectedPassageId(current => firstAvailablePassageId(story, current));

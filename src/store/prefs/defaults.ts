@@ -11,6 +11,8 @@ export const defaults = (): PrefsState => ({
 	defaultAssetFolder: '',
 	defaultProjectFolder: '',
 	firstRunTime: new Date().getTime(),
+	graphDefaultCardSize: 'medium',
+	graphGeneratedLayoutSavePrompt: true,
 	highContrast: false,
 	keybindingPreset: 'default',
 	lastUpdateSeen: '',
@@ -24,6 +26,7 @@ export const defaults = (): PrefsState => ({
 	passageEditorFontFamily: 'var(--font-ui)',
 	passageEditorFontScale: 1,
 	passageTagDisplay: 'color',
+	preferredStoryEditMode: 'auto',
 	reducedMotion: false,
 	proofingFormat: {
 		name: 'Paperthin',

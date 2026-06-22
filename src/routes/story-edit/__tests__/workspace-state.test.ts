@@ -52,6 +52,18 @@ describe('story edit workspace state', () => {
 		expect(initialModeForStory(story, 'graph', 'text')).toBe('graph');
 	});
 
+	it('uses the preferred editor mode before workspace mode memory', () => {
+		const story = fakeStory();
+
+		story.passages = [
+			fakePassage({height: 100, left: 120, text: 'Once', top: 80, width: 100}),
+			fakePassage({height: 100, left: 320, text: 'Again', top: 80, width: 100})
+		];
+
+		expect(initialModeForStory(story, undefined, 'graph', 'text')).toBe('text');
+		expect(initialModeForStory(story, 'split', 'graph', 'text')).toBe('split');
+	});
+
 	it('opens source-only stories in text mode before workspace mode memory', () => {
 		const story = fakeStory();
 

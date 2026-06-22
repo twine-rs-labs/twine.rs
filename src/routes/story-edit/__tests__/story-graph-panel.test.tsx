@@ -1,6 +1,9 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {StoreCoreProjectHost} from '../../../core/project-host';
+import {defaults as prefsDefaults} from '../../../store/prefs/defaults';
+import {PrefsContext} from '../../../store/prefs';
+import {reducer as prefsReducer} from '../../../store/prefs/reducer';
 import {StoriesContext} from '../../../store/stories';
 import {UndoableStoriesContext} from '../../../store/undoable-stories';
 import {fakePassage, fakeStory} from '../../../test-util';
@@ -59,30 +62,44 @@ function renderComponent(
 	const onTestPassage = jest.fn();
 	const storiesDispatch = jest.fn();
 	const undoableDispatch = jest.fn();
+	const TestProviders: React.FC = ({children}) => {
+		const [prefs, prefsDispatch] = React.useReducer(
+			prefsReducer,
+			prefsDefaults()
+		);
+
+		return (
+			<PrefsContext.Provider value={{dispatch: prefsDispatch, prefs}}>
+				<StoriesContext.Provider
+					value={{dispatch: storiesDispatch, stories: [story]}}
+				>
+					<UndoableStoriesContext.Provider
+						value={{
+							dispatch: undoableDispatch,
+							isUndoable: true,
+							stories: [story]
+						}}
+					>
+						{children}
+					</UndoableStoriesContext.Provider>
+				</StoriesContext.Provider>
+			</PrefsContext.Provider>
+		);
+	};
 	const result = render(
-		<StoriesContext.Provider
-			value={{dispatch: storiesDispatch, stories: [story]}}
-		>
-			<UndoableStoriesContext.Provider
-				value={{
-					dispatch: undoableDispatch,
-					isUndoable: true,
-					stories: [story]
-				}}
-			>
-				<StoryGraphPanel
-					onCreate={onCreate}
-					onDeselect={onDeselect}
-					onEdit={onEdit}
-					onSelect={onSelect}
-					onTestPassage={onTestPassage}
-					selectedPassageId={start.id}
-					story={story}
-					visibleZoom={1}
-					zoom={1}
-				/>
-			</UndoableStoriesContext.Provider>
-		</StoriesContext.Provider>
+		<TestProviders>
+			<StoryGraphPanel
+				onCreate={onCreate}
+				onDeselect={onDeselect}
+				onEdit={onEdit}
+				onSelect={onSelect}
+				onTestPassage={onTestPassage}
+				selectedPassageId={start.id}
+				story={story}
+				visibleZoom={1}
+				zoom={1}
+			/>
+		</TestProviders>
 	);
 
 	return {
@@ -127,6 +144,40 @@ describe('<StoryGraphPanel>', () => {
 		expect(screen.getByTestId('story-graph-edges-canvas')).toHaveAttribute(
 			'data-edge-kinds',
 			expect.stringContaining('broken')
+		);
+	});
+
+	it('anchors link edges to the actual passage card bounds', () => {
+		renderComponent(false, ({next, start}) => {
+			start.height = 92;
+			start.width = 150;
+			next.height = 148;
+			next.left = 210;
+			next.width = 240;
+		});
+
+		expect(screen.getByTestId('story-graph-edges-canvas')).toHaveAttribute(
+			'data-edge-routes',
+			expect.stringContaining('start->next:150,46>210,74')
+		);
+	});
+
+	it('rotates edge anchors with the graph view', () => {
+		renderComponent(false, ({next, start}) => {
+			start.height = 92;
+			start.width = 150;
+			next.height = 148;
+			next.left = 210;
+			next.width = 240;
+		});
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Rotate view: Left to Right'})
+		);
+
+		expect(screen.getByTestId('story-graph-edges-canvas')).toHaveAttribute(
+			'data-edge-routes',
+			expect.stringContaining('start->next:46,150>74,210')
 		);
 	});
 
@@ -355,7 +406,7 @@ describe('<StoryGraphPanel>', () => {
 		);
 	});
 
-	it('applies the default card size to every selected passage', () => {
+	it('applies the default card size to every selected passage', async () => {
 		const {story, undoableDispatch} = renderComponent(false, ({next, start}) => {
 			start.selected = true;
 			next.selected = true;
@@ -364,6 +415,9 @@ describe('<StoryGraphPanel>', () => {
 		fireEvent.change(screen.getByLabelText('Default card size'), {
 			target: {value: 'wide'}
 		});
+		await waitFor(() =>
+			expect(screen.getByLabelText('Default card size')).toHaveValue('wide')
+		);
 		fireEvent.click(screen.getByRole('button', {name: 'Apply'}));
 
 		expect(screen.getByText('2 selected')).toBeInTheDocument();

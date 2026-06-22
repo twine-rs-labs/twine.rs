@@ -124,6 +124,8 @@ export function fakePrefs(overrides?: Partial<PrefsState>): PrefsState {
 		defaultAssetFolder: '',
 		defaultProjectFolder: '',
 		firstRunTime: new Date().getTime(),
+		graphDefaultCardSize: 'medium',
+		graphGeneratedLayoutSavePrompt: true,
 		highContrast: faker.datatype.boolean(),
 		keybindingPreset: 'default',
 		lastUpdateSeen: '',
@@ -132,6 +134,7 @@ export function fakePrefs(overrides?: Partial<PrefsState>): PrefsState {
 		passageEditorFontFamily: faker.lorem.words(2),
 		passageEditorFontScale: 0.8 + faker.number.float(0.5),
 		passageTagDisplay: 'color',
+		preferredStoryEditMode: 'auto',
 		reducedMotion: faker.datatype.boolean(),
 		proofingFormat: {
 			name: faker.lorem.words(2),
