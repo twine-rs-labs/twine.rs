@@ -557,6 +557,10 @@ impl GraphIndex {
             }
         }
 
+        let mut source_ids = source_ids.into_iter().collect::<Vec<_>>();
+
+        source_ids.sort_by_key(|id| self.story_rank.get(id).copied().unwrap_or(usize::MAX));
+
         for source_id in source_ids {
             if focus_ids.is_some_and(|focused_ids| !focused_ids.contains(&source_id)) {
                 continue;

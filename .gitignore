@@ -10,5 +10,6 @@ docs/en/book/*
 /test-results/
 /playwright-report/
 /playwright/.cache/
+src/electron/main-process/native/*.node
 target/
 .local/

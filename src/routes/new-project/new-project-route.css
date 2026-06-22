@@ -198,6 +198,55 @@
 	font-size: var(--fs-xs);
 }
 
+.new-project-route__progress {
+	background: var(--ink-1);
+	border: 1px solid var(--line-1);
+	border-radius: var(--r-sm);
+	display: grid;
+	gap: 8px;
+	margin-top: 12px;
+	padding: 10px 12px;
+}
+
+.new-project-route__progress-copy {
+	align-items: baseline;
+	display: flex;
+	gap: 8px;
+	min-width: 0;
+}
+
+.new-project-route__progress-copy span {
+	color: var(--tx-1);
+	font-size: var(--fs-sm);
+	font-weight: var(--fw-semibold);
+	white-space: nowrap;
+}
+
+.new-project-route__progress-copy b {
+	color: var(--tx-4);
+	font-family: var(--font-mono);
+	font-size: var(--fs-xs);
+	font-weight: var(--fw-regular);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.new-project-route__progress-track {
+	background: var(--ink-void);
+	border-radius: var(--r-pill);
+	height: 4px;
+	overflow: hidden;
+}
+
+.new-project-route__progress-track span {
+	background: linear-gradient(90deg, var(--sem-link), var(--sem-saved));
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+	transition: width var(--dur-3) var(--ease-out);
+}
+
 .new-project-route__review-empty {
 	align-items: center;
 	color: var(--tx-4);

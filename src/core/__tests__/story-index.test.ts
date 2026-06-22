@@ -325,4 +325,47 @@ describe('storyToCoreIndex', () => {
 			sourceName: 'North Hall'
 		});
 	});
+
+	it('can skip rich facets for lean search queries', () => {
+		const story = fakeStory(1);
+
+		story.passages[0].name = 'Start';
+		story.passages[0].text = 'Search $score here. [[Missing]]';
+		story.script = 'const ignored = true;';
+
+		const index = storyToCoreIndex(story, {
+			includeAssets: false,
+			includeContents: false,
+			includeDiagnostics: false,
+			includeFiles: false,
+			includeGraph: false,
+			includePassageNames: false,
+			includeScript: false,
+			includeStylesheet: false,
+			includeTags: false,
+			includeVariables: false,
+			query: '$score'
+		});
+
+		expect(index.assetInventory).toEqual([]);
+		expect(index.assets).toEqual([]);
+		expect(index.contents).toEqual([]);
+		expect(index.diagnostics).toEqual([]);
+		expect(index.files).toEqual([]);
+		expect(index.graph).toEqual({
+			brokenLinks: 0,
+			emptyPassages: 0,
+			links: 0,
+			orphanPassages: 0,
+			passages: 0,
+			resolvedLinks: 0,
+			selfLinks: 0,
+			taggedPassages: 0,
+			unreachablePassages: 0
+		});
+		expect(index.searchHits).toEqual([
+			expect.objectContaining({matchText: '$score', scope: 'passageText'})
+		]);
+		expect(index.symbols).toEqual([]);
+	});
 });

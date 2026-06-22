@@ -13,8 +13,10 @@ import {createUntitledPassage, Story} from '../store/stories';
 export * from './story-index';
 export * from './graph-projection';
 export * from './project-host';
+export * from './project-snapshot';
 export * from './view-models';
 export * from './diagnostic-dismissals';
+export * from './wasm/performance';
 
 export type {
 	CoreGraphProjectionOptions,
@@ -224,6 +226,10 @@ export function queryStoryIndexCommand(
 	options: CoreStoryIndexOptions = {
 		fuzzy: false,
 		includeAssets: true,
+		includeContents: true,
+		includeDiagnostics: true,
+		includeFiles: true,
+		includeGraph: true,
 		includePassageNames: true,
 		includePassageText: true,
 		includeScript: true,

@@ -34,7 +34,7 @@ import {
 import {markProjectStoryHydration} from '../../store/project-hydration';
 import {useStoryFormatsContext} from '../../store/story-formats';
 import {useStoriesRepair} from '../../store/use-stories-repair';
-import {importStories as importStoriesFromHtml} from '../../util/import';
+import {importStoriesAsync as importStoriesFromHtml} from '../../util/import';
 import {
 	markPerformance,
 	measurePerformance,
@@ -52,6 +52,11 @@ interface ImportQueue {
 	preparedImport?: NativeProjectImportSource;
 	stories: Story[];
 	selectedIds: string[];
+}
+
+interface ImportProgress {
+	detail: string;
+	progress: number;
 }
 
 function formatKey(name: string, version: string) {
@@ -146,12 +151,14 @@ function parseAfterIdle<T>(parse: () => T) {
 	);
 }
 
-function parseStoryFile(file: File, source: string) {
-	if (/\.html?$/i.test(file.name)) {
-		return importStoriesFromHtml(source);
-	}
-
-	return [storyFromTwee(source)];
+function waitForPaint() {
+	return new Promise<void>(resolve => {
+		if (typeof window.requestAnimationFrame === 'function') {
+			window.requestAnimationFrame(() => resolve());
+		} else {
+			window.setTimeout(resolve, 0);
+		}
+	});
 }
 
 function desktopBridge() {
@@ -192,9 +199,7 @@ async function parseImportFile(file: File) {
 			try {
 				return {
 					preparedImport,
-					stories: await parseAfterIdle(() =>
-						importStoriesFromHtml(preparedImport.htmlSource)
-					)
+					stories: await importStoriesFromHtml(preparedImport.htmlSource)
 				};
 			} catch (error) {
 				await twineElectron.discardProjectImport?.(preparedImport.id);
@@ -211,7 +216,9 @@ async function parseImportFile(file: File) {
 
 	return {
 		preparedImport: undefined,
-		stories: await parseAfterIdle(() => parseStoryFile(file, source))
+		stories: /\.html?$/i.test(file.name)
+			? await importStoriesFromHtml(source)
+			: await parseAfterIdle(() => [storyFromTwee(source)])
 	};
 }
 
@@ -271,6 +278,7 @@ export const NewProjectRoute: React.FC = () => {
 	const [error, setError] = React.useState<string>();
 	const [importQueue, setImportQueue] = React.useState<ImportQueue>();
 	const [importing, setImporting] = React.useState(false);
+	const [importProgress, setImportProgress] = React.useState<ImportProgress>();
 	const [importError, setImportError] = React.useState<string>();
 	const [draggingImport, setDraggingImport] = React.useState(false);
 	const fileInput = React.useRef<HTMLInputElement>(null);
@@ -437,14 +445,17 @@ export const NewProjectRoute: React.FC = () => {
 		setImportError(undefined);
 		setImportQueue(undefined);
 		setImporting(true);
+		setImportProgress({detail: 'Reading source file', progress: 28});
 
 		try {
 			await discardPreparedImports();
 
+			setImportProgress({detail: 'Parsing story data', progress: 54});
 			const {preparedImport, stories: importedStories} =
 				await parseImportFile(file);
 
 			trackPreparedImport(preparedImport);
+			setImportProgress({detail: 'Preparing import review', progress: 86});
 
 			setImportQueue({
 				fileName: file.name,
@@ -458,6 +469,7 @@ export const NewProjectRoute: React.FC = () => {
 			setImportError((error as Error).message);
 		} finally {
 			setImporting(false);
+			setImportProgress(undefined);
 		}
 	}
 
@@ -524,6 +536,8 @@ export const NewProjectRoute: React.FC = () => {
 
 		try {
 			const storiesToImport = selectedStories.map(storyWithImportIdentity);
+			setImporting(true);
+			setImportProgress({detail: 'Writing project folders', progress: 62});
 			const projectResults = await Promise.all(
 				storiesToImport.map(story =>
 					persistNativeProjectFolder(
@@ -535,6 +549,7 @@ export const NewProjectRoute: React.FC = () => {
 			const preparedImport = importQueue.preparedImport;
 
 			if (preparedImport) {
+				setImportProgress({detail: 'Copying project assets', progress: 82});
 				await Promise.all(
 					projectResults.flatMap(result =>
 						result
@@ -556,6 +571,9 @@ export const NewProjectRoute: React.FC = () => {
 			history.push('/');
 		} catch (error) {
 			setImportError((error as Error).message);
+		} finally {
+			setImporting(false);
+			setImportProgress(undefined);
 		}
 	}
 
@@ -578,48 +596,6 @@ export const NewProjectRoute: React.FC = () => {
 				rootPath
 			});
 		}
-	}
-
-	async function hydrateNativeProjectStories(
-		rootPath: string,
-		storyIds: string[]
-	) {
-		const hydrated = await desktopBridge()?.hydrateProjectFolder?.(
-			rootPath,
-			storyIds
-		);
-
-		if (!hydrated?.stories.length) {
-			return;
-		}
-
-		const hydratedStoryIds = projectStoryIdsForCurrentStories(
-			storiesRef.current,
-			hydrated.stories
-		);
-		const hydratedStories = mergeProjectStories(
-			storiesRef.current,
-			hydrated.stories,
-			{
-				preserveExistingText: true
-			}
-		);
-
-		storiesRef.current = hydratedStories;
-		dispatch({
-			state: hydratedStories,
-			type: 'init'
-		});
-
-		for (const [index, story] of hydrated.stories.entries()) {
-			markProjectStoryHydration(hydratedStoryIds[index] ?? story.id, {
-				passageTextLoaded: true,
-				rootPath
-			});
-		}
-
-		markPerformance('all-passages-ready');
-		measurePerformance('open-to-hydrated', 'open-start', 'all-passages-ready');
 	}
 
 	function handleImportDragOver(event: React.DragEvent) {
@@ -650,9 +626,11 @@ export const NewProjectRoute: React.FC = () => {
 		setImportError(undefined);
 		setImportQueue(undefined);
 		setImporting(true);
+		setImportProgress({detail: 'Opening project folder', progress: 42});
 		markPerformance('open-start');
 
 		try {
+			await waitForPaint();
 			await discardPreparedImports();
 
 			const result = await desktopBridge()?.openProjectFolder?.({
@@ -663,6 +641,7 @@ export const NewProjectRoute: React.FC = () => {
 				return;
 			}
 
+			setImportProgress({detail: 'Preparing story shell', progress: 76});
 			const storeStoryIds = projectStoryIdsForCurrentStories(
 				storiesRef.current,
 				result.stories
@@ -689,9 +668,7 @@ export const NewProjectRoute: React.FC = () => {
 			measurePerformance('open-to-shell', 'open-start', 'shell-visible');
 			history.push('/');
 
-			if (!result.passageTextLoaded) {
-				void hydrateNativeProjectStories(result.rootPath, result.storyIds);
-			} else {
+			if (result.passageTextLoaded) {
 				markPerformance('all-passages-ready');
 				measurePerformance(
 					'open-to-hydrated',
@@ -703,6 +680,7 @@ export const NewProjectRoute: React.FC = () => {
 			setImportError((error as Error).message);
 		} finally {
 			setImporting(false);
+			setImportProgress(undefined);
 		}
 	}
 
@@ -890,6 +868,24 @@ export const NewProjectRoute: React.FC = () => {
 								</Button>
 								<span>.html, .twee, .tw, .zip</span>
 							</div>
+							{importProgress && (
+								<div
+									aria-label="Opening story"
+									aria-valuemax={100}
+									aria-valuemin={0}
+									aria-valuenow={importProgress.progress}
+									className="new-project-route__progress"
+									role="progressbar"
+								>
+									<div className="new-project-route__progress-copy">
+										<span>Opening story</span>
+										<b>{importProgress.detail}</b>
+									</div>
+									<div className="new-project-route__progress-track">
+										<span style={{width: `${importProgress.progress}%`}} />
+									</div>
+								</div>
+							)}
 							{importError && (
 								<Badge icon="alert-octagon" tone="error">
 									{importError}
@@ -976,6 +972,7 @@ export const NewProjectRoute: React.FC = () => {
 									importQueue.selectedIds.length === 0
 								}
 								icon="file-import"
+								loading={importing}
 								onClick={handleImport}
 								variant="primary"
 							>

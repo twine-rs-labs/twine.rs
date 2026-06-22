@@ -25,6 +25,14 @@ import {
 	normalizedAssetPath
 } from '../../core/asset-paths';
 import {Passage, Story} from '../../store/stories';
+import {
+	diffNativeProjectFileManifest,
+	findNativeTwineHtmlFiles,
+	listNativeProjectAssets,
+	loadNativeProjectFolder,
+	nativeProjectFileManifest,
+	prepareNativeHtmlImport
+} from './native';
 import {getStoryDirectoryPath} from './story-directory';
 
 export interface NativeProjectFolderResult {
@@ -99,6 +107,7 @@ type ProjectSessionListener = (snapshot: NativeProjectSessionSnapshot) => void;
 
 interface ProjectSessionState {
 	baseline?: NativeProjectSessionSnapshot;
+	baselineReusableUntil?: number;
 	debounceTimer?: ReturnType<typeof setTimeout>;
 	interval?: ReturnType<typeof setInterval>;
 	listeners: Set<ProjectSessionListener>;
@@ -1148,6 +1157,12 @@ async function projectFileManifest(
 	rootPath: string,
 	assets?: CoreAssetInventoryEntry[]
 ) {
+	const nativeManifest = nativeProjectFileManifest(rootPath, assets);
+
+	if (nativeManifest) {
+		return nativeManifest;
+	}
+
 	const files: NativeProjectFileEntry[] = [];
 	const scans = [
 		scanProjectFiles(rootPath, 'twine.toml', 'manifest', files),
@@ -1179,6 +1194,15 @@ function projectSessionConflicts(
 	previousFiles: NativeProjectFileEntry[],
 	currentFiles: NativeProjectFileEntry[]
 ) {
+	const nativeConflicts = diffNativeProjectFileManifest(
+		previousFiles,
+		currentFiles
+	);
+
+	if (nativeConflicts) {
+		return nativeConflicts;
+	}
+
 	const previous = new Map(previousFiles.map(file => [file.path, file]));
 	const current = new Map(currentFiles.map(file => [file.path, file]));
 	const conflicts: NativeProjectSessionConflict[] = [];
@@ -1370,18 +1394,37 @@ async function readProjectStories(
 	rootPath: string,
 	options: ProjectStoryReadOptions = {}
 ) {
+	return (await readProjectFolder(rootPath, options)).stories;
+}
+
+async function readProjectFolder(
+	rootPath: string,
+	options: ProjectStoryReadOptions = {}
+): Promise<NativeProjectFolderResult> {
+	const nativeResult = loadNativeProjectFolder(rootPath, options);
+
+	if (nativeResult) {
+		return nativeResult;
+	}
+
 	const manifestSource = await readTextIfPresent(join(rootPath, 'twine.toml'));
 	const metadataStories = await metadataSidecarStories(
 		join(rootPath, '.twine', 'project.json'),
 		manifestSource ? {maxBytes: maxProjectMetadataSidecarBytes} : {}
 	);
-
-	return storiesFromProjectManifest(
+	const stories = await storiesFromProjectManifest(
 		rootPath,
 		metadataStories,
 		manifestSource,
 		options
 	);
+
+	return {
+		passageTextLoaded: options.loadPassageText !== false,
+		rootPath,
+		stories,
+		storyIds: stories.map(story => story.id)
+	};
 }
 
 async function readProjectSessionSnapshot(
@@ -1511,6 +1554,42 @@ async function refreshProjectSessionBaseline(
 		storyIds: storyIds ?? session.baseline?.storyIds
 	});
 	session.pending = undefined;
+	session.baselineReusableUntil = undefined;
+}
+
+async function primeProjectSessionBaseline(
+	rootPath: string,
+	hints: ProjectSessionSnapshotHints
+) {
+	const session = ensureProjectSession(rootPath);
+
+	session.baseline = await readProjectSessionSnapshot(rootPath, undefined, hints);
+	session.pending = undefined;
+	session.baselineReusableUntil = Date.now() + projectSessionPollMs;
+
+	return session.baseline;
+}
+
+function reusableProjectSessionBaseline(
+	session: ProjectSessionState,
+	storyIds?: string[]
+) {
+	if (
+		!session.baseline ||
+		!session.baselineReusableUntil ||
+		Date.now() > session.baselineReusableUntil
+	) {
+		return undefined;
+	}
+
+	if (
+		storyIds?.length &&
+		!storyIds.every(storyId => session.baseline?.storyIds.includes(storyId))
+	) {
+		return undefined;
+	}
+
+	return session.baseline;
 }
 
 export async function createProjectFolder(
@@ -1567,7 +1646,9 @@ export async function prepareProjectImport(
 			cleanupPath = await mkdtemp(join(tmpdir(), 'twine-import-'));
 			await extractZip(absoluteSourcePath, {dir: cleanupPath});
 
-			const htmlFiles = await findTwineHtmlFiles(cleanupPath);
+			const htmlFiles =
+				findNativeTwineHtmlFiles(cleanupPath) ??
+				(await findTwineHtmlFiles(cleanupPath));
 
 			if (htmlFiles.length === 0) {
 				throw new Error('No Twine HTML story was found in the zip archive.');
@@ -1578,6 +1659,26 @@ export async function prepareProjectImport(
 				absoluteSourcePath,
 				htmlFiles
 			);
+		}
+
+		const nativePreparedImport = prepareNativeHtmlImport(
+			absoluteSourcePath,
+			htmlFilePath,
+			sourceKind
+		);
+
+		if (nativePreparedImport) {
+			const preparedImport: NativeProjectImportSource = {
+				...nativePreparedImport,
+				id: uuid()
+			};
+
+			preparedProjectImports.set(preparedImport.id, {
+				assets: preparedImport.assets,
+				cleanupPath
+			});
+
+			return preparedImport;
 		}
 
 		const rawHtmlSource = await readFile(htmlFilePath, 'utf8');
@@ -1687,32 +1788,28 @@ export async function openProjectFolder(
 		);
 	}
 
-	const stories = await readProjectStories(rootPath, options);
-	await refreshProjectSessionBaseline(
-		rootPath,
-		stories.map(story => story.id)
-	);
+	const projectFolder = await readProjectFolder(rootPath, options);
+	await primeProjectSessionBaseline(rootPath, {
+		stories: projectFolder.stories,
+		storyIds: projectFolder.storyIds
+	});
 
-	return {
-		passageTextLoaded: options.loadPassageText !== false,
-		rootPath,
-		stories,
-		storyIds: stories.map(story => story.id)
-	};
+	return projectFolder;
 }
 
 export async function hydrateProjectFolder(
 	rootPath: string,
 	storyIds?: string[]
 ): Promise<NativeProjectFolderResult> {
-	const stories = await readProjectStories(rootPath, {loadPassageText: true});
+	const projectFolder = await readProjectFolder(rootPath, {loadPassageText: true});
+	const {stories} = projectFolder;
 	const filteredStories = storyIds?.length
 		? stories.filter(story => storyIds.includes(story.id))
 		: stories;
 
 	return {
 		passageTextLoaded: true,
-		rootPath,
+		rootPath: projectFolder.rootPath,
 		stories: filteredStories,
 		storyIds: filteredStories.map(story => story.id)
 	};
@@ -1771,6 +1868,12 @@ export async function chooseAssetFile(defaultPath?: string) {
 }
 
 export async function listProjectAssets(rootPath: string) {
+	const nativeAssets = listNativeProjectAssets(rootPath);
+
+	if (nativeAssets) {
+		return nativeAssets.sort((left, right) => left.path.localeCompare(right.path));
+	}
+
 	const assets: CoreAssetInventoryEntry[] = [];
 
 	await scanAssetDirectory(rootPath, join(rootPath, 'assets'), assets);
@@ -1843,6 +1946,11 @@ export async function projectSessionSnapshot(
 	storyIds?: string[]
 ) {
 	const session = ensureProjectSession(rootPath);
+	const reusable = reusableProjectSessionBaseline(session, storyIds);
+
+	if (reusable) {
+		return reusable;
+	}
 
 	if (!session.baseline) {
 		session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
@@ -1868,6 +1976,7 @@ export async function startProjectSession(
 	}
 
 	const baselineWasMissing = !session.baseline;
+	const reusable = reusableProjectSessionBaseline(session, storyIds);
 
 	if (!session.baseline) {
 		session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
@@ -1894,6 +2003,10 @@ export async function startProjectSession(
 
 	if (session.pending) {
 		return session.pending;
+	}
+
+	if (reusable) {
+		return reusable;
 	}
 
 	if (baselineWasMissing) {

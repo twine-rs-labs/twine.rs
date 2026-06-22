@@ -1,6 +1,6 @@
 import {TwineElectronWindow} from '../../../../electron/shared';
 import {Story} from '../../../stories/stories.types';
-import {importStories} from '../../../../util/import';
+import {importStoriesAsync} from '../../../../util/import';
 
 export async function load(): Promise<Story[]> {
 	const {twineElectron} = window as TwineElectronWindow;
@@ -12,16 +12,19 @@ export async function load(): Promise<Story[]> {
 	const stories = await twineElectron.loadStories();
 
 	if (stories && Array.isArray(stories)) {
-		return stories.reduce((result, file) => {
-			const story = importStories(file.htmlSource, file.mtime);
+		const result: Story[] = [];
+
+		for (const file of stories) {
+			const story = await importStoriesAsync(file.htmlSource, file.mtime);
 
 			if (story[0]) {
-				return [...result, story[0]];
+				result.push(story[0]);
+			} else {
+				console.warn('Could not hydrate story: ', file.htmlSource);
 			}
+		}
 
-			console.warn('Could not hydrate story: ', file.htmlSource);
-			return result;
-		}, [] as Story[]);
+		return result;
 	} else {
 		console.warn('No stories to hydrate in Electron bridge');
 	}

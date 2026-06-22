@@ -66,6 +66,19 @@ impl Default for SaveOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LoadProjectOptions {
+    pub load_passage_text: bool,
+}
+
+impl Default for LoadProjectOptions {
+    fn default() -> Self {
+        Self {
+            load_passage_text: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SaveReport {
     pub backup_path: Option<PathBuf>,
@@ -147,6 +160,13 @@ pub fn save_story_json_path(path: impl AsRef<Path>, story: &Story) -> Result<(),
 }
 
 pub fn load_project_path(root: impl AsRef<Path>) -> Result<Project, StoreError> {
+    load_project_path_with_options(root, LoadProjectOptions::default())
+}
+
+pub fn load_project_path_with_options(
+    root: impl AsRef<Path>,
+    options: LoadProjectOptions,
+) -> Result<Project, StoreError> {
     let root = root.as_ref();
     let manifest_path = root.join(MANIFEST_FILE);
 
@@ -156,7 +176,7 @@ pub fn load_project_path(root: impl AsRef<Path>) -> Result<Project, StoreError> 
 
     let manifest: ProjectFile = toml::from_str(&fs::read_to_string(&manifest_path)?)?;
 
-    manifest.into_project(root)
+    manifest.into_project(root, options)
 }
 
 pub fn save_project_path(
@@ -370,7 +390,7 @@ impl ProjectFile {
         }
     }
 
-    fn into_project(self, root: &Path) -> Result<Project, StoreError> {
+    fn into_project(self, root: &Path, options: LoadProjectOptions) -> Result<Project, StoreError> {
         let layout = if root.join(GRAPH_LAYOUT_FILE).exists() {
             serde_json::from_str(&fs::read_to_string(root.join(GRAPH_LAYOUT_FILE))?)?
         } else {
@@ -379,7 +399,7 @@ impl ProjectFile {
         let mut stories = self
             .stories
             .into_iter()
-            .map(|story| story.into_story(root))
+            .map(|story| story.into_story(root, options))
             .collect::<Result<Vec<_>, _>>()?;
 
         for story in &mut stories {
@@ -508,7 +528,7 @@ impl StoryFile {
         }
     }
 
-    fn into_story(self, root: &Path) -> Result<Story, StoreError> {
+    fn into_story(self, root: &Path, options: LoadProjectOptions) -> Result<Story, StoreError> {
         let mut story = Story {
             color: self.color,
             custom_attributes: self.custom_attributes,
@@ -533,7 +553,7 @@ impl StoryFile {
         story.passages = self
             .passages
             .into_iter()
-            .map(|passage| passage.into_passage(root, &story.id))
+            .map(|passage| passage.into_passage(root, &story.id, options))
             .collect::<Result<Vec<_>, _>>()?
             .into();
 
@@ -572,7 +592,12 @@ impl PassageFile {
         }
     }
 
-    fn into_passage(self, root: &Path, story_id: &StoryId) -> Result<Passage, StoreError> {
+    fn into_passage(
+        self,
+        root: &Path,
+        story_id: &StoryId,
+        options: LoadProjectOptions,
+    ) -> Result<Passage, StoreError> {
         Ok(Passage {
             custom_attributes: self.custom_attributes,
             id: self.id,
@@ -582,7 +607,11 @@ impl PassageFile {
             source_pid: self.source_pid,
             story: story_id.clone(),
             tags: self.tags,
-            text: read_optional(root, &self.file)?,
+            text: if options.load_passage_text {
+                read_optional(root, &self.file)?
+            } else {
+                String::new()
+            },
         })
     }
 }
@@ -980,6 +1009,35 @@ mod tests {
         let loaded = load_project_path(&root).expect("project should load");
 
         assert!(loaded.stories[0].passages[0].layout.is_none());
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn can_load_project_shell_without_passage_bodies() {
+        let root = temp_path("project-shell");
+        let story = story();
+        let project = Project::from_story(story.clone());
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+
+        let loaded = load_project_path_with_options(
+            &root,
+            LoadProjectOptions {
+                load_passage_text: false,
+            },
+        )
+        .expect("project shell should load");
+
+        assert_eq!(loaded.stories.len(), 1);
+        assert_eq!(loaded.stories[0].script, story.script);
+        assert_eq!(loaded.stories[0].stylesheet, story.stylesheet);
+        assert_eq!(loaded.stories[0].passages.len(), 1);
+        assert_eq!(loaded.stories[0].passages[0].text, "");
+        assert_eq!(
+            loaded.stories[0].passages[0].layout.expect("layout").left,
+            25.0
+        );
 
         fs::remove_dir_all(&root).expect("project should be removed");
     }

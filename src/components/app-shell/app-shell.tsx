@@ -12,6 +12,8 @@ import {
 import {storyFileName} from '../../electron/shared';
 import {useStorySaveStatus} from '../../store/persistence/save-status';
 import {usePrefsContext} from '../../store/prefs';
+import {loadProjectMetadata} from '../../store/project-metadata';
+import {useProjectStoryHydration} from '../../store/project-hydration';
 import {Story, useStoriesContext} from '../../store/stories';
 import {usePublishing} from '../../store/use-publishing';
 import {useStoryLaunch} from '../../store/use-story-launch';
@@ -43,6 +45,11 @@ type BuildState = {
 	kind: 'idle' | 'busy' | 'done' | 'error';
 	label: string;
 };
+
+interface StoryOpenProgress {
+	detail: string;
+	progress: number;
+}
 
 interface RouteMode {
 	icon: string;
@@ -190,6 +197,11 @@ export const AppShell: React.FC = ({children}) => {
 	const selectedStory = stories.find(story => story.selected);
 	const currentStory =
 		stories.find(story => story.id === storyId) ?? selectedStory;
+	const currentStoryHydration = useProjectStoryHydration(currentStory?.id);
+	const currentProjectMetadata = React.useMemo(
+		() => (currentStory ? loadProjectMetadata(currentStory.id) : undefined),
+		[currentStory]
+	);
 	const mode = routeMode(location.pathname);
 	const routeTabs = React.useMemo(
 		() => Object.keys(toolbar?.tabs ?? {}),
@@ -225,6 +237,26 @@ export const AppShell: React.FC = ({children}) => {
 		(storyIndex?.diagnostics.length ?? 0) - diagnosticCount;
 	const wordCount = storyWordCount(currentStory);
 	const crumbLabels = breadcrumbs(location.pathname, currentStory, mode);
+	const storyOpenProgress = React.useMemo<StoryOpenProgress | undefined>(() => {
+		if (
+			currentStory &&
+			currentProjectMetadata?.storageKind === 'electron-project-folder' &&
+			currentProjectMetadata.status === 'file-backed' &&
+			currentStoryHydration?.passageTextLoaded === false
+		) {
+			return {
+				detail: 'Loading passage text',
+				progress: 46
+			};
+		}
+
+		return undefined;
+	}, [
+		currentProjectMetadata?.status,
+		currentProjectMetadata?.storageKind,
+		currentStory,
+		currentStoryHydration?.passageTextLoaded
+	]);
 	const saveStatus =
 		storySaveStatus.kind === 'error'
 			? {
@@ -767,6 +799,24 @@ export const AppShell: React.FC = ({children}) => {
 				<main className="app-shell__center">
 					<div className="app-shell__route">{children}</div>
 				</main>
+				{storyOpenProgress && (
+					<div
+						aria-label="Opening story"
+						aria-valuemax={100}
+						aria-valuemin={0}
+						aria-valuenow={storyOpenProgress.progress}
+						className="app-shell__open-progress"
+						role="progressbar"
+					>
+						<div className="app-shell__open-progress-copy">
+							<span>Opening story</span>
+							<b>{storyOpenProgress.detail}</b>
+						</div>
+						<div className="app-shell__open-progress-track">
+							<span style={{width: `${storyOpenProgress.progress}%`}} />
+						</div>
+					</div>
+				)}
 				{dock && (
 					<aside className="app-shell__dock" aria-label={dock.label}>
 						{dock.content}
@@ -822,15 +872,42 @@ export const AppShell: React.FC = ({children}) => {
 					</aside>
 				)}
 				<footer className="app-shell__status" aria-live="polite">
-					<span className="app-shell__status-item">
+					<span className="app-shell__status-item app-shell__status-mode">
 						<TablerIcon icon={mode.icon} />
 						{mode.label}
 					</span>
-					<span className="app-shell__status-item">
+					<button
+						className={classNames(
+							'app-shell__status-item',
+							'app-shell__status-button',
+							'app-shell__story-status',
+							storyOpenProgress && 'app-shell__story-status--loading'
+						)}
+						disabled={!currentStory}
+						onClick={() =>
+							currentStory && history.push(`/stories/${currentStory.id}`)
+						}
+						title={
+							currentStory
+								? `Open ${storySelectionLabel(currentStory)}`
+								: 'No story selected'
+						}
+						type="button"
+					>
 						<TablerIcon icon="focus-2" />
-						{storySelectionLabel(currentStory)}
-					</span>
-					<span className="app-shell__status-item" title={saveStatus.title}>
+						<span>
+							{storyOpenProgress?.detail ?? storySelectionLabel(currentStory)}
+						</span>
+						{storyOpenProgress && (
+							<span aria-hidden className="app-shell__story-status-progress">
+								<span style={{width: `${storyOpenProgress.progress}%`}} />
+							</span>
+						)}
+					</button>
+					<span
+						className="app-shell__status-item app-shell__status-save"
+						title={saveStatus.title}
+					>
 						<TablerIcon icon={saveStatus.icon} />
 						{saveStatus.label}
 					</span>
@@ -850,7 +927,9 @@ export const AppShell: React.FC = ({children}) => {
 						{diagnosticCount} diagnostics
 					</button>
 					<span className="app-shell__status-spacer" />
-					<span className="app-shell__status-item">{wordCount} words</span>
+					<span className="app-shell__status-item app-shell__status-words">
+						{wordCount} words
+					</span>
 					<Badge dot tone={buildBadgeTone} title={buildState.error}>
 						{buildState.label}
 					</Badge>

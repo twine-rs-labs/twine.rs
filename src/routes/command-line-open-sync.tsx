@@ -76,55 +76,6 @@ export const CommandLineOpenSync: React.FC = () => {
 				measurePerformance('open-to-shell', 'open-start', 'shell-visible');
 				history.push(`/stories/${openedStoryIds[0]}`);
 
-				for (const project of result.openedProjects) {
-					if (project.passageTextLoaded) {
-						continue;
-					}
-
-					void bridge
-						.hydrateProjectFolder?.(project.rootPath, project.storyIds)
-						.then(hydrated => {
-							if (!cancelled && hydrated?.stories.length) {
-								const hydratedStoryIds =
-									projectStoryIdsForCurrentStories(
-										storiesRef.current,
-										hydrated.stories
-									);
-								const hydratedStories = mergeProjectStories(
-									storiesRef.current,
-									hydrated.stories,
-									{preserveExistingText: true}
-								);
-
-								storiesRef.current = hydratedStories;
-								dispatch({
-									state: hydratedStories,
-									type: 'init'
-								});
-
-								for (const [
-									index,
-									story
-								] of hydrated.stories.entries()) {
-									markProjectStoryHydration(
-										hydratedStoryIds[index] ?? story.id,
-										{
-											passageTextLoaded: true,
-											rootPath: project.rootPath
-										}
-									);
-								}
-
-								markPerformance('all-passages-ready');
-								measurePerformance(
-									'open-to-hydrated',
-									'open-start',
-									'all-passages-ready'
-								);
-							}
-						});
-				}
-
 				if (
 					result.openedProjects.every(
 						project => project.passageTextLoaded !== false

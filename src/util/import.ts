@@ -21,6 +21,15 @@ export interface ImportedStory extends Omit<Partial<Story>, 'passages'> {
 	passages: Partial<Passage>[];
 }
 
+export interface ImportStoriesAsyncOptions {
+	/**
+	 * How many passage elements to convert before yielding back to the browser.
+	 * Smaller values are useful in tests; the default keeps import throughput high
+	 * while preventing one huge story from monopolizing the main thread.
+	 */
+	passageBatchSize?: number;
+}
+
 /**
  * HTML selectors used to find data in HTML format.
  */
@@ -48,6 +57,26 @@ function query(el: Element, selector: string) {
 	return Array.from(el.querySelectorAll(selector));
 }
 
+function yieldToBrowser() {
+	if (typeof window === 'undefined') {
+		return Promise.resolve();
+	}
+
+	const requestIdleCallback = (
+		window as Window & {
+			requestIdleCallback?: (callback: () => void) => number;
+		}
+	).requestIdleCallback;
+
+	return new Promise<void>(resolve => {
+		if (requestIdleCallback) {
+			requestIdleCallback(resolve);
+		} else {
+			window.setTimeout(resolve, 0);
+		}
+	});
+}
+
 /**
  * Convenience function to parse a string like "100,50".
  */
@@ -71,9 +100,8 @@ function parseDimensions(raw: any): [string, string] | undefined {
  * malformed. This function does its best to reflect the contents of the
  * element.
  */
-function domToObject(storyEl: Element): ImportedStory {
+function storyShellFromDom(storyEl: Element) {
 	const startPassagePid = storyEl.getAttribute('startnode');
-	let startPassageId: string | undefined = undefined;
 	const story: ImportedStory = {
 		ifid: storyEl.getAttribute('ifid') ?? uuid().toUpperCase(),
 		id: uuid(),
@@ -100,31 +128,114 @@ function domToObject(storyEl: Element): ImportedStory {
 
 			return {...result, [tagName]: el.getAttribute('color')};
 		}, {}),
-		passages: query(storyEl, selectors.passageData).map(passageEl => {
-			const id = uuid();
-			const position = parseDimensions(passageEl.getAttribute('position'));
-			const size = parseDimensions(passageEl.getAttribute('size'));
-
-			if (passageEl.getAttribute('pid') === startPassagePid) {
-				startPassageId = id;
-			}
-
-			return {
-				id,
-				left: position ? float(position[0]) : undefined,
-				top: position ? float(position[1]) : undefined,
-				width: size ? float(size[0]) : undefined,
-				height: size ? float(size[1]) : undefined,
-				tags: passageEl.getAttribute('tags')
-					? passageEl.getAttribute('tags')!.split(/\s+/)
-					: [],
-				name: passageEl.getAttribute('name') ?? undefined,
-				text: passageEl.textContent ?? undefined
-			};
-		})
+		passages: []
 	};
 
+	return {
+		passageEls: query(storyEl, selectors.passageData),
+		startPassagePid,
+		story
+	};
+}
+
+function passageFromDom(passageEl: Element) {
+	const position = parseDimensions(passageEl.getAttribute('position'));
+	const size = parseDimensions(passageEl.getAttribute('size'));
+
+	return {
+		id: uuid(),
+		left: position ? float(position[0]) : undefined,
+		top: position ? float(position[1]) : undefined,
+		width: size ? float(size[0]) : undefined,
+		height: size ? float(size[1]) : undefined,
+		tags: passageEl.getAttribute('tags')
+			? passageEl.getAttribute('tags')!.split(/\s+/)
+			: [],
+		name: passageEl.getAttribute('name') ?? undefined,
+		text: passageEl.textContent ?? undefined
+	};
+}
+
+/**
+ * Converts a DOM <tw-storydata> element to a story object matching the format
+ * in the store. This *may* be missing data, or data it returns may be
+ * malformed. This function does its best to reflect the contents of the
+ * element.
+ */
+function domToObject(storyEl: Element): ImportedStory {
+	const {passageEls, startPassagePid, story} = storyShellFromDom(storyEl);
+	let startPassageId: string | undefined = undefined;
+
+	story.passages = passageEls.map(passageEl => {
+		const passage = passageFromDom(passageEl);
+
+		if (passageEl.getAttribute('pid') === startPassagePid) {
+			startPassageId = passage.id;
+		}
+
+		return passage;
+	});
+
 	story.startPassage = startPassageId;
+	return story;
+}
+
+async function domToObjectAsync(
+	storyEl: Element,
+	options: ImportStoriesAsyncOptions = {}
+): Promise<ImportedStory> {
+	const {passageEls, startPassagePid, story} = storyShellFromDom(storyEl);
+	const passageBatchSize = Math.max(1, options.passageBatchSize ?? 250);
+	let startPassageId: string | undefined = undefined;
+
+	for (let index = 0; index < passageEls.length; index += passageBatchSize) {
+		const batch = passageEls.slice(index, index + passageBatchSize);
+
+		story.passages.push(
+			...batch.map(passageEl => {
+				const passage = passageFromDom(passageEl);
+
+				if (passageEl.getAttribute('pid') === startPassagePid) {
+					startPassageId = passage.id;
+				}
+
+				return passage;
+			})
+		);
+
+		if (index + passageBatchSize < passageEls.length) {
+			await yieldToBrowser();
+		}
+	}
+
+	story.startPassage = startPassageId;
+	return story;
+}
+
+function finalizeImportedStory(
+	importedStory: ImportedStory,
+	storyGraphMetadata: ReturnType<typeof parseStoryGraphHtmlAttribute>,
+	lastUpdateOverride?: Date
+) {
+	// Merge in defaults. We can't use object spreads here because undefined
+	// values would override defaults.
+
+	const story: Story = defaults(importedStory, {id: uuid()}, storyDefaults());
+
+	// Override the last update as requested.
+
+	if (lastUpdateOverride) {
+		story.lastUpdate = lastUpdateOverride;
+	}
+
+	// Merge in passage defaults. We don't need to set ID here--domToObject did
+	// this for us.
+
+	story.passages = story.passages.map(passage =>
+		defaults(passage, passageDefaults(), {story: story.id})
+	);
+	applyStoryGraphMetadataToStory(story, storyGraphMetadata);
+
 	return story;
 }
 
@@ -146,25 +257,47 @@ export function importStories(
 			storyEl.getAttribute(TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE)
 		);
 
-		// Merge in defaults. We can't use object spreads here because undefined
-		// values would override defaults.
-
-		const story: Story = defaults(importedStory, {id: uuid()}, storyDefaults());
-
-		// Override the last update as requested.
-
-		if (lastUpdateOverride) {
-			story.lastUpdate = lastUpdateOverride;
-		}
-
-		// Merge in passage defaults. We don't need to set ID here--domToObject did
-		// this for us.
-
-		story.passages = story.passages.map(passage =>
-			defaults(passage, passageDefaults(), {story: story.id})
+		return finalizeImportedStory(
+			importedStory,
+			storyGraphMetadata,
+			lastUpdateOverride
 		);
-		applyStoryGraphMetadataToStory(story, storyGraphMetadata);
-
-		return story;
 	});
+}
+
+/**
+ * Imports stories from HTML in chunks so large Twine archives yield back to the
+ * browser between passage batches. This keeps app load/import flows responsive
+ * until the Rust worker bridge owns HTML import end to end.
+ */
+export async function importStoriesAsync(
+	html: string,
+	lastUpdateOverride?: Date,
+	options: ImportStoriesAsyncOptions = {}
+): Promise<Story[]> {
+	await yieldToBrowser();
+
+	const nodes = document.createElement('div');
+
+	nodes.innerHTML = html;
+
+	const stories: Story[] = [];
+
+	for (const storyEl of query(nodes, selectors.storyData)) {
+		const storyGraphMetadata = parseStoryGraphHtmlAttribute(
+			storyEl.getAttribute(TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE)
+		);
+		const importedStory = await domToObjectAsync(storyEl, options);
+
+		stories.push(
+			finalizeImportedStory(
+				importedStory,
+				storyGraphMetadata,
+				lastUpdateOverride
+			)
+		);
+		await yieldToBrowser();
+	}
+
+	return stories;
 }

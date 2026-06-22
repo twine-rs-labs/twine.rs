@@ -144,6 +144,8 @@
 	flex-direction: column;
 	gap: var(--sp-2);
 	grid-area: rail;
+	min-height: 0;
+	overflow-y: auto;
 	padding: var(--sp-3) var(--sp-2);
 	z-index: 20;
 }
@@ -317,6 +319,66 @@
 	justify-content: center;
 }
 
+.app-shell__open-progress {
+	background: color-mix(in oklab, var(--ink-1) 96%, transparent);
+	border: 1px solid var(--border-faint);
+	border-bottom: 0;
+	border-radius: var(--r-sm) var(--r-sm) 0 0;
+	bottom: var(--app-shell-status-h);
+	box-shadow: var(--shadow-card), var(--edge-hi);
+	color: var(--text-body);
+	font-family: var(--font-ui);
+	left: calc(var(--app-shell-rail-w) + var(--sp-3));
+	min-width: min(
+		420px,
+		calc(100vw - var(--app-shell-rail-w) - 2 * var(--sp-3))
+	);
+	padding: var(--sp-2) var(--sp-3);
+	position: fixed;
+	right: var(--sp-3);
+	z-index: 55;
+}
+
+.app-shell__open-progress-copy {
+	align-items: baseline;
+	display: flex;
+	gap: var(--sp-2);
+	justify-content: space-between;
+	min-width: 0;
+}
+
+.app-shell__open-progress-copy span {
+	color: var(--text-muted);
+	font-size: var(--fs-micro);
+	text-transform: uppercase;
+}
+
+.app-shell__open-progress-copy b {
+	color: var(--text-strong);
+	font-size: var(--fs-xs);
+	font-weight: 650;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.app-shell__open-progress-track {
+	background: var(--ink-4);
+	border-radius: var(--r-pill);
+	height: 4px;
+	margin-top: var(--sp-2);
+	overflow: hidden;
+}
+
+.app-shell__open-progress-track span {
+	background: var(--sem-link);
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+	transition: width 160ms ease;
+}
+
 .app-shell__status {
 	align-items: center;
 	background: var(--ink-2);
@@ -356,8 +418,59 @@
 	padding: 0;
 }
 
+.app-shell__status-button:disabled {
+	cursor: default;
+	opacity: 0.54;
+}
+
 .app-shell__status-button:hover {
 	color: var(--text-strong);
+}
+
+.app-shell__story-status {
+	background: color-mix(in oklab, var(--ink-1) 72%, transparent);
+	border: 1px solid var(--border-faint);
+	border-radius: var(--r-sm);
+	color: var(--text-body);
+	flex: 1 1 260px;
+	height: 21px;
+	max-width: 520px;
+	min-width: 140px;
+	overflow: hidden;
+	padding: 0 var(--sp-2);
+	position: relative;
+}
+
+.app-shell__story-status:hover:not(:disabled) {
+	background: var(--ink-4);
+	border-color: var(--line-2);
+}
+
+.app-shell__story-status span:not(.app-shell__story-status-progress) {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.app-shell__story-status-progress {
+	background: color-mix(in oklab, var(--sem-link) 14%, transparent);
+	bottom: 0;
+	height: 2px;
+	left: 0;
+	position: absolute;
+	right: 0;
+}
+
+.app-shell__story-status-progress span {
+	background: var(--sem-link);
+	display: block;
+	height: 100%;
+	transition: width 160ms ease;
+}
+
+.app-shell__story-status--loading {
+	border-color: color-mix(in oklab, var(--sem-link) 42%, var(--border-faint));
 }
 
 .app-shell__status-spacer {
@@ -542,10 +655,38 @@
 	}
 
 	.app-shell__brand-text,
-	.app-shell__status-item:nth-of-type(2),
-	.app-shell__status-item:nth-of-type(3),
-	.app-shell__status-item:nth-of-type(5) {
+	.app-shell__status-save,
+	.app-shell__status-words {
 		display: none;
+	}
+
+	.app-shell__bar {
+		gap: var(--sp-2);
+		padding: 0 var(--sp-2);
+	}
+
+	.app-shell__brand {
+		padding-right: var(--sp-2);
+	}
+
+	.app-shell__crumbs {
+		min-width: 0;
+	}
+
+	.app-shell__status {
+		gap: var(--sp-2);
+		padding: 0 var(--sp-2);
+	}
+
+	.app-shell__story-status {
+		flex: 1 1 auto;
+		min-width: 96px;
+	}
+
+	.app-shell__open-progress {
+		left: calc(var(--app-shell-rail-w) + var(--sp-2));
+		min-width: 0;
+		right: var(--sp-2);
 	}
 
 	.app-shell__route-tabs {

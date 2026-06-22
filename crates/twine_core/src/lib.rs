@@ -103,12 +103,18 @@ pub struct StorySnapshot {
     pub name: String,
     pub passages: Vec<PassageSnapshot>,
     pub script: String,
+    #[serde(default = "default_true")]
+    pub snap_to_grid: bool,
     pub start_passage_id: String,
     pub story_format: String,
     pub story_format_version: String,
     pub stylesheet: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub tag_colors: BTreeMap<String, String>,
+    #[serde(default = "default_zoom")]
+    pub zoom: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -395,6 +401,14 @@ pub struct CoreStoryIndexOptions {
     #[serde(default = "default_true")]
     pub include_assets: bool,
     #[serde(default = "default_true")]
+    pub include_contents: bool,
+    #[serde(default = "default_true")]
+    pub include_diagnostics: bool,
+    #[serde(default = "default_true")]
+    pub include_files: bool,
+    #[serde(default = "default_true")]
+    pub include_graph: bool,
+    #[serde(default = "default_true")]
     pub include_passage_names: bool,
     #[serde(default = "default_true")]
     pub include_passage_text: bool,
@@ -423,6 +437,10 @@ impl Default for CoreStoryIndexOptions {
         Self {
             fuzzy: false,
             include_assets: true,
+            include_contents: true,
+            include_diagnostics: true,
+            include_files: true,
+            include_graph: true,
             include_passage_names: true,
             include_passage_text: true,
             include_script: true,
@@ -470,11 +488,14 @@ impl From<&Story> for StorySnapshot {
             name: value.name.clone(),
             passages: value.passages.iter().map(PassageSnapshot::from).collect(),
             script: value.script.clone(),
+            snap_to_grid: value.snap_to_grid,
             start_passage_id: value.start_passage.as_ref().to_owned(),
             story_format: value.story_format.clone(),
             story_format_version: value.story_format_version.clone(),
             stylesheet: value.stylesheet.clone(),
             tags: value.tags.clone(),
+            tag_colors: value.tag_colors.clone(),
+            zoom: value.zoom,
         }
     }
 }
@@ -697,7 +718,7 @@ pub struct CoreGraphEdge {
     pub target_name: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreGraphStats {
@@ -1785,10 +1806,13 @@ impl ProjectSession {
         options: CoreStoryIndexOptions,
     ) -> Result<CoreStoryIndex, CoreError> {
         let story = self.story(story_id)?;
-        let graph = GraphIndex::from_story(story);
+        let graph =
+            (options.include_graph || options.include_diagnostics || options.include_contents)
+                .then(|| GraphIndex::from_story(story));
         let metadata_source_id = format!("{}:metadata", story.id.as_ref());
         let script_source_id = format!("{}:script", story.id.as_ref());
         let stylesheet_source_id = format!("{}:stylesheet", story.id.as_ref());
+        let search_enabled = has_search_query(&options);
         let search_pattern = search_pattern(&options);
         let mut diagnostics = Vec::new();
         let mut files = Vec::new();
@@ -1805,17 +1829,19 @@ impl ProjectSession {
                     .insert(passage.id.as_ref().to_owned());
             }
 
-            files.push(CoreSourceFile {
-                character_count: passage.text.len(),
-                id: passage.id.as_ref().to_owned(),
-                kind: CoreSourceKind::Passage,
-                line_count: line_count(&passage.text),
-                name: passage.name.clone(),
-                passage_id: Some(passage.id.as_ref().to_owned()),
-                tags: passage.tags.clone(),
-            });
+            if options.include_files {
+                files.push(CoreSourceFile {
+                    character_count: passage.text.len(),
+                    id: passage.id.as_ref().to_owned(),
+                    kind: CoreSourceKind::Passage,
+                    line_count: line_count(&passage.text),
+                    name: passage.name.clone(),
+                    passage_id: Some(passage.id.as_ref().to_owned()),
+                    tags: passage.tags.clone(),
+                });
+            }
 
-            if options.include_passage_names {
+            if search_enabled && options.include_passage_names {
                 search_hits.extend(search_hits_in_source(
                     &options,
                     search_pattern.as_ref(),
@@ -1827,7 +1853,7 @@ impl ProjectSession {
                 ));
             }
 
-            if options.include_passage_text {
+            if search_enabled && options.include_passage_text {
                 search_hits.extend(search_hits_in_source(
                     &options,
                     search_pattern.as_ref(),
@@ -1839,7 +1865,7 @@ impl ProjectSession {
                 ));
             }
 
-            if options.include_tags {
+            if search_enabled && options.include_tags {
                 for tag in &passage.tags {
                     search_hits.extend(search_hits_in_source(
                         &options,
@@ -1873,54 +1899,60 @@ impl ProjectSession {
             }
         }
 
-        files.push(CoreSourceFile {
-            character_count: story.script.len(),
-            id: script_source_id.clone(),
-            kind: CoreSourceKind::Script,
-            line_count: line_count(&story.script),
-            name: "Story JavaScript".into(),
-            passage_id: None,
-            tags: Vec::new(),
-        });
-        files.push(CoreSourceFile {
-            character_count: story.stylesheet.len(),
-            id: stylesheet_source_id.clone(),
-            kind: CoreSourceKind::Stylesheet,
-            line_count: line_count(&story.stylesheet),
-            name: "Story Stylesheet".into(),
-            passage_id: None,
-            tags: Vec::new(),
-        });
-
-        if let Err(error) = &search_pattern {
-            diagnostics.push(CoreDiagnostic {
-                code: "invalid-search-regex".into(),
-                end: options.query.as_ref().map_or(0, String::len),
-                line: 1,
-                message: format!("Search regular expression is invalid: {error}"),
+        if options.include_files {
+            files.push(CoreSourceFile {
+                character_count: story.script.len(),
+                id: script_source_id.clone(),
+                kind: CoreSourceKind::Script,
+                line_count: line_count(&story.script),
+                name: "Story JavaScript".into(),
                 passage_id: None,
-                quick_fixes: vec![CoreQuickFix {
-                    command: "disable-regex-search".into(),
-                    title: "Turn off regular expressions".into(),
-                }],
-                severity: CoreDiagnosticSeverity::Error,
-                source_id: metadata_source_id.clone(),
-                start: 0,
+                tags: Vec::new(),
+            });
+            files.push(CoreSourceFile {
+                character_count: story.stylesheet.len(),
+                id: stylesheet_source_id.clone(),
+                kind: CoreSourceKind::Stylesheet,
+                line_count: line_count(&story.stylesheet),
+                name: "Story Stylesheet".into(),
+                passage_id: None,
+                tags: Vec::new(),
             });
         }
 
-        let metadata_source = story_metadata_source(story);
-        search_hits.extend(search_hits_in_source(
-            &options,
-            search_pattern.as_ref(),
-            &metadata_source_id,
-            "Story Metadata",
-            &metadata_source,
-            CoreSearchScope::Metadata,
-            None,
-        ));
+        if search_enabled && options.include_diagnostics {
+            if let Err(error) = &search_pattern {
+                diagnostics.push(CoreDiagnostic {
+                    code: "invalid-search-regex".into(),
+                    end: options.query.as_ref().map_or(0, String::len),
+                    line: 1,
+                    message: format!("Search regular expression is invalid: {error}"),
+                    passage_id: None,
+                    quick_fixes: vec![CoreQuickFix {
+                        command: "disable-regex-search".into(),
+                        title: "Turn off regular expressions".into(),
+                    }],
+                    severity: CoreDiagnosticSeverity::Error,
+                    source_id: metadata_source_id.clone(),
+                    start: 0,
+                });
+            }
+        }
 
-        if options.include_script {
+        if search_enabled {
+            let metadata_source = story_metadata_source(story);
+            search_hits.extend(search_hits_in_source(
+                &options,
+                search_pattern.as_ref(),
+                &metadata_source_id,
+                "Story Metadata",
+                &metadata_source,
+                CoreSearchScope::Metadata,
+                None,
+            ));
+        }
+
+        if search_enabled && options.include_script {
             search_hits.extend(search_hits_in_source(
                 &options,
                 search_pattern.as_ref(),
@@ -1932,7 +1964,7 @@ impl ProjectSession {
             ));
         }
 
-        if options.include_stylesheet {
+        if search_enabled && options.include_stylesheet {
             search_hits.extend(search_hits_in_source(
                 &options,
                 search_pattern.as_ref(),
@@ -1984,7 +2016,7 @@ impl ProjectSession {
             Vec::new()
         };
 
-        if options.include_variables {
+        if search_enabled && options.include_variables {
             for symbol in &symbols {
                 search_hits.extend(search_hits_in_source(
                     &options,
@@ -1998,7 +2030,7 @@ impl ProjectSession {
             }
         }
 
-        if options.include_assets {
+        if search_enabled && options.include_assets {
             for asset in &asset_inventory {
                 let location = asset_search_location(story, asset);
 
@@ -2014,73 +2046,79 @@ impl ProjectSession {
             }
         }
 
-        for broken_link in graph.broken_links() {
-            let (line, start, end) = story
-                .passage_by_id(&broken_link.source)
-                .and_then(|passage| locate_link_target(&passage.text, &broken_link.target_name))
-                .unwrap_or((1, 0, broken_link.target_name.len()));
+        if options.include_diagnostics {
+            if let Some(graph) = &graph {
+                for broken_link in graph.broken_links() {
+                    let (line, start, end) = story
+                        .passage_by_id(&broken_link.source)
+                        .and_then(|passage| {
+                            locate_link_target(&passage.text, &broken_link.target_name)
+                        })
+                        .unwrap_or((1, 0, broken_link.target_name.len()));
 
-            diagnostics.push(CoreDiagnostic {
-                code: "broken-link".into(),
-                end,
-                line,
-                message: format!("Broken link to \"{}\"", broken_link.target_name),
-                passage_id: Some(broken_link.source.as_ref().to_owned()),
-                quick_fixes: vec![
-                    CoreQuickFix {
-                        command: format!("create-passage:{}", broken_link.target_name),
-                        title: format!("Create \"{}\"", broken_link.target_name),
-                    },
-                    CoreQuickFix {
-                        command: "rename-link-target".into(),
-                        title: "Change link target".into(),
-                    },
-                ],
-                severity: CoreDiagnosticSeverity::Warning,
-                source_id: broken_link.source.as_ref().to_owned(),
-                start,
-            });
+                    diagnostics.push(CoreDiagnostic {
+                        code: "broken-link".into(),
+                        end,
+                        line,
+                        message: format!("Broken link to \"{}\"", broken_link.target_name),
+                        passage_id: Some(broken_link.source.as_ref().to_owned()),
+                        quick_fixes: vec![
+                            CoreQuickFix {
+                                command: format!("create-passage:{}", broken_link.target_name),
+                                title: format!("Create \"{}\"", broken_link.target_name),
+                            },
+                            CoreQuickFix {
+                                command: "rename-link-target".into(),
+                                title: "Change link target".into(),
+                            },
+                        ],
+                        severity: CoreDiagnosticSeverity::Warning,
+                        source_id: broken_link.source.as_ref().to_owned(),
+                        start,
+                    });
+                }
+            }
+
+            for duplicate in duplicate_passage_names(story) {
+                diagnostics.push(CoreDiagnostic {
+                    code: "duplicate-passage-name".into(),
+                    end: duplicate.name.len(),
+                    line: 1,
+                    message: format!("Duplicate passage name \"{}\"", duplicate.name),
+                    passage_id: Some(duplicate.passage_id.clone()),
+                    quick_fixes: vec![CoreQuickFix {
+                        command: "rename-passage".into(),
+                        title: "Rename passage".into(),
+                    }],
+                    severity: CoreDiagnosticSeverity::Error,
+                    source_id: duplicate.passage_id,
+                    start: 0,
+                });
+            }
+
+            if story.passage_by_id(&story.start_passage).is_none() {
+                diagnostics.push(CoreDiagnostic {
+                    code: "missing-start-passage".into(),
+                    end: 0,
+                    line: 1,
+                    message: "Story start passage is missing".into(),
+                    passage_id: None,
+                    quick_fixes: vec![CoreQuickFix {
+                        command: "set-start-passage".into(),
+                        title: "Choose a start passage".into(),
+                    }],
+                    severity: CoreDiagnosticSeverity::Error,
+                    source_id: metadata_source_id.clone(),
+                    start: 0,
+                });
+            }
+
+            diagnostics.extend(asset_diagnostics(
+                story,
+                &metadata_source_id,
+                &asset_inventory,
+            ));
         }
-
-        for duplicate in duplicate_passage_names(story) {
-            diagnostics.push(CoreDiagnostic {
-                code: "duplicate-passage-name".into(),
-                end: duplicate.name.len(),
-                line: 1,
-                message: format!("Duplicate passage name \"{}\"", duplicate.name),
-                passage_id: Some(duplicate.passage_id.clone()),
-                quick_fixes: vec![CoreQuickFix {
-                    command: "rename-passage".into(),
-                    title: "Rename passage".into(),
-                }],
-                severity: CoreDiagnosticSeverity::Error,
-                source_id: duplicate.passage_id,
-                start: 0,
-            });
-        }
-
-        if story.passage_by_id(&story.start_passage).is_none() {
-            diagnostics.push(CoreDiagnostic {
-                code: "missing-start-passage".into(),
-                end: 0,
-                line: 1,
-                message: "Story start passage is missing".into(),
-                passage_id: None,
-                quick_fixes: vec![CoreQuickFix {
-                    command: "set-start-passage".into(),
-                    title: "Choose a start passage".into(),
-                }],
-                severity: CoreDiagnosticSeverity::Error,
-                source_id: metadata_source_id.clone(),
-                start: 0,
-            });
-        }
-
-        diagnostics.extend(asset_diagnostics(
-            story,
-            &metadata_source_id,
-            &asset_inventory,
-        ));
 
         asset_inventory.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -2103,16 +2141,30 @@ impl ProjectSession {
             .iter()
             .map(|entry| entry.name.clone())
             .collect::<Vec<_>>();
-        let contents = contents_entries(
-            story,
-            &files,
-            &tag_entries,
-            &symbols,
-            &asset_inventory,
-            &diagnostics,
-            &graph,
-            &metadata_source_id,
-        );
+        let contents = if options.include_contents {
+            contents_entries(
+                story,
+                &files,
+                &tag_entries,
+                &symbols,
+                &asset_inventory,
+                &diagnostics,
+                graph
+                    .as_ref()
+                    .expect("graph index should exist when contents are included"),
+                &metadata_source_id,
+            )
+        } else {
+            Vec::new()
+        };
+        let graph_stats = if options.include_graph {
+            graph
+                .as_ref()
+                .map(|graph| graph.stats().clone().into())
+                .unwrap_or_default()
+        } else {
+            CoreGraphStats::default()
+        };
 
         Ok(CoreStoryIndex {
             asset_inventory,
@@ -2120,7 +2172,7 @@ impl ProjectSession {
             contents,
             diagnostics,
             files,
-            graph: graph.stats().clone().into(),
+            graph: graph_stats,
             replace_previews,
             search_hits,
             story_id: story_id.to_owned(),
@@ -2584,6 +2636,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_zoom() -> f64 {
+    1.0
+}
+
 fn next_passage_id(story: &Story) -> String {
     let mut suffix = story.passage_count() + 1;
 
@@ -2943,6 +2999,13 @@ fn line_count(text: &str) -> usize {
 }
 
 const MAX_SEARCH_HITS: usize = 500;
+
+fn has_search_query(options: &CoreStoryIndexOptions) -> bool {
+    options
+        .query
+        .as_deref()
+        .is_some_and(|query| !query.trim().is_empty())
+}
 
 fn search_hits_in_source(
     options: &CoreStoryIndexOptions,

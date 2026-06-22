@@ -1,0 +1,29 @@
+[package]
+name = "twine_native"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = "3"
+napi-derive = "3"
+rayon.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+twine_model.workspace = true
+twine_store.workspace = true
+
+[build-dependencies]
+napi-build = "2"
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = "warn"

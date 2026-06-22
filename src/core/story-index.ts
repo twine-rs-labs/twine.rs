@@ -28,6 +28,10 @@ type StoryIndexQuery = string | Partial<CoreStoryIndexOptions>;
 const defaultOptions: CoreStoryIndexOptions = {
 	fuzzy: false,
 	includeAssets: true,
+	includeContents: true,
+	includeDiagnostics: true,
+	includeFiles: true,
+	includeGraph: true,
 	includePassageNames: true,
 	includePassageText: true,
 	includeScript: true,
@@ -43,7 +47,9 @@ const defaultOptions: CoreStoryIndexOptions = {
 
 const maxSearchHits = 500;
 
-function normalizeOptions(query: StoryIndexQuery = {}): CoreStoryIndexOptions {
+export function normalizeStoryIndexOptions(
+	query: StoryIndexQuery = {}
+): CoreStoryIndexOptions {
 	return typeof query === 'string'
 		? {...defaultOptions, query}
 		: {...defaultOptions, ...query};
@@ -163,6 +169,10 @@ function createSearchMatcher(options: CoreStoryIndexOptions) {
 		matchCase: options.matchCase,
 		useRegexes: options.useRegexes
 	});
+}
+
+function hasSearchQuery(options: CoreStoryIndexOptions) {
+	return (options.query?.trim() ?? '') !== '';
 }
 
 function replacementForMatch(
@@ -338,6 +348,20 @@ function graphStats(story: Story): CoreGraphStats {
 		selfLinks,
 		taggedPassages: story.passages.filter(passage => passage.tags.length > 0)
 			.length,
+		unreachablePassages: 0
+	};
+}
+
+function emptyGraphStats(): CoreGraphStats {
+	return {
+		brokenLinks: 0,
+		emptyPassages: 0,
+		links: 0,
+		orphanPassages: 0,
+		passages: 0,
+		resolvedLinks: 0,
+		selfLinks: 0,
+		taggedPassages: 0,
 		unreachablePassages: 0
 	};
 }
@@ -906,43 +930,52 @@ export function storyToCoreIndex(
 	story: Story,
 	query: StoryIndexQuery = {}
 ): CoreStoryIndex {
-	const options = normalizeOptions(query);
+	const options = normalizeStoryIndexOptions(query);
+	const searchEnabled = hasSearchQuery(options);
 	let matcher: RegExp | undefined;
-	const diagnostics = diagnosticsForStory(story);
+	const diagnostics = options.includeDiagnostics
+		? diagnosticsForStory(story)
+		: [];
 
 	try {
-		matcher = createSearchMatcher(options);
+		if (searchEnabled) {
+			matcher = createSearchMatcher(options);
+		}
 	} catch {
-		diagnostics.push(invalidRegexDiagnostic(story, options.query ?? ''));
+		if (searchEnabled && options.includeDiagnostics) {
+			diagnostics.push(invalidRegexDiagnostic(story, options.query ?? ''));
+		}
 	}
 
-	const files: CoreSourceFile[] = [
-		...story.passages.map(sourceFileForPassage),
-		{
-			characterCount: story.script.length,
-			id: `${story.id}:script`,
-			kind: 'script',
-			lineCount: lineCount(story.script),
-			name: 'Story JavaScript',
-			passageId: null,
-			tags: []
-		},
-		{
-			characterCount: story.stylesheet.length,
-			id: `${story.id}:stylesheet`,
-			kind: 'stylesheet',
-			lineCount: lineCount(story.stylesheet),
-			name: 'Story Stylesheet',
-			passageId: null,
-			tags: []
-		}
-	];
+	const files: CoreSourceFile[] = options.includeFiles
+		? [
+				...story.passages.map(sourceFileForPassage),
+				{
+					characterCount: story.script.length,
+					id: `${story.id}:script`,
+					kind: 'script',
+					lineCount: lineCount(story.script),
+					name: 'Story JavaScript',
+					passageId: null,
+					tags: []
+				},
+				{
+					characterCount: story.stylesheet.length,
+					id: `${story.id}:stylesheet`,
+					kind: 'stylesheet',
+					lineCount: lineCount(story.stylesheet),
+					name: 'Story Stylesheet',
+					passageId: null,
+					tags: []
+				}
+			]
+		: [];
 	const searchHits: CoreSearchHit[] = [];
 	const symbols: CoreSymbol[] = [];
 	const assets: CoreAssetReference[] = [];
 
 	for (const passage of story.passages) {
-		if (options.includePassageNames) {
+		if (searchEnabled && options.includePassageNames) {
 			searchHits.push(
 				...searchHitsInSource(
 					options,
@@ -956,7 +989,7 @@ export function storyToCoreIndex(
 			);
 		}
 
-		if (options.includePassageText) {
+		if (searchEnabled && options.includePassageText) {
 			searchHits.push(
 				...searchHitsInSource(
 					options,
@@ -970,7 +1003,7 @@ export function storyToCoreIndex(
 			);
 		}
 
-		if (options.includeTags) {
+		if (searchEnabled && options.includeTags) {
 			for (const tag of passage.tags) {
 				searchHits.push(
 					...searchHitsInSource(
@@ -1010,19 +1043,21 @@ export function storyToCoreIndex(
 		}
 	}
 
-	searchHits.push(
-		...searchHitsInSource(
-			options,
-			matcher,
-			`${story.id}:metadata`,
-			'Story Metadata',
-			storyMetadataSource(story),
-			'metadata',
-			null
-		)
-	);
+	if (searchEnabled) {
+		searchHits.push(
+			...searchHitsInSource(
+				options,
+				matcher,
+				`${story.id}:metadata`,
+				'Story Metadata',
+				storyMetadataSource(story),
+				'metadata',
+				null
+			)
+		);
+	}
 
-	if (options.includeScript) {
+	if (searchEnabled && options.includeScript) {
 		searchHits.push(
 			...searchHitsInSource(
 				options,
@@ -1036,7 +1071,7 @@ export function storyToCoreIndex(
 		);
 	}
 
-	if (options.includeStylesheet) {
+	if (searchEnabled && options.includeStylesheet) {
 		searchHits.push(
 			...searchHitsInSource(
 				options,
@@ -1090,7 +1125,7 @@ export function storyToCoreIndex(
 		? assetInventoryFromReferences(assets, options.knownAssets)
 		: [];
 
-	if (options.includeVariables) {
+	if (searchEnabled && options.includeVariables) {
 		for (const symbol of symbols) {
 			searchHits.push(
 				...searchHitsInSource(
@@ -1106,7 +1141,7 @@ export function storyToCoreIndex(
 		}
 	}
 
-	if (options.includeAssets) {
+	if (searchEnabled && options.includeAssets) {
 		for (const asset of assetInventory) {
 			const location = assetLocation(story, asset);
 
@@ -1162,22 +1197,26 @@ export function storyToCoreIndex(
 			start: hit.start
 		}));
 
-	diagnostics.push(...assetDiagnostics(story, assetInventory));
+	if (options.includeDiagnostics) {
+		diagnostics.push(...assetDiagnostics(story, assetInventory));
+	}
 
 	return {
 		assetInventory,
 		assets,
-		contents: contentsEntries(
-			story,
-			files,
-			tags,
-			symbols,
-			assetInventory,
-			diagnostics
-		),
+		contents: options.includeContents
+			? contentsEntries(
+					story,
+					files,
+					tags,
+					symbols,
+					assetInventory,
+					diagnostics
+				)
+			: [],
 		diagnostics,
 		files,
-		graph: graphStats(story),
+		graph: options.includeGraph ? graphStats(story) : emptyGraphStats(),
 		replacePreviews,
 		searchHits,
 		storyId: story.id,

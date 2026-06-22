@@ -64,5 +64,8 @@ export default defineConfig({
 	],
 	server: {
 		open: true
+	},
+	worker: {
+		format: 'es'
 	}
 });

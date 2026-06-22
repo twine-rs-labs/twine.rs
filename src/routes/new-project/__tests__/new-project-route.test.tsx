@@ -188,7 +188,48 @@ describe('<NewProjectRoute>', () => {
 		expect(history.location.pathname).toBe('/');
 	});
 
-	it('hydrates native project folder passage bodies after shell open', async () => {
+	it('shows progress while opening native project folders', async () => {
+		const story = {
+			...fakeStory(1),
+			id: 'native-story',
+			name: 'Native Story',
+			storyFormat: 'Harlowe',
+			storyFormatVersion: '3.3.9'
+		};
+		let resolveOpen: (value: any) => void = () => undefined;
+
+		(window as any).twineElectron = {
+			openProjectFolder: jest.fn(
+				() =>
+					new Promise(resolve => {
+						resolveOpen = resolve;
+					})
+			)
+		};
+
+		renderComponent('/new-project/import');
+		fireEvent.click(screen.getByRole('button', {name: /open project folder/i}));
+
+		expect(
+			screen.getByRole('progressbar', {name: /opening story/i})
+		).toHaveTextContent('Opening project folder');
+
+		await waitFor(() =>
+			expect((window as any).twineElectron.openProjectFolder).toHaveBeenCalled()
+		);
+
+		resolveOpen({
+			rootPath: '/native/Native Story.twine.rs',
+			stories: [story],
+			storyIds: [story.id]
+		});
+
+		await waitFor(() =>
+			expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+		);
+	});
+
+	it('defers native project folder passage body hydration after shell open', async () => {
 		const shellStory = {
 			...fakeStory(1),
 			id: 'native-story',
@@ -206,23 +247,8 @@ describe('<NewProjectRoute>', () => {
 			storyFormat: 'Harlowe',
 			storyFormatVersion: '3.3.9'
 		};
-		const hydratedStory = {
-			...shellStory,
-			passages: [
-				{
-					...shellStory.passages[0],
-					text: 'Hydrated body text'
-				}
-			]
-		};
-
 		(window as any).twineElectron = {
-			hydrateProjectFolder: jest.fn(async () => ({
-				passageTextLoaded: true,
-				rootPath: '/native/Native Story.twine.rs',
-				stories: [hydratedStory],
-				storyIds: [hydratedStory.id]
-			})),
+			hydrateProjectFolder: jest.fn(),
 			openProjectFolder: jest.fn(async () => ({
 				passageTextLoaded: false,
 				rootPath: '/native/Native Story.twine.rs',
@@ -236,13 +262,14 @@ describe('<NewProjectRoute>', () => {
 		fireEvent.click(screen.getByRole('button', {name: /open project folder/i}));
 
 		await waitFor(() =>
-			expect(screen.getByTestId('passage-start')).toHaveTextContent(
-				'Hydrated body text'
+			expect(screen.getByTestId('story-inspector-default')).toHaveAttribute(
+				'data-name',
+				'Native Story'
 			)
 		);
 		expect(
 			(window as any).twineElectron.hydrateProjectFolder
-		).toHaveBeenCalledWith('/native/Native Story.twine.rs', ['native-story']);
+		).not.toHaveBeenCalled();
 	});
 
 	it('is accessible', async () => {

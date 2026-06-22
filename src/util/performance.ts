@@ -1,5 +1,12 @@
 const prefix = 'twine';
 
+export interface TwinePerformanceEntry {
+	duration: number;
+	name: string;
+	startTime: number;
+	type: string;
+}
+
 function performanceApi() {
 	return typeof window !== 'undefined' ? window.performance : undefined;
 }
@@ -54,6 +61,24 @@ export function measurePerformance(
 	} catch {
 		// Missing marks should never affect app behavior.
 	}
+}
+
+export function performanceSnapshot(): TwinePerformanceEntry[] {
+	const performance = performanceApi();
+
+	if (!performance?.getEntries) {
+		return [];
+	}
+
+	return performance
+		.getEntries()
+		.filter(entry => entry.name.startsWith(`${prefix}:`))
+		.map(entry => ({
+			duration: entry.duration,
+			name: entry.name.slice(prefix.length + 1),
+			startTime: entry.startTime,
+			type: entry.entryType
+		}));
 }
 
 export function scheduleIdleWork(callback: () => void) {

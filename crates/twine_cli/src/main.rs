@@ -26,6 +26,7 @@ fn main() -> Result<()> {
     match args.as_slice() {
         [] => bail!("{}", usage()),
         [command] if is_command(command, "bench-graph") => bench_graph(50_000),
+        [command, path] if is_command(command, "bench-open") => bench_open(path),
         [command, path] if is_command(command, "inspect") => inspect(path),
         [command, path] if is_command(command, "graph") => graph(path, None),
         [command, path, story_id] if is_command(command, "graph") => {
@@ -57,6 +58,7 @@ fn usage() -> &'static str {
   twine-rs inspect <story-json|twee|html|project-dir>
   twine-rs graph <story-json|twee|html|project-dir> [story-id-or-name]
   twine-rs bench-graph [passage-count]
+  twine-rs bench-open <project-dir>
   twine-rs import <story-json|twee|html> <project-dir>
   twine-rs export <project-dir> <json|twee|html|archive> [output-file]"
 }
@@ -102,6 +104,109 @@ fn bench_graph(passage_count: usize) -> Result<()> {
         }))?
     );
     Ok(())
+}
+
+fn bench_open(project_dir: &Path) -> Result<()> {
+    let start = Instant::now();
+    let project = load_project_path(project_dir)
+        .with_context(|| format!("failed to load project at {}", project_dir.display()))?;
+    let load_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let assets = count_asset_files(&project_dir.join("assets"))?;
+    let passages = project
+        .stories
+        .iter()
+        .map(Story::passage_count)
+        .sum::<usize>();
+    let mut links = 0;
+    let mut visible_nodes = 0;
+    let mut visible_edges = 0;
+    let start = Instant::now();
+    let graphs = project
+        .stories
+        .iter()
+        .map(|story| {
+            let graph = GraphIndex::from_story(story);
+
+            links += graph.stats().links;
+            graph
+        })
+        .collect::<Vec<_>>();
+    let index_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let start = Instant::now();
+    let layouts = project
+        .stories
+        .iter()
+        .zip(&graphs)
+        .map(|(story, graph)| {
+            graph.layout_snapshot(story, &project.layout, &AutoLayoutOptions::default())
+        })
+        .collect::<Vec<_>>();
+    let layout_snapshot_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let start = Instant::now();
+
+    for (graph, layout) in graphs.iter().zip(&layouts) {
+        let projection = graph.canvas_projection_from_snapshot(
+            layout,
+            &GraphProjectionOptions {
+                viewport: Some(
+                    GraphPosition {
+                        height: 1200.0,
+                        left: 0.0,
+                        top: 0.0,
+                        width: 1600.0,
+                    }
+                    .into(),
+                ),
+                ..GraphProjectionOptions::default()
+            },
+        );
+
+        visible_nodes += projection.nodes.len();
+        visible_edges += projection.edges.len();
+    }
+
+    let projection_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "assets": assets,
+            "indexMs": index_ms,
+            "layoutSnapshotMs": layout_snapshot_ms,
+            "links": links,
+            "loadMs": load_ms,
+            "passages": passages,
+            "projectionMs": projection_ms,
+            "stories": project.stories.len(),
+            "visibleEdges": visible_edges,
+            "visibleNodes": visible_nodes
+        }))?
+    );
+    Ok(())
+}
+
+fn count_asset_files(asset_root: &Path) -> Result<usize> {
+    if !asset_root.exists() {
+        return Ok(0);
+    }
+
+    let mut count = 0;
+    let mut stack = vec![asset_root.to_path_buf()];
+
+    while let Some(path) = stack.pop() {
+        for entry in fs::read_dir(&path)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+
+            if file_type.is_dir() {
+                stack.push(entry.path());
+            } else if file_type.is_file() {
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
 }
 
 fn inspect(path: &Path) -> Result<()> {

@@ -1,8 +1,10 @@
-import {render, screen, within} from '@testing-library/react';
+import {render, screen, waitFor, within} from '@testing-library/react';
 import * as React from 'react';
 import {MemoryRouter} from 'react-router-dom';
 import {DialogsContext} from '../../../dialogs/context';
 import {StoryJavaScriptDialog} from '../../../dialogs/story-javascript';
+import {markProjectStoryHydration} from '../../../store/project-hydration';
+import {saveProjectMetadata} from '../../../store/project-metadata';
 import {UndoableStoriesContext} from '../../../store/undoable-stories';
 import {fakePassage, fakeStory} from '../../../test-util';
 import {StoryWorkspaceShell} from '../story-workspace-shell';
@@ -45,6 +47,9 @@ function renderComponent(
 	mode: StoryEditMode,
 	props?: Partial<React.ComponentProps<typeof StoryWorkspaceShell>>,
 	context?: {
+		configureStory?: (
+			story: ReturnType<typeof storyWithLinkedPassages>['story']
+		) => void;
 		dialogsDispatch?: jest.Mock;
 		storyDispatch?: jest.Mock;
 	}
@@ -54,6 +59,8 @@ function renderComponent(
 	const onRevealPassageInGraph = jest.fn();
 	const dialogsDispatch = context?.dialogsDispatch ?? jest.fn();
 	const storyDispatch = context?.storyDispatch ?? jest.fn();
+
+	context?.configureStory?.(story);
 
 	render(
 		<MemoryRouter>
@@ -161,6 +168,31 @@ describe('<StoryWorkspaceShell>', () => {
 		).toHaveAttribute('aria-current', 'true');
 	});
 
+	it('windows large passage navigator lists to viewport-sized row counts', () => {
+		renderComponent('text', undefined, {
+			configureStory: story => {
+				story.passages = Array.from({length: 1000}, (_, index) =>
+					fakePassage({
+						id: `passage-${index}`,
+						name: `Passage ${index}`,
+						story: story.id,
+						text: ''
+					})
+				);
+				story.startPassage = story.passages[0].id;
+			}
+		});
+
+		const list = screen
+			.getByRole('complementary', {
+				name: 'routes.storyEdit.workspace.leftDock'
+			})
+			.querySelector('.story-edit-passage-list');
+
+		expect(list).toHaveAttribute('data-total-count', '1000');
+		expect(Number(list?.getAttribute('data-visible-count'))).toBeLessThan(80);
+	});
+
 	it('navigates to linked passages from the bottom drawer', () => {
 		const {next, onSelectPassage} = renderComponent('text', {
 			bottomDrawerOpen: true
@@ -201,6 +233,41 @@ describe('<StoryWorkspaceShell>', () => {
 		expect(screen.getAllByText('$score').length).toBeGreaterThan(0);
 		expect(screen.getAllByText('assets/cover.png').length).toBeGreaterThan(0);
 		expect(screen.getAllByText('broken-link').length).toBeGreaterThan(0);
+	});
+
+	it('hydrates only the opened project-folder story on demand', async () => {
+		const hydrateProjectFolder = jest.fn(async () => ({
+			passageTextLoaded: true,
+			rootPath: '/native/project.twine.rs',
+			stories: [],
+			storyIds: []
+		}));
+
+		(window as any).twineElectron = {hydrateProjectFolder};
+		const {story} = renderComponent('graph', undefined, {
+			configureStory: currentStory => {
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+
+		expect(
+			screen.getByRole('progressbar', {name: 'Opening story'})
+		).toHaveTextContent('Loading passage text');
+
+		await waitFor(() =>
+			expect(hydrateProjectFolder).toHaveBeenCalledWith(
+				'/native/project.twine.rs',
+				[story.id]
+			)
+		);
 	});
 
 	it('opens indexed story sources from the contents navigator', () => {
@@ -326,9 +393,11 @@ describe('<StoryWorkspaceShell>', () => {
 	it('reveals diagnostics in the graph explicitly', () => {
 		const {onRevealPassageInGraph, start} = renderComponent('text');
 
-		screen.getByRole('button', {
-			name: 'routes.storyEdit.workspace.revealInGraph'
-		}).click();
+		screen
+			.getByRole('button', {
+				name: 'routes.storyEdit.workspace.revealInGraph'
+			})
+			.click();
 
 		expect(onRevealPassageInGraph).toHaveBeenCalledWith(start);
 	});

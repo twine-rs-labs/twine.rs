@@ -1,4 +1,4 @@
-import {importStories} from '../import';
+import {importStories, importStoriesAsync} from '../import';
 import {TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE} from '../story-graph-metadata';
 
 const testHtml = `
@@ -151,5 +151,59 @@ describe('importStories', () => {
 				story.passages.every(passage => passage.story === story.id)
 			)
 		).toBe(true);
+	});
+
+	it('asynchronously imports the same story shape', async () => {
+		await expect(importStoriesAsync(testHtml)).resolves.toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: 'Test',
+					passages: expect.arrayContaining([
+						expect.objectContaining({
+							name: 'Untitled Passage',
+							text: 'This is some text.\n\n[[1]]'
+						})
+					])
+				})
+			])
+		);
+	});
+
+	it('yields between large passage batches during async import', async () => {
+		const originalRequestIdleCallback = window.requestIdleCallback;
+		const idleSpy = jest.fn((callback: IdleRequestCallback) => {
+			window.setTimeout(
+				() =>
+					callback({
+						didTimeout: false,
+						timeRemaining: () => 16
+					} as IdleDeadline),
+				0
+			);
+
+			return 1;
+		});
+		const passages = Array.from(
+			{length: 5},
+			(_, index) =>
+				`<tw-passagedata pid="${index + 1}" name="Passage ${
+					index + 1
+				}">Text ${index + 1}</tw-passagedata>`
+		).join('');
+
+		window.requestIdleCallback = idleSpy;
+
+		try {
+			const result = await importStoriesAsync(
+				`<tw-storydata name="Chunky" startnode="1">${passages}</tw-storydata>`,
+				undefined,
+				{passageBatchSize: 2}
+			);
+
+			expect(result[0].passages).toHaveLength(5);
+			expect(idleSpy).toHaveBeenCalledTimes(4);
+		} finally {
+			window.requestIdleCallback = originalRequestIdleCallback;
+		}
 	});
 });

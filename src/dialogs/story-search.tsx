@@ -65,7 +65,17 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 	const index = React.useMemo(
 		() =>
 			coreProjectHost.queryStoryIndex(story.id, {
+				includeAssets: false,
+				includeContents: false,
+				includeDiagnostics: false,
+				includeFiles: false,
+				includeGraph: false,
 				includePassageNames: flags.includePassageNames ?? false,
+				includePassageText: true,
+				includeScript: true,
+				includeStylesheet: true,
+				includeTags: false,
+				includeVariables: false,
 				matchCase: flags.matchCase ?? false,
 				query: find,
 				replacement: replace,

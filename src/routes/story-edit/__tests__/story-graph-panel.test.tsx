@@ -140,9 +140,10 @@ describe('<StoryGraphPanel>', () => {
 		).toBeInTheDocument();
 		expect(nodeButton(result.container, 'next')).toHaveTextContent('Next');
 		expect(screen.getByText('saved')).toBeInTheDocument();
-		expect(
-			screen.getByTestId('story-graph-edges-canvas')
-		).toHaveAttribute('data-edge-kinds', expect.stringContaining('resolved'));
+		expect(screen.getByTestId('story-graph-edges-canvas')).toHaveAttribute(
+			'data-edge-kinds',
+			expect.stringContaining('resolved')
+		);
 		expect(screen.getByTestId('story-graph-edges-canvas')).toHaveAttribute(
 			'data-edge-kinds',
 			expect.stringContaining('broken')
@@ -206,7 +207,7 @@ describe('<StoryGraphPanel>', () => {
 		expect(onTestPassage).toHaveBeenCalledWith(start);
 	});
 
-	it('passes the measured viewport into graph projection queries', async () => {
+	it('passes a buffered measured viewport into graph projection queries', async () => {
 		const widthSpy = jest
 			.spyOn(HTMLElement.prototype, 'clientWidth', 'get')
 			.mockReturnValue(320);
@@ -224,10 +225,10 @@ describe('<StoryGraphPanel>', () => {
 				story.id,
 				expect.objectContaining({
 					viewport: expect.objectContaining({
-						height: 240,
+						height: 1800,
 						left: 0,
 						top: 0,
-						width: 320
+						width: 1800
 					})
 				})
 			)
@@ -235,6 +236,26 @@ describe('<StoryGraphPanel>', () => {
 
 		widthSpy.mockRestore();
 		heightSpy.mockRestore();
+	});
+
+	it('uses a bounded initial graph projection before viewport measurement', () => {
+		const querySpy = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'queryGraphProjection'
+		);
+		const {story} = renderComponent();
+
+		expect(querySpy).toHaveBeenCalledWith(
+			story.id,
+			expect.objectContaining({
+				viewport: expect.objectContaining({
+					height: 1,
+					left: 0,
+					top: 0,
+					width: 1
+				})
+			})
+		);
 	});
 
 	it('keeps the edge canvas backing store bounded at low zoom', async () => {
@@ -262,12 +283,12 @@ describe('<StoryGraphPanel>', () => {
 			) as HTMLCanvasElement;
 
 			await waitFor(() =>
-				expect(parseFloat(canvas.style.width)).toBeGreaterThan(10000)
+				expect(parseFloat(canvas.style.width)).toBeGreaterThan(5000)
 			);
 
 			const cssWidth = parseFloat(canvas.style.width);
 
-			expect(cssWidth).toBeCloseTo(12000, 0);
+			expect(cssWidth).toBeCloseTo(5400, 0);
 			expect(canvas.width).toBe(Math.ceil(cssWidth * 0.3));
 			expect(canvas.width).toBeLessThan(cssWidth);
 		} finally {
@@ -492,10 +513,13 @@ describe('<StoryGraphPanel>', () => {
 	});
 
 	it('applies the default card size to every selected passage', async () => {
-		const {story, undoableDispatch} = renderComponent(false, ({next, start}) => {
-			start.selected = true;
-			next.selected = true;
-		});
+		const {story, undoableDispatch} = renderComponent(
+			false,
+			({next, start}) => {
+				start.selected = true;
+				next.selected = true;
+			}
+		);
 
 		fireEvent.change(screen.getByLabelText('Default card size'), {
 			target: {value: 'wide'}

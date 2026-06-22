@@ -78,6 +78,15 @@ export interface StoryWorkspaceShellProps {
 
 type NavigatorTab = 'passages' | 'contents' | 'assets';
 const deferIndexPassageThreshold = 500;
+const passageNavigatorRowHeight = 30;
+const passageNavigatorOverscan = 12;
+const virtualFallbackHeight = 540;
+
+interface StoryOpenProgressState {
+	detail: string;
+	label: string;
+	progress: number;
+}
 
 function navigatorStorageKey(storyId: string) {
 	return `twine-story-edit-navigator-${storyId}`;
@@ -111,6 +120,57 @@ function usePersistedNavigatorTab(storyId: string) {
 	}, [storyId, tab]);
 
 	return [tab, setTab] as const;
+}
+
+function useFixedVirtualRange(
+	count: number,
+	rowHeight: number,
+	overscan: number
+) {
+	const containerRef = React.useRef<HTMLDivElement>(null);
+	const [viewport, setViewport] = React.useState({
+		height: virtualFallbackHeight,
+		top: 0
+	});
+
+	React.useEffect(() => {
+		const element = containerRef.current;
+
+		if (!element) {
+			return;
+		}
+
+		const current = element;
+
+		function update() {
+			setViewport({
+				height: current.clientHeight || virtualFallbackHeight,
+				top: current.scrollTop
+			});
+		}
+
+		update();
+		current.addEventListener('scroll', update, {passive: true});
+		window.addEventListener('resize', update);
+
+		return () => {
+			current.removeEventListener('scroll', update);
+			window.removeEventListener('resize', update);
+		};
+	}, []);
+
+	const start = Math.max(0, Math.floor(viewport.top / rowHeight) - overscan);
+	const end = Math.min(
+		count,
+		Math.ceil((viewport.top + viewport.height) / rowHeight) + overscan
+	);
+
+	return {
+		containerRef,
+		end,
+		start,
+		totalHeight: count * rowHeight
+	};
 }
 
 const DockPanel: React.FC<{
@@ -196,6 +256,12 @@ const PassageNavigator: React.FC<{
 }> = props => {
 	const {index, onSelectPassage, selectedPassageId, story} = props;
 	const {t} = useTranslation();
+	const virtual = useFixedVirtualRange(
+		story.passages.length,
+		passageNavigatorRowHeight,
+		passageNavigatorOverscan
+	);
+	const visiblePassages = story.passages.slice(virtual.start, virtual.end);
 	const diagnosticsByPassage = React.useMemo(() => {
 		const result = new Map<string, number>();
 
@@ -212,9 +278,30 @@ const PassageNavigator: React.FC<{
 	}, [index.diagnostics]);
 
 	return (
-		<ol className="story-edit-passage-list">
-			{story.passages.map(passage => (
-				<li key={passage.id}>
+		<div
+			className="story-edit-passage-list"
+			data-total-count={story.passages.length}
+			data-visible-count={visiblePassages.length}
+			ref={virtual.containerRef}
+			role="list"
+		>
+			<div
+				aria-hidden
+				className="story-edit-passage-list-spacer"
+				style={{height: virtual.totalHeight}}
+			/>
+			{visiblePassages.map((passage, offset) => (
+				<div
+					className="story-edit-passage-list-row"
+					key={passage.id}
+					role="listitem"
+					style={{
+						height: passageNavigatorRowHeight,
+						top: `calc(var(--sp-3) + ${
+							(virtual.start + offset) * passageNavigatorRowHeight
+						}px)`
+					}}
+				>
 					<button
 						aria-current={passage.id === selectedPassageId ? 'true' : undefined}
 						className={classNames('story-edit-passage-list-item', {
@@ -249,11 +336,32 @@ const PassageNavigator: React.FC<{
 							</span>
 						)}
 					</button>
-				</li>
+				</div>
 			))}
-		</ol>
+		</div>
 	);
 };
+
+const StoryOpenProgress: React.FC<{state: StoryOpenProgressState}> = ({
+	state
+}) => (
+	<div
+		aria-label={state.label}
+		aria-valuemax={100}
+		aria-valuemin={0}
+		aria-valuenow={state.progress}
+		className="story-edit-open-progress"
+		role="progressbar"
+	>
+		<div className="story-edit-open-progress__copy">
+			<span>{state.label}</span>
+			<b>{state.detail}</b>
+		</div>
+		<div className="story-edit-open-progress__track">
+			<span style={{width: `${state.progress}%`}} />
+		</div>
+	</div>
+);
 
 const NavigatorTabs: React.FC<{
 	activeTab: NavigatorTab;
@@ -1020,6 +1128,35 @@ export const StoryWorkspaceShell: React.FC<
 		[knownAssets, story]
 	);
 	const [fullIndex, setFullIndex] = React.useState<CoreStoryIndex>();
+	const openProgress = React.useMemo<StoryOpenProgressState | undefined>(() => {
+		if (isFileBackedStory && hydration?.passageTextLoaded === false) {
+			return {
+				detail: 'Loading passage text',
+				label: 'Opening story',
+				progress: 46
+			};
+		}
+
+		if (
+			passageTextLoaded &&
+			story.passages.length > deferIndexPassageThreshold &&
+			!fullIndex
+		) {
+			return {
+				detail: 'Indexing contents and diagnostics',
+				label: 'Opening story',
+				progress: 78
+			};
+		}
+
+		return undefined;
+	}, [
+		fullIndex,
+		hydration?.passageTextLoaded,
+		isFileBackedStory,
+		passageTextLoaded,
+		story.passages.length
+	]);
 
 	React.useEffect(() => {
 		storiesRef.current = stories;
@@ -1050,7 +1187,7 @@ export const StoryWorkspaceShell: React.FC<
 
 		hydratingStories.current.add(hydrateKey);
 		void bridge
-			.hydrateProjectFolder(projectMetadata.rootPath)
+			.hydrateProjectFolder(projectMetadata.rootPath, [story.id])
 			.then(result => {
 				if (result.stories.length > 0) {
 					const hydratedStories = mergeProjectStories(
@@ -1081,13 +1218,7 @@ export const StoryWorkspaceShell: React.FC<
 			.catch(error =>
 				console.warn(`Could not hydrate project folder story: ${error}`)
 			);
-	}, [
-		passageTextLoaded,
-		projectMetadata,
-		stories,
-		storiesDispatch,
-		story.id
-	]);
+	}, [passageTextLoaded, projectMetadata, stories, storiesDispatch, story.id]);
 
 	React.useEffect(
 		() =>
@@ -1116,20 +1247,57 @@ export const StoryWorkspaceShell: React.FC<
 	}, []);
 
 	React.useEffect(() => {
+		let active = true;
+
 		setFullIndex(undefined);
 
 		if (!passageTextLoaded) {
-			return;
+			return () => {
+				active = false;
+			};
 		}
+
+		if (coreProjectHost.runtimeMode() !== 'wasm-worker') {
+			if (story.passages.length <= deferIndexPassageThreshold) {
+				setFullIndex(coreProjectHost.queryStoryIndex(story.id));
+				return () => {
+					active = false;
+				};
+			}
+
+			const cancelIdleWork = scheduleIdleWork(() => {
+				if (active) {
+					setFullIndex(coreProjectHost.queryStoryIndex(story.id));
+				}
+			});
+
+			return () => {
+				active = false;
+				cancelIdleWork();
+			};
+		}
+
+		const loadFullIndex = () => {
+			void coreProjectHost.queryStoryIndexAsync(story.id).then(index => {
+				if (active) {
+					setFullIndex(index);
+				}
+			});
+		};
 
 		if (story.passages.length <= deferIndexPassageThreshold) {
-			setFullIndex(coreProjectHost.queryStoryIndex(story.id));
-			return;
+			loadFullIndex();
+			return () => {
+				active = false;
+			};
 		}
 
-		return scheduleIdleWork(() => {
-			setFullIndex(coreProjectHost.queryStoryIndex(story.id));
-		});
+		const cancelIdleWork = scheduleIdleWork(loadFullIndex);
+
+		return () => {
+			active = false;
+			cancelIdleWork();
+		};
 	}, [coreProjectHost, knownAssets, passageTextLoaded, patchVersion, story]);
 
 	const index = fullIndex ?? shellIndex;
@@ -1195,6 +1363,7 @@ export const StoryWorkspaceShell: React.FC<
 				'right-dock-collapsed': rightDockCollapsed
 			})}
 		>
+			{openProgress && <StoryOpenProgress state={openProgress} />}
 			<aside
 				aria-label={t('routes.storyEdit.workspace.leftDock')}
 				className="story-edit-dock story-edit-left-dock"

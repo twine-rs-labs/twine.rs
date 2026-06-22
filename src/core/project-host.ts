@@ -16,10 +16,17 @@ import {
 	replaceAssetReferencesInSource
 } from './asset-paths';
 import {
+	normalizeGraphProjectionOptions,
 	saveGeneratedGraphLayout,
 	storyToCoreGraphProjection
 } from './graph-projection';
-import {storyToCoreIndex} from './story-index';
+import {projectSnapshotFromStories} from './project-snapshot';
+import {normalizeStoryIndexOptions, storyToCoreIndex} from './story-index';
+import type {CoreBridgeMode} from './wasm/performance';
+import {
+	WasmCoreWorkerClient,
+	createWasmCoreWorkerClient
+} from './wasm/twine-wasm-client';
 import {
 	StoriesAction,
 	StoriesState,
@@ -49,7 +56,16 @@ export interface CoreProjectHost {
 		storyId: string,
 		options?: GraphProjectionQuery
 	): CoreGraphProjection;
+	queryGraphProjectionAsync(
+		storyId: string,
+		options?: GraphProjectionQuery
+	): Promise<CoreGraphProjection>;
 	queryStoryIndex(storyId: string, options?: StoryIndexQuery): CoreStoryIndex;
+	queryStoryIndexAsync(
+		storyId: string,
+		options?: StoryIndexQuery
+	): Promise<CoreStoryIndex>;
+	runtimeMode(): CoreBridgeMode;
 	subscribeToPatches(listener: CoreProjectPatchListener): () => void;
 }
 
@@ -89,10 +105,7 @@ export function useKnownAssetInventoryVersion() {
 	const [version, setVersion] = React.useState(assetInventoryVersion);
 
 	React.useEffect(
-		() =>
-			subscribeKnownAssetInventory(() =>
-				setVersion(assetInventoryVersion)
-			),
+		() => subscribeKnownAssetInventory(() => setVersion(assetInventoryVersion)),
 		[]
 	);
 
@@ -103,7 +116,8 @@ export function useKnownAssetInventoryForStory(storyId: string | undefined) {
 	const version = useKnownAssetInventoryVersion();
 
 	return React.useMemo(
-		() => (storyId ? knownAssetInventoryForStory(storyId) : emptyAssetInventory),
+		() =>
+			storyId ? knownAssetInventoryForStory(storyId) : emptyAssetInventory,
 		[storyId, version]
 	);
 }
@@ -155,15 +169,9 @@ function storyForId(stories: Story[], storyId: string) {
 }
 
 function storyIndexCacheKey(options: StoryIndexQuery) {
-	if (typeof options === 'string') {
-		return JSON.stringify({query: options});
-	}
+	const cacheableOptions = normalizeStoryIndexOptions(options);
 
-	const cacheableOptions = {...options};
-
-	delete cacheableOptions.knownAssets;
-
-	return JSON.stringify(cacheableOptions);
+	return JSON.stringify({...cacheableOptions, knownAssets: []});
 }
 
 function passageForId(story: Story, passageId: string) {
@@ -288,11 +296,16 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	>();
 	private stories: StoriesState;
 	private transactionId = BigInt(0);
+	private wasmClient: WasmCoreWorkerClient;
+	private wasmProjectRevision = 1;
+	private wasmProjectReplaceRevision = -1;
+	private wasmProjectReplacePromise?: Promise<void>;
 
 	constructor(stories: StoriesState, dispatch: UndoableDispatch) {
 		this.dispatch = dispatch;
 		this.stories = stories;
 		this.savedStoryFingerprints = storyFingerprintMap(stories);
+		this.wasmClient = createWasmCoreWorkerClient();
 	}
 
 	applyStoryCommand(command: StoryCommand, annotation?: string) {
@@ -859,10 +872,106 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		}
 	}
 
+	runtimeMode() {
+		return this.wasmClient.mode;
+	}
+
+	private normalizedStoryIndexOptions(
+		storyId: string,
+		options: StoryIndexQuery = {}
+	) {
+		const knownAssets =
+			this.assetInventoryByStory.get(storyId) ?? emptyAssetInventory;
+		const explicitKnownAssets =
+			typeof options === 'string' ? [] : (options.knownAssets ?? []);
+
+		return typeof options === 'string'
+			? normalizeStoryIndexOptions({
+					knownAssets,
+					query: options
+				})
+			: normalizeStoryIndexOptions({
+					...options,
+					knownAssets: [...explicitKnownAssets, ...knownAssets]
+				});
+	}
+
+	private async ensureWasmProjectSession() {
+		if (!this.wasmClient.enabled) {
+			throw new Error('WASM core worker is unavailable.');
+		}
+
+		if (
+			!this.wasmProjectReplacePromise ||
+			this.wasmProjectReplaceRevision !== this.wasmProjectRevision
+		) {
+			const revision = this.wasmProjectRevision;
+			const snapshot = projectSnapshotFromStories(this.stories);
+
+			this.wasmProjectReplaceRevision = revision;
+			this.wasmProjectReplacePromise = this.wasmClient
+				.replaceProject(snapshot, revision)
+				.catch(error => {
+					this.wasmProjectReplacePromise = undefined;
+					throw error;
+				});
+		}
+
+		await this.wasmProjectReplacePromise;
+		return this.wasmProjectReplaceRevision;
+	}
+
 	queryGraphProjection(storyId: string, options: GraphProjectionQuery = {}) {
+		const normalizedOptions = normalizeGraphProjectionOptions(options);
+		const cached = this.wasmClient.cachedGraphProjection(
+			storyId,
+			normalizedOptions,
+			this.wasmProjectRevision
+		);
+
+		if (cached) {
+			return cached;
+		}
+
+		if (this.wasmClient.enabled) {
+			const lastProjection = this.wasmClient.lastGraphProjection(
+				storyId,
+				this.wasmProjectRevision
+			);
+
+			if (lastProjection) {
+				return lastProjection;
+			}
+		}
+
 		return storyToCoreGraphProjection(
 			storyForId(this.stories, storyId),
-			options
+			normalizedOptions
+		);
+	}
+
+	async queryGraphProjectionAsync(
+		storyId: string,
+		options: GraphProjectionQuery = {}
+	) {
+		const normalizedOptions = normalizeGraphProjectionOptions(options);
+
+		if (this.wasmClient.enabled) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await this.wasmClient.queryGraphProjection(
+					storyId,
+					normalizedOptions,
+					revision
+				);
+			} catch (error) {
+				console.warn(`Falling back to JS graph projection: ${error}`);
+			}
+		}
+
+		return storyToCoreGraphProjection(
+			storyForId(this.stories, storyId),
+			normalizedOptions
 		);
 	}
 
@@ -876,21 +985,25 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		const cacheKey = storyIndexCacheKey(options);
 		const storyCache = this.storyIndexCache.get(story);
 		const cached = canCache ? storyCache?.get(cacheKey) : undefined;
+		const normalizedOptions = this.normalizedStoryIndexOptions(
+			storyId,
+			options
+		);
+		const wasmCached = this.wasmClient.cachedStoryIndex(
+			storyId,
+			normalizedOptions,
+			this.wasmProjectRevision
+		);
+
+		if (wasmCached && canCache) {
+			return wasmCached;
+		}
 
 		if (cached?.knownAssets === knownAssets) {
 			return cached.index;
 		}
 
-		const index =
-			typeof options === 'string'
-				? storyToCoreIndex(story, {
-						knownAssets,
-						query: options
-					})
-				: storyToCoreIndex(story, {
-						...options,
-						knownAssets: [...explicitKnownAssets, ...knownAssets]
-					});
+		const index = storyToCoreIndex(story, normalizedOptions);
 
 		if (canCache) {
 			const nextStoryCache =
@@ -903,6 +1016,31 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		return index;
 	}
 
+	async queryStoryIndexAsync(storyId: string, options: StoryIndexQuery = {}) {
+		const normalizedOptions = this.normalizedStoryIndexOptions(
+			storyId,
+			options
+		);
+
+		if (this.wasmClient.enabled) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await this.wasmClient.queryStoryIndex(
+					storyId,
+					normalizedOptions,
+					revision
+				);
+			} catch (error) {
+				console.warn(`Falling back to JS story index: ${error}`);
+			}
+		}
+
+		return storyToCoreIndex(
+			storyForId(this.stories, storyId),
+			normalizedOptions
+		);
+	}
+
 	subscribeToPatches(listener: CoreProjectPatchListener) {
 		this.listeners.add(listener);
 
@@ -912,6 +1050,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	}
 
 	update(stories: StoriesState, dispatch: UndoableDispatch) {
+		if (this.stories !== stories) {
+			this.wasmProjectRevision++;
+			this.wasmProjectReplacePromise = undefined;
+		}
+
 		this.dispatch = dispatch;
 		this.stories = stories;
 	}

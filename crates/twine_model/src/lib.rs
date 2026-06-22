@@ -494,7 +494,7 @@ pub enum ModelError {
     PassageNotFound(PassageId),
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PassageLayout {
     #[serde(default)]
@@ -503,6 +503,56 @@ pub struct PassageLayout {
     pub group: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, Value>,
+}
+
+impl<'de> Deserialize<'de> for PassageLayout {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PassageLayoutWire {
+            #[serde(default)]
+            bounds: Option<GraphPosition>,
+            #[serde(default)]
+            group: Option<String>,
+            #[serde(default)]
+            height: Option<f64>,
+            #[serde(default)]
+            left: Option<f64>,
+            #[serde(default)]
+            metadata: BTreeMap<String, Value>,
+            #[serde(default)]
+            top: Option<f64>,
+            #[serde(default)]
+            width: Option<f64>,
+        }
+
+        let wire = PassageLayoutWire::deserialize(deserializer)?;
+        let bounds = wire.bounds.or_else(|| {
+            if wire.left.is_some()
+                || wire.top.is_some()
+                || wire.width.is_some()
+                || wire.height.is_some()
+            {
+                Some(GraphPosition {
+                    height: wire.height.unwrap_or(100.0),
+                    left: wire.left.unwrap_or(0.0),
+                    top: wire.top.unwrap_or(0.0),
+                    width: wire.width.unwrap_or(100.0),
+                })
+            } else {
+                None
+            }
+        });
+
+        Ok(Self {
+            bounds: bounds.unwrap_or_default(),
+            group: wire.group,
+            metadata: wire.metadata,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -729,6 +779,62 @@ mod tests {
         assert_eq!(story.passage_count(), 1);
         assert_eq!(story.passages[0].bounds().expect("layout").left, 25.0);
         assert!(story.passage_by_name("Start").is_some());
+    }
+
+    #[test]
+    fn deserializes_legacy_flat_graph_layout_positions() {
+        let layout: GraphLayout = serde_json::from_str(
+            r#"{
+                "passages": {
+                    "passage-1": {
+                        "height": 120,
+                        "left": 3250,
+                        "top": 10950,
+                        "width": 180
+                    }
+                }
+            }"#,
+        )
+        .expect("legacy flat graph layout should deserialize");
+        let bounds = layout
+            .passages
+            .get(&PassageId::new("passage-1"))
+            .expect("passage layout")
+            .bounds;
+
+        assert_eq!(bounds.left, 3250.0);
+        assert_eq!(bounds.top, 10950.0);
+        assert_eq!(bounds.width, 180.0);
+        assert_eq!(bounds.height, 120.0);
+    }
+
+    #[test]
+    fn deserializes_canonical_graph_layout_bounds() {
+        let layout: GraphLayout = serde_json::from_str(
+            r#"{
+                "passages": {
+                    "passage-1": {
+                        "bounds": {
+                            "height": 120,
+                            "left": 3250,
+                            "top": 10950,
+                            "width": 180
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("canonical graph layout should deserialize");
+        let bounds = layout
+            .passages
+            .get(&PassageId::new("passage-1"))
+            .expect("passage layout")
+            .bounds;
+
+        assert_eq!(bounds.left, 3250.0);
+        assert_eq!(bounds.top, 10950.0);
+        assert_eq!(bounds.width, 180.0);
+        assert_eq!(bounds.height, 120.0);
     }
 
     #[test]

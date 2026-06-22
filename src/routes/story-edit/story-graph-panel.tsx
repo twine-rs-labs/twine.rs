@@ -20,6 +20,7 @@ import type {GraphCardSizePreference} from '../../store/prefs';
 import type {CoreGraphEdge} from '../../core/bindings/CoreGraphEdge';
 import type {CoreGraphLayoutState} from '../../core/bindings/CoreGraphLayoutState';
 import type {CoreGraphNode} from '../../core/bindings/CoreGraphNode';
+import type {CoreGraphProjection} from '../../core/bindings/CoreGraphProjection';
 import type {CoreLinkLayerOptions} from '../../core/bindings/CoreLinkLayerOptions';
 import type {CoreRect} from '../../core/bindings/CoreRect';
 import {Passage, Story} from '../../store/stories';
@@ -84,6 +85,12 @@ interface ViewportState {
 	width: number;
 }
 
+interface AsyncProjectionState {
+	projection: CoreGraphProjection;
+	queryKey: string;
+	story: Story;
+}
+
 const minimapSize = {height: 120, width: 170};
 const canvasPad = 900;
 const graphSnapGridSize = 26;
@@ -93,6 +100,8 @@ const exposeEdgeRouteDebug = process.env.NODE_ENV === 'test';
 const graphInteractiveSelector =
 	'.story-edit-graph-node, .story-edit-graph-toolbar, .story-edit-graph-status, .story-edit-graph-minimap, .story-edit-graph-card-tools';
 const resizeSnapActivationDistance = 18;
+const graphProjectionTileSize = 600;
+const graphProjectionOverscan = 1200;
 
 function excerpt(text: string) {
 	let compact = '';
@@ -133,6 +142,43 @@ function passageRect(passage: Passage): CoreRect {
 		top: passage.top,
 		width: passage.width
 	};
+}
+
+function bufferedViewport(rect: CoreRect): CoreRect {
+	const left = Math.max(
+		0,
+		Math.floor(
+			(rect.left - graphProjectionOverscan) / graphProjectionTileSize
+		) * graphProjectionTileSize
+	);
+	const top = Math.max(
+		0,
+		Math.floor((rect.top - graphProjectionOverscan) / graphProjectionTileSize) *
+			graphProjectionTileSize
+	);
+	const right =
+		Math.ceil(
+			(rect.left + rect.width + graphProjectionOverscan) /
+				graphProjectionTileSize
+		) * graphProjectionTileSize;
+	const bottom =
+		Math.ceil(
+			(rect.top + rect.height + graphProjectionOverscan) /
+				graphProjectionTileSize
+		) * graphProjectionTileSize;
+
+	return {
+		height: Math.max(1, bottom - top),
+		left,
+		top,
+		width: Math.max(1, right - left)
+	};
+}
+
+function bufferedViewportKey(rect: CoreRect) {
+	const buffered = bufferedViewport(rect);
+
+	return `${buffered.left}:${buffered.top}:${buffered.width}:${buffered.height}`;
 }
 
 function orientationLabel(orientation: GraphOrientation) {
@@ -777,6 +823,8 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	const selectionHandledOnPointerDown = React.useRef<string>();
 	const [optimisticSelectionKey, setOptimisticSelectionKey] =
 		React.useState('');
+	const [asyncProjection, setAsyncProjection] =
+		React.useState<AsyncProjectionState>();
 	const panRef = React.useRef<{
 		left: number;
 		moved: boolean;
@@ -840,38 +888,74 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	};
 	const measuredViewport =
 		viewport.height > 1 && viewport.width > 1 ? viewport : null;
+	const projectionViewportKey = measuredViewport
+		? bufferedViewportKey(measuredViewport)
+		: `initial:${viewport.left}:${viewport.top}:${viewport.width}:${viewport.height}`;
+	const projectionViewport = React.useMemo(() => {
+		const source = measuredViewport ?? viewport;
+
+		return measuredViewport ? bufferedViewport(source) : source;
+	}, [projectionViewportKey]);
 	const selectedPassageInViewport =
 		!selectedPassage ||
 		!measuredViewport ||
 		rectsIntersect(passageRect(selectedPassage), measuredViewport);
 	const queryViewport =
-		focusSelection || !selectedPassageInViewport || orientation !== 'right'
+		focusSelection ||
+		(measuredViewport && !selectedPassageInViewport) ||
+		orientation !== 'right'
 			? null
-			: measuredViewport;
-	const projection = React.useMemo(
-		() =>
-			host.queryGraphProjection(story.id, {
-				focus:
-					focusSelection && selectedPassageIds.length > 0
-						? {
-								direction: 'both',
-								passageIds: selectedPassageIds,
-								radius: 1
-							}
-						: null,
-				layers,
-				viewport: queryViewport
-			}),
-		[
-			focusSelection,
-			host,
+			: projectionViewport;
+	const projectionQuery = React.useMemo(
+		() => ({
+			focus:
+				focusSelection && selectedPassageIds.length > 0
+					? {
+							direction: 'both' as const,
+							passageIds: selectedPassageIds,
+							radius: 1
+						}
+					: null,
 			layers,
-			queryViewport,
-			selectedPassageIds,
-			story.id,
-			story
-		]
+			viewport: queryViewport
+		}),
+		[focusSelection, layers, queryViewport, selectedPassageIds]
 	);
+	const projectionQueryKey = React.useMemo(
+		() => JSON.stringify(projectionQuery),
+		[projectionQuery]
+	);
+	const projectionSnapshot = React.useMemo(
+		() => host.queryGraphProjection(story.id, projectionQuery),
+		[host, projectionQuery, projectionQueryKey, story.id, story]
+	);
+	const projection =
+		asyncProjection?.story === story &&
+		asyncProjection.queryKey === projectionQueryKey
+			? asyncProjection.projection
+			: projectionSnapshot;
+
+	React.useEffect(() => {
+		if (host.runtimeMode() !== 'wasm-worker') {
+			setAsyncProjection(undefined);
+			return;
+		}
+
+		let active = true;
+		const queryKey = projectionQueryKey;
+
+		void host
+			.queryGraphProjectionAsync(story.id, projectionQuery)
+			.then(projection => {
+				if (active) {
+					setAsyncProjection({projection, queryKey, story});
+				}
+			});
+
+		return () => {
+			active = false;
+		};
+	}, [host, projectionQuery, projectionQueryKey, story.id, story]);
 
 	React.useEffect(() => {
 		if (projection.nodes.length > 0 || projection.bounds) {
@@ -957,23 +1041,16 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			)
 		};
 	}, [displayBounds, viewport.height, viewport.width, visibleZoom]);
+	const edgeDrawViewportKey = queryViewport
+		? projectionViewportKey
+		: bufferedViewportKey(viewport);
 	const edgeDrawBounds = React.useMemo(() => {
-		const padding = Math.max(viewport.height, viewport.width, 1600);
-		const left = Math.max(0, viewport.left - padding);
-		const top = Math.max(0, viewport.top - padding);
+		if (queryViewport) {
+			return queryViewport;
+		}
 
-		return {
-			height: Math.max(1, viewport.height + padding * 2),
-			left,
-			top,
-			width: Math.max(1, viewport.width + padding * 2)
-		};
-	}, [
-		viewport.height,
-		viewport.left,
-		viewport.top,
-		viewport.width
-	]);
+		return bufferedViewport(viewport);
+	}, [edgeDrawViewportKey, queryViewport]);
 	const minimap = React.useMemo(
 		() => minimapTransform(displayBounds),
 		[displayBounds]
@@ -1187,7 +1264,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		pan.moved =
 			Math.abs(element.scrollLeft - pan.startLeft) > 3 ||
 			Math.abs(element.scrollTop - pan.startTop) > 3;
-		readViewport();
+		updateViewport();
 		event.preventDefault();
 	}
 
@@ -1220,7 +1297,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 		viewportElement.scrollLeft = Math.max(0, nextLeft);
 		viewportElement.scrollTop = Math.max(0, nextTop);
-		readViewport();
+		updateViewport();
 	}
 
 	function handleMinimapPointerDown(event: React.PointerEvent<HTMLDivElement>) {

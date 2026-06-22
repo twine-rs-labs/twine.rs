@@ -2,6 +2,8 @@ import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {MemoryRouter} from 'react-router-dom';
 import {publishStorySaveStatus} from '../../../store/persistence/save-status';
+import {saveProjectMetadata} from '../../../store/project-metadata';
+import {markProjectStoryHydration} from '../../../store/project-hydration';
 import {StoriesContext, Story} from '../../../store/stories';
 import {fakeStory} from '../../../test-util/fakes';
 import {AppShell} from '../app-shell';
@@ -77,6 +79,7 @@ describe('AppShell', () => {
 		jest.clearAllMocks();
 		window.localStorage.clear();
 		publishStorySaveStatus({kind: 'idle'});
+		markProjectStoryHydration('mock-story', {passageTextLoaded: true});
 		story = {
 			...fakeStory(2),
 			id: 'mock-story',
@@ -108,7 +111,29 @@ describe('AppShell', () => {
 		).toBeInTheDocument();
 		expect(screen.getByText('Dock Content')).toBeInTheDocument();
 		expect(screen.getByText('Opening')).toBeInTheDocument();
+		expect(screen.getByTitle('Open Opening')).toBeInTheDocument();
 		expect(screen.getByText('5 words')).toBeInTheDocument();
+	});
+
+	it('shows shell story-opening progress while a file-backed story hydrates', () => {
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: false,
+			rootPath: '/native/moon-castle.twine.rs'
+		});
+
+		renderShell(story);
+
+		expect(
+			screen.getByRole('progressbar', {name: 'Opening story'})
+		).toHaveTextContent('Loading passage text');
+		expect(
+			screen.getByRole('button', {name: /Loading passage text/})
+		).toBeInTheDocument();
 	});
 
 	it('opens the global command palette and runs shell commands', async () => {
@@ -130,7 +155,9 @@ describe('AppShell', () => {
 
 		fireEvent.click(screen.getByRole('button', {name: 'Command'}));
 
-		expect(await screen.findByLabelText('Command')).toHaveFocus();
+		const input = await screen.findByLabelText('Command');
+
+		await waitFor(() => expect(input).toHaveFocus());
 		expect(screen.getByText('⌘ Enter')).toBeInTheDocument();
 	});
 

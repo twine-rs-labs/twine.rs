@@ -111,6 +111,73 @@ body.dragging-passages .story-edit-route * {
 	--story-edit-bottom-offset: 130px;
 }
 
+.story-edit-open-progress {
+	backdrop-filter: blur(10px);
+	background: linear-gradient(
+		180deg,
+		color-mix(in oklab, var(--ink-2) 96%, transparent),
+		color-mix(in oklab, var(--ink-1) 94%, transparent)
+	);
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-sm);
+	box-shadow: var(--shadow-card), var(--edge-hi);
+	box-sizing: border-box;
+	display: grid;
+	gap: var(--sp-2);
+	left: calc(var(--story-edit-left-offset) + var(--sp-3));
+	min-width: min(
+		360px,
+		calc(
+			100% - var(--story-edit-left-offset) - var(--story-edit-right-offset) -
+				2 * var(--sp-3)
+		)
+	);
+	padding: var(--sp-2) var(--sp-3);
+	position: absolute;
+	right: calc(var(--story-edit-right-offset) + var(--sp-3));
+	top: var(--sp-3);
+	z-index: 7;
+}
+
+.story-edit-open-progress__copy {
+	align-items: baseline;
+	display: flex;
+	gap: var(--sp-2);
+	min-width: 0;
+}
+
+.story-edit-open-progress__copy span {
+	color: var(--tx-1);
+	font-size: var(--fs-sm);
+	font-weight: var(--fw-semibold);
+	white-space: nowrap;
+}
+
+.story-edit-open-progress__copy b {
+	color: var(--tx-4);
+	font-family: var(--font-mono);
+	font-size: var(--fs-xs);
+	font-weight: var(--fw-regular);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.story-edit-open-progress__track {
+	background: var(--ink-void);
+	border-radius: var(--r-pill);
+	height: 4px;
+	overflow: hidden;
+}
+
+.story-edit-open-progress__track span {
+	background: linear-gradient(90deg, var(--sem-link), var(--sem-saved));
+	border-radius: inherit;
+	display: block;
+	height: 100%;
+	transition: width var(--dur-3) var(--ease-out);
+}
+
 .story-edit-graph-layer {
 	background:
 		radial-gradient(
@@ -321,17 +388,14 @@ body.dragging-passages .story-edit-route * {
 .story-edit-graph-status {
 	align-items: center;
 	backdrop-filter: blur(10px);
-	background:
-		linear-gradient(
-			180deg,
-			color-mix(in oklab, var(--ink-2) 96%, transparent),
-			color-mix(in oklab, var(--ink-1) 94%, transparent)
-		);
+	background: linear-gradient(
+		180deg,
+		color-mix(in oklab, var(--ink-2) 96%, transparent),
+		color-mix(in oklab, var(--ink-1) 94%, transparent)
+	);
 	border: 1px solid var(--line-2);
 	border-radius: var(--r-sm);
-	box-shadow:
-		var(--shadow-card),
-		var(--edge-hi);
+	box-shadow: var(--shadow-card), var(--edge-hi);
 	display: flex;
 	gap: var(--sp-2);
 }
@@ -392,18 +456,15 @@ body.dragging-passages .story-edit-route * {
 }
 
 .story-edit-graph-minimap {
-	background:
-		linear-gradient(
-			180deg,
-			color-mix(in oklab, var(--ink-2) 92%, transparent),
-			color-mix(in oklab, var(--ink-void) 90%, transparent)
-		);
+	background: linear-gradient(
+		180deg,
+		color-mix(in oklab, var(--ink-2) 92%, transparent),
+		color-mix(in oklab, var(--ink-void) 90%, transparent)
+	);
 	border: 1px solid var(--line-2);
 	border-radius: var(--r-sm);
 	bottom: var(--sp-3);
-	box-shadow:
-		var(--shadow-card),
-		var(--edge-hi);
+	box-shadow: var(--shadow-card), var(--edge-hi);
 	cursor: grab;
 	height: 120px;
 	overflow: hidden;
@@ -416,12 +477,11 @@ body.dragging-passages .story-edit-route * {
 }
 
 .story-edit-graph-minimap__surface {
-	background-image:
-		radial-gradient(
-			circle,
-			color-mix(in oklab, var(--tx-4) 28%, transparent) 0 1px,
-			transparent 1.5px
-		);
+	background-image: radial-gradient(
+		circle,
+		color-mix(in oklab, var(--tx-4) 28%, transparent) 0 1px,
+		transparent 1.5px
+	);
 	background-size: 18px 18px;
 	height: 100%;
 	position: relative;
@@ -533,11 +593,17 @@ body.dragging-passages .story-edit-route * {
 	min-height: 0;
 	overflow: auto;
 	padding: var(--sp-3);
+	position: relative;
 }
 
-.story-edit-passage-list li {
-	margin: 0;
-	padding: 0;
+.story-edit-passage-list-spacer {
+	pointer-events: none;
+}
+
+.story-edit-passage-list-row {
+	left: var(--sp-3);
+	position: absolute;
+	right: var(--sp-3);
 }
 
 .story-edit-passage-list-item {

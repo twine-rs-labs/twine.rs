@@ -78,7 +78,7 @@ const spatialCellSize = 512;
 const viewportOverscan = 256;
 const graphProjectionCache = new WeakMap<Story, GraphProjectionData>();
 
-function normalizeOptions(
+export function normalizeGraphProjectionOptions(
 	options: GraphProjectionQuery = {}
 ): CoreGraphProjectionOptions {
 	return {
@@ -318,7 +318,10 @@ function buildGraphIndex(story: Story): GraphIndex {
 			if (target) {
 				stats.resolvedLinks++;
 				nodes.get(target.id)!.incomingCount++;
-				backlinks.set(target.id, [...(backlinks.get(target.id) ?? []), passage.id]);
+				backlinks.set(target.id, [
+					...(backlinks.get(target.id) ?? []),
+					passage.id
+				]);
 				record({
 					kind: 'resolved',
 					sourceId: passage.id,
@@ -469,7 +472,9 @@ function layoutSnapshot(story: Story, index: GraphIndex): LayoutSnapshot {
 						: 'mixed';
 
 	return {
-		bounds: graphBounds(Array.from(entries.values()).map(entry => entry.bounds)),
+		bounds: graphBounds(
+			Array.from(entries.values()).map(entry => entry.bounds)
+		),
 		entries,
 		spatialCells: buildSpatialCells(entries),
 		state
@@ -555,7 +560,7 @@ function projectEdges(
 				sourceBounds: sourceLayout.bounds,
 				sourceId: edge.sourceId,
 				targetBounds: edge.targetId
-					? layout.entries.get(edge.targetId)?.bounds ?? null
+					? (layout.entries.get(edge.targetId)?.bounds ?? null)
 					: null,
 				targetId: edge.targetId,
 				targetName: edge.targetName
@@ -570,7 +575,7 @@ export function storyToCoreGraphProjection(
 	story: Story,
 	query: GraphProjectionQuery = {}
 ): CoreGraphProjection {
-	const options = normalizeOptions(query);
+	const options = normalizeGraphProjectionOptions(query);
 	const {index, layout} = graphProjectionData(story);
 	const focusedIds =
 		options.focus && options.focus.passageIds.length > 0
@@ -620,13 +625,7 @@ export function storyToCoreGraphProjection(
 
 	return {
 		bounds: layout.bounds,
-		edges: projectEdges(
-			index,
-			layout,
-			visibleIds,
-			focusedIds,
-			options.layers
-		),
+		edges: projectEdges(index, layout, visibleIds, focusedIds, options.layers),
 		layoutState: layout.state,
 		nodes,
 		stats: index.stats

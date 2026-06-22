@@ -68,12 +68,12 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(
 			context.host.queryStoryIndex(context.story.id).assetInventory
 		).toEqual([
-				expect.objectContaining({
-					exists: true,
-					path: 'assets/cover.png',
-					thumbnailUrl: 'file:///tmp/cover.png',
-					unused: true
-				})
+			expect.objectContaining({
+				exists: true,
+				path: 'assets/cover.png',
+				thumbnailUrl: 'file:///tmp/cover.png',
+				unused: true
+			})
 		]);
 
 		context.host.applyStoryCommand(
@@ -145,7 +145,9 @@ describe('StoreCoreProjectHost asset commands', () => {
 			})
 		);
 
-		context.host.applyStoryCommand(saveGeneratedLayoutCommand(context.story.id));
+		context.host.applyStoryCommand(
+			saveGeneratedLayoutCommand(context.story.id)
+		);
 		expect(listener).toHaveBeenLastCalledWith(
 			expect.objectContaining({
 				patches: [
@@ -194,6 +196,70 @@ describe('StoreCoreProjectHost asset commands', () => {
 			'undoChange.changeStoryDetails',
 			'undoChange.changeStoryDetails'
 		]);
+	});
+
+	it('ignores stale worker graph caches after story updates', () => {
+		const context = hostWithStory();
+		const staleProjection = {stale: true};
+		const fakeWasmClient = {
+			cachedGraphProjection: jest.fn(
+				(_storyId: string, _options: unknown, revision: number) =>
+					revision === 1 ? staleProjection : undefined
+			),
+			enabled: true,
+			lastGraphProjection: jest.fn()
+		};
+
+		(context.host as any).wasmClient = fakeWasmClient;
+
+		expect(context.host.queryGraphProjection(context.story.id)).toBe(
+			staleProjection
+		);
+
+		context.host.update(
+			[{...context.stories[0], name: 'Updated'}],
+			context.dispatch
+		);
+
+		expect(context.host.queryGraphProjection(context.story.id)).not.toBe(
+			staleProjection
+		);
+		expect(fakeWasmClient.cachedGraphProjection).toHaveBeenLastCalledWith(
+			context.story.id,
+			expect.any(Object),
+			2
+		);
+		expect(fakeWasmClient.lastGraphProjection).toHaveBeenLastCalledWith(
+			context.story.id,
+			2
+		);
+	});
+
+	it('ignores stale worker story index caches after story updates', () => {
+		const context = hostWithStory();
+		const staleIndex = {storyId: context.story.id, stale: true};
+		const fakeWasmClient = {
+			cachedStoryIndex: jest.fn(
+				(_storyId: string, _options: unknown, revision: number) =>
+					revision === 1 ? staleIndex : undefined
+			)
+		};
+
+		(context.host as any).wasmClient = fakeWasmClient;
+
+		expect(context.host.queryStoryIndex(context.story.id)).toBe(staleIndex);
+
+		context.host.update(
+			[{...context.stories[0], name: 'Updated'}],
+			context.dispatch
+		);
+
+		expect(context.host.queryStoryIndex(context.story.id)).not.toBe(staleIndex);
+		expect(fakeWasmClient.cachedStoryIndex).toHaveBeenLastCalledWith(
+			context.story.id,
+			expect.any(Object),
+			2
+		);
 	});
 });
 

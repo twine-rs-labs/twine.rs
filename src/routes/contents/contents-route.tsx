@@ -297,13 +297,6 @@ function entryMatchesQuery(entry: ContentsViewModelEntry, query: string) {
 		.some(value => value!.toLowerCase().includes(normalized));
 }
 
-function filterCount(
-	entries: ContentsViewModelEntry[],
-	filter: ContentsFilter
-) {
-	return entries.filter(entry => entryMatchesFilter(entry, filter)).length;
-}
-
 function severityTone(severity: ContentsViewModelEntry['severity']) {
 	if (severity === 'error') {
 		return 'error';
@@ -449,21 +442,58 @@ export const ContentsRoute: React.FC = () => {
 	}, [projectMetadata?.rootPath, story, twineElectron]);
 
 	React.useEffect(() => {
+		let active = true;
+
 		if (!story || !passageTextLoaded) {
 			setFullIndex(undefined);
-			return;
+			return () => {
+				active = false;
+			};
 		}
 
 		setFullIndex(undefined);
 
-		if (story.passages.length <= deferIndexPassageThreshold) {
-			setFullIndex(coreProjectHost.queryStoryIndex(story.id));
-			return;
+		if (coreProjectHost.runtimeMode() !== 'wasm-worker') {
+			if (story.passages.length <= deferIndexPassageThreshold) {
+				setFullIndex(coreProjectHost.queryStoryIndex(story.id));
+				return () => {
+					active = false;
+				};
+			}
+
+			const cancelIdleWork = scheduleIdleWork(() => {
+				if (active) {
+					setFullIndex(coreProjectHost.queryStoryIndex(story.id));
+				}
+			});
+
+			return () => {
+				active = false;
+				cancelIdleWork();
+			};
 		}
 
-		return scheduleIdleWork(() => {
-			setFullIndex(coreProjectHost.queryStoryIndex(story.id));
-		});
+		const loadFullIndex = () => {
+			void coreProjectHost.queryStoryIndexAsync(story.id).then(index => {
+				if (active) {
+					setFullIndex(index);
+				}
+			});
+		};
+
+		if (story.passages.length <= deferIndexPassageThreshold) {
+			loadFullIndex();
+			return () => {
+				active = false;
+			};
+		}
+
+		const cancelIdleWork = scheduleIdleWork(loadFullIndex);
+
+		return () => {
+			active = false;
+			cancelIdleWork();
+		};
 	}, [coreProjectHost, knownAssets, passageTextLoaded, patchVersion, story]);
 
 	const index = fullIndex ?? shellIndex;
@@ -471,6 +501,32 @@ export const ContentsRoute: React.FC = () => {
 		() => (index ? contentsViewModel(index) : undefined),
 		[index]
 	);
+	const filterCounts = React.useMemo(() => {
+		const counts = new Map<ContentsFilter, number>();
+		const entries = contents?.entries ?? [];
+
+		counts.set('all', entries.length);
+
+		for (const entry of entries) {
+			const previous = counts.get(entry.core.kind as ContentsFilter) ?? 0;
+
+			counts.set(entry.core.kind as ContentsFilter, previous + 1);
+
+			if (
+				entry.core.kind === 'brokenLink' ||
+				entry.core.kind === 'diagnostic' ||
+				entry.core.kind === 'orphan'
+			) {
+				counts.set('diagnostics', (counts.get('diagnostics') ?? 0) + 1);
+			}
+
+			if (entry.severity) {
+				counts.set('problems', (counts.get('problems') ?? 0) + 1);
+			}
+		}
+
+		return counts;
+	}, [contents]);
 	const visibleEntries = React.useMemo(() => {
 		const entries = contents?.entries ?? [];
 		const filtered = entries.filter(
@@ -583,7 +639,7 @@ export const ContentsRoute: React.FC = () => {
 						<TablerIcon icon={candidate.icon} />
 						<span>{candidate.label}</span>
 						<span className="contents-route__count">
-							{filterCount(contents.entries, candidate.id)}
+							{filterCounts.get(candidate.id) ?? 0}
 						</span>
 					</button>
 				))}
@@ -599,7 +655,7 @@ export const ContentsRoute: React.FC = () => {
 						<TablerIcon icon={candidate.icon} />
 						<span>{candidate.label}</span>
 						<span className="contents-route__count">
-							{filterCount(contents.entries, candidate.id)}
+							{filterCounts.get(candidate.id) ?? 0}
 						</span>
 					</button>
 				))}
