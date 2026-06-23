@@ -28,11 +28,11 @@ async function createProject(
 		.click();
 	await page.getByRole('button', {name: 'Create Project'}).click();
 	await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
-	await expect(page.getByRole('heading', {name: startPassage})).toBeVisible();
+	await expect(page.getByRole('region', {name: startPassage})).toBeVisible();
 }
 
 function sourceEditor(page: Page): Locator {
-	return page.locator('[data-testid^="story-text-source-editor-"]').first();
+	return page.locator('[data-testid^="story-editor-window-"]').first();
 }
 
 async function setPassageText(page: Page, text: string) {

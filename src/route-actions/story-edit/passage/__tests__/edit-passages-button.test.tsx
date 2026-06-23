@@ -20,6 +20,7 @@ const TestEditPassagesButton: React.FC<
 
 	return (
 		<EditPassagesButton
+			onEditPassages={jest.fn()}
 			passages={stories[0].passages}
 			story={stories[0]}
 			{...props}
@@ -44,19 +45,27 @@ describe('<EditPassagesButton>', () => {
 		expect(screen.getByRole('button', {name: 'common.edit'})).toBeDisabled();
 	});
 
-	it('opens a passage dialog for every passage when clicked', async () => {
+	it('asks the workspace to open every selected passage when clicked', async () => {
 		const format = fakeLoadedStoryFormat();
 		const story = fakeStory(3);
+		const onEditPassages = jest.fn();
 
 		story.storyFormat = format.name;
 		story.storyFormatVersion = format.version;
 		renderComponent(
-			{story, passages: [story.passages[0], story.passages[1]]},
+			{
+				onEditPassages,
+				story,
+				passages: [story.passages[0], story.passages[1]]
+			},
 			{stories: [story], storyFormats: [format]}
 		);
 		fireEvent.click(screen.getByRole('button', {name: 'common.editCount'}));
 		await act(() => Promise.resolve());
-		expect(screen.getByText(story.passages[0].name)).toBeInTheDocument();
+		expect(onEditPassages).toHaveBeenCalledWith([
+			story.passages[0],
+			story.passages[1]
+		]);
 	});
 
 	it('is accessible', async () => {

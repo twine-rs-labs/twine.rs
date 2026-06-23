@@ -17,7 +17,7 @@ resolver = "3"
 edition = "2024"
 license = "GPL-3.0-only"
 rust-version = "1.88"
-version = "0.1.1"
+version = "0.1.2"
 
 [workspace.dependencies]
 anyhow = "1"

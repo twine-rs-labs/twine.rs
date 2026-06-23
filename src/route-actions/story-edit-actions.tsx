@@ -4,7 +4,7 @@ import {useTranslation} from 'react-i18next';
 import {useAppShellContext} from '../components/app-shell';
 import {IconButton, SegmentedControl} from '../components/design-system';
 import {useDialogsContext} from '../dialogs';
-import {Story} from '../store/stories';
+import {Passage, Story} from '../store/stories';
 import {Point} from '../util/geometry';
 import {StoryEditMode} from '../routes/story-edit/workspace-state';
 import {AppActions} from './app-actions';
@@ -23,6 +23,7 @@ export interface StoryEditActionsProps {
 	onChangeLeftDockCollapsed?: (value: boolean) => void;
 	onChangeMode?: (mode: StoryEditMode) => void;
 	onChangeRightDockCollapsed?: (value: boolean) => void;
+	onEditPassages: (passages: Passage[]) => void;
 	onOpenFuzzyFinder: () => void;
 	rightDockCollapsed?: boolean;
 	story: Story;
@@ -38,6 +39,7 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 		onChangeLeftDockCollapsed,
 		onChangeMode,
 		onChangeRightDockCollapsed,
+		onEditPassages,
 		onOpenFuzzyFinder,
 		rightDockCollapsed = false,
 		story
@@ -160,8 +162,8 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 		() => ({
 			[t('common.passage')]: (
 				<PassageActions
-					dialogsDispatch={dialogsDispatch}
 					getCenter={getCenter}
+					onEditPassages={onEditPassages}
 					onOpenFuzzyFinder={onOpenFuzzyFinder}
 					story={story}
 				/>
@@ -172,7 +174,7 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 			[t('common.build')]: <BuildActions story={story} />,
 			[t('common.appName')]: <AppActions dialogsDispatch={dialogsDispatch} />
 		}),
-		[dialogsDispatch, getCenter, onOpenFuzzyFinder, story, t]
+		[dialogsDispatch, getCenter, onEditPassages, onOpenFuzzyFinder, story, t]
 	);
 
 	React.useEffect(() => {

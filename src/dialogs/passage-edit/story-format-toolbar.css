@@ -1,8 +1,0 @@
-@import '../../styles/metrics.css';
-
-/* Keep story format icons reasonably-sized. */
-
-.story-format-toolbar .icon-button .icon img {
-	height: 18px;
-	width: auto;
-}

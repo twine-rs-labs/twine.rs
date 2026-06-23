@@ -18,6 +18,7 @@ const TestPassageActions: React.FC<Partial<PassageActionsProps>> = props => {
 	return (
 		<PassageActions
 			getCenter={() => ({left: 0, top: 0})}
+			onEditPassages={jest.fn()}
 			onOpenFuzzyFinder={jest.fn()}
 			story={stories[0]}
 			{...props}

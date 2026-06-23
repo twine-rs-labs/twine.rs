@@ -218,11 +218,7 @@ body.dragging-passages .story-edit-route * {
 
 .story-edit-graph-layer--snap-off {
 	--story-edit-snap-dot: color-mix(in oklab, var(--tx-4) 10%, transparent);
-	--story-edit-snap-major-dot: color-mix(
-		in oklab,
-		var(--tx-4) 7%,
-		transparent
-	);
+	--story-edit-snap-major-dot: color-mix(in oklab, var(--tx-4) 7%, transparent);
 }
 
 .story-edit-workspace.mode-split .story-edit-graph-layer {
@@ -239,12 +235,19 @@ body.dragging-passages .story-edit-route * {
 	);
 }
 
+/* The viewport never scrolls — pan/zoom are a single transform on the world
+   layer below. Overflow is hidden so there are no scrollbars to grow/shrink. */
 .story-edit-graph-viewport {
-	cursor: grab;
+	cursor: default;
 	height: 100%;
-	overflow: auto;
+	overflow: hidden;
 	position: relative;
+	touch-action: none;
 	width: 100%;
+}
+
+.story-edit-graph-viewport--pan-tool {
+	cursor: grab;
 }
 
 .story-edit-graph-viewport--panning {
@@ -257,35 +260,37 @@ body.dragging-passages .story-edit-route * {
 	user-select: none;
 }
 
-.story-edit-graph-canvas {
-	background:
+/* Dotted grid in SCREEN space. Its background-position/size are driven inline
+   to track the world transform, so the dots ARE the snap targets and move 1:1
+   with pan/zoom. */
+.story-edit-graph-grid {
+	background-color: var(--ink-void);
+	background-image:
+		radial-gradient(circle, var(--story-edit-snap-dot) 0 1px, transparent 1.5px),
 		radial-gradient(
 			circle,
 			var(--story-edit-snap-major-dot) 0 1.7px,
 			transparent 2.2px
-		),
-		radial-gradient(
-			circle,
-			var(--story-edit-snap-dot) 0 1px,
-			transparent 1.5px
 		);
-	background-color: var(--ink-void);
-	background-position:
-		0 0,
-		0 0;
-	background-size:
-		var(--story-edit-snap-major-grid-size)
-			var(--story-edit-snap-major-grid-size),
-		var(--story-edit-snap-grid-size) var(--story-edit-snap-grid-size);
-	min-height: 100%;
-	min-width: 100%;
-	position: relative;
-	transform-origin: top left;
+	background-repeat: repeat, repeat;
+	inset: 0;
+	pointer-events: none;
+	position: absolute;
+	z-index: 0;
 }
 
-.story-edit-graph-viewport--marqueeing .story-edit-graph-canvas,
-.story-edit-graph-viewport--selecting-mode .story-edit-graph-canvas {
-	cursor: crosshair;
+/* The single transformed "world": grid-aligned children, edges + nodes ride
+   one translate()+scale(). It is just a transform anchor (zero-sized box at the
+   world origin); children are absolutely positioned in world coordinates. */
+.story-edit-graph-canvas {
+	height: 0;
+	left: 0;
+	position: absolute;
+	top: 0;
+	transform-origin: 0 0;
+	width: 0;
+	will-change: transform;
+	z-index: 1;
 }
 
 .story-edit-graph-edges {
@@ -537,6 +542,41 @@ body.dragging-passages .story-edit-route * {
 	cursor: grabbing;
 }
 
+/* Zoom + fit cluster, parked just above the minimap (bottom-right). */
+.story-edit-graph-zoom {
+	align-items: center;
+	backdrop-filter: blur(10px);
+	background: linear-gradient(
+		180deg,
+		color-mix(in oklab, var(--ink-2) 96%, transparent),
+		color-mix(in oklab, var(--ink-1) 94%, transparent)
+	);
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-sm);
+	bottom: calc(var(--sp-3) + 120px + var(--sp-2));
+	box-shadow: var(--shadow-card), var(--edge-hi);
+	display: flex;
+	gap: var(--sp-1);
+	padding: var(--sp-1);
+	position: absolute;
+	right: var(--sp-3);
+	z-index: 3;
+}
+
+.story-edit-graph-zoom-value {
+	color: var(--tx-1);
+	font-family: var(--font-mono);
+	font-size: var(--fs-micro);
+	min-width: 42px;
+	text-align: center;
+}
+
+.story-edit-graph-zoom-sep {
+	background: var(--line-2);
+	height: 18px;
+	width: 1px;
+}
+
 .story-edit-graph-minimap__surface {
 	background-image: radial-gradient(
 		circle,
@@ -572,6 +612,49 @@ body.dragging-passages .story-edit-route * {
 	box-shadow:
 		0 0 0 999px oklch(0 0 0 / 0.16),
 		0 0 0 2px color-mix(in oklab, var(--focus-ring) 20%, transparent);
+}
+
+.story-edit-graph-context-menu {
+	background: var(--ink-2);
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-sm);
+	box-shadow: var(--shadow-card), var(--edge-hi);
+	color: var(--tx-2);
+	display: grid;
+	gap: 2px;
+	min-width: 180px;
+	padding: var(--sp-1);
+	position: fixed;
+	z-index: 12;
+}
+
+.story-edit-graph-context-menu button {
+	align-items: center;
+	background: transparent;
+	border: 0;
+	border-radius: var(--r-xs);
+	color: inherit;
+	cursor: pointer;
+	display: flex;
+	font-family: var(--font-ui);
+	font-size: var(--fs-sm);
+	gap: var(--sp-2);
+	height: 30px;
+	min-width: 0;
+	padding: 0 var(--sp-3);
+	text-align: left;
+}
+
+.story-edit-graph-context-menu button:hover,
+.story-edit-graph-context-menu button:focus-visible {
+	background: var(--hover);
+	color: var(--tx-1);
+	outline: none;
+}
+
+.story-edit-graph-context-menu .tw-ds-icon {
+	color: var(--tx-3);
+	flex: 0 0 auto;
 }
 
 .story-edit-dock {
@@ -1063,8 +1146,10 @@ button.story-edit-contents-item:focus-visible {
 .story-edit-text-layer {
 	background: var(--ink-3);
 	bottom: var(--story-edit-bottom-offset);
+	display: flex;
 	left: var(--story-edit-left-offset);
 	min-width: 0;
+	overflow: hidden;
 	position: fixed;
 	right: var(--story-edit-right-offset);
 	top: calc(2 * var(--ctl-h));
@@ -1073,6 +1158,281 @@ button.story-edit-contents-item:focus-visible {
 		left var(--dur-3) var(--ease-out),
 		right var(--dur-3) var(--ease-out);
 	z-index: 4;
+}
+
+/* ===================================================================
+   EDITOR DOCK — multiple closeable buffer windows in an adaptive grid.
+   Story-level chrome appears once on top; per-buffer controls live in each
+   window's titlebar. JS/CSS are singletons; passages tile freely.
+   =================================================================== */
+.story-edit-editor-dock {
+	background: var(--ink-1);
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+}
+
+.story-edit-workspace.mode-split .story-edit-editor-dock {
+	border-left: 1px solid var(--line-1);
+}
+
+.story-edit-editor-dock-chrome {
+	align-items: center;
+	background: var(--ink-1);
+	border-bottom: 1px solid var(--line-1);
+	display: flex;
+	flex: none;
+	gap: var(--sp-2);
+	height: 38px;
+	padding: 0 var(--sp-3);
+}
+
+.story-edit-editor-dock-open {
+	position: relative;
+}
+
+.story-edit-editor-dock-open-menu {
+	background: var(--ink-5, var(--ink-3));
+	border: 1px solid var(--line-3);
+	border-radius: var(--r-md);
+	box-shadow: var(--shadow-modal, var(--shadow-card));
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	left: 0;
+	min-width: 220px;
+	padding: var(--sp-1);
+	position: absolute;
+	top: calc(100% + var(--sp-1));
+	z-index: 20;
+}
+
+.story-edit-editor-dock-open-menu button {
+	align-items: center;
+	background: none;
+	border: 0;
+	border-radius: var(--r-sm);
+	color: var(--tx-1);
+	cursor: pointer;
+	display: flex;
+	font-family: var(--font-ui);
+	font-size: var(--fs-sm);
+	gap: var(--sp-2);
+	height: 30px;
+	padding: 0 var(--sp-3);
+	text-align: left;
+	width: 100%;
+}
+
+.story-edit-editor-dock-open-menu button:hover:not(:disabled),
+.story-edit-editor-dock-open-menu button:focus-visible {
+	background: var(--acc-blue-soft, var(--sel-wash));
+	outline: none;
+}
+
+.story-edit-editor-dock-open-menu button:disabled {
+	color: var(--tx-4);
+	cursor: default;
+}
+
+.story-edit-editor-dock-open-menu .tw-ds-icon {
+	color: var(--tx-3);
+	font-size: 15px;
+}
+
+.story-edit-editor-dock-chrome-sp {
+	flex: 1;
+}
+
+.story-edit-editor-dock-empty {
+	align-items: center;
+	color: var(--tx-4);
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 2px;
+	justify-content: center;
+}
+
+.story-edit-editor-dock-empty .tw-ds-icon {
+	font-size: 30px;
+	margin-bottom: var(--sp-1);
+}
+
+.story-edit-editor-dock-empty p {
+	color: var(--tx-2);
+	font-size: var(--fs-md);
+	font-weight: var(--fw-semibold);
+	margin: 0;
+}
+
+.story-edit-editor-dock-empty span {
+	font-size: var(--fs-sm);
+}
+
+/* The tiling grid: 2×2 for four, last lone tile spans its row; stacks
+   vertically in the narrow Split column. Drag a window's titlebar to
+   rearrange. */
+.story-edit-editor-dock-grid {
+	background: var(--line-1);
+	display: grid;
+	flex: 1;
+	gap: 1px;
+	grid-auto-rows: minmax(190px, 1fr);
+	min-height: 0;
+	overflow: auto;
+}
+
+.story-edit-editor-dock.is-compact .story-edit-editor-dock-grid {
+	grid-auto-rows: minmax(240px, 1fr);
+}
+
+.story-edit-editor-dock-cell {
+	display: flex;
+	min-height: 0;
+	min-width: 0;
+	position: relative;
+}
+
+.story-edit-editor-dock-cell.is-dragging {
+	opacity: 0.35;
+}
+
+.story-edit-editor-dock-cell.is-over::after {
+	background: var(--acc-blue-soft, var(--sel-wash));
+	border: 2px solid var(--acc-blue, var(--sel-line));
+	border-radius: var(--r-sm);
+	content: '';
+	inset: 0;
+	pointer-events: none;
+	position: absolute;
+	z-index: 5;
+}
+
+/* ---- one editor window ---- */
+.story-edit-editor-window {
+	background: var(--ink-3);
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+	position: relative;
+}
+
+.story-edit-editor-window.is-active {
+	box-shadow: inset 0 2px 0 var(--acc-blue, var(--sel-line));
+}
+
+.story-edit-editor-window-bar {
+	align-items: center;
+	background: var(--ink-2);
+	border-bottom: 1px solid var(--line-1);
+	display: flex;
+	flex: none;
+	gap: var(--sp-2);
+	height: 34px;
+	padding: 0 var(--sp-1) 0 var(--sp-2);
+}
+
+.story-edit-editor-window-grip {
+	color: var(--tx-4);
+	cursor: grab;
+	flex: none;
+	font-size: 15px;
+}
+
+.story-edit-editor-window-bar:active .story-edit-editor-window-grip {
+	cursor: grabbing;
+}
+
+.story-edit-editor-window-icon {
+	color: var(--tx-3);
+	flex: none;
+	font-size: 14px;
+}
+
+.story-edit-editor-window-name {
+	color: var(--tx-1);
+	font-size: var(--fs-sm);
+	font-weight: var(--fw-semibold);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.story-edit-editor-window-dirty {
+	background: var(--sem-dirty);
+	border-radius: 50%;
+	flex: none;
+	height: 7px;
+	width: 7px;
+}
+
+.story-edit-editor-window-bar-sp {
+	flex: 1;
+}
+
+.story-edit-editor-window-sub {
+	align-items: center;
+	background: var(--ink-3);
+	border-bottom: 1px solid var(--line-1);
+	display: flex;
+	flex: none;
+	gap: var(--sp-2);
+	min-height: 32px;
+	padding: var(--sp-1) var(--sp-3);
+}
+
+.story-edit-editor-window-sub-sp {
+	flex: 1;
+}
+
+.story-edit-editor-window-code {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+	min-width: 0;
+}
+
+.story-edit-editor-window-code > * {
+	flex: 1;
+	min-width: 0;
+}
+
+.story-edit-editor-window-empty {
+	align-items: center;
+	color: var(--tx-3);
+	display: flex;
+	flex: 1;
+	justify-content: center;
+	margin: 0;
+}
+
+.story-edit-editor-window-diag {
+	align-items: center;
+	background: var(--sem-error-soft, color-mix(in oklab, var(--sem-error) 16%, transparent));
+	border-top: 1px solid
+		color-mix(in oklab, var(--sem-error) 40%, transparent);
+	color: var(--tx-1);
+	display: flex;
+	flex: none;
+	flex-wrap: wrap;
+	font-size: var(--fs-xs);
+	gap: var(--sp-2);
+	padding: var(--sp-2) var(--sp-3);
+}
+
+.story-edit-editor-window-diag .tw-ds-icon {
+	color: var(--sem-error);
+	font-size: 15px;
+}
+
+.story-edit-editor-window-diag strong {
+	color: var(--sem-error);
 }
 
 .story-edit-workspace.mode-split .story-edit-text-layer {
@@ -1088,154 +1448,6 @@ button.story-edit-contents-item:focus-visible {
 	);
 	min-width: 0;
 	right: var(--story-edit-right-offset);
-}
-
-.story-edit-text-panel {
-	background: var(--ink-3);
-	display: flex;
-	flex-direction: column;
-	height: 100%;
-	min-height: 0;
-	min-width: 0;
-}
-
-.story-edit-text-panel.empty {
-	align-items: center;
-	color: var(--tx-3);
-	justify-content: center;
-}
-
-.story-edit-source-tabs {
-	align-items: center;
-	background: var(--ink-2);
-	border-bottom: 1px solid var(--line-1);
-	display: flex;
-	flex: 0 0 36px;
-	gap: var(--sp-1);
-	min-width: 0;
-	overflow-x: auto;
-	padding: 0 var(--sp-2);
-}
-
-.story-edit-source-tabs button {
-	align-items: center;
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: var(--r-sm) var(--r-sm) 0 0;
-	color: var(--tx-3);
-	cursor: pointer;
-	display: inline-flex;
-	flex: 0 0 auto;
-	font-family: var(--font-ui);
-	font-size: var(--fs-sm);
-	gap: var(--sp-2);
-	height: 28px;
-	max-width: 220px;
-	min-width: 0;
-	padding: 0 var(--sp-4);
-}
-
-.story-edit-source-tabs button svg {
-	flex: 0 0 auto;
-}
-
-.story-edit-source-tabs button[aria-selected='true'] {
-	background: var(--ink-3);
-	box-shadow: inset 0 -2px 0 var(--acc-blue);
-	color: var(--tx-1);
-}
-
-.story-edit-source-tabs button:focus-visible {
-	box-shadow: var(--glow-focus);
-	outline: none;
-}
-
-.story-edit-text-panel-header {
-	align-items: center;
-	background: var(--ink-3);
-	border-bottom: 1px solid var(--line-1);
-	color: var(--tx-3);
-	display: flex;
-	flex: 0 0 30px;
-	font-size: var(--fs-sm);
-	gap: var(--sp-2);
-	min-width: 0;
-	padding: 0 var(--sp-5);
-}
-
-.story-edit-text-panel-header > .tw-ds-icon {
-	color: var(--tx-4);
-	flex: 0 0 auto;
-	font-size: 14px;
-}
-
-.story-edit-crumb-root {
-	flex: 0 0 auto;
-}
-
-.story-edit-crumb-sep {
-	color: var(--tx-4);
-}
-
-.story-edit-text-panel-header h2 {
-	color: var(--tx-1);
-	flex: 1 1 auto;
-	font-family: var(--font-ui);
-	font-size: var(--fs-sm);
-	font-weight: var(--fw-semibold);
-	margin: 0;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.story-edit-text-panel-meta {
-	align-items: center;
-	display: flex;
-	flex: 0 0 auto;
-	gap: var(--sp-2);
-	min-width: 0;
-}
-
-.story-edit-text-editor {
-	display: flex;
-	flex: 1;
-	min-height: 0;
-}
-
-.story-edit-text-editor .source-editor {
-	flex: 1;
-	min-height: 0;
-}
-
-.story-edit-inline-diagnostic {
-	align-items: center;
-	background: var(--sem-error-soft);
-	border-top: 1px solid color-mix(in oklab, var(--sem-error) 40%, transparent);
-	color: var(--tx-2);
-	display: flex;
-	flex: 0 0 auto;
-	font-size: var(--fs-sm);
-	gap: var(--sp-2);
-	min-height: 34px;
-	padding: 0 var(--sp-5);
-}
-
-.story-edit-inline-diagnostic .tw-ds-icon,
-.story-edit-inline-diagnostic strong {
-	color: var(--sem-error);
-}
-
-.story-edit-inline-diagnostic > span {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.story-edit-inline-diagnostic .tw-btn {
-	margin-left: auto;
 }
 
 .story-edit-inspector {
@@ -1555,9 +1767,5 @@ button.story-edit-link-chip:focus-visible {
 	.story-edit-workspace.mode-split .story-edit-text-layer {
 		left: var(--story-edit-left-offset);
 		right: var(--story-edit-right-offset);
-	}
-
-	.story-edit-text-panel-meta {
-		display: none;
 	}
 }

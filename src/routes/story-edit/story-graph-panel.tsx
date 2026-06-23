@@ -29,11 +29,17 @@ import type {CoreRect} from '../../core/bindings/CoreRect';
 import {Passage, Story} from '../../store/stories';
 import {Point, Rect, rectFromPoints, rectsIntersect} from '../../util/geometry';
 import {markPerformanceAfterPaint} from '../../util/performance';
+import {
+	graphSnapGridSize,
+	graphSnapMajorGridSize,
+	snapToGraphGrid
+} from './graph-grid';
 
 export interface StoryGraphPanelProps {
 	onCreate: (point: Point, size?: {height: number; width: number}) => void;
 	onDeselect: (passage: Passage) => void;
 	onEdit: (passage: Passage) => void;
+	onEditPassages: (passages: Passage[]) => void;
 	onSelect: (passage: Passage, exclusive: boolean) => void;
 	onSelectIds: (passageIds: string[], additive: boolean) => void;
 	onTestPassage?: (passage: Passage) => void;
@@ -41,8 +47,17 @@ export interface StoryGraphPanelProps {
 	revealRequestKey?: number;
 	selectedPassageId?: string;
 	story: Story;
-	visibleZoom: number;
-	zoom: number;
+}
+
+/**
+ * The graph viewport is a single transformed "world" layer. Pan changes
+ * `x`/`y`; zoom changes `k` while keeping the world point under the cursor
+ * pinned. There is no scrolling — see WORKBENCH_INTEGRATION.md.
+ */
+interface GraphView {
+	k: number;
+	x: number;
+	y: number;
 }
 
 type GraphDensity = 'structure' | 'names' | 'excerpt';
@@ -100,15 +115,19 @@ interface ViewportState {
 	width: number;
 }
 
+interface GraphContextMenuState {
+	left: number;
+	passageIds: string[];
+	point?: Point;
+	top: number;
+}
+
 interface AsyncProjectionState {
 	projection: CoreGraphProjection;
 	storyId: string;
 }
 
 const minimapSize = {height: 120, width: 170};
-const canvasPad = 900;
-const graphSnapGridSize = 25;
-const graphSnapMajorGridSize = graphSnapGridSize * 5;
 const largeStoryPassageCount = 500;
 const maxExcerptNodes = 160;
 const exposeEdgeRouteDebug = process.env.NODE_ENV === 'test';
@@ -118,10 +137,12 @@ const resizeSnapActivationDistance = 18;
 const graphResizeMinimum = 40;
 const graphProjectionTileSize = 600;
 const graphProjectionOverscan = 1200;
-const graphMinZoom = 0.25;
-const graphMaxZoom = 2;
-const graphWheelZoomFactor = 1.12;
+const graphMinZoom = 0.2;
+const graphMaxZoom = 2.4;
+const graphButtonZoomFactor = 1.18;
 const graphDragClickTolerance = 3;
+const graphInitialView: GraphView = {k: 1, x: 80, y: 60};
+const graphFitPadding = 96;
 const noFocusedPassageIds: string[] = [];
 
 function excerpt(text: string) {
@@ -173,6 +194,16 @@ function validRect(rect: CoreRect) {
 	);
 }
 
+function sameRect(a: CoreRect | undefined, b: CoreRect) {
+	return (
+		!!a &&
+		a.height === b.height &&
+		a.left === b.left &&
+		a.top === b.top &&
+		a.width === b.width
+	);
+}
+
 function unionRects(rects: CoreRect[]): CoreRect | null {
 	const validRects = rects.filter(validRect);
 
@@ -193,8 +224,15 @@ function unionRects(rects: CoreRect[]): CoreRect | null {
 	};
 }
 
-function storyPassageBounds(passages: Passage[]) {
-	return unionRects(passages.map(passageRect));
+function storyPassageBounds(
+	passages: Passage[],
+	optimisticBounds: Record<string, CoreRect> = {}
+) {
+	return unionRects(
+		passages.map(
+			passage => optimisticBounds[passage.id] ?? passageRect(passage)
+		)
+	);
 }
 
 function bufferedViewport(rect: CoreRect): CoreRect {
@@ -232,32 +270,6 @@ function bufferedViewportKey(rect: CoreRect) {
 	const buffered = bufferedViewport(rect);
 
 	return `${buffered.left}:${buffered.top}:${buffered.width}:${buffered.height}`;
-}
-
-function orientationLabel(orientation: GraphOrientation) {
-	switch (orientation) {
-		case 'down':
-			return 'Top to Bottom';
-		case 'left':
-			return 'Right to Left';
-		case 'up':
-			return 'Bottom to Top';
-		default:
-			return 'Left to Right';
-	}
-}
-
-function nextOrientation(orientation: GraphOrientation): GraphOrientation {
-	switch (orientation) {
-		case 'right':
-			return 'down';
-		case 'down':
-			return 'left';
-		case 'left':
-			return 'up';
-		default:
-			return 'right';
-	}
 }
 
 function displayRect(
@@ -385,10 +397,13 @@ function freeResizeDisplaySize(
 	orientation: GraphOrientation
 ) {
 	return displaySizeForLogicalSize(
-		logicalSizeFromDisplaySize({
-			height: Math.round(size.height),
-			width: Math.round(size.width)
-		}, orientation),
+		logicalSizeFromDisplaySize(
+			{
+				height: Math.round(size.height),
+				width: Math.round(size.width)
+			},
+			orientation
+		),
 		orientation
 	);
 }
@@ -459,21 +474,6 @@ function center(rect: CoreRect) {
 	};
 }
 
-function rectCenterVisible(
-	rect: CoreRect,
-	viewport: CoreRect,
-	padding: number
-) {
-	const rectCenter = center(rect);
-
-	return (
-		rectCenter.left >= viewport.left + padding &&
-		rectCenter.left <= viewport.left + viewport.width - padding &&
-		rectCenter.top >= viewport.top + padding &&
-		rectCenter.top <= viewport.top + viewport.height - padding
-	);
-}
-
 function clampZoom(zoom: number) {
 	return Math.max(graphMinZoom, Math.min(graphMaxZoom, zoom));
 }
@@ -482,10 +482,10 @@ function roundedZoom(zoom: number) {
 	return Math.round(zoom * 100) / 100;
 }
 
+// Continuous, frame-perfect zoom factor so the wheel never overshoots and the
+// next event has no animation to fight (the old useZoomTransition jank).
 function wheelZoom(currentZoom: number, deltaY: number) {
-	const factor = deltaY < 0 ? graphWheelZoomFactor : 1 / graphWheelZoomFactor;
-
-	return roundedZoom(clampZoom(currentZoom * factor));
+	return clampZoom(currentZoom * Math.exp(-deltaY * 0.0016));
 }
 
 function horizontalEdgeCurve(source: CoreRect, target: CoreRect) {
@@ -703,7 +703,7 @@ const GraphEdgesCanvas: React.FC<GraphEdgesCanvasProps> = ({
 				(!!edge.targetId && selectedNodeIds.has(edge.targetId));
 			const color = connected
 				? colors.selected
-				: colors[edge.kind] ?? colors.resolved;
+				: (colors[edge.kind] ?? colors.resolved);
 
 			context.globalAlpha = hasSelection && !connected ? 0.35 : 1;
 			context.lineWidth = connected ? 3.5 : 2;
@@ -777,10 +777,6 @@ function nodeTone(node: CoreGraphNode) {
 	}
 
 	return undefined;
-}
-
-function snapToGraphGrid(value: number) {
-	return Math.round(value / graphSnapGridSize) * graphSnapGridSize;
 }
 
 function snapBounds(story: Story, bounds: CoreRect): CoreRect {
@@ -882,22 +878,32 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		onCreate,
 		onDeselect,
 		onEdit,
+		onEditPassages,
 		onSelect,
 		onSelectIds,
 		onTestPassage,
 		revealPassageId,
 		revealRequestKey,
 		selectedPassageId,
-		story,
-		visibleZoom
+		story
 	} = props;
 	const host = useCoreProjectHost();
+	// The whole graph (grid + edges + nodes) rides one transformed world layer.
+	// `view.k` is the live, un-animated zoom; `visibleZoom` aliases it so the
+	// projection / edge / resize math below stays unchanged.
+	const [view, setView] = React.useState<GraphView>(() => ({
+		...graphInitialView,
+		k: clampZoom(story.zoom || graphInitialView.k)
+	}));
+	const visibleZoom = view.k;
+	const viewRef = React.useRef(view);
+	viewRef.current = view;
+	const persistZoomFrame = React.useRef<number>();
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const [density, setDensity] = React.useState<GraphDensity>(() =>
 		defaultGraphDensity(story)
 	);
-	const [orientation, setOrientation] =
-		React.useState<GraphOrientation>('right');
+	const orientation: GraphOrientation = 'right';
 	const defaultSize = prefs.graphDefaultCardSize;
 	const [focusSelection, setFocusSelection] = React.useState(false);
 	const [layers, setLayers] = React.useState<CoreLinkLayerOptions>({
@@ -906,9 +912,16 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		selfLinks: true
 	});
 	const [drag, setDrag] = React.useState<DragState>();
+	const dragRef = React.useRef<DragState>();
 	const [marquee, setMarquee] = React.useState<MarqueeState>();
+	const [contextMenu, setContextMenu] = React.useState<GraphContextMenuState>();
+	const [optimisticMoveBounds, setOptimisticMoveBounds] = React.useState<
+		Record<string, CoreRect>
+	>({});
 	const [resize, setResize] = React.useState<ResizeState>();
 	const [shiftSelecting, setShiftSelecting] = React.useState(false);
+	const [tool, setTool] = React.useState<'select' | 'pan'>('select');
+	const [spaceDown, setSpaceDown] = React.useState(false);
 	const [viewport, setViewport] = React.useState<ViewportState>({
 		height: 1,
 		left: 0,
@@ -939,6 +952,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	}>();
 	const minimapDragRef = React.useRef<number>();
 	const recentlyDragged = React.useRef(false);
+	const panning = tool === 'pan' || spaceDown;
 	const selectedPassageIds = React.useMemo(() => {
 		const selectedIds = story.passages
 			.filter(passage => passage.selected)
@@ -1052,13 +1066,29 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			markPerformanceAfterPaint('graph-visible');
 		}
 	}, [projection.bounds, projection.nodes.length]);
-	const nodeById = React.useMemo(
+	const projectedNodeById = React.useMemo(
 		() => new Map(projection.nodes.map(node => [node.id, node])),
 		[projection.nodes]
 	);
+	const logicalNodeById = React.useMemo(() => {
+		if (Object.keys(optimisticMoveBounds).length === 0) {
+			return projectedNodeById;
+		}
+
+		return new Map(
+			projection.nodes.map(node => [
+				node.id,
+				optimisticMoveBounds[node.id]
+					? {...node, bounds: optimisticMoveBounds[node.id]}
+					: node
+			])
+		);
+	}, [optimisticMoveBounds, projectedNodeById, projection.nodes]);
 	const logicalGraphBounds = React.useMemo(
-		() => storyPassageBounds(story.passages) ?? projection.bounds,
-		[projection.bounds, story.passages]
+		() =>
+			storyPassageBounds(story.passages, optimisticMoveBounds) ??
+			projection.bounds,
+		[optimisticMoveBounds, projection.bounds, story.passages]
 	);
 	const displayBounds = React.useMemo(
 		() => orientedBounds(logicalGraphBounds, orientation),
@@ -1068,9 +1098,13 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		() =>
 			projection.nodes.map(node => ({
 				...node,
-				bounds: displayRect(node.bounds, orientation, logicalGraphBounds)
+				bounds: displayRect(
+					logicalNodeById.get(node.id)?.bounds ?? node.bounds,
+					orientation,
+					logicalGraphBounds
+				)
 			})),
-		[logicalGraphBounds, orientation, projection.nodes]
+		[logicalGraphBounds, logicalNodeById, orientation, projection.nodes]
 	);
 	const displayNodeById = React.useMemo(
 		() => new Map(displayNodes.map(node => [node.id, node])),
@@ -1154,20 +1188,6 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		story.snapToGrid,
 		visibleZoom
 	]);
-	const canvasSize = React.useMemo(() => {
-		const bounds = displayBounds;
-
-		return {
-			height: Math.max(
-				viewport.height,
-				(bounds ? bounds.top + bounds.height : 0) + canvasPad / visibleZoom
-			),
-			width: Math.max(
-				viewport.width,
-				(bounds ? bounds.left + bounds.width : 0) + canvasPad / visibleZoom
-			)
-		};
-	}, [displayBounds, viewport.height, viewport.width, visibleZoom]);
 	const edgeDrawViewportKey = queryViewport
 		? projectionViewportKey
 		: bufferedViewportKey(viewport);
@@ -1185,7 +1205,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	const minimapNodes = React.useMemo(
 		() =>
 			story.passages.flatMap(passage => {
-				const bounds = passageRect(passage);
+				const bounds = optimisticMoveBounds[passage.id] ?? passageRect(passage);
 
 				return validRect(bounds)
 					? [
@@ -1196,7 +1216,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 						]
 					: [];
 			}),
-		[logicalGraphBounds, orientation, story.passages]
+		[logicalGraphBounds, optimisticMoveBounds, orientation, story.passages]
 	);
 	const showSaveLayoutAction =
 		projection.layoutState !== 'generated' ||
@@ -1206,18 +1226,24 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			? 'names'
 			: density;
 
+	// The logical (world-space) rectangle currently visible. Derived purely
+	// from the transform: world point at the viewport's top-left is (-x/k,-y/k)
+	// and the visible size is clientSize / k. No scroll positions involved.
 	const readViewport = React.useCallback(() => {
 		const element = viewportRef.current;
 
-		if (!element) {
+		if (!element || element.clientWidth < 1 || element.clientHeight < 1) {
+			// Not laid out yet — keep the bounded initial viewport so the first
+			// projection query stays centered on the content origin.
 			return;
 		}
 
+		const {k, x, y} = viewRef.current;
 		const next = {
-			height: element.clientHeight / visibleZoom,
-			left: element.scrollLeft / visibleZoom,
-			top: element.scrollTop / visibleZoom,
-			width: element.clientWidth / visibleZoom
+			height: element.clientHeight / k,
+			left: -x / k,
+			top: -y / k,
+			width: element.clientWidth / k
 		};
 
 		setViewport(current => {
@@ -1232,7 +1258,64 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 			return next;
 		});
-	}, [visibleZoom]);
+	}, []);
+
+	// Persist the live zoom back to the story (debounced) so it survives a
+	// reload, without round-tripping every wheel tick through the core.
+	const persistZoom = React.useCallback(
+		(k: number) => {
+			if (persistZoomFrame.current !== undefined) {
+				window.clearTimeout(persistZoomFrame.current);
+			}
+
+			persistZoomFrame.current = window.setTimeout(() => {
+				persistZoomFrame.current = undefined;
+				const rounded = roundedZoom(k);
+
+				if (rounded !== roundedZoom(story.zoom)) {
+					host.applyStoryCommand(setStoryZoomCommand(story.id, rounded));
+				}
+			}, 400);
+		},
+		[host, story.id, story.zoom]
+	);
+
+	// Zoom toward a point given in viewport-local pixels, keeping the world
+	// point under it pinned. This is the cursor-anchored zoom formula.
+	const zoomToPoint = React.useCallback(
+		(localX: number, localY: number, nextK: number) => {
+			setView(current => {
+				const k = clampZoom(nextK);
+
+				if (k === current.k) {
+					return current;
+				}
+
+				const worldX = (localX - current.x) / current.k;
+				const worldY = (localY - current.y) / current.k;
+
+				persistZoom(k);
+
+				return {k, x: localX - worldX * k, y: localY - worldY * k};
+			});
+		},
+		[persistZoom]
+	);
+
+	const zoomAtViewportCenter = React.useCallback(
+		(factor: number) => {
+			const element = viewportRef.current;
+
+			if (!element) {
+				return;
+			}
+
+			const rect = element.getBoundingClientRect();
+
+			zoomToPoint(rect.width / 2, rect.height / 2, viewRef.current.k * factor);
+		},
+		[zoomToPoint]
+	);
 
 	const updateViewport = React.useCallback(() => {
 		if (viewportFrame.current !== undefined) {
@@ -1263,17 +1346,20 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		setDensity(defaultGraphDensity(story));
 	}, [story.id]);
 
+	// The logical viewport (used for projection tiling + minimap) is a pure
+	// function of the transform, so recompute it whenever the view changes.
 	React.useEffect(() => {
-		const element = viewportRef.current;
+		readViewport();
+	}, [readViewport, view]);
 
-		if (!element) {
-			return;
-		}
-
-		element.addEventListener('scroll', updateViewport, {passive: true});
-
-		return () => element.removeEventListener('scroll', updateViewport);
-	}, [updateViewport]);
+	React.useEffect(
+		() => () => {
+			if (persistZoomFrame.current !== undefined) {
+				window.clearTimeout(persistZoomFrame.current);
+			}
+		},
+		[]
+	);
 
 	React.useEffect(() => {
 		optimisticSelectedIds.current = undefined;
@@ -1281,15 +1367,87 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	}, [persistedSelectionKey]);
 
 	React.useEffect(() => {
+		if (Object.keys(optimisticMoveBounds).length === 0) {
+			return;
+		}
+
+		setOptimisticMoveBounds(current => {
+			let changed = false;
+			const next: Record<string, CoreRect> = {};
+
+			for (const [id, bounds] of Object.entries(current)) {
+				if (!passagesById.has(id)) {
+					changed = true;
+					continue;
+				}
+
+				if (sameRect(projectedNodeById.get(id)?.bounds, bounds)) {
+					changed = true;
+					continue;
+				}
+
+				next[id] = bounds;
+			}
+
+			return changed ? next : current;
+		});
+	}, [optimisticMoveBounds, passagesById, projectedNodeById]);
+
+	React.useEffect(() => {
+		dragRef.current = undefined;
+		setDrag(undefined);
+		setOptimisticMoveBounds(current =>
+			Object.keys(current).length === 0 ? current : {}
+		);
+	}, [story.id]);
+
+	React.useEffect(() => {
+		function isTyping(target: EventTarget | null) {
+			const element = target as HTMLElement | null;
+
+			return (
+				!!element &&
+				(/^(input|textarea|select)$/i.test(element.tagName) ||
+					element.isContentEditable)
+			);
+		}
+
 		function handleKeyDown(event: KeyboardEvent) {
 			if (event.key === 'Shift') {
 				setShiftSelecting(true);
+			}
+
+			if (event.key === 'Escape') {
+				setContextMenu(undefined);
+			}
+
+			if (isTyping(event.target) || event.metaKey || event.ctrlKey) {
+				return;
+			}
+
+			if (event.code === 'Space' && !spaceDown) {
+				setSpaceDown(true);
+				event.preventDefault();
+			} else if (event.key === 'v' || event.key === 'V') {
+				setTool('select');
+			} else if (event.key === 'h' || event.key === 'H') {
+				setTool('pan');
+			} else if (event.key === '+' || event.key === '=') {
+				zoomAtViewportCenter(graphButtonZoomFactor);
+			} else if (event.key === '-' || event.key === '_') {
+				zoomAtViewportCenter(1 / graphButtonZoomFactor);
+			} else if (event.key === '0') {
+				fitToContent();
 			}
 		}
 
 		function handleKeyUp(event: KeyboardEvent) {
 			if (event.key === 'Shift') {
 				setShiftSelecting(false);
+			}
+
+			if (event.code === 'Space') {
+				setSpaceDown(false);
 			}
 		}
 
@@ -1300,8 +1458,30 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			window.removeEventListener('keydown', handleKeyDown);
 			window.removeEventListener('keyup', handleKeyUp);
 		};
-	}, []);
+	}, [spaceDown, zoomAtViewportCenter]);
 
+	React.useEffect(() => {
+		if (!contextMenu) {
+			return;
+		}
+
+		function closeContextMenu() {
+			setContextMenu(undefined);
+		}
+
+		window.addEventListener('click', closeContextMenu);
+		window.addEventListener('scroll', closeContextMenu, true);
+
+		return () => {
+			window.removeEventListener('click', closeContextMenu);
+			window.removeEventListener('scroll', closeContextMenu, true);
+		};
+	}, [contextMenu]);
+
+	// Selection has NO side effect on the viewport (this was the old "jumps up
+	// and to the right" jiggle). The view only moves on an EXPLICIT reveal
+	// request (Reveal in graph / fuzzy finder), which re-anchors the transform
+	// directly — never a scroll side-effect.
 	React.useEffect(() => {
 		const element = viewportRef.current;
 		const node = selectedPassageId
@@ -1314,69 +1494,32 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				? passageRect(selectedPassage)
 				: undefined;
 		const bounds = node?.bounds ?? fallbackBounds;
-
-		if (!selectedPassageId) {
-			lastAutoCenteredSelection.current = undefined;
-			return;
-		}
-
 		const forceReveal =
 			revealPassageId === selectedPassageId &&
 			revealRequestKey !== undefined &&
 			lastRevealRequestKey.current !== revealRequestKey;
 
-		if (
-			!element ||
-			!bounds ||
-			(!forceReveal &&
-				lastAutoCenteredSelection.current === selectedPassageId)
-		) {
+		if (!forceReveal || !element || !bounds) {
 			return;
 		}
 
-		if (forceReveal) {
-			lastRevealRequestKey.current = revealRequestKey;
-		}
+		lastRevealRequestKey.current = revealRequestKey;
 		lastAutoCenteredSelection.current = selectedPassageId;
 
-		const visibleRect = {
-			height: element.clientHeight / visibleZoom,
-			left: element.scrollLeft / visibleZoom,
-			top: element.scrollTop / visibleZoom,
-			width: element.clientWidth / visibleZoom
-		};
-		const padding = Math.min(
-			40 / visibleZoom,
-			visibleRect.width / 4,
-			visibleRect.height / 4
-		);
+		const centerPoint = center(bounds);
 
-		if (rectCenterVisible(bounds, visibleRect, Math.max(0, padding))) {
-			return;
-		}
-
-		const left =
-			(bounds.left + bounds.width / 2) * visibleZoom - element.clientWidth / 2;
-		const top =
-			(bounds.top + bounds.height / 2) * visibleZoom - element.clientHeight / 2;
-
-		if (typeof element.scrollTo === 'function') {
-			element.scrollTo({
-				left: Math.max(left, 0),
-				top: Math.max(top, 0)
-			});
-		} else {
-			element.scrollLeft = Math.max(left, 0);
-			element.scrollTop = Math.max(top, 0);
-		}
+		setView(current => ({
+			...current,
+			x: element.clientWidth / 2 - centerPoint.left * current.k,
+			y: element.clientHeight / 2 - centerPoint.top * current.k
+		}));
 	}, [
 		displayNodeById,
 		orientation,
 		revealPassageId,
 		revealRequestKey,
 		selectedPassage,
-		selectedPassageId,
-		visibleZoom
+		selectedPassageId
 	]);
 
 	function canvasPointFromEvent(event: {clientX: number; clientY: number}) {
@@ -1402,7 +1545,41 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		return canvasPointFromEvent(event);
 	}
 
+	// Fit the whole graph into the viewport by setting x/y/k directly. This is
+	// the only "framing" action besides explicit reveal — never a scroll.
+	function fitToContent() {
+		const element = viewportRef.current;
+
+		if (
+			!element ||
+			!displayBounds ||
+			displayBounds.width <= 0 ||
+			displayBounds.height <= 0
+		) {
+			return;
+		}
+
+		const rect = element.getBoundingClientRect();
+		const k = clampZoom(
+			Math.min(
+				(rect.width - graphFitPadding * 2) / displayBounds.width,
+				(rect.height - graphFitPadding * 2) / displayBounds.height
+			)
+		);
+
+		setView({
+			k,
+			x: (rect.width - displayBounds.width * k) / 2 - displayBounds.left * k,
+			y: (rect.height - displayBounds.height * k) / 2 - displayBounds.top * k
+		});
+		persistZoom(k);
+	}
+
 	function handleCreateAtEvent(event: React.MouseEvent<HTMLDivElement>) {
+		if (contextMenu) {
+			return;
+		}
+
 		const point = pointFromEvent(event);
 
 		if (point) {
@@ -1414,7 +1591,20 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	}
 
 	function handleContextMenu(event: React.MouseEvent<HTMLDivElement>) {
-		if (!prefs.graphRightClickCreatePassage) {
+		const target = event.target as HTMLElement;
+		const nodeElement = target.closest<HTMLElement>('[data-passage-id]');
+		const nodeId = nodeElement?.dataset.passageId;
+
+		if (nodeId && passagesById.has(nodeId)) {
+			event.preventDefault();
+			setContextMenu({
+				left: event.clientX,
+				passageIds:
+					selectedIdSet.has(nodeId) && selectedIdSet.size > 1
+						? Array.from(selectedIdSet)
+						: [nodeId],
+				top: event.clientY
+			});
 			return;
 		}
 
@@ -1422,18 +1612,22 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 		if (point && !panRef.current?.moved) {
 			event.preventDefault();
-			onCreate(
-				displayPointToLogical(point, orientation, logicalGraphBounds),
-				defaultCardSize
-			);
+			setContextMenu({
+				left: event.clientX,
+				passageIds: [],
+				point: displayPointToLogical(point, orientation, logicalGraphBounds),
+				top: event.clientY
+			});
 		}
 	}
 
 	function handleViewportPointerDown(
 		event: React.PointerEvent<HTMLDivElement>
 	) {
+		setContextMenu(undefined);
+
 		if (
-			![0, 1, 2].includes(event.button) ||
+			![0, 1].includes(event.button) ||
 			(event.target as HTMLElement).closest(graphInteractiveSelector)
 		) {
 			return;
@@ -1445,49 +1639,47 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			return;
 		}
 
-		if (event.button === 0 && event.shiftKey) {
-			const start = canvasPointFromEvent(event);
-			const pointerId =
-				typeof event.pointerId === 'number' ? event.pointerId : undefined;
+		const pointerId =
+			typeof event.pointerId === 'number' ? event.pointerId : undefined;
+		const wantPan = panning || event.button === 1;
 
-			if (!start) {
-				return;
-			}
-
-			setMarquee({
-				additive: true,
+		if (wantPan) {
+			panRef.current = {
+				left: view.x,
+				moved: false,
 				pointerId,
-				rect: rectFromPoints(start, start),
-				startLeft: start.left,
-				startTop: start.top
-			});
+				startLeft: view.x,
+				startTop: view.y,
+				top: view.y,
+				x: event.clientX,
+				y: event.clientY
+			};
 			if (pointerId !== undefined) {
 				element.setPointerCapture(pointerId);
 			}
+			element.classList.add('story-edit-graph-viewport--panning');
 			event.preventDefault();
 			return;
 		}
 
-		const pointerId =
-			typeof event.pointerId === 'number' ? event.pointerId : undefined;
+		// Plain left-drag on empty canvas = marquee select.
+		const start = canvasPointFromEvent(event);
 
-		panRef.current = {
-			left: element.scrollLeft,
-			moved: false,
+		if (!start) {
+			return;
+		}
+
+		setMarquee({
+			additive: event.shiftKey || event.metaKey || event.ctrlKey,
 			pointerId,
-			startLeft: element.scrollLeft,
-			startTop: element.scrollTop,
-			top: element.scrollTop,
-			x: event.clientX,
-			y: event.clientY
-		};
+			rect: rectFromPoints(start, start),
+			startLeft: start.left,
+			startTop: start.top
+		});
 		if (pointerId !== undefined) {
 			element.setPointerCapture(pointerId);
 		}
-		element.classList.add('story-edit-graph-viewport--panning');
-		if (event.button !== 0) {
-			event.preventDefault();
-		}
+		event.preventDefault();
 	}
 
 	function handleViewportPointerMove(
@@ -1520,18 +1712,18 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		}
 
 		const pan = panRef.current;
-		const element = viewportRef.current;
 
-		if (!pan || !element) {
+		if (!pan) {
 			return;
 		}
 
-		element.scrollLeft = pan.left + (pan.x - event.clientX);
-		element.scrollTop = pan.top + (pan.y - event.clientY);
+		// Pan = move the world layer 1:1 with the pointer. No scrolling.
+		const nextX = pan.left + (event.clientX - pan.x);
+		const nextY = pan.top + (event.clientY - pan.y);
+
 		pan.moved =
-			Math.abs(element.scrollLeft - pan.startLeft) > 3 ||
-			Math.abs(element.scrollTop - pan.startTop) > 3;
-		updateViewport();
+			Math.abs(nextX - pan.startLeft) > 3 || Math.abs(nextY - pan.startTop) > 3;
+		setView(current => ({...current, x: nextX, y: nextY}));
 		event.preventDefault();
 	}
 
@@ -1568,35 +1760,37 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	}
 
 	function handleViewportWheel(event: React.WheelEvent<HTMLDivElement>) {
+		setContextMenu(undefined);
+
+		const element = viewportRef.current;
+
+		if (!element) {
+			return;
+		}
+
+		event.preventDefault();
+
+		const bounds = element.getBoundingClientRect();
+
+		// Shift + wheel pans horizontally (trackpads send deltaX too).
+		if (event.shiftKey && !event.ctrlKey && !event.metaKey) {
+			const delta = event.deltaX || event.deltaY;
+
+			setView(current => ({...current, x: current.x - delta}));
+			return;
+		}
+
 		if (event.deltaY === 0) {
 			return;
 		}
 
-		const nextZoom = wheelZoom(story.zoom, event.deltaY);
-
-		event.preventDefault();
-
-		if (nextZoom === story.zoom) {
-			return;
-		}
-
-		const element = viewportRef.current;
-
-		if (element) {
-			const bounds = element.getBoundingClientRect();
-			const localLeft = event.clientX - bounds.left;
-			const localTop = event.clientY - bounds.top;
-			const logicalLeft = (element.scrollLeft + localLeft) / visibleZoom;
-			const logicalTop = (element.scrollTop + localTop) / visibleZoom;
-
-			window.requestAnimationFrame(() => {
-				element.scrollLeft = Math.max(logicalLeft * nextZoom - localLeft, 0);
-				element.scrollTop = Math.max(logicalTop * nextZoom - localTop, 0);
-				updateViewport();
-			});
-		}
-
-		host.applyStoryCommand(setStoryZoomCommand(story.id, nextZoom));
+		// Cursor-anchored, continuous zoom — no animation for the next event to
+		// fight, and the world point under the pointer stays pinned.
+		zoomToPoint(
+			event.clientX - bounds.left,
+			event.clientY - bounds.top,
+			wheelZoom(viewRef.current.k, event.deltaY)
+		);
 	}
 
 	function idsInMarqueeRect(rect: Rect) {
@@ -1645,12 +1839,14 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		const localTop = Math.max(0, Math.min(clientY - rect.top, rect.height));
 		const logicalLeft = (localLeft - minimap.x) / minimap.scale;
 		const logicalTop = (localTop - minimap.y) / minimap.scale;
-		const nextLeft = (logicalLeft - viewport.width / 2) * visibleZoom;
-		const nextTop = (logicalTop - viewport.height / 2) * visibleZoom;
 
-		viewportElement.scrollLeft = Math.max(0, nextLeft);
-		viewportElement.scrollTop = Math.max(0, nextTop);
-		updateViewport();
+		// Center the viewport on the clicked world point by re-anchoring the
+		// transform — no scrolling.
+		setView(current => ({
+			...current,
+			x: viewportElement.clientWidth / 2 - logicalLeft * current.k,
+			y: viewportElement.clientHeight / 2 - logicalTop * current.k
+		}));
 	}
 
 	function handleMinimapPointerDown(event: React.PointerEvent<HTMLDivElement>) {
@@ -1754,36 +1950,50 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				? Array.from(selectedForDrag)
 				: [node.id];
 
-		setDrag({
+		const nextDrag = {
 			ids,
 			left: data.x,
 			startLeft: data.x,
 			startTop: data.y,
 			top: data.y
-		});
+		};
+
+		dragRef.current = nextDrag;
+		setDrag(nextDrag);
 	}
 
 	function handleDrag(data: DraggableData) {
 		setDrag(current =>
-			current ? {...current, left: data.x, top: data.y} : current
+			current
+				? (() => {
+						const next = {...current, left: data.x, top: data.y};
+
+						dragRef.current = next;
+						return next;
+					})()
+				: current
 		);
 	}
 
-	function handleDragStop() {
+	function handleDragStop(_event: DraggableEvent, data: DraggableData) {
 		document.body.classList.remove('dragging-passages');
-		setDrag(current => {
-			if (!current) {
-				return undefined;
-			}
 
-			const screenDeltaLeft = current.left - current.startLeft;
-			const screenDeltaTop = current.top - current.startTop;
-			const moved = Math.hypot(screenDeltaLeft, screenDeltaTop);
+		const current = dragRef.current
+			? {...dragRef.current, left: data.x, top: data.y}
+			: undefined;
 
-			if (moved < graphDragClickTolerance) {
-				return undefined;
-			}
+		dragRef.current = undefined;
+		setDrag(undefined);
 
+		if (!current) {
+			return;
+		}
+
+		const screenDeltaLeft = current.left - current.startLeft;
+		const screenDeltaTop = current.top - current.startTop;
+		const moved = Math.hypot(screenDeltaLeft, screenDeltaTop);
+
+		if (moved >= graphDragClickTolerance) {
 			const displayDeltaLeft = screenDeltaLeft / visibleZoom;
 			const displayDeltaTop = screenDeltaTop / visibleZoom;
 			const {left: deltaLeft, top: deltaTop} = displayDeltaToLogical(
@@ -1794,7 +2004,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 			if (Math.abs(deltaLeft) >= 1 || Math.abs(deltaTop) >= 1) {
 				const moves = current.ids
-					.map(id => nodeById.get(id))
+					.map(id => logicalNodeById.get(id))
 					.filter((node): node is CoreGraphNode => !!node)
 					.map(node => ({
 						bounds: snapBounds(story, {
@@ -1806,16 +2016,21 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 					}));
 
 				if (moves.length > 0) {
+					setOptimisticMoveBounds(currentBounds => ({
+						...currentBounds,
+						...Object.fromEntries(
+							moves.map(move => [move.passageId, move.bounds])
+						)
+					}));
 					host.applyStoryCommand(movePassagesCommand(story.id, moves));
 				}
 			}
+		}
 
-			recentlyDragged.current = true;
-			window.setTimeout(() => {
-				recentlyDragged.current = false;
-			}, 0);
-			return undefined;
-		});
+		recentlyDragged.current = true;
+		window.setTimeout(() => {
+			recentlyDragged.current = false;
+		}, 0);
 	}
 
 	function applySizeToSelection(size: {height: number; width: number}) {
@@ -1939,6 +2154,12 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				});
 
 			if (moves.length > 0) {
+				setOptimisticMoveBounds(currentBounds => ({
+					...currentBounds,
+					...Object.fromEntries(
+						moves.map(move => [move.passageId, move.bounds])
+					)
+				}));
 				host.applyStoryCommand(movePassagesCommand(story.id, moves));
 			}
 
@@ -1982,6 +2203,44 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		}
 	}
 
+	function contextMenuPassages() {
+		return (
+			contextMenu?.passageIds
+				.map(id => passagesById.get(id))
+				.filter((passage): passage is Passage => !!passage) ?? []
+		);
+	}
+
+	function handleContextEdit() {
+		const passages = contextMenuPassages();
+
+		if (passages.length === 1) {
+			onEdit(passages[0]);
+		} else if (passages.length > 1) {
+			onEditPassages(passages);
+		}
+
+		setContextMenu(undefined);
+	}
+
+	function handleContextCreate() {
+		if (contextMenu?.point) {
+			onCreate(contextMenu.point, defaultCardSize);
+		}
+
+		setContextMenu(undefined);
+	}
+
+	function handleContextTest() {
+		const passage = contextMenuPassages()[0];
+
+		if (passage) {
+			onTestPassage?.(passage);
+		}
+
+		setContextMenu(undefined);
+	}
+
 	function nodeDisplayBounds(node: CoreGraphNode) {
 		return interactionBounds(
 			node,
@@ -2021,6 +2280,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			<div
 				className={classNames(
 					'story-edit-graph-viewport',
+					panning && 'story-edit-graph-viewport--pan-tool',
 					shiftSelecting && 'story-edit-graph-viewport--selecting-mode',
 					marquee && 'story-edit-graph-viewport--marqueeing'
 				)}
@@ -2033,13 +2293,32 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				onWheel={handleViewportWheel}
 				ref={viewportRef}
 			>
+				{/* Grid drawn in screen space but positioned/scaled to track the
+				    world transform, so the dots ARE the snap targets and move 1:1
+				    with pan/zoom (offset half a cell so a snapped corner lands on a
+				    dot). */}
+				<div
+					aria-hidden
+					className="story-edit-graph-grid"
+					style={{
+						backgroundPosition: `${
+							view.x - (graphSnapGridSize * view.k) / 2
+						}px ${view.y - (graphSnapGridSize * view.k) / 2}px, ${
+							view.x - (graphSnapMajorGridSize * view.k) / 2
+						}px ${view.y - (graphSnapMajorGridSize * view.k) / 2}px`,
+						backgroundSize: `${graphSnapGridSize * view.k}px ${
+							graphSnapGridSize * view.k
+						}px, ${graphSnapMajorGridSize * view.k}px ${
+							graphSnapMajorGridSize * view.k
+						}px`
+					}}
+				/>
 				<div
 					className="story-edit-graph-canvas"
 					ref={canvasRef}
 					style={{
-						height: canvasSize.height,
-						transform: `scale(${visibleZoom})`,
-						width: canvasSize.width
+						transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`,
+						transformOrigin: '0 0'
 					}}
 				>
 					<GraphEdgesCanvas
@@ -2165,6 +2444,22 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				onPointerDown={event => event.stopPropagation()}
 			>
 				<div className="story-edit-graph-toolbar-group">
+					<IconButton
+						active={tool === 'select'}
+						icon="pointer"
+						label="Select tool (V)"
+						onClick={() => setTool('select')}
+						size="sm"
+					/>
+					<IconButton
+						active={tool === 'pan'}
+						icon="hand-stop"
+						label="Pan tool (H, or hold Space)"
+						onClick={() => setTool('pan')}
+						size="sm"
+					/>
+				</div>
+				<div className="story-edit-graph-toolbar-group">
 					{onTestPassage && (
 						<Button
 							disabled={!soloSelectedPassage}
@@ -2269,18 +2564,6 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 							: currentSizeLabel}
 					</span>
 				</div>
-				<div className="story-edit-graph-toolbar-group">
-					<IconButton
-						icon="rotate-clockwise"
-						label={`Rotate view: ${orientationLabel(orientation)}`}
-						onClick={() => setOrientation(current => nextOrientation(current))}
-						size="sm"
-						tooltipPosition="bottom"
-					/>
-					<span className="story-edit-graph-toolbar-hint">
-						{orientationLabel(orientation)}
-					</span>
-				</div>
 			</div>
 			<div className="story-edit-graph-status">
 				<Badge mono tone={layoutBadgeTone(projection.layoutState)}>
@@ -2312,6 +2595,35 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 						Save Layout
 					</Button>
 				)}
+			</div>
+			<div
+				className="story-edit-graph-zoom"
+				onContextMenu={event => event.stopPropagation()}
+				onDoubleClick={event => event.stopPropagation()}
+				onPointerDown={event => event.stopPropagation()}
+			>
+				<IconButton
+					icon="minus"
+					label="Zoom out"
+					onClick={() => zoomAtViewportCenter(1 / graphButtonZoomFactor)}
+					size="sm"
+				/>
+				<span className="story-edit-graph-zoom-value">
+					{Math.round(view.k * 100)}%
+				</span>
+				<IconButton
+					icon="plus"
+					label="Zoom in"
+					onClick={() => zoomAtViewportCenter(graphButtonZoomFactor)}
+					size="sm"
+				/>
+				<span className="story-edit-graph-zoom-sep" />
+				<IconButton
+					icon="maximize"
+					label="Fit graph to window (0)"
+					onClick={fitToContent}
+					size="sm"
+				/>
 			</div>
 			{displayBounds && (
 				<div
@@ -2352,6 +2664,65 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 							}}
 						/>
 					</div>
+				</div>
+			)}
+			{contextMenu && (
+				<div
+					className="story-edit-graph-context-menu"
+					onClick={event => event.stopPropagation()}
+					onContextMenu={event => event.preventDefault()}
+					style={{
+						left: contextMenu.left,
+						top: contextMenu.top
+					}}
+				>
+					{contextMenu.passageIds.length > 0 ? (
+						<>
+							<button onClick={handleContextEdit} type="button">
+								<TablerIcon icon="edit" />
+								<span>
+									{contextMenu.passageIds.length > 1
+										? `Edit ${contextMenu.passageIds.length} passages`
+										: 'Edit passage'}
+								</span>
+							</button>
+							{contextMenu.passageIds.length === 1 && onTestPassage && (
+								<button onClick={handleContextTest} type="button">
+									<TablerIcon icon="tool" />
+									<span>Test from here</span>
+								</button>
+							)}
+						</>
+					) : (
+						<>
+							<button onClick={handleContextCreate} type="button">
+								<TablerIcon icon="plus" />
+								<span>New passage here</span>
+							</button>
+							<button
+								onClick={() => {
+									fitToContent();
+									setContextMenu(undefined);
+								}}
+								type="button"
+							>
+								<TablerIcon icon="maximize" />
+								<span>Fit graph to window</span>
+							</button>
+							<button
+								onClick={() => {
+									host.applyStoryCommand(
+										setStorySnapToGridCommand(story.id, !story.snapToGrid)
+									);
+									setContextMenu(undefined);
+								}}
+								type="button"
+							>
+								<TablerIcon icon={story.snapToGrid ? 'check' : 'grid-dots'} />
+								<span>Snap to grid</span>
+							</button>
+						</>
+					)}
 				</div>
 			)}
 		</section>

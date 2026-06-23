@@ -4,14 +4,11 @@ import {Story, useStoriesContext} from '../../../store/stories';
 import {fakeStory, FakeStateProvider, StoryInspector} from '../../../test-util';
 import {usePassageChangeHandlers} from '../use-passage-change-handlers';
 
-jest.mock('../../../dialogs/passage-edit/passage-edit-stack');
-
 function TestComponent() {
 	const {stories} = useStoriesContext();
 	const {
 		handleDeselectPassage,
 		handleDragPassages,
-		handleEditPassage,
 		handleSelectPassage,
 		handleSelectRect
 	} = usePassageChangeHandlers(stories[0]);
@@ -25,9 +22,6 @@ function TestComponent() {
 			</button>
 			<button onClick={() => handleDragPassages({left: 20, top: 10})}>
 				handleDragPassages
-			</button>
-			<button onClick={() => handleEditPassage(stories[0].passages[0])}>
-				handleEditPassage
 			</button>
 			<button
 				onClick={() => handleSelectPassage(stories[0].passages[0], false)}
@@ -123,20 +117,6 @@ describe('usePassageChangeHandlers', () => {
 			expect(passage0.dataset.left).toBe('10');
 			expect(passage0.dataset.top).toBe('20');
 		});
-	});
-
-	it('returns a handleEditPassage function which opens a passage editor', () => {
-		const story = fakeStory(1);
-
-		renderHook(story);
-		fireEvent.click(screen.getByText('handleEditPassage'));
-
-		const editDialog = screen.getByTestId('mock-passage-edit-stack');
-
-		expect(editDialog).toBeInTheDocument();
-		expect(editDialog.dataset.passageIds).toBe(
-			JSON.stringify([story.passages[0].id])
-		);
 	});
 
 	describe('The handleSelectPassage function it returns', () => {

@@ -1,41 +1,53 @@
 import {v4 as uuid} from '@lukeed/uuid';
 import {StoryFormatsState} from '../../../story-formats/story-formats.types';
 
-export function save(state: StoryFormatsState) {
-	// Delete existing formats in local storage, since we aren't bothering to
-	// preserve ids.
+const storyFormatStoragePrefix = 'twine-storyformats';
 
-	const previouslySerialized =
-		window.localStorage.getItem('twine-storyformats');
+function removeStoredFormats() {
+	const keys: string[] = [];
 
-	if (previouslySerialized) {
-		previouslySerialized.split(',').forEach(id => {
-			window.localStorage.removeItem(`twine-storyformats-${id}`);
-		});
+	for (let index = 0; index < window.localStorage.length; index++) {
+		const key = window.localStorage.key(index);
+
+		if (key?.startsWith(storyFormatStoragePrefix)) {
+			keys.push(key);
+		}
 	}
 
-	// Save new ones.
+	keys.forEach(key => window.localStorage.removeItem(key));
+}
+
+export function save(state: StoryFormatsState) {
+	// Delete all old format keys, including orphaned keys from interrupted or
+	// failed saves. Built-in formats are repaired from defaults at startup, so
+	// only user-added formats need localStorage.
+	removeStoredFormats();
 
 	const ids: string[] = [];
 
-	for (const format of state) {
-		const id = uuid();
+	try {
+		for (const format of state.filter(format => format.userAdded)) {
+			const id = uuid();
 
-		// We have to remove the `properties` property if it exists, as that is
-		// dynamically added when loading.
+			// We have to remove the `properties` property if it exists, as that is
+			// dynamically added when loading.
 
-		ids.push(id);
-		window.localStorage.setItem(
-			`twine-storyformats-${id}`,
-			JSON.stringify({
-				...format,
-				loadError: undefined,
-				loadState: undefined,
-				properties: undefined,
-				selected: undefined
-			})
-		);
+			ids.push(id);
+			window.localStorage.setItem(
+				`${storyFormatStoragePrefix}-${id}`,
+				JSON.stringify({
+					...format,
+					loadError: undefined,
+					loadState: undefined,
+					properties: undefined,
+					selected: undefined
+				})
+			);
+		}
+
+		window.localStorage.setItem(storyFormatStoragePrefix, ids.join(','));
+	} catch (error) {
+		removeStoredFormats();
+		throw error;
 	}
-
-	window.localStorage.setItem('twine-storyformats', ids.join(','));
 }

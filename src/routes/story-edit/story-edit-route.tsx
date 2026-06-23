@@ -10,13 +10,16 @@ import {
 	UndoableStoriesContextProvider,
 	useUndoableStoriesContext
 } from '../../store/undoable-stories';
+import {
+	EditorWindowSpec,
+	editorWindowId,
+	editorWindowsEqual
+} from './editor-window-spec';
 import {PassageFuzzyFinder} from './passage-fuzzy-finder';
 import {StoryGraphPanel} from './story-graph-panel';
 import {useInitialPassageCreation} from './use-initial-passage-creation';
 import {usePassageChangeHandlers} from './use-passage-change-handlers';
 import {useViewCenter} from './use-view-center';
-import {useZoomShortcuts} from './use-zoom-shortcuts';
-import {useZoomTransition} from './use-zoom-transition';
 import {StoryWorkspaceShell} from './story-workspace-shell';
 import {
 	useStoryEditScrollMemory,
@@ -35,6 +38,13 @@ export const InnerStoryEditRoute: React.FC = () => {
 		key: 0,
 		passageId: ''
 	});
+	// The open editor buffers (the dock). `undefined` means "follow the
+	// selection" — the dock shows whichever passage is selected. Once the user
+	// explicitly opens/edits, it becomes a concrete, user-managed list.
+	const [editorWindows, setEditorWindows] = React.useState<
+		EditorWindowSpec[] | undefined
+	>();
+	const [activeWindowId, setActiveWindowId] = React.useState<string>();
 	const mainContent = React.useRef<HTMLDivElement>(null);
 	const workspace = useStoryEditWorkspace(story);
 	const {getCenter, setCenter} = useViewCenter(story, mainContent);
@@ -44,12 +54,30 @@ export const InnerStoryEditRoute: React.FC = () => {
 		handleSelectPassage,
 		handleSelectPassageIds
 	} = usePassageChangeHandlers(story);
-	const visibleZoom = useZoomTransition(story.zoom, mainContent.current);
 	const handledRevealQuery = React.useRef('');
 
-	useZoomShortcuts(story);
 	useInitialPassageCreation(story, getCenter);
 	useStoryEditScrollMemory(story.id, workspace.mode, mainContent);
+
+	const editorWindowsRef = React.useRef(editorWindows);
+	editorWindowsRef.current = editorWindows;
+
+	// Drop passage windows whose passage was deleted.
+	React.useEffect(() => {
+		setEditorWindows(current => {
+			if (!current) {
+				return current;
+			}
+
+			const availableIds = new Set(story.passages.map(passage => passage.id));
+			const next = current.filter(
+				window_ =>
+					window_.kind !== 'passage' || availableIds.has(window_.passageId)
+			);
+
+			return next.length === current.length ? current : next;
+		});
+	}, [story.passages]);
 
 	const handleChoosePassage = React.useCallback(
 		(passage: Passage) => {
@@ -59,14 +87,125 @@ export const InnerStoryEditRoute: React.FC = () => {
 		[dispatch, story, workspace]
 	);
 
-	const handleEditPassage = React.useCallback(
-		(passage: Passage) => {
-			handleChoosePassage(passage);
+	// The dock list with the implicit "follow selection" view materialized, so
+	// open/close/reorder always operate on a concrete list.
+	const materializedWindows = React.useCallback(
+		(selectedId = workspace.selectedPassageId): EditorWindowSpec[] => {
+			if (editorWindowsRef.current) {
+				return editorWindowsRef.current;
+			}
+
+			return selectedId ? [{kind: 'passage', passageId: selectedId}] : [];
+		},
+		[workspace.selectedPassageId]
+	);
+
+	const openEditorWindow = React.useCallback(
+		(spec: EditorWindowSpec) => {
+			setEditorWindows(current => {
+				const list = current ?? materializedWindows();
+
+				return list.some(window_ => editorWindowsEqual(window_, spec))
+					? list
+					: [...list, spec];
+			});
+			setActiveWindowId(editorWindowId(spec));
+
+			if (spec.kind === 'passage') {
+				workspace.setSelectedPassageId(spec.passageId);
+			}
+
 			if (workspace.mode === 'graph') {
 				workspace.setMode('split');
 			}
 		},
-		[handleChoosePassage, workspace]
+		[materializedWindows, workspace]
+	);
+
+	const handleEditPassage = React.useCallback(
+		(passage: Passage) => {
+			openEditorWindow({kind: 'passage', passageId: passage.id});
+		},
+		[openEditorWindow]
+	);
+	const handleEditPassages = React.useCallback(
+		(passages: Passage[]) => {
+			if (passages.length === 0) {
+				return;
+			}
+
+			const specs = passages.map(
+				(passage): EditorWindowSpec => ({
+					kind: 'passage',
+					passageId: passage.id
+				})
+			);
+
+			setEditorWindows(current => {
+				const next = [...(current ?? materializedWindows())];
+
+				for (const spec of specs) {
+					if (!next.some(window_ => editorWindowsEqual(window_, spec))) {
+						next.push(spec);
+					}
+				}
+
+				return next;
+			});
+			workspace.setSelectedPassageId(passages[0].id);
+			setActiveWindowId(editorWindowId(specs[0]));
+
+			if (workspace.mode === 'graph') {
+				workspace.setMode('split');
+			}
+		},
+		[materializedWindows, workspace]
+	);
+	const handleCloseEditorWindow = React.useCallback(
+		(spec: EditorWindowSpec) => {
+			const id = editorWindowId(spec);
+			const next = materializedWindows().filter(
+				window_ => !editorWindowsEqual(window_, spec)
+			);
+
+			setEditorWindows(next);
+			setActiveWindowId(current =>
+				current === id
+					? next.length
+						? editorWindowId(next[next.length - 1])
+						: undefined
+					: current
+			);
+
+			if (next.length === 0 && workspace.mode === 'split') {
+				workspace.setMode('graph');
+			}
+		},
+		[materializedWindows, workspace]
+	);
+	const handleFocusEditorWindow = React.useCallback(
+		(id: string) => {
+			setActiveWindowId(id);
+
+			if (id.startsWith('passage:')) {
+				workspace.setSelectedPassageId(id.slice('passage:'.length));
+			}
+		},
+		[workspace]
+	);
+	const handleReorderEditorWindows = React.useCallback(
+		(from: number, to: number) => {
+			const list = [...materializedWindows()];
+			const [moved] = list.splice(from, 1);
+
+			if (!moved) {
+				return;
+			}
+
+			list.splice(to, 0, moved);
+			setEditorWindows(list);
+		},
+		[materializedWindows]
 	);
 	const handleRevealPassageInGraph = React.useCallback(
 		(passage: Passage) => {
@@ -131,6 +270,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 				onChangeLeftDockCollapsed={workspace.setLeftDockCollapsed}
 				onChangeMode={workspace.setMode}
 				onChangeRightDockCollapsed={workspace.setRightDockCollapsed}
+				onEditPassages={handleEditPassages}
 				onOpenFuzzyFinder={() => setFuzzyFinderOpen(true)}
 				rightDockCollapsed={workspace.rightDockCollapsed}
 				story={story}
@@ -143,6 +283,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 							onCreate={handleCreatePassage}
 							onDeselect={handleDeselectPassage}
 							onEdit={handleEditPassage}
+							onEditPassages={handleEditPassages}
 							onSelect={handleSelectPassageInMap}
 							onSelectIds={handleSelectPassageIds}
 							onTestPassage={handleTestPassage}
@@ -150,15 +291,19 @@ export const InnerStoryEditRoute: React.FC = () => {
 							revealRequestKey={graphRevealRequest.key}
 							selectedPassageId={workspace.selectedPassageId}
 							story={story}
-							visibleZoom={visibleZoom}
-							zoom={story.zoom}
 						/>
 					}
 					leftDockCollapsed={workspace.leftDockCollapsed}
 					mode={workspace.mode}
+					activeWindowId={activeWindowId}
+					editorWindows={editorWindows}
 					onChangeBottomDrawerOpen={workspace.setBottomDrawerOpen}
 					onChangeLeftDockCollapsed={workspace.setLeftDockCollapsed}
 					onChangeRightDockCollapsed={workspace.setRightDockCollapsed}
+					onCloseEditorWindow={handleCloseEditorWindow}
+					onFocusEditorWindow={handleFocusEditorWindow}
+					onOpenEditorWindow={openEditorWindow}
+					onReorderEditorWindows={handleReorderEditorWindows}
 					onRevealPassageInGraph={handleRevealPassageInGraph}
 					onSelectPassage={handleChoosePassage}
 					onTestPassage={handleTestPassage}
@@ -166,7 +311,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 						<PassageFuzzyFinder
 							onClose={() => setFuzzyFinderOpen(false)}
 							onOpen={() => setFuzzyFinderOpen(true)}
-							onRevealPassageInGraph={handleChoosePassage}
+							onRevealPassageInGraph={handleRevealPassageInGraph}
 							onTestPassage={handleTestPassage}
 							open={fuzzyFinderOpen}
 							setCenter={setCenter}

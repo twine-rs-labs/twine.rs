@@ -1,0 +1,212 @@
+<!-- @dsCard group="twine.rs Workbench" viewport="1320x760" name="Workbench — Split / Text / Graph" subtitle="Transform-based graph nav, cursor-anchored zoom, snap-to-grid, and a multi-window editor dock" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>twine.rs — Workbench</title>
+<link rel="stylesheet" href="../../styles.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link rel="stylesheet" href="workbench.css" />
+<style>
+	html, body { height: 100%; }
+	body { margin: 0; overflow: hidden; }
+</style>
+</head>
+<body>
+	<div id="root"></div>
+	<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+	<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+	<script src="../../_ds_bundle.js"></script>
+	<script src="../nav.js"></script>
+	<script src="data.js"></script>
+	<script type="text/babel" src="GraphMode.jsx"></script>
+	<script type="text/babel" src="EditorDock.jsx"></script>
+	<script type="text/babel" src="CommandPalette.jsx"></script>
+	<script type="text/babel">
+		const NS = window.TwineRsDesignSystem_073217;
+		const { SegmentedControl, Button } = NS;
+		const DATA = window.TWINE_DATA;
+
+		let WIN_SEQ = 100;
+		function passageWindow(p) {
+			return { id: 'p' + p.id, kind: 'passage', passageId: p.id, title: p.name,
+				dirty: p.id === 1, tags: p.tags, links: p.links, broken: p.broken };
+		}
+
+		function App() {
+			const [mode, setMode] = React.useState('split');
+			const [passages, setPassages] = React.useState(DATA.passages);
+			const [positions, setPositions] = React.useState(
+				() => Object.fromEntries(DATA.passages.map(p => [p.id, { x: p.x, y: p.y }])));
+			const [selectedIds, setSelectedIds] = React.useState([1]);
+			const [density, setDensity] = React.useState('excerpt');
+			const [snap, setSnap] = React.useState(true);
+			const [tool, setTool] = React.useState('select');
+			const [palette, setPalette] = React.useState(false);
+
+			// open editor windows (mixed passage / js / css)
+			const [windows, setWindows] = React.useState(() => [
+				passageWindow(DATA.passages[0]),
+				passageWindow(DATA.passages[3]),
+				{ id: 'js', kind: 'js', title: 'Story JavaScript', dirty: false }
+			]);
+			const [activeId, setActiveId] = React.useState('p1');
+
+			const byId = React.useMemo(() => Object.fromEntries(passages.map(p => [p.id, p])), [passages]);
+			const liveEdges = React.useMemo(
+				() => DATA.edges.filter(([a, b]) => positions[a] && positions[b]),
+				[positions]);
+
+			// ---- window management ----------------------------------------
+			function openWindow(spec) {
+				if (spec.kind === 'js' || spec.kind === 'css') {
+					const exist = windows.find(w => w.kind === spec.kind);
+					if (exist) { setActiveId(exist.id); return; }
+					const win = { id: spec.kind, kind: spec.kind,
+						title: spec.kind === 'js' ? 'Story JavaScript' : 'Story Stylesheet', dirty: false };
+					setWindows(ws => [...ws, win]); setActiveId(win.id); return;
+				}
+				// passage: one window per passage (focus if already open)
+				const id = 'p' + spec.passageId;
+				const exist = windows.find(w => w.id === id);
+				if (exist) { setActiveId(id); return; }
+				const p = byId[spec.passageId];
+				if (!p) return;
+				setWindows(ws => [...ws, passageWindow(p)]);
+				setActiveId(id);
+			}
+			function openPassage(pid) {
+				if (mode === 'graph') setMode('split');
+				openWindow({ kind: 'passage', passageId: pid });
+			}
+			function closeWindow(id) {
+				setWindows(ws => {
+					const next = ws.filter(w => w.id !== id);
+					if (id === activeId) setActiveId(next.length ? next[next.length - 1].id : null);
+					return next;
+				});
+			}
+			function reorderWindows(from, to) {
+				setWindows(ws => {
+					const a = [...ws];
+					const [moved] = a.splice(from, 1);
+					a.splice(to, 0, moved);
+					return a;
+				});
+			}
+
+			// ---- graph context actions ------------------------------------
+			function contextAction(action, arg) {
+				if (action === 'new') {
+					const id = Math.max(0, ...passages.map(p => p.id)) + 1;
+					const np = { id, name: 'Untitled Passage', tags: [], links: 0, broken: 0,
+						excerpt: 'Enter the body text of your passage here.' };
+					setPassages(ps => [...ps, np]);
+					setPositions(pos => ({ ...pos, [id]: { x: Math.round(arg.x), y: Math.round(arg.y) } }));
+					setSelectedIds([id]);
+				} else if (action === 'delete') {
+					const kill = new Set(selectedIds);
+					setPassages(ps => ps.filter(p => !kill.has(p.id)));
+					setPositions(pos => { const n = { ...pos }; kill.forEach(k => delete n[k]); return n; });
+					setWindows(ws => ws.filter(w => !(w.kind === 'passage' && kill.has(w.passageId))));
+					setSelectedIds([]);
+				}
+				/* 'test' / 'rename' are no-ops in this static reference */
+			}
+
+			// ---- keyboard ---------------------------------------------------
+			React.useEffect(() => {
+				const h = e => {
+					const typing = /^(input|textarea)$/i.test(e.target.tagName);
+					if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPalette(p => !p); return; }
+					if (e.key === 'Escape') { setPalette(false); return; }
+					if (typing) return;
+					if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'w' && activeId) { e.preventDefault(); closeWindow(activeId); return; }
+					if (e.key === 'Enter' && selectedIds.length) { e.preventDefault(); selectedIds.forEach(openPassage); return; }
+					if (e.key.toLowerCase() === 'v') setTool('select');
+					if (e.key.toLowerCase() === 'h') setTool('pan');
+					if (e.key === 'Delete' || e.key === 'Backspace') { if (selectedIds.length) contextAction('delete'); }
+				};
+				window.addEventListener('keydown', h);
+				return () => window.removeEventListener('keydown', h);
+			});
+
+			const graph = (
+				<window.GraphMode
+					passages={passages} edges={liveEdges} positions={positions} setPositions={setPositions}
+					selectedIds={selectedIds} onSelect={(ids) => setSelectedIds(ids)}
+					onOpenPassage={openPassage} onContextAction={contextAction}
+					density={density} setDensity={setDensity} snap={snap} setSnap={setSnap}
+					tool={tool} setTool={setTool} />
+			);
+			const dock = (
+				<window.EditorDock windows={windows} activeId={activeId}
+					onFocus={setActiveId} onClose={closeWindow} onOpen={openWindow} onReorder={reorderWindows}
+					compact={mode === 'split'} />
+			);
+
+			const Center = mode === 'graph' ? graph
+				: mode === 'text' ? dock
+				: <div className="sp"><div className="sp__graph">{graph}</div><div className="sp__divider" /><div className="sp__text">{dock}</div></div>;
+
+			return (
+				<div className="wb">
+					{/* Top command bar */}
+					<div className="wb__bar">
+						<div className="wb__brand">
+							<img src="../../assets/twine-mark.svg" alt="" />
+							<b>twine<span>.rs</span></b>
+						</div>
+						<div className="wb__bar-sep" />
+						<div className="wb__crumbs">
+							<i className="ti ti-folder" /> Documents <i className="ti ti-chevron-right" />
+							<b>the-lighthouse</b>
+						</div>
+
+						<div className="wb__bar-sp" />
+						{/* identical in every mode → never shifts when you switch */}
+						<SegmentedControl value={mode} onChange={setMode} options={[
+							{ value: 'text', label: 'Text', icon: 'file-text' },
+							{ value: 'graph', label: 'Graph', icon: 'binary-tree' },
+							{ value: 'split', label: 'Split', icon: 'layout-columns' }]} />
+						<div className="wb__bar-sp" />
+						<div className="wb__bar-group">
+							<Button size="sm" variant="ghost" icon="player-play">Play</Button>
+							<Button size="sm" variant="ghost" icon="tool">Test</Button>
+							<Button size="sm" variant="primary" icon="package-export">Export</Button>
+						</div>
+						<div className="wb__bar-sep" />
+						<div className="wb__pill" onClick={() => setPalette(true)}>
+							<i className="ti ti-command" /> Command Palette <kbd>⌘K</kbd>
+						</div>
+					</div>
+
+					{/* Mid: rail + center */}
+					<div className="wb__mid">
+						<window.TwineRail active="workbench" />
+						<div className="wb__center">{Center}</div>
+					</div>
+
+					{/* Status bar — story-level facts live HERE, once */}
+					<div className="wb__status">
+						<span className="s"><i className="ti ti-git-branch" /> main</span>
+						<span className="s ok"><i className="ti ti-circle-check" /> Saved</span>
+						<span className="s dirty"><i className="ti ti-point-filled" /> 1 unsaved</span>
+						<span className="s"><i className="ti ti-windows" /> {windows.length === 1 ? '1 editor' : windows.length + ' editors'}</span>
+						<div className="wb__status-sp" />
+						<span className="s err"><i className="ti ti-alert-octagon" /> 37</span>
+						<span className="s"><i className="ti ti-database" /> 12,483 passages · 248,917 words</span>
+						<span className="s"><i className="ti ti-puzzle" /> {DATA.format}</span>
+					</div>
+
+					{palette && <window.CommandPalette onClose={() => setPalette(false)} />}
+				</div>
+			);
+		}
+
+		ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+	</script>
+</body>
+</html>

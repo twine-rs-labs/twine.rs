@@ -6,7 +6,10 @@ describe('story formats local storage save', () => {
 	afterAll(() => window.localStorage.clear());
 
 	it('saves formats to local storage', () => {
-		const formats = [fakeLoadedStoryFormat(), fakeLoadedStoryFormat()];
+		const formats = [
+			fakeLoadedStoryFormat({userAdded: true}),
+			fakeLoadedStoryFormat({userAdded: true})
+		];
 
 		save(formats);
 
@@ -62,5 +65,35 @@ describe('story formats local storage save', () => {
 
 		/* eslint-enable jest/no-conditional-expect */
 		expect.assertions(2);
+	});
+
+	it('does not persist built-in formats', () => {
+		const custom = fakeLoadedStoryFormat({userAdded: true});
+
+		save([fakeLoadedStoryFormat({userAdded: false}), custom]);
+
+		const ids = window.localStorage.getItem('twine-storyformats')!.split(',');
+
+		expect(ids).toHaveLength(1);
+		expect(
+			JSON.parse(window.localStorage.getItem(`twine-storyformats-${ids[0]}`)!)
+		).toEqual(
+			expect.objectContaining({
+				name: custom.name,
+				userAdded: true,
+				version: custom.version
+			})
+		);
+	});
+
+	it('removes orphaned story format keys before saving', () => {
+		const custom = fakeLoadedStoryFormat({userAdded: true});
+
+		window.localStorage.setItem('twine-storyformats-old-id', 'old');
+		window.localStorage.setItem('twine-storyformats-orphan', 'old');
+		save([custom]);
+
+		expect(window.localStorage.getItem('twine-storyformats-old-id')).toBeNull();
+		expect(window.localStorage.getItem('twine-storyformats-orphan')).toBeNull();
 	});
 });

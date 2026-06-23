@@ -70,6 +70,21 @@ describe('PassageFuzzyFinder', () => {
 				expect(setCenter.mock.calls).toEqual([[story.passages[0]]]);
 			});
 
+			it('uses explicit graph reveal instead of scroll centering when available', () => {
+				const onRevealPassageInGraph = jest.fn();
+				const setCenter = jest.fn();
+				const story = fakeStory(1);
+
+				story.passages[0].name = 'a name';
+				story.passages[0].selected = false;
+				story.passages[0].text = 'text';
+				renderComponent({onRevealPassageInGraph, setCenter}, story);
+				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
+				fireEvent.click(screen.getByRole('button', {name: 'a name text'}));
+				expect(onRevealPassageInGraph).toHaveBeenCalledWith(story.passages[0]);
+				expect(setCenter).not.toBeCalled();
+			});
+
 			it('calls the onClose prop', () => {
 				const onClose = jest.fn();
 				const story = fakeStory(1);

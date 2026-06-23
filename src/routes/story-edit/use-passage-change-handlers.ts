@@ -1,5 +1,4 @@
 import * as React from 'react';
-import {addPassageEditors, useDialogsContext} from '../../dialogs';
 import {
 	createUntitledPassageCommand,
 	movePassagesCommand,
@@ -15,6 +14,7 @@ import {
 } from '../../store/stories';
 import {useUndoableStoriesContext} from '../../store/undoable-stories';
 import {Point, Rect} from '../../util/geometry';
+import {snapToGraphGrid} from './graph-grid';
 
 export function usePassageChangeHandlers(story: Story) {
 	const selectedPassages = React.useMemo(
@@ -22,7 +22,6 @@ export function usePassageChangeHandlers(story: Story) {
 		[story.passages]
 	);
 	const {dispatch: undoableStoriesDispatch} = useUndoableStoriesContext();
-	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const coreProjectHost = useCoreProjectHost();
 
 	const handleDeselectPassage = React.useCallback(
@@ -57,8 +56,8 @@ export function usePassageChangeHandlers(story: Story) {
 						let top = Math.max(passage.top + change.top / story.zoom, 0);
 
 						if (story.snapToGrid) {
-							left = Math.round(left / 25) * 25;
-							top = Math.round(top / 25) * 25;
+							left = snapToGraphGrid(left);
+							top = snapToGraphGrid(top);
 						}
 
 						return {
@@ -78,12 +77,6 @@ export function usePassageChangeHandlers(story: Story) {
 			);
 		},
 		[coreProjectHost, selectedPassages, story]
-	);
-
-	const handleEditPassage = React.useCallback(
-		(passage: Passage) =>
-			dialogsDispatch(addPassageEditors(story.id, [passage.id])),
-		[dialogsDispatch, story.id]
 	);
 
 	const handleSelectPassage = React.useCallback(
@@ -132,7 +125,6 @@ export function usePassageChangeHandlers(story: Story) {
 		handleCreatePassage,
 		handleDeselectPassage,
 		handleDragPassages,
-		handleEditPassage,
 		handleSelectPassage,
 		handleSelectPassageIds,
 		handleSelectRect

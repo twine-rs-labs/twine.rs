@@ -10,12 +10,35 @@ import {fakePassage, fakeStory} from '../../../test-util';
 import {StoryWorkspaceShell} from '../story-workspace-shell';
 import {StoryEditMode} from '../workspace-state';
 
-jest.mock('../story-text-panel', () => ({
-	StoryTextPanel: ({selectedPassageId}: {selectedPassageId?: string}) => (
-		<div
-			data-selected-passage-id={selectedPassageId}
-			data-testid="text-panel"
-		/>
+jest.mock('../editor-dock', () => ({
+	EditorDock: ({
+		onClose,
+		windows
+	}: {
+		onClose?: (spec: any) => void;
+		windows: any[];
+	}) => (
+		<div data-testid="editor-dock">
+			{windows.map(spec => {
+				const id =
+					spec.kind === 'passage' ? `passage:${spec.passageId}` : spec.kind;
+
+				return (
+					<div
+						data-selected-passage-id={
+							spec.kind === 'passage' ? spec.passageId : undefined
+						}
+						data-testid="editor-window"
+						data-window-id={id}
+						key={id}
+					>
+						{onClose && (
+							<button onClick={() => onClose(spec)}>close-{id}</button>
+						)}
+					</div>
+				);
+			})}
+		</div>
 	)
 }));
 
@@ -110,18 +133,50 @@ describe('<StoryWorkspaceShell>', () => {
 		delete (window as any).twineElectron;
 	});
 
-	it('renders only the text panel in text mode', () => {
+	it('renders only the editor dock in text mode', () => {
 		renderComponent('text');
 
-		expect(screen.getByTestId('text-panel')).toBeInTheDocument();
+		expect(screen.getByTestId('editor-dock')).toBeInTheDocument();
 		expect(screen.queryByTestId('graph-panel')).not.toBeInTheDocument();
 	});
 
-	it('renders graph and text panels in split mode', () => {
+	it('renders graph and editor dock in split mode', () => {
 		renderComponent('split');
 
 		expect(screen.getByTestId('graph-panel')).toBeInTheDocument();
-		expect(screen.getByTestId('text-panel')).toBeInTheDocument();
+		expect(screen.getByTestId('editor-dock')).toBeInTheDocument();
+	});
+
+	it('renders one editor window for every open buffer', () => {
+		const {next, start} = renderComponent('text', {
+			editorWindows: [
+				{kind: 'passage', passageId: 'start'},
+				{kind: 'passage', passageId: 'next'}
+			]
+		});
+		const windows = screen.getAllByTestId('editor-window');
+
+		expect(windows).toHaveLength(2);
+		expect(windows[0]).toHaveAttribute('data-selected-passage-id', start.id);
+		expect(windows[1]).toHaveAttribute('data-selected-passage-id', next.id);
+	});
+
+	it('lets an individual editor window be closed', () => {
+		const onCloseEditorWindow = jest.fn();
+
+		renderComponent('text', {
+			editorWindows: [
+				{kind: 'passage', passageId: 'start'},
+				{kind: 'passage', passageId: 'next'}
+			],
+			onCloseEditorWindow
+		});
+
+		screen.getByText('close-passage:start').click();
+		expect(onCloseEditorWindow).toHaveBeenCalledWith({
+			kind: 'passage',
+			passageId: 'start'
+		});
 	});
 
 	it('keeps dock collapse controls active in graph mode', () => {

@@ -14,9 +14,6 @@ import {
 	StoryInspector
 } from '../../../test-util';
 import {InnerStoryEditRoute} from '../story-edit-route';
-import {useZoomShortcuts} from '../use-zoom-shortcuts';
-
-jest.mock('../use-zoom-shortcuts');
 
 const TestStoryEditRoute: React.FC = () => {
 	const {stories} = useStoriesContext();
@@ -38,8 +35,6 @@ const TestStoryEditRoute: React.FC = () => {
 };
 
 describe('<StoryEditRoute>', () => {
-	const useZoomShortcutsMock = useZoomShortcuts as jest.Mock;
-
 	beforeEach(() => {
 		window.localStorage.clear();
 	});
@@ -112,19 +107,70 @@ describe('<StoryEditRoute>', () => {
 		const {container} = await renderComponent(story);
 		let graphNode: HTMLElement | null = null;
 
-		await waitFor(() => {
-			graphNode = container.querySelector(
-				`[data-passage-id="${story.passages[0].id}"] .tw-node`
-			);
-			expect(graphNode).toBeTruthy();
-		});
+		await waitFor(
+			() => {
+				graphNode = container.querySelector(
+					`[data-passage-id="${story.passages[0].id}"] .tw-node`
+				);
+				expect(graphNode).toBeTruthy();
+			},
+			{timeout: 4000}
+		);
 
 		fireEvent.doubleClick(graphNode!);
 
-		await waitFor(() =>
-			expect(container.querySelector('.story-edit-text-panel')).toBeTruthy()
+		await waitFor(
+			() =>
+				expect(
+					container.querySelector('.story-edit-editor-window')
+				).toBeTruthy(),
+			{timeout: 4000}
 		);
 		expect(container.querySelector('.passage-edit-stack')).toBeNull();
+	});
+
+	it('returns to graph mode after closing the last editor from split mode', async () => {
+		const story = fakeStory(1);
+
+		story.passages[0].left = 125;
+		story.passages[0].top = 125;
+		window.localStorage.setItem(
+			'twine-story-edit-workspace',
+			JSON.stringify({mode: 'graph'})
+		);
+		const {container} = await renderComponent(story);
+		let graphNode: HTMLElement | null = null;
+
+		await waitFor(
+			() => {
+				graphNode = container.querySelector(
+					`[data-passage-id="${story.passages[0].id}"] .tw-node`
+				);
+				expect(graphNode).toBeTruthy();
+			},
+			{timeout: 4000}
+		);
+
+		fireEvent.doubleClick(graphNode!);
+
+		await waitFor(
+			() =>
+				expect(
+					container.querySelector('.story-edit-editor-window')
+				).toBeTruthy(),
+			{timeout: 4000}
+		);
+
+		fireEvent.click(
+			container.querySelector(
+				'.story-edit-editor-window [aria-label^="common.close"]'
+			)!
+		);
+
+		await waitFor(() =>
+			expect(container.querySelector('.story-edit-text-layer')).toBeNull()
+		);
+		expect(screen.getByLabelText('Story graph')).toBeInTheDocument();
 	});
 
 	it('opens the Go To Passage finder from text mode above the workspace', async () => {
@@ -173,11 +219,6 @@ describe('<StoryEditRoute>', () => {
 		expect(
 			screen.getByLabelText('dialogs.storyDetails.snapToGrid')
 		).toBeInTheDocument();
-	});
-
-	it('sets up zoom keyboard shortcuts', async () => {
-		await renderComponent(fakeStory());
-		expect(useZoomShortcutsMock).toBeCalled();
 	});
 
 	it('is accessible', async () => {

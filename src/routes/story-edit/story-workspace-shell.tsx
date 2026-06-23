@@ -57,16 +57,23 @@ import {
 	scheduleIdleWork
 } from '../../util/performance';
 import {StoryEditMode} from './workspace-state';
-import {StoryTextPanel} from './story-text-panel';
+import {EditorDock} from './editor-dock';
+import {EditorWindowSpec, editorWindowId} from './editor-window-spec';
 
 export interface StoryWorkspaceShellProps {
+	activeWindowId?: string;
 	bottomDrawerOpen: boolean;
+	editorWindows?: EditorWindowSpec[];
 	graphPanel: React.ReactNode;
 	leftDockCollapsed: boolean;
 	mode: StoryEditMode;
 	onChangeBottomDrawerOpen: (value: boolean) => void;
 	onChangeLeftDockCollapsed: (value: boolean) => void;
 	onChangeRightDockCollapsed: (value: boolean) => void;
+	onCloseEditorWindow?: (spec: EditorWindowSpec) => void;
+	onFocusEditorWindow?: (id: string) => void;
+	onOpenEditorWindow?: (spec: EditorWindowSpec) => void;
+	onReorderEditorWindows?: (from: number, to: number) => void;
 	onRevealPassageInGraph: (passage: Passage) => void;
 	onSelectPassage: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
@@ -1096,13 +1103,19 @@ export const StoryWorkspaceShell: React.FC<
 	StoryWorkspaceShellProps
 > = props => {
 	const {
+		activeWindowId,
 		bottomDrawerOpen,
+		editorWindows,
 		graphPanel,
 		leftDockCollapsed,
 		mode,
 		onChangeBottomDrawerOpen,
 		onChangeLeftDockCollapsed,
 		onChangeRightDockCollapsed,
+		onCloseEditorWindow,
+		onFocusEditorWindow,
+		onOpenEditorWindow,
+		onReorderEditorWindows,
 		onRevealPassageInGraph,
 		onSelectPassage,
 		onTestPassage,
@@ -1325,6 +1338,37 @@ export const StoryWorkspaceShell: React.FC<
 		[activeIndex, selectedPassageId, story]
 	);
 	const passage = selection.passage;
+	// The dock's open buffers. `undefined` follows the current selection so
+	// selecting a passage in Split/Text mode shows it without an explicit open.
+	const dockWindows = React.useMemo<EditorWindowSpec[]>(() => {
+		const availableIds = new Set(story.passages.map(passage => passage.id));
+
+		if (editorWindows) {
+			return editorWindows.filter(
+				window_ =>
+					window_.kind !== 'passage' || availableIds.has(window_.passageId)
+			);
+		}
+
+		return passage ? [{kind: 'passage', passageId: passage.id}] : [];
+	}, [editorWindows, passage, story.passages]);
+	// Per-passage-window selection facts, keyed by window id.
+	const dockSelections = React.useMemo(
+		() =>
+			new Map(
+				dockWindows
+					.filter(window_ => window_.kind === 'passage')
+					.map(window_ => [
+						editorWindowId(window_),
+						workbenchSelection(
+							story,
+							activeIndex,
+							window_.kind === 'passage' ? window_.passageId : undefined
+						)
+					])
+			),
+		[activeIndex, dockWindows, story]
+	);
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {t} = useTranslation();
 	const [navigatorTab, setNavigatorTab] = usePersistedNavigatorTab(story.id);
@@ -1403,14 +1447,21 @@ export const StoryWorkspaceShell: React.FC<
 			{showGraph && graphPanel}
 			{showText && (
 				<div className="story-edit-text-layer">
-					<StoryTextPanel
+					<EditorDock
+						activeId={activeWindowId}
+						compact={mode === 'split'}
 						index={activeIndex}
+						onClose={spec => onCloseEditorWindow?.(spec)}
+						onFocus={id => onFocusEditorWindow?.(id)}
+						onOpen={spec => onOpenEditorWindow?.(spec)}
+						onReorder={(from, to) => onReorderEditorWindows?.(from, to)}
 						onRevealPassageInGraph={onRevealPassageInGraph}
 						onSelectPassage={onSelectPassage}
 						onTestPassage={onTestPassage}
-						selectedPassageId={passage?.id}
-						selection={selection}
+						selectedPassageId={selectedPassageId}
+						selections={dockSelections}
 						story={story}
+						windows={dockWindows}
 					/>
 				</div>
 			)}
