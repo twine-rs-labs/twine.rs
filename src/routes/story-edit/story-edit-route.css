@@ -266,7 +266,11 @@ body.dragging-passages .story-edit-route * {
 .story-edit-graph-grid {
 	background-color: var(--ink-void);
 	background-image:
-		radial-gradient(circle, var(--story-edit-snap-dot) 0 1px, transparent 1.5px),
+		radial-gradient(
+			circle,
+			var(--story-edit-snap-dot) 0 1px,
+			transparent 1.5px
+		),
 		radial-gradient(
 			circle,
 			var(--story-edit-snap-major-dot) 0 1.7px,
@@ -1246,6 +1250,10 @@ button.story-edit-contents-item:focus-visible {
 	flex: 1;
 }
 
+.story-edit-editor-dock-layout {
+	flex: none;
+}
+
 .story-edit-editor-dock-empty {
 	align-items: center;
 	color: var(--tx-4);
@@ -1314,6 +1322,7 @@ button.story-edit-contents-item:focus-visible {
 /* ---- one editor window ---- */
 .story-edit-editor-window {
 	background: var(--ink-3);
+	border: 1px solid transparent;
 	display: flex;
 	flex: 1;
 	flex-direction: column;
@@ -1323,7 +1332,22 @@ button.story-edit-contents-item:focus-visible {
 }
 
 .story-edit-editor-window.is-active {
-	box-shadow: inset 0 2px 0 var(--acc-blue, var(--sel-line));
+	border-color: color-mix(in oklab, var(--acc-blue) 70%, var(--line-3));
+	box-shadow:
+		0 0 0 2px var(--acc-blue-soft),
+		0 8px 22px oklch(0 0 0 / 0.22);
+	z-index: 2;
+}
+
+.story-edit-editor-window.is-active .story-edit-editor-window-bar {
+	background: color-mix(in oklab, var(--acc-blue-soft) 42%, var(--ink-2));
+	border-bottom-color: color-mix(in oklab, var(--acc-blue) 48%, var(--line-2));
+	box-shadow: inset 0 3px 0 var(--acc-blue);
+}
+
+.story-edit-editor-window.is-active .story-edit-editor-window-icon,
+.story-edit-editor-window.is-active .story-edit-editor-window-name {
+	color: var(--tx-0);
 }
 
 .story-edit-editor-window-bar {
@@ -1414,9 +1438,11 @@ button.story-edit-contents-item:focus-visible {
 
 .story-edit-editor-window-diag {
 	align-items: center;
-	background: var(--sem-error-soft, color-mix(in oklab, var(--sem-error) 16%, transparent));
-	border-top: 1px solid
-		color-mix(in oklab, var(--sem-error) 40%, transparent);
+	background: var(
+		--sem-error-soft,
+		color-mix(in oklab, var(--sem-error) 16%, transparent)
+	);
+	border-top: 1px solid color-mix(in oklab, var(--sem-error) 40%, transparent);
 	color: var(--tx-1);
 	display: flex;
 	flex: none;

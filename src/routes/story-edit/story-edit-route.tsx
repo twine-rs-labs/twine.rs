@@ -412,6 +412,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 			<MainContent grabbable={false} padded={false} ref={mainContent}>
 				<StoryWorkspaceShell
 					bottomDrawerOpen={workspace.bottomDrawerOpen}
+					editorDockLayout={workspace.editorDockLayout}
 					graphPanel={
 						<StoryGraphPanel
 							graphOptions={workspace.graphOptions}
@@ -436,6 +437,7 @@ export const InnerStoryEditRoute: React.FC = () => {
 					activeWindowId={workspace.activeWindowId}
 					editorWindows={workspace.editorWindows}
 					onChangeBottomDrawerOpen={workspace.setBottomDrawerOpen}
+					onChangeEditorDockLayout={workspace.setEditorDockLayout}
 					onChangeLeftDockCollapsed={workspace.setLeftDockCollapsed}
 					onChangeRightDockCollapsed={workspace.setRightDockCollapsed}
 					onCloseEditorWindow={handleCloseEditorWindow}

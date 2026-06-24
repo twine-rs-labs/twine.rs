@@ -410,6 +410,8 @@
 				"passageStats": "{{wordCount}} words, {{linkCount}} links",
 				"revealInGraph": "Reveal in Graph",
 				"resolvedLinks": "Links",
+				"stackEditors": "Stack",
+				"tileEditors": "Tile",
 				"rightDock": "Inspector",
 				"selfLinks": "Self",
 				"assets": "Assets",

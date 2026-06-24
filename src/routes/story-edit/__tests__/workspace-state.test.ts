@@ -125,6 +125,7 @@ describe('story edit workspace state', () => {
 			'twine-story-edit-workspace-story-1',
 			JSON.stringify({
 				activeWindowId: 'passage:missing',
+				editorDockLayout: 'stack',
 				editorWindows: [
 					{kind: 'passage', passageId: 'start'},
 					{kind: 'passage', passageId: 'missing'},
@@ -147,6 +148,7 @@ describe('story edit workspace state', () => {
 		expect(readProjectWorkspaceForStory(story)).toEqual(
 			expect.objectContaining({
 				activeWindowId: 'passage:start',
+				editorDockLayout: 'stack',
 				editorWindows: [
 					{kind: 'passage', passageId: 'start'},
 					{kind: 'script'}
@@ -162,5 +164,21 @@ describe('story edit workspace state', () => {
 				mode: 'split'
 			})
 		);
+	});
+
+	it('ignores invalid editor dock layout memory', () => {
+		const story = fakeStory(1);
+
+		story.id = 'story-1';
+		window.localStorage.setItem(
+			'twine-story-edit-workspace-story-1',
+			JSON.stringify({
+				editorDockLayout: 'carousel'
+			})
+		);
+
+		expect(
+			readProjectWorkspaceForStory(story).editorDockLayout
+		).toBeUndefined();
 	});
 });

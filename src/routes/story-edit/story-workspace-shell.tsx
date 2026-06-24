@@ -52,7 +52,7 @@ import {
 	measurePerformance,
 	scheduleIdleWork
 } from '../../util/performance';
-import {StoryEditMode} from './workspace-state';
+import {EditorDockLayout, StoryEditMode} from './workspace-state';
 import {EditorDock} from './editor-dock';
 import {EditorWindowSpec, editorWindowId} from './editor-window-spec';
 import {
@@ -65,11 +65,13 @@ import {
 export interface StoryWorkspaceShellProps {
 	activeWindowId?: string;
 	bottomDrawerOpen: boolean;
+	editorDockLayout: EditorDockLayout;
 	editorWindows?: EditorWindowSpec[];
 	graphPanel: React.ReactNode;
 	leftDockCollapsed: boolean;
 	mode: StoryEditMode;
 	onChangeBottomDrawerOpen: (value: boolean) => void;
+	onChangeEditorDockLayout: (value: EditorDockLayout) => void;
 	onChangeLeftDockCollapsed: (value: boolean) => void;
 	onChangeRightDockCollapsed: (value: boolean) => void;
 	onCloseEditorWindow?: (spec: EditorWindowSpec) => void;
@@ -1128,11 +1130,13 @@ export const StoryWorkspaceShell: React.FC<
 	const {
 		activeWindowId,
 		bottomDrawerOpen,
+		editorDockLayout,
 		editorWindows,
 		graphPanel,
 		leftDockCollapsed,
 		mode,
 		onChangeBottomDrawerOpen,
+		onChangeEditorDockLayout,
 		onChangeLeftDockCollapsed,
 		onChangeRightDockCollapsed,
 		onCloseEditorWindow,
@@ -1534,6 +1538,8 @@ export const StoryWorkspaceShell: React.FC<
 						activeId={activeWindowId}
 						compact={mode === 'split'}
 						index={activeIndex}
+						layout={editorDockLayout}
+						onChangeLayout={onChangeEditorDockLayout}
 						onClose={spec => onCloseEditorWindow?.(spec)}
 						onFocus={id => onFocusEditorWindow?.(id)}
 						onOpen={spec => onOpenEditorWindow?.(spec)}

@@ -29,6 +29,7 @@ export interface EditorWindowProps {
 	active: boolean;
 	index: CoreStoryIndex;
 	onClose: () => void;
+	onDragEnd?: (event: React.DragEvent<HTMLDivElement>) => void;
 	onDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
 	onFocus: () => void;
 	onRevealPassageInGraph?: (passage: Passage) => void;
@@ -86,6 +87,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		active,
 		index,
 		onClose,
+		onDragEnd,
 		onDragStart,
 		onFocus,
 		onRevealPassageInGraph,
@@ -302,6 +304,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			<header
 				className="story-edit-editor-window-bar"
 				draggable={!!onDragStart}
+				onDragEnd={onDragEnd}
 				onDragStart={onDragStart}
 			>
 				<TablerIcon

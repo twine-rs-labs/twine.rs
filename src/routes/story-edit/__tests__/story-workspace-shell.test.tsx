@@ -2,7 +2,7 @@ import {render, screen, waitFor, within} from '@testing-library/react';
 import * as React from 'react';
 import {MemoryRouter} from 'react-router-dom';
 import {DialogsContext} from '../../../dialogs/context';
-import {StoryJavaScriptDialog} from '../../../dialogs/story-javascript';
+import {StorySearchDialog} from '../../../dialogs/story-search';
 import {markProjectStoryHydration} from '../../../store/project-hydration';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {UndoableStoriesContext} from '../../../store/undoable-stories';
@@ -80,6 +80,7 @@ function renderComponent(
 	const {next, start, story} = storyWithLinkedPassages();
 	const onSelectPassage = jest.fn();
 	const onRevealPassageInGraph = jest.fn();
+	const onOpenEditorWindow = jest.fn();
 	const dialogsDispatch = context?.dialogsDispatch ?? jest.fn();
 	const storyDispatch = context?.storyDispatch ?? jest.fn();
 
@@ -97,12 +98,15 @@ function renderComponent(
 				>
 					<StoryWorkspaceShell
 						bottomDrawerOpen={false}
+						editorDockLayout="tile"
 						graphPanel={<div data-testid="graph-panel" />}
 						leftDockCollapsed={false}
 						mode={mode}
 						onChangeBottomDrawerOpen={jest.fn()}
+						onChangeEditorDockLayout={jest.fn()}
 						onChangeLeftDockCollapsed={jest.fn()}
 						onChangeRightDockCollapsed={jest.fn()}
+						onOpenEditorWindow={onOpenEditorWindow}
 						onRevealPassageInGraph={onRevealPassageInGraph}
 						onSelectPassage={onSelectPassage}
 						rightDockCollapsed={false}
@@ -118,6 +122,7 @@ function renderComponent(
 	return {
 		dialogsDispatch,
 		next,
+		onOpenEditorWindow,
 		onRevealPassageInGraph,
 		onSelectPassage,
 		start,
@@ -328,7 +333,7 @@ describe('<StoryWorkspaceShell>', () => {
 	});
 
 	it('opens indexed story sources from the contents navigator', async () => {
-		const {dialogsDispatch} = renderComponent('text');
+		const {onOpenEditorWindow} = renderComponent('text');
 
 		within(
 			screen.getByRole('complementary', {
@@ -351,15 +356,11 @@ describe('<StoryWorkspaceShell>', () => {
 			.getByRole('button', {name: /Story JavaScript/})
 			.click();
 
-		expect(dialogsDispatch).toHaveBeenCalledWith({
-			type: 'addDialog',
-			component: StoryJavaScriptDialog,
-			props: {storyId: expect.any(String)}
-		});
+		expect(onOpenEditorWindow).toHaveBeenCalledWith({kind: 'script'});
 	});
 
-	it('navigates variable and asset entries to their first indexed passage', async () => {
-		const {onSelectPassage, start} = renderComponent('text');
+	it('routes variable entries to story search from the contents navigator', async () => {
+		const {dialogsDispatch, story} = renderComponent('text');
 
 		within(
 			screen.getByRole('complementary', {
@@ -382,7 +383,20 @@ describe('<StoryWorkspaceShell>', () => {
 			.getByRole('button', {name: /\$score/})
 			.click();
 
-		expect(onSelectPassage).toHaveBeenCalledWith(start);
+		expect(dialogsDispatch).toHaveBeenCalledWith({
+			type: 'addDialog',
+			component: StorySearchDialog,
+			props: {
+				find: '$score',
+				flags: {
+					includePassageNames: false,
+					matchCase: false,
+					useRegexes: false
+				},
+				replace: '',
+				storyId: story.id
+			}
+		});
 	});
 
 	it('routes asset manager insertion through the project host', async () => {

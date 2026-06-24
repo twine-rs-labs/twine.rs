@@ -26,10 +26,12 @@ import {css} from '@codemirror/lang-css';
 import {html} from '@codemirror/lang-html';
 import {javascript} from '@codemirror/lang-javascript';
 import {
+	closeSearchPanel,
 	highlightSelectionMatches,
 	openSearchPanel,
 	SearchQuery,
 	searchKeymap,
+	searchPanelOpen,
 	setSearchQuery
 } from '@codemirror/search';
 import {
@@ -89,6 +91,7 @@ interface SourceEditorMemory {
 const languageCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
 const autocompleteCompartment = new Compartment();
+const foldingCompartment = new Compartment();
 const twineDecorationCompartment = new Compartment();
 const wrappingCompartment = new Compartment();
 const themeCompartment = new Compartment();
@@ -116,6 +119,12 @@ function languageExtension(language: SourceEditorLanguage): Extension {
 		case 'twine':
 			return [];
 	}
+}
+
+function foldingExtension(language: SourceEditorLanguage): Extension {
+	return language === 'css' || language === 'html' || language === 'javascript'
+		? foldGutter()
+		: [];
 }
 
 function loadMemory(memoryKey?: string): SourceEditorMemory {
@@ -400,7 +409,7 @@ function baseExtensions(
 		highlightActiveLineGutter(),
 		highlightSpecialChars(),
 		history(),
-		foldGutter(),
+		foldingCompartment.of(foldingExtension(props.language ?? 'twine')),
 		drawSelection(),
 		indentOnInput(),
 		bracketMatching(),
@@ -530,9 +539,14 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		const view = viewRef.current;
 
 		view?.dispatch({
-			effects: languageCompartment.reconfigure(
-				languageExtension(props.language ?? 'twine')
-			)
+			effects: [
+				languageCompartment.reconfigure(
+					languageExtension(props.language ?? 'twine')
+				),
+				foldingCompartment.reconfigure(
+					foldingExtension(props.language ?? 'twine')
+				)
+			]
 		});
 	}, [props.language]);
 
@@ -587,9 +601,13 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 					})
 				)
 			});
+			openSearchPanel(view);
+		} else if (searchPanelOpen(view.state)) {
+			closeSearchPanel(view);
+		} else {
+			openSearchPanel(view);
 		}
 
-		openSearchPanel(view);
 		view.focus();
 	}, [props.searchQuery, props.searchRequestKey]);
 

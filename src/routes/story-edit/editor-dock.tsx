@@ -1,16 +1,24 @@
 import classNames from 'classnames';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {Badge, Button, TablerIcon} from '../../components/design-system';
+import {
+	Badge,
+	Button,
+	SegmentedControl,
+	TablerIcon
+} from '../../components/design-system';
 import type {CoreStoryIndex, WorkbenchSelection} from '../../core';
 import {Passage, Story} from '../../store/stories';
 import {EditorWindow} from './editor-window';
 import {EditorWindowSpec, editorWindowId} from './editor-window-spec';
+import type {EditorDockLayout} from './workspace-state';
 
 export interface EditorDockProps {
 	activeId?: string;
 	compact?: boolean;
 	index: CoreStoryIndex;
+	layout: EditorDockLayout;
+	onChangeLayout: (layout: EditorDockLayout) => void;
 	onClose: (spec: EditorWindowSpec) => void;
 	onFocus: (id: string) => void;
 	onOpen: (spec: EditorWindowSpec) => void;
@@ -29,7 +37,15 @@ export interface EditorDockProps {
 // Tile in a 2-D grid when the dock has full width; stack vertically in the
 // narrow Split column (width is the scarce axis there). Same component, space
 // aware — see WORKBENCH_INTEGRATION.md.
-function columnsForCount(count: number, compact: boolean) {
+function columnsForCount(
+	count: number,
+	compact: boolean,
+	layout: EditorDockLayout
+) {
+	if (layout === 'stack') {
+		return 1;
+	}
+
 	if (compact) {
 		return 1;
 	}
@@ -46,6 +62,8 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 		activeId,
 		compact,
 		index,
+		layout,
+		onChangeLayout,
 		onClose,
 		onFocus,
 		onOpen,
@@ -69,12 +87,13 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 		: undefined;
 	const issueCount = index.diagnostics.length;
 
-	const columns = columnsForCount(windows.length, !!compact);
+	const columns = columnsForCount(windows.length, !!compact, layout);
 
 	return (
 		<div
 			className={classNames('story-edit-editor-dock', {
-				'is-compact': compact
+				'is-compact': compact,
+				'is-stacked': layout === 'stack'
 			})}
 		>
 			{/* Story-level chrome — ONCE, never repeated per window. */}
@@ -134,6 +153,24 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 					)}
 				</div>
 				<span className="story-edit-editor-dock-chrome-sp" />
+				<SegmentedControl
+					className="story-edit-editor-dock-layout"
+					onChange={value => onChangeLayout(value as EditorDockLayout)}
+					options={[
+						{
+							icon: 'layout-grid',
+							label: t('routes.storyEdit.workspace.tileEditors'),
+							value: 'tile'
+						},
+						{
+							icon: 'list-details',
+							label: t('routes.storyEdit.workspace.stackEditors'),
+							value: 'stack'
+						}
+					]}
+					size="sm"
+					value={layout}
+				/>
 				<Badge mono tone="neutral">
 					{story.storyFormat} {story.storyFormatVersion}
 				</Badge>
@@ -202,6 +239,10 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 										setDragIndex(index_);
 										event.dataTransfer.effectAllowed = 'move';
 										event.dataTransfer.setData('text/plain', String(index_));
+									}}
+									onDragEnd={() => {
+										setDragIndex(undefined);
+										setOverIndex(undefined);
 									}}
 									onFocus={() => onFocus(id)}
 									onRevealPassageInGraph={onRevealPassageInGraph}

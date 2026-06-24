@@ -61,8 +61,8 @@ describe('<SourceEditor>', () => {
 			)
 		).toEqual(['(if:', '<<=Story.name>>', '<</if>>']);
 		expect(
-			Array.from(container.querySelectorAll('.cm-twine-variable')).map(element =>
-				element.textContent?.trim()
+			Array.from(container.querySelectorAll('.cm-twine-variable')).map(
+				element => element.textContent?.trim()
 			)
 		).toContain('$object.properties');
 		expect(container).toHaveTextContent('(you have to force yourself)');
@@ -71,5 +71,44 @@ describe('<SourceEditor>', () => {
 				element.textContent?.includes('(you')
 			)
 		).toBe(false);
+	});
+
+	it('toggles the editor search panel when requested without an explicit query', async () => {
+		const {container, rerender} = render(
+			<SourceEditor
+				id="story-start-editor"
+				label="Passage text"
+				onChange={jest.fn()}
+				value="Find this text"
+			/>
+		);
+
+		rerender(
+			<SourceEditor
+				id="story-start-editor"
+				label="Passage text"
+				onChange={jest.fn()}
+				searchRequestKey={1}
+				value="Find this text"
+			/>
+		);
+
+		await waitFor(() =>
+			expect(container.querySelector('.cm-search')).toBeInTheDocument()
+		);
+
+		rerender(
+			<SourceEditor
+				id="story-start-editor"
+				label="Passage text"
+				onChange={jest.fn()}
+				searchRequestKey={2}
+				value="Find this text"
+			/>
+		);
+
+		await waitFor(() =>
+			expect(container.querySelector('.cm-search')).not.toBeInTheDocument()
+		);
 	});
 });

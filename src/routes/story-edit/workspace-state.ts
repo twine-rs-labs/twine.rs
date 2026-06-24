@@ -9,11 +9,13 @@ export const storyEditModes = ['text', 'graph', 'split'] as const;
 export const storyGraphDensities = ['structure', 'names', 'excerpt'] as const;
 export const storyGraphOrientations = ['right', 'down', 'left', 'up'] as const;
 export const storyGraphTools = ['select', 'pan'] as const;
+export const editorDockLayouts = ['tile', 'stack'] as const;
 
 export type StoryEditMode = (typeof storyEditModes)[number];
 export type StoryGraphDensity = (typeof storyGraphDensities)[number];
 export type StoryGraphOrientation = (typeof storyGraphOrientations)[number];
 export type StoryGraphTool = (typeof storyGraphTools)[number];
+export type EditorDockLayout = (typeof editorDockLayouts)[number];
 
 interface ScrollPosition {
 	left: number;
@@ -36,6 +38,7 @@ export interface StoryGraphWorkspaceOptions {
 
 interface StoredProjectWorkspace {
 	activeWindowId?: string;
+	editorDockLayout?: EditorDockLayout;
 	editorWindows?: EditorWindowSpec[];
 	graphOptions?: StoryGraphWorkspaceOptions;
 	graphView?: StoryGraphWorkspaceView;
@@ -54,6 +57,7 @@ interface StoredWorkspace {
 export interface StoryEditWorkspaceState {
 	activeWindowId?: string;
 	bottomDrawerOpen: boolean;
+	editorDockLayout: EditorDockLayout;
 	editorWindows?: EditorWindowSpec[];
 	graphOptions: StoryGraphWorkspaceOptions;
 	graphView?: StoryGraphWorkspaceView;
@@ -63,6 +67,7 @@ export interface StoryEditWorkspaceState {
 	selectedPassageId?: string;
 	setActiveWindowId: React.Dispatch<React.SetStateAction<string | undefined>>;
 	setBottomDrawerOpen: (value: boolean) => void;
+	setEditorDockLayout: (value: EditorDockLayout) => void;
 	setEditorWindows: React.Dispatch<
 		React.SetStateAction<EditorWindowSpec[] | undefined>
 	>;
@@ -96,6 +101,10 @@ function isGraphOrientation(value: unknown): value is StoryGraphOrientation {
 
 function isGraphTool(value: unknown): value is StoryGraphTool {
 	return storyGraphTools.includes(value as StoryGraphTool);
+}
+
+function isEditorDockLayout(value: unknown): value is EditorDockLayout {
+	return editorDockLayouts.includes(value as EditorDockLayout);
 }
 
 function finiteNumber(value: unknown) {
@@ -259,6 +268,9 @@ function readProjectWorkspace(storyId: string): StoredProjectWorkspace {
 
 	return {
 		...workspace,
+		editorDockLayout: isEditorDockLayout(workspace.editorDockLayout)
+			? workspace.editorDockLayout
+			: undefined,
 		graphOptions: graphOptionsFromValue(workspace.graphOptions),
 		graphView: graphViewFromValue(workspace.graphView),
 		mode: isMode(workspace.mode) ? workspace.mode : undefined
@@ -464,6 +476,10 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 	const [bottomDrawerOpen, setBottomDrawerOpen] = React.useState(
 		initialWorkspace.bottomDrawerOpen ?? false
 	);
+	const [editorDockLayout, setEditorDockLayout] =
+		React.useState<EditorDockLayout>(
+			() => initialProjectWorkspace.editorDockLayout ?? 'tile'
+		);
 	const [editorWindows, setEditorWindows] = React.useState<
 		EditorWindowSpec[] | undefined
 	>(() => initialProjectWorkspace.editorWindows);
@@ -512,6 +528,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		setSelectedPassageId(
 			firstAvailablePassageId(story, projectWorkspace.selectedPassageId)
 		);
+		setEditorDockLayout(projectWorkspace.editorDockLayout ?? 'tile');
 		setEditorWindows(projectWorkspace.editorWindows);
 		setActiveWindowId(projectWorkspace.activeWindowId);
 		setGraphViewState(projectWorkspace.graphView);
@@ -538,6 +555,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		writeJson(projectStorageKey(story.id), {
 			...projectWorkspace,
 			activeWindowId,
+			editorDockLayout,
 			editorWindows,
 			graphOptions,
 			graphView,
@@ -546,6 +564,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		});
 	}, [
 		activeWindowId,
+		editorDockLayout,
 		editorWindows,
 		graphOptions,
 		graphView,
@@ -569,6 +588,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 	return {
 		activeWindowId,
 		bottomDrawerOpen,
+		editorDockLayout,
 		editorWindows,
 		graphOptions,
 		graphView,
@@ -578,6 +598,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		selectedPassageId,
 		setActiveWindowId,
 		setBottomDrawerOpen,
+		setEditorDockLayout,
 		setEditorWindows,
 		setGraphOptions,
 		setGraphView,
