@@ -15,13 +15,12 @@ import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {DiagnosticsViewModelItem} from '../../core/view-models';
 import type {CoreDiagnosticSeverity} from '../../core/bindings/CoreDiagnosticSeverity';
 import type {CoreStoryIndex} from '../../core';
-import {
-	Passage,
-	selectPassage,
-	Story,
-	useStoriesContext
-} from '../../store/stories';
+import {selectPassage, Story, useStoriesContext} from '../../store/stories';
 import {useStoryLaunch} from '../../store/use-story-launch';
+import {
+	sourceNavigationTargetFromSourceId,
+	sourceTarget
+} from '../story-edit/source-navigation';
 import './diagnostics-route.css';
 
 type SeverityFilter = CoreDiagnosticSeverity | 'all';
@@ -88,14 +87,11 @@ function diagnosticPassage(story: Story, item: DiagnosticsViewModelItem) {
 		: undefined;
 }
 
-function sourceTarget(story: Story, mode: 'graph' | 'text', passage?: Passage) {
-	const query = new URLSearchParams({mode});
-
-	if (passage) {
-		query.set('passage', passage.id);
-	}
-
-	return `/stories/${story.id}?${query.toString()}`;
+function diagnosticSourceTarget(item: DiagnosticsViewModelItem) {
+	return sourceNavigationTargetFromSourceId(
+		item.core.sourceId,
+		item.core.passageId
+	);
 }
 
 function matchesQuery(item: DiagnosticsViewModelItem, query: string) {
@@ -273,11 +269,39 @@ export const DiagnosticsRoute: React.FC = () => {
 
 		const passage = diagnosticPassage(story, item);
 
+		if (mode === 'graph') {
+			if (!passage) {
+				return;
+			}
+
+			dispatch(selectPassage(story, passage, true));
+			history.push(
+				sourceTarget(story, {
+					mode,
+					target: {kind: 'passage', passageId: passage.id}
+				})
+			);
+			return;
+		}
+
+		const target = diagnosticSourceTarget(item);
+
+		if (!target) {
+			return;
+		}
+
 		if (passage) {
 			dispatch(selectPassage(story, passage, true));
 		}
 
-		history.push(sourceTarget(story, mode, passage));
+		history.push(
+			sourceTarget(story, {
+				line: item.core.line,
+				mode,
+				offset: item.core.start,
+				target
+			})
+		);
 	}
 
 	function fixAllSafe() {
@@ -573,6 +597,9 @@ export const DiagnosticsRoute: React.FC = () => {
 							</Button>
 							<Button
 								block
+								disabled={
+									!selectedItem || !diagnosticSourceTarget(selectedItem)
+								}
 								icon="file-text"
 								onClick={() => reveal(selectedItem, 'text')}
 								size="sm"
