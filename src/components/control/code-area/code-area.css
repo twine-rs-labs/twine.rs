@@ -20,10 +20,10 @@
 
 .code-area .CodeMirror,
 .code-area textarea.visible {
-	background: var(--white-translucent);
+	background: var(--bg-card);
 	border-radius: var(--corner-round);
-	border: 1px solid var(--faint-gray);
-	color: var(--dark-gray);
+	border: 1px solid var(--line-2);
+	color: var(--tx-1);
 	font-family: inherit;
 	height: 100%;
 	left: 0;

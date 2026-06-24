@@ -259,14 +259,6 @@ export const SettingsRoute: React.FC = () => {
 		};
 	}, []);
 
-	function setUseCodeMirror(value: boolean) {
-		dispatch(setPref('useCodeMirror', value));
-
-		if (!value) {
-			dispatch(setPref('editorCursorBlinks', true));
-		}
-	}
-
 	async function chooseStoryLibraryFolder() {
 		const path = await (
 			window as TwineElectronWindow
@@ -362,9 +354,6 @@ export const SettingsRoute: React.FC = () => {
 						</Badge>
 						<Badge icon="palette" tone="neutral">
 							{prefs.appTheme}
-						</Badge>
-						<Badge icon="code" tone={prefs.useCodeMirror ? 'saved' : 'neutral'}>
-							Enhanced editors
 						</Badge>
 					</div>
 				</div>
@@ -560,13 +549,7 @@ export const SettingsRoute: React.FC = () => {
 				<Panel icon="code" pad title="Editors">
 					<div className="settings-route__stack">
 						<Switch
-							checked={prefs.useCodeMirror}
-							label="Enhanced editors"
-							onChange={setUseCodeMirror}
-						/>
-						<Switch
 							checked={prefs.editorCursorBlinks}
-							disabled={!prefs.useCodeMirror}
 							label="Blinking cursor"
 							onChange={value => dispatch(setPref('editorCursorBlinks', value))}
 						/>

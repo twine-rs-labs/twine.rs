@@ -58,6 +58,16 @@
 	--faint-purple: var(--sem-tag-soft);
 }
 
+/*
+ * Light-theme corrections for the legacy translucent overlays above. These
+ * aliases assume a dark base (a faint *white* film lifts a surface on hover).
+ * On paper that film is invisible, so flip it to a faint *ink* film that
+ * darkens the surface instead — matching the DS light-control behaviour.
+ */
+[data-app-theme='light'] {
+	--light-gray-translucent: oklch(0 0 0 / 0.06);
+}
+
 body {
 	color: var(--text-body);
 }

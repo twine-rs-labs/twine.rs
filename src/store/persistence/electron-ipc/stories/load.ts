@@ -1,6 +1,7 @@
 import {
 	ElectronLoadedStoryEntry,
 	ElectronNativeProjectStoryEntry,
+	storyFileName,
 	TwineElectronWindow
 } from '../../../../electron/shared';
 import {Story} from '../../../stories/stories.types';
@@ -38,10 +39,12 @@ export async function load(): Promise<Story[]> {
 
 	if (stories && Array.isArray(stories)) {
 		const result: Story[] = [];
+		const nativeProjectIndexes = new Map<string, number>();
 
 		for (const file of stories) {
 			if (isNativeProjectStoryEntry(file)) {
 				const story = reviveNativeProjectStory(file);
+				const nativeProjectKey = `${file.rootPath}\n${storyFileName(story)}`;
 
 				saveProjectMetadata(story.id, {
 					rootPath: file.rootPath,
@@ -52,7 +55,14 @@ export async function load(): Promise<Story[]> {
 					passageTextLoaded: file.passageTextLoaded,
 					rootPath: file.rootPath
 				});
-				result.push(story);
+
+				if (nativeProjectIndexes.has(nativeProjectKey)) {
+					result[nativeProjectIndexes.get(nativeProjectKey)!] = story;
+				} else {
+					nativeProjectIndexes.set(nativeProjectKey, result.length);
+					result.push(story);
+				}
+
 				continue;
 			}
 

@@ -81,7 +81,7 @@ const sharedTwineVars = {
 	'--source-editor-diagnostic-marker-bg': 'var(--sem-error-soft)',
 	'--source-editor-link': 'var(--sem-link)',
 	'--source-editor-link-underline': 'var(--sem-link-soft)',
-	'--source-editor-macro': 'var(--sem-build)',
+	'--source-editor-macro': 'var(--sem-var)',
 	'--source-editor-search-bg': 'var(--sem-warn-soft)',
 	'--source-editor-search-outline': 'var(--sem-warn)',
 	'--source-editor-selection-bg': 'var(--sel-wash)',
@@ -113,7 +113,10 @@ const sharedTwineVars = {
 
 const twineVars = {
 	...sharedTwineVars,
-	'--source-editor-active-line-bg': 'oklch(0.62 0.12 248 / 0.07)',
+	// Token-driven so the adaptive theme's active line flips with light/dark:
+	// --sel-line deepens to blue ink on paper, stays bright blue on ink.
+	'--source-editor-active-line-bg':
+		'color-mix(in oklab, var(--sel-line) 12%, transparent)',
 	'--source-editor-active-line-gutter-bg': 'var(--ink-3)',
 	'--source-editor-bg': 'var(--ink-3)',
 	'--source-editor-fg': 'var(--tx-2)',

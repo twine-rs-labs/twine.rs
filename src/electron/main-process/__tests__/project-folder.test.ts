@@ -323,7 +323,7 @@ describe('project-folder native bridge', () => {
 		);
 	});
 
-	it('does not run TypeScript project scans when legacy fallback is disabled', async () => {
+	it('keeps project loading native-only when legacy fallback is disabled', async () => {
 		const previousFallback = process.env.TWINE_LEGACY_PROJECT_FALLBACK;
 
 		process.env.TWINE_LEGACY_PROJECT_FALLBACK = '0';
@@ -332,17 +332,44 @@ describe('project-folder native bridge', () => {
 			await expect(
 				openProjectFolder('/native/moon-castle.twine.rs')
 			).rejects.toThrow('native Rust project backend');
-			await expect(
-				listProjectAssets('/native/moon-castle.twine.rs')
-			).rejects.toThrow('native Rust project backend');
-			await expect(
-				prepareProjectImport('/imports/Transylvania.html')
-			).rejects.toThrow('native Rust project backend');
 
 			expect(readFileMock).not.toHaveBeenCalled();
 			expect(readJsonMock).not.toHaveBeenCalled();
 			expect(readdirMock).not.toHaveBeenCalled();
 			expect(extractZipMock).not.toHaveBeenCalled();
+		} finally {
+			if (previousFallback === undefined) {
+				delete process.env.TWINE_LEGACY_PROJECT_FALLBACK;
+			} else {
+				process.env.TWINE_LEGACY_PROJECT_FALLBACK = previousFallback;
+			}
+		}
+	});
+
+	it('allows import preparation and asset scans to use compatibility fallback', async () => {
+		const previousFallback = process.env.TWINE_LEGACY_PROJECT_FALLBACK;
+
+		process.env.TWINE_LEGACY_PROJECT_FALLBACK = '0';
+		readFileMock.mockResolvedValue('<tw-storydata></tw-storydata>');
+		readdirMock.mockRejectedValue(
+			Object.assign(new Error('missing'), {code: 'ENOENT'})
+		);
+
+		try {
+			await expect(
+				listProjectAssets('/native/moon-castle.twine.rs')
+			).resolves.toEqual([]);
+			await expect(
+				prepareProjectImport('/imports/Transylvania.html')
+			).resolves.toEqual(
+				expect.objectContaining({
+					assets: [],
+					htmlFilePath: '/imports/Transylvania.html',
+					htmlSource: '<tw-storydata></tw-storydata>',
+					sourceKind: 'html',
+					sourcePath: '/imports/Transylvania.html'
+				})
+			);
 		} finally {
 			if (previousFallback === undefined) {
 				delete process.env.TWINE_LEGACY_PROJECT_FALLBACK;
@@ -1109,6 +1136,7 @@ describe('project-folder native bridge', () => {
 			'/native/project.twine.rs/assets/images/cover.png',
 			{overwrite: true}
 		);
+		expect(readdirMock).toHaveBeenCalledWith('/native/project.twine.rs/assets');
 	});
 
 	it('prepares a zip import by extracting it and cleaning up when discarded', async () => {

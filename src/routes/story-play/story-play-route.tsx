@@ -97,7 +97,6 @@ export const StoryPlayRoute: React.FC = () => {
 			error={publishError}
 			html={html}
 			missingStoryMessage={`There is no story with ID "${storyId}".`}
-			onOpenBuild={() => history.push(`/stories/${storyId}/build`)}
 			onRevealGraph={passageId =>
 				history.push(`/stories/${storyId}?mode=graph${passageQuery(passageId)}`)
 			}

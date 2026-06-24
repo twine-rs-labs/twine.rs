@@ -317,6 +317,7 @@ export function queryGraphProjectionCommand(
 export function queryStoryIndexCommand(
 	storyId: string,
 	options: CoreStoryIndexOptions = {
+		assetScanComplete: false,
 		fuzzy: false,
 		includeAssets: true,
 		includeContents: true,

@@ -53,7 +53,7 @@ describe('saveStory()', () => {
 		]);
 	});
 
-	it('updates a remembered native project folder after saving story HTML', async () => {
+	it('updates a remembered native project folder without saving legacy HTML', async () => {
 		saveProjectMetadata(story.id, {
 			rootPath: '/native/moon-castle.twine.rs',
 			status: 'file-backed',
@@ -66,9 +66,10 @@ describe('saveStory()', () => {
 			'/native/moon-castle.twine.rs',
 			story
 		);
+		expect(saveStoryHtml).not.toHaveBeenCalled();
 	});
 
-	it('does not fail the HTML save if the native project folder cannot be refreshed', async () => {
+	it('does not fall back to legacy HTML if the native project folder cannot be refreshed', async () => {
 		saveProjectFolder.mockRejectedValue(new Error('Permission denied'));
 		saveProjectMetadata(story.id, {
 			rootPath: '/native/moon-castle.twine.rs',
@@ -77,7 +78,7 @@ describe('saveStory()', () => {
 		});
 
 		await expect(saveStory(story, formatsState)).resolves.toBeUndefined();
-		expect(saveStoryHtml).toHaveBeenCalled();
+		expect(saveStoryHtml).not.toHaveBeenCalled();
 		expect(console.warn).toHaveBeenCalledWith(
 			expect.stringContaining('Could not update native project folder')
 		);

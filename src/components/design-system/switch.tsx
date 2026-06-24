@@ -6,11 +6,13 @@ export interface SwitchProps {
 	checked: boolean;
 	onChange?: (checked: boolean) => void;
 	label?: string;
+	ariaLabel?: string;
 	disabled?: boolean;
 	className?: string;
 }
 
 export const Switch: React.FC<SwitchProps> = ({
+	ariaLabel,
 	checked,
 	className,
 	disabled = false,
@@ -25,6 +27,7 @@ export const Switch: React.FC<SwitchProps> = ({
 		)}
 	>
 		<input
+			aria-label={ariaLabel}
 			checked={checked}
 			disabled={disabled}
 			onChange={event => onChange?.(event.target.checked)}

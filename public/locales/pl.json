@@ -191,8 +191,7 @@
 			"themeDark": "Ciemny",
 			"themeSystem": "Systemowy",
 			"theme": "Motyw",
-			"title": "Ustawienia",
-			"useEnhancedEditors": "Używaj rozszerzonych edytorów"
+			"title": "Ustawienia"
 		},
 		"passageEdit": {
 			"editorCrashed": "Wystąpił błąd w edytorze. Spróbuj zamknąć i ponownie otworzyć tę scenę.",

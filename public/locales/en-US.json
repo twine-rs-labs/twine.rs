@@ -202,8 +202,7 @@
 			"themeDark": "Dark",
 			"themeSystem": "System",
 			"theme": "Theme",
-			"title": "Preferences",
-			"useEnhancedEditors": "Use Enhanced Editors"
+			"title": "Preferences"
 		},
 		"passageEdit": {
 			"editorCrashed": "Something went wrong with this editor. Try closing it and editing this passage again.",

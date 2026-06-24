@@ -15,16 +15,6 @@ export const AppPrefsDialog: React.FC<
 	const {dispatch, prefs} = usePrefsContext();
 	const {t} = useTranslation();
 
-	function handleUseCodeMirrorChange(value: boolean) {
-		dispatch(setPref('useCodeMirror', value));
-
-		// If we're disabling CodeMirror, force cursor blinking on because we no longer control it.
-
-		if (!value) {
-			dispatch(setPref('editorCursorBlinks', true));
-		}
-	}
-
 	return (
 		<DialogCard
 			{...props}
@@ -120,14 +110,8 @@ export const AppPrefsDialog: React.FC<
 				</TextSelect>
 				<Checkbox
 					checked={prefs.editorCursorBlinks}
-					disabled={!prefs.useCodeMirror}
 					label={t('dialogs.appPrefs.editorCursorBlinks')}
 					onChange={value => dispatch(setPref('editorCursorBlinks', value))}
-				/>
-				<Checkbox
-					checked={prefs.useCodeMirror}
-					label={t('dialogs.appPrefs.useEnhancedEditors')}
-					onChange={handleUseCodeMirrorChange}
 				/>
 				<p className="font-explanation">
 					{t('dialogs.appPrefs.fontExplanation')}

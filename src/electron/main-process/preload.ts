@@ -20,6 +20,7 @@ function jsonp(
 	const target = document.getElementsByTagName('script')[0] || document.head;
 	const script = document.createElement('script');
 	let timer: number | undefined;
+	let settled = false;
 
 	function cleanup() {
 		if (script.parentNode) {
@@ -33,16 +34,30 @@ function jsonp(
 		}
 	}
 
-	(window as any)[callbackName] = (data: any) => {
+	// Single settlement path so a load error, the JSONP callback, and the
+	// timeout can't double-invoke the caller.
+	function settle(error: Error | null, data?: any) {
+		if (settled) {
+			return;
+		}
+
+		settled = true;
 		cleanup();
-		callback(null, data);
-	};
+		callback(error, data);
+	}
+
+	(window as any)[callbackName] = (data: any) => settle(null, data);
+
+	// Without this, a missing format.js (a common file:// packaging failure) only
+	// surfaces after the timeout with a vague "Timeout" — report it immediately.
+	script.onerror = () =>
+		settle(new Error(`Could not load story format from ${url}`));
 
 	if (options.timeout) {
-		timer = window.setTimeout(() => {
-			cleanup();
-			callback(new Error('Timeout'));
-		}, options.timeout);
+		timer = window.setTimeout(
+			() => settle(new Error('Timeout')),
+			options.timeout
+		);
 	}
 
 	url += `${url.includes('?') ? '&' : '?'}${callbackParam}=${encodeURIComponent(
@@ -57,6 +72,9 @@ function jsonp(
 }
 
 const bridge = {
+	addLocalStoryFormat() {
+		return ipcRenderer.invoke('add-local-story-format');
+	},
 	chooseAssetFile(defaultPath?: string) {
 		return ipcRenderer.invoke('choose-asset-file', defaultPath);
 	},

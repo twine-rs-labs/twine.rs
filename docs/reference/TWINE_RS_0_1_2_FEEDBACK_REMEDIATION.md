@@ -395,6 +395,13 @@ compact/split mode (`editor-dock.tsx:30-40`). Expose an explicit, persisted
 
 # W5 — Correctness bugs
 
+**Status: implemented.** Variable extraction now rejects all-underscore captures
+in Rust and TS parity; asset inventory has an explicit completed-scan state so
+referenced files missing from a completed scan become `exists=false`; import
+preparation and project asset scanning now fall back to the TypeScript
+compatibility path when the native backend is unavailable, and import asset copy
+runs a post-copy scan.
+
 **W5.1 — `____` is listed as a variable.** `symbols_in_source`
 ([`crates/twine_core/src/lib.rs:3855-3912`](../../crates/twine_core/src/lib.rs))
 captures a `$` sigil followed by `is_identifier_start`, where both
@@ -455,6 +462,27 @@ zip/html import) being incomplete**.
 
 # W6 — Preferences: two controls that do nothing (decide: remove or wire)
 
+**Status: implemented (shipped the palette + retired the toggle — the honest
+path for both, not the "hide it" fallback).**
+
+- **W6.1** now ships the real **"Daylight workbench" light theme** instead of
+  hiding the selector. A full `[data-app-theme='light']` block in
+  `design-system/tokens/colors.css` re-binds every primitive
+  (ink / line / tx / accents / semantics / elevation) to a soft cool-paper
+  palette, so the existing System / Light / Dark selector and `ThemeSetter`
+  finally do something. Because CSS custom properties resolve `var()` at their
+  _declaring_ element (verified empirically), the semantic aliases
+  (`--bg-*` / `--text-*` / `--border-*`) had to be re-bound inside the light
+  scope too — without that, the ~13 alias-driven CSS files stayed dark; the
+  high-contrast block was given the same re-bind (it had the same latent gap).
+  The one hardcoded editor active-line wash (`source-editor/themes.ts`) and the
+  legacy white hover overlay (`styles/colors.css`) were routed through
+  theme-adaptive tokens. `@kind` token tagging is preserved verbatim.
+- **W6.2** removed the `useCodeMirror` pref entirely — Settings UI, the legacy
+  prefs dialog, the store type/defaults, and every consumer. The enhanced
+  **CodeMirror editor is now always-on** for passages and the JS / Stylesheet /
+  Search dialogs; the cursor-blink and font prefs are kept.
+
 **W6.1 — Theme change has no effect.** `appTheme` is stored
 ([`prefs.types.ts:44-48`](../../src/store/prefs/prefs.types.ts)) and applied as
 `document.body.dataset.appTheme` ([`theme-setter.tsx:9-20`](../../src/store/theme-setter.tsx)),
@@ -500,6 +528,28 @@ visible effect on passage editing.
 ---
 
 # W7 — Story Formats: missing icons, descriptions, source links, local add
+
+**Status: implemented.**
+
+- **W7.1** — The DS formats screen now renders each format's real icon once its
+  manifest hydrates, with explicit **loading** (spinner) and **failed-load**
+  (error glyph) states on the logo and an initials fallback when a format has no
+  image or the image itself 404s. The Electron JSONP loader gained an `onerror`
+  path (single-settlement guard) so a missing `format.js` — the common file://
+  packaging failure — surfaces immediately instead of after a vague 2s
+  "Timeout". (Confirming the packaged-build jsonp/base-URL resolution itself
+  still needs a run of the packaged desktop app; the UI now makes any failure
+  visible per-format.)
+- **W7.2** — The detail panel renders the format's **website link**
+  (`properties.url`, distinct from the `format.js` location) plus its
+  **description**, author, and license.
+- **W7.3** — Added an **"From File"** import (desktop only): a new
+  `add-local-story-format` IPC opens a picker for a `format.js` file (or a folder
+  containing one), validates it is a real format by parsing the
+  `window.storyFormat(...)` manifest (no eval), then copies the format and its
+  relative icon into a managed `userData/story-formats/<name>-<version>/`
+  directory and adds it by its file:// URL so the icon resolves and it survives
+  the original being moved. No more hand-constructing a URL to a local file.
 
 **Symptoms:** format icons absent; descriptions and source links absent; can't add a
 user format by directory (only a `format.js` URL works).

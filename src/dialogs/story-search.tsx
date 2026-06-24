@@ -8,7 +8,6 @@ import {Button, Checkbox} from '../components/design-system';
 import {useCoreProjectHost} from '../core';
 import type {CoreSearchHit} from '../core/bindings/CoreSearchHit';
 import type {CoreStoryIndex} from '../core';
-import {usePrefsContext} from '../store/prefs';
 import {
 	StorySearchFlags,
 	highlightPassages,
@@ -50,7 +49,6 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 	const closingRef = React.useRef(false);
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const history = useHistory();
-	const {prefs} = usePrefsContext();
 	const {dispatch, stories} = useUndoableStoriesContext();
 	const {t} = useTranslation();
 	const story = storyWithId(stories, storyId);
@@ -243,7 +241,6 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 						extraKeys: ignoreTab,
 						mode: 'text'
 					}}
-					useCodeMirror={prefs.useCodeMirror}
 					value={find}
 				/>
 				<CodeArea
@@ -251,7 +248,6 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 					label={t('dialogs.storySearch.replaceWith')}
 					onChangeText={handleReplaceWithChange}
 					options={{extraKeys: ignoreTab, mode: 'text'}}
-					useCodeMirror={prefs.useCodeMirror}
 					value={replace}
 				/>
 			</div>

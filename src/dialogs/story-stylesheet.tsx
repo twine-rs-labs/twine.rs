@@ -39,12 +39,10 @@ export const StoryStylesheetDialog: React.FC<
 			headerLabel={t('dialogs.storyStylesheet.title')}
 			maximizable
 		>
-			{prefs.useCodeMirror && (
-				<ButtonBar>
-					<UndoRedoButtons editor={cmEditor} watch={story.script} />
-					<IndentButtons editor={cmEditor} />
-				</ButtonBar>
-			)}
+			<ButtonBar>
+				<UndoRedoButtons editor={cmEditor} watch={story.script} />
+				<IndentButtons editor={cmEditor} />
+			</ButtonBar>
 			<DialogEditor>
 				<CodeArea
 					editorDidMount={setCmEditor}
@@ -62,7 +60,6 @@ export const StoryStylesheetDialog: React.FC<
 						mode: 'css',
 						placeholder: t('dialogs.storyStylesheet.explanation')
 					}}
-					useCodeMirror={prefs.useCodeMirror}
 					value={story.stylesheet}
 				/>
 			</DialogEditor>

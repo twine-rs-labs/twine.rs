@@ -1,4 +1,4 @@
-import {usePublishing} from './use-publishing';
+import {usePublishing, type ProofingFormatSelection} from './use-publishing';
 import {isElectronRenderer} from '../util/is-electron';
 import {TwineElectronWindow} from '../electron/shared';
 import {loadProjectMetadata} from './project-metadata';
@@ -9,7 +9,10 @@ import {
 
 export interface UseStoryLaunchProps {
 	playStory: (storyId: string) => Promise<void>;
-	proofStory: (storyId: string) => Promise<void>;
+	proofStory: (
+		storyId: string,
+		proofingFormat?: ProofingFormatSelection
+	) => Promise<void>;
 	testStory: (storyId: string, startPassageId?: string) => Promise<void>;
 }
 
@@ -79,12 +82,15 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 					build.assets
 				);
 			},
-			proofStory: async storyId => {
+			proofStory: async (storyId, proofingFormat) => {
 				const assetInventory = await refreshedProjectAssets(
 					storyId,
 					twineElectronBridge
 				);
-				const build = await proofStoryPackage(storyId, assetInventory);
+				const build = await proofStoryPackage(storyId, {
+					assetInventory,
+					proofingFormat
+				});
 
 				twineElectronBridge.openWithScratchPackage(
 					build.html,
@@ -119,8 +125,15 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 		playStory: async storyId => {
 			window.open(`#/stories/${storyId}/play`, '_blank');
 		},
-		proofStory: async storyId => {
-			window.open(`#/stories/${storyId}/proof`, '_blank');
+		proofStory: async (storyId, proofingFormat) => {
+			const query = proofingFormat
+				? `?${new URLSearchParams({
+						proofingFormatName: proofingFormat.name,
+						proofingFormatVersion: proofingFormat.version
+					}).toString()}`
+				: '';
+
+			window.open(`#/stories/${storyId}/proof${query}`, '_blank');
 		},
 		testStory: async (storyId, startPassageId) => {
 			window.open(

@@ -104,7 +104,6 @@ export const StoryTestRoute: React.FC = () => {
 			error={publishError}
 			html={html}
 			missingStoryMessage={`There is no story with ID "${storyId}".`}
-			onOpenBuild={() => history.push(`/stories/${storyId}/build`)}
 			onRevealGraph={runtimePassageId =>
 				history.push(
 					`/stories/${storyId}?mode=graph${passageQuery(runtimePassageId)}`

@@ -265,6 +265,34 @@ function requireNativeProjectBackend(operation: string): never {
 	);
 }
 
+const warnedCompatibilityFallbacks = new Set<string>();
+
+function allowCompatibilityProjectFallback(operation: string) {
+	if (legacyProjectFallbackEnabled()) {
+		return;
+	}
+
+	if (process.env.NODE_ENV === 'test') {
+		return;
+	}
+
+	const diagnostic = nativeProjectDiagnostic();
+	const warning = `${operation} is using the TypeScript project compatibility path because the native Rust backend did not return a result${
+		diagnostic ? `: ${diagnostic}` : '.'
+	}`;
+
+	if (!warnedCompatibilityFallbacks.has(warning)) {
+		warnedCompatibilityFallbacks.add(warning);
+		console.warn(warning);
+	}
+}
+
+function warnBestEffortProjectMaintenance(operation: string, error: unknown) {
+	if (process.env.NODE_ENV !== 'test') {
+		console.warn(`${operation} failed: ${(error as Error).message}`);
+	}
+}
+
 function pathSlug(value: string) {
 	return (
 		value
@@ -1781,7 +1809,8 @@ function ensureProjectSession(rootPath: string) {
 
 async function refreshProjectSessionBaseline(
 	rootPath: string,
-	storyIds?: string[]
+	storyIds?: string[],
+	hints: Omit<ProjectSessionSnapshotHints, 'storyIds'> = {}
 ) {
 	const session = projectSessions.get(projectSessionKey(rootPath));
 
@@ -1790,6 +1819,7 @@ async function refreshProjectSessionBaseline(
 	}
 
 	session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
+		...hints,
 		storyIds: storyIds ?? session.baseline?.storyIds
 	});
 	session.pending = undefined;
@@ -1908,9 +1938,7 @@ export async function prepareProjectImport(
 			return preparedImport;
 		}
 
-		if (!legacyProjectFallbackEnabled()) {
-			requireNativeProjectBackend('Project import preparation');
-		}
+		allowCompatibilityProjectFallback('Project import preparation');
 
 		if (sourceKind === 'zip') {
 			cleanupPath = await mkdtemp(join(tmpdir(), 'twine-import-'));
@@ -2126,7 +2154,15 @@ export async function copyProjectImportAssets(
 		});
 	}
 
-	await refreshProjectSessionBaseline(rootPath);
+	const assets = await listProjectAssets(rootPath);
+
+	await refreshProjectSessionBaseline(rootPath, undefined, {assets}).catch(
+		error =>
+			warnBestEffortProjectMaintenance(
+				'Project import session baseline refresh',
+				error
+			)
+	);
 
 	return results;
 }
@@ -2164,9 +2200,7 @@ export async function listProjectAssets(rootPath: string) {
 		);
 	}
 
-	if (!legacyProjectFallbackEnabled()) {
-		requireNativeProjectBackend('Project asset scanning');
-	}
+	allowCompatibilityProjectFallback('Project asset scanning');
 
 	const assets: CoreAssetInventoryEntry[] = [];
 

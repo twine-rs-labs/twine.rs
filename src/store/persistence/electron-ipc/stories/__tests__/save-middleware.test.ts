@@ -3,6 +3,7 @@ import {StoryFormatsState} from '../../../../story-formats';
 import {StoriesAction, StoriesState} from '../../../../stories';
 import {fakeLoadedStoryFormat, fakeStory} from '../../../../../test-util';
 import {TwineElectronWindow} from '../../../../../electron/shared';
+import {saveProjectMetadata} from '../../../../project-metadata';
 import {saveStory} from '../save-story';
 
 jest.mock('../save-story');
@@ -16,6 +17,7 @@ describe('stories Electron IPC save middleware', () => {
 	let storiesState: StoriesState;
 
 	beforeEach(() => {
+		window.localStorage.clear();
 		formatsState = [fakeLoadedStoryFormat()];
 		onceStoryRenamed = jest.fn();
 		deleteStory = jest.fn();
@@ -42,7 +44,10 @@ describe('stories Electron IPC save middleware', () => {
 		);
 	});
 
-	afterEach(() => delete (window as TwineElectronWindow).twineElectron);
+	afterEach(() => {
+		window.localStorage.clear();
+		delete (window as TwineElectronWindow).twineElectron;
+	});
 
 	it.each([
 		['init', () => ({type: 'init', state: []})],
@@ -256,6 +261,32 @@ describe('stories Electron IPC save middleware', () => {
 			expect(onceStoryRenamed).toHaveBeenCalledTimes(1);
 			saveStoryMock.mockReset();
 			onceStoryRenamed.mock.calls[0][0]();
+			expect(saveStoryMock.mock.calls).toEqual([
+				[storiesState[0], formatsState]
+			]);
+		});
+
+		it('saves file-backed project stories without renaming legacy HTML', () => {
+			storiesState[0] = {...storiesState[0], name: 'new-name'};
+			saveProjectMetadata(storiesState[0].id, {
+				rootPath: '/native/moon-castle.twine.rs',
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+
+			expect(
+				saveMiddleware(
+					storiesState,
+					{
+						type: 'updateStory',
+						props: {name: 'new-name'},
+						storyId: storiesState[0].id
+					},
+					formatsState
+				)
+			).toBe(true);
+			expect(renameStory).not.toHaveBeenCalled();
+			expect(onceStoryRenamed).not.toHaveBeenCalled();
 			expect(saveStoryMock.mock.calls).toEqual([
 				[storiesState[0], formatsState]
 			]);

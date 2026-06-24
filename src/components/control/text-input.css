@@ -8,10 +8,11 @@
 }
 
 .text-input > label > input {
-	background: var(--white-translucent);
-	border: 1px solid var(--light-gray-translucent);
+	background: var(--ink-1);
+	border: 1px solid var(--line-2);
 	border-radius: var(--corner-round);
-	color: var(--dark-gray);
+	box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.25);
+	color: var(--tx-1);
 	flex-grow: 1;
 	font: 100% var(--font-system);
 	height: var(--control-height);
@@ -19,8 +20,13 @@
 	padding: var(--grid-size);
 }
 
+.text-input > label > input::placeholder {
+	color: var(--tx-4);
+}
+
 .text-input > label > input:focus {
-	box-shadow: inset 0 0 0px 2px var(--blue);
+	border-color: var(--focus-ring);
+	box-shadow: var(--glow-focus), inset 0 1px 2px oklch(0 0 0 / 0.25);
 	outline: none;
 }
 

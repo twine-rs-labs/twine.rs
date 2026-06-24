@@ -15,17 +15,30 @@ async function saveNativeProjectFolder(
 ) {
 	const projectMetadata = loadProjectMetadata(story.id);
 
-	if (projectMetadata?.rootPath && twineElectron.saveProjectFolder) {
-		try {
-			await twineElectron.saveProjectFolder(projectMetadata.rootPath, story);
-		} catch (error) {
-			console.warn(
-				`Could not update native project folder (${
-					(error as Error).message
-				}). Story HTML save was still sent.`
-			);
-		}
+	if (
+		projectMetadata?.storageKind !== 'electron-project-folder' ||
+		projectMetadata.status !== 'file-backed' ||
+		!projectMetadata.rootPath
+	) {
+		return false;
 	}
+
+	if (!twineElectron.saveProjectFolder) {
+		console.warn('Could not update native project folder; bridge is missing.');
+		return true;
+	}
+
+	try {
+		await twineElectron.saveProjectFolder(projectMetadata.rootPath, story);
+	} catch (error) {
+		console.warn(
+			`Could not update native project folder (${
+				(error as Error).message
+			}). Legacy HTML save was skipped.`
+		);
+	}
+
+	return true;
 }
 
 /**
@@ -36,6 +49,10 @@ export async function saveStory(story: Story, formats: StoryFormatsState) {
 
 	if (!twineElectron) {
 		throw new Error('Electron bridge is not present on window.');
+	}
+
+	if (await saveNativeProjectFolder(twineElectron, story)) {
+		return;
 	}
 
 	let storyHtml: string;
@@ -71,5 +88,4 @@ export async function saveStory(story: Story, formats: StoryFormatsState) {
 	}
 
 	twineElectron.saveStoryHtml(story, storyHtml);
-	await saveNativeProjectFolder(twineElectron, story);
 }

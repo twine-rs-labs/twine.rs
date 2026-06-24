@@ -33,7 +33,6 @@ export interface CodeAreaProps extends Omit<
 	labelHidden?: boolean;
 	onChangeEditor?: (value: CodeMirror.Editor) => void;
 	onChangeText: (value: string, data?: CodeMirror.EditorChange) => void;
-	useCodeMirror?: boolean;
 	value: string;
 }
 
@@ -45,7 +44,6 @@ export const CodeArea: React.FC<CodeAreaProps> = props => {
 		label,
 		onChangeEditor,
 		onChangeText,
-		useCodeMirror,
 		...otherProps
 	} = props;
 	const containerRef = React.useRef<HTMLDivElement>(null);
@@ -74,14 +72,14 @@ export const CodeArea: React.FC<CodeAreaProps> = props => {
 	// CodeMirror.
 
 	React.useEffect(() => {
-		if (useCodeMirror && containerRef.current) {
+		if (containerRef.current) {
 			const textarea = containerRef.current.querySelector('textarea');
 
 			if (textarea) {
 				textarea.setAttribute('id', id);
 			}
 		}
-	}, [id, useCodeMirror]);
+	}, [id]);
 
 	return (
 		<div className="code-area" ref={containerRef} style={style}>
@@ -93,21 +91,10 @@ export const CodeArea: React.FC<CodeAreaProps> = props => {
 			>
 				{label}
 			</label>
-			{useCodeMirror ? (
-				<CodeMirror
-					{...otherProps}
-					onBeforeChange={handleCodeMirrorBeforeChange}
-				/>
-			) : (
-				<textarea
-					className="visible"
-					id={id}
-					onChange={({target}) => onChangeText(target.value)}
-					placeholder={otherProps.options?.placeholder}
-					style={style}
-					value={otherProps.value}
-				/>
-			)}
+			<CodeMirror
+				{...otherProps}
+				onBeforeChange={handleCodeMirrorBeforeChange}
+			/>
 		</div>
 	);
 };

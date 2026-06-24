@@ -10,12 +10,23 @@ import {
 	isPersistablePassageChange,
 	isPersistableStoryChange
 } from '../../persistable-changes';
+import {loadProjectMetadata} from '../../../project-metadata';
 import {saveStory} from './save-story';
 
 // When a story is deleted, we need to be able to look up information about it
 // from the last state.
 
 let lastState: StoriesState;
+
+function isNativeProjectStory(storyId: string) {
+	const metadata = loadProjectMetadata(storyId);
+
+	return (
+		metadata?.storageKind === 'electron-project-folder' &&
+		metadata.status === 'file-backed' &&
+		!!metadata.rootPath
+	);
+}
 
 /**
  * A middleware function to save changes to disk. This should be called *after*
@@ -69,8 +80,15 @@ export function saveMiddleware(
 					// specially. We rename the story file, then save it to catch
 					// any other changes.
 
-					const oldStory = storyWithId(lastState, action.storyId);
 					const newStory = storyWithId(state, action.storyId);
+
+					if (isNativeProjectStory(action.storyId)) {
+						saveStory(newStory, formats);
+						persisted = true;
+						break;
+					}
+
+					const oldStory = storyWithId(lastState, action.storyId);
 
 					// It's crucial that we only respond to this event once. Otherwise,
 					// multiple renames in one session will cause mayhem.

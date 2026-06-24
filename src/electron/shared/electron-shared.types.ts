@@ -133,8 +133,17 @@ export type ElectronLoadedStoryEntry =
 	| ElectronLegacyStoryFile
 	| ElectronNativeProjectStoryEntry;
 
+export interface NativeAddLocalStoryFormatResult {
+	name: string;
+	url: string;
+	version: string;
+}
+
 export interface TwineElectronWindow extends Window {
 	twineElectron?: {
+		addLocalStoryFormat(): Promise<
+			NativeAddLocalStoryFormatResult | undefined
+		>;
 		chooseAssetFile(defaultPath?: string): Promise<string | undefined>;
 		chooseStoryLibraryFolder(): Promise<string | undefined>;
 		consumeCommandLineOpenRequests(): Promise<NativeCommandLineOpenResult>;

@@ -397,6 +397,8 @@ pub struct CoreQuickFix {
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreStoryIndexOptions {
     #[serde(default)]
+    pub asset_scan_complete: bool,
+    #[serde(default)]
     pub fuzzy: bool,
     #[serde(default = "default_true")]
     pub include_assets: bool,
@@ -435,6 +437,7 @@ pub struct CoreStoryIndexOptions {
 impl Default for CoreStoryIndexOptions {
     fn default() -> Self {
         Self {
+            asset_scan_complete: false,
             fuzzy: false,
             include_assets: true,
             include_contents: true,
@@ -2451,7 +2454,11 @@ impl ProjectSession {
         let mut asset_inventory = if options.include_assets {
             let known_assets = self.known_asset_inventory(&options.known_assets)?;
 
-            asset_inventory_from_references(&assets, known_assets, self.asset_root.is_some())
+            asset_inventory_from_references(
+                &assets,
+                known_assets,
+                self.asset_root.is_some() || options.asset_scan_complete,
+            )
         } else {
             Vec::new()
         };
@@ -3882,18 +3889,20 @@ fn symbols_in_source(
                 }
             }
 
-            symbols.push(CoreSymbol {
-                end: index,
-                excerpt: excerpt_around(source, start, index - start),
-                kind: CoreSymbolKind::Variable,
-                line: line_number_at(source, start),
-                name: source[start..index].to_owned(),
-                passage_id: passage_id.map(str::to_owned),
-                scope: scope.clone(),
-                source_id: source_id.to_owned(),
-                source_name: source_name.to_owned(),
-                start,
-            });
+            if symbol_name_has_identifier_body(&source[start + 1..index]) {
+                symbols.push(CoreSymbol {
+                    end: index,
+                    excerpt: excerpt_around(source, start, index - start),
+                    kind: CoreSymbolKind::Variable,
+                    line: line_number_at(source, start),
+                    name: source[start..index].to_owned(),
+                    passage_id: passage_id.map(str::to_owned),
+                    scope: scope.clone(),
+                    source_id: source_id.to_owned(),
+                    source_name: source_name.to_owned(),
+                    start,
+                });
+            }
             continue;
         }
 
@@ -3901,6 +3910,12 @@ fn symbols_in_source(
     }
 
     symbols
+}
+
+fn symbol_name_has_identifier_body(name_without_sigil: &str) -> bool {
+    name_without_sigil
+        .bytes()
+        .any(|byte| byte.is_ascii_alphanumeric())
 }
 
 fn is_identifier_start(byte: u8) -> bool {
@@ -5282,8 +5297,7 @@ mod tests {
                 .passage_by_id_mut(&PassageId::new("a"))
                 .expect("passage");
 
-            passage.text =
-                "Set $score and $player.score. _turn ?sidebar assets/cover.png [[Next]]".into();
+            passage.text = "Set $score and $player.score. _turn ?sidebar $____ $__.__ $valid._ $_.valid assets/cover.png [[Next]]".into();
             passage.tags = vec!["chapter-one".into(), "scene".into()];
             story.tag_colors.insert("scene".into(), "red".into());
             story.script = "const coin = 1;".into();
@@ -5313,6 +5327,10 @@ mod tests {
         );
         assert!(!index.symbols.iter().any(|symbol| symbol.name == "_turn"));
         assert!(!index.symbols.iter().any(|symbol| symbol.name == "?sidebar"));
+        assert!(!index.symbols.iter().any(|symbol| symbol.name == "$____"));
+        assert!(!index.symbols.iter().any(|symbol| symbol.name == "$__.__"));
+        assert!(index.symbols.iter().any(|symbol| symbol.name == "$valid._"));
+        assert!(index.symbols.iter().any(|symbol| symbol.name == "$_.valid"));
         assert!(
             index
                 .assets
@@ -5433,6 +5451,56 @@ mod tests {
                 && entry.label == "assets/unused.png"
                 && entry.severity == Some(CoreDiagnosticSeverity::Info)
         }));
+    }
+
+    #[test]
+    fn completed_asset_scan_marks_referenced_unscanned_assets_missing() {
+        let mut session = session();
+
+        {
+            let story = session.story_mut("story-1").expect("story");
+            let passage = story
+                .passage_by_id_mut(&PassageId::new("a"))
+                .expect("passage");
+
+            passage.text = r#"<img src="assets/missing.png">"#.into();
+        }
+
+        let unknown_index = session
+            .story_index("story-1", CoreStoryIndexOptions::default())
+            .expect("index should build");
+        let unknown_asset = unknown_index
+            .asset_inventory
+            .iter()
+            .find(|asset| asset.path == "assets/missing.png")
+            .expect("referenced asset should be indexed");
+
+        assert_eq!(unknown_asset.exists, None);
+        assert!(!unknown_asset.missing);
+
+        let scanned_index = session
+            .story_index(
+                "story-1",
+                CoreStoryIndexOptions {
+                    asset_scan_complete: true,
+                    ..CoreStoryIndexOptions::default()
+                },
+            )
+            .expect("index should build");
+        let scanned_asset = scanned_index
+            .asset_inventory
+            .iter()
+            .find(|asset| asset.path == "assets/missing.png")
+            .expect("referenced asset should be indexed");
+
+        assert_eq!(scanned_asset.exists, Some(false));
+        assert!(scanned_asset.missing);
+        assert!(
+            scanned_index
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "missing-asset")
+        );
     }
 
     #[test]

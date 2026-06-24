@@ -115,6 +115,159 @@
 	color-scheme: dark;
 }
 
+/* ============================================================
+   LIGHT THEME — "Daylight workbench"
+   Activated by ThemeSetter via [data-app-theme='light'] on
+   <body>. Dark stays the default (:root above); this block
+   only re-binds the *primitives* (ink / line / tx / accents /
+   semantics / elevation) — every semantic alias and component
+   resolves through them, so nothing else has to change.
+
+   Design intent (read alongside the dark notes above):
+   - NOT a searing white. The base frame is a soft cool paper
+     (oklch L≈0.95, a faint blue-green undertone, hue ~232) so
+     long writing sessions stay low-glare. Pure-ish white is
+     reserved for the cards/editor you actually read in.
+   - The ramp INVERTS its lift logic, not its roles. In dark,
+     "raised" = lighter; in light, "raised" = whiter + a soft
+     cool shadow. Controls (ink-4/5) are gentle toned grays
+     that sit ON the white surfaces, so the existing component
+     CSS (button rest=ink-4 → hover=ink-5) now reads as a
+     normal light control that darkens on hover.
+   - Accents keep the twine blue→green hues but drop ~0.15 in
+     lightness and gain chroma so they carry real contrast on
+     paper and take white text. The signature gradient stays.
+   - Semantic hues are deepened to AA-legible ink; their -soft
+     tints become pale washes (low alpha) instead of glows.
+   - Elevation switches from "1px light-from-above" to soft,
+     cool, low-alpha drop shadows — paper casts shadow, it does
+     not glow.
+   ============================================================ */
+
+[data-app-theme='light'] {
+	/* ---- Surface ramp (cool paper) ----------------------- */
+	/* Base frame is the most toned; cards/editor climb to near-white. */
+	--ink-0: oklch(0.952 0.008 232); /* app frame / deepest gutter */
+	--ink-1: oklch(0.968 0.007 232); /* docks, side rails          */
+	--ink-2: oklch(0.980 0.006 232); /* panels, toolbars           */
+	--ink-3: oklch(0.994 0.003 232); /* cards, editor body         */
+	/* Controls: gentle toned grays that read as interactive chips
+	   on the white surfaces. ink-4 = rest, ink-5 = hover/active.  */
+	--ink-4: oklch(0.930 0.010 232); /* control rest / neutral chip */
+	--ink-5: oklch(0.892 0.013 233); /* control hover, active row   */
+
+	/* Graph canvas: a calm slate-paper that frames white nodes. */
+	--ink-void: oklch(0.918 0.012 234);
+
+	/* ---- Hairlines & dividers ---------------------------- */
+	--line-1: oklch(0.888 0.010 232); /* faint divider            */
+	--line-2: oklch(0.828 0.013 232); /* default border           */
+	--line-3: oklch(0.742 0.018 233); /* strong / focused border  */
+
+	/* ---- Text -------------------------------------------- */
+	--tx-1: oklch(0.250 0.018 248); /* primary, headings — soft ink */
+	--tx-2: oklch(0.350 0.016 245); /* body / secondary             */
+	--tx-3: oklch(0.470 0.015 241); /* muted labels                 */
+	--tx-4: oklch(0.598 0.013 238); /* faint / placeholder          */
+	--tx-on-accent: oklch(0.992 0.004 230); /* text on accent fills */
+
+	/* ---- Brand accents — the twine gradient, deepened ----- */
+	--acc-blue: oklch(0.548 0.158 252); /* primary action          */
+	--acc-blue-hi: oklch(0.598 0.158 252); /* hover / lifted        */
+	--acc-blue-lo: oklch(0.470 0.150 252); /* pressed / deep        */
+	--acc-blue-soft: oklch(0.700 0.120 252 / 0.16); /* tint fill    */
+
+	--acc-green: oklch(0.560 0.135 158);
+	--acc-green-hi: oklch(0.610 0.135 158);
+	--acc-green-soft: oklch(0.680 0.120 158 / 0.18);
+
+	--acc-twine: linear-gradient(
+		135deg,
+		oklch(0.560 0.170 255) 0%,
+		oklch(0.620 0.130 200) 42%,
+		oklch(0.610 0.150 158) 100%
+	); /* @kind color */
+
+	--focus-ring: oklch(0.548 0.160 250);
+
+	/* ---- Semantic roles (deepened ink + pale washes) ------ */
+	--sem-link: oklch(0.500 0.160 252);
+	--sem-link-soft: oklch(0.620 0.130 252 / 0.15);
+
+	--sem-tag: oklch(0.500 0.165 305);
+	--sem-tag-soft: oklch(0.640 0.135 305 / 0.15);
+
+	--sem-var: oklch(0.470 0.095 214);
+	--sem-var-soft: oklch(0.610 0.090 208 / 0.16);
+
+	--sem-warn: oklch(0.560 0.130 72);
+	--sem-warn-soft: oklch(0.790 0.130 80 / 0.28);
+
+	--sem-error: oklch(0.530 0.198 27);
+	--sem-error-soft: oklch(0.640 0.175 27 / 0.15);
+
+	--sem-dirty: oklch(0.560 0.165 50);
+	--sem-dirty-soft: oklch(0.720 0.150 55 / 0.18);
+
+	--sem-saved: oklch(0.520 0.140 156);
+	--sem-saved-soft: oklch(0.650 0.130 156 / 0.16);
+
+	--sem-generated: oklch(0.510 0.100 218);
+	--sem-generated-soft: oklch(0.640 0.090 214 / 0.16);
+
+	--sem-build: oklch(0.500 0.150 272);
+	--sem-build-soft: oklch(0.640 0.130 270 / 0.15);
+
+	/* Selection wash — a pale blue on paper. */
+	--sel-wash: oklch(0.620 0.140 250 / 0.20);
+	--sel-line: oklch(0.520 0.160 250);
+
+	/* ---- Elevation — soft cool drop shadows --------------- */
+	/* Paper casts shadow, it doesn't glow. Override the depth
+	   tokens here (they carry color) so cards lift correctly. */
+	--shadow-sm: 0 1px 2px oklch(0.45 0.03 245 / 0.10);
+	--shadow-card: 0 1px 2px oklch(0.45 0.03 245 / 0.09),
+		0 2px 6px oklch(0.45 0.03 245 / 0.07);
+	--shadow-pop: 0 4px 10px oklch(0.42 0.03 245 / 0.12),
+		0 14px 30px oklch(0.42 0.03 245 / 0.14);
+	--shadow-modal: 0 20px 52px oklch(0.34 0.03 245 / 0.22),
+		0 4px 14px oklch(0.40 0.03 245 / 0.13);
+
+	/* A crisp white top edge still helps the toned-gray controls
+	   catch light; it's a no-op on the near-white cards. */
+	--edge-hi: inset 0 1px 0 oklch(1 0 0 / 0.65); /* @kind shadow */
+
+	--glow-focus: 0 0 0 var(--focus-w) oklch(0.548 0.160 250 / 0.45);
+	--glow-accent: 0 0 0 1px oklch(0.548 0.150 252 / 0.5),
+		0 0 14px oklch(0.548 0.150 252 / 0.22);
+
+	/* ---- Semantic aliases (re-bound in this scope) -------- */
+	/* A custom property resolves its var() at the element that
+	   DECLARES it, not where it is used. The aliases on :root above
+	   are therefore frozen to the dark primitives; a descendant that
+	   re-binds --ink-* / --tx-* / --line-* does NOT update them. So
+	   re-declare every alias here, alongside the light primitives, or
+	   anything reading --bg-* / --text-* / --border-* stays dark. */
+	--bg-app: var(--ink-0);
+	--bg-dock: var(--ink-1);
+	--bg-panel: var(--ink-2);
+	--bg-card: var(--ink-3);
+	--bg-raised: var(--ink-4);
+	--bg-pop: var(--ink-5);
+	--bg-canvas: var(--ink-void);
+
+	--text-strong: var(--tx-1);
+	--text-body: var(--tx-2);
+	--text-muted: var(--tx-3);
+	--text-faint: var(--tx-4);
+
+	--border-default: var(--line-2);
+	--border-faint: var(--line-1);
+	--border-strong: var(--line-3);
+
+	color-scheme: light;
+}
+
 body[data-high-contrast='true'] {
 	--ink-0: oklch(0.1 0.006 240);
 	--ink-1: oklch(0.14 0.008 240);
@@ -129,4 +282,24 @@ body[data-high-contrast='true'] {
 	--tx-2: oklch(0.9 0.006 233);
 	--tx-3: oklch(0.78 0.008 236);
 	--tx-4: oklch(0.66 0.01 238);
+
+	/* Re-bind the aliases here too: var() resolves at the declaring
+	   element, so without this the deepened ink/line/tx above never
+	   reaches the components that read --bg-* / --text-* / --border-*. */
+	--bg-app: var(--ink-0);
+	--bg-dock: var(--ink-1);
+	--bg-panel: var(--ink-2);
+	--bg-card: var(--ink-3);
+	--bg-raised: var(--ink-4);
+	--bg-pop: var(--ink-5);
+	--bg-canvas: var(--ink-void);
+
+	--text-strong: var(--tx-1);
+	--text-body: var(--tx-2);
+	--text-muted: var(--tx-3);
+	--text-faint: var(--tx-4);
+
+	--border-default: var(--line-2);
+	--border-faint: var(--line-1);
+	--border-strong: var(--line-3);
 }

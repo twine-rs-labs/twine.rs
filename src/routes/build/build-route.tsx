@@ -46,8 +46,13 @@ import './build-route.css';
 type BuildView = 'export' | 'preview';
 type ExportFormat = 'html' | 'twee' | 'json' | 'archive';
 type InspectTab = 'source' | 'html';
-type PreviewAction = 'play' | 'test' | 'proof';
+type PreviewAction = 'play' | 'proof';
 type NoteTone = 'ok' | 'warn' | 'error' | 'info';
+
+interface InlineAssetProfile {
+	count: number;
+	knownSizeBytes: number;
+}
 
 interface BuildLogEntry {
 	line: string;
@@ -115,6 +120,8 @@ const publishBoundTargets: StoryBuildTarget[] = [
 	'export-html',
 	'package'
 ];
+const inlineAssetDefaultMaxCount = 25;
+const inlineAssetDefaultMaxSizeBytes = 25 * 1024 * 1024;
 
 function storyForId(stories: Story[], storyId: string | undefined) {
 	return stories.find(story => story.id === storyId);
@@ -168,6 +175,48 @@ function bytesLabel(bytes: number) {
 	}
 
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function inlineAssetProfile(storyIndex?: CoreStoryIndex): InlineAssetProfile {
+	const assets =
+		storyIndex?.assetInventory.filter(
+			asset => asset.publish.copy && asset.exists !== false && !asset.missing
+		) ?? [];
+
+	return {
+		count: assets.length,
+		knownSizeBytes: assets.reduce(
+			(total, asset) => total + (asset.sizeBytes ?? 0),
+			0
+		)
+	};
+}
+
+function shouldInlineAssetsByDefault(profile: InlineAssetProfile) {
+	return (
+		profile.count <= inlineAssetDefaultMaxCount &&
+		profile.knownSizeBytes <= inlineAssetDefaultMaxSizeBytes
+	);
+}
+
+function inlineAssetDefaultReason(profile: InlineAssetProfile) {
+	const reasons = [];
+
+	if (profile.count > inlineAssetDefaultMaxCount) {
+		reasons.push(
+			`${profile.count} exportable assets (limit ${inlineAssetDefaultMaxCount})`
+		);
+	}
+
+	if (profile.knownSizeBytes > inlineAssetDefaultMaxSizeBytes) {
+		reasons.push(
+			`${bytesLabel(profile.knownSizeBytes)} of known asset data (limit ${bytesLabel(
+				inlineAssetDefaultMaxSizeBytes
+			)})`
+		);
+	}
+
+	return reasons.join(' and ');
 }
 
 function logTime() {
@@ -315,7 +364,7 @@ export const BuildRoute: React.FC = () => {
 	const coreProjectHost = useCoreProjectHost();
 	const {formats} = useStoryFormatsContext();
 	const {proofStoryPackage, publishStoryPackage} = usePublishing();
-	const {playStory, proofStory, testStory} = useStoryLaunch();
+	const {playStory, proofStory} = useStoryLaunch();
 	const [view, setView] = React.useState<BuildView>('export');
 	const [exportFormat, setExportFormat] = React.useState<ExportFormat>('html');
 	const [formatOptions, setFormatOptions] = React.useState<ExportFormatOptions>(
@@ -325,7 +374,7 @@ export const BuildRoute: React.FC = () => {
 			jsonPretty: true
 		}
 	);
-	const [startPassageId, setStartPassageId] = React.useState('');
+	const [inlineAssetsTouched, setInlineAssetsTouched] = React.useState(false);
 	const [proofingFormatValue, setProofingFormatValue] = React.useState('');
 	const [busyAction, setBusyAction] = React.useState<string>();
 	const [error, setError] = React.useState<string>();
@@ -345,11 +394,6 @@ export const BuildRoute: React.FC = () => {
 
 	const activeDefinition = exportDefinition(exportFormat);
 	const activeTarget = targetForExport(exportFormat);
-	const startPassageOptions =
-		story?.passages.map(passage => ({
-			label: passage.name,
-			value: passage.id
-		})) ?? [];
 	const proofingOptions = React.useMemo(
 		() => proofingFormatOptions(formats, story),
 		[formats, story]
@@ -358,6 +402,14 @@ export const BuildRoute: React.FC = () => {
 		() => proofingFormatFromValue(proofingFormatValue, story),
 		[proofingFormatValue, story]
 	);
+	const assetProfile = React.useMemo(
+		() => inlineAssetProfile(storyIndex),
+		[storyIndex]
+	);
+	const inlineAssetsDefault = shouldInlineAssetsByDefault(assetProfile);
+	const inlineAssetsAutoDisabled =
+		exportFormat === 'html' && !inlineAssetsDefault;
+	const inlineAssetsAutoReason = inlineAssetDefaultReason(assetProfile);
 
 	React.useEffect(() => {
 		let active = true;
@@ -381,14 +433,6 @@ export const BuildRoute: React.FC = () => {
 			active = false;
 		};
 	}, [coreProjectHost, story]);
-
-	React.useEffect(() => {
-		if (!story) {
-			return;
-		}
-
-		setStartPassageId(story.startPassage || story.passages[0]?.id || '');
-	}, [story]);
 
 	React.useEffect(() => {
 		if (
@@ -428,6 +472,22 @@ export const BuildRoute: React.FC = () => {
 		formatOptions.jsonPretty,
 		view
 	]);
+
+	React.useEffect(() => {
+		setInlineAssetsTouched(false);
+	}, [story?.id]);
+
+	React.useEffect(() => {
+		if (inlineAssetsTouched) {
+			return;
+		}
+
+		setFormatOptions(current =>
+			current.htmlInlineAssets === inlineAssetsDefault
+				? current
+				: {...current, htmlInlineAssets: inlineAssetsDefault}
+		);
+	}, [inlineAssetsDefault, inlineAssetsTouched]);
 
 	const format = React.useMemo(() => {
 		if (!story) {
@@ -606,22 +666,12 @@ export const BuildRoute: React.FC = () => {
 				}
 
 				const nextBuild = await publishStoryPackage(story.id, {
-					buildTarget: action,
-					formatOptions: action === 'test' ? 'debug' : undefined,
-					...(action === 'test' && startPassageId
-						? {startId: startPassageId, startMode: 'afterStartup' as const}
-						: {startId: action === 'test' ? startPassageId : undefined})
+					buildTarget: action
 				});
 
 				setBuild(nextBuild);
-
-				if (action === 'play') {
-					await playStory(story.id);
-					appendLog('Opened Play preview.');
-				} else {
-					await testStory(story.id, startPassageId);
-					appendLog('Opened Test preview.');
-				}
+				await playStory(story.id);
+				appendLog('Opened Play preview.');
 			} catch (error) {
 				const message = (error as Error).message;
 
@@ -638,9 +688,7 @@ export const BuildRoute: React.FC = () => {
 			proofStoryPackage,
 			publishStoryPackage,
 			selectedProofingFormat,
-			startPassageId,
-			story,
-			testStory
+			story
 		]
 	);
 
@@ -734,11 +782,14 @@ export const BuildRoute: React.FC = () => {
 
 		if (exportFormat === 'html' && !formatOptions.htmlInlineAssets) {
 			notes.push({
-				detail:
-					'Referenced project assets stay in the asset copy plan instead of being embedded.',
+				detail: inlineAssetsAutoDisabled
+					? `${inlineAssetsAutoReason}. Keeping assets external avoids a very large HTML file. You can turn this back on.`
+					: 'Referenced project assets stay in the asset copy plan instead of being embedded.',
 				icon: 'info-circle',
 				id: 'asset-copy-plan',
-				title: 'Assets stay external',
+				title: inlineAssetsAutoDisabled
+					? 'Inline assets off by default'
+					: 'Assets stay external',
 				tone: 'info'
 			});
 		}
@@ -795,6 +846,8 @@ export const BuildRoute: React.FC = () => {
 		formatOptions.htmlCompatibility,
 		formatOptions.htmlInlineAssets,
 		history,
+		inlineAssetsAutoDisabled,
+		inlineAssetsAutoReason,
 		missingAssets,
 		safetyIssues,
 		sourceOnly,
@@ -903,37 +956,6 @@ export const BuildRoute: React.FC = () => {
 
 							<div className="build-route__action-row">
 								<div className="build-route__action-icon">
-									<TablerIcon icon="tool" />
-								</div>
-								<div className="build-route__action-body">
-									<div className="build-route__action-title">
-										Test from a passage
-									</div>
-									<div className="build-route__action-detail">
-										Run with debug output, starting from any passage you choose.
-									</div>
-									<div className="build-route__action-inline">
-										<span>Start at</span>
-										<Select
-											ariaLabel="Test start passage"
-											onChange={setStartPassageId}
-											options={startPassageOptions}
-											size="sm"
-											value={startPassageId}
-										/>
-									</div>
-								</div>
-								<Button
-									icon="tool"
-									loading={busyAction === 'test'}
-									onClick={() => runPreview('test')}
-								>
-									Test
-								</Button>
-							</div>
-
-							<div className="build-route__action-row">
-								<div className="build-route__action-icon">
 									<TablerIcon icon="book" />
 								</div>
 								<div className="build-route__action-body">
@@ -983,9 +1005,9 @@ export const BuildRoute: React.FC = () => {
 												onClick={() => setExportFormat(format.format)}
 												type="button"
 											>
-												<TablerIcon
+												<span
+													aria-hidden
 													className="build-route__format-check"
-													icon="circle-check-filled"
 												/>
 												<div className="build-route__format-icon">
 													<TablerIcon icon={format.icon} />
@@ -1030,9 +1052,10 @@ export const BuildRoute: React.FC = () => {
 												<Switch
 													ariaLabel="Inline all assets"
 													checked={formatOptions.htmlInlineAssets}
-													onChange={checked =>
-														updateFormatOption('htmlInlineAssets', checked)
-													}
+													onChange={checked => {
+														setInlineAssetsTouched(true);
+														updateFormatOption('htmlInlineAssets', checked);
+													}}
 												/>
 											</div>
 											<div className="build-route__row">

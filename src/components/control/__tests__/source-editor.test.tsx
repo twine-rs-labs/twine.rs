@@ -44,33 +44,106 @@ describe('<SourceEditor>', () => {
 				onChange={jest.fn()}
 				value={
 					'(if: true)[Shown]\n' +
+					'(set:_secret_thought to "secretly harbor")\n' +
 					'<<=Story.name>>\n' +
 					'<</if>>\n' +
 					'$object.properties\n' +
-					'(you have to force yourself)'
+					'// the keeper watches from the stair\n' +
+					'(you have to force yourself)\n' +
+					'She said "not a code string."'
 				}
 			/>
 		);
 
 		await waitFor(() =>
-			expect(container.querySelectorAll('.cm-twine-macro')).toHaveLength(3)
+			expect(container.querySelectorAll('.cm-twine-macro')).toHaveLength(8)
 		);
 		expect(
 			Array.from(container.querySelectorAll('.cm-twine-macro')).map(element =>
 				element.textContent?.trim()
 			)
-		).toEqual(['(if:', '<<=Story.name>>', '<</if>>']);
+		).toEqual([
+			'(if:',
+			')',
+			'(set:',
+			')',
+			'<<=Story.name',
+			'>>',
+			'<</if',
+			'>>'
+		]);
+		expect(
+			Array.from(container.querySelectorAll('.cm-twine-string')).map(
+				element => element.textContent
+			)
+		).toEqual(['"secretly harbor"', '"not a code string."']);
+		expect(
+			Array.from(container.querySelectorAll('.cm-twine-comment')).map(
+				element => element.textContent
+			)
+		).toEqual(['// the keeper watches from the stair']);
 		expect(
 			Array.from(container.querySelectorAll('.cm-twine-variable')).map(
 				element => element.textContent?.trim()
 			)
 		).toContain('$object.properties');
+		expect(
+			Array.from(container.querySelectorAll('.cm-twine-variable')).map(
+				element => element.textContent?.trim()
+			)
+		).toContain('_secret_thought');
 		expect(container).toHaveTextContent('(you have to force yourself)');
 		expect(
 			Array.from(container.querySelectorAll('.cm-twine-macro')).some(element =>
 				element.textContent?.includes('(you')
 			)
 		).toBe(false);
+	});
+
+	it('highlights Chapbook and Snowman syntax with the shared Twine palette', async () => {
+		const {container} = render(
+			<SourceEditor
+				id="story-start-editor"
+				label="Passage text"
+				onChange={jest.fn()}
+				value={
+					'{embed passage: "Lamp Room"}\n' +
+					'{{ config.debug }}\n' +
+					'<% if (s.lampLit) { %><%= "Glow" %><% } %>\n' +
+					'[[Proof Link]]'
+				}
+			/>
+		);
+
+		await waitFor(() =>
+			expect(container.querySelectorAll('.cm-twine-macro')).toHaveLength(10)
+		);
+		expect(
+			Array.from(container.querySelectorAll('.cm-twine-macro')).map(element =>
+				element.textContent?.trim()
+			)
+		).toEqual([
+			'{embed passage:',
+			'}',
+			'{{',
+			'}}',
+			'<%',
+			'%>',
+			'<%=',
+			'%>',
+			'<%',
+			'%>'
+		]);
+		expect(
+			Array.from(container.querySelectorAll('.cm-twine-string')).map(
+				element => element.textContent
+			)
+		).toEqual(['"Lamp Room"', '"Glow"']);
+		expect(
+			Array.from(container.querySelectorAll('.cm-twine-link')).map(
+				element => element.textContent
+			)
+		).toEqual(['[[Proof Link]]']);
 	});
 
 	it('toggles the editor search panel when requested without an explicit query', async () => {

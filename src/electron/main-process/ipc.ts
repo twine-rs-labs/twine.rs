@@ -10,7 +10,7 @@ import {
 	renameStory,
 	saveStoryHtml
 } from './story-file';
-import {loadStoryFormats} from './story-formats';
+import {addLocalStoryFormat, loadStoryFormats} from './story-formats';
 import {loadPrefs} from './prefs';
 import {openWithScratchFile, openWithScratchPackage} from './scratch-file';
 import {Story} from '../../store/stories/stories.types';
@@ -331,6 +331,8 @@ export function initIpc() {
 			return [];
 		}
 	});
+
+	ipcMain.handle('add-local-story-format', async () => addLocalStoryFormat());
 
 	ipcMain.on(
 		'open-with-scratch-file',

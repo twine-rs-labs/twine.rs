@@ -136,6 +136,25 @@ describe('AppShell', () => {
 		).toBeInTheDocument();
 	});
 
+	it('does not show story-opening progress from the library route', () => {
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: false,
+			rootPath: '/native/moon-castle.twine.rs'
+		});
+
+		renderShell(story, '/');
+
+		expect(
+			screen.queryByRole('progressbar', {name: 'Opening story'})
+		).not.toBeInTheDocument();
+		expect(screen.getByRole('button', {name: /Opening/})).toBeInTheDocument();
+	});
+
 	it('opens the global command palette and runs shell commands', async () => {
 		renderShell(story);
 

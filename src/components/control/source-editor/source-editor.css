@@ -7,6 +7,14 @@
 	position: relative;
 }
 
+.source-editor > [role='textbox'] {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+	min-width: 0;
+	width: 100%;
+}
+
 .source-editor .cm-editor {
 	background: var(--source-editor-bg, var(--ink-3));
 	color: var(--source-editor-fg, var(--tx-2));
@@ -16,7 +24,9 @@
 	height: 100%;
 	line-height: var(--lh-code);
 	min-height: 0;
+	min-width: 0;
 	outline: none;
+	width: 100%;
 }
 
 .source-editor .cm-scroller {
@@ -25,8 +35,10 @@
 	height: 100%;
 	line-height: inherit;
 	min-height: 0;
+	min-width: 0;
 	scrollbar-color: var(--ink-5) var(--ink-2);
 	scrollbar-width: thin;
+	width: 100%;
 }
 
 .source-editor .cm-scroller::-webkit-scrollbar {
@@ -49,7 +61,9 @@
 }
 
 .source-editor .cm-content {
+	box-sizing: border-box;
 	caret-color: var(--source-editor-active-line-border, var(--acc-blue));
+	min-width: 100%;
 	padding: 10px 0;
 }
 
@@ -165,23 +179,24 @@
 }
 
 .source-editor .cm-twine-variable {
-	background: var(--source-editor-variable-bg, var(--sem-var-soft));
-	border-radius: 2px;
 	color: var(--source-editor-variable, var(--sem-var));
-	font-weight: 600;
-	padding: 0 1px;
 }
 
 .source-editor .cm-twine-macro {
 	color: var(--source-editor-macro, var(--sem-build));
-	font-weight: 600;
+}
+
+.source-editor .cm-twine-comment {
+	color: var(--source-editor-syntax-comment, var(--tx-4));
+	font-style: italic;
+}
+
+.source-editor .cm-twine-string {
+	color: var(--source-editor-syntax-string, var(--sem-saved));
 }
 
 .source-editor .cm-twine-tag {
-	background: var(--source-editor-tag-bg, var(--sem-tag-soft));
-	border-radius: 2px;
 	color: var(--source-editor-tag, var(--sem-tag));
-	padding: 0 1px;
 }
 
 .source-editor .cm-twine-diagnostic-line {

@@ -560,18 +560,10 @@ export const NewProjectRoute: React.FC = () => {
 
 		try {
 			const identityStories = selectedStories.map(storyWithImportIdentity);
-			const defaultRepairFormat = safeRepairFormat(
-				formats,
-				prefs.storyFormat
-			);
+			const defaultRepairFormat = safeRepairFormat(formats, prefs.storyFormat);
 			const storiesToImport = defaultRepairFormat
 				? identityStories.map(story =>
-						repairStory(
-							story,
-							identityStories,
-							formats,
-							defaultRepairFormat
-						)
+						repairStory(story, identityStories, formats, defaultRepairFormat)
 					)
 				: identityStories;
 
@@ -683,7 +675,8 @@ export const NewProjectRoute: React.FC = () => {
 			setImportProgress({detail: 'Preparing story shell', progress: 76});
 			const storeStoryIds = projectStoryIdsForCurrentStories(
 				storiesRef.current,
-				result.stories
+				result.stories,
+				{preserveExistingIdentity: false}
 			);
 
 			rememberNativeProjectStories(
@@ -694,7 +687,8 @@ export const NewProjectRoute: React.FC = () => {
 			);
 			const shellStories = mergeProjectStories(
 				storiesRef.current,
-				result.stories
+				result.stories,
+				{preserveExistingIdentity: false}
 			);
 
 			storiesRef.current = shellStories;

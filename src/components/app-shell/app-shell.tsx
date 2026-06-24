@@ -57,26 +57,28 @@ interface RouteMode {
 	label: string;
 }
 
-function currentStoryId(pathname: string) {
-	const match = pathname.match(/^\/stories\/([^/]+)/);
+function currentStoryId(pathname?: string) {
+	const match = (pathname ?? '').match(/^\/stories\/([^/]+)/);
 
 	return match ? decodeURIComponent(match[1]) : undefined;
 }
 
-function routeHasSegment(pathname: string, segment: string) {
-	return pathname.split('/').includes(segment);
+function routeHasSegment(pathname: string | undefined, segment: string) {
+	return (pathname ?? '').split('/').includes(segment);
 }
 
-function routeMode(pathname: string): RouteMode {
-	if (pathname.startsWith('/new-project')) {
+function routeMode(pathname?: string): RouteMode {
+	const safePathname = pathname ?? '';
+
+	if (safePathname.startsWith('/new-project')) {
 		return {icon: 'folder-plus', label: 'New Project'};
 	}
 
-	if (pathname.startsWith('/formats')) {
+	if (safePathname.startsWith('/formats')) {
 		return {icon: 'puzzle', label: 'Formats'};
 	}
 
-	if (pathname.startsWith('/settings')) {
+	if (safePathname.startsWith('/settings')) {
 		return {icon: 'settings', label: 'Settings'};
 	}
 
@@ -108,7 +110,7 @@ function routeMode(pathname: string): RouteMode {
 		return {icon: 'photo', label: 'Assets'};
 	}
 
-	if (pathname.startsWith('/stories/')) {
+	if (safePathname.startsWith('/stories/')) {
 		return {icon: 'layout-columns', label: 'Edit'};
 	}
 
@@ -146,23 +148,25 @@ function storySelectionLabel(story: Story | undefined) {
 }
 
 function breadcrumbs(
-	pathname: string,
+	pathname: string | undefined,
 	story: Story | undefined,
 	mode: RouteMode
 ) {
-	if (pathname === '/') {
+	const safePathname = pathname ?? '';
+
+	if (safePathname === '/') {
 		return ['Stories'];
 	}
 
-	if (pathname.startsWith('/new-project')) {
+	if (safePathname.startsWith('/new-project')) {
 		return ['Stories', mode.label];
 	}
 
-	if (pathname.startsWith('/formats')) {
+	if (safePathname.startsWith('/formats')) {
 		return ['Story Formats'];
 	}
 
-	if (pathname.startsWith('/settings')) {
+	if (safePathname.startsWith('/settings')) {
 		return ['Settings'];
 	}
 
@@ -176,6 +180,7 @@ function breadcrumbs(
 export const AppShell: React.FC = ({children}) => {
 	const history = useHistory();
 	const location = useLocation();
+	const pathname = location.pathname ?? '';
 	const {stories} = useStoriesContext();
 	const {prefs} = usePrefsContext();
 	const coreProjectHost = useCoreProjectHost();
@@ -195,16 +200,18 @@ export const AppShell: React.FC = ({children}) => {
 		kind: 'idle',
 		label: 'Ready'
 	});
-	const storyId = currentStoryId(location.pathname);
+	const storyId = currentStoryId(pathname);
 	const selectedStory = stories.find(story => story.selected);
-	const currentStory =
-		stories.find(story => story.id === storyId) ?? selectedStory;
+	const routedStory = storyId
+		? stories.find(story => story.id === storyId)
+		: undefined;
+	const currentStory = storyId ? routedStory : selectedStory;
 	const currentStoryHydration = useProjectStoryHydration(currentStory?.id);
 	const currentProjectMetadata = React.useMemo(
 		() => (currentStory ? loadProjectMetadata(currentStory.id) : undefined),
 		[currentStory]
 	);
-	const mode = routeMode(location.pathname);
+	const mode = routeMode(pathname);
 	const routeTabs = React.useMemo(
 		() => Object.keys(toolbar?.tabs ?? {}),
 		[toolbar]
@@ -231,9 +238,10 @@ export const AppShell: React.FC = ({children}) => {
 	const dismissedDiagnosticCount =
 		(storyIndex?.diagnostics.length ?? 0) - diagnosticCount;
 	const wordCount = storyWordCount(currentStory);
-	const crumbLabels = breadcrumbs(location.pathname, currentStory, mode);
+	const crumbLabels = breadcrumbs(pathname, currentStory, mode);
 	const storyOpenProgress = React.useMemo<StoryOpenProgress | undefined>(() => {
 		if (
+			storyId &&
 			currentStory &&
 			currentProjectMetadata?.storageKind === 'electron-project-folder' &&
 			currentProjectMetadata.status === 'file-backed' &&
@@ -250,7 +258,8 @@ export const AppShell: React.FC = ({children}) => {
 		currentProjectMetadata?.status,
 		currentProjectMetadata?.storageKind,
 		currentStory,
-		currentStoryHydration?.passageTextLoaded
+		currentStoryHydration?.passageTextLoaded,
+		storyId
 	]);
 
 	React.useEffect(() => {
@@ -675,7 +684,7 @@ export const AppShell: React.FC = ({children}) => {
 				</div>
 				<nav className="app-shell__rail" aria-label="Workspace">
 					<button
-						aria-current={location.pathname === '/' ? 'page' : undefined}
+						aria-current={pathname === '/' ? 'page' : undefined}
 						className="app-shell__rail-button"
 						onClick={() => history.push('/')}
 						title="Stories"
@@ -685,14 +694,14 @@ export const AppShell: React.FC = ({children}) => {
 					</button>
 					<button
 						aria-current={
-							location.pathname.startsWith('/stories/') &&
-							!routeHasSegment(location.pathname, 'play') &&
-							!routeHasSegment(location.pathname, 'proof') &&
-							!routeHasSegment(location.pathname, 'test') &&
-							!routeHasSegment(location.pathname, 'build') &&
-							!routeHasSegment(location.pathname, 'contents') &&
-							!routeHasSegment(location.pathname, 'diagnostics') &&
-							!routeHasSegment(location.pathname, 'assets')
+							pathname.startsWith('/stories/') &&
+							!routeHasSegment(pathname, 'play') &&
+							!routeHasSegment(pathname, 'proof') &&
+							!routeHasSegment(pathname, 'test') &&
+							!routeHasSegment(pathname, 'build') &&
+							!routeHasSegment(pathname, 'contents') &&
+							!routeHasSegment(pathname, 'diagnostics') &&
+							!routeHasSegment(pathname, 'assets')
 								? 'page'
 								: undefined
 						}
@@ -708,9 +717,7 @@ export const AppShell: React.FC = ({children}) => {
 					</button>
 					<button
 						aria-current={
-							routeHasSegment(location.pathname, 'contents')
-								? 'page'
-								: undefined
+							routeHasSegment(pathname, 'contents') ? 'page' : undefined
 						}
 						className="app-shell__rail-button"
 						disabled={!currentStory}
@@ -725,7 +732,7 @@ export const AppShell: React.FC = ({children}) => {
 					</button>
 					<button
 						aria-current={
-							routeHasSegment(location.pathname, 'assets') ? 'page' : undefined
+							routeHasSegment(pathname, 'assets') ? 'page' : undefined
 						}
 						className="app-shell__rail-button"
 						disabled={!currentStory}
@@ -748,7 +755,7 @@ export const AppShell: React.FC = ({children}) => {
 					</button>
 					<button
 						aria-current={
-							routeHasSegment(location.pathname, 'build') ? 'page' : undefined
+							routeHasSegment(pathname, 'build') ? 'page' : undefined
 						}
 						className="app-shell__rail-button"
 						disabled={!currentStory}
@@ -762,9 +769,7 @@ export const AppShell: React.FC = ({children}) => {
 					</button>
 					<button
 						aria-current={
-							routeHasSegment(location.pathname, 'diagnostics')
-								? 'page'
-								: undefined
+							routeHasSegment(pathname, 'diagnostics') ? 'page' : undefined
 						}
 						className="app-shell__rail-button"
 						disabled={!currentStory}
@@ -781,9 +786,7 @@ export const AppShell: React.FC = ({children}) => {
 						)}
 					</button>
 					<button
-						aria-current={
-							location.pathname.startsWith('/formats') ? 'page' : undefined
-						}
+						aria-current={pathname.startsWith('/formats') ? 'page' : undefined}
 						className="app-shell__rail-button"
 						onClick={() => history.push('/formats')}
 						title="Story Formats"
@@ -792,9 +795,7 @@ export const AppShell: React.FC = ({children}) => {
 						<TablerIcon icon="puzzle" />
 					</button>
 					<button
-						aria-current={
-							location.pathname.startsWith('/settings') ? 'page' : undefined
-						}
+						aria-current={pathname.startsWith('/settings') ? 'page' : undefined}
 						className="app-shell__rail-button"
 						onClick={() => history.push('/settings')}
 						title="Settings"
@@ -804,7 +805,7 @@ export const AppShell: React.FC = ({children}) => {
 					</button>
 					<button
 						aria-current={
-							location.pathname.startsWith('/new-project') ? 'page' : undefined
+							pathname.startsWith('/new-project') ? 'page' : undefined
 						}
 						className="app-shell__rail-button"
 						onClick={() => history.push('/new-project')}

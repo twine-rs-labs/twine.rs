@@ -55,4 +55,21 @@ describe('<StoryProofRoute>', () => {
 			expect(document.body.textContent).toContain('mock-error-message')
 		);
 	});
+
+	it('uses proofing format query params when present', async () => {
+		const proofStory = jest.fn(
+			jest.fn(() => Promise.resolve('mock-proofed-story'))
+		);
+
+		usePublishingMock.mockReturnValue({proofStory});
+		renderComponent(
+			'/stories/123/proof?proofingFormatName=Paperthin&proofingFormatVersion=1.0.0'
+		);
+		await waitFor(() =>
+			expect(proofStory).toHaveBeenCalledWith('123', {
+				name: 'Paperthin',
+				version: '1.0.0'
+			})
+		);
+	});
 });

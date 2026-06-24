@@ -176,8 +176,7 @@
 			"themeDark": "Scuro",
 			"themeSystem": "Sistema",
 			"theme": "Tema",
-			"title": "Preferenze",
-			"useEnhancedEditors": "Usa editor avanzati"
+			"title": "Preferenze"
 		},
 		"passageEdit": {
 			"editorCrashed": "Qualcosa è andato storto con questo editor. Prova a chiuderlo e a modificare di nuovo questo passaggio.",

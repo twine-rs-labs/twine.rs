@@ -103,7 +103,48 @@
 	font-weight: var(--fw-semibold);
 	height: 34px;
 	justify-content: center;
+	overflow: hidden;
 	width: 34px;
+}
+
+.story-formats-route__logo img {
+	border-radius: inherit;
+	height: 100%;
+	object-fit: contain;
+	width: 100%;
+}
+
+/* A loaded icon and the loading/error placeholders sit on a neutral surface,
+   not the brand accent reserved for the initials fallback. */
+.story-formats-route__logo:has(img),
+.story-formats-route__logo[data-format-state='loading'],
+.story-formats-route__logo[data-format-state='error'] {
+	background: var(--ink-3);
+	border: 1px solid var(--line-1);
+}
+
+.story-formats-route__logo[data-format-state='loading'] {
+	color: var(--tx-4);
+}
+
+.story-formats-route__logo[data-format-state='error'] {
+	color: var(--sem-error);
+}
+
+.story-formats-route__logo[data-format-state='loading'] svg {
+	animation: story-formats-route-spin 0.8s linear infinite;
+}
+
+@keyframes story-formats-route-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.story-formats-route__logo[data-format-state='loading'] svg {
+		animation: none;
+	}
 }
 
 .story-formats-route__name {
@@ -178,6 +219,58 @@
 .story-formats-route__status--error {
 	background: var(--sem-error-soft);
 	color: var(--sem-error);
+}
+
+.story-formats-route__about {
+	margin-top: 14px;
+}
+
+.story-formats-route__about-author {
+	color: var(--tx-3);
+	font-size: var(--fs-sm);
+}
+
+.story-formats-route__about-desc {
+	color: var(--tx-2);
+	font-size: var(--fs-sm);
+	line-height: var(--lh-normal);
+	margin-top: 6px;
+}
+
+.story-formats-route__about-desc p {
+	margin: 0 0 6px;
+}
+
+.story-formats-route__about-desc a {
+	color: var(--sem-link);
+}
+
+.story-formats-route__about-links {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	font-size: var(--fs-sm);
+	gap: 14px;
+	margin-top: 10px;
+}
+
+.story-formats-route__about-links a {
+	align-items: center;
+	color: var(--sem-link);
+	display: inline-flex;
+	gap: 5px;
+	text-decoration: none;
+}
+
+.story-formats-route__about-links a:hover {
+	text-decoration: underline;
+}
+
+.story-formats-route__about-license {
+	align-items: center;
+	color: var(--tx-4);
+	display: inline-flex;
+	gap: 5px;
 }
 
 .story-formats-route__section-title {

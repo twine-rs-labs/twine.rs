@@ -92,6 +92,43 @@ describe('stories Electron IPC load', () => {
 		);
 	});
 
+	it('collapses duplicate native project story entries by project path and story file', async () => {
+		const oldStory = fakeStory(1);
+		const newStory = fakeStory(1);
+
+		oldStory.id = 'old-story-id';
+		oldStory.name = 'Moon Castle';
+		oldStory.passages = oldStory.passages.map(passage => ({
+			...passage,
+			story: oldStory.id
+		}));
+		newStory.id = 'new-story-id';
+		newStory.name = 'Moon Castle';
+		newStory.passages = newStory.passages.map(passage => ({
+			...passage,
+			story: newStory.id
+		}));
+
+		mockLoadStories([
+			{
+				kind: 'native-project',
+				passageTextLoaded: false,
+				rootPath: '/native/moon-castle.twine.rs',
+				story: oldStory,
+				storyIds: [oldStory.id]
+			},
+			{
+				kind: 'native-project',
+				passageTextLoaded: false,
+				rootPath: '/native/moon-castle.twine.rs',
+				story: newStory,
+				storyIds: [newStory.id]
+			}
+		]);
+
+		expect(await load()).toEqual([newStory]);
+	});
+
 	it("preserves stories' modification time", async () => {
 		(await load()).forEach((result, index) =>
 			expect(result.lastUpdate).toBe(storydata[index].mtime)

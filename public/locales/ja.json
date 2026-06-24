@@ -186,8 +186,7 @@
 			"themeDark": "ダーク",
 			"themeSystem": "システム",
 			"theme": "テーマ",
-			"title": "環境設定",
-			"useEnhancedEditors": "拡張エディターを使用"
+			"title": "環境設定"
 		},
 		"passageEdit": {
 			"editorCrashed": "このエディターで問題が発生しました。閉じてからこのパッセージを編集し直してください。",

@@ -6,11 +6,13 @@ import {
 	Input,
 	TablerIcon
 } from '../../components/design-system';
+import type {TwineElectronWindow} from '../../electron/shared';
 import {FormatLoader} from '../../store/format-loader';
 import {setPref, usePrefsContext} from '../../store/prefs';
 import {
 	createFromProperties,
 	deleteFormat,
+	formatImageUrl,
 	newestFormatNamed,
 	sortFormats,
 	StoryFormat,
@@ -47,6 +49,60 @@ function initials(format: StoryFormat) {
 		.slice(0, 2)
 		.toUpperCase();
 }
+
+// Renders a format's real icon once its manifest is hydrated, with explicit
+// loading and failed-load states (W7.1) and a graceful initials fallback when
+// the format has no image or the image itself fails to load.
+const FormatLogo: React.FC<{format: StoryFormat; className?: string}> = ({
+	format,
+	className
+}) => {
+	const [imageFailed, setImageFailed] = React.useState(false);
+
+	React.useEffect(() => {
+		setImageFailed(false);
+	}, [format.id, format.loadState]);
+
+	const classes = `story-formats-route__logo${
+		className ? ` ${className}` : ''
+	}`;
+
+	if (format.loadState === 'error') {
+		return (
+			<div className={classes} data-format-state="error" title="Failed to load">
+				<TablerIcon icon="alert-triangle" />
+			</div>
+		);
+	}
+
+	if (format.loadState !== 'loaded') {
+		return (
+			<div className={classes} data-format-state="loading" title="Loading manifest">
+				<TablerIcon icon="loader-2" />
+			</div>
+		);
+	}
+
+	let imageUrl: string | undefined;
+
+	if (format.properties.image && !imageFailed) {
+		try {
+			imageUrl = formatImageUrl(format);
+		} catch {
+			imageUrl = undefined;
+		}
+	}
+
+	if (imageUrl) {
+		return (
+			<div className={classes}>
+				<img src={imageUrl} alt="" onError={() => setImageFailed(true)} />
+			</div>
+		);
+	}
+
+	return <div className={classes}>{initials(format)}</div>;
+};
 
 function isCurrentFormat(format: StoryFormat, formats: StoryFormat[]) {
 	return newestFormatNamed(formats, format.name)?.id === format.id;
@@ -150,6 +206,7 @@ function capabilityEntries(format: StoryFormat) {
 export const StoryFormatsRoute: React.FC = () => {
 	const {dispatch: formatsDispatch, formats} = useStoryFormatsContext();
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
+	const desktopBridge = (window as TwineElectronWindow).twineElectron;
 	const [filter, setFilter] = React.useState<FormatFilter>('all');
 	const [selectedId, setSelectedId] = React.useState<string>();
 	const [newFormatUrl, setNewFormatUrl] = React.useState('');
@@ -217,6 +274,42 @@ export const StoryFormatsRoute: React.FC = () => {
 
 			formatsDispatch(createFromProperties(newFormatUrl, properties));
 			setNewFormatUrl('');
+		} catch (error) {
+			setAddError((error as Error).message);
+		} finally {
+			setAdding(false);
+		}
+	}
+
+	async function handleAddLocalFormat() {
+		if (!desktopBridge?.addLocalStoryFormat) {
+			return;
+		}
+
+		setAdding(true);
+		setAddError(undefined);
+
+		try {
+			const result = await desktopBridge.addLocalStoryFormat();
+
+			// User cancelled the file picker.
+			if (!result) {
+				return;
+			}
+
+			if (
+				formats.some(
+					format =>
+						format.name === result.name && format.version === result.version
+				)
+			) {
+				setAddError(`${result.name} ${result.version} is already added.`);
+				return;
+			}
+
+			const properties = await fetchStoryFormatProperties(result.url);
+
+			formatsDispatch(createFromProperties(result.url, properties));
 		} catch (error) {
 			setAddError((error as Error).message);
 		} finally {
@@ -365,6 +458,15 @@ export const StoryFormatsRoute: React.FC = () => {
 						>
 							Add
 						</Button>
+						{desktopBridge?.addLocalStoryFormat && (
+							<Button
+								icon="folder"
+								loading={adding}
+								onClick={handleAddLocalFormat}
+							>
+								From File
+							</Button>
+						)}
 					</div>
 					{addError && (
 						<Badge icon="alert-octagon" tone="error">
@@ -395,9 +497,7 @@ export const StoryFormatsRoute: React.FC = () => {
 								type="button"
 							>
 								<div className="story-formats-route__card-top">
-									<div className="story-formats-route__logo">
-										{initials(format)}
-									</div>
+									<FormatLogo format={format} />
 									<div style={{flex: 1, minWidth: 0}}>
 										<div className="story-formats-route__name">
 											{format.name}
@@ -443,9 +543,10 @@ export const StoryFormatsRoute: React.FC = () => {
 					{selectedFormat && selectedStatus ? (
 						<>
 							<div className="story-formats-route__detail-top">
-								<div className="story-formats-route__logo story-formats-route__detail-logo">
-									{initials(selectedFormat)}
-								</div>
+								<FormatLogo
+									format={selectedFormat}
+									className="story-formats-route__detail-logo"
+								/>
 								<div>
 									<h1>{selectedFormat.name}</h1>
 									<div className="story-formats-route__meta">
@@ -459,6 +560,51 @@ export const StoryFormatsRoute: React.FC = () => {
 								<TablerIcon icon={selectedStatus.icon} />
 								<span>{selectedStatus.label}</span>
 							</div>
+
+							{selectedFormat.loadState === 'loaded' &&
+								(selectedFormat.properties.description ||
+									selectedFormat.properties.author ||
+									selectedFormat.properties.url ||
+									selectedFormat.properties.license) && (
+									<div className="story-formats-route__about">
+										{selectedFormat.properties.author && (
+											<div className="story-formats-route__about-author">
+												By {selectedFormat.properties.author}
+											</div>
+										)}
+										{selectedFormat.properties.description && (
+											// Format descriptions are authored HTML in the manifest
+											// (matching the legacy details renderer).
+											<div
+												className="story-formats-route__about-desc"
+												dangerouslySetInnerHTML={{
+													__html: selectedFormat.properties.description
+												}}
+											/>
+										)}
+										{(selectedFormat.properties.url ||
+											selectedFormat.properties.license) && (
+											<div className="story-formats-route__about-links">
+												{selectedFormat.properties.url && (
+													<a
+														href={selectedFormat.properties.url}
+														target="_blank"
+														rel="noreferrer"
+													>
+														<TablerIcon icon="external-link" />
+														Format website
+													</a>
+												)}
+												{selectedFormat.properties.license && (
+													<span className="story-formats-route__about-license">
+														<TablerIcon icon="license" />
+														{selectedFormat.properties.license}
+													</span>
+												)}
+											</div>
+										)}
+									</div>
+								)}
 
 							<div className="story-formats-route__section-title">
 								Capabilities

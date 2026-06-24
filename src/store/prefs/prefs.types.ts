@@ -203,10 +203,6 @@ export interface PrefsState {
 	 */
 	storyTagColors: Record<string, Color>;
 	/**
-	 * Use CodeMirror for text editing?
-	 */
-	useCodeMirror: boolean;
-	/**
 	 * Has the user been shown the welcome route?
 	 */
 	welcomeSeen: boolean;

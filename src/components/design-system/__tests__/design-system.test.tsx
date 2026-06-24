@@ -13,7 +13,8 @@ import {
 	Select,
 	Switch,
 	Tag,
-	TablerIcon
+	TablerIcon,
+	hasTablerIcon
 } from '..';
 
 describe('design-system primitives', () => {
@@ -41,6 +42,18 @@ describe('design-system primitives', () => {
 			container.querySelector('[data-icon-name="package-export"]')
 		).toBeInTheDocument();
 		expect(container.querySelector('svg')).toBeInTheDocument();
+	});
+
+	it('registers workbench icon names that should not fall back to circles', () => {
+		for (const icon of [
+			'pointer',
+			'hand-grab',
+			'grip-vertical',
+			'maximize',
+			'windows'
+		]) {
+			expect(hasTablerIcon(icon)).toBe(true);
+		}
 	});
 
 	it('renders icon buttons with accessible names and toggle state', () => {

@@ -19,7 +19,6 @@ export const CodeArea: React.FC<CodeAreaProps> = props => {
 			data-font-family={props.fontFamily}
 			data-font-scale={props.fontScale}
 			data-options={JSON.stringify(props.options)}
-			data-use-code-mirror={props.useCodeMirror}
 		>
 			<label>
 				{props.label} <textarea onChange={handleOnChange} value={props.value} />

@@ -26,6 +26,7 @@ import {createRegExp} from '../util/regexp';
 type StoryIndexQuery = string | Partial<CoreStoryIndexOptions>;
 
 const defaultOptions: CoreStoryIndexOptions = {
+	assetScanComplete: false,
 	fuzzy: false,
 	includeAssets: true,
 	includeContents: true,
@@ -456,13 +457,16 @@ function symbolsInSource(
 	passageId: string | null
 ): CoreSymbol[] {
 	const symbols: CoreSymbol[] = [];
-	const matcher =
-		/(^|[^A-Za-z0-9_])(\$[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)/g;
+	const matcher = /(^|[^A-Za-z0-9_])(\$[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)/g;
 
 	for (let match = matcher.exec(source); match; match = matcher.exec(source)) {
 		const start = match.index + match[1].length;
 		const name = match[2];
 		const end = start + name.length;
+
+		if (!symbolNameHasIdentifierBody(name.slice(1))) {
+			continue;
+		}
 
 		symbols.push({
 			end,
@@ -479,6 +483,10 @@ function symbolsInSource(
 	}
 
 	return symbols;
+}
+
+function symbolNameHasIdentifierBody(nameWithoutSigil: string) {
+	return /[A-Za-z0-9]/.test(nameWithoutSigil);
 }
 
 function assetPublishRule(
@@ -526,7 +534,8 @@ function assetInventoryEntry(
 
 function assetInventoryFromReferences(
 	references: CoreAssetReference[],
-	knownAssets: CoreAssetInventoryEntry[]
+	knownAssets: CoreAssetInventoryEntry[],
+	assetScanComplete: boolean
 ) {
 	const referencesByPath = new Map<string, CoreAssetReference[]>();
 
@@ -587,7 +596,7 @@ function assetInventoryFromReferences(
 			assetInventoryEntry(
 				firstReference.path,
 				firstReference.kind,
-				null,
+				assetScanComplete ? false : null,
 				references
 			)
 		);
@@ -1118,7 +1127,11 @@ export function storyToCoreIndex(
 	}
 
 	const assetInventory = options.includeAssets
-		? assetInventoryFromReferences(assets, options.knownAssets)
+		? assetInventoryFromReferences(
+				assets,
+				options.knownAssets,
+				options.assetScanComplete
+			)
 		: [];
 
 	if (searchEnabled && options.includeVariables) {

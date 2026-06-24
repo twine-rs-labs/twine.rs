@@ -22,7 +22,6 @@ export interface StoryPreviewFrameProps {
 	error?: Error;
 	html?: string;
 	missingStoryMessage: string;
-	onOpenBuild?: () => void;
 	onRevealGraph?: (passageId?: string) => void;
 	onRevealSource?: (passageId?: string) => void;
 	onTestCurrentPassage?: (passageId: string) => void;
@@ -45,7 +44,6 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		error,
 		html,
 		missingStoryMessage,
-		onOpenBuild,
 		onRevealGraph,
 		onRevealSource,
 		onTestCurrentPassage,
@@ -215,14 +213,6 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 						size="sm"
 					>
 						Reload
-					</Button>
-					<Button
-						disabled={!onOpenBuild}
-						icon="package"
-						onClick={onOpenBuild}
-						size="sm"
-					>
-						Build
 					</Button>
 				</div>
 			</div>

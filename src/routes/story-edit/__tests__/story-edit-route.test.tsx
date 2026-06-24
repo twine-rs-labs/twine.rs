@@ -83,6 +83,16 @@ describe('<StoryEditRoute>', () => {
 		expect(Helmet.peek().title).toBe(`${story.name} - Twine RS`);
 	});
 
+	it('redirects to the story list if the story ID no longer exists', async () => {
+		await renderComponent(fakeStory(), undefined, () => '/stories/missing');
+
+		await waitFor(() =>
+			expect(
+				screen.queryByTestId('story-inspector-default')
+			).not.toBeInTheDocument()
+		);
+	});
+
 	it('registers story edit actions in the app shell', async () => {
 		await renderComponent(fakeStory());
 		expect(

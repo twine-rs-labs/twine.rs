@@ -224,8 +224,305 @@ interface LinkRange {
 	to: number;
 }
 
+type TwineNestingToken = 'macro' | 'paren';
+
 function rangeOverlaps(ranges: LinkRange[], from: number, to: number) {
 	return ranges.some(range => from < range.to && to > range.from);
+}
+
+function rangeContaining(ranges: LinkRange[], position: number) {
+	return ranges.find(range => position >= range.from && position < range.to);
+}
+
+function addTokenDecoration(
+	entries: DecorationEntry[],
+	className: string,
+	from: number,
+	to: number
+) {
+	if (from >= to) {
+		return;
+	}
+
+	entries.push({
+		decoration: Decoration.mark({class: className}),
+		from,
+		to
+	});
+}
+
+function quotedStringEnd(text: string, from: number) {
+	const quote = text[from];
+	let escaped = false;
+
+	for (let index = from + 1; index < text.length; index++) {
+		if (escaped) {
+			escaped = false;
+		} else if (text[index] === '\\') {
+			escaped = true;
+		} else if (text[index] === quote) {
+			return index + 1;
+		}
+	}
+
+	return text.length;
+}
+
+function addCommentTokenDecorations(
+	text: string,
+	offset: number,
+	entries: DecorationEntry[],
+	linkRanges: LinkRange[],
+	commentRanges: LinkRange[]
+) {
+	const lineCommentPattern = /(^|[\n\r])([ \t]*\/\/[^\n\r]*)/g;
+	const blockCommentPattern = /\/%[\s\S]*?%\//g;
+	let match: RegExpExecArray | null;
+
+	while ((match = lineCommentPattern.exec(text))) {
+		const absoluteFrom = offset + match.index + match[1].length;
+		const absoluteTo = absoluteFrom + match[2].length;
+
+		if (rangeOverlaps(linkRanges, absoluteFrom, absoluteTo)) {
+			continue;
+		}
+
+		addTokenDecoration(entries, 'cm-twine-comment', absoluteFrom, absoluteTo);
+		commentRanges.push({from: absoluteFrom, to: absoluteTo});
+	}
+
+	while ((match = blockCommentPattern.exec(text))) {
+		const absoluteFrom = offset + match.index;
+		const absoluteTo = absoluteFrom + match[0].length;
+
+		if (rangeOverlaps(linkRanges, absoluteFrom, absoluteTo)) {
+			continue;
+		}
+
+		addTokenDecoration(entries, 'cm-twine-comment', absoluteFrom, absoluteTo);
+		commentRanges.push({from: absoluteFrom, to: absoluteTo});
+	}
+}
+
+function addStringTokenDecorations(
+	text: string,
+	offset: number,
+	entries: DecorationEntry[],
+	blockedRanges: LinkRange[],
+	stringRanges: LinkRange[]
+) {
+	let index = 0;
+
+	while (index < text.length) {
+		const absoluteFrom = offset + index;
+		const blockedRange = rangeContaining(blockedRanges, absoluteFrom);
+
+		if (blockedRange) {
+			index = blockedRange.to - offset;
+			continue;
+		}
+
+		if (text[index] !== '"' && text[index] !== "'") {
+			index++;
+			continue;
+		}
+
+		const absoluteTo = offset + quotedStringEnd(text, index);
+
+		addTokenDecoration(entries, 'cm-twine-string', absoluteFrom, absoluteTo);
+		stringRanges.push({from: absoluteFrom, to: absoluteTo});
+		index = absoluteTo - offset;
+	}
+}
+
+function harloweMacroOpenerLength(text: string, from: number) {
+	return /^\([A-Za-z][\w-]*\s*:/.exec(text.slice(from))?.[0].length ?? 0;
+}
+
+function addHarloweTokenDecorations(
+	text: string,
+	offset: number,
+	entries: DecorationEntry[],
+	linkRanges: LinkRange[],
+	stringRanges: LinkRange[]
+) {
+	const stack: TwineNestingToken[] = [];
+	let index = 0;
+
+	while (index < text.length) {
+		const absoluteFrom = offset + index;
+
+		if (rangeOverlaps(linkRanges, absoluteFrom, absoluteFrom + 1)) {
+			index++;
+			continue;
+		}
+
+		const stringRange = rangeContaining(stringRanges, absoluteFrom);
+
+		if (stringRange) {
+			index = stringRange.to - offset;
+			continue;
+		}
+
+		const openerLength = harloweMacroOpenerLength(text, index);
+
+		if (openerLength > 0) {
+			addTokenDecoration(
+				entries,
+				'cm-twine-macro',
+				absoluteFrom,
+				absoluteFrom + openerLength
+			);
+			stack.push('macro');
+			index += openerLength;
+			continue;
+		}
+
+		if (stack.length > 0 && text[index] === '(') {
+			stack.push('paren');
+		} else if (stack.length > 0 && text[index] === ')') {
+			if (stack.pop() === 'macro') {
+				addTokenDecoration(
+					entries,
+					'cm-twine-macro',
+					absoluteFrom,
+					absoluteFrom + 1
+				);
+			}
+		}
+
+		index++;
+	}
+}
+
+function sugarCubeMacroEnd(text: string, from: number) {
+	let index = from + 2;
+
+	while (index < text.length) {
+		if (text[index] === '"' || text[index] === "'") {
+			index = quotedStringEnd(text, index);
+		} else if (text.startsWith('>>', index)) {
+			return index + 2;
+		} else {
+			index++;
+		}
+	}
+
+	return text.length;
+}
+
+function addSugarCubeTokenDecorations(
+	text: string,
+	offset: number,
+	entries: DecorationEntry[],
+	linkRanges: LinkRange[]
+) {
+	let index = 0;
+
+	while (index < text.length) {
+		if (!text.startsWith('<<', index)) {
+			index++;
+			continue;
+		}
+
+		const absoluteFrom = offset + index;
+
+		if (rangeOverlaps(linkRanges, absoluteFrom, absoluteFrom + 2)) {
+			index += 2;
+			continue;
+		}
+
+		const macroEnd = sugarCubeMacroEnd(text, index);
+		const macroText = text.slice(index, macroEnd);
+		const openerLength =
+			/^<<\s*\/?=?\s*[$A-Za-z_][\w$.-]*/.exec(macroText)?.[0].length ?? 2;
+
+		addTokenDecoration(
+			entries,
+			'cm-twine-macro',
+			absoluteFrom,
+			absoluteFrom + openerLength
+		);
+
+		if (macroEnd - index >= 4) {
+			addTokenDecoration(
+				entries,
+				'cm-twine-macro',
+				offset + macroEnd - 2,
+				offset + macroEnd
+			);
+		}
+
+		index = macroEnd;
+	}
+}
+
+function addSnowmanTokenDecorations(
+	text: string,
+	offset: number,
+	entries: DecorationEntry[],
+	linkRanges: LinkRange[]
+) {
+	const templatePattern = /<%[-=]?[\s\S]*?%>/g;
+	let match: RegExpExecArray | null;
+
+	while ((match = templatePattern.exec(text))) {
+		const absoluteFrom = offset + match.index;
+		const absoluteTo = absoluteFrom + match[0].length;
+
+		if (rangeOverlaps(linkRanges, absoluteFrom, absoluteTo)) {
+			continue;
+		}
+
+		const openerLength = /^<%[-=]?/.exec(match[0])?.[0].length ?? 2;
+
+		addTokenDecoration(
+			entries,
+			'cm-twine-macro',
+			absoluteFrom,
+			absoluteFrom + openerLength
+		);
+		addTokenDecoration(entries, 'cm-twine-macro', absoluteTo - 2, absoluteTo);
+	}
+}
+
+function addChapbookTokenDecorations(
+	text: string,
+	offset: number,
+	entries: DecorationEntry[],
+	linkRanges: LinkRange[]
+) {
+	const commandPattern =
+		/\{\{[^}\n\r]*}}|\{\s*[A-Za-z][A-Za-z -]*(?::|\s)[^}\n\r]*}/g;
+	let match: RegExpExecArray | null;
+
+	while ((match = commandPattern.exec(text))) {
+		const absoluteFrom = offset + match.index;
+		const absoluteTo = absoluteFrom + match[0].length;
+
+		if (rangeOverlaps(linkRanges, absoluteFrom, absoluteTo)) {
+			continue;
+		}
+
+		const openerMatch = /^(?:\{\{|\{\s*[A-Za-z][A-Za-z -]*(?::|\s))/.exec(
+			match[0]
+		);
+		const openerLength = openerMatch?.[0].length ?? 1;
+		const closerLength = match[0].endsWith('}}') ? 2 : 1;
+
+		addTokenDecoration(
+			entries,
+			'cm-twine-macro',
+			absoluteFrom,
+			absoluteFrom + openerLength
+		);
+		addTokenDecoration(
+			entries,
+			'cm-twine-macro',
+			absoluteTo - closerLength,
+			absoluteTo
+		);
+	}
 }
 
 function twineTokenDecorations(
@@ -263,6 +560,8 @@ function twineTokenDecorations(
 					for (const {from, to} of view.visibleRanges) {
 						const text = view.state.doc.sliceString(from, to);
 						const linkPattern = /\[\[(.*?)\]\]/g;
+						const commentRanges: LinkRange[] = [];
+						const stringRanges: LinkRange[] = [];
 						let match: RegExpExecArray | null;
 
 						while ((match = linkPattern.exec(text))) {
@@ -301,16 +600,41 @@ function twineTokenDecorations(
 							}
 						}
 
+						addCommentTokenDecorations(
+							text,
+							from,
+							entries,
+							linkRanges,
+							commentRanges
+						);
+						addStringTokenDecorations(
+							text,
+							from,
+							entries,
+							[...linkRanges, ...commentRanges],
+							stringRanges
+						);
+						addHarloweTokenDecorations(
+							text,
+							from,
+							entries,
+							linkRanges,
+							stringRanges
+						);
+						addSugarCubeTokenDecorations(text, from, entries, linkRanges);
+						addSnowmanTokenDecorations(text, from, entries, linkRanges);
+						addChapbookTokenDecorations(text, from, entries, linkRanges);
+
+						const blockedRanges = [
+							...linkRanges,
+							...commentRanges,
+							...stringRanges
+						];
 						const tokenPatterns: Array<{
 							className: string;
 							regexp: RegExp;
 							tokenGroup?: number;
 						}> = [
-							{
-								className: 'cm-twine-macro',
-								regexp:
-									/<<\s*\/?=?\s*[$A-Za-z_][\w$.-]*(?:\s+[^>\n\r]*)?>>|\([A-Za-z][\w-]*\s*:/g
-							},
 							{
 								className: 'cm-twine-variable',
 								regexp:
@@ -319,7 +643,8 @@ function twineTokenDecorations(
 							},
 							{
 								className: 'cm-twine-tag',
-								regexp: /(^|[\s([,{])#[-A-Za-z0-9_]+/g
+								regexp: /(^|[\s([,{])(#[-A-Za-z0-9_]+)/g,
+								tokenGroup: 2
 							}
 						];
 
@@ -334,7 +659,7 @@ function twineTokenDecorations(
 
 								if (
 									absoluteFrom < absoluteTo &&
-									!rangeOverlaps(linkRanges, absoluteFrom, absoluteTo)
+									!rangeOverlaps(blockedRanges, absoluteFrom, absoluteTo)
 								) {
 									entries.push({
 										decoration: Decoration.mark({class: className}),

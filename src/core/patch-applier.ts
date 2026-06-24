@@ -12,7 +12,8 @@ export interface ProjectPatchApplicationSinks {
 	renameAsset(storyId: string, oldPath: string, newPath: string): void;
 	replaceAssetInventory(
 		storyId: string,
-		inventory: CoreAssetInventoryEntry[]
+		inventory: CoreAssetInventoryEntry[],
+		options?: {assetScanComplete?: boolean}
 	): void;
 	setDirty(dirty: boolean): void;
 	upsertAsset(storyId: string, asset: CoreAssetInventoryEntry): void;

@@ -41,17 +41,7 @@ const severityFilters: Array<{
 	{id: 'info', icon: 'info-circle', label: 'Info'}
 ];
 
-const typeFilters = [
-	'All Types',
-	'Broken Links',
-	'Missing Assets',
-	'Duplicate Names',
-	'Invalid Metadata',
-	'Format Errors',
-	'Export Blockers',
-	'Unreachable',
-	'Assets'
-];
+const allTypesFilter = 'All Types';
 
 function storyForId(stories: Story[], storyId: string | undefined) {
 	return stories.find(story => story.id === storyId);
@@ -117,7 +107,7 @@ function severityCount(items: RouteDiagnosticItem[], severity: SeverityFilter) {
 }
 
 function typeCount(items: RouteDiagnosticItem[], group: string) {
-	return group === 'All Types'
+	return group === allTypesFilter
 		? items.length
 		: items.filter(item => item.group === group).length;
 }
@@ -132,7 +122,7 @@ export const DiagnosticsRoute: React.FC = () => {
 	const [severity, setSeverity] = React.useState<SeverityFilter>('all');
 	const [visibility, setVisibility] =
 		React.useState<VisibilityFilter>('active');
-	const [type, setType] = React.useState('All Types');
+	const [type, setType] = React.useState(allTypesFilter);
 	const [query, setQuery] = React.useState('');
 	const [selectedId, setSelectedId] = React.useState<string>();
 	const [patchVersion, setPatchVersion] = React.useState(0);
@@ -235,11 +225,26 @@ export const DiagnosticsRoute: React.FC = () => {
 		[items]
 	);
 	const statusItems = visibility === 'active' ? activeItems : dismissedItems;
+	const visibleSeverityFilters =
+		statusItems.length === 0
+			? []
+			: severityFilters.filter(
+					candidate =>
+						candidate.id === 'all' ||
+						severityCount(statusItems, candidate.id) > 0
+				);
+	const visibleTypeFilters =
+		statusItems.length === 0
+			? []
+			: [
+					allTypesFilter,
+					...Array.from(new Set(statusItems.map(item => item.group))).sort()
+				];
 	const visibleItems = React.useMemo(() => {
 		return statusItems.filter(
 			item =>
 				(severity === 'all' || item.severity === severity) &&
-				(type === 'All Types' || item.group === type) &&
+				(type === allTypesFilter || item.group === type) &&
 				matchesQuery(item, query)
 		);
 	}, [query, severity, statusItems, type]);
@@ -258,6 +263,18 @@ export const DiagnosticsRoute: React.FC = () => {
 			setSelectedId(selectedItem.id);
 		}
 	}, [selectedId, selectedItem]);
+
+	React.useEffect(() => {
+		if (severity !== 'all' && severityCount(statusItems, severity) === 0) {
+			setSeverity('all');
+		}
+	}, [severity, statusItems]);
+
+	React.useEffect(() => {
+		if (type !== allTypesFilter && typeCount(statusItems, type) === 0) {
+			setType(allTypesFilter);
+		}
+	}, [statusItems, type]);
 
 	function reveal(
 		item: DiagnosticsViewModelItem | undefined,
@@ -352,7 +369,7 @@ export const DiagnosticsRoute: React.FC = () => {
 		}
 	}
 
-	if (!story || !diagnostics) {
+	if (!story) {
 		return (
 			<div className="diagnostics-route__empty">
 				<TablerIcon icon="alert-triangle" />
@@ -361,7 +378,55 @@ export const DiagnosticsRoute: React.FC = () => {
 		);
 	}
 
+	if (!diagnostics) {
+		return (
+			<div className="diagnostics-route__empty">
+				<TablerIcon icon="search" />
+				<span>Checking diagnostics...</span>
+			</div>
+		);
+	}
+
 	let lastGroup: string | undefined;
+	const emptyListState =
+		items.length === 0 ? (
+			<div className="diagnostics-route__empty-state" aria-live="polite">
+				<TablerIcon icon="circle-check" />
+				<h1>No issues found — your story is healthy</h1>
+				<p>
+					Diagnostics check story structure, links, passage names, start
+					passages, assets, and format/export problems.
+				</p>
+			</div>
+		) : statusItems.length === 0 ? (
+			<div
+				className="diagnostics-route__empty-state diagnostics-route__empty-state--neutral"
+				aria-live="polite"
+			>
+				<TablerIcon
+					icon={visibility === 'active' ? 'circle-check' : 'archive'}
+				/>
+				<h1>
+					{visibility === 'active'
+						? 'No active diagnostics'
+						: 'No dismissed diagnostics'}
+				</h1>
+				<p>
+					{visibility === 'active'
+						? 'Every known diagnostic is resolved or dismissed.'
+						: 'Dismissed diagnostics will appear here when you archive them.'}
+				</p>
+			</div>
+		) : (
+			<div
+				className="diagnostics-route__empty-state diagnostics-route__empty-state--neutral"
+				aria-live="polite"
+			>
+				<TablerIcon icon="search" />
+				<h1>No matching diagnostics</h1>
+				<p>Try another severity, category, or search term.</p>
+			</div>
+		);
 
 	return (
 		<div className="diagnostics-route">
@@ -373,6 +438,7 @@ export const DiagnosticsRoute: React.FC = () => {
 				<button
 					aria-current={visibility === 'active'}
 					className="diagnostics-route__filter"
+					disabled={activeItems.length === 0 && visibility !== 'active'}
 					onClick={() => setVisibility('active')}
 					type="button"
 				>
@@ -383,6 +449,7 @@ export const DiagnosticsRoute: React.FC = () => {
 				<button
 					aria-current={visibility === 'dismissed'}
 					className="diagnostics-route__filter"
+					disabled={dismissedItems.length === 0 && visibility !== 'dismissed'}
 					onClick={() => setVisibility('dismissed')}
 					type="button"
 				>
@@ -392,37 +459,45 @@ export const DiagnosticsRoute: React.FC = () => {
 						{dismissedItems.length}
 					</span>
 				</button>
-				<div className="diagnostics-route__filter-label">Severity</div>
-				{severityFilters.map(candidate => (
-					<button
-						aria-current={candidate.id === severity}
-						className="diagnostics-route__filter"
-						key={candidate.id}
-						onClick={() => setSeverity(candidate.id)}
-						type="button"
-					>
-						<TablerIcon icon={candidate.icon} />
-						<span>{candidate.label}</span>
-						<span className="diagnostics-route__count">
-							{severityCount(statusItems, candidate.id)}
-						</span>
-					</button>
-				))}
-				<div className="diagnostics-route__filter-label">Type</div>
-				{typeFilters.map(candidate => (
-					<button
-						aria-current={candidate === type}
-						className="diagnostics-route__filter"
-						key={candidate}
-						onClick={() => setType(candidate)}
-						type="button"
-					>
-						<span>{candidate}</span>
-						<span className="diagnostics-route__count">
-							{typeCount(statusItems, candidate)}
-						</span>
-					</button>
-				))}
+				{visibleSeverityFilters.length > 0 && (
+					<>
+						<div className="diagnostics-route__filter-label">Severity</div>
+						{visibleSeverityFilters.map(candidate => (
+							<button
+								aria-current={candidate.id === severity}
+								className="diagnostics-route__filter"
+								key={candidate.id}
+								onClick={() => setSeverity(candidate.id)}
+								type="button"
+							>
+								<TablerIcon icon={candidate.icon} />
+								<span>{candidate.label}</span>
+								<span className="diagnostics-route__count">
+									{severityCount(statusItems, candidate.id)}
+								</span>
+							</button>
+						))}
+					</>
+				)}
+				{visibleTypeFilters.length > 0 && (
+					<>
+						<div className="diagnostics-route__filter-label">Type</div>
+						{visibleTypeFilters.map(candidate => (
+							<button
+								aria-current={candidate === type}
+								className="diagnostics-route__filter"
+								key={candidate}
+								onClick={() => setType(candidate)}
+								type="button"
+							>
+								<span>{candidate}</span>
+								<span className="diagnostics-route__count">
+									{typeCount(statusItems, candidate)}
+								</span>
+							</button>
+						))}
+					</>
+				)}
 			</aside>
 			<main className="diagnostics-route__main" aria-label="Diagnostics">
 				<div className="diagnostics-route__toolbar">
@@ -440,7 +515,6 @@ export const DiagnosticsRoute: React.FC = () => {
 							` (${dismissedItems.length} dismissed)`}
 					</span>
 					<Button
-						disabled={items.length === 0}
 						icon="refresh"
 						onClick={() => setPatchVersion(version => version + 1)}
 						size="sm"
@@ -469,59 +543,55 @@ export const DiagnosticsRoute: React.FC = () => {
 					</Button>
 				</div>
 				<div className="diagnostics-route__list">
-					{visibleItems.length === 0 ? (
-						<div className="diagnostics-route__list-empty">
-							No {visibility} diagnostics match this filter.
-						</div>
-					) : (
-						visibleItems.map(item => {
-							const showGroup = item.group !== lastGroup;
+					{visibleItems.length === 0
+						? emptyListState
+						: visibleItems.map(item => {
+								const showGroup = item.group !== lastGroup;
 
-							lastGroup = item.group;
+								lastGroup = item.group;
 
-							return (
-								<React.Fragment key={item.id}>
-									{showGroup && (
-										<div className="diagnostics-route__group">
-											<TablerIcon icon="chevron-down" />
-											{item.group}
-										</div>
-									)}
-									<button
-										aria-current={item.id === selectedItem?.id}
-										className={classNames(
-											'diagnostics-route__row',
-											`diagnostics-route__row--${item.severity}`,
-											item.dismissed && 'diagnostics-route__row--dismissed'
+								return (
+									<React.Fragment key={item.id}>
+										{showGroup && (
+											<div className="diagnostics-route__group">
+												<TablerIcon icon="chevron-down" />
+												{item.group}
+											</div>
 										)}
-										onClick={() => setSelectedId(item.id)}
-										type="button"
-									>
-										<TablerIcon
-											className="diagnostics-route__severity-icon"
-											icon={severityIcon(item.severity)}
-										/>
-										<span className="diagnostics-route__row-text">
-											<span className="diagnostics-route__message">
-												<b>{item.core.code}</b>
-												{item.message}
+										<button
+											aria-current={item.id === selectedItem?.id}
+											className={classNames(
+												'diagnostics-route__row',
+												`diagnostics-route__row--${item.severity}`,
+												item.dismissed && 'diagnostics-route__row--dismissed'
+											)}
+											onClick={() => setSelectedId(item.id)}
+											type="button"
+										>
+											<TablerIcon
+												className="diagnostics-route__severity-icon"
+												icon={severityIcon(item.severity)}
+											/>
+											<span className="diagnostics-route__row-text">
+												<span className="diagnostics-route__message">
+													<b>{item.core.code}</b>
+													{item.message}
+												</span>
+												<span className="diagnostics-route__location">
+													{item.location}
+												</span>
 											</span>
-											<span className="diagnostics-route__location">
-												{item.location}
+											<span className="diagnostics-route__row-fix">
+												{item.dismissed
+													? 'Dismissed'
+													: item.core.quickFixes.length > 0
+														? 'Fix'
+														: 'Review'}
 											</span>
-										</span>
-										<span className="diagnostics-route__row-fix">
-											{item.dismissed
-												? 'Dismissed'
-												: item.core.quickFixes.length > 0
-													? 'Fix'
-													: 'Review'}
-										</span>
-									</button>
-								</React.Fragment>
-							);
-						})
-					)}
+										</button>
+									</React.Fragment>
+								);
+							})}
 				</div>
 			</main>
 			<aside
@@ -625,7 +695,9 @@ export const DiagnosticsRoute: React.FC = () => {
 					</>
 				) : (
 					<div className="diagnostics-route__empty-detail">
-						Select a diagnostic.
+						{items.length === 0
+							? 'No diagnostic detail.'
+							: 'Select a diagnostic.'}
 					</div>
 				)}
 			</aside>

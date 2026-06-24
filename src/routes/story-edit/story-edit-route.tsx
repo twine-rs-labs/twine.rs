@@ -1,12 +1,12 @@
 import * as React from 'react';
-import {useLocation, useParams} from 'react-router-dom';
+import {Redirect, useLocation, useParams} from 'react-router-dom';
 import {MainContent} from '../../components/container/main-content';
 import {DocumentTitle} from '../../components/document-title/document-title';
 import {DialogsContextProvider} from '../../dialogs';
 import {useDialogsContext} from '../../dialogs/context';
 import {StorySearchDialog} from '../../dialogs/story-search';
 import {StoryEditActions} from '../../route-actions';
-import {Passage, selectPassage, Story, storyWithId} from '../../store/stories';
+import {Passage, selectPassage, Story} from '../../store/stories';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {
 	UndoableStoriesContextProvider,
@@ -93,12 +93,10 @@ function sourcePositionForQuery(
 	return lineStart;
 }
 
-export const InnerStoryEditRoute: React.FC = () => {
-	const {storyId} = useParams<{storyId: string}>();
+const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 	const location = useLocation();
 	const {dispatch: dialogsDispatch} = useDialogsContext();
-	const {dispatch, stories} = useUndoableStoriesContext();
-	const story = storyWithId(stories, storyId);
+	const {dispatch} = useUndoableStoriesContext();
 	const {testStory} = useStoryLaunch();
 	const [fuzzyFinderOpen, setFuzzyFinderOpen] = React.useState(false);
 	const [graphRevealRequest, setGraphRevealRequest] = React.useState({
@@ -467,6 +465,14 @@ export const InnerStoryEditRoute: React.FC = () => {
 			</MainContent>
 		</div>
 	);
+};
+
+export const InnerStoryEditRoute: React.FC = () => {
+	const {storyId} = useParams<{storyId: string}>();
+	const {stories} = useUndoableStoriesContext();
+	const story = stories.find(candidate => candidate.id === storyId);
+
+	return story ? <StoryEditRouteForStory story={story} /> : <Redirect to="/" />;
 };
 
 // This is a separate component so that the inner one can use

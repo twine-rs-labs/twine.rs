@@ -48,7 +48,8 @@ export const CommandLineOpenSync: React.FC = () => {
 			for (const project of result.openedProjects) {
 				const projectStoryIds = projectStoryIdsForCurrentStories(
 					mergedStories,
-					project.stories
+					project.stories,
+					{preserveExistingIdentity: false}
 				);
 
 				for (const [index, story] of project.stories.entries()) {
@@ -65,7 +66,9 @@ export const CommandLineOpenSync: React.FC = () => {
 					openedStoryIds.push(storyId);
 				}
 
-				mergedStories = mergeProjectStories(mergedStories, project.stories);
+				mergedStories = mergeProjectStories(mergedStories, project.stories, {
+					preserveExistingIdentity: false
+				});
 			}
 
 			if (openedStoryIds.length > 0) {

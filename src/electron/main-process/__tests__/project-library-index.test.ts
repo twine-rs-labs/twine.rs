@@ -66,6 +66,30 @@ describe('project library index', () => {
 		]);
 	});
 
+	it('deduplicates remembered project paths after resolving them', () => {
+		listRememberedNativeProjectFoldersMock.mockReturnValue([
+			{
+				rootPath: 'Projects/moon-castle.twine.rs',
+				storyIds: ['old-story-id'],
+				updatedAt: '2026-06-23T12:00:00.000Z'
+			},
+			{
+				rootPath: `${process.cwd()}/mock-story-library/Projects/moon-castle.twine.rs`,
+				storyIds: ['new-story-id'],
+				updatedAt: '2026-06-23T12:05:00.000Z'
+			}
+		]);
+
+		expect(rememberedProjectFolders()).toEqual([
+			expect.objectContaining({
+				rootPath: expect.stringMatching(
+					/mock-story-library\/Projects\/moon-castle\.twine\.rs$/
+				),
+				storyIds: ['new-story-id']
+			})
+		]);
+	});
+
 	it('migrates existing absolute in-library project paths to relative paths', () => {
 		listRememberedNativeProjectFoldersMock.mockReturnValue([
 			{

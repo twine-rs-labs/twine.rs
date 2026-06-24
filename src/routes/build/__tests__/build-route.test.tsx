@@ -2,6 +2,10 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {MemoryRouter, Route} from 'react-router-dom';
 import {
+	replaceKnownAssetInventoryForStory,
+	type CoreAssetInventoryEntry
+} from '../../../core';
+import {
 	fakeLoadedStoryFormat,
 	FakeStateProvider,
 	fakeStory
@@ -24,6 +28,32 @@ jest.mock('../../../store/use-story-launch', () => ({
 jest.mock('../../../util/save-file', () => ({
 	saveFile: jest.fn()
 }));
+
+function exportableAsset(path: string, sizeBytes: number): CoreAssetInventoryEntry {
+	return {
+		durationMs: null,
+		exists: true,
+		height: null,
+		kind: 'image',
+		missing: false,
+		modifiedAt: null,
+		normalizedPath: path,
+		path,
+		previewUrl: null,
+		publish: {
+			copy: true,
+			outputPath: path,
+			reason: 'Copy asset into published output'
+		},
+		referenceCount: 1,
+		references: [],
+		sizeBytes,
+		snippet: {label: 'HTML', mediaType: 'text/html', text: ''},
+		thumbnailUrl: null,
+		unused: false,
+		width: null
+	};
+}
 
 describe('<BuildRoute>', () => {
 	function renderComponent() {
@@ -75,6 +105,7 @@ describe('<BuildRoute>', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
 		window.localStorage.clear();
+		replaceKnownAssetInventoryForStory('story-id', []);
 	});
 
 	it('collapses the old target list into Export and Preview flows', async () => {
@@ -101,6 +132,29 @@ describe('<BuildRoute>', () => {
 		expect(
 			screen.queryByRole('button', {name: /Inspect HTML/})
 		).not.toBeInTheDocument();
+	});
+
+	it('turns off inline assets by default for heavy asset plans', async () => {
+		replaceKnownAssetInventoryForStory(
+			'story-id',
+			Array.from({length: 26}, (_, index) =>
+				exportableAsset(`assets/${index}.png`, 1024)
+			)
+		);
+
+		renderComponent();
+
+		await waitFor(() =>
+			expect(
+				screen.getByText('Inline assets off by default')
+			).toBeInTheDocument()
+		);
+		expect(screen.getByLabelText('Inline all assets')).not.toBeChecked();
+		expect(screen.getByText(/26 exportable assets/)).toBeInTheDocument();
+
+		fireEvent.click(screen.getByLabelText('Inline all assets'));
+
+		expect(screen.getByLabelText('Inline all assets')).toBeChecked();
 	});
 
 	it('exports the selected file format', async () => {
@@ -156,15 +210,15 @@ describe('<BuildRoute>', () => {
 		expect(saveFile).not.toHaveBeenCalled();
 	});
 
-	it('runs preview actions with inline passage and proofing format choices', async () => {
+	it('runs preview actions with the inline proofing format choice', async () => {
 		const {format} = renderComponent();
 
 		fireEvent.click(screen.getByRole('tab', {name: /Preview/}));
-		fireEvent.click(screen.getByRole('button', {name: 'Test'}));
 
-		await waitFor(() =>
-			expect(mockTestStory).toHaveBeenCalledWith('story-id', 'passage-0')
-		);
+		expect(screen.queryByText('Test from a passage')).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', {name: 'Test'})
+		).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole('button', {name: 'Proof'}));
 
@@ -174,5 +228,6 @@ describe('<BuildRoute>', () => {
 				version: format.version
 			})
 		);
+		expect(mockTestStory).not.toHaveBeenCalled();
 	});
 });

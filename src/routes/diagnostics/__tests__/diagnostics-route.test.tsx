@@ -89,6 +89,39 @@ function renderComponentWithHistory(
 	return {history, result, story};
 }
 
+function renderCleanComponent() {
+	const story = {
+		...fakeStory(0),
+		id: 'story-id',
+		name: 'Healthy Castle',
+		script: '',
+		selected: true,
+		stylesheet: ''
+	};
+	const start = fakePassage({
+		id: 'start',
+		name: 'Start',
+		selected: true,
+		story: story.id,
+		text: 'A quiet room.'
+	});
+
+	story.passages = [start];
+	story.startPassage = start.id;
+
+	const result = render(
+		<FakeStateProvider stories={[story]}>
+			<MemoryRouter initialEntries={[`/stories/${story.id}/diagnostics`]}>
+				<Route path="/stories/:storyId/diagnostics">
+					<DiagnosticsRoute />
+				</Route>
+			</MemoryRouter>
+		</FakeStateProvider>
+	);
+
+	return {result, story};
+}
+
 function missingAsset(path: string): CoreAssetInventoryEntry {
 	return {
 		durationMs: null,
@@ -136,6 +169,25 @@ describe('<DiagnosticsRoute>', () => {
 			expect(screen.getAllByText('broken-link').length).toBeGreaterThan(0)
 		);
 		expect(
+			screen.getByRole('button', {name: /Active\s+1/})
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole('button', {name: /Warnings\s+1/})
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole('button', {name: /Broken Links\s+1/})
+		).toBeInTheDocument();
+		expect(screen.getByRole('button', {name: /Dismissed\s+0/})).toBeDisabled();
+		expect(
+			screen.queryByRole('button', {name: /Errors/})
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', {name: /Info/})
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', {name: /Missing Assets/})
+		).not.toBeInTheDocument();
+		expect(
 			screen.getAllByText(/Broken link to "Missing"/).length
 		).toBeGreaterThan(0);
 		expect(screen.queryByText('unreachable-passage')).not.toBeInTheDocument();
@@ -147,6 +199,35 @@ describe('<DiagnosticsRoute>', () => {
 		expect(
 			screen.getByRole('button', {name: 'Reveal Graph'})
 		).toBeInTheDocument();
+
+		fireEvent.change(screen.getByLabelText('Filter diagnostics'), {
+			target: {value: 'nothing matches this'}
+		});
+
+		expect(screen.getByText('No matching diagnostics')).toBeInTheDocument();
+		expect(
+			screen.getByText('Try another severity, category, or search term.')
+		).toBeInTheDocument();
+	});
+
+	it('shows a healthy empty state instead of empty diagnostic categories', async () => {
+		renderCleanComponent();
+
+		expect(
+			await screen.findByText('No issues found — your story is healthy')
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(/Diagnostics check story structure/)
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole('button', {name: /Active\s+0/})
+		).toBeInTheDocument();
+		expect(screen.getByRole('button', {name: /Dismissed\s+0/})).toBeDisabled();
+		expect(screen.queryByText('Severity')).not.toBeInTheDocument();
+		expect(screen.queryByText('Type')).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', {name: /Broken Links/})
+		).not.toBeInTheDocument();
 	});
 
 	it('dismisses and restores a specific validation diagnostic', async () => {
@@ -161,6 +242,7 @@ describe('<DiagnosticsRoute>', () => {
 		await waitFor(() =>
 			expect(screen.queryByText('broken-link')).not.toBeInTheDocument()
 		);
+		expect(screen.getByText('No active diagnostics')).toBeInTheDocument();
 		expect(screen.queryByText('unreachable-passage')).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole('button', {name: /Dismissed/}));

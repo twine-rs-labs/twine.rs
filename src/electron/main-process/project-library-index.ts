@@ -57,6 +57,20 @@ function rememberedProjectMigrationRecord(
 	};
 }
 
+function newestProjectRecord(
+	left: ReturnType<typeof rememberedProjectMigrationRecord> | undefined,
+	right: ReturnType<typeof rememberedProjectMigrationRecord>
+) {
+	if (!left) {
+		return right;
+	}
+
+	return Date.parse(right.project.updatedAt) >=
+		Date.parse(left.project.updatedAt)
+		? right
+		: left;
+}
+
 export function rememberProjectFolder(project: NativeProjectFolderResult) {
 	return rememberNativeProjectFolder(projectLibraryIndexPath(), {
 		...project,
@@ -80,6 +94,7 @@ export function rememberedProjectFolders() {
 	const indexPath = projectLibraryIndexPath();
 	const projects = listRememberedNativeProjectFolders(indexPath) ?? [];
 	const migrationRecords = projects.map(rememberedProjectMigrationRecord);
+	const canonicalRecords = new Map<string, (typeof migrationRecords)[number]>();
 
 	for (const record of migrationRecords) {
 		if (record.changed) {
@@ -91,7 +106,15 @@ export function rememberedProjectFolders() {
 				storyIds: record.project.storyIds
 			});
 		}
+
+		canonicalRecords.set(
+			resolve(record.project.rootPath),
+			newestProjectRecord(
+				canonicalRecords.get(resolve(record.project.rootPath)),
+				record
+			)
+		);
 	}
 
-	return migrationRecords.map(record => record.project);
+	return [...canonicalRecords.values()].map(record => record.project);
 }

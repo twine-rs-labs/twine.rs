@@ -890,6 +890,27 @@ describe('<StoryGraphPanel>', () => {
 		);
 	});
 
+	it('does not snap graph passages before drag activation', async () => {
+		const {result} = renderComponent(false, ({start, story}) => {
+			start.left = 12;
+			start.top = 13;
+			story.snapToGrid = true;
+		});
+		const startNode = await waitForNode(result.container, 'start');
+
+		fireEvent.mouseDown(startNode, {button: 0, clientX: 0, clientY: 0});
+		fireEvent.mouseMove(document, {clientX: 2, clientY: 2});
+
+		expect(startNode.style.left).toBe('12px');
+		expect(startNode.style.top).toBe('13px');
+
+		fireEvent.mouseUp(document, {clientX: 2, clientY: 2});
+
+		expect(applyStoryCommandSpy).not.toHaveBeenCalledWith(
+			expect.objectContaining({type: 'movePassages'})
+		);
+	});
+
 	it('shows and toggles the story snap grid state from the graph toolbar', () => {
 		const {result, story} = renderComponent(false, ({story}) => {
 			story.snapToGrid = true;
@@ -965,6 +986,71 @@ describe('<StoryGraphPanel>', () => {
 		expect(after.k).toBeGreaterThan(before.k);
 		expect(viewport.scrollLeft).toBe(0);
 		expect(viewport.scrollTop).toBe(0);
+	});
+
+	it('keeps the live zoom when the story prop refreshes before graph view persistence', () => {
+		const {story} = graphStory();
+		const storedGraphView = {k: 1, x: 80, y: 60};
+		const onCreate = jest.fn();
+		const onDeselect = jest.fn();
+		const onEdit = jest.fn();
+		const onEditPassages = jest.fn();
+		const onSelect = jest.fn();
+		const onSelectIds = jest.fn();
+		const TestComponent: React.FC = () => {
+			const [currentStory, setCurrentStory] = React.useState(story);
+
+			return (
+				<PrefsContext.Provider
+					value={{dispatch: jest.fn(), prefs: prefsDefaults()}}
+				>
+					<StoriesContext.Provider
+						value={{dispatch: jest.fn(), stories: [currentStory]}}
+					>
+						<UndoableStoriesContext.Provider
+							value={{
+								dispatch: jest.fn(),
+								isUndoable: true,
+								stories: [currentStory]
+							}}
+						>
+							<button
+								onClick={() =>
+									setCurrentStory(current => ({
+										...current,
+										script: `${current.script} `
+									}))
+								}
+								type="button"
+							>
+								Refresh story
+							</button>
+							<StoryGraphPanel
+								graphView={storedGraphView}
+								onCreate={onCreate}
+								onDeselect={onDeselect}
+								onEdit={onEdit}
+								onEditPassages={onEditPassages}
+								onSelect={onSelect}
+								onSelectIds={onSelectIds}
+								selectedPassageId="start"
+								story={currentStory}
+							/>
+						</UndoableStoriesContext.Provider>
+					</StoriesContext.Provider>
+				</PrefsContext.Provider>
+			);
+		};
+		const result = render(<TestComponent />);
+
+		fireEvent.click(screen.getByRole('button', {name: 'Zoom in'}));
+		const zoomed = worldView(result.container);
+
+		expect(zoomed.k).toBeGreaterThan(1);
+
+		fireEvent.click(screen.getByRole('button', {name: 'Refresh story'}));
+
+		expect(worldView(result.container)).toEqual(zoomed);
 	});
 
 	it('persists the zoom level back to the core after a wheel zoom (debounced)', async () => {

@@ -218,6 +218,86 @@ describe('loadStories', () => {
 		);
 	});
 
+	it('loads duplicate remembered native project folders once', async () => {
+		const story = fakeStory(1);
+
+		rememberedProjectFoldersMock.mockReturnValue([
+			{
+				rootPath: '/native/moon-castle.twine.rs',
+				storyIds: [story.id],
+				updatedAt: '2026-06-21T16:00:00.000Z'
+			},
+			{
+				rootPath: '/native/moon-castle.twine.rs',
+				storyIds: [story.id],
+				updatedAt: '2026-06-21T16:01:00.000Z'
+			}
+		]);
+		openProjectFolderMock.mockResolvedValue({
+			passageTextLoaded: false,
+			rootPath: '/native/moon-castle.twine.rs',
+			stories: [story],
+			storyIds: [story.id]
+		});
+
+		const result = await loadStories();
+
+		expect(
+			result.filter(entry => 'kind' in entry && entry.kind === 'native-project')
+		).toHaveLength(1);
+		expect(openProjectFolderMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('skips legacy HTML files that duplicate a loaded native project IFID', async () => {
+		const story = fakeStory(1);
+
+		rememberedProjectFoldersMock.mockReturnValue([
+			{
+				rootPath: '/native/moon-castle.twine.rs',
+				storyIds: [story.id],
+				updatedAt: '2026-06-21T16:00:00.000Z'
+			}
+		]);
+		openProjectFolderMock.mockResolvedValue({
+			passageTextLoaded: false,
+			rootPath: '/native/moon-castle.twine.rs',
+			stories: [story],
+			storyIds: [story.id]
+		});
+		readFileMock.mockImplementation((name: string) => {
+			switch (name) {
+				case 'mock-story-directory/test-story-1.html':
+					return Promise.resolve(
+						`<tw-storydata name="${story.name}" ifid="${story.ifid}"></tw-storydata>`
+					);
+
+				case 'mock-story-directory/test-story-2.html':
+					return Promise.resolve('mock story 2 contents');
+
+				default:
+					throw new Error(`Asked to read a non-mocked file: ${name}`);
+			}
+		});
+
+		expect(await loadStories()).toEqual([
+			expect.objectContaining({
+				kind: 'native-project',
+				rootPath: '/native/moon-castle.twine.rs',
+				story
+			}),
+			{
+				htmlSource: 'mock story 2 contents',
+				mtime: expect.any(Date)
+			}
+		]);
+		expect(fileWasTouchedMock).toHaveBeenCalledWith(
+			'mock-story-directory/test-story-2.html'
+		);
+		expect(fileWasTouchedMock).not.toHaveBeenCalledWith(
+			'mock-story-directory/test-story-1.html'
+		);
+	});
+
 	it('keeps remembered native project folders when legacy HTML directory is absent', async () => {
 		const story = fakeStory(1);
 

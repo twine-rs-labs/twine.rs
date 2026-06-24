@@ -19,14 +19,11 @@
 	Using a gradient here so that Firefox won't try to apply it to the dropdown
 	when it's opened. It will do this with a simple color.
 	*/
-	background: linear-gradient(
-		to right,
-		var(--white-translucent),
-		var(--white-translucent)
-	);
+	background: linear-gradient(to right, var(--ink-1), var(--ink-1));
 	border-radius: var(--corner-round);
-	border: 1px solid var(--light-gray-translucent);
-	color: var(--dark-gray);
+	border: 1px solid var(--line-2);
+	box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.25);
+	color: var(--tx-1);
 	font: 100% var(--font-system);
 	height: var(--control-height);
 	margin-left: var(--grid-size);
@@ -44,7 +41,8 @@
 }
 
 .text-select-control select:focus-visible {
-	box-shadow: inset 0 0 0px 2px var(--blue);
+	border-color: var(--focus-ring);
+	box-shadow: var(--glow-focus), inset 0 1px 2px oklch(0 0 0 / 0.25);
 	outline: none;
 }
 

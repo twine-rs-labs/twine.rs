@@ -49,6 +49,9 @@ import {
 	IconGitMerge,
 	IconGitPullRequest,
 	IconGridDots,
+	IconGripVertical,
+	IconHandGrab,
+	IconHandStop,
 	IconHash,
 	IconHome,
 	IconInfoCircle,
@@ -65,6 +68,7 @@ import {
 	IconLink,
 	IconMarquee,
 	IconMarqueeOff,
+	IconMaximize,
 	IconMinus,
 	IconMovie,
 	IconMusic,
@@ -74,6 +78,7 @@ import {
 	IconPhotoOff,
 	IconPlayerPlay,
 	IconPlus,
+	IconPointer,
 	IconPuzzle,
 	IconRefresh,
 	IconReplace,
@@ -94,6 +99,7 @@ import {
 	IconUpload,
 	IconVariable,
 	IconWand,
+	IconWindow,
 	IconWriting,
 	IconX
 } from '@tabler/icons';
@@ -157,6 +163,9 @@ const iconRegistry: Record<string, typeof IconCircle> = {
 	'git-merge': IconGitMerge,
 	'git-pull-request': IconGitPullRequest,
 	'grid-dots': IconGridDots,
+	'grip-vertical': IconGripVertical,
+	'hand-grab': IconHandGrab,
+	'hand-stop': IconHandStop,
 	hash: IconHash,
 	home: IconHome,
 	'info-circle': IconInfoCircle,
@@ -173,6 +182,7 @@ const iconRegistry: Record<string, typeof IconCircle> = {
 	link: IconLink,
 	marquee: IconMarquee,
 	'marquee-off': IconMarqueeOff,
+	maximize: IconMaximize,
 	minus: IconMinus,
 	movie: IconMovie,
 	music: IconMusic,
@@ -184,6 +194,7 @@ const iconRegistry: Record<string, typeof IconCircle> = {
 	'player-play': IconPlayerPlay,
 	plus: IconPlus,
 	'point-filled': IconCircleDot,
+	pointer: IconPointer,
 	puzzle: IconPuzzle,
 	refresh: IconRefresh,
 	replace: IconReplace,
@@ -204,9 +215,14 @@ const iconRegistry: Record<string, typeof IconCircle> = {
 	upload: IconUpload,
 	variable: IconVariable,
 	wand: IconWand,
+	windows: IconWindow,
 	writing: IconWriting,
 	x: IconX
 };
+
+export function hasTablerIcon(icon: string) {
+	return Object.prototype.hasOwnProperty.call(iconRegistry, icon);
+}
 
 export const TablerIcon: React.FC<TablerIconProps> = ({
 	className,

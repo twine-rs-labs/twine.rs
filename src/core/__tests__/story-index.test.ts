@@ -103,7 +103,8 @@ describe('storyToCoreIndex', () => {
 			tags: ['chapter-one', 'scene'],
 			text:
 				'Set $score and $player.score and _turn. ' +
-				'?sidebar <img src="assets/cover.png">'
+				'?sidebar $____ $__.__ $valid._ $_.valid ' +
+				'<img src="assets/cover.png">'
 		});
 		const next = fakePassage({
 			id: 'next',
@@ -119,12 +120,17 @@ describe('storyToCoreIndex', () => {
 
 		const index = storyToCoreIndex(story);
 
-			expect(index.symbols.map(symbol => symbol.name)).toEqual(
-				expect.arrayContaining(['$score', '$player.score'])
-			);
-			expect(index.symbols.map(symbol => symbol.name)).not.toEqual(
-				expect.arrayContaining(['_turn', '?sidebar'])
-			);
+		expect(index.symbols.map(symbol => symbol.name)).toEqual(
+			expect.arrayContaining([
+				'$score',
+				'$player.score',
+				'$valid._',
+				'$_.valid'
+			])
+		);
+		expect(index.symbols.map(symbol => symbol.name)).not.toEqual(
+			expect.arrayContaining(['_turn', '?sidebar', '$____', '$__.__'])
+		);
 		expect(index.assets).toEqual([
 			expect.objectContaining({kind: 'image', path: 'assets/cover.png'})
 		]);
@@ -254,6 +260,52 @@ describe('storyToCoreIndex', () => {
 		).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({scope: 'asset', sourceName: 'Assets'})
+			])
+		);
+	});
+
+	it('marks referenced assets missing only after a completed asset scan', () => {
+		const story = fakeStory(0);
+		const start = fakePassage({
+			id: 'start',
+			name: 'Start',
+			story: story.id,
+			text: '<img src="assets/missing.png">'
+		});
+
+		story.passages = [start];
+		story.startPassage = start.id;
+
+		const unknownIndex = storyToCoreIndex(story);
+
+		expect(unknownIndex.assetInventory).toEqual([
+			expect.objectContaining({
+				exists: null,
+				missing: false,
+				path: 'assets/missing.png'
+			})
+		]);
+		expect(
+			unknownIndex.diagnostics.map(diagnostic => diagnostic.code)
+		).not.toContain('missing-asset');
+
+		const scannedIndex = storyToCoreIndex(story, {assetScanComplete: true});
+
+		expect(scannedIndex.assetInventory).toEqual([
+			expect.objectContaining({
+				exists: false,
+				missing: true,
+				path: 'assets/missing.png',
+				publish: expect.objectContaining({copy: false})
+			})
+		]);
+		expect(scannedIndex.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					code: 'missing-asset',
+					passageId: start.id,
+					severity: 'error'
+				})
 			])
 		);
 	});

@@ -2,6 +2,7 @@ import {storyFileName} from '../electron/shared';
 import {Story} from './stories';
 
 export interface MergeProjectStoriesOptions {
+	preserveExistingIdentity?: boolean;
 	preserveExistingText?: boolean;
 }
 
@@ -26,6 +27,10 @@ function mergeStory(
 	}
 
 	const identifiedIncoming = storyWithExistingIdentity(incoming, existing);
+
+	if (options.preserveExistingIdentity === false) {
+		return incoming;
+	}
 
 	if (!options.preserveExistingText) {
 		return identifiedIncoming;
@@ -72,8 +77,13 @@ export function mergeProjectStories(
 
 export function projectStoryIdsForCurrentStories(
 	current: Story[],
-	incoming: Story[]
+	incoming: Story[],
+	options: Pick<MergeProjectStoriesOptions, 'preserveExistingIdentity'> = {}
 ) {
+	if (options.preserveExistingIdentity === false) {
+		return incoming.map(story => story.id);
+	}
+
 	const currentByFileName = new Map(
 		current.map(story => [storyFileName(story), story])
 	);

@@ -151,7 +151,7 @@ const graphProjectionOverscan = 1200;
 const graphMinZoom = 0.2;
 const graphMaxZoom = 2.4;
 const graphButtonZoomFactor = 1.18;
-const graphDragClickTolerance = 3;
+const graphDragActivationDistance = 5;
 const graphInitialView: GraphView = {k: 1, x: 80, y: 60};
 const graphFitPadding = 96;
 const noFocusedPassageIds: string[] = [];
@@ -213,6 +213,10 @@ function sameRect(a: CoreRect | undefined, b: CoreRect) {
 		a.top === b.top &&
 		a.width === b.width
 	);
+}
+
+function dragDistance(drag: DragState) {
+	return Math.hypot(drag.left - drag.startLeft, drag.top - drag.startTop);
 }
 
 function unionRects(rects: CoreRect[]): CoreRect | null {
@@ -458,11 +462,11 @@ function defaultGraphDensity(story: Story): GraphDensity {
 }
 
 function initialGraphView(
-	story: Story,
+	storyZoom: number,
 	workspaceView: StoryGraphWorkspaceView | undefined
 ): GraphView {
 	return {
-		k: clampZoom(workspaceView?.k ?? (story.zoom || graphInitialView.k)),
+		k: clampZoom(workspaceView?.k ?? (storyZoom || graphInitialView.k)),
 		x: workspaceView?.x ?? graphInitialView.x,
 		y: workspaceView?.y ?? graphInitialView.y
 	};
@@ -939,11 +943,18 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		story
 	} = props;
 	const host = useCoreProjectHost();
+	const passageCount = story.passages.length;
+	const storyZoomSeed = React.useRef({storyId: story.id, zoom: story.zoom});
+
+	if (storyZoomSeed.current.storyId !== story.id) {
+		storyZoomSeed.current = {storyId: story.id, zoom: story.zoom};
+	}
+
 	// The whole graph (grid + edges + nodes) rides one transformed world layer.
 	// `view.k` is the live, un-animated zoom; `visibleZoom` aliases it so the
 	// projection / edge / resize math below stays unchanged.
 	const [view, setView] = React.useState<GraphView>(() =>
-		initialGraphView(story, graphView)
+		initialGraphView(storyZoomSeed.current.zoom, graphView)
 	);
 	const visibleZoom = view.k;
 	const viewRef = React.useRef(view);
@@ -1396,13 +1407,19 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	}, [readViewport, updateViewport]);
 
 	React.useEffect(() => {
-		const nextView = initialGraphView(story, graphView);
-		const nextDensity = graphOptions?.density ?? defaultGraphDensity(story);
+		const nextView = initialGraphView(storyZoomSeed.current.zoom, graphView);
+
+		setView(current => (sameGraphView(current, nextView) ? current : nextView));
+	}, [graphView, story.id]);
+
+	React.useEffect(() => {
+		const nextDensity =
+			graphOptions?.density ??
+			(passageCount > largeStoryPassageCount ? 'structure' : 'excerpt');
 		const nextFocusSelection = graphOptions?.focusSelection ?? false;
 		const nextLayers = graphLayers(graphOptions);
 		const nextTool = graphOptions?.tool ?? 'select';
 
-		setView(current => (sameGraphView(current, nextView) ? current : nextView));
 		setDensity(current => (current === nextDensity ? current : nextDensity));
 		setFocusSelection(current =>
 			current === nextFocusSelection ? current : nextFocusSelection
@@ -1411,7 +1428,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			sameGraphLayers(current, nextLayers) ? current : nextLayers
 		);
 		setTool(current => (current === nextTool ? current : nextTool));
-	}, [graphOptions, graphView, story]);
+	}, [graphOptions, passageCount]);
 
 	React.useEffect(() => {
 		onGraphOptionsChange?.({
@@ -2048,8 +2065,6 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		const selectedForDrag =
 			optimisticSelectedIds.current ?? handleNodePress(node, event);
 
-		document.body.classList.add('dragging-passages');
-
 		const ids =
 			selectedForDrag?.has(passage.id) && selectedForDrag.size > 0
 				? Array.from(selectedForDrag)
@@ -2064,20 +2079,27 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		};
 
 		dragRef.current = nextDrag;
-		setDrag(nextDrag);
+		setDrag(undefined);
 	}
 
 	function handleDrag(data: DraggableData) {
-		setDrag(current =>
-			current
-				? (() => {
-						const next = {...current, left: data.x, top: data.y};
+		const current = dragRef.current;
 
-						dragRef.current = next;
-						return next;
-					})()
-				: current
-		);
+		if (!current) {
+			return;
+		}
+
+		const next = {...current, left: data.x, top: data.y};
+
+		dragRef.current = next;
+
+		if (dragDistance(next) < graphDragActivationDistance) {
+			setDrag(undefined);
+			return;
+		}
+
+		document.body.classList.add('dragging-passages');
+		setDrag(next);
 	}
 
 	function handleDragStop(_event: DraggableEvent, data: DraggableData) {
@@ -2098,7 +2120,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		const screenDeltaTop = current.top - current.startTop;
 		const moved = Math.hypot(screenDeltaLeft, screenDeltaTop);
 
-		if (moved >= graphDragClickTolerance) {
+		if (moved >= graphDragActivationDistance) {
 			const displayDeltaLeft = screenDeltaLeft / visibleZoom;
 			const displayDeltaTop = screenDeltaTop / visibleZoom;
 			const {left: deltaLeft, top: deltaTop} = displayDeltaToLogical(
@@ -2558,7 +2580,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 					/>
 					<IconButton
 						active={tool === 'pan'}
-						icon="hand-stop"
+						icon="hand-grab"
 						label="Pan tool (H, or hold Space)"
 						onClick={() => setTool('pan')}
 						size="sm"

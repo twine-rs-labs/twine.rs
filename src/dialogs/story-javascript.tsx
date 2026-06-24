@@ -37,12 +37,10 @@ export const StoryJavaScriptDialog: React.FC<
 			headerLabel={t('dialogs.storyJavaScript.title')}
 			maximizable
 		>
-			{prefs.useCodeMirror && (
-				<ButtonBar>
-					<UndoRedoButtons editor={cmEditor} watch={story.script} />
-					<IndentButtons editor={cmEditor} />
-				</ButtonBar>
-			)}
+			<ButtonBar>
+				<UndoRedoButtons editor={cmEditor} watch={story.script} />
+				<IndentButtons editor={cmEditor} />
+			</ButtonBar>
 			<DialogEditor>
 				<CodeArea
 					editorDidMount={setCmEditor}
@@ -60,7 +58,6 @@ export const StoryJavaScriptDialog: React.FC<
 						mode: 'javascript',
 						placeholder: t('dialogs.storyJavaScript.explanation')
 					}}
-					useCodeMirror={prefs.useCodeMirror}
 					value={story.script}
 				/>
 			</DialogEditor>

@@ -49,6 +49,26 @@ function appendNativeProjectStories(
 	}
 }
 
+function loadedNativeProjectIfids(result: ElectronLoadedStoryEntry[]) {
+	return new Set(
+		result.flatMap(entry =>
+			entry.kind === 'native-project' ? [entry.story.ifid.toUpperCase()] : []
+		)
+	);
+}
+
+function storyDataIfid(htmlSource: string) {
+	const storyDataMatch = htmlSource.match(/<tw-storydata\b[^>]*>/i);
+
+	if (!storyDataMatch) {
+		return undefined;
+	}
+
+	const ifidMatch = storyDataMatch[0].match(/\bifid="([^"]+)"/i);
+
+	return ifidMatch?.[1]?.toUpperCase();
+}
+
 async function directoryEntries(path: string) {
 	try {
 		return await readdir(path, {withFileTypes: true});
@@ -116,15 +136,25 @@ async function loadRememberedProjectStories(
 	const missingProjectPathsByBasename = new Map<string, string[]>();
 
 	for (const project of rememberedProjects) {
+		const rememberedProjectPath = resolve(project.rootPath);
+
+		if (loadedProjectPaths.has(rememberedProjectPath)) {
+			continue;
+		}
+
 		try {
 			const openedProject = await openProjectFolder(project.rootPath, {
 				loadPassageText: false
 			});
+			const openedProjectPath = openedProject
+				? resolve(openedProject.rootPath)
+				: rememberedProjectPath;
 
 			appendNativeProjectStories(result, openedProject);
 
 			if (openedProject) {
-				loadedProjectPaths.add(resolve(openedProject.rootPath));
+				loadedProjectPaths.add(openedProjectPath);
+				loadedProjectPaths.add(rememberedProjectPath);
 			}
 		} catch (error) {
 			console.warn(
@@ -190,6 +220,7 @@ export async function loadStories() {
 	const result: ElectronLoadedStoryEntry[] = [];
 
 	await loadRememberedProjectStories(result);
+	const nativeProjectIfids = loadedNativeProjectIfids(result);
 
 	let files: string[];
 
@@ -211,9 +242,16 @@ export async function loadStories() {
 				const stats = await stat(filePath);
 
 				if (!stats.isDirectory()) {
+					const htmlSource = await readFile(filePath, 'utf8');
+					const ifid = storyDataIfid(htmlSource);
+
+					if (ifid && nativeProjectIfids.has(ifid)) {
+						return undefined;
+					}
+
 					result.push({
 						mtime: stats.mtime,
-						htmlSource: await readFile(filePath, 'utf8')
+						htmlSource
 					});
 					return fileWasTouched(filePath);
 				}

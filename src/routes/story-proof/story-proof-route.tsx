@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {useHistory, useParams} from 'react-router-dom';
+import {useHistory, useLocation, useParams} from 'react-router-dom';
 import {useCoreProjectHost} from '../../core';
 import type {CoreStoryIndex} from '../../core';
 import {usePublishing} from '../../store/use-publishing';
@@ -15,6 +15,7 @@ export const StoryProofRoute: React.FC = () => {
 	const [html, setHtml] = React.useState<string>();
 	const {storyId} = useParams<{storyId: string}>();
 	const history = useHistory();
+	const location = useLocation();
 	const {proofStory} = usePublishing();
 	const coreProjectHost = useCoreProjectHost();
 	const [index, setIndex] = React.useState<CoreStoryIndex>();
@@ -24,6 +25,13 @@ export const StoryProofRoute: React.FC = () => {
 	const startPassage = story?.passages.find(
 		passage => passage.id === story.startPassage
 	);
+	const proofingFormat = React.useMemo(() => {
+		const params = new URLSearchParams(location.search);
+		const name = params.get('proofingFormatName');
+		const version = params.get('proofingFormatVersion');
+
+		return name && version ? {name, version} : undefined;
+	}, [location.search]);
 	const passageQuery = React.useCallback(
 		(passageId?: string) => {
 			const targetId = passageId ?? startPassage?.id;
@@ -60,7 +68,9 @@ export const StoryProofRoute: React.FC = () => {
 
 		async function load() {
 			try {
-				const proof = await proofStory(storyId);
+				const proof = proofingFormat
+					? await proofStory(storyId, proofingFormat)
+					: await proofStory(storyId);
 
 				if (active) {
 					setHtml(proof);
@@ -82,7 +92,7 @@ export const StoryProofRoute: React.FC = () => {
 		return () => {
 			active = false;
 		};
-	}, [proofStory, storyExists, storyId]);
+	}, [proofStory, proofingFormat, storyExists, storyId]);
 
 	return (
 		<StoryPreviewFrame
@@ -90,7 +100,6 @@ export const StoryProofRoute: React.FC = () => {
 			error={publishError}
 			html={html}
 			missingStoryMessage={`There is no story with ID "${storyId}".`}
-			onOpenBuild={() => history.push(`/stories/${storyId}/build`)}
 			onRevealGraph={passageId =>
 				history.push(`/stories/${storyId}?mode=graph${passageQuery(passageId)}`)
 			}

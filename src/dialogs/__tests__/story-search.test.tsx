@@ -387,20 +387,9 @@ describe('<StorySearchDialog>', () => {
 		).toBeDisabled();
 	});
 
-	it('uses CodeMirror on its code areas when CodeMirror is enabled', () => {
-		renderComponent({}, {prefs: {useCodeMirror: true}});
-
-		for (const area of screen.getAllByTestId('mock-code-area')) {
-			expect(area.dataset.useCodeMirror).toBe('true');
-		}
-	});
-
-	it('disables CodeMirror on its code areas when CodeMirror is disabled', () => {
-		renderComponent({}, {prefs: {useCodeMirror: false}});
-
-		for (const area of screen.getAllByTestId('mock-code-area')) {
-			expect(area.dataset.useCodeMirror).toBe('false');
-		}
+	it('renders its code areas', () => {
+		renderComponent();
+		expect(screen.getAllByTestId('mock-code-area')).toHaveLength(2);
 	});
 
 	it('is accessible', async () => {

@@ -16,8 +16,7 @@ describe('<SettingsRoute>', () => {
 					appTheme: 'dark',
 					defaultAssetFolder: '/tmp/assets',
 					defaultProjectFolder: '/tmp/projects',
-					keybindingPreset: 'vim',
-					useCodeMirror: true
+					keybindingPreset: 'vim'
 				}}
 			>
 				<SettingsRoute />

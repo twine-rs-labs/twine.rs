@@ -95,12 +95,17 @@
 }
 
 .build-route__format-check {
-	color: var(--acc-blue);
-	font-size: 18px;
+	background: var(--acc-blue);
+	border: 2px solid var(--acc-blue);
+	border-radius: 999px;
+	box-shadow: 0 0 0 2px color-mix(in oklab, var(--acc-blue) 20%, transparent);
+	display: block;
+	height: 14px;
 	left: 14px;
 	opacity: 0;
 	position: absolute;
 	top: 16px;
+	width: 14px;
 }
 
 .build-route__format--selected .build-route__format-check {

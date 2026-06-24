@@ -60,6 +60,7 @@ const sharedAssetInventoryByStory = new Map<
 	string,
 	CoreAssetInventoryEntry[]
 >();
+const sharedAssetInventoryScanCompleteByStory = new Set<string>();
 const emptyAssetInventory: CoreAssetInventoryEntry[] = [];
 const assetInventoryListeners = new Set<() => void>();
 let assetInventoryVersion = 0;
@@ -68,11 +69,23 @@ export function knownAssetInventoryForStory(storyId: string) {
 	return sharedAssetInventoryByStory.get(storyId) ?? emptyAssetInventory;
 }
 
+export function knownAssetInventoryScanCompleteForStory(storyId: string) {
+	return sharedAssetInventoryScanCompleteByStory.has(storyId);
+}
+
 export function replaceKnownAssetInventoryForStory(
 	storyId: string,
-	assets: CoreAssetInventoryEntry[]
+	assets: CoreAssetInventoryEntry[],
+	options: {assetScanComplete?: boolean} = {}
 ) {
 	sharedAssetInventoryByStory.set(storyId, assets);
+
+	if (options.assetScanComplete ?? true) {
+		sharedAssetInventoryScanCompleteByStory.add(storyId);
+	} else {
+		sharedAssetInventoryScanCompleteByStory.delete(storyId);
+	}
+
 	assetInventoryVersion++;
 
 	for (const listener of assetInventoryListeners) {
@@ -403,7 +416,12 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				dispatch: action => this.dispatch(action, annotation),
 				renameAsset: (storyId, oldPath, newPath) =>
 					this.renameAsset(storyId, oldPath, newPath),
-				replaceAssetInventory: replaceKnownAssetInventoryForStory,
+				replaceAssetInventory: (storyId, inventory, options) =>
+					replaceKnownAssetInventoryForStory(storyId, inventory, {
+						assetScanComplete:
+							options?.assetScanComplete ??
+							knownAssetInventoryScanCompleteForStory(storyId)
+					}),
 				setDirty: dirty => {
 					this.dirty = dirty;
 				},
@@ -564,16 +582,19 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	) {
 		const knownAssets =
 			this.assetInventoryByStory.get(storyId) ?? emptyAssetInventory;
+		const assetScanComplete = knownAssetInventoryScanCompleteForStory(storyId);
 		const explicitKnownAssets =
 			typeof options === 'string' ? [] : (options.knownAssets ?? []);
 
 		return typeof options === 'string'
 			? normalizeStoryIndexOptions({
+					assetScanComplete,
 					knownAssets,
 					query: options
 				})
 			: normalizeStoryIndexOptions({
 					...options,
+					assetScanComplete: options.assetScanComplete ?? assetScanComplete,
 					knownAssets: [...explicitKnownAssets, ...knownAssets]
 				});
 	}
