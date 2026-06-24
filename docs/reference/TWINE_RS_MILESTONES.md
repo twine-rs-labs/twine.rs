@@ -328,6 +328,15 @@ Make the Rust story model, source layout, import/export, save semantics, identif
 
 Primary screen: Project Launcher / Project Files.
 
+> **0.1.2 remediation (2026-06-23):** the highest-severity open defect is an M0
+> persistence bug — the launch-time library backup copies the library into its own
+> `Backups/` subdirectory and bricks the app, and the persisted library path lives
+> in app-data so reinstalling doesn't recover it. "Change library location" also
+> only repoints a pref (no move) and the project list reads a stale absolute-path
+> index instead of scanning. Root cause + DO/DON'T fixes in
+> [`TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md`](./TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md)
+> waves W0–W1. The `____`→variable extractor bug (W5.1) is an M4 indexing fix.
+
 Recorded enhancement requests: **26**. Priority mix: P2=5, P3=12, P4=8, unprioritized=1.
 
 Core deliverables:

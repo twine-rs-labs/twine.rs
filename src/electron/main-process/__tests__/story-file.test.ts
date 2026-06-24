@@ -110,7 +110,17 @@ describe('loadStories', () => {
 		forgetProjectFolderMock.mockReturnValue(undefined);
 		openProjectFolderMock.mockResolvedValue(undefined);
 		rememberedProjectFoldersMock.mockReturnValue([]);
-		readdirMock.mockResolvedValue(['test-story-1.html', 'test-story-2.html']);
+		readdirMock.mockImplementation((name: string, options?: any) => {
+			if (options?.withFileTypes) {
+				return Promise.resolve([]);
+			}
+
+			if (name === 'mock-story-directory') {
+				return Promise.resolve(['test-story-1.html', 'test-story-2.html']);
+			}
+
+			throw new Error(`Asked to read a non-mocked directory: ${name}`);
+		});
 		readFileMock.mockImplementation((name: string) => {
 			switch (name) {
 				case 'mock-story-directory/test-story-1.html':
@@ -255,6 +265,187 @@ describe('loadStories', () => {
 
 		expect(forgetProjectFolderMock).toHaveBeenCalledWith(
 			'/native/missing.twine.rs'
+		);
+	});
+
+	it('adopts scanned native project folders when the remembered index is empty', async () => {
+		const looseStory = fakeStory(1);
+		const projectStory = fakeStory(2);
+
+		readdirMock.mockImplementation((name: string, options?: any) => {
+			if (options?.withFileTypes) {
+				switch (name) {
+					case 'mock-story-directory':
+						return Promise.resolve([
+							{isDirectory: () => true, name: 'loose.twine.rs'},
+							{isDirectory: () => true, name: 'not-a-project'},
+							{isDirectory: () => false, name: 'test-story-1.html'}
+						]);
+
+					case 'mock-story-directory/Projects':
+						return Promise.resolve([
+							{isDirectory: () => true, name: 'moon-castle.twine.rs'}
+						]);
+
+					default:
+						throw new Error(`Asked to read a non-mocked directory: ${name}`);
+				}
+			}
+
+			if (name === 'mock-story-directory') {
+				return Promise.resolve(['test-story-1.html']);
+			}
+
+			throw new Error(`Asked to read a non-mocked directory: ${name}`);
+		});
+		statMock.mockImplementation((name: string) => {
+			switch (name) {
+				case 'mock-story-directory/loose.twine.rs/twine.toml':
+				case 'mock-story-directory/Projects/moon-castle.twine.rs/twine.toml':
+					return Promise.resolve({
+						isFile: () => true
+					});
+
+				case 'mock-story-directory/not-a-project/twine.toml':
+					return Promise.reject(
+						Object.assign(new Error('missing'), {code: 'ENOENT'})
+					);
+
+				case 'mock-story-directory/test-story-1.html':
+					return Promise.resolve({
+						isDirectory: () => false,
+						mtime: new Date('1/1/1990')
+					});
+
+				default:
+					throw new Error(`Asked to stat a non-mocked file: ${name}`);
+			}
+		});
+		openProjectFolderMock.mockImplementation(async path => {
+			switch (path) {
+				case 'mock-story-directory/loose.twine.rs':
+					return {
+						passageTextLoaded: false,
+						rootPath: path,
+						stories: [looseStory],
+						storyIds: [looseStory.id]
+					};
+
+				case 'mock-story-directory/Projects/moon-castle.twine.rs':
+					return {
+						passageTextLoaded: false,
+						rootPath: path,
+						stories: [projectStory],
+						storyIds: [projectStory.id]
+					};
+
+				default:
+					throw new Error(`Asked to open a non-mocked project: ${path}`);
+			}
+		});
+
+		expect(await loadStories()).toEqual([
+			expect.objectContaining({
+				kind: 'native-project',
+				rootPath: 'mock-story-directory/loose.twine.rs',
+				story: looseStory
+			}),
+			expect.objectContaining({
+				kind: 'native-project',
+				rootPath: 'mock-story-directory/Projects/moon-castle.twine.rs',
+				story: projectStory
+			}),
+			{
+				htmlSource: 'mock story 1 contents',
+				mtime: expect.any(Date)
+			}
+		]);
+	});
+
+	it('tries to recover missing remembered project folders from the current library before forgetting them', async () => {
+		const story = fakeStory(1);
+
+		rememberedProjectFoldersMock.mockReturnValue([
+			{
+				rootPath: '/old-library/Projects/moon-castle.twine.rs',
+				storyIds: [story.id],
+				updatedAt: '2026-06-21T16:00:00.000Z'
+			}
+		]);
+		readdirMock.mockImplementation((name: string, options?: any) => {
+			if (options?.withFileTypes) {
+				switch (name) {
+					case 'mock-story-directory':
+						return Promise.resolve([]);
+
+					case 'mock-story-directory/Projects':
+						return Promise.resolve([
+							{isDirectory: () => true, name: 'moon-castle.twine.rs'}
+						]);
+
+					default:
+						throw new Error(`Asked to read a non-mocked directory: ${name}`);
+				}
+			}
+
+			if (name === 'mock-story-directory') {
+				return Promise.resolve(['test-story-1.html']);
+			}
+
+			throw new Error(`Asked to read a non-mocked directory: ${name}`);
+		});
+		statMock.mockImplementation((name: string) => {
+			switch (name) {
+				case 'mock-story-directory/Projects/moon-castle.twine.rs/twine.toml':
+					return Promise.resolve({
+						isFile: () => true
+					});
+
+				case 'mock-story-directory/test-story-1.html':
+					return Promise.resolve({
+						isDirectory: () => false,
+						mtime: new Date('1/1/1990')
+					});
+
+				default:
+					throw new Error(`Asked to stat a non-mocked file: ${name}`);
+			}
+		});
+		openProjectFolderMock.mockImplementation(async path => {
+			if (path === '/old-library/Projects/moon-castle.twine.rs') {
+				throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+			}
+
+			if (path === 'mock-story-directory/Projects/moon-castle.twine.rs') {
+				return {
+					passageTextLoaded: false,
+					rootPath: path,
+					stories: [story],
+					storyIds: [story.id]
+				};
+			}
+
+			throw new Error(`Asked to open a non-mocked project: ${path}`);
+		});
+
+		const result = await loadStories();
+
+		expect(result).toEqual([
+			expect.objectContaining({
+				kind: 'native-project',
+				rootPath: 'mock-story-directory/Projects/moon-castle.twine.rs',
+				story
+			}),
+			{
+				htmlSource: 'mock story 1 contents',
+				mtime: expect.any(Date)
+			}
+		]);
+		expect(forgetProjectFolderMock).toHaveBeenCalledWith(
+			'/old-library/Projects/moon-castle.twine.rs'
+		);
+		expect(openProjectFolderMock.mock.invocationCallOrder[1]).toBeLessThan(
+			forgetProjectFolderMock.mock.invocationCallOrder[0]
 		);
 	});
 

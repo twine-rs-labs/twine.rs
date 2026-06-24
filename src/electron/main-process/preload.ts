@@ -145,6 +145,9 @@ const bridge = {
 	revealBackupFolder() {
 		return ipcRenderer.invoke('reveal-backup-folder');
 	},
+	resetStoryLibraryFolder() {
+		return ipcRenderer.invoke('reset-story-library-folder');
+	},
 	revealPath(path: string) {
 		ipcRenderer.send('reveal-path', path);
 	},

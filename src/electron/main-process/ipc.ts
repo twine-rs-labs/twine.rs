@@ -20,7 +20,8 @@ import {
 	getBackupDirectoryPath,
 	getStoryDirectoryPath,
 	revealBackupDirectory,
-	revealStoryDirectory
+	revealStoryDirectory,
+	resetStoryDirectoryPath
 } from './story-directory';
 import {
 	nativeAppPlatformSettings,
@@ -198,6 +199,10 @@ export function initIpc() {
 
 	ipcMain.handle('choose-story-library-folder', async () => {
 		return (await chooseStoryDirectoryPath()) ?? getStoryDirectoryPath();
+	});
+
+	ipcMain.handle('reset-story-library-folder', async () => {
+		return resetStoryDirectoryPath();
 	});
 
 	ipcMain.handle('consume-command-line-open-requests', async () => {

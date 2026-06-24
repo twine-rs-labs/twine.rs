@@ -7,7 +7,8 @@ import {
 } from 'electron';
 import {
 	chooseStoryDirectoryPath,
-	revealStoryDirectory
+	revealStoryDirectory,
+	resetStoryDirectoryPath
 } from './story-directory';
 import {i18n} from './locales';
 import {checkForUpdate} from './check-for-update';
@@ -27,6 +28,10 @@ export function initMenuBar() {
 				{
 					label: i18n.t('electron.menuBar.setStoryLibraryFolder'),
 					click: chooseStoryDirectoryPath
+				},
+				{
+					label: i18n.t('electron.menuBar.resetStoryLibraryFolder'),
+					click: resetStoryDirectoryPath
 				},
 				{type: 'separator'},
 				{role: 'quit'}
@@ -101,6 +106,10 @@ export function initMenuBar() {
 			{
 				label: i18n.t('electron.menuBar.setStoryLibraryFolder'),
 				click: chooseStoryDirectoryPath
+			},
+			{
+				label: i18n.t('electron.menuBar.resetStoryLibraryFolder'),
+				click: resetStoryDirectoryPath
 			},
 			{type: 'separator'},
 			{role: 'services', submenu: []},

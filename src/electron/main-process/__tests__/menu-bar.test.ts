@@ -2,7 +2,8 @@ import {initMenuBar} from '../menu-bar';
 import {BrowserWindow, Menu, MenuItemConstructorOptions, shell} from 'electron';
 import {
 	chooseStoryDirectoryPath,
-	revealStoryDirectory
+	revealStoryDirectory,
+	resetStoryDirectoryPath
 } from '../story-directory';
 import {getAppPref} from '../app-prefs';
 import {toggleHardwareAcceleration} from '../hardware-acceleration';
@@ -29,6 +30,7 @@ describe('initMenuBar', () => {
 	let openDevToolsMock: jest.Mock;
 	const openExternalMock = shell.openExternal as jest.Mock;
 	const revealStoryDirectoryMock = revealStoryDirectory as jest.Mock;
+	const resetStoryDirectoryPathMock = resetStoryDirectoryPath as jest.Mock;
 	let setApplicationMenuSpy: jest.SpyInstance;
 
 	beforeEach(() => {
@@ -102,6 +104,16 @@ describe('initMenuBar', () => {
 			expect(item).not.toBeUndefined();
 			item.click();
 			expect(chooseStoryDirectoryPathMock).toBeCalledTimes(1);
+		});
+
+		it('adds a Reset Story Library Folder menu item to the application menu', () => {
+			const item = setApplicationMenuSpy.mock.calls[0][0][0].submenu.find(
+				(item: any) => item.label === 'electron.menuBar.resetStoryLibraryFolder'
+			);
+
+			expect(item).not.toBeUndefined();
+			item.click();
+			expect(resetStoryDirectoryPathMock).toBeCalledTimes(1);
 		});
 
 		it('adds a Show Story Library menu item to the View menu', () => {
@@ -270,6 +282,16 @@ describe('initMenuBar', () => {
 			expect(item).not.toBeUndefined();
 			item.click();
 			expect(chooseStoryDirectoryPathMock).toBeCalledTimes(1);
+		});
+
+		it('adds a Reset Story Library Folder menu item to the application menu', () => {
+			const item = setApplicationMenuSpy.mock.calls[0][0][0].submenu.find(
+				(item: any) => item.label === 'electron.menuBar.resetStoryLibraryFolder'
+			);
+
+			expect(item).not.toBeUndefined();
+			item.click();
+			expect(resetStoryDirectoryPathMock).toBeCalledTimes(1);
 		});
 
 		it('adds a Show Story Library menu item to the View menu', () => {

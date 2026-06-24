@@ -635,6 +635,17 @@ TypeScript stand-ins for a finished Rust core, a linear search placeholder, and 
 mutation path — with M2's own performance validation explicitly outstanding. Those are the
 temporary scaffolds; the phases above remove them.
 
+> **0.1.2 playtest remediation (2026-06-23).** External testing surfaced a
+> launch-bricking backup crash, an unimplemented asset-import copy path, and a
+> missing-asset detection bug — all of which land in **Phase 2** here (P2.2 native
+> load owns the library path/move; P2.4/P2.5 own import; P2.6 owns the single asset
+> manifest that drives missing detection). The crash itself is an Electron
+> main-process recursive-copy bug that must be fixed *now*, ahead of the native
+> cutover. Full root-cause analysis, file:line refs, and DO/DON'T fixes:
+> [`TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md`](./TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md)
+> (waves W0, W5.2, W5.3). Also relevant: §7b(6) preload jsonp hardening ↔ that
+> doc's W7 (story-format icons/descriptions not loading in the packaged app).
+
 ## 8. Sequencing recommendation
 
 1. **Phase 0 now** — biggest user-visible win for least risk; gets open off the hard-fail line.

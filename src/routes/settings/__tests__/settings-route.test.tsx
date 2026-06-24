@@ -32,7 +32,9 @@ describe('<SettingsRoute>', () => {
 		expect(screen.getByText('Workspace')).toBeInTheDocument();
 		expect(screen.getByText('Modes')).toBeInTheDocument();
 		expect(screen.getByText('Default card')).toBeInTheDocument();
-		expect(screen.getByText('Right-click creates passages')).toBeInTheDocument();
+		expect(
+			screen.getByText('Right-click creates passages')
+		).toBeInTheDocument();
 		expect(screen.getByText('Code theme')).toBeInTheDocument();
 		expect(screen.getByText('Storage')).toBeInTheDocument();
 		expect(screen.getByText('Backups')).toBeInTheDocument();
@@ -65,10 +67,15 @@ describe('<SettingsRoute>', () => {
 
 		expect(screen.getByDisplayValue('/Users/test/Stories')).toBeInTheDocument();
 		expect(screen.getByLabelText('Code editor theme')).toHaveValue('one-dark');
-		expect(screen.getByLabelText('Right-click creates passages')).not.toBeChecked();
+		expect(
+			screen.getByLabelText('Right-click creates passages')
+		).not.toBeChecked();
 	});
 
 	it('loads and updates native platform settings', async () => {
+		const resetStoryLibraryFolder = jest.fn(
+			async () => '/native/default-library'
+		);
 		const updatePlatformSettings = jest.fn(async settings => ({
 			backupCadenceMinutes: 20,
 			backupFolderPath: '/native/backups',
@@ -100,6 +107,7 @@ describe('<SettingsRoute>', () => {
 				storyLibraryFolderPath: '/native/library'
 			})),
 			getStoryLibraryFolder: jest.fn(async () => '/native/library'),
+			resetStoryLibraryFolder,
 			updatePlatformSettings
 		} as any;
 
@@ -133,5 +141,14 @@ describe('<SettingsRoute>', () => {
 				scratchAssetStrategy: 'copy'
 			})
 		);
+
+		fireEvent.click(screen.getByText('Reset Library'));
+
+		await waitFor(() =>
+			expect(resetStoryLibraryFolder).toHaveBeenCalledTimes(1)
+		);
+		expect(
+			screen.getByDisplayValue('/native/default-library')
+		).toBeInTheDocument();
 	});
 });

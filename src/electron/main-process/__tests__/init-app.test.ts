@@ -88,6 +88,24 @@ describe('initApp', () => {
 		expect(showErrorBoxMock).not.toBeCalled();
 	});
 
+	it("doesn't quit if the automatic story directory backup fails", async () => {
+		const warnMock = jest.spyOn(console, 'warn').mockReturnValue();
+		const error = new Error('Backup failed');
+
+		backupStoryDirectoryMock.mockRejectedValue(error);
+		await initApp();
+		await Promise.resolve();
+
+		expect(showErrorBoxMock).not.toBeCalled();
+		expect(quitMock).not.toBeCalled();
+		expect(initIpcMock).toBeCalledTimes(1);
+		expect(initMenuBarMock).toBeCalledTimes(1);
+		expect(warnMock).toHaveBeenCalledWith(
+			'Story library backup failed; continuing startup.',
+			error
+		);
+	});
+
 	it('displays an error dialog and quits if an error occurs', async () => {
 		initLocalesMock.mockRejectedValue(new Error());
 		await initApp();

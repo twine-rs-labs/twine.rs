@@ -1,6 +1,6 @@
 import {app, dialog, shell} from 'electron';
 import {copy, mkdirp, readdir, remove, stat} from 'fs-extra';
-import {join} from 'path';
+import {isAbsolute, join, relative, resolve, sep} from 'path';
 import {i18n} from './locales';
 import {getAppPref, setAppPref} from './app-prefs';
 import {showRelaunchDialog} from './relaunch-dialog';
@@ -11,6 +11,130 @@ import {backupRetentionLimit} from './platform-settings';
 // first.
 
 let storyDirectoryPath: string;
+
+function appDocumentsDirectoryPath() {
+	return join(app.getPath('documents'), app.getName());
+}
+
+function defaultStoryDirectoryPath() {
+	return join(
+		appDocumentsDirectoryPath(),
+		i18n.t('electron.storiesDirectoryName')
+	);
+}
+
+function documentsBackupDirectoryPath() {
+	return join(
+		appDocumentsDirectoryPath(),
+		i18n.t('electron.backupsDirectoryName')
+	);
+}
+
+function pathContainsPath(parentPath: string, childPath: string) {
+	const relativePath = relative(resolve(parentPath), resolve(childPath));
+
+	return (
+		relativePath === '' ||
+		(relativePath !== '..' &&
+			!relativePath.startsWith(`..${sep}`) &&
+			!isAbsolute(relativePath))
+	);
+}
+
+function pathsOverlap(pathA: string, pathB: string) {
+	return pathContainsPath(pathA, pathB) || pathContainsPath(pathB, pathA);
+}
+
+function defaultBackupDirectoryPath(storyPath = storyDirectoryPath) {
+	const backupPath = documentsBackupDirectoryPath();
+
+	if (storyPath !== undefined && pathsOverlap(storyPath, backupPath)) {
+		return join(
+			app.getPath('userData'),
+			i18n.t('electron.backupsDirectoryName')
+		);
+	}
+
+	return backupPath;
+}
+
+function validateBackupDirectoryPath(storyPath: string, backupPath: string) {
+	if (pathsOverlap(storyPath, backupPath)) {
+		throw new Error(
+			`The story library cannot be backed up to a folder inside it or to one of its parent folders. Story library: ${storyPath}; backup folder: ${backupPath}`
+		);
+	}
+}
+
+function validateStoryDirectoryMovePath(
+	sourcePath: string,
+	destinationPath: string
+) {
+	if (resolve(sourcePath) === resolve(destinationPath)) {
+		return;
+	}
+
+	if (pathsOverlap(sourcePath, destinationPath)) {
+		throw new Error(
+			`The story library cannot be moved into itself or one of its parent folders. Story library: ${sourcePath}; destination: ${destinationPath}`
+		);
+	}
+}
+
+function isUnsafeStoryDirectoryPreferencePath(prefPath: string) {
+	return pathsOverlap(prefPath, documentsBackupDirectoryPath());
+}
+
+async function resetBackupDirectoryPreferenceIfUnsafe(storyPath: string) {
+	const backupPrefPath = getAppPref('backupFolderPath');
+
+	if (
+		typeof backupPrefPath === 'string' &&
+		pathsOverlap(storyPath, backupPrefPath)
+	) {
+		console.warn(
+			`Backup path ${backupPrefPath} overlaps the story library; resetting to the default backup path.`
+		);
+		await setAppPref('backupFolderPath', undefined);
+	}
+}
+
+function backupCopyFilter(storyPath: string, backupPath: string) {
+	const excludedPaths = [
+		backupPath,
+		join(storyPath, i18n.t('electron.backupsDirectoryName')),
+		join(storyPath, i18n.t('electron.scratchDirectoryName')),
+		join(storyPath, '.twine', 'cache'),
+		join(storyPath, '.twine', 'tmp')
+	].map(path => resolve(path));
+
+	return (sourcePath: string) => {
+		const resolvedSourcePath = resolve(sourcePath);
+
+		return !excludedPaths.some(
+			excludedPath =>
+				resolvedSourcePath !== resolve(storyPath) &&
+				pathContainsPath(excludedPath, resolvedSourcePath)
+		);
+	};
+}
+
+async function moveStoryDirectory(destinationPath: string) {
+	const sourcePath = getStoryDirectoryPath();
+
+	if (resolve(sourcePath) === resolve(destinationPath)) {
+		return;
+	}
+
+	validateStoryDirectoryMovePath(sourcePath, destinationPath);
+	await mkdirp(destinationPath);
+	await copy(sourcePath, destinationPath, {
+		errorOnExist: true,
+		overwrite: false
+	});
+	await readdir(destinationPath);
+	await remove(sourcePath);
+}
 
 /**
  * Initializes the user story directory, deciding whether to use one set by app
@@ -27,55 +151,63 @@ export async function initStoryDirectory() {
 	const prefPath = getAppPref('storyLibraryFolderPath');
 
 	if (typeof prefPath === 'string') {
-		// Try reading it initially. We need to use readdir() instead of access()
-		// because access() just tells us if we can see the directory itself, not
-		// anything inside it.
-
-		try {
-			await readdir(prefPath);
-			storyDirectoryPath = prefPath;
-			console.log(`Story library path initialized as ${storyDirectoryPath}`);
-			return;
-		} catch (error) {
-			// Maybe it doesn't exist yet. Try creating it.
+		if (isUnsafeStoryDirectoryPreferencePath(prefPath)) {
+			console.warn(
+				`Story library path ${prefPath} overlaps Twine's backup folder; resetting to the default story library path.`
+			);
+			await setAppPref('storyLibraryFolderPath', undefined);
+		} else {
+			// Try reading it initially. We need to use readdir() instead of access()
+			// because access() just tells us if we can see the directory itself, not
+			// anything inside it.
 
 			try {
-				await mkdirp(prefPath);
 				await readdir(prefPath);
 				storyDirectoryPath = prefPath;
+				await resetBackupDirectoryPreferenceIfUnsafe(storyDirectoryPath);
+				console.log(`Story library path initialized as ${storyDirectoryPath}`);
 				return;
 			} catch (error) {
-				// OK, we give up.
+				// Maybe it doesn't exist yet. Try creating it.
 
-				const {response} = await dialog.showMessageBox({
-					detail: i18n.t('electron.errors.storyLibraryFolderAppPref.detail', {
-						path: prefPath
-					}),
-					message: i18n.t('electron.errors.storyLibraryFolderAppPref.message'),
-					type: 'error',
-					buttons: [
-						i18n.t('electron.errors.storyLibraryFolderAppPref.useDefault'),
-						i18n.t('electron.errors.storyLibraryFolderAppPref.quit')
-					],
-					defaultId: 0
-				});
+				try {
+					await mkdirp(prefPath);
+					await readdir(prefPath);
+					storyDirectoryPath = prefPath;
+					await resetBackupDirectoryPreferenceIfUnsafe(storyDirectoryPath);
+					return;
+				} catch (error) {
+					// OK, we give up.
 
-				if (response === 1) {
-					app.quit();
+					const {response} = await dialog.showMessageBox({
+						detail: i18n.t('electron.errors.storyLibraryFolderAppPref.detail', {
+							path: prefPath
+						}),
+						message: i18n.t(
+							'electron.errors.storyLibraryFolderAppPref.message'
+						),
+						type: 'error',
+						buttons: [
+							i18n.t('electron.errors.storyLibraryFolderAppPref.useDefault'),
+							i18n.t('electron.errors.storyLibraryFolderAppPref.quit')
+						],
+						defaultId: 0
+					});
+
+					if (response === 1) {
+						app.quit();
+					}
+
+					// Reset the preference and fall through to the default path.
+
+					await setAppPref('storyLibraryFolderPath', undefined);
 				}
-
-				// Reset the preference and fall through to the default path.
-
-				setAppPref('storyLibraryFolderPath', undefined);
 			}
 		}
 	}
 
-	storyDirectoryPath = join(
-		app.getPath('documents'),
-		app.getName(),
-		i18n.t('electron.storiesDirectoryName')
-	);
+	storyDirectoryPath = defaultStoryDirectoryPath();
+	await resetBackupDirectoryPreferenceIfUnsafe(storyDirectoryPath);
 	console.log(`Story library path initialized as ${storyDirectoryPath}`);
 }
 
@@ -102,14 +234,62 @@ export async function chooseStoryDirectoryPath() {
 		title: 'Choose a folder'
 	});
 
-	if (!canceled) {
-		setAppPref('storyLibraryFolderPath', filePaths[0]);
-		storyDirectoryPath = filePaths[0];
-		await showRelaunchDialog();
-		return filePaths[0];
+	if (canceled || !filePaths[0]) {
+		return undefined;
 	}
 
-	return undefined;
+	const destinationPath = filePaths[0];
+
+	if (resolve(destinationPath) === resolve(getStoryDirectoryPath())) {
+		return getStoryDirectoryPath();
+	}
+
+	if (isUnsafeStoryDirectoryPreferencePath(destinationPath)) {
+		dialog.showErrorBox(
+			'Story library folder cannot be used.',
+			'Choose a folder that is not the parent of Twine RS backups.'
+		);
+		return undefined;
+	}
+
+	const {response} = await dialog.showMessageBox({
+		buttons: [
+			'Move Existing Stories Here',
+			'Use Existing Stories Here',
+			'Start Empty Here',
+			'Cancel'
+		],
+		cancelId: 3,
+		defaultId: 0,
+		detail:
+			'Moving copies the current story library to the selected folder, verifies the copy, and then removes the old folder.',
+		message: 'Change Story Library Folder',
+		type: 'question'
+	});
+
+	if (response === 3) {
+		return undefined;
+	}
+
+	if (response === 0) {
+		await moveStoryDirectory(destinationPath);
+	}
+
+	await setAppPref('storyLibraryFolderPath', destinationPath);
+	storyDirectoryPath = destinationPath;
+	await showRelaunchDialog();
+	return destinationPath;
+}
+
+/**
+ * Clears the story-library app preference and uses the default story directory.
+ */
+export async function resetStoryDirectoryPath() {
+	storyDirectoryPath = defaultStoryDirectoryPath();
+	await setAppPref('storyLibraryFolderPath', undefined);
+	await resetBackupDirectoryPreferenceIfUnsafe(storyDirectoryPath);
+	await showRelaunchDialog();
+	return storyDirectoryPath;
 }
 
 /**
@@ -134,13 +314,7 @@ export async function revealStoryDirectory() {
 export function getBackupDirectoryPath() {
 	const prefPath = getAppPref('backupFolderPath');
 
-	return typeof prefPath === 'string'
-		? prefPath
-		: join(
-				app.getPath('documents'),
-				app.getName(),
-				i18n.t('electron.backupsDirectoryName')
-			);
+	return typeof prefPath === 'string' ? prefPath : defaultBackupDirectoryPath();
 }
 
 /**
@@ -156,9 +330,11 @@ export async function revealBackupDirectory() {
 export async function backupStoryDirectory(
 	maxBackups = backupRetentionLimit()
 ): Promise<NativeBackupResult> {
+	const storyPath = getStoryDirectoryPath();
 	const backupPath = getBackupDirectoryPath();
 
 	console.log(`Backing up story library to ${backupPath}`);
+	validateBackupDirectoryPath(storyPath, backupPath);
 	await mkdirp(backupPath);
 
 	const now = new Date();
@@ -169,7 +345,9 @@ export async function backupStoryDirectory(
 		}-${now.getDate()} ${now.getHours()}-${now.getMinutes()}-${now.getSeconds()}-${now.getMilliseconds()}`
 	);
 
-	await copy(getStoryDirectoryPath(), backupDirectoryName);
+	await copy(storyPath, backupDirectoryName, {
+		filter: backupCopyFilter(storyPath, backupPath)
+	});
 	console.log(`Backed up story library to ${backupDirectoryName}`);
 
 	const backupDirs = (await readdir(backupPath, {withFileTypes: true})).filter(

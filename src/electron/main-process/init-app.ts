@@ -85,13 +85,24 @@ async function createWindow() {
 	});
 }
 
+async function runAutomaticStoryDirectoryBackup() {
+	try {
+		await backupStoryDirectory();
+	} catch (error) {
+		console.warn('Story library backup failed; continuing startup.', error);
+	}
+}
+
 export async function initApp() {
 	try {
 		await initLocales();
 		await initStoryDirectory();
 		await createStoryDirectory();
-		await backupStoryDirectory();
-		setInterval(() => void backupStoryDirectory(), backupCadenceMs());
+		void runAutomaticStoryDirectoryBackup();
+		setInterval(
+			() => void runAutomaticStoryDirectoryBackup(),
+			backupCadenceMs()
+		);
 		initIpc();
 		initMenuBar();
 		app.on('will-quit', async () => {

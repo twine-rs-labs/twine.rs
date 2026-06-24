@@ -331,6 +331,7 @@
 			"checkForUpdates": "Check for Updates...",
 			"disableHardwareAcceleration": "Disable Hardware Acceleration",
 			"edit": "Edit",
+			"resetStoryLibraryFolder": "Reset Story Library Folder",
 			"setStoryLibraryFolder": "Set Story Library Folder...",
 			"showDevTools": "Show Debug Console",
 			"showStoryLibrary": "Show Story Library",

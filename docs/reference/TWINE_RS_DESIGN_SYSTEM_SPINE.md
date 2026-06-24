@@ -91,6 +91,19 @@ push. M7 (Preferences/Platform) and any further M-work must build _on the DS
 shell_, not add new legacy chrome. The M6 preview/debug handoff is satisfied by
 D8, and the M6 graph-projection requirement is satisfied by D5.
 
+> **0.1.2 playtest remediation (2026-06-23).** The D-series screens are
+> structurally right; external testing found *wiring, state-persistence, and UX*
+> gaps on top of them, not layout problems. Most are D4–D7 polish: a
+> reveal/navigation contract that can address scripts/stylesheets/assets instead of
+> defaulting to the start passage (D6), persisting open editors + graph pan/view
+> options across route changes (D4/D5 view-state rule), editor-dock polish (D4),
+> story-format icon/description/source-link rendering + local-format add (D6), and
+> diagnostics empty-state clarity (D6). **Two items need design, not just code:**
+> a hard simplification of Build/Export (D7) and an optional light token palette
+> (relates to D0's dark-first decision). Per-item root cause, file:line, DO/DON'T
+> fixes, and the two design briefs are in
+> [`TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md`](./TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md).
+
 ## M6 ↔ D-series closure map
 
 M6 (Story Formats, Build, Test, Publishing) is **partially done** and is closed

@@ -19,7 +19,8 @@ import {
 	getBackupDirectoryPath,
 	getStoryDirectoryPath,
 	revealBackupDirectory,
-	revealStoryDirectory
+	revealStoryDirectory,
+	resetStoryDirectoryPath
 } from '../story-directory';
 import {
 	nativeAppPlatformSettings,
@@ -90,6 +91,7 @@ describe('initIpc()', () => {
 		updateNativeAppPlatformSettings as jest.Mock;
 	const revealBackupDirectoryMock = revealBackupDirectory as jest.Mock;
 	const revealStoryDirectoryMock = revealStoryDirectory as jest.Mock;
+	const resetStoryDirectoryPathMock = resetStoryDirectoryPath as jest.Mock;
 	const onMock = ipcMain.on as jest.Mock;
 	const appOnMock = app.on as jest.Mock;
 	const clipboardWriteTextMock = clipboard.writeText as jest.Mock;
@@ -219,6 +221,7 @@ describe('initIpc()', () => {
 		});
 		revealBackupDirectoryMock.mockResolvedValue(undefined);
 		revealStoryDirectoryMock.mockResolvedValue(undefined);
+		resetStoryDirectoryPathMock.mockResolvedValue('/mock/default-library');
 		saveStoryHtmlMock.mockResolvedValue(undefined);
 		initIpc();
 	});
@@ -289,6 +292,9 @@ describe('initIpc()', () => {
 		);
 		const revealLibrary = handleMock.mock.calls.find(
 			call => call[0] === 'reveal-story-library-folder'
+		);
+		const resetLibrary = handleMock.mock.calls.find(
+			call => call[0] === 'reset-story-library-folder'
 		);
 		const saveProject = handleMock.mock.calls.find(
 			call => call[0] === 'save-project-folder'
@@ -402,6 +408,8 @@ describe('initIpc()', () => {
 		});
 		expect(createProjectFolderMock).toHaveBeenCalledWith(story, '/mock/root');
 		expect(await getLibrary[1]()).toBe('/mock/library');
+		expect(await resetLibrary[1]()).toBe('/mock/default-library');
+		expect(resetStoryDirectoryPathMock).toHaveBeenCalledTimes(1);
 		await expect(openProject[1]()).resolves.toBeUndefined();
 		await expect(
 			hydrateProject[1]({}, '/mock/project', ['mock-story'])

@@ -277,6 +277,16 @@ export const SettingsRoute: React.FC = () => {
 		}
 	}
 
+	async function resetStoryLibraryFolder() {
+		const path = await (
+			window as TwineElectronWindow
+		).twineElectron?.resetStoryLibraryFolder?.();
+
+		if (path) {
+			setStoryLibraryFolder(path);
+		}
+	}
+
 	function revealStoryLibraryFolder() {
 		void (
 			window as TwineElectronWindow
@@ -435,6 +445,13 @@ export const SettingsRoute: React.FC = () => {
 								onClick={chooseStoryLibraryFolder}
 							>
 								Choose Library
+							</Button>
+							<Button
+								disabled={!desktopBridge?.resetStoryLibraryFolder}
+								icon="refresh"
+								onClick={resetStoryLibraryFolder}
+							>
+								Reset Library
 							</Button>
 							<Button
 								disabled={!desktopBridge?.revealStoryLibraryFolder}

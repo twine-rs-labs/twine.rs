@@ -8,7 +8,7 @@ import {
 	stat,
 	writeFile
 } from 'fs-extra';
-import {basename, join} from 'path';
+import {basename, join, resolve} from 'path';
 import {i18n} from './locales';
 import {openProjectFolder} from './project-folder';
 import {
@@ -30,27 +30,101 @@ import {
 
 export interface StoryFile extends ElectronLegacyStoryFile {}
 
+function appendNativeProjectStories(
+	result: ElectronLoadedStoryEntry[],
+	openedProject: Awaited<ReturnType<typeof openProjectFolder>>
+) {
+	if (!openedProject) {
+		return;
+	}
+
+	for (const story of openedProject.stories) {
+		result.push({
+			kind: 'native-project',
+			passageTextLoaded: openedProject.passageTextLoaded !== false,
+			rootPath: openedProject.rootPath,
+			story,
+			storyIds: openedProject.storyIds
+		});
+	}
+}
+
+async function directoryEntries(path: string) {
+	try {
+		return await readdir(path, {withFileTypes: true});
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+
+		if (code === 'ENOENT' || code === 'ENOTDIR') {
+			return [];
+		}
+
+		throw error;
+	}
+}
+
+async function isNativeProjectFolder(path: string) {
+	try {
+		const manifestStats = await stat(join(path, 'twine.toml'));
+
+		return manifestStats.isFile();
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+
+		if (code === 'ENOENT' || code === 'ENOTDIR') {
+			return false;
+		}
+
+		throw error;
+	}
+}
+
+async function scanNativeProjectFolders() {
+	const storyPath = getStoryDirectoryPath();
+	const parentPaths = [storyPath, join(storyPath, 'Projects')];
+	const result: string[] = [];
+
+	for (const parentPath of parentPaths) {
+		const entries = await directoryEntries(parentPath);
+
+		await Promise.all(
+			entries
+				.filter(
+					entry =>
+						typeof entry !== 'string' &&
+						entry.isDirectory() &&
+						entry.name[0] !== '.'
+				)
+				.map(async entry => {
+					const candidatePath = join(parentPath, entry.name);
+
+					if (await isNativeProjectFolder(candidatePath)) {
+						result.push(candidatePath);
+					}
+				})
+		);
+	}
+
+	return result;
+}
+
 async function loadRememberedProjectStories(
 	result: ElectronLoadedStoryEntry[]
 ) {
-	for (const project of rememberedProjectFolders()) {
+	const rememberedProjects = rememberedProjectFolders();
+	const loadedProjectPaths = new Set<string>();
+	const missingProjectPathsByBasename = new Map<string, string[]>();
+
+	for (const project of rememberedProjects) {
 		try {
 			const openedProject = await openProjectFolder(project.rootPath, {
 				loadPassageText: false
 			});
 
-			if (!openedProject) {
-				continue;
-			}
+			appendNativeProjectStories(result, openedProject);
 
-			for (const story of openedProject.stories) {
-				result.push({
-					kind: 'native-project',
-					passageTextLoaded: openedProject.passageTextLoaded !== false,
-					rootPath: openedProject.rootPath,
-					story,
-					storyIds: openedProject.storyIds
-				});
+			if (openedProject) {
+				loadedProjectPaths.add(resolve(openedProject.rootPath));
 			}
 		} catch (error) {
 			console.warn(
@@ -62,8 +136,47 @@ async function loadRememberedProjectStories(
 			const code = (error as NodeJS.ErrnoException).code;
 
 			if (code === 'ENOENT' || code === 'ENOTDIR') {
-				forgetProjectFolder(project.rootPath);
+				const projectBasename = basename(project.rootPath);
+				const paths = missingProjectPathsByBasename.get(projectBasename) ?? [];
+
+				paths.push(project.rootPath);
+				missingProjectPathsByBasename.set(projectBasename, paths);
 			}
+		}
+	}
+
+	if (
+		rememberedProjects.length === 0 ||
+		missingProjectPathsByBasename.size > 0
+	) {
+		for (const projectPath of await scanNativeProjectFolders()) {
+			if (loadedProjectPaths.has(resolve(projectPath))) {
+				continue;
+			}
+
+			try {
+				const openedProject = await openProjectFolder(projectPath, {
+					loadPassageText: false
+				});
+
+				appendNativeProjectStories(result, openedProject);
+
+				if (openedProject) {
+					loadedProjectPaths.add(resolve(openedProject.rootPath));
+				}
+			} catch (error) {
+				console.warn(
+					`Could not load scanned native project ${projectPath}: ${
+						(error as Error).message
+					}`
+				);
+			}
+		}
+	}
+
+	for (const missingProjectPaths of missingProjectPathsByBasename.values()) {
+		for (const missingProjectPath of missingProjectPaths) {
+			forgetProjectFolder(missingProjectPath);
 		}
 	}
 }

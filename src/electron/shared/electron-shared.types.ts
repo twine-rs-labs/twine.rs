@@ -193,6 +193,7 @@ export interface TwineElectronWindow extends Window {
 		): Promise<NativeProjectSessionSnapshot>;
 		revealStoryLibraryFolder(): Promise<void>;
 		revealBackupFolder(): Promise<void>;
+		resetStoryLibraryFolder(): Promise<string>;
 		revealPath(path: string): void;
 		renameProjectAsset(
 			rootPath: string,
