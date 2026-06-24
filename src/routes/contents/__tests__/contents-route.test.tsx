@@ -1,6 +1,7 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {createMemoryHistory} from 'history';
 import * as React from 'react';
-import {MemoryRouter, Route} from 'react-router-dom';
+import {MemoryRouter, Route, Router} from 'react-router-dom';
 import {
 	FakeStateProvider,
 	fakePassage,
@@ -101,6 +102,30 @@ function renderComponent(
 	);
 
 	return {result, story};
+}
+
+function renderComponentWithHistory(
+	configure?: (story: ReturnType<typeof indexedStory>['story']) => void
+) {
+	const {story} = indexedStory();
+
+	configure?.(story);
+
+	const history = createMemoryHistory({
+		initialEntries: [`/stories/${story.id}/contents`]
+	});
+	const result = render(
+		<FakeStateProvider stories={[story]}>
+			<Router history={history}>
+				<Route path="/stories/:storyId/contents">
+					<ContentsRoute />
+					<StoryInspector id={story.id} />
+				</Route>
+			</Router>
+		</FakeStateProvider>
+	);
+
+	return {history, result, story};
 }
 
 describe('<ContentsRoute>', () => {
@@ -261,5 +286,46 @@ describe('<ContentsRoute>', () => {
 		fireEvent.click(screen.getByRole('button', {name: 'Test From Here'}));
 
 		expect(mockTestStory).toHaveBeenCalledWith(story.id, story.passages[0].id);
+	});
+
+	it('reveals variables through story search instead of a first source', async () => {
+		const {history} = renderComponentWithHistory();
+
+		fireEvent.click(screen.getByRole('button', {name: /Variables/}));
+		await waitFor(() =>
+			expect(screen.getAllByText('$score').length).toBeGreaterThan(0)
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'Reveal in Source'}));
+
+		const query = new URLSearchParams(history.location.search);
+
+		expect(history.location.pathname).toBe('/stories/story-id');
+		expect(query.get('q')).toBe('$score');
+		expect(query.get('scope')).toBe('variable');
+		expect(query.get('source')).toBeNull();
+		expect(query.get('passage')).toBeNull();
+	});
+
+	it('reveals stylesheet asset references to the stylesheet source target', async () => {
+		const {history, story} = renderComponentWithHistory(story => {
+			story.stylesheet = '.hero { background: url("assets/bg.png"); }';
+		});
+
+		fireEvent.click(screen.getByRole('button', {name: /Assets/}));
+		await waitFor(() =>
+			expect(screen.getAllByText('assets/bg.png').length).toBeGreaterThan(0)
+		);
+		fireEvent.click(screen.getAllByText('assets/bg.png')[0].closest('button')!);
+		fireEvent.click(screen.getByRole('button', {name: 'Reveal in Source'}));
+
+		const query = new URLSearchParams(history.location.search);
+
+		expect(history.location.pathname).toBe(`/stories/${story.id}`);
+		expect(query.get('mode')).toBe('text');
+		expect(query.get('source')).toBe('stylesheet');
+		expect(query.get('passage')).toBeNull();
+		expect(Number(query.get('offset'))).toBe(
+			story.stylesheet.indexOf('assets/bg.png')
+		);
 	});
 });

@@ -36,12 +36,7 @@ import {
 	normalizedAssetPath,
 	projectAssetPath
 } from '../../core/asset-paths';
-import {
-	Passage,
-	selectPassage,
-	Story,
-	useStoriesContext
-} from '../../store/stories';
+import {selectPassage, Story, useStoriesContext} from '../../store/stories';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {usePrefsContext} from '../../store/prefs';
 import {
@@ -50,6 +45,10 @@ import {
 	saveProjectMetadata
 } from '../../store/project-metadata';
 import {markPerformance} from '../../util/performance';
+import {
+	sourceNavigationTargetFromAssetReference,
+	sourceTarget
+} from '../story-edit/source-navigation';
 import './assets-route.css';
 
 type AssetSort = 'Name' | 'References' | 'Size' | 'Type';
@@ -394,22 +393,6 @@ function firstUsagePassage(story: Story, asset: AssetManagerViewModelEntry) {
 				passage => passage.id === asset.firstReference?.passageId
 			)
 		: undefined;
-}
-
-function passageForAssetReference(story: Story, reference: CoreAssetReference) {
-	return reference.passageId
-		? story.passages.find(passage => passage.id === reference.passageId)
-		: undefined;
-}
-
-function sourceTarget(story: Story, passage?: Passage) {
-	const query = new URLSearchParams({mode: 'text'});
-
-	if (passage) {
-		query.set('passage', passage.id);
-	}
-
-	return `/stories/${story.id}?${query.toString()}`;
 }
 
 function assetSourceLabel(asset: AssetManagerViewModelEntry) {
@@ -866,6 +849,7 @@ export const AssetsRoute: React.FC = () => {
 		story && selectedAsset
 			? firstUsagePassage(story, selectedAsset)
 			: undefined;
+	const canRevealSelectedAsset = !!selectedAsset?.firstReference;
 
 	React.useEffect(() => {
 		if (selectedAsset && selectedAsset.path !== selectedPath) {
@@ -1037,13 +1021,32 @@ export const AssetsRoute: React.FC = () => {
 			return;
 		}
 
-		const target = firstUsagePassage(story, asset);
+		const reference = asset.firstReference;
+		const target = reference
+			? sourceNavigationTargetFromAssetReference(reference)
+			: undefined;
 
-		if (target) {
-			dispatch(selectPassage(story, target, true));
+		if (!target || !reference) {
+			return;
 		}
 
-		history.push(sourceTarget(story, target));
+		if (target.kind === 'passage') {
+			const passage = story.passages.find(
+				passage => passage.id === target.passageId
+			);
+
+			if (passage) {
+				dispatch(selectPassage(story, passage, true));
+			}
+		}
+
+		history.push(
+			sourceTarget(story, {
+				line: reference.line,
+				offset: reference.start,
+				target
+			})
+		);
 	}
 
 	function revealReference(reference: CoreAssetReference) {
@@ -1051,13 +1054,29 @@ export const AssetsRoute: React.FC = () => {
 			return;
 		}
 
-		const target = passageForAssetReference(story, reference);
+		const target = sourceNavigationTargetFromAssetReference(reference);
 
-		if (target) {
-			dispatch(selectPassage(story, target, true));
+		if (!target) {
+			return;
 		}
 
-		history.push(sourceTarget(story, target));
+		if (target.kind === 'passage') {
+			const passage = story.passages.find(
+				passage => passage.id === target.passageId
+			);
+
+			if (passage) {
+				dispatch(selectPassage(story, passage, true));
+			}
+		}
+
+		history.push(
+			sourceTarget(story, {
+				line: reference.line,
+				offset: reference.start,
+				target
+			})
+		);
 	}
 
 	function testFirstUsage(asset: AssetManagerViewModelEntry) {
@@ -1499,7 +1518,7 @@ export const AssetsRoute: React.FC = () => {
 								))
 							) : (
 								<div className="assets-route__muted">
-									No passages reference this asset.
+									No indexed source references this asset.
 								</div>
 							)}
 							<div className="assets-route__actions">
@@ -1531,6 +1550,7 @@ export const AssetsRoute: React.FC = () => {
 								</Button>
 								<Button
 									block
+									disabled={!canRevealSelectedAsset}
 									icon="link"
 									onClick={() => revealUsage(selectedAsset)}
 									size="sm"

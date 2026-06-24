@@ -34,16 +34,15 @@ export interface EditorWindowProps {
 	onRevealPassageInGraph?: (passage: Passage) => void;
 	onSelectPassage?: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
+	revealRequest?: {key: number; position?: number};
+	searchRequest?: {key: number; query?: string};
 	selection?: WorkbenchSelection;
 	spec: EditorWindowSpec;
 	story: Story;
 }
 
 function languageForPassage(passage: Passage): SourceEditorLanguage {
-	if (
-		passage.tags.includes('stylesheet') &&
-		!passage.tags.includes('script')
-	) {
+	if (passage.tags.includes('stylesheet') && !passage.tags.includes('script')) {
 		return 'css';
 	}
 
@@ -92,6 +91,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		onRevealPassageInGraph,
 		onSelectPassage,
 		onTestPassage,
+		revealRequest,
+		searchRequest,
 		selection,
 		spec,
 		story
@@ -99,6 +100,10 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	const {t} = useTranslation();
 	const coreProjectHost = useCoreProjectHost();
 	const [searchRequestKey, setSearchRequestKey] = React.useState(0);
+	const combinedSearchRequestKey =
+		searchRequest?.key !== undefined
+			? `${searchRequestKey}:${searchRequest.key}`
+			: searchRequestKey;
 
 	const passage =
 		spec.kind === 'passage'
@@ -129,9 +134,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		return {
 			id: passage?.id ?? `${story.id}:passage`,
 			language: passage ? languageForPassage(passage) : 'twine',
-			memoryKey: passage
-				? `${story.id}:${passage.id}`
-				: `${story.id}:passage`,
+			memoryKey: passage ? `${story.id}:${passage.id}` : `${story.id}:passage`,
 			name: passage?.name ?? t('routes.storyEdit.workspace.noPassages'),
 			passage,
 			value: passage?.text ?? ''
@@ -198,7 +201,14 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				);
 			}
 		},
-		[coreProjectHost, passage, spec.kind, story.id, story.script, story.stylesheet]
+		[
+			coreProjectHost,
+			passage,
+			spec.kind,
+			story.id,
+			story.script,
+			story.stylesheet
+		]
 	);
 
 	React.useEffect(() => {
@@ -385,7 +395,16 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 						memoryKey={buffer.memoryKey}
 						onChange={handleChangeText}
 						placeholderText={t('dialogs.passageEdit.passageTextPlaceholder')}
-						searchRequestKey={searchRequestKey}
+						revealPosition={
+							revealRequest?.position !== undefined
+								? {
+										key: revealRequest.key,
+										position: revealRequest.position
+									}
+								: undefined
+						}
+						searchQuery={searchRequest?.query}
+						searchRequestKey={combinedSearchRequestKey}
 						selfLinkName={spec.kind === 'passage' ? passage?.name : undefined}
 						value={localText}
 					/>

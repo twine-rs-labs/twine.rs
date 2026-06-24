@@ -1,6 +1,7 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {createMemoryHistory} from 'history';
 import * as React from 'react';
-import {MemoryRouter, Route} from 'react-router-dom';
+import {MemoryRouter, Route, Router} from 'react-router-dom';
 import {
 	FakeStateProvider,
 	fakePassage,
@@ -14,6 +15,7 @@ import {
 } from '../../../core';
 import {StoreCoreProjectHost} from '../../../core/project-host';
 import {saveProjectMetadata} from '../../../store/project-metadata';
+import type {Story} from '../../../store/stories';
 import {AssetsRoute} from '../assets-route';
 
 const mockTestStory = jest.fn();
@@ -114,6 +116,28 @@ function renderComponent() {
 	return {result, story};
 }
 
+function renderComponentWithHistory(configure?: (story: Story) => void) {
+	const {story} = assetStory();
+
+	configure?.(story);
+
+	const history = createMemoryHistory({
+		initialEntries: [`/stories/${story.id}/assets`]
+	});
+	const result = render(
+		<FakeStateProvider stories={[story]}>
+			<Router history={history}>
+				<Route path="/stories/:storyId/assets">
+					<AssetsRoute />
+					<StoryInspector id={story.id} />
+				</Route>
+			</Router>
+		</FakeStateProvider>
+	);
+
+	return {history, result, story};
+}
+
 function assetCard(path: string) {
 	return screen.getByRole('button', {
 		name: `Select asset ${path}`
@@ -167,6 +191,26 @@ describe('<AssetsRoute>', () => {
 		expect(
 			screen.getByRole('button', {name: 'Find Usages'})
 		).toBeInTheDocument();
+	});
+
+	it('reveals stylesheet asset references without falling back to a passage', async () => {
+		const {history, story} = renderComponentWithHistory(story => {
+			story.stylesheet = '.hero { background: url("assets/bg.png"); }';
+		});
+
+		await openAssetsFolder();
+		fireEvent.click(assetCard('assets/bg.png'));
+		fireEvent.click(screen.getByRole('button', {name: 'Find Usages'}));
+
+		const query = new URLSearchParams(history.location.search);
+
+		expect(history.location.pathname).toBe(`/stories/${story.id}`);
+		expect(query.get('mode')).toBe('text');
+		expect(query.get('source')).toBe('stylesheet');
+		expect(query.get('passage')).toBeNull();
+		expect(Number(query.get('offset'))).toBe(
+			story.stylesheet.indexOf('assets/bg.png')
+		);
 	});
 
 	it('keeps folders collapsed by default and opens directories in the browser', async () => {

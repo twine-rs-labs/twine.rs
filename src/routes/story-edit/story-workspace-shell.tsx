@@ -35,15 +35,11 @@ import type {
 } from '../../core';
 import type {PatchBatch} from '../../core/bindings/PatchBatch';
 import type {CoreStoryIndex} from '../../core/bindings/CoreStoryIndex';
-import type {CoreContentsEntry} from '../../core/bindings/CoreContentsEntry';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {CoreProjectHost} from '../../core/project-host';
 import type {TwineElectronWindow} from '../../electron/shared';
 import {useDialogsContext} from '../../dialogs/context';
-import {
-	canOpenStorySource,
-	openStorySourceDialog
-} from '../../dialogs/story-source-dialog';
+import {StorySearchDialog} from '../../dialogs/story-search';
 import {loadProjectMetadata} from '../../store/project-metadata';
 import {
 	markProjectStoryHydration,
@@ -59,6 +55,12 @@ import {
 import {StoryEditMode} from './workspace-state';
 import {EditorDock} from './editor-dock';
 import {EditorWindowSpec, editorWindowId} from './editor-window-spec';
+import {
+	editorWindowSpecForSourceNavigationTarget,
+	sourceNavigationTargetFromAssetReference,
+	sourceNavigationTargetFromContentsEntry,
+	sourceTarget
+} from './source-navigation';
 
 export interface StoryWorkspaceShellProps {
 	activeWindowId?: string;
@@ -78,7 +80,9 @@ export interface StoryWorkspaceShellProps {
 	onSelectPassage: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
 	overlay?: React.ReactNode;
+	revealRequests?: Map<string, {key: number; position?: number}>;
 	rightDockCollapsed: boolean;
+	searchRequests?: Map<string, {key: number; query?: string}>;
 	selectedPassageId?: string;
 	story: Story;
 }
@@ -406,14 +410,27 @@ const AssetManager: React.FC<{
 
 	function revealFirstUsage(path: string) {
 		const asset = assets.entries.find(entry => entry.path === path);
-		const passage = asset?.firstReference?.passageId
-			? story.passages.find(
-					passage => passage.id === asset.firstReference?.passageId
-				)
+		const reference = asset?.firstReference;
+		const target = reference
+			? sourceNavigationTargetFromAssetReference(reference)
 			: undefined;
+		const passage =
+			target?.kind === 'passage'
+				? story.passages.find(passage => passage.id === target.passageId)
+				: undefined;
 
 		if (passage) {
 			onSelectPassage(passage);
+		}
+
+		if (target && reference) {
+			history.push(
+				sourceTarget(story, {
+					line: reference.line,
+					offset: reference.start,
+					target
+				})
+			);
 		}
 	}
 
@@ -528,6 +545,7 @@ const AssetManager: React.FC<{
 										Insert
 									</Button>
 									<Button
+										disabled={!asset.firstReference}
 										icon="link"
 										onClick={() => revealFirstUsage(asset.path)}
 										size="sm"
@@ -580,17 +598,11 @@ const ContentsEntryVisual: React.FC<{entry: ContentsViewModelEntry}> = ({
 
 const ContentsNavigator: React.FC<{
 	contents: ContentsViewModel;
-	onOpenSource: (entry: CoreContentsEntry) => void;
+	onOpenSource: (entry: ContentsViewModelEntry) => void;
 	onSelectPassage: (passage: Passage) => void;
 	story: Story;
 }> = ({contents, onOpenSource, onSelectPassage, story}) => {
 	const visibleEntries = contents.entries.slice(0, 120);
-
-	function passageForEntry(entry: CoreContentsEntry) {
-		return entry.passageId
-			? story.passages.find(passage => passage.id === entry.passageId)
-			: undefined;
-	}
 
 	let lastGroup: string | undefined;
 
@@ -608,7 +620,14 @@ const ContentsNavigator: React.FC<{
 			</div>
 			<div className="cn__list">
 				{visibleEntries.map(entry => {
-					const passage = passageForEntry(entry.core);
+					const passage = entry.core.passageId
+						? story.passages.find(
+								passage => passage.id === entry.core.passageId
+							)
+						: undefined;
+					const canOpenSource =
+						entry.core.kind === 'variable' ||
+						!!sourceNavigationTargetFromContentsEntry(entry.core);
 					const showGroup = entry.group !== lastGroup;
 					lastGroup = entry.group;
 					const content = (
@@ -645,17 +664,21 @@ const ContentsNavigator: React.FC<{
 									className={classNames('cn__row', 'story-edit-contents-item', {
 										'is-problem': !!entry.severity
 									})}
-									onClick={() => onSelectPassage(passage)}
+									onClick={() =>
+										canOpenSource
+											? onOpenSource(entry)
+											: onSelectPassage(passage)
+									}
 									type="button"
 								>
 									{content}
 								</button>
-							) : canOpenStorySource(entry.core.sourceId, entry.core.kind) ? (
+							) : canOpenSource ? (
 								<button
 									className={classNames('cn__row', 'story-edit-contents-item', {
 										'is-problem': !!entry.severity
 									})}
-									onClick={() => onOpenSource(entry.core)}
+									onClick={() => onOpenSource(entry)}
 									type="button"
 								>
 									{content}
@@ -1120,11 +1143,14 @@ export const StoryWorkspaceShell: React.FC<
 		onSelectPassage,
 		onTestPassage,
 		overlay,
+		revealRequests,
 		rightDockCollapsed,
+		searchRequests,
 		selectedPassageId,
 		story
 	} = props;
 	const coreProjectHost = useCoreProjectHost();
+	const history = useHistory();
 	const {dispatch: storiesDispatch, stories} = useStoriesContext();
 	const [patchVersion, setPatchVersion] = React.useState(0);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
@@ -1375,13 +1401,70 @@ export const StoryWorkspaceShell: React.FC<
 	const showGraph = mode === 'graph' || mode === 'split';
 	const showText = mode === 'text' || mode === 'split';
 
-	function handleOpenContentsSource(entry: CoreContentsEntry) {
-		openStorySourceDialog(
-			dialogsDispatch,
-			story.id,
-			entry.sourceId,
-			entry.kind
-		);
+	function handleOpenContentsSource(entry: ContentsViewModelEntry) {
+		if (entry.core.kind === 'variable') {
+			dialogsDispatch({
+				type: 'addDialog',
+				component: StorySearchDialog,
+				props: {
+					find: entry.label,
+					flags: {
+						includePassageNames: false,
+						matchCase: false,
+						useRegexes: false
+					},
+					replace: '',
+					storyId: story.id
+				}
+			});
+			return;
+		}
+
+		const assetReference =
+			entry.core.kind === 'asset' ? entry.asset?.references[0] : undefined;
+		const assetTarget = assetReference
+			? sourceNavigationTargetFromAssetReference(assetReference)
+			: undefined;
+
+		if (assetReference && assetTarget) {
+			if (assetTarget.kind === 'passage') {
+				const passage = story.passages.find(
+					passage => passage.id === assetTarget.passageId
+				);
+
+				if (passage) {
+					onSelectPassage(passage);
+				}
+			}
+
+			history.push(
+				sourceTarget(story, {
+					line: assetReference.line,
+					offset: assetReference.start,
+					target: assetTarget
+				})
+			);
+			return;
+		}
+
+		const target = sourceNavigationTargetFromContentsEntry(entry.core);
+
+		if (!target) {
+			return;
+		}
+
+		if (target.kind === 'passage') {
+			const passage = story.passages.find(
+				passage => passage.id === target.passageId
+			);
+
+			if (passage) {
+				onSelectPassage(passage);
+			}
+			return;
+		}
+
+		onOpenEditorWindow?.(editorWindowSpecForSourceNavigationTarget(target));
 	}
 
 	return (
@@ -1458,6 +1541,8 @@ export const StoryWorkspaceShell: React.FC<
 						onRevealPassageInGraph={onRevealPassageInGraph}
 						onSelectPassage={onSelectPassage}
 						onTestPassage={onTestPassage}
+						revealRequests={revealRequests}
+						searchRequests={searchRequests}
 						selectedPassageId={selectedPassageId}
 						selections={dockSelections}
 						story={story}

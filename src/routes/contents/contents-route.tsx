@@ -19,15 +19,11 @@ import {
 	workbenchSelection
 } from '../../core';
 import type {ContentsViewModelEntry} from '../../core/view-models';
+import type {CoreAssetReference} from '../../core/bindings/CoreAssetReference';
 import type {CoreContentsEntryKind} from '../../core/bindings/CoreContentsEntryKind';
 import {fileUrlForPath} from '../../core/asset-paths';
 import type {TwineElectronWindow} from '../../electron/shared';
-import {
-	Passage,
-	selectPassage,
-	Story,
-	useStoriesContext
-} from '../../store/stories';
+import {selectPassage, Story, useStoriesContext} from '../../store/stories';
 import {
 	defaultProjectFolderRoot,
 	loadProjectMetadata,
@@ -39,6 +35,12 @@ import {
 	markPerformanceAfterPaint,
 	scheduleIdleWork
 } from '../../util/performance';
+import {
+	sourceNavigationTargetFromAssetReference,
+	sourceNavigationTargetFromContentsEntry,
+	sourceTarget,
+	type SourceNavigationTarget
+} from '../story-edit/source-navigation';
 import './contents-route.css';
 
 type ContentsFilter =
@@ -315,16 +317,6 @@ function passageForEntry(story: Story, entry: ContentsViewModelEntry) {
 		: undefined;
 }
 
-function sourceTarget(story: Story, mode: 'graph' | 'text', passage?: Passage) {
-	const query = new URLSearchParams({mode});
-
-	if (passage) {
-		query.set('passage', passage.id);
-	}
-
-	return `/stories/${story.id}?${query.toString()}`;
-}
-
 const DetailField: React.FC<{
 	label: string;
 	value: React.ReactNode;
@@ -334,6 +326,25 @@ const DetailField: React.FC<{
 		<b>{value}</b>
 	</div>
 );
+
+function sourceIconForTarget(target: SourceNavigationTarget) {
+	return target.kind === 'script'
+		? 'braces'
+		: target.kind === 'stylesheet'
+			? 'hash'
+			: 'file-text';
+}
+
+function canRevealEntryInSource(entry: ContentsViewModelEntry | undefined) {
+	if (!entry) {
+		return false;
+	}
+
+	return (
+		entry.core.kind === 'variable' ||
+		!!sourceNavigationTargetFromContentsEntry(entry.core)
+	);
+}
 
 export const ContentsRoute: React.FC = () => {
 	const {storyId} = useParams<{storyId: string}>();
@@ -551,6 +562,7 @@ export const ContentsRoute: React.FC = () => {
 		story && index && selectedPassage
 			? workbenchSelection(story, index, selectedPassage.id)
 			: undefined;
+	const canRevealSelectedEntry = canRevealEntryInSource(selectedEntry);
 
 	React.useEffect(() => {
 		if (selectedEntry && selectedEntry.id !== selectedId) {
@@ -574,11 +586,82 @@ export const ContentsRoute: React.FC = () => {
 
 		const passage = passageForEntry(story, entry);
 
-		if (passage) {
+		if (mode === 'graph') {
+			if (!passage) {
+				return;
+			}
+
 			dispatch(selectPassage(story, passage, true));
+			history.push(
+				sourceTarget(story, {
+					mode,
+					target: {kind: 'passage', passageId: passage.id}
+				})
+			);
+			return;
 		}
 
-		history.push(sourceTarget(story, mode, passage));
+		if (entry.core.kind === 'variable') {
+			history.push(
+				sourceTarget(story, {
+					search: {query: entry.label, scope: 'variable'}
+				})
+			);
+			return;
+		}
+
+		if (entry.core.kind === 'asset' && entry.asset?.references[0]) {
+			openReference(entry.asset.references[0]);
+			return;
+		}
+
+		const target = sourceNavigationTargetFromContentsEntry(entry.core);
+
+		if (!target) {
+			return;
+		}
+
+		if (target.kind === 'passage') {
+			const targetPassage = story.passages.find(
+				passage => passage.id === target.passageId
+			);
+
+			if (targetPassage) {
+				dispatch(selectPassage(story, targetPassage, true));
+			}
+		}
+
+		history.push(sourceTarget(story, {target}));
+	}
+
+	function openReference(reference: CoreAssetReference) {
+		if (!story) {
+			return;
+		}
+
+		const target = sourceNavigationTargetFromAssetReference(reference);
+
+		if (!target) {
+			return;
+		}
+
+		if (target.kind === 'passage') {
+			const passage = story.passages.find(
+				passage => passage.id === target.passageId
+			);
+
+			if (passage) {
+				dispatch(selectPassage(story, passage, true));
+			}
+		}
+
+		history.push(
+			sourceTarget(story, {
+				line: reference.line,
+				offset: reference.start,
+				target
+			})
+		);
 	}
 
 	function markStart() {
@@ -797,6 +880,38 @@ export const ContentsRoute: React.FC = () => {
 								</>
 							)}
 						</section>
+						{selectedEntry.asset && (
+							<section className="contents-route__section">
+								<div className="contents-route__section-title">
+									Used In ({selectedEntry.asset.referenceCount})
+								</div>
+								{selectedEntry.asset.references.length > 0 ? (
+									selectedEntry.asset.references.slice(0, 8).map(reference => {
+										const target =
+											sourceNavigationTargetFromAssetReference(reference);
+
+										return target ? (
+											<button
+												className="contents-route__usage"
+												key={`${reference.sourceId}:${reference.start}:${reference.path}`}
+												onClick={() => openReference(reference)}
+												type="button"
+											>
+												<TablerIcon icon={sourceIconForTarget(target)} />
+												<span>{reference.sourceName}</span>
+												<span>
+													{reference.line}:{reference.start}
+												</span>
+											</button>
+										) : null;
+									})
+								) : (
+									<div className="contents-route__muted">
+										No indexed source references this asset.
+									</div>
+								)}
+							</section>
+						)}
 						{selectedPassage && selectedFacts && (
 							<section className="contents-route__section">
 								<div className="contents-route__section-title">Passage</div>
@@ -841,6 +956,7 @@ export const ContentsRoute: React.FC = () => {
 							</Button>
 							<Button
 								block
+								disabled={!canRevealSelectedEntry}
 								icon="file-text"
 								onClick={() => openEntry(selectedEntry, 'text')}
 								size="sm"

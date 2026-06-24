@@ -3,8 +3,10 @@ import {useLocation, useParams} from 'react-router-dom';
 import {MainContent} from '../../components/container/main-content';
 import {DocumentTitle} from '../../components/document-title/document-title';
 import {DialogsContextProvider} from '../../dialogs';
+import {useDialogsContext} from '../../dialogs/context';
+import {StorySearchDialog} from '../../dialogs/story-search';
 import {StoryEditActions} from '../../route-actions';
-import {Passage, selectPassage, storyWithId} from '../../store/stories';
+import {Passage, selectPassage, Story, storyWithId} from '../../store/stories';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {
 	UndoableStoriesContextProvider,
@@ -25,11 +27,76 @@ import {
 	useStoryEditScrollMemory,
 	useStoryEditWorkspace
 } from './workspace-state';
+import {
+	resolveSourceNavigationTarget,
+	sourceNavigationTargetFromQuery,
+	type SourceNavigationTarget
+} from './source-navigation';
 import './story-edit-route.css';
+
+function parsedInteger(value: string | null, minimum: number) {
+	if (value === null || !/^\d+$/.test(value)) {
+		return undefined;
+	}
+
+	return Math.max(minimum, Number(value));
+}
+
+function sourceTextForTarget(story: Story, target: SourceNavigationTarget) {
+	if (target.kind === 'script') {
+		return story.script;
+	}
+
+	if (target.kind === 'stylesheet') {
+		return story.stylesheet;
+	}
+
+	return story.passages.find(passage => passage.id === target.passageId)?.text;
+}
+
+function sourcePositionForQuery(
+	story: Story,
+	target: SourceNavigationTarget,
+	offsetValue: string | null,
+	lineValue: string | null
+) {
+	const sourceText = sourceTextForTarget(story, target);
+
+	if (sourceText === undefined) {
+		return undefined;
+	}
+
+	const offset = parsedInteger(offsetValue, 0);
+
+	if (offset !== undefined) {
+		return Math.min(offset, sourceText.length);
+	}
+
+	const line = parsedInteger(lineValue, 1);
+
+	if (line === undefined) {
+		return undefined;
+	}
+
+	let lineStart = 0;
+
+	for (let currentLine = 1; currentLine < line; currentLine++) {
+		const nextLineStart = sourceText.indexOf('\n', lineStart);
+
+		if (nextLineStart === -1) {
+			return sourceText.length;
+		}
+
+		lineStart = nextLineStart + 1;
+	}
+
+	return lineStart;
+}
 
 export const InnerStoryEditRoute: React.FC = () => {
 	const {storyId} = useParams<{storyId: string}>();
 	const location = useLocation();
+	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {dispatch, stories} = useUndoableStoriesContext();
 	const story = storyWithId(stories, storyId);
 	const {testStory} = useStoryLaunch();
@@ -45,6 +112,12 @@ export const InnerStoryEditRoute: React.FC = () => {
 		EditorWindowSpec[] | undefined
 	>();
 	const [activeWindowId, setActiveWindowId] = React.useState<string>();
+	const [revealRequests, setRevealRequests] = React.useState(
+		() => new Map<string, {key: number; position?: number}>()
+	);
+	const [searchRequests, setSearchRequests] = React.useState(
+		() => new Map<string, {key: number; query?: string}>()
+	);
 	const mainContent = React.useRef<HTMLDivElement>(null);
 	const workspace = useStoryEditWorkspace(story);
 	const {getCenter, setCenter} = useViewCenter(story, mainContent);
@@ -243,8 +316,27 @@ export const InnerStoryEditRoute: React.FC = () => {
 		const search = new URLSearchParams(location.search);
 		const mode = search.get('mode');
 		const passageId = search.get('passage');
-		const passage = passageId
-			? story.passages.find(passage => passage.id === passageId)
+		const query = search.get('q')?.trim();
+		const target =
+			sourceNavigationTargetFromQuery(search.get('source')) ??
+			(passageId ? ({kind: 'passage', passageId} as const) : undefined);
+		const {spec, target: resolvedTarget} = resolveSourceNavigationTarget(
+			story,
+			target
+		);
+		const passage =
+			resolvedTarget?.kind === 'passage'
+				? story.passages.find(
+						passage => passage.id === resolvedTarget.passageId
+					)
+				: undefined;
+		const revealPosition = resolvedTarget
+			? sourcePositionForQuery(
+					story,
+					resolvedTarget,
+					search.get('offset'),
+					search.get('line')
+				)
 			: undefined;
 
 		handledRevealQuery.current = location.search;
@@ -253,10 +345,76 @@ export const InnerStoryEditRoute: React.FC = () => {
 			workspace.setMode(mode);
 		}
 
-		if (passage) {
+		if (mode === 'graph' && passage) {
 			handleChoosePassage(passage);
+			setGraphRevealRequest(current => ({
+				key: current.key + 1,
+				passageId: passage.id
+			}));
+			return;
 		}
-	}, [handleChoosePassage, location.search, story.passages, workspace]);
+
+		if (spec) {
+			openEditorWindow(spec);
+
+			if (passage) {
+				handleChoosePassage(passage);
+			}
+
+			const windowId = editorWindowId(spec);
+
+			if (revealPosition !== undefined) {
+				setRevealRequests(current => {
+					const next = new Map(current);
+					const previous = current.get(windowId);
+
+					next.set(windowId, {
+						key: (previous?.key ?? 0) + 1,
+						position: revealPosition
+					});
+					return next;
+				});
+			}
+
+			if (query) {
+				setSearchRequests(current => {
+					const next = new Map(current);
+					const previous = current.get(windowId);
+
+					next.set(windowId, {
+						key: (previous?.key ?? 0) + 1,
+						query
+					});
+					return next;
+				});
+			}
+			return;
+		}
+
+		if (query) {
+			dialogsDispatch({
+				type: 'addDialog',
+				component: StorySearchDialog,
+				props: {
+					find: query,
+					flags: {
+						includePassageNames: false,
+						matchCase: false,
+						useRegexes: false
+					},
+					replace: '',
+					storyId: story.id
+				}
+			});
+		}
+	}, [
+		dialogsDispatch,
+		handleChoosePassage,
+		location.search,
+		openEditorWindow,
+		story,
+		workspace
+	]);
 
 	return (
 		<div className="story-edit-route">
@@ -318,7 +476,9 @@ export const InnerStoryEditRoute: React.FC = () => {
 							story={story}
 						/>
 					}
+					revealRequests={revealRequests}
 					rightDockCollapsed={workspace.rightDockCollapsed}
+					searchRequests={searchRequests}
 					selectedPassageId={workspace.selectedPassageId}
 					story={story}
 				/>

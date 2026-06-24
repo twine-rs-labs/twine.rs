@@ -15,13 +15,17 @@ import {
 } from '../../../test-util';
 import {InnerStoryEditRoute} from '../story-edit-route';
 
-const TestStoryEditRoute: React.FC = () => {
+const TestStoryEditRoute: React.FC<{
+	initialEntry?: (story: Story) => string;
+}> = ({initialEntry}) => {
 	const {stories} = useStoriesContext();
 
 	return (
 		<Router
 			history={createMemoryHistory({
-				initialEntries: [`/stories/${stories[0].id}`]
+				initialEntries: [
+					initialEntry?.(stories[0]) ?? `/stories/${stories[0].id}`
+				]
 			})}
 		>
 			<AppShell>
@@ -41,7 +45,8 @@ describe('<StoryEditRoute>', () => {
 
 	async function renderComponent(
 		story: Story,
-		contexts?: FakeStateProviderProps
+		contexts?: FakeStateProviderProps,
+		initialEntry?: (story: Story) => string
 	) {
 		const format = fakeLoadedStoryFormat();
 
@@ -56,7 +61,7 @@ describe('<StoryEditRoute>', () => {
 				stories={[story]}
 				storyFormats={[format]}
 			>
-				<TestStoryEditRoute />
+				<TestStoryEditRoute initialEntry={initialEntry} />
 			</FakeStateProvider>
 		);
 
@@ -205,6 +210,39 @@ describe('<StoryEditRoute>', () => {
 			screen.getByRole('button', {
 				name: 'routes.storyEdit.toolbar.findAndReplace'
 			})
+		);
+
+		expect(screen.getByText('dialogs.storySearch.title')).toBeInTheDocument();
+	});
+
+	it('opens the stylesheet editor for a stylesheet source route target', async () => {
+		const story = fakeStory(1);
+
+		story.stylesheet = '.hero { background: url("assets/bg.png"); }';
+
+		await renderComponent(
+			story,
+			undefined,
+			story => `/stories/${story.id}?mode=text&source=stylesheet`
+		);
+
+		expect(
+			await screen.findByTestId(`story-editor-window-${story.id}:stylesheet`)
+		).toBeInTheDocument();
+		expect(
+			screen.getByLabelText('routes.storyEdit.toolbar.stylesheet')
+		).toBeInTheDocument();
+	});
+
+	it('opens story search for variable source route queries', async () => {
+		const story = fakeStory(1);
+
+		story.passages[0].text = 'Set $score here.';
+
+		await renderComponent(
+			story,
+			undefined,
+			story => `/stories/${story.id}?mode=text&q=%24score&scope=variable`
 		);
 
 		expect(screen.getByText('dialogs.storySearch.title')).toBeInTheDocument();

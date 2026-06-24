@@ -315,6 +315,42 @@
 	text-align: right;
 }
 
+.contents-route__usage {
+	align-items: center;
+	background: transparent;
+	border: 0;
+	color: var(--tx-2);
+	cursor: pointer;
+	display: flex;
+	font: inherit;
+	gap: 8px;
+	padding: 6px 0;
+	text-align: left;
+	width: 100%;
+}
+
+.contents-route__usage:hover {
+	color: var(--tx-1);
+}
+
+.contents-route__usage svg {
+	color: var(--tx-4);
+	font-size: 14px;
+}
+
+.contents-route__usage span:last-child {
+	color: var(--tx-4);
+	font-family: var(--font-mono);
+	font-size: var(--fs-xs);
+	margin-left: auto;
+}
+
+.contents-route__muted {
+	color: var(--tx-4);
+	font-size: var(--fs-sm);
+	margin-top: 8px;
+}
+
 .contents-route__actions {
 	display: flex;
 	flex-direction: column;

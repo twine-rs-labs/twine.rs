@@ -28,7 +28,9 @@ import {javascript} from '@codemirror/lang-javascript';
 import {
 	highlightSelectionMatches,
 	openSearchPanel,
-	searchKeymap
+	SearchQuery,
+	searchKeymap,
+	setSearchQuery
 } from '@codemirror/search';
 import {
 	Decoration,
@@ -70,7 +72,9 @@ export interface SourceEditorProps {
 	onChange: (value: string) => void;
 	placeholderText?: string;
 	readOnly?: boolean;
-	searchRequestKey?: number;
+	revealPosition?: {key: number; position: number};
+	searchQuery?: string;
+	searchRequestKey?: number | string;
 	selfLinkName?: string;
 	value: string;
 }
@@ -575,9 +579,41 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 			return;
 		}
 
+		if (props.searchQuery !== undefined) {
+			view.dispatch({
+				effects: setSearchQuery.of(
+					new SearchQuery({
+						search: props.searchQuery
+					})
+				)
+			});
+		}
+
 		openSearchPanel(view);
 		view.focus();
-	}, [props.searchRequestKey]);
+	}, [props.searchQuery, props.searchRequestKey]);
+
+	React.useEffect(() => {
+		const view = viewRef.current;
+		const position = props.revealPosition?.position;
+
+		if (!view || position === undefined) {
+			return;
+		}
+
+		const clampedPosition = Math.max(
+			0,
+			Math.min(Math.trunc(position), view.state.doc.length)
+		);
+
+		view.dispatch({
+			effects: EditorView.scrollIntoView(clampedPosition, {
+				y: 'center'
+			}),
+			selection: {anchor: clampedPosition}
+		});
+		view.focus();
+	}, [props.revealPosition?.key, props.revealPosition?.position]);
 
 	return (
 		<div className="source-editor">

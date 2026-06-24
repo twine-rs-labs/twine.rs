@@ -18,6 +18,8 @@ export interface EditorDockProps {
 	onRevealPassageInGraph?: (passage: Passage) => void;
 	onSelectPassage?: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
+	revealRequests?: Map<string, {key: number; position?: number}>;
+	searchRequests?: Map<string, {key: number; query?: string}>;
 	selectedPassageId?: string;
 	selections: Map<string, WorkbenchSelection>;
 	story: Story;
@@ -51,6 +53,8 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 		onRevealPassageInGraph,
 		onSelectPassage,
 		onTestPassage,
+		revealRequests,
+		searchRequests,
 		selectedPassageId,
 		selections,
 		story
@@ -203,6 +207,8 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 									onRevealPassageInGraph={onRevealPassageInGraph}
 									onSelectPassage={onSelectPassage}
 									onTestPassage={onTestPassage}
+									revealRequest={revealRequests?.get(id)}
+									searchRequest={searchRequests?.get(id)}
 									selection={selections.get(id)}
 									spec={spec}
 									story={story}

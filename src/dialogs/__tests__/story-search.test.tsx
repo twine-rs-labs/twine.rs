@@ -1,6 +1,8 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
+import {createMemoryHistory} from 'history';
 import * as React from 'react';
+import {Router} from 'react-router-dom';
 import {useStoriesContext} from '../../store/stories';
 import {
 	FakeStateProvider,
@@ -43,12 +45,17 @@ describe('<StorySearchDialog>', () => {
 		props?: Partial<StorySearchDialogProps>,
 		context?: Partial<FakeStateProviderProps>
 	) {
-		return render(
+		const history = createMemoryHistory();
+		const result = render(
 			<FakeStateProvider {...context}>
-				<StoryInspector />
-				<TestStorySearchDialog {...props} />
+				<Router history={history}>
+					<StoryInspector />
+					<TestStorySearchDialog {...props} />
+				</Router>
 			</FakeStateProvider>
 		);
+
+		return {...result, history};
 	}
 
 	// Needed because the dialog dispatches actions on unmount.
@@ -342,20 +349,22 @@ describe('<StorySearchDialog>', () => {
 		);
 	});
 
-	it('opens a source dialog for a non-passage search result', async () => {
+	it('routes to the source editor for a non-passage search result', async () => {
 		const story = fakeStory(1);
 
 		story.passages[0].text = '';
 		story.script = 'const mockFind = true;';
-		renderComponent({find: 'mockFind'}, {stories: [story]});
+		const {history} = renderComponent({find: 'mockFind'}, {stories: [story]});
 		fireEvent.click(
 			await screen.findByRole('button', {name: /Story JavaScript/})
 		);
-		expect(
-			screen.getByRole('textbox', {
-				name: 'dialogs.storyJavaScript.editorLabel'
-			})
-		).toHaveValue('const mockFind = true;');
+
+		const query = new URLSearchParams(history.location.search);
+
+		expect(history.location.pathname).toBe(`/stories/${story.id}`);
+		expect(query.get('source')).toBe('script');
+		expect(query.get('q')).toBe('mockFind');
+		expect(Number(query.get('offset'))).toBe(story.script.indexOf('mockFind'));
 	});
 
 	it('disables the replace button if there are no matches for the search', () => {

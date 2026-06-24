@@ -1,6 +1,7 @@
 import * as React from 'react';
 import debounce from 'lodash/debounce';
 import {useTranslation} from 'react-i18next';
+import {useHistory} from 'react-router-dom';
 import {DialogCard} from '../components/container/dialog-card';
 import {CodeArea} from '../components/control/code-area';
 import {Button, Checkbox} from '../components/design-system';
@@ -17,6 +18,10 @@ import {
 	storyWithId
 } from '../store/stories';
 import {useUndoableStoriesContext} from '../store/undoable-stories';
+import {
+	sourceNavigationTargetFromSourceId,
+	sourceTarget
+} from '../routes/story-edit/source-navigation';
 import {useDialogsContext} from './context';
 import {DialogComponentProps} from './dialogs.types';
 import {canOpenStorySource, openStorySourceDialog} from './story-source-dialog';
@@ -44,6 +49,7 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 		props;
 	const closingRef = React.useRef(false);
 	const {dispatch: dialogsDispatch} = useDialogsContext();
+	const history = useHistory();
 	const {prefs} = usePrefsContext();
 	const {dispatch, stories} = useUndoableStoriesContext();
 	const {t} = useTranslation();
@@ -189,6 +195,10 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 	}
 
 	function handleSelectResult(hit: CoreSearchHit) {
+		const target = sourceNavigationTargetFromSourceId(
+			hit.sourceId,
+			hit.passageId
+		);
 		const passage = hit.passageId
 			? story.passages.find(passage => passage.id === hit.passageId)
 			: undefined;
@@ -196,6 +206,17 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 		if (passage) {
 			dispatch(selectPassage(story, passage, true));
 			dispatch(highlightPassages(story, [passage.id]));
+		}
+
+		if (target) {
+			history.push(
+				sourceTarget(story, {
+					line: hit.line,
+					offset: hit.start,
+					search: {query: find, scope: hit.scope},
+					target
+				})
+			);
 		} else {
 			openStorySourceDialog(dialogsDispatch, story.id, hit.sourceId, hit.scope);
 		}
