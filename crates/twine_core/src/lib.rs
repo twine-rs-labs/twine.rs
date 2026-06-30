@@ -2,8 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
+    hash::{DefaultHasher, Hash, Hasher},
     io::Read,
     path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
@@ -157,10 +158,44 @@ pub struct CoreSessionStatus {
     pub undo_kind: Option<CoreHistoryKind>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreExternalIngestMode {
+    Auto,
+    Force,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreExternalIngestOutcome {
+    Applied,
+    Conflict,
+    NoOp,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreExternalConflict {
+    pub field: String,
+    pub message: String,
+    #[serde(default)]
+    pub passage_id: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub story_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase", tag = "type")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub enum CoreExternalChange {
+    DeleteAsset {
+        path: String,
+    },
     DeletePassage {
         passage_id: String,
         story_id: String,
@@ -172,8 +207,33 @@ pub enum CoreExternalChange {
         passage: PassageSnapshot,
         story_id: String,
     },
+    UpsertAsset {
+        asset: CoreAssetInventoryEntry,
+    },
     UpsertStory {
         story: StorySnapshot,
+    },
+    UpdatePassage {
+        changes: PassagePatch,
+        passage_id: String,
+        story_id: String,
+    },
+    UpdatePassageLayout {
+        #[serde(default)]
+        layout: Option<CoreRect>,
+        passage_id: String,
+        story_id: String,
+    },
+    UpdateProjectLayout {
+        layout_json: String,
+    },
+    UpdateStoryMetadata {
+        changes: StoryMetadataPatch,
+        story_id: String,
+    },
+    UpdateStoryStartPassage {
+        passage_id: String,
+        story_id: String,
     },
     UpdateStoryScript {
         script: String,
@@ -190,7 +250,22 @@ pub enum CoreExternalChange {
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreExternalDelta {
     #[serde(default)]
+    pub id: String,
+    #[serde(default)]
     pub changes: Vec<CoreExternalChange>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreExternalIngestResult {
+    #[serde(default)]
+    pub batch: Option<PatchBatch>,
+    #[serde(default)]
+    pub conflicts: Vec<CoreExternalConflict>,
+    pub history_recorded: bool,
+    pub outcome: CoreExternalIngestOutcome,
+    pub status: CoreSessionStatus,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -1401,6 +1476,66 @@ struct ProjectDelta {
     stories: Vec<StoryDelta>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct AssetInventoryDelta {
+    after: Option<CoreAssetInventoryEntry>,
+    before: Option<CoreAssetInventoryEntry>,
+    normalized_path: String,
+}
+
+fn asset_inventory_delta(
+    before: &[CoreAssetInventoryEntry],
+    after: &[CoreAssetInventoryEntry],
+) -> Vec<AssetInventoryDelta> {
+    let before = before
+        .iter()
+        .map(|asset| (asset.normalized_path.clone(), asset))
+        .collect::<BTreeMap<_, _>>();
+    let after = after
+        .iter()
+        .map(|asset| (asset.normalized_path.clone(), asset))
+        .collect::<BTreeMap<_, _>>();
+
+    before
+        .keys()
+        .chain(after.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|normalized_path| {
+            let before = before.get(&normalized_path).copied().cloned();
+            let after = after.get(&normalized_path).copied().cloned();
+
+            (before != after).then_some(AssetInventoryDelta {
+                after,
+                before,
+                normalized_path,
+            })
+        })
+        .collect()
+}
+
+fn apply_asset_inventory_delta(
+    inventory: &mut Vec<CoreAssetInventoryEntry>,
+    delta: &[AssetInventoryDelta],
+    forward: bool,
+) {
+    let paths = delta
+        .iter()
+        .map(|change| &change.normalized_path)
+        .collect::<BTreeSet<_>>();
+
+    inventory.retain(|asset| !paths.contains(&asset.normalized_path));
+    inventory.extend(delta.iter().filter_map(|change| {
+        if forward {
+            change.after.clone()
+        } else {
+            change.before.clone()
+        }
+    }));
+    inventory.sort_by(|left, right| left.path.cmp(&right.path));
+}
+
 impl ProjectDelta {
     fn between(before: &Project, after: &Project) -> Self {
         let mut before_top = before.clone();
@@ -1746,9 +1881,107 @@ impl ProjectDelta {
     }
 }
 
+fn sync_fingerprints_for_delta(
+    project: &Project,
+    values: &mut BTreeMap<String, u64>,
+    delta: &ProjectDelta,
+) -> BTreeSet<String> {
+    let mut touched = BTreeSet::new();
+
+    if delta.top_before.is_some() || delta.top_after.is_some() {
+        touched.extend([
+            "project:manifest".to_owned(),
+            "project:library".to_owned(),
+            "project:layout".to_owned(),
+        ]);
+        insert_project_fingerprints(values, project);
+    }
+
+    for story_delta in &delta.stories {
+        match story_delta {
+            StoryDelta::Replace { story_id, .. } => {
+                let story_prefix = format!("story:{}:", story_id.as_ref());
+                let passage_prefix = format!("passage:{}:", story_id.as_ref());
+                let removed = values
+                    .keys()
+                    .filter(|field| {
+                        field.starts_with(&story_prefix) || field.starts_with(&passage_prefix)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                for field in removed {
+                    values.remove(&field);
+                    touched.insert(field);
+                }
+                if let Some(story) = project.stories.iter().find(|story| story.id == *story_id) {
+                    let before = values.keys().cloned().collect::<BTreeSet<_>>();
+
+                    insert_story_fingerprints(values, story, true);
+                    touched.extend(
+                        values
+                            .keys()
+                            .filter(|field| !before.contains(*field))
+                            .cloned(),
+                    );
+                }
+            }
+            StoryDelta::Update {
+                passages, story_id, ..
+            } => {
+                let Some(story) = project.stories.iter().find(|story| story.id == *story_id) else {
+                    continue;
+                };
+                let story_prefix = format!("story:{}:", story_id.as_ref());
+
+                touched.extend(
+                    values
+                        .keys()
+                        .filter(|field| field.starts_with(&story_prefix))
+                        .cloned(),
+                );
+                insert_story_fingerprints(values, story, false);
+
+                for passage_delta in passages {
+                    let prefix = format!(
+                        "passage:{}:{}:",
+                        story_id.as_ref(),
+                        passage_delta.passage_id.as_ref()
+                    );
+                    let removed = values
+                        .keys()
+                        .filter(|field| field.starts_with(&prefix))
+                        .cloned()
+                        .collect::<Vec<_>>();
+
+                    for field in removed {
+                        values.remove(&field);
+                        touched.insert(field);
+                    }
+                    if let Some(passage) = story.passage_by_id(&passage_delta.passage_id) {
+                        let fields = [
+                            format!("{prefix}exists"),
+                            format!("{prefix}layout"),
+                            format!("{prefix}name"),
+                            format!("{prefix}tags"),
+                            format!("{prefix}text"),
+                        ];
+
+                        insert_passage_fingerprints(values, story_id.as_ref(), passage);
+                        touched.extend(fields);
+                    }
+                }
+            }
+        }
+    }
+
+    touched
+}
+
 #[derive(Clone, Debug)]
 struct Transaction {
     after_state_id: u64,
+    assets: Vec<AssetInventoryDelta>,
     before_state_id: u64,
     byte_size: usize,
     delta: ProjectDelta,
@@ -1772,35 +2005,282 @@ struct SourceAnalysisCache {
     tags: Vec<String>,
 }
 
+fn fingerprint(value: &impl Serialize) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    serde_json::to_string(value)
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
+fn project_fingerprints(project: &Project) -> BTreeMap<String, u64> {
+    let mut values = BTreeMap::new();
+
+    insert_project_fingerprints(&mut values, project);
+
+    for story in &project.stories {
+        insert_story_fingerprints(&mut values, story, true);
+    }
+
+    values
+}
+
+fn insert_project_fingerprints(values: &mut BTreeMap<String, u64>, project: &Project) {
+    values.insert("project:manifest".into(), fingerprint(&project.manifest));
+    values.insert("project:library".into(), fingerprint(&project.library));
+    let mut layout_metadata = project.layout.clone();
+
+    layout_metadata.passages.clear();
+    values.insert("project:layout".into(), fingerprint(&layout_metadata));
+}
+
+fn insert_story_fingerprints(
+    values: &mut BTreeMap<String, u64>,
+    story: &Story,
+    include_passages: bool,
+) {
+    let story_id = story.id.as_ref();
+
+    values.insert(format!("story:{story_id}:exists"), fingerprint(&true));
+    values.insert(format!("story:{story_id}:ifid"), fingerprint(&story.ifid));
+    values.insert(format!("story:{story_id}:name"), fingerprint(&story.name));
+    values.insert(
+        format!("story:{story_id}:snapToGrid"),
+        fingerprint(&story.snap_to_grid),
+    );
+    values.insert(
+        format!("story:{story_id}:startPassage"),
+        fingerprint(&story.start_passage),
+    );
+    values.insert(
+        format!("story:{story_id}:storyFormat"),
+        fingerprint(&story.story_format),
+    );
+    values.insert(
+        format!("story:{story_id}:storyFormatVersion"),
+        fingerprint(&story.story_format_version),
+    );
+    values.insert(
+        format!("story:{story_id}:tagColors"),
+        fingerprint(&story.tag_colors),
+    );
+    values.insert(format!("story:{story_id}:tags"), fingerprint(&story.tags));
+    values.insert(format!("story:{story_id}:zoom"), fingerprint(&story.zoom));
+    values.insert(
+        format!("story:{story_id}:script"),
+        fingerprint(&story.script),
+    );
+    values.insert(
+        format!("story:{story_id}:stylesheet"),
+        fingerprint(&story.stylesheet),
+    );
+
+    if include_passages {
+        for passage in story.passages.iter() {
+            insert_passage_fingerprints(values, story_id, passage);
+        }
+    }
+}
+
+fn insert_passage_fingerprints(
+    values: &mut BTreeMap<String, u64>,
+    story_id: &str,
+    passage: &Passage,
+) {
+    let passage_id = passage.id.as_ref();
+    let prefix = format!("passage:{story_id}:{passage_id}");
+
+    values.insert(format!("{prefix}:exists"), fingerprint(&true));
+    values.insert(format!("{prefix}:layout"), fingerprint(&passage.layout));
+    values.insert(format!("{prefix}:name"), fingerprint(&passage.name));
+    values.insert(format!("{prefix}:tags"), fingerprint(&passage.tags));
+    values.insert(format!("{prefix}:text"), fingerprint(&passage.text));
+}
+
+fn normalized_asset_inventory(
+    inventory: Vec<CoreAssetInventoryEntry>,
+) -> Vec<CoreAssetInventoryEntry> {
+    let by_path = inventory
+        .into_iter()
+        .map(|asset| (asset.normalized_path.clone(), asset))
+        .collect::<BTreeMap<_, _>>();
+    let mut inventory = by_path.into_values().collect::<Vec<_>>();
+
+    inventory.sort_by(|left, right| left.path.cmp(&right.path));
+    inventory
+}
+
+fn field_matches_pattern(field: &str, pattern: &str) -> bool {
+    pattern
+        .strip_suffix('*')
+        .map_or(field == pattern, |prefix| field.starts_with(prefix))
+}
+
+fn external_change_field_patterns(change: &CoreExternalChange) -> Vec<String> {
+    match change {
+        CoreExternalChange::DeleteAsset { path } => vec![format!("asset:{path}")],
+        CoreExternalChange::DeletePassage {
+            passage_id,
+            story_id,
+        }
+        | CoreExternalChange::UpsertPassage {
+            passage: PassageSnapshot { id: passage_id, .. },
+            story_id,
+        } => vec![format!("passage:{story_id}:{passage_id}:*")],
+        CoreExternalChange::DeleteStory { story_id } => vec![
+            format!("story:{story_id}:*"),
+            format!("passage:{story_id}:*"),
+        ],
+        CoreExternalChange::UpsertAsset { asset } => {
+            vec![format!("asset:{}", asset.normalized_path)]
+        }
+        CoreExternalChange::UpsertStory { story } => vec![
+            format!("story:{}:*", story.id),
+            format!("passage:{}:*", story.id),
+        ],
+        CoreExternalChange::UpdatePassage {
+            changes,
+            passage_id,
+            story_id,
+        } => {
+            let prefix = format!("passage:{story_id}:{passage_id}");
+            let mut fields = Vec::new();
+
+            if changes.layout.is_some() {
+                fields.push(format!("{prefix}:layout"));
+            }
+            if changes.name.is_some() {
+                fields.push(format!("{prefix}:name"));
+            }
+            if changes.tags.is_some() {
+                fields.push(format!("{prefix}:tags"));
+            }
+            if changes.text.is_some() {
+                fields.push(format!("{prefix}:text"));
+            }
+            fields
+        }
+        CoreExternalChange::UpdatePassageLayout {
+            passage_id,
+            story_id,
+            ..
+        } => vec![format!("passage:{story_id}:{passage_id}:layout")],
+        CoreExternalChange::UpdateProjectLayout { .. } => vec!["project:layout".into()],
+        CoreExternalChange::UpdateStoryMetadata { changes, story_id } => {
+            let prefix = format!("story:{story_id}");
+            let mut fields = Vec::new();
+
+            if changes.name.is_some() {
+                fields.push(format!("{prefix}:name"));
+            }
+            if changes.snap_to_grid.is_some() {
+                fields.push(format!("{prefix}:snapToGrid"));
+            }
+            if changes.story_format.is_some() {
+                fields.push(format!("{prefix}:storyFormat"));
+            }
+            if changes.story_format_version.is_some() {
+                fields.push(format!("{prefix}:storyFormatVersion"));
+            }
+            if changes.tag_colors.is_some() {
+                fields.push(format!("{prefix}:tagColors"));
+            }
+            if changes.tags.is_some() {
+                fields.push(format!("{prefix}:tags"));
+            }
+            if changes.zoom.is_some() {
+                fields.push(format!("{prefix}:zoom"));
+            }
+            fields
+        }
+        CoreExternalChange::UpdateStoryScript { story_id, .. } => {
+            vec![format!("story:{story_id}:script")]
+        }
+        CoreExternalChange::UpdateStoryStartPassage { story_id, .. } => {
+            vec![format!("story:{story_id}:startPassage")]
+        }
+        CoreExternalChange::UpdateStoryStylesheet { story_id, .. } => {
+            vec![format!("story:{story_id}:stylesheet")]
+        }
+    }
+}
+
+fn external_change_identity(change: &CoreExternalChange) -> (Option<String>, Option<String>) {
+    match change {
+        CoreExternalChange::DeletePassage {
+            passage_id,
+            story_id,
+        }
+        | CoreExternalChange::UpdatePassage {
+            passage_id,
+            story_id,
+            ..
+        } => (Some(story_id.clone()), Some(passage_id.clone())),
+        CoreExternalChange::UpdatePassageLayout {
+            passage_id,
+            story_id,
+            ..
+        } => (Some(story_id.clone()), Some(passage_id.clone())),
+        CoreExternalChange::UpsertPassage { passage, story_id } => {
+            (Some(story_id.clone()), Some(passage.id.clone()))
+        }
+        CoreExternalChange::DeleteStory { story_id }
+        | CoreExternalChange::UpdateStoryMetadata { story_id, .. }
+        | CoreExternalChange::UpdateStoryStartPassage { story_id, .. }
+        | CoreExternalChange::UpdateStoryScript { story_id, .. }
+        | CoreExternalChange::UpdateStoryStylesheet { story_id, .. } => {
+            (Some(story_id.clone()), None)
+        }
+        CoreExternalChange::UpsertStory { story } => (Some(story.id.clone()), None),
+        CoreExternalChange::DeleteAsset { .. } | CoreExternalChange::UpsertAsset { .. } => {
+            (None, None)
+        }
+        CoreExternalChange::UpdateProjectLayout { .. } => (None, None),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectSession {
     analysis_cache: BTreeMap<StoryId, BTreeMap<String, SourceAnalysisCache>>,
     analysis_parse_count: usize,
+    applied_external_delta_ids: VecDeque<String>,
+    asset_inventory: Vec<CoreAssetInventoryEntry>,
     asset_root: Option<PathBuf>,
+    current_fingerprints: BTreeMap<String, u64>,
     dirty: bool,
+    dirty_fields: BTreeSet<String>,
     graph_cache: BTreeMap<StoryId, GraphSessionCache>,
     history_bytes: usize,
     current_state_id: u64,
     next_transaction_id: u64,
     project: Project,
     redo_stack: Vec<Transaction>,
+    saved_fingerprints: BTreeMap<String, u64>,
     saved_state_id: u64,
     undo_stack: Vec<Transaction>,
 }
 
 impl ProjectSession {
     pub fn new(project: Project) -> Self {
+        let saved_fingerprints = project_fingerprints(&project);
+
         Self {
             analysis_cache: BTreeMap::new(),
             analysis_parse_count: 0,
+            applied_external_delta_ids: VecDeque::new(),
+            asset_inventory: Vec::new(),
             asset_root: None,
+            current_fingerprints: saved_fingerprints.clone(),
             dirty: false,
+            dirty_fields: BTreeSet::new(),
             graph_cache: BTreeMap::new(),
             history_bytes: 0,
             current_state_id: 0,
             next_transaction_id: 1,
             project,
             redo_stack: Vec::new(),
+            saved_fingerprints,
             saved_state_id: 0,
             undo_stack: Vec::new(),
         }
@@ -1824,6 +2304,14 @@ impl ProjectSession {
         self.asset_root = Some(project_root.into().join("assets"));
     }
 
+    pub fn set_asset_inventory(&mut self, inventory: Vec<CoreAssetInventoryEntry>) {
+        self.asset_inventory = normalized_asset_inventory(inventory);
+    }
+
+    pub fn asset_inventory(&self) -> &[CoreAssetInventoryEntry] {
+        &self.asset_inventory
+    }
+
     pub fn apply(&mut self, command: StoryCommand) -> Result<PatchBatch, CoreError> {
         self.apply_with_history(command, true)
     }
@@ -1834,6 +2322,7 @@ impl ProjectSession {
         record_history: bool,
     ) -> Result<PatchBatch, CoreError> {
         let before = self.project.clone();
+        let asset_before = self.asset_inventory.clone();
         let dirty_before = self.dirty;
         let redo_before = self.redo_stack.clone();
         let undo_before = self.undo_stack.clone();
@@ -1842,6 +2331,7 @@ impl ProjectSession {
             Ok(patches) => patches,
             Err(error) => {
                 self.project = before;
+                self.asset_inventory = asset_before;
                 self.dirty = dirty_before;
                 self.redo_stack = redo_before;
                 self.undo_stack = undo_before;
@@ -1849,16 +2339,18 @@ impl ProjectSession {
             }
         };
 
-        let project_changed =
-            command.mutates_project() && (self.project != before || command.has_external_effect());
+        let project_changed = command.mutates_project()
+            && (self.project != before
+                || self.asset_inventory != asset_before
+                || command.has_external_effect());
 
         if project_changed {
             self.next_transaction_id += 1;
             let before_state_id = self.current_state_id;
             self.current_state_id = transaction_id;
-            self.dirty = self.current_state_id != self.saved_state_id;
-            push_dirty_patch(&mut patches, dirty_before, self.dirty);
             let delta = ProjectDelta::between(&before, &self.project);
+            self.sync_fingerprints(&delta);
+            push_dirty_patch(&mut patches, dirty_before, self.dirty);
 
             self.update_graph_cache(&delta);
             self.update_analysis_cache(&delta);
@@ -1866,6 +2358,7 @@ impl ProjectSession {
             if record_history {
                 self.push_undo(Transaction {
                     after_state_id: self.current_state_id,
+                    assets: asset_inventory_delta(&asset_before, &self.asset_inventory),
                     before_state_id,
                     byte_size: 0,
                     delta,
@@ -1913,8 +2406,12 @@ impl ProjectSession {
         let mut patches = transaction.delta.patches(true);
 
         transaction.delta.apply(&mut self.project, true);
+        if !transaction.assets.is_empty() {
+            apply_asset_inventory_delta(&mut self.asset_inventory, &transaction.assets, true);
+            patches.extend(self.asset_inventory_patches().ok()?);
+        }
         self.current_state_id = transaction.after_state_id;
-        self.dirty = self.current_state_id != self.saved_state_id;
+        self.sync_fingerprints(&transaction.delta);
         self.update_graph_cache(&transaction.delta);
         self.update_analysis_cache(&transaction.delta);
         self.undo_stack.push(transaction.clone());
@@ -1949,8 +2446,12 @@ impl ProjectSession {
         let mut patches = transaction.delta.patches(false);
 
         transaction.delta.apply(&mut self.project, false);
+        if !transaction.assets.is_empty() {
+            apply_asset_inventory_delta(&mut self.asset_inventory, &transaction.assets, false);
+            patches.extend(self.asset_inventory_patches().ok()?);
+        }
         self.current_state_id = transaction.before_state_id;
-        self.dirty = self.current_state_id != self.saved_state_id;
+        self.sync_fingerprints(&transaction.delta);
         self.update_graph_cache(&transaction.delta);
         self.update_analysis_cache(&transaction.delta);
         self.redo_stack.push(transaction.clone());
@@ -1969,6 +2470,8 @@ impl ProjectSession {
 
         if revision == self.revision() {
             self.saved_state_id = self.current_state_id;
+            self.saved_fingerprints = self.current_fingerprints.clone();
+            self.dirty_fields.clear();
             self.dirty = false;
         }
 
@@ -1998,63 +2501,251 @@ impl ProjectSession {
         }
     }
 
-    pub fn apply_external_delta(
+    fn refresh_dirty(&mut self) {
+        self.dirty = !self.dirty_fields.is_empty();
+    }
+
+    fn refresh_dirty_fields(&mut self, touched: impl IntoIterator<Item = String>) {
+        for field in touched {
+            if self.current_fingerprints.get(&field) == self.saved_fingerprints.get(&field) {
+                self.dirty_fields.remove(&field);
+            } else {
+                self.dirty_fields.insert(field);
+            }
+        }
+        self.refresh_dirty();
+    }
+
+    fn sync_fingerprints(&mut self, delta: &ProjectDelta) {
+        let touched =
+            sync_fingerprints_for_delta(&self.project, &mut self.current_fingerprints, delta);
+
+        self.refresh_dirty_fields(touched);
+    }
+
+    fn external_conflicts(
+        &self,
+        changes: &[CoreExternalChange],
+        candidate: &ProjectSession,
+    ) -> Vec<CoreExternalConflict> {
+        let mut conflicts = Vec::new();
+
+        for change in changes {
+            if let CoreExternalChange::DeleteAsset { path }
+            | CoreExternalChange::UpsertAsset {
+                asset: CoreAssetInventoryEntry { path, .. },
+            } = change
+            {
+                conflicts.push(CoreExternalConflict {
+                    field: format!("asset:{path}"),
+                    message: format!("{path} changed outside twine.rs and requires review."),
+                    passage_id: None,
+                    path: Some(path.clone()),
+                    story_id: None,
+                });
+                continue;
+            }
+
+            for pattern in external_change_field_patterns(change) {
+                for field in self
+                    .dirty_fields
+                    .iter()
+                    .filter(|field| field_matches_pattern(field, &pattern))
+                {
+                    if self.current_fingerprints.get(field)
+                        == candidate.current_fingerprints.get(field)
+                    {
+                        continue;
+                    }
+
+                    let (story_id, passage_id) = external_change_identity(change);
+
+                    conflicts.push(CoreExternalConflict {
+                        field: field.clone(),
+                        message: format!("{field} changed both locally and on disk."),
+                        passage_id,
+                        path: None,
+                        story_id,
+                    });
+                }
+            }
+        }
+
+        conflicts.sort_by(|left, right| left.field.cmp(&right.field));
+        conflicts.dedup_by(|left, right| left.field == right.field);
+        conflicts
+    }
+
+    fn accept_external_fingerprints(&mut self, changes: &[CoreExternalChange]) {
+        let all_fields = self
+            .current_fingerprints
+            .keys()
+            .chain(self.saved_fingerprints.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        for pattern in changes.iter().flat_map(external_change_field_patterns) {
+            for field in all_fields
+                .iter()
+                .filter(|field| field_matches_pattern(field, &pattern))
+            {
+                if let Some(value) = self.current_fingerprints.get(field) {
+                    self.saved_fingerprints.insert(field.clone(), *value);
+                } else {
+                    self.saved_fingerprints.remove(field);
+                }
+                self.dirty_fields.remove(field);
+            }
+        }
+        self.refresh_dirty();
+    }
+
+    fn remember_external_delta(&mut self, id: String) {
+        if id.is_empty() {
+            return;
+        }
+
+        self.applied_external_delta_ids.push_back(id);
+        while self.applied_external_delta_ids.len() > MAX_HISTORY_ENTRIES {
+            self.applied_external_delta_ids.pop_front();
+        }
+    }
+
+    pub fn ingest_external_delta(
         &mut self,
         delta: CoreExternalDelta,
-    ) -> Result<PatchBatch, CoreError> {
+        mode: CoreExternalIngestMode,
+    ) -> Result<CoreExternalIngestResult, CoreError> {
+        if !delta.id.is_empty() && self.applied_external_delta_ids.contains(&delta.id) {
+            return Ok(CoreExternalIngestResult {
+                batch: None,
+                conflicts: Vec::new(),
+                history_recorded: false,
+                outcome: CoreExternalIngestOutcome::NoOp,
+                status: self.status(),
+            });
+        }
+
+        let mut candidate = self.clone();
+
+        for change in delta.changes.iter().cloned() {
+            candidate.apply_external_change(change)?;
+        }
+        let candidate_delta = ProjectDelta::between(&self.project, &candidate.project);
+
+        candidate.sync_fingerprints(&candidate_delta);
+
+        let conflicts = self.external_conflicts(&delta.changes, &candidate);
+
+        if mode == CoreExternalIngestMode::Auto && !conflicts.is_empty() {
+            return Ok(CoreExternalIngestResult {
+                batch: None,
+                conflicts,
+                history_recorded: false,
+                outcome: CoreExternalIngestOutcome::Conflict,
+                status: self.status(),
+            });
+        }
+
         let before = self.project.clone();
+        let before_assets = self.asset_inventory.clone();
         let dirty_before = self.dirty;
         let before_state_id = self.current_state_id;
         let operation_id = self.next_transaction_id;
 
-        for change in delta.changes {
+        for change in delta.changes.iter().cloned() {
             if let Err(error) = self.apply_external_change(change) {
                 self.project = before;
+                self.asset_inventory = before_assets;
                 return Err(error);
             }
         }
 
-        if self.project == before {
-            self.saved_state_id = self.current_state_id;
-            self.dirty = false;
+        let project_changed = self.project != before;
+        let assets_changed = self.asset_inventory != before_assets;
+        let transaction_delta = ProjectDelta::between(&before, &self.project);
+
+        if project_changed {
+            self.sync_fingerprints(&transaction_delta);
+        }
+        self.accept_external_fingerprints(&delta.changes);
+        self.remember_external_delta(delta.id);
+
+        if !project_changed && !assets_changed {
             let mut patches = Vec::new();
 
             push_dirty_patch(&mut patches, dirty_before, self.dirty);
-            return Ok(PatchBatch {
+            let batch = PatchBatch {
                 label: "External Changes".into(),
                 patches,
                 transaction_id: operation_id,
+            };
+
+            return Ok(CoreExternalIngestResult {
+                batch: Some(batch),
+                conflicts: Vec::new(),
+                history_recorded: false,
+                outcome: CoreExternalIngestOutcome::NoOp,
+                status: self.status(),
             });
         }
 
         self.next_transaction_id += 1;
-        self.current_state_id = operation_id;
-        self.saved_state_id = operation_id;
-        self.dirty = false;
         let mut patches = project_diff_patches(&before, &self.project);
-        let transaction_delta = ProjectDelta::between(&before, &self.project);
 
+        if assets_changed {
+            patches.extend(self.asset_inventory_patches()?);
+        }
         push_dirty_patch(&mut patches, dirty_before, self.dirty);
-        self.update_graph_cache(&transaction_delta);
-        self.update_analysis_cache(&transaction_delta);
-        self.clear_redo();
-        self.push_undo(Transaction {
-            after_state_id: self.current_state_id,
-            before_state_id,
-            byte_size: 0,
-            delta: transaction_delta,
-            kind: CoreHistoryKind::ExternalChanges,
-            label: "External Changes".into(),
-        });
-        Ok(PatchBatch {
+
+        if project_changed {
+            self.current_state_id = operation_id;
+            self.update_graph_cache(&transaction_delta);
+            self.update_analysis_cache(&transaction_delta);
+            self.clear_redo();
+            self.push_undo(Transaction {
+                after_state_id: self.current_state_id,
+                assets: Vec::new(),
+                before_state_id,
+                byte_size: 0,
+                delta: transaction_delta,
+                kind: CoreHistoryKind::ExternalChanges,
+                label: "External Changes".into(),
+            });
+        }
+
+        let batch = PatchBatch {
             label: "External Changes".into(),
             patches,
             transaction_id: operation_id,
+        };
+
+        Ok(CoreExternalIngestResult {
+            batch: Some(batch),
+            conflicts: Vec::new(),
+            history_recorded: project_changed,
+            outcome: CoreExternalIngestOutcome::Applied,
+            status: self.status(),
         })
+    }
+
+    pub fn apply_external_delta(
+        &mut self,
+        delta: CoreExternalDelta,
+    ) -> Result<PatchBatch, CoreError> {
+        self.ingest_external_delta(delta, CoreExternalIngestMode::Force)?
+            .batch
+            .ok_or_else(|| CoreError::UnsupportedCommand("external delta produced no batch".into()))
     }
 
     fn apply_external_change(&mut self, change: CoreExternalChange) -> Result<(), CoreError> {
         match change {
+            CoreExternalChange::DeleteAsset { path } => {
+                let normalized = normalized_asset_path(&path);
+
+                self.asset_inventory
+                    .retain(|asset| asset.normalized_path != normalized);
+            }
             CoreExternalChange::DeletePassage {
                 passage_id,
                 story_id,
@@ -2070,6 +2761,15 @@ impl ProjectSession {
 
                 story.passages.insert(passage);
             }
+            CoreExternalChange::UpsertAsset { asset } => {
+                let normalized = asset.normalized_path.clone();
+
+                self.asset_inventory
+                    .retain(|existing| existing.normalized_path != normalized);
+                self.asset_inventory.push(asset);
+                self.asset_inventory =
+                    normalized_asset_inventory(std::mem::take(&mut self.asset_inventory));
+            }
             CoreExternalChange::UpsertStory { story } => {
                 if self
                     .project
@@ -2082,8 +2782,68 @@ impl ProjectSession {
                     self.create_story(story)?;
                 }
             }
+            CoreExternalChange::UpdatePassage {
+                changes,
+                passage_id,
+                story_id,
+            } => {
+                self.update_passage(&story_id, &passage_id, changes, false)?;
+            }
+            CoreExternalChange::UpdatePassageLayout {
+                layout,
+                passage_id,
+                story_id,
+            } => {
+                let story = self.story_mut(&story_id)?;
+                let passage = story
+                    .passages
+                    .get_mut(&PassageId::new(passage_id.clone()))
+                    .ok_or_else(|| CoreError::PassageNotFound(passage_id))?;
+
+                passage.layout = layout.map(GraphPosition::from);
+            }
+            CoreExternalChange::UpdateProjectLayout { layout_json } => {
+                let layout = serde_json::from_str::<twine_model::GraphLayout>(&layout_json)
+                    .map_err(|error| CoreError::UnsupportedCommand(error.to_string()))?;
+
+                self.project.layout.annotations = layout.annotations;
+                self.project.layout.groups = layout.groups;
+                self.project.layout.metadata = layout.metadata;
+                self.project.layout.saved_layouts = layout.saved_layouts;
+            }
+            CoreExternalChange::UpdateStoryMetadata { changes, story_id } => {
+                let story = self.story_mut(&story_id)?;
+
+                if let Some(name) = changes.name {
+                    story.name = name;
+                }
+                if let Some(value) = changes.snap_to_grid {
+                    story.snap_to_grid = value;
+                }
+                if let Some(value) = changes.story_format {
+                    story.story_format = value;
+                }
+                if let Some(value) = changes.story_format_version {
+                    story.story_format_version = value;
+                }
+                if let Some(value) = changes.tag_colors {
+                    story.tag_colors = value;
+                }
+                if let Some(value) = changes.tags {
+                    story.tags = value;
+                }
+                if let Some(value) = changes.zoom {
+                    story.zoom = value;
+                }
+            }
             CoreExternalChange::UpdateStoryScript { script, story_id } => {
                 self.update_story_script(&story_id, script)?;
+            }
+            CoreExternalChange::UpdateStoryStartPassage {
+                passage_id,
+                story_id,
+            } => {
+                self.set_start_passage(&story_id, &passage_id)?;
             }
             CoreExternalChange::UpdateStoryStylesheet {
                 story_id,
@@ -2097,8 +2857,8 @@ impl ProjectSession {
     }
 
     fn push_undo(&mut self, mut transaction: Transaction) {
-        transaction.byte_size =
-            serde_json::to_vec(&transaction.delta).map_or(0, |delta| delta.len());
+        transaction.byte_size = serde_json::to_vec(&(&transaction.delta, &transaction.assets))
+            .map_or(0, |delta| delta.len());
         self.history_bytes += transaction.byte_size;
         self.undo_stack.push(transaction);
 
@@ -3535,13 +4295,29 @@ impl ProjectSession {
         &self,
         extra_assets: &[CoreAssetInventoryEntry],
     ) -> Result<Vec<CoreAssetInventoryEntry>, CoreError> {
-        let mut assets = extra_assets.to_vec();
+        let mut assets = self.asset_inventory.clone();
+
+        assets.extend_from_slice(extra_assets);
 
         if let Some(asset_root) = &self.asset_root {
             assets.extend(file_asset_inventory(asset_root)?);
         }
 
-        Ok(assets)
+        Ok(normalized_asset_inventory(assets))
+    }
+
+    fn asset_inventory_patches(&mut self) -> Result<Vec<Patch>, CoreError> {
+        let story_ids = self
+            .project
+            .stories
+            .iter()
+            .map(|story| story.id.as_ref().to_owned())
+            .collect::<Vec<_>>();
+
+        story_ids
+            .iter()
+            .map(|story_id| self.asset_inventory_patch(story_id))
+            .collect()
     }
 
     fn asset_inventory_patch(&mut self, story_id: &str) -> Result<Patch, CoreError> {
@@ -3584,6 +4360,9 @@ impl ProjectSession {
 
         let asset_path = AssetPath::parse(path)?;
         let Some(asset_root) = self.asset_root.clone() else {
+            self.asset_inventory.retain(|asset| {
+                asset.normalized_path != normalized_asset_path(&asset_path.project_path)
+            });
             let mut patches = vec![Patch::AssetDeleted {
                 path: asset_path.project_path.clone(),
                 story_id: story_id.to_owned(),
@@ -3647,6 +4426,11 @@ impl ProjectSession {
             let kind = asset_kind_for_path(&target.project_path);
             let asset = asset_inventory_entry(target.project_path, kind, Some(true), Vec::new());
 
+            self.asset_inventory
+                .retain(|existing| existing.normalized_path != asset.normalized_path);
+            self.asset_inventory.push(asset.clone());
+            self.asset_inventory =
+                normalized_asset_inventory(std::mem::take(&mut self.asset_inventory));
             return Ok(vec![Patch::AssetImported {
                 asset,
                 story_id: story_id.to_owned(),
@@ -3718,6 +4502,30 @@ impl ProjectSession {
         let old_asset = AssetPath::parse(path)?;
         let new_asset = AssetPath::parse(new_path)?;
         let Some(asset_root) = self.asset_root.clone() else {
+            let old_normalized = normalized_asset_path(&old_asset.project_path);
+            let new_kind = asset_kind_for_path(&new_asset.project_path);
+            let mut renamed = self
+                .asset_inventory
+                .iter()
+                .find(|asset| asset.normalized_path == old_normalized)
+                .cloned()
+                .unwrap_or_else(|| {
+                    asset_inventory_entry(
+                        new_asset.project_path.clone(),
+                        new_kind.clone(),
+                        Some(true),
+                        Vec::new(),
+                    )
+                });
+
+            renamed.path = new_asset.project_path.clone();
+            renamed.normalized_path = normalized_asset_path(&renamed.path);
+            renamed.kind = new_kind;
+            self.asset_inventory
+                .retain(|asset| asset.normalized_path != old_normalized);
+            self.asset_inventory.push(renamed);
+            self.asset_inventory =
+                normalized_asset_inventory(std::mem::take(&mut self.asset_inventory));
             let mut patches = vec![Patch::AssetRenamed {
                 new_path: new_asset.project_path.clone(),
                 old_path: old_asset.project_path.clone(),
@@ -3781,6 +4589,11 @@ impl ProjectSession {
             let kind = asset_kind_for_path(&asset.project_path);
             let asset = asset_inventory_entry(asset.project_path, kind, Some(true), Vec::new());
 
+            self.asset_inventory
+                .retain(|existing| existing.normalized_path != asset.normalized_path);
+            self.asset_inventory.push(asset.clone());
+            self.asset_inventory =
+                normalized_asset_inventory(std::mem::take(&mut self.asset_inventory));
             return Ok(vec![Patch::AssetReplaced {
                 asset,
                 story_id: story_id.to_owned(),
@@ -5917,6 +6730,7 @@ mod tests {
                 },
                 story_id: "story-1".into(),
             }],
+            ..CoreExternalDelta::default()
         };
 
         session
@@ -5932,6 +6746,122 @@ mod tests {
         assert!(session.status().dirty);
         session.redo().expect("external delta should redo");
         assert!(!session.status().dirty);
+    }
+
+    #[test]
+    fn external_ingest_merges_disjoint_fields_and_preserves_local_dirty_state() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "local text".into(),
+            })
+            .expect("local edit should apply");
+        let result = session
+            .ingest_external_delta(
+                CoreExternalDelta {
+                    changes: vec![CoreExternalChange::UpdatePassage {
+                        changes: PassagePatch {
+                            tags: Some(vec!["disk".into()]),
+                            ..PassagePatch::default()
+                        },
+                        passage_id: "a".into(),
+                        story_id: "story-1".into(),
+                    }],
+                    id: "disk-tags".into(),
+                },
+                CoreExternalIngestMode::Auto,
+            )
+            .expect("disjoint disk edit should merge");
+
+        assert_eq!(result.outcome, CoreExternalIngestOutcome::Applied);
+        assert!(result.conflicts.is_empty());
+        assert!(session.status().dirty);
+        assert_eq!(
+            session
+                .story("story-1")
+                .expect("story")
+                .passage_by_id(&PassageId::new("a"))
+                .expect("passage")
+                .tags,
+            vec!["disk"]
+        );
+    }
+
+    #[test]
+    fn external_ingest_blocks_overlapping_local_fields() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "local text".into(),
+            })
+            .expect("local edit should apply");
+        let result = session
+            .ingest_external_delta(
+                CoreExternalDelta {
+                    changes: vec![CoreExternalChange::UpdatePassage {
+                        changes: PassagePatch {
+                            text: Some("disk text".into()),
+                            ..PassagePatch::default()
+                        },
+                        passage_id: "a".into(),
+                        story_id: "story-1".into(),
+                    }],
+                    id: "disk-text".into(),
+                },
+                CoreExternalIngestMode::Auto,
+            )
+            .expect("overlap should be reported");
+
+        assert_eq!(result.outcome, CoreExternalIngestOutcome::Conflict);
+        assert_eq!(result.conflicts.len(), 1);
+        assert_eq!(session.revision(), 2);
+    }
+
+    #[test]
+    fn external_assets_require_review_and_force_without_history() {
+        let mut session = session();
+        let asset = asset_inventory_entry(
+            "assets/cover.png".into(),
+            "image".into(),
+            Some(true),
+            Vec::new(),
+        );
+        let delta = CoreExternalDelta {
+            changes: vec![CoreExternalChange::UpsertAsset {
+                asset: asset.clone(),
+            }],
+            id: "asset-change".into(),
+        };
+
+        let review = session
+            .ingest_external_delta(delta.clone(), CoreExternalIngestMode::Auto)
+            .expect("asset review should be returned");
+
+        assert_eq!(review.outcome, CoreExternalIngestOutcome::Conflict);
+        assert!(!session.can_undo());
+
+        let accepted = session
+            .ingest_external_delta(delta.clone(), CoreExternalIngestMode::Force)
+            .expect("asset should be accepted");
+
+        assert_eq!(accepted.outcome, CoreExternalIngestOutcome::Applied);
+        assert_eq!(session.asset_inventory(), &[asset]);
+        assert!(!session.can_undo());
+        assert!(!session.dirty());
+        let revision = session.revision();
+
+        let duplicate = session
+            .ingest_external_delta(delta, CoreExternalIngestMode::Force)
+            .expect("duplicate should be idempotent");
+
+        assert_eq!(duplicate.outcome, CoreExternalIngestOutcome::NoOp);
+        assert_eq!(session.revision(), revision);
     }
 
     #[test]
@@ -6790,8 +7720,10 @@ mod tests {
                 .iter()
                 .any(|patch| matches!(patch, Patch::AssetImported { .. }))
         );
-        assert!(session.dirty());
+        assert!(!session.dirty());
         assert!(session.can_undo());
+        session.undo().expect("asset import should undo");
+        assert!(session.asset_inventory().is_empty());
     }
 
     #[test]

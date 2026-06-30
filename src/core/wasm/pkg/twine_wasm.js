@@ -60,6 +60,18 @@ export class TwineWasmProjectSession {
         return ret !== 0;
     }
     /**
+     * @param {any} delta
+     * @param {boolean} force
+     * @returns {any}
+     */
+    ingest_external_delta(delta, force) {
+        const ret = wasm.twinewasmprojectsession_ingest_external_delta(this.__wbg_ptr, delta, force);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * @param {any} snapshot
      */
     constructor(snapshot) {
@@ -115,6 +127,15 @@ export class TwineWasmProjectSession {
     revision() {
         const ret = wasm.twinewasmprojectsession_revision(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * @param {any} inventory
+     */
+    set_asset_inventory(inventory) {
+        const ret = wasm.twinewasmprojectsession_set_asset_inventory(this.__wbg_ptr, inventory);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
     }
     /**
      * @param {number} revision

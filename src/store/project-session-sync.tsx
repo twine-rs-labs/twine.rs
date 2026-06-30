@@ -1,16 +1,15 @@
 import * as React from 'react';
 import {
-	NativeProjectSessionSnapshot,
+	NativeProjectSessionDelta,
+	NativeProjectSessionStart,
 	TwineElectronWindow
 } from '../electron/shared';
 import {
 	coreSessionIdForStory,
-	passageToSnapshot,
 	replaceKnownAssetInventoryForStory,
-	storyToSnapshot,
 	useCoreProjectHost
 } from '../core';
-import type {CoreExternalDelta} from '../core/bindings/CoreExternalDelta';
+import type {CoreExternalConflict} from '../core/bindings/CoreExternalConflict';
 import {markProjectStoryHydration} from './project-hydration';
 import {loadProjectMetadata, saveProjectMetadata} from './project-metadata';
 import {Story, useStoriesContext} from './stories';
@@ -18,8 +17,9 @@ import {markPerformance} from '../util/performance';
 import './project-session-sync.css';
 
 interface PendingProjectReview {
+	conflicts: CoreExternalConflict[];
+	delta: NativeProjectSessionDelta;
 	rootPath: string;
-	snapshot: NativeProjectSessionSnapshot;
 }
 
 function reviveSessionStory(story: Story): Story {
@@ -29,96 +29,12 @@ function reviveSessionStory(story: Story): Story {
 	};
 }
 
-function externalDelta(current: Story[], incoming: Story[]): CoreExternalDelta {
-	const incomingIds = new Set(incoming.map(story => story.id));
-	const currentById = new Map(current.map(story => [story.id, story]));
-	const changes: CoreExternalDelta['changes'] = current
-		.filter(story => !incomingIds.has(story.id))
-		.map(story => ({
-			story_id: story.id,
-			type: 'deleteStory' as const
-		}));
-
-	for (const story of incoming) {
-		const previous = currentById.get(story.id);
-
-		if (!previous) {
-			changes.push({story: storyToSnapshot(story), type: 'upsertStory'});
-			continue;
-		}
-
-		const previousShell = {
-			...storyToSnapshot(previous),
-			passages: [],
-			script: '',
-			stylesheet: ''
-		};
-		const nextShell = {
-			...storyToSnapshot(story),
-			passages: [],
-			script: '',
-			stylesheet: ''
-		};
-
-		if (JSON.stringify(previousShell) !== JSON.stringify(nextShell)) {
-			changes.push({story: storyToSnapshot(story), type: 'upsertStory'});
-			continue;
-		}
-
-		if (previous.script !== story.script) {
-			changes.push({
-				script: story.script,
-				story_id: story.id,
-				type: 'updateStoryScript'
-			});
-		}
-		if (previous.stylesheet !== story.stylesheet) {
-			changes.push({
-				story_id: story.id,
-				stylesheet: story.stylesheet,
-				type: 'updateStoryStylesheet'
-			});
-		}
-
-		const nextPassageIds = new Set(story.passages.map(passage => passage.id));
-		for (const passage of previous.passages) {
-			if (!nextPassageIds.has(passage.id)) {
-				changes.push({
-					passage_id: passage.id,
-					story_id: story.id,
-					type: 'deletePassage'
-				});
-			}
-		}
-		const previousPassages = new Map(
-			previous.passages.map(passage => [passage.id, passage])
-		);
-		for (const passage of story.passages) {
-			const previousPassage = previousPassages.get(passage.id);
-
-			if (
-				!previousPassage ||
-				JSON.stringify(passageToSnapshot(previousPassage)) !==
-					JSON.stringify(passageToSnapshot(passage))
-			) {
-				changes.push({
-					passage: passageToSnapshot(passage),
-					story_id: story.id,
-					type: 'upsertPassage'
-				});
-			}
-		}
-	}
-
-	return {changes};
-}
-
-function rememberSessionSnapshot(snapshot: NativeProjectSessionSnapshot) {
+function rememberSessionStart(start: NativeProjectSessionStart) {
 	markPerformance('session-baseline-ready');
 	markPerformance('asset-inventory-ready');
 
-	for (const storyId of snapshot.storyIds) {
-		replaceKnownAssetInventoryForStory(storyId, snapshot.assets);
+	for (const storyId of start.storyIds) {
+		replaceKnownAssetInventoryForStory(storyId, start.assets);
 	}
 }
 
@@ -149,7 +65,7 @@ export const ProjectSessionSync: React.FC = () => {
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
 	const twineElectron = (window as TwineElectronWindow).twineElectron;
-	const dismissedRoots = React.useRef(new Set<string>());
+	const dismissedDeltas = React.useRef(new Set<string>());
 	const [pendingReview, setPendingReview] =
 		React.useState<PendingProjectReview>();
 	const [busy, setBusy] = React.useState(false);
@@ -176,35 +92,92 @@ export const ProjectSessionSync: React.FC = () => {
 		);
 	}, [roots]);
 
-	const applyDiskSnapshot = React.useCallback(
-		async (snapshot: NativeProjectSessionSnapshot) => {
-			const current = rootStoriesRef.current.get(snapshot.rootPath) ?? [];
-			const incoming = snapshot.stories.map(reviveSessionStory);
+	const acknowledgeDelta = React.useCallback(
+		async (delta: NativeProjectSessionDelta) => {
+			if (!twineElectron?.resolveProjectSessionConflicts) {
+				throw new Error('Native project acknowledgement is unavailable.');
+			}
+
+			let lastError: Error | undefined;
+
+			for (let attempt = 0; attempt < 3; attempt++) {
+				try {
+					const start = await twineElectron.resolveProjectSessionConflicts(
+						delta.rootPath,
+						'acceptDisk',
+						undefined,
+						delta.id
+					);
+
+					rememberSessionStart(start);
+					return;
+				} catch (acknowledgementError) {
+					lastError = acknowledgementError as Error;
+				}
+			}
+
+			throw lastError;
+		},
+		[twineElectron]
+	);
+
+	const processDelta = React.useCallback(
+		async (delta: NativeProjectSessionDelta) => {
+			const current = rootStoriesRef.current.get(delta.rootPath) ?? [];
 			const targetStoryId = current[0]?.id;
 
 			if (!targetStoryId) {
 				throw new Error(
-					`No active project session exists for "${snapshot.rootPath}".`
+					`No active project session exists for "${delta.rootPath}".`
 				);
 			}
-
-			for (const story of incoming) {
-				saveProjectMetadata(story.id, {
-					rootPath: snapshot.rootPath,
-					status: 'file-backed',
-					storageKind: 'electron-project-folder'
-				});
-				markProjectStoryHydration(story.id, {
-					passageTextLoaded: true,
-					rootPath: snapshot.rootPath
-				});
+			if (delta.recovery) {
+				setPendingReview({conflicts: [], delta, rootPath: delta.rootPath});
+				return;
 			}
 
-			await coreProjectHost.applyExternalDelta(
+			const result = await coreProjectHost.ingestExternalDelta(
 				targetStoryId,
-				externalDelta(current, incoming)
+				delta.delta
 			);
-			rememberSessionSnapshot(snapshot);
+
+			if (result.outcome === 'conflict') {
+				setPendingReview({
+					conflicts: result.conflicts,
+					delta,
+					rootPath: delta.rootPath
+				});
+				return;
+			}
+
+			await acknowledgeDelta(delta);
+			dismissedDeltas.current.delete(delta.id);
+			setPendingReview(currentReview =>
+				currentReview?.rootPath === delta.rootPath ? undefined : currentReview
+			);
+		},
+		[acknowledgeDelta, coreProjectHost]
+	);
+
+	const synchronizeStartAssets = React.useCallback(
+		async (start: NativeProjectSessionStart) => {
+			rememberSessionStart(start);
+			const targetStoryId = rootStoriesRef.current.get(start.rootPath)?.[0]?.id;
+
+			if (!targetStoryId || start.assets.length === 0) {
+				return;
+			}
+			await coreProjectHost.ingestExternalDelta(
+				targetStoryId,
+				{
+					changes: start.assets.map(asset => ({
+						asset,
+						type: 'upsertAsset' as const
+					})),
+					id: `baseline:${start.rootPath}:${start.generation}`
+				},
+				{force: true}
+			);
 		},
 		[coreProjectHost]
 	);
@@ -214,24 +187,14 @@ export const ProjectSessionSync: React.FC = () => {
 			return;
 		}
 
-		return twineElectron.onProjectSessionChanged(snapshot => {
-			if (
-				snapshot.conflicts.length > 0 &&
-				!dismissedRoots.current.has(snapshot.rootPath)
-			) {
-				setPendingReview({
-					rootPath: snapshot.rootPath,
-					snapshot
-				});
-			} else if (snapshot.changedPaths.length > 0) {
-				void applyDiskSnapshot(snapshot).catch(changeError => {
+		return twineElectron.onProjectSessionChanged(delta => {
+			if (!dismissedDeltas.current.has(delta.id)) {
+				void processDelta(delta).catch(changeError => {
 					setError(changeError.message);
 				});
-			} else {
-				rememberSessionSnapshot(snapshot);
 			}
 		});
-	}, [applyDiskSnapshot, twineElectron]);
+	}, [processDelta, twineElectron]);
 
 	React.useEffect(() => {
 		if (!twineElectron?.startProjectSession) {
@@ -242,19 +205,12 @@ export const ProjectSessionSync: React.FC = () => {
 		for (const rootPath of rootPaths) {
 			void twineElectron
 				.startProjectSession(rootPath, rootStoryIds.current.get(rootPath) ?? [])
-				.then(snapshot => {
+				.then(async start => {
 					if (canceled) {
 						return;
 					}
 
-					rememberSessionSnapshot(snapshot);
-
-					if (
-						snapshot.conflicts.length > 0 &&
-						!dismissedRoots.current.has(rootPath)
-					) {
-						setPendingReview({rootPath, snapshot});
-					}
+					await synchronizeStartAssets(start);
 				})
 				.catch((startError: Error) => {
 					if (!canceled) {
@@ -270,7 +226,7 @@ export const ProjectSessionSync: React.FC = () => {
 				void twineElectron.stopProjectSession?.(rootPath);
 			}
 		};
-	}, [rootPaths, twineElectron]);
+	}, [rootPaths, synchronizeStartAssets, twineElectron]);
 
 	async function acceptDisk() {
 		if (!pendingReview || !twineElectron?.resolveProjectSessionConflicts) {
@@ -281,12 +237,57 @@ export const ProjectSessionSync: React.FC = () => {
 		setError(undefined);
 
 		try {
-			const snapshot = await twineElectron.resolveProjectSessionConflicts(
-				pendingReview.rootPath,
-				'acceptDisk'
-			);
-			await applyDiskSnapshot(snapshot);
-			dismissedRoots.current.delete(pendingReview.rootPath);
+			const rootStories =
+				rootStoriesRef.current.get(pendingReview.rootPath) ?? [];
+			const targetStoryId = rootStories[0]?.id;
+
+			if (!targetStoryId) {
+				throw new Error('No active project session exists for this change.');
+			}
+
+			if (pendingReview.delta.recovery) {
+				if (
+					!window.confirm(
+						`${pendingReview.delta.recovery.message}\n\nReloading from disk will reset undo history.`
+					)
+				) {
+					return;
+				}
+				const folder = await twineElectron.hydrateProjectFolder(
+					pendingReview.rootPath,
+					rootStoryIds.current.get(pendingReview.rootPath)
+				);
+				const assets = await twineElectron.listProjectAssets(
+					pendingReview.rootPath
+				);
+				const incoming = folder.stories.map(reviveSessionStory);
+
+				await coreProjectHost.recoverFromSnapshot(
+					targetStoryId,
+					incoming,
+					assets
+				);
+				for (const story of incoming) {
+					saveProjectMetadata(story.id, {
+						rootPath: pendingReview.rootPath,
+						status: 'file-backed',
+						storageKind: 'electron-project-folder'
+					});
+					markProjectStoryHydration(story.id, {
+						passageTextLoaded: true,
+						rootPath: pendingReview.rootPath
+					});
+				}
+			} else {
+				await coreProjectHost.ingestExternalDelta(
+					targetStoryId,
+					pendingReview.delta.delta,
+					{force: true}
+				);
+			}
+
+			await acknowledgeDelta(pendingReview.delta);
+			dismissedDeltas.current.delete(pendingReview.delta.id);
 			setPendingReview(undefined);
 		} catch (acceptError) {
 			setError((acceptError as Error).message);
@@ -306,13 +307,14 @@ export const ProjectSessionSync: React.FC = () => {
 		setError(undefined);
 
 		try {
-			const snapshot = await twineElectron.resolveProjectSessionConflicts(
+			const start = await twineElectron.resolveProjectSessionConflicts(
 				pendingReview.rootPath,
 				'keepApp',
-				rootStories
+				rootStories,
+				pendingReview.delta.id
 			);
 
-			rememberSessionSnapshot(snapshot);
+			rememberSessionStart(start);
 			if (rootStories[0]) {
 				const status = coreProjectHost.sessionStatus(rootStories[0].id);
 
@@ -321,7 +323,7 @@ export const ProjectSessionSync: React.FC = () => {
 					status.revision
 				);
 			}
-			dismissedRoots.current.delete(pendingReview.rootPath);
+			dismissedDeltas.current.delete(pendingReview.delta.id);
 			setPendingReview(undefined);
 		} catch (keepError) {
 			setError((keepError as Error).message);
@@ -332,7 +334,7 @@ export const ProjectSessionSync: React.FC = () => {
 
 	function reviewLater() {
 		if (pendingReview) {
-			dismissedRoots.current.add(pendingReview.rootPath);
+			dismissedDeltas.current.add(pendingReview.delta.id);
 		}
 
 		setPendingReview(undefined);
@@ -342,10 +344,13 @@ export const ProjectSessionSync: React.FC = () => {
 		return null;
 	}
 
-	const conflictCount = pendingReview?.snapshot.conflicts.length ?? 0;
-	const pathPreview = pendingReview?.snapshot.changedPaths
-		.slice(0, 3)
-		.join(', ');
+	const conflictCount = pendingReview
+		? Math.max(
+				pendingReview.conflicts.length,
+				pendingReview.delta.fileChanges.length
+			)
+		: 0;
+	const pathPreview = pendingReview?.delta.changedPaths.slice(0, 3).join(', ');
 
 	return (
 		<div className="project-session-sync" role="status">
@@ -356,14 +361,15 @@ export const ProjectSessionSync: React.FC = () => {
 						? `${conflictCount} disk change${
 								conflictCount === 1 ? '' : 's'
 							} need review${pathPreview ? `: ${pathPreview}` : ''}.`
-						: 'The disk copy differs from the app copy.'}
+						: (pendingReview.delta.recovery?.message ??
+							'The disk copy differs from the app copy.')}
 				</p>
 			) : null}
 			{error ? <p className="project-session-sync__error">{error}</p> : null}
 			{pendingReview ? (
 				<div className="project-session-sync__actions">
 					<button disabled={busy} onClick={acceptDisk} type="button">
-						Accept Disk
+						{pendingReview.delta.recovery ? 'Reload From Disk' : 'Accept Disk'}
 					</button>
 					<button disabled={busy} onClick={keepApp} type="button">
 						Keep App

@@ -1,5 +1,6 @@
 import {Story} from '../../store/stories/stories.types';
 import type {CoreAssetInventoryEntry} from '../../core';
+import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
 import type {StoryBuildAsset} from '../../util/build-package';
 
 export interface NativeProjectFileEntry {
@@ -36,6 +37,36 @@ export interface NativeProjectSessionSnapshot {
 	rootPath: string;
 	scannedAt: string;
 	stories: Story[];
+	storyIds: string[];
+}
+
+export interface NativeProjectSessionRecovery {
+	changedPaths: string[];
+	message: string;
+	reason:
+		| 'invalidManifest'
+		| 'projectIdentity'
+		| 'schema'
+		| 'unsafePath'
+		| 'unsupportedMetadata';
+}
+
+export interface NativeProjectSessionDelta {
+	baseGeneration: number;
+	candidateGeneration: number;
+	changedPaths: string[];
+	delta: CoreExternalDelta;
+	fileChanges: NativeProjectSessionConflict[];
+	id: string;
+	recovery?: NativeProjectSessionRecovery;
+	rootPath: string;
+	scannedAt: string;
+}
+
+export interface NativeProjectSessionStart {
+	assets: CoreAssetInventoryEntry[];
+	generation: number;
+	rootPath: string;
 	storyIds: string[];
 }
 
@@ -195,7 +226,7 @@ export interface TwineElectronWindow extends Window {
 			assets: Pick<StoryBuildAsset, 'outputPath' | 'sourcePath'>[]
 		): void;
 		onProjectSessionChanged(
-			callback: (snapshot: NativeProjectSessionSnapshot) => void
+			callback: (delta: NativeProjectSessionDelta) => void
 		): () => void;
 		openProjectFolder(options?: {
 			loadPassageText?: boolean;
@@ -225,8 +256,9 @@ export interface TwineElectronWindow extends Window {
 		resolveProjectSessionConflicts(
 			rootPath: string,
 			resolution: NativeProjectSessionResolution,
-			stories?: Story[]
-		): Promise<NativeProjectSessionSnapshot>;
+			stories?: Story[],
+			deltaId?: string
+		): Promise<NativeProjectSessionStart>;
 		saveProjectFolder(
 			rootPath: string,
 			story: Story
@@ -237,7 +269,7 @@ export interface TwineElectronWindow extends Window {
 		startProjectSession(
 			rootPath: string,
 			storyIds?: string[]
-		): Promise<NativeProjectSessionSnapshot>;
+		): Promise<NativeProjectSessionStart>;
 		stopProjectSession(rootPath: string): Promise<void>;
 		updatePlatformSettings(
 			settings: NativePlatformSettingsUpdate

@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 use twine_core::{
-    CoreExternalDelta, CoreGraphProjectionOptions, CoreStoryIndexOptions, PassageSnapshot,
-    ProjectSession, ProjectSnapshot, StoryCommand, StorySnapshot,
+    CoreAssetInventoryEntry, CoreExternalDelta, CoreExternalIngestMode, CoreGraphProjectionOptions,
+    CoreStoryIndexOptions, PassageSnapshot, ProjectSession, ProjectSnapshot, StoryCommand,
+    StorySnapshot,
 };
 use twine_model::{
     GraphLayout, GraphPosition, LibraryMetadata, Passage, PassageId, PassageIndex, PassageLayout,
@@ -57,6 +58,33 @@ impl TwineWasmProjectSession {
             .map_err(core_error)?;
 
         to_js(&batch)
+    }
+
+    pub fn ingest_external_delta(
+        &mut self,
+        delta: JsValue,
+        force: bool,
+    ) -> Result<JsValue, JsValue> {
+        let delta = from_js::<CoreExternalDelta>(delta)?;
+        let result = self
+            .session
+            .ingest_external_delta(
+                delta,
+                if force {
+                    CoreExternalIngestMode::Force
+                } else {
+                    CoreExternalIngestMode::Auto
+                },
+            )
+            .map_err(core_error)?;
+
+        to_js(&result)
+    }
+
+    pub fn set_asset_inventory(&mut self, inventory: JsValue) -> Result<(), JsValue> {
+        self.session
+            .set_asset_inventory(from_js::<Vec<CoreAssetInventoryEntry>>(inventory)?);
+        Ok(())
     }
 
     pub fn can_undo(&self) -> bool {

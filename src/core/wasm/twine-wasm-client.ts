@@ -1,4 +1,6 @@
+import type {CoreAssetInventoryEntry} from '../bindings/CoreAssetInventoryEntry';
 import type {CoreExternalDelta} from '../bindings/CoreExternalDelta';
+import type {CoreExternalIngestResult} from '../bindings/CoreExternalIngestResult';
 import type {CoreGraphProjection} from '../bindings/CoreGraphProjection';
 import type {CoreGraphProjectionOptions} from '../bindings/CoreGraphProjectionOptions';
 import type {CoreStoryIndex} from '../bindings/CoreStoryIndex';
@@ -158,7 +160,8 @@ export class WasmCoreWorkerClient {
 	async replaceProject(
 		sessionId: string,
 		snapshot: ProjectSnapshot,
-		revision: number
+		revision: number,
+		assets: CoreAssetInventoryEntry[] = []
 	) {
 		if (!this.enabled) {
 			return undefined;
@@ -170,6 +173,7 @@ export class WasmCoreWorkerClient {
 
 		const response = await this.enqueueMutation(sessionId, () =>
 			this.send({
+				assets,
 				id: 0,
 				kind: 'replaceProject',
 				revision,
@@ -243,28 +247,52 @@ export class WasmCoreWorkerClient {
 		return response.result;
 	}
 
-	async applyExternalDelta(
+	async ingestExternalDelta(
 		sessionId: string,
 		delta: CoreExternalDelta,
-		revision: number
-	): Promise<CoreSessionMutationResult> {
+		revision: number,
+		force = false
+	): Promise<CoreExternalIngestResult & {revision: number}> {
 		const response = await this.enqueueMutation(sessionId, () =>
 			this.send({
 				delta,
+				force,
 				id: 0,
-				kind: 'applyExternalDelta',
+				kind: 'ingestExternalDelta',
 				revision,
 				sessionId
 			})
 		);
 
-		if (response.kind !== 'applyExternalDelta') {
+		if (response.kind !== 'ingestExternalDelta') {
 			throw new Error(`Unexpected WASM response: ${response.kind}`);
 		}
 
 		this.clearQueryCaches(sessionId);
 		this.readyRevisions.set(sessionId, response.result.revision);
 		return response.result;
+	}
+
+	async applyExternalDelta(
+		sessionId: string,
+		delta: CoreExternalDelta,
+		revision: number
+	): Promise<CoreSessionMutationResult> {
+		const result = await this.ingestExternalDelta(
+			sessionId,
+			delta,
+			revision,
+			true
+		);
+
+		if (!result.batch) {
+			throw new Error('Forced external delta did not return a patch batch.');
+		}
+		return {
+			batch: result.batch,
+			revision: result.revision,
+			status: result.status
+		};
 	}
 
 	async status(sessionId: string, revision: number) {

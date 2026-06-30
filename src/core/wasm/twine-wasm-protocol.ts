@@ -1,5 +1,6 @@
 import type {CoreGraphProjection} from '../bindings/CoreGraphProjection';
 import type {CoreExternalDelta} from '../bindings/CoreExternalDelta';
+import type {CoreExternalIngestResult} from '../bindings/CoreExternalIngestResult';
 import type {CoreGraphProjectionOptions} from '../bindings/CoreGraphProjectionOptions';
 import type {CoreSessionStatus} from '../bindings/CoreSessionStatus';
 import type {CoreStoryIndex} from '../bindings/CoreStoryIndex';
@@ -47,8 +48,9 @@ export type WasmWorkerRequest =
 	  }
 	| {
 			delta: CoreExternalDelta;
+			force: boolean;
 			id: number;
-			kind: 'applyExternalDelta';
+			kind: 'ingestExternalDelta';
 			revision: number;
 			sessionId: string;
 	  }
@@ -69,6 +71,7 @@ export type WasmWorkerRequest =
 			storyId: string;
 	  }
 	| {
+			assets: CoreAssetInventoryEntry[];
 			id: number;
 			kind: 'replaceProject';
 			revision: number;
@@ -93,6 +96,10 @@ export type WasmWorkerMutationResult = {
 	status: CoreSessionStatus;
 };
 
+export type WasmWorkerExternalIngestResult = CoreExternalIngestResult & {
+	revision: number;
+};
+
 export type WasmWorkerSuccess =
 	| {
 			id: number;
@@ -110,10 +117,10 @@ export type WasmWorkerSuccess =
 	  }
 	| {
 			id: number;
-			kind: 'applyExternalDelta';
+			kind: 'ingestExternalDelta';
 			metrics: WasmWorkerMetricBase;
 			ok: true;
-			result: WasmWorkerMutationResult;
+			result: WasmWorkerExternalIngestResult;
 	  }
 	| {
 			id: number;
@@ -178,3 +185,4 @@ export type WasmWorkerResponse = WasmWorkerFailure | WasmWorkerSuccess;
 export type WasmClientMetric = CoreBridgeMetric & {
 	kind: WasmWorkerRequest['kind'];
 };
+import type {CoreAssetInventoryEntry} from '../bindings/CoreAssetInventoryEntry';

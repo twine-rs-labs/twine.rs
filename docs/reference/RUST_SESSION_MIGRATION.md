@@ -15,9 +15,13 @@
 - Native and local-storage writes carry the exact Rust session revision.
   Electron writes are queued per session and waiting writes coalesce to the
   newest state. Rust acknowledges only the revision that actually completed.
-- External disk snapshots are converted to typed `CoreExternalDelta`
-  transactions. Accepted changes are clean, undoable, and preserve older
-  history.
+- The native project watcher emits generation-bound, changed-path
+  `CoreExternalDelta` values. Passage, script, stylesheet, layout, manifest,
+  and asset paths are parsed independently; the renderer no longer compares
+  complete stories.
+- Rust atomically classifies external fields against the saved field
+  fingerprints. Non-overlapping content changes merge automatically;
+  overlapping changes retain Accept Disk / Keep App / Later review.
 - Retained history is bounded to 200 entries or 64 MiB and stores changed
   project metadata, story fields, and passage entities rather than complete
   project snapshots.
@@ -43,14 +47,29 @@ moving the Rust cursor. Evicted and closed-session journals are discarded, and
 startup removes crash leftovers because history is session-only. WASM performs
 only model/reference changes and never accesses the filesystem.
 
+Rust also owns the session asset inventory. External asset changes always enter
+review because bytes changed outside the app. Accepting them updates inventory,
+indexes, and diagnostics without adding a misleading byte-undo history entry.
+Mixed external transactions retain undo only for their content/layout portion.
+
+## Native watcher
+
+Recursive watcher filenames drive 150 ms coalesced scans. The native
+main-process service stats and parses only the hinted source paths, maintains an
+accepted/candidate generation pair, and requires the renderer to acknowledge
+the exact candidate ID after Rust commits it. A 30-second metadata
+reconciliation catches missed events; the 1.25-second scan remains only where
+recursive watching is unavailable. Generated graph caches are ignored.
+
+Project identity, schema, invalid-manifest, unsafe-path, and unsupported
+compatibility-metadata changes produce a recovery warning. The only full reload
+path requires confirmation and explicitly resets session history.
+
 The frontend remains a patch-applied read model. Removing the complete React
 project mirror is a separate migration.
 
 ## Follow-up limits
 
-- The native watcher still produces a session snapshot; the renderer converts
-  it into passage/script/stylesheet/story deltas. Moving changed-path parsing
-  fully into the native service remains a separate optimization.
 - Incremental parse-count and no-full-transfer invariants are covered by unit
   tests. The wall-clock 50k-passage thresholds still need a stable release-mode
   benchmark runner before they can be enforced in CI without debug-build

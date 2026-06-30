@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type {CoreAssetInventoryEntry} from './bindings/CoreAssetInventoryEntry';
 import type {CoreExternalDelta} from './bindings/CoreExternalDelta';
+import type {CoreExternalIngestResult} from './bindings/CoreExternalIngestResult';
 import type {CoreGraphProjection} from './bindings/CoreGraphProjection';
 import type {CoreSessionStatus} from './bindings/CoreSessionStatus';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
@@ -57,6 +58,11 @@ export interface CoreProjectHost {
 		command: StoryCommand,
 		options?: CoreCommandOptions
 	): Promise<PatchBatch | undefined>;
+	ingestExternalDelta(
+		storyId: string,
+		delta: CoreExternalDelta,
+		options?: {force?: boolean}
+	): Promise<CoreExternalIngestResult>;
 	acknowledgeSaved(sessionId: string, revision: number): Promise<void>;
 	redo(storyId?: string): Promise<PatchBatch | undefined>;
 	isDirty(storyId?: string): boolean;
@@ -73,6 +79,11 @@ export interface CoreProjectHost {
 		storyId: string,
 		options?: StoryIndexQuery
 	): Promise<CoreStoryIndex>;
+	recoverFromSnapshot(
+		storyId: string,
+		stories: Story[],
+		assets: CoreAssetInventoryEntry[]
+	): Promise<void>;
 	runtimeMode(): CoreBridgeMode;
 	sessionStatus(storyId?: string): CoreSessionStatus;
 	subscribeToPatches(listener: CoreProjectPatchListener): () => void;
@@ -160,6 +171,7 @@ type CoreProjectSessionClient = Pick<
 	| 'acknowledgeSaved'
 	| 'apply'
 	| 'applyExternalDelta'
+	| 'ingestExternalDelta'
 	| 'cachedGraphProjection'
 	| 'cachedStoryIndex'
 	| 'enabled'
@@ -426,6 +438,42 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				this.recordHistoryEffect(undefined);
 			}
 			return result.batch;
+		});
+	}
+
+	async ingestExternalDelta(
+		_storyId: string,
+		delta: CoreExternalDelta,
+		options: {force?: boolean} = {}
+	): Promise<CoreExternalIngestResult> {
+		if (!this.wasmClient.enabled) {
+			throw new Error('WASM core worker is unavailable.');
+		}
+
+		return this.enqueueMutation(async () => {
+			const revision = await this.ensureWasmProjectSession();
+			const result = await this.wasmClient.ingestExternalDelta(
+				this.sessionId,
+				delta,
+				revision,
+				options.force
+			);
+
+			this.wasmProjectRevision = result.revision;
+			if (result.batch) {
+				this.applySessionPatchBatch(
+					result.batch,
+					'undoChange.externalChanges',
+					result.revision,
+					result.status
+				);
+				if (result.historyRecorded) {
+					this.recordHistoryEffect(undefined);
+				}
+			} else {
+				this.publishStatus(result.status);
+			}
+			return result;
 		});
 	}
 
@@ -741,6 +789,34 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		});
 	}
 
+	async recoverFromSnapshot(
+		_storiesId: string,
+		stories: Story[],
+		assets: CoreAssetInventoryEntry[]
+	) {
+		await this.enqueueMutation(async () => {
+			this.disposeEffects();
+			this.stories = stories;
+			this.savedStoryFingerprints = storyFingerprintMap(stories);
+			for (const story of stories) {
+				replaceKnownAssetInventoryForStory(story.id, assets);
+			}
+			this.wasmProjectRevision++;
+			this.wasmProjectReplaceRevision = this.wasmProjectRevision;
+			this.dispatch({state: stories, type: 'init'});
+			const status = await this.wasmClient.replaceProject(
+				this.sessionId,
+				projectSnapshotFromStories(stories),
+				this.wasmProjectRevision,
+				assets
+			);
+
+			if (status) {
+				this.publishStatus(status);
+			}
+		});
+	}
+
 	private enqueueMutation<T>(mutation: () => Promise<T>) {
 		const result = this.mutationQueue.then(mutation, mutation);
 
@@ -878,10 +954,22 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		) {
 			const revision = this.wasmProjectRevision;
 			const snapshot = projectSnapshotFromStories(this.stories);
+			const assets = this.stories.flatMap(
+				story => this.assetInventoryByStory.get(story.id) ?? []
+			);
 
 			this.wasmProjectReplaceRevision = revision;
-			this.wasmProjectReplacePromise = this.wasmClient
-				.replaceProject(this.sessionId, snapshot, revision)
+			const replacePromise =
+				assets.length > 0
+					? this.wasmClient.replaceProject(
+							this.sessionId,
+							snapshot,
+							revision,
+							assets
+						)
+					: this.wasmClient.replaceProject(this.sessionId, snapshot, revision);
+
+			this.wasmProjectReplacePromise = replacePromise
 				.then(status => {
 					if (status) {
 						this.publishStatus(status);
@@ -1152,10 +1240,41 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		return host.applyExternalDelta(storyId, delta);
 	}
 
+	ingestExternalDelta(
+		storyId: string,
+		delta: CoreExternalDelta,
+		options?: {force?: boolean}
+	) {
+		const host = this.hostForStory(storyId);
+
+		if (!host) {
+			throw new Error(
+				`No core project session is available for story "${storyId}".`
+			);
+		}
+
+		return host.ingestExternalDelta(storyId, delta, options);
+	}
+
 	acknowledgeSaved(sessionId: string, revision: number) {
 		const host = this.hosts.get(sessionId);
 
 		return host?.acknowledgeSaved(sessionId, revision) ?? Promise.resolve();
+	}
+
+	recoverFromSnapshot(
+		storyId: string,
+		stories: Story[],
+		assets: CoreAssetInventoryEntry[]
+	) {
+		const host = this.hostForStory(storyId);
+
+		if (!host) {
+			throw new Error(
+				`No core project session is available for story "${storyId}".`
+			);
+		}
+		return host.recoverFromSnapshot(storyId, stories, assets);
 	}
 
 	redo(storyId?: string) {
@@ -1305,6 +1424,8 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.acknowledgeSaved(sessionId, revision),
 			applyExternalDelta: (deltaStoryId, delta) =>
 				host.applyExternalDelta(deltaStoryId, delta),
+			ingestExternalDelta: (deltaStoryId, delta, options) =>
+				host.ingestExternalDelta(deltaStoryId, delta, options),
 			applyStoryCommand: (command, options) =>
 				host.applyStoryCommand(command, options),
 			isDirty: () => host.isDirty(storyId),
@@ -1316,6 +1437,8 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.queryStoryIndex(queryStoryId, options),
 			queryStoryIndexAsync: (queryStoryId, options) =>
 				host.queryStoryIndexAsync(queryStoryId, options),
+			recoverFromSnapshot: (recoveryStoryId, recoveryStories, assets) =>
+				host.recoverFromSnapshot(recoveryStoryId, recoveryStories, assets),
 			redo: () => host.redo(storyId),
 			runtimeMode: () => host.runtimeMode(),
 			sessionStatus: () => host.sessionStatus(storyId),

@@ -9,11 +9,13 @@ export class TwineWasmProjectSession {
     apply_external_delta(delta: any): any;
     can_redo(): boolean;
     can_undo(): boolean;
+    ingest_external_delta(delta: any, force: boolean): any;
     constructor(snapshot: any);
     query_graph_projection(story_id: string, options: any): any;
     query_story_index(story_id: string, options: any): any;
     redo(): any;
     revision(): number;
+    set_asset_inventory(inventory: any): void;
     set_revision(revision: number): void;
     snapshot(): any;
     status(): any;
@@ -36,11 +38,13 @@ export interface InitOutput {
     readonly twinewasmprojectsession_apply_external_delta: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_can_redo: (a: number) => number;
     readonly twinewasmprojectsession_can_undo: (a: number) => number;
+    readonly twinewasmprojectsession_ingest_external_delta: (a: number, b: any, c: number) => [number, number, number];
     readonly twinewasmprojectsession_new: (a: any) => [number, number, number];
     readonly twinewasmprojectsession_query_graph_projection: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_story_index: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_redo: (a: number) => [number, number, number];
     readonly twinewasmprojectsession_revision: (a: number) => number;
+    readonly twinewasmprojectsession_set_asset_inventory: (a: number, b: any) => [number, number];
     readonly twinewasmprojectsession_set_revision: (a: number, b: number) => void;
     readonly twinewasmprojectsession_snapshot: (a: number) => [number, number, number];
     readonly twinewasmprojectsession_status: (a: number) => [number, number, number];

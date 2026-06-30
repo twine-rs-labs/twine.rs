@@ -18,6 +18,10 @@ import {
 } from 'fs-extra';
 import {basename, dirname, extname, join, relative, resolve} from 'path';
 import type {CoreAssetInventoryEntry} from '../../core';
+import type {CoreExternalChange} from '../../core/bindings/CoreExternalChange';
+import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
+import type {PassagePatch} from '../../core/bindings/PassagePatch';
+import type {StoryMetadataPatch} from '../../core/bindings/StoryMetadataPatch';
 import {
 	assetKindForPath,
 	assetSnippet,
@@ -123,19 +127,78 @@ export interface NativeProjectSessionSnapshot extends NativeProjectFolderResult 
 	scannedAt: string;
 }
 
-type ProjectSessionListener = (snapshot: NativeProjectSessionSnapshot) => void;
+export interface NativeProjectSessionRecovery {
+	changedPaths: string[];
+	message: string;
+	reason:
+		| 'invalidManifest'
+		| 'projectIdentity'
+		| 'schema'
+		| 'unsafePath'
+		| 'unsupportedMetadata';
+}
+
+export interface NativeProjectSessionDelta {
+	baseGeneration: number;
+	candidateGeneration: number;
+	changedPaths: string[];
+	delta: CoreExternalDelta;
+	fileChanges: NativeProjectSessionConflict[];
+	id: string;
+	recovery?: NativeProjectSessionRecovery;
+	rootPath: string;
+	scannedAt: string;
+}
+
+export interface NativeProjectSessionStart {
+	assets: CoreAssetInventoryEntry[];
+	generation: number;
+	rootPath: string;
+	storyIds: string[];
+}
+
+interface NativeProjectDescriptor {
+	layout: Record<
+		string,
+		{height: number; left: number; top: number; width: number}
+	>;
+	layoutDataJson: string;
+	name: string;
+	paths: Map<
+		string,
+		{
+			kind: 'passage' | 'script' | 'stylesheet';
+			passageId?: string;
+			storyId: string;
+		}
+	>;
+	schemaVersion: number;
+	stories: ParsedProjectStory[];
+}
+
+interface ProjectSessionCandidate {
+	baseline: NativeProjectSessionSnapshot;
+	delta: NativeProjectSessionDelta;
+	descriptor: NativeProjectDescriptor;
+}
+
+type ProjectSessionListener = (delta: NativeProjectSessionDelta) => void;
 
 interface ProjectSessionState {
 	baseline?: NativeProjectSessionSnapshot;
 	baselineReusableUntil?: number;
 	debounceTimer?: ReturnType<typeof setTimeout>;
+	descriptor?: NativeProjectDescriptor;
+	generation: number;
 	interval?: ReturnType<typeof setInterval>;
 	listeners: Set<ProjectSessionListener>;
-	pending?: NativeProjectSessionSnapshot;
+	pathHints: Set<string>;
+	pending?: ProjectSessionCandidate;
 	rescanRequested?: boolean;
 	rootPath: string;
 	scanning?: boolean;
 	watcher?: FSWatcher;
+	watcherAvailable?: boolean;
 }
 
 interface ProjectSessionSnapshotHints {
@@ -202,7 +265,8 @@ const preparedProjectImports = new Map<
 	string,
 	{assets: NativeProjectImportAsset[]; cleanupPath?: string}
 >();
-const projectSessionPollMs = 1250;
+const projectSessionFallbackPollMs = 1250;
+const projectSessionReconcileMs = 30_000;
 const projectSessionWatchDebounceMs = 150;
 const maxProjectMetadataSidecarBytes = 2 * 1024 * 1024;
 const importAssetExtensions = new Set([
@@ -474,6 +538,245 @@ async function readJsonIfPresent<T>(
 
 		throw error;
 	}
+}
+
+function projectHeaderValue(source: string, key: string) {
+	for (const rawLine of source.split(/\r?\n/)) {
+		const line = stripTomlComment(rawLine).trim();
+
+		if (line === '[[stories]]') {
+			break;
+		}
+		const delimiter = line.indexOf('=');
+
+		if (delimiter !== -1 && line.slice(0, delimiter).trim() === key) {
+			return parseTomlValue(line.slice(delimiter + 1));
+		}
+	}
+
+	return undefined;
+}
+
+async function readProjectLayout(rootPath: string) {
+	const graph = await readJsonIfPresent<
+		Record<string, unknown> & {
+			passages?: Record<
+				string,
+				Partial<Record<'height' | 'left' | 'top' | 'width', number>>
+			>;
+		}
+	>(join(rootPath, '.twine', 'graph.json'));
+	const layout: NativeProjectDescriptor['layout'] = {};
+
+	for (const [passageId, entry] of Object.entries(graph?.passages ?? {})) {
+		layout[passageId] = {
+			height: numberOrFallback(entry.height, 100),
+			left: numberOrFallback(entry.left, 0),
+			top: numberOrFallback(entry.top, 0),
+			width: numberOrFallback(entry.width, 100)
+		};
+	}
+
+	const layoutData = {...(graph ?? {})};
+
+	delete layoutData.passages;
+	return {
+		layout,
+		layoutDataJson: JSON.stringify(layoutData)
+	};
+}
+
+async function readProjectDescriptor(
+	rootPath: string
+): Promise<NativeProjectDescriptor> {
+	const source = await readTextIfPresent(join(rootPath, 'twine.toml'));
+
+	if (!source) {
+		throw new Error('Project manifest not found.');
+	}
+	const schemaVersion = Number(
+		projectHeaderValue(source, 'schema_version') ?? 1
+	);
+	const name = String(projectHeaderValue(source, 'name') ?? '');
+	const stories = parseProjectToml(source);
+
+	if (schemaVersion !== 1) {
+		throw Object.assign(
+			new Error(`Project schema ${schemaVersion} requires a full reload.`),
+			{recoveryReason: 'schema'}
+		);
+	}
+	if (
+		stories.some(
+			story =>
+				!story.id ||
+				story.passages.some(passage => !passage.id || !passage.file)
+		)
+	) {
+		throw Object.assign(
+			new Error('Project identities or source mappings are incomplete.'),
+			{recoveryReason: 'projectIdentity'}
+		);
+	}
+
+	const {layout, layoutDataJson} = await readProjectLayout(rootPath);
+	const descriptor: NativeProjectDescriptor = {
+		layout,
+		layoutDataJson,
+		name,
+		paths: new Map(),
+		schemaVersion,
+		stories
+	};
+
+	descriptor.paths = descriptorPathMap(descriptor);
+	return descriptor;
+}
+
+function descriptorStoryMap(descriptor: NativeProjectDescriptor) {
+	return new Map(
+		descriptor.stories.map(story => [story.id as string, story] as const)
+	);
+}
+
+function descriptorPassageMap(story: ParsedProjectStory) {
+	return new Map(
+		story.passages.map(passage => [passage.id as string, passage] as const)
+	);
+}
+
+async function readDescriptorPassage(
+	rootPath: string,
+	storyId: string,
+	passage: ParsedProjectPassage,
+	layout?: NativeProjectDescriptor['layout'][string]
+) {
+	const path = safeProjectFilePath(rootPath, passage.file);
+	const text = path ? ((await readTextIfPresent(path)) ?? '') : '';
+
+	return {
+		id: passage.id as string,
+		layout: layout ?? null,
+		name: passage.name ?? 'Untitled Passage',
+		storyId,
+		tags: passage.tags ?? [],
+		text
+	};
+}
+
+async function readDescriptorStory(
+	rootPath: string,
+	story: ParsedProjectStory,
+	descriptor: NativeProjectDescriptor
+) {
+	const storyId = story.id as string;
+	const scriptPath = safeProjectFilePath(rootPath, story.script);
+	const stylesheetPath = safeProjectFilePath(rootPath, story.stylesheet);
+
+	return {
+		id: storyId,
+		ifid: story.ifid ?? storyId.toUpperCase(),
+		name: story.name ?? 'Untitled Story',
+		passages: await Promise.all(
+			story.passages.map(passage =>
+				readDescriptorPassage(
+					rootPath,
+					storyId,
+					passage,
+					descriptor.layout[passage.id as string]
+				)
+			)
+		),
+		script: scriptPath ? ((await readTextIfPresent(scriptPath)) ?? '') : '',
+		snapToGrid: story.snap_to_grid ?? true,
+		startPassageId:
+			story.start_passage ?? (story.passages[0]?.id as string) ?? '',
+		storyFormat: story.story_format ?? '',
+		storyFormatVersion: story.story_format_version ?? '',
+		stylesheet: stylesheetPath
+			? ((await readTextIfPresent(stylesheetPath)) ?? '')
+			: '',
+		tagColors: {},
+		tags: story.tags ?? [],
+		zoom: story.zoom ?? 1
+	};
+}
+
+function descriptorPathMap(descriptor: NativeProjectDescriptor) {
+	const paths = new Map<
+		string,
+		{
+			kind: 'passage' | 'script' | 'stylesheet';
+			passageId?: string;
+			storyId: string;
+		}
+	>();
+
+	for (const story of descriptor.stories) {
+		const storyId = story.id as string;
+
+		if (story.script) {
+			paths.set(story.script.replace(/\\/g, '/'), {kind: 'script', storyId});
+		}
+		if (story.stylesheet) {
+			paths.set(story.stylesheet.replace(/\\/g, '/'), {
+				kind: 'stylesheet',
+				storyId
+			});
+		}
+		for (const passage of story.passages) {
+			if (passage.file) {
+				paths.set(passage.file.replace(/\\/g, '/'), {
+					kind: 'passage',
+					passageId: passage.id as string,
+					storyId
+				});
+			}
+		}
+	}
+
+	return paths;
+}
+
+function descriptorFromStories(stories: Story[]): NativeProjectDescriptor {
+	const descriptor: NativeProjectDescriptor = {
+		layout: Object.fromEntries(
+			stories.flatMap(story =>
+				story.passages.map(passage => [
+					passage.id,
+					{
+						height: passage.height,
+						left: passage.left,
+						top: passage.top,
+						width: passage.width
+					}
+				])
+			)
+		),
+		layoutDataJson: '{}',
+		name: stories[0]?.name ?? '',
+		paths: new Map(),
+		schemaVersion: 1,
+		stories: stories.map(story => ({
+			ifid: story.ifid,
+			id: story.id,
+			name: story.name,
+			passages: story.passages.map(passage => ({
+				id: passage.id,
+				name: passage.name,
+				tags: passage.tags
+			})),
+			snap_to_grid: story.snapToGrid,
+			start_passage: story.startPassage,
+			story_format: story.storyFormat,
+			story_format_version: story.storyFormatVersion,
+			tags: story.tags,
+			zoom: story.zoom
+		}))
+	};
+
+	descriptor.paths = descriptorPathMap(descriptor);
+	return descriptor;
 }
 
 async function writeJsonAtomic(path: string, data: unknown) {
@@ -1377,6 +1680,69 @@ async function projectFileManifest(
 	return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
+function projectFileKindForPath(
+	path: string
+): NativeProjectFileKind | undefined {
+	if (path === 'twine.toml') {
+		return 'manifest';
+	}
+	if (path === '.twine/project.json') {
+		return 'metadata';
+	}
+	if (path === '.twine/graph.json') {
+		return 'graph';
+	}
+	if (path === '.twine/cache' || path.startsWith('.twine/cache/')) {
+		return undefined;
+	}
+	if (path === 'passages' || path.startsWith('passages/')) {
+		return 'passage';
+	}
+	if (path === 'scripts' || path.startsWith('scripts/')) {
+		return 'script';
+	}
+	if (path === 'styles' || path.startsWith('styles/')) {
+		return 'stylesheet';
+	}
+	if (path === 'assets' || path.startsWith('assets/')) {
+		return 'asset';
+	}
+
+	return undefined;
+}
+
+async function projectFileManifestForHints(
+	rootPath: string,
+	baseline: NativeProjectFileEntry[],
+	hints: string[]
+) {
+	const files = new Map(baseline.map(file => [file.path, file] as const));
+
+	for (const hint of hints) {
+		const normalized = hint.replace(/^\.\/+/, '').replace(/\\/g, '/');
+		const kind = projectFileKindForPath(normalized);
+
+		if (!kind) {
+			continue;
+		}
+		for (const path of [...files.keys()]) {
+			if (path === normalized || path.startsWith(`${normalized}/`)) {
+				files.delete(path);
+			}
+		}
+		const changed: NativeProjectFileEntry[] = [];
+
+		await scanProjectFiles(rootPath, normalized, kind, changed);
+		for (const entry of changed) {
+			files.set(entry.path, entry);
+		}
+	}
+
+	return [...files.values()].sort((left, right) =>
+		left.path.localeCompare(right.path)
+	);
+}
+
 function projectSessionConflicts(
 	previousFiles: NativeProjectFileEntry[],
 	currentFiles: NativeProjectFileEntry[]
@@ -1741,19 +2107,443 @@ async function readProjectSessionSnapshot(
 	};
 }
 
-function notifyProjectSession(session: ProjectSessionState) {
-	const snapshot = session.pending;
+function emptyStoryMetadataPatch(): StoryMetadataPatch {
+	return {
+		name: null,
+		snapToGrid: null,
+		storyFormat: null,
+		storyFormatVersion: null,
+		tagColors: null,
+		tags: null,
+		zoom: null
+	};
+}
 
-	if (!snapshot) {
+function emptyPassagePatch(): PassagePatch {
+	return {layout: null, name: null, tags: null, text: null};
+}
+
+async function manifestExternalChanges(
+	rootPath: string,
+	before: NativeProjectDescriptor,
+	after: NativeProjectDescriptor
+): Promise<CoreExternalChange[]> {
+	if (before.name !== after.name) {
+		throw Object.assign(
+			new Error('Project identity changed and requires a full reload.'),
+			{recoveryReason: 'projectIdentity'}
+		);
+	}
+
+	const changes: CoreExternalChange[] = [];
+	const beforeStories = descriptorStoryMap(before);
+	const afterStories = descriptorStoryMap(after);
+
+	for (const storyId of beforeStories.keys()) {
+		if (!afterStories.has(storyId)) {
+			changes.push({story_id: storyId, type: 'deleteStory'});
+		}
+	}
+
+	for (const [storyId, story] of afterStories) {
+		const previous = beforeStories.get(storyId);
+
+		if (!previous) {
+			changes.push({
+				story: await readDescriptorStory(rootPath, story, after),
+				type: 'upsertStory'
+			});
+			continue;
+		}
+		if (previous.ifid !== story.ifid) {
+			throw Object.assign(
+				new Error(`Story identity changed for "${storyId}".`),
+				{recoveryReason: 'projectIdentity'}
+			);
+		}
+
+		const metadata = emptyStoryMetadataPatch();
+
+		if (previous.name !== story.name) {
+			metadata.name = story.name ?? 'Untitled Story';
+		}
+		if (previous.snap_to_grid !== story.snap_to_grid) {
+			metadata.snapToGrid = story.snap_to_grid ?? true;
+		}
+		if (previous.story_format !== story.story_format) {
+			metadata.storyFormat = story.story_format ?? '';
+		}
+		if (previous.story_format_version !== story.story_format_version) {
+			metadata.storyFormatVersion = story.story_format_version ?? '';
+		}
+		if (
+			JSON.stringify(previous.tags ?? []) !== JSON.stringify(story.tags ?? [])
+		) {
+			metadata.tags = story.tags ?? [];
+		}
+		if (previous.zoom !== story.zoom) {
+			metadata.zoom = story.zoom ?? 1;
+		}
+		if (Object.values(metadata).some(value => value !== null)) {
+			changes.push({
+				changes: metadata,
+				story_id: storyId,
+				type: 'updateStoryMetadata'
+			});
+		}
+		const previousStart =
+			previous.start_passage ?? (previous.passages[0]?.id as string) ?? '';
+		const nextStart =
+			story.start_passage ?? (story.passages[0]?.id as string) ?? '';
+
+		if (previousStart !== nextStart) {
+			changes.push({
+				passage_id: nextStart,
+				story_id: storyId,
+				type: 'updateStoryStartPassage'
+			});
+		}
+
+		const previousPassages = descriptorPassageMap(previous);
+		const passages = descriptorPassageMap(story);
+
+		for (const passageId of previousPassages.keys()) {
+			if (!passages.has(passageId)) {
+				changes.push({
+					passage_id: passageId,
+					story_id: storyId,
+					type: 'deletePassage'
+				});
+			}
+		}
+		for (const [passageId, passage] of passages) {
+			const previousPassage = previousPassages.get(passageId);
+
+			if (!previousPassage) {
+				changes.push({
+					passage: await readDescriptorPassage(
+						rootPath,
+						storyId,
+						passage,
+						after.layout[passageId]
+					),
+					story_id: storyId,
+					type: 'upsertPassage'
+				});
+				continue;
+			}
+			const passageChanges = emptyPassagePatch();
+
+			if (previousPassage.name !== passage.name) {
+				passageChanges.name = passage.name ?? 'Untitled Passage';
+			}
+			if (
+				JSON.stringify(previousPassage.tags ?? []) !==
+				JSON.stringify(passage.tags ?? [])
+			) {
+				passageChanges.tags = passage.tags ?? [];
+			}
+			if (previousPassage.file !== passage.file) {
+				const path = safeProjectFilePath(rootPath, passage.file);
+
+				passageChanges.text = path
+					? ((await readTextIfPresent(path)) ?? '')
+					: '';
+			}
+			if (Object.values(passageChanges).some(value => value !== null)) {
+				changes.push({
+					changes: passageChanges,
+					passage_id: passageId,
+					story_id: storyId,
+					type: 'updatePassage'
+				});
+			}
+		}
+
+		if (previous.script !== story.script) {
+			const path = safeProjectFilePath(rootPath, story.script);
+
+			changes.push({
+				script: path ? ((await readTextIfPresent(path)) ?? '') : '',
+				story_id: storyId,
+				type: 'updateStoryScript'
+			});
+		}
+		if (previous.stylesheet !== story.stylesheet) {
+			const path = safeProjectFilePath(rootPath, story.stylesheet);
+
+			changes.push({
+				story_id: storyId,
+				stylesheet: path ? ((await readTextIfPresent(path)) ?? '') : '',
+				type: 'updateStoryStylesheet'
+			});
+		}
+	}
+
+	return changes;
+}
+
+function layoutExternalChanges(
+	before: NativeProjectDescriptor,
+	after: NativeProjectDescriptor
+): CoreExternalChange[] {
+	const passageStories = new Map<string, string>();
+
+	for (const story of after.stories) {
+		for (const passage of story.passages) {
+			passageStories.set(passage.id as string, story.id as string);
+		}
+	}
+
+	return Array.from(
+		new Set([...Object.keys(before.layout), ...Object.keys(after.layout)])
+	).flatMap(passageId => {
+		const previous = before.layout[passageId];
+		const next = after.layout[passageId];
+		const storyId = passageStories.get(passageId);
+
+		if (!storyId || JSON.stringify(previous) === JSON.stringify(next)) {
+			return [];
+		}
+		return [
+			{
+				layout: next ?? null,
+				passage_id: passageId,
+				story_id: storyId,
+				type: 'updatePassageLayout' as const
+			}
+		];
+	});
+}
+
+async function targetedAssetEntry(rootPath: string, projectPath: string) {
+	const asset = safeProjectAssetPath(rootPath, projectPath);
+
+	try {
+		const fileStats = await stat(asset.absolutePath);
+
+		return fileStats.isFile()
+			? projectAssetInventoryEntry(
+					asset.projectPath,
+					asset.absolutePath,
+					fileStats
+				)
+			: undefined;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return undefined;
+		}
+		throw error;
+	}
+}
+
+function recoveryDelta(
+	session: ProjectSessionState,
+	fileChanges: NativeProjectSessionConflict[],
+	error: Error & {recoveryReason?: NativeProjectSessionRecovery['reason']}
+): ProjectSessionCandidate {
+	const changedPaths = fileChanges.map(change => change.path);
+	const candidateGeneration = session.generation + 1;
+	const delta: NativeProjectSessionDelta = {
+		baseGeneration: session.generation,
+		candidateGeneration,
+		changedPaths,
+		delta: {changes: [], id: uuid()},
+		fileChanges,
+		id: uuid(),
+		recovery: {
+			changedPaths,
+			message: error.message,
+			reason: error.recoveryReason ?? 'invalidManifest'
+		},
+		rootPath: session.rootPath,
+		scannedAt: new Date().toISOString()
+	};
+
+	return {
+		baseline: session.baseline!,
+		delta,
+		descriptor: session.descriptor!
+	};
+}
+
+async function readProjectSessionDelta(
+	session: ProjectSessionState,
+	reconcile = false
+): Promise<ProjectSessionCandidate | undefined> {
+	const baseline = session.baseline!;
+	const hints = [...session.pathHints];
+
+	session.pathHints.clear();
+	const files =
+		!reconcile && hints.length > 0
+			? await projectFileManifestForHints(
+					session.rootPath,
+					baseline.files,
+					hints
+				)
+			: await projectFileManifest(session.rootPath);
+	const fileChanges = projectSessionConflicts(baseline.files, files);
+
+	if (fileChanges.length === 0) {
+		return undefined;
+	}
+
+	let descriptor = session.descriptor!;
+	const changes: CoreExternalChange[] = [];
+	const changedPaths = fileChanges.map(change => change.path);
+
+	try {
+		if (fileChanges.some(change => change.kind === 'metadata')) {
+			throw Object.assign(
+				new Error(
+					'Compatibility project metadata changed and requires a full reload.'
+				),
+				{recoveryReason: 'unsupportedMetadata'}
+			);
+		}
+
+		if (fileChanges.some(change => change.kind === 'manifest')) {
+			const nextDescriptor = await readProjectDescriptor(session.rootPath);
+
+			changes.push(
+				...(await manifestExternalChanges(
+					session.rootPath,
+					descriptor,
+					nextDescriptor
+				))
+			);
+			descriptor = nextDescriptor;
+		}
+
+		const pathMap = descriptor.paths;
+		for (const fileChange of fileChanges) {
+			const mapping = pathMap.get(fileChange.path);
+
+			if (mapping?.kind === 'passage' && mapping.passageId) {
+				const path = safeProjectFilePath(session.rootPath, fileChange.path);
+
+				changes.push({
+					changes: {
+						...emptyPassagePatch(),
+						text: path ? ((await readTextIfPresent(path)) ?? '') : ''
+					},
+					passage_id: mapping.passageId,
+					story_id: mapping.storyId,
+					type: 'updatePassage'
+				});
+			} else if (mapping?.kind === 'script') {
+				const path = safeProjectFilePath(session.rootPath, fileChange.path);
+
+				changes.push({
+					script: path ? ((await readTextIfPresent(path)) ?? '') : '',
+					story_id: mapping.storyId,
+					type: 'updateStoryScript'
+				});
+			} else if (mapping?.kind === 'stylesheet') {
+				const path = safeProjectFilePath(session.rootPath, fileChange.path);
+
+				changes.push({
+					story_id: mapping.storyId,
+					stylesheet: path ? ((await readTextIfPresent(path)) ?? '') : '',
+					type: 'updateStoryStylesheet'
+				});
+			}
+		}
+
+		if (fileChanges.some(change => change.kind === 'graph')) {
+			const nextLayout = await readProjectLayout(session.rootPath);
+			const nextDescriptor = {
+				...descriptor,
+				...nextLayout
+			};
+
+			changes.push(...layoutExternalChanges(descriptor, nextDescriptor));
+			if (descriptor.layoutDataJson !== nextDescriptor.layoutDataJson) {
+				changes.push({
+					layout_json: nextDescriptor.layoutDataJson,
+					type: 'updateProjectLayout'
+				});
+			}
+			descriptor = nextDescriptor;
+		}
+
+		const assets = new Map(
+			baseline.assets.map(asset => [asset.normalizedPath, asset] as const)
+		);
+		for (const fileChange of fileChanges.filter(
+			change => change.kind === 'asset'
+		)) {
+			const existing = assets.get(normalizedAssetPath(fileChange.path));
+			const asset = await targetedAssetEntry(session.rootPath, fileChange.path);
+
+			if (asset) {
+				assets.set(asset.normalizedPath, asset);
+				changes.push({asset, type: 'upsertAsset'});
+			} else {
+				assets.delete(normalizedAssetPath(fileChange.path));
+				changes.push({
+					path: existing?.path ?? fileChange.path,
+					type: 'deleteAsset'
+				});
+			}
+		}
+
+		const candidateGeneration = session.generation + 1;
+		const coreDelta: CoreExternalDelta = {changes, id: uuid()};
+		const delta: NativeProjectSessionDelta = {
+			baseGeneration: session.generation,
+			candidateGeneration,
+			changedPaths,
+			delta: coreDelta,
+			fileChanges,
+			id: coreDelta.id,
+			rootPath: session.rootPath,
+			scannedAt: new Date().toISOString()
+		};
+
+		return {
+			baseline: {
+				...baseline,
+				assets: [...assets.values()].sort((left, right) =>
+					left.path.localeCompare(right.path)
+				),
+				changedPaths,
+				conflicts: fileChanges,
+				files,
+				scannedAt: delta.scannedAt,
+				stories: []
+			},
+			delta,
+			descriptor
+		};
+	} catch (error) {
+		return recoveryDelta(
+			session,
+			fileChanges,
+			error as Error & {
+				recoveryReason?: NativeProjectSessionRecovery['reason'];
+			}
+		);
+	}
+}
+
+function notifyProjectSession(session: ProjectSessionState) {
+	const pending = session.pending;
+
+	if (!pending) {
 		return;
 	}
 
 	for (const listener of session.listeners) {
-		listener(snapshot);
+		listener(pending.delta);
 	}
 }
 
-async function pollProjectSession(session: ProjectSessionState) {
+async function pollProjectSession(
+	session: ProjectSessionState,
+	reconcile = false
+) {
 	if (session.scanning) {
 		session.rescanRequested = true;
 		return;
@@ -1762,34 +2552,37 @@ async function pollProjectSession(session: ProjectSessionState) {
 	session.scanning = true;
 
 	try {
-		const snapshot = await readProjectSessionSnapshot(
-			session.rootPath,
-			session.baseline,
-			{storyIds: session.baseline?.storyIds}
-		);
-		const previousConflictIds = (session.pending?.conflicts ?? [])
-			.map(conflict => conflict.id)
-			.join('\n');
-		const currentConflictIds = snapshot.conflicts
-			.map(conflict => conflict.id)
-			.join('\n');
+		const candidate = await readProjectSessionDelta(session, reconcile);
+		const previousSignature = session.pending
+			? JSON.stringify({
+					changes: session.pending.delta.delta.changes,
+					paths: session.pending.delta.changedPaths,
+					recovery: session.pending.delta.recovery
+				})
+			: '';
+		const nextSignature = candidate
+			? JSON.stringify({
+					changes: candidate.delta.delta.changes,
+					paths: candidate.delta.changedPaths,
+					recovery: candidate.delta.recovery
+				})
+			: '';
 
-		if (snapshot.conflicts.length > 0) {
-			session.pending = snapshot;
-
-			if (currentConflictIds !== previousConflictIds) {
-				notifyProjectSession(session);
-			}
+		if (candidate && session.pending && nextSignature === previousSignature) {
+			// Preserve the exact candidate ID while the renderer is applying or
+			// reviewing the same coalesced disk state.
 		} else {
-			session.pending = undefined;
-			session.baseline = snapshot;
+			session.pending = candidate;
+		}
+		if (candidate && nextSignature !== previousSignature) {
+			notifyProjectSession(session);
 		}
 	} finally {
 		session.scanning = false;
 
 		if (session.rescanRequested) {
 			session.rescanRequested = false;
-			void pollProjectSession(session);
+			void pollProjectSession(session, reconcile);
 		}
 	}
 }
@@ -1805,13 +2598,44 @@ function scheduleProjectSessionPoll(session: ProjectSessionState) {
 	}, projectSessionWatchDebounceMs);
 }
 
+function installProjectSessionWatcher(session: ProjectSessionState) {
+	session.watcher?.close();
+	session.watcher = undefined;
+
+	try {
+		session.watcher = watch(
+			session.rootPath,
+			{recursive: true},
+			(_eventType, filename) => {
+				if (filename) {
+					const normalized = String(filename).replace(/\\/g, '/');
+
+					if (
+						normalized &&
+						!normalized.startsWith('../') &&
+						!normalized.includes('/../')
+					) {
+						session.pathHints.add(normalized);
+					}
+				}
+				scheduleProjectSessionPoll(session);
+			}
+		);
+		session.watcherAvailable = true;
+	} catch {
+		session.watcherAvailable = false;
+	}
+}
+
 function ensureProjectSession(rootPath: string) {
 	const key = projectSessionKey(rootPath);
 	let session = projectSessions.get(key);
 
 	if (!session) {
 		session = {
+			generation: 1,
 			listeners: new Set<ProjectSessionListener>(),
+			pathHints: new Set<string>(),
 			rootPath
 		};
 		projectSessions.set(key, session);
@@ -1835,8 +2659,15 @@ async function refreshProjectSessionBaseline(
 		...hints,
 		storyIds: storyIds ?? session.baseline?.storyIds
 	});
+	session.descriptor = await readProjectDescriptor(rootPath).catch(() =>
+		descriptorFromStories(hints.stories ?? session.baseline?.stories ?? [])
+	);
+	session.generation++;
 	session.pending = undefined;
 	session.baselineReusableUntil = undefined;
+	if (session.watcher || session.watcherAvailable !== undefined) {
+		installProjectSessionWatcher(session);
+	}
 }
 
 async function primeProjectSessionBaseline(
@@ -1850,8 +2681,11 @@ async function primeProjectSessionBaseline(
 		undefined,
 		hints
 	);
+	session.descriptor = await readProjectDescriptor(rootPath).catch(() =>
+		descriptorFromStories(hints.stories ?? session.baseline?.stories ?? [])
+	);
 	session.pending = undefined;
-	session.baselineReusableUntil = Date.now() + projectSessionPollMs;
+	session.baselineReusableUntil = Date.now() + projectSessionFallbackPollMs;
 
 	return session.baseline;
 }
@@ -2651,39 +3485,43 @@ export async function startProjectSession(
 			storyIds
 		});
 	}
-
-	if (!session.interval) {
-		session.interval = setInterval(
-			() => void pollProjectSession(session),
-			projectSessionPollMs
+	if (!session.descriptor) {
+		session.descriptor = await readProjectDescriptor(rootPath).catch(() =>
+			descriptorFromStories(session.baseline?.stories ?? [])
 		);
 	}
 
 	if (!session.watcher) {
-		try {
-			session.watcher = watch(rootPath, {recursive: true}, () =>
-				scheduleProjectSessionPoll(session)
-			);
-		} catch {
-			// Polling above remains active when recursive watching is unavailable.
-		}
+		installProjectSessionWatcher(session);
+	}
+
+	if (!session.interval) {
+		session.interval = setInterval(
+			() => void pollProjectSession(session, true),
+			session.watcherAvailable
+				? projectSessionReconcileMs
+				: projectSessionFallbackPollMs
+		);
 	}
 
 	if (session.pending) {
-		return session.pending;
+		queueMicrotask(() => notifyProjectSession(session));
 	}
 
-	if (reusable) {
-		return reusable;
-	}
+	const baseline =
+		reusable ??
+		(baselineWasMissing
+			? session.baseline
+			: await readProjectSessionSnapshot(rootPath, undefined, {
+					storyIds: storyIds ?? session.baseline.storyIds
+				}));
 
-	if (baselineWasMissing) {
-		return session.baseline;
-	}
-
-	return readProjectSessionSnapshot(rootPath, session.baseline, {
-		storyIds: storyIds ?? session.baseline.storyIds
-	});
+	return {
+		assets: baseline.assets,
+		generation: session.generation,
+		rootPath: baseline.rootPath,
+		storyIds: baseline.storyIds
+	} satisfies NativeProjectSessionStart;
 }
 
 export function unsubscribeProjectSession(
@@ -2726,21 +3564,50 @@ export function stopProjectSession(rootPath: string) {
 export async function resolveProjectSessionConflicts(
 	rootPath: string,
 	resolution: NativeProjectSessionResolution,
-	stories: Story[] = []
+	stories: Story[] = [],
+	deltaId?: string
 ) {
+	const session = ensureProjectSession(rootPath);
+
+	if (deltaId && (!session.pending || session.pending.delta.id !== deltaId)) {
+		throw new Error(`Project delta "${deltaId}" is stale.`);
+	}
+
 	if (resolution === 'keepApp') {
 		if (stories.length === 0) {
 			throw new Error('Cannot keep app changes without a story snapshot.');
 		}
 
 		await writeProjectFolder(rootPath, stories[0]);
+		await refreshProjectSessionBaseline(
+			rootPath,
+			stories.map(story => story.id),
+			{stories}
+		);
+	} else if (resolution === 'acceptDisk' && session.pending) {
+		const candidate = session.pending;
+
+		if (candidate.delta.recovery) {
+			session.baseline = await readProjectSessionSnapshot(rootPath);
+			session.descriptor = await readProjectDescriptor(rootPath);
+		} else {
+			session.baseline = {
+				...candidate.baseline,
+				changedPaths: [],
+				conflicts: []
+			};
+			session.descriptor = candidate.descriptor;
+		}
+		session.generation = candidate.delta.candidateGeneration;
+		session.pending = undefined;
 	}
 
-	const session = ensureProjectSession(rootPath);
-	const snapshot = await readProjectSessionSnapshot(rootPath);
+	const baseline = session.baseline!;
 
-	session.baseline = snapshot;
-	session.pending = undefined;
-
-	return snapshot;
+	return {
+		assets: baseline.assets,
+		generation: session.generation,
+		rootPath: baseline.rootPath,
+		storyIds: baseline.storyIds
+	} satisfies NativeProjectSessionStart;
 }

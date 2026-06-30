@@ -5,7 +5,7 @@ export interface CoreBridgeMetric {
 	kind:
 		| 'acknowledgeSaved'
 		| 'apply'
-		| 'applyExternalDelta'
+		| 'ingestExternalDelta'
 		| 'queryGraphProjection'
 		| 'queryStoryIndex'
 		| 'redo'

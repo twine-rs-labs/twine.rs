@@ -201,13 +201,15 @@ const bridge = {
 	resolveProjectSessionConflicts(
 		rootPath: string,
 		resolution: string,
-		stories?: Story[]
+		stories?: Story[],
+		deltaId?: string
 	) {
 		return ipcRenderer.invoke(
 			'resolve-project-session-conflicts',
 			rootPath,
 			resolution,
-			stories
+			stories,
+			deltaId
 		);
 	},
 	saveJson(filename: string, data: any) {

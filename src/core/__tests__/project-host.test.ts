@@ -89,6 +89,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 			cachedStoryIndex: jest.fn(),
 			enabled: true,
 			lastGraphProjection: jest.fn(),
+			ingestExternalDelta: jest.fn(),
 			mode: 'wasm-worker',
 			queryGraphProjection: jest.fn(),
 			queryStoryIndex: jest.fn(),
@@ -97,6 +98,47 @@ describe('StoreCoreProjectHost asset commands', () => {
 			undo: jest.fn()
 		};
 	}
+
+	it('returns external conflicts without dispatching a patch batch', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		wasmClient.ingestExternalDelta.mockResolvedValue({
+			batch: null,
+			conflicts: [
+				{
+					field: 'passage:story:start:text',
+					message: 'changed locally and on disk',
+					passageId: 'start',
+					path: null,
+					storyId: 'story'
+				}
+			],
+			historyRecorded: false,
+			outcome: 'conflict',
+			revision: 1,
+			status: {
+				canRedo: false,
+				canUndo: false,
+				dirty: true,
+				redoKind: null,
+				revision: 1,
+				undoKind: null
+			}
+		});
+		const context = hostWithStory({wasmClient});
+		const result = await context.host.ingestExternalDelta(context.story.id, {
+			changes: [],
+			id: 'disk-change'
+		});
+
+		expect(result.outcome).toBe('conflict');
+		expect(context.dispatch).not.toHaveBeenCalled();
+		expect(wasmClient.ingestExternalDelta).toHaveBeenCalledWith(
+			'library',
+			{changes: [], id: 'disk-change'},
+			1,
+			undefined
+		);
+	});
 
 	async function flushCommand() {
 		for (let i = 0; i < 8; i++) {

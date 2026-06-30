@@ -102,9 +102,11 @@ allocations, persistence write-back, and React render churn → ~7s observed.
    calls `queryStoryIndex()` on mount, derives a full contents view model, filters/sorts the full
    array, and maps every visible row. At 4.6k passages plus tags/assets/diagnostics this is enough
    to feel slow even if the graph itself is fast.
-7. **Session sync can keep the disk busy after open.** The watcher baseline/conflict path is
-   correct for safety, but it currently depends on rescanning project files. That must become an
-   incremental native file-manifest diff before polling large projects becomes background jank.
+7. **Session sync is now changed-path incremental.** Recursive watcher hints drive targeted
+   passage/source/layout/asset reads and generation-bound Rust deltas. A 30-second metadata-only
+   reconciliation catches missed events; the old 1.25-second manifest scan is retained only when
+   recursive watching is unavailable. The remaining gate is measuring this path in packaged
+   10k/50k projects.
 
 ### 1.3 What already exists to build on
 
@@ -640,7 +642,7 @@ temporary scaffolds; the phases above remove them.
 > missing-asset detection bug — all of which land in **Phase 2** here (P2.2 native
 > load owns the library path/move; P2.4/P2.5 own import; P2.6 owns the single asset
 > manifest that drives missing detection). The crash itself is an Electron
-> main-process recursive-copy bug that must be fixed *now*, ahead of the native
+> main-process recursive-copy bug that must be fixed _now_, ahead of the native
 > cutover. Full root-cause analysis, file:line refs, and DO/DON'T fixes:
 > [`TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md`](./TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md)
 > (waves W0, W5.2, W5.3). Also relevant: §7b(6) preload jsonp hardening ↔ that

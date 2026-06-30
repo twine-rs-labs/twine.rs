@@ -314,7 +314,7 @@ describe('project-folder native bridge', () => {
 				storyIds: [story.id]
 			})
 		);
-		expect(readFileMock).not.toHaveBeenCalledWith(
+		expect(readFileMock).toHaveBeenCalledWith(
 			'/native/moon-castle.twine.rs/twine.toml',
 			'utf8'
 		);
@@ -1318,6 +1318,178 @@ describe('project-folder native bridge', () => {
 				]
 			})
 		);
+	});
+
+	it('emits a generation-bound passage delta without loading the full project', async () => {
+		jest.useFakeTimers();
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'start_passage = "passage-id"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/001-start.twee"'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const passageFile = {
+			fingerprint: '1:4',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'passages/story/001-start.twee',
+			sizeBytes: 4
+		};
+		const changedPassageFile = {
+			...passageFile,
+			fingerprint: '2:9',
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 2,
+			sizeBytes: 9
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : 'from disk'
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([manifestFile, passageFile])
+			.mockReturnValueOnce([manifestFile, changedPassageFile]);
+
+		try {
+			const start = await startProjectSession(
+				'/native/project.twine.rs',
+				listener,
+				['story-id']
+			);
+
+			expect(start).toEqual(
+				expect.objectContaining({generation: 1, storyIds: ['story-id']})
+			);
+			await jest.advanceTimersByTimeAsync(1250);
+
+			expect(listener).toHaveBeenCalledWith(
+				expect.objectContaining({
+					baseGeneration: 1,
+					candidateGeneration: 2,
+					changedPaths: ['passages/story/001-start.twee'],
+					delta: expect.objectContaining({
+						changes: [
+							expect.objectContaining({
+								passage_id: 'passage-id',
+								story_id: 'story-id',
+								type: 'updatePassage'
+							})
+						]
+					})
+				})
+			);
+			expect(loadNativeProjectFolderMock).not.toHaveBeenCalled();
+		} finally {
+			stopProjectSession('/native/project.twine.rs');
+			jest.useRealTimers();
+		}
+	});
+
+	it('emits asset-only deltas without parsing story sources', async () => {
+		jest.useFakeTimers();
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const assetFile = {
+			fingerprint: '1:4',
+			kind: 'asset' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'assets/cover.png',
+			sizeBytes: 4
+		};
+		const changedAssetFile = {
+			...assetFile,
+			fingerprint: '2:9',
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 2,
+			sizeBytes: 9
+		};
+		const inventory = {
+			durationMs: null,
+			exists: true,
+			height: null,
+			kind: 'image',
+			missing: false,
+			modifiedAt: assetFile.modifiedAt,
+			normalizedPath: assetFile.path,
+			path: assetFile.path,
+			previewUrl: null,
+			publish: {copy: true, outputPath: assetFile.path, reason: 'Copy asset'},
+			referenceCount: 0,
+			references: [],
+			sizeBytes: assetFile.sizeBytes,
+			snippet: {label: 'cover.png', mediaType: 'image/png', text: ''},
+			thumbnailUrl: null,
+			unused: true,
+			width: null
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : 'unexpected'
+		);
+		listNativeProjectAssetsMock.mockReturnValue([inventory]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([manifestFile, assetFile])
+			.mockReturnValueOnce([manifestFile, changedAssetFile]);
+
+		try {
+			await startProjectSession('/native/project.twine.rs', listener, [
+				'story-id'
+			]);
+			readFileMock.mockClear();
+			await jest.advanceTimersByTimeAsync(1250);
+
+			expect(listener).toHaveBeenCalledWith(
+				expect.objectContaining({
+					changedPaths: ['assets/cover.png'],
+					delta: expect.objectContaining({
+						changes: [
+							expect.objectContaining({
+								asset: expect.objectContaining({path: 'assets/cover.png'}),
+								type: 'upsertAsset'
+							})
+						]
+					})
+				})
+			);
+			expect(readFileMock).not.toHaveBeenCalled();
+		} finally {
+			stopProjectSession('/native/project.twine.rs');
+			jest.useRealTimers();
+		}
 	});
 
 	it('renames, replaces, and deletes native project asset files safely', async () => {

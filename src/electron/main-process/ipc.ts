@@ -144,10 +144,12 @@ export function initIpc() {
 			stopProjectSessionSubscription(event.sender.id, rootPath);
 
 			const listener = (
-				snapshot: Awaited<ReturnType<typeof projectSessionSnapshot>>
+				delta: Parameters<
+					NonNullable<Parameters<typeof startProjectSession>[1]>
+				>[0]
 			) => {
 				if (!event.sender.isDestroyed()) {
-					event.sender.send('project-session-changed', snapshot);
+					event.sender.send('project-session-changed', delta);
 				}
 			};
 			const subscriptionKey = projectSessionSubscriptionKey(
@@ -178,8 +180,12 @@ export function initIpc() {
 			_event,
 			rootPath: string,
 			resolution: Parameters<typeof resolveProjectSessionConflicts>[1],
-			stories?: Story[]
-		) => resolveProjectSessionConflicts(rootPath, resolution, stories)
+			stories?: Story[],
+			deltaId?: string
+		) =>
+			deltaId
+				? resolveProjectSessionConflicts(rootPath, resolution, stories, deltaId)
+				: resolveProjectSessionConflicts(rootPath, resolution, stories)
 	);
 
 	ipcMain.handle(

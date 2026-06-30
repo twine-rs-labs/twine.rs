@@ -79,6 +79,7 @@ async function handleRequest(
 					const nextSession = new SessionConstructor(request.snapshot);
 
 					nextSession.set_revision(request.revision);
+					nextSession.set_asset_inventory(request.assets);
 					sessions.get(request.sessionId)?.session.free();
 					sessions.set(request.sessionId, {
 						revision: request.revision,
@@ -159,15 +160,17 @@ async function handleRequest(
 				break;
 			}
 
-			case 'applyExternalDelta': {
+			case 'ingestExternalDelta': {
 				const entry = ensureSession(request.sessionId, request.revision);
-				const batch = entry.session.apply_external_delta(request.delta);
+				const ingest = entry.session.ingest_external_delta(
+					request.delta,
+					request.force
+				);
 
 				entry.revision = entry.session.revision();
 				result = {
-					batch,
-					revision: entry.revision,
-					status: entry.session.status()
+					...ingest,
+					revision: entry.revision
 				};
 				break;
 			}
