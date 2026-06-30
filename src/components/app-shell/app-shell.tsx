@@ -6,7 +6,6 @@ import {
 	diagnosticDismissalsChangedEvent,
 	diagnosticIdentity,
 	loadDismissedDiagnosticIds,
-	markSavedCommand,
 	useCoreProjectHost
 } from '../../core';
 import type {CoreStoryIndex} from '../../core';
@@ -342,8 +341,15 @@ export const AppShell: React.FC = ({children}) => {
 	}, []);
 
 	React.useEffect(() => {
-		if (storySaveStatus.kind === 'saved') {
-			coreProjectHost.applyStoryCommand(markSavedCommand());
+		if (
+			storySaveStatus.kind === 'saved' &&
+			storySaveStatus.sessionId &&
+			storySaveStatus.revision !== undefined
+		) {
+			void coreProjectHost.acknowledgeSaved(
+				storySaveStatus.sessionId,
+				storySaveStatus.revision
+			);
 		}
 	}, [coreProjectHost, storySaveStatus]);
 

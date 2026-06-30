@@ -18,6 +18,9 @@ use twine_model::{
     GraphPosition, Passage, PassageId, PassageIndex, PassageLayout, Project, Story, StoryId,
 };
 
+const MAX_HISTORY_ENTRIES: usize = 200;
+const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
@@ -115,6 +118,79 @@ pub struct StorySnapshot {
     pub tag_colors: BTreeMap<String, String>,
     #[serde(default = "default_zoom")]
     pub zoom: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreHistoryKind {
+    Batch,
+    CreateStory,
+    NewPassage,
+    DeleteAsset,
+    DeletePassage,
+    DeleteStory,
+    EditPassage,
+    ExternalChanges,
+    ImportAsset,
+    InsertAsset,
+    MovePassage,
+    RenameAsset,
+    RenamePassage,
+    RenameStory,
+    RenameTag,
+    ReplaceAsset,
+    SaveLayout,
+    SetStartPassage,
+    StoryDetails,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreSessionStatus {
+    pub can_redo: bool,
+    pub can_undo: bool,
+    pub dirty: bool,
+    pub redo_kind: Option<CoreHistoryKind>,
+    pub revision: u32,
+    pub undo_kind: Option<CoreHistoryKind>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase", tag = "type")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreExternalChange {
+    DeletePassage {
+        passage_id: String,
+        story_id: String,
+    },
+    DeleteStory {
+        story_id: String,
+    },
+    UpsertPassage {
+        passage: PassageSnapshot,
+        story_id: String,
+    },
+    UpsertStory {
+        story: StorySnapshot,
+    },
+    UpdateStoryScript {
+        script: String,
+        story_id: String,
+    },
+    UpdateStoryStylesheet {
+        story_id: String,
+        stylesheet: String,
+    },
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreExternalDelta {
+    #[serde(default)]
+    pub changes: Vec<CoreExternalChange>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -924,7 +1000,6 @@ pub enum StoryCommand {
         source_id: String,
         story_id: String,
     },
-    MarkSaved,
     MovePassages {
         moves: Vec<PassageMove>,
         story_id: String,
@@ -1053,7 +1128,6 @@ impl StoryCommand {
             Self::DeleteStory { .. } => "Delete Story",
             Self::ImportAsset { .. } => "Import Asset",
             Self::InsertAssetSnippet { .. } => "Insert Asset Snippet",
-            Self::MarkSaved => "Mark Saved",
             Self::MovePassages { .. } => "Move Passages",
             Self::QueryGraphProjection { .. } => "Query Graph",
             Self::QueryStoryIndex { .. } => "Query Story Index",
@@ -1091,6 +1165,57 @@ impl StoryCommand {
                 | Self::RevealAsset { .. }
                 | Self::ValidateAssetReferences { .. }
         )
+    }
+
+    fn has_external_effect(&self) -> bool {
+        matches!(
+            self,
+            Self::DeleteAsset { .. }
+                | Self::ImportAsset { .. }
+                | Self::RenameAsset { .. }
+                | Self::ReplaceAsset { .. }
+        )
+    }
+
+    fn history_kind(&self) -> CoreHistoryKind {
+        match self {
+            Self::Batch { .. } => CoreHistoryKind::Batch,
+            Self::CreateStory { .. } => CoreHistoryKind::CreateStory,
+            Self::CreatePassage { .. } | Self::RestorePassages { .. } => {
+                CoreHistoryKind::NewPassage
+            }
+            Self::DeleteAsset { .. } => CoreHistoryKind::DeleteAsset,
+            Self::DeletePassages { .. } => CoreHistoryKind::DeletePassage,
+            Self::DeleteStory { .. } => CoreHistoryKind::DeleteStory,
+            Self::ImportAsset { .. } => CoreHistoryKind::ImportAsset,
+            Self::InsertAssetSnippet { .. } => CoreHistoryKind::InsertAsset,
+            Self::MovePassages { .. } => CoreHistoryKind::MovePassage,
+            Self::RenameAsset { .. } => CoreHistoryKind::RenameAsset,
+            Self::RenamePassage { .. } => CoreHistoryKind::RenamePassage,
+            Self::RenameStory { .. } => CoreHistoryKind::RenameStory,
+            Self::RenamePassageTag { .. } | Self::RenameStoryTag { .. } => {
+                CoreHistoryKind::RenameTag
+            }
+            Self::ReplaceAsset { .. } => CoreHistoryKind::ReplaceAsset,
+            Self::ReplaceStory { .. } => CoreHistoryKind::StoryDetails,
+            Self::SaveGeneratedLayout { .. } => CoreHistoryKind::SaveLayout,
+            Self::SetStartPassage { .. } => CoreHistoryKind::SetStartPassage,
+            Self::SetPassageTags { .. }
+            | Self::SetStoryFormat { .. }
+            | Self::SetStorySnapToGrid { .. }
+            | Self::SetStoryTagColor { .. }
+            | Self::SetStoryTags { .. }
+            | Self::SetStoryZoom { .. } => CoreHistoryKind::StoryDetails,
+            Self::UpdatePassage { .. }
+            | Self::UpdatePassageText { .. }
+            | Self::UpdateStoryScript { .. }
+            | Self::UpdateStoryStylesheet { .. } => CoreHistoryKind::EditPassage,
+            Self::CopyAssetSnippet { .. }
+            | Self::QueryGraphProjection { .. }
+            | Self::QueryStoryIndex { .. }
+            | Self::RevealAsset { .. }
+            | Self::ValidateAssetReferences { .. } => CoreHistoryKind::Batch,
+        }
     }
 }
 
@@ -1235,13 +1360,399 @@ pub enum CoreError {
     UnsafeAssetPath(String),
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct IndexedStory {
+    index: usize,
+    value: Story,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct IndexedPassage {
+    index: usize,
+    value: Passage,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct PassageDelta {
+    after: Option<IndexedPassage>,
+    before: Option<IndexedPassage>,
+    passage_id: PassageId,
+}
+
+#[derive(Clone, Debug, Serialize)]
+enum StoryDelta {
+    Replace {
+        after: Option<IndexedStory>,
+        before: Option<IndexedStory>,
+        story_id: StoryId,
+    },
+    Update {
+        after: Story,
+        before: Story,
+        passages: Vec<PassageDelta>,
+        story_id: StoryId,
+    },
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct ProjectDelta {
+    top_after: Option<Project>,
+    top_before: Option<Project>,
+    stories: Vec<StoryDelta>,
+}
+
+impl ProjectDelta {
+    fn between(before: &Project, after: &Project) -> Self {
+        let mut before_top = before.clone();
+        let mut after_top = after.clone();
+
+        before_top.stories.clear();
+        after_top.stories.clear();
+        let top_changed = before_top != after_top;
+        let before_by_id = before
+            .stories
+            .iter()
+            .enumerate()
+            .map(|(index, story)| (story.id.clone(), (index, story)))
+            .collect::<BTreeMap<_, _>>();
+        let after_by_id = after
+            .stories
+            .iter()
+            .enumerate()
+            .map(|(index, story)| (story.id.clone(), (index, story)))
+            .collect::<BTreeMap<_, _>>();
+        let story_ids = before_by_id
+            .keys()
+            .chain(after_by_id.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut stories = Vec::new();
+
+        for story_id in story_ids {
+            let before_story = before_by_id.get(&story_id);
+            let after_story = after_by_id.get(&story_id);
+
+            match (before_story, after_story) {
+                (Some((_, before_story)), Some((_, after_story))) => {
+                    let mut before_shell = (*before_story).clone();
+                    let mut after_shell = (*after_story).clone();
+
+                    before_shell.passages.clear();
+                    after_shell.passages.clear();
+                    let before_passages = before_story
+                        .passages
+                        .iter()
+                        .enumerate()
+                        .map(|(index, passage)| (passage.id.clone(), (index, passage)))
+                        .collect::<BTreeMap<_, _>>();
+                    let after_passages = after_story
+                        .passages
+                        .iter()
+                        .enumerate()
+                        .map(|(index, passage)| (passage.id.clone(), (index, passage)))
+                        .collect::<BTreeMap<_, _>>();
+                    let passage_ids = before_passages
+                        .keys()
+                        .chain(after_passages.keys())
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    let passages = passage_ids
+                        .into_iter()
+                        .filter_map(|passage_id| {
+                            let before =
+                                before_passages.get(&passage_id).map(|(index, passage)| {
+                                    IndexedPassage {
+                                        index: *index,
+                                        value: (*passage).clone(),
+                                    }
+                                });
+                            let after = after_passages.get(&passage_id).map(|(index, passage)| {
+                                IndexedPassage {
+                                    index: *index,
+                                    value: (*passage).clone(),
+                                }
+                            });
+
+                            (before.as_ref().map(|value| &value.value)
+                                != after.as_ref().map(|value| &value.value))
+                            .then_some(PassageDelta {
+                                after,
+                                before,
+                                passage_id,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+
+                    if before_shell != after_shell || !passages.is_empty() {
+                        stories.push(StoryDelta::Update {
+                            after: after_shell,
+                            before: before_shell,
+                            passages,
+                            story_id,
+                        });
+                    }
+                }
+                (before_story, after_story) => {
+                    stories.push(StoryDelta::Replace {
+                        after: after_story.map(|(index, story)| IndexedStory {
+                            index: *index,
+                            value: (*story).clone(),
+                        }),
+                        before: before_story.map(|(index, story)| IndexedStory {
+                            index: *index,
+                            value: (*story).clone(),
+                        }),
+                        story_id,
+                    });
+                }
+            }
+        }
+
+        Self {
+            top_after: top_changed.then_some(after_top),
+            top_before: top_changed.then_some(before_top),
+            stories,
+        }
+    }
+
+    fn apply(&self, project: &mut Project, forward: bool) {
+        if let Some(top) = if forward {
+            self.top_after.as_ref()
+        } else {
+            self.top_before.as_ref()
+        } {
+            project.layout = top.layout.clone();
+            project.library = top.library.clone();
+            project.manifest = top.manifest.clone();
+        }
+
+        let replacement_ids = self
+            .stories
+            .iter()
+            .filter_map(|delta| match delta {
+                StoryDelta::Replace { story_id, .. } => Some(story_id),
+                StoryDelta::Update { .. } => None,
+            })
+            .collect::<BTreeSet<_>>();
+
+        project
+            .stories
+            .retain(|story| !replacement_ids.contains(&story.id));
+        let mut story_inserts = self
+            .stories
+            .iter()
+            .filter_map(|delta| match delta {
+                StoryDelta::Replace { after, before, .. } => {
+                    if forward {
+                        after.as_ref()
+                    } else {
+                        before.as_ref()
+                    }
+                }
+                StoryDelta::Update { .. } => None,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        story_inserts.sort_by_key(|story| story.index);
+        for story in story_inserts {
+            project
+                .stories
+                .insert(story.index.min(project.stories.len()), story.value);
+        }
+
+        for delta in &self.stories {
+            let StoryDelta::Update {
+                after,
+                before,
+                passages,
+                story_id,
+            } = delta
+            else {
+                continue;
+            };
+            let Some(story_index) = project
+                .stories
+                .iter()
+                .position(|story| &story.id == story_id)
+            else {
+                continue;
+            };
+            let current_passages = &project.stories[story_index].passages;
+            let passage_ids = passages
+                .iter()
+                .map(|delta| &delta.passage_id)
+                .collect::<BTreeSet<_>>();
+            let mut next_passages = current_passages
+                .iter()
+                .filter(|passage| !passage_ids.contains(&passage.id))
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut passage_inserts = passages
+                .iter()
+                .filter_map(|delta| {
+                    if forward {
+                        delta.after.as_ref()
+                    } else {
+                        delta.before.as_ref()
+                    }
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            passage_inserts.sort_by_key(|passage| passage.index);
+            for passage in passage_inserts {
+                next_passages.insert(passage.index.min(next_passages.len()), passage.value);
+            }
+
+            let mut next_story = if forward {
+                after.clone()
+            } else {
+                before.clone()
+            };
+
+            next_story.passages = PassageIndex::from(next_passages);
+            project.stories[story_index] = next_story;
+        }
+    }
+
+    fn graph_facts_changed(delta: &StoryDelta) -> bool {
+        match delta {
+            StoryDelta::Replace { .. } => true,
+            StoryDelta::Update {
+                after,
+                before,
+                passages,
+                ..
+            } => {
+                before.start_passage != after.start_passage
+                    || passages
+                        .iter()
+                        .any(|delta| match (&delta.before, &delta.after) {
+                            (Some(before), Some(after)) => {
+                                before.value.name != after.value.name
+                                    || before.value.tags != after.value.tags
+                                    || before.value.text != after.value.text
+                            }
+                            _ => true,
+                        })
+            }
+        }
+    }
+
+    fn patches(&self, forward: bool) -> Vec<Patch> {
+        let mut patches = Vec::new();
+
+        for story_delta in &self.stories {
+            match story_delta {
+                StoryDelta::Replace {
+                    after,
+                    before,
+                    story_id,
+                } => {
+                    let (from, to) = if forward {
+                        (before, after)
+                    } else {
+                        (after, before)
+                    };
+
+                    match (from, to) {
+                        (None, Some(story)) => patches.push(Patch::StoryCreated {
+                            story: StorySnapshot::from(&story.value),
+                        }),
+                        (Some(_), None) => patches.push(Patch::StoryDeleted {
+                            story_id: story_id.as_ref().to_owned(),
+                        }),
+                        _ => {}
+                    }
+                }
+                StoryDelta::Update {
+                    after,
+                    before,
+                    passages,
+                    story_id,
+                } => {
+                    let (from_story, to_story) = if forward {
+                        (before, after)
+                    } else {
+                        (after, before)
+                    };
+                    let story_id = story_id.as_ref().to_owned();
+
+                    for passage in passages {
+                        let (from, to) = if forward {
+                            (&passage.before, &passage.after)
+                        } else {
+                            (&passage.after, &passage.before)
+                        };
+
+                        match (from, to) {
+                            (None, Some(passage)) => {
+                                patches.push(Patch::PassageCreated {
+                                    passage: PassageSnapshot::from(&passage.value),
+                                    story_id: story_id.clone(),
+                                });
+                            }
+                            (Some(_), None) => patches.push(Patch::PassageDeleted {
+                                passage_id: passage.passage_id.as_ref().to_owned(),
+                                story_id: story_id.clone(),
+                            }),
+                            (Some(from), Some(to)) => {
+                                let changes = passage_diff_patch(&from.value, &to.value);
+
+                                if !passage_patch_is_empty(&changes) {
+                                    patches.push(Patch::PassageUpdated {
+                                        changes,
+                                        passage_id: passage.passage_id.as_ref().to_owned(),
+                                        story_id: story_id.clone(),
+                                    });
+                                }
+                            }
+                            (None, None) => {}
+                        }
+                    }
+
+                    if from_story.start_passage != to_story.start_passage {
+                        patches.push(Patch::StartPassageChanged {
+                            passage_id: to_story.start_passage.as_ref().to_owned(),
+                            story_id: story_id.clone(),
+                        });
+                    }
+                    let metadata = story_metadata_diff_patch(from_story, to_story);
+
+                    if !metadata.is_empty() {
+                        patches.push(Patch::StoryMetadataUpdated {
+                            changes: metadata,
+                            story_id: story_id.clone(),
+                        });
+                    }
+                    if from_story.script != to_story.script {
+                        patches.push(Patch::StoryScriptUpdated {
+                            script: to_story.script.clone(),
+                            story_id: story_id.clone(),
+                        });
+                    }
+                    if from_story.stylesheet != to_story.stylesheet {
+                        patches.push(Patch::StoryStylesheetUpdated {
+                            story_id,
+                            stylesheet: to_story.stylesheet.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        patches
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Transaction {
-    after: Project,
-    before: Project,
-    dirty_after: bool,
-    dirty_before: bool,
-    id: u64,
+    after_state_id: u64,
+    before_state_id: u64,
+    byte_size: usize,
+    delta: ProjectDelta,
+    kind: CoreHistoryKind,
     label: String,
 }
 
@@ -1252,25 +1763,45 @@ struct GraphSessionCache {
 }
 
 #[derive(Clone, Debug)]
+struct SourceAnalysisCache {
+    assets: Vec<CoreAssetReference>,
+    file: CoreSourceFile,
+    name: String,
+    source: String,
+    symbols: Vec<CoreSymbol>,
+    tags: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ProjectSession {
+    analysis_cache: BTreeMap<StoryId, BTreeMap<String, SourceAnalysisCache>>,
+    analysis_parse_count: usize,
     asset_root: Option<PathBuf>,
     dirty: bool,
     graph_cache: BTreeMap<StoryId, GraphSessionCache>,
+    history_bytes: usize,
+    current_state_id: u64,
     next_transaction_id: u64,
     project: Project,
     redo_stack: Vec<Transaction>,
+    saved_state_id: u64,
     undo_stack: Vec<Transaction>,
 }
 
 impl ProjectSession {
     pub fn new(project: Project) -> Self {
         Self {
+            analysis_cache: BTreeMap::new(),
+            analysis_parse_count: 0,
             asset_root: None,
             dirty: false,
             graph_cache: BTreeMap::new(),
+            history_bytes: 0,
+            current_state_id: 0,
             next_transaction_id: 1,
             project,
             redo_stack: Vec::new(),
+            saved_state_id: 0,
             undo_stack: Vec::new(),
         }
     }
@@ -1294,38 +1825,54 @@ impl ProjectSession {
     }
 
     pub fn apply(&mut self, command: StoryCommand) -> Result<PatchBatch, CoreError> {
+        self.apply_with_history(command, true)
+    }
+
+    pub fn apply_with_history(
+        &mut self,
+        command: StoryCommand,
+        record_history: bool,
+    ) -> Result<PatchBatch, CoreError> {
         let before = self.project.clone();
         let dirty_before = self.dirty;
         let redo_before = self.redo_stack.clone();
         let undo_before = self.undo_stack.clone();
         let transaction_id = self.next_transaction_id;
-        self.next_transaction_id += 1;
         let mut patches = match self.apply_without_transaction(command.clone()) {
             Ok(patches) => patches,
             Err(error) => {
                 self.project = before;
                 self.dirty = dirty_before;
-                self.graph_cache.clear();
-                self.next_transaction_id = transaction_id;
                 self.redo_stack = redo_before;
                 self.undo_stack = undo_before;
                 return Err(error);
             }
         };
 
-        if command.mutates_project() {
-            self.graph_cache.clear();
-            self.dirty = !matches!(command, StoryCommand::MarkSaved);
+        let project_changed =
+            command.mutates_project() && (self.project != before || command.has_external_effect());
+
+        if project_changed {
+            self.next_transaction_id += 1;
+            let before_state_id = self.current_state_id;
+            self.current_state_id = transaction_id;
+            self.dirty = self.current_state_id != self.saved_state_id;
             push_dirty_patch(&mut patches, dirty_before, self.dirty);
-            self.undo_stack.push(Transaction {
-                after: self.project.clone(),
-                before,
-                dirty_after: self.dirty,
-                dirty_before,
-                id: transaction_id,
-                label: command.label().into(),
-            });
-            self.redo_stack.clear();
+            let delta = ProjectDelta::between(&before, &self.project);
+
+            self.update_graph_cache(&delta);
+            self.update_analysis_cache(&delta);
+            self.clear_redo();
+            if record_history {
+                self.push_undo(Transaction {
+                    after_state_id: self.current_state_id,
+                    before_state_id,
+                    byte_size: 0,
+                    delta,
+                    kind: command.history_kind(),
+                    label: command.label().into(),
+                });
+            }
         }
 
         Ok(PatchBatch {
@@ -1361,20 +1908,23 @@ impl ProjectSession {
 
     pub fn redo(&mut self) -> Option<PatchBatch> {
         let transaction = self.redo_stack.pop()?;
-        let before = self.project.clone();
         let dirty_before = self.dirty;
+        let operation_id = self.next_transaction_id;
+        let mut patches = transaction.delta.patches(true);
 
-        self.project = transaction.after.clone();
-        self.dirty = transaction.dirty_after;
-        self.graph_cache.clear();
+        transaction.delta.apply(&mut self.project, true);
+        self.current_state_id = transaction.after_state_id;
+        self.dirty = self.current_state_id != self.saved_state_id;
+        self.update_graph_cache(&transaction.delta);
+        self.update_analysis_cache(&transaction.delta);
         self.undo_stack.push(transaction.clone());
-        let mut patches = project_diff_patches(&before, &self.project);
+        self.next_transaction_id += 1;
 
         push_dirty_patch(&mut patches, dirty_before, self.dirty);
         Some(PatchBatch {
             label: transaction.label,
             patches,
-            transaction_id: transaction.id,
+            transaction_id: operation_id,
         })
     }
 
@@ -1394,34 +1944,365 @@ impl ProjectSession {
 
     pub fn undo(&mut self) -> Option<PatchBatch> {
         let transaction = self.undo_stack.pop()?;
-        let before = self.project.clone();
         let dirty_before = self.dirty;
+        let operation_id = self.next_transaction_id;
+        let mut patches = transaction.delta.patches(false);
 
-        self.project = transaction.before.clone();
-        self.dirty = transaction.dirty_before;
-        self.graph_cache.clear();
+        transaction.delta.apply(&mut self.project, false);
+        self.current_state_id = transaction.before_state_id;
+        self.dirty = self.current_state_id != self.saved_state_id;
+        self.update_graph_cache(&transaction.delta);
+        self.update_analysis_cache(&transaction.delta);
         self.redo_stack.push(transaction.clone());
-        let mut patches = project_diff_patches(&before, &self.project);
+        self.next_transaction_id += 1;
 
         push_dirty_patch(&mut patches, dirty_before, self.dirty);
         Some(PatchBatch {
             label: format!("Undo {}", transaction.label),
             patches,
-            transaction_id: transaction.id,
+            transaction_id: operation_id,
         })
+    }
+
+    pub fn acknowledge_saved(&mut self, revision: u64) -> PatchBatch {
+        let dirty_before = self.dirty;
+
+        if revision == self.revision() {
+            self.saved_state_id = self.current_state_id;
+            self.dirty = false;
+        }
+
+        let mut patches = Vec::new();
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+        PatchBatch {
+            label: "Mark Saved".into(),
+            patches,
+            transaction_id: self.next_transaction_id,
+        }
+    }
+
+    pub fn status(&self) -> CoreSessionStatus {
+        CoreSessionStatus {
+            can_redo: self.can_redo(),
+            can_undo: self.can_undo(),
+            dirty: self.dirty,
+            redo_kind: self
+                .redo_stack
+                .last()
+                .map(|transaction| transaction.kind.clone()),
+            revision: self.revision().min(u32::MAX as u64) as u32,
+            undo_kind: self
+                .undo_stack
+                .last()
+                .map(|transaction| transaction.kind.clone()),
+        }
+    }
+
+    pub fn apply_external_delta(
+        &mut self,
+        delta: CoreExternalDelta,
+    ) -> Result<PatchBatch, CoreError> {
+        let before = self.project.clone();
+        let dirty_before = self.dirty;
+        let before_state_id = self.current_state_id;
+        let operation_id = self.next_transaction_id;
+
+        for change in delta.changes {
+            if let Err(error) = self.apply_external_change(change) {
+                self.project = before;
+                return Err(error);
+            }
+        }
+
+        if self.project == before {
+            self.saved_state_id = self.current_state_id;
+            self.dirty = false;
+            let mut patches = Vec::new();
+
+            push_dirty_patch(&mut patches, dirty_before, self.dirty);
+            return Ok(PatchBatch {
+                label: "External Changes".into(),
+                patches,
+                transaction_id: operation_id,
+            });
+        }
+
+        self.next_transaction_id += 1;
+        self.current_state_id = operation_id;
+        self.saved_state_id = operation_id;
+        self.dirty = false;
+        let mut patches = project_diff_patches(&before, &self.project);
+        let transaction_delta = ProjectDelta::between(&before, &self.project);
+
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+        self.update_graph_cache(&transaction_delta);
+        self.update_analysis_cache(&transaction_delta);
+        self.clear_redo();
+        self.push_undo(Transaction {
+            after_state_id: self.current_state_id,
+            before_state_id,
+            byte_size: 0,
+            delta: transaction_delta,
+            kind: CoreHistoryKind::ExternalChanges,
+            label: "External Changes".into(),
+        });
+        Ok(PatchBatch {
+            label: "External Changes".into(),
+            patches,
+            transaction_id: operation_id,
+        })
+    }
+
+    fn apply_external_change(&mut self, change: CoreExternalChange) -> Result<(), CoreError> {
+        match change {
+            CoreExternalChange::DeletePassage {
+                passage_id,
+                story_id,
+            } => {
+                self.delete_passages(&story_id, &[passage_id])?;
+            }
+            CoreExternalChange::DeleteStory { story_id } => {
+                self.delete_story(&story_id)?;
+            }
+            CoreExternalChange::UpsertPassage { passage, story_id } => {
+                let story = self.story_mut(&story_id)?;
+                let passage = passage.into_passage(&story.id);
+
+                story.passages.insert(passage);
+            }
+            CoreExternalChange::UpsertStory { story } => {
+                if self
+                    .project
+                    .stories
+                    .iter()
+                    .any(|candidate| candidate.id.as_ref() == story.id)
+                {
+                    self.replace_story(&story.id.clone(), story)?;
+                } else {
+                    self.create_story(story)?;
+                }
+            }
+            CoreExternalChange::UpdateStoryScript { script, story_id } => {
+                self.update_story_script(&story_id, script)?;
+            }
+            CoreExternalChange::UpdateStoryStylesheet {
+                story_id,
+                stylesheet,
+            } => {
+                self.update_story_stylesheet(&story_id, stylesheet)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn push_undo(&mut self, mut transaction: Transaction) {
+        transaction.byte_size =
+            serde_json::to_vec(&transaction.delta).map_or(0, |delta| delta.len());
+        self.history_bytes += transaction.byte_size;
+        self.undo_stack.push(transaction);
+
+        while self.undo_stack.len() > MAX_HISTORY_ENTRIES || self.history_bytes > MAX_HISTORY_BYTES
+        {
+            let removed = self.undo_stack.remove(0);
+            self.history_bytes = self.history_bytes.saturating_sub(removed.byte_size);
+        }
+    }
+
+    fn clear_redo(&mut self) {
+        for transaction in self.redo_stack.drain(..) {
+            self.history_bytes = self.history_bytes.saturating_sub(transaction.byte_size);
+        }
+    }
+
+    fn refresh_graph_layout(&mut self, story_id: &StoryId) {
+        let Some(cache) = self.graph_cache.get(story_id) else {
+            return;
+        };
+        let Some(story) = self
+            .project
+            .stories
+            .iter()
+            .find(|story| &story.id == story_id)
+        else {
+            self.graph_cache.remove(story_id);
+            return;
+        };
+        let layout =
+            cache
+                .graph
+                .layout_snapshot(story, &self.project.layout, &AutoLayoutOptions::default());
+
+        if let Some(cache) = self.graph_cache.get_mut(story_id) {
+            cache.layout = layout;
+        }
+    }
+
+    fn update_graph_cache(&mut self, delta: &ProjectDelta) {
+        let top_layout_changed = delta
+            .top_before
+            .as_ref()
+            .zip(delta.top_after.as_ref())
+            .is_some_and(|(before, after)| before.layout != after.layout);
+        for story_delta in &delta.stories {
+            let story_id = match story_delta {
+                StoryDelta::Replace { story_id, .. } | StoryDelta::Update { story_id, .. } => {
+                    story_id.clone()
+                }
+            };
+
+            if ProjectDelta::graph_facts_changed(story_delta) {
+                if let StoryDelta::Update { passages, .. } = story_delta
+                    && let Some(story) = self
+                        .project
+                        .stories
+                        .iter()
+                        .find(|story| story.id == story_id)
+                    && let Some(cache) = self.graph_cache.get_mut(&story_id)
+                {
+                    let changed_passage_ids = passages
+                        .iter()
+                        .map(|passage| passage.passage_id.clone())
+                        .collect::<BTreeSet<_>>();
+                    let changed_target_names = passages
+                        .iter()
+                        .flat_map(|passage| match (&passage.before, &passage.after) {
+                            (Some(before), Some(after))
+                                if before.value.name == after.value.name =>
+                            {
+                                [None, None]
+                            }
+                            (before, after) => [
+                                before.as_ref().map(|value| value.value.name.clone()),
+                                after.as_ref().map(|value| value.value.name.clone()),
+                            ],
+                        })
+                        .flatten()
+                        .collect::<BTreeSet<_>>();
+
+                    cache.graph.apply_story_delta(
+                        story,
+                        &changed_passage_ids,
+                        &changed_target_names,
+                    );
+                    cache.layout = cache.graph.layout_snapshot(
+                        story,
+                        &self.project.layout,
+                        &AutoLayoutOptions::default(),
+                    );
+                } else {
+                    self.graph_cache.remove(&story_id);
+                }
+            } else {
+                self.refresh_graph_layout(&story_id);
+            }
+        }
+        if top_layout_changed {
+            let cached_story_ids = self.graph_cache.keys().cloned().collect::<Vec<_>>();
+
+            for story_id in cached_story_ids {
+                self.refresh_graph_layout(&story_id);
+            }
+        }
+    }
+
+    fn update_analysis_cache(&mut self, delta: &ProjectDelta) {
+        for story_delta in &delta.stories {
+            match story_delta {
+                StoryDelta::Replace { story_id, .. } => {
+                    self.analysis_cache.remove(story_id);
+                }
+                StoryDelta::Update {
+                    after,
+                    before,
+                    passages,
+                    story_id,
+                } => {
+                    if !self.analysis_cache.contains_key(story_id) {
+                        continue;
+                    }
+
+                    for passage_delta in passages {
+                        let passage = self
+                            .project
+                            .stories
+                            .iter()
+                            .find(|story| &story.id == story_id)
+                            .and_then(|story| story.passage_by_id(&passage_delta.passage_id))
+                            .cloned();
+
+                        if let Some(passage) = passage {
+                            self.source_analysis(
+                                story_id,
+                                passage.id.as_ref(),
+                                &passage.name,
+                                &passage.text,
+                                CoreSourceKind::Passage,
+                                Some(passage.id.as_ref()),
+                                &passage.tags,
+                                CoreSearchScope::PassageText,
+                            );
+                        } else if let Some(cache) = self.analysis_cache.get_mut(story_id) {
+                            cache.remove(passage_delta.passage_id.as_ref());
+                        }
+                    }
+
+                    if before.script != after.script {
+                        let Some(script) = self
+                            .project
+                            .stories
+                            .iter()
+                            .find(|story| &story.id == story_id)
+                            .map(|story| story.script.clone())
+                        else {
+                            continue;
+                        };
+                        let source_id = format!("{}:script", story_id.as_ref());
+
+                        self.source_analysis(
+                            story_id,
+                            &source_id,
+                            "Story JavaScript",
+                            &script,
+                            CoreSourceKind::Script,
+                            None,
+                            &[],
+                            CoreSearchScope::Script,
+                        );
+                    }
+                    if before.stylesheet != after.stylesheet {
+                        let Some(stylesheet) = self
+                            .project
+                            .stories
+                            .iter()
+                            .find(|story| &story.id == story_id)
+                            .map(|story| story.stylesheet.clone())
+                        else {
+                            continue;
+                        };
+                        let source_id = format!("{}:stylesheet", story_id.as_ref());
+
+                        self.source_analysis(
+                            story_id,
+                            &source_id,
+                            "Story Stylesheet",
+                            &stylesheet,
+                            CoreSourceKind::Stylesheet,
+                            None,
+                            &[],
+                            CoreSearchScope::Stylesheet,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn apply_without_transaction(
         &mut self,
         command: StoryCommand,
     ) -> Result<Vec<Patch>, CoreError> {
-        let mutates_project = command.mutates_project();
-
-        if mutates_project {
-            self.graph_cache.clear();
-        }
-
-        let result = match command {
+        match command {
             StoryCommand::Batch { commands } => {
                 let mut patches = Vec::new();
 
@@ -1476,10 +2357,6 @@ impl ProjectSession {
                 position,
                 snippet,
             ),
-            StoryCommand::MarkSaved => {
-                self.dirty = false;
-                Ok(Vec::new())
-            }
             StoryCommand::MovePassages { story_id, moves } => self.move_passages(&story_id, moves),
             StoryCommand::QueryGraphProjection { story_id, options } => {
                 let projection = self.graph_projection(&story_id, options)?;
@@ -1571,13 +2448,7 @@ impl ProjectSession {
             StoryCommand::ValidateAssetReferences { story_id } => {
                 self.validate_asset_references(&story_id)
             }
-        };
-
-        if mutates_project && result.is_ok() {
-            self.graph_cache.clear();
         }
-
-        result
     }
 
     fn create_passage(
@@ -1810,6 +2681,7 @@ impl ProjectSession {
             });
         }
 
+        self.refresh_graph_layout(&StoryId::new(story_id));
         let projection = self.graph_projection(story_id, CoreGraphProjectionOptions::default())?;
 
         patches.push(Patch::LayoutSaved {
@@ -2243,15 +3115,56 @@ impl ProjectSession {
         }])
     }
 
+    fn source_analysis(
+        &mut self,
+        story_id: &StoryId,
+        source_id: &str,
+        name: &str,
+        source: &str,
+        kind: CoreSourceKind,
+        passage_id: Option<&str>,
+        tags: &[String],
+        scope: CoreSearchScope,
+    ) -> SourceAnalysisCache {
+        let story_cache = self.analysis_cache.entry(story_id.clone()).or_default();
+
+        if let Some(cached) = story_cache.get(source_id) {
+            if cached.name == name && cached.source == source && cached.tags == tags {
+                return cached.clone();
+            }
+        }
+
+        let analysis = SourceAnalysisCache {
+            assets: asset_references_in_source(source_id, name, source, passage_id),
+            file: CoreSourceFile {
+                character_count: source.len(),
+                id: source_id.to_owned(),
+                kind,
+                line_count: line_count(source),
+                name: name.to_owned(),
+                passage_id: passage_id.map(str::to_owned),
+                tags: tags.to_vec(),
+            },
+            name: name.to_owned(),
+            source: source.to_owned(),
+            symbols: symbols_in_source(source_id, name, source, scope, passage_id),
+            tags: tags.to_vec(),
+        };
+
+        story_cache.insert(source_id.to_owned(), analysis.clone());
+        self.analysis_parse_count += 1;
+        analysis
+    }
+
     pub fn story_index(
-        &self,
+        &mut self,
         story_id: &str,
         options: CoreStoryIndexOptions,
     ) -> Result<CoreStoryIndex, CoreError> {
-        let story = self.story(story_id)?;
+        let story = self.story(story_id)?.clone();
         let graph =
             (options.include_graph || options.include_diagnostics || options.include_contents)
-                .then(|| GraphIndex::from_story(story));
+                .then(|| GraphIndex::from_story(&story));
         let metadata_source_id = format!("{}:metadata", story.id.as_ref());
         let script_source_id = format!("{}:script", story.id.as_ref());
         let stylesheet_source_id = format!("{}:stylesheet", story.id.as_ref());
@@ -2264,7 +3177,21 @@ impl ProjectSession {
         let mut symbols = Vec::new();
         let mut assets = Vec::new();
 
+        let mut active_source_ids = BTreeSet::new();
+
         for passage in story.passages.iter() {
+            active_source_ids.insert(passage.id.as_ref().to_owned());
+            let analysis = self.source_analysis(
+                &story.id,
+                passage.id.as_ref(),
+                &passage.name,
+                &passage.text,
+                CoreSourceKind::Passage,
+                Some(passage.id.as_ref()),
+                &passage.tags,
+                CoreSearchScope::PassageText,
+            );
+
             for tag in &passage.tags {
                 tag_usage
                     .entry(tag.clone())
@@ -2273,15 +3200,7 @@ impl ProjectSession {
             }
 
             if options.include_files {
-                files.push(CoreSourceFile {
-                    character_count: passage.text.len(),
-                    id: passage.id.as_ref().to_owned(),
-                    kind: CoreSourceKind::Passage,
-                    line_count: line_count(&passage.text),
-                    name: passage.name.clone(),
-                    passage_id: Some(passage.id.as_ref().to_owned()),
-                    tags: passage.tags.clone(),
-                });
+                files.push(analysis.file.clone());
             }
 
             if search_enabled && options.include_passage_names {
@@ -2323,44 +3242,43 @@ impl ProjectSession {
             }
 
             if options.include_variables {
-                symbols.extend(symbols_in_source(
-                    passage.id.as_ref(),
-                    &passage.name,
-                    &passage.text,
-                    CoreSearchScope::PassageText,
-                    Some(passage.id.as_ref()),
-                ));
+                symbols.extend(analysis.symbols.clone());
             }
 
             if options.include_assets {
-                assets.extend(asset_references_in_source(
-                    passage.id.as_ref(),
-                    &passage.name,
-                    &passage.text,
-                    Some(passage.id.as_ref()),
-                ));
+                assets.extend(analysis.assets);
             }
         }
 
+        active_source_ids.insert(script_source_id.clone());
+        active_source_ids.insert(stylesheet_source_id.clone());
+        let script_analysis = self.source_analysis(
+            &story.id,
+            &script_source_id,
+            "Story JavaScript",
+            &story.script,
+            CoreSourceKind::Script,
+            None,
+            &[],
+            CoreSearchScope::Script,
+        );
+        let stylesheet_analysis = self.source_analysis(
+            &story.id,
+            &stylesheet_source_id,
+            "Story Stylesheet",
+            &story.stylesheet,
+            CoreSourceKind::Stylesheet,
+            None,
+            &[],
+            CoreSearchScope::Stylesheet,
+        );
+        if let Some(cache) = self.analysis_cache.get_mut(&story.id) {
+            cache.retain(|source_id, _| active_source_ids.contains(source_id));
+        }
+
         if options.include_files {
-            files.push(CoreSourceFile {
-                character_count: story.script.len(),
-                id: script_source_id.clone(),
-                kind: CoreSourceKind::Script,
-                line_count: line_count(&story.script),
-                name: "Story JavaScript".into(),
-                passage_id: None,
-                tags: Vec::new(),
-            });
-            files.push(CoreSourceFile {
-                character_count: story.stylesheet.len(),
-                id: stylesheet_source_id.clone(),
-                kind: CoreSourceKind::Stylesheet,
-                line_count: line_count(&story.stylesheet),
-                name: "Story Stylesheet".into(),
-                passage_id: None,
-                tags: Vec::new(),
-            });
+            files.push(script_analysis.file.clone());
+            files.push(stylesheet_analysis.file.clone());
         }
 
         if search_enabled && options.include_diagnostics {
@@ -2383,7 +3301,7 @@ impl ProjectSession {
         }
 
         if search_enabled {
-            let metadata_source = story_metadata_source(story);
+            let metadata_source = story_metadata_source(&story);
             search_hits.extend(search_hits_in_source(
                 &options,
                 search_pattern.as_ref(),
@@ -2420,35 +3338,13 @@ impl ProjectSession {
         }
 
         if options.include_variables {
-            symbols.extend(symbols_in_source(
-                &script_source_id,
-                "Story JavaScript",
-                &story.script,
-                CoreSearchScope::Script,
-                None,
-            ));
-            symbols.extend(symbols_in_source(
-                &stylesheet_source_id,
-                "Story Stylesheet",
-                &story.stylesheet,
-                CoreSearchScope::Stylesheet,
-                None,
-            ));
+            symbols.extend(script_analysis.symbols.clone());
+            symbols.extend(stylesheet_analysis.symbols.clone());
         }
 
         if options.include_assets {
-            assets.extend(asset_references_in_source(
-                &script_source_id,
-                "Story JavaScript",
-                &story.script,
-                None,
-            ));
-            assets.extend(asset_references_in_source(
-                &stylesheet_source_id,
-                "Story Stylesheet",
-                &story.stylesheet,
-                None,
-            ));
+            assets.extend(script_analysis.assets);
+            assets.extend(stylesheet_analysis.assets);
         }
 
         let mut asset_inventory = if options.include_assets {
@@ -2479,7 +3375,7 @@ impl ProjectSession {
 
         if search_enabled && options.include_assets {
             for asset in &asset_inventory {
-                let location = asset_search_location(story, asset);
+                let location = asset_search_location(&story, asset);
 
                 search_hits.extend(search_hits_in_source(
                     &options,
@@ -2526,7 +3422,7 @@ impl ProjectSession {
                 }
             }
 
-            for duplicate in duplicate_passage_names(story) {
+            for duplicate in duplicate_passage_names(&story) {
                 diagnostics.push(CoreDiagnostic {
                     code: "duplicate-passage-name".into(),
                     end: duplicate.name.len(),
@@ -2561,7 +3457,7 @@ impl ProjectSession {
             }
 
             diagnostics.extend(asset_diagnostics(
-                story,
+                &story,
                 &metadata_source_id,
                 &asset_inventory,
             ));
@@ -2583,14 +3479,14 @@ impl ProjectSession {
             .iter()
             .filter_map(CoreReplacePreview::from_hit)
             .collect::<Vec<_>>();
-        let tag_entries = tag_entries(story, tag_usage);
+        let tag_entries = tag_entries(&story, tag_usage);
         let tags = tag_entries
             .iter()
             .map(|entry| entry.name.clone())
             .collect::<Vec<_>>();
         let contents = if options.include_contents {
             contents_entries(
-                story,
+                &story,
                 &files,
                 &tag_entries,
                 &symbols,
@@ -2648,7 +3544,7 @@ impl ProjectSession {
         Ok(assets)
     }
 
-    fn asset_inventory_patch(&self, story_id: &str) -> Result<Patch, CoreError> {
+    fn asset_inventory_patch(&mut self, story_id: &str) -> Result<Patch, CoreError> {
         let index = self.story_index(story_id, CoreStoryIndexOptions::default())?;
 
         Ok(Patch::AssetInventoryUpdated {
@@ -2686,8 +3582,22 @@ impl ProjectSession {
     ) -> Result<Vec<Patch>, CoreError> {
         self.story(story_id)?;
 
-        let asset_root = self.asset_root()?.to_path_buf();
         let asset_path = AssetPath::parse(path)?;
+        let Some(asset_root) = self.asset_root.clone() else {
+            let mut patches = vec![Patch::AssetDeleted {
+                path: asset_path.project_path.clone(),
+                story_id: story_id.to_owned(),
+            }];
+
+            if remove_references {
+                patches.extend(self.replace_asset_references(
+                    story_id,
+                    &asset_path.project_path,
+                    "",
+                )?);
+            }
+            return Ok(patches);
+        };
         let disk_path = asset_path.disk_path(&asset_root);
 
         if !disk_path.is_file() {
@@ -2722,16 +3632,10 @@ impl ProjectSession {
     ) -> Result<Vec<Patch>, CoreError> {
         self.story(story_id)?;
 
-        let asset_root = self.asset_root()?.to_path_buf();
-        let source = PathBuf::from(source_path);
-
-        if !source.is_file() {
-            return Err(CoreError::AssetFileNotFound(source_path.into()));
-        }
-
         let target = match target_path {
             Some(path) => AssetPath::parse(&path)?,
             None => {
+                let source = PathBuf::from(source_path);
                 let Some(file_name) = source.file_name().and_then(|name| name.to_str()) else {
                     return Err(CoreError::UnsafeAssetPath(source_path.into()));
                 };
@@ -2739,6 +3643,20 @@ impl ProjectSession {
                 AssetPath::parse(file_name)?
             }
         };
+        let Some(asset_root) = self.asset_root.clone() else {
+            let kind = asset_kind_for_path(&target.project_path);
+            let asset = asset_inventory_entry(target.project_path, kind, Some(true), Vec::new());
+
+            return Ok(vec![Patch::AssetImported {
+                asset,
+                story_id: story_id.to_owned(),
+            }]);
+        };
+        let source = PathBuf::from(source_path);
+
+        if !source.is_file() {
+            return Err(CoreError::AssetFileNotFound(source_path.into()));
+        }
         let disk_path = target.disk_path(&asset_root);
 
         if disk_path.exists() && !overwrite {
@@ -2797,9 +3715,24 @@ impl ProjectSession {
     ) -> Result<Vec<Patch>, CoreError> {
         self.story(story_id)?;
 
-        let asset_root = self.asset_root()?.to_path_buf();
         let old_asset = AssetPath::parse(path)?;
         let new_asset = AssetPath::parse(new_path)?;
+        let Some(asset_root) = self.asset_root.clone() else {
+            let mut patches = vec![Patch::AssetRenamed {
+                new_path: new_asset.project_path.clone(),
+                old_path: old_asset.project_path.clone(),
+                story_id: story_id.to_owned(),
+            }];
+
+            if update_references {
+                patches.extend(self.replace_asset_references(
+                    story_id,
+                    &old_asset.project_path,
+                    &new_asset.project_path,
+                )?);
+            }
+            return Ok(patches);
+        };
         let old_disk_path = old_asset.disk_path(&asset_root);
         let new_disk_path = new_asset.disk_path(&asset_root);
 
@@ -2843,8 +3776,16 @@ impl ProjectSession {
     ) -> Result<Vec<Patch>, CoreError> {
         self.story(story_id)?;
 
-        let asset_root = self.asset_root()?.to_path_buf();
         let asset = AssetPath::parse(path)?;
+        let Some(asset_root) = self.asset_root.clone() else {
+            let kind = asset_kind_for_path(&asset.project_path);
+            let asset = asset_inventory_entry(asset.project_path, kind, Some(true), Vec::new());
+
+            return Ok(vec![Patch::AssetReplaced {
+                asset,
+                story_id: story_id.to_owned(),
+            }]);
+        };
         let disk_path = asset.disk_path(&asset_root);
         let source = PathBuf::from(source_path);
 
@@ -2887,7 +3828,7 @@ impl ProjectSession {
         }])
     }
 
-    fn validate_asset_references(&self, story_id: &str) -> Result<Vec<Patch>, CoreError> {
+    fn validate_asset_references(&mut self, story_id: &str) -> Result<Vec<Patch>, CoreError> {
         self.story(story_id)?;
 
         Ok(vec![self.asset_inventory_patch(story_id)?])
@@ -4843,6 +5784,306 @@ mod tests {
     }
 
     #[test]
+    fn no_op_commands_do_not_change_history_revision_or_dirty_state() {
+        let mut session = session();
+        let original_text = session
+            .story("story-1")
+            .expect("story")
+            .passage_by_id(&PassageId::new("a"))
+            .expect("passage")
+            .text
+            .clone();
+        let batch = session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: original_text,
+            })
+            .expect("no-op update should succeed");
+
+        assert!(batch.patches.is_empty());
+        assert_eq!(session.revision(), 1);
+        assert!(!session.dirty());
+        assert!(!session.can_undo());
+        assert!(!session.can_redo());
+    }
+
+    #[test]
+    fn skipped_history_mutations_advance_revision_without_becoming_undoable() {
+        let mut session = session();
+        let batch = session
+            .apply_with_history(
+                StoryCommand::UpdatePassageText {
+                    story_id: "story-1".into(),
+                    passage_id: "a".into(),
+                    text: "automatic initialization".into(),
+                },
+                false,
+            )
+            .expect("automatic mutation should apply");
+
+        assert_eq!(batch.transaction_id, 1);
+        assert_eq!(session.revision(), 2);
+        assert!(session.dirty());
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn savepoints_survive_undo_redo_and_branching_history() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "saved".into(),
+            })
+            .expect("first edit");
+        session.acknowledge_saved(session.revision());
+        assert!(!session.status().dirty);
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "later".into(),
+            })
+            .expect("second edit");
+        assert!(session.status().dirty);
+
+        let undo = session.undo().expect("undo second edit");
+        assert_eq!(undo.transaction_id, 3);
+        assert!(!session.status().dirty);
+
+        let redo = session.redo().expect("redo second edit");
+        assert_eq!(redo.transaction_id, 4);
+        assert!(session.status().dirty);
+
+        session.undo().expect("return to savepoint");
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "branched".into(),
+            })
+            .expect("branch edit");
+        assert!(!session.can_redo());
+        assert!(session.status().dirty);
+        session.undo().expect("undo branch");
+        assert!(!session.status().dirty);
+    }
+
+    #[test]
+    fn stale_save_acknowledgement_does_not_mark_newer_state_clean() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "first".into(),
+            })
+            .expect("first edit");
+        let persisted_revision = session.revision();
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "newer".into(),
+            })
+            .expect("newer edit");
+
+        session.acknowledge_saved(persisted_revision);
+        assert!(session.status().dirty);
+    }
+
+    #[test]
+    fn accepted_external_delta_is_undoable_and_redo_returns_clean() {
+        let mut session = session();
+        let original = session
+            .story("story-1")
+            .expect("story")
+            .passage_by_id(&PassageId::new("a"))
+            .expect("passage");
+        let delta = CoreExternalDelta {
+            changes: vec![CoreExternalChange::UpsertPassage {
+                passage: PassageSnapshot {
+                    id: original.id.as_ref().into(),
+                    layout: original.layout.map(CoreRect::from),
+                    name: original.name.clone(),
+                    story_id: "story-1".into(),
+                    tags: original.tags.clone(),
+                    text: "from disk".into(),
+                },
+                story_id: "story-1".into(),
+            }],
+        };
+
+        session
+            .apply_external_delta(delta)
+            .expect("external delta should apply");
+        assert!(!session.status().dirty);
+        assert_eq!(
+            session.status().undo_kind,
+            Some(CoreHistoryKind::ExternalChanges)
+        );
+
+        session.undo().expect("external delta should undo");
+        assert!(session.status().dirty);
+        session.redo().expect("external delta should redo");
+        assert!(!session.status().dirty);
+    }
+
+    #[test]
+    fn passage_history_retains_only_the_changed_entity() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "incremental".into(),
+            })
+            .expect("edit should apply");
+
+        let transaction = session.undo_stack.last().expect("history entry");
+        let StoryDelta::Update { passages, .. } = &transaction.delta.stories[0] else {
+            panic!("passage edit should use an incremental story delta");
+        };
+
+        assert_eq!(transaction.delta.stories.len(), 1);
+        assert_eq!(passages.len(), 1);
+        assert_eq!(passages[0].passage_id, PassageId::new("a"));
+    }
+
+    #[test]
+    fn layout_edits_and_undo_reuse_parsed_graph_facts() {
+        let mut session = session();
+
+        session
+            .graph_projection("story-1", CoreGraphProjectionOptions::default())
+            .expect("graph should build");
+        assert!(session.graph_cache.contains_key(&StoryId::new("story-1")));
+
+        session
+            .apply(StoryCommand::MovePassages {
+                story_id: "story-1".into(),
+                moves: vec![PassageMove {
+                    bounds: CoreRect {
+                        height: 100.0,
+                        left: 250.0,
+                        top: 125.0,
+                        width: 100.0,
+                    },
+                    passage_id: "a".into(),
+                }],
+            })
+            .expect("layout edit should apply");
+        assert!(session.graph_cache.contains_key(&StoryId::new("story-1")));
+
+        session.undo().expect("layout edit should undo");
+        assert!(session.graph_cache.contains_key(&StoryId::new("story-1")));
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "topology changed [[Start]]".into(),
+            })
+            .expect("text edit should apply");
+        assert!(session.graph_cache.contains_key(&StoryId::new("story-1")));
+        assert_eq!(
+            session
+                .graph_cache
+                .get(&StoryId::new("story-1"))
+                .expect("incremental graph")
+                .graph
+                .links_from(&PassageId::new("a"))
+                .len(),
+            1
+        );
+        assert_eq!(
+            session
+                .graph_cache
+                .get(&StoryId::new("story-1"))
+                .expect("incremental graph")
+                .graph
+                .last_incremental_parse_count(),
+            1
+        );
+    }
+
+    #[test]
+    fn story_analysis_reparses_only_changed_sources() {
+        let mut session = session();
+
+        session
+            .story_index("story-1", CoreStoryIndexOptions::default())
+            .expect("initial index");
+        let initial_parse_count = session.analysis_parse_count;
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "changed source".into(),
+            })
+            .expect("passage edit");
+        session
+            .story_index("story-1", CoreStoryIndexOptions::default())
+            .expect("updated index");
+        assert_eq!(session.analysis_parse_count, initial_parse_count + 1);
+
+        session
+            .apply(StoryCommand::MovePassages {
+                story_id: "story-1".into(),
+                moves: vec![PassageMove {
+                    bounds: CoreRect {
+                        height: 100.0,
+                        left: 400.0,
+                        top: 300.0,
+                        width: 100.0,
+                    },
+                    passage_id: "a".into(),
+                }],
+            })
+            .expect("layout edit");
+        session
+            .story_index("story-1", CoreStoryIndexOptions::default())
+            .expect("layout-only index");
+        assert_eq!(session.analysis_parse_count, initial_parse_count + 1);
+
+        session
+            .apply(StoryCommand::UpdateStoryScript {
+                script: "window.changed = true;".into(),
+                story_id: "story-1".into(),
+            })
+            .expect("script edit");
+        session
+            .story_index("story-1", CoreStoryIndexOptions::default())
+            .expect("script index");
+        assert_eq!(session.analysis_parse_count, initial_parse_count + 2);
+    }
+
+    #[test]
+    fn history_evicts_oldest_complete_transactions() {
+        let mut session = session();
+
+        for index in 0..=MAX_HISTORY_ENTRIES {
+            session
+                .apply(StoryCommand::UpdatePassageText {
+                    story_id: "story-1".into(),
+                    passage_id: "a".into(),
+                    text: format!("edit {index}"),
+                })
+                .expect("edit should apply");
+        }
+
+        assert_eq!(session.undo_stack.len(), MAX_HISTORY_ENTRIES);
+        assert!(session.history_bytes <= MAX_HISTORY_BYTES);
+    }
+
+    #[test]
     fn rolls_back_batch_when_child_command_fails() {
         let mut session = session();
         let error = session
@@ -5532,19 +6773,25 @@ mod tests {
     }
 
     #[test]
-    fn asset_commands_require_file_backed_project_root() {
+    fn renderer_asset_commands_apply_model_side_without_filesystem_access() {
         let mut session = session();
-        let error = session
+        let batch = session
             .apply(StoryCommand::ImportAsset {
                 overwrite: false,
                 source_path: "/tmp/cover.png".into(),
                 story_id: "story-1".into(),
                 target_path: None,
             })
-            .expect_err("asset commands need a project root");
+            .expect("renderer session should accept the native effect");
 
-        assert!(matches!(error, CoreError::AssetHostUnavailable));
-        assert!(!session.dirty());
+        assert!(
+            batch
+                .patches
+                .iter()
+                .any(|patch| matches!(patch, Patch::AssetImported { .. }))
+        );
+        assert!(session.dirty());
+        assert!(session.can_undo());
     }
 
     #[test]

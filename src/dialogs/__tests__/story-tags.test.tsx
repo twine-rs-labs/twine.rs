@@ -3,10 +3,7 @@ import {axe} from 'jest-axe';
 import * as React from 'react';
 import {StoreCoreProjectHost} from '../../core';
 import {PrefsContext, PrefsContextProps} from '../../store/prefs';
-import {
-	UndoableStoriesContext,
-	UndoableStoriesContextProps
-} from '../../store/undoable-stories';
+import {StoriesContext, StoriesContextProps} from '../../store/stories';
 import {fakePrefs, fakeStory} from '../../test-util';
 import {StoryTagsDialog, StoryTagsDialogProps} from '../story-tags';
 
@@ -17,7 +14,7 @@ describe('<StoryTagsDialog>', () => {
 
 	async function renderComponent(
 		props?: Partial<StoryTagsDialogProps>,
-		storiesContext?: Partial<UndoableStoriesContextProps>,
+		storiesContext?: Partial<StoriesContextProps>,
 		prefsContext?: Partial<PrefsContextProps>
 	) {
 		const prefs = fakePrefs({storyTagColors: {'mock-tag': 'red'}});
@@ -29,10 +26,9 @@ describe('<StoryTagsDialog>', () => {
 			<PrefsContext.Provider
 				value={{prefs, dispatch: jest.fn(), ...prefsContext}}
 			>
-				<UndoableStoriesContext.Provider
+				<StoriesContext.Provider
 					value={{
 						dispatch: jest.fn(),
-						isUndoable: true,
 						stories: [story],
 						...storiesContext
 					}}
@@ -46,7 +42,7 @@ describe('<StoryTagsDialog>', () => {
 						onClose={jest.fn()}
 						{...props}
 					/>
-				</UndoableStoriesContext.Provider>
+				</StoriesContext.Provider>
 			</PrefsContext.Provider>
 		);
 
@@ -75,7 +71,7 @@ describe('<StoryTagsDialog>', () => {
 		const stories = [story];
 		const applyStoryCommand = jest
 			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
-			.mockImplementation(() => {});
+			.mockImplementation(async () => undefined);
 
 		story.tags = ['mock-tag'];
 		await renderComponent({}, {dispatch, stories});

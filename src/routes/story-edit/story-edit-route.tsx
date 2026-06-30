@@ -6,12 +6,13 @@ import {DialogsContextProvider} from '../../dialogs';
 import {useDialogsContext} from '../../dialogs/context';
 import {StorySearchDialog} from '../../dialogs/story-search';
 import {StoryEditActions} from '../../route-actions';
-import {Passage, selectPassage, Story} from '../../store/stories';
-import {useStoryLaunch} from '../../store/use-story-launch';
 import {
-	UndoableStoriesContextProvider,
-	useUndoableStoriesContext
-} from '../../store/undoable-stories';
+	Passage,
+	selectPassage,
+	Story,
+	useStoriesContext
+} from '../../store/stories';
+import {useStoryLaunch} from '../../store/use-story-launch';
 import {
 	EditorWindowSpec,
 	editorWindowId,
@@ -96,7 +97,7 @@ function sourcePositionForQuery(
 const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 	const location = useLocation();
 	const {dispatch: dialogsDispatch} = useDialogsContext();
-	const {dispatch} = useUndoableStoriesContext();
+	const {dispatch} = useStoriesContext();
 	const {testStory} = useStoryLaunch();
 	const [fuzzyFinderOpen, setFuzzyFinderOpen] = React.useState(false);
 	const [graphRevealRequest, setGraphRevealRequest] = React.useState({
@@ -469,19 +470,16 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 
 export const InnerStoryEditRoute: React.FC = () => {
 	const {storyId} = useParams<{storyId: string}>();
-	const {stories} = useUndoableStoriesContext();
+	const {stories} = useStoriesContext();
 	const story = stories.find(candidate => candidate.id === storyId);
 
 	return story ? <StoryEditRouteForStory story={story} /> : <Redirect to="/" />;
 };
 
-// This is a separate component so that the inner one can use
-// `useDialogsContext()` and `useUndoableStoriesContext()` inside it.
+// This is a separate component so that the inner one can use dialog context.
 
 export const StoryEditRoute: React.FC = () => (
-	<UndoableStoriesContextProvider>
-		<DialogsContextProvider>
-			<InnerStoryEditRoute />
-		</DialogsContextProvider>
-	</UndoableStoriesContextProvider>
+	<DialogsContextProvider>
+		<InnerStoryEditRoute />
+	</DialogsContextProvider>
 );

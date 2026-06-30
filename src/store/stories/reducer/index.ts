@@ -16,6 +16,9 @@ export const reducer: React.Reducer<StoriesState, StoriesAction> = (
 	action
 ) => {
 	switch (action.type) {
+		case 'applyCorePatchBatch':
+			return action.actions.reduce(reducer, state);
+
 		case 'createPassage':
 			return createPassage(state, action.storyId, action.props);
 

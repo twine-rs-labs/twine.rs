@@ -8,7 +8,6 @@ import {StoriesContext, StoriesState} from '../store/stories';
 import {reducer as storiesReducer} from '../store/stories/reducer';
 import {StoryFormatsContext, StoryFormatsState} from '../store/story-formats';
 import {reducer as storyFormatsReducer} from '../store/story-formats/reducer';
-import {UndoableStoriesContextProvider} from '../store/undoable-stories';
 import {fakePrefs, fakeStory} from './fakes';
 
 export interface FakeStateProviderProps {
@@ -45,9 +44,7 @@ export const FakeStateProvider: React.FC<FakeStateProviderProps> = props => {
 				<StoriesContext.Provider
 					value={{dispatch: storiesDispatch, stories: storiesState}}
 				>
-					<UndoableStoriesContextProvider>
-						<DialogsContextProvider>{props.children}</DialogsContextProvider>
-					</UndoableStoriesContextProvider>
+					<DialogsContextProvider>{props.children}</DialogsContextProvider>
 				</StoriesContext.Provider>
 			</StoryFormatsContext.Provider>
 		</PrefsContext.Provider>

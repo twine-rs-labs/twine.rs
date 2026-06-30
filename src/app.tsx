@@ -11,6 +11,7 @@ import {StoryFormatsContextProvider} from './store/story-formats';
 import {ProjectSessionSync} from './store/project-session-sync';
 import {StateLoader} from './store/state-loader';
 import {ThemeSetter} from './store/theme-setter';
+import {CoreProjectHostProvider} from './core';
 
 export const App: React.FC = () => (
 	<GlobalErrorBoundary>
@@ -20,10 +21,12 @@ export const App: React.FC = () => (
 			<StoryFormatsContextProvider>
 				<StoriesContextProvider>
 					<StateLoader>
-						<ProjectSessionSync />
-						<React.Suspense fallback={<LoadingCurtain />}>
-							<Routes />
-						</React.Suspense>
+						<CoreProjectHostProvider>
+							<ProjectSessionSync />
+							<React.Suspense fallback={<LoadingCurtain />}>
+								<Routes />
+							</React.Suspense>
+						</CoreProjectHostProvider>
 					</StateLoader>
 				</StoriesContextProvider>
 			</StoryFormatsContextProvider>

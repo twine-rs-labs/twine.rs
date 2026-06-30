@@ -69,7 +69,7 @@ describe('saveStory()', () => {
 		expect(saveStoryHtml).not.toHaveBeenCalled();
 	});
 
-	it('does not fall back to legacy HTML if the native project folder cannot be refreshed', async () => {
+	it('surfaces native project save failures without falling back to legacy HTML', async () => {
 		saveProjectFolder.mockRejectedValue(new Error('Permission denied'));
 		saveProjectMetadata(story.id, {
 			rootPath: '/native/moon-castle.twine.rs',
@@ -77,11 +77,10 @@ describe('saveStory()', () => {
 			storageKind: 'electron-project-folder'
 		});
 
-		await expect(saveStory(story, formatsState)).resolves.toBeUndefined();
-		expect(saveStoryHtml).not.toHaveBeenCalled();
-		expect(console.warn).toHaveBeenCalledWith(
-			expect.stringContaining('Could not update native project folder')
+		await expect(saveStory(story, formatsState)).rejects.toThrow(
+			'Could not update native project folder: Permission denied'
 		);
+		expect(saveStoryHtml).not.toHaveBeenCalled();
 	});
 
 	it("loads the story's format if needed", async () => {

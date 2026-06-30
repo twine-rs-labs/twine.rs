@@ -4,7 +4,9 @@
 export class TwineWasmProjectSession {
     free(): void;
     [Symbol.dispose](): void;
-    apply(command: any): any;
+    acknowledge_saved(revision: number): any;
+    apply(command: any, record_history: boolean): any;
+    apply_external_delta(delta: any): any;
     can_redo(): boolean;
     can_undo(): boolean;
     constructor(snapshot: any);
@@ -14,6 +16,7 @@ export class TwineWasmProjectSession {
     revision(): number;
     set_revision(revision: number): void;
     snapshot(): any;
+    status(): any;
     undo(): any;
 }
 
@@ -28,7 +31,9 @@ export interface InitOutput {
     readonly __wbg_twinewasmprojectsession_free: (a: number, b: number) => void;
     readonly query_graph_projection: (a: any, b: number, c: number, d: any) => [number, number, number];
     readonly query_story_index: (a: any, b: number, c: number, d: any) => [number, number, number];
-    readonly twinewasmprojectsession_apply: (a: number, b: any) => [number, number, number];
+    readonly twinewasmprojectsession_acknowledge_saved: (a: number, b: number) => [number, number, number];
+    readonly twinewasmprojectsession_apply: (a: number, b: any, c: number) => [number, number, number];
+    readonly twinewasmprojectsession_apply_external_delta: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_can_redo: (a: number) => number;
     readonly twinewasmprojectsession_can_undo: (a: number) => number;
     readonly twinewasmprojectsession_new: (a: any) => [number, number, number];
@@ -38,6 +43,7 @@ export interface InitOutput {
     readonly twinewasmprojectsession_revision: (a: number) => number;
     readonly twinewasmprojectsession_set_revision: (a: number, b: number) => void;
     readonly twinewasmprojectsession_snapshot: (a: number) => [number, number, number];
+    readonly twinewasmprojectsession_status: (a: number) => [number, number, number];
     readonly twinewasmprojectsession_undo: (a: number) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

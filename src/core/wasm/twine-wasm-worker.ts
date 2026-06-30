@@ -9,8 +9,10 @@ let wasmReady: Promise<void> | undefined;
 let SessionConstructor:
 	| (new (snapshot: unknown) => TwineWasmProjectSessionType)
 	| undefined;
-let session: TwineWasmProjectSessionType | undefined;
-let sessionRevision = -1;
+const sessions = new Map<
+	string,
+	{revision: number; session: TwineWasmProjectSessionType}
+>();
 
 function now() {
 	return typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -40,14 +42,18 @@ async function ensureWasm() {
 	await wasmReady;
 }
 
-function ensureSession(revision: number) {
-	if (!session || sessionRevision !== revision) {
+function ensureSession(sessionId: string, revision: number) {
+	const entry = sessions.get(sessionId);
+
+	if (!entry || entry.revision !== revision) {
 		throw new Error(
-			`WASM core session is at revision ${sessionRevision}, not ${revision}.`
+			`WASM core session "${sessionId}" is at revision ${
+				entry?.revision ?? 'missing'
+			}, not ${revision}.`
 		);
 	}
 
-	return session;
+	return entry;
 }
 
 async function handleRequest(
@@ -73,30 +79,45 @@ async function handleRequest(
 					const nextSession = new SessionConstructor(request.snapshot);
 
 					nextSession.set_revision(request.revision);
-					session?.free();
-					session = nextSession;
+					sessions.get(request.sessionId)?.session.free();
+					sessions.set(request.sessionId, {
+						revision: request.revision,
+						session: nextSession
+					});
+					result = {
+						revision: request.revision,
+						status: nextSession.status()
+					};
 				}
-				sessionRevision = request.revision;
-				result = {revision: request.revision};
 				break;
 
 			case 'apply': {
-				const liveSession = ensureSession(request.revision);
-				const batch = liveSession.apply(request.command);
+				const entry = ensureSession(request.sessionId, request.revision);
+				const batch = entry.session.apply(
+					request.command,
+					request.history !== 'skip'
+				);
 
-				sessionRevision = liveSession.revision();
-				result = {batch, revision: sessionRevision};
+				entry.revision = entry.session.revision();
+				result = {
+					batch,
+					revision: entry.revision,
+					status: entry.session.status()
+				};
 				break;
 			}
 
 			case 'undo': {
-				const liveSession = ensureSession(request.revision);
-				const batch = liveSession.undo();
+				const entry = ensureSession(request.sessionId, request.revision);
+				const batch = entry.session.undo();
 
 				if (batch) {
-					sessionRevision = request.revision + 1;
-					liveSession.set_revision(sessionRevision);
-					result = {batch, revision: sessionRevision};
+					entry.revision = entry.session.revision();
+					result = {
+						batch,
+						revision: entry.revision,
+						status: entry.session.status()
+					};
 				} else {
 					result = null;
 				}
@@ -104,31 +125,81 @@ async function handleRequest(
 			}
 
 			case 'redo': {
-				const liveSession = ensureSession(request.revision);
-				const batch = liveSession.redo();
+				const entry = ensureSession(request.sessionId, request.revision);
+				const batch = entry.session.redo();
 
 				if (batch) {
-					sessionRevision = request.revision + 1;
-					liveSession.set_revision(sessionRevision);
-					result = {batch, revision: sessionRevision};
+					entry.revision = entry.session.revision();
+					result = {
+						batch,
+						revision: entry.revision,
+						status: entry.session.status()
+					};
 				} else {
 					result = null;
 				}
 				break;
 			}
 
+			case 'acknowledgeSaved': {
+				const entry = sessions.get(request.sessionId);
+
+				if (!entry) {
+					throw new Error(
+						`WASM core session "${request.sessionId}" is missing.`
+					);
+				}
+				const batch = entry.session.acknowledge_saved(request.revision);
+
+				result = {
+					batch,
+					revision: entry.revision,
+					status: entry.session.status()
+				};
+				break;
+			}
+
+			case 'applyExternalDelta': {
+				const entry = ensureSession(request.sessionId, request.revision);
+				const batch = entry.session.apply_external_delta(request.delta);
+
+				entry.revision = entry.session.revision();
+				result = {
+					batch,
+					revision: entry.revision,
+					status: entry.session.status()
+				};
+				break;
+			}
+
 			case 'queryGraphProjection':
-				result = ensureSession(request.revision).query_graph_projection(
-					request.storyId,
-					request.options
-				);
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_graph_projection(request.storyId, request.options);
 				break;
 
 			case 'queryStoryIndex':
-				result = ensureSession(request.revision).query_story_index(
-					request.storyId,
-					request.options
-				);
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_story_index(request.storyId, request.options);
+				break;
+
+			case 'removeSession': {
+				const removed = sessions.get(request.sessionId);
+
+				removed?.session.free();
+				sessions.delete(request.sessionId);
+				result = {removed: !!removed};
+				break;
+			}
+
+			case 'status':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.status();
 				break;
 		}
 

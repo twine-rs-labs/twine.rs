@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 use twine_core::{
-    CoreGraphProjectionOptions, CoreStoryIndexOptions, PassageSnapshot, ProjectSession,
-    ProjectSnapshot, StoryCommand, StorySnapshot,
+    CoreExternalDelta, CoreGraphProjectionOptions, CoreStoryIndexOptions, PassageSnapshot,
+    ProjectSession, ProjectSnapshot, StoryCommand, StorySnapshot,
 };
 use twine_model::{
     GraphLayout, GraphPosition, LibraryMetadata, Passage, PassageId, PassageIndex, PassageLayout,
@@ -27,9 +27,12 @@ impl TwineWasmProjectSession {
         })
     }
 
-    pub fn apply(&mut self, command: JsValue) -> Result<JsValue, JsValue> {
+    pub fn apply(&mut self, command: JsValue, record_history: bool) -> Result<JsValue, JsValue> {
         let command = from_js::<StoryCommand>(command)?;
-        let batch = self.session.apply(command).map_err(core_error)?;
+        let batch = self
+            .session
+            .apply_with_history(command, record_history)
+            .map_err(core_error)?;
 
         to_js(&batch)
     }
@@ -40,6 +43,20 @@ impl TwineWasmProjectSession {
 
     pub fn redo(&mut self) -> Result<JsValue, JsValue> {
         to_js(&self.session.redo())
+    }
+
+    pub fn acknowledge_saved(&mut self, revision: u32) -> Result<JsValue, JsValue> {
+        to_js(&self.session.acknowledge_saved(revision as u64))
+    }
+
+    pub fn apply_external_delta(&mut self, delta: JsValue) -> Result<JsValue, JsValue> {
+        let delta = from_js::<CoreExternalDelta>(delta)?;
+        let batch = self
+            .session
+            .apply_external_delta(delta)
+            .map_err(core_error)?;
+
+        to_js(&batch)
     }
 
     pub fn can_undo(&self) -> bool {
@@ -56,6 +73,10 @@ impl TwineWasmProjectSession {
 
     pub fn set_revision(&mut self, revision: u32) {
         self.session.set_revision(revision as u64);
+    }
+
+    pub fn status(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.session.status())
     }
 
     pub fn query_graph_projection(

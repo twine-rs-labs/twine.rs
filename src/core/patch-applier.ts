@@ -5,10 +5,12 @@ import type {PatchBatch} from './bindings/PatchBatch';
 import type {StoryMetadataPatch} from './bindings/StoryMetadataPatch';
 import type {StorySnapshot} from './bindings/StorySnapshot';
 import type {Passage, StoriesAction, Story} from '../store/stories';
+import type {CorePatchStoryAction} from '../store/stories/stories.types';
 
 export interface ProjectPatchApplicationSinks {
 	deleteAsset(storyId: string, path: string): void;
 	dispatch(action: StoriesAction): void;
+	dispatchBatch?(actions: CorePatchStoryAction[]): void;
 	renameAsset(storyId: string, oldPath: string, newPath: string): void;
 	replaceAssetInventory(
 		storyId: string,
@@ -67,15 +69,19 @@ export function applyProjectPatchBatch(
 		}
 	}
 
-	for (const action of storyActions) {
-		sinks.dispatch(action);
+	if (storyActions.length > 0 && sinks.dispatchBatch) {
+		sinks.dispatchBatch(storyActions);
+	} else {
+		for (const action of storyActions) {
+			sinks.dispatch(action);
+		}
 	}
 
 	return {dispatchedStoryActions: storyActions.length};
 }
 
 export function projectPatchBatchStoryActions(batch: PatchBatch) {
-	const actions: StoriesAction[] = [];
+	const actions: CorePatchStoryAction[] = [];
 
 	for (const patch of batch.patches) {
 		switch (patch.type) {

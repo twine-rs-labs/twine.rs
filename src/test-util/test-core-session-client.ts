@@ -135,11 +135,37 @@ export class TestCoreSessionClient {
 		stories: []
 	};
 
+	private currentStatus() {
+		return {
+			canRedo: false,
+			canUndo: false,
+			dirty: false,
+			redoKind: null,
+			revision: this.revision,
+			undoKind: null
+		};
+	}
+
 	enabled = true;
 	mode = 'wasm-worker' as const;
 
-	apply = jest.fn(async (command: StoryCommand, revision: number) =>
-		this.applySync(command, revision)
+	acknowledgeSaved = jest.fn(
+		async (
+			_sessionId: string,
+			revision: number
+		): Promise<CoreSessionMutationResult> => ({
+			batch: {
+				label: 'Mark Saved',
+				patches: [{dirty: false, type: 'dirtyStateChanged'}],
+				transactionId: BigInt(revision)
+			},
+			revision,
+			status: {...this.currentStatus(), dirty: false}
+		})
+	);
+	apply = jest.fn(
+		async (_sessionId: string, command: StoryCommand, revision: number) =>
+			this.applySync(command, revision)
 	);
 	applySync = jest.fn((command: StoryCommand, revision: number) =>
 		this.applyCommand(command, revision)
@@ -147,18 +173,22 @@ export class TestCoreSessionClient {
 	cachedGraphProjection = jest.fn();
 	cachedStoryIndex = jest.fn();
 	lastGraphProjection = jest.fn();
-	queryGraphProjection = jest.fn(async (storyId, options) =>
+	queryGraphProjection = jest.fn(async (_sessionId, storyId, options) =>
 		storyToCoreGraphProjection(
 			storySnapshotToStory(this.story(storyId)),
 			options
 		)
 	);
-	queryStoryIndex = jest.fn(async (storyId, options) =>
+	queryStoryIndex = jest.fn(async (_sessionId, storyId, options) =>
 		storyToCoreIndex(storySnapshotToStory(this.story(storyId)), options)
 	);
-	redo = jest.fn(async () => null);
+	redo = jest.fn(async (sessionId: string, revision: number) => {
+		void sessionId;
+		void revision;
+		return null;
+	});
 	replaceProject = jest.fn(
-		async (snapshot: ProjectSnapshot, revision: number) => {
+		async (_sessionId: string, snapshot: ProjectSnapshot, revision: number) => {
 			this.replaceProjectSync(snapshot, revision);
 		}
 	);
@@ -166,7 +196,11 @@ export class TestCoreSessionClient {
 		this.snapshot = cloneSnapshot(snapshot);
 		this.revision = revision;
 	});
-	undo = jest.fn(async () => null);
+	undo = jest.fn(async (sessionId: string, revision: number) => {
+		void sessionId;
+		void revision;
+		return null;
+	});
 
 	private story(storyId: string) {
 		const story = this.snapshot.stories.find(story => story.id === storyId);
@@ -277,7 +311,7 @@ export class TestCoreSessionClient {
 			transactionId: BigInt(revision)
 		};
 
-		return {batch, revision: nextRevision};
+		return {batch, revision: nextRevision, status: this.currentStatus()};
 	}
 
 	private commandPatches(command: StoryCommand): Patch[] {
@@ -431,9 +465,6 @@ export class TestCoreSessionClient {
 					})
 				];
 			}
-
-			case 'markSaved':
-				return [{dirty: false, type: 'dirtyStateChanged'}];
 
 			case 'movePassages': {
 				const story = this.story(command.story_id);
@@ -722,6 +753,10 @@ export class TestCoreSessionClient {
 			case 'validateAssetReferences':
 				return [];
 		}
+
+		throw new Error(
+			`Unsupported test command: ${(command as StoryCommand).type}`
+		);
 	}
 }
 

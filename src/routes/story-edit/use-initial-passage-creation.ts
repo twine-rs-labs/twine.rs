@@ -21,7 +21,8 @@ export function useInitialPassageCreation(
 				const center = getCenter();
 
 				coreProjectHost.applyStoryCommand(
-					createUntitledPassageCommand(story, center.left, center.top)
+					createUntitledPassageCommand(story, center.left, center.top),
+					{history: 'skip'}
 				);
 			}
 		}

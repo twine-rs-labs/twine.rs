@@ -5,7 +5,6 @@ import {defaults as prefsDefaults} from '../../../store/prefs/defaults';
 import {PrefsContext, PrefsState} from '../../../store/prefs';
 import {reducer as prefsReducer} from '../../../store/prefs/reducer';
 import {StoriesContext} from '../../../store/stories';
-import {UndoableStoriesContext} from '../../../store/undoable-stories';
 import {fakePassage, fakeStory} from '../../../test-util';
 import {StoryGraphPanel} from '../story-graph-panel';
 import type {
@@ -79,7 +78,6 @@ function renderComponent(
 	const onSelectIds = jest.fn();
 	const onTestPassage = jest.fn();
 	const storiesDispatch = jest.fn();
-	const undoableDispatch = jest.fn();
 	const initialSelectedPassageId = options.selectedPassageId ?? start.id;
 	const TestProviders: React.FC = ({children}) => {
 		const [prefs, prefsDispatch] = React.useReducer(prefsReducer, {
@@ -92,15 +90,7 @@ function renderComponent(
 				<StoriesContext.Provider
 					value={{dispatch: storiesDispatch, stories: [story]}}
 				>
-					<UndoableStoriesContext.Provider
-						value={{
-							dispatch: undoableDispatch,
-							isUndoable: true,
-							stories: [story]
-						}}
-					>
-						{children}
-					</UndoableStoriesContext.Provider>
+					{children}
 				</StoriesContext.Provider>
 			</PrefsContext.Provider>
 		);
@@ -154,8 +144,7 @@ function renderComponent(
 		result,
 		start,
 		storiesDispatch,
-		story,
-		undoableDispatch
+		story
 	};
 }
 
@@ -213,7 +202,7 @@ describe('<StoryGraphPanel>', () => {
 	beforeEach(() => {
 		applyStoryCommandSpy = jest
 			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
-			.mockImplementation(() => undefined);
+			.mockImplementation(async () => undefined);
 	});
 
 	afterEach(() => {
@@ -1007,13 +996,7 @@ describe('<StoryGraphPanel>', () => {
 					<StoriesContext.Provider
 						value={{dispatch: jest.fn(), stories: [currentStory]}}
 					>
-						<UndoableStoriesContext.Provider
-							value={{
-								dispatch: jest.fn(),
-								isUndoable: true,
-								stories: [currentStory]
-							}}
-						>
+						<>
 							<button
 								onClick={() =>
 									setCurrentStory(current => ({
@@ -1036,7 +1019,7 @@ describe('<StoryGraphPanel>', () => {
 								selectedPassageId="start"
 								story={currentStory}
 							/>
-						</UndoableStoriesContext.Provider>
+						</>
 					</StoriesContext.Provider>
 				</PrefsContext.Provider>
 			);
@@ -1165,7 +1148,7 @@ describe('<StoryGraphPanel>', () => {
 	});
 
 	it('does not render graph orientation controls', () => {
-		const {undoableDispatch} = renderComponent();
+		const {storiesDispatch} = renderComponent();
 
 		expect(
 			screen.queryByRole('button', {name: /Rotate view/})
@@ -1173,7 +1156,7 @@ describe('<StoryGraphPanel>', () => {
 		expect(screen.queryByText('Left to Right')).not.toBeInTheDocument();
 		expect(screen.queryByText('Top to Bottom')).not.toBeInTheDocument();
 		expect(applyStoryCommandSpy).not.toHaveBeenCalled();
-		expect(undoableDispatch).not.toHaveBeenCalled();
+		expect(storiesDispatch).not.toHaveBeenCalled();
 	});
 
 	it('saves generated layout through the core project host', () => {

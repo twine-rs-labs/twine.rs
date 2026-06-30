@@ -3,8 +3,7 @@ import {useTranslation} from 'react-i18next';
 import {DialogCard} from '../components/container/dialog-card';
 import {CardContent} from '../components/container/card';
 import {DialogComponentProps} from './dialogs.types';
-import {storyWithId} from '../store/stories';
-import {useUndoableStoriesContext} from '../store/undoable-stories';
+import {storyWithId, useStoriesContext} from '../store/stories';
 import {Color} from '../util/color';
 import {TagEditor} from '../components/tag/tag-editor';
 import {
@@ -21,7 +20,7 @@ export interface PassageTagsDialogProps extends DialogComponentProps {
 
 export const PassageTagsDialog: React.FC<PassageTagsDialogProps> = props => {
 	const {storyId, ...other} = props;
-	const {stories} = useUndoableStoriesContext();
+	const {stories} = useStoriesContext();
 	const {t} = useTranslation();
 
 	const story = storyWithId(stories, storyId);

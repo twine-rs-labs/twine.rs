@@ -2,10 +2,7 @@ import {act, fireEvent, render, screen, within} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {StoreCoreProjectHost} from '../../core';
-import {
-	UndoableStoriesContext,
-	UndoableStoriesContextProps
-} from '../../store/undoable-stories';
+import {StoriesContext, StoriesContextProps} from '../../store/stories';
 import {fakeStory} from '../../test-util';
 import {PassageTagsDialog, PassageTagsDialogProps} from '../passage-tags';
 
@@ -16,17 +13,16 @@ describe('<PassageTagsDialog>', () => {
 
 	async function renderComponent(
 		props?: Partial<PassageTagsDialogProps>,
-		storiesContext?: Partial<UndoableStoriesContextProps>
+		storiesContext?: Partial<StoriesContextProps>
 	) {
 		const story = fakeStory(1);
 
 		story.passages[0].tags = ['mock-tag'];
 
 		const result = render(
-			<UndoableStoriesContext.Provider
+			<StoriesContext.Provider
 				value={{
 					dispatch: jest.fn(),
-					isUndoable: true,
 					stories: [story],
 					...storiesContext
 				}}
@@ -41,7 +37,7 @@ describe('<PassageTagsDialog>', () => {
 					storyId={story.id}
 					{...props}
 				/>
-			</UndoableStoriesContext.Provider>
+			</StoriesContext.Provider>
 		);
 
 		// Need this because of <PromptButton>
@@ -80,7 +76,7 @@ describe('<PassageTagsDialog>', () => {
 		const stories = [story];
 		const applyStoryCommand = jest
 			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
-			.mockImplementation(() => {});
+			.mockImplementation(async () => undefined);
 
 		story.passages[0].tags = ['mock-tag'];
 		await renderComponent({storyId: story.id}, {dispatch, stories});
@@ -105,7 +101,7 @@ describe('<PassageTagsDialog>', () => {
 		const dispatch = jest.fn();
 		const applyStoryCommand = jest
 			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
-			.mockImplementation(() => {});
+			.mockImplementation(async () => undefined);
 
 		await renderComponent({}, {dispatch});
 		expect(dispatch).not.toHaveBeenCalled();

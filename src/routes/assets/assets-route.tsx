@@ -917,10 +917,11 @@ export const AssetsRoute: React.FC = () => {
 				const targetPath =
 					copied?.targetPath ?? importTargetPathForSource(sourcePath);
 
-				coreProjectHost.applyStoryCommand(
+				await coreProjectHost.applyStoryCommand(
 					importAssetCommand(story.id, copied?.sourcePath ?? sourcePath, {
 						targetPath
-					})
+					}),
+					{effectToken: copied?.effectToken}
 				);
 				setImportPath('');
 				focusAsset(targetPath);
@@ -964,10 +965,11 @@ export const AssetsRoute: React.FC = () => {
 				const targetPath =
 					copied?.targetPath ?? importTargetPathForSource(sourcePath);
 
-				coreProjectHost.applyStoryCommand(
+				await coreProjectHost.applyStoryCommand(
 					importAssetCommand(story.id, copied?.sourcePath ?? sourcePath, {
 						targetPath
-					})
+					}),
+					{effectToken: copied?.effectToken}
 				);
 				setImportPath('');
 				focusAsset(targetPath);
@@ -1117,12 +1119,13 @@ export const AssetsRoute: React.FC = () => {
 							)
 						: undefined;
 
-				coreProjectHost.applyStoryCommand(
+				await coreProjectHost.applyStoryCommand(
 					renameAssetCommand(
 						story.id,
 						assetEdit.path,
 						renamed?.targetPath ?? value
-					)
+					),
+					{effectToken: renamed?.effectToken}
 				);
 				focusAsset(renamed?.targetPath ?? value);
 			}
@@ -1137,12 +1140,13 @@ export const AssetsRoute: React.FC = () => {
 							)
 						: undefined;
 
-				coreProjectHost.applyStoryCommand(
+				await coreProjectHost.applyStoryCommand(
 					replaceAssetCommand(
 						story.id,
 						assetEdit.path,
 						replaced?.sourcePath ?? value
-					)
+					),
+					{effectToken: replaced?.effectToken}
 				);
 				focusAsset(assetEdit.path);
 			}
@@ -1162,12 +1166,14 @@ export const AssetsRoute: React.FC = () => {
 		setAssetError(undefined);
 
 		try {
-			if (projectRoot && twineElectron?.deleteProjectAsset) {
-				await twineElectron.deleteProjectAsset(projectRoot, asset.path);
-			}
+			const deleted =
+				projectRoot && twineElectron?.deleteProjectAsset
+					? await twineElectron.deleteProjectAsset(projectRoot, asset.path)
+					: undefined;
 
-			coreProjectHost.applyStoryCommand(
-				deleteAssetCommand(story.id, asset.path, true)
+			await coreProjectHost.applyStoryCommand(
+				deleteAssetCommand(story.id, asset.path, true),
+				{effectToken: deleted?.effectToken}
 			);
 			setSelectedPath(undefined);
 			selectFolder(parentPathForPath(asset.path) || 'All Assets');

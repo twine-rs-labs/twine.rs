@@ -17,7 +17,7 @@ export interface PersistenceHooks {
 			state: StoriesState,
 			action: StoriesAction,
 			formats: StoryFormatsState
-		) => boolean;
+		) => boolean | StoryPersistenceResult;
 	};
 	storyFormats: {
 		load: () => Promise<StoryFormatsState>;
@@ -26,6 +26,11 @@ export interface PersistenceHooks {
 			action: StoryFormatsAction
 		) => void;
 	};
+}
+
+export interface StoryPersistenceResult {
+	completion: Promise<void>;
+	persisted: boolean;
 }
 
 export function usePersistence(): PersistenceHooks {

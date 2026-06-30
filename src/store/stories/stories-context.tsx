@@ -37,7 +37,46 @@ export const StoriesContextProvider: React.FC = props => {
 				const newState = reducer(state, action);
 
 				try {
-					if (storiesPersistence.saveMiddleware(newState, action, formats)) {
+					const persistence = storiesPersistence.saveMiddleware(
+						newState,
+						action,
+						formats
+					);
+
+					if (typeof persistence === 'object') {
+						void persistence.completion
+							.then(() => {
+								if (persistence.persisted) {
+									queueStorySaveStatus({
+										kind: 'saved',
+										revision:
+											action.type === 'applyCorePatchBatch'
+												? action.revision
+												: undefined,
+										savedAt: Date.now(),
+										sessionId:
+											action.type === 'applyCorePatchBatch'
+												? action.sessionId
+												: undefined
+									});
+								}
+							})
+							.catch(error => {
+								queueStorySaveStatus({
+									error: error as Error,
+									kind: 'error',
+									revision:
+										action.type === 'applyCorePatchBatch'
+											? action.revision
+											: undefined,
+									sessionId:
+										action.type === 'applyCorePatchBatch'
+											? action.sessionId
+											: undefined
+								});
+								reportError(error as Error, 'store.errors.cantPersistStories');
+							});
+					} else if (persistence) {
 						queueStorySaveStatus({kind: 'saved', savedAt: Date.now()});
 					}
 				} catch (error) {

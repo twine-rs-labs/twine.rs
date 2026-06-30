@@ -3,11 +3,15 @@ export type CoreBridgeMode = 'js-fallback' | 'unavailable' | 'wasm-worker';
 export interface CoreBridgeMetric {
 	computeMs: number;
 	kind:
+		| 'acknowledgeSaved'
 		| 'apply'
+		| 'applyExternalDelta'
 		| 'queryGraphProjection'
 		| 'queryStoryIndex'
 		| 'redo'
+		| 'removeSession'
 		| 'replaceProject'
+		| 'status'
 		| 'undo';
 	mode: CoreBridgeMode;
 	payloadBytes: number;

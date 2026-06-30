@@ -29,10 +29,13 @@ import {
 } from './platform-settings';
 import {
 	chooseAssetFile,
+	applyProjectAssetEffect,
+	cleanupStaleProjectAssetEffects,
 	copyProjectImportAssets,
 	copyAssetToProject,
 	createProjectFolder,
 	deleteProjectAsset,
+	discardProjectAssetEffect,
 	deleteProjectFolder,
 	discardProjectImport,
 	hydrateProjectFolder,
@@ -62,6 +65,10 @@ function nativePlatformSettings() {
 }
 
 export function initIpc() {
+	void Promise.resolve(cleanupStaleProjectAssetEffects()).catch(error => {
+		console.warn(`Could not clean stale asset journals: ${error}`);
+	});
+
 	// We want to debounce story saves so we aren't constantly writing to disk.
 	// However, we need to have individual debounced functions per story so that
 	// saves on multiple stories in one interval aren't lost. So we maintain a set
@@ -191,6 +198,18 @@ export function initIpc() {
 		'delete-project-asset',
 		async (_event, rootPath: string, path: string) =>
 			deleteProjectAsset(rootPath, path)
+	);
+
+	ipcMain.handle(
+		'apply-project-asset-effect',
+		async (_event, effectToken: string, direction: 'redo' | 'undo') =>
+			applyProjectAssetEffect(effectToken, direction)
+	);
+
+	ipcMain.handle(
+		'discard-project-asset-effect',
+		async (_event, effectToken: string) =>
+			discardProjectAssetEffect(effectToken)
 	);
 
 	ipcMain.handle('delete-project-folder', async (_event, rootPath: string) =>

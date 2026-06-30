@@ -1,14 +1,6 @@
-import {Thunk} from 'react-hook-thunk-reducer';
 import {createRegExp, escapeRegExpReplace} from '../../../util/regexp';
-import {updatePassage} from './update-passage';
-import {updateStory} from './update-story';
-import {
-	Passage,
-	StoriesAction,
-	StoriesState,
-	Story,
-	StorySearchFlags
-} from '../stories.types';
+import type {PassagePatch, StoryCommand} from '../../../core';
+import {Passage, Story, StorySearchFlags} from '../stories.types';
 
 /**
  * Core logic for replacing text using flags.
@@ -75,110 +67,77 @@ export function passageReplaceError(
 	}
 }
 
-export function replaceInPassage(
-	story: Story,
-	passage: Passage,
-	searchFor: string,
-	replaceWith: string,
-	flags: StorySearchFlags
-): Thunk<StoriesState, StoriesAction> {
-	return (dispatch, getState) => {
-		if (searchFor === '') {
-			throw new Error("Can't replace an empty string");
-		}
-
-		if (passage.story !== story.id) {
-			throw new Error('Passage does not belong to story');
-		}
-
-		const {includePassageNames} = flags;
-		const props: Partial<Passage> = {};
-
-		const newText = replaceText(passage.text, searchFor, replaceWith, flags);
-
-		if (newText !== passage.text) {
-			props.text = newText;
-		}
-
-		if (includePassageNames) {
-			const newName = replaceText(passage.name, searchFor, replaceWith, flags);
-
-			if (newName !== passage.name) {
-				props.name = newName;
-			}
-		}
-
-		if (Object.keys(props).length > 0) {
-			updatePassage(story, passage, props)(dispatch, getState);
-		}
-	};
-}
-
-export function replaceInStory(
+/**
+ * Builds the Rust-owned equivalent of replaceInStory(). The entire replacement
+ * is committed as one session transaction.
+ */
+export function replaceInStoryCommand(
 	story: Story,
 	searchFor: string,
 	replaceWith: string,
 	flags: StorySearchFlags
-): Thunk<StoriesState, StoriesAction> {
-	return (dispatch, getState) => {
-		if (searchFor === '') {
-			throw new Error("Can't replace an empty string");
+): StoryCommand {
+	if (searchFor === '') {
+		throw new Error("Can't replace an empty string");
+	}
+
+	const commands: StoryCommand[] = [];
+
+	for (const passage of story.passages) {
+		const changes: PassagePatch = {
+			layout: null,
+			name: null,
+			tags: null,
+			text: null
+		};
+		const text = replaceText(passage.text, searchFor, replaceWith, flags);
+
+		if (text !== passage.text) {
+			changes.text = text;
 		}
 
 		if (flags.includePassageNames) {
-			// Do replaces in passage names first, so that if a replace will change
-			// both a link and a passage name, the updatePassage action will see that
-			// the passage exists when the link is changed, and not create a new
-			// passage that will conflict with the existing one.
+			const name = replaceText(passage.name, searchFor, replaceWith, flags);
 
-			for (const passage of story.passages) {
-				const name = replaceText(passage.name, searchFor, replaceWith, flags);
-
-				if (name !== passage.name) {
-					updatePassage(story, passage, {name})(dispatch, getState);
-				}
-			}
-
-			for (const passage of story.passages) {
-				const text = replaceText(passage.text, searchFor, replaceWith, flags);
-
-				if (text !== passage.text) {
-					updatePassage(story, passage, {text})(dispatch, getState);
-				}
-			}
-		} else {
-			// We're only updating passage text, so we can do it the easy way.
-
-			for (const passage of story.passages) {
-				replaceInPassage(
-					story,
-					passage,
-					searchFor,
-					replaceWith,
-					flags
-				)(dispatch, getState);
+			if (name !== passage.name) {
+				changes.name = name;
 			}
 		}
 
-		const script = replaceText(story.script, searchFor, replaceWith, flags);
-		const stylesheet = replaceText(
-			story.stylesheet,
-			searchFor,
-			replaceWith,
-			flags
-		);
-		const storyChanges: Partial<Story> = {};
-
-		if (script !== story.script) {
-			storyChanges.script = script;
+		if (changes.name !== null || changes.text !== null) {
+			commands.push({
+				type: 'updatePassage',
+				changes,
+				passage_id: passage.id,
+				story_id: story.id,
+				update_references: true
+			});
 		}
+	}
 
-		if (stylesheet !== story.stylesheet) {
-			storyChanges.stylesheet = stylesheet;
-		}
+	const script = replaceText(story.script, searchFor, replaceWith, flags);
+	const stylesheet = replaceText(
+		story.stylesheet,
+		searchFor,
+		replaceWith,
+		flags
+	);
 
-		if (Object.keys(storyChanges).length > 0) {
-			dispatch(updateStory(getState(), story, storyChanges));
-		}
-	};
+	if (script !== story.script) {
+		commands.push({
+			type: 'updateStoryScript',
+			script,
+			story_id: story.id
+		});
+	}
+
+	if (stylesheet !== story.stylesheet) {
+		commands.push({
+			type: 'updateStoryStylesheet',
+			story_id: story.id,
+			stylesheet
+		});
+	}
+
+	return {type: 'batch', commands};
 }

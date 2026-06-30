@@ -31,10 +31,9 @@ async function saveNativeProjectFolder(
 	try {
 		await twineElectron.saveProjectFolder(projectMetadata.rootPath, story);
 	} catch (error) {
-		console.warn(
-			`Could not update native project folder (${
-				(error as Error).message
-			}). Legacy HTML save was skipped.`
+		throw new Error(
+			`Could not update native project folder: ${(error as Error).message}`,
+			{cause: error}
 		);
 	}
 

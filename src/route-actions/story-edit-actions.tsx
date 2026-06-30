@@ -141,7 +141,7 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 				>
 					{mode !== 'text' && <ZoomButtons story={story} />}
 				</div>
-				<UndoRedoButtons />
+				<UndoRedoButtons storyId={story.id} />
 			</>
 		),
 		[

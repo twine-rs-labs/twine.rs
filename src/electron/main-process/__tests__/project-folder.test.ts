@@ -1,4 +1,5 @@
 import {dialog} from 'electron';
+import {createHash} from 'crypto';
 import {
 	copy,
 	mkdtemp,
@@ -15,11 +16,14 @@ import extractZip from 'extract-zip';
 import {fakeStory} from '../../../test-util';
 import {
 	chooseAssetFile,
+	applyProjectAssetEffect,
+	cleanupStaleProjectAssetEffects,
 	copyProjectImportAssets,
 	copyAssetToProject,
 	createProjectFolder,
 	deleteProjectAsset,
 	deleteProjectFolder,
+	discardProjectAssetEffect,
 	discardProjectImport,
 	hydrateProjectFolder,
 	listProjectAssets,
@@ -859,9 +863,23 @@ describe('project-folder native bridge', () => {
 	});
 
 	it('copies an asset into the native project assets folder', async () => {
+		let destinationExists = false;
+
+		readFileMock.mockImplementation(async path => {
+			if (String(path).endsWith('assets/cover.png') && !destinationExists) {
+				throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+			}
+			return 'asset bytes';
+		});
+		copyMock.mockImplementation(async (_source, destination) => {
+			if (String(destination).endsWith('assets/cover.png')) {
+				destinationExists = true;
+			}
+		});
 		await expect(
 			copyAssetToProject('/native/project.twine.rs', '/tmp/cover.png')
 		).resolves.toEqual({
+			effectToken: expect.any(String),
 			sourcePath: '/native/project.twine.rs/assets/cover.png',
 			targetPath: 'assets/cover.png'
 		});
@@ -1303,6 +1321,17 @@ describe('project-folder native bridge', () => {
 	});
 
 	it('renames, replaces, and deletes native project asset files safely', async () => {
+		let heroExists = false;
+
+		readFileMock.mockImplementation(async path => {
+			if (String(path).endsWith('assets/hero.png') && !heroExists) {
+				throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+			}
+			return String(path);
+		});
+		moveMock.mockImplementation(async () => {
+			heroExists = true;
+		});
 		await expect(
 			renameProjectAsset(
 				'/native/project.twine.rs',
@@ -1310,14 +1339,14 @@ describe('project-folder native bridge', () => {
 				'assets/hero.png'
 			)
 		).resolves.toEqual({
+			effectToken: expect.any(String),
 			sourcePath: '/native/project.twine.rs/assets/hero.png',
 			targetPath: 'assets/hero.png'
 		});
 		expect(mkdirpMock).toHaveBeenCalledWith('/native/project.twine.rs/assets');
 		expect(moveMock).toHaveBeenCalledWith(
 			'/native/project.twine.rs/assets/cover.png',
-			'/native/project.twine.rs/assets/hero.png',
-			{overwrite: true}
+			'/native/project.twine.rs/assets/hero.png'
 		);
 
 		await expect(
@@ -1327,6 +1356,7 @@ describe('project-folder native bridge', () => {
 				'/tmp/new-hero.png'
 			)
 		).resolves.toEqual({
+			effectToken: expect.any(String),
 			sourcePath: '/native/project.twine.rs/assets/hero.png',
 			targetPath: 'assets/hero.png'
 		});
@@ -1339,6 +1369,86 @@ describe('project-folder native bridge', () => {
 		await deleteProjectAsset('/native/project.twine.rs', 'assets/hero.png');
 		expect(removeMock).toHaveBeenCalledWith(
 			'/native/project.twine.rs/assets/hero.png'
+		);
+	});
+
+	it('undoes and redoes journaled asset imports with fingerprint checks', async () => {
+		const fingerprint = createHash('sha256')
+			.update('asset bytes')
+			.digest('hex');
+		let exists = true;
+
+		readJsonMock.mockResolvedValue({
+			afterFingerprint: fingerprint,
+			kind: 'import',
+			rootPath: '/native/project.twine.rs',
+			targetPath: 'assets/cover.png',
+			token: 'effect-1'
+		});
+		readFileMock.mockImplementation(async path => {
+			if (String(path).endsWith('assets/cover.png')) {
+				if (!exists) {
+					throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+				}
+				return 'asset bytes';
+			}
+			return 'asset bytes';
+		});
+		removeMock.mockImplementation(async path => {
+			if (String(path).endsWith('assets/cover.png')) {
+				exists = false;
+			}
+		});
+		copyMock.mockImplementation(async (_source, destination) => {
+			if (String(destination).endsWith('assets/cover.png')) {
+				exists = true;
+			}
+		});
+
+		await applyProjectAssetEffect('effect-1', 'undo');
+		expect(removeMock).toHaveBeenCalledWith(
+			'/native/project.twine.rs/assets/cover.png'
+		);
+
+		await applyProjectAssetEffect('effect-1', 'redo');
+		expect(copyMock).toHaveBeenCalledWith(
+			expect.stringContaining('effect-1/after.bin'),
+			'/native/project.twine.rs/assets/cover.png',
+			{overwrite: true}
+		);
+	});
+
+	it('stops asset undo when the journaled file was externally modified', async () => {
+		readJsonMock.mockResolvedValue({
+			afterFingerprint: 'expected',
+			kind: 'replace',
+			rootPath: '/native/project.twine.rs',
+			targetPath: 'assets/cover.png',
+			token: 'effect-2'
+		});
+		readFileMock.mockResolvedValue('externally modified');
+
+		await expect(applyProjectAssetEffect('effect-2', 'undo')).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(removeMock).not.toHaveBeenCalledWith(
+			'/native/project.twine.rs/assets/cover.png'
+		);
+	});
+
+	it('discards evicted asset effect journals', async () => {
+		await discardProjectAssetEffect('effect-3');
+
+		expect(removeMock).toHaveBeenCalledWith(
+			expect.stringContaining('effect-3')
+		);
+	});
+
+	it('cleans stale crash journals at startup', async () => {
+		await cleanupStaleProjectAssetEffects();
+
+		expect(removeMock).toHaveBeenCalledWith(
+			'mock-story-library/.twine-rs-asset-journal'
 		);
 	});
 

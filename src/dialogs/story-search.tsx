@@ -12,11 +12,11 @@ import {
 	StorySearchFlags,
 	highlightPassages,
 	passageReplaceError,
-	replaceInStory,
+	replaceInStoryCommand,
 	selectPassage,
-	storyWithId
+	storyWithId,
+	useStoriesContext
 } from '../store/stories';
-import {useUndoableStoriesContext} from '../store/undoable-stories';
 import {
 	sourceNavigationTargetFromSourceId,
 	sourceTarget
@@ -49,7 +49,7 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 	const closingRef = React.useRef(false);
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const history = useHistory();
-	const {dispatch, stories} = useUndoableStoriesContext();
+	const {dispatch, stories} = useStoriesContext();
 	const {t} = useTranslation();
 	const story = storyWithId(stories, storyId);
 	const coreProjectHost = useCoreProjectHost();
@@ -186,8 +186,8 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 	}
 
 	function handleReplace() {
-		dispatch(
-			replaceInStory(story, find, replace, flags),
+		void coreProjectHost.applyStoryCommand(
+			replaceInStoryCommand(story, find, replace, flags),
 			'undoChange.replaceAllText'
 		);
 	}

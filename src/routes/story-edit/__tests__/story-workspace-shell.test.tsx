@@ -5,7 +5,7 @@ import {DialogsContext} from '../../../dialogs/context';
 import {StorySearchDialog} from '../../../dialogs/story-search';
 import {markProjectStoryHydration} from '../../../store/project-hydration';
 import {saveProjectMetadata} from '../../../store/project-metadata';
-import {UndoableStoriesContext} from '../../../store/undoable-stories';
+import {StoriesContext} from '../../../store/stories';
 import {fakePassage, fakeStory} from '../../../test-util';
 import {StoryWorkspaceShell} from '../story-workspace-shell';
 import {StoryEditMode} from '../workspace-state';
@@ -89,10 +89,9 @@ function renderComponent(
 	render(
 		<MemoryRouter>
 			<DialogsContext.Provider value={{dialogs: [], dispatch: dialogsDispatch}}>
-				<UndoableStoriesContext.Provider
+				<StoriesContext.Provider
 					value={{
 						dispatch: storyDispatch,
-						isUndoable: true,
 						stories: [story]
 					}}
 				>
@@ -114,7 +113,7 @@ function renderComponent(
 						story={story}
 						{...props}
 					/>
-				</UndoableStoriesContext.Provider>
+				</StoriesContext.Provider>
 			</DialogsContext.Provider>
 		</MemoryRouter>
 	);
@@ -416,8 +415,10 @@ describe('<StoryWorkspaceShell>', () => {
 		screen.getByRole('button', {name: 'Insert'}).click();
 
 		expect(storyDispatch).toHaveBeenCalledWith(
-			expect.objectContaining({type: 'updatePassage'}),
-			'undoChange.editPassage'
+			expect.objectContaining({
+				actions: [expect.objectContaining({type: 'updatePassage'})],
+				type: 'applyCorePatchBatch'
+			})
 		);
 	});
 
@@ -475,12 +476,20 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 		screen.getByRole('button', {name: /Create "Missing"/}).click();
 		expect(storyDispatch).toHaveBeenCalledWith(
-			{
-				type: 'createPassage',
-				props: expect.objectContaining({name: 'Missing', tags: [], text: ''}),
-				storyId: story.id
-			},
-			'undoChange.newPassage'
+			expect.objectContaining({
+				actions: [
+					{
+						type: 'createPassage',
+						props: expect.objectContaining({
+							name: 'Missing',
+							tags: [],
+							text: ''
+						}),
+						storyId: story.id
+					}
+				],
+				type: 'applyCorePatchBatch'
+			})
 		);
 	});
 

@@ -22,9 +22,65 @@ let lastState: StoriesState;
  * *after* the main reducer runs.
  */
 export function saveMiddleware(state: StoriesState, action: StoriesAction) {
+	let atomicBatch = false;
 	let persisted = false;
 
 	switch (action.type) {
+		case 'applyCorePatchBatch': {
+			atomicBatch = true;
+			const touchedStoryIds = new Set(
+				action.actions.flatMap(action =>
+					'storyId' in action ? [action.storyId] : []
+				)
+			);
+			const deletedStoryIds = new Set(
+				action.actions.flatMap(action =>
+					action.type === 'deleteStory' ? [action.storyId] : []
+				)
+			);
+
+			doUpdateTransaction(transaction => {
+				for (const storyId of deletedStoryIds) {
+					const previous = lastState?.find(story => story.id === storyId);
+
+					if (!previous) {
+						continue;
+					}
+
+					for (const passage of previous.passages) {
+						deletePassageById(transaction, passage.id);
+					}
+					deleteStory(transaction, previous);
+					persisted = true;
+				}
+
+				for (const storyId of touchedStoryIds) {
+					if (deletedStoryIds.has(storyId)) {
+						continue;
+					}
+
+					const story = state.find(story => story.id === storyId);
+					const previous = lastState?.find(story => story.id === storyId);
+
+					if (!story) {
+						continue;
+					}
+
+					saveStory(transaction, story);
+					for (const passage of story.passages) {
+						savePassage(transaction, passage);
+					}
+					for (const passage of previous?.passages ?? []) {
+						if (!story.passages.some(current => current.id === passage.id)) {
+							deletePassageById(transaction, passage.id);
+						}
+					}
+					persisted = true;
+				}
+			});
+			break;
+		}
+
 		case 'init':
 		case 'repair':
 			// We take no action here on a repair action. This is to prevent messing up a
@@ -208,5 +264,5 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 	}
 
 	lastState = state;
-	return persisted;
+	return atomicBatch ? {completion: Promise.resolve(), persisted} : persisted;
 }

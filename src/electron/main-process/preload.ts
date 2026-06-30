@@ -90,6 +90,13 @@ const bridge = {
 	copyAssetToProject(rootPath: string, sourcePath: string) {
 		return ipcRenderer.invoke('copy-asset-to-project', rootPath, sourcePath);
 	},
+	applyProjectAssetEffect(effectToken: string, direction: 'redo' | 'undo') {
+		return ipcRenderer.invoke(
+			'apply-project-asset-effect',
+			effectToken,
+			direction
+		);
+	},
 	copyProjectImportAssets(importId: string, rootPath: string) {
 		return ipcRenderer.invoke('copy-project-import-assets', importId, rootPath);
 	},
@@ -98,6 +105,9 @@ const bridge = {
 	},
 	deleteProjectAsset(rootPath: string, path: string) {
 		return ipcRenderer.invoke('delete-project-asset', rootPath, path);
+	},
+	discardProjectAssetEffect(effectToken: string) {
+		return ipcRenderer.invoke('discard-project-asset-effect', effectToken);
 	},
 	deleteProjectFolder(rootPath: string) {
 		return ipcRenderer.invoke('delete-project-folder', rootPath);

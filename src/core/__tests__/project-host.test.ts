@@ -18,7 +18,7 @@ import {
 } from '../project-host';
 import {reducer as storiesReducer} from '../../store/stories/reducer';
 import {StoriesContext, StoriesState} from '../../store/stories';
-import {StoriesActionOrThunk} from '../../store/undoable-stories';
+import {StoriesActionOrThunk} from '../../store/stories';
 import {fakePassage, fakeStory} from '../../test-util';
 
 describe('StoreCoreProjectHost asset commands', () => {
@@ -63,11 +63,28 @@ describe('StoreCoreProjectHost asset commands', () => {
 	function fakeWasmClient(
 		apply: (command: StoryCommand, revision: number) => Promise<PatchBatch>
 	) {
+		const status = (revision: number) => ({
+			canRedo: false,
+			canUndo: true,
+			dirty: true,
+			redoKind: null,
+			revision,
+			undoKind: 'editPassage' as const
+		});
+
 		return {
-			apply: jest.fn(async (command: StoryCommand, revision: number) => ({
-				batch: await apply(command, revision),
-				revision: revision + 1
-			})),
+			acknowledgeSaved: jest.fn(),
+			apply: jest.fn(
+				async (
+					_sessionId: string,
+					command: StoryCommand,
+					revision: number
+				) => ({
+					batch: await apply(command, revision),
+					revision: revision + 1,
+					status: status(revision + 1)
+				})
+			),
 			cachedGraphProjection: jest.fn(),
 			cachedStoryIndex: jest.fn(),
 			enabled: true,
@@ -150,6 +167,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 		await flushCommand();
 
 		expect(wasmClient.replaceProject).toHaveBeenCalledWith(
+			'library',
 			expect.objectContaining({
 				stories: [expect.objectContaining({id: context.story.id})]
 			}),
@@ -161,9 +179,14 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(context.host.isDirty()).toBe(true);
 		expect(context.dispatch).toHaveBeenCalledWith(
 			expect.objectContaining({
-				passageId: 'start',
-				props: {text: 'from-rust'},
-				type: 'updatePassage'
+				actions: [
+					expect.objectContaining({
+						passageId: 'start',
+						props: {text: 'from-rust'},
+						type: 'updatePassage'
+					})
+				],
+				type: 'applyCorePatchBatch'
 			}),
 			'undoChange.editPassage'
 		);
@@ -171,10 +194,33 @@ describe('StoreCoreProjectHost asset commands', () => {
 
 	it('uses the worker-advanced revision for follow-up commands', async () => {
 		const wasmClient = {
+			acknowledgeSaved: jest.fn(),
 			apply: jest
 				.fn()
-				.mockResolvedValueOnce({batch: batch([]), revision: 9})
-				.mockResolvedValueOnce({batch: batch([]), revision: 10}),
+				.mockResolvedValueOnce({
+					batch: batch([]),
+					revision: 9,
+					status: {
+						canRedo: false,
+						canUndo: true,
+						dirty: true,
+						redoKind: null,
+						revision: 9,
+						undoKind: 'editPassage'
+					}
+				})
+				.mockResolvedValueOnce({
+					batch: batch([]),
+					revision: 10,
+					status: {
+						canRedo: false,
+						canUndo: true,
+						dirty: true,
+						redoKind: null,
+						revision: 10,
+						undoKind: 'editPassage'
+					}
+				}),
 			cachedGraphProjection: jest.fn(),
 			cachedStoryIndex: jest.fn(),
 			enabled: true,
@@ -197,7 +243,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 		);
 		await flushCommand();
 
-		expect(wasmClient.apply.mock.calls.map(call => call[1])).toEqual([1, 9]);
+		expect(wasmClient.apply.mock.calls.map(call => call[2])).toEqual([1, 9]);
 	});
 
 	it('applies asset inventory effects from returned patch batches', async () => {
@@ -230,6 +276,88 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(wasmClient.apply).toHaveBeenCalled();
 		expect(knownAssetInventoryForStory(context.story.id)).toEqual([cover]);
 		expect(context.dispatch).not.toHaveBeenCalled();
+	});
+
+	it('runs native asset effects before Rust undo and redo', async () => {
+		const applyProjectAssetEffect = jest.fn().mockResolvedValue(undefined);
+		const wasmClient = fakeWasmClient(async () => batch([]));
+
+		wasmClient.undo.mockResolvedValue({
+			batch: batch([]),
+			revision: 3,
+			status: {
+				canRedo: true,
+				canUndo: false,
+				dirty: false,
+				redoKind: 'importAsset',
+				revision: 3,
+				undoKind: null
+			}
+		});
+		wasmClient.redo.mockResolvedValue({
+			batch: batch([]),
+			revision: 4,
+			status: {
+				canRedo: false,
+				canUndo: true,
+				dirty: true,
+				redoKind: null,
+				revision: 4,
+				undoKind: 'importAsset'
+			}
+		});
+		(window as any).twineElectron = {applyProjectAssetEffect};
+		const context = hostWithStory({wasmClient});
+
+		await context.host.applyStoryCommand(
+			{
+				overwrite: false,
+				source_path: '/tmp/cover.png',
+				story_id: context.story.id,
+				target_path: 'assets/cover.png',
+				type: 'importAsset'
+			},
+			{effectToken: 'effect-1'}
+		);
+		await context.host.undo();
+		await context.host.redo();
+
+		expect(applyProjectAssetEffect.mock.calls).toEqual([
+			['effect-1', 'undo'],
+			['effect-1', 'redo']
+		]);
+		delete (window as any).twineElectron;
+	});
+
+	it('rolls back a prepared native asset effect when Rust rejects it', async () => {
+		const applyProjectAssetEffect = jest.fn().mockResolvedValue(undefined);
+		const discardProjectAssetEffect = jest.fn().mockResolvedValue(undefined);
+		const wasmClient = fakeWasmClient(async () => {
+			throw new Error('rejected');
+		});
+
+		(window as any).twineElectron = {
+			applyProjectAssetEffect,
+			discardProjectAssetEffect
+		};
+		const context = hostWithStory({wasmClient});
+
+		await expect(
+			context.host.applyStoryCommand(
+				{
+					overwrite: false,
+					source_path: '/tmp/cover.png',
+					story_id: context.story.id,
+					target_path: 'assets/cover.png',
+					type: 'importAsset'
+				},
+				{effectToken: 'effect-2'}
+			)
+		).rejects.toThrow('rejected');
+
+		expect(applyProjectAssetEffect).toHaveBeenCalledWith('effect-2', 'undo');
+		expect(discardProjectAssetEffect).toHaveBeenCalledWith('effect-2');
+		delete (window as any).twineElectron;
 	});
 
 	it('publishes returned non-state patches without dispatching reducer actions', async () => {
@@ -354,13 +482,17 @@ describe('StoreCoreProjectHost asset commands', () => {
 		]);
 	});
 
-	it('ignores stale worker graph caches after story updates', () => {
+	it('does not replace the Rust project after direct React state updates', () => {
 		const context = hostWithStory();
 		const staleProjection = {stale: true};
 		const fakeWasmClient = {
 			cachedGraphProjection: jest.fn(
-				(_storyId: string, _options: unknown, revision: number) =>
-					revision === 1 ? staleProjection : undefined
+				(
+					_sessionId: string,
+					_storyId: string,
+					_options: unknown,
+					revision: number
+				) => (revision === 1 ? staleProjection : undefined)
 			),
 			enabled: true,
 			lastGraphProjection: jest.fn()
@@ -377,18 +509,16 @@ describe('StoreCoreProjectHost asset commands', () => {
 			context.dispatch
 		);
 
-		expect(context.host.queryGraphProjection(context.story.id)).not.toBe(
+		expect(context.host.queryGraphProjection(context.story.id)).toBe(
 			staleProjection
 		);
 		expect(fakeWasmClient.cachedGraphProjection).toHaveBeenLastCalledWith(
+			'library',
 			context.story.id,
 			expect.any(Object),
-			2
+			1
 		);
-		expect(fakeWasmClient.lastGraphProjection).toHaveBeenLastCalledWith(
-			context.story.id,
-			2
-		);
+		expect(fakeWasmClient.lastGraphProjection).not.toHaveBeenCalled();
 	});
 
 	it('keeps Rust graph caches live for selection-only store updates', () => {
@@ -396,8 +526,12 @@ describe('StoreCoreProjectHost asset commands', () => {
 		const cachedProjection = {cached: true};
 		const fakeWasmClient = {
 			cachedGraphProjection: jest.fn(
-				(_storyId: string, _options: unknown, revision: number) =>
-					revision === 1 ? cachedProjection : undefined
+				(
+					_sessionId: string,
+					_storyId: string,
+					_options: unknown,
+					revision: number
+				) => (revision === 1 ? cachedProjection : undefined)
 			),
 			enabled: true,
 			lastGraphProjection: jest.fn()
@@ -427,6 +561,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 			cachedProjection
 		);
 		expect(fakeWasmClient.cachedGraphProjection).toHaveBeenLastCalledWith(
+			'library',
 			context.story.id,
 			expect.any(Object),
 			1
@@ -434,13 +569,17 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(fakeWasmClient.lastGraphProjection).not.toHaveBeenCalled();
 	});
 
-	it('ignores stale worker story index caches after story updates', () => {
+	it('keeps Rust query revisions stable across direct React view updates', () => {
 		const context = hostWithStory();
 		const staleIndex = {storyId: context.story.id, stale: true};
 		const fakeWasmClient = {
 			cachedStoryIndex: jest.fn(
-				(_storyId: string, _options: unknown, revision: number) =>
-					revision === 1 ? staleIndex : undefined
+				(
+					_sessionId: string,
+					_storyId: string,
+					_options: unknown,
+					revision: number
+				) => (revision === 1 ? staleIndex : undefined)
 			)
 		};
 
@@ -453,11 +592,12 @@ describe('StoreCoreProjectHost asset commands', () => {
 			context.dispatch
 		);
 
-		expect(context.host.queryStoryIndex(context.story.id)).not.toBe(staleIndex);
+		expect(context.host.queryStoryIndex(context.story.id)).toBe(staleIndex);
 		expect(fakeWasmClient.cachedStoryIndex).toHaveBeenLastCalledWith(
+			'library',
 			context.story.id,
 			expect.any(Object),
-			2
+			1
 		);
 	});
 });

@@ -40,7 +40,6 @@ import {
 	loadProjectMetadata
 } from '../../store/project-metadata';
 import type {TwineElectronWindow} from '../../electron/shared';
-import {UndoableStoriesContextProvider} from '../../store/undoable-stories';
 import './story-list-route.css';
 
 type LauncherView = 'table' | 'cards';
@@ -637,9 +636,7 @@ export const InnerStoryListRoute: React.FC = () => {
 };
 
 export const StoryListRoute: React.FC = () => (
-	<UndoableStoriesContextProvider>
-		<DialogsContextProvider>
-			<InnerStoryListRoute />
-		</DialogsContextProvider>
-	</UndoableStoriesContextProvider>
+	<DialogsContextProvider>
+		<InnerStoryListRoute />
+	</DialogsContextProvider>
 );

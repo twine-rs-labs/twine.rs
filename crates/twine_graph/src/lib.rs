@@ -129,6 +129,8 @@ pub struct GraphIndex {
     stats: GraphStats,
     story_order: Vec<PassageId>,
     story_rank: BTreeMap<PassageId, usize>,
+    #[serde(skip)]
+    last_incremental_parse_count: usize,
 }
 
 impl GraphIndex {
@@ -167,6 +169,7 @@ impl GraphIndex {
             },
             story_order,
             story_rank,
+            last_incremental_parse_count: story.passage_count(),
             ..Self::default()
         };
 
@@ -247,6 +250,163 @@ impl GraphIndex {
 
     pub fn backlinks_to(&self, id: &PassageId) -> &[PassageId] {
         self.backlinks.get(id).map_or(&[], Vec::as_slice)
+    }
+
+    /// Updates parsed graph facts for changed passages and sources whose target
+    /// resolution can be affected by a rename/create/delete. Unaffected source
+    /// text is not reparsed.
+    pub fn apply_story_delta(
+        &mut self,
+        story: &Story,
+        changed_passage_ids: &BTreeSet<PassageId>,
+        changed_target_names: &BTreeSet<String>,
+    ) {
+        self.last_incremental_parse_count = 0;
+        let mut affected_sources = changed_passage_ids.clone();
+
+        for (source_id, edges) in &self.outgoing {
+            if edges
+                .iter()
+                .any(|edge| changed_target_names.contains(&edge.target_name))
+            {
+                affected_sources.insert(source_id.clone());
+            }
+        }
+
+        self.passage_names = story
+            .passages
+            .iter()
+            .map(|passage| (passage.name.clone(), passage.id.clone()))
+            .collect();
+        self.story_order = story
+            .passages
+            .iter()
+            .map(|passage| passage.id.clone())
+            .collect();
+        self.story_rank = self
+            .story_order
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, id)| (id, index))
+            .collect();
+        self.nodes = story
+            .passages
+            .iter()
+            .map(|passage| {
+                (
+                    passage.id.clone(),
+                    GraphNode {
+                        broken_link_count: 0,
+                        id: passage.id.clone(),
+                        incoming_count: 0,
+                        is_empty: passage.text.trim().is_empty(),
+                        is_orphan: false,
+                        is_start: passage.id == story.start_passage,
+                        is_unreachable: false,
+                        name: passage.name.clone(),
+                        outgoing_count: 0,
+                        self_link_count: 0,
+                        tags: passage.tags.clone(),
+                    },
+                )
+            })
+            .collect();
+
+        self.outgoing.retain(|source_id, _| {
+            self.nodes.contains_key(source_id) && !affected_sources.contains(source_id)
+        });
+        for source_id in affected_sources {
+            let Some(passage) = story.passage_by_id(&source_id) else {
+                self.outgoing.remove(&source_id);
+                continue;
+            };
+            let edges = parse_standard_links(
+                &passage.text,
+                LinkParseOptions {
+                    internal_only: true,
+                },
+            )
+            .into_iter()
+            .map(|link| LinkEdge {
+                source: passage.id.clone(),
+                target: self.passage_names.get(&link.target).cloned(),
+                target_name: link.target,
+            })
+            .collect::<Vec<_>>();
+            self.last_incremental_parse_count += 1;
+
+            if edges.is_empty() {
+                self.outgoing.remove(&source_id);
+            } else {
+                self.outgoing.insert(source_id, edges);
+            }
+        }
+
+        self.backlinks.clear();
+        self.broken_links.clear();
+        self.self_links.clear();
+        self.stats = GraphStats {
+            empty_passages: story
+                .passages
+                .iter()
+                .filter(|passage| passage.text.trim().is_empty())
+                .count(),
+            passages: story.passage_count(),
+            tagged_passages: story
+                .passages
+                .iter()
+                .filter(|passage| !passage.tags.is_empty())
+                .count(),
+            ..GraphStats::default()
+        };
+
+        let all_edges = self
+            .outgoing
+            .values()
+            .flat_map(|edges| edges.iter().cloned())
+            .collect::<Vec<_>>();
+        for edge in all_edges {
+            self.stats.links += 1;
+            if let Some(node) = self.nodes.get_mut(&edge.source) {
+                node.outgoing_count += 1;
+            }
+
+            match &edge.target {
+                Some(target) if target == &edge.source => {
+                    self.stats.self_links += 1;
+                    self.self_links.push(edge.source.clone());
+                    if let Some(node) = self.nodes.get_mut(&edge.source) {
+                        node.self_link_count += 1;
+                    }
+                }
+                Some(target) => {
+                    self.stats.resolved_links += 1;
+                    self.backlinks
+                        .entry(target.clone())
+                        .or_default()
+                        .push(edge.source.clone());
+                    if let Some(node) = self.nodes.get_mut(target) {
+                        node.incoming_count += 1;
+                    }
+                }
+                None => {
+                    self.stats.broken_links += 1;
+                    self.broken_links.push(BrokenLink {
+                        source: edge.source.clone(),
+                        target_name: edge.target_name.clone(),
+                    });
+                    if let Some(node) = self.nodes.get_mut(&edge.source) {
+                        node.broken_link_count += 1;
+                    }
+                }
+            }
+        }
+        self.mark_orphans(&story.start_passage);
+    }
+
+    pub fn last_incremental_parse_count(&self) -> usize {
+        self.last_incremental_parse_count
     }
 
     pub fn broken_links(&self) -> &[BrokenLink] {

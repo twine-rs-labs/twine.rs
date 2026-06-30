@@ -12,11 +12,34 @@ export class TwineWasmProjectSession {
         wasm.__wbg_twinewasmprojectsession_free(ptr, 0);
     }
     /**
-     * @param {any} command
+     * @param {number} revision
      * @returns {any}
      */
-    apply(command) {
-        const ret = wasm.twinewasmprojectsession_apply(this.__wbg_ptr, command);
+    acknowledge_saved(revision) {
+        const ret = wasm.twinewasmprojectsession_acknowledge_saved(this.__wbg_ptr, revision);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @param {any} command
+     * @param {boolean} record_history
+     * @returns {any}
+     */
+    apply(command, record_history) {
+        const ret = wasm.twinewasmprojectsession_apply(this.__wbg_ptr, command, record_history);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @param {any} delta
+     * @returns {any}
+     */
+    apply_external_delta(delta) {
+        const ret = wasm.twinewasmprojectsession_apply_external_delta(this.__wbg_ptr, delta);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -104,6 +127,16 @@ export class TwineWasmProjectSession {
      */
     snapshot() {
         const ret = wasm.twinewasmprojectsession_snapshot(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @returns {any}
+     */
+    status() {
+        const ret = wasm.twinewasmprojectsession_status(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

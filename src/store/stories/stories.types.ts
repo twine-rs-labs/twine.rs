@@ -183,7 +183,7 @@ export interface DeletePassagesAction {
 	storyId: string;
 }
 
-export type StoriesAction =
+export type CorePatchStoryAction =
 	| InitStoriesAction
 	| RepairStoriesAction
 	| CreateStoryAction
@@ -196,9 +196,21 @@ export type StoriesAction =
 	| DeletePassageAction
 	| DeletePassagesAction;
 
-export type StoriesDispatch = React.Dispatch<
-	StoriesAction | Thunk<StoriesState, StoriesAction>
->;
+export interface ApplyCorePatchBatchAction {
+	actions: CorePatchStoryAction[];
+	revision?: number;
+	sessionId?: string;
+	storyIds?: string[];
+	type: 'applyCorePatchBatch';
+}
+
+export type StoriesAction = CorePatchStoryAction | ApplyCorePatchBatchAction;
+
+export type StoriesActionOrThunk =
+	| StoriesAction
+	| Thunk<StoriesState, StoriesAction>;
+
+export type StoriesDispatch = React.Dispatch<StoriesActionOrThunk>;
 
 export interface StorySearchFlags {
 	includePassageNames?: boolean;

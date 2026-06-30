@@ -96,6 +96,7 @@ export interface NativeProjectFolderResult {
 }
 
 export interface NativeProjectAssetWriteResult {
+	effectToken?: string;
 	sourcePath: string;
 	targetPath: string;
 }
@@ -141,9 +142,7 @@ export interface NativeAddLocalStoryFormatResult {
 
 export interface TwineElectronWindow extends Window {
 	twineElectron?: {
-		addLocalStoryFormat(): Promise<
-			NativeAddLocalStoryFormatResult | undefined
-		>;
+		addLocalStoryFormat(): Promise<NativeAddLocalStoryFormatResult | undefined>;
 		chooseAssetFile(defaultPath?: string): Promise<string | undefined>;
 		chooseStoryLibraryFolder(): Promise<string | undefined>;
 		consumeCommandLineOpenRequests(): Promise<NativeCommandLineOpenResult>;
@@ -160,7 +159,15 @@ export interface TwineElectronWindow extends Window {
 			story: Story,
 			preferredParent?: string
 		): Promise<NativeProjectFolderResult>;
-		deleteProjectAsset(rootPath: string, path: string): Promise<void>;
+		deleteProjectAsset(
+			rootPath: string,
+			path: string
+		): Promise<NativeProjectAssetWriteResult>;
+		applyProjectAssetEffect(
+			effectToken: string,
+			direction: 'redo' | 'undo'
+		): Promise<void>;
+		discardProjectAssetEffect(effectToken: string): Promise<void>;
 		deleteProjectFolder(rootPath: string): Promise<void>;
 		discardProjectImport(importId: string): Promise<void>;
 		deleteStory(story: Story): void;

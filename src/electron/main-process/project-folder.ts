@@ -1,4 +1,5 @@
 import {FSWatcher, watch} from 'fs';
+import {createHash} from 'crypto';
 import {tmpdir} from 'os';
 import {dialog} from 'electron';
 import {v4 as uuid} from '@lukeed/uuid';
@@ -50,8 +51,20 @@ export interface NativeProjectFolderResult {
 }
 
 export interface NativeProjectAssetWriteResult {
+	effectToken?: string;
 	sourcePath: string;
 	targetPath: string;
+}
+
+interface NativeAssetEffectJournal {
+	afterFingerprint?: string;
+	beforeFingerprint?: string;
+	kind: 'delete' | 'import' | 'rename' | 'replace';
+	newPath?: string;
+	oldPath?: string;
+	rootPath: string;
+	targetPath: string;
+	token: string;
 }
 
 export interface NativeProjectImportAsset {
@@ -2209,6 +2222,180 @@ export async function listProjectAssets(rootPath: string) {
 	return assets.sort((left, right) => left.path.localeCompare(right.path));
 }
 
+function assetEffectJournalRoot() {
+	try {
+		return join(getStoryDirectoryPath(), '.twine-rs-asset-journal');
+	} catch {
+		return join(tmpdir(), 'twine-rs-asset-journal');
+	}
+}
+
+function assetEffectDirectory(token: string) {
+	if (!/^[a-zA-Z0-9-]+$/.test(token)) {
+		throw new Error('Invalid asset effect token.');
+	}
+
+	return join(assetEffectJournalRoot(), token);
+}
+
+async function fileFingerprint(path: string) {
+	try {
+		const data = await readFile(path);
+
+		return createHash('sha256').update(data).digest('hex');
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return undefined;
+		}
+		throw error;
+	}
+}
+
+async function writeAssetEffectJournal(journal: NativeAssetEffectJournal) {
+	const directory = assetEffectDirectory(journal.token);
+
+	await mkdirp(directory);
+	await writeFile(
+		join(directory, 'effect.json'),
+		JSON.stringify(journal, null, 2),
+		'utf8'
+	);
+}
+
+async function readAssetEffectJournal(token: string) {
+	return readJson(
+		join(assetEffectDirectory(token), 'effect.json')
+	) as Promise<NativeAssetEffectJournal>;
+}
+
+async function requireFingerprint(
+	path: string,
+	expected: string | undefined,
+	description: string
+) {
+	const current = await fileFingerprint(path);
+
+	if (current !== expected) {
+		throw new Error(
+			`${description} changed outside Twine; refusing to overwrite it.`
+		);
+	}
+}
+
+async function prepareAssetEffect(
+	journal: Omit<NativeAssetEffectJournal, 'token'>,
+	options: {backupPath?: string; forwardPath?: string} = {}
+) {
+	const token = uuid();
+	const directory = assetEffectDirectory(token);
+	const prepared = {...journal, token};
+
+	await mkdirp(directory);
+	if (options.backupPath && (await fileFingerprint(options.backupPath))) {
+		await copy(options.backupPath, join(directory, 'before.bin'));
+	}
+	if (options.forwardPath) {
+		await copy(options.forwardPath, join(directory, 'after.bin'));
+	}
+	await writeAssetEffectJournal(prepared);
+	return prepared;
+}
+
+export async function applyProjectAssetEffect(
+	effectToken: string,
+	direction: 'redo' | 'undo'
+) {
+	const journal = await readAssetEffectJournal(effectToken);
+	const directory = assetEffectDirectory(effectToken);
+	const target = safeProjectAssetPath(journal.rootPath, journal.targetPath);
+	const oldAsset = journal.oldPath
+		? safeProjectAssetPath(journal.rootPath, journal.oldPath)
+		: undefined;
+	const newAsset = journal.newPath
+		? safeProjectAssetPath(journal.rootPath, journal.newPath)
+		: undefined;
+
+	if (direction === 'undo') {
+		if (journal.kind === 'delete') {
+			await requireFingerprint(
+				target.absolutePath,
+				undefined,
+				journal.targetPath
+			);
+			await mkdirp(dirname(target.absolutePath));
+			await copy(join(directory, 'before.bin'), target.absolutePath);
+		} else if (journal.kind === 'rename' && oldAsset && newAsset) {
+			await requireFingerprint(
+				newAsset.absolutePath,
+				journal.afterFingerprint,
+				journal.newPath!
+			);
+			await requireFingerprint(
+				oldAsset.absolutePath,
+				undefined,
+				journal.oldPath!
+			);
+			await mkdirp(dirname(oldAsset.absolutePath));
+			await move(newAsset.absolutePath, oldAsset.absolutePath);
+		} else {
+			await requireFingerprint(
+				target.absolutePath,
+				journal.afterFingerprint,
+				journal.targetPath
+			);
+			const backup = join(directory, 'before.bin');
+
+			if (journal.beforeFingerprint) {
+				await copy(backup, target.absolutePath, {overwrite: true});
+			} else {
+				await remove(target.absolutePath);
+			}
+		}
+	} else if (journal.kind === 'delete') {
+		await requireFingerprint(
+			target.absolutePath,
+			journal.beforeFingerprint,
+			journal.targetPath
+		);
+		await remove(target.absolutePath);
+	} else if (journal.kind === 'rename' && oldAsset && newAsset) {
+		await requireFingerprint(
+			oldAsset.absolutePath,
+			journal.afterFingerprint,
+			journal.oldPath!
+		);
+		await requireFingerprint(
+			newAsset.absolutePath,
+			undefined,
+			journal.newPath!
+		);
+		await mkdirp(dirname(newAsset.absolutePath));
+		await move(oldAsset.absolutePath, newAsset.absolutePath);
+	} else {
+		await requireFingerprint(
+			target.absolutePath,
+			journal.beforeFingerprint,
+			journal.targetPath
+		);
+		await mkdirp(dirname(target.absolutePath));
+		await copy(join(directory, 'after.bin'), target.absolutePath, {
+			overwrite: true
+		});
+	}
+
+	await refreshProjectSessionBaseline(journal.rootPath);
+}
+
+export async function discardProjectAssetEffect(effectToken: string) {
+	await remove(assetEffectDirectory(effectToken));
+}
+
+export async function cleanupStaleProjectAssetEffects() {
+	// Undo history is intentionally session-only. Any journal present during a
+	// new main-process startup cannot have a live Rust history entry.
+	await remove(assetEffectJournalRoot());
+}
+
 export async function copyAssetToProject(
 	rootPath: string,
 	sourcePath: string
@@ -2216,12 +2403,35 @@ export async function copyAssetToProject(
 	const filename = basename(sourcePath);
 	const targetPath = `assets/${filename}`;
 	const destinationPath = join(rootPath, targetPath);
+	const beforeFingerprint = await fileFingerprint(destinationPath);
 
-	await mkdirp(join(rootPath, 'assets'));
-	await copy(sourcePath, destinationPath, {overwrite: true});
+	if (beforeFingerprint) {
+		throw new Error(`${targetPath} already exists.`);
+	}
+	const journal = await prepareAssetEffect(
+		{
+			beforeFingerprint,
+			kind: 'import',
+			rootPath,
+			targetPath
+		},
+		{forwardPath: sourcePath}
+	);
+
+	try {
+		await mkdirp(join(rootPath, 'assets'));
+		await copy(sourcePath, destinationPath, {overwrite: true});
+		journal.afterFingerprint = await fileFingerprint(destinationPath);
+		await writeAssetEffectJournal(journal);
+	} catch (error) {
+		await remove(destinationPath).catch(() => undefined);
+		await discardProjectAssetEffect(journal.token);
+		throw error;
+	}
 	await refreshProjectSessionBaseline(rootPath);
 
 	return {
+		effectToken: journal.token,
 		sourcePath: destinationPath,
 		targetPath
 	};
@@ -2234,12 +2444,41 @@ export async function renameProjectAsset(
 ): Promise<NativeProjectAssetWriteResult> {
 	const oldAsset = safeProjectAssetPath(rootPath, oldPath);
 	const newAsset = safeProjectAssetPath(rootPath, newPath);
+	const beforeFingerprint = await fileFingerprint(oldAsset.absolutePath);
 
-	await mkdirp(dirname(newAsset.absolutePath));
-	await move(oldAsset.absolutePath, newAsset.absolutePath, {overwrite: true});
+	if (!beforeFingerprint) {
+		throw new Error(`${oldAsset.projectPath} does not exist.`);
+	}
+	if (await fileFingerprint(newAsset.absolutePath)) {
+		throw new Error(`${newAsset.projectPath} already exists.`);
+	}
+	const journal = await prepareAssetEffect({
+		afterFingerprint: beforeFingerprint,
+		beforeFingerprint,
+		kind: 'rename',
+		newPath: newAsset.projectPath,
+		oldPath: oldAsset.projectPath,
+		rootPath,
+		targetPath: newAsset.projectPath
+	});
+
+	try {
+		await mkdirp(dirname(newAsset.absolutePath));
+		await move(oldAsset.absolutePath, newAsset.absolutePath);
+		await writeAssetEffectJournal(journal);
+	} catch (error) {
+		if (await fileFingerprint(newAsset.absolutePath).catch(() => undefined)) {
+			await move(newAsset.absolutePath, oldAsset.absolutePath, {
+				overwrite: true
+			}).catch(() => undefined);
+		}
+		await discardProjectAssetEffect(journal.token);
+		throw error;
+	}
 	await refreshProjectSessionBaseline(rootPath);
 
 	return {
+		effectToken: journal.token,
 		sourcePath: newAsset.absolutePath,
 		targetPath: newAsset.projectPath
 	};
@@ -2251,22 +2490,81 @@ export async function replaceProjectAsset(
 	sourcePath: string
 ): Promise<NativeProjectAssetWriteResult> {
 	const asset = safeProjectAssetPath(rootPath, path);
+	const beforeFingerprint = await fileFingerprint(asset.absolutePath);
 
-	await mkdirp(dirname(asset.absolutePath));
-	await copy(sourcePath, asset.absolutePath, {overwrite: true});
+	if (!beforeFingerprint) {
+		throw new Error(`${asset.projectPath} does not exist.`);
+	}
+	const journal = await prepareAssetEffect(
+		{
+			beforeFingerprint,
+			kind: 'replace',
+			rootPath,
+			targetPath: asset.projectPath
+		},
+		{backupPath: asset.absolutePath, forwardPath: sourcePath}
+	);
+
+	try {
+		await mkdirp(dirname(asset.absolutePath));
+		await copy(sourcePath, asset.absolutePath, {overwrite: true});
+		journal.afterFingerprint = await fileFingerprint(asset.absolutePath);
+		await writeAssetEffectJournal(journal);
+	} catch (error) {
+		await copy(
+			join(assetEffectDirectory(journal.token), 'before.bin'),
+			asset.absolutePath,
+			{overwrite: true}
+		).catch(() => undefined);
+		await discardProjectAssetEffect(journal.token);
+		throw error;
+	}
 	await refreshProjectSessionBaseline(rootPath);
 
 	return {
+		effectToken: journal.token,
 		sourcePath: asset.absolutePath,
 		targetPath: asset.projectPath
 	};
 }
 
-export async function deleteProjectAsset(rootPath: string, path: string) {
+export async function deleteProjectAsset(
+	rootPath: string,
+	path: string
+): Promise<NativeProjectAssetWriteResult> {
 	const asset = safeProjectAssetPath(rootPath, path);
+	const beforeFingerprint = await fileFingerprint(asset.absolutePath);
 
-	await remove(asset.absolutePath);
+	if (!beforeFingerprint) {
+		throw new Error(`${asset.projectPath} does not exist.`);
+	}
+	const journal = await prepareAssetEffect(
+		{
+			beforeFingerprint,
+			kind: 'delete',
+			rootPath,
+			targetPath: asset.projectPath
+		},
+		{backupPath: asset.absolutePath}
+	);
+	try {
+		await remove(asset.absolutePath);
+		await writeAssetEffectJournal(journal);
+	} catch (error) {
+		await copy(
+			join(assetEffectDirectory(journal.token), 'before.bin'),
+			asset.absolutePath,
+			{overwrite: true}
+		).catch(() => undefined);
+		await discardProjectAssetEffect(journal.token);
+		throw error;
+	}
 	await refreshProjectSessionBaseline(rootPath);
+	return {
+		effectToken: journal.token,
+		sourcePath: asset.absolutePath,
+		targetPath: asset.projectPath
+	};
 }
 
 export async function deleteProjectFolder(rootPath: string) {

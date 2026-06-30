@@ -1,9 +1,19 @@
 import * as React from 'react';
 
 export type StorySaveStatus =
-	| {kind: 'error'; error: Error}
+	| {
+			kind: 'error';
+			error: Error;
+			revision?: number;
+			sessionId?: string;
+	  }
 	| {kind: 'idle'}
-	| {kind: 'saved'; savedAt: number};
+	| {
+			kind: 'saved';
+			revision?: number;
+			savedAt: number;
+			sessionId?: string;
+	  };
 
 let currentStatus: StorySaveStatus = {kind: 'idle'};
 const listeners = new Set<(status: StorySaveStatus) => void>();

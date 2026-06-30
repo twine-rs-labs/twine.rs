@@ -10,9 +10,9 @@ import {
 	selectPassage,
 	selectPassagesById,
 	selectPassagesInRect,
-	Story
+	Story,
+	useStoriesContext
 } from '../../store/stories';
-import {useUndoableStoriesContext} from '../../store/undoable-stories';
 import {Point, Rect} from '../../util/geometry';
 import {snapToGraphGrid} from './graph-grid';
 
@@ -21,13 +21,12 @@ export function usePassageChangeHandlers(story: Story) {
 		() => story.passages.filter(passage => passage.selected),
 		[story.passages]
 	);
-	const {dispatch: undoableStoriesDispatch} = useUndoableStoriesContext();
+	const {dispatch: storiesDispatch} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
 
 	const handleDeselectPassage = React.useCallback(
-		(passage: Passage) =>
-			undoableStoriesDispatch(deselectPassage(story, passage)),
-		[story, undoableStoriesDispatch]
+		(passage: Passage) => storiesDispatch(deselectPassage(story, passage)),
+		[story, storiesDispatch]
 	);
 
 	const handleCreatePassage = React.useCallback(
@@ -81,13 +80,13 @@ export function usePassageChangeHandlers(story: Story) {
 
 	const handleSelectPassage = React.useCallback(
 		(passage: Passage, exclusive: boolean) =>
-			undoableStoriesDispatch(selectPassage(story, passage, exclusive)),
-		[story, undoableStoriesDispatch]
+			storiesDispatch(selectPassage(story, passage, exclusive)),
+		[story, storiesDispatch]
 	);
 
 	const handleSelectPassageIds = React.useCallback(
 		(passageIds: string[], additive: boolean) => {
-			undoableStoriesDispatch(
+			storiesDispatch(
 				selectPassagesById(
 					story,
 					passageIds,
@@ -95,7 +94,7 @@ export function usePassageChangeHandlers(story: Story) {
 				)
 			);
 		},
-		[selectedPassages, story, undoableStoriesDispatch]
+		[selectedPassages, story, storiesDispatch]
 	);
 
 	const handleSelectRect = React.useCallback(
@@ -110,7 +109,7 @@ export function usePassageChangeHandlers(story: Story) {
 			};
 
 			// This should not be undoable.
-			undoableStoriesDispatch(
+			storiesDispatch(
 				selectPassagesInRect(
 					story,
 					logicalRect,
@@ -118,7 +117,7 @@ export function usePassageChangeHandlers(story: Story) {
 				)
 			);
 		},
-		[selectedPassages, story, undoableStoriesDispatch]
+		[selectedPassages, story, storiesDispatch]
 	);
 
 	return {

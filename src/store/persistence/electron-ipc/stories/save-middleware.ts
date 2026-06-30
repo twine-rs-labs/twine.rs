@@ -18,6 +18,61 @@ import {saveStory} from './save-story';
 
 let lastState: StoriesState;
 
+interface QueuedSave {
+	reject: (error: unknown) => void;
+	resolve: () => void;
+	task: () => Promise<void>;
+}
+
+const activeSessionSaves = new Set<string>();
+const pendingSessionSaves = new Map<string, QueuedSave[]>();
+
+function runSessionSave(sessionId: string, save: QueuedSave) {
+	activeSessionSaves.add(sessionId);
+	void save
+		.task()
+		.then(save.resolve, save.reject)
+		.finally(() => {
+			const pending = pendingSessionSaves.get(sessionId) ?? [];
+			const next = pending.pop();
+
+			pendingSessionSaves.delete(sessionId);
+			if (next) {
+				const superseded = pending;
+
+				runSessionSave(sessionId, {
+					reject: error => {
+						next.reject(error);
+						superseded.forEach(save => save.reject(error));
+					},
+					resolve: () => {
+						next.resolve();
+						superseded.forEach(save => save.resolve());
+					},
+					task: next.task
+				});
+			} else {
+				activeSessionSaves.delete(sessionId);
+			}
+		});
+}
+
+function queueSessionSave(sessionId: string, task: () => Promise<void>) {
+	return new Promise<void>((resolve, reject) => {
+		const save = {reject, resolve, task};
+
+		if (!activeSessionSaves.has(sessionId)) {
+			runSessionSave(sessionId, save);
+			return;
+		}
+
+		pendingSessionSaves.set(sessionId, [
+			...(pendingSessionSaves.get(sessionId) ?? []),
+			save
+		]);
+	});
+}
+
 function isNativeProjectStory(storyId: string) {
 	const metadata = loadProjectMetadata(storyId);
 
@@ -41,6 +96,7 @@ export function saveMiddleware(
 	formats: StoryFormatsState
 ) {
 	const {twineElectron} = window as TwineElectronWindow;
+	let completion: Promise<void> | undefined;
 	let persisted = false;
 
 	if (!twineElectron) {
@@ -48,6 +104,54 @@ export function saveMiddleware(
 	}
 
 	switch (action.type) {
+		case 'applyCorePatchBatch': {
+			const saves: Array<() => Promise<void>> = [];
+			const touchedStoryIds = new Set(
+				action.actions.flatMap(action =>
+					'storyId' in action ? [action.storyId] : []
+				)
+			);
+			const deletedStoryIds = new Set(
+				action.actions.flatMap(action =>
+					action.type === 'deleteStory' ? [action.storyId] : []
+				)
+			);
+
+			for (const storyId of deletedStoryIds) {
+				const deleted = lastState?.find(story => story.id === storyId);
+
+				if (deleted) {
+					saves.push(async () => {
+						await twineElectron.deleteStory(deleted);
+					});
+					persisted = true;
+				}
+			}
+
+			for (const storyId of touchedStoryIds) {
+				if (deletedStoryIds.has(storyId)) {
+					continue;
+				}
+
+				const story = state.find(story => story.id === storyId);
+
+				if (story) {
+					saves.push(() => saveStory(story, formats));
+					persisted = true;
+				}
+			}
+			const saveAll = async () => {
+				for (const save of saves) {
+					await save();
+				}
+			};
+
+			completion = action.sessionId
+				? queueSessionSave(action.sessionId, saveAll)
+				: saveAll();
+			break;
+		}
+
 		case 'init':
 		case 'repair':
 			// We take no action here on a repair action. This is to prevent messing up a
@@ -141,5 +245,5 @@ export function saveMiddleware(
 	}
 
 	lastState = [...state];
-	return persisted;
+	return completion ? {completion, persisted} : persisted;
 }
