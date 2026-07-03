@@ -69,7 +69,9 @@ Builds the renderer and Electron main process, then launches the desktop app.
 npm run start:docs
 ```
 
-Serves the documentation from `docs/en`.
+Serves the inherited Twine compatibility manual from `docs/en`. The current
+twine.rs architecture, status, roadmap, and product documentation starts at
+[`docs/README.md`](docs/README.md).
 
 ## Build and Check
 
@@ -126,7 +128,8 @@ cargo run -p twine_cli -- export /tmp/example.twine twee /tmp/example.twee
 - `src/`: React UI, Electron shell, store integration, and TypeScript bridge code.
 - `crates/`: Rust model, parser, graph, core, search, store, export, and CLI crates.
 - `benchmarks/`: generated story fixtures and benchmark helpers.
-- `docs/`: user docs, design references, and upstream/reference material.
+- `docs/`: current architecture, status, roadmap, product specifications,
+  design artifacts, user documentation, upstream material, and archives.
 - `public/locales/`: app localization files.
 
 ## License
@@ -134,4 +137,6 @@ cargo run -p twine_cli -- export /tmp/example.twine twee /tmp/example.twee
 The upstream TwineJS code is licensed under GPL-3.0. This repository preserves
 that license; see `LICENSE`.
 
-Original upstream README: `docs/reference/UPSTREAM_TWINEJS_README.md`
+Documentation index: [`docs/README.md`](docs/README.md)
+
+Original upstream README: [`docs/upstream/README.md`](docs/upstream/README.md)

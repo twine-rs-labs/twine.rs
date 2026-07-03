@@ -1,5 +1,11 @@
 # Hello!
 
+> **Documentation scope:** this mdBook is predominantly the upstream Twine
+> manual retained for compatibility and general authoring concepts. It is not
+> yet an authoritative guide to the twine.rs project-folder workbench. See the
+> [twine.rs documentation map](../../README.md) and
+> [user-documentation status](../../user/README.md).
+
 This is a reference guide for the Twine editor. It describes Twine's user
 interface and introduces the larger ecosystem that surrounds it. If you've never
 built anything with Twine before, this will guide through the basics and point
@@ -49,7 +55,7 @@ to work around these issues.
 
 ## See Also...
 
-In order to use Twine most effectively, you should spend some time reading the documentation for the story format you're using. ([Wait, what's a story format?](getting-started/basic-concepts.html#story-formats)) 
+In order to use Twine most effectively, you should spend some time reading the documentation for the story format you're using. ([Wait, what's a story format?](getting-started/basic-concepts.html#story-formats))
 
 - [Chapbook](http://klembot.github.io/chapbook/guide/)
 - [Harlowe](https://twine2.neocities.org)

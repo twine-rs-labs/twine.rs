@@ -80,7 +80,7 @@ interface ResolvedBuffer {
  * JavaScript, or the story Stylesheet). The titlebar carries ONLY per-buffer
  * controls — name, dirty dot, find, close. Story-level chrome (format,
  * validate, Open editor) lives once on the dock chrome above the grid, never
- * here. See WORKBENCH_INTEGRATION.md.
+ * here. See docs/product/workbench.md.
  */
 export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	const {

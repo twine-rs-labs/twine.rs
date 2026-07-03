@@ -70,10 +70,8 @@ Export a project:
 cargo run -p twine_cli -- export /tmp/example.twine twee /tmp/example.twee
 ```
 
-The first Rust/WASM interop milestone can now build on the M0 core: import
-fixtures into the canonical project layout, expose graph indexing to
-TypeScript, compare it with the current `passageConnections()` helper, and
-benchmark it against generated fixtures.
-
-See `docs/reference/RUST_CORE_STYLE_GUIDE.md` for the Rust core conventions that
-should guide the remaining milestone work.
+See
+[`../docs/architecture/rust-core-style-guide.md`](../docs/architecture/rust-core-style-guide.md)
+for the Rust core conventions and
+[`../docs/architecture/overview.md`](../docs/architecture/overview.md) for the
+current runtime boundaries.

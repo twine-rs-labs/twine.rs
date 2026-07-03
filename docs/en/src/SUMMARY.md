@@ -1,6 +1,6 @@
 # Summary
 
-- [Introduction](README.md)
+- [About This Compatibility Manual](README.md)
 - [Getting Started](getting-started/index.md)
   - [Installing Twine](getting-started/installing.md)
   - [Basic Concepts](getting-started/basic-concepts.md)

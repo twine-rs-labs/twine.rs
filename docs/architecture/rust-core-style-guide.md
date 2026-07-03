@@ -1,5 +1,10 @@
 # twine.rs Rust Core Style Guide
 
+Status: current
+Owner: Rust core maintainers
+Last verified: 2026-07-04
+Source of truth: Rust workspace conventions
+
 This guide defines the house style for the Rust core. It is intentionally small:
 follow Rust defaults, keep Twine semantics explicit, and make every milestone
 harder to break than the last one.
@@ -94,7 +99,7 @@ Reference spine:
 - CLI behavior can stay smoke-tested in M0, but command parsing should move to
   stronger integration tests before it becomes a user-facing contract.
 
-## Milestone Readiness
+## Integration readiness
 
 - M1 Rust/WASM work should expose typed DTOs generated from the Rust boundary,
   not hand-maintained TypeScript shadows.
@@ -103,10 +108,9 @@ Reference spine:
   mutate canonical story state ad hoc in the UI.
 - M4+ story-format work should describe capabilities explicitly and keep legacy
   JavaScript formats compatible.
-- The D-series UI spine ([`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md))
-  is bound by these same contracts: design-system screens mutate the model only
-  through generated `StoryCommand`s and read only through query DTOs — never
-  parsing or computing facts in the UI. D5 (graph mode) consumes the generated
-  `CoreGraphProjection` / `queryGraphProjection` contract; D8 (preview/debug)
-  consumes build packages, diagnostics, and the asset inventory. Keep these
-  contracts UI-framework- and Tauri-agnostic in the core crates.
+- Product screens are bound by these same contracts: they mutate the model only
+  through generated `StoryCommand`s and read only through query DTOs, never by
+  parsing or computing canonical facts in the UI. Graph mode consumes the
+  generated `CoreGraphProjection`/`queryGraphProjection` contract; preview and
+  debug consume build packages, diagnostics, and the asset inventory. Keep
+  these contracts UI-framework- and desktop-host-agnostic in the core crates.

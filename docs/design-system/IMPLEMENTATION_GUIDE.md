@@ -1,9 +1,12 @@
 # twine.rs — Implementation Guide
 
-How to take this design system from these HTML/JSX artifacts into the real
-**Rust + Tauri** application. Pair this with `readme.md` (the design guide:
-content voice, visual foundations, iconography) — this file is the *engineering*
-handoff.
+Status: artifact integration reference
+Last verified: 2026-07-04
+
+How these HTML/JSX artifacts map into the real **React/Electron + Rust**
+application. Pair this with `readme.md` for content voice, visual foundations,
+and iconography. Current product behavior lives in
+[`../product/`](../product/README.md).
 
 - [1. What's in the package](#1-whats-in-the-package)
 - [2. Consuming the design system](#2-consuming-the-design-system)
@@ -61,21 +64,23 @@ Three things to load, in order:
 <link rel="stylesheet" href="styles.css" />
 
 <!-- 2. icon webfont (or use @tabler/icons-react in a real React app — see §4) -->
-<link rel="stylesheet"
-  href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+<link
+	rel="stylesheet"
+	href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css"
+/>
 
 <!-- 3. the component runtime, then read components off the namespace -->
 <script src="_ds_bundle.js"></script>
 <script>
-  const { Button, SegmentedControl, PassageNode, Badge, Panel } =
-    window.TwineRsDesignSystem_073217;
+	const {Button, SegmentedControl, PassageNode, Badge, Panel} =
+		window.TwineRsDesignSystem_073217;
 </script>
 ```
 
-In the **real Tauri app** you won't use `_ds_bundle.js` — you'll port the component
-source (`components/**/<Name>.jsx`) into your build (Vite + React, the same stack the
-legacy app uses) and import the CSS token files directly. The components depend only on
-React and the CSS custom properties; no other runtime deps.
+In the production app you do not use `_ds_bundle.js` — consume the production
+components under `src/components/design-system/` and use these artifact
+components as visual references. The production components depend on React and
+the design-system CSS custom properties.
 
 > **Namespace note:** `TwineRsDesignSystem_073217` is the compiler-generated global for
 > these preview cards. In your app you'll `import { Button } from '@twine/ui'` instead —
@@ -85,19 +90,23 @@ React and the CSS custom properties; no other runtime deps.
 
 ## 3. Fonts
 
-| Role | Family | Use |
-|---|---|---|
-| Display | **Space Grotesk** | brand, screen titles, mode labels (`--font-display`) |
-| UI | **Hanken Grotesk** | all interface text, 13px base (`--font-ui`) |
-| Mono | **JetBrains Mono** | source, paths, IDs, numeric data (`--font-mono`) |
+| Role    | Family             | Use                                                  |
+| ------- | ------------------ | ---------------------------------------------------- |
+| Display | **Space Grotesk**  | brand, screen titles, mode labels (`--font-display`) |
+| UI      | **Hanken Grotesk** | all interface text, 13px base (`--font-ui`)          |
+| Mono    | **JetBrains Mono** | source, paths, IDs, numeric data (`--font-mono`)     |
 
 These replace the legacy **Nunito Light** for a sharper, more professional feel
 (confirmed with the team). The previews and app self-host the fonts from local `woff2`
 files through `tokens/typography.css`:
 
 ```css
-@font-face { font-family: 'Space Grotesk'; src: url('./fonts/SpaceGrotesk-Medium.woff2') format('woff2');
-  font-weight: 500; font-display: swap; }
+@font-face {
+	font-family: 'Space Grotesk';
+	src: url('./fonts/SpaceGrotesk-Medium.woff2') format('woff2');
+	font-weight: 500;
+	font-display: swap;
+}
 /* …repeat for each weight/family… */
 ```
 
@@ -158,18 +167,18 @@ raised surfaces); `--glow-focus` (2px blue ring); `--glow-accent`.
 Read each component's `.prompt.md` for examples and its `.d.ts` for the full prop contract.
 Quick map:
 
-| Component | Group | Key props |
-|---|---|---|
-| `Button` | forms | `variant` (primary/default/ghost/danger), `size`, `icon`, `iconRight`, `loading`, `block` |
-| `IconButton` | forms | `icon`, `label` (required — tooltip + a11y), `active`, `solid`, `size` |
-| `Input` | forms | `label`, `icon`, `kbd`, `invalid`, `mono`, `block` + native input attrs |
-| `Select` | forms | `options` (string\|{value,label}), `value`, `onChange`, `size`, `block` |
-| `SegmentedControl` | forms | `options` ({value,label,icon}), `value`, `onChange` — the Text\|Graph\|Split switch |
-| `Switch` / `Checkbox` | forms | `checked`, `onChange`, `label`; Checkbox adds `indeterminate` |
-| `Badge` | feedback | `tone` (9 semantic roles), `icon`, `dot`, `mono` |
-| `Tag` | feedback | `color` (named hue/CSS), `onRemove`, `onClick`, `hash` |
-| `PassageNode` | data | `title`, `excerpt`, `tags[]`, `links`, `broken`, `start`, `selected`, `accent` |
-| `Panel` | data | `title`, `icon`, `count`, `actions`, `pad`, `flush` — dock/inspector container |
+| Component             | Group    | Key props                                                                                 |
+| --------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| `Button`              | forms    | `variant` (primary/default/ghost/danger), `size`, `icon`, `iconRight`, `loading`, `block` |
+| `IconButton`          | forms    | `icon`, `label` (required — tooltip + a11y), `active`, `solid`, `size`                    |
+| `Input`               | forms    | `label`, `icon`, `kbd`, `invalid`, `mono`, `block` + native input attrs                   |
+| `Select`              | forms    | `options` (string\|{value,label}), `value`, `onChange`, `size`, `block`                   |
+| `SegmentedControl`    | forms    | `options` ({value,label,icon}), `value`, `onChange` — the Text\|Graph\|Split switch       |
+| `Switch` / `Checkbox` | forms    | `checked`, `onChange`, `label`; Checkbox adds `indeterminate`                             |
+| `Badge`               | feedback | `tone` (9 semantic roles), `icon`, `dot`, `mono`                                          |
+| `Tag`                 | feedback | `color` (named hue/CSS), `onRemove`, `onClick`, `hash`                                    |
+| `PassageNode`         | data     | `title`, `excerpt`, `tags[]`, `links`, `broken`, `start`, `selected`, `accent`            |
+| `Panel`               | data     | `title`, `icon`, `count`, `actions`, `pad`, `flush` — dock/inspector container            |
 
 All are self-contained: React + CSS custom properties only. Each injects its own scoped
 stylesheet once per document (guard by `id`), so they're safe to drop anywhere.
@@ -216,21 +225,21 @@ Its structure, top to bottom:
 Each screen maps to a UI-document section and the crates it leans on
 (`twine_model/parse/graph/search/store/export`).
 
-| Screen | UI doc section | Backed by |
-|---|---|---|
-| **Launcher** | Project Launcher | `twine_store` (project discovery, health, backups), Git probe |
-| **Workbench** | Main Workspace Shell + Text/Graph/Split | all crates; patch stream + projections |
-| **Text mode** | Text Mode | `twine_parse` (highlight, links), `twine_graph` (backlinks), diagnostics |
-| **Graph mode** | Graph Mode | `twine_graph` + viewport/spatial index; canvas edge render |
-| **Contents** | Contents Navigator | `twine_search` indexes (passages/tags/vars/assets), problem groups |
-| **Diagnostics** | Diagnostics | `twine_graph` + format validators; quick-fix command application |
-| **Assets** | Asset Manager | `twine_store` (asset files), reference scan, missing/unused detection |
-| **Story Formats** | Story Formats | format manifest loader + typed capability flags; custom-fork health |
-| **New Project / Import** | New Project + Import/Migration Review | `twine_store` scaffolding; `twine_parse` import; non-destructive review |
-| **Build / Export** | Build, Export & Publish | `twine_export` targets; validate-before-export; streaming logs |
-| **Play / Test** | Play, Test & Debug | runtime harness; var/history/console attached to source & graph |
-| **Settings** | Settings | prefs store; surfaces accessibility (reduced motion / high contrast) |
-| **Command Palette** | Command Palette | unifies commands/passages/files/tags across modes (⌘K) |
+| Screen                   | UI doc section                          | Backed by                                                                |
+| ------------------------ | --------------------------------------- | ------------------------------------------------------------------------ |
+| **Launcher**             | Project Launcher                        | `twine_store` (project discovery, health, backups), Git probe            |
+| **Workbench**            | Main Workspace Shell + Text/Graph/Split | all crates; patch stream + projections                                   |
+| **Text mode**            | Text Mode                               | `twine_parse` (highlight, links), `twine_graph` (backlinks), diagnostics |
+| **Graph mode**           | Graph Mode                              | `twine_graph` + viewport/spatial index; canvas edge render               |
+| **Contents**             | Contents Navigator                      | `twine_search` indexes (passages/tags/vars/assets), problem groups       |
+| **Diagnostics**          | Diagnostics                             | `twine_graph` + format validators; quick-fix command application         |
+| **Assets**               | Asset Manager                           | `twine_store` (asset files), reference scan, missing/unused detection    |
+| **Story Formats**        | Story Formats                           | format manifest loader + typed capability flags; custom-fork health      |
+| **New Project / Import** | New Project + Import/Migration Review   | `twine_store` scaffolding; `twine_parse` import; non-destructive review  |
+| **Build / Export**       | Build, Export & Publish                 | `twine_export` targets; validate-before-export; streaming logs           |
+| **Play / Test**          | Play, Test & Debug                      | runtime harness; var/history/console attached to source & graph          |
+| **Settings**             | Settings                                | prefs store; surfaces accessibility (reduced motion / high contrast)     |
+| **Command Palette**      | Command Palette                         | unifies commands/passages/files/tags across modes (⌘K)                   |
 
 Round-trip and conflict rules (UI doc "Round-Trip Rules" / "Conflict Handling") are product
 invariants the UI assumes: edits never reorder unrelated passages, unknown metadata is
@@ -253,7 +262,7 @@ preserved, and unresolved conflicts open a review panel rather than guessing.
 
 ---
 
-## 10. Production checklist
+## 10. Artifact adoption checklist
 
 - [ ] Port `components/**/<Name>.jsx` + token CSS into the app's Vite/React build.
 - [x] Self-host the three fonts; replace the Google `@import` in `tokens/typography.css`.
@@ -265,5 +274,6 @@ preserved, and unresolved conflicts open a review panel rather than guessing.
 - [ ] Add the `[data-contrast="high"]` scope and verify reduced-motion paths.
 - [ ] Keep the exact UI-document labels (Title-Case commands) — they're the product vocabulary.
 
-Questions, or want any screen taken further (denser 50k states, a wired command palette across
-every screen, or a real graph-virtualization prototype)? That's the natural next step.
+This checklist describes the original artifact-to-product adoption work. It is
+not the active product roadmap; unfinished work is tracked in
+[`../roadmap/product.md`](../roadmap/product.md).

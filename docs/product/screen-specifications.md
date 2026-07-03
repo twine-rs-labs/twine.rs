@@ -1,6 +1,16 @@
 # twine.rs UI Document
 
-This reference describes the target mode-native UI: Text, Graph, and Split workspaces over one Rust project model. The companion design system in `docs/design-system/` is the **UI source of truth**, and [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md) (the D-series) is the roadmap that installs it as the app's real UI. The screens described below map to D-milestones: Main Workspace Shell + Command Palette → **D2**; Project Launcher + New Project → **D3**; Text Mode → **D4**; Graph Mode + Split → **D5**; Contents, Diagnostics, Asset Manager, Story Formats → **D6**; Build/Export/Publish + Settings → **D7**; Play/Test/Debug → **D8**. D0–D2 (tokens, primitives, app shell) are prerequisites for every screen below; build in that order.
+Status: current product specification
+Owner: product/UI maintainers
+Last verified: 2026-07-04
+Source of truth: target screen behavior and vocabulary
+
+This specification describes the mode-native UI: Text, Graph, and Split
+workspaces over one Rust project model. The companion
+[`design-system`](../design-system/readme.md) is the visual source of truth.
+Implementation state belongs in [`../status/current.md`](../status/current.md);
+unfinished product work belongs in
+[`../roadmap/product.md`](../roadmap/product.md).
 
 ## Product Thesis
 
@@ -860,12 +870,13 @@ This matrix is the spot-check promise: current Twine options should either survi
 
 `twine.rs` should be designed for a native desktop app first, because the best version of the project-folder workflow needs real filesystem access. Browser mode can still exist, but it should be honest about limits and use browser-native storage/export patterns.
 
-Platform assumptions checked against current docs: Tauri has native filesystem and file/directory dialog plugins; browser File System API handles can expose user-picked files/directories in supporting browsers, while OPFS is origin-private storage and not a normal visible project folder.
+The Electron desktop host has native filesystem, watcher, and file/directory
+dialog access. Browser File System API handles can expose user-picked
+files/directories in supporting browsers, while OPFS is origin-private storage
+and not a normal visible project folder.
 
 Reference docs:
 
-- Tauri file system plugin: https://v2.tauri.app/plugin/file-system/
-- Tauri dialog plugin: https://v2.tauri.app/plugin/dialog/
 - MDN File System API: https://developer.mozilla.org/en-US/docs/Web/API/File_System_API
 - MDN `showOpenFilePicker()`: https://developer.mozilla.org/en-US/docs/Web/API/Window/showOpenFilePicker
 - MDN Origin Private File System: https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system
@@ -874,7 +885,7 @@ Reference docs:
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Project folders                  | Full native folder projects. User can `Open Folder`, `New Project in Folder`, `Reveal in Finder`, and point the app at any directory the OS permits. | Limited. Can use upload/import everywhere. Modern Chromium-like browsers may support File System Access API with permission prompts; otherwise use IndexedDB/OPFS plus download/export. |
 | Save model                       | Write changed files directly to disk. Save `twine.toml`, passage files, assets, scripts, styles, and optional `.twine/graph.json`.                   | Autosave to browser storage. Exports are downloads unless directory access permission exists. Must show storage quota and backup/export reminders.                                      |
-| Directory watching               | Rust/Tauri can watch files and folders, detect external edits, update indexes incrementally, and show merge UI.                                      | Usually unavailable. With File System Access handles, can poll or re-read on focus, but not reliable background watching.                                                               |
+| Directory watching               | Electron/native Rust watches files and folders, detects external edits, updates indexes incrementally, and shows merge UI.                           | Usually unavailable. With File System Access handles, can poll or re-read on focus, but not reliable background watching.                                                               |
 | External editor workflow         | Strong. `Open in External Editor`, detect changes, merge or reload, preserve cursor/source spans.                                                    | Weak. Browser can copy text or download files. Direct external editor integration is not reliable.                                                                                      |
 | Git/version control              | Strong. Detect Git repo, branch, dirty files, diffs, commits, ignores, external changes.                                                             | Usually unavailable unless integrated with a remote service or user imports/exports project archives.                                                                                   |
 | Asset folders                    | Strong. Assets live in `assets/`; app can import, rename, preview, detect missing/unused assets, and package output.                                 | Possible inside browser storage, but real file paths are constrained. Asset import/export needs explicit user actions or File System Access permission.                                 |
@@ -938,7 +949,13 @@ Shared labels/actions:
 - `Save Layout`
 - `Keep Text-Only`
 
-Important product decision: desktop mode should not be artificially limited to browser assumptions. The beautiful Rust/Tauri version is allowed to feel like a real local creative tool: point it at a directory, watch files, index in the background, write only changed files, track assets, talk to Git, launch external editors, and keep graph layout as optional project metadata. Browser mode should preserve the same conceptual model, but use browser-safe storage and explicit import/export boundaries.
+Important product decision: desktop mode should not be artificially limited to
+browser assumptions. The Electron/native Rust product is allowed to feel like a
+real local creative tool: point it at a directory, watch files, index in the
+background, write only changed files, track assets, talk to Git, launch external
+editors, and keep graph layout as optional project metadata. Browser mode should
+preserve the same conceptual model, but use browser-safe storage and explicit
+import/export boundaries.
 
 ## Source Layout Proposal
 
@@ -1270,7 +1287,7 @@ The “amazing Rust showcase” version:
 - Diagnostics feel compiler-grade.
 - Project files are clean enough for Git.
 - Assets are managed like real project resources.
-- Tauri app feels native, small, and fast.
+- Desktop app feels native and fast.
 
 ## Product North Star
 

@@ -1,10 +1,13 @@
 # Workbench overhaul — what changed, how it's wired, and the shortcuts
 
+> Completed migration record. Current behavior and interaction invariants live
+> in [`../../product/workbench.md`](../../product/workbench.md).
+
 This documents the rebuild of the story-edit workbench to match the
 `ui_kits/workbench/` reference. It is the integration record: every file that
 changed, why, how the pieces connect, and the rules to keep so it does not
 regress. The reference kit's own rationale lives in
-`ui_kits/workbench/WORKBENCH_GUIDE.md` — this file is the *applied* version for
+`ui_kits/workbench/WORKBENCH_GUIDE.md` — this file is the _applied_ version for
 the real `twine.rs` (TS/React + Rust core) code.
 
 ---
@@ -25,6 +28,7 @@ structure and the symptoms disappear together.
 ## 1. Graph navigation — `src/routes/story-edit/story-graph-panel.tsx`
 
 ### Before
+
 - Pan = native `scrollLeft/scrollTop` on `.story-edit-graph-viewport`
   (`overflow: auto`). Scrollbars grew/shrank; the grid was a fixed background
   that didn't move.
@@ -36,6 +40,7 @@ structure and the symptoms disappear together.
   the right" jiggle; edges appeared to redraw).
 
 ### After
+
 - **One transformed world.** Grid (screen-space layer), edges and nodes ride
   `.story-edit-graph-canvas` with
   `transform: translate(x,y) scale(k); transform-origin: 0 0`. The viewport is
@@ -61,6 +66,7 @@ structure and the symptoms disappear together.
   `readViewport()` no-ops until the element is actually laid out.
 
 ### Coordinate / state flow into the Rust core (unchanged plumbing)
+
 - Passage moves still persist via `movePassagesCommand(storyId, moves)` with
   logical `CoreRect`s. Drag delta is `screenDelta / view.k`, then snapped:
   `round(v / 25) * 25` (`snapToGraphGrid` from `graph-grid.ts`).
@@ -70,6 +76,7 @@ structure and the symptoms disappear together.
   viewport passed in is the transform-derived rect.
 
 ### Grid = snap (the "passages don't land on dots" fix)
+
 - `graph-grid.ts` is the single source of truth: `graphSnapGridSize = 25`,
   `graphSnapMajorGridSize = 125`, `snapToGraphGrid()`.
 - The grid is drawn screen-space on `.story-edit-graph-grid`; its
@@ -82,17 +89,19 @@ structure and the symptoms disappear together.
 ## 2. Editor dock — new files, replaces the per-panel repetition
 
 ### Before
+
 - `story-workspace-shell.tsx` rendered **N `StoryTextPanel`s** in a CSS grid.
   **Each** panel repeated the source tabs (Passage / JavaScript / Stylesheet),
   the `Passages › Name` breadcrumb, and the `Harlowe 3.3` format badge. JS/CSS
-  were *tabs inside every passage editor*. 3+ editors overlapped.
+  were _tabs inside every passage editor_. 3+ editors overlapped.
 
 ### After — `editor-dock.tsx`, `editor-window.tsx`, `editor-window-spec.ts`
+
 - **Open buffers are modeled as windows**, not passage ids:
   `EditorWindowSpec = {kind:'passage', passageId} | {kind:'script'} | {kind:'stylesheet'}`.
   `editorWindowId(spec)` is the stable React key / focus id
   (`passage:<id>` | `script` | `stylesheet`).
-- **`EditorDock`** renders story-level chrome **once** (an *Open editor*
+- **`EditorDock`** renders story-level chrome **once** (an _Open editor_
   dropdown → selected passage / Story JavaScript / Story Stylesheet, the format
   badge, and an issue count) above an **adaptive tiling grid**:
   - full-width dock: 1 → full, 2 → side-by-side, **4 → 2×2**, odd counts → the
@@ -100,7 +109,7 @@ structure and the symptoms disappear together.
   - narrow Split column (`compact`): windows **stack vertically** and scroll.
   - **Drag a window titlebar to rearrange** (HTML5 DnD → `onReorder(from,to)`).
 - **`EditorWindow`** is one self-contained buffer. Titlebar = drag grip · icon ·
-  name · dirty dot · **find** · **✕ (top-right)** and *nothing else*. The
+  name · dirty dot · **find** · **✕ (top-right)** and _nothing else_. The
   passage subbar (tags, link/broken counts, Test/Reveal) lives **inside the
   passage window only**. JS/CSS windows are just the editor. It owns the
   debounced commit (`updatePassageTextCommand` / `updateStoryScriptCommand` /
@@ -110,9 +119,11 @@ structure and the symptoms disappear together.
   re-opening focuses it).
 
 ### State + handlers — `story-edit-route.tsx`
+
 The route owns the dock state:
-- `editorWindows: EditorWindowSpec[] | undefined` — `undefined` means *follow
-  the selection* (the dock shows whichever passage is selected, so Split/Text
+
+- `editorWindows: EditorWindowSpec[] | undefined` — `undefined` means _follow
+  the selection_ (the dock shows whichever passage is selected, so Split/Text
   still works without an explicit open). The first open/close/reorder
   materializes it into a concrete list.
 - `activeWindowId` — the focused window.
@@ -122,6 +133,7 @@ The route owns the dock state:
   A passage deleted in the core is pruned from the list.
 
 ### Shell — `story-workspace-shell.tsx`
+
 - Renders a single `<EditorDock>` inside `.story-edit-text-layer` (now a flex
   container, not an N-column grid). `dockWindows` resolves the
   follow-selection fallback; `dockSelections` maps per-passage-window
@@ -131,7 +143,8 @@ The route owns the dock state:
 
 ## 3. Legacy modal removed (one editor surface)
 
-Deleted entirely (the modal could appear *over* the workspace editor):
+Deleted entirely (the modal could appear _over_ the workspace editor):
+
 - `src/dialogs/passage-edit/` (PassageEditStack, PassageEditContents, css,
   mocks, tests)
 - `addPassageEditors` / `removePassageEditors` (`src/dialogs/context/action-creators.ts`)
@@ -149,21 +162,21 @@ are untouched — only the passage-edit modal path was removed.
 
 ## 4. Keyboard & input model
 
-| Input | Action |
-|---|---|
-| Wheel / trackpad | Zoom toward the cursor (continuous) |
-| Shift + wheel | Pan horizontally |
-| Drag empty canvas | Marquee-select |
-| Space-drag · middle-drag · Pan tool (`H`) | Pan |
-| `V` / `H` | Select tool / Pan tool |
-| Click node | Select only that node |
-| Shift / ⌘ / Ctrl + click node | Add / remove from selection |
-| Drag node(s) | Move selection, snapped to the 25px grid |
-| Double-click node | Open it in an editor window |
-| Right-click node / canvas | Context menu (Edit / Test · New / Fit / Snap) |
-| `+` / `=` , `-` | Zoom in / out at viewport center |
-| `0` | Fit graph to window |
-| Delete / Backspace | Delete selection (existing route handler) |
+| Input                                     | Action                                        |
+| ----------------------------------------- | --------------------------------------------- |
+| Wheel / trackpad                          | Zoom toward the cursor (continuous)           |
+| Shift + wheel                             | Pan horizontally                              |
+| Drag empty canvas                         | Marquee-select                                |
+| Space-drag · middle-drag · Pan tool (`H`) | Pan                                           |
+| `V` / `H`                                 | Select tool / Pan tool                        |
+| Click node                                | Select only that node                         |
+| Shift / ⌘ / Ctrl + click node             | Add / remove from selection                   |
+| Drag node(s)                              | Move selection, snapped to the 25px grid      |
+| Double-click node                         | Open it in an editor window                   |
+| Right-click node / canvas                 | Context menu (Edit / Test · New / Fit / Snap) |
+| `+` / `=` , `-`                           | Zoom in / out at viewport center              |
+| `0`                                       | Fit graph to window                           |
+| Delete / Backspace                        | Delete selection (existing route handler)     |
 
 Graph keyboard handling lives in `story-graph-panel.tsx` (it ignores events
 while typing in inputs and when ⌘/Ctrl is held). The old `use-zoom-shortcuts.ts`

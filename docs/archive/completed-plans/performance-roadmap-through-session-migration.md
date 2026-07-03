@@ -1,11 +1,17 @@
 # twine.rs Performance Roadmap — Blistering Fast at Transylvania Scale
 
+> Historical roadmap through the Rust-session and release-mode harness
+> milestones. Several “current state” sections below intentionally preserve
+> their earlier context and are no longer current. See
+> [`../../status/performance.md`](../../status/performance.md) and
+> [`../../roadmap/performance.md`](../../roadmap/performance.md).
+
 This roadmap makes `twine.rs` open, navigate, and edit massive real projects (the
 `Transylvania0.6.01` sample: **4,622 passages, 2,889 links, 2,656 asset files, ~404 MB**)
 feel instant. It is **fully aligned with the dream architecture**, not a parallel plan:
 every major item here is a step toward _making the Rust/WASM/native `ProjectSession` the
 live product authority_
-that [`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) already names as the remaining
+that [`milestones-and-enhancement-catalogue.md`](../research/milestones-and-enhancement-catalogue.md) already names as the remaining
 scale risk for **M2** and the foundation for **M4**. We are not inventing a new engine — we
 are letting the engine that already exists do the work it was built for.
 
@@ -14,7 +20,7 @@ are letting the engine that already exists do the work it was built for.
 > The Electron app takes **~7s** for the same project because the live app _reimplements_
 > parsing, indexing, graph projection, and search in TypeScript, on the main thread, and
 > re-reads/re-scans the project several times on open. The generated bindings in
-> [`src/core/bindings/`](../../src/core/bindings/) were emitted by `ts-rs` "for the workbench
+> [`src/core/bindings/`](../../../src/core/bindings/) were emitted by `ts-rs` "for the workbench
 > bridge," but **nothing crosses that bridge yet**. Closing that gap is the whole game.
 
 ## 0. Architecture Lock: Rust Owns The Product Model
@@ -65,16 +71,16 @@ the contents screen, project-open lifecycle, and file-scan duplication.
 
 ### 1.1 Where the ~7 seconds goes (project open, critical path)
 
-| #   | Step                                | Location                                                                                      | Cost at Transylvania scale                                    | Critical path            |
-| --- | ----------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------ |
-| 1   | Read **all** passage files          | [project-folder.ts](../../src/electron/main-process/project-folder.ts) `readProjectStories()` | ~4,622 file reads, **~2–3s**                                  | YES                      |
-| 2   | Scan `assets/` tree (1st time)      | `listProjectAssets()` / `scanAssetDirectory()`                                                | ~2,656 `stat()` + walk, ~80–150ms                             | YES                      |
-| 3   | Scan `assets/` tree (2nd)           | `projectSessionSnapshot()` → manifest                                                         | duplicate walk                                                | YES                      |
-| 4   | Scan `assets/` tree (3rd)           | `startProjectSession()` baseline                                                              | duplicate walk                                                | YES                      |
-| 5   | Synchronous HTML DOM parse of story | [import.ts](../../src/util/import.ts) `importStories()`                                       | `innerHTML` + `querySelectorAll` over 4,622 nodes, ~200–400ms | YES                      |
-| 6   | Build story index on first view     | [story-index.ts](../../src/core/story-index.ts) `storyToCoreIndex()`                          | O(n²)-ish link/diagnostic pass, **~500–1000ms**               | YES (if a passage opens) |
-| 7   | Graph projection / layout (JS)      | [graph-projection.ts](../../src/core/graph-projection.ts)                                     | O(n) build + O(n) layout, WeakMap-cached                      | on demand                |
-| 8   | PassageMap mount                    | [passage-map.tsx](../../src/components/passage/passage-map/passage-map.tsx)                   | O(n) bounding-rect + visible filter on first render           | YES                      |
+| #   | Step                                | Location                                                                                         | Cost at Transylvania scale                                    | Critical path            |
+| --- | ----------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- | ------------------------ |
+| 1   | Read **all** passage files          | [project-folder.ts](../../../src/electron/main-process/project-folder.ts) `readProjectStories()` | ~4,622 file reads, **~2–3s**                                  | YES                      |
+| 2   | Scan `assets/` tree (1st time)      | `listProjectAssets()` / `scanAssetDirectory()`                                                   | ~2,656 `stat()` + walk, ~80–150ms                             | YES                      |
+| 3   | Scan `assets/` tree (2nd)           | `projectSessionSnapshot()` → manifest                                                            | duplicate walk                                                | YES                      |
+| 4   | Scan `assets/` tree (3rd)           | `startProjectSession()` baseline                                                                 | duplicate walk                                                | YES                      |
+| 5   | Synchronous HTML DOM parse of story | [import.ts](../../../src/util/import.ts) `importStories()`                                       | `innerHTML` + `querySelectorAll` over 4,622 nodes, ~200–400ms | YES                      |
+| 6   | Build story index on first view     | [story-index.ts](../../../src/core/story-index.ts) `storyToCoreIndex()`                          | O(n²)-ish link/diagnostic pass, **~500–1000ms**               | YES (if a passage opens) |
+| 7   | Graph projection / layout (JS)      | [graph-projection.ts](../../../src/core/graph-projection.ts)                                     | O(n) build + O(n) layout, WeakMap-cached                      | on demand                |
+| 8   | PassageMap mount                    | [passage-map.tsx](../../../src/components/passage/passage-map/passage-map.tsx)                   | O(n) bounding-rect + visible filter on first render           | YES                      |
 
 **Total critical path: ~3.2–5.2s minimum**, plus GC pauses on ~4.6k Story/Passage object
 allocations, persistence write-back, and React render churn → ~7s observed.
@@ -83,7 +89,7 @@ allocations, persistence write-back, and React render churn → ~7s observed.
 
 1. **Rust is not wired into the live app as authority.** `twine_core::ProjectSession`,
    `twine_graph::GraphIndex`, and the parsers are production-ready but reachable only through
-   `twine_cli`. The renderer's [project-host.ts](../../src/core/project-host.ts) re-implements
+   `twine_cli`. The renderer's [project-host.ts](../../../src/core/project-host.ts) re-implements
    the command→patch model against Redux in TypeScript; bindings are imported `type`-only. This
    is migration debt, not an acceptable destination.
 2. **Everything is on the main thread.** Parse, index, projection, and search block first
@@ -98,7 +104,7 @@ allocations, persistence write-back, and React render churn → ~7s observed.
    complete indexes before the list can render, and WeakMap caches miss whenever reducer updates
    replace the `Story` object. The Rust bridge must not simply shuttle the same giant objects
    across a faster boundary.
-6. **Contents is a first-class perf surface, not a secondary view.** [contents-route.tsx](../../src/routes/contents/contents-route.tsx)
+6. **Contents is a first-class perf surface, not a secondary view.** [contents-route.tsx](../../../src/routes/contents/contents-route.tsx)
    calls `queryStoryIndex()` on mount, derives a full contents view model, filters/sorts the full
    array, and maps every visible row. At 4.6k passages plus tags/assets/diagnostics this is enough
    to feel slow even if the graph itself is fast.
@@ -115,12 +121,12 @@ allocations, persistence write-back, and React render churn → ~7s observed.
   `canvas_projection_from_snapshot` (spatial-cell viewport projection, `SPATIAL_CELL_SIZE=512`).
   `twine_core::ProjectSession` has the full command→patch spine, undo/redo, and a per-story
   `graph_cache`. Measured: **50k-node index ~351ms, viewport projection ~2–4ms**.
-- **Bindings:** `ts-rs`-generated types in [src/core/bindings/](../../src/core/bindings/)
+- **Bindings:** `ts-rs`-generated types in [src/core/bindings/](../../../src/core/bindings/)
   already define the exact contract (`CoreGraphProjection`, `StoryCommand`, `PatchBatch`, …).
 - **Benchmark CLI:** `twine_cli bench-graph [N]` and `twine_cli graph <path>`.
-- **Fixtures:** [benchmarks/generate-fixtures.mjs](../../benchmarks/generate-fixtures.mjs)
+- **Fixtures:** [benchmarks/generate-fixtures.mjs](../../../benchmarks/generate-fixtures.mjs)
   → `npm run bench:fixtures` / `:large` (1k/5k/10k/50k, deterministic links).
-- **Test harnesses:** Jest + jsdom (114 suites), Playwright ([e2e/](../../e2e/)), `cargo test`.
+- **Test harnesses:** Jest + jsdom (114 suites), Playwright ([e2e/](../../../e2e/)), `cargo test`.
 - **Boundary-shaped UI surfaces:** the newer graph/contents work already routes through
   `useCoreProjectHost()` and generated core types. That is good news: many call sites can switch
   from `StoreCoreProjectHost` to a WASM/native-backed host without a wholesale UI rewrite. That
@@ -180,7 +186,7 @@ a process per interaction:
   triple asset scan / sync import path.
 - **Contract is already written:** the `ts-rs` bindings are the wire format. The renderer talks
   `StoryCommand` in, `PatchBatch` out — exactly the host interface
-  [project-host.ts](../../src/core/project-host.ts) already models.
+  [project-host.ts](../../../src/core/project-host.ts) already models.
 
 ### 3.1 Data ownership: revisioned Rust sessions, not giant story transfers
 
@@ -294,7 +300,7 @@ The headline phase: the live graph and indexes stop being TypeScript-owned.
   for `QueryGraphProjection` / `QueryStoryIndex`, returning the existing `ts-rs` types.
   _Test:_ `wasm-pack test --headless` parity vs. golden CLI projections on the fixture corpus.
 - **P1.2 — Cut the graph projection over to WASM as authority.** Replace
-  [graph-projection.ts](../../src/core/graph-projection.ts)'s `storyToCoreGraphProjection` call
+  [graph-projection.ts](../../../src/core/graph-projection.ts)'s `storyToCoreGraphProjection` call
   site with a WASM `ProjectSession` query. The JS projector becomes a temporary diagnostic/test
   fallback, not a production owner.
   _Test:_ parity during cutover, then a regression test asserting the product path uses the WASM
@@ -304,7 +310,7 @@ The headline phase: the live graph and indexes stop being TypeScript-owned.
   _Test:_ Worker round-trip latency harness; Playwright frame-time trace during a scripted pan
   asserting no frame > 50ms.
 - **P1.4 — Cut story index + search over to WASM as authority.** Replace
-  [story-index.ts](../../src/core/story-index.ts) with `QueryStoryIndex`; search uses
+  [story-index.ts](../../../src/core/story-index.ts) with `QueryStoryIndex`; search uses
   `twine_search`. The TypeScript indexer becomes test-only or deleted.
   _Test:_ product-path assertion that route-facing search/contents call Rust; bench search < 50ms
   at 50k.
@@ -471,7 +477,7 @@ npm run perf:unit          # new script: jest --selectProjects perf --runInBand
 
 ### 5.4 App-level — release-mode Electron (implemented locally)
 
-The dedicated [playwright.electron.config.ts](../../playwright.electron.config.ts) launches the
+The dedicated [playwright.electron.config.ts](../../../playwright.electron.config.ts) launches the
 unpackaged production build with `_electron.launch`, a copied fixture, and isolated temporary
 user-data/session-data/library paths. The normal browser Playwright configuration remains
 unchanged. Startup, edit, query/search, graph, and watcher work run in separate Playwright
@@ -599,29 +605,29 @@ closes, so the perf work _finishes_ the architecture rather than diverging from 
 priority order:
 
 1. **The entire Rust core is bypassed in the live app — the central temporary thing.**
-   [project-host.ts](../../src/core/project-host.ts):237 `StoreCoreProjectHost` is, in the
+   [project-host.ts](../../../src/core/project-host.ts):237 `StoreCoreProjectHost` is, in the
    milestones doc's own words, "_still a compatibility host while the legacy store backs the
-   app_" ([MILESTONES](./TWINE_RS_MILESTONES.md):530). It translates every `StoryCommand` into a
+   app_" ([MILESTONES](../research/milestones-and-enhancement-catalogue.md):530). It translates every `StoryCommand` into a
    Redux dispatch; graph projection and indexing run through TS re-implementations
-   ([graph-projection.ts](../../src/core/graph-projection.ts),
-   [story-index.ts](../../src/core/story-index.ts)); the `ts-rs` bindings are imported
+   ([graph-projection.ts](../../../src/core/graph-projection.ts),
+   [story-index.ts](../../../src/core/story-index.ts)); the `ts-rs` bindings are imported
    `type`-only. **There is no `wasm-bindgen` / `napi` / `neon` anywhere in the tree** (verified).
    → _Retired by Phases 1–2._
 
 2. **Search is a "baseline linear implementation."** `twine_search::LinearSearchIndex`
-   ([lib.rs](../../crates/twine_search/src/lib.rs):24) is an O(n) case-insensitive
+   ([lib.rs](../../../crates/twine_search/src/lib.rs):24) is an O(n) case-insensitive
    `.contains()` scan with a 1.0/0.5 name-vs-text score and no inverted index, trie, or ranking
    — and the live app doesn't even call it (search runs in TS). Correct, not scalable.
    → _Retired by Phase 1.4._
 
 3. **A legacy store + DS dual path still exists.** The design spine installs a "_temporary,
    clearly-flagged bridge so unmigrated legacy screens keep [working]_"
-   ([DESIGN_SPINE](./TWINE_RS_DESIGN_SYSTEM_SPINE.md):132), and "_dialog-era screens that are not
+   ([DESIGN_SPINE](./design-system-spine.md):132), and "_dialog-era screens that are not
    part of the migrated D4/D5 workbench can still mutate legacy state directly_"
-   ([MILESTONES](./TWINE_RS_MILESTONES.md):531). Two mutation paths = double the surface to keep
+   ([MILESTONES](../research/milestones-and-enhancement-catalogue.md):531). Two mutation paths = double the surface to keep
    fast and correct. → _Folds away as Phases 1–3 route everything through the host/session._
 
-4. **M2 perf was self-flagged as unvalidated.** [MILESTONES](./TWINE_RS_MILESTONES.md):422 —
+4. **M2 perf was self-flagged as unvalidated.** [MILESTONES](../research/milestones-and-enhancement-catalogue.md):422 —
    "**REMAINING:** performance validation still needs 50k passage projects, pan/zoom latency
    traces, viewport projection latency, edge-layer filtering, search/filter responsiveness, and
    memory ceilings in the running app," and the "remaining scale risk is … the Rust/WASM
@@ -634,17 +640,17 @@ priority order:
    to duplicate all passage text — fine as a safety net, but a temporary shape until the native
    session owns load/save. → _Hardened by Phase 2.2._
 
-6. **Preload runs without context isolation.** [preload.ts](../../src/electron/main-process/preload.ts):5
+6. **Preload runs without context isolation.** [preload.ts](../../../src/electron/main-process/preload.ts):5
    — "_For now, we cannot use context isolation here because of jsonp_," placing a privileged
    `jsonp` into renderer context (and using `Date.now()` for callback names). Long-lived "for
    now" with a real security dimension; worth scheduling alongside the format/runtime work.
 
-7. **Known latent undo crash.** [reverse-action.ts](../../src/store/undoable-stories/reverse-action.ts):57
+7. **Known latent undo crash.** [reverse-action.ts](../../../src/store/undoable-stories/reverse-action.ts):57
    — "_TODO: crashes on a replace all that affects a passage name, unclear why_." A real bug, not
    a perf item, but it lives on the mutation path Phase 1–3 reworks; fix it during that cutover.
 
 8. **D-series PARTIALs (mostly runtime depth, not blockers).** Per
-   [DESIGN_SPINE](./TWINE_RS_DESIGN_SYSTEM_SPINE.md): D8 runtime inspection
+   [DESIGN_SPINE](./design-system-spine.md): D8 runtime inspection
    (variables/state/devtools) still missing; format-host extension-point UI not built for every
    declared slot; "run-from-here" not wired everywhere; desktop scratch-window preview parity
    pending. These are feature-depth temporaries rather than performance ones — noted so the perf
@@ -662,7 +668,7 @@ temporary scaffolds; the phases above remove them.
 > manifest that drives missing detection). The crash itself is an Electron
 > main-process recursive-copy bug that must be fixed _now_, ahead of the native
 > cutover. Full root-cause analysis, file:line refs, and DO/DON'T fixes:
-> [`TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md`](./TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md)
+> [`0.1.2-feedback-remediation.md`](../release-remediation/0.1.2-feedback-remediation.md)
 > (waves W0, W5.2, W5.3). Also relevant: §7b(6) preload jsonp hardening ↔ that
 > doc's W7 (story-format icons/descriptions not loading in the packaged app).
 

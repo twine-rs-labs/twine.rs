@@ -1,5 +1,9 @@
 # twine.rs Milestones and Enhancement Catalogue
 
+> Historical planning and research snapshot. Completed milestone annotations
+> and the 2026-06-20 upstream issue catalogue are preserved here, but active
+> work is tracked only in [`../../roadmap/`](../../roadmap/README.md).
+
 This reference records the detailed `M0`-`M7` roadmap, the current Twine UI catalogue, the target `twine.rs` UI, and the 170 open Twine enhancement requests captured during planning.
 
 This document records the current Twine UI, the desired `twine.rs` UI, and every open Twine enhancement request from `klembot/twinejs` with the `enhancement` label.
@@ -314,12 +318,12 @@ Must do: expose startup mode, default project folder, generated layout behavior,
 ## Milestone Roadmap
 
 > **GUI spine:** the M-series adds capability; the parallel **D-series** in
-> [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md) installs
+> [`design-system-spine.md`](../completed-plans/design-system-spine.md) installs
 > `docs/design-system/` as the actual UI of the app (tokens, primitives, shell,
 > screen-by-screen migration, preview surface). M7+ must build on the DS shell,
 > not add new legacy chrome. The M6 preview/debug and graph-projection handoffs
 > are satisfied by D8 and D5 respectively. The Phase 1–8 sequence in
-> [`TWINE_RS_STACK_STRATEGY.md`](./TWINE_RS_STACK_STRATEGY.md) is the architecture
+> [`dream-stack-strategy.md`](./dream-stack-strategy.md) is the architecture
 > view of the same path.
 
 ### M0: Core Model, Project Format, and Persistence
@@ -334,7 +338,7 @@ Primary screen: Project Launcher / Project Files.
 > in app-data so reinstalling doesn't recover it. "Change library location" also
 > only repoints a pref (no move) and the project list reads a stale absolute-path
 > index instead of scanning. Root cause + DO/DON'T fixes in
-> [`TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md`](./TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md)
+> [`0.1.2-feedback-remediation.md`](../release-remediation/0.1.2-feedback-remediation.md)
 > waves W0–W1. The `____`→variable extractor bug (W5.1) is an M4 indexing fix.
 
 Recorded enhancement requests: **26**. Priority mix: P2=5, P3=12, P4=8, unprioritized=1.
@@ -654,7 +658,7 @@ M6 splits along an engine/UI seam. The **engine** (Rust contracts plus the TypeS
 - H2 (graph projection): **DONE for D5** — DS graph rendering, viewport/focus query options, generated layout save, explicit reveal-in-graph, immediate pointer-down selection feedback, additive multi-select, group drag, live edge/arrow updates during movement/resizing, actual-size edge anchors, rotated edge anchors, one-shot selection centering, preference-backed default graph card size, and minimap panning are wired on the app side. Native/WASM `ProjectSession` bridging remains follow-up.
 - H3 ("run from here" everywhere): **PARTIAL, MAJOR D8 SURFACES LANDED** — `startId` is plumbed through the build package and native-aware `useStoryLaunch()` path. Test From Here now appears from the text header, graph toolbar, split/right inspector, passage fuzzy-search result actions, standalone Contents and Diagnostics inspectors, asset inspectors/usage contexts, preview Test From Start controls, and preview Test Current once the running iframe reports a passage. Remaining D8 work: command/search panel parity as those panels deepen, variable/state/devtools inspection, and carrying the same runtime bridge into the desktop scratch-window path.
 
-Sequencing implication: **do not build any M6 UI in the legacy shell.** The core-first work is now mostly in place and the primary Build/Formats screens have been promoted into the DS shell; the remaining closures are deeper screen replacement and app integration — **D5** closes H2, **D6** has promoted Contents/Diagnostics/Assets/Formats into the shell and retired legacy Story Formats toolbar access as a primary path, **D7** finishes Settings plus advanced Build/export policy, and **D8** closes H1, H3, and deliverable 5. Full closure map in [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md).
+Sequencing implication: **do not build any M6 UI in the legacy shell.** The core-first work is now mostly in place and the primary Build/Formats screens have been promoted into the DS shell; the remaining closures are deeper screen replacement and app integration — **D5** closes H2, **D6** has promoted Contents/Diagnostics/Assets/Formats into the shell and retired legacy Story Formats toolbar access as a primary path, **D7** finishes Settings plus advanced Build/export policy, and **D8** closes H1, H3, and deliverable 5. Full closure map in [`design-system-spine.md`](../completed-plans/design-system-spine.md).
 
 Highest-signal requests in this milestone:
 
@@ -712,7 +716,7 @@ M7 implementation status (advanced 2026-06-22 — **DONE for the current desktop
   hooks and local-only warnings. These are intentionally local-first hooks, not
   hidden network services.
 - Installer/update/mobile/platform policy is captured in
-  [`TWINE_RS_M7_PLATFORM_DISTRIBUTION.md`](./TWINE_RS_M7_PLATFORM_DISTRIBUTION.md):
+  [`0005-platform-and-distribution.md`](../../decisions/0005-platform-and-distribution.md):
   Windows remains x64 NSIS with documented install options, 32-bit builds are
   out of scope for current Electron support, Linux ships zip/AppImage-adjacent
   artifacts with Flatpak metadata as the next packaging layer, macOS remains

@@ -4,7 +4,8 @@ This folder contains repeatable fixture generation for large Twine stories.
 
 The generated files are intentionally ignored by Git because large-project
 fixtures can become tens or hundreds of megabytes. Regenerate them locally when
-benchmarking TypeScript, Rust/WASM, or Rust/Tauri implementations.
+benchmarking the Rust CLI, Rust/WASM sessions, native storage, or Electron
+application path.
 
 ## Generate Fixtures
 
@@ -41,9 +42,10 @@ Each generated corpus includes:
 - Tags distributed across the graph.
 - A manifest with expected passage and link counts.
 
-These files are meant to support the first interop experiment from
-`docs/reference/RUST_PORT_FEASIBILITY.md`: feeding passage snapshots into a Rust/WASM graph
-index and comparing behavior/performance with the existing TypeScript helpers.
+These files support Rust, WASM, native, and release-mode Electron performance
+tests. The current performance status and active optimization work are recorded
+in [`../docs/status/performance.md`](../docs/status/performance.md) and
+[`../docs/roadmap/performance.md`](../docs/roadmap/performance.md).
 
 ## Release-mode Electron harness
 

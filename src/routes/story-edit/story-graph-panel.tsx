@@ -67,7 +67,7 @@ export interface StoryGraphPanelProps {
 /**
  * The graph viewport is a single transformed "world" layer. Pan changes
  * `x`/`y`; zoom changes `k` while keeping the world point under the cursor
- * pinned. There is no scrolling — see WORKBENCH_INTEGRATION.md.
+ * pinned. There is no scrolling — see docs/product/workbench.md.
  */
 type GraphView = StoryGraphWorkspaceView;
 type GraphDensity = StoryGraphDensity;

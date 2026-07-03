@@ -1,9 +1,12 @@
 # twine.rs Design System
 
+Status: current visual source artifacts
+Last verified: 2026-07-04
+
 A unique, professional **dark-mode workbench** design system for `twine.rs` — an
-in-progress Rust/Tauri port of [Twine](https://twinery.org) (the interactive-fiction
-authoring tool). It dresses a serious creative IDE that is **text-native, graph-native,
-and synchronized**, while staying recognizably a Twine descendant.
+Electron/React editor backed by a Rust core. It dresses a serious creative IDE
+that is **text-native, graph-native, and synchronized**, while staying
+recognizably a Twine descendant.
 
 > Not a marketing site, not a toy clone. Quiet, fast, dense enough for 50k-passage
 > projects, and still welcoming to writers.
@@ -14,13 +17,14 @@ and synchronized**, while staying recognizably a Twine descendant.
 
 This system was built from the local planning materials available when the package was created:
 
-- **Codebase:** `twine.rs/` — the legacy `twinejs` React/TypeScript app being used for reference.
-  Mounted read-only. Key references read while building this system:
+- **Original codebase survey:** the inherited `twinejs` React/TypeScript app.
+  Key references used when the design package was created:
   - `twine.rs/src/styles/{colors,typography,metrics,depth}.css` — the legacy token system (Nunito, blue/green logo hues, oklch palette).
   - `twine.rs/icons/logo.svg`, `app-release.svg` — the twine mark (blue→green sweep).
   - `twine.rs/src/components/**` — confirmed the icon library is **Tabler Icons** (`@tabler/icons`).
-- **Spec:** `uploads/TWINE_RS_UI_DOCUMENT.md` — the exhaustive target-UI document (screen
-  goals, UI inventories, exact labels, desktop-vs-browser matrix). This drove every screen.
+- **Spec:** [`../product/screen-specifications.md`](../product/screen-specifications.md)
+  — the canonical screen goals, UI inventories, vocabulary, and
+  desktop-vs-browser matrix.
 - **Brand DNA inherited:** the Twine logo gradient (blue → green) and the multi-hue
   semantic palette concept ("avoid a single-hue palette").
 
@@ -29,11 +33,11 @@ This system was built from the local planning materials available when the packa
 The legacy app shipped **Nunito Light**. To hit the "more professional, crisp" brief,
 twine.rs deliberately moves to a sharper trio, self-hosted from local `woff2` files:
 
-| Role | twine.rs | was |
-|---|---|---|
-| Display / brand | **Space Grotesk** | Nunito Light |
-| UI / body | **Hanken Grotesk** | system font |
-| Mono / code | **JetBrains Mono** | SFMono / system mono |
+| Role            | twine.rs           | was                  |
+| --------------- | ------------------ | -------------------- |
+| Display / brand | **Space Grotesk**  | Nunito Light         |
+| UI / body       | **Hanken Grotesk** | system font          |
+| Mono / code     | **JetBrains Mono** | SFMono / system mono |
 
 These are an intentional evolution, not a forced match. They are bundled under `fonts/`
 so the design-system previews and desktop app work offline without a font CDN round
@@ -143,10 +147,12 @@ meaning — selection, links, tags, diagnostics, build state.
 ## Index / manifest
 
 **Root**
+
 - `styles.css` — global entry point (import-only). Consumers link this.
 - `readme.md` — this file.
 
 **`tokens/`** (all `@import`ed by `styles.css`)
+
 - `colors.css` — surface ramp, text, brand accents, the twine gradient, semantic roles + tints.
 - `typography.css` — font stacks (Space Grotesk / Hanken Grotesk / JetBrains Mono), scale, weights.
 - `spacing.css` — 4px spacing scale, control sizing, chrome dimensions, radii.
@@ -158,6 +164,7 @@ semantic roles, semantic tints, display/UI/mono type, type scale, spacing scale,
 elevation, the mark, focus & selection, iconography.
 
 **`components/`** — reusable React primitives (namespace `window.TwineRsDesignSystem_073217`).
+
 - `forms/` — `Button`, `IconButton`, `Input`, `Select`, `SegmentedControl`, `Switch`, `Checkbox`.
 - `feedback/` — `Badge`, `Tag`.
 - `data/` — `PassageNode` (graph card), `Panel` (dock/inspector container).
@@ -166,6 +173,7 @@ elevation, the mark, focus & selection, iconography.
 **`ui_kits/`** — full-screen product recreations. A shared `ui_kits/nav.js` renders the
 cross-screen **activity rail** (`window.TwineRail`) that links every screen together; each
 screen carries `<TwineRail active="…" />` as its leftmost column.
+
 - `workbench/` — the signature **Split / Text / Graph** workbench: top command bar, activity
   rail, file tree, syntax-highlighted source editor, native graph canvas (toolbar, layers,
   minimap, generated-layout status), right outline/inspector, bottom diagnostics drawer,
@@ -199,11 +207,15 @@ screen carries `<TwineRail active="…" />` as its leftmost column.
 Consumers link one file and read components off the global namespace:
 
 ```html
-<link rel="stylesheet" href="styles.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="styles.css" />
+<link
+	rel="stylesheet"
+	href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css"
+/>
 <script src="_ds_bundle.js"></script>
 <script>
-  const { Button, SegmentedControl, PassageNode, Badge } = window.TwineRsDesignSystem_073217;
+	const {Button, SegmentedControl, PassageNode, Badge} =
+		window.TwineRsDesignSystem_073217;
 </script>
 ```
 

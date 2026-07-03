@@ -1,6 +1,11 @@
 # Upstream TwineJS README
 
+Status: upstream snapshot; not twine.rs product documentation
+
 This is the original README from the TwineJS repository at the time this workspace was created.
+The preserved repository policy files remain under
+[`source/`](./source/), and the inherited mdBook is
+served from [`../en/`](../en/).
 
 ## twinejs
 

@@ -1,8 +1,16 @@
 # Rust Port Feasibility Notes
 
+> Historical research, retained for rationale and provenance. It does not
+> describe the current architecture or active roadmap. See
+> [`../../architecture/overview.md`](../../architecture/overview.md) and
+> [`../../roadmap/README.md`](../../roadmap/README.md).
+
 This reference records the initial TwineJS codebase analysis, the performance chokepoints, and the first incremental interop ideas. The current product direction is a greenfield, mode-native editor with a Rust core; the older strangler-port notes remain useful as parity-harness thinking.
 
-That direction is now tracked concretely in [`TWINE_RS_STACK_STRATEGY.md`](./TWINE_RS_STACK_STRATEGY.md) (architecture), [`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) (M-series feature roadmap), and [`TWINE_RS_DESIGN_SYSTEM_SPINE.md`](./TWINE_RS_DESIGN_SYSTEM_SPINE.md) (D-series UI-spine roadmap).
+That direction was tracked in
+[`dream-stack-strategy.md`](./dream-stack-strategy.md),
+[`milestones-and-enhancement-catalogue.md`](./milestones-and-enhancement-catalogue.md),
+and [`design-system-spine.md`](../completed-plans/design-system-spine.md).
 
 Local checkout:
 

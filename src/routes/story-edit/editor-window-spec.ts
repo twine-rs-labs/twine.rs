@@ -1,7 +1,7 @@
 /**
  * An open editor buffer in the workspace dock. Passages tile freely (one
  * window each); the story JavaScript and Stylesheet are singletons. This is the
- * source of truth for what the dock renders — see WORKBENCH_INTEGRATION.md.
+ * source of truth for what the dock renders — see docs/product/workbench.md.
  */
 export type EditorWindowSpec =
 	| {kind: 'passage'; passageId: string}

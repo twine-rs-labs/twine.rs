@@ -36,7 +36,7 @@ export interface EditorDockProps {
 
 // Tile in a 2-D grid when the dock has full width; stack vertically in the
 // narrow Split column (width is the scarce axis there). Same component, space
-// aware — see WORKBENCH_INTEGRATION.md.
+// aware — see docs/product/workbench.md.
 function columnsForCount(
 	count: number,
 	compact: boolean,

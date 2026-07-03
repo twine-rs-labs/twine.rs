@@ -1,3 +1,6 @@
+[book]
+title = "Twine compatibility manual (upstream)"
+
 [output.html]
 additional-css = ["custom.css"]
 no-section-label = true

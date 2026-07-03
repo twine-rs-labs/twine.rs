@@ -1,6 +1,8 @@
-# M7 Platform and Distribution Decisions
+# ADR 0005: Platform and distribution
 
-Date: 2026-06-22
+Status: accepted
+Decision date: 2026-06-22
+Last verified: 2026-07-04
 
 This record closes the M7 platform/documentation slice for the current Electron
 desktop app path. It documents what the app supports now, what is intentionally

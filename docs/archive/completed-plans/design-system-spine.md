@@ -1,9 +1,13 @@
 # twine.rs Design System Spine Milestones (D-Series)
 
+> Completed migration plan, retained as an implementation record. Current
+> product rules live in [`../../product/`](../../product/README.md) and the
+> design-system package documentation.
+
 This is the roadmap for making `docs/design-system/` the **actual UI of the
 app**, not a prototype that the app loosely resembles. It is a dedicated track
 that runs parallel to — and underneath — the feature roadmap in
-[`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md). The M-series adds
+[`milestones-and-enhancement-catalogue.md`](../research/milestones-and-enhancement-catalogue.md). The M-series adds
 capability; the D-series replaces the chrome that capability is displayed in.
 
 The non-negotiable goal, in the user's words: **passage editing must directly
@@ -27,18 +31,18 @@ Where the app was before this D-series started, so each milestone has a measured
 starting line:
 
 - **Global styling was still legacy.** The only global style import was
-  [`src/app.tsx`](../../src/app.tsx) → `./styles/typography.css`, which defines
+  [`src/app.tsx`](../../../src/app.tsx) → `./styles/typography.css`, which defines
   Nunito Light + `--font-system` / `--font-monospaced`. The DS trio
   (Space Grotesk / Hanken Grotesk / JetBrains Mono) was **not** the app default.
 - **DS tokens were not the base.** `docs/design-system/tokens/*.css`
   (`--ink-N`, `--line-N`, `--tx-N`, `--acc-*`, `--sem-*`, `--bg-app`…) only
   existed in the app as a _partial, route-scoped shim_
-  ([`src/styles/workbench-tokens.css`](../../src/styles/workbench-tokens.css),
-  [`src/styles/workbench.css`](../../src/styles/workbench.css)) that re-maps DS
+  ([`src/styles/workbench-tokens.css`](../../../src/styles/workbench-tokens.css),
+  [`src/styles/workbench.css`](../../../src/styles/workbench.css)) that re-maps DS
   fonts back to legacy fonts.
 - **Legacy color aliases are everywhere.** `var(--white)`, `var(--light-gray)`,
   `var(--gray)`/`var(--dark-gray)` and friends appear across **36 CSS files**
-  under `src/` (see [`src/styles/colors.css`](../../src/styles/colors.css)).
+  under `src/` (see [`src/styles/colors.css`](../../../src/styles/colors.css)).
 - **DS components are prototypes only.** `docs/design-system/components/**` are
   preview JSX with `.d.ts` + `.prompt.md` contracts; there are no production
   equivalents the app imports.
@@ -46,8 +50,8 @@ starting line:
   `MarqueeablePassageMap` → `PassageMap` → `PassageCard`; D5 replaces that
   surface with DS `PassageNode` and the generated graph-projection contract.
 - **Previews are isolated.** Play/Test/Proof go through
-  [`src/store/use-story-launch.ts`](../../src/store/use-story-launch.ts) →
-  [`src/util/replace-dom.ts`](../../src/util/replace-dom.ts) (rewrites the whole
+  [`src/store/use-story-launch.ts`](../../../src/store/use-story-launch.ts) →
+  [`src/util/replace-dom.ts`](../../../src/util/replace-dom.ts) (rewrites the whole
   document) or a scratch HTML package in Electron. There is no app-owned,
   inspectable preview surface.
 - **Core workflows live in dialogs.** App Prefs, Story Formats, Story Details,
@@ -92,7 +96,7 @@ shell_, not add new legacy chrome. The M6 preview/debug handoff is satisfied by
 D8, and the M6 graph-projection requirement is satisfied by D5.
 
 > **0.1.2 playtest remediation (2026-06-23).** The D-series screens are
-> structurally right; external testing found *wiring, state-persistence, and UX*
+> structurally right; external testing found _wiring, state-persistence, and UX_
 > gaps on top of them, not layout problems. Most are D4–D7 polish: a
 > reveal/navigation contract that can address scripts/stylesheets/assets instead of
 > defaulting to the start passage (D6), persisting open editors + graph pan/view
@@ -102,7 +106,7 @@ D8, and the M6 graph-projection requirement is satisfied by D5.
 > a hard simplification of Build/Export (D7) and an optional light token palette
 > (relates to D0's dark-first decision). Per-item root cause, file:line, DO/DON'T
 > fixes, and the two design briefs are in
-> [`TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md`](./TWINE_RS_0_1_2_FEEDBACK_REMEDIATION.md).
+> [`0.1.2-feedback-remediation.md`](../release-remediation/0.1.2-feedback-remediation.md).
 
 ## M6 ↔ D-series closure map
 
@@ -135,7 +139,7 @@ remains is deeper integration and retiring compatibility surfaces:
 (archive/project-folder packaging, full format-dev reload loop, runtime state
 inspection, and diagnostics-grade build warnings) as core-first or DS-shell work; let D5–D8
 finish the surrounding screens. The engine half is tracked in
-[`TWINE_RS_MILESTONES.md`](./TWINE_RS_MILESTONES.md) (M6 section).
+[`milestones-and-enhancement-catalogue.md`](../research/milestones-and-enhancement-catalogue.md) (M6 section).
 
 ---
 
@@ -158,13 +162,13 @@ Core deliverables:
   JetBrains Mono (follow the existing `@font-face` pattern for
   `nunito-light.woff2`). The app must render the correct fonts offline and in
   Electron with no network dependency.
-- Import the DS tokens at the app root in [`src/app.tsx`](../../src/app.tsx)
+- Import the DS tokens at the app root in [`src/app.tsx`](../../../src/app.tsx)
   **before** any route CSS, so `--bg-app`, `--ink-*`, `--tx-*`, `--font-ui`,
   `--font-display`, `--font-mono` are globally available. The app is dark-first
   (`color-scheme: dark`), matching the DS.
 - **Compatibility bridge:** re-point the legacy aliases in
-  [`src/styles/colors.css`](../../src/styles/colors.css) and
-  [`src/styles/typography.css`](../../src/styles/typography.css)
+  [`src/styles/colors.css`](../../../src/styles/colors.css) and
+  [`src/styles/typography.css`](../../../src/styles/typography.css)
   (`--white`, `--light-gray`, `--gray`, `--dark-gray`, `--font-system`,
   `--font-monospaced`, …) to the closest DS token. This is a _throwaway_ layer:
   it keeps the 36 legacy CSS files alive during migration, and every mapping is
@@ -255,8 +259,8 @@ Source artifacts: `ui_kits/launcher/index.html`,
 
 Core deliverables:
 
-- Replace [`src/routes/welcome`](../../src/routes/welcome) and
-  [`src/routes/story-list`](../../src/routes/story-list) with the DS launcher:
+- Replace [`src/routes/welcome`](../../../src/routes/welcome) and
+  [`src/routes/story-list`](../../../src/routes/story-list) with the DS launcher:
   project grid/list, recents, search, sort, project metadata, create/import
   entry points.
 - Replace the new-project / import entry (currently
@@ -277,12 +281,12 @@ Source artifacts: `ui_kits/workbench/TextMode.jsx`, `workbench.css`.
 
 Core deliverables:
 
-- Rebuild [`src/routes/story-edit`](../../src/routes/story-edit) as the
+- Rebuild [`src/routes/story-edit`](../../../src/routes/story-edit) as the
   Workbench: Text / Graph / Split via DS `SegmentedControl`, with the center
   panel, left contents/file tree, right inspector, and bottom drawer all using
   DS `Panel` anatomy.
 - Re-skin the source editor
-  ([`src/components/control/source-editor`](../../src/components/control/source-editor),
+  ([`src/components/control/source-editor`](../../../src/components/control/source-editor),
   CodeMirror) to DS tokens/fonts: JetBrains Mono body, DS gutters, inline
   diagnostics, link/tag/variable highlighting using `--sem-*` colors.
 - Text-native panels from the DS: outline, backlinks, outgoing links, variables,
@@ -297,7 +301,7 @@ Exit criteria:
   artifact or screenshot pair before D4 is called complete.
 - No legacy color/font aliases remain in the story-edit or source-editor CSS.
 
-Audit artifact: [`visual-audits/D4_D5_AUDIT_2026-06-21.md`](./visual-audits/D4_D5_AUDIT_2026-06-21.md)
+Audit artifact: [`D4_D5_AUDIT_2026-06-21.md`](../visual-audits/D4_D5_AUDIT_2026-06-21.md)
 records the D4 screenshot pair and the D5 implementation checks.
 
 Depends on: D2, D1.
@@ -313,7 +317,7 @@ Source artifacts: `ui_kits/workbench/GraphMode.jsx`,
 Core deliverables:
 
 - Replace `MarqueeablePassageMap` → `PassageMap` → legacy `PassageCard`
-  ([`src/components/passage`](../../src/components/passage)) with DS `PassageNode`
+  ([`src/components/passage`](../../../src/components/passage)) with DS `PassageNode`
   rendered in a DS GraphMode surface.
 - Back the graph with `QueryGraphProjection` DTOs (visible nodes, edges,
   generated/saved layout, selection focus, viewport filtering, save-layout).
@@ -359,7 +363,7 @@ Core deliverables:
 - **Asset Manager** as a DS screen consuming the file-backed asset inventory
   (replacing prompt-driven asset actions).
 - **Story Formats** manager as a DS screen replacing
-  [`src/dialogs/story-formats`](../../src/dialogs/story-formats).
+  [`src/dialogs/story-formats`](../../../src/dialogs/story-formats).
 
 Implementation note (2026-06-21): D6's primary screens are now onscreen.
 `/formats` is the primary DS shell screen for format capabilities, publish
@@ -403,7 +407,7 @@ Core deliverables:
 - **Build & Export** DS screen: targets (Play/Test/Proof/Export HTML/Twee/JSON/
   Package/Publish), capability report, missing-asset and publish-safety warnings
   surfaced before output (building on `createStoryBuildPackage`).
-- **Settings** DS screen replacing [`src/dialogs/app-prefs`](../../src/dialogs/app-prefs):
+- **Settings** DS screen replacing [`src/dialogs/app-prefs`](../../../src/dialogs/app-prefs):
   accessibility (reduced motion, high contrast, keybindings), editor prefs,
   default folders, integrations. (This is also where M7 prefs land — on the DS
   shell, not a dialog.)
@@ -541,8 +545,8 @@ brain.
 ## Rust Design Principle Adherence (binding on every D-milestone)
 
 The GUI work must not erode the core-first architecture in
-[`RUST_CORE_STYLE_GUIDE.md`](./RUST_CORE_STYLE_GUIDE.md) and
-[`TWINE_RS_STACK_STRATEGY.md`](./TWINE_RS_STACK_STRATEGY.md). These are
+[`rust-core-style-guide.md`](../../architecture/rust-core-style-guide.md) and
+[`dream-stack-strategy.md`](../research/dream-stack-strategy.md). These are
 acceptance constraints, checked per milestone — a screen that looks like the DS
 but violates them is **not** done.
 
