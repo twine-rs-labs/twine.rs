@@ -70,7 +70,30 @@ project mirror is a separate migration.
 
 ## Follow-up limits
 
-- Incremental parse-count and no-full-transfer invariants are covered by unit
-  tests. The wall-clock 50k-passage thresholds still need a stable release-mode
-  benchmark runner before they can be enforced in CI without debug-build
-  timing noise.
+- A local release-mode Electron harness now opens generated canonical 10k and
+  50k `.twine.rs` folders through the real native/WASM/session path. It records
+  startup phases, editor/undo/persistence latency, contents and search latency,
+  graph frames, watcher parsing, bridge payloads, session ownership, and
+  process memory. Independent startup/edit/query/graph/watcher processes,
+  persistent launch checkpoints, a sanitized Electron environment, and a
+  macOS teardown barrier keep failures attributable and retries isolated.
+- Machine-independent incremental, worker/session, monotonic-revision,
+  bounded-rendering, and no-full-replacement invariants fail immediately.
+  Absolute roadmap targets remain report-only until a local machine baseline is
+  explicitly accepted; matching baselines then enforce timing and memory
+  regressions.
+- Hosted CI, packaged-app performance, cross-machine baselines, and the
+  optimization work identified by the first 10k/50k profiles remain separate
+  follow-ups.
+- Complete 10k and 50k Apple M4 runs now pass every structural invariant,
+  including one worker/session, monotonic edit/undo/redo revisions,
+  exact-revision persistence acknowledgement, bounded graph nodes, one-source
+  passage watcher parsing, asset-only review, fixture immutability, isolated
+  user data, and complete run-root cleanup. Matching local baselines are
+  accepted for both sizes.
+- The baseline profiles make the remaining optimization work explicit. At 50k,
+  shell p50 is about 27.5 s, edit-to-paint p95 1.36 s, project-folder save p95
+  29.25 s, contents p95 3.34 s, graph-frame p95 2.5 s, incremental watcher
+  reindex 615.5 ms, and resident memory p50 1.93 GiB. Search p95 is 46.7 ms and
+  meets its 50 ms target. Absolute targets remain report-only; matching-baseline
+  regressions are blocking.

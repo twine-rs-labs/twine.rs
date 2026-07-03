@@ -576,6 +576,12 @@ export const ContentsRoute: React.FC = () => {
 		}
 	}, [contents]);
 
+	React.useEffect(() => {
+		if (contents && query) {
+			markPerformanceAfterPaint('contents-search-visible');
+		}
+	}, [contents, query, visibleEntries.length]);
+
 	function openEntry(
 		entry: ContentsViewModelEntry | undefined,
 		mode: 'graph' | 'text'

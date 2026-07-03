@@ -2,6 +2,8 @@ export type CoreBridgeMode = 'js-fallback' | 'unavailable' | 'wasm-worker';
 
 export interface CoreBridgeMetric {
 	computeMs: number;
+	computeFinishedAtEpochMs: number;
+	computeStartedAtEpochMs: number;
 	kind:
 		| 'acknowledgeSaved'
 		| 'apply'
@@ -17,11 +19,18 @@ export interface CoreBridgeMetric {
 	payloadBytes: number;
 	queuedMs: number;
 	receivedAt: number;
+	receivedAtEpochMs: number;
 	requestBytes: number;
+	requestedAtEpochMs: number;
 	responseBytes: number;
 	roundTripMs: number;
+	rustFinishedAtEpochMs?: number;
+	rustStartedAtEpochMs?: number;
 	storyId?: string;
+	traceId?: string;
 	transferMs: number;
+	workerReceivedAtEpochMs: number;
+	workerRespondedAtEpochMs: number;
 }
 
 const maxMetrics = 80;
@@ -42,6 +51,10 @@ export function recordCoreBridgeMetric(metric: CoreBridgeMetric) {
 
 export function coreBridgeMetricsSnapshot() {
 	return [...metrics];
+}
+
+export function resetCoreBridgeMetrics() {
+	metrics.length = 0;
 }
 
 export function subscribeCoreBridgeMetrics(listener: () => void) {

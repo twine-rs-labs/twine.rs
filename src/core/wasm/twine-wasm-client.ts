@@ -21,6 +21,7 @@ import type {
 type PendingRequest = {
 	reject: (error: Error) => void;
 	requestedAt: number;
+	requestedAtEpochMs: number;
 	resolve: (response: WasmWorkerSuccess) => void;
 };
 
@@ -54,6 +55,12 @@ export function wasmQueryKey(storyId: string, options: unknown) {
 
 function now() {
 	return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function epochNow() {
+	return typeof performance !== 'undefined'
+		? performance.timeOrigin + performance.now()
+		: Date.now();
 }
 
 function isWasmEnabled() {
@@ -520,20 +527,30 @@ export class WasmCoreWorkerClient {
 		this.pending.delete(response.id);
 
 		if (!response.ok) {
-			this.recordMetric(response, pending.requestedAt);
+			this.recordMetric(
+				response,
+				pending.requestedAt,
+				pending.requestedAtEpochMs
+			);
 			pending.reject(workerFailureError(response));
 			return;
 		}
 
-		this.recordMetric(response, pending.requestedAt);
+		this.recordMetric(
+			response,
+			pending.requestedAt,
+			pending.requestedAtEpochMs
+		);
 		pending.resolve(response);
 	}
 
 	private recordMetric(
 		response: WasmWorkerFailure | WasmWorkerSuccess,
-		requestedAt: number
+		requestedAt: number,
+		requestedAtEpochMs: number
 	) {
 		const receivedAt = now();
+		const receivedAtEpochMs = epochNow();
 		const metrics = response.metrics;
 
 		if (!metrics) {
@@ -542,19 +559,34 @@ export class WasmCoreWorkerClient {
 
 		recordCoreBridgeMetric({
 			computeMs: metrics.computeMs,
+			computeFinishedAtEpochMs: metrics.computeFinishedAtEpochMs,
+			computeStartedAtEpochMs: metrics.computeStartedAtEpochMs,
 			kind: response.kind,
 			mode: 'wasm-worker',
 			payloadBytes: metrics.payloadBytes,
-			queuedMs: Math.max(0, metrics.workerReceivedAt - requestedAt),
+			queuedMs: Math.max(
+				0,
+				metrics.workerReceivedAtEpochMs - requestedAtEpochMs
+			),
 			receivedAt,
+			receivedAtEpochMs,
 			requestBytes: metrics.requestBytes,
+			requestedAtEpochMs,
 			responseBytes: metrics.responseBytes,
 			roundTripMs: receivedAt - requestedAt,
+			rustFinishedAtEpochMs: metrics.rustFinishedAtEpochMs,
+			rustStartedAtEpochMs: metrics.rustStartedAtEpochMs,
 			storyId:
 				response.ok && response.kind === 'queryStoryIndex'
 					? response.result.storyId
 					: undefined,
-			transferMs: Math.max(0, receivedAt - metrics.workerRespondedAt)
+			traceId: metrics.traceId,
+			transferMs: Math.max(
+				0,
+				receivedAtEpochMs - metrics.workerRespondedAtEpochMs
+			),
+			workerReceivedAtEpochMs: metrics.workerReceivedAtEpochMs,
+			workerRespondedAtEpochMs: metrics.workerRespondedAtEpochMs
 		});
 	}
 
@@ -567,10 +599,16 @@ export class WasmCoreWorkerClient {
 
 		const id = this.nextId++;
 		const requestedAt = now();
+		const requestedAtEpochMs = epochNow();
 		const finalRequest = {...request, id} as WasmWorkerRequest;
 
 		return new Promise<WasmWorkerSuccess>((resolve, reject) => {
-			this.pending.set(id, {reject, requestedAt, resolve});
+			this.pending.set(id, {
+				reject,
+				requestedAt,
+				requestedAtEpochMs,
+				resolve
+			});
 			this.worker!.postMessage(finalRequest);
 		});
 	}

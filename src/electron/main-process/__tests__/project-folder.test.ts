@@ -32,6 +32,7 @@ import {
 	projectSessionSnapshot,
 	renameProjectAsset,
 	replaceProjectAsset,
+	resolveProjectSessionConflicts,
 	saveProjectFolder,
 	startProjectSession,
 	stopProjectSession
@@ -1399,6 +1400,229 @@ describe('project-folder native bridge', () => {
 			expect(loadNativeProjectFolderMock).not.toHaveBeenCalled();
 		} finally {
 			stopProjectSession('/native/project.twine.rs');
+			jest.useRealTimers();
+		}
+	});
+
+	it('holds a delivered candidate until exact acknowledgement, then rescans', async () => {
+		jest.useFakeTimers();
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'start_passage = "passage-id"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/001-start.twee"'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const passageFile = {
+			fingerprint: '1:4',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'passages/story/001-start.twee',
+			sizeBytes: 4
+		};
+		const firstChange = {
+			...passageFile,
+			fingerprint: '2:9',
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 2,
+			sizeBytes: 9
+		};
+		const secondChange = {
+			...firstChange,
+			fingerprint: '3:10',
+			modifiedAt: '2026-06-21T16:00:02.000Z',
+			mtimeMs: 3,
+			sizeBytes: 10
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : 'from disk'
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([manifestFile, passageFile])
+			.mockReturnValueOnce([manifestFile, firstChange])
+			.mockReturnValueOnce([manifestFile, secondChange]);
+
+		try {
+			await startProjectSession('/native/leased.twine.rs', listener, [
+				'story-id'
+			]);
+			await jest.advanceTimersByTimeAsync(1250);
+			const firstDelta = listener.mock.calls[0][0];
+
+			expect(firstDelta).toEqual(
+				expect.objectContaining({
+					baseGeneration: 1,
+					candidateGeneration: 2
+				})
+			);
+			await jest.advanceTimersByTimeAsync(1250);
+			expect(listener).toHaveBeenCalledTimes(1);
+			expect(nativeProjectFileManifestMock).toHaveBeenCalledTimes(2);
+
+			const accepted = await resolveProjectSessionConflicts(
+				'/native/leased.twine.rs',
+				'acceptDisk',
+				[],
+				firstDelta.id
+			);
+
+			expect(accepted.generation).toBe(2);
+			await jest.advanceTimersByTimeAsync(1);
+			expect(listener).toHaveBeenCalledTimes(2);
+			expect(listener.mock.calls[1][0]).toEqual(
+				expect.objectContaining({
+					baseGeneration: 2,
+					candidateGeneration: 3
+				})
+			);
+			expect(nativeProjectFileManifestMock).toHaveBeenCalledTimes(3);
+
+			await expect(
+				resolveProjectSessionConflicts(
+					'/native/leased.twine.rs',
+					'acceptDisk',
+					[],
+					firstDelta.id
+				)
+			).resolves.toEqual(accepted);
+			await expect(
+				resolveProjectSessionConflicts(
+					'/native/leased.twine.rs',
+					'dismiss',
+					[],
+					firstDelta.id
+				)
+			).rejects.toThrow('already resolved as "acceptDisk"');
+		} finally {
+			stopProjectSession('/native/leased.twine.rs');
+			jest.useRealTimers();
+		}
+	});
+
+	it('defers an unchanged candidate and replaces it only after disk changes', async () => {
+		jest.useFakeTimers();
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'start_passage = "passage-id"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/001-start.twee"'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const passageFile = {
+			fingerprint: '1:4',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'passages/story/001-start.twee',
+			sizeBytes: 4
+		};
+		const firstChange = {
+			...passageFile,
+			fingerprint: '2:9',
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 2,
+			sizeBytes: 9
+		};
+		const secondChange = {
+			...firstChange,
+			fingerprint: '3:10',
+			modifiedAt: '2026-06-21T16:00:02.000Z',
+			mtimeMs: 3,
+			sizeBytes: 10
+		};
+		const listener = jest.fn();
+		let passageReads = 0;
+
+		readFileMock.mockImplementation(async path => {
+			if (String(path).endsWith('twine.toml')) {
+				return manifestSource;
+			}
+
+			passageReads++;
+			return passageReads < 3 ? 'first disk text' : 'second disk text';
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([manifestFile, passageFile])
+			.mockReturnValueOnce([manifestFile, firstChange])
+			.mockReturnValueOnce([manifestFile, firstChange])
+			.mockReturnValueOnce([manifestFile, secondChange])
+			.mockReturnValueOnce([manifestFile, passageFile])
+			.mockReturnValueOnce([manifestFile, firstChange]);
+
+		try {
+			await startProjectSession('/native/deferred.twine.rs', listener, [
+				'story-id'
+			]);
+			await jest.advanceTimersByTimeAsync(1250);
+			const firstDelta = listener.mock.calls[0][0];
+
+			const dismissed = await resolveProjectSessionConflicts(
+				'/native/deferred.twine.rs',
+				'dismiss',
+				[],
+				firstDelta.id
+			);
+
+			expect(dismissed.generation).toBe(1);
+			await jest.advanceTimersByTimeAsync(1250);
+			expect(listener).toHaveBeenCalledTimes(1);
+
+			await jest.advanceTimersByTimeAsync(1250);
+			expect(listener).toHaveBeenCalledTimes(2);
+			expect(listener.mock.calls[1][0]).toEqual(
+				expect.objectContaining({
+					baseGeneration: 1,
+					candidateGeneration: 2
+				})
+			);
+			expect(listener.mock.calls[1][0].id).not.toBe(firstDelta.id);
+
+			await resolveProjectSessionConflicts(
+				'/native/deferred.twine.rs',
+				'dismiss',
+				[],
+				listener.mock.calls[1][0].id
+			);
+			await jest.advanceTimersByTimeAsync(1250);
+			expect(listener).toHaveBeenCalledTimes(2);
+
+			await jest.advanceTimersByTimeAsync(1250);
+			expect(listener).toHaveBeenCalledTimes(3);
+		} finally {
+			stopProjectSession('/native/deferred.twine.rs');
 			jest.useRealTimers();
 		}
 	});

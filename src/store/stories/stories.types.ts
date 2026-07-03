@@ -198,6 +198,7 @@ export type CorePatchStoryAction =
 
 export interface ApplyCorePatchBatchAction {
 	actions: CorePatchStoryAction[];
+	persistence?: 'skip';
 	revision?: number;
 	sessionId?: string;
 	storyIds?: string[];

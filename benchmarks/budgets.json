@@ -1,0 +1,73 @@
+{
+	"schemaVersion": 1,
+	"metrics": {
+		"startup.shellMs": {
+			"category": "electron",
+			"enforceTarget": false,
+			"stat": "p50",
+			"target": 400
+		},
+		"startup.interactiveMs": {
+			"category": "electron",
+			"enforceTarget": false,
+			"stat": "p50",
+			"target": 1500
+		},
+		"incremental.reindexComputeMs": {
+			"category": "native",
+			"enforceTarget": false,
+			"stat": "p95",
+			"target": 5
+		},
+		"query.contentsMs": {
+			"category": "electron",
+			"enforceTarget": false,
+			"stat": "p95",
+			"target": 50
+		},
+		"query.searchMs": {
+			"category": "electron",
+			"enforceTarget": false,
+			"stat": "p95",
+			"target": 50
+		},
+		"edit.paintMs": {
+			"category": "electron",
+			"enforceTarget": false,
+			"stat": "p95",
+			"target": 16.6
+		},
+		"graph.frameMs": {
+			"category": "electron",
+			"enforceTarget": false,
+			"stat": "p95",
+			"target": 16.6
+		},
+		"graph.frameMaxMs": {
+			"category": "electron",
+			"enforceTarget": false,
+			"stat": "max",
+			"target": 50
+		},
+		"memory.residentMiB": {
+			"category": "memory",
+			"enforceTarget": false,
+			"stat": "p50",
+			"target": 600
+		}
+	},
+	"regressions": {
+		"electron": {
+			"floor": 5,
+			"percent": 15
+		},
+		"memory": {
+			"floor": 32,
+			"percent": 10
+		},
+		"native": {
+			"floor": 2,
+			"percent": 10
+		}
+	}
+}

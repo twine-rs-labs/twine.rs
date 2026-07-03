@@ -55,6 +55,11 @@ import type {
 	NativeCommandLineOpenResult,
 	NativePlatformSettingsUpdate
 } from '../shared';
+import {
+	mainPerformanceHarnessSnapshot,
+	performanceHarnessEnabled,
+	resetMainPerformanceHarness
+} from './performance-harness';
 
 function nativePlatformSettings() {
 	return {
@@ -65,6 +70,15 @@ function nativePlatformSettings() {
 }
 
 export function initIpc() {
+	if (performanceHarnessEnabled()) {
+		ipcMain.handle('performance-harness-snapshot', async () =>
+			mainPerformanceHarnessSnapshot()
+		);
+		ipcMain.handle('performance-harness-reset', async () =>
+			resetMainPerformanceHarness()
+		);
+	}
+
 	void Promise.resolve(cleanupStaleProjectAssetEffects()).catch(error => {
 		console.warn(`Could not clean stale asset journals: ${error}`);
 	});

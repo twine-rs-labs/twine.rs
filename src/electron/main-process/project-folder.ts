@@ -17,6 +17,7 @@ import {
 	writeFile
 } from 'fs-extra';
 import {basename, dirname, extname, join, relative, resolve} from 'path';
+import {performance} from 'perf_hooks';
 import type {CoreAssetInventoryEntry} from '../../core';
 import type {CoreExternalChange} from '../../core/bindings/CoreExternalChange';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
@@ -46,6 +47,12 @@ import {
 	rememberProjectFolder
 } from './project-library-index';
 import {getStoryDirectoryPath} from './story-directory';
+import {
+	performanceEpochNow,
+	performanceHarnessEnabled,
+	recordWatcherPerformanceMetric,
+	recordWatcherTraceEvent
+} from './performance-harness';
 
 export interface NativeProjectFolderResult {
 	passageTextLoaded?: boolean;
@@ -145,9 +152,17 @@ export interface NativeProjectSessionDelta {
 	delta: CoreExternalDelta;
 	fileChanges: NativeProjectSessionConflict[];
 	id: string;
+	performanceTrace?: NativeProjectSessionPerformanceTrace;
 	recovery?: NativeProjectSessionRecovery;
 	rootPath: string;
 	scannedAt: string;
+}
+
+export interface NativeProjectSessionPerformanceTrace {
+	deltaCreatedAtEpochMs: number;
+	nativeNotifiedAtEpochMs?: number;
+	scanStartedAtEpochMs: number;
+	watcherObservedAtEpochMs?: number;
 }
 
 export interface NativeProjectSessionStart {
@@ -178,8 +193,14 @@ interface NativeProjectDescriptor {
 
 interface ProjectSessionCandidate {
 	baseline: NativeProjectSessionSnapshot;
+	deliveryState: 'awaitingResolution' | 'deferred';
 	delta: NativeProjectSessionDelta;
 	descriptor: NativeProjectDescriptor;
+}
+
+interface ProjectSessionResolutionRecord {
+	resolution: NativeProjectSessionResolution;
+	start: NativeProjectSessionStart;
 }
 
 type ProjectSessionListener = (delta: NativeProjectSessionDelta) => void;
@@ -194,7 +215,15 @@ interface ProjectSessionState {
 	listeners: Set<ProjectSessionListener>;
 	pathHints: Set<string>;
 	pending?: ProjectSessionCandidate;
+	pollAfterResolution?: boolean;
+	pendingWatcherTrace?: {
+		deltaId: string;
+		observedAtEpochMs: number;
+	};
+	reconcileAfterResolution?: boolean;
+	rescanReconcileRequested?: boolean;
 	rescanRequested?: boolean;
+	resolvedCandidates: Map<string, ProjectSessionResolutionRecord>;
 	rootPath: string;
 	scanning?: boolean;
 	watcher?: FSWatcher;
@@ -2340,17 +2369,28 @@ async function targetedAssetEntry(rootPath: string, projectPath: string) {
 function recoveryDelta(
 	session: ProjectSessionState,
 	fileChanges: NativeProjectSessionConflict[],
-	error: Error & {recoveryReason?: NativeProjectSessionRecovery['reason']}
+	error: Error & {recoveryReason?: NativeProjectSessionRecovery['reason']},
+	deltaId: string,
+	scanStartedAtEpochMs: number,
+	watcherObservedAtEpochMs?: number
 ): ProjectSessionCandidate {
 	const changedPaths = fileChanges.map(change => change.path);
 	const candidateGeneration = session.generation + 1;
+	const deltaCreatedAtEpochMs = performanceEpochNow();
 	const delta: NativeProjectSessionDelta = {
 		baseGeneration: session.generation,
 		candidateGeneration,
 		changedPaths,
-		delta: {changes: [], id: uuid()},
+		delta: {changes: [], id: deltaId},
 		fileChanges,
-		id: uuid(),
+		id: deltaId,
+		performanceTrace: performanceHarnessEnabled()
+			? {
+					deltaCreatedAtEpochMs,
+					scanStartedAtEpochMs,
+					watcherObservedAtEpochMs
+				}
+			: undefined,
 		recovery: {
 			changedPaths,
 			message: error.message,
@@ -2360,8 +2400,16 @@ function recoveryDelta(
 		scannedAt: new Date().toISOString()
 	};
 
+	recordWatcherTraceEvent({
+		deltaId,
+		rootPath: session.rootPath,
+		stage: 'delta-created',
+		timeEpochMs: deltaCreatedAtEpochMs
+	});
+
 	return {
 		baseline: session.baseline!,
+		deliveryState: 'awaitingResolution',
 		delta,
 		descriptor: session.descriptor!
 	};
@@ -2371,10 +2419,21 @@ async function readProjectSessionDelta(
 	session: ProjectSessionState,
 	reconcile = false
 ): Promise<ProjectSessionCandidate | undefined> {
+	const startedAt = performance.now();
+	const scanStartedAtEpochMs = performanceEpochNow();
+	const watcherTrace = session.pendingWatcherTrace;
+	const deltaId = watcherTrace?.deltaId ?? uuid();
 	const baseline = session.baseline!;
 	const hints = [...session.pathHints];
 
+	session.pendingWatcherTrace = undefined;
 	session.pathHints.clear();
+	recordWatcherTraceEvent({
+		deltaId,
+		rootPath: session.rootPath,
+		stage: 'scan-started',
+		timeEpochMs: scanStartedAtEpochMs
+	});
 	const files =
 		!reconcile && hints.length > 0
 			? await projectFileManifestForHints(
@@ -2392,6 +2451,7 @@ async function readProjectSessionDelta(
 	let descriptor = session.descriptor!;
 	const changes: CoreExternalChange[] = [];
 	const changedPaths = fileChanges.map(change => change.path);
+	let contentFilesRead = 0;
 
 	try {
 		if (fileChanges.some(change => change.kind === 'metadata')) {
@@ -2406,6 +2466,7 @@ async function readProjectSessionDelta(
 		if (fileChanges.some(change => change.kind === 'manifest')) {
 			const nextDescriptor = await readProjectDescriptor(session.rootPath);
 
+			contentFilesRead++;
 			changes.push(
 				...(await manifestExternalChanges(
 					session.rootPath,
@@ -2423,6 +2484,7 @@ async function readProjectSessionDelta(
 			if (mapping?.kind === 'passage' && mapping.passageId) {
 				const path = safeProjectFilePath(session.rootPath, fileChange.path);
 
+				contentFilesRead++;
 				changes.push({
 					changes: {
 						...emptyPassagePatch(),
@@ -2435,6 +2497,7 @@ async function readProjectSessionDelta(
 			} else if (mapping?.kind === 'script') {
 				const path = safeProjectFilePath(session.rootPath, fileChange.path);
 
+				contentFilesRead++;
 				changes.push({
 					script: path ? ((await readTextIfPresent(path)) ?? '') : '',
 					story_id: mapping.storyId,
@@ -2443,6 +2506,7 @@ async function readProjectSessionDelta(
 			} else if (mapping?.kind === 'stylesheet') {
 				const path = safeProjectFilePath(session.rootPath, fileChange.path);
 
+				contentFilesRead++;
 				changes.push({
 					story_id: mapping.storyId,
 					stylesheet: path ? ((await readTextIfPresent(path)) ?? '') : '',
@@ -2453,6 +2517,7 @@ async function readProjectSessionDelta(
 
 		if (fileChanges.some(change => change.kind === 'graph')) {
 			const nextLayout = await readProjectLayout(session.rootPath);
+			contentFilesRead++;
 			const nextDescriptor = {
 				...descriptor,
 				...nextLayout
@@ -2490,7 +2555,8 @@ async function readProjectSessionDelta(
 		}
 
 		const candidateGeneration = session.generation + 1;
-		const coreDelta: CoreExternalDelta = {changes, id: uuid()};
+		const deltaCreatedAtEpochMs = performanceEpochNow();
+		const coreDelta: CoreExternalDelta = {changes, id: deltaId};
 		const delta: NativeProjectSessionDelta = {
 			baseGeneration: session.generation,
 			candidateGeneration,
@@ -2498,11 +2564,18 @@ async function readProjectSessionDelta(
 			delta: coreDelta,
 			fileChanges,
 			id: coreDelta.id,
+			performanceTrace: performanceHarnessEnabled()
+				? {
+						deltaCreatedAtEpochMs,
+						scanStartedAtEpochMs,
+						watcherObservedAtEpochMs: watcherTrace?.observedAtEpochMs
+					}
+				: undefined,
 			rootPath: session.rootPath,
 			scannedAt: new Date().toISOString()
 		};
 
-		return {
+		const candidate = {
 			baseline: {
 				...baseline,
 				assets: [...assets.values()].sort((left, right) =>
@@ -2514,38 +2587,111 @@ async function readProjectSessionDelta(
 				scannedAt: delta.scannedAt,
 				stories: []
 			},
+			deliveryState: 'awaitingResolution' as const,
 			delta,
 			descriptor
 		};
+
+		recordWatcherTraceEvent({
+			deltaId,
+			rootPath: session.rootPath,
+			stage: 'delta-created',
+			timeEpochMs: deltaCreatedAtEpochMs
+		});
+		recordWatcherPerformanceMetric({
+			assetChanges: changes.filter(
+				change => change.type === 'upsertAsset' || change.type === 'deleteAsset'
+			).length,
+			changedPaths,
+			contentFilesRead,
+			deltaId,
+			durationMs: performance.now() - startedAt,
+			entityChanges: changes.length,
+			recovery: false,
+			rootPath: session.rootPath
+		});
+		return candidate;
 	} catch (error) {
-		return recoveryDelta(
+		const candidate = recoveryDelta(
 			session,
 			fileChanges,
 			error as Error & {
 				recoveryReason?: NativeProjectSessionRecovery['reason'];
-			}
+			},
+			deltaId,
+			scanStartedAtEpochMs,
+			watcherTrace?.observedAtEpochMs
 		);
+
+		recordWatcherPerformanceMetric({
+			assetChanges: fileChanges.filter(change => change.kind === 'asset')
+				.length,
+			changedPaths,
+			contentFilesRead,
+			deltaId,
+			durationMs: performance.now() - startedAt,
+			entityChanges: 0,
+			recovery: true,
+			rootPath: session.rootPath
+		});
+		return candidate;
 	}
 }
 
 function notifyProjectSession(session: ProjectSessionState) {
 	const pending = session.pending;
 
-	if (!pending) {
+	if (!pending || pending.deliveryState !== 'awaitingResolution') {
 		return;
 	}
 
+	const wasNotified =
+		pending.delta.performanceTrace?.nativeNotifiedAtEpochMs !== undefined;
+
+	if (pending.delta.performanceTrace) {
+		pending.delta.performanceTrace.nativeNotifiedAtEpochMs ??=
+			performanceEpochNow();
+	}
+	if (!wasNotified) {
+		recordWatcherTraceEvent({
+			deltaId: pending.delta.id,
+			rootPath: session.rootPath,
+			stage: 'native-notified',
+			timeEpochMs: pending.delta.performanceTrace?.nativeNotifiedAtEpochMs
+		});
+	}
 	for (const listener of session.listeners) {
 		listener(pending.delta);
 	}
+}
+
+function projectSessionCandidateSignature(
+	candidate: ProjectSessionCandidate | undefined
+) {
+	return candidate
+		? JSON.stringify({
+				changes: candidate.delta.delta.changes,
+				paths: candidate.delta.changedPaths,
+				recovery: candidate.delta.recovery
+			})
+		: '';
 }
 
 async function pollProjectSession(
 	session: ProjectSessionState,
 	reconcile = false
 ) {
+	if (session.pending?.deliveryState === 'awaitingResolution') {
+		session.pollAfterResolution = true;
+		session.reconcileAfterResolution =
+			session.reconcileAfterResolution || reconcile;
+		return;
+	}
+
 	if (session.scanning) {
 		session.rescanRequested = true;
+		session.rescanReconcileRequested =
+			session.rescanReconcileRequested || reconcile;
 		return;
 	}
 
@@ -2553,24 +2699,11 @@ async function pollProjectSession(
 
 	try {
 		const candidate = await readProjectSessionDelta(session, reconcile);
-		const previousSignature = session.pending
-			? JSON.stringify({
-					changes: session.pending.delta.delta.changes,
-					paths: session.pending.delta.changedPaths,
-					recovery: session.pending.delta.recovery
-				})
-			: '';
-		const nextSignature = candidate
-			? JSON.stringify({
-					changes: candidate.delta.delta.changes,
-					paths: candidate.delta.changedPaths,
-					recovery: candidate.delta.recovery
-				})
-			: '';
+		const previousSignature = projectSessionCandidateSignature(session.pending);
+		const nextSignature = projectSessionCandidateSignature(candidate);
 
 		if (candidate && session.pending && nextSignature === previousSignature) {
-			// Preserve the exact candidate ID while the renderer is applying or
-			// reviewing the same coalesced disk state.
+			// Preserve the deferred candidate ID while disk state is unchanged.
 		} else {
 			session.pending = candidate;
 		}
@@ -2581,8 +2714,11 @@ async function pollProjectSession(
 		session.scanning = false;
 
 		if (session.rescanRequested) {
+			const nextReconcile = session.rescanReconcileRequested ?? false;
+
 			session.rescanRequested = false;
-			void pollProjectSession(session, reconcile);
+			session.rescanReconcileRequested = false;
+			void pollProjectSession(session, nextReconcile);
 		}
 	}
 }
@@ -2607,6 +2743,18 @@ function installProjectSessionWatcher(session: ProjectSessionState) {
 			session.rootPath,
 			{recursive: true},
 			(_eventType, filename) => {
+				if (!session.pendingWatcherTrace) {
+					session.pendingWatcherTrace = {
+						deltaId: uuid(),
+						observedAtEpochMs: performanceEpochNow()
+					};
+					recordWatcherTraceEvent({
+						deltaId: session.pendingWatcherTrace.deltaId,
+						rootPath: session.rootPath,
+						stage: 'watcher-observed',
+						timeEpochMs: session.pendingWatcherTrace.observedAtEpochMs
+					});
+				}
 				if (filename) {
 					const normalized = String(filename).replace(/\\/g, '/');
 
@@ -2636,6 +2784,7 @@ function ensureProjectSession(rootPath: string) {
 			generation: 1,
 			listeners: new Set<ProjectSessionListener>(),
 			pathHints: new Set<string>(),
+			resolvedCandidates: new Map(),
 			rootPath
 		};
 		projectSessions.set(key, session);
@@ -3561,6 +3710,63 @@ export function stopProjectSession(rootPath: string) {
 	projectSessions.delete(key);
 }
 
+function projectSessionStart(session: ProjectSessionState) {
+	const baseline = session.baseline!;
+
+	return {
+		assets: baseline.assets,
+		generation: session.generation,
+		rootPath: baseline.rootPath,
+		storyIds: baseline.storyIds
+	} satisfies NativeProjectSessionStart;
+}
+
+function rememberProjectSessionResolution(
+	session: ProjectSessionState,
+	deltaId: string | undefined,
+	resolution: NativeProjectSessionResolution,
+	start: NativeProjectSessionStart
+) {
+	if (!deltaId) {
+		return;
+	}
+
+	session.resolvedCandidates.delete(deltaId);
+	session.resolvedCandidates.set(deltaId, {resolution, start});
+	while (session.resolvedCandidates.size > 32) {
+		const oldest = session.resolvedCandidates.keys().next().value;
+
+		if (oldest === undefined) {
+			break;
+		}
+		session.resolvedCandidates.delete(oldest);
+	}
+}
+
+function scheduleProjectSessionReconciliation(session: ProjectSessionState) {
+	const shouldPoll =
+		session.pollAfterResolution ||
+		session.reconcileAfterResolution ||
+		session.pathHints.size > 0;
+	const reconcile = session.reconcileAfterResolution ?? false;
+
+	session.pollAfterResolution = false;
+	session.reconcileAfterResolution = false;
+	if (!shouldPoll) {
+		return;
+	}
+	if (session.debounceTimer) {
+		clearTimeout(session.debounceTimer);
+		session.debounceTimer = undefined;
+	}
+
+	setTimeout(() => {
+		if (projectSessions.get(projectSessionKey(session.rootPath)) === session) {
+			void pollProjectSession(session, reconcile);
+		}
+	}, 0);
+}
+
 export async function resolveProjectSessionConflicts(
 	rootPath: string,
 	resolution: NativeProjectSessionResolution,
@@ -3568,6 +3774,18 @@ export async function resolveProjectSessionConflicts(
 	deltaId?: string
 ) {
 	const session = ensureProjectSession(rootPath);
+	const resolved = deltaId
+		? session.resolvedCandidates.get(deltaId)
+		: undefined;
+
+	if (resolved) {
+		if (resolved.resolution !== resolution) {
+			throw new Error(
+				`Project delta "${deltaId}" was already resolved as "${resolved.resolution}".`
+			);
+		}
+		return resolved.start;
+	}
 
 	if (deltaId && (!session.pending || session.pending.delta.id !== deltaId)) {
 		throw new Error(`Project delta "${deltaId}" is stale.`);
@@ -3600,14 +3818,13 @@ export async function resolveProjectSessionConflicts(
 		}
 		session.generation = candidate.delta.candidateGeneration;
 		session.pending = undefined;
+	} else if (resolution === 'dismiss' && session.pending) {
+		session.pending.deliveryState = 'deferred';
 	}
 
-	const baseline = session.baseline!;
+	const start = projectSessionStart(session);
 
-	return {
-		assets: baseline.assets,
-		generation: session.generation,
-		rootPath: baseline.rootPath,
-		storyIds: baseline.storyIds
-	} satisfies NativeProjectSessionStart;
+	rememberProjectSessionResolution(session, deltaId, resolution, start);
+	scheduleProjectSessionReconciliation(session);
+	return start;
 }

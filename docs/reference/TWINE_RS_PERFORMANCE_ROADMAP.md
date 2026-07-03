@@ -105,8 +105,9 @@ allocations, persistence write-back, and React render churn → ~7s observed.
 7. **Session sync is now changed-path incremental.** Recursive watcher hints drive targeted
    passage/source/layout/asset reads and generation-bound Rust deltas. A 30-second metadata-only
    reconciliation catches missed events; the old 1.25-second manifest scan is retained only when
-   recursive watching is unavailable. The remaining gate is measuring this path in packaged
-   10k/50k projects.
+   recursive watching is unavailable. The unpackaged release-mode Electron harness now proves
+   one-source passage ingestion and asset-only review at 10k and 50k. Packaged-app measurements
+   remain a separate release follow-up.
 
 ### 1.3 What already exists to build on
 
@@ -439,21 +440,19 @@ cargo bench -p twine_graph -- --baseline main       # CI: fail on regression
 Criterion's baseline diffing is the regression gate for pure-core perf. Feed the same generated
 fixtures (1k/5k/10k/50k) so numbers track the JS/E2E layers.
 
-### 5.2 Full-project load bench — extend `twine_cli`
+### 5.2 Full-project load bench — `twine_cli`
 
-Add a `bench-open <project-folder>` command (sibling to `bench-graph`) that times native load +
-index + projection of a _real folder_ and prints JSON (`loadMs`, `indexMs`, `projectionMs`,
-`assets`, `passages`). Wrap in a script that records against a committed budget file:
+`bench-open <project-folder>` times native load, index, layout snapshot, and projection of a
+real folder and prints JSON (`loadMs`, `indexMs`, `layoutSnapshotMs`, `projectionMs`, `assets`,
+`passages`):
 
 ```sh
 cargo run -q -p twine_cli --release -- bench-open "<Transylvania folder>"
-node benchmarks/check-budget.mjs --metric open --max 1500   # exits non-zero over budget
 ```
 
-Commit a **tracked perf fixture** so CI has a stable large project without the 404MB asset blob:
-generate a 5k-passage story _with a synthetic asset tree of the same shape_ (counts, nesting,
-reference density) via an extended `generate-fixtures.mjs --with-assets`. Keep the real
-Transylvania as a local-only manual benchmark (document its path; never commit 404MB).
+The Electron harness generates untracked 10k/50k story input and delegates canonical
+project-folder creation to `twine_cli import`. This avoids duplicating the storage schema in
+JavaScript and keeps large corpora out of Git. Keep real asset-heavy projects local-only.
 
 ### 5.3 Renderer perf — Jest (parity + micro-latency)
 
@@ -470,29 +469,49 @@ npm run test -- src/core/__tests__/graph-projection.parity.test.ts
 npm run perf:unit          # new script: jest --selectProjects perf --runInBand
 ```
 
-### 5.4 App-level — Playwright, including real Electron
+### 5.4 App-level — release-mode Electron (implemented locally)
 
-Today [playwright.config.ts](../../playwright.config.ts) drives the **Vite web** build. Add a
-second project that launches the **built Electron app** (`_electron.launch`) so we measure the
-real main↔renderer path, then capture timing/frames/memory via CDP.
+The dedicated [playwright.electron.config.ts](../../playwright.electron.config.ts) launches the
+unpackaged production build with `_electron.launch`, a copied fixture, and isolated temporary
+user-data/session-data/library paths. The normal browser Playwright configuration remains
+unchanged. Startup, edit, query/search, graph, and watcher work run in separate Playwright
+processes, with a sanitized environment and macOS teardown barrier between Electron launches.
 
-- **Startup:** `performance.mark`/`measure` between launch, shell-visible, and
-  all-passages-ready, opening the perf fixture.
-- **Frame time during pan:** inject a `requestAnimationFrame` sampler, run a scripted drag,
-  assert no frame > 50ms and p95 ≤ 16.6ms.
-- **Edge/node desync:** sample projected edge vs node counts per frame; assert they never diverge
-  (kills the "pointers disappear and reappear" symptom).
-- **Memory:** `Performance.getMetrics` / `Runtime.getHeapUsage` over CDP after open; assert
-  ceiling.
+- **Startup:** three fresh processes record launch, shell, hydration, session, graph, and
+  contents milestones.
+- **Edit:** two warm-ups plus twenty edit/undo/redo samples record compute, queue, transfer,
+  paint, payload, persistence queue/save, and exact-revision acknowledgement timing.
+- **Query:** two warm-ups plus twenty full-contents and filter/search samples.
+- **Graph:** five scripted pans collect animation-frame p50/p95/max and assert viewport-bounded
+  node mounting.
+- **Watcher:** one passage edit and one asset edit assert changed-path parsing, automatic content
+  ingestion, asset review, and no recovery/full replacement.
+- **Memory:** Electron process metrics capture total resident working sets after startup and
+  after every active phase, with main and renderer values reported separately.
 
 ```sh
-npm run e2e:electron        # new: playwright test --project=electron
-npm run perf:e2e            # new: the timing/frame/memory specs only
+npm run perf:prepare
+npm run perf:electron:10k
+npm run perf:electron:50k
+npm run perf:electron:50k:watcher
 ```
 
-### 5.5 CI gating — a dedicated `perf` job
+JSON/Markdown reports live under ignored `benchmarks/results/`. Absolute targets are initially
+report-only. Complete all-phase Apple M4 baselines are accepted for both 10k and 50k; partial
+reports cannot become baselines. Matching runs enforce 15%/5 ms Electron, 10%/2 ms native, and
+10%/32 MiB memory regression checks. A persistent checkpoint beside each report records phase
+status and completed launch traces even when Electron crashes or a phase times out; the outer
+runner owns and removes the complete temporary run root.
 
-`.github/workflows/perf.yml` (mirrors the existing jest/playwright reference workflows):
+The first complete 50k baseline passes all structural gates but exposes the optimization backlog:
+shell p50 27.5 s, edit-to-paint p95 1.36 s, project-folder save p95 29.25 s, contents p95 3.34 s,
+graph-frame p95 2.5 s, incremental watcher reindex 615.5 ms, and resident memory p50 1.93 GiB.
+Search p95 is 46.7 ms and meets the 50 ms target.
+
+### 5.5 CI gating — deferred
+
+The current milestone deliberately provides a reproducible local harness without hosted CI or
+packaged-app measurement. A future dedicated job can run the same commands on pinned hardware:
 
 ```
 matrix: fixture ∈ {1k, 5k, 10k, 50k}
@@ -504,18 +523,17 @@ steps:
 artifacts: criterion reports, playwright traces, budget JSON (trend over time)
 ```
 
-Budgets live in a single committed `benchmarks/budgets.json` so a regression is a one-line diff
-and a red check, not a vibe.
+Budgets already live in `benchmarks/budgets.json`; CI should promote absolute targets only after
+stable reference-hardware baselines exist.
 
 ### 5.6 Profiling artifacts we should keep
 
-Every perf run should save enough evidence to explain failures without rerunning locally:
+Every local Electron perf run saves:
 
-- `open-profile.json`: phase marks, file counts, payload bytes, heap/RSS, bridge mode flags.
-- Playwright trace + screenshot at shell-visible, graph-visible, contents-visible.
-- Rust criterion report for core regressions.
-- Worker/native timing breakdown: compute vs transfer vs React commit.
-- A short `benchmarks/latest.md` generated from the JSON so humans can compare runs quickly.
+- a versioned JSON report with samples, aggregates, file/entity counts, payload bytes,
+  memory, bridge mode, machine fingerprint, Git state, and invariant results;
+- a same-named Markdown summary with targets, baseline status, and failures;
+- Playwright failure artifacts under `output/playwright/electron-performance`.
 
 These artifacts matter because "Rust is fast" is not enough; we need to know whether time moved
 from parse to transfer, from transfer to React commit, or from open to background sync.
@@ -603,12 +621,12 @@ priority order:
    ([MILESTONES](./TWINE_RS_MILESTONES.md):531). Two mutation paths = double the surface to keep
    fast and correct. → _Folds away as Phases 1–3 route everything through the host/session._
 
-4. **M2 perf is self-flagged as unvalidated.** [MILESTONES](./TWINE_RS_MILESTONES.md):422 —
+4. **M2 perf was self-flagged as unvalidated.** [MILESTONES](./TWINE_RS_MILESTONES.md):422 —
    "**REMAINING:** performance validation still needs 50k passage projects, pan/zoom latency
    traces, viewport projection latency, edge-layer filtering, search/filter responsiveness, and
    memory ceilings in the running app," and the "remaining scale risk is … the Rust/WASM
    `ProjectSession` bridge." This roadmap's §5 headless harness is precisely that missing
-   validation. → _Delivered by §5 + Phase 4._
+   validation. → _Delivered locally by §5; optimization against the recorded baseline remains._
 
 5. **`.twine/project.json` carries a tolerate-corruption fallback.** The recent fix writes the
    sidecar atomically and the loader _ignores invalid JSON and falls back to twine.toml_; older

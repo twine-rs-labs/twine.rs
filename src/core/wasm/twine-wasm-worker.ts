@@ -18,6 +18,12 @@ function now() {
 	return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
+function epochNow() {
+	return typeof performance !== 'undefined'
+		? performance.timeOrigin + performance.now()
+		: Date.now();
+}
+
 function byteSize(value: unknown) {
 	const json =
 		JSON.stringify(value, (_key, current) =>
@@ -60,15 +66,22 @@ async function handleRequest(
 	request: WasmWorkerRequest
 ): Promise<WasmWorkerResponse> {
 	const workerReceivedAt = now();
+	const workerReceivedAtEpochMs = epochNow();
 	const requestBytes = byteSize(request);
 	let result: unknown;
 	let computeMs = 0;
+	let computeStartedAt = workerReceivedAt;
+	let computeStartedAtEpochMs = workerReceivedAtEpochMs;
+	let computeFinishedAtEpochMs = workerReceivedAtEpochMs;
+	let rustStartedAtEpochMs: number | undefined;
+	let rustFinishedAtEpochMs: number | undefined;
 
 	try {
 		await ensureWasm();
 
-		const computeStartedAt = now();
+		computeStartedAt = now();
 
+		computeStartedAtEpochMs = epochNow();
 		switch (request.kind) {
 			case 'replaceProject':
 				if (!SessionConstructor) {
@@ -162,11 +175,14 @@ async function handleRequest(
 
 			case 'ingestExternalDelta': {
 				const entry = ensureSession(request.sessionId, request.revision);
+
+				rustStartedAtEpochMs = epochNow();
 				const ingest = entry.session.ingest_external_delta(
 					request.delta,
 					request.force
 				);
 
+				rustFinishedAtEpochMs = epochNow();
 				entry.revision = entry.session.revision();
 				result = {
 					...ingest,
@@ -207,18 +223,29 @@ async function handleRequest(
 		}
 
 		computeMs = now() - computeStartedAt;
+		computeFinishedAtEpochMs = epochNow();
 
 		const responseBytes = byteSize(result);
+		const workerRespondedAt = now();
+		const workerRespondedAtEpochMs = epochNow();
 		const metrics: WasmWorkerMetricBase = {
 			computeMs,
+			computeFinishedAtEpochMs,
+			computeStartedAtEpochMs,
 			payloadBytes:
 				request.kind === 'replaceProject'
 					? byteSize(request.snapshot)
 					: responseBytes,
 			requestBytes,
 			responseBytes,
+			rustFinishedAtEpochMs,
+			rustStartedAtEpochMs,
+			traceId:
+				request.kind === 'ingestExternalDelta' ? request.delta.id : undefined,
 			workerReceivedAt,
-			workerRespondedAt: now()
+			workerReceivedAtEpochMs,
+			workerRespondedAt,
+			workerRespondedAtEpochMs
 		};
 
 		return {
@@ -229,13 +256,25 @@ async function handleRequest(
 			result
 		} as WasmWorkerResponse;
 	} catch (error) {
+		computeMs = now() - computeStartedAt;
+		computeFinishedAtEpochMs = epochNow();
+		const workerRespondedAt = now();
+		const workerRespondedAtEpochMs = epochNow();
 		const metrics: WasmWorkerMetricBase = {
 			computeMs,
+			computeFinishedAtEpochMs,
+			computeStartedAtEpochMs,
 			payloadBytes: 0,
 			requestBytes,
 			responseBytes: 0,
+			rustFinishedAtEpochMs,
+			rustStartedAtEpochMs,
+			traceId:
+				request.kind === 'ingestExternalDelta' ? request.delta.id : undefined,
 			workerReceivedAt,
-			workerRespondedAt: now()
+			workerReceivedAtEpochMs,
+			workerRespondedAt,
+			workerRespondedAtEpochMs
 		};
 
 		return {

@@ -37,6 +37,12 @@ import {
 } from '../store/stories';
 import {loadProjectMetadata} from '../store/project-metadata';
 import type {TwineElectronWindow} from '../electron/shared';
+import {
+	markPerformance,
+	measurePerformance,
+	measurePerformanceAfterPaint,
+	recordPerformanceHarnessEvent
+} from '../util/performance';
 
 export type StoryIndexQuery = string | Partial<CoreStoryIndexOptions>;
 const defaultCoreSessionId = 'library';
@@ -402,14 +408,30 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		options?: CoreCommandOptions
 	): Promise<PatchBatch | undefined> {
 		const normalized = normalizeCommandOptions(options);
+		markPerformance('mutation-submit');
+		let batch: PatchBatch | undefined;
 
 		if (this.wasmClient.applySync && this.wasmClient.replaceProjectSync) {
-			return this.applyStoryCommandThroughSyncSession(command, normalized);
+			batch = this.applyStoryCommandThroughSyncSession(command, normalized);
+		} else {
+			batch = await this.enqueueMutation(() =>
+				this.applyStoryCommandThroughWasm(command, normalized)
+			);
 		}
 
-		return this.enqueueMutation(() =>
-			this.applyStoryCommandThroughWasm(command, normalized)
+		markPerformance('mutation-patch-applied');
+		measurePerformance(
+			'mutation-round-trip',
+			'mutation-submit',
+			'mutation-patch-applied'
 		);
+		measurePerformanceAfterPaint('mutation-to-paint', 'mutation-submit');
+		recordPerformanceHarnessEvent('mutation-applied', {
+			command: command.type,
+			patches: batch?.patches.length ?? 0,
+			revision: this.status.revision
+		});
+		return batch;
 	}
 
 	async applyExternalDelta(
@@ -422,17 +444,28 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 		return this.enqueueMutation(async () => {
 			const revision = await this.ensureWasmProjectSession();
+			recordPerformanceHarnessEvent('external-delta-worker-submit', {
+				deltaId: delta.id,
+				force: true,
+				revision
+			});
 			const result = await this.wasmClient.applyExternalDelta(
 				this.sessionId,
 				delta,
 				revision
 			);
 
+			recordPerformanceHarnessEvent('external-delta-rust-ingested', {
+				deltaId: delta.id,
+				outcome: 'applied',
+				revision: result.revision
+			});
 			this.applySessionPatchBatch(
 				result.batch,
 				'undoChange.externalChanges',
 				result.revision,
-				result.status
+				result.status,
+				delta.id
 			);
 			if (result.revision !== revision) {
 				this.recordHistoryEffect(undefined);
@@ -452,6 +485,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 		return this.enqueueMutation(async () => {
 			const revision = await this.ensureWasmProjectSession();
+			recordPerformanceHarnessEvent('external-delta-worker-submit', {
+				deltaId: delta.id,
+				force: !!options.force,
+				revision
+			});
 			const result = await this.wasmClient.ingestExternalDelta(
 				this.sessionId,
 				delta,
@@ -459,13 +497,19 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				options.force
 			);
 
+			recordPerformanceHarnessEvent('external-delta-rust-ingested', {
+				deltaId: delta.id,
+				outcome: result.outcome,
+				revision: result.revision
+			});
 			this.wasmProjectRevision = result.revision;
 			if (result.batch) {
 				this.applySessionPatchBatch(
 					result.batch,
 					'undoChange.externalChanges',
 					result.revision,
-					result.status
+					result.status,
+					delta.id
 				);
 				if (result.historyRecorded) {
 					this.recordHistoryEffect(undefined);
@@ -545,7 +589,8 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		batch: PatchBatch,
 		annotation: string | undefined,
 		nextRevision: number,
-		status?: CoreSessionStatus
+		status?: CoreSessionStatus,
+		externalDeltaId?: string
 	) {
 		const storyActions = projectPatchBatchStoryActions(batch);
 
@@ -562,6 +607,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					this.dispatch(
 						{
 							actions,
+							persistence: externalDeltaId ? 'skip' : undefined,
 							revision: nextRevision,
 							sessionId: this.sessionId,
 							storyIds: Array.from(
@@ -591,6 +637,14 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			storyActions
 		);
 
+		if (externalDeltaId) {
+			recordPerformanceHarnessEvent('external-delta-patch-applied', {
+				deltaId: externalDeltaId,
+				patches: batch.patches.length,
+				revision: nextRevision,
+				storyActions: storyActions.length
+			});
+		}
 		this.publishPatchBatch(batch);
 		if (status) {
 			this.publishStatus(status);
@@ -606,7 +660,15 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			return undefined;
 		}
 
-		return this.enqueueMutation(() => this.undoThroughWasm());
+		markPerformance('undo-submit');
+		const batch = await this.enqueueMutation(() => this.undoThroughWasm());
+
+		markPerformance('undo-applied');
+		measurePerformance('undo-round-trip', 'undo-submit', 'undo-applied');
+		recordPerformanceHarnessEvent('undo-applied', {
+			revision: this.status.revision
+		});
+		return batch;
 	}
 
 	private async undoThroughWasm() {
@@ -648,7 +710,15 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			return undefined;
 		}
 
-		return this.enqueueMutation(() => this.redoThroughWasm());
+		markPerformance('redo-submit');
+		const batch = await this.enqueueMutation(() => this.redoThroughWasm());
+
+		markPerformance('redo-applied');
+		measurePerformance('redo-round-trip', 'redo-submit', 'redo-applied');
+		recordPerformanceHarnessEvent('redo-applied', {
+			revision: this.status.revision
+		});
+		return batch;
 	}
 
 	private async redoThroughWasm() {
@@ -701,8 +771,16 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	}
 
 	private publishStatus(status: CoreSessionStatus) {
+		const previousRevision = this.status.revision;
+
 		this.status = status;
 		this.dirty = status.dirty;
+		if (status.revision !== previousRevision) {
+			recordPerformanceHarnessEvent('session-revision', {
+				revision: status.revision,
+				sessionId: this.sessionId
+			});
+		}
 		this.statusListeners.forEach(listener => listener(status));
 	}
 
@@ -1041,13 +1119,22 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 		if (this.wasmClient.enabled) {
 			try {
+				markPerformance('graph-query-submit');
 				const revision = await this.ensureWasmProjectSession();
-				return await this.wasmClient.queryGraphProjection(
+				const result = await this.wasmClient.queryGraphProjection(
 					this.sessionId,
 					storyId,
 					normalizedOptions,
 					revision
 				);
+
+				markPerformance('graph-query-result');
+				measurePerformance(
+					'graph-query-round-trip',
+					'graph-query-submit',
+					'graph-query-result'
+				);
+				return result;
 			} catch (error) {
 				console.warn(`Rust graph projection query failed: ${error}`);
 			}
@@ -1083,13 +1170,22 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 		if (this.wasmClient.enabled) {
 			try {
+				markPerformance('story-index-query-submit');
 				const revision = await this.ensureWasmProjectSession();
-				return await this.wasmClient.queryStoryIndex(
+				const result = await this.wasmClient.queryStoryIndex(
 					this.sessionId,
 					storyId,
 					normalizedOptions,
 					revision
 				);
+
+				markPerformance('story-index-query-result');
+				measurePerformance(
+					'story-index-query-round-trip',
+					'story-index-query-submit',
+					'story-index-query-result'
+				);
+				return result;
 			} catch (error) {
 				console.warn(`Rust story index query failed: ${error}`);
 			}
@@ -1156,6 +1252,8 @@ function commandStoryId(command: StoryCommand): string | undefined {
 	return undefined;
 }
 
+const projectScopedCoreHosts = new Set<ProjectScopedCoreProjectHost>();
+
 class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	private client = createWasmCoreWorkerClient();
 	private dispatch: UndoableDispatch;
@@ -1168,7 +1266,21 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	constructor(stories: StoriesState, dispatch: UndoableDispatch) {
 		this.stories = stories;
 		this.dispatch = dispatch;
+		projectScopedCoreHosts.add(this);
 		this.update(stories, dispatch);
+	}
+
+	performanceDiagnostics() {
+		return {
+			mode: this.client.mode,
+			sessions: Array.from(this.hosts, ([sessionId, host]) => ({
+				revision: host.sessionStatus().revision,
+				sessionId,
+				storyIds: Array.from(this.storySessions)
+					.filter(([, candidate]) => candidate === sessionId)
+					.map(([storyId]) => storyId)
+			}))
+		};
 	}
 
 	private emptyStatus(): CoreSessionStatus {
@@ -1388,7 +1500,23 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		this.hosts.clear();
 		this.storySessions.clear();
 		this.client.dispose();
+		projectScopedCoreHosts.delete(this);
 	}
+}
+
+export function coreProjectHostPerformanceSnapshot() {
+	const hosts = [...projectScopedCoreHosts].map(host =>
+		host.performanceDiagnostics()
+	);
+
+	return {
+		activeSessions: hosts.reduce(
+			(total, host) => total + host.sessions.length,
+			0
+		),
+		hosts,
+		workerClients: hosts.length
+	};
 }
 
 export function useCoreProjectHost() {

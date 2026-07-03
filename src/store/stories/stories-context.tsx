@@ -13,6 +13,7 @@ import {
 	publishStorySaveStatus,
 	StorySaveStatus
 } from '../persistence/save-status';
+import {recordPerformanceHarnessEvent} from '../../util/performance';
 
 export const StoriesContext = React.createContext<StoriesContextProps>({
 	dispatch: () => {},
@@ -47,6 +48,16 @@ export const StoriesContextProvider: React.FC = props => {
 						void persistence.completion
 							.then(() => {
 								if (persistence.persisted) {
+									recordPerformanceHarnessEvent('persistence-save-notified', {
+										revision:
+											action.type === 'applyCorePatchBatch'
+												? action.revision
+												: undefined,
+										sessionId:
+											action.type === 'applyCorePatchBatch'
+												? action.sessionId
+												: undefined
+									});
 									queueStorySaveStatus({
 										kind: 'saved',
 										revision:
@@ -62,6 +73,20 @@ export const StoriesContextProvider: React.FC = props => {
 								}
 							})
 							.catch(error => {
+								recordPerformanceHarnessEvent(
+									'persistence-notification-failed',
+									{
+										error: (error as Error).message,
+										revision:
+											action.type === 'applyCorePatchBatch'
+												? action.revision
+												: undefined,
+										sessionId:
+											action.type === 'applyCorePatchBatch'
+												? action.sessionId
+												: undefined
+									}
+								);
 								queueStorySaveStatus({
 									error: error as Error,
 									kind: 'error',

@@ -12,6 +12,7 @@ import {
 } from '../../persistable-changes';
 import {loadProjectMetadata} from '../../../project-metadata';
 import {saveStory} from './save-story';
+import {recordPerformanceHarnessEvent} from '../../../../util/performance';
 
 // When a story is deleted, we need to be able to look up information about it
 // from the last state.
@@ -105,6 +106,9 @@ export function saveMiddleware(
 
 	switch (action.type) {
 		case 'applyCorePatchBatch': {
+			if (action.persistence === 'skip') {
+				break;
+			}
 			const saves: Array<() => Promise<void>> = [];
 			const touchedStoryIds = new Set(
 				action.actions.flatMap(action =>
@@ -141,11 +145,32 @@ export function saveMiddleware(
 				}
 			}
 			const saveAll = async () => {
-				for (const save of saves) {
-					await save();
+				recordPerformanceHarnessEvent('persistence-save-started', {
+					revision: action.revision,
+					sessionId: action.sessionId
+				});
+				try {
+					for (const save of saves) {
+						await save();
+					}
+					recordPerformanceHarnessEvent('persistence-save-completed', {
+						revision: action.revision,
+						sessionId: action.sessionId
+					});
+				} catch (error) {
+					recordPerformanceHarnessEvent('persistence-save-failed', {
+						error: (error as Error).message,
+						revision: action.revision,
+						sessionId: action.sessionId
+					});
+					throw error;
 				}
 			};
 
+			recordPerformanceHarnessEvent('persistence-save-queued', {
+				revision: action.revision,
+				sessionId: action.sessionId
+			});
 			completion = action.sessionId
 				? queueSessionSave(action.sessionId, saveAll)
 				: saveAll();

@@ -7,6 +7,15 @@ export interface TwinePerformanceEntry {
 	type: string;
 }
 
+export interface TwinePerformanceEvent {
+	detail?: Record<string, unknown>;
+	epochTime: number;
+	name: string;
+	time: number;
+}
+
+const harnessEvents: TwinePerformanceEvent[] = [];
+
 function performanceApi() {
 	return typeof window !== 'undefined' ? window.performance : undefined;
 }
@@ -39,6 +48,64 @@ export function markPerformanceAfterPaint(name: string) {
 	}
 
 	requestFrame(() => markPerformance(name));
+}
+
+export function measurePerformanceAfterPaint(name: string, start: string) {
+	if (typeof window === 'undefined') {
+		return;
+	}
+
+	const finish = () => {
+		markPerformance(`${name}-end`);
+		measurePerformance(name, start, `${name}-end`);
+	};
+	const requestFrame = window.requestAnimationFrame;
+
+	if (!requestFrame) {
+		window.setTimeout(finish, 0);
+		return;
+	}
+	requestFrame(finish);
+}
+
+export function recordPerformanceHarnessEvent(
+	name: string,
+	detail?: Record<string, unknown>
+) {
+	if (
+		typeof window === 'undefined' ||
+		!(window as Window & {twinePerformanceNative?: unknown})
+			.twinePerformanceNative
+	) {
+		return;
+	}
+
+	const performance = performanceApi();
+	const time = performance?.now() ?? Date.now();
+	harnessEvents.push({
+		detail,
+		epochTime:
+			typeof performance?.timeOrigin === 'number'
+				? performance.timeOrigin + time
+				: Date.now(),
+		name,
+		time
+	});
+	if (harnessEvents.length > 1000) {
+		harnessEvents.splice(0, harnessEvents.length - 1000);
+	}
+}
+
+export function performanceEventSnapshot() {
+	return [...harnessEvents];
+}
+
+export function resetRendererPerformance() {
+	harnessEvents.length = 0;
+	const performance = performanceApi();
+
+	performance?.clearMarks?.();
+	performance?.clearMeasures?.();
 }
 
 export function measurePerformance(

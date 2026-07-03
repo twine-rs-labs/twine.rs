@@ -12,11 +12,18 @@ import type {CoreBridgeMetric} from './performance';
 
 export interface WasmWorkerMetricBase {
 	computeMs: number;
+	computeFinishedAtEpochMs: number;
+	computeStartedAtEpochMs: number;
 	payloadBytes: number;
 	requestBytes: number;
 	responseBytes: number;
+	rustFinishedAtEpochMs?: number;
+	rustStartedAtEpochMs?: number;
+	traceId?: string;
 	workerReceivedAt: number;
+	workerReceivedAtEpochMs: number;
 	workerRespondedAt: number;
+	workerRespondedAtEpochMs: number;
 }
 
 export type WasmWorkerRequest =

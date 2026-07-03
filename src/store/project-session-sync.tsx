@@ -12,8 +12,12 @@ import {
 import type {CoreExternalConflict} from '../core/bindings/CoreExternalConflict';
 import {markProjectStoryHydration} from './project-hydration';
 import {loadProjectMetadata, saveProjectMetadata} from './project-metadata';
+import {NativeProjectDeltaQueue} from './native-project-delta-queue';
 import {Story, useStoriesContext} from './stories';
-import {markPerformance} from '../util/performance';
+import {
+	markPerformance,
+	recordPerformanceHarnessEvent
+} from '../util/performance';
 import './project-session-sync.css';
 
 interface PendingProjectReview {
@@ -61,6 +65,13 @@ function projectRootsForStories(stories: Story[]) {
 	return roots;
 }
 
+function deterministicResolutionError(error: Error) {
+	return (
+		error.message.includes(' is stale.') ||
+		error.message.includes(' was already resolved as ')
+	);
+}
+
 export const ProjectSessionSync: React.FC = () => {
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
@@ -101,6 +112,10 @@ export const ProjectSessionSync: React.FC = () => {
 			let lastError: Error | undefined;
 
 			for (let attempt = 0; attempt < 3; attempt++) {
+				recordPerformanceHarnessEvent('watcher-acknowledgement-start', {
+					attempt: attempt + 1,
+					deltaId: delta.id
+				});
 				try {
 					const start = await twineElectron.resolveProjectSessionConflicts(
 						delta.rootPath,
@@ -110,9 +125,22 @@ export const ProjectSessionSync: React.FC = () => {
 					);
 
 					rememberSessionStart(start);
+					recordPerformanceHarnessEvent('watcher-acknowledgement-complete', {
+						attempt: attempt + 1,
+						deltaId: delta.id,
+						generation: start.generation
+					});
 					return;
 				} catch (acknowledgementError) {
 					lastError = acknowledgementError as Error;
+					recordPerformanceHarnessEvent('watcher-acknowledgement-failed', {
+						attempt: attempt + 1,
+						deltaId: delta.id,
+						error: lastError.message
+					});
+					if (deterministicResolutionError(lastError)) {
+						break;
+					}
 				}
 			}
 
@@ -123,6 +151,13 @@ export const ProjectSessionSync: React.FC = () => {
 
 	const processDelta = React.useCallback(
 		async (delta: NativeProjectSessionDelta) => {
+			recordPerformanceHarnessEvent('watcher-ingest-start', {
+				changedPaths: delta.changedPaths.length,
+				deltaId: delta.id,
+				entityChanges: delta.delta.changes.length,
+				nativeTrace: delta.performanceTrace,
+				recovery: !!delta.recovery
+			});
 			const current = rootStoriesRef.current.get(delta.rootPath) ?? [];
 			const targetStoryId = current[0]?.id;
 
@@ -132,8 +167,12 @@ export const ProjectSessionSync: React.FC = () => {
 				);
 			}
 			if (delta.recovery) {
+				recordPerformanceHarnessEvent('watcher-review-required', {
+					deltaId: delta.id,
+					recovery: true
+				});
 				setPendingReview({conflicts: [], delta, rootPath: delta.rootPath});
-				return;
+				return 'pause' as const;
 			}
 
 			const result = await coreProjectHost.ingestExternalDelta(
@@ -142,22 +181,46 @@ export const ProjectSessionSync: React.FC = () => {
 			);
 
 			if (result.outcome === 'conflict') {
+				recordPerformanceHarnessEvent('watcher-review-required', {
+					conflicts: result.conflicts.length,
+					deltaId: delta.id,
+					recovery: false
+				});
 				setPendingReview({
 					conflicts: result.conflicts,
 					delta,
 					rootPath: delta.rootPath
 				});
-				return;
+				return 'pause' as const;
 			}
 
 			await acknowledgeDelta(delta);
+			recordPerformanceHarnessEvent('watcher-ingest-applied', {
+				deltaId: delta.id,
+				outcome: result.outcome
+			});
 			dismissedDeltas.current.delete(delta.id);
 			setPendingReview(currentReview =>
 				currentReview?.rootPath === delta.rootPath ? undefined : currentReview
 			);
+			return 'continue' as const;
 		},
 		[acknowledgeDelta, coreProjectHost]
 	);
+
+	const processDeltaRef = React.useRef(processDelta);
+	const deltaQueueRef =
+		React.useRef<NativeProjectDeltaQueue<NativeProjectSessionDelta> | null>(
+			null
+		);
+
+	processDeltaRef.current = processDelta;
+	if (!deltaQueueRef.current) {
+		deltaQueueRef.current = new NativeProjectDeltaQueue(
+			delta => processDeltaRef.current(delta),
+			changeError => setError(changeError.message)
+		);
+	}
 
 	const synchronizeStartAssets = React.useCallback(
 		async (start: NativeProjectSessionStart) => {
@@ -189,12 +252,17 @@ export const ProjectSessionSync: React.FC = () => {
 
 		return twineElectron.onProjectSessionChanged(delta => {
 			if (!dismissedDeltas.current.has(delta.id)) {
-				void processDelta(delta).catch(changeError => {
-					setError(changeError.message);
+				recordPerformanceHarnessEvent('watcher-delta-observed', {
+					changedPaths: delta.changedPaths.length,
+					deltaId: delta.id,
+					entityChanges: delta.delta.changes.length,
+					nativeTrace: delta.performanceTrace,
+					recovery: !!delta.recovery
 				});
+				deltaQueueRef.current?.enqueue(delta);
 			}
 		});
-	}, [processDelta, twineElectron]);
+	}, [twineElectron]);
 
 	React.useEffect(() => {
 		if (!twineElectron?.startProjectSession) {
@@ -223,6 +291,7 @@ export const ProjectSessionSync: React.FC = () => {
 			canceled = true;
 
 			for (const rootPath of rootPaths) {
+				deltaQueueRef.current?.clearRoot(rootPath);
 				void twineElectron.stopProjectSession?.(rootPath);
 			}
 		};
@@ -288,6 +357,7 @@ export const ProjectSessionSync: React.FC = () => {
 
 			await acknowledgeDelta(pendingReview.delta);
 			dismissedDeltas.current.delete(pendingReview.delta.id);
+			deltaQueueRef.current?.resume(pendingReview.rootPath);
 			setPendingReview(undefined);
 		} catch (acceptError) {
 			setError((acceptError as Error).message);
@@ -324,6 +394,7 @@ export const ProjectSessionSync: React.FC = () => {
 				);
 			}
 			dismissedDeltas.current.delete(pendingReview.delta.id);
+			deltaQueueRef.current?.resume(pendingReview.rootPath);
 			setPendingReview(undefined);
 		} catch (keepError) {
 			setError((keepError as Error).message);
@@ -332,12 +403,28 @@ export const ProjectSessionSync: React.FC = () => {
 		}
 	}
 
-	function reviewLater() {
-		if (pendingReview) {
-			dismissedDeltas.current.add(pendingReview.delta.id);
+	async function reviewLater() {
+		if (!pendingReview || !twineElectron?.resolveProjectSessionConflicts) {
+			return;
 		}
 
-		setPendingReview(undefined);
+		setBusy(true);
+		setError(undefined);
+		try {
+			await twineElectron.resolveProjectSessionConflicts(
+				pendingReview.rootPath,
+				'dismiss',
+				undefined,
+				pendingReview.delta.id
+			);
+			dismissedDeltas.current.add(pendingReview.delta.id);
+			deltaQueueRef.current?.resume(pendingReview.rootPath);
+			setPendingReview(undefined);
+		} catch (dismissError) {
+			setError((dismissError as Error).message);
+		} finally {
+			setBusy(false);
+		}
 	}
 
 	if (!pendingReview && !error) {

@@ -248,3 +248,14 @@ if ((process as any).contextIsolated) {
 } else {
 	(window as any).twineElectron = bridge;
 }
+
+if (process.env.TWINE_PERF === '1') {
+	(window as any).twinePerformanceNative = {
+		reset() {
+			return ipcRenderer.invoke('performance-harness-reset');
+		},
+		snapshot() {
+			return ipcRenderer.invoke('performance-harness-snapshot');
+		}
+	};
+}

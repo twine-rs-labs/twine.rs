@@ -28,6 +28,9 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 	switch (action.type) {
 		case 'applyCorePatchBatch': {
 			atomicBatch = true;
+			if (action.persistence === 'skip') {
+				break;
+			}
 			const touchedStoryIds = new Set(
 				action.actions.flatMap(action =>
 					'storyId' in action ? [action.storyId] : []

@@ -69,6 +69,28 @@ describe('stories Electron IPC save middleware', () => {
 		expect(saveStoryMock).not.toHaveBeenCalled();
 	});
 
+	it('does not save an externally persisted core patch batch', () => {
+		expect(
+			saveMiddleware(
+				storiesState,
+				{
+					actions: [
+						{
+							passageId: storiesState[0].passages[0].id,
+							props: {text: 'from disk'},
+							storyId: storiesState[0].id,
+							type: 'updatePassage'
+						}
+					],
+					persistence: 'skip',
+					type: 'applyCorePatchBatch'
+				},
+				formatsState
+			)
+		).toBe(false);
+		expect(saveStoryMock).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		[
 			'createPassage',

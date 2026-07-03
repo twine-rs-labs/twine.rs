@@ -1,7 +1,10 @@
 import {
 	markPerformance,
 	measurePerformance,
-	performanceSnapshot
+	performanceEventSnapshot,
+	performanceSnapshot,
+	recordPerformanceHarnessEvent,
+	resetRendererPerformance
 } from '../performance';
 
 describe('performance utilities', () => {
@@ -20,6 +23,13 @@ describe('performance utilities', () => {
 			configurable: true,
 			value: {
 				getEntries: jest.fn(() => entries),
+				now: jest.fn(() => entries.length),
+				clearMarks: jest.fn(() => {
+					entries = entries.filter(entry => entry.entryType !== 'mark');
+				}),
+				clearMeasures: jest.fn(() => {
+					entries = entries.filter(entry => entry.entryType !== 'measure');
+				}),
 				mark: jest.fn((name: string) =>
 					entries.push({
 						duration: 0,
@@ -41,6 +51,8 @@ describe('performance utilities', () => {
 	});
 
 	afterEach(() => {
+		delete (window as any).twinePerformanceNative;
+		resetRendererPerformance();
 		Object.defineProperty(window, 'performance', {
 			configurable: true,
 			value: originalPerformance
@@ -59,5 +71,23 @@ describe('performance utilities', () => {
 				expect.objectContaining({name: 'open-to-shell', type: 'measure'})
 			])
 		);
+	});
+
+	it('records harness events only when the perf-only native bridge exists', () => {
+		recordPerformanceHarnessEvent('disabled');
+		expect(performanceEventSnapshot()).toEqual([]);
+
+		(window as any).twinePerformanceNative = {};
+		recordPerformanceHarnessEvent('enabled', {revision: 2});
+
+		expect(performanceEventSnapshot()).toEqual([
+			expect.objectContaining({
+				detail: {revision: 2},
+				epochTime: expect.any(Number),
+				name: 'enabled'
+			})
+		]);
+		resetRendererPerformance();
+		expect(performanceEventSnapshot()).toEqual([]);
 	});
 });

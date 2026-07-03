@@ -17,10 +17,16 @@ import {
 	initStoryDirectory
 } from './story-directory';
 import {getUserCss} from './user-css';
+import {
+	markMainPerformance,
+	performanceHarnessEnabled,
+	recordMainLaunchPhase
+} from './performance-harness';
 
 let mainWindow: BrowserWindow | null;
 
 async function createWindow() {
+	markMainPerformance('window-create-start');
 	const screenSize = screen.getPrimaryDisplay().workAreaSize;
 
 	mainWindow = new BrowserWindow({
@@ -52,6 +58,7 @@ async function createWindow() {
 	);
 
 	mainWindow.once('ready-to-show', async () => {
+		markMainPerformance('window-ready-to-show');
 		const userCss = await getUserCss();
 
 		if (userCss) {
@@ -61,7 +68,7 @@ async function createWindow() {
 
 		mainWindow!.show();
 
-		if (!app.isPackaged) {
+		if (!app.isPackaged && !performanceHarnessEnabled()) {
 			mainWindow!.webContents.openDevTools();
 		}
 	});
@@ -108,7 +115,9 @@ export async function initApp() {
 		app.on('will-quit', async () => {
 			await cleanScratchDirectory();
 		});
-		createWindow();
+		await createWindow();
+		markMainPerformance('window-created');
+		recordMainLaunchPhase('window-created');
 	} catch (error) {
 		// Not localized because that may be the cause of the error.
 

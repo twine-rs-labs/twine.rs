@@ -19,6 +19,7 @@ import {usePublishing} from '../../store/use-publishing';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {saveHtml, saveTwee} from '../../util/save-file';
 import {storyToTwee} from '../../util/twee';
+import {recordPerformanceHarnessEvent} from '../../util/performance';
 import {
 	Badge,
 	Button,
@@ -346,10 +347,29 @@ export const AppShell: React.FC = ({children}) => {
 			storySaveStatus.sessionId &&
 			storySaveStatus.revision !== undefined
 		) {
-			void coreProjectHost.acknowledgeSaved(
-				storySaveStatus.sessionId,
-				storySaveStatus.revision
-			);
+			recordPerformanceHarnessEvent('save-acknowledgement-start', {
+				revision: storySaveStatus.revision,
+				sessionId: storySaveStatus.sessionId
+			});
+			void Promise.resolve(
+				coreProjectHost.acknowledgeSaved(
+					storySaveStatus.sessionId,
+					storySaveStatus.revision
+				)
+			)
+				.then(() =>
+					recordPerformanceHarnessEvent('save-acknowledgement-complete', {
+						revision: storySaveStatus.revision,
+						sessionId: storySaveStatus.sessionId
+					})
+				)
+				.catch(error =>
+					recordPerformanceHarnessEvent('save-acknowledgement-failed', {
+						error: (error as Error).message,
+						revision: storySaveStatus.revision,
+						sessionId: storySaveStatus.sessionId
+					})
+				);
 		}
 	}, [coreProjectHost, storySaveStatus]);
 

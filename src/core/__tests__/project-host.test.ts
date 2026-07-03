@@ -140,6 +140,52 @@ describe('StoreCoreProjectHost asset commands', () => {
 		);
 	});
 
+	it('applies external disk patches without scheduling frontend persistence', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+
+		wasmClient.ingestExternalDelta.mockResolvedValue({
+			batch: batch([
+				{
+					changes: {
+						layout: null,
+						name: null,
+						tags: null,
+						text: 'from disk'
+					},
+					passage_id: 'start',
+					story_id: context.story.id,
+					type: 'passageUpdated'
+				}
+			]),
+			conflicts: [],
+			historyRecorded: true,
+			outcome: 'applied',
+			revision: 2,
+			status: {
+				canRedo: false,
+				canUndo: true,
+				dirty: false,
+				redoKind: null,
+				revision: 2,
+				undoKind: 'externalChanges'
+			}
+		});
+
+		await context.host.ingestExternalDelta(context.story.id, {
+			changes: [],
+			id: 'disk-change'
+		});
+
+		expect(context.dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				persistence: 'skip',
+				type: 'applyCorePatchBatch'
+			}),
+			'undoChange.externalChanges'
+		);
+	});
+
 	async function flushCommand() {
 		for (let i = 0; i < 8; i++) {
 			await Promise.resolve();

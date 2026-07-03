@@ -58,9 +58,17 @@ export interface NativeProjectSessionDelta {
 	delta: CoreExternalDelta;
 	fileChanges: NativeProjectSessionConflict[];
 	id: string;
+	performanceTrace?: NativeProjectSessionPerformanceTrace;
 	recovery?: NativeProjectSessionRecovery;
 	rootPath: string;
 	scannedAt: string;
+}
+
+export interface NativeProjectSessionPerformanceTrace {
+	deltaCreatedAtEpochMs: number;
+	nativeNotifiedAtEpochMs?: number;
+	scanStartedAtEpochMs: number;
+	watcherObservedAtEpochMs?: number;
 }
 
 export interface NativeProjectSessionStart {
@@ -172,6 +180,10 @@ export interface NativeAddLocalStoryFormatResult {
 }
 
 export interface TwineElectronWindow extends Window {
+	twinePerformanceNative?: {
+		reset(): Promise<void>;
+		snapshot(): Promise<unknown>;
+	};
 	twineElectron?: {
 		addLocalStoryFormat(): Promise<NativeAddLocalStoryFormatResult | undefined>;
 		chooseAssetFile(defaultPath?: string): Promise<string | undefined>;

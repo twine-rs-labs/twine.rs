@@ -9,12 +9,30 @@ import {
 	commandLineOpenPaths,
 	queueCommandLineOpenPaths
 } from './command-line';
+import {
+	markMainPerformance,
+	performanceHarnessSessionDataPath,
+	performanceHarnessUserDataPath,
+	recordMainLaunchPhase
+} from './performance-harness';
 
 const nativeAppName = 'Twine RS';
 const nativeUserDataName = 'twine-rs';
 
+recordMainLaunchPhase('main-module');
 app.setName(nativeAppName);
-app.setPath('userData', join(app.getPath('appData'), nativeUserDataName));
+const performanceUserData = performanceHarnessUserDataPath();
+const performanceSessionData = performanceHarnessSessionDataPath();
+
+app.setPath(
+	'userData',
+	performanceUserData ?? join(app.getPath('appData'), nativeUserDataName)
+);
+if (performanceSessionData) {
+	app.setPath('sessionData', performanceSessionData);
+}
+markMainPerformance('app-configured');
+recordMainLaunchPhase('app-configured');
 
 // We need to load prefs here *and block* because disabling hardware
 // acceleration has to happen before the app is ready.
@@ -36,6 +54,10 @@ if (commandLineHelpRequested(commandLineArgs)) {
 		event.preventDefault();
 		queueCommandLineOpenPaths([path]);
 	});
-	app.whenReady().then(initApp);
+	app.whenReady().then(() => {
+		markMainPerformance('app-ready');
+		recordMainLaunchPhase('app-ready');
+		return initApp();
+	});
 	app.on('window-all-closed', () => app.quit());
 }

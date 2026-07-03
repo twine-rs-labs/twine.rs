@@ -39,6 +39,25 @@ describe('stories local storage save middleware', () => {
 		expect(saveStoryMock).not.toHaveBeenCalled();
 	});
 
+	it('does not save an externally persisted core patch batch', () => {
+		expect(
+			saveMiddleware(state, {
+				actions: [
+					{
+						passageId: state[0].passages[0].id,
+						props: {text: 'from disk'},
+						storyId: state[0].id,
+						type: 'updatePassage'
+					}
+				],
+				persistence: 'skip',
+				type: 'applyCorePatchBatch'
+			})
+		).toEqual({completion: expect.any(Promise), persisted: false});
+		expect(doUpdateTransactionMock).not.toHaveBeenCalled();
+		expect(saveStoryMock).not.toHaveBeenCalled();
+	});
+
 	describe('when a createPassage action is received', () => {
 		it('saves the story using a transaction', () => {
 			const transaction = {passageIds: '', storyIds: ''};

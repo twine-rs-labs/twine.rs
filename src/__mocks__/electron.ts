@@ -1,5 +1,6 @@
 export const app = {
 	disableHardwareAcceleration: jest.fn(),
+	getAppMetrics: jest.fn(() => []),
 	getName() {
 		return `mock-electron-app-name`;
 	},
