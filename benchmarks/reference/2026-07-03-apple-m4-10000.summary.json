@@ -1,0 +1,844 @@
+{
+  "aggregates": {
+    "startup.launchToWindowMs": {
+      "count": 3,
+      "max": 699.9169159999983,
+      "mean": 653.5744023333327,
+      "min": 606.3556659999995,
+      "p50": 654.4506250000004,
+      "p95": 699.9169159999983
+    },
+    "startup.shellMs": {
+      "count": 3,
+      "max": 1430.5,
+      "mean": 1397.499999999379,
+      "min": 1371.2999999988824,
+      "p50": 1390.699999999255,
+      "p95": 1430.5
+    },
+    "startup.hydratedMs": {
+      "count": 3,
+      "max": 2760.39999999851,
+      "mean": 2456.433333332961,
+      "min": 2278.199999999255,
+      "p50": 2330.7000000011176,
+      "p95": 2760.39999999851
+    },
+    "startup.interactiveMs": {
+      "count": 3,
+      "max": 1741.1000000014901,
+      "mean": 1709.7333333337058,
+      "min": 1683,
+      "p50": 1705.0999999996275,
+      "p95": 1741.1000000014901
+    },
+    "memory.residentMiB": {
+      "count": 6,
+      "max": 1590.140625,
+      "mean": 1187.4010416666667,
+      "min": 996.140625,
+      "p50": 1020.5,
+      "p95": 1590.140625
+    },
+    "memory.rendererMiB": {
+      "count": 6,
+      "max": 686.515625,
+      "mean": 489.6692708333333,
+      "min": 369.875,
+      "p50": 375.203125,
+      "p95": 686.515625
+    },
+    "memory.mainMiB": {
+      "count": 6,
+      "max": 381.765625,
+      "mean": 296.6744791666667,
+      "min": 186.21875,
+      "p50": 291.421875,
+      "p95": 381.765625
+    },
+    "edit.roundTripMs": {
+      "count": 20,
+      "max": 173.89999999850988,
+      "mean": 160.63499999996276,
+      "min": 149.09999999776483,
+      "p50": 160.40000000223517,
+      "p95": 168.89999999850988
+    },
+    "edit.paintMs": {
+      "count": 20,
+      "max": 175.30000000074506,
+      "mean": 162.17500000018626,
+      "min": 150.69999999925494,
+      "p50": 162,
+      "p95": 170.5
+    },
+    "undo.roundTripMs": {
+      "count": 20,
+      "max": 309.3999999985099,
+      "mean": 141.46000000033527,
+      "min": 127,
+      "p50": 130.30000000074506,
+      "p95": 152.30000000074506
+    },
+    "redo.roundTripMs": {
+      "count": 20,
+      "max": 175.5,
+      "mean": 135.7250000005588,
+      "min": 129.80000000074506,
+      "p50": 132.80000000074506,
+      "p95": 149.5
+    },
+    "persistence.queueMs": {
+      "count": 3,
+      "max": 0,
+      "mean": 0,
+      "min": 0,
+      "p50": 0,
+      "p95": 0
+    },
+    "persistence.saveMs": {
+      "count": 3,
+      "max": 3373,
+      "mean": 3311.5333658854165,
+      "min": 3228.2001953125,
+      "p50": 3333.39990234375,
+      "p95": 3373
+    },
+    "persistence.notifyMs": {
+      "count": 3,
+      "max": 0,
+      "mean": 0,
+      "min": 0,
+      "p50": 0,
+      "p95": 0
+    },
+    "persistence.acknowledgementMs": {
+      "count": 3,
+      "max": 50.900146484375,
+      "mean": 44.400065104166664,
+      "min": 31.60009765625,
+      "p50": 50.699951171875,
+      "p95": 50.900146484375
+    },
+    "persistence.endToEndMs": {
+      "count": 3,
+      "max": 3437.699951171875,
+      "mean": 3369.9666341145835,
+      "min": 3273.900146484375,
+      "p50": 3398.2998046875,
+      "p95": 3437.699951171875
+    },
+    "query.contentsMs": {
+      "count": 20,
+      "max": 2032.699999999255,
+      "mean": 1237.8700000006706,
+      "min": 882,
+      "p50": 973.5,
+      "p95": 2013.800000000745
+    },
+    "query.coreRoundTripMs": {
+      "count": 16,
+      "max": 0.20000000298023224,
+      "mean": 0.06875000009313226,
+      "min": 0,
+      "p50": 0.09999999776482582,
+      "p95": 0.20000000298023224
+    },
+    "query.searchMs": {
+      "count": 20,
+      "max": 29,
+      "mean": 16.43499999996275,
+      "min": 14.5,
+      "p50": 16.100000001490116,
+      "p95": 16.699999999254942
+    },
+    "graph.frameMs": {
+      "count": 445,
+      "max": 900,
+      "mean": 102.4343191011236,
+      "min": 15.599999999998545,
+      "p50": 16.700000000000728,
+      "p95": 816.6999999999971
+    },
+    "graph.frameMaxMs": {
+      "count": 445,
+      "max": 900,
+      "mean": 102.4343191011236,
+      "min": 15.599999999998545,
+      "p50": 16.700000000000728,
+      "p95": 816.6999999999971
+    },
+    "watcher.contentIngestMs": {
+      "count": 1,
+      "max": 2287.300048828125,
+      "mean": 2287.300048828125,
+      "min": 2287.300048828125,
+      "p50": 2287.300048828125,
+      "p95": 2287.300048828125
+    },
+    "watcher.observationToScanMs": {
+      "count": 2,
+      "max": 151.742919921875,
+      "mean": 151.6519775390625,
+      "min": 151.56103515625,
+      "p50": 151.56103515625,
+      "p95": 151.742919921875
+    },
+    "watcher.nativeDeltaCreationMs": {
+      "count": 2,
+      "max": 37.988525390625,
+      "mean": 34.0687255859375,
+      "min": 30.14892578125,
+      "p50": 30.14892578125,
+      "p95": 37.988525390625
+    },
+    "watcher.nativeToRendererMs": {
+      "count": 2,
+      "max": 0.481201171875,
+      "mean": 0.2977294921875,
+      "min": 0.1142578125,
+      "p50": 0.1142578125,
+      "p95": 0.481201171875
+    },
+    "watcher.rendererToWorkerMs": {
+      "count": 2,
+      "max": 2109.300048828125,
+      "mean": 1054.699951171875,
+      "min": 0.099853515625,
+      "p50": 0.099853515625,
+      "p95": 2109.300048828125
+    },
+    "watcher.rustIngestMs": {
+      "count": 2,
+      "max": 115.39990234375,
+      "mean": 79.5,
+      "min": 43.60009765625,
+      "p50": 43.60009765625,
+      "p95": 115.39990234375
+    },
+    "watcher.rustToPatchMs": {
+      "count": 1,
+      "max": 62.60009765625,
+      "mean": 62.60009765625,
+      "min": 62.60009765625,
+      "p50": 62.60009765625,
+      "p95": 62.60009765625
+    },
+    "watcher.observationToPatchMs": {
+      "count": 1,
+      "max": 2469.8779296875,
+      "mean": 2469.8779296875,
+      "min": 2469.8779296875,
+      "p50": 2469.8779296875,
+      "p95": 2469.8779296875
+    },
+    "incremental.reindexComputeMs": {
+      "count": 1,
+      "max": 115.39999999850988,
+      "mean": 115.39999999850988,
+      "min": 115.39999999850988,
+      "p50": 115.39999999850988,
+      "p95": 115.39999999850988
+    },
+    "watcher.assetReviewMs": {
+      "count": 1,
+      "max": 44.399999998509884,
+      "mean": 44.399999998509884,
+      "min": 44.399999998509884,
+      "p50": 44.399999998509884,
+      "p95": 44.399999998509884
+    }
+  },
+  "classification": "historical-initial-baseline",
+  "createdAt": "2026-07-03T18:48:16.286Z",
+  "environment": {
+    "git": {
+      "dirty": true,
+      "revision": "16c07337d8964e7dad2a6f69ac45b3d52a305e68"
+    },
+    "machine": {
+      "arch": "arm64",
+      "cpu": "Apple M4",
+      "cpuCount": 10,
+      "memoryBytes": 25769803776,
+      "node": "v24.18.0",
+      "platform": "darwin",
+      "release": "25.5.0"
+    },
+    "versions": {
+      "electron": "41.2.0",
+      "playwright": "1.61.0"
+    },
+    "fingerprint": "f83c0f8cbc7f386b"
+  },
+  "evaluation": {
+    "baselineStatus": "matched",
+    "checks": [
+      {
+        "actual": 170.5,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 196.075,
+        "name": "edit.paintMs",
+        "passed": true
+      },
+      {
+        "actual": 900,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 1035,
+        "name": "graph.frameMaxMs",
+        "passed": true
+      },
+      {
+        "actual": 816.6999999999971,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 939.2049999999966,
+        "name": "graph.frameMs",
+        "passed": true
+      },
+      {
+        "actual": 115.39999999850988,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 126.93999999836088,
+        "name": "incremental.reindexComputeMs",
+        "passed": true
+      },
+      {
+        "actual": 1020.5,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 1122.55,
+        "name": "memory.residentMiB",
+        "passed": true
+      },
+      {
+        "actual": 2013.800000000745,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 2315.8700000008566,
+        "name": "query.contentsMs",
+        "passed": true
+      },
+      {
+        "actual": 16.699999999254942,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 21.699999999254942,
+        "name": "query.searchMs",
+        "passed": true
+      },
+      {
+        "actual": 1705.0999999996275,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 1960.8649999995716,
+        "name": "startup.interactiveMs",
+        "passed": true
+      },
+      {
+        "actual": 1390.699999999255,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 1599.304999999143,
+        "name": "startup.shellMs",
+        "passed": true
+      },
+      {
+        "actual": 170.5,
+        "blocking": false,
+        "kind": "target",
+        "limit": 16.6,
+        "name": "edit.paintMs",
+        "passed": false
+      },
+      {
+        "actual": 900,
+        "blocking": false,
+        "kind": "target",
+        "limit": 50,
+        "name": "graph.frameMaxMs",
+        "passed": false
+      },
+      {
+        "actual": 816.6999999999971,
+        "blocking": false,
+        "kind": "target",
+        "limit": 16.6,
+        "name": "graph.frameMs",
+        "passed": false
+      },
+      {
+        "actual": 115.39999999850988,
+        "blocking": false,
+        "kind": "target",
+        "limit": 5,
+        "name": "incremental.reindexComputeMs",
+        "passed": false
+      },
+      {
+        "actual": 1020.5,
+        "blocking": false,
+        "kind": "target",
+        "limit": 600,
+        "name": "memory.residentMiB",
+        "passed": false
+      },
+      {
+        "actual": 2013.800000000745,
+        "blocking": false,
+        "kind": "target",
+        "limit": 50,
+        "name": "query.contentsMs",
+        "passed": false
+      },
+      {
+        "actual": 16.699999999254942,
+        "blocking": false,
+        "kind": "target",
+        "limit": 50,
+        "name": "query.searchMs",
+        "passed": true
+      },
+      {
+        "actual": 1705.0999999996275,
+        "blocking": false,
+        "kind": "target",
+        "limit": 1500,
+        "name": "startup.interactiveMs",
+        "passed": false
+      },
+      {
+        "actual": 1390.699999999255,
+        "blocking": false,
+        "kind": "target",
+        "limit": 400,
+        "name": "startup.shellMs",
+        "passed": false
+      }
+    ],
+    "passed": true
+  },
+  "fixture": {
+    "bodyWords": 32,
+    "files": [
+      "benchmarks/fixtures/generated/sources/story-10000.story.json"
+    ],
+    "linkCounts": {
+      "branch": 9993,
+      "broken": 270,
+      "next": 9999,
+      "self": 99,
+      "total": 20361
+    },
+    "passageCount": 10000,
+    "storyFormat": "Harlowe",
+    "storyFormatVersion": "3.3.9",
+    "assets": [
+      "assets/perf/pixel.svg",
+      "assets/perf/readme.txt"
+    ],
+    "projectPath": "benchmarks/fixtures/generated/projects/story-10000.twine.rs",
+    "sourcePath": "benchmarks/fixtures/generated/sources/story-10000.story.json",
+    "manifestSha256": "13f3ad46ab69e5732ed2c41874e1902e10fa8f52e3476aaf05cf26ffc752d404"
+  },
+  "invariants": {
+    "checks": [
+      {
+        "name": "contents-0-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-1-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-10-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-11-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-12-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-13-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-14-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-15-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-16-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-17-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-18-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-19-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-2-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-20-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-21-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-3-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-4-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-5-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-6-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-7-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-8-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-9-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-0-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-1-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-10-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-11-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-12-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-13-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-14-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-15-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-16-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-17-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-18-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-19-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-2-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-20-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-21-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-3-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-4-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-5-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-6-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-7-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-8-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-9-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-final-revision-persisted",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-undo-redo-revisions-monotonic",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "graph-viewport-node-count-bounded",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "one-project-one-session-worker",
+        "occurrences": 4,
+        "passed": true
+      },
+      {
+        "name": "phase-edit-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "phase-graph-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "phase-query-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "phase-startup-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "phase-watcher-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "source-fixture-manifest-unchanged",
+        "occurrences": 5,
+        "passed": true
+      },
+      {
+        "name": "source-fixture-tree-unchanged",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "temporary-run-root-removed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "user-data-paths-isolated",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "wasm-worker-mode-active",
+        "occurrences": 4,
+        "passed": true
+      },
+      {
+        "name": "watcher-asset-avoids-recovery",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-asset-enters-review",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-asset-observed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-asset-parses-no-story-source",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-acknowledged",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-applied",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-avoids-recovery",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-observed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-parses-one-source",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-trace-complete",
+        "occurrences": 1,
+        "passed": true
+      }
+    ],
+    "failed": 0,
+    "passed": 69,
+    "total": 69
+  },
+  "kind": "twine-electron-performance-reference",
+  "provenance": {
+    "budgetsSha256": "c3e6e0dd87baee020c64f50b979d0df213be8d21271cd850e5bf12a747820ad8",
+    "limitations": [
+      "The source report was captured from a dirty worktree. This snapshot is historical performance evidence, not proof of clean-commit reproducibility."
+    ],
+    "sourceReport": {
+      "file": "benchmarks/results/electron-2026-07-03T18-40-43-974Z-10000.json",
+      "sha256": "5a589cbe15088cf5312a8ab65c9791674cd1148c002c962b64e287284ef322ef",
+      "tracked": false
+    }
+  },
+  "run": {
+    "phase": "all",
+    "phases": {
+      "edit": {
+        "finishedAt": "2026-07-03T18:45:38.230Z",
+        "startedAt": "2026-07-03T18:41:24.639Z",
+        "status": "passed"
+      },
+      "graph": {
+        "finishedAt": "2026-07-03T18:47:51.563Z",
+        "startedAt": "2026-07-03T18:46:40.805Z",
+        "status": "passed"
+      },
+      "query": {
+        "finishedAt": "2026-07-03T18:46:37.301Z",
+        "startedAt": "2026-07-03T18:45:41.733Z",
+        "status": "passed"
+      },
+      "startup": {
+        "finishedAt": "2026-07-03T18:41:21.135Z",
+        "startedAt": "2026-07-03T18:40:44.158Z",
+        "status": "passed"
+      },
+      "watcher": {
+        "finishedAt": "2026-07-03T18:48:12.782Z",
+        "startedAt": "2026-07-03T18:47:55.066Z",
+        "status": "passed"
+      }
+    },
+    "smoke": false,
+    "testStatus": "passed"
+  },
+  "schemaVersion": 1
+}

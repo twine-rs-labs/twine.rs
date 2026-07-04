@@ -1,0 +1,844 @@
+{
+  "aggregates": {
+    "startup.launchToWindowMs": {
+      "count": 3,
+      "max": 1412.3192920000001,
+      "mean": 907.6080280000073,
+      "min": 646.3318330000038,
+      "p50": 664.1729590000177,
+      "p95": 1412.3192920000001
+    },
+    "startup.shellMs": {
+      "count": 3,
+      "max": 38085.60000000149,
+      "mean": 27902.733333334327,
+      "min": 18137.300000000745,
+      "p50": 27485.300000000745,
+      "p95": 38085.60000000149
+    },
+    "startup.hydratedMs": {
+      "count": 3,
+      "max": 50021.5,
+      "mean": 40789.26666666692,
+      "min": 30527.10000000149,
+      "p50": 41819.199999999255,
+      "p95": 50021.5
+    },
+    "startup.interactiveMs": {
+      "count": 3,
+      "max": 40329.400000002235,
+      "mean": 30012.60000000149,
+      "min": 19470.60000000149,
+      "p50": 30237.800000000745,
+      "p95": 40329.400000002235
+    },
+    "memory.residentMiB": {
+      "count": 6,
+      "max": 2940.578125,
+      "mean": 2244.9479166666665,
+      "min": 1791.1875,
+      "p50": 1977.15625,
+      "p95": 2940.578125
+    },
+    "memory.rendererMiB": {
+      "count": 6,
+      "max": 1370.515625,
+      "mean": 969.8255208333334,
+      "min": 717.90625,
+      "p50": 815.53125,
+      "p95": 1370.515625
+    },
+    "memory.mainMiB": {
+      "count": 6,
+      "max": 931.578125,
+      "mean": 531.9244791666666,
+      "min": 156.0625,
+      "p50": 380.953125,
+      "p95": 931.578125
+    },
+    "edit.roundTripMs": {
+      "count": 20,
+      "max": 1673.699999999255,
+      "mean": 852.5600000003353,
+      "min": 713.1999999992549,
+      "p50": 751.2000000029802,
+      "p95": 1360.800000000745
+    },
+    "edit.paintMs": {
+      "count": 20,
+      "max": 1676.5,
+      "mean": 854.3400000004098,
+      "min": 714.5,
+      "p50": 752.6000000014901,
+      "p95": 1364.1000000014901
+    },
+    "undo.roundTripMs": {
+      "count": 20,
+      "max": 1144.1000000014901,
+      "mean": 729.9399999996647,
+      "min": 621.5,
+      "p50": 643.3999999985099,
+      "p95": 1141.0999999977648
+    },
+    "redo.roundTripMs": {
+      "count": 20,
+      "max": 1002.0999999977648,
+      "mean": 699.0249999996274,
+      "min": 608.2999999970198,
+      "p50": 631.2000000029802,
+      "p95": 856.6000000014901
+    },
+    "persistence.queueMs": {
+      "count": 3,
+      "max": 0,
+      "mean": 0,
+      "min": 0,
+      "p50": 0,
+      "p95": 0
+    },
+    "persistence.saveMs": {
+      "count": 3,
+      "max": 29249.60009765625,
+      "mean": 26027.600016276043,
+      "min": 24257,
+      "p50": 24576.199951171875,
+      "p95": 29249.60009765625
+    },
+    "persistence.notifyMs": {
+      "count": 3,
+      "max": 0,
+      "mean": 0,
+      "min": 0,
+      "p50": 0,
+      "p95": 0
+    },
+    "persistence.acknowledgementMs": {
+      "count": 3,
+      "max": 200.5,
+      "mean": 156.833251953125,
+      "min": 133.2998046875,
+      "p50": 136.699951171875,
+      "p95": 200.5
+    },
+    "persistence.endToEndMs": {
+      "count": 3,
+      "max": 29498.699951171875,
+      "mean": 26333.999918619793,
+      "min": 24511.199951171875,
+      "p50": 24992.099853515625,
+      "p95": 29498.699951171875
+    },
+    "query.contentsMs": {
+      "count": 20,
+      "max": 3921.300000000745,
+      "mean": 2961.9650000002234,
+      "min": 2110.699999999255,
+      "p50": 3025.60000000149,
+      "p95": 3337.2999999970198
+    },
+    "query.coreRoundTripMs": {
+      "count": 17,
+      "max": 0.10000000149011612,
+      "mean": 0.0823529410888167,
+      "min": 0,
+      "p50": 0.09999999776482582,
+      "p95": 0.10000000149011612
+    },
+    "query.searchMs": {
+      "count": 20,
+      "max": 49.5,
+      "mean": 46.03000000044703,
+      "min": 44.899999998509884,
+      "p50": 45.900000002235174,
+      "p95": 46.70000000298023
+    },
+    "graph.frameMs": {
+      "count": 445,
+      "max": 3899.899999999994,
+      "mean": 307.52993258426966,
+      "min": 11.200000000011642,
+      "p50": 17.29999999998836,
+      "p95": 2500
+    },
+    "graph.frameMaxMs": {
+      "count": 445,
+      "max": 3899.899999999994,
+      "mean": 307.52993258426966,
+      "min": 11.200000000011642,
+      "p50": 17.29999999998836,
+      "p95": 2500
+    },
+    "watcher.contentIngestMs": {
+      "count": 1,
+      "max": 15348.099853515625,
+      "mean": 15348.099853515625,
+      "min": 15348.099853515625,
+      "p50": 15348.099853515625,
+      "p95": 15348.099853515625
+    },
+    "watcher.observationToScanMs": {
+      "count": 2,
+      "max": 151.790771484375,
+      "mean": 151.6727294921875,
+      "min": 151.5546875,
+      "p50": 151.5546875,
+      "p95": 151.790771484375
+    },
+    "watcher.nativeDeltaCreationMs": {
+      "count": 2,
+      "max": 153.958740234375,
+      "mean": 149.453125,
+      "min": 144.947509765625,
+      "p50": 144.947509765625,
+      "p95": 153.958740234375
+    },
+    "watcher.nativeToRendererMs": {
+      "count": 2,
+      "max": 0.276611328125,
+      "mean": 0.264892578125,
+      "min": 0.253173828125,
+      "p50": 0.253173828125,
+      "p95": 0.276611328125
+    },
+    "watcher.rendererToWorkerMs": {
+      "count": 2,
+      "max": 14416,
+      "mean": 7208,
+      "min": 0,
+      "p50": 0,
+      "p95": 14416
+    },
+    "watcher.rustIngestMs": {
+      "count": 2,
+      "max": 615.39990234375,
+      "mean": 430.4998779296875,
+      "min": 245.599853515625,
+      "p50": 245.599853515625,
+      "p95": 615.39990234375
+    },
+    "watcher.rustToPatchMs": {
+      "count": 1,
+      "max": 316.5,
+      "mean": 316.5,
+      "min": 316.5,
+      "p50": 316.5,
+      "p95": 316.5
+    },
+    "watcher.observationToPatchMs": {
+      "count": 1,
+      "max": 15654.31396484375,
+      "mean": 15654.31396484375,
+      "min": 15654.31396484375,
+      "p50": 15654.31396484375,
+      "p95": 15654.31396484375
+    },
+    "incremental.reindexComputeMs": {
+      "count": 1,
+      "max": 615.5,
+      "mean": 615.5,
+      "min": 615.5,
+      "p50": 615.5,
+      "p95": 615.5
+    },
+    "watcher.assetReviewMs": {
+      "count": 1,
+      "max": 246.30000000074506,
+      "mean": 246.30000000074506,
+      "min": 246.30000000074506,
+      "p50": 246.30000000074506,
+      "p95": 246.30000000074506
+    }
+  },
+  "classification": "historical-initial-baseline",
+  "createdAt": "2026-07-03T19:32:40.160Z",
+  "environment": {
+    "git": {
+      "dirty": true,
+      "revision": "16c07337d8964e7dad2a6f69ac45b3d52a305e68"
+    },
+    "machine": {
+      "arch": "arm64",
+      "cpu": "Apple M4",
+      "cpuCount": 10,
+      "memoryBytes": 25769803776,
+      "node": "v24.18.0",
+      "platform": "darwin",
+      "release": "25.5.0"
+    },
+    "versions": {
+      "electron": "41.2.0",
+      "playwright": "1.61.0"
+    },
+    "fingerprint": "f83c0f8cbc7f386b"
+  },
+  "evaluation": {
+    "baselineStatus": "matched",
+    "checks": [
+      {
+        "actual": 1364.1000000014901,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 1568.7150000017136,
+        "name": "edit.paintMs",
+        "passed": true
+      },
+      {
+        "actual": 3899.899999999994,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 4484.884999999993,
+        "name": "graph.frameMaxMs",
+        "passed": true
+      },
+      {
+        "actual": 2500,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 2875,
+        "name": "graph.frameMs",
+        "passed": true
+      },
+      {
+        "actual": 615.5,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 677.05,
+        "name": "incremental.reindexComputeMs",
+        "passed": true
+      },
+      {
+        "actual": 1977.15625,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 2174.871875,
+        "name": "memory.residentMiB",
+        "passed": true
+      },
+      {
+        "actual": 3337.2999999970198,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 3837.8949999965726,
+        "name": "query.contentsMs",
+        "passed": true
+      },
+      {
+        "actual": 46.70000000298023,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 53.705000003427266,
+        "name": "query.searchMs",
+        "passed": true
+      },
+      {
+        "actual": 30237.800000000745,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 34773.47000000086,
+        "name": "startup.interactiveMs",
+        "passed": true
+      },
+      {
+        "actual": 27485.300000000745,
+        "blocking": true,
+        "kind": "regression",
+        "limit": 31608.095000000856,
+        "name": "startup.shellMs",
+        "passed": true
+      },
+      {
+        "actual": 1364.1000000014901,
+        "blocking": false,
+        "kind": "target",
+        "limit": 16.6,
+        "name": "edit.paintMs",
+        "passed": false
+      },
+      {
+        "actual": 3899.899999999994,
+        "blocking": false,
+        "kind": "target",
+        "limit": 50,
+        "name": "graph.frameMaxMs",
+        "passed": false
+      },
+      {
+        "actual": 2500,
+        "blocking": false,
+        "kind": "target",
+        "limit": 16.6,
+        "name": "graph.frameMs",
+        "passed": false
+      },
+      {
+        "actual": 615.5,
+        "blocking": false,
+        "kind": "target",
+        "limit": 5,
+        "name": "incremental.reindexComputeMs",
+        "passed": false
+      },
+      {
+        "actual": 1977.15625,
+        "blocking": false,
+        "kind": "target",
+        "limit": 600,
+        "name": "memory.residentMiB",
+        "passed": false
+      },
+      {
+        "actual": 3337.2999999970198,
+        "blocking": false,
+        "kind": "target",
+        "limit": 50,
+        "name": "query.contentsMs",
+        "passed": false
+      },
+      {
+        "actual": 46.70000000298023,
+        "blocking": false,
+        "kind": "target",
+        "limit": 50,
+        "name": "query.searchMs",
+        "passed": true
+      },
+      {
+        "actual": 30237.800000000745,
+        "blocking": false,
+        "kind": "target",
+        "limit": 1500,
+        "name": "startup.interactiveMs",
+        "passed": false
+      },
+      {
+        "actual": 27485.300000000745,
+        "blocking": false,
+        "kind": "target",
+        "limit": 400,
+        "name": "startup.shellMs",
+        "passed": false
+      }
+    ],
+    "passed": true
+  },
+  "fixture": {
+    "bodyWords": 32,
+    "files": [
+      "benchmarks/fixtures/generated/sources/story-50000.story.json"
+    ],
+    "linkCounts": {
+      "branch": 49993,
+      "broken": 1351,
+      "next": 49999,
+      "self": 495,
+      "total": 101838
+    },
+    "passageCount": 50000,
+    "storyFormat": "Harlowe",
+    "storyFormatVersion": "3.3.9",
+    "assets": [
+      "assets/perf/pixel.svg",
+      "assets/perf/readme.txt"
+    ],
+    "projectPath": "benchmarks/fixtures/generated/projects/story-50000.twine.rs",
+    "sourcePath": "benchmarks/fixtures/generated/sources/story-50000.story.json",
+    "manifestSha256": "0a254a11edc3b3d4cfd8581662967f054af806d9ecd0f93fdcd03e6a18f064f1"
+  },
+  "invariants": {
+    "checks": [
+      {
+        "name": "contents-0-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-1-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-10-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-11-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-12-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-13-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-14-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-15-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-16-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-17-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-18-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-19-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-2-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-20-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-21-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-3-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-4-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-5-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-6-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-7-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-8-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "contents-9-uses-wasm-worker",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-0-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-1-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-10-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-11-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-12-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-13-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-14-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-15-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-16-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-17-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-18-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-19-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-2-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-20-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-21-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-3-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-4-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-5-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-6-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-7-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-8-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-9-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-final-revision-persisted",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "edit-undo-redo-revisions-monotonic",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "graph-viewport-node-count-bounded",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "one-project-one-session-worker",
+        "occurrences": 4,
+        "passed": true
+      },
+      {
+        "name": "phase-edit-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "phase-graph-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "phase-query-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "phase-startup-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "phase-watcher-completed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "source-fixture-manifest-unchanged",
+        "occurrences": 5,
+        "passed": true
+      },
+      {
+        "name": "source-fixture-tree-unchanged",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "temporary-run-root-removed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "user-data-paths-isolated",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "wasm-worker-mode-active",
+        "occurrences": 4,
+        "passed": true
+      },
+      {
+        "name": "watcher-asset-avoids-recovery",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-asset-enters-review",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-asset-observed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-asset-parses-no-story-source",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-avoids-full-replace",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-acknowledged",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-applied",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-avoids-recovery",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-observed",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-parses-one-source",
+        "occurrences": 1,
+        "passed": true
+      },
+      {
+        "name": "watcher-passage-trace-complete",
+        "occurrences": 1,
+        "passed": true
+      }
+    ],
+    "failed": 0,
+    "passed": 69,
+    "total": 69
+  },
+  "kind": "twine-electron-performance-reference",
+  "provenance": {
+    "budgetsSha256": "c3e6e0dd87baee020c64f50b979d0df213be8d21271cd850e5bf12a747820ad8",
+    "limitations": [
+      "The source report was captured from a dirty worktree. This snapshot is historical performance evidence, not proof of clean-commit reproducibility."
+    ],
+    "sourceReport": {
+      "file": "benchmarks/results/electron-2026-07-03T18-48-34-752Z-50000.json",
+      "sha256": "b74e3bbff9007d475f69439c545a229d2a153d9350bb388e4675d3a32479bb5a",
+      "tracked": false
+    }
+  },
+  "run": {
+    "phase": "all",
+    "phases": {
+      "edit": {
+        "finishedAt": "2026-07-03T19:23:30.397Z",
+        "startedAt": "2026-07-03T18:52:36.420Z",
+        "status": "passed"
+      },
+      "graph": {
+        "finishedAt": "2026-07-03T19:31:14.622Z",
+        "startedAt": "2026-07-03T19:26:28.250Z",
+        "status": "passed"
+      },
+      "query": {
+        "finishedAt": "2026-07-03T19:26:24.746Z",
+        "startedAt": "2026-07-03T19:23:33.903Z",
+        "status": "passed"
+      },
+      "startup": {
+        "finishedAt": "2026-07-03T18:52:32.911Z",
+        "startedAt": "2026-07-03T18:48:35.870Z",
+        "status": "passed"
+      },
+      "watcher": {
+        "finishedAt": "2026-07-03T19:32:36.656Z",
+        "startedAt": "2026-07-03T19:31:18.127Z",
+        "status": "passed"
+      }
+    },
+    "smoke": false,
+    "testStatus": "passed"
+  },
+  "schemaVersion": 1
+}

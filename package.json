@@ -177,6 +177,7 @@
 		"perf:electron:all": "npm-run-all --serial perf:electron:10k perf:electron:50k",
 		"perf:baseline": "node benchmarks/accept-baseline.mjs",
 		"perf:check": "node benchmarks/check-performance.mjs",
+		"perf:reference": "node benchmarks/create-reference-summary.mjs",
 		"perf:test": "node --test benchmarks/__tests__/*.test.mjs",
 		"start": "vite",
 		"start:docs": "cd docs/en && mdbook serve",

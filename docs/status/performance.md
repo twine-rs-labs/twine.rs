@@ -14,8 +14,18 @@ queries, graph frames, watcher ingestion, bridge payloads, persistence, and
 process memory.
 
 Complete 10k and 50k Apple M4 runs pass all machine-independent structural
-invariants. Matching local baselines are accepted. Baseline files and generated
-reports are intentionally ignored by Git.
+invariants. Matching local baselines are accepted. Raw reports and
+machine-specific baselines remain ignored, while normalized historical
+evidence is tracked:
+
+- [10k reference](../../benchmarks/reference/2026-07-03-apple-m4-10000.summary.json)
+- [50k reference](../../benchmarks/reference/2026-07-03-apple-m4-50000.summary.json)
+
+Both source reports were captured from the same dirty worktree. The artifacts
+preserve that limitation, the recorded Git revision, environment and dependency
+versions, fixture identity, all aggregates, normalized invariant results, and
+source-report hashes. They document the initial baseline without claiming
+clean-commit reproducibility.
 
 ## First 50k baseline
 

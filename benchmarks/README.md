@@ -131,6 +131,27 @@ worker receipt, Rust ingestion, and renderer patch application. This separates
 debounce/scanning, IPC, Rust compute, and reducer costs when a large fixture
 misses the watcher deadline.
 
+## Tracked reference summaries
+
+Raw reports and accepted regression baselines remain ignored. Small normalized
+reference summaries under [`reference/`](./reference/README.md) preserve
+durable evidence for performance numbers quoted in repository documentation.
+They include report and budget hashes, Git dirty state and revision, machine and
+dependency identity, fixture identity, aggregates, phase results, and
+normalized invariant outcomes.
+
+Create one from an existing complete report without rerunning the benchmark:
+
+```sh
+npm run perf:reference -- \
+  --from benchmarks/results/electron-...-50000.json \
+  --out benchmarks/reference/YYYY-MM-DD-machine-50000.summary.json
+```
+
+Reference summaries are documentation evidence, not portable regression
+baselines. A dirty-worktree source remains explicitly marked as historical
+rather than being presented as clean-commit reproducibility evidence.
+
 ## Local baselines
 
 Accept a completed all-phase report explicitly:
