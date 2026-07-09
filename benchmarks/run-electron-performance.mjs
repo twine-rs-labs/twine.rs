@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
 import {spawnSync} from 'node:child_process';
-import {access, mkdir, mkdtemp, readFile, rm} from 'node:fs/promises';
+import {
+	access,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	stat
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -22,7 +30,7 @@ const smoke = args.includes('--smoke');
 const phaseIndex = args.indexOf('--phase');
 const requestedPhase = phaseIndex >= 0 ? args[phaseIndex + 1] : 'all';
 const completePhases = ['startup', 'edit', 'query', 'graph', 'watcher'];
-const validPhases = ['all', 'interaction', ...completePhases];
+const validPhases = ['all', 'diagnostic', 'interaction', ...completePhases];
 
 if (!Number.isInteger(size) || size <= 0) {
 	throw new Error('--size must be a positive integer.');
@@ -62,6 +70,35 @@ const main = path.join(
 	'main-process',
 	'index.js'
 );
+const renderer = path.join(
+	repoRoot,
+	'electron-build',
+	'renderer',
+	'index.html'
+);
+const native = path.join(
+	repoRoot,
+	'electron-build',
+	'main',
+	'src',
+	'electron',
+	'main-process',
+	'native',
+	'twine_native.node'
+);
+const buildInputs = [
+	path.join(repoRoot, 'src'),
+	path.join(repoRoot, 'crates'),
+	path.join(repoRoot, 'public'),
+	path.join(repoRoot, 'Cargo.lock'),
+	path.join(repoRoot, 'Cargo.toml'),
+	path.join(repoRoot, 'package-lock.json'),
+	path.join(repoRoot, 'package.json'),
+	path.join(repoRoot, 'tsconfig.electron.json'),
+	path.join(repoRoot, 'tsconfig.json'),
+	path.join(repoRoot, 'vite.config.mts')
+];
+const buildArtifacts = [main, renderer, native];
 
 await access(fixture).catch(() => {
 	throw new Error(
@@ -73,7 +110,88 @@ await access(main).catch(() => {
 		`Missing production Electron build. Run npm run perf:prepare first.`
 	);
 });
+await assertFreshProductionBuild();
 await mkdir(path.join(repoRoot, 'benchmarks', 'results'), {recursive: true});
+
+async function mtimeMs(file) {
+	return (await stat(file)).mtimeMs;
+}
+
+async function newestSourceMtime(entry) {
+	let info;
+
+	try {
+		info = await stat(entry);
+	} catch (error) {
+		if (error.code === 'ENOENT') {
+			return 0;
+		}
+		throw error;
+	}
+
+	if (!info.isDirectory()) {
+		return info.mtimeMs;
+	}
+
+	let newest = info.mtimeMs;
+
+	for (const child of await readdir(entry)) {
+		if (
+			child === 'node_modules' ||
+			child === 'target' ||
+			child === 'dist' ||
+			child === 'electron-build' ||
+			child === 'release'
+		) {
+			continue;
+		}
+		newest = Math.max(newest, await newestSourceMtime(path.join(entry, child)));
+	}
+
+	return newest;
+}
+
+async function assertFreshProductionBuild() {
+	if (process.env.TWINE_PERF_ALLOW_STALE_BUILD === '1') {
+		return;
+	}
+
+	const missing = [];
+	const artifactTimes = [];
+
+	for (const artifact of buildArtifacts) {
+		try {
+			artifactTimes.push(await mtimeMs(artifact));
+		} catch (error) {
+			if (error.code === 'ENOENT') {
+				missing.push(path.relative(repoRoot, artifact));
+				continue;
+			}
+			throw error;
+		}
+	}
+
+	if (missing.length > 0) {
+		throw new Error(
+			`Missing production Electron build artifact(s): ${missing.join(
+				', '
+			)}. Run npm run perf:prepare first.`
+		);
+	}
+
+	const sourceNewest = Math.max(
+		...(await Promise.all(buildInputs.map(newestSourceMtime)))
+	);
+	const artifactOldest = Math.min(...artifactTimes);
+
+	if (sourceNewest > artifactOldest + 1000) {
+		throw new Error(
+			'Production Electron build is older than app/native sources. ' +
+				'Run npm run perf:prepare before running performance phases. ' +
+				'Set TWINE_PERF_ALLOW_STALE_BUILD=1 only for intentional stale-build diagnostics.'
+		);
+	}
+}
 
 const fixtureFingerprintBefore = await treeMetadataFingerprint(fixture);
 const runRoot = await mkdtemp(path.join(os.tmpdir(), 'twine-rs-perf-run-'));

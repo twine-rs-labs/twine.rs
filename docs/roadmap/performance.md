@@ -26,8 +26,11 @@ with unchanged structural assertions.
 
 ### 2. Save and edit-to-paint
 
-- Attribute the roughly 29-second 50k save between snapshot preparation,
-  serialization, filesystem writes, watcher suppression, and acknowledgement.
+- Use `npm run perf:electron:50k:diagnostic` to attribute the roughly
+  29-second 50k save before rerunning full benchmark phases.
+- Split the cost between renderer queueing, native deserialization/project
+  construction, project-folder writes, changed-file planning, sidecar writes,
+  baseline refresh, watcher suppression, and Rust acknowledgement.
 - Avoid preparing or writing unchanged project entities.
 - Keep one persistence notification per committed patch batch and exact
   revision acknowledgement.

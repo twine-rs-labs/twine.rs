@@ -107,7 +107,14 @@ const runRoot = process.env.TWINE_PERF_RUN_ROOT;
 const launchTracePath = process.env.TWINE_PERF_LAUNCH_TRACE;
 const runId = process.env.TWINE_PERF_RUN_ID;
 const watcherTimeout = smoke ? 60_000 : 10 * 60 * 1000;
-const benchmarkPhases = ['edit', 'graph', 'query', 'startup', 'watcher'];
+const benchmarkPhases = [
+	'diagnostic',
+	'edit',
+	'graph',
+	'query',
+	'startup',
+	'watcher'
+];
 const mainPath = path.resolve(
 	'electron-build/main/src/electron/main-process/index.js'
 );
@@ -641,6 +648,7 @@ async function measureEdits(page: Page) {
 		);
 
 		capturePersistenceMetrics(persisted);
+		captureNativeSaveMetrics(persisted);
 		assertInvariant(
 			'edit-final-revision-persisted',
 			persisted.renderer.events.some(
@@ -651,6 +659,102 @@ async function measureEdits(page: Page) {
 			`revision ${finalRevision}`
 		);
 	}
+}
+
+async function measureDiagnostic(page: Page, launchToWindowMs: number) {
+	const startupSnapshot = await snapshot(page);
+
+	startupMetrics(startupSnapshot, launchToWindowMs);
+	diagnostics.startup.push(startupSnapshot);
+	assertInvariant(
+		'wasm-worker-mode-active',
+		startupSnapshot.renderer.core.hosts.length === 1 &&
+			startupSnapshot.renderer.core.hosts[0].mode === 'wasm-worker'
+	);
+	assertInvariant(
+		'one-project-one-session-worker',
+		startupSnapshot.renderer.core.workerClients === 1 &&
+			startupSnapshot.renderer.core.activeSessions === 1
+	);
+
+	await reset(page);
+	await page
+		.getByRole('group', {name: 'Workspace Mode'})
+		.getByRole('tab', {name: 'Text'})
+		.click();
+	const editor = page.locator('[data-testid^="story-editor-window-"]').first();
+
+	await expect(editor).toBeVisible();
+	const content = editor.locator('.cm-content');
+	const previousRevision = await currentRevision(page);
+	const bridgeMetricStart = (await snapshot(page)).renderer.bridgeMetrics
+		.length;
+
+	await content.click();
+	await page.keyboard.press('End');
+	await page.keyboard.insertText(' diagnostic-save-profile');
+	await waitForEvent(page, 'mutation-applied');
+	await waitForMeasure(page, 'mutation-to-paint');
+	const finalRevision = await waitForRevisionAfter(page, previousRevision);
+	const mutationSnapshot = await snapshot(page);
+
+	addSample(
+		'edit.roundTripMs',
+		lastEntry(mutationSnapshot, 'mutation-round-trip', 'measure')?.duration
+	);
+	addSample(
+		'edit.paintMs',
+		lastEntry(mutationSnapshot, 'mutation-to-paint', 'measure')?.duration
+	);
+	assertInvariant(
+		'diagnostic-edit-revision-monotonic',
+		finalRevision > previousRevision,
+		`${previousRevision} -> ${finalRevision}`
+	);
+
+	const persisted = await waitForRevisionEvent(
+		page,
+		['save-acknowledgement-complete', 'persistence-save-failed'],
+		finalRevision,
+		watcherTimeout
+	);
+	const queuedSaves = persisted.renderer.events.filter(
+		event =>
+			event.name === 'persistence-save-queued' &&
+			event.detail?.revision === finalRevision
+	);
+
+	capturePersistenceMetrics(persisted);
+	captureNativeSaveMetrics(persisted);
+	captureBridgeMetrics(persisted);
+	captureMemory(persisted);
+	diagnostics.interaction = persisted;
+	assertInvariant(
+		'diagnostic-final-revision-persisted',
+		persisted.renderer.events.some(
+			event =>
+				event.name === 'save-acknowledgement-complete' &&
+				event.detail?.revision === finalRevision
+		),
+		`revision ${finalRevision}`
+	);
+	assertInvariant(
+		'diagnostic-one-save-for-final-revision',
+		queuedSaves.length === 1,
+		`revision ${finalRevision}; saves ${queuedSaves.length}`
+	);
+	assertInvariant(
+		'diagnostic-save-stage-timings-present',
+		persisted.renderer.events.some(
+			event => event.name === 'save-native-timings'
+		)
+	);
+	assertInvariant(
+		'diagnostic-avoids-full-replace',
+		!persisted.renderer.bridgeMetrics
+			.slice(bridgeMetricStart)
+			.some(metric => metric.kind === 'replaceProject')
+	);
 }
 
 async function measureContents(page: Page) {
@@ -781,10 +885,67 @@ function capturePersistenceMetrics(current: PerformanceSnapshot) {
 				: undefined
 		);
 		addSample(
+			'save.acknowledgementMs',
+			acknowledgementStarted && acknowledgementCompleted
+				? acknowledgementCompleted.epochTime - acknowledgementStarted.epochTime
+				: undefined
+		);
+		addSample(
 			'persistence.endToEndMs',
 			queued && acknowledgementCompleted
 				? acknowledgementCompleted.epochTime - queued.epochTime
 				: undefined
+		);
+		addSample(
+			'save.endToEndMs',
+			queued && acknowledgementCompleted
+				? acknowledgementCompleted.epochTime - queued.epochTime
+				: undefined
+		);
+	}
+}
+
+function microsToMillis(value: unknown) {
+	return typeof value === 'number' && Number.isFinite(value)
+		? value / 1000
+		: undefined;
+}
+
+function captureNativeSaveMetrics(current: PerformanceSnapshot) {
+	const timingEvents = current.renderer.events.filter(
+		event => event.name === 'save-native-timings'
+	);
+
+	for (const event of timingEvents) {
+		const detail = event.detail ?? {};
+
+		addSample('save.nativeTotalMs', microsToMillis(detail.totalUs));
+		addSample('save.nativeDeserializeMs', microsToMillis(detail.jsonParseUs));
+		addSample('save.projectBuildMs', microsToMillis(detail.projectBuildUs));
+		addSample('save.writeProjectMs', microsToMillis(detail.saveProjectPathUs));
+		addSample(
+			'save.collectOldFilesMs',
+			microsToMillis(detail.collectOldFilesUs)
+		);
+		addSample(
+			'save.writeTempProjectMs',
+			microsToMillis(detail.writeTempProjectUs)
+		);
+		addSample('save.copyAssetsMs', microsToMillis(detail.copyAssetsUs));
+		addSample(
+			'save.collectNewFilesMs',
+			microsToMillis(detail.collectNewFilesUs)
+		);
+		addSample('save.dirtyCompareMs', microsToMillis(detail.dirtyCompareUs));
+		addSample(
+			'save.changedFilePlanMs',
+			microsToMillis(detail.changedFilePlanUs)
+		);
+		addSample('save.rootSwapMs', microsToMillis(detail.rootSwapUs));
+		addSample('save.sidecarMs', microsToMillis(detail.sidecarUs));
+		addSample(
+			'save.baselineRefreshMs',
+			microsToMillis(detail.baselineRefreshUs)
 		);
 	}
 }
@@ -1279,6 +1440,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				],
 				createdAt: new Date().toISOString(),
 				diagnostics,
+				diagnostic: phase === 'diagnostic',
 				environment: {
 					git: {dirty: gitDirty, revision: gitRevision},
 					machine: {
@@ -1298,6 +1460,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				fixture: fixtureManifest,
 				kind: 'twine-electron-performance',
 				phase,
+				sampleCount: phase === 'diagnostic' ? 1 : undefined,
 				samples,
 				schemaVersion: 1,
 				smoke,
@@ -1337,6 +1500,16 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 	const fixtureManifestBefore = await readFile(
 		path.join(fixturePath, 'twine.toml')
 	);
+
+	if (phase === 'diagnostic') {
+		const running = await launchFixture();
+
+		try {
+			await measureDiagnostic(running.page, running.launchToWindowMs);
+		} finally {
+			await closeFixture(running);
+		}
+	}
 
 	if (phase === 'startup') {
 		for (let index = 0; index < (smoke ? 1 : 3); index++) {

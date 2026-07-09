@@ -65,6 +65,10 @@ This generates JSON story input and delegates project-folder creation to the
 release `twine_cli import` command. Generated sources, projects, reports, and
 baselines are ignored by Git.
 
+Performance commands refuse to launch when the production Electron build is
+older than app or native sources. Re-run `npm run perf:prepare` after changing
+renderer, Electron main, Rust, or build configuration code.
+
 Run either size or both:
 
 ```sh
@@ -80,6 +84,19 @@ phase boundaries. The temporary launch trace records per-sample progress and
 is copied into the checkpoint when each child process exits. This preserves
 launch and phase state when a process crashes or times out.
 
+For fast 50k edit/save investigation, run the diagnostic phase:
+
+```sh
+npm run perf:electron:50k:diagnostic
+```
+
+This performs one release Electron launch and one text edit, then waits for
+paint, persistence, notification, and exact-revision Rust save acknowledgement.
+The report is intentionally partial and cannot be accepted as a regression
+baseline or compared against a local baseline. It preserves the structural
+assertions needed during optimization without requiring repeated full 50k
+benchmark runs.
+
 Run the watcher path independently when diagnosing ingestion without paying
 for startup repetition and interaction samples:
 
@@ -88,9 +105,10 @@ npm run perf:electron:10k:watcher
 npm run perf:electron:50k:watcher
 ```
 
-Edit, query, and graph phases also have size-specific diagnostic commands:
+Edit, query, and graph phases also have size-specific subsystem commands:
 
 ```sh
+npm run perf:electron:10k:diagnostic
 npm run perf:electron:50k:edit
 npm run perf:electron:50k:query
 npm run perf:electron:50k:graph
@@ -120,10 +138,12 @@ process-name kills that could terminate unrelated Electron applications.
 Reports are written as paired JSON and Markdown files under
 `benchmarks/results/`. Absolute roadmap targets from `budgets.json` are shown
 but remain report-only. Reports include persistence queue, native save, save
-notification, and exact-revision Rust acknowledgement timings. Worker/session
-ownership, monotonic revisions, incremental watcher parsing, bounded graph
-rendering, isolation, cleanup, and the absence of post-initialization
-full-project replacement are blocking invariants.
+notification, exact-revision Rust acknowledgement timings, and perf-gated
+save-stage timings for native deserialization, project construction,
+project-folder writes, changed-file planning, sidecar writes, and baseline
+refresh. Worker/session ownership, monotonic revisions, incremental watcher
+parsing, bounded graph rendering, isolation, cleanup, and the absence of
+post-initialization full-project replacement are blocking invariants.
 
 Watcher diagnostics use the delta ID to correlate epoch-aligned monotonic
 timestamps for native observation, scan start, delta creation and notification,

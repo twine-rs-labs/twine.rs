@@ -7,7 +7,7 @@ use std::{
     fs::{self, File},
     io::BufReader,
     path::{Component, Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 use twine_graph::GraphIndex;
@@ -85,6 +85,19 @@ pub struct SaveReport {
     pub changed_files: Vec<PathBuf>,
     pub dirty: bool,
     pub storage_message: String,
+    pub timings: SaveTimings,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SaveTimings {
+    pub changed_file_plan_us: u64,
+    pub collect_new_files_us: u64,
+    pub collect_old_files_us: u64,
+    pub copy_assets_us: u64,
+    pub dirty_compare_us: u64,
+    pub root_swap_us: u64,
+    pub total_us: u64,
+    pub write_temp_project_us: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -184,34 +197,51 @@ pub fn save_project_path(
     project: &Project,
     options: &SaveOptions,
 ) -> Result<SaveReport, StoreError> {
+    let total_started = Instant::now();
+    let mut timings = SaveTimings::default();
     let root = root.as_ref();
     let temp_root = temp_project_path(root);
+    let started = Instant::now();
     let old_files = collect_files(root)?;
+    timings.collect_old_files_us = elapsed_us(started);
 
     if temp_root.exists() {
         fs::remove_dir_all(&temp_root)?;
     }
 
+    let started = Instant::now();
     write_project_to_dir(&temp_root, project, options)?;
+    timings.write_temp_project_us = elapsed_us(started);
+    let started = Instant::now();
     copy_existing_assets(root, &temp_root)?;
+    timings.copy_assets_us = elapsed_us(started);
 
+    let started = Instant::now();
     let new_files = collect_files(&temp_root)?;
+    timings.collect_new_files_us = elapsed_us(started);
+    let started = Instant::now();
     let dirty = !file_sets_equal(root, &old_files, &temp_root, &new_files)?;
+    timings.dirty_compare_us = elapsed_us(started);
+    let started = Instant::now();
     let changed_files = changed_files(root, &old_files, &temp_root, &new_files)?;
+    timings.changed_file_plan_us = elapsed_us(started);
     let storage_message = project.manifest.storage.message.clone();
 
     if !dirty {
         fs::remove_dir_all(&temp_root)?;
+        timings.total_us = elapsed_us(total_started);
         return Ok(SaveReport {
             backup_path: None,
             changed_files,
             dirty: false,
             storage_message,
+            timings,
         });
     }
 
     let mut backup_path = None;
     let retired_path = root.with_extension(format!("retired-{}", timestamp()));
+    let started = Instant::now();
 
     if root.exists() {
         if options.create_backup {
@@ -230,13 +260,20 @@ pub fn save_project_path(
     if retired_path.exists() {
         fs::remove_dir_all(retired_path)?;
     }
+    timings.root_swap_us = elapsed_us(started);
+    timings.total_us = elapsed_us(total_started);
 
     Ok(SaveReport {
         backup_path,
         changed_files,
         dirty: true,
         storage_message,
+        timings,
     })
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
 }
 
 fn write_project_to_dir(

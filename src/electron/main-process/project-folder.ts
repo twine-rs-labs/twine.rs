@@ -56,9 +56,26 @@ import {
 
 export interface NativeProjectFolderResult {
 	passageTextLoaded?: boolean;
+	performanceTimings?: NativeProjectSaveTimings;
 	rootPath: string;
 	stories: Story[];
 	storyIds: string[];
+}
+
+export interface NativeProjectSaveTimings {
+	baselineRefreshUs?: number;
+	changedFilePlanUs: number;
+	collectNewFilesUs: number;
+	collectOldFilesUs: number;
+	copyAssetsUs: number;
+	dirtyCompareUs: number;
+	jsonParseUs: number;
+	projectBuildUs: number;
+	rootSwapUs: number;
+	saveProjectPathUs: number;
+	sidecarUs: number;
+	totalUs: number;
+	writeTempProjectUs: number;
 }
 
 export interface NativeProjectAssetWriteResult {
@@ -2886,7 +2903,20 @@ export async function saveProjectFolder(
 	story: Story
 ): Promise<NativeProjectFolderResult> {
 	const writtenProject = await writeProjectFolder(rootPath, story);
+	const baselineStarted = performance.now();
+
 	await refreshProjectSessionBaseline(rootPath, [story.id]);
+	const baselineRefreshUs = Math.max(
+		0,
+		Math.round((performance.now() - baselineStarted) * 1000)
+	);
+
+	if (performanceHarnessEnabled() && writtenProject?.performanceTimings) {
+		writtenProject.performanceTimings = {
+			...writtenProject.performanceTimings,
+			baselineRefreshUs
+		};
+	}
 
 	const result = writtenProject ?? {
 		passageTextLoaded: true,

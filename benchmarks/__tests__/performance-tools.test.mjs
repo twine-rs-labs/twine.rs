@@ -169,6 +169,13 @@ test('accepts only complete all-phase baseline reports', () => {
 		/all-phase/
 	);
 	assert.match(
+		baselineCandidateErrors(
+			{...report, diagnostic: true, phase: 'diagnostic'},
+			budgets
+		).join(' '),
+		/all-phase/
+	);
+	assert.match(
 		baselineCandidateErrors({...report, aggregates: {}}, budgets).join(' '),
 		/Missing baseline metric/
 	);

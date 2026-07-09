@@ -27,6 +27,12 @@ versions, fixture identity, all aggregates, normalized invariant results, and
 source-report hashes. They document the initial baseline without claiming
 clean-commit reproducibility.
 
+A short diagnostic phase now exists for iteration on the dominant 50k edit/save
+cost. `npm run perf:electron:50k:diagnostic` performs one production launch and
+one edit/save/acknowledgement cycle, records the same structural assertions, and
+adds perf-gated native save-stage timings. Diagnostic reports are partial by
+design and are not accepted as baselines.
+
 ## First 50k baseline
 
 | Metric                       |       Measured |
@@ -48,6 +54,10 @@ clean-commit reproducibility.
 Search meets its 50 ms target. The other headline metrics demonstrate that the
 architecture now exposes actionable bottlenecks rather than satisfying the
 roadmap budgets.
+
+The next save-path work should use diagnostic save-stage metrics first, then
+rerun the complete 50k suite only after an optimization materially changes a
+reported phase.
 
 ## Gates
 

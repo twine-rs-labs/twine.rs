@@ -38,7 +38,7 @@ const baselinePath = path.join(
 );
 let baseline;
 
-if (!raw.smoke) {
+if (!raw.smoke && !raw.diagnostic) {
 	try {
 		baseline = await readJson(baselinePath);
 	} catch (error) {

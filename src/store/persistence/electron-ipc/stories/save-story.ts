@@ -8,6 +8,7 @@ import {
 import {getAppInfo} from '../../../../util/app-info';
 import {fetchStoryFormatProperties} from '../../../../util/story-format/fetch-properties';
 import {loadProjectMetadata} from '../../../project-metadata';
+import {recordPerformanceHarnessEvent} from '../../../../util/performance';
 
 async function saveNativeProjectFolder(
 	twineElectron: NonNullable<TwineElectronWindow['twineElectron']>,
@@ -29,7 +30,25 @@ async function saveNativeProjectFolder(
 	}
 
 	try {
-		await twineElectron.saveProjectFolder(projectMetadata.rootPath, story);
+		recordPerformanceHarnessEvent('save-native-call-started', {
+			rootPath: projectMetadata.rootPath,
+			storyId: story.id
+		});
+		const result = await twineElectron.saveProjectFolder(
+			projectMetadata.rootPath,
+			story
+		);
+		recordPerformanceHarnessEvent('save-native-call-completed', {
+			rootPath: projectMetadata.rootPath,
+			storyId: story.id
+		});
+		if (result?.performanceTimings) {
+			recordPerformanceHarnessEvent('save-native-timings', {
+				rootPath: projectMetadata.rootPath,
+				storyId: story.id,
+				...result.performanceTimings
+			});
+		}
 	} catch (error) {
 		throw new Error(
 			`Could not update native project folder: ${(error as Error).message}`,

@@ -10,7 +10,7 @@ use std::{
     io,
     io::ErrorKind,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use twine_model::{GraphPosition, Passage, Project, StoragePolicy, Story};
@@ -41,9 +41,28 @@ struct HealthReport {
 #[serde(rename_all = "camelCase")]
 struct NativeProjectFolderResult {
     passage_text_loaded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    performance_timings: Option<NativeProjectSaveTimings>,
     root_path: String,
     stories: Vec<NativeStory>,
     story_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeProjectSaveTimings {
+    changed_file_plan_us: u64,
+    collect_new_files_us: u64,
+    collect_old_files_us: u64,
+    copy_assets_us: u64,
+    dirty_compare_us: u64,
+    json_parse_us: u64,
+    project_build_us: u64,
+    root_swap_us: u64,
+    save_project_path_us: u64,
+    sidecar_us: u64,
+    total_us: u64,
+    write_temp_project_us: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -220,6 +239,7 @@ pub fn load_project_folder_json(
 
     json_string(&NativeProjectFolderResult {
         passage_text_loaded,
+        performance_timings: None,
         root_path,
         stories,
         story_ids,
@@ -229,10 +249,15 @@ pub fn load_project_folder_json(
 
 #[napi(js_name = "saveProjectFolderJson")]
 pub fn save_project_folder_json(root_path: String, story_json: String) -> NativeResult<String> {
+    let total_started = Instant::now();
+    let mut timings = NativeProjectSaveTimings::default();
     let root = PathBuf::from(&root_path);
+    let started = Instant::now();
     let story_value =
         serde_json::from_str::<serde_json::Value>(&story_json).map_err(native_error)?;
     let story = serde_json::from_value::<Story>(story_value.clone()).map_err(native_error)?;
+    timings.json_parse_us = elapsed_us(started);
+    let started = Instant::now();
     let mut project = Project::from_story(story.clone());
 
     project.manifest.app_version = "twine.rs-desktop".into();
@@ -240,8 +265,10 @@ pub fn save_project_folder_json(root_path: String, story_json: String) -> Native
         message: "Native twine.rs desktop project folder".into(),
         ..StoragePolicy::default()
     };
+    timings.project_build_us = elapsed_us(started);
 
-    save_project_path(
+    let started = Instant::now();
+    let save_report = save_project_path(
         &root,
         &project,
         &SaveOptions {
@@ -251,15 +278,35 @@ pub fn save_project_folder_json(root_path: String, story_json: String) -> Native
         },
     )
     .map_err(native_error)?;
+    timings.save_project_path_us = elapsed_us(started);
+    timings.changed_file_plan_us = save_report.timings.changed_file_plan_us;
+    timings.collect_new_files_us = save_report.timings.collect_new_files_us;
+    timings.collect_old_files_us = save_report.timings.collect_old_files_us;
+    timings.copy_assets_us = save_report.timings.copy_assets_us;
+    timings.dirty_compare_us = save_report.timings.dirty_compare_us;
+    timings.root_swap_us = save_report.timings.root_swap_us;
+    timings.write_temp_project_us = save_report.timings.write_temp_project_us;
+    let started = Instant::now();
     write_renderer_project_sidecar(&root, story_value).map_err(native_error)?;
+    timings.sidecar_us = elapsed_us(started);
+    timings.total_us = elapsed_us(total_started);
 
     json_string(&NativeProjectFolderResult {
         passage_text_loaded: true,
+        performance_timings: performance_timings(timings),
         root_path,
         stories: vec![NativeStory::from_story(&story)],
         story_ids: vec![story.id.as_ref().to_owned()],
     })
     .map_err(native_error)
+}
+
+fn performance_timings(timings: NativeProjectSaveTimings) -> Option<NativeProjectSaveTimings> {
+    (std::env::var("TWINE_PERF").ok().as_deref() == Some("1")).then_some(timings)
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
 }
 
 #[napi(js_name = "rememberProjectFolderJson")]

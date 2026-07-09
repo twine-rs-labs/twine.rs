@@ -129,9 +129,26 @@ export interface NativeCommandLineOpenResult {
 
 export interface NativeProjectFolderResult {
 	passageTextLoaded?: boolean;
+	performanceTimings?: NativeProjectSaveTimings;
 	rootPath: string;
 	stories: Story[];
 	storyIds: string[];
+}
+
+export interface NativeProjectSaveTimings {
+	baselineRefreshUs?: number;
+	changedFilePlanUs: number;
+	collectNewFilesUs: number;
+	collectOldFilesUs: number;
+	copyAssetsUs: number;
+	dirtyCompareUs: number;
+	jsonParseUs: number;
+	projectBuildUs: number;
+	rootSwapUs: number;
+	saveProjectPathUs: number;
+	sidecarUs: number;
+	totalUs: number;
+	writeTempProjectUs: number;
 }
 
 export interface NativeProjectAssetWriteResult {
