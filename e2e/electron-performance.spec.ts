@@ -857,6 +857,23 @@ async function measureContents(page: Page) {
 			{timeout: 60_000}
 		);
 		const current = await snapshot(page);
+		const contentsTrace = current.renderer.events
+			.filter(
+				event =>
+					event.name === 'core-read-model-query' &&
+					event.detail?.kind === 'queryContentsPage'
+			)
+			.at(-1);
+		const hostCacheHit = current.renderer.events
+			.filter(
+				event =>
+					event.name === 'core-read-model-host-cache-hit' &&
+					event.detail?.kind === 'queryContentsPage'
+			)
+			.at(-1);
+		const sessionReadyTrace = current.renderer.events
+			.filter(event => event.name === 'core-session-ready')
+			.at(-1);
 
 		if (index >= 2) {
 			addSample(
@@ -882,6 +899,22 @@ async function measureContents(page: Page) {
 				lastEntry(current, 'contents-page-result-to-paint', 'measure')?.duration
 			);
 			addSample(
+				'query.contentsSessionQueueMs',
+				contentsTrace
+					? numericDetail(contentsTrace.detail?.queueWaitMs)
+					: hostCacheHit
+						? 0
+						: undefined
+			);
+			addSample(
+				'query.contentsSessionReadyMs',
+				sessionReadyTrace
+					? numericDetail(sessionReadyTrace.detail?.durationMs)
+					: hostCacheHit
+						? 0
+						: undefined
+			);
+			addSample(
 				'query.coreRoundTripMs',
 				current.renderer.bridgeMetrics
 					.filter(metric => metric.kind === 'queryContentsPage')
@@ -890,6 +923,16 @@ async function measureContents(page: Page) {
 		}
 		const contentsMetrics = current.renderer.bridgeMetrics.filter(
 			metric => metric.kind === 'queryContentsPage'
+		);
+		assertInvariant(
+			`contents-${index}-queue-attribution-present`,
+			!!contentsTrace || !!hostCacheHit,
+			contentsTrace?.detail?.waitingOn as string | undefined
+		);
+		assertInvariant(
+			`contents-${index}-session-ready-attribution-present`,
+			!!sessionReadyTrace || !!hostCacheHit,
+			sessionReadyTrace?.detail?.mode as string | undefined
 		);
 		assertInvariant(
 			`contents-${index}-uses-wasm-worker`,

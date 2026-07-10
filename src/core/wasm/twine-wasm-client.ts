@@ -17,6 +17,7 @@ import type {CoreStoryIndexOptions} from '../bindings/CoreStoryIndexOptions';
 import type {CoreStorySummary} from '../bindings/CoreStorySummary';
 import type {ProjectSnapshot} from '../bindings/ProjectSnapshot';
 import type {StoryCommand} from '../bindings/StoryCommand';
+import {recordPerformanceHarnessEvent} from '../../util/performance';
 import {recordCoreBridgeMetric} from './performance';
 import type {CoreBridgeMode} from './performance';
 import TwineWasmWorker from './twine-wasm-worker?worker';
@@ -39,6 +40,14 @@ type CacheEntry<T> = {
 	result: T;
 	revision: number;
 };
+
+type SessionMutationKind =
+	| 'acknowledgeSaved'
+	| 'apply'
+	| 'ingestExternalDelta'
+	| 'redo'
+	| 'replaceProject'
+	| 'undo';
 
 type ReadModelWorkerRequest = Extract<
 	WasmWorkerRequest,
@@ -122,6 +131,7 @@ export class WasmCoreWorkerClient {
 	private nextId = 1;
 	private pending = new Map<number, PendingRequest>();
 	private readyRevisions = new Map<string, number>();
+	private sessionMutationKinds = new Map<string, SessionMutationKind>();
 	private sessionQueues = new Map<string, Promise<void>>();
 	private worker: Worker | undefined;
 
@@ -203,15 +213,18 @@ export class WasmCoreWorkerClient {
 			return this.status(sessionId, revision);
 		}
 
-		const response = await this.enqueueMutation(sessionId, () =>
-			this.send({
-				assets,
-				id: 0,
-				kind: 'replaceProject',
-				revision,
-				sessionId,
-				snapshot
-			})
+		const response = await this.enqueueMutation(
+			sessionId,
+			'replaceProject',
+			() =>
+				this.send({
+					assets,
+					id: 0,
+					kind: 'replaceProject',
+					revision,
+					sessionId,
+					snapshot
+				})
 		);
 
 		if (response.kind !== 'replaceProject') {
@@ -229,7 +242,7 @@ export class WasmCoreWorkerClient {
 		revision: number,
 		history: 'record' | 'skip' = 'record'
 	): Promise<CoreSessionMutationResult> {
-		const response = await this.enqueueMutation(sessionId, () =>
+		const response = await this.enqueueMutation(sessionId, 'apply', () =>
 			this.send({
 				command,
 				history,
@@ -267,8 +280,10 @@ export class WasmCoreWorkerClient {
 		sessionId: string,
 		revision: number
 	): Promise<CoreSessionMutationResult> {
-		const response = await this.enqueueMutation(sessionId, () =>
-			this.send({id: 0, kind: 'acknowledgeSaved', revision, sessionId})
+		const response = await this.enqueueMutation(
+			sessionId,
+			'acknowledgeSaved',
+			() => this.send({id: 0, kind: 'acknowledgeSaved', revision, sessionId})
 		);
 
 		if (response.kind !== 'acknowledgeSaved') {
@@ -285,15 +300,18 @@ export class WasmCoreWorkerClient {
 		revision: number,
 		force = false
 	): Promise<CoreExternalIngestResult & {revision: number}> {
-		const response = await this.enqueueMutation(sessionId, () =>
-			this.send({
-				delta,
-				force,
-				id: 0,
-				kind: 'ingestExternalDelta',
-				revision,
-				sessionId
-			})
+		const response = await this.enqueueMutation(
+			sessionId,
+			'ingestExternalDelta',
+			() =>
+				this.send({
+					delta,
+					force,
+					id: 0,
+					kind: 'ingestExternalDelta',
+					revision,
+					sessionId
+				})
 		);
 
 		if (response.kind !== 'ingestExternalDelta') {
@@ -356,6 +374,7 @@ export class WasmCoreWorkerClient {
 		}
 
 		this.readyRevisions.delete(sessionId);
+		this.sessionMutationKinds.delete(sessionId);
 		this.sessionQueues.delete(sessionId);
 		this.clearQueryCaches(sessionId);
 		return response.result.removed;
@@ -469,6 +488,38 @@ export class WasmCoreWorkerClient {
 		});
 	}
 
+	/**
+	 * A revision-matched page remains valid while no mutation is queued for the
+	 * session. Hosts use this before their readiness await so a cached read is
+	 * not held behind an unrelated in-flight status request.
+	 */
+	cachedContentsPage(
+		sessionId: string,
+		storyId: string,
+		options: CoreContentsQuery,
+		revision: number
+	) {
+		if (this.sessionQueues.has(sessionId)) {
+			return undefined;
+		}
+
+		const request: ReadModelWorkerRequest = {
+			id: 0,
+			kind: 'queryContentsPage',
+			options,
+			revision,
+			sessionId,
+			storyId
+		};
+		const cached = this.readModelCache.get(
+			cacheKey(sessionId, storyId, request)
+		);
+
+		return cached?.revision === revision
+			? (cached.result as CoreContentsPage)
+			: undefined;
+	}
+
 	async querySearchPage(
 		sessionId: string,
 		storyId: string,
@@ -544,13 +595,25 @@ export class WasmCoreWorkerClient {
 		revision: number,
 		request: ReadModelWorkerRequest
 	): Promise<T> {
+		const queuedAt = now();
+		const waitingOn = this.sessionMutationKinds.get(sessionId);
+
 		await this.waitForMutations(sessionId);
+		const queueWaitMs = now() - queuedAt;
 		const key = cacheKey(sessionId, storyId, request);
 		const generationKey = `${sessionId}:${storyId}:${request.kind}`;
 		const cached = this.readModelCache.get(key);
+		const cacheState = cached?.revision === revision ? 'client' : 'worker';
 
-		if (cached?.revision === revision) {
-			return cached.result as T;
+		recordPerformanceHarnessEvent('core-read-model-query', {
+			cacheState,
+			kind: request.kind,
+			queueWaitMs,
+			waitingOn: waitingOn ?? null
+		});
+
+		if (cacheState === 'client') {
+			return cached!.result as T;
 		}
 
 		const generation =
@@ -576,7 +639,7 @@ export class WasmCoreWorkerClient {
 		sessionId: string,
 		revision: number
 	) {
-		const response = await this.enqueueMutation(sessionId, () =>
+		const response = await this.enqueueMutation(sessionId, kind, () =>
 			this.send({id: 0, kind, revision, sessionId})
 		);
 
@@ -603,6 +666,7 @@ export class WasmCoreWorkerClient {
 		}
 
 		this.pending.clear();
+		this.sessionMutationKinds.clear();
 	}
 
 	private clearQueryCaches(sessionId?: string) {
@@ -667,9 +731,11 @@ export class WasmCoreWorkerClient {
 
 	private enqueueMutation<T>(
 		sessionId: string,
+		kind: SessionMutationKind,
 		mutation: () => Promise<T>
 	): Promise<T> {
 		const previous = this.sessionQueues.get(sessionId) ?? Promise.resolve();
+		this.sessionMutationKinds.set(sessionId, kind);
 		const result = previous.then(mutation, mutation);
 		const settled = result.then(
 			() => undefined,
@@ -680,6 +746,7 @@ export class WasmCoreWorkerClient {
 		void settled.finally(() => {
 			if (this.sessionQueues.get(sessionId) === settled) {
 				this.sessionQueues.delete(sessionId);
+				this.sessionMutationKinds.delete(sessionId);
 			}
 		});
 		return result;

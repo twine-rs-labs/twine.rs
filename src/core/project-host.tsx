@@ -209,6 +209,7 @@ type CoreProjectSessionClient = Pick<
 	| 'acknowledgeSaved'
 	| 'apply'
 	| 'applyExternalDelta'
+	| 'cachedContentsPage'
 	| 'ingestExternalDelta'
 	| 'cachedGraphProjection'
 	| 'cachedStoryIndex'
@@ -1238,6 +1239,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		if (!this.wasmClient.enabled) {
 			throw new Error('WASM core worker is unavailable.');
 		}
+		const startedAt =
+			typeof performance !== 'undefined' ? performance.now() : Date.now();
+		const reusedReadySession =
+			!!this.wasmProjectReplacePromise &&
+			this.wasmProjectReplaceRevision === this.wasmProjectRevision;
 
 		if (
 			!this.wasmProjectReplacePromise ||
@@ -1273,6 +1279,14 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		}
 
 		await this.wasmProjectReplacePromise;
+		recordPerformanceHarnessEvent('core-session-ready', {
+			durationMs:
+				(typeof performance !== 'undefined' ? performance.now() : Date.now()) -
+				startedAt,
+			mode: reusedReadySession ? 'reused' : 'replace',
+			revision: this.wasmProjectReplaceRevision,
+			sessionId: this.sessionId
+		});
 		return this.wasmProjectReplaceRevision;
 	}
 
@@ -1460,17 +1474,32 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		storyId: string,
 		options: Partial<CoreContentsQuery> = {}
 	) {
+		const normalizedQuery = {...defaultContentsQuery, ...options};
 		const queryContentsPage = (
 			this.wasmClient as Partial<CoreProjectSessionClient>
 		).queryContentsPage?.bind(this.wasmClient);
 
 		if (this.wasmClient.enabled && queryContentsPage) {
 			try {
+				const cached = this.wasmClient.cachedContentsPage(
+					this.sessionId,
+					storyId,
+					normalizedQuery,
+					this.wasmProjectRevision
+				);
+
+				if (cached) {
+					recordPerformanceHarnessEvent('core-read-model-host-cache-hit', {
+						kind: 'queryContentsPage',
+						revision: this.wasmProjectRevision
+					});
+					return cached;
+				}
 				const revision = await this.ensureWasmProjectSession();
 				return await queryContentsPage(
 					this.sessionId,
 					storyId,
-					{...defaultContentsQuery, ...options},
+					normalizedQuery,
 					revision
 				);
 			} catch (error) {
