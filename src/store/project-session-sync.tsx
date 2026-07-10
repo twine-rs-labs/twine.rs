@@ -279,6 +279,11 @@ export const ProjectSessionSync: React.FC = () => {
 					}
 
 					await synchronizeStartAssets(start);
+					// The native baseline is ready before the initial asset inventory has
+					// necessarily crossed the serialized core-session queue. Keep a
+					// separate readiness mark so performance scenarios do not inject an
+					// external edit into that initialization work.
+					markPerformance('session-initialization-complete');
 				})
 				.catch((startError: Error) => {
 					if (!canceled) {

@@ -9,10 +9,12 @@ import {getAppInfo} from '../../../../util/app-info';
 import {fetchStoryFormatProperties} from '../../../../util/story-format/fetch-properties';
 import {loadProjectMetadata} from '../../../project-metadata';
 import {recordPerformanceHarnessEvent} from '../../../../util/performance';
+import type {ProjectFolderSaveOptions} from '../../project-folder-save-hints';
 
 async function saveNativeProjectFolder(
 	twineElectron: NonNullable<TwineElectronWindow['twineElectron']>,
-	story: Story
+	story: Story,
+	options: ProjectFolderSaveOptions = {}
 ) {
 	const projectMetadata = loadProjectMetadata(story.id);
 
@@ -34,10 +36,17 @@ async function saveNativeProjectFolder(
 			rootPath: projectMetadata.rootPath,
 			storyId: story.id
 		});
-		const result = await twineElectron.saveProjectFolder(
-			projectMetadata.rootPath,
-			story
-		);
+		const hasOptions =
+			!!options.hints?.length ||
+			options.revision !== undefined ||
+			options.sessionId !== undefined;
+		const result = hasOptions
+			? await twineElectron.saveProjectFolder(
+					projectMetadata.rootPath,
+					story,
+					options
+				)
+			: await twineElectron.saveProjectFolder(projectMetadata.rootPath, story);
 		recordPerformanceHarnessEvent('save-native-call-completed', {
 			rootPath: projectMetadata.rootPath,
 			storyId: story.id
@@ -62,14 +71,18 @@ async function saveNativeProjectFolder(
 /**
  * Sends an IPC message to save a story to disk, ideally in published form.
  */
-export async function saveStory(story: Story, formats: StoryFormatsState) {
+export async function saveStory(
+	story: Story,
+	formats: StoryFormatsState,
+	options: ProjectFolderSaveOptions = {}
+) {
 	const {twineElectron} = window as TwineElectronWindow;
 
 	if (!twineElectron) {
 		throw new Error('Electron bridge is not present on window.');
 	}
 
-	if (await saveNativeProjectFolder(twineElectron, story)) {
+	if (await saveNativeProjectFolder(twineElectron, story, options)) {
 		return;
 	}
 

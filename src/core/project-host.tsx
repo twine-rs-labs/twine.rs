@@ -36,6 +36,7 @@ import {
 	useStoriesContext
 } from '../store/stories';
 import {loadProjectMetadata} from '../store/project-metadata';
+import type {ProjectFolderSaveHint} from '../store/persistence/project-folder-save-hints';
 import type {TwineElectronWindow} from '../electron/shared';
 import {
 	markPerformance,
@@ -253,6 +254,64 @@ function normalizeCommandOptions(
 				effectToken: options?.effectToken,
 				history: options?.history ?? 'record'
 			};
+}
+
+function projectFolderSaveHintsForPatchBatch(batch: PatchBatch) {
+	const hints = new Map<string, ProjectFolderSaveHint>();
+
+	function addFull(storyId: string | undefined, reason: string) {
+		if (!storyId) {
+			return;
+		}
+		hints.set(storyId, {reason, storyId, type: 'full'});
+	}
+
+	for (const patch of batch.patches) {
+		switch (patch.type) {
+			case 'passageUpdated':
+				if (
+					patch.changes.text !== null &&
+					patch.changes.name === null &&
+					patch.changes.tags === null &&
+					patch.changes.layout === null
+				) {
+					const existing = hints.get(patch.story_id);
+
+					if (existing?.type !== 'full') {
+						hints.set(`${patch.story_id}:${patch.passage_id}`, {
+							passageId: patch.passage_id,
+							storyId: patch.story_id,
+							type: 'passageText'
+						});
+					}
+				} else {
+					addFull(patch.story_id, 'passage metadata or layout changed');
+				}
+				break;
+
+			case 'passageCreated':
+			case 'passageDeleted':
+			case 'startPassageChanged':
+			case 'storyCreated':
+			case 'storyDeleted':
+			case 'storyMetadataUpdated':
+			case 'storyScriptUpdated':
+			case 'storyStylesheetUpdated':
+			case 'projectSnapshotReplaced':
+				addFull('story_id' in patch ? patch.story_id : undefined, patch.type);
+				break;
+		}
+	}
+
+	const fullStoryIds = new Set(
+		[...hints.values()].flatMap(hint =>
+			hint.type === 'full' ? [hint.storyId] : []
+		)
+	);
+
+	return [...hints.values()].filter(
+		hint => hint.type === 'full' || !fullStoryIds.has(hint.storyId)
+	);
 }
 
 function assetInventoryEntry(
@@ -608,6 +667,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 						{
 							actions,
 							persistence: externalDeltaId ? 'skip' : undefined,
+							persistenceHints: projectFolderSaveHintsForPatchBatch(batch),
 							revision: nextRevision,
 							sessionId: this.sessionId,
 							storyIds: Array.from(

@@ -97,6 +97,11 @@ baseline or compared against a local baseline. It preserves the structural
 assertions needed during optimization without requiring repeated full 50k
 benchmark runs.
 
+For the passage text fast path, the diagnostic also requires `incremental` save
+mode and one touched project path. Its save-stage metrics distinguish native
+conflict checking, touched-file writes, baseline patching, and Rust save
+acknowledgement from end-to-end edit latency.
+
 Run the watcher path independently when diagnosing ingestion without paying
 for startup repetition and interaction samples:
 
@@ -104,6 +109,11 @@ for startup repetition and interaction samples:
 npm run perf:electron:10k:watcher
 npm run perf:electron:50k:watcher
 ```
+
+The watcher phase first waits for initial asset-inventory synchronization to
+leave the serialized core-session queue. It then measures a one-passage disk
+edit and an asset-only edit as steady-state deltas, rather than accidentally
+mixing either with startup work.
 
 Edit, query, and graph phases also have size-specific subsystem commands:
 

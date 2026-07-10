@@ -315,8 +315,12 @@ export function initIpc() {
 
 	ipcMain.handle(
 		'save-project-folder',
-		async (_event, rootPath: string, story: Story) =>
-			saveProjectFolder(rootPath, story)
+		async (
+			_event,
+			rootPath: string,
+			story: Story,
+			options?: Parameters<typeof saveProjectFolder>[2]
+		) => saveProjectFolder(rootPath, story, options)
 	);
 
 	ipcMain.handle('reveal-story-library-folder', async () => {

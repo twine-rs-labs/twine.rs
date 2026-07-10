@@ -2,7 +2,7 @@
 
 Status: current measured snapshot
 Owner: performance maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-10
 Source of truth: release-mode Electron harness and accepted local baselines
 
 ## Harness state
@@ -33,6 +33,28 @@ one edit/save/acknowledgement cycle, records the same structural assertions, and
 adds perf-gated native save-stage timings. Diagnostic reports are partial by
 design and are not accepted as baselines.
 
+## Recent focused validation
+
+The 50k diagnostic and watcher phases passed on 2026-07-10. They validate the
+first incremental project-folder save path and steady-state watcher path without
+requiring another complete multi-phase run:
+
+- A passage text edit used `incremental` save mode, touched one project path,
+  and completed its native save in about 149 ms. The native write itself took
+  about 7 ms; conflict checking, baseline patching, and IPC account for the
+  remainder.
+- The same edit still took about 1.65 s to paint and about 1.67 s end to end.
+  The remaining latency is therefore not a whole-project filesystem rewrite.
+- The watcher phase parsed one source for a one-passage edit and parsed no story
+  sources for an asset-only edit. The asset change entered review as required.
+- Passage watcher observation to patch was about 3.88 s, including about 1.23 s
+  of Rust external-delta ingestion. This is the next high-value incremental
+  indexing target.
+
+The watcher phase waits for the initial asset-inventory session transaction to
+finish before it resets metrics or modifies disk. That keeps the measured
+external edit separate from startup queue work.
+
 ## First 50k baseline
 
 | Metric                       |       Measured |
@@ -55,9 +77,10 @@ Search meets its 50 ms target. The other headline metrics demonstrate that the
 architecture now exposes actionable bottlenecks rather than satisfying the
 roadmap budgets.
 
-The next save-path work should use diagnostic save-stage metrics first, then
-rerun the complete 50k suite only after an optimization materially changes a
-reported phase.
+The incremental native-save fast path is now in place for passage text edits.
+The next optimization work is bounded initial read-model queries and per-passage
+Rust indexing, then a complete 50k comparison only after those changes
+materially affect a reported phase.
 
 ## Gates
 

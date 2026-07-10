@@ -31,6 +31,10 @@ import {
 	normalizedAssetPath
 } from '../../core/asset-paths';
 import {Passage, Story} from '../../store/stories';
+import type {
+	ProjectFolderSaveHint,
+	ProjectFolderSaveOptions
+} from '../../store/persistence/project-folder-save-hints';
 import {
 	diffNativeProjectFileManifest,
 	findNativeTwineHtmlFiles,
@@ -64,17 +68,23 @@ export interface NativeProjectFolderResult {
 
 export interface NativeProjectSaveTimings {
 	baselineRefreshUs?: number;
+	baselinePatchUs?: number;
 	changedFilePlanUs: number;
 	collectNewFilesUs: number;
+	conflictCheckUs?: number;
 	collectOldFilesUs: number;
 	copyAssetsUs: number;
 	dirtyCompareUs: number;
+	fallbackReason?: string;
 	jsonParseUs: number;
+	mode?: 'full' | 'incremental';
 	projectBuildUs: number;
 	rootSwapUs: number;
 	saveProjectPathUs: number;
 	sidecarUs: number;
+	touchedPathCount?: number;
 	totalUs: number;
+	writeTouchedFilesUs?: number;
 	writeTempProjectUs: number;
 }
 
@@ -2900,12 +2910,29 @@ export async function createProjectFolder(
 
 export async function saveProjectFolder(
 	rootPath: string,
-	story: Story
+	story: Story,
+	options: ProjectFolderSaveOptions = {}
 ): Promise<NativeProjectFolderResult> {
-	const writtenProject = await writeProjectFolder(rootPath, story);
+	const incrementalProject = await writeProjectFolderIncremental(
+		rootPath,
+		story,
+		options
+	);
+	const writtenProject =
+		incrementalProject ?? (await writeProjectFolder(rootPath, story));
+
+	if (
+		!incrementalProject &&
+		options.hints?.length &&
+		writtenProject?.performanceTimings
+	) {
+		writtenProject.performanceTimings.fallbackReason = 'unsupported save hints';
+	}
 	const baselineStarted = performance.now();
 
-	await refreshProjectSessionBaseline(rootPath, [story.id]);
+	if (!incrementalProject) {
+		await refreshProjectSessionBaseline(rootPath, [story.id]);
+	}
 	const baselineRefreshUs = Math.max(
 		0,
 		Math.round((performance.now() - baselineStarted) * 1000)
@@ -2914,6 +2941,7 @@ export async function saveProjectFolder(
 	if (performanceHarnessEnabled() && writtenProject?.performanceTimings) {
 		writtenProject.performanceTimings = {
 			...writtenProject.performanceTimings,
+			mode: writtenProject.performanceTimings.mode ?? 'full',
 			baselineRefreshUs
 		};
 	}
@@ -2927,6 +2955,228 @@ export async function saveProjectFolder(
 
 	rememberProjectFolder(result);
 	return result;
+}
+
+function emptySaveTimings(
+	mode: NativeProjectSaveTimings['mode'],
+	extras: Partial<NativeProjectSaveTimings> = {}
+): NativeProjectSaveTimings {
+	return {
+		changedFilePlanUs: 0,
+		collectNewFilesUs: 0,
+		collectOldFilesUs: 0,
+		copyAssetsUs: 0,
+		dirtyCompareUs: 0,
+		jsonParseUs: 0,
+		mode,
+		projectBuildUs: 0,
+		rootSwapUs: 0,
+		saveProjectPathUs: 0,
+		sidecarUs: 0,
+		totalUs: 0,
+		writeTempProjectUs: 0,
+		...extras
+	};
+}
+
+function passageTextHints(
+	hints: ProjectFolderSaveHint[] | undefined,
+	storyId: string
+) {
+	if (!hints?.length) {
+		return undefined;
+	}
+	if (
+		hints.some(hint => hint.storyId !== storyId || hint.type !== 'passageText')
+	) {
+		return undefined;
+	}
+
+	return hints.filter(
+		(hint): hint is Extract<ProjectFolderSaveHint, {type: 'passageText'}> =>
+			hint.type === 'passageText'
+	);
+}
+
+async function atomicWriteText(path: string, text: string) {
+	const tempPath = `${path}.${uuid()}.tmp`;
+
+	try {
+		await mkdirp(dirname(path));
+		await writeFile(tempPath, text, 'utf8');
+		await move(tempPath, path, {overwrite: true});
+	} catch (error) {
+		await remove(tempPath).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function projectFileEntryForPath(
+	rootPath: string,
+	projectPath: string,
+	kind: NativeProjectFileKind
+) {
+	const entries: NativeProjectFileEntry[] = [];
+
+	await scanProjectFiles(rootPath, projectPath, kind, entries);
+	return entries.find(entry => entry.path === projectPath);
+}
+
+function replaceBaselineStory(
+	baseline: NativeProjectSessionSnapshot,
+	story: Story
+) {
+	return baseline.stories.map(existing =>
+		existing.id === story.id ? story : existing
+	);
+}
+
+function replaceBaselineFiles(
+	baseline: NativeProjectSessionSnapshot,
+	entries: NativeProjectFileEntry[]
+) {
+	const files = new Map(baseline.files.map(file => [file.path, file] as const));
+
+	for (const entry of entries) {
+		files.set(entry.path, entry);
+	}
+
+	return [...files.values()].sort((left, right) =>
+		left.path.localeCompare(right.path)
+	);
+}
+
+async function writeProjectFolderIncremental(
+	rootPath: string,
+	story: Story,
+	options: ProjectFolderSaveOptions
+): Promise<NativeProjectFolderResult | undefined> {
+	const totalStarted = performance.now();
+	const timings = emptySaveTimings('incremental');
+	const hints = passageTextHints(options.hints, story.id);
+
+	if (!hints?.length) {
+		return undefined;
+	}
+
+	const session = projectSessions.get(projectSessionKey(rootPath));
+
+	if (!session?.baseline) {
+		return undefined;
+	}
+
+	const descriptor =
+		session.descriptor ??
+		(await readProjectDescriptor(rootPath).catch(() => undefined));
+	const descriptorStory = descriptorStoryMap(
+		descriptor ?? descriptorFromStories([])
+	).get(story.id);
+
+	if (!descriptor || !descriptorStory) {
+		return undefined;
+	}
+
+	const descriptorPassages = descriptorPassageMap(descriptorStory);
+	const touched = hints.map(hint => {
+		const descriptorPassage = descriptorPassages.get(hint.passageId);
+		const storyPassage = story.passages.find(
+			passage => passage.id === hint.passageId
+		);
+
+		if (!descriptorPassage?.file || !storyPassage) {
+			return undefined;
+		}
+
+		return {
+			absolutePath: safeProjectFilePath(rootPath, descriptorPassage.file),
+			passage: storyPassage,
+			projectPath: descriptorPassage.file.replace(/\\/g, '/')
+		};
+	});
+
+	if (
+		touched.some(entry => !entry || !entry.absolutePath || !entry.projectPath)
+	) {
+		return undefined;
+	}
+
+	const concreteTouched = touched as Array<{
+		absolutePath: string;
+		passage: Passage;
+		projectPath: string;
+	}>;
+	const baselineByPath = new Map(
+		session.baseline.files.map(file => [file.path, file] as const)
+	);
+	const conflictStarted = performance.now();
+
+	for (const entry of concreteTouched) {
+		const baselineFile = baselineByPath.get(entry.projectPath);
+		const currentFile = await projectFileEntryForPath(
+			rootPath,
+			entry.projectPath,
+			'passage'
+		);
+
+		if (!baselineFile || !currentFile) {
+			return undefined;
+		}
+		if (baselineFile.fingerprint !== currentFile.fingerprint) {
+			throw new Error(
+				`${entry.projectPath} changed outside twine.rs; refusing to overwrite it.`
+			);
+		}
+	}
+	timings.conflictCheckUs = Math.round(
+		(performance.now() - conflictStarted) * 1000
+	);
+
+	const writeStarted = performance.now();
+
+	for (const entry of concreteTouched) {
+		await atomicWriteText(entry.absolutePath, entry.passage.text);
+	}
+	timings.writeTouchedFilesUs = Math.round(
+		(performance.now() - writeStarted) * 1000
+	);
+
+	const baselinePatchStarted = performance.now();
+	const updatedEntries = (
+		await Promise.all(
+			concreteTouched.map(entry =>
+				projectFileEntryForPath(rootPath, entry.projectPath, 'passage')
+			)
+		)
+	).filter((entry): entry is NativeProjectFileEntry => !!entry);
+
+	if (updatedEntries.length !== concreteTouched.length) {
+		return undefined;
+	}
+
+	session.baseline = {
+		...session.baseline,
+		changedPaths: concreteTouched.map(entry => entry.projectPath),
+		files: replaceBaselineFiles(session.baseline, updatedEntries),
+		scannedAt: new Date().toISOString(),
+		stories: replaceBaselineStory(session.baseline, story)
+	};
+	session.descriptor = descriptor;
+	session.generation++;
+	session.pending = undefined;
+	session.baselineReusableUntil = undefined;
+	timings.baselinePatchUs = Math.round(
+		(performance.now() - baselinePatchStarted) * 1000
+	);
+	timings.touchedPathCount = concreteTouched.length;
+	timings.totalUs = Math.round((performance.now() - totalStarted) * 1000);
+
+	return {
+		passageTextLoaded: true,
+		performanceTimings: performanceHarnessEnabled() ? timings : undefined,
+		rootPath,
+		stories: [story],
+		storyIds: [story.id]
+	};
 }
 
 export async function prepareProjectImport(

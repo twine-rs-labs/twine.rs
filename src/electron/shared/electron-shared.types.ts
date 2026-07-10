@@ -1,4 +1,5 @@
 import {Story} from '../../store/stories/stories.types';
+import type {ProjectFolderSaveOptions} from '../../store/persistence/project-folder-save-hints';
 import type {CoreAssetInventoryEntry} from '../../core';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
 import type {StoryBuildAsset} from '../../util/build-package';
@@ -137,17 +138,23 @@ export interface NativeProjectFolderResult {
 
 export interface NativeProjectSaveTimings {
 	baselineRefreshUs?: number;
+	baselinePatchUs?: number;
 	changedFilePlanUs: number;
 	collectNewFilesUs: number;
+	conflictCheckUs?: number;
 	collectOldFilesUs: number;
 	copyAssetsUs: number;
 	dirtyCompareUs: number;
+	fallbackReason?: string;
 	jsonParseUs: number;
+	mode?: 'full' | 'incremental';
 	projectBuildUs: number;
 	rootSwapUs: number;
 	saveProjectPathUs: number;
 	sidecarUs: number;
+	touchedPathCount?: number;
 	totalUs: number;
+	writeTouchedFilesUs?: number;
 	writeTempProjectUs: number;
 }
 
@@ -290,7 +297,8 @@ export interface TwineElectronWindow extends Window {
 		): Promise<NativeProjectSessionStart>;
 		saveProjectFolder(
 			rootPath: string,
-			story: Story
+			story: Story,
+			options?: ProjectFolderSaveOptions
 		): Promise<NativeProjectFolderResult>;
 		saveStoryHtml(story: Story, data: string): void;
 		saveJson(filename: string, data: any): void;

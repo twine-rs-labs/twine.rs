@@ -120,6 +120,14 @@ export function saveMiddleware(
 					action.type === 'deleteStory' ? [action.storyId] : []
 				)
 			);
+			const hintsByStory = new Map(
+				(action.persistenceHints ?? []).map(hint => [
+					hint.storyId,
+					(action.persistenceHints ?? []).filter(
+						candidate => candidate.storyId === hint.storyId
+					)
+				])
+			);
 
 			for (const storyId of deletedStoryIds) {
 				const deleted = lastState?.find(story => story.id === storyId);
@@ -140,7 +148,13 @@ export function saveMiddleware(
 				const story = state.find(story => story.id === storyId);
 
 				if (story) {
-					saves.push(() => saveStory(story, formats));
+					saves.push(() =>
+						saveStory(story, formats, {
+							hints: hintsByStory.get(storyId),
+							revision: action.revision,
+							sessionId: action.sessionId
+						})
+					);
 					persisted = true;
 				}
 			}

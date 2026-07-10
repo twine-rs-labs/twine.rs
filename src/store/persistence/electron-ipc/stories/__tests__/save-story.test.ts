@@ -69,6 +69,43 @@ describe('saveStory()', () => {
 		expect(saveStoryHtml).not.toHaveBeenCalled();
 	});
 
+	it('forwards project-folder save hints to the native bridge', async () => {
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+
+		await saveStory(story, formatsState, {
+			hints: [
+				{
+					passageId: story.passages[0].id,
+					storyId: story.id,
+					type: 'passageText'
+				}
+			],
+			revision: 3,
+			sessionId: 'project:/native/moon-castle.twine.rs'
+		});
+
+		expect(saveProjectFolder).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			story,
+			{
+				hints: [
+					{
+						passageId: story.passages[0].id,
+						storyId: story.id,
+						type: 'passageText'
+					}
+				],
+				revision: 3,
+				sessionId: 'project:/native/moon-castle.twine.rs'
+			}
+		);
+		expect(saveStoryHtml).not.toHaveBeenCalled();
+	});
+
 	it('surfaces native project save failures without falling back to legacy HTML', async () => {
 		saveProjectFolder.mockRejectedValue(new Error('Permission denied'));
 		saveProjectMetadata(story.id, {

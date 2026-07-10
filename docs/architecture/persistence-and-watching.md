@@ -16,6 +16,21 @@ savepoint reports clean.
 Web local storage and Electron project-folder storage implement the same
 revision-aware contract.
 
+## Incremental project-folder writes
+
+Electron classifies the persisted changes from a committed patch batch before
+saving. The first fast path covers a passage text-only edit: native code loads
+the descriptor, verifies the accepted fingerprint for that passage file, writes
+only that file through a temporary-file rename, and patches file-entry and story
+baseline state for the exact revision. Its own watcher events are suppressed by
+the refreshed baseline.
+
+Scripts, stylesheets, and all broad or unsupported mutations currently fall
+back to the full project-folder save. This includes project creation/import,
+path or identity changes, schema recovery, and any change whose persisted paths
+cannot be classified safely. Assets continue to use their separate native
+effect-journal flow.
+
 ## Changed-path watcher deltas
 
 The Electron watcher uses recursive filename hints, normalizes and coalesces

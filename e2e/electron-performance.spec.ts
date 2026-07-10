@@ -323,7 +323,9 @@ async function launchFixture(): Promise<RunningApp> {
 				);
 
 				return (
-					names.has('all-passages-ready') && names.has('session-baseline-ready')
+					names.has('all-passages-ready') &&
+					names.has('session-baseline-ready') &&
+					names.has('session-initialization-complete')
 				);
 			},
 			smoke ? 30_000 : 10 * 60 * 1000
@@ -495,6 +497,47 @@ async function waitForRevisionEvent(
 	);
 }
 
+async function waitForDiagnosticSaveCompletion(
+	page: Page,
+	revision: number,
+	timeout = 60_000
+) {
+	return pollSnapshot(
+		page,
+		current =>
+			current.renderer.events.some(
+				event =>
+					event.name === 'save-acknowledgement-complete' &&
+					event.detail?.revision === revision
+			) &&
+			current.renderer.events.some(
+				event => event.name === 'save-native-timings'
+			),
+		timeout
+	);
+}
+
+async function waitForAssetWatcherReview(page: Page, timeout = 60_000) {
+	const current = await pollSnapshot(
+		page,
+		snapshot =>
+			snapshot.renderer.events.some(
+				event => event.name === 'watcher-review-required'
+			) && snapshot.main.watcherMetrics.some(metric => metric.assetChanges > 0),
+		timeout
+	);
+	const metric = current.main.watcherMetrics
+		.filter(metric => metric.assetChanges > 0)
+		.at(-1);
+	const deltaId =
+		metric?.deltaId ??
+		(current.renderer.events
+			.filter(event => event.name === 'watcher-review-required')
+			.at(-1)?.detail?.deltaId as string | undefined);
+
+	return {current, deltaId, metric};
+}
+
 async function waitForMeasure(page: Page, name: string) {
 	await page.waitForFunction(
 		measureName =>
@@ -530,6 +573,21 @@ async function waitForRevisionAfter(page: Page, previous: number) {
 			(snapshot.renderer.core.hosts[0]?.sessions[0]?.revision ?? 0) > previous
 	);
 	return current.renderer.core.hosts[0]?.sessions[0]?.revision ?? 0;
+}
+
+async function waitForDiagnosticWarmup(page: Page) {
+	await pollSnapshot(
+		page,
+		current =>
+			(current.renderer.core.hosts[0]?.sessions[0]?.revision ?? 0) >= 2 &&
+			current.renderer.bridgeMetrics.some(
+				metric => metric.kind === 'ingestExternalDelta'
+			) &&
+			current.renderer.bridgeMetrics.some(
+				metric => metric.kind === 'queryStoryIndex'
+			),
+		180_000
+	);
 }
 
 async function waitForWatcherMetric(
@@ -677,6 +735,7 @@ async function measureDiagnostic(page: Page, launchToWindowMs: number) {
 			startupSnapshot.renderer.core.activeSessions === 1
 	);
 
+	await waitForDiagnosticWarmup(page);
 	await reset(page);
 	await page
 		.getByRole('group', {name: 'Workspace Mode'})
@@ -712,9 +771,8 @@ async function measureDiagnostic(page: Page, launchToWindowMs: number) {
 		`${previousRevision} -> ${finalRevision}`
 	);
 
-	const persisted = await waitForRevisionEvent(
+	const persisted = await waitForDiagnosticSaveCompletion(
 		page,
-		['save-acknowledgement-complete', 'persistence-save-failed'],
 		finalRevision,
 		watcherTimeout
 	);
@@ -747,6 +805,22 @@ async function measureDiagnostic(page: Page, launchToWindowMs: number) {
 		'diagnostic-save-stage-timings-present',
 		persisted.renderer.events.some(
 			event => event.name === 'save-native-timings'
+		)
+	);
+	assertInvariant(
+		'diagnostic-save-uses-incremental-mode',
+		persisted.renderer.events.some(
+			event =>
+				event.name === 'save-native-timings' &&
+				event.detail?.mode === 'incremental'
+		)
+	);
+	assertInvariant(
+		'diagnostic-save-touches-one-path',
+		persisted.renderer.events.some(
+			event =>
+				event.name === 'save-native-timings' &&
+				event.detail?.touchedPathCount === 1
 		)
 	);
 	assertInvariant(
@@ -911,6 +985,12 @@ function microsToMillis(value: unknown) {
 		: undefined;
 }
 
+function numericDetail(value: unknown) {
+	return typeof value === 'number' && Number.isFinite(value)
+		? value
+		: undefined;
+}
+
 function captureNativeSaveMetrics(current: PerformanceSnapshot) {
 	const timingEvents = current.renderer.events.filter(
 		event => event.name === 'save-native-timings'
@@ -947,6 +1027,13 @@ function captureNativeSaveMetrics(current: PerformanceSnapshot) {
 			'save.baselineRefreshMs',
 			microsToMillis(detail.baselineRefreshUs)
 		);
+		addSample('save.touchedPathCount', numericDetail(detail.touchedPathCount));
+		addSample('save.conflictCheckMs', microsToMillis(detail.conflictCheckUs));
+		addSample(
+			'save.writeTouchedFilesMs',
+			microsToMillis(detail.writeTouchedFilesUs)
+		);
+		addSample('save.baselinePatchMs', microsToMillis(detail.baselinePatchUs));
 	}
 }
 
@@ -1160,7 +1247,6 @@ function captureWatcherTrace(
 }
 
 async function measureWatcher(page: Page, projectPath: string) {
-	await page.waitForTimeout(750);
 	await reset(page);
 	const passageFile = await firstPassageFile(projectPath);
 	const passageProjectPath = path
@@ -1328,34 +1414,30 @@ async function measureWatcher(page: Page, projectPath: string) {
 
 	await page.waitForTimeout(750);
 	await reset(page);
-	const assetPath = path.join(projectPath, 'assets', 'perf', 'external.txt');
-	const assetProjectPath = 'assets/perf/external.txt';
+	const assetPath = path.join(projectPath, 'assets', 'perf', 'readme.txt');
 
-	await writeFile(assetPath, 'External asset benchmark edit.\n');
+	await appendFile(assetPath, '\nExternal asset benchmark edit.\n');
 	try {
-		watcher = await waitForWatcherMetric(
-			page,
-			assetProjectPath,
-			watcherTimeout
-		);
+		const assetReview = await waitForAssetWatcherReview(page, watcherTimeout);
+
+		watcher = assetReview.metric;
+		current = assetReview.current;
 	} catch (error) {
 		assertInvariant('watcher-asset-observed', false, (error as Error).message);
 		return;
 	}
-	const assetDeltaId = watcher.deltaId;
+	const assetDeltaId = watcher?.deltaId;
 
-	try {
-		current = await waitForCorrelatedEvent(
-			page,
-			'watcher-review-required',
-			assetDeltaId,
-			watcherTimeout
-		);
-	} catch (error) {
-		assertInvariant('watcher-asset-observed', false, (error as Error).message);
-		return;
-	}
-	assertInvariant('watcher-asset-observed', true);
+	assertInvariant(
+		'watcher-asset-observed',
+		!!assetDeltaId &&
+			current.renderer.events.some(
+				event =>
+					event.name === 'watcher-review-required' &&
+					event.detail?.deltaId === assetDeltaId
+			),
+		JSON.stringify(watcher)
+	);
 	await expect(page.getByRole('button', {name: 'Later'})).toBeVisible();
 	diagnostics.watcherAsset = current;
 	captureBridgeMetrics(current);

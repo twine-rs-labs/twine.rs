@@ -255,6 +255,101 @@ describe('project-folder native bridge', () => {
 		expect(moveMock).not.toHaveBeenCalled();
 	});
 
+	it('incrementally saves a passage text edit through the active project session', async () => {
+		const story = {
+			...fakeStory(1),
+			id: 'story-id',
+			name: 'Story',
+			passages: [
+				{
+					...fakeStory(1).passages[0],
+					id: 'passage-id',
+					name: 'Start',
+					text: 'from disk'
+				}
+			]
+		};
+		const changedStory = {
+			...story,
+			passages: [{...story.passages[0], text: 'updated text'}]
+		};
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'start_passage = "passage-id"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/001-start.twee"'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:0',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 0
+		};
+		const passageFile = {
+			fingerprint: '1:0',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'passages/story/001-start.twee',
+			sizeBytes: 0
+		};
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : 'from disk'
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockReturnValue([manifestFile, passageFile]);
+
+		await startProjectSession('/native/project.twine.rs', undefined, [
+			'story-id'
+		]);
+		const result = await saveProjectFolder(
+			'/native/project.twine.rs',
+			changedStory,
+			{
+				hints: [
+					{passageId: 'passage-id', storyId: 'story-id', type: 'passageText'}
+				]
+			}
+		);
+
+		expect(result.performanceTimings?.mode).toBeUndefined();
+		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
+		expect(writeFileMock).toHaveBeenCalledWith(
+			expect.stringMatching(
+				/^\/native\/project\.twine\.rs\/passages\/story\/001-start\.twee\..+\.tmp$/
+			),
+			'updated text',
+			'utf8'
+		);
+		expect(moveMock).toHaveBeenCalledWith(
+			expect.stringMatching(
+				/^\/native\/project\.twine\.rs\/passages\/story\/001-start\.twee\..+\.tmp$/
+			),
+			'/native/project.twine.rs/passages/story/001-start.twee',
+			{overwrite: true}
+		);
+		expect(writeFileMock).not.toHaveBeenCalledWith(
+			'/native/project.twine.rs/twine.toml',
+			expect.anything(),
+			'utf8'
+		);
+		expect(
+			writeFileMock.mock.calls.some(call =>
+				String(call[0]).includes('/.twine/project.json.')
+			)
+		).toBe(false);
+	});
+
 	it('opens a native project folder from renderer metadata', async () => {
 		const story = fakeStory(1);
 

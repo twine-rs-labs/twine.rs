@@ -9,6 +9,7 @@
 
 import {contextBridge, ipcRenderer, webUtils} from 'electron';
 import {Story} from '../../store/stories/stories.types';
+import type {TwineElectronWindow} from '../shared';
 
 function jsonp(
 	url: string,
@@ -215,8 +216,14 @@ const bridge = {
 	saveJson(filename: string, data: any) {
 		ipcRenderer.send('save-json', filename, data);
 	},
-	saveProjectFolder(rootPath: string, story: Story) {
-		return ipcRenderer.invoke('save-project-folder', rootPath, story);
+	saveProjectFolder(
+		rootPath: string,
+		story: Story,
+		options?: Parameters<
+			NonNullable<TwineElectronWindow['twineElectron']>['saveProjectFolder']
+		>[2]
+	) {
+		return ipcRenderer.invoke('save-project-folder', rootPath, story, options);
 	},
 	runStoryLibraryBackup() {
 		return ipcRenderer.invoke('run-story-library-backup');

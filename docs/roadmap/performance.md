@@ -2,7 +2,7 @@
 
 Status: active
 Owner: performance and architecture maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-10
 Source of truth: outstanding work revealed by accepted 10k/50k baselines
 
 ## Objective
@@ -13,30 +13,38 @@ fixture isolation.
 
 ## Work order
 
-### 1. Startup and open
+### 1. Bounded startup read model
 
 - Profile native project load, renderer hydration, session initialization, and
   first-route queries independently.
-- Remove redundant full-project serialization and frontend work before the
-  first useful viewport.
+- Bound initial story-index and contents payloads to the visible or requested
+  result set. A 50k trace previously transferred a roughly 28 MiB story-index
+  result to the renderer, contributing to startup time and duplicate memory.
+- Remove redundant full-project serialization and frontend work before the first
+  useful viewport.
 - Preserve one project session and no post-initialization `replaceProject`.
 
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.
 
-### 2. Save and edit-to-paint
+### 2. Incremental indexing and edit-to-paint
 
-- Use `npm run perf:electron:50k:diagnostic` to attribute the roughly
-  29-second 50k save before rerunning full benchmark phases.
-- Split the cost between renderer queueing, native deserialization/project
-  construction, project-folder writes, changed-file planning, sidecar writes,
-  baseline refresh, watcher suppression, and Rust acknowledgement.
-- Avoid preparing or writing unchanged project entities.
+- The first incremental project-folder write is complete: a passage text edit
+  writes one file in place, checks its accepted fingerprint, patches the native
+  baseline, and acknowledges the exact Rust revision. Unsupported or broad
+  mutations retain the full-save fallback.
+- Use the diagnostic phase to keep that path observable. The focused 50k run
+  measured about 149 ms native save time for one touched path, so it is not the
+  dominant remaining edit cost.
+- Make local and external passage edits update only that passage's parsed facts,
+  search document, links, backlinks, and affected graph topology. Undo/redo
+  must use the same forward/inverse cache-delta path.
 - Keep one persistence notification per committed patch batch and exact
   revision acknowledgement.
 
-Exit signal: passage edits no longer wait on project-scale save preparation and
-edit-to-paint approaches an interactive frame budget.
+Exit signal: a one-passage edit or external delta does no project-scale index
+rebuild; edit-to-paint and watcher ingestion materially improve against the
+focused 50k measurements.
 
 ### 3. Contents, graph, and watcher latency
 
@@ -45,7 +53,9 @@ edit-to-paint approaches an interactive frame budget.
 - Profile graph layout, projection transfer, React reconciliation, canvas edge
   work, and frame scheduling separately.
 - Reduce watcher observation and Rust reindex latency while retaining
-  one-source parsing and immutable candidate leases.
+  one-source parsing and immutable candidate leases. The focused 50k watcher
+  run measured about 1.23 s Rust ingestion and about 3.88 s observation to
+  passage patch; native changed-path parsing is not the limiting stage.
 
 Exit signal: no full-source rebuilds, bounded rendering remains true, and each
 surface materially improves against its accepted baseline.
