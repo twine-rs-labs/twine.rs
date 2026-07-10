@@ -19,6 +19,7 @@ import {
 	diagnosticDismissalsChangedEvent,
 	diagnosticIdentity,
 	diagnosticsViewModel,
+	emptyStoryIndex,
 	insertAssetSnippetCommand,
 	loadDismissedDiagnosticIds,
 	storyShellIndex,
@@ -35,6 +36,7 @@ import type {
 } from '../../core';
 import type {PatchBatch} from '../../core/bindings/PatchBatch';
 import type {CoreStoryIndex} from '../../core/bindings/CoreStoryIndex';
+import type {CorePassageFacts} from '../../core/bindings/CorePassageFacts';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {CoreProjectHost} from '../../core/project-host';
 import type {TwineElectronWindow} from '../../electron/shared';
@@ -47,11 +49,7 @@ import {
 } from '../../store/project-hydration';
 import {mergeProjectStories} from '../../store/merge-project-stories';
 import {Passage, Story, useStoriesContext} from '../../store/stories';
-import {
-	markPerformance,
-	measurePerformance,
-	scheduleIdleWork
-} from '../../util/performance';
+import {markPerformance, measurePerformance} from '../../util/performance';
 import {EditorDockLayout, StoryEditMode} from './workspace-state';
 import {EditorDock} from './editor-dock';
 import {EditorWindowSpec, editorWindowId} from './editor-window-spec';
@@ -92,6 +90,71 @@ export interface StoryWorkspaceShellProps {
 type NavigatorTab = 'passages' | 'contents' | 'assets';
 const deferIndexPassageThreshold = 500;
 const passageNavigatorRowHeight = 30;
+
+function boundedWorkbenchSelection(
+	story: Story,
+	selectedPassageId: string | undefined
+): WorkbenchSelection {
+	const passage =
+		story.passages.find(passage => passage.id === selectedPassageId) ??
+		story.passages.find(passage => passage.id === story.startPassage) ??
+		story.passages[0];
+	const text = passage?.text.trim() ?? '';
+
+	return {
+		assetReferences: [],
+		backlinks: [],
+		brokenLinks: [],
+		diagnostics: [],
+		linkFacts: [],
+		links: [],
+		passage,
+		passageNames: [],
+		sourceId: passage?.id,
+		wordCount: text === '' ? 0 : text.split(/\s+/).length
+	};
+}
+
+function selectionFromPassageFacts(
+	story: Story,
+	selection: WorkbenchSelection,
+	facts: CorePassageFacts | undefined
+): WorkbenchSelection {
+	if (!facts || facts.passageId !== selection.passage?.id) {
+		return selection;
+	}
+
+	const linkFacts = facts.links.map(link => ({
+		broken: link.broken,
+		self: link.sourceId === link.targetId,
+		sourceId: link.sourceId,
+		sourceName:
+			story.passages.find(passage => passage.id === link.sourceId)?.name ??
+			link.sourceId,
+		targetId: link.targetId,
+		targetName: link.targetName
+	}));
+	const backlinks = facts.backlinks.map(link => ({
+		broken: link.broken,
+		self: link.sourceId === link.targetId,
+		sourceId: link.sourceId,
+		sourceName:
+			story.passages.find(passage => passage.id === link.sourceId)?.name ??
+			link.sourceId,
+		targetId: link.targetId,
+		targetName: link.targetName
+	}));
+
+	return {
+		...selection,
+		assetReferences: facts.assetReferences,
+		backlinks,
+		brokenLinks: linkFacts.filter(link => link.broken),
+		diagnostics: facts.diagnostics,
+		linkFacts,
+		links: linkFacts.map(link => link.targetName)
+	};
+}
 const passageNavigatorOverscan = 12;
 const virtualFallbackHeight = 540;
 
@@ -1171,29 +1234,23 @@ export const StoryWorkspaceShell: React.FC<
 		projectMetadata.status === 'file-backed';
 	const passageTextLoaded =
 		!isFileBackedStory || hydration?.passageTextLoaded !== false;
+	const usesBoundedReadModel =
+		story.passages.length > deferIndexPassageThreshold;
 	const shellIndex = React.useMemo(
-		() => storyShellIndex(story, knownAssets),
-		[knownAssets, story]
+		() =>
+			usesBoundedReadModel
+				? emptyStoryIndex(story.id)
+				: storyShellIndex(story, knownAssets),
+		[knownAssets, story, usesBoundedReadModel]
 	);
 	const [fullIndex, setFullIndex] = React.useState<CoreStoryIndex>();
+	const [passageFacts, setPassageFacts] = React.useState<CorePassageFacts>();
 	const openProgress = React.useMemo<StoryOpenProgressState | undefined>(() => {
 		if (isFileBackedStory && hydration?.passageTextLoaded === false) {
 			return {
 				detail: 'Loading passage text',
 				label: 'Opening story',
 				progress: 46
-			};
-		}
-
-		if (
-			passageTextLoaded &&
-			story.passages.length > deferIndexPassageThreshold &&
-			!fullIndex
-		) {
-			return {
-				detail: 'Indexing contents and diagnostics',
-				label: 'Opening story',
-				progress: 78
 			};
 		}
 
@@ -1304,29 +1361,57 @@ export const StoryWorkspaceShell: React.FC<
 				active = false;
 			};
 		}
+		if (usesBoundedReadModel) {
+			return () => {
+				active = false;
+			};
+		}
 
 		const loadFullIndex = () => {
-			void coreProjectHost.queryStoryIndexAsync(story.id).then(index => {
+			void coreProjectHost.queryStoryIndexAsync(story.id, {}).then(index => {
 				if (active) {
 					setFullIndex(index);
 				}
 			});
 		};
 
-		if (story.passages.length <= deferIndexPassageThreshold) {
-			loadFullIndex();
+		loadFullIndex();
+
+		return () => {
+			active = false;
+		};
+	}, [coreProjectHost, knownAssets, passageTextLoaded, patchVersion, story]);
+
+	React.useEffect(() => {
+		let active = true;
+		const passageId = selectedPassageId ?? story.startPassage;
+
+		if (!usesBoundedReadModel || !passageId || !passageTextLoaded) {
+			setPassageFacts(undefined);
 			return () => {
 				active = false;
 			};
 		}
 
-		const cancelIdleWork = scheduleIdleWork(loadFullIndex);
+		void coreProjectHost
+			.queryPassageFactsAsync(story.id, passageId)
+			.then(facts => {
+				if (active) {
+					setPassageFacts(facts.revision > 0 ? facts : undefined);
+				}
+			});
 
 		return () => {
 			active = false;
-			cancelIdleWork();
 		};
-	}, [coreProjectHost, knownAssets, passageTextLoaded, patchVersion, story]);
+	}, [
+		coreProjectHost,
+		passageTextLoaded,
+		patchVersion,
+		selectedPassageId,
+		story,
+		usesBoundedReadModel
+	]);
 
 	const index = fullIndex ?? shellIndex;
 	const dismissedDiagnosticIds = React.useMemo(
@@ -1364,8 +1449,15 @@ export const StoryWorkspaceShell: React.FC<
 	);
 	const assets = React.useMemo(() => assetManagerViewModel(index), [index]);
 	const selection = React.useMemo(
-		() => workbenchSelection(story, activeIndex, selectedPassageId),
-		[activeIndex, selectedPassageId, story]
+		() =>
+			selectionFromPassageFacts(
+				story,
+				usesBoundedReadModel
+					? boundedWorkbenchSelection(story, selectedPassageId)
+					: workbenchSelection(story, activeIndex, selectedPassageId),
+				passageFacts
+			),
+		[activeIndex, passageFacts, selectedPassageId, story, usesBoundedReadModel]
 	);
 	const passage = selection.passage;
 	// The dock's open buffers. `undefined` follows the current selection so
@@ -1390,14 +1482,33 @@ export const StoryWorkspaceShell: React.FC<
 					.filter(window_ => window_.kind === 'passage')
 					.map(window_ => [
 						editorWindowId(window_),
-						workbenchSelection(
-							story,
-							activeIndex,
-							window_.kind === 'passage' ? window_.passageId : undefined
-						)
+						usesBoundedReadModel
+							? selectionFromPassageFacts(
+									story,
+									boundedWorkbenchSelection(
+										story,
+										window_.kind === 'passage' ? window_.passageId : undefined
+									),
+									window_.kind === 'passage' &&
+										window_.passageId === selection.passage?.id
+										? passageFacts
+										: undefined
+								)
+							: workbenchSelection(
+									story,
+									activeIndex,
+									window_.kind === 'passage' ? window_.passageId : undefined
+								)
 					])
 			),
-		[activeIndex, dockWindows, story]
+		[
+			activeIndex,
+			dockWindows,
+			passageFacts,
+			selection.passage?.id,
+			story,
+			usesBoundedReadModel
+		]
 	);
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {t} = useTranslation();

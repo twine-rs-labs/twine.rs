@@ -779,11 +779,25 @@ export const AssetsRoute: React.FC = () => {
 
 		setIndex(undefined);
 
-		void coreProjectHost.queryStoryIndexAsync(story.id).then(index => {
-			if (active) {
-				setIndex(index);
-			}
-		});
+		void coreProjectHost
+			.queryStoryIndexAsync(story.id, {
+				includeAssets: true,
+				includeContents: false,
+				includeDiagnostics: false,
+				includeFiles: false,
+				includeGraph: false,
+				includePassageNames: false,
+				includePassageText: false,
+				includeScript: false,
+				includeStylesheet: false,
+				includeTags: false,
+				includeVariables: false
+			})
+			.then(index => {
+				if (active) {
+					setIndex(index);
+				}
+			});
 
 		return () => {
 			active = false;

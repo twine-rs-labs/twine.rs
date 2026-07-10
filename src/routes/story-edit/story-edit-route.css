@@ -593,21 +593,15 @@ body.dragging-passages .story-edit-route * {
 	width: 100%;
 }
 
-.story-edit-graph-minimap__node,
+.story-edit-graph-minimap__canvas,
 .story-edit-graph-minimap__viewport {
 	position: absolute;
 }
 
-.story-edit-graph-minimap__node {
-	background: color-mix(in oklab, var(--tx-3) 74%, transparent);
-	border-radius: 2px;
-	box-shadow: 0 0 0 1px color-mix(in oklab, var(--ink-void) 50%, transparent);
-	opacity: 0.7;
-}
-
-.story-edit-graph-minimap__node--selected {
-	background: var(--sel-line);
-	opacity: 1;
+.story-edit-graph-minimap__canvas {
+	height: 100%;
+	inset: 0;
+	width: 100%;
 }
 
 .story-edit-graph-minimap__viewport {

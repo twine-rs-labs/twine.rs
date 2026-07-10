@@ -2,7 +2,7 @@
 
 Status: current
 Owner: core/session maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-10
 Source of truth: live Rust/WASM session architecture
 
 ## Session ownership
@@ -24,6 +24,9 @@ Source of truth: live Rust/WASM session architecture
   reparses only that source; layout-only transactions reuse both source facts
   and graph facts. Graph edge resolution incrementally revisits the changed
   passage and sources targeting renamed/created/deleted passage names.
+- Bounded read-model queries are revision-bound. Summary, cursor pages, and
+  selected-passage facts wait behind mutations; a cursor from an older revision
+  is rejected rather than combining results from two project states.
 
 ## Removed paths
 

@@ -7,7 +7,7 @@ import {CodeArea} from '../components/control/code-area';
 import {Button, Checkbox} from '../components/design-system';
 import {useCoreProjectHost} from '../core';
 import type {CoreSearchHit} from '../core/bindings/CoreSearchHit';
-import type {CoreStoryIndex} from '../core';
+import type {CoreSearchPage} from '../core/bindings/CoreSearchPage';
 import {
 	StorySearchFlags,
 	highlightPassages,
@@ -54,7 +54,7 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 	const story = storyWithId(stories, storyId);
 	const coreProjectHost = useCoreProjectHost();
 	const storyRef = React.useRef(story);
-	const [index, setIndex] = React.useState<CoreStoryIndex>();
+	const [searchPage, setSearchPage] = React.useState<CoreSearchPage>();
 	const includePassageNames = flags.includePassageNames ?? false;
 	const matchCase = flags.matchCase ?? false;
 	const useRegexes = flags.useRegexes ?? false;
@@ -74,27 +74,20 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 	React.useEffect(() => {
 		let active = true;
 		const options = {
-			includeAssets: false,
-			includeContents: false,
-			includeDiagnostics: false,
-			includeFiles: false,
-			includeGraph: false,
 			includePassageNames,
 			includePassageText: true,
 			includeScript: true,
 			includeStylesheet: true,
-			includeTags: false,
-			includeVariables: false,
 			matchCase,
 			query: find,
 			replacement: replace,
 			useRegexes
 		};
 
-		setIndex(undefined);
-		void coreProjectHost.queryStoryIndexAsync(story.id, options).then(index => {
+		setSearchPage(undefined);
+		void coreProjectHost.querySearchPageAsync(story.id, options).then(page => {
 			if (active) {
-				setIndex(index);
+				setSearchPage(page);
 			}
 		});
 
@@ -110,7 +103,7 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 		story,
 		useRegexes
 	]);
-	const searchHits = index?.searchHits ?? [];
+	const searchHits = searchPage?.searchHits ?? [];
 	const matches = React.useMemo(() => {
 		const passageIds = searchHits
 			.map(hit => hit.passageId)

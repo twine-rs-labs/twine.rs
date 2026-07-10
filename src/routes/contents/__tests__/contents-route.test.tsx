@@ -261,7 +261,7 @@ describe('<ContentsRoute>', () => {
 		expect(await screen.findByText('$score')).toBeInTheDocument();
 	});
 
-	it('windows large contents lists to viewport-sized row counts', () => {
+	it('windows large contents lists to viewport-sized row counts', async () => {
 		const {result} = renderComponent(story => {
 			story.passages = Array.from({length: 1000}, (_, index) =>
 				fakePassage({
@@ -277,7 +277,9 @@ describe('<ContentsRoute>', () => {
 		expect(
 			result.container.querySelectorAll('.contents-route__row').length
 		).toBeLessThan(80);
-		expect(screen.getByText(/of 1003/)).toBeInTheDocument();
+		// The bounded Rust page retains the diagnostic/orphan entries that the
+		// old shell-only fallback intentionally omitted.
+		expect(await screen.findByText(/of 2004/)).toBeInTheDocument();
 	});
 
 	it('tests the selected indexed passage from the inspector', () => {

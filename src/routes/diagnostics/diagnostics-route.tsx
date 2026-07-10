@@ -4,8 +4,9 @@ import {useHistory, useParams} from 'react-router-dom';
 import {Badge, Button, Input, TablerIcon} from '../../components/design-system';
 import {
 	diagnosticDismissalsChangedEvent,
+	diagnosticGroup,
 	diagnosticIdentity,
-	diagnosticsViewModel,
+	diagnosticLocation,
 	isDiagnosticDismissed,
 	loadDismissedDiagnosticIds,
 	saveDismissedDiagnosticIds,
@@ -14,7 +15,7 @@ import {
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {DiagnosticsViewModelItem} from '../../core/view-models';
 import type {CoreDiagnosticSeverity} from '../../core/bindings/CoreDiagnosticSeverity';
-import type {CoreStoryIndex} from '../../core';
+import type {CoreDiagnosticsPage} from '../../core/bindings/CoreDiagnosticsPage';
 import {selectPassage, Story, useStoriesContext} from '../../store/stories';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {
@@ -126,7 +127,8 @@ export const DiagnosticsRoute: React.FC = () => {
 	const [query, setQuery] = React.useState('');
 	const [selectedId, setSelectedId] = React.useState<string>();
 	const [patchVersion, setPatchVersion] = React.useState(0);
-	const [index, setIndex] = React.useState<CoreStoryIndex>();
+	const [diagnosticsPage, setDiagnosticsPage] =
+		React.useState<CoreDiagnosticsPage>();
 	const [dismissedIds, setDismissedIds] = React.useState<Set<string>>(
 		() => new Set()
 	);
@@ -174,30 +176,18 @@ export const DiagnosticsRoute: React.FC = () => {
 		let active = true;
 
 		if (!story) {
-			setIndex(undefined);
+			setDiagnosticsPage(undefined);
 			return () => {
 				active = false;
 			};
 		}
 
-		setIndex(undefined);
+		setDiagnosticsPage(undefined);
 		void coreProjectHost
-			.queryStoryIndexAsync(story.id, {
-				includeAssets: true,
-				includeContents: true,
-				includeDiagnostics: true,
-				includeFiles: false,
-				includeGraph: true,
-				includePassageNames: false,
-				includePassageText: false,
-				includeScript: true,
-				includeStylesheet: true,
-				includeTags: false,
-				includeVariables: true
-			})
-			.then(index => {
+			.queryDiagnosticsPageAsync(story.id, {limit: 250})
+			.then(page => {
 				if (active) {
-					setIndex(index);
+					setDiagnosticsPage(page);
 				}
 			});
 
@@ -205,17 +195,18 @@ export const DiagnosticsRoute: React.FC = () => {
 			active = false;
 		};
 	}, [coreProjectHost, patchVersion, story]);
-	const diagnostics = React.useMemo(
-		() => (story && index ? diagnosticsViewModel(index, story) : undefined),
-		[index, story]
-	);
 	const items = React.useMemo<RouteDiagnosticItem[]>(() => {
-		return (diagnostics?.items ?? []).map(item => ({
-			...item,
-			dismissalId: diagnosticIdentity(item.core),
-			dismissed: isDiagnosticDismissed(item.core, dismissedIds)
+		return (diagnosticsPage?.diagnostics ?? []).map((core, ordinal) => ({
+			core,
+			dismissalId: diagnosticIdentity(core),
+			dismissed: isDiagnosticDismissed(core, dismissedIds),
+			group: diagnosticGroup(core),
+			id: `${core.sourceId}:${core.code}:${core.start}:${ordinal}`,
+			location: story ? diagnosticLocation(story, core) : core.sourceId,
+			message: core.message,
+			severity: core.severity
 		}));
-	}, [diagnostics, dismissedIds]);
+	}, [diagnosticsPage, dismissedIds, story]);
 	const activeItems = React.useMemo(
 		() => items.filter(item => !item.dismissed),
 		[items]
@@ -322,7 +313,7 @@ export const DiagnosticsRoute: React.FC = () => {
 	}
 
 	function fixAllSafe() {
-		if (!story || !diagnostics) {
+		if (!story || !diagnosticsPage) {
 			return;
 		}
 
@@ -378,7 +369,7 @@ export const DiagnosticsRoute: React.FC = () => {
 		);
 	}
 
-	if (!diagnostics) {
+	if (!diagnosticsPage) {
 		return (
 			<div className="diagnostics-route__empty">
 				<TablerIcon icon="search" />

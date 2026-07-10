@@ -34,6 +34,14 @@ async function visit(directory) {
 			);
 		}
 		if (
+			!displayPath.startsWith('src/core/') &&
+			/\bqueryStoryIndexAsync\(\s*[^,\n)]+\s*\)/.test(source)
+		) {
+			violations.push(
+				`${displayPath}: issues an unscoped full-story-index query; use a bounded read-model query or explicit index options`
+			);
+		}
+		if (
 			displayPath === 'src/store/project-session-sync.tsx' &&
 			/\b(?:passageToSnapshot|storyToSnapshot)\b|snapshot\.stories/.test(source)
 		) {

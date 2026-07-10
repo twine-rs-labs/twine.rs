@@ -11,6 +11,7 @@ import {
 } from '../../components/design-system';
 import {
 	contentsViewModel,
+	emptyStoryIndex,
 	replaceKnownAssetInventoryForStory,
 	setStartPassageCommand,
 	storyShellIndex,
@@ -21,6 +22,9 @@ import {
 import type {ContentsViewModelEntry} from '../../core/view-models';
 import type {CoreAssetReference} from '../../core/bindings/CoreAssetReference';
 import type {CoreContentsEntryKind} from '../../core/bindings/CoreContentsEntryKind';
+import type {CoreContentsPage} from '../../core/bindings/CoreContentsPage';
+import type {CorePassageFacts} from '../../core/bindings/CorePassageFacts';
+import type {CoreStoryIndex} from '../../core/bindings/CoreStoryIndex';
 import {fileUrlForPath} from '../../core/asset-paths';
 import type {TwineElectronWindow} from '../../electron/shared';
 import {selectPassage, Story, useStoriesContext} from '../../store/stories';
@@ -32,8 +36,10 @@ import {
 import {useProjectStoryHydration} from '../../store/project-hydration';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {
+	markPerformance,
 	markPerformanceAfterPaint,
-	scheduleIdleWork
+	measurePerformance,
+	measurePerformanceAfterPaint
 } from '../../util/performance';
 import {
 	sourceNavigationTargetFromAssetReference,
@@ -374,12 +380,30 @@ export const ContentsRoute: React.FC = () => {
 		!!inferredProjectRoot;
 	const passageTextLoaded =
 		!isFileBackedStory || hydration?.passageTextLoaded !== false;
+	const usesPagedContents =
+		!!story && story.passages.length > deferIndexPassageThreshold;
 	const shellIndex = React.useMemo(
-		() => (story ? storyShellIndex(story, knownAssets) : undefined),
-		[knownAssets, story]
+		() =>
+			story
+				? usesPagedContents
+					? emptyStoryIndex(story.id)
+					: storyShellIndex(story, knownAssets)
+				: undefined,
+		[knownAssets, story, usesPagedContents]
 	);
-	const [fullIndex, setFullIndex] =
-		React.useState<typeof shellIndex>(undefined);
+	const [fullIndex, setFullIndex] = React.useState<CoreStoryIndex>();
+	const [contentsPage, setContentsPage] = React.useState<CoreContentsPage>();
+	const [selectedPassageFacts, setSelectedPassageFacts] =
+		React.useState<CorePassageFacts>();
+
+	React.useLayoutEffect(() => {
+		markPerformance('contents-route-committed');
+		measurePerformance(
+			'contents-navigation-to-commit',
+			'contents-navigation-start',
+			'contents-route-committed'
+		);
+	}, []);
 
 	React.useEffect(
 		() =>
@@ -457,42 +481,101 @@ export const ContentsRoute: React.FC = () => {
 
 		if (!story || !passageTextLoaded) {
 			setFullIndex(undefined);
+			setContentsPage(undefined);
 			return () => {
 				active = false;
 			};
 		}
 
 		setFullIndex(undefined);
+		if (usesPagedContents) {
+			setContentsPage(undefined);
+			markPerformance('contents-page-query-submit');
+			measurePerformance(
+				'contents-commit-to-query-submit',
+				'contents-route-committed',
+				'contents-page-query-submit'
+			);
+			void coreProjectHost
+				.queryContentsPageAsync(story.id, {
+					filter,
+					limit: 100,
+					query: query || null,
+					sort: sort.toLowerCase() as 'group' | 'issues' | 'name'
+				})
+				.then(page => {
+					if (active) {
+						markPerformance('contents-page-query-result');
+						measurePerformance(
+							'contents-page-query-round-trip',
+							'contents-page-query-submit',
+							'contents-page-query-result'
+						);
+						setContentsPage(page);
+					}
+				});
+			return () => {
+				active = false;
+			};
+		}
 
 		const loadFullIndex = () => {
-			void coreProjectHost.queryStoryIndexAsync(story.id).then(index => {
+			void coreProjectHost.queryStoryIndexAsync(story.id, {}).then(index => {
 				if (active) {
 					setFullIndex(index);
 				}
 			});
 		};
 
-		if (story.passages.length <= deferIndexPassageThreshold) {
-			loadFullIndex();
-			return () => {
-				active = false;
-			};
-		}
-
-		const cancelIdleWork = scheduleIdleWork(loadFullIndex);
+		loadFullIndex();
 
 		return () => {
 			active = false;
-			cancelIdleWork();
 		};
-	}, [coreProjectHost, knownAssets, passageTextLoaded, patchVersion, story]);
+	}, [
+		coreProjectHost,
+		filter,
+		knownAssets,
+		passageTextLoaded,
+		patchVersion,
+		query,
+		sort,
+		story,
+		usesPagedContents
+	]);
 
-	const index = fullIndex ?? shellIndex;
+	const pagedIndex = React.useMemo(
+		() =>
+			story && contentsPage
+				? {
+						...emptyStoryIndex(story.id),
+						contents: contentsPage.entries
+					}
+				: undefined,
+		[contentsPage, story]
+	);
+	const index = fullIndex ?? (usesPagedContents ? pagedIndex : shellIndex);
 	const contents = React.useMemo(
 		() => (index ? contentsViewModel(index) : undefined),
 		[index]
 	);
 	const filterCounts = React.useMemo(() => {
+		if (contentsPage) {
+			return new Map<ContentsFilter, number>([
+				['all', contentsPage.facets.all],
+				['asset', contentsPage.facets.asset],
+				['diagnostics', contentsPage.facets.diagnostics],
+				['entryPoint', contentsPage.facets.entryPoint],
+				['group', contentsPage.facets.group],
+				['metadata', contentsPage.facets.metadata],
+				['passage', contentsPage.facets.passage],
+				['problems', contentsPage.facets.problems],
+				['script', contentsPage.facets.script],
+				['stylesheet', contentsPage.facets.stylesheet],
+				['tag', contentsPage.facets.tag],
+				['variable', contentsPage.facets.variable]
+			]);
+		}
 		const counts = new Map<ContentsFilter, number>();
 		const entries = contents?.entries ?? [];
 
@@ -517,9 +600,12 @@ export const ContentsRoute: React.FC = () => {
 		}
 
 		return counts;
-	}, [contents]);
+	}, [contents, contentsPage]);
 	const visibleEntries = React.useMemo(() => {
 		const entries = contents?.entries ?? [];
+		if (contentsPage) {
+			return entries;
+		}
 		const filtered = entries.filter(
 			entry =>
 				entryMatchesFilter(entry, filter) && entryMatchesQuery(entry, query)
@@ -543,12 +629,13 @@ export const ContentsRoute: React.FC = () => {
 				left.label.localeCompare(right.label)
 			);
 		});
-	}, [contents, filter, query, sort]);
+	}, [contents, contentsPage, filter, query, sort]);
 	const items = React.useMemo(
 		() => renderItems(visibleEntries),
 		[visibleEntries]
 	);
 	const virtualContents = useVirtualContents(items);
+	const totalContents = contentsPage?.totalCount ?? contents?.totalCount ?? 0;
 	const selectedEntry =
 		visibleEntries.find(entry => entry.id === selectedId) ??
 		visibleEntries.find(
@@ -558,10 +645,42 @@ export const ContentsRoute: React.FC = () => {
 		visibleEntries[0];
 	const selectedPassage =
 		story && selectedEntry ? passageForEntry(story, selectedEntry) : undefined;
+	React.useEffect(() => {
+		let active = true;
+
+		if (!usesPagedContents || !story || !selectedPassage) {
+			setSelectedPassageFacts(undefined);
+			return () => {
+				active = false;
+			};
+		}
+
+		void coreProjectHost
+			.queryPassageFactsAsync(story.id, selectedPassage.id)
+			.then(facts => {
+				if (active) {
+					setSelectedPassageFacts(facts.revision > 0 ? facts : undefined);
+				}
+			});
+
+		return () => {
+			active = false;
+		};
+	}, [coreProjectHost, selectedPassage, story, usesPagedContents]);
 	const selectedFacts =
-		story && index && selectedPassage
-			? workbenchSelection(story, index, selectedPassage.id)
-			: undefined;
+		usesPagedContents && selectedPassageFacts && selectedPassage
+			? {
+					assetReferences: selectedPassageFacts.assetReferences,
+					backlinks: selectedPassageFacts.backlinks,
+					diagnostics: selectedPassageFacts.diagnostics,
+					linkFacts: selectedPassageFacts.links,
+					wordCount: selectedPassage.text.trim()
+						? selectedPassage.text.trim().split(/\s+/).length
+						: 0
+				}
+			: story && index && selectedPassage
+				? workbenchSelection(story, index, selectedPassage.id)
+				: undefined;
 	const canRevealSelectedEntry = canRevealEntryInSource(selectedEntry);
 
 	React.useEffect(() => {
@@ -573,8 +692,18 @@ export const ContentsRoute: React.FC = () => {
 	React.useEffect(() => {
 		if (contents) {
 			markPerformanceAfterPaint('contents-visible');
+			if (usesPagedContents && contentsPage) {
+				measurePerformanceAfterPaint(
+					'contents-page-query-to-paint',
+					'contents-page-query-submit'
+				);
+				measurePerformanceAfterPaint(
+					'contents-page-result-to-paint',
+					'contents-page-query-result'
+				);
+			}
 		}
-	}, [contents]);
+	}, [contents, contentsPage, usesPagedContents]);
 
 	React.useEffect(() => {
 		if (contents && query) {
@@ -684,6 +813,28 @@ export const ContentsRoute: React.FC = () => {
 		}
 	}
 
+	function loadNextContentsPage() {
+		if (!story || !contentsPage?.nextCursor) {
+			return;
+		}
+
+		void coreProjectHost
+			.queryContentsPageAsync(story.id, {
+				cursor: contentsPage.nextCursor,
+				filter,
+				limit: 100,
+				query: query || null,
+				sort: sort.toLowerCase() as 'group' | 'issues' | 'name'
+			})
+			.then(next => {
+				setContentsPage(current =>
+					current && current.revision === next.revision
+						? {...next, entries: [...current.entries, ...next.entries]}
+						: next
+				);
+			});
+	}
+
 	if (!story || !contents || !index) {
 		return (
 			<div className="contents-route__empty">
@@ -748,7 +899,7 @@ export const ContentsRoute: React.FC = () => {
 						value={sort}
 					/>
 					<span className="contents-route__toolbar-stat">
-						{visibleEntries.length} of {contents.totalCount}
+						{visibleEntries.length} of {totalContents}
 					</span>
 				</div>
 				<div className="contents-route__list" ref={virtualContents.listRef}>
@@ -818,6 +969,11 @@ export const ContentsRoute: React.FC = () => {
 						</div>
 					)}
 				</div>
+				{contentsPage?.nextCursor && (
+					<Button onClick={loadNextContentsPage} size="sm" variant="ghost">
+						Load more
+					</Button>
+				)}
 			</main>
 			<aside className="contents-route__inspector" aria-label="Content details">
 				{selectedEntry ? (

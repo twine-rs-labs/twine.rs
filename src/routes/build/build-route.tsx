@@ -423,11 +423,27 @@ export const BuildRoute: React.FC = () => {
 
 		setStoryIndex(undefined);
 
-		void coreProjectHost.queryStoryIndexAsync(story.id).then(index => {
-			if (active) {
-				setStoryIndex(index);
-			}
-		});
+		// Building is an explicit non-interactive workflow. Keep its complete
+		// inventory request scoped rather than relying on the product default.
+		void coreProjectHost
+			.queryStoryIndexAsync(story.id, {
+				includeAssets: true,
+				includeContents: false,
+				includeDiagnostics: false,
+				includeFiles: false,
+				includeGraph: false,
+				includePassageNames: false,
+				includePassageText: false,
+				includeScript: false,
+				includeStylesheet: false,
+				includeTags: false,
+				includeVariables: false
+			})
+			.then(index => {
+				if (active) {
+					setStoryIndex(index);
+				}
+			});
 
 		return () => {
 			active = false;
@@ -1302,7 +1318,9 @@ export const BuildRoute: React.FC = () => {
 								</span>
 								<Button
 									icon="copy"
-									onClick={() => void navigator.clipboard?.writeText(inspectText)}
+									onClick={() =>
+										void navigator.clipboard?.writeText(inspectText)
+									}
 									size="sm"
 									variant="ghost"
 								>

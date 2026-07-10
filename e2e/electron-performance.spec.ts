@@ -580,11 +580,14 @@ async function waitForDiagnosticWarmup(page: Page) {
 		page,
 		current =>
 			(current.renderer.core.hosts[0]?.sessions[0]?.revision ?? 0) >= 2 &&
-			current.renderer.bridgeMetrics.some(
-				metric => metric.kind === 'ingestExternalDelta'
+			current.renderer.entries.some(
+				event => event.name === 'session-baseline-ready'
 			) &&
-			current.renderer.bridgeMetrics.some(
-				metric => metric.kind === 'queryStoryIndex'
+			current.renderer.entries.some(
+				event => event.name === 'session-initialization-complete'
+			) &&
+			current.renderer.entries.some(
+				entry => entry.name === 'graph-query-result'
 			),
 		180_000
 	);
@@ -861,20 +864,56 @@ async function measureContents(page: Page) {
 				lastEntry(current, 'contents-visible', 'mark')!.startTime - startedAt
 			);
 			addSample(
+				'query.contentsRequestMs',
+				lastEntry(current, 'contents-page-query-round-trip', 'measure')
+					?.duration
+			);
+			addSample(
+				'query.contentsNavigationToCommitMs',
+				lastEntry(current, 'contents-navigation-to-commit', 'measure')?.duration
+			);
+			addSample(
+				'query.contentsCommitToRequestMs',
+				lastEntry(current, 'contents-commit-to-query-submit', 'measure')
+					?.duration
+			);
+			addSample(
+				'query.contentsResultToPaintMs',
+				lastEntry(current, 'contents-page-result-to-paint', 'measure')?.duration
+			);
+			addSample(
 				'query.coreRoundTripMs',
-				lastEntry(current, 'story-index-query-round-trip', 'measure')?.duration
+				current.renderer.bridgeMetrics
+					.filter(metric => metric.kind === 'queryContentsPage')
+					.at(-1)?.roundTripMs
 			);
 		}
-		const storyIndexMetrics = current.renderer.bridgeMetrics.filter(
-			metric => metric.kind === 'queryStoryIndex'
+		const contentsMetrics = current.renderer.bridgeMetrics.filter(
+			metric => metric.kind === 'queryContentsPage'
 		);
 		assertInvariant(
 			`contents-${index}-uses-wasm-worker`,
 			current.renderer.core.hosts[0]?.mode === 'wasm-worker' &&
-				storyIndexMetrics.every(metric => metric.mode === 'wasm-worker'),
-			storyIndexMetrics.length === 0
+				contentsMetrics.every(metric => metric.mode === 'wasm-worker'),
+			contentsMetrics.length === 0
 				? 'served from the Rust session cache'
 				: undefined
+		);
+		assertInvariant(
+			`contents-${index}-avoids-full-index-transfer`,
+			passageCount <= 500 ||
+				!current.renderer.bridgeMetrics.some(
+					metric => metric.kind === 'queryStoryIndex'
+				)
+		);
+		assertInvariant(
+			`contents-${index}-payload-is-bounded`,
+			contentsMetrics.every(metric => metric.responseBytes <= 1_000_000),
+			contentsMetrics.map(metric => metric.responseBytes).join(', ')
+		);
+		addSample(
+			'query.contentsPayloadBytes',
+			contentsMetrics.at(-1)?.responseBytes
 		);
 		captureBridgeMetrics(current);
 		await recordLaunchPhase('benchmark-sample-completed', {

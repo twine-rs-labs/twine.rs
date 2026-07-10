@@ -13,7 +13,8 @@ use thiserror::Error;
 use ts_rs::TS;
 use twine_graph::{
     AutoLayoutOptions, GraphDirection, GraphEdgeKind, GraphFocus, GraphIndex, GraphLayoutSnapshot,
-    GraphLayoutSource, GraphLayoutState, GraphProjectionOptions, GraphViewport, LinkLayerOptions,
+    GraphLayoutSource, GraphLayoutState, GraphProjectionOptions, GraphViewport, LinkEdge,
+    LinkLayerOptions,
 };
 use twine_model::{
     GraphPosition, Passage, PassageId, PassageIndex, PassageLayout, Project, Story, StoryId,
@@ -630,6 +631,269 @@ pub struct CoreStoryIndex {
     pub tags: Vec<String>,
     #[serde(default)]
     pub tag_entries: Vec<CoreTagEntry>,
+    #[serde(default)]
+    pub symbols: Vec<CoreSymbol>,
+}
+
+/// Compact, always-bounded story facts for shell and route chrome.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreStorySummary {
+    pub asset_count: usize,
+    pub diagnostic_count: usize,
+    pub error_count: usize,
+    pub graph: CoreGraphStats,
+    pub missing_asset_count: usize,
+    pub passage_count: usize,
+    pub revision: u32,
+    pub story_id: String,
+    pub tag_count: usize,
+    pub warning_count: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreContentsFilter {
+    #[default]
+    All,
+    Asset,
+    Diagnostics,
+    EntryPoint,
+    Group,
+    Metadata,
+    Passage,
+    Problems,
+    Script,
+    Stylesheet,
+    Tag,
+    Variable,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreContentsSort {
+    #[default]
+    Group,
+    Issues,
+    Name,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreContentsQuery {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub filter: CoreContentsFilter,
+    #[serde(default = "default_read_model_page_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub sort: CoreContentsSort,
+}
+
+impl Default for CoreContentsQuery {
+    fn default() -> Self {
+        Self {
+            cursor: None,
+            filter: CoreContentsFilter::All,
+            limit: default_read_model_page_limit(),
+            query: None,
+            sort: CoreContentsSort::Group,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreContentsFacets {
+    pub all: usize,
+    pub asset: usize,
+    pub diagnostics: usize,
+    pub entry_point: usize,
+    pub group: usize,
+    pub metadata: usize,
+    pub passage: usize,
+    pub problems: usize,
+    pub script: usize,
+    pub stylesheet: usize,
+    pub tag: usize,
+    pub variable: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreContentsPage {
+    pub entries: Vec<CoreContentsEntry>,
+    pub facets: CoreContentsFacets,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    pub revision: u32,
+    pub story_id: String,
+    pub total_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreSearchQuery {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub fuzzy: bool,
+    #[serde(default = "default_read_model_page_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub match_case: bool,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub replacement: Option<String>,
+    #[serde(default = "default_true")]
+    pub include_passage_names: bool,
+    #[serde(default = "default_true")]
+    pub include_passage_text: bool,
+    #[serde(default = "default_true")]
+    pub include_script: bool,
+    #[serde(default = "default_true")]
+    pub include_stylesheet: bool,
+    #[serde(default)]
+    pub use_regexes: bool,
+}
+
+impl Default for CoreSearchQuery {
+    fn default() -> Self {
+        Self {
+            cursor: None,
+            fuzzy: false,
+            limit: default_read_model_page_limit(),
+            match_case: false,
+            query: String::new(),
+            replacement: None,
+            include_passage_names: true,
+            include_passage_text: true,
+            include_script: true,
+            include_stylesheet: true,
+            use_regexes: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreSearchPage {
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    #[serde(default)]
+    pub replace_previews: Vec<CoreReplacePreview>,
+    pub revision: u32,
+    #[serde(default)]
+    pub search_hits: Vec<CoreSearchHit>,
+    pub story_id: String,
+    pub total_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreDiagnosticsQuery {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default = "default_read_model_page_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub severity: Option<CoreDiagnosticSeverity>,
+}
+
+impl Default for CoreDiagnosticsQuery {
+    fn default() -> Self {
+        Self {
+            cursor: None,
+            limit: default_read_model_page_limit(),
+            severity: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreDiagnosticsPage {
+    pub diagnostics: Vec<CoreDiagnostic>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    pub revision: u32,
+    pub story_id: String,
+    pub total_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreAssetsQuery {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default = "default_read_model_page_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+impl Default for CoreAssetsQuery {
+    fn default() -> Self {
+        Self {
+            cursor: None,
+            limit: default_read_model_page_limit(),
+            query: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreAssetsPage {
+    pub assets: Vec<CoreAssetInventoryEntry>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    pub revision: u32,
+    pub story_id: String,
+    pub total_count: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageLinkFact {
+    pub broken: bool,
+    pub source_id: String,
+    pub target_id: Option<String>,
+    pub target_name: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageFacts {
+    #[serde(default)]
+    pub asset_references: Vec<CoreAssetReference>,
+    #[serde(default)]
+    pub backlinks: Vec<CorePassageLinkFact>,
+    #[serde(default)]
+    pub diagnostics: Vec<CoreDiagnostic>,
+    #[serde(default)]
+    pub links: Vec<CorePassageLinkFact>,
+    pub passage_id: String,
+    pub revision: u32,
+    pub story_id: String,
     #[serde(default)]
     pub symbols: Vec<CoreSymbol>,
 }
@@ -1433,6 +1697,9 @@ pub enum CoreError {
 
     #[error("unsafe asset path: {0}")]
     UnsafeAssetPath(String),
+
+    #[error("stale read-model cursor")]
+    StaleReadModelCursor,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1881,6 +2148,29 @@ impl ProjectDelta {
     }
 }
 
+fn story_shell_without_passages(story: &Story) -> Story {
+    Story {
+        color: story.color.clone(),
+        custom_attributes: story.custom_attributes.clone(),
+        format_options: story.format_options.clone(),
+        ifid: story.ifid.clone(),
+        id: story.id.clone(),
+        last_update: story.last_update.clone(),
+        metadata: story.metadata.clone(),
+        name: story.name.clone(),
+        passages: PassageIndex::default(),
+        script: story.script.clone(),
+        snap_to_grid: story.snap_to_grid,
+        start_passage: story.start_passage.clone(),
+        story_format: story.story_format.clone(),
+        story_format_version: story.story_format_version.clone(),
+        stylesheet: story.stylesheet.clone(),
+        tag_colors: story.tag_colors.clone(),
+        tags: story.tags.clone(),
+        zoom: story.zoom,
+    }
+}
+
 fn sync_fingerprints_for_delta(
     project: &Project,
     values: &mut BTreeMap<String, u64>,
@@ -1995,12 +2285,26 @@ struct GraphSessionCache {
     layout: GraphLayoutSnapshot,
 }
 
+/// Compact server-side read records shared by Contents, diagnostics, assets,
+/// and shell summary queries. This deliberately excludes files, symbols,
+/// search hits, previews, and the complete compatibility `CoreStoryIndex`:
+/// retaining that object was a measurable 50k memory regression.
+#[derive(Clone, Debug)]
+struct StoryReadModelCache {
+    asset_inventory: Vec<CoreAssetInventoryEntry>,
+    contents: Vec<CoreContentsEntry>,
+    diagnostics: Vec<CoreDiagnostic>,
+    graph: CoreGraphStats,
+    revision: u64,
+    tag_count: usize,
+}
+
 #[derive(Clone, Debug)]
 struct SourceAnalysisCache {
     assets: Vec<CoreAssetReference>,
     file: CoreSourceFile,
     name: String,
-    source: String,
+    source_fingerprint: u64,
     symbols: Vec<CoreSymbol>,
     tags: Vec<String>,
 }
@@ -2011,6 +2315,13 @@ fn fingerprint(value: &impl Serialize) -> u64 {
     serde_json::to_string(value)
         .unwrap_or_default()
         .hash(&mut hasher);
+    hasher.finish()
+}
+
+fn source_fingerprint(source: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    source.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -2248,6 +2559,7 @@ pub struct ProjectSession {
     asset_inventory: Vec<CoreAssetInventoryEntry>,
     asset_root: Option<PathBuf>,
     current_fingerprints: BTreeMap<String, u64>,
+    read_model_cache: BTreeMap<StoryId, StoryReadModelCache>,
     dirty: bool,
     dirty_fields: BTreeSet<String>,
     graph_cache: BTreeMap<StoryId, GraphSessionCache>,
@@ -2272,6 +2584,7 @@ impl ProjectSession {
             asset_inventory: Vec::new(),
             asset_root: None,
             current_fingerprints: saved_fingerprints.clone(),
+            read_model_cache: BTreeMap::new(),
             dirty: false,
             dirty_fields: BTreeSet::new(),
             graph_cache: BTreeMap::new(),
@@ -2306,6 +2619,7 @@ impl ProjectSession {
 
     pub fn set_asset_inventory(&mut self, inventory: Vec<CoreAssetInventoryEntry>) {
         self.asset_inventory = normalized_asset_inventory(inventory);
+        self.read_model_cache.clear();
     }
 
     pub fn asset_inventory(&self) -> &[CoreAssetInventoryEntry] {
@@ -2321,6 +2635,85 @@ impl ProjectSession {
         command: StoryCommand,
         record_history: bool,
     ) -> Result<PatchBatch, CoreError> {
+        if let StoryCommand::UpdatePassageText {
+            passage_id,
+            story_id,
+            text,
+        } = command
+        {
+            return self.apply_passage_text_incremental(
+                &story_id,
+                &passage_id,
+                text,
+                record_history,
+            );
+        }
+        if let StoryCommand::UpdatePassage {
+            ref changes,
+            ref passage_id,
+            ref story_id,
+            update_references,
+        } = command
+        {
+            // A rename that rewrites references can touch arbitrary sources and
+            // still uses the compatibility transaction below. Ordinary passage
+            // field edits have one entity delta and never need a project clone.
+            if changes.name.is_none() || !update_references {
+                return self.apply_passage_patch_incremental(
+                    &story_id,
+                    &passage_id,
+                    changes.clone(),
+                    record_history,
+                    "Update Passage",
+                    CoreHistoryKind::EditPassage,
+                );
+            }
+        }
+        if let StoryCommand::SetPassageTags {
+            ref passage_id,
+            ref story_id,
+            ref tags,
+        } = command
+        {
+            return self.apply_passage_patch_incremental(
+                story_id,
+                passage_id,
+                PassagePatch {
+                    tags: Some(tags.clone()),
+                    ..PassagePatch::default()
+                },
+                record_history,
+                "Set Passage Tags",
+                CoreHistoryKind::StoryDetails,
+            );
+        }
+        if let StoryCommand::SetStartPassage {
+            ref passage_id,
+            ref story_id,
+        } = command
+        {
+            return self.apply_start_passage_incremental(story_id, passage_id, record_history);
+        }
+        if let StoryCommand::UpdateStoryScript {
+            ref script,
+            ref story_id,
+        } = command
+        {
+            return self.apply_story_source_incremental(story_id, script, true, record_history);
+        }
+        if let StoryCommand::UpdateStoryStylesheet {
+            ref story_id,
+            ref stylesheet,
+        } = command
+        {
+            return self.apply_story_source_incremental(
+                story_id,
+                stylesheet,
+                false,
+                record_history,
+            );
+        }
+
         let before = self.project.clone();
         let asset_before = self.asset_inventory.clone();
         let dirty_before = self.dirty;
@@ -2370,6 +2763,393 @@ impl ProjectSession {
 
         Ok(PatchBatch {
             label: command.label().into(),
+            patches,
+            transaction_id,
+        })
+    }
+
+    fn apply_passage_text_incremental(
+        &mut self,
+        story_id: &str,
+        passage_id: &str,
+        text: String,
+        record_history: bool,
+    ) -> Result<PatchBatch, CoreError> {
+        let transaction_id = self.next_transaction_id;
+        let story_id = StoryId::new(story_id);
+        let passage_id = PassageId::new(passage_id);
+        let (passage_index, before, story_shell) = {
+            let story = self.story(story_id.as_ref())?;
+            let passage_index = story
+                .passages
+                .iter()
+                .position(|passage| passage.id == passage_id)
+                .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+            let before = story
+                .passage_by_id(&passage_id)
+                .expect("passage index should resolve")
+                .clone();
+
+            if before.text == text {
+                return Ok(PatchBatch {
+                    label: "Update Passage Text".into(),
+                    patches: Vec::new(),
+                    transaction_id,
+                });
+            }
+
+            (passage_index, before, story_shell_without_passages(story))
+        };
+        let after = {
+            let passage = self
+                .story_mut(story_id.as_ref())?
+                .passage_by_id_mut(&passage_id)
+                .expect("passage index should resolve");
+
+            passage.text = text.clone();
+            passage.clone()
+        };
+        let delta = ProjectDelta {
+            stories: vec![StoryDelta::Update {
+                after: story_shell.clone(),
+                before: story_shell,
+                passages: vec![PassageDelta {
+                    after: Some(IndexedPassage {
+                        index: passage_index,
+                        value: after,
+                    }),
+                    before: Some(IndexedPassage {
+                        index: passage_index,
+                        value: before,
+                    }),
+                    passage_id: passage_id.clone(),
+                }],
+                story_id: story_id.clone(),
+            }],
+            ..ProjectDelta::default()
+        };
+        let dirty_before = self.dirty;
+        let before_state_id = self.current_state_id;
+
+        self.next_transaction_id += 1;
+        self.current_state_id = transaction_id;
+        self.sync_fingerprints(&delta);
+        self.update_graph_cache(&delta);
+        self.update_analysis_cache(&delta);
+        self.clear_redo();
+        if record_history {
+            self.push_undo(Transaction {
+                after_state_id: self.current_state_id,
+                assets: Vec::new(),
+                before_state_id,
+                byte_size: 0,
+                delta,
+                kind: CoreHistoryKind::EditPassage,
+                label: "Update Passage Text".into(),
+            });
+        }
+        let mut patches = vec![Patch::PassageUpdated {
+            changes: PassagePatch {
+                text: Some(text),
+                ..PassagePatch::default()
+            },
+            passage_id: passage_id.as_ref().to_owned(),
+            story_id: story_id.as_ref().to_owned(),
+        }];
+
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+        Ok(PatchBatch {
+            label: "Update Passage Text".into(),
+            patches,
+            transaction_id,
+        })
+    }
+
+    fn apply_passage_patch_incremental(
+        &mut self,
+        story_id: &str,
+        passage_id: &str,
+        changes: PassagePatch,
+        record_history: bool,
+        label: &str,
+        kind: CoreHistoryKind,
+    ) -> Result<PatchBatch, CoreError> {
+        if changes.name.is_some() {
+            // `update_references: false` from the caller is represented by the
+            // direct field patch below. A referenced rename stays on the broad
+            // compatibility path in `apply_with_history`.
+        }
+        let transaction_id = self.next_transaction_id;
+        let story_id = StoryId::new(story_id);
+        let passage_id = PassageId::new(passage_id);
+        let (passage_index, before, story_shell) = {
+            let story = self.story(story_id.as_ref())?;
+            let passage_index = story
+                .passages
+                .iter()
+                .position(|passage| passage.id == passage_id)
+                .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+            let before = story
+                .passage_by_id(&passage_id)
+                .expect("passage index should resolve")
+                .clone();
+
+            (passage_index, before, story_shell_without_passages(story))
+        };
+        let mut applied = PassagePatch::default();
+        let after = {
+            let passage = self
+                .story_mut(story_id.as_ref())?
+                .passage_by_id_mut(&passage_id)
+                .expect("passage index should resolve");
+
+            if let Some(name) = changes.name
+                && passage.name != name
+            {
+                passage.name = name.clone();
+                applied.name = Some(name);
+            }
+            if let Some(text) = changes.text
+                && passage.text != text
+            {
+                passage.text = text.clone();
+                applied.text = Some(text);
+            }
+            if let Some(tags) = changes.tags
+                && passage.tags != tags
+            {
+                passage.tags = tags.clone();
+                applied.tags = Some(tags);
+            }
+            if let Some(layout) = changes.layout
+                && passage.layout.map(CoreRect::from) != Some(layout.clone())
+            {
+                passage.layout = Some(GraphPosition::from(layout.clone()));
+                applied.layout = Some(layout);
+            }
+            passage.clone()
+        };
+
+        if passage_patch_is_empty(&applied) {
+            return Ok(PatchBatch {
+                label: label.into(),
+                patches: Vec::new(),
+                transaction_id,
+            });
+        }
+
+        let delta = ProjectDelta {
+            stories: vec![StoryDelta::Update {
+                after: story_shell.clone(),
+                before: story_shell,
+                passages: vec![PassageDelta {
+                    after: Some(IndexedPassage {
+                        index: passage_index,
+                        value: after,
+                    }),
+                    before: Some(IndexedPassage {
+                        index: passage_index,
+                        value: before,
+                    }),
+                    passage_id: passage_id.clone(),
+                }],
+                story_id: story_id.clone(),
+            }],
+            ..ProjectDelta::default()
+        };
+        let dirty_before = self.dirty;
+        let before_state_id = self.current_state_id;
+
+        self.next_transaction_id += 1;
+        self.current_state_id = transaction_id;
+        self.sync_fingerprints(&delta);
+        self.update_graph_cache(&delta);
+        self.update_analysis_cache(&delta);
+        self.clear_redo();
+        if record_history {
+            self.push_undo(Transaction {
+                after_state_id: self.current_state_id,
+                assets: Vec::new(),
+                before_state_id,
+                byte_size: 0,
+                delta,
+                kind,
+                label: label.into(),
+            });
+        }
+
+        let mut patches = vec![Patch::PassageUpdated {
+            changes: applied,
+            passage_id: passage_id.as_ref().to_owned(),
+            story_id: story_id.as_ref().to_owned(),
+        }];
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+        Ok(PatchBatch {
+            label: label.into(),
+            patches,
+            transaction_id,
+        })
+    }
+
+    fn apply_start_passage_incremental(
+        &mut self,
+        story_id: &str,
+        passage_id: &str,
+        record_history: bool,
+    ) -> Result<PatchBatch, CoreError> {
+        let transaction_id = self.next_transaction_id;
+        let story_id = StoryId::new(story_id);
+        let passage_id = PassageId::new(passage_id);
+        let before = {
+            let story = self.story(story_id.as_ref())?;
+
+            if story.passage_by_id(&passage_id).is_none() {
+                return Err(CoreError::PassageNotFound(passage_id.as_ref().to_owned()));
+            }
+            if story.start_passage == passage_id {
+                return Ok(PatchBatch {
+                    label: "Set Start Passage".into(),
+                    patches: Vec::new(),
+                    transaction_id,
+                });
+            }
+
+            story_shell_without_passages(story)
+        };
+        let after = {
+            let story = self.story_mut(story_id.as_ref())?;
+
+            story.start_passage = passage_id.clone();
+            story_shell_without_passages(story)
+        };
+        let delta = ProjectDelta {
+            stories: vec![StoryDelta::Update {
+                after,
+                before,
+                passages: Vec::new(),
+                story_id: story_id.clone(),
+            }],
+            ..ProjectDelta::default()
+        };
+        let dirty_before = self.dirty;
+        let before_state_id = self.current_state_id;
+
+        self.next_transaction_id += 1;
+        self.current_state_id = transaction_id;
+        self.sync_fingerprints(&delta);
+        self.update_graph_cache(&delta);
+        self.update_analysis_cache(&delta);
+        self.clear_redo();
+        if record_history {
+            self.push_undo(Transaction {
+                after_state_id: self.current_state_id,
+                assets: Vec::new(),
+                before_state_id,
+                byte_size: 0,
+                delta,
+                kind: CoreHistoryKind::SetStartPassage,
+                label: "Set Start Passage".into(),
+            });
+        }
+
+        let mut patches = vec![Patch::StartPassageChanged {
+            passage_id: passage_id.as_ref().to_owned(),
+            story_id: story_id.as_ref().to_owned(),
+        }];
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+        Ok(PatchBatch {
+            label: "Set Start Passage".into(),
+            patches,
+            transaction_id,
+        })
+    }
+
+    fn apply_story_source_incremental(
+        &mut self,
+        story_id: &str,
+        source: &str,
+        script: bool,
+        record_history: bool,
+    ) -> Result<PatchBatch, CoreError> {
+        let transaction_id = self.next_transaction_id;
+        let story_id = StoryId::new(story_id);
+        let label = if script {
+            "Update Story JavaScript"
+        } else {
+            "Update Story Stylesheet"
+        };
+        let before = {
+            let story = self.story(story_id.as_ref())?;
+            let unchanged = if script {
+                story.script == source
+            } else {
+                story.stylesheet == source
+            };
+
+            if unchanged {
+                return Ok(PatchBatch {
+                    label: label.into(),
+                    patches: Vec::new(),
+                    transaction_id,
+                });
+            }
+
+            story_shell_without_passages(story)
+        };
+        let after = {
+            let story = self.story_mut(story_id.as_ref())?;
+
+            if script {
+                story.script = source.into();
+            } else {
+                story.stylesheet = source.into();
+            }
+            story_shell_without_passages(story)
+        };
+        let delta = ProjectDelta {
+            stories: vec![StoryDelta::Update {
+                after,
+                before,
+                passages: Vec::new(),
+                story_id: story_id.clone(),
+            }],
+            ..ProjectDelta::default()
+        };
+        let dirty_before = self.dirty;
+        let before_state_id = self.current_state_id;
+
+        self.next_transaction_id += 1;
+        self.current_state_id = transaction_id;
+        self.sync_fingerprints(&delta);
+        self.update_graph_cache(&delta);
+        self.update_analysis_cache(&delta);
+        self.clear_redo();
+        if record_history {
+            self.push_undo(Transaction {
+                after_state_id: self.current_state_id,
+                assets: Vec::new(),
+                before_state_id,
+                byte_size: 0,
+                delta,
+                kind: CoreHistoryKind::EditPassage,
+                label: label.into(),
+            });
+        }
+
+        let mut patches = if script {
+            vec![Patch::StoryScriptUpdated {
+                script: source.into(),
+                story_id: story_id.as_ref().to_owned(),
+            }]
+        } else {
+            vec![Patch::StoryStylesheetUpdated {
+                story_id: story_id.as_ref().to_owned(),
+                stylesheet: source.into(),
+            }]
+        };
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+        Ok(PatchBatch {
+            label: label.into(),
             patches,
             transaction_id,
         })
@@ -2626,6 +3406,27 @@ impl ProjectSession {
             });
         }
 
+        if let [
+            CoreExternalChange::UpdatePassage {
+                changes,
+                passage_id,
+                story_id,
+            },
+        ] = delta.changes.as_slice()
+            && changes.text.is_some()
+            && changes.layout.is_none()
+            && changes.name.is_none()
+            && changes.tags.is_none()
+        {
+            return self.ingest_external_passage_text(
+                delta.id,
+                mode,
+                story_id,
+                passage_id,
+                changes.text.clone().expect("text change should be present"),
+            );
+        }
+
         let mut candidate = self.clone();
 
         for change in delta.changes.iter().cloned() {
@@ -2724,6 +3525,160 @@ impl ProjectSession {
             batch: Some(batch),
             conflicts: Vec::new(),
             history_recorded: project_changed,
+            outcome: CoreExternalIngestOutcome::Applied,
+            status: self.status(),
+        })
+    }
+
+    fn ingest_external_passage_text(
+        &mut self,
+        delta_id: String,
+        mode: CoreExternalIngestMode,
+        story_id: &str,
+        passage_id: &str,
+        text: String,
+    ) -> Result<CoreExternalIngestResult, CoreError> {
+        let field = format!("passage:{story_id}:{passage_id}:text");
+        let passage_id = PassageId::new(passage_id);
+        let story_id = StoryId::new(story_id);
+        let (passage_index, before, story_shell) = {
+            let story = self.story(story_id.as_ref())?;
+            let passage_index = story
+                .passages
+                .iter()
+                .position(|passage| passage.id == passage_id)
+                .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+            let before = story
+                .passage_by_id(&passage_id)
+                .expect("passage index should resolve")
+                .clone();
+
+            if mode == CoreExternalIngestMode::Auto
+                && self.dirty_fields.contains(&field)
+                && before.text != text
+            {
+                return Ok(CoreExternalIngestResult {
+                    batch: None,
+                    conflicts: vec![CoreExternalConflict {
+                        field,
+                        message: format!(
+                            "passage:{}:{}:text changed both locally and on disk.",
+                            story_id.as_ref(),
+                            passage_id.as_ref()
+                        ),
+                        passage_id: Some(passage_id.as_ref().to_owned()),
+                        path: None,
+                        story_id: Some(story_id.as_ref().to_owned()),
+                    }],
+                    history_recorded: false,
+                    outcome: CoreExternalIngestOutcome::Conflict,
+                    status: self.status(),
+                });
+            }
+
+            (passage_index, before, story_shell_without_passages(story))
+        };
+        let dirty_before = self.dirty;
+        let before_state_id = self.current_state_id;
+        let operation_id = self.next_transaction_id;
+        if before.text == text {
+            self.accept_external_fingerprints(&[CoreExternalChange::UpdatePassage {
+                changes: PassagePatch {
+                    text: Some(text),
+                    ..PassagePatch::default()
+                },
+                passage_id: passage_id.as_ref().to_owned(),
+                story_id: story_id.as_ref().to_owned(),
+            }]);
+            self.remember_external_delta(delta_id);
+            let mut patches = Vec::new();
+
+            push_dirty_patch(&mut patches, dirty_before, self.dirty);
+            return Ok(CoreExternalIngestResult {
+                batch: Some(PatchBatch {
+                    label: "External Changes".into(),
+                    patches,
+                    transaction_id: operation_id,
+                }),
+                conflicts: Vec::new(),
+                history_recorded: false,
+                outcome: CoreExternalIngestOutcome::NoOp,
+                status: self.status(),
+            });
+        }
+        let after = {
+            let passage = self
+                .story_mut(story_id.as_ref())?
+                .passage_by_id_mut(&passage_id)
+                .expect("passage index should resolve");
+
+            passage.text = text.clone();
+            passage.clone()
+        };
+        let transaction_delta = ProjectDelta {
+            stories: vec![StoryDelta::Update {
+                after: story_shell.clone(),
+                before: story_shell,
+                passages: vec![PassageDelta {
+                    after: Some(IndexedPassage {
+                        index: passage_index,
+                        value: after,
+                    }),
+                    before: Some(IndexedPassage {
+                        index: passage_index,
+                        value: before,
+                    }),
+                    passage_id: passage_id.clone(),
+                }],
+                story_id: story_id.clone(),
+            }],
+            ..ProjectDelta::default()
+        };
+
+        self.sync_fingerprints(&transaction_delta);
+        let change = CoreExternalChange::UpdatePassage {
+            changes: PassagePatch {
+                text: Some(text.clone()),
+                ..PassagePatch::default()
+            },
+            passage_id: passage_id.as_ref().to_owned(),
+            story_id: story_id.as_ref().to_owned(),
+        };
+
+        self.accept_external_fingerprints(&[change]);
+        self.remember_external_delta(delta_id);
+        self.next_transaction_id += 1;
+        self.current_state_id = operation_id;
+        self.update_graph_cache(&transaction_delta);
+        self.update_analysis_cache(&transaction_delta);
+        self.clear_redo();
+        self.push_undo(Transaction {
+            after_state_id: self.current_state_id,
+            assets: Vec::new(),
+            before_state_id,
+            byte_size: 0,
+            delta: transaction_delta,
+            kind: CoreHistoryKind::ExternalChanges,
+            label: "External Changes".into(),
+        });
+        let mut patches = vec![Patch::PassageUpdated {
+            changes: PassagePatch {
+                text: Some(text),
+                ..PassagePatch::default()
+            },
+            passage_id: passage_id.as_ref().to_owned(),
+            story_id: story_id.as_ref().to_owned(),
+        }];
+
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+        Ok(CoreExternalIngestResult {
+            batch: Some(PatchBatch {
+                label: "External Changes".into(),
+                patches,
+                transaction_id: operation_id,
+            }),
+            conflicts: Vec::new(),
+            history_recorded: true,
             outcome: CoreExternalIngestOutcome::Applied,
             status: self.status(),
         })
@@ -3887,9 +4842,13 @@ impl ProjectSession {
         scope: CoreSearchScope,
     ) -> SourceAnalysisCache {
         let story_cache = self.analysis_cache.entry(story_id.clone()).or_default();
+        let source_fingerprint = source_fingerprint(source);
 
         if let Some(cached) = story_cache.get(source_id) {
-            if cached.name == name && cached.source == source && cached.tags == tags {
+            if cached.name == name
+                && cached.source_fingerprint == source_fingerprint
+                && cached.tags == tags
+            {
                 return cached.clone();
             }
         }
@@ -3906,7 +4865,7 @@ impl ProjectSession {
                 tags: tags.to_vec(),
             },
             name: name.to_owned(),
-            source: source.to_owned(),
+            source_fingerprint,
             symbols: symbols_in_source(source_id, name, source, scope, passage_id),
             tags: tags.to_vec(),
         };
@@ -3922,9 +4881,8 @@ impl ProjectSession {
         options: CoreStoryIndexOptions,
     ) -> Result<CoreStoryIndex, CoreError> {
         let story = self.story(story_id)?.clone();
-        let graph =
-            (options.include_graph || options.include_diagnostics || options.include_contents)
-                .then(|| GraphIndex::from_story(&story));
+        let graph_required =
+            options.include_graph || options.include_diagnostics || options.include_contents;
         let metadata_source_id = format!("{}:metadata", story.id.as_ref());
         let script_source_id = format!("{}:script", story.id.as_ref());
         let stylesheet_source_id = format!("{}:stylesheet", story.id.as_ref());
@@ -4107,6 +5065,13 @@ impl ProjectSession {
             assets.extend(stylesheet_analysis.assets);
         }
 
+        if graph_required {
+            self.ensure_graph_cache(&story.id)?;
+        }
+        let graph = graph_required
+            .then(|| self.graph_cache.get(&story.id).map(|cache| &cache.graph))
+            .flatten();
+
         let mut asset_inventory = if options.include_assets {
             let known_assets = self.known_asset_inventory(&options.known_assets)?;
 
@@ -4283,6 +5248,576 @@ impl ProjectSession {
             tag_entries,
             symbols,
         })
+    }
+
+    /// Lazily builds the bounded read model from source and graph caches. It
+    /// never creates a `CoreStoryIndex`; that compatibility type remains for
+    /// explicit callers only and is too large to retain for a 50k story.
+    fn read_model(&mut self, story_id: &str) -> Result<&StoryReadModelCache, CoreError> {
+        let story_id = StoryId::new(story_id);
+        let revision = self.revision();
+        let current = self
+            .read_model_cache
+            .get(&story_id)
+            .is_some_and(|cache| cache.revision == revision);
+
+        if !current {
+            let story = self.story(story_id.as_ref())?.clone();
+            let metadata_source_id = format!("{}:metadata", story.id.as_ref());
+            let script_source_id = format!("{}:script", story.id.as_ref());
+            let stylesheet_source_id = format!("{}:stylesheet", story.id.as_ref());
+            let mut active_source_ids = BTreeSet::new();
+            let mut assets = Vec::new();
+            let mut files = Vec::new();
+            let mut symbols = Vec::new();
+            let mut tag_usage = BTreeMap::<String, BTreeSet<String>>::new();
+
+            for passage in &story.passages {
+                active_source_ids.insert(passage.id.as_ref().to_owned());
+                let analysis = self.source_analysis(
+                    &story.id,
+                    passage.id.as_ref(),
+                    &passage.name,
+                    &passage.text,
+                    CoreSourceKind::Passage,
+                    Some(passage.id.as_ref()),
+                    &passage.tags,
+                    CoreSearchScope::PassageText,
+                );
+
+                assets.extend(analysis.assets);
+                files.push(analysis.file);
+                symbols.extend(analysis.symbols);
+                for tag in &passage.tags {
+                    tag_usage
+                        .entry(tag.clone())
+                        .or_default()
+                        .insert(passage.id.as_ref().to_owned());
+                }
+            }
+
+            active_source_ids.insert(script_source_id.clone());
+            active_source_ids.insert(stylesheet_source_id.clone());
+            let script_analysis = self.source_analysis(
+                &story.id,
+                &script_source_id,
+                "Story JavaScript",
+                &story.script,
+                CoreSourceKind::Script,
+                None,
+                &[],
+                CoreSearchScope::Script,
+            );
+            let stylesheet_analysis = self.source_analysis(
+                &story.id,
+                &stylesheet_source_id,
+                "Story Stylesheet",
+                &story.stylesheet,
+                CoreSourceKind::Stylesheet,
+                None,
+                &[],
+                CoreSearchScope::Stylesheet,
+            );
+            assets.extend(script_analysis.assets);
+            assets.extend(stylesheet_analysis.assets);
+            files.push(script_analysis.file);
+            files.push(stylesheet_analysis.file);
+            symbols.extend(script_analysis.symbols);
+            symbols.extend(stylesheet_analysis.symbols);
+            if let Some(cache) = self.analysis_cache.get_mut(&story.id) {
+                cache.retain(|source_id, _| active_source_ids.contains(source_id));
+            }
+
+            let known_assets = self.known_asset_inventory(&[])?;
+            let asset_inventory =
+                asset_inventory_from_references(&assets, known_assets, self.asset_root.is_some());
+            let tag_entries = tag_entries(&story, tag_usage);
+            self.ensure_graph_cache(&story.id)?;
+            let graph = &self
+                .graph_cache
+                .get(&story.id)
+                .expect("graph cache was initialized")
+                .graph;
+            let mut diagnostics = Vec::new();
+
+            for broken_link in graph.broken_links() {
+                let (line, start, end) = story
+                    .passage_by_id(&broken_link.source)
+                    .and_then(|passage| locate_link_target(&passage.text, &broken_link.target_name))
+                    .unwrap_or((1, 0, broken_link.target_name.len()));
+
+                diagnostics.push(CoreDiagnostic {
+                    code: "broken-link".into(),
+                    end,
+                    line,
+                    message: format!("Broken link to \"{}\"", broken_link.target_name),
+                    passage_id: Some(broken_link.source.as_ref().to_owned()),
+                    quick_fixes: vec![
+                        CoreQuickFix {
+                            command: format!("create-passage:{}", broken_link.target_name),
+                            title: format!("Create \"{}\"", broken_link.target_name),
+                        },
+                        CoreQuickFix {
+                            command: "rename-link-target".into(),
+                            title: "Change link target".into(),
+                        },
+                    ],
+                    severity: CoreDiagnosticSeverity::Warning,
+                    source_id: broken_link.source.as_ref().to_owned(),
+                    start,
+                });
+            }
+            for duplicate in duplicate_passage_names(&story) {
+                diagnostics.push(CoreDiagnostic {
+                    code: "duplicate-passage-name".into(),
+                    end: duplicate.name.len(),
+                    line: 1,
+                    message: format!("Duplicate passage name \"{}\"", duplicate.name),
+                    passage_id: Some(duplicate.passage_id.clone()),
+                    quick_fixes: vec![CoreQuickFix {
+                        command: "rename-passage".into(),
+                        title: "Rename passage".into(),
+                    }],
+                    severity: CoreDiagnosticSeverity::Error,
+                    source_id: duplicate.passage_id,
+                    start: 0,
+                });
+            }
+            if story.passage_by_id(&story.start_passage).is_none() {
+                diagnostics.push(CoreDiagnostic {
+                    code: "missing-start-passage".into(),
+                    end: 0,
+                    line: 1,
+                    message: "Story start passage is missing".into(),
+                    passage_id: None,
+                    quick_fixes: vec![CoreQuickFix {
+                        command: "set-start-passage".into(),
+                        title: "Choose a start passage".into(),
+                    }],
+                    severity: CoreDiagnosticSeverity::Error,
+                    source_id: metadata_source_id.clone(),
+                    start: 0,
+                });
+            }
+            diagnostics.extend(asset_diagnostics(
+                &story,
+                &metadata_source_id,
+                &asset_inventory,
+            ));
+            let contents = contents_entries(
+                &story,
+                &files,
+                &tag_entries,
+                &symbols,
+                &asset_inventory,
+                &diagnostics,
+                graph,
+                &metadata_source_id,
+            );
+
+            self.read_model_cache.insert(
+                story_id.clone(),
+                StoryReadModelCache {
+                    asset_inventory,
+                    contents,
+                    diagnostics,
+                    graph: graph.stats().clone().into(),
+                    revision,
+                    tag_count: tag_entries.len(),
+                },
+            );
+        }
+
+        Ok(self
+            .read_model_cache
+            .get(&story_id)
+            .expect("read model was initialized"))
+    }
+
+    pub fn story_summary(&mut self, story_id: &str) -> Result<CoreStorySummary, CoreError> {
+        let passage_count = self.story(story_id)?.passage_count();
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let read_model = self.read_model(story_id)?;
+
+        Ok(CoreStorySummary {
+            asset_count: read_model.asset_inventory.len(),
+            diagnostic_count: read_model.diagnostics.len(),
+            error_count: read_model
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == CoreDiagnosticSeverity::Error)
+                .count(),
+            graph: read_model.graph.clone(),
+            missing_asset_count: read_model
+                .asset_inventory
+                .iter()
+                .filter(|asset| asset.missing)
+                .count(),
+            passage_count,
+            revision,
+            story_id: story_id.to_owned(),
+            tag_count: read_model.tag_count,
+            warning_count: read_model
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == CoreDiagnosticSeverity::Warning)
+                .count(),
+        })
+    }
+
+    pub fn contents_page(
+        &mut self,
+        story_id: &str,
+        query: CoreContentsQuery,
+    ) -> Result<CoreContentsPage, CoreError> {
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let cursor_fingerprint = read_model_query_fingerprint(&query, |query| {
+            query.cursor = None;
+        });
+        let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
+        let entries = &self.read_model(story_id)?.contents;
+        let facets = contents_facets(entries);
+        let mut matching = entries
+            .iter()
+            .filter(|entry| contents_filter_matches(entry, &query.filter))
+            .collect::<Vec<_>>();
+        if let Some(search) = normalized_read_model_query(query.query.as_deref()) {
+            matching.retain(|entry| {
+                entry.label.to_lowercase().contains(&search)
+                    || entry
+                        .detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.to_lowercase().contains(&search))
+            });
+        }
+        sort_contents_entry_refs(&mut matching, &query.sort);
+        let total_count = matching.len();
+        let (entries, next_cursor) =
+            read_model_page_refs(matching, offset, query.limit, revision, cursor_fingerprint);
+
+        Ok(CoreContentsPage {
+            entries,
+            facets,
+            next_cursor,
+            revision,
+            story_id: story_id.to_owned(),
+            total_count,
+        })
+    }
+
+    pub fn search_page(
+        &mut self,
+        story_id: &str,
+        query: CoreSearchQuery,
+    ) -> Result<CoreSearchPage, CoreError> {
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let cursor_fingerprint = read_model_query_fingerprint(&query, |query| {
+            query.cursor = None;
+        });
+        let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
+        let options = CoreStoryIndexOptions {
+            fuzzy: query.fuzzy,
+            include_assets: false,
+            include_contents: false,
+            include_diagnostics: false,
+            include_files: false,
+            include_graph: false,
+            include_passage_names: query.include_passage_names,
+            include_passage_text: query.include_passage_text,
+            include_script: query.include_script,
+            include_stylesheet: query.include_stylesheet,
+            include_tags: false,
+            include_variables: false,
+            match_case: query.match_case,
+            query: Some(query.query),
+            replacement: query.replacement,
+            use_regexes: query.use_regexes,
+            ..CoreStoryIndexOptions::default()
+        };
+        let pattern = search_pattern(&options);
+        let story = self.story(story_id)?;
+        let mut hits = Vec::new();
+
+        for passage in story.passages.iter() {
+            if options.include_passage_names {
+                hits.extend(search_hits_in_source(
+                    &options,
+                    pattern.as_ref(),
+                    passage.id.as_ref(),
+                    &passage.name,
+                    &passage.name,
+                    CoreSearchScope::PassageName,
+                    Some(passage.id.as_ref()),
+                ));
+            }
+            if options.include_passage_text {
+                hits.extend(search_hits_in_source(
+                    &options,
+                    pattern.as_ref(),
+                    passage.id.as_ref(),
+                    &passage.name,
+                    &passage.text,
+                    CoreSearchScope::PassageText,
+                    Some(passage.id.as_ref()),
+                ));
+            }
+        }
+
+        if options.include_script {
+            let source_id = format!("{}:script", story.id.as_ref());
+
+            hits.extend(search_hits_in_source(
+                &options,
+                pattern.as_ref(),
+                &source_id,
+                "Story JavaScript",
+                &story.script,
+                CoreSearchScope::Script,
+                None,
+            ));
+        }
+        if options.include_stylesheet {
+            let source_id = format!("{}:stylesheet", story.id.as_ref());
+
+            hits.extend(search_hits_in_source(
+                &options,
+                pattern.as_ref(),
+                &source_id,
+                "Story Stylesheet",
+                &story.stylesheet,
+                CoreSearchScope::Stylesheet,
+                None,
+            ));
+        }
+
+        hits.sort_by(|left, right| {
+            right
+                .rank
+                .total_cmp(&left.rank)
+                .then_with(|| left.source_name.cmp(&right.source_name))
+                .then_with(|| left.line.cmp(&right.line))
+                .then_with(|| left.start.cmp(&right.start))
+        });
+        hits.truncate(MAX_SEARCH_HITS);
+        let total_count = hits.len();
+        let (search_hits, next_cursor) =
+            read_model_page(hits, offset, query.limit, revision, cursor_fingerprint);
+        let replace_previews = search_hits
+            .iter()
+            .filter_map(CoreReplacePreview::from_hit)
+            .collect();
+
+        Ok(CoreSearchPage {
+            next_cursor,
+            replace_previews,
+            revision,
+            search_hits,
+            story_id: story_id.to_owned(),
+            total_count,
+        })
+    }
+
+    pub fn diagnostics_page(
+        &mut self,
+        story_id: &str,
+        query: CoreDiagnosticsQuery,
+    ) -> Result<CoreDiagnosticsPage, CoreError> {
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let cursor_fingerprint = read_model_query_fingerprint(&query, |query| {
+            query.cursor = None;
+        });
+        let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
+        let diagnostics = self
+            .read_model(story_id)?
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                query
+                    .severity
+                    .as_ref()
+                    .is_none_or(|severity| diagnostic.severity == *severity)
+            })
+            .collect::<Vec<_>>();
+        let total_count = diagnostics.len();
+        let (diagnostics, next_cursor) = read_model_page_refs(
+            diagnostics,
+            offset,
+            query.limit,
+            revision,
+            cursor_fingerprint,
+        );
+
+        Ok(CoreDiagnosticsPage {
+            diagnostics,
+            next_cursor,
+            revision,
+            story_id: story_id.to_owned(),
+            total_count,
+        })
+    }
+
+    pub fn assets_page(
+        &mut self,
+        story_id: &str,
+        query: CoreAssetsQuery,
+    ) -> Result<CoreAssetsPage, CoreError> {
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let cursor_fingerprint = read_model_query_fingerprint(&query, |query| {
+            query.cursor = None;
+        });
+        let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
+        let mut assets = self
+            .read_model(story_id)?
+            .asset_inventory
+            .iter()
+            .collect::<Vec<_>>();
+        if let Some(search) = normalized_read_model_query(query.query.as_deref()) {
+            assets.retain(|asset| asset.path.to_lowercase().contains(&search));
+        }
+        let total_count = assets.len();
+        let (assets, next_cursor) =
+            read_model_page_refs(assets, offset, query.limit, revision, cursor_fingerprint);
+
+        Ok(CoreAssetsPage {
+            assets,
+            next_cursor,
+            revision,
+            story_id: story_id.to_owned(),
+            total_count,
+        })
+    }
+
+    pub fn passage_facts(
+        &mut self,
+        story_id: &str,
+        passage_id: &str,
+    ) -> Result<CorePassageFacts, CoreError> {
+        let passage_id = PassageId::new(passage_id);
+        let (story_id, passage_name, passage_text, passage_tags, duplicate_name) = {
+            let story = self.story(story_id)?;
+            let passage = story
+                .passage_by_id(&passage_id)
+                .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+
+            (
+                story.id.clone(),
+                passage.name.clone(),
+                passage.text.clone(),
+                passage.tags.clone(),
+                story
+                    .passages
+                    .iter()
+                    .filter(|candidate| candidate.name == passage.name)
+                    .nth(1)
+                    .is_some(),
+            )
+        };
+        let analysis = self.source_analysis(
+            &story_id,
+            passage_id.as_ref(),
+            &passage_name,
+            &passage_text,
+            CoreSourceKind::Passage,
+            Some(passage_id.as_ref()),
+            &passage_tags,
+            CoreSearchScope::PassageText,
+        );
+        self.ensure_graph_cache(&story_id)?;
+        let graph = &self
+            .graph_cache
+            .get(&story_id)
+            .expect("graph cache was initialized")
+            .graph;
+        let links = graph
+            .links_from(&passage_id)
+            .iter()
+            .map(core_passage_link_fact)
+            .collect();
+        let backlinks = graph
+            .backlinks_to(&passage_id)
+            .iter()
+            .flat_map(|source_id| graph.links_from(source_id))
+            .filter(|edge| edge.target.as_ref() == Some(&passage_id))
+            .map(core_passage_link_fact)
+            .collect();
+        let mut diagnostics = graph
+            .broken_links()
+            .iter()
+            .filter(|broken_link| broken_link.source == passage_id)
+            .map(|broken_link| {
+                let (line, start, end) = locate_link_target(
+                    &passage_text,
+                    &broken_link.target_name,
+                )
+                .unwrap_or((1, 0, broken_link.target_name.len()));
+
+                CoreDiagnostic {
+                    code: "broken-link".into(),
+                    end,
+                    line,
+                    message: format!("Broken link to \"{}\"", broken_link.target_name),
+                    passage_id: Some(passage_id.as_ref().to_owned()),
+                    quick_fixes: vec![
+                        CoreQuickFix {
+                            command: format!("create-passage:{}", broken_link.target_name),
+                            title: format!("Create \"{}\"", broken_link.target_name),
+                        },
+                        CoreQuickFix {
+                            command: "rename-link-target".into(),
+                            title: "Change link target".into(),
+                        },
+                    ],
+                    severity: CoreDiagnosticSeverity::Warning,
+                    source_id: passage_id.as_ref().to_owned(),
+                    start,
+                }
+            })
+            .collect::<Vec<_>>();
+        if duplicate_name {
+            diagnostics.push(CoreDiagnostic {
+                code: "duplicate-passage-name".into(),
+                end: passage_name.len(),
+                line: 1,
+                message: format!("Duplicate passage name \"{}\"", passage_name),
+                passage_id: Some(passage_id.as_ref().to_owned()),
+                quick_fixes: vec![CoreQuickFix {
+                    command: "rename-passage".into(),
+                    title: "Rename passage".into(),
+                }],
+                severity: CoreDiagnosticSeverity::Error,
+                source_id: passage_id.as_ref().to_owned(),
+                start: 0,
+            });
+        }
+
+        Ok(CorePassageFacts {
+            asset_references: analysis.assets,
+            backlinks,
+            diagnostics,
+            links,
+            passage_id: passage_id.as_ref().to_owned(),
+            revision: self.revision().min(u32::MAX as u64) as u32,
+            story_id: story_id.as_ref().to_owned(),
+            symbols: analysis.symbols,
+        })
+    }
+
+    /// Lazily initializes topology once for bounded graph and passage-fact reads.
+    /// Mutations update this cache through `update_graph_cache`, so focused reads
+    /// never construct a second graph from the complete story.
+    fn ensure_graph_cache(&mut self, story_id: &StoryId) -> Result<(), CoreError> {
+        if self.graph_cache.contains_key(story_id) {
+            return Ok(());
+        }
+
+        let story = self.story(story_id.as_ref())?.clone();
+        let graph = GraphIndex::from_story(&story);
+        let layout =
+            graph.layout_snapshot(&story, &self.project.layout, &AutoLayoutOptions::default());
+
+        self.graph_cache
+            .insert(story_id.clone(), GraphSessionCache { graph, layout });
+        Ok(())
     }
 
     fn asset_root(&self) -> Result<&Path, CoreError> {
@@ -4973,6 +6508,194 @@ fn story_metadata_diff_patch(before: &Story, after: &Story) -> StoryMetadataPatc
 
 fn default_true() -> bool {
     true
+}
+
+fn default_read_model_page_limit() -> usize {
+    100
+}
+
+const MAX_READ_MODEL_PAGE_LIMIT: usize = 250;
+
+fn read_model_query_fingerprint<T>(query: &T, clear_cursor: impl FnOnce(&mut T)) -> u64
+where
+    T: Clone + Serialize,
+{
+    let mut normalized = query.clone();
+
+    clear_cursor(&mut normalized);
+    fingerprint(&normalized)
+}
+
+fn read_model_page_offset(
+    cursor: Option<&str>,
+    revision: u32,
+    query_fingerprint: u64,
+) -> Result<usize, CoreError> {
+    let Some(cursor) = cursor else {
+        return Ok(0);
+    };
+    let mut parts = cursor.split(':');
+    let (Some(cursor_revision), Some(cursor_fingerprint), Some(offset), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(CoreError::StaleReadModelCursor);
+    };
+
+    match (
+        cursor_revision.parse::<u32>(),
+        cursor_fingerprint.parse::<u64>(),
+        offset.parse::<usize>(),
+    ) {
+        (Ok(cursor_revision), Ok(cursor_fingerprint), Ok(offset))
+            if cursor_revision == revision && cursor_fingerprint == query_fingerprint =>
+        {
+            Ok(offset)
+        }
+        _ => Err(CoreError::StaleReadModelCursor),
+    }
+}
+
+fn read_model_page<T>(
+    values: Vec<T>,
+    offset: usize,
+    requested_limit: usize,
+    revision: u32,
+    query_fingerprint: u64,
+) -> (Vec<T>, Option<String>) {
+    let limit = requested_limit.clamp(1, MAX_READ_MODEL_PAGE_LIMIT);
+    let offset = offset.min(values.len());
+    let end = (offset + limit).min(values.len());
+    let next_cursor = (end < values.len()).then(|| format!("{revision}:{query_fingerprint}:{end}"));
+
+    (
+        values.into_iter().skip(offset).take(end - offset).collect(),
+        next_cursor,
+    )
+}
+
+/// Pages a borrowed cache without cloning every cached record first. The
+/// temporary vector contains references only; the response owns at most the
+/// requested page size.
+fn read_model_page_refs<T: Clone>(
+    values: Vec<&T>,
+    offset: usize,
+    requested_limit: usize,
+    revision: u32,
+    query_fingerprint: u64,
+) -> (Vec<T>, Option<String>) {
+    let limit = requested_limit.clamp(1, MAX_READ_MODEL_PAGE_LIMIT);
+    let offset = offset.min(values.len());
+    let end = (offset + limit).min(values.len());
+    let next_cursor = (end < values.len()).then(|| format!("{revision}:{query_fingerprint}:{end}"));
+
+    (
+        values[offset..end]
+            .iter()
+            .map(|value| (*value).clone())
+            .collect(),
+        next_cursor,
+    )
+}
+
+fn normalized_read_model_query(query: Option<&str>) -> Option<String> {
+    query
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+        .map(str::to_lowercase)
+}
+
+fn contents_group(kind: &CoreContentsEntryKind) -> &'static str {
+    match kind {
+        CoreContentsEntryKind::Passage => "Passages",
+        CoreContentsEntryKind::Group | CoreContentsEntryKind::Tag => "Tags",
+        CoreContentsEntryKind::Variable => "Variables",
+        CoreContentsEntryKind::Asset => "Assets",
+        CoreContentsEntryKind::BrokenLink
+        | CoreContentsEntryKind::Diagnostic
+        | CoreContentsEntryKind::Orphan => "Diagnostics",
+        CoreContentsEntryKind::EntryPoint
+        | CoreContentsEntryKind::Metadata
+        | CoreContentsEntryKind::Script
+        | CoreContentsEntryKind::Stylesheet => "Project",
+    }
+}
+
+fn contents_filter_matches(entry: &CoreContentsEntry, filter: &CoreContentsFilter) -> bool {
+    match filter {
+        CoreContentsFilter::All => true,
+        CoreContentsFilter::Asset => entry.kind == CoreContentsEntryKind::Asset,
+        CoreContentsFilter::Diagnostics => matches!(
+            entry.kind,
+            CoreContentsEntryKind::BrokenLink
+                | CoreContentsEntryKind::Diagnostic
+                | CoreContentsEntryKind::Orphan
+        ),
+        CoreContentsFilter::EntryPoint => entry.kind == CoreContentsEntryKind::EntryPoint,
+        CoreContentsFilter::Group => entry.kind == CoreContentsEntryKind::Group,
+        CoreContentsFilter::Metadata => entry.kind == CoreContentsEntryKind::Metadata,
+        CoreContentsFilter::Passage => entry.kind == CoreContentsEntryKind::Passage,
+        CoreContentsFilter::Problems => entry.severity.is_some(),
+        CoreContentsFilter::Script => entry.kind == CoreContentsEntryKind::Script,
+        CoreContentsFilter::Stylesheet => entry.kind == CoreContentsEntryKind::Stylesheet,
+        CoreContentsFilter::Tag => entry.kind == CoreContentsEntryKind::Tag,
+        CoreContentsFilter::Variable => entry.kind == CoreContentsEntryKind::Variable,
+    }
+}
+
+fn contents_facets(entries: &[CoreContentsEntry]) -> CoreContentsFacets {
+    let mut facets = CoreContentsFacets {
+        all: entries.len(),
+        ..CoreContentsFacets::default()
+    };
+
+    for entry in entries {
+        match entry.kind {
+            CoreContentsEntryKind::Asset => facets.asset += 1,
+            CoreContentsEntryKind::BrokenLink
+            | CoreContentsEntryKind::Diagnostic
+            | CoreContentsEntryKind::Orphan => facets.diagnostics += 1,
+            CoreContentsEntryKind::EntryPoint => facets.entry_point += 1,
+            CoreContentsEntryKind::Group => facets.group += 1,
+            CoreContentsEntryKind::Metadata => facets.metadata += 1,
+            CoreContentsEntryKind::Passage => facets.passage += 1,
+            CoreContentsEntryKind::Script => facets.script += 1,
+            CoreContentsEntryKind::Stylesheet => facets.stylesheet += 1,
+            CoreContentsEntryKind::Tag => facets.tag += 1,
+            CoreContentsEntryKind::Variable => facets.variable += 1,
+        }
+        if entry.severity.is_some() {
+            facets.problems += 1;
+        }
+    }
+
+    facets
+}
+
+fn sort_contents_entry_refs(entries: &mut [&CoreContentsEntry], sort: &CoreContentsSort) {
+    entries.sort_by(|left, right| match sort {
+        CoreContentsSort::Group => contents_group(&left.kind)
+            .cmp(contents_group(&right.kind))
+            .then_with(|| left.label.cmp(&right.label)),
+        CoreContentsSort::Issues => right
+            .severity
+            .is_some()
+            .cmp(&left.severity.is_some())
+            .then_with(|| contents_group(&left.kind).cmp(contents_group(&right.kind)))
+            .then_with(|| left.label.cmp(&right.label)),
+        CoreContentsSort::Name => left.label.cmp(&right.label),
+    });
+}
+
+fn core_passage_link_fact(edge: &LinkEdge) -> CorePassageLinkFact {
+    CorePassageLinkFact {
+        broken: edge.target.is_none(),
+        source_id: edge.source.as_ref().to_owned(),
+        target_id: edge
+            .target
+            .as_ref()
+            .map(|target| target.as_ref().to_owned()),
+        target_name: edge.target_name.clone(),
+    }
 }
 
 fn default_zoom() -> f64 {
@@ -7455,6 +9178,187 @@ mod tests {
                 .search_hits
                 .iter()
                 .any(|hit| hit.source_name == "Next")
+        );
+    }
+
+    #[test]
+    fn read_model_pages_are_bounded_and_revision_bound() {
+        let mut session = session();
+        let first = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    limit: 1,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("first contents page");
+
+        assert_eq!(first.entries.len(), 1);
+        assert!(first.total_count > first.entries.len());
+        assert!(first.facets.all >= first.total_count);
+        let cursor = first.next_cursor.expect("second contents page cursor");
+        let second = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    cursor: Some(cursor.clone()),
+                    limit: 1,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("second contents page");
+
+        assert_eq!(second.entries.len(), 1);
+        assert_ne!(first.entries[0].id, second.entries[0].id);
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "changed".into(),
+            })
+            .expect("mutation should apply");
+        assert_eq!(
+            session.contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    cursor: Some(cursor),
+                    limit: 1,
+                    ..CoreContentsQuery::default()
+                }
+            ),
+            Err(CoreError::StaleReadModelCursor)
+        );
+    }
+
+    #[test]
+    fn direct_search_page_does_not_build_a_compatibility_index() {
+        let mut session = session();
+        let baseline_parse_count = session.analysis_parse_count;
+
+        let page = session
+            .search_page(
+                "story-1",
+                CoreSearchQuery {
+                    include_passage_names: true,
+                    include_passage_text: true,
+                    query: "missing".into(),
+                    ..CoreSearchQuery::default()
+                },
+            )
+            .expect("search page should query source text directly");
+
+        assert!(!page.search_hits.is_empty());
+        assert_eq!(session.analysis_parse_count, baseline_parse_count);
+        assert!(session.analysis_cache.is_empty());
+    }
+
+    #[test]
+    fn read_model_keeps_bounded_records_and_revisions_them() {
+        let mut session = session();
+
+        session
+            .contents_page("story-1", CoreContentsQuery::default())
+            .expect("contents page should initialize cache");
+        let story_id = StoryId::new("story-1");
+        let initial_revision = session.revision();
+        let cache = session
+            .read_model_cache
+            .get(&story_id)
+            .expect("read model cache should exist");
+
+        assert_eq!(cache.revision, initial_revision);
+        assert!(!cache.contents.is_empty());
+        assert!(cache.asset_inventory.is_empty());
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "changed".into(),
+            })
+            .expect("mutation should apply");
+        session
+            .contents_page("story-1", CoreContentsQuery::default())
+            .expect("contents page should rebuild at new revision");
+        assert_eq!(
+            session
+                .read_model_cache
+                .get(&story_id)
+                .expect("read model cache should refresh")
+                .revision,
+            session.revision()
+        );
+    }
+
+    #[test]
+    fn read_model_passage_facts_use_cached_source_analysis() {
+        let mut session = session();
+        let baseline = session.analysis_parse_count;
+
+        let facts = session
+            .passage_facts("story-1", "b")
+            .expect("passage facts should load");
+
+        assert_eq!(facts.passage_id, "b");
+        assert!(facts.links.iter().any(|link| link.target_name == "Missing"));
+        assert!(
+            facts
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "broken-link")
+        );
+        assert!(session.analysis_parse_count > baseline);
+    }
+
+    #[test]
+    fn external_passage_text_reuses_incremental_cache_and_history() {
+        let mut session = session();
+
+        session
+            .story_index("story-1", CoreStoryIndexOptions::default())
+            .expect("initial index should populate source cache");
+        let initial_parse_count = session.analysis_parse_count;
+        let result = session
+            .ingest_external_delta(
+                CoreExternalDelta {
+                    changes: vec![CoreExternalChange::UpdatePassage {
+                        changes: PassagePatch {
+                            text: Some("Disk edit [[Next]]".into()),
+                            ..PassagePatch::default()
+                        },
+                        passage_id: "a".into(),
+                        story_id: "story-1".into(),
+                    }],
+                    id: "external-passage-text".into(),
+                },
+                CoreExternalIngestMode::Auto,
+            )
+            .expect("external text delta should apply");
+
+        assert_eq!(result.outcome, CoreExternalIngestOutcome::Applied);
+        assert!(result.history_recorded);
+        assert_eq!(session.analysis_parse_count, initial_parse_count + 1);
+        assert_eq!(
+            session
+                .project()
+                .stories
+                .iter()
+                .find(|story| story.id == StoryId::new("story-1"))
+                .and_then(|story| story.passage_by_id(&PassageId::new("a")))
+                .map(|passage| passage.text.as_str()),
+            Some("Disk edit [[Next]]")
+        );
+        session.undo().expect("external text delta should undo");
+        assert_eq!(
+            session
+                .project()
+                .stories
+                .iter()
+                .find(|story| story.id == StoryId::new("story-1"))
+                .and_then(|story| story.passage_by_id(&PassageId::new("a")))
+                .map(|passage| passage.text.as_str()),
+            Some("[[Next]] [[Label->Next]] [[Next<-Back]]")
         );
     }
 

@@ -13,7 +13,7 @@ fixture isolation.
 
 ## Work order
 
-### 1. Bounded startup read model
+### 1. Bounded startup read model — in progress
 
 - Profile native project load, renderer hydration, session initialization, and
   first-route queries independently.
@@ -23,11 +23,17 @@ fixture isolation.
 - Remove redundant full-project serialization and frontend work before the first
   useful viewport.
 - Preserve one project session and no post-initialization `replaceProject`.
+- The first cut is live: generated Rust/WASM queries now provide story
+  summaries, revision-bound Contents/search/diagnostics/assets pages, and
+  selected-passage facts. Large Contents no longer performs the old idle full
+  index load, and default full-index calls are statically prohibited from
+  product code. Remaining work is to replace compatibility shells and measure
+  the resulting 50k startup/query phases.
 
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.
 
-### 2. Incremental indexing and edit-to-paint
+### 2. Incremental indexing and edit-to-paint — in progress
 
 - The first incremental project-folder write is complete: a passage text edit
   writes one file in place, checks its accepted fingerprint, patches the native
@@ -41,6 +47,10 @@ with unchanged structural assertions.
   must use the same forward/inverse cache-delta path.
 - Keep one persistence notification per committed patch batch and exact
   revision acknowledgement.
+- The hot local and external one-passage text paths now record an entity delta
+  and reuse source/graph caches instead of cloning and diffing the entire
+  project. Broader command families and recovery still retain compatibility
+  fallbacks and should be narrowed before this item is considered complete.
 
 Exit signal: a one-passage edit or external delta does no project-scale index
 rebuild; edit-to-paint and watcher ingestion materially improve against the

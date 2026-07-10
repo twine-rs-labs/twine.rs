@@ -8,7 +8,7 @@ import {
 	loadDismissedDiagnosticIds,
 	useCoreProjectHost
 } from '../../core';
-import type {CoreStoryIndex} from '../../core';
+import type {CoreDiagnostic} from '../../core/bindings/CoreDiagnostic';
 import {storyFileName} from '../../electron/shared';
 import {useStorySaveStatus} from '../../store/persistence/save-status';
 import {usePrefsContext} from '../../store/prefs';
@@ -19,7 +19,10 @@ import {usePublishing} from '../../store/use-publishing';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {saveHtml, saveTwee} from '../../util/save-file';
 import {storyToTwee} from '../../util/twee';
-import {recordPerformanceHarnessEvent} from '../../util/performance';
+import {
+	markPerformance,
+	recordPerformanceHarnessEvent
+} from '../../util/performance';
 import {
 	Badge,
 	Button,
@@ -194,7 +197,7 @@ export const AppShell: React.FC = ({children}) => {
 	const [dirty, setDirty] = React.useState(() => coreProjectHost.isDirty());
 	const [patchVersion, setPatchVersion] = React.useState(0);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
-	const [storyIndex, setStoryIndex] = React.useState<CoreStoryIndex>();
+	const [diagnostics, setDiagnostics] = React.useState<CoreDiagnostic[]>([]);
 	const storySaveStatus = useStorySaveStatus();
 	const [buildState, setBuildState] = React.useState<BuildState>({
 		kind: 'idle',
@@ -226,17 +229,14 @@ export const AppShell: React.FC = ({children}) => {
 	);
 	const activeDiagnostics = React.useMemo(
 		() =>
-			storyIndex
-				? storyIndex.diagnostics.filter(
-						diagnostic =>
-							!dismissedDiagnosticIds.has(diagnosticIdentity(diagnostic))
-					)
-				: [],
-		[dismissedDiagnosticIds, storyIndex]
+			diagnostics.filter(
+				diagnostic =>
+					!dismissedDiagnosticIds.has(diagnosticIdentity(diagnostic))
+			),
+		[diagnostics, dismissedDiagnosticIds]
 	);
 	const diagnosticCount = activeDiagnostics.length;
-	const dismissedDiagnosticCount =
-		(storyIndex?.diagnostics.length ?? 0) - diagnosticCount;
+	const dismissedDiagnosticCount = diagnostics.length - diagnosticCount;
 	const wordCount = storyWordCount(currentStory);
 	const crumbLabels = breadcrumbs(pathname, currentStory, mode);
 	const storyOpenProgress = React.useMemo<StoryOpenProgress | undefined>(() => {
@@ -266,19 +266,21 @@ export const AppShell: React.FC = ({children}) => {
 		let active = true;
 
 		if (!currentStory || !shouldQueryDiagnostics) {
-			setStoryIndex(undefined);
+			setDiagnostics([]);
 			return () => {
 				active = false;
 			};
 		}
 
-		setStoryIndex(undefined);
+		setDiagnostics([]);
 
-		void coreProjectHost.queryStoryIndexAsync(currentStory.id).then(index => {
-			if (active) {
-				setStoryIndex(index);
-			}
-		});
+		void coreProjectHost
+			.queryDiagnosticsPageAsync(currentStory.id)
+			.then(page => {
+				if (active) {
+					setDiagnostics(page.diagnostics);
+				}
+			});
 
 		return () => {
 			active = false;
@@ -308,19 +310,12 @@ export const AppShell: React.FC = ({children}) => {
 		setDirty(coreProjectHost.isDirty());
 
 		return coreProjectHost.subscribeToPatches(batch => {
-			let sawStoryIndexPatch = false;
-
 			for (const patch of batch.patches) {
 				if (patch.type === 'dirtyStateChanged') {
 					setDirty(patch.dirty);
-				} else if (patch.type === 'storyIndexUpdated') {
-					sawStoryIndexPatch = true;
 				}
 			}
-
-			if (sawStoryIndexPatch) {
-				setPatchVersion(version => version + 1);
-			}
+			setPatchVersion(version => version + 1);
 		});
 	}, [coreProjectHost, stories]);
 
@@ -512,8 +507,12 @@ export const AppShell: React.FC = ({children}) => {
 				icon: 'list-tree',
 				id: 'nav.contents',
 				label: 'Contents',
-				run: () =>
-					currentStory && history.push(`/stories/${currentStory.id}/contents`)
+				run: () => {
+					if (currentStory) {
+						markPerformance('contents-navigation-start');
+						history.push(`/stories/${currentStory.id}/contents`);
+					}
+				}
 			},
 			{
 				disabled: !currentStory,
@@ -747,10 +746,12 @@ export const AppShell: React.FC = ({children}) => {
 						}
 						className="app-shell__rail-button"
 						disabled={!currentStory}
-						onClick={() =>
-							currentStory &&
-							history.push(`/stories/${currentStory.id}/contents`)
-						}
+						onClick={() => {
+							if (currentStory) {
+								markPerformance('contents-navigation-start');
+								history.push(`/stories/${currentStory.id}/contents`);
+							}
+						}}
 						title="Contents"
 						type="button"
 					>

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {useHistory, useParams} from 'react-router-dom';
 import {useCoreProjectHost} from '../../core';
-import type {CoreStoryIndex} from '../../core';
+import type {CoreStorySummary} from '../../core';
 import {usePublishing} from '../../store/use-publishing';
 import {useStoriesContext} from '../../store/stories';
 import {StoryPreviewFrame} from '../story-preview-frame';
@@ -21,7 +21,7 @@ export const StoryTestRoute: React.FC = () => {
 	const {publishStory} = usePublishing();
 	const coreProjectHost = useCoreProjectHost();
 	const publishStoryRef = React.useRef(publishStory);
-	const [index, setIndex] = React.useState<CoreStoryIndex>();
+	const [summary, setSummary] = React.useState<CoreStorySummary>();
 	const {stories} = useStoriesContext();
 	const story = stories.find(story => story.id === storyId);
 	const storyExists = !!story;
@@ -40,17 +40,17 @@ export const StoryTestRoute: React.FC = () => {
 		let active = true;
 
 		if (!story) {
-			setIndex(undefined);
+			setSummary(undefined);
 			return () => {
 				active = false;
 			};
 		}
 
-		setIndex(undefined);
+		setSummary(undefined);
 
-		void coreProjectHost.queryStoryIndexAsync(story.id).then(index => {
+		void coreProjectHost.queryStorySummaryAsync(story.id).then(summary => {
 			if (active) {
-				setIndex(index);
+				setSummary(summary);
 			}
 		});
 
@@ -100,7 +100,7 @@ export const StoryTestRoute: React.FC = () => {
 
 	return (
 		<StoryPreviewFrame
-			debugMetrics={storyPreviewDebugMetrics(index)}
+			debugMetrics={storyPreviewDebugMetrics(summary)}
 			error={publishError}
 			html={html}
 			missingStoryMessage={`There is no story with ID "${storyId}".`}

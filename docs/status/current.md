@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-10
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -29,6 +29,9 @@ phase is optimization and release validation, not another ownership migration.
 - Rust import/export, graph, storage, search, and CLI crates.
 - Deterministic 10k/50k release-mode Electron benchmark fixtures and local
   machine baselines.
+- Generated bounded Rust/WASM read-model contracts for summaries, cursor pages,
+  and selected-passage facts; large Contents no longer eagerly transfers a
+  full story index.
 
 ## Proven structural properties
 
@@ -49,6 +52,9 @@ The complete local 10k and 50k benchmark runs verify:
 - The 50k path is structurally correct but substantially misses most absolute
   latency and memory targets.
 - React still retains a complete patch-applied project mirror.
+- Some compatibility routes and broad command families still use scoped full
+  indexes or broad session deltas; they are not part of the large-story default
+  startup path and remain optimization work.
 - Preview/debug runtime inspection is not yet complete across all desktop
   surfaces.
 - Some inherited legacy UI and compatibility code remains available outside the

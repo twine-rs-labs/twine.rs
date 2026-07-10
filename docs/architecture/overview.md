@@ -2,12 +2,19 @@
 
 Status: current
 Owner: architecture maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-10
 Source of truth: live Electron, React, WASM, and Rust integration
 
 `twine.rs` is a React/Electron editor backed by a shared Rust project model.
 Rust owns persisted project semantics. TypeScript owns presentation and
 transient interaction state.
+
+Interactive product routes use typed read models rather than a default complete
+`CoreStoryIndex`: compact summaries provide shell health, cursor pages provide
+Contents/search/diagnostics/assets, and selected-passage facts provide the
+inspector. `CoreStoryIndex` remains a compatibility and explicit
+non-interactive-workflow contract; product code is guarded against issuing it
+without scoped options.
 
 ## Runtime shape
 

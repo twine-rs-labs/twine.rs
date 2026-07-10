@@ -19,7 +19,7 @@ import {
 	storyLinkFacts,
 	useCoreProjectHost
 } from '../../core';
-import type {CoreStoryIndex} from '../../core';
+import type {CoreStorySummary} from '../../core';
 import {
 	AppDonationDialog,
 	DialogsContextProvider,
@@ -63,16 +63,12 @@ function allTags(stories: Story[]) {
 	return Array.from(new Set(stories.flatMap(story => story.tags))).sort();
 }
 
-function storyHealth(index: CoreStoryIndex | undefined) {
-	if (!index) {
+function storyHealth(summary: CoreStorySummary | undefined) {
+	if (!summary) {
 		return {brokenLinks: 0, errors: 0};
 	}
 
-	const errors = index.diagnostics.filter(
-		diagnostic => diagnostic.severity === 'error'
-	).length;
-
-	return {brokenLinks: index.graph.brokenLinks, errors};
+	return {brokenLinks: summary.graph.brokenLinks, errors: summary.errorCount};
 }
 
 function desktopBridge() {
@@ -141,30 +137,18 @@ function ProjectMiniMap({story}: {story: Story}) {
 
 function HealthBadges({story}: {story: Story}) {
 	const coreProjectHost = useCoreProjectHost();
-	const [index, setIndex] = React.useState<CoreStoryIndex>();
-	const health = storyHealth(index);
+	const [summary, setSummary] = React.useState<CoreStorySummary>();
+	const health = storyHealth(summary);
 
 	React.useEffect(() => {
 		let active = true;
 
-		setIndex(undefined);
-		void coreProjectHost
-			.queryStoryIndexAsync(story.id, {
-				includeAssets: false,
-				includeContents: false,
-				includeFiles: false,
-				includePassageNames: false,
-				includePassageText: false,
-				includeScript: false,
-				includeStylesheet: false,
-				includeTags: false,
-				includeVariables: false
-			})
-			.then(index => {
-				if (active) {
-					setIndex(index);
-				}
-			});
+		setSummary(undefined);
+		void coreProjectHost.queryStorySummaryAsync(story.id).then(summary => {
+			if (active) {
+				setSummary(summary);
+			}
+		});
 
 		return () => {
 			active = false;

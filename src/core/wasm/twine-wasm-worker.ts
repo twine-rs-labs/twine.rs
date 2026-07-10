@@ -205,6 +205,48 @@ async function handleRequest(
 				).session.query_story_index(request.storyId, request.options);
 				break;
 
+			case 'queryStorySummary':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_story_summary(request.storyId);
+				break;
+
+			case 'queryContentsPage':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_contents_page(request.storyId, request.options);
+				break;
+
+			case 'querySearchPage':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_search_page(request.storyId, request.options);
+				break;
+
+			case 'queryDiagnosticsPage':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_diagnostics_page(request.storyId, request.options);
+				break;
+
+			case 'queryAssetsPage':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_assets_page(request.storyId, request.options);
+				break;
+
+			case 'queryPassageFacts':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_passage_facts(request.storyId, request.passageId);
+				break;
+
 			case 'removeSession': {
 				const removed = sessions.get(request.sessionId);
 

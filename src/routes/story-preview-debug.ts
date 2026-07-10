@@ -1,6 +1,6 @@
 import type * as React from 'react';
 import type {BadgeTone} from '../components/design-system';
-import type {CoreStoryIndex} from '../core';
+import type {CoreStorySummary} from '../core';
 
 export const STORY_PREVIEW_BRIDGE_SOURCE = 'twine.rs.preview.bridge';
 
@@ -344,12 +344,12 @@ export function instrumentPreviewHtml(html: string, sessionId: string) {
 	return `${script}${html}`;
 }
 
-function diagnosticTone(index: CoreStoryIndex): BadgeTone {
-	if (index.diagnostics.some(diagnostic => diagnostic.severity === 'error')) {
+function diagnosticTone(summary: CoreStorySummary): BadgeTone {
+	if (summary.errorCount > 0) {
 		return 'error';
 	}
 
-	if (index.diagnostics.some(diagnostic => diagnostic.severity === 'warning')) {
+	if (summary.warningCount > 0) {
 		return 'warn';
 	}
 
@@ -357,33 +357,31 @@ function diagnosticTone(index: CoreStoryIndex): BadgeTone {
 }
 
 export function storyPreviewDebugMetrics(
-	index: CoreStoryIndex | undefined
+	summary: CoreStorySummary | undefined
 ): StoryPreviewDebugMetric[] {
-	if (!index) {
+	if (!summary) {
 		return [];
 	}
 
-	const missingAssets = index.assetInventory.filter(
-		asset => asset.missing
-	).length;
+	const missingAssets = summary.missingAssetCount;
 
 	return [
 		{
 			icon: 'files',
 			label: 'passages',
-			value: index.graph.passages
+			value: summary.graph.passages
 		},
 		{
 			icon: 'link',
 			label: 'links',
 			tone: 'link',
-			value: index.graph.resolvedLinks
+			value: summary.graph.resolvedLinks
 		},
 		{
 			icon: 'unlink',
 			label: 'broken',
-			tone: index.graph.brokenLinks > 0 ? 'error' : 'neutral',
-			value: index.graph.brokenLinks
+			tone: summary.graph.brokenLinks > 0 ? 'error' : 'neutral',
+			value: summary.graph.brokenLinks
 		},
 		{
 			icon: 'photo',
@@ -391,14 +389,14 @@ export function storyPreviewDebugMetrics(
 			tone: missingAssets > 0 ? 'warn' : 'neutral',
 			value:
 				missingAssets > 0
-					? `${missingAssets}/${index.assetInventory.length}`
-					: index.assetInventory.length
+					? `${missingAssets}/${summary.assetCount}`
+					: summary.assetCount
 		},
 		{
-			icon: index.diagnostics.length > 0 ? 'alert-triangle' : 'circle-check',
+			icon: summary.diagnosticCount > 0 ? 'alert-triangle' : 'circle-check',
 			label: 'diagnostics',
-			tone: index.diagnostics.length > 0 ? diagnosticTone(index) : 'saved',
-			value: index.diagnostics.length
+			tone: summary.diagnosticCount > 0 ? diagnosticTone(summary) : 'saved',
+			value: summary.diagnosticCount
 		}
 	];
 }

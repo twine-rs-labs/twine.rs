@@ -138,6 +138,12 @@ interface AsyncProjectionState {
 	storyId: string;
 }
 
+interface MinimapTransform {
+	scale: number;
+	x: number;
+	y: number;
+}
+
 const minimapSize = {height: 120, width: 170};
 const largeStoryPassageCount = 500;
 const maxExcerptNodes = 160;
@@ -808,6 +814,113 @@ const GraphEdgesCanvas: React.FC<GraphEdgesCanvasProps> = ({
 	);
 };
 
+const GraphMinimapCanvas: React.FC<{
+	logicalBounds: CoreRect | null;
+	minimap: MinimapTransform;
+	optimisticBounds: Record<string, CoreRect>;
+	orientation: GraphOrientation;
+	selectedNodeIds: Set<string>;
+	story: Story;
+}> = ({
+	logicalBounds,
+	minimap,
+	optimisticBounds,
+	orientation,
+	selectedNodeIds,
+	story
+}) => {
+	const canvasRef = React.useRef<HTMLCanvasElement>(null);
+
+	React.useEffect(() => {
+		const canvas = canvasRef.current;
+
+		if (!canvas) {
+			return;
+		}
+
+		const width = canvas.clientWidth;
+		const height = canvas.clientHeight;
+
+		if (width < 1 || height < 1) {
+			return;
+		}
+
+		const pixelRatio = window.devicePixelRatio || 1;
+		canvas.width = Math.ceil(width * pixelRatio);
+		canvas.height = Math.ceil(height * pixelRatio);
+		const context = canvas.getContext('2d');
+
+		if (!context) {
+			return;
+		}
+
+		context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+		context.clearRect(0, 0, width, height);
+		const styles = getComputedStyle(canvas);
+		const nodeColor = styles.getPropertyValue('--tx-3').trim() || '#94a3b8';
+		const selectedColor =
+			styles.getPropertyValue('--sel-line').trim() || '#5c97ff';
+		context.fillStyle = nodeColor;
+		context.globalAlpha = 0.7;
+
+		for (const passage of story.passages) {
+			const bounds = optimisticBounds[passage.id] ?? passageRect(passage);
+
+			if (!validRect(bounds)) {
+				continue;
+			}
+
+			const display = displayRect(bounds, orientation, logicalBounds);
+			context.fillRect(
+				display.left * minimap.scale + minimap.x,
+				display.top * minimap.scale + minimap.y,
+				Math.max(4, display.width * minimap.scale),
+				Math.max(3, display.height * minimap.scale)
+			);
+		}
+
+		if (selectedNodeIds.size > 0) {
+			context.fillStyle = selectedColor;
+			context.globalAlpha = 1;
+
+			for (const passage of story.passages) {
+				if (!selectedNodeIds.has(passage.id)) {
+					continue;
+				}
+
+				const bounds = optimisticBounds[passage.id] ?? passageRect(passage);
+
+				if (!validRect(bounds)) {
+					continue;
+				}
+
+				const display = displayRect(bounds, orientation, logicalBounds);
+				context.fillRect(
+					display.left * minimap.scale + minimap.x,
+					display.top * minimap.scale + minimap.y,
+					Math.max(4, display.width * minimap.scale),
+					Math.max(3, display.height * minimap.scale)
+				);
+			}
+		}
+	}, [
+		logicalBounds,
+		minimap,
+		optimisticBounds,
+		orientation,
+		selectedNodeIds,
+		story
+	]);
+
+	return (
+		<canvas
+			aria-hidden
+			className="story-edit-graph-minimap__canvas"
+			ref={canvasRef}
+		/>
+	);
+};
+
 function layoutBadgeTone(state: CoreGraphLayoutState) {
 	return state === 'saved'
 		? 'saved'
@@ -907,7 +1020,7 @@ function interactionBounds(
 	};
 }
 
-function minimapTransform(bounds: CoreRect | null) {
+function minimapTransform(bounds: CoreRect | null): MinimapTransform {
 	if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
 		return {scale: 1, x: 0, y: 0};
 	}
@@ -1265,22 +1378,6 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	const minimap = React.useMemo(
 		() => minimapTransform(displayBounds),
 		[displayBounds]
-	);
-	const minimapNodes = React.useMemo(
-		() =>
-			story.passages.flatMap(passage => {
-				const bounds = optimisticMoveBounds[passage.id] ?? passageRect(passage);
-
-				return validRect(bounds)
-					? [
-							{
-								bounds: displayRect(bounds, orientation, logicalGraphBounds),
-								id: passage.id
-							}
-						]
-					: [];
-			}),
-		[logicalGraphBounds, optimisticMoveBounds, orientation, story.passages]
 	);
 	const showSaveLayoutAction =
 		projection.layoutState !== 'generated' ||
@@ -2765,22 +2862,14 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 					ref={minimapRef}
 				>
 					<div className="story-edit-graph-minimap__surface">
-						{minimapNodes.map(node => (
-							<span
-								className={classNames(
-									'story-edit-graph-minimap__node',
-									displaySelectedIdSet.has(node.id) &&
-										'story-edit-graph-minimap__node--selected'
-								)}
-								key={node.id}
-								style={{
-									height: Math.max(3, node.bounds.height * minimap.scale),
-									left: node.bounds.left * minimap.scale + minimap.x,
-									top: node.bounds.top * minimap.scale + minimap.y,
-									width: Math.max(4, node.bounds.width * minimap.scale)
-								}}
-							/>
-						))}
+						<GraphMinimapCanvas
+							logicalBounds={logicalGraphBounds}
+							minimap={minimap}
+							optimisticBounds={optimisticMoveBounds}
+							orientation={orientation}
+							selectedNodeIds={displaySelectedIdSet}
+							story={story}
+						/>
 						<span
 							className="story-edit-graph-minimap__viewport"
 							style={{

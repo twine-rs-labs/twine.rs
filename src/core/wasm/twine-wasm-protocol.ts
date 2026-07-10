@@ -2,9 +2,19 @@ import type {CoreGraphProjection} from '../bindings/CoreGraphProjection';
 import type {CoreExternalDelta} from '../bindings/CoreExternalDelta';
 import type {CoreExternalIngestResult} from '../bindings/CoreExternalIngestResult';
 import type {CoreGraphProjectionOptions} from '../bindings/CoreGraphProjectionOptions';
+import type {CoreAssetsPage} from '../bindings/CoreAssetsPage';
+import type {CoreAssetsQuery} from '../bindings/CoreAssetsQuery';
+import type {CoreContentsPage} from '../bindings/CoreContentsPage';
+import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
+import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
+import type {CoreDiagnosticsQuery} from '../bindings/CoreDiagnosticsQuery';
+import type {CorePassageFacts} from '../bindings/CorePassageFacts';
+import type {CoreSearchPage} from '../bindings/CoreSearchPage';
+import type {CoreSearchQuery} from '../bindings/CoreSearchQuery';
 import type {CoreSessionStatus} from '../bindings/CoreSessionStatus';
 import type {CoreStoryIndex} from '../bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from '../bindings/CoreStoryIndexOptions';
+import type {CoreStorySummary} from '../bindings/CoreStorySummary';
 import type {PatchBatch} from '../bindings/PatchBatch';
 import type {ProjectSnapshot} from '../bindings/ProjectSnapshot';
 import type {StoryCommand} from '../bindings/StoryCommand';
@@ -73,6 +83,53 @@ export type WasmWorkerRequest =
 			id: number;
 			kind: 'queryStoryIndex';
 			options: CoreStoryIndexOptions;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryStorySummary';
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryContentsPage';
+			options: CoreContentsQuery;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'querySearchPage';
+			options: CoreSearchQuery;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryDiagnosticsPage';
+			options: CoreDiagnosticsQuery;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryAssetsPage';
+			options: CoreAssetsQuery;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryPassageFacts';
+			passageId: string;
 			revision: number;
 			sessionId: string;
 			storyId: string;
@@ -156,6 +213,48 @@ export type WasmWorkerSuccess =
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: CoreStoryIndex;
+	  }
+	| {
+			id: number;
+			kind: 'queryStorySummary';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CoreStorySummary;
+	  }
+	| {
+			id: number;
+			kind: 'queryContentsPage';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CoreContentsPage;
+	  }
+	| {
+			id: number;
+			kind: 'querySearchPage';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CoreSearchPage;
+	  }
+	| {
+			id: number;
+			kind: 'queryDiagnosticsPage';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CoreDiagnosticsPage;
+	  }
+	| {
+			id: number;
+			kind: 'queryAssetsPage';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CoreAssetsPage;
+	  }
+	| {
+			id: number;
+			kind: 'queryPassageFacts';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CorePassageFacts;
 	  }
 	| {
 			id: number;

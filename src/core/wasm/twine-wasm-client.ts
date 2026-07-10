@@ -1,10 +1,20 @@
 import type {CoreAssetInventoryEntry} from '../bindings/CoreAssetInventoryEntry';
+import type {CoreAssetsPage} from '../bindings/CoreAssetsPage';
+import type {CoreAssetsQuery} from '../bindings/CoreAssetsQuery';
+import type {CoreContentsPage} from '../bindings/CoreContentsPage';
+import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
+import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
+import type {CoreDiagnosticsQuery} from '../bindings/CoreDiagnosticsQuery';
 import type {CoreExternalDelta} from '../bindings/CoreExternalDelta';
 import type {CoreExternalIngestResult} from '../bindings/CoreExternalIngestResult';
 import type {CoreGraphProjection} from '../bindings/CoreGraphProjection';
 import type {CoreGraphProjectionOptions} from '../bindings/CoreGraphProjectionOptions';
+import type {CorePassageFacts} from '../bindings/CorePassageFacts';
+import type {CoreSearchPage} from '../bindings/CoreSearchPage';
+import type {CoreSearchQuery} from '../bindings/CoreSearchQuery';
 import type {CoreStoryIndex} from '../bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from '../bindings/CoreStoryIndexOptions';
+import type {CoreStorySummary} from '../bindings/CoreStorySummary';
 import type {ProjectSnapshot} from '../bindings/ProjectSnapshot';
 import type {StoryCommand} from '../bindings/StoryCommand';
 import {recordCoreBridgeMetric} from './performance';
@@ -29,6 +39,19 @@ type CacheEntry<T> = {
 	result: T;
 	revision: number;
 };
+
+type ReadModelWorkerRequest = Extract<
+	WasmWorkerRequest,
+	{
+		kind:
+			| 'queryAssetsPage'
+			| 'queryContentsPage'
+			| 'queryDiagnosticsPage'
+			| 'queryPassageFacts'
+			| 'querySearchPage'
+			| 'queryStorySummary';
+	}
+>;
 
 export type CoreSessionMutationResult = WasmWorkerMutationResult;
 
@@ -94,6 +117,8 @@ export class WasmCoreWorkerClient {
 	private indexCache = new Map<string, CacheEntry<CoreStoryIndex>>();
 	private indexQueryGenerations = new Map<string, number>();
 	private lastGraphByStory = new Map<string, CacheEntry<CoreGraphProjection>>();
+	private readModelCache = new Map<string, CacheEntry<unknown>>();
+	private readModelQueryGenerations = new Map<string, number>();
 	private nextId = 1;
 	private pending = new Map<number, PendingRequest>();
 	private readyRevisions = new Map<string, number>();
@@ -414,6 +439,138 @@ export class WasmCoreWorkerClient {
 		return response.result;
 	}
 
+	async queryStorySummary(
+		sessionId: string,
+		storyId: string,
+		revision: number
+	) {
+		return this.queryReadModel<CoreStorySummary>(sessionId, storyId, revision, {
+			id: 0,
+			kind: 'queryStorySummary',
+			revision,
+			sessionId,
+			storyId
+		});
+	}
+
+	async queryContentsPage(
+		sessionId: string,
+		storyId: string,
+		options: CoreContentsQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CoreContentsPage>(sessionId, storyId, revision, {
+			id: 0,
+			kind: 'queryContentsPage',
+			options,
+			revision,
+			sessionId,
+			storyId
+		});
+	}
+
+	async querySearchPage(
+		sessionId: string,
+		storyId: string,
+		options: CoreSearchQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CoreSearchPage>(sessionId, storyId, revision, {
+			id: 0,
+			kind: 'querySearchPage',
+			options,
+			revision,
+			sessionId,
+			storyId
+		});
+	}
+
+	async queryDiagnosticsPage(
+		sessionId: string,
+		storyId: string,
+		options: CoreDiagnosticsQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CoreDiagnosticsPage>(
+			sessionId,
+			storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'queryDiagnosticsPage',
+				options,
+				revision,
+				sessionId,
+				storyId
+			}
+		);
+	}
+
+	async queryAssetsPage(
+		sessionId: string,
+		storyId: string,
+		options: CoreAssetsQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CoreAssetsPage>(sessionId, storyId, revision, {
+			id: 0,
+			kind: 'queryAssetsPage',
+			options,
+			revision,
+			sessionId,
+			storyId
+		});
+	}
+
+	async queryPassageFacts(
+		sessionId: string,
+		storyId: string,
+		passageId: string,
+		revision: number
+	) {
+		return this.queryReadModel<CorePassageFacts>(sessionId, storyId, revision, {
+			id: 0,
+			kind: 'queryPassageFacts',
+			passageId,
+			revision,
+			sessionId,
+			storyId
+		});
+	}
+
+	private async queryReadModel<T>(
+		sessionId: string,
+		storyId: string,
+		revision: number,
+		request: ReadModelWorkerRequest
+	): Promise<T> {
+		await this.waitForMutations(sessionId);
+		const key = cacheKey(sessionId, storyId, request);
+		const generationKey = `${sessionId}:${storyId}:${request.kind}`;
+		const cached = this.readModelCache.get(key);
+
+		if (cached?.revision === revision) {
+			return cached.result as T;
+		}
+
+		const generation =
+			(this.readModelQueryGenerations.get(generationKey) ?? 0) + 1;
+
+		this.readModelQueryGenerations.set(generationKey, generation);
+		const response = await this.send(request);
+
+		if (response.kind !== request.kind) {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
+
+		const result = (response as unknown as {result: T}).result;
+
+		if (this.readModelQueryGenerations.get(generationKey) === generation) {
+			this.readModelCache.set(key, {result, revision});
+		}
+		return result;
+	}
+
 	private async historyMutation(
 		kind: 'redo' | 'undo',
 		sessionId: string,
@@ -455,6 +612,8 @@ export class WasmCoreWorkerClient {
 			this.lastGraphByStory.clear();
 			this.graphQueryGenerations.clear();
 			this.indexQueryGenerations.clear();
+			this.readModelCache.clear();
+			this.readModelQueryGenerations.clear();
 			return;
 		}
 
@@ -488,6 +647,19 @@ export class WasmCoreWorkerClient {
 				this.indexQueryGenerations.set(
 					key,
 					(this.indexQueryGenerations.get(key) ?? 0) + 1
+				);
+			}
+		}
+		for (const key of this.readModelCache.keys()) {
+			if (key.startsWith(prefix)) {
+				this.readModelCache.delete(key);
+			}
+		}
+		for (const key of this.readModelQueryGenerations.keys()) {
+			if (key.startsWith(prefix)) {
+				this.readModelQueryGenerations.set(
+					key,
+					(this.readModelQueryGenerations.get(key) ?? 0) + 1
 				);
 			}
 		}

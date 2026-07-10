@@ -349,7 +349,7 @@ export function storyLinkFacts(story: Story): PassageLinkFact[] {
 	return facts;
 }
 
-function diagnosticLocation(story: Story, diagnostic: CoreDiagnostic) {
+export function diagnosticLocation(story: Story, diagnostic: CoreDiagnostic) {
 	const passage = diagnostic.passageId
 		? story.passages.find(passage => passage.id === diagnostic.passageId)
 		: undefined;
@@ -364,7 +364,7 @@ function diagnosticLocation(story: Story, diagnostic: CoreDiagnostic) {
 	return `${sourceName}:${diagnostic.line}`;
 }
 
-function diagnosticGroup(diagnostic: CoreDiagnostic) {
+export function diagnosticGroup(diagnostic: CoreDiagnostic) {
 	switch (diagnostic.code) {
 		case 'broken-link':
 			return 'Broken Links';

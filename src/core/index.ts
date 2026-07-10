@@ -1,8 +1,18 @@
 import type {CoreGraphProjectionOptions} from './bindings/CoreGraphProjectionOptions';
 import type {CoreAssetInventoryEntry} from './bindings/CoreAssetInventoryEntry';
+import type {CoreAssetsPage} from './bindings/CoreAssetsPage';
+import type {CoreAssetsQuery} from './bindings/CoreAssetsQuery';
+import type {CoreContentsPage} from './bindings/CoreContentsPage';
+import type {CoreContentsQuery} from './bindings/CoreContentsQuery';
+import type {CoreDiagnosticsPage} from './bindings/CoreDiagnosticsPage';
+import type {CoreDiagnosticsQuery} from './bindings/CoreDiagnosticsQuery';
+import type {CorePassageFacts} from './bindings/CorePassageFacts';
 import type {CoreRect} from './bindings/CoreRect';
+import type {CoreSearchPage} from './bindings/CoreSearchPage';
+import type {CoreSearchQuery} from './bindings/CoreSearchQuery';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
+import type {CoreStorySummary} from './bindings/CoreStorySummary';
 import type {PassageMove} from './bindings/PassageMove';
 import type {PassagePatch} from './bindings/PassagePatch';
 import type {Patch} from './bindings/Patch';
@@ -23,9 +33,19 @@ export * from './wasm/performance';
 export type {
 	CoreGraphProjectionOptions,
 	CoreAssetInventoryEntry,
+	CoreAssetsPage,
+	CoreAssetsQuery,
+	CoreContentsPage,
+	CoreContentsQuery,
+	CoreDiagnosticsPage,
+	CoreDiagnosticsQuery,
+	CorePassageFacts,
 	CoreRect,
+	CoreSearchPage,
+	CoreSearchQuery,
 	CoreStoryIndex,
 	CoreStoryIndexOptions,
+	CoreStorySummary,
 	PassageMove,
 	PassagePatch,
 	Patch,

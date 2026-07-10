@@ -11,7 +11,7 @@ import {
 	type StoryBuildTarget
 } from '../util/build-package';
 import {useCoreProjectHost} from '../core/project-host';
-import type {CoreAssetInventoryEntry} from '../core';
+import type {CoreAssetInventoryEntry, CoreAssetsPage} from '../core';
 import {usePrefsContext} from './prefs';
 import {
 	formatWithNameAndVersion,
@@ -85,8 +85,23 @@ export function usePublishing(): UsePublishingProps {
 
 	const assetInventoryForStory = React.useCallback(
 		async (storyId: string) => {
-			return (await coreProjectHost.queryStoryIndexAsync(storyId))
-				.assetInventory;
+			const inventory: CoreAssetInventoryEntry[] = [];
+			let cursor: string | null = null;
+
+			do {
+				const page: CoreAssetsPage = await coreProjectHost.queryAssetsPageAsync(
+					storyId,
+					{
+						cursor,
+						limit: 250
+					}
+				);
+
+				inventory.push(...page.assets);
+				cursor = page.nextCursor;
+			} while (cursor);
+
+			return inventory;
 		},
 		[coreProjectHost]
 	);

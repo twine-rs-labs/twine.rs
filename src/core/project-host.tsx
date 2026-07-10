@@ -1,11 +1,21 @@
 import * as React from 'react';
 import type {CoreAssetInventoryEntry} from './bindings/CoreAssetInventoryEntry';
+import type {CoreAssetsPage} from './bindings/CoreAssetsPage';
+import type {CoreAssetsQuery} from './bindings/CoreAssetsQuery';
+import type {CoreContentsPage} from './bindings/CoreContentsPage';
+import type {CoreContentsQuery} from './bindings/CoreContentsQuery';
+import type {CoreDiagnosticsPage} from './bindings/CoreDiagnosticsPage';
+import type {CoreDiagnosticsQuery} from './bindings/CoreDiagnosticsQuery';
 import type {CoreExternalDelta} from './bindings/CoreExternalDelta';
 import type {CoreExternalIngestResult} from './bindings/CoreExternalIngestResult';
 import type {CoreGraphProjection} from './bindings/CoreGraphProjection';
+import type {CorePassageFacts} from './bindings/CorePassageFacts';
+import type {CoreSearchPage} from './bindings/CoreSearchPage';
+import type {CoreSearchQuery} from './bindings/CoreSearchQuery';
 import type {CoreSessionStatus} from './bindings/CoreSessionStatus';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
+import type {CoreStorySummary} from './bindings/CoreStorySummary';
 import type {Patch} from './bindings/Patch';
 import type {PatchBatch} from './bindings/PatchBatch';
 import type {StoryCommand} from './bindings/StoryCommand';
@@ -86,6 +96,27 @@ export interface CoreProjectHost {
 		storyId: string,
 		options?: StoryIndexQuery
 	): Promise<CoreStoryIndex>;
+	queryStorySummaryAsync(storyId: string): Promise<CoreStorySummary>;
+	queryContentsPageAsync(
+		storyId: string,
+		options?: Partial<CoreContentsQuery>
+	): Promise<CoreContentsPage>;
+	querySearchPageAsync(
+		storyId: string,
+		options: Partial<CoreSearchQuery>
+	): Promise<CoreSearchPage>;
+	queryDiagnosticsPageAsync(
+		storyId: string,
+		options?: Partial<CoreDiagnosticsQuery>
+	): Promise<CoreDiagnosticsPage>;
+	queryAssetsPageAsync(
+		storyId: string,
+		options?: Partial<CoreAssetsQuery>
+	): Promise<CoreAssetsPage>;
+	queryPassageFactsAsync(
+		storyId: string,
+		passageId: string
+	): Promise<CorePassageFacts>;
 	recoverFromSnapshot(
 		storyId: string,
 		stories: Story[],
@@ -186,6 +217,12 @@ type CoreProjectSessionClient = Pick<
 	| 'mode'
 	| 'queryGraphProjection'
 	| 'queryStoryIndex'
+	| 'queryStorySummary'
+	| 'queryContentsPage'
+	| 'querySearchPage'
+	| 'queryDiagnosticsPage'
+	| 'queryAssetsPage'
+	| 'queryPassageFacts'
 	| 'redo'
 	| 'replaceProject'
 	| 'undo'
@@ -205,6 +242,37 @@ export interface StoreCoreProjectHostOptions {
 	sessionId?: string;
 	wasmClient?: CoreProjectSessionClient;
 }
+
+const defaultContentsQuery: CoreContentsQuery = {
+	cursor: null,
+	filter: 'all',
+	limit: 100,
+	query: null,
+	sort: 'group'
+};
+const defaultDiagnosticsQuery: CoreDiagnosticsQuery = {
+	cursor: null,
+	limit: 100,
+	severity: null
+};
+const defaultAssetsQuery: CoreAssetsQuery = {
+	cursor: null,
+	limit: 100,
+	query: null
+};
+const defaultSearchQuery: CoreSearchQuery = {
+	cursor: null,
+	fuzzy: false,
+	includePassageNames: true,
+	includePassageText: true,
+	includeScript: true,
+	includeStylesheet: true,
+	limit: 100,
+	matchCase: false,
+	query: '',
+	replacement: null,
+	useRegexes: false
+};
 
 function storyCommandAnnotation(command: StoryCommand) {
 	switch (command.type) {
@@ -420,6 +488,91 @@ export function emptyStoryIndex(storyId: string): CoreStoryIndex {
 		tagEntries: [],
 		tags: []
 	};
+}
+
+function emptyStorySummary(storyId: string): CoreStorySummary {
+	return {
+		assetCount: 0,
+		diagnosticCount: 0,
+		errorCount: 0,
+		graph: emptyGraphStats(),
+		missingAssetCount: 0,
+		passageCount: 0,
+		revision: 0,
+		storyId,
+		tagCount: 0,
+		warningCount: 0
+	};
+}
+
+function emptyContentsPage(storyId: string): CoreContentsPage {
+	return {
+		entries: [],
+		facets: {
+			all: 0,
+			asset: 0,
+			diagnostics: 0,
+			entryPoint: 0,
+			group: 0,
+			metadata: 0,
+			passage: 0,
+			problems: 0,
+			script: 0,
+			stylesheet: 0,
+			tag: 0,
+			variable: 0
+		},
+		nextCursor: null,
+		revision: 0,
+		storyId,
+		totalCount: 0
+	};
+}
+
+function contentsFacetsFromEntries(entries: CoreContentsPage['entries']) {
+	const facets = emptyContentsPage('').facets;
+
+	for (const entry of entries) {
+		facets.all += 1;
+		switch (entry.kind) {
+			case 'asset':
+				facets.asset += 1;
+				break;
+			case 'entryPoint':
+				facets.entryPoint += 1;
+				break;
+			case 'group':
+				facets.group += 1;
+				break;
+			case 'metadata':
+				facets.metadata += 1;
+				break;
+			case 'passage':
+				facets.passage += 1;
+				break;
+			case 'script':
+				facets.script += 1;
+				break;
+			case 'stylesheet':
+				facets.stylesheet += 1;
+				break;
+			case 'tag':
+				facets.tag += 1;
+				break;
+			case 'variable':
+				facets.variable += 1;
+				break;
+			case 'brokenLink':
+			case 'diagnostic':
+			case 'orphan':
+				facets.diagnostics += 1;
+		}
+		if (entry.severity) {
+			facets.problems += 1;
+		}
+	}
+
+	return facets;
 }
 
 export class StoreCoreProjectHost implements CoreProjectHost {
@@ -1254,6 +1407,244 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		return emptyStoryIndex(storyId);
 	}
 
+	async queryStorySummaryAsync(storyId: string) {
+		const queryStorySummary = (
+			this.wasmClient as Partial<CoreProjectSessionClient>
+		).queryStorySummary?.bind(this.wasmClient);
+
+		if (this.wasmClient.enabled && queryStorySummary) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await queryStorySummary(this.sessionId, storyId, revision);
+			} catch (error) {
+				console.warn(`Rust story summary query failed: ${error}`);
+			}
+		}
+		// Older test doubles and a temporarily stale WASM bundle retain the
+		// compatibility query. Product workers always take the bounded branch.
+		const index = await this.queryStoryIndexAsync(storyId, {
+			includeAssets: true,
+			includeContents: false,
+			includeDiagnostics: true,
+			includeFiles: false,
+			includeGraph: true,
+			includePassageNames: false,
+			includePassageText: false,
+			includeScript: false,
+			includeStylesheet: false,
+			includeTags: true,
+			includeVariables: false
+		});
+
+		return {
+			assetCount: index.assetInventory.length,
+			diagnosticCount: index.diagnostics.length,
+			errorCount: index.diagnostics.filter(
+				diagnostic => diagnostic.severity === 'error'
+			).length,
+			graph: index.graph,
+			missingAssetCount: index.assetInventory.filter(asset => asset.missing)
+				.length,
+			passageCount:
+				this.stories.find(story => story.id === storyId)?.passages.length ?? 0,
+			revision: this.sessionStatus().revision,
+			storyId,
+			tagCount: index.tagEntries.length,
+			warningCount: index.diagnostics.filter(
+				diagnostic => diagnostic.severity === 'warning'
+			).length
+		};
+	}
+
+	async queryContentsPageAsync(
+		storyId: string,
+		options: Partial<CoreContentsQuery> = {}
+	) {
+		const queryContentsPage = (
+			this.wasmClient as Partial<CoreProjectSessionClient>
+		).queryContentsPage?.bind(this.wasmClient);
+
+		if (this.wasmClient.enabled && queryContentsPage) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await queryContentsPage(
+					this.sessionId,
+					storyId,
+					{...defaultContentsQuery, ...options},
+					revision
+				);
+			} catch (error) {
+				console.warn(`Rust contents page query failed: ${error}`);
+			}
+		}
+		// This compatibility branch supports older test doubles and a stale WASM
+		// bundle. Current product workers always take the bounded request above.
+		const index = await this.queryStoryIndexAsync(storyId, {});
+
+		return {
+			entries: index.contents,
+			facets: contentsFacetsFromEntries(index.contents),
+			nextCursor: null,
+			revision: this.sessionStatus().revision,
+			storyId,
+			totalCount: index.contents.length
+		};
+	}
+
+	async querySearchPageAsync(
+		storyId: string,
+		options: Partial<CoreSearchQuery>
+	) {
+		const querySearchPage = (
+			this.wasmClient as Partial<CoreProjectSessionClient>
+		).querySearchPage?.bind(this.wasmClient);
+
+		if (this.wasmClient.enabled && querySearchPage) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await querySearchPage(
+					this.sessionId,
+					storyId,
+					{...defaultSearchQuery, ...options},
+					revision
+				);
+			} catch (error) {
+				console.warn(`Rust search page query failed: ${error}`);
+			}
+		}
+		const query = {...defaultSearchQuery, ...options};
+		const index = await this.queryStoryIndexAsync(storyId, {
+			fuzzy: query.fuzzy,
+			includeAssets: false,
+			includeContents: false,
+			includeDiagnostics: false,
+			includeFiles: false,
+			includeGraph: false,
+			includePassageNames: query.includePassageNames,
+			includePassageText: query.includePassageText,
+			includeScript: query.includeScript,
+			includeStylesheet: query.includeStylesheet,
+			includeTags: false,
+			includeVariables: false,
+			matchCase: query.matchCase,
+			query: query.query,
+			replacement: query.replacement,
+			useRegexes: query.useRegexes
+		});
+		const searchHits = index.searchHits.slice(0, query.limit);
+
+		return {
+			nextCursor: null,
+			replacePreviews: index.replacePreviews.slice(0, query.limit),
+			revision: this.sessionStatus().revision,
+			searchHits,
+			storyId,
+			totalCount: index.searchHits.length
+		} satisfies CoreSearchPage;
+	}
+
+	async queryDiagnosticsPageAsync(
+		storyId: string,
+		options: Partial<CoreDiagnosticsQuery> = {}
+	) {
+		const queryDiagnosticsPage = (
+			this.wasmClient as Partial<CoreProjectSessionClient>
+		).queryDiagnosticsPage?.bind(this.wasmClient);
+
+		if (this.wasmClient.enabled && queryDiagnosticsPage) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await queryDiagnosticsPage(
+					this.sessionId,
+					storyId,
+					{...defaultDiagnosticsQuery, ...options},
+					revision
+				);
+			} catch (error) {
+				console.warn(`Rust diagnostics page query failed: ${error}`);
+			}
+		}
+		const index = await this.queryStoryIndexAsync(storyId, {
+			includeAssets: true,
+			includeContents: false,
+			includeDiagnostics: true,
+			includeFiles: false,
+			includeGraph: true,
+			includePassageNames: false,
+			includePassageText: false,
+			includeScript: false,
+			includeStylesheet: false,
+			includeTags: false,
+			includeVariables: false
+		});
+		const diagnostics = index.diagnostics.filter(
+			diagnostic =>
+				!options.severity || diagnostic.severity === options.severity
+		);
+
+		return {
+			diagnostics: diagnostics.slice(0, options.limit ?? 100),
+			nextCursor: null,
+			revision: this.sessionStatus().revision,
+			storyId,
+			totalCount: diagnostics.length
+		} satisfies CoreDiagnosticsPage;
+	}
+
+	async queryAssetsPageAsync(
+		storyId: string,
+		options: Partial<CoreAssetsQuery> = {}
+	) {
+		if (this.wasmClient.enabled) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await this.wasmClient.queryAssetsPage(
+					this.sessionId,
+					storyId,
+					{...defaultAssetsQuery, ...options},
+					revision
+				);
+			} catch (error) {
+				console.warn(`Rust assets page query failed: ${error}`);
+			}
+		}
+
+		return {
+			assets: [],
+			nextCursor: null,
+			revision: 0,
+			storyId,
+			totalCount: 0
+		} satisfies CoreAssetsPage;
+	}
+
+	async queryPassageFactsAsync(storyId: string, passageId: string) {
+		if (this.wasmClient.enabled) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await this.wasmClient.queryPassageFacts(
+					this.sessionId,
+					storyId,
+					passageId,
+					revision
+				);
+			} catch (error) {
+				console.warn(`Rust passage facts query failed: ${error}`);
+			}
+		}
+
+		return {
+			assetReferences: [],
+			backlinks: [],
+			diagnostics: [],
+			links: [],
+			passageId,
+			revision: 0,
+			storyId,
+			symbols: []
+		} satisfies CorePassageFacts;
+	}
+
 	subscribeToPatches(listener: CoreProjectPatchListener) {
 		this.listeners.add(listener);
 
@@ -1497,6 +1888,82 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
+	queryStorySummaryAsync(storyId: string) {
+		return (
+			this.hostForStory(storyId)?.queryStorySummaryAsync(storyId) ??
+			Promise.resolve(emptyStorySummary(storyId))
+		);
+	}
+
+	queryContentsPageAsync(
+		storyId: string,
+		options?: Partial<CoreContentsQuery>
+	) {
+		return (
+			this.hostForStory(storyId)?.queryContentsPageAsync(storyId, options) ??
+			Promise.resolve(emptyContentsPage(storyId))
+		);
+	}
+
+	querySearchPageAsync(storyId: string, options: Partial<CoreSearchQuery>) {
+		return (
+			this.hostForStory(storyId)?.querySearchPageAsync(storyId, options) ??
+			Promise.resolve({
+				nextCursor: null,
+				replacePreviews: [],
+				revision: 0,
+				searchHits: [],
+				storyId,
+				totalCount: 0
+			} satisfies CoreSearchPage)
+		);
+	}
+
+	queryDiagnosticsPageAsync(
+		storyId: string,
+		options?: Partial<CoreDiagnosticsQuery>
+	) {
+		return (
+			this.hostForStory(storyId)?.queryDiagnosticsPageAsync(storyId, options) ??
+			Promise.resolve({
+				diagnostics: [],
+				nextCursor: null,
+				revision: 0,
+				storyId,
+				totalCount: 0
+			} satisfies CoreDiagnosticsPage)
+		);
+	}
+
+	queryAssetsPageAsync(storyId: string, options?: Partial<CoreAssetsQuery>) {
+		return (
+			this.hostForStory(storyId)?.queryAssetsPageAsync(storyId, options) ??
+			Promise.resolve({
+				assets: [],
+				nextCursor: null,
+				revision: 0,
+				storyId,
+				totalCount: 0
+			} satisfies CoreAssetsPage)
+		);
+	}
+
+	queryPassageFactsAsync(storyId: string, passageId: string) {
+		return (
+			this.hostForStory(storyId)?.queryPassageFactsAsync(storyId, passageId) ??
+			Promise.resolve({
+				assetReferences: [],
+				backlinks: [],
+				diagnostics: [],
+				links: [],
+				passageId,
+				revision: 0,
+				storyId,
+				symbols: []
+			} satisfies CorePassageFacts)
+		);
+	}
+
 	runtimeMode() {
 		return this.client.mode;
 	}
@@ -1625,6 +2092,18 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.queryStoryIndex(queryStoryId, options),
 			queryStoryIndexAsync: (queryStoryId, options) =>
 				host.queryStoryIndexAsync(queryStoryId, options),
+			queryStorySummaryAsync: queryStoryId =>
+				host.queryStorySummaryAsync(queryStoryId),
+			queryContentsPageAsync: (queryStoryId, options) =>
+				host.queryContentsPageAsync(queryStoryId, options),
+			querySearchPageAsync: (queryStoryId, options) =>
+				host.querySearchPageAsync(queryStoryId, options),
+			queryDiagnosticsPageAsync: (queryStoryId, options) =>
+				host.queryDiagnosticsPageAsync(queryStoryId, options),
+			queryAssetsPageAsync: (queryStoryId, options) =>
+				host.queryAssetsPageAsync(queryStoryId, options),
+			queryPassageFactsAsync: (queryStoryId, passageId) =>
+				host.queryPassageFactsAsync(queryStoryId, passageId),
 			recoverFromSnapshot: (recoveryStoryId, recoveryStories, assets) =>
 				host.recoverFromSnapshot(recoveryStoryId, recoveryStories, assets),
 			redo: () => host.redo(storyId),

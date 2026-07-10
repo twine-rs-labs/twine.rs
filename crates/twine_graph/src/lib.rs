@@ -273,45 +273,54 @@ impl GraphIndex {
             }
         }
 
-        self.passage_names = story
-            .passages
-            .iter()
-            .map(|passage| (passage.name.clone(), passage.id.clone()))
-            .collect();
-        self.story_order = story
+        // Keep graph identity stable across edits. In particular, do not throw
+        // away every node merely because one passage's source changed: callers
+        // hold this cache for viewport projection and passage-fact queries.
+        let current_ids = story
             .passages
             .iter()
             .map(|passage| passage.id.clone())
-            .collect();
-        self.story_rank = self
-            .story_order
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(index, id)| (id, index))
-            .collect();
-        self.nodes = story
-            .passages
-            .iter()
-            .map(|passage| {
-                (
-                    passage.id.clone(),
-                    GraphNode {
-                        broken_link_count: 0,
-                        id: passage.id.clone(),
-                        incoming_count: 0,
-                        is_empty: passage.text.trim().is_empty(),
-                        is_orphan: false,
-                        is_start: passage.id == story.start_passage,
-                        is_unreachable: false,
-                        name: passage.name.clone(),
-                        outgoing_count: 0,
-                        self_link_count: 0,
-                        tags: passage.tags.clone(),
-                    },
-                )
-            })
-            .collect();
+            .collect::<BTreeSet<_>>();
+        self.nodes.retain(|id, _| current_ids.contains(id));
+        self.outgoing.retain(|id, _| current_ids.contains(id));
+        self.passage_names.clear();
+        self.story_order.clear();
+        self.story_rank.clear();
+
+        for (rank, passage) in story.passages.iter().enumerate() {
+            self.passage_names
+                .insert(passage.name.clone(), passage.id.clone());
+            self.story_order.push(passage.id.clone());
+            self.story_rank.insert(passage.id.clone(), rank);
+
+            let node = self
+                .nodes
+                .entry(passage.id.clone())
+                .or_insert_with(|| GraphNode {
+                    broken_link_count: 0,
+                    id: passage.id.clone(),
+                    incoming_count: 0,
+                    is_empty: passage.text.trim().is_empty(),
+                    is_orphan: false,
+                    is_start: passage.id == story.start_passage,
+                    is_unreachable: false,
+                    name: passage.name.clone(),
+                    outgoing_count: 0,
+                    self_link_count: 0,
+                    tags: passage.tags.clone(),
+                });
+            node.id = passage.id.clone();
+            node.is_empty = passage.text.trim().is_empty();
+            node.is_start = passage.id == story.start_passage;
+            node.name = passage.name.clone();
+            node.tags = passage.tags.clone();
+            node.broken_link_count = 0;
+            node.incoming_count = 0;
+            node.is_orphan = false;
+            node.is_unreachable = false;
+            node.outgoing_count = 0;
+            node.self_link_count = 0;
+        }
 
         self.outgoing.retain(|source_id, _| {
             self.nodes.contains_key(source_id) && !affected_sources.contains(source_id)

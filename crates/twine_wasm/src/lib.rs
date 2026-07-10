@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 use twine_core::{
-    CoreAssetInventoryEntry, CoreExternalDelta, CoreExternalIngestMode, CoreGraphProjectionOptions,
+    CoreAssetInventoryEntry, CoreAssetsQuery, CoreContentsQuery, CoreDiagnosticsQuery,
+    CoreExternalDelta, CoreExternalIngestMode, CoreGraphProjectionOptions, CoreSearchQuery,
     CoreStoryIndexOptions, PassageSnapshot, ProjectSession, ProjectSnapshot, StoryCommand,
     StorySnapshot,
 };
@@ -133,6 +134,83 @@ impl TwineWasmProjectSession {
             .map_err(core_error)?;
 
         to_js(&index)
+    }
+
+    pub fn query_story_summary(&mut self, story_id: String) -> Result<JsValue, JsValue> {
+        to_js(&self.session.story_summary(&story_id).map_err(core_error)?)
+    }
+
+    pub fn query_contents_page(
+        &mut self,
+        story_id: String,
+        query: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let query = from_js::<CoreContentsQuery>(query)?;
+
+        to_js(
+            &self
+                .session
+                .contents_page(&story_id, query)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_search_page(
+        &mut self,
+        story_id: String,
+        query: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let query = from_js::<CoreSearchQuery>(query)?;
+
+        to_js(
+            &self
+                .session
+                .search_page(&story_id, query)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_diagnostics_page(
+        &mut self,
+        story_id: String,
+        query: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let query = from_js::<CoreDiagnosticsQuery>(query)?;
+
+        to_js(
+            &self
+                .session
+                .diagnostics_page(&story_id, query)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_assets_page(
+        &mut self,
+        story_id: String,
+        query: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let query = from_js::<CoreAssetsQuery>(query)?;
+
+        to_js(
+            &self
+                .session
+                .assets_page(&story_id, query)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_passage_facts(
+        &mut self,
+        story_id: String,
+        passage_id: String,
+    ) -> Result<JsValue, JsValue> {
+        to_js(
+            &self
+                .session
+                .passage_facts(&story_id, &passage_id)
+                .map_err(core_error)?,
+        )
     }
 
     pub fn snapshot(&self) -> Result<JsValue, JsValue> {
