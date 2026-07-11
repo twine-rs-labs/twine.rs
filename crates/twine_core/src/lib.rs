@@ -19,6 +19,7 @@ use twine_graph::{
 use twine_model::{
     GraphPosition, Passage, PassageId, PassageIndex, PassageLayout, Project, Story, StoryId,
 };
+use web_time::Instant;
 
 const MAX_HISTORY_ENTRIES: usize = 200;
 const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
@@ -2367,10 +2368,35 @@ struct SourceAnalysisCache {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoreSessionPerformanceDiagnostics {
+    #[serde(default)]
+    pub last_mutation: Option<CoreMutationStageTimings>,
     pub parsed_source_count: usize,
     pub read_model_full_build_count: usize,
     pub read_model_incremental_update_count: usize,
     pub read_model_last_touched_source_count: usize,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreMutationStageTimings {
+    pub analysis_ms: f64,
+    pub delta_id: String,
+    pub fingerprint_ms: f64,
+    pub graph_ms: f64,
+    pub graph_parsed_source_count: usize,
+    pub history_ms: f64,
+    pub lookup_and_delta_ms: f64,
+    pub operation: String,
+    pub patch_finalize_ms: f64,
+    pub read_model_ms: f64,
+    pub revision: u64,
+    pub savepoint_ms: f64,
+    pub topology_changed: bool,
+    pub total_ms: f64,
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1_000.0
 }
 
 fn fingerprint(value: &impl Serialize) -> u64 {
@@ -2631,6 +2657,7 @@ pub struct ProjectSession {
     dirty_fields: BTreeSet<String>,
     graph_cache: BTreeMap<StoryId, GraphSessionCache>,
     history_bytes: usize,
+    last_mutation_stage_timings: Option<CoreMutationStageTimings>,
     current_state_id: u64,
     next_transaction_id: u64,
     project: Project,
@@ -2659,6 +2686,7 @@ impl ProjectSession {
             dirty_fields: BTreeSet::new(),
             graph_cache: BTreeMap::new(),
             history_bytes: 0,
+            last_mutation_stage_timings: None,
             current_state_id: 0,
             next_transaction_id: 1,
             project,
@@ -3464,6 +3492,7 @@ impl ProjectSession {
 
     pub fn performance_diagnostics(&self) -> CoreSessionPerformanceDiagnostics {
         CoreSessionPerformanceDiagnostics {
+            last_mutation: self.last_mutation_stage_timings.clone(),
             parsed_source_count: self.analysis_parse_count,
             read_model_full_build_count: self.read_model_full_build_count,
             read_model_incremental_update_count: self.read_model_incremental_update_count,
@@ -3832,6 +3861,9 @@ impl ProjectSession {
         passage_id: &str,
         text: String,
     ) -> Result<CoreExternalIngestResult, CoreError> {
+        self.last_mutation_stage_timings = None;
+        let total_started = Instant::now();
+        let delta_id_for_timings = delta_id.clone();
         let field = format!("passage:{story_id}:{passage_id}:text");
         let passage_id = PassageId::new(passage_id);
         let story_id = StoryId::new(story_id);
@@ -3928,8 +3960,16 @@ impl ProjectSession {
             }],
             ..ProjectDelta::default()
         };
+        let mut timings = CoreMutationStageTimings {
+            delta_id: delta_id_for_timings,
+            lookup_and_delta_ms: elapsed_ms(total_started),
+            operation: "externalPassageText".into(),
+            ..CoreMutationStageTimings::default()
+        };
 
+        let stage_started = Instant::now();
         self.sync_fingerprints(&transaction_delta);
+        timings.fingerprint_ms = elapsed_ms(stage_started);
         let change = CoreExternalChange::UpdatePassage {
             changes: PassagePatch {
                 text: Some(text.clone()),
@@ -3939,11 +3979,30 @@ impl ProjectSession {
             story_id: story_id.as_ref().to_owned(),
         };
 
+        let stage_started = Instant::now();
         self.accept_external_fingerprints(&[change]);
         self.remember_external_delta(delta_id);
+        timings.savepoint_ms = elapsed_ms(stage_started);
         self.next_transaction_id += 1;
         self.current_state_id = operation_id;
-        self.update_session_caches(&transaction_delta);
+
+        let stage_started = Instant::now();
+        self.update_graph_cache(&transaction_delta);
+        timings.graph_ms = elapsed_ms(stage_started);
+        if let Some(graph) = self.graph_cache.get(&story_id).map(|cache| &cache.graph) {
+            timings.graph_parsed_source_count = graph.last_incremental_parse_count();
+            timings.topology_changed = graph.last_topology_changed();
+        }
+
+        let stage_started = Instant::now();
+        self.update_analysis_cache(&transaction_delta);
+        timings.analysis_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
+        self.update_read_model_cache(&transaction_delta);
+        timings.read_model_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
         self.clear_redo();
         self.push_undo(Transaction {
             after_state_id: self.current_state_id,
@@ -3954,6 +4013,9 @@ impl ProjectSession {
             kind: CoreHistoryKind::ExternalChanges,
             label: "External Changes".into(),
         });
+        timings.history_ms = elapsed_ms(stage_started);
+
+        let stage_started = Instant::now();
         let mut patches = vec![Patch::PassageUpdated {
             changes: PassagePatch {
                 text: Some(text),
@@ -3964,7 +4026,7 @@ impl ProjectSession {
         }];
 
         push_dirty_patch(&mut patches, dirty_before, self.dirty);
-        Ok(CoreExternalIngestResult {
+        let result = CoreExternalIngestResult {
             batch: Some(PatchBatch {
                 label: "External Changes".into(),
                 patches,
@@ -3974,7 +4036,13 @@ impl ProjectSession {
             history_recorded: true,
             outcome: CoreExternalIngestOutcome::Applied,
             status: self.status(),
-        })
+        };
+        timings.patch_finalize_ms = elapsed_ms(stage_started);
+        timings.revision = self.revision();
+        timings.total_ms = elapsed_ms(total_started);
+        self.last_mutation_stage_timings = Some(timings);
+
+        Ok(result)
     }
 
     pub fn apply_external_delta(
@@ -10335,6 +10403,23 @@ mod tests {
 
         assert_eq!(result.outcome, CoreExternalIngestOutcome::Applied);
         assert!(result.history_recorded);
+        let timing = session
+            .performance_diagnostics()
+            .last_mutation
+            .expect("external ingestion should expose stage timings");
+        assert_eq!(timing.operation, "externalPassageText");
+        assert_eq!(timing.delta_id, "external-passage-text");
+        assert_eq!(timing.revision, session.revision());
+        assert_eq!(timing.graph_parsed_source_count, 1);
+        let stage_sum = timing.lookup_and_delta_ms
+            + timing.fingerprint_ms
+            + timing.savepoint_ms
+            + timing.graph_ms
+            + timing.analysis_ms
+            + timing.read_model_ms
+            + timing.history_ms
+            + timing.patch_finalize_ms;
+        assert!(stage_sum <= timing.total_ms + 0.1);
         assert_eq!(session.analysis_parse_count, initial_parse_count + 1);
         assert_eq!(session.read_model_full_build_count, 1);
         assert_eq!(session.read_model_incremental_update_count, 1);

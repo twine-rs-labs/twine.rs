@@ -268,11 +268,23 @@ async function handleRequest(
 		computeFinishedAtEpochMs = epochNow();
 
 		const responseBytes = byteSize(result);
-		const readModel = sessions
+		const diagnostics = sessions
 			.get(request.sessionId)
 			?.session.performance_diagnostics() as
-			| WasmWorkerMetricBase['readModel']
+			| (NonNullable<WasmWorkerMetricBase['readModel']> & {
+					lastMutation?: WasmWorkerMetricBase['mutationStages'];
+			  })
 			| undefined;
+		const readModel = diagnostics
+			? {
+					parsedSourceCount: diagnostics.parsedSourceCount,
+					readModelFullBuildCount: diagnostics.readModelFullBuildCount,
+					readModelIncrementalUpdateCount:
+						diagnostics.readModelIncrementalUpdateCount,
+					readModelLastTouchedSourceCount:
+						diagnostics.readModelLastTouchedSourceCount
+				}
+			: undefined;
 		const workerRespondedAt = now();
 		const workerRespondedAtEpochMs = epochNow();
 		const metrics: WasmWorkerMetricBase = {
@@ -285,6 +297,7 @@ async function handleRequest(
 					: responseBytes,
 			requestBytes,
 			readModel,
+			mutationStages: diagnostics?.lastMutation,
 			responseBytes,
 			rustFinishedAtEpochMs,
 			rustStartedAtEpochMs,

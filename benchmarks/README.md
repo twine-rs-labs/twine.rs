@@ -111,9 +111,14 @@ npm run perf:electron:50k:watcher
 ```
 
 The watcher phase first waits for initial asset-inventory synchronization to
-leave the serialized core-session queue. It then measures a one-passage disk
-edit and an asset-only edit as steady-state deltas, rather than accidentally
-mixing either with startup work.
+leave the serialized core-session queue. It performs one unreported passage
+warm-up, then measures five independent edits to the deterministic median
+fixture passage. Holding the entity constant makes the distribution expose
+runtime variance rather than graph-position variance. Each edit completes native
+acknowledgement before the next starts. It reports distribution aggregates for
+native observation, Rust ingestion stages, the WASM boundary, renderer patch
+application, and end-to-end latency. One asset-only edit then verifies the
+review path without mixing startup work into either scenario.
 
 Edit, query, and graph phases also have size-specific subsystem commands:
 

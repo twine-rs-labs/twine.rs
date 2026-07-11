@@ -22,6 +22,7 @@ export interface CoreBridgeMetric {
 		| 'status'
 		| 'undo';
 	mode: CoreBridgeMode;
+	mutationStages?: import('./twine-wasm-protocol').WasmMutationStageTimings;
 	payloadBytes: number;
 	queuedMs: number;
 	receivedAt: number;

@@ -49,6 +49,22 @@ interface PerformanceSnapshot {
 			computeStartedAtEpochMs: number;
 			kind: string;
 			mode: string;
+			mutationStages?: {
+				analysisMs: number;
+				deltaId: string;
+				fingerprintMs: number;
+				graphMs: number;
+				graphParsedSourceCount: number;
+				historyMs: number;
+				lookupAndDeltaMs: number;
+				operation: string;
+				patchFinalizeMs: number;
+				readModelMs: number;
+				revision: number;
+				savepointMs: number;
+				topologyChanged: boolean;
+				totalMs: number;
+			};
 			payloadBytes: number;
 			queuedMs: number;
 			receivedAtEpochMs: number;
@@ -1273,9 +1289,10 @@ function captureMemory(current: PerformanceSnapshot) {
 	addSample('memory.mainMiB', current.main.memory.rss / 1024 / 1024);
 }
 
-async function firstPassageFile(projectPath: string) {
+async function passageFiles(projectPath: string) {
 	const passageRoot = path.join(projectPath, 'passages');
 	const pending = [passageRoot];
+	const files: string[] = [];
 
 	while (pending.length > 0) {
 		const current = pending.pop()!;
@@ -1286,12 +1303,30 @@ async function firstPassageFile(projectPath: string) {
 			if (entry.isDirectory()) {
 				pending.push(entryPath);
 			} else if (entry.isFile() && entry.name.endsWith('.twee')) {
-				return entryPath;
+				files.push(entryPath);
 			}
 		}
 	}
 
-	throw new Error('Fixture project does not contain a passage file.');
+	if (files.length === 0) {
+		throw new Error('Fixture project does not contain a passage file.');
+	}
+
+	return files.sort((left, right) => left.localeCompare(right));
+}
+
+function watcherPassageSampleIndices(length: number) {
+	if (length === 0) {
+		throw new Error('Watcher sampling requires a passage file.');
+	}
+
+	// Repeatedly use the median fixture passage so the distribution measures
+	// runtime variance rather than graph-position variance. Every append still
+	// produces an independent native candidate and Rust transaction.
+	const warmup = Math.floor(length / 2);
+	const measured = Array.from({length: 5}, () => warmup);
+
+	return {measured, warmup};
 }
 
 function captureWatcherTrace(
@@ -1377,14 +1412,22 @@ function captureWatcherTrace(
 	return traceId;
 }
 
-async function measureWatcher(page: Page, projectPath: string) {
+async function measureWatcherPassageSample(
+	page: Page,
+	projectPath: string,
+	passageFile: string,
+	sampleLabel: string,
+	recordSamples: boolean
+) {
 	await reset(page);
-	const passageFile = await firstPassageFile(projectPath);
 	const passageProjectPath = path
 		.relative(projectPath, passageFile)
 		.replaceAll(path.sep, '/');
 
-	await appendFile(passageFile, '\nExternal watcher benchmark edit.\n');
+	await appendFile(
+		passageFile,
+		`\nExternal watcher benchmark edit ${sampleLabel}.\n`
+	);
 	let watcher;
 	try {
 		watcher = await waitForWatcherMetric(
@@ -1550,7 +1593,131 @@ async function measureWatcher(page: Page, projectPath: string) {
 	if (!acknowledgementComplete) {
 		diagnostics.watcher = current;
 		diagnostics.watcherPassage = current;
+		return undefined;
+	}
+
+	const stages = ingest?.mutationStages;
+	const stageSum = stages
+		? stages.lookupAndDeltaMs +
+			stages.fingerprintMs +
+			stages.savepointMs +
+			stages.graphMs +
+			stages.analysisMs +
+			stages.readModelMs +
+			stages.historyMs +
+			stages.patchFinalizeMs
+		: undefined;
+	const activeRevision = current.renderer.core.hosts
+		.flatMap(host => host.sessions)
+		.find(session => session.sessionId.includes(projectPath))?.revision;
+
+	assertInvariant(
+		`watcher-${sampleLabel}-rust-stage-attribution-present`,
+		!!stages,
+		JSON.stringify(stages)
+	);
+	assertInvariant(
+		`watcher-${sampleLabel}-rust-stage-correlation`,
+		stages?.deltaId === deltaId && stages?.revision === activeRevision,
+		JSON.stringify({activeRevision, deltaId, stages})
+	);
+	assertInvariant(
+		`watcher-${sampleLabel}-rust-stage-sum-bounded`,
+		stageSum !== undefined && stageSum <= (stages?.totalMs ?? 0) + 0.25,
+		JSON.stringify({stageSum, totalMs: stages?.totalMs})
+	);
+	assertInvariant(
+		`watcher-${sampleLabel}-rust-parses-one-source`,
+		stages?.graphParsedSourceCount === 1,
+		JSON.stringify(stages)
+	);
+
+	if (recordSamples && stages && stageSum !== undefined) {
+		addSample('watcher.coreTotalMs', stages.totalMs);
+		addSample('watcher.lookupAndDeltaMs', stages.lookupAndDeltaMs);
+		addSample('watcher.fingerprintMs', stages.fingerprintMs);
+		addSample('watcher.savepointMs', stages.savepointMs);
+		addSample('watcher.graphMs', stages.graphMs);
+		addSample('watcher.analysisMs', stages.analysisMs);
+		addSample('watcher.readModelMs', stages.readModelMs);
+		addSample('watcher.historyMs', stages.historyMs);
+		addSample('watcher.patchFinalizeMs', stages.patchFinalizeMs);
+		addSample(
+			'watcher.coreUnattributedMs',
+			Math.max(0, stages.totalMs - stageSum)
+		);
+		addSample(
+			'watcher.wasmBoundaryMs',
+			ingest.rustStartedAtEpochMs !== undefined &&
+				ingest.rustFinishedAtEpochMs !== undefined
+				? Math.max(
+						0,
+						ingest.rustFinishedAtEpochMs -
+							ingest.rustStartedAtEpochMs -
+							stages.totalMs
+					)
+				: undefined
+		);
+	}
+
+	return {current, ingest};
+}
+
+async function measureWatcher(page: Page, projectPath: string) {
+	const files = await passageFiles(projectPath);
+	const indices = watcherPassageSampleIndices(files.length);
+	const sampleLengths = Object.fromEntries(
+		Object.entries(samples).map(([name, values]) => [name, values.length])
+	);
+	const warmup = await measureWatcherPassageSample(
+		page,
+		projectPath,
+		files[indices.warmup],
+		'warmup',
+		false
+	);
+
+	for (const [name, values] of Object.entries(samples)) {
+		values.length = sampleLengths[name] ?? 0;
+	}
+	if (!warmup) {
 		return;
+	}
+
+	let previousReadModel = warmup.ingest?.readModel;
+	for (const [sampleIndex, passageIndex] of indices.measured.entries()) {
+		const result = await measureWatcherPassageSample(
+			page,
+			projectPath,
+			files[passageIndex],
+			`passage-${sampleIndex + 1}`,
+			true
+		);
+
+		if (!result) {
+			return;
+		}
+		const readModel = result.ingest?.readModel;
+
+		assertInvariant(
+			`watcher-passage-${sampleIndex + 1}-avoids-full-read-model-build`,
+			!!readModel &&
+				readModel.readModelFullBuildCount ===
+					previousReadModel?.readModelFullBuildCount,
+			JSON.stringify({previousReadModel, readModel})
+		);
+		assertInvariant(
+			`watcher-passage-${sampleIndex + 1}-updates-one-source`,
+			!!readModel &&
+				readModel.parsedSourceCount ===
+					(previousReadModel?.parsedSourceCount ?? 0) + 1 &&
+				readModel.readModelIncrementalUpdateCount ===
+					(previousReadModel?.readModelIncrementalUpdateCount ?? 0) + 1,
+			JSON.stringify({previousReadModel, readModel})
+		);
+		previousReadModel = readModel;
+		diagnostics.watcher = result.current;
+		diagnostics.watcherPassage = result.current;
 	}
 
 	await page.waitForTimeout(750);
@@ -1558,30 +1725,16 @@ async function measureWatcher(page: Page, projectPath: string) {
 	const assetPath = path.join(projectPath, 'assets', 'perf', 'readme.txt');
 
 	await appendFile(assetPath, '\nExternal asset benchmark edit.\n');
+	let assetReview;
 	try {
-		const assetReview = await waitForAssetWatcherReview(page, watcherTimeout);
-
-		watcher = assetReview.metric;
-		current = assetReview.current;
+		assetReview = await waitForAssetWatcherReview(page, watcherTimeout);
 	} catch (error) {
 		assertInvariant('watcher-asset-observed', false, (error as Error).message);
 		return;
 	}
+	const watcher = assetReview.metric;
+	const current = assetReview.current;
 	const assetDeltaId = watcher?.deltaId;
-
-	assertInvariant(
-		'watcher-asset-observed',
-		!!assetDeltaId &&
-			current.renderer.events.some(
-				event =>
-					event.name === 'watcher-review-required' &&
-					event.detail?.deltaId === assetDeltaId
-			),
-		JSON.stringify(watcher)
-	);
-	await expect(page.getByRole('button', {name: 'Later'})).toBeVisible();
-	diagnostics.watcherAsset = current;
-	captureBridgeMetrics(current);
 	const review = current.renderer.events
 		.filter(
 			event =>
@@ -1589,13 +1742,16 @@ async function measureWatcher(page: Page, projectPath: string) {
 				event.detail?.deltaId === assetDeltaId
 		)
 		.at(-1);
-
-	observed = current.renderer.events.find(
+	const observed = current.renderer.events.find(
 		event =>
 			event.name === 'watcher-delta-observed' &&
 			event.detail?.deltaId === assetDeltaId
 	);
 
+	assertInvariant('watcher-asset-observed', !!assetDeltaId && !!review);
+	await expect(page.getByRole('button', {name: 'Later'})).toBeVisible();
+	diagnostics.watcherAsset = current;
+	captureBridgeMetrics(current);
 	captureWatcherTrace(current, assetDeltaId);
 	addSample(
 		'watcher.assetReviewMs',

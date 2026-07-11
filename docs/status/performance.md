@@ -59,11 +59,21 @@ accepted.
   above the 600 MiB target.
 - The watcher phase parsed one source for a one-passage edit and parsed no story
   sources for an asset-only edit. The asset change entered review as required.
-- After entity-maintained read-model caches landed, passing passage watcher
+- After entity-maintained read-model caches landed, earlier passage watcher
   samples ranged from about 592–826 ms observation-to-patch and 150–291 ms Rust
-  ingestion. Their counters showed one initial 50k cache build followed by one
-  incremental update touching one source; no second full build occurred. The
-  spread is too wide to rank small follow-up changes from a single sample.
+  ingestion. The focused watcher phase now uses one warm-up and five
+  deterministic passage samples and attributes Rust lookup/delta work,
+  fingerprints, savepoint maintenance, graph, analysis, read-model, history,
+  and patch finalization separately. It also derives unattributed core and
+  WASM-boundary time. This makes subsequent optimization decisions depend on
+  distributions rather than isolated runs.
+- The first repeated 50k profile completed in 1.3 minutes. Across five warm
+  passage samples, core ingestion was 1.7–2.8 ms (2.1 ms p50), with analysis
+  and read-model maintenance each about 0.7 ms p50. The WASM boundary was about
+  0.1 ms p50. Observation-to-patch remained about 416 ms p50: roughly 151 ms
+  event coalescing, 138 ms native delta creation, and 122 ms Rust-result to
+  renderer-patch work. The warm-up was deliberately excluded from these core
+  aggregates.
 
 The watcher phase waits for the initial asset-inventory session transaction to
 finish before it resets metrics or modifies disk. That keeps the measured
@@ -96,7 +106,9 @@ Rust read-model caches are maintained across ordinary passage text, layout,
 tag, story source, start-passage, undo/redo, and external text transactions;
 perf bridge metrics report parsed-source and full/incremental cache-build
 counters. Both diagnostic and watcher Electron phases pass those assertions.
-Startup and retained-memory attribution are now the next optimization gate.
+The repeated watcher profile determines whether graph/index maintenance or
+boundary overhead deserves the next latency change. Startup and retained-memory
+attribution remain the next broader optimization gate.
 
 ## Gates
 

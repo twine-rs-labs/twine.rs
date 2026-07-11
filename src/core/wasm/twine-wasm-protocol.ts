@@ -20,6 +20,23 @@ import type {ProjectSnapshot} from '../bindings/ProjectSnapshot';
 import type {StoryCommand} from '../bindings/StoryCommand';
 import type {CoreBridgeMetric} from './performance';
 
+export interface WasmMutationStageTimings {
+	analysisMs: number;
+	deltaId: string;
+	fingerprintMs: number;
+	graphMs: number;
+	graphParsedSourceCount: number;
+	historyMs: number;
+	lookupAndDeltaMs: number;
+	operation: string;
+	patchFinalizeMs: number;
+	readModelMs: number;
+	revision: number;
+	savepointMs: number;
+	topologyChanged: boolean;
+	totalMs: number;
+}
+
 export interface WasmWorkerMetricBase {
 	computeMs: number;
 	computeFinishedAtEpochMs: number;
@@ -33,6 +50,7 @@ export interface WasmWorkerMetricBase {
 		readModelIncrementalUpdateCount: number;
 		readModelLastTouchedSourceCount: number;
 	};
+	mutationStages?: WasmMutationStageTimings;
 	rustFinishedAtEpochMs?: number;
 	rustStartedAtEpochMs?: number;
 	traceId?: string;

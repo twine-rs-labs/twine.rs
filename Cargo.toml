@@ -42,6 +42,7 @@ twine_store = { path = "crates/twine_store" }
 twine_wasm = { path = "crates/twine_wasm" }
 wasm-bindgen = "0.2"
 wasm-bindgen-test = "0.3"
+web-time = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]

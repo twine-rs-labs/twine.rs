@@ -812,6 +812,7 @@ export class WasmCoreWorkerClient {
 			requestBytes: metrics.requestBytes,
 			requestedAtEpochMs,
 			readModel: metrics.readModel,
+			mutationStages: metrics.mutationStages,
 			responseBytes: metrics.responseBytes,
 			roundTripMs: receivedAt - requestedAt,
 			rustFinishedAtEpochMs: metrics.rustFinishedAtEpochMs,

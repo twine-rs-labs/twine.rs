@@ -80,10 +80,16 @@ focused 50k measurements.
   run measured about 1.23 s Rust ingestion and about 3.88 s observation to
   passage patch before resident read-model maintenance landed. The attributed
   follow-ups improved those to roughly 150–291 ms and 592–826 ms respectively,
-  with one touched source and no second full cache build. Further work should
-  add stage-level Rust timings or repeated samples before optimizing the
-  remaining graph/topology and renderer-patch portions; native file parsing is
-  not the limiting stage.
+  with one touched source and no second full cache build. The watcher phase now
+  records one warm-up plus five deterministic samples and splits Rust ingestion
+  into lookup/delta, fingerprint, savepoint, graph, analysis, read-model,
+  history, and patch-finalization stages. Use its p50/p95 distributions to
+  select the next optimization; native file parsing is not currently the
+  limiting stage.
+  The first repeated profile measured core ingestion at 2.1 ms p50 and the WASM
+  boundary at 0.1 ms p50, while observation-to-patch remained about 416 ms p50.
+  Optimize the fixed watcher coalescing/native-delta and renderer-patch portions
+  before changing the incremental Rust index pipeline.
 
 Exit signal: no full-source rebuilds, bounded rendering remains true, and each
 surface materially improves against its accepted baseline.
