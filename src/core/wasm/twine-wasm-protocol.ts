@@ -27,6 +27,12 @@ export interface WasmWorkerMetricBase {
 	payloadBytes: number;
 	requestBytes: number;
 	responseBytes: number;
+	readModel?: {
+		parsedSourceCount: number;
+		readModelFullBuildCount: number;
+		readModelIncrementalUpdateCount: number;
+		readModelLastTouchedSourceCount: number;
+	};
 	rustFinishedAtEpochMs?: number;
 	rustStartedAtEpochMs?: number;
 	traceId?: string;

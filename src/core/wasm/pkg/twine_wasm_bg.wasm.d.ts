@@ -11,6 +11,7 @@ export const twinewasmprojectsession_can_redo: (a: number) => number;
 export const twinewasmprojectsession_can_undo: (a: number) => number;
 export const twinewasmprojectsession_ingest_external_delta: (a: number, b: any, c: number) => [number, number, number];
 export const twinewasmprojectsession_new: (a: any) => [number, number, number];
+export const twinewasmprojectsession_performance_diagnostics: (a: number) => [number, number, number];
 export const twinewasmprojectsession_query_assets_page: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_contents_page: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_diagnostics_page: (a: number, b: number, c: number, d: any) => [number, number, number];

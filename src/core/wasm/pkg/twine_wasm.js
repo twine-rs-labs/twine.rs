@@ -84,6 +84,16 @@ export class TwineWasmProjectSession {
         return this;
     }
     /**
+     * @returns {any}
+     */
+    performance_diagnostics() {
+        const ret = wasm.twinewasmprojectsession_performance_diagnostics(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * @param {string} story_id
      * @param {any} query
      * @returns {any}

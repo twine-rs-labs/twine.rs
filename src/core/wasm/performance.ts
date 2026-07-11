@@ -28,6 +28,12 @@ export interface CoreBridgeMetric {
 	receivedAtEpochMs: number;
 	requestBytes: number;
 	requestedAtEpochMs: number;
+	readModel?: {
+		parsedSourceCount: number;
+		readModelFullBuildCount: number;
+		readModelIncrementalUpdateCount: number;
+		readModelLastTouchedSourceCount: number;
+	};
 	responseBytes: number;
 	roundTripMs: number;
 	rustFinishedAtEpochMs?: number;

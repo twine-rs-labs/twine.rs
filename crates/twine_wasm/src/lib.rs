@@ -108,6 +108,10 @@ impl TwineWasmProjectSession {
         to_js(&self.session.status())
     }
 
+    pub fn performance_diagnostics(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.session.performance_diagnostics())
+    }
+
     pub fn query_graph_projection(
         &mut self,
         story_id: String,

@@ -2,7 +2,7 @@
 
 Status: active
 Owner: performance and architecture maintainers
-Last verified: 2026-07-10
+Last verified: 2026-07-11
 Source of truth: outstanding work revealed by accepted 10k/50k baselines
 
 ## Objective
@@ -13,7 +13,7 @@ fixture isolation.
 
 ## Work order
 
-### 1. Bounded startup read model — in progress
+### 1. Bounded startup read model — implemented, validation pending
 
 - Profile native project load, renderer hydration, session initialization, and
   first-route queries independently.
@@ -27,8 +27,16 @@ fixture isolation.
   summaries, revision-bound Contents/search/diagnostics/assets pages, and
   selected-passage facts. Large Contents no longer performs the old idle full
   index load, and default full-index calls are statically prohibited from
-  product code. Remaining work is to replace compatibility shells and measure
-  the resulting 50k startup/query phases.
+  product code.
+- Contents records are now keyed by stable entity ID inside Rust. Ordinary
+  passage text, layout, tag, story-source, and start-passage mutations update an
+  existing bounded cache in place; undo/redo and external text ingestion use
+  the same path. Perf metrics expose parsed-source, full-build, incremental
+  update, and last-touched-source counters.
+- Focused query runs now transfer roughly 19 KiB for Contents instead of the old
+  roughly 28 MiB compatibility index. Remaining work is cold-start profiling
+  and removal of compatibility full-index calls from explicitly complete
+  workflows where paging is practical.
 
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.
@@ -49,8 +57,13 @@ with unchanged structural assertions.
   revision acknowledgement.
 - The hot local and external one-passage text paths now record an entity delta
   and reuse source/graph caches instead of cloning and diffing the entire
-  project. Broader command families and recovery still retain compatibility
-  fallbacks and should be narrowed before this item is considered complete.
+  project. Passage moves now retain only touched passage/layout entities in
+  history rather than a complete project-layout snapshot. Passage tag and
+  layout changes do not reparse text.
+- Structural story replacement, reference-rewriting rename operations, broad
+  batches, and explicit recovery retain compatibility fallbacks. These should
+  be narrowed by command family, but they are no longer on the ordinary edit,
+  undo/redo, Contents, or watcher text path.
 
 Exit signal: a one-passage edit or external delta does no project-scale index
 rebuild; edit-to-paint and watcher ingestion materially improve against the
@@ -65,7 +78,12 @@ focused 50k measurements.
 - Reduce watcher observation and Rust reindex latency while retaining
   one-source parsing and immutable candidate leases. The focused 50k watcher
   run measured about 1.23 s Rust ingestion and about 3.88 s observation to
-  passage patch; native changed-path parsing is not the limiting stage.
+  passage patch before resident read-model maintenance landed. The attributed
+  follow-ups improved those to roughly 150–291 ms and 592–826 ms respectively,
+  with one touched source and no second full cache build. Further work should
+  add stage-level Rust timings or repeated samples before optimizing the
+  remaining graph/topology and renderer-patch portions; native file parsing is
+  not the limiting stage.
 
 Exit signal: no full-source rebuilds, bounded rendering remains true, and each
 surface materially improves against its accepted baseline.

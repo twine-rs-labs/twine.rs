@@ -2,7 +2,7 @@
 
 Status: current measured snapshot
 Owner: performance maintainers
-Last verified: 2026-07-10
+Last verified: 2026-07-11
 Source of truth: release-mode Electron harness and accepted local baselines
 
 ## Harness state
@@ -35,21 +35,35 @@ design and are not accepted as baselines.
 
 ## Recent focused validation
 
-The 50k diagnostic and watcher phases passed on 2026-07-10. They validate the
-first incremental project-folder save path and steady-state watcher path without
-requiring another complete multi-phase run:
+The 50k diagnostic, query, graph, and watcher phases passed on 2026-07-10. They
+validate the incremental project-folder save path, bounded Contents path, and
+steady-state watcher path without requiring another complete multi-phase run.
+These ignored local reports are current engineering evidence; the tracked July
+3 summaries remain the durable accepted baseline until a new complete suite is
+accepted.
 
 - A passage text edit used `incremental` save mode, touched one project path,
-  and completed its native save in about 149 ms. The native write itself took
-  about 7 ms; conflict checking, baseline patching, and IPC account for the
-  remainder.
-- The same edit still took about 1.65 s to paint and about 1.67 s end to end.
-  The remaining latency is therefore not a whole-project filesystem rewrite.
+  and completed its native save in about 63 ms. The file write itself took
+  about 3 ms; baseline patching and acknowledgement account for more of the
+  remaining persistence time than filesystem output.
+- The same focused sample took about 629 ms to paint and about 846 ms through
+  save acknowledgement. The remaining latency is not a whole-project rewrite.
+- The corrected query phase kept Contents payloads near 19 KiB. Contents p95
+  was about 594 ms, of which about 290 ms was the Rust/WASM request and about
+  40 ms was result-to-paint. Search p95 was about 109 ms. An earlier run on the
+  same implementation measured about 290 ms Contents p95 and 41 ms search p95,
+  so variance and remaining CPU work still need attention.
+- The graph phase improved to about 49 ms p95, with a 984 ms maximum outlier.
+- Query-phase resident memory was about 1.15 GiB; graph-phase resident memory
+  was about 1.56 GiB. Both are materially below the original baseline but still
+  above the 600 MiB target.
 - The watcher phase parsed one source for a one-passage edit and parsed no story
   sources for an asset-only edit. The asset change entered review as required.
-- Passage watcher observation to patch was about 3.88 s, including about 1.23 s
-  of Rust external-delta ingestion. This is the next high-value incremental
-  indexing target.
+- After entity-maintained read-model caches landed, passing passage watcher
+  samples ranged from about 592–826 ms observation-to-patch and 150–291 ms Rust
+  ingestion. Their counters showed one initial 50k cache build followed by one
+  incremental update touching one source; no second full build occurred. The
+  spread is too wide to rank small follow-up changes from a single sample.
 
 The watcher phase waits for the initial asset-inventory session transaction to
 finish before it resets metrics or modifies disk. That keeps the measured
@@ -77,10 +91,12 @@ Search meets its 50 ms target. The other headline metrics demonstrate that the
 architecture now exposes actionable bottlenecks rather than satisfying the
 roadmap budgets.
 
-The incremental native-save fast path is now in place for passage text edits.
-The next optimization work is bounded initial read-model queries and per-passage
-Rust indexing, then a complete 50k comparison only after those changes
-materially affect a reported phase.
+The incremental native-save and bounded read-model paths are now in place.
+Rust read-model caches are maintained across ordinary passage text, layout,
+tag, story source, start-passage, undo/redo, and external text transactions;
+perf bridge metrics report parsed-source and full/incremental cache-build
+counters. Both diagnostic and watcher Electron phases pass those assertions.
+Startup and retained-memory attribution are now the next optimization gate.
 
 ## Gates
 

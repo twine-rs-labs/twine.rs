@@ -131,6 +131,8 @@ pub struct GraphIndex {
     story_rank: BTreeMap<PassageId, usize>,
     #[serde(skip)]
     last_incremental_parse_count: usize,
+    #[serde(skip)]
+    last_topology_changed: bool,
 }
 
 impl GraphIndex {
@@ -170,6 +172,7 @@ impl GraphIndex {
             story_order,
             story_rank,
             last_incremental_parse_count: story.passage_count(),
+            last_topology_changed: true,
             ..Self::default()
         };
 
@@ -259,9 +262,22 @@ impl GraphIndex {
         &mut self,
         story: &Story,
         changed_passage_ids: &BTreeSet<PassageId>,
+        changed_source_ids: &BTreeSet<PassageId>,
         changed_target_names: &BTreeSet<String>,
     ) {
         self.last_incremental_parse_count = 0;
+        self.last_topology_changed = true;
+
+        if changed_target_names.is_empty()
+            && story.passage_count() == self.nodes.len()
+            && changed_passage_ids
+                .iter()
+                .all(|passage_id| self.nodes.contains_key(passage_id))
+        {
+            self.apply_stable_story_delta(story, changed_passage_ids, changed_source_ids);
+            return;
+        }
+
         let mut affected_sources = changed_passage_ids.clone();
 
         for (source_id, edges) in &self.outgoing {
@@ -414,8 +430,189 @@ impl GraphIndex {
         self.mark_orphans(&story.start_passage);
     }
 
+    fn apply_stable_story_delta(
+        &mut self,
+        story: &Story,
+        changed_passage_ids: &BTreeSet<PassageId>,
+        changed_source_ids: &BTreeSet<PassageId>,
+    ) {
+        let previous_start = self
+            .nodes
+            .values()
+            .find(|node| node.is_start)
+            .map(|node| node.id.clone());
+        let start_changed = previous_start.as_ref() != Some(&story.start_passage);
+        let mut topology_changed = false;
+
+        if start_changed {
+            if let Some(previous_start) = previous_start
+                && let Some(node) = self.nodes.get_mut(&previous_start)
+            {
+                node.is_start = false;
+            }
+            if let Some(node) = self.nodes.get_mut(&story.start_passage) {
+                node.is_start = true;
+            }
+        }
+
+        for passage_id in changed_passage_ids {
+            let Some(passage) = story.passage_by_id(passage_id) else {
+                continue;
+            };
+            let was_empty = self.nodes.get(passage_id).is_some_and(|node| node.is_empty);
+            let was_tagged = self
+                .nodes
+                .get(passage_id)
+                .is_some_and(|node| !node.tags.is_empty());
+            let is_empty = passage.text.trim().is_empty();
+            let is_tagged = !passage.tags.is_empty();
+
+            if was_empty != is_empty {
+                if is_empty {
+                    self.stats.empty_passages += 1;
+                } else {
+                    self.stats.empty_passages = self.stats.empty_passages.saturating_sub(1);
+                }
+            }
+            if was_tagged != is_tagged {
+                if is_tagged {
+                    self.stats.tagged_passages += 1;
+                } else {
+                    self.stats.tagged_passages = self.stats.tagged_passages.saturating_sub(1);
+                }
+            }
+
+            if changed_source_ids.contains(passage_id) {
+                let next_edges = parse_standard_links(
+                    &passage.text,
+                    LinkParseOptions {
+                        internal_only: true,
+                    },
+                )
+                .into_iter()
+                .map(|link| LinkEdge {
+                    source: passage.id.clone(),
+                    target: self.passage_names.get(&link.target).cloned(),
+                    target_name: link.target,
+                })
+                .collect::<Vec<_>>();
+                self.last_incremental_parse_count += 1;
+                let previous_edges = self.outgoing.get(passage_id).cloned().unwrap_or_default();
+
+                if previous_edges != next_edges {
+                    topology_changed = true;
+                    for edge in &previous_edges {
+                        self.remove_edge_facts(edge);
+                    }
+                    if next_edges.is_empty() {
+                        self.outgoing.remove(passage_id);
+                    } else {
+                        self.outgoing.insert(passage_id.clone(), next_edges.clone());
+                    }
+                    for edge in &next_edges {
+                        self.add_edge_facts(edge);
+                    }
+                }
+            }
+
+            if let Some(node) = self.nodes.get_mut(passage_id) {
+                node.is_empty = is_empty;
+                node.name.clone_from(&passage.name);
+                node.tags.clone_from(&passage.tags);
+            }
+        }
+
+        if topology_changed || start_changed {
+            self.stats.orphan_passages = 0;
+            self.mark_orphans(&story.start_passage);
+        }
+        self.last_topology_changed = topology_changed || start_changed;
+    }
+
+    fn remove_edge_facts(&mut self, edge: &LinkEdge) {
+        self.stats.links = self.stats.links.saturating_sub(1);
+        if let Some(node) = self.nodes.get_mut(&edge.source) {
+            node.outgoing_count = node.outgoing_count.saturating_sub(1);
+        }
+
+        match &edge.target {
+            Some(target) if target == &edge.source => {
+                self.stats.self_links = self.stats.self_links.saturating_sub(1);
+                if let Some(index) = self.self_links.iter().position(|id| id == &edge.source) {
+                    self.self_links.remove(index);
+                }
+                if let Some(node) = self.nodes.get_mut(&edge.source) {
+                    node.self_link_count = node.self_link_count.saturating_sub(1);
+                }
+            }
+            Some(target) => {
+                self.stats.resolved_links = self.stats.resolved_links.saturating_sub(1);
+                let remove_backlinks = if let Some(backlinks) = self.backlinks.get_mut(target) {
+                    if let Some(index) = backlinks.iter().position(|id| id == &edge.source) {
+                        backlinks.remove(index);
+                    }
+                    backlinks.is_empty()
+                } else {
+                    false
+                };
+                if remove_backlinks {
+                    self.backlinks.remove(target);
+                }
+                if let Some(node) = self.nodes.get_mut(target) {
+                    node.incoming_count = node.incoming_count.saturating_sub(1);
+                }
+            }
+            None => {
+                self.stats.broken_links = self.stats.broken_links.saturating_sub(1);
+                if let Some(index) = self.broken_links.iter().position(|broken| {
+                    broken.source == edge.source && broken.target_name == edge.target_name
+                }) {
+                    self.broken_links.remove(index);
+                }
+                if let Some(node) = self.nodes.get_mut(&edge.source) {
+                    node.broken_link_count = node.broken_link_count.saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    fn add_edge_facts(&mut self, edge: &LinkEdge) {
+        self.stats.links += 1;
+        if let Some(node) = self.nodes.get_mut(&edge.source) {
+            node.outgoing_count += 1;
+        }
+
+        match &edge.target {
+            Some(target) if target == &edge.source => {
+                self.stats.self_links += 1;
+                self.self_links.push(edge.source.clone());
+                self.increment_self_link_count(&edge.source);
+            }
+            Some(target) => {
+                self.stats.resolved_links += 1;
+                self.backlinks
+                    .entry(target.clone())
+                    .or_default()
+                    .push(edge.source.clone());
+                self.increment_incoming_count(target);
+            }
+            None => {
+                self.stats.broken_links += 1;
+                self.broken_links.push(BrokenLink {
+                    source: edge.source.clone(),
+                    target_name: edge.target_name.clone(),
+                });
+                self.increment_broken_link_count(&edge.source);
+            }
+        }
+    }
+
     pub fn last_incremental_parse_count(&self) -> usize {
         self.last_incremental_parse_count
+    }
+
+    pub fn last_topology_changed(&self) -> bool {
+        self.last_topology_changed
     }
 
     pub fn broken_links(&self) -> &[BrokenLink] {
@@ -1280,6 +1477,51 @@ mod tests {
         assert_eq!(start.outgoing_count, 2);
         assert_eq!(start.broken_link_count, 1);
         assert!(!start.is_orphan);
+    }
+
+    #[test]
+    fn stable_text_delta_updates_only_the_changed_source() {
+        let mut story = story();
+        let mut graph = GraphIndex::from_story(&story);
+
+        story
+            .passage_by_id_mut(&PassageId::new("a"))
+            .expect("passage a")
+            .text
+            .push_str(" plain text");
+        let changed = BTreeSet::from([PassageId::new("a")]);
+
+        graph.apply_story_delta(&story, &changed, &changed, &BTreeSet::new());
+
+        assert_eq!(graph.last_incremental_parse_count(), 1);
+        assert_eq!(graph.stats(), GraphIndex::from_story(&story).stats());
+        assert_eq!(
+            graph.links_from(&PassageId::new("a")),
+            GraphIndex::from_story(&story).links_from(&PassageId::new("a"))
+        );
+    }
+
+    #[test]
+    fn tag_only_delta_updates_node_without_parsing_text() {
+        let mut story = story();
+        let mut graph = GraphIndex::from_story(&story);
+
+        story
+            .passage_by_id_mut(&PassageId::new("b"))
+            .expect("passage b")
+            .tags = vec!["scene".into()];
+        let changed = BTreeSet::from([PassageId::new("b")]);
+
+        graph.apply_story_delta(&story, &changed, &BTreeSet::new(), &BTreeSet::new());
+
+        assert_eq!(graph.last_incremental_parse_count(), 0);
+        assert_eq!(graph.stats().tagged_passages, 2);
+        assert_eq!(
+            graph
+                .node(&PassageId::new("b"))
+                .map(|node| node.tags.as_slice()),
+            Some(["scene".to_owned()].as_slice())
+        );
     }
 
     #[test]

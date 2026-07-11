@@ -1738,9 +1738,17 @@ enum StoryDelta {
 
 #[derive(Clone, Debug, Default, Serialize)]
 struct ProjectDelta {
+    layout_passages: Vec<ProjectLayoutPassageDelta>,
     top_after: Option<Project>,
     top_before: Option<Project>,
     stories: Vec<StoryDelta>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ProjectLayoutPassageDelta {
+    after: Option<PassageLayout>,
+    before: Option<PassageLayout>,
+    passage_id: PassageId,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1807,9 +1815,30 @@ impl ProjectDelta {
     fn between(before: &Project, after: &Project) -> Self {
         let mut before_top = before.clone();
         let mut after_top = after.clone();
+        let layout_passages = before
+            .layout
+            .passages
+            .keys()
+            .chain(after.layout.passages.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|passage_id| {
+                let before = before.layout.passages.get(&passage_id).cloned();
+                let after = after.layout.passages.get(&passage_id).cloned();
+
+                (before != after).then_some(ProjectLayoutPassageDelta {
+                    after,
+                    before,
+                    passage_id,
+                })
+            })
+            .collect::<Vec<_>>();
 
         before_top.stories.clear();
         after_top.stories.clear();
+        before_top.layout.passages.clear();
+        after_top.layout.passages.clear();
         let top_changed = before_top != after_top;
         let before_by_id = before
             .stories
@@ -1911,6 +1940,7 @@ impl ProjectDelta {
         }
 
         Self {
+            layout_passages,
             top_after: top_changed.then_some(after_top),
             top_before: top_changed.then_some(before_top),
             stories,
@@ -1926,6 +1956,23 @@ impl ProjectDelta {
             project.layout = top.layout.clone();
             project.library = top.library.clone();
             project.manifest = top.manifest.clone();
+        }
+
+        for delta in &self.layout_passages {
+            let value = if forward {
+                delta.after.as_ref()
+            } else {
+                delta.before.as_ref()
+            };
+
+            if let Some(value) = value {
+                project
+                    .layout
+                    .passages
+                    .insert(delta.passage_id.clone(), value.clone());
+            } else {
+                project.layout.passages.remove(&delta.passage_id);
+            }
         }
 
         let replacement_ids = self
@@ -2222,14 +2269,21 @@ fn sync_fingerprints_for_delta(
                 let Some(story) = project.stories.iter().find(|story| story.id == *story_id) else {
                     continue;
                 };
-                let story_prefix = format!("story:{}:", story_id.as_ref());
-
-                touched.extend(
-                    values
-                        .keys()
-                        .filter(|field| field.starts_with(&story_prefix))
-                        .cloned(),
-                );
+                let story_id_value = story_id.as_ref();
+                touched.extend([
+                    format!("story:{story_id_value}:exists"),
+                    format!("story:{story_id_value}:ifid"),
+                    format!("story:{story_id_value}:name"),
+                    format!("story:{story_id_value}:snapToGrid"),
+                    format!("story:{story_id_value}:startPassage"),
+                    format!("story:{story_id_value}:storyFormat"),
+                    format!("story:{story_id_value}:storyFormatVersion"),
+                    format!("story:{story_id_value}:tagColors"),
+                    format!("story:{story_id_value}:tags"),
+                    format!("story:{story_id_value}:zoom"),
+                    format!("story:{story_id_value}:script"),
+                    format!("story:{story_id_value}:stylesheet"),
+                ]);
                 insert_story_fingerprints(values, story, false);
 
                 for passage_delta in passages {
@@ -2238,27 +2292,20 @@ fn sync_fingerprints_for_delta(
                         story_id.as_ref(),
                         passage_delta.passage_id.as_ref()
                     );
-                    let removed = values
-                        .keys()
-                        .filter(|field| field.starts_with(&prefix))
-                        .cloned()
-                        .collect::<Vec<_>>();
+                    let fields = [
+                        format!("{prefix}exists"),
+                        format!("{prefix}layout"),
+                        format!("{prefix}name"),
+                        format!("{prefix}tags"),
+                        format!("{prefix}text"),
+                    ];
 
-                    for field in removed {
-                        values.remove(&field);
-                        touched.insert(field);
+                    for field in &fields {
+                        values.remove(field);
+                        touched.insert(field.clone());
                     }
                     if let Some(passage) = story.passage_by_id(&passage_delta.passage_id) {
-                        let fields = [
-                            format!("{prefix}exists"),
-                            format!("{prefix}layout"),
-                            format!("{prefix}name"),
-                            format!("{prefix}tags"),
-                            format!("{prefix}text"),
-                        ];
-
                         insert_passage_fingerprints(values, story_id.as_ref(), passage);
-                        touched.extend(fields);
                     }
                 }
             }
@@ -2292,11 +2339,19 @@ struct GraphSessionCache {
 #[derive(Clone, Debug)]
 struct StoryReadModelCache {
     asset_inventory: Vec<CoreAssetInventoryEntry>,
-    contents: Vec<CoreContentsEntry>,
+    asset_entry_ids: BTreeSet<String>,
+    assets_by_source: BTreeMap<String, Vec<CoreAssetReference>>,
+    contents: BTreeMap<String, CoreContentsEntry>,
+    diagnostic_entry_ids: BTreeSet<String>,
     diagnostics: Vec<CoreDiagnostic>,
+    entry_point_id: Option<String>,
     graph: CoreGraphStats,
+    orphan_entry_ids: BTreeSet<String>,
     revision: u64,
+    symbol_entry_ids: BTreeSet<String>,
+    symbols_by_source: BTreeMap<String, Vec<CoreSymbol>>,
     tag_count: usize,
+    tag_usage: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2307,6 +2362,15 @@ struct SourceAnalysisCache {
     source_fingerprint: u64,
     symbols: Vec<CoreSymbol>,
     tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreSessionPerformanceDiagnostics {
+    pub parsed_source_count: usize,
+    pub read_model_full_build_count: usize,
+    pub read_model_incremental_update_count: usize,
+    pub read_model_last_touched_source_count: usize,
 }
 
 fn fingerprint(value: &impl Serialize) -> u64 {
@@ -2560,6 +2624,9 @@ pub struct ProjectSession {
     asset_root: Option<PathBuf>,
     current_fingerprints: BTreeMap<String, u64>,
     read_model_cache: BTreeMap<StoryId, StoryReadModelCache>,
+    read_model_full_build_count: usize,
+    read_model_incremental_update_count: usize,
+    read_model_last_touched_source_count: usize,
     dirty: bool,
     dirty_fields: BTreeSet<String>,
     graph_cache: BTreeMap<StoryId, GraphSessionCache>,
@@ -2585,6 +2652,9 @@ impl ProjectSession {
             asset_root: None,
             current_fingerprints: saved_fingerprints.clone(),
             read_model_cache: BTreeMap::new(),
+            read_model_full_build_count: 0,
+            read_model_incremental_update_count: 0,
+            read_model_last_touched_source_count: 0,
             dirty: false,
             dirty_fields: BTreeSet::new(),
             graph_cache: BTreeMap::new(),
@@ -2694,6 +2764,13 @@ impl ProjectSession {
         {
             return self.apply_start_passage_incremental(story_id, passage_id, record_history);
         }
+        if let StoryCommand::MovePassages {
+            ref moves,
+            ref story_id,
+        } = command
+        {
+            return self.apply_move_passages_incremental(story_id, moves, record_history);
+        }
         if let StoryCommand::UpdateStoryScript {
             ref script,
             ref story_id,
@@ -2712,6 +2789,17 @@ impl ProjectSession {
                 false,
                 record_history,
             );
+        }
+        if let Some(story_id) = match &command {
+            StoryCommand::RenameStory { story_id, .. }
+            | StoryCommand::SetStoryFormat { story_id, .. }
+            | StoryCommand::SetStorySnapToGrid { story_id, .. }
+            | StoryCommand::SetStoryTagColor { story_id, .. }
+            | StoryCommand::SetStoryTags { story_id, .. }
+            | StoryCommand::SetStoryZoom { story_id, .. } => Some(story_id.clone()),
+            _ => None,
+        } {
+            return self.apply_story_metadata_incremental(command, &story_id, record_history);
         }
 
         let before = self.project.clone();
@@ -2745,8 +2833,7 @@ impl ProjectSession {
             self.sync_fingerprints(&delta);
             push_dirty_patch(&mut patches, dirty_before, self.dirty);
 
-            self.update_graph_cache(&delta);
-            self.update_analysis_cache(&delta);
+            self.update_session_caches(&delta);
             self.clear_redo();
             if record_history {
                 self.push_undo(Transaction {
@@ -2834,8 +2921,7 @@ impl ProjectSession {
         self.next_transaction_id += 1;
         self.current_state_id = transaction_id;
         self.sync_fingerprints(&delta);
-        self.update_graph_cache(&delta);
-        self.update_analysis_cache(&delta);
+        self.update_session_caches(&delta);
         self.clear_redo();
         if record_history {
             self.push_undo(Transaction {
@@ -2963,8 +3049,7 @@ impl ProjectSession {
         self.next_transaction_id += 1;
         self.current_state_id = transaction_id;
         self.sync_fingerprints(&delta);
-        self.update_graph_cache(&delta);
-        self.update_analysis_cache(&delta);
+        self.update_session_caches(&delta);
         self.clear_redo();
         if record_history {
             self.push_undo(Transaction {
@@ -3037,8 +3122,7 @@ impl ProjectSession {
         self.next_transaction_id += 1;
         self.current_state_id = transaction_id;
         self.sync_fingerprints(&delta);
-        self.update_graph_cache(&delta);
-        self.update_analysis_cache(&delta);
+        self.update_session_caches(&delta);
         self.clear_redo();
         if record_history {
             self.push_undo(Transaction {
@@ -3059,6 +3143,153 @@ impl ProjectSession {
         push_dirty_patch(&mut patches, dirty_before, self.dirty);
         Ok(PatchBatch {
             label: "Set Start Passage".into(),
+            patches,
+            transaction_id,
+        })
+    }
+
+    fn apply_move_passages_incremental(
+        &mut self,
+        story_id: &str,
+        moves: &[PassageMove],
+        record_history: bool,
+    ) -> Result<PatchBatch, CoreError> {
+        let transaction_id = self.next_transaction_id;
+        let story_id = StoryId::new(story_id);
+        let requested = moves
+            .iter()
+            .map(|passage_move| {
+                (
+                    PassageId::new(&passage_move.passage_id),
+                    GraphPosition::from(passage_move.bounds.clone()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let (story_shell, before_passages) = {
+            let story = self.story(story_id.as_ref())?;
+            let mut before_passages = Vec::new();
+
+            for (passage_id, bounds) in &requested {
+                let index = story
+                    .passages
+                    .iter()
+                    .position(|passage| &passage.id == passage_id)
+                    .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+                let passage = story
+                    .passage_by_id(passage_id)
+                    .expect("validated passage should resolve");
+
+                if passage.layout != Some(*bounds)
+                    || self
+                        .project
+                        .layout
+                        .passages
+                        .get(passage_id)
+                        .map(|layout| layout.bounds)
+                        != Some(*bounds)
+                {
+                    before_passages.push((index, passage.clone()));
+                }
+            }
+
+            (story_shell_without_passages(story), before_passages)
+        };
+
+        if before_passages.is_empty() {
+            return Ok(PatchBatch {
+                label: "Move Passages".into(),
+                patches: Vec::new(),
+                transaction_id,
+            });
+        }
+
+        let mut passage_deltas = Vec::with_capacity(before_passages.len());
+        let mut layout_passages = Vec::with_capacity(before_passages.len());
+        let mut patches = Vec::with_capacity(before_passages.len() + 1);
+
+        for (index, before) in before_passages {
+            let passage_id = before.id.clone();
+            let bounds = *requested
+                .get(&passage_id)
+                .expect("validated move should retain its bounds");
+            let layout_before = self.project.layout.passages.get(&passage_id).cloned();
+            let after = {
+                let passage = self
+                    .story_mut(story_id.as_ref())?
+                    .passage_by_id_mut(&passage_id)
+                    .expect("validated passage should resolve");
+
+                passage.layout = Some(bounds);
+                passage.clone()
+            };
+            let layout_after = PassageLayout {
+                bounds,
+                ..PassageLayout::default()
+            };
+
+            self.project
+                .layout
+                .passages
+                .insert(passage_id.clone(), layout_after.clone());
+            passage_deltas.push(PassageDelta {
+                after: Some(IndexedPassage {
+                    index,
+                    value: after,
+                }),
+                before: Some(IndexedPassage {
+                    index,
+                    value: before,
+                }),
+                passage_id: passage_id.clone(),
+            });
+            layout_passages.push(ProjectLayoutPassageDelta {
+                after: Some(layout_after),
+                before: layout_before,
+                passage_id: passage_id.clone(),
+            });
+            patches.push(Patch::PassageUpdated {
+                changes: PassagePatch {
+                    layout: Some(bounds.into()),
+                    ..PassagePatch::default()
+                },
+                passage_id: passage_id.as_ref().to_owned(),
+                story_id: story_id.as_ref().to_owned(),
+            });
+        }
+
+        let delta = ProjectDelta {
+            layout_passages,
+            stories: vec![StoryDelta::Update {
+                after: story_shell.clone(),
+                before: story_shell,
+                passages: passage_deltas,
+                story_id: story_id.clone(),
+            }],
+            ..ProjectDelta::default()
+        };
+        let dirty_before = self.dirty;
+        let before_state_id = self.current_state_id;
+
+        self.next_transaction_id += 1;
+        self.current_state_id = transaction_id;
+        self.sync_fingerprints(&delta);
+        self.update_session_caches(&delta);
+        self.clear_redo();
+        if record_history {
+            self.push_undo(Transaction {
+                after_state_id: self.current_state_id,
+                assets: Vec::new(),
+                before_state_id,
+                byte_size: 0,
+                delta,
+                kind: CoreHistoryKind::MovePassage,
+                label: "Move Passages".into(),
+            });
+        }
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+
+        Ok(PatchBatch {
+            label: "Move Passages".into(),
             patches,
             transaction_id,
         })
@@ -3121,8 +3352,7 @@ impl ProjectSession {
         self.next_transaction_id += 1;
         self.current_state_id = transaction_id;
         self.sync_fingerprints(&delta);
-        self.update_graph_cache(&delta);
-        self.update_analysis_cache(&delta);
+        self.update_session_caches(&delta);
         self.clear_redo();
         if record_history {
             self.push_undo(Transaction {
@@ -3155,6 +3385,63 @@ impl ProjectSession {
         })
     }
 
+    fn apply_story_metadata_incremental(
+        &mut self,
+        command: StoryCommand,
+        story_id: &str,
+        record_history: bool,
+    ) -> Result<PatchBatch, CoreError> {
+        let transaction_id = self.next_transaction_id;
+        let story_id = StoryId::new(story_id);
+        let before = story_shell_without_passages(self.story(story_id.as_ref())?);
+        let dirty_before = self.dirty;
+        let mut patches = self.apply_without_transaction(command.clone())?;
+
+        if patches.is_empty() {
+            return Ok(PatchBatch {
+                label: command.label().into(),
+                patches,
+                transaction_id,
+            });
+        }
+
+        let after = story_shell_without_passages(self.story(story_id.as_ref())?);
+        let delta = ProjectDelta {
+            stories: vec![StoryDelta::Update {
+                after,
+                before,
+                passages: Vec::new(),
+                story_id,
+            }],
+            ..ProjectDelta::default()
+        };
+        let before_state_id = self.current_state_id;
+
+        self.next_transaction_id += 1;
+        self.current_state_id = transaction_id;
+        self.sync_fingerprints(&delta);
+        self.update_session_caches(&delta);
+        self.clear_redo();
+        if record_history {
+            self.push_undo(Transaction {
+                after_state_id: self.current_state_id,
+                assets: Vec::new(),
+                before_state_id,
+                byte_size: 0,
+                delta,
+                kind: command.history_kind(),
+                label: command.label().into(),
+            });
+        }
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+
+        Ok(PatchBatch {
+            label: command.label().into(),
+            patches,
+            transaction_id,
+        })
+    }
+
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
     }
@@ -3175,6 +3462,15 @@ impl ProjectSession {
         self.next_transaction_id
     }
 
+    pub fn performance_diagnostics(&self) -> CoreSessionPerformanceDiagnostics {
+        CoreSessionPerformanceDiagnostics {
+            parsed_source_count: self.analysis_parse_count,
+            read_model_full_build_count: self.read_model_full_build_count,
+            read_model_incremental_update_count: self.read_model_incremental_update_count,
+            read_model_last_touched_source_count: self.read_model_last_touched_source_count,
+        }
+    }
+
     pub fn set_revision(&mut self, next_transaction_id: u64) {
         self.next_transaction_id = next_transaction_id.max(1);
     }
@@ -3192,10 +3488,9 @@ impl ProjectSession {
         }
         self.current_state_id = transaction.after_state_id;
         self.sync_fingerprints(&transaction.delta);
-        self.update_graph_cache(&transaction.delta);
-        self.update_analysis_cache(&transaction.delta);
-        self.undo_stack.push(transaction.clone());
         self.next_transaction_id += 1;
+        self.update_session_caches(&transaction.delta);
+        self.undo_stack.push(transaction.clone());
 
         push_dirty_patch(&mut patches, dirty_before, self.dirty);
         Some(PatchBatch {
@@ -3232,10 +3527,9 @@ impl ProjectSession {
         }
         self.current_state_id = transaction.before_state_id;
         self.sync_fingerprints(&transaction.delta);
-        self.update_graph_cache(&transaction.delta);
-        self.update_analysis_cache(&transaction.delta);
-        self.redo_stack.push(transaction.clone());
         self.next_transaction_id += 1;
+        self.update_session_caches(&transaction.delta);
+        self.redo_stack.push(transaction.clone());
 
         push_dirty_patch(&mut patches, dirty_before, self.dirty);
         Some(PatchBatch {
@@ -3357,24 +3651,25 @@ impl ProjectSession {
     }
 
     fn accept_external_fingerprints(&mut self, changes: &[CoreExternalChange]) {
-        let all_fields = self
-            .current_fingerprints
-            .keys()
-            .chain(self.saved_fingerprints.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>();
-
         for pattern in changes.iter().flat_map(external_change_field_patterns) {
-            for field in all_fields
-                .iter()
-                .filter(|field| field_matches_pattern(field, &pattern))
-            {
-                if let Some(value) = self.current_fingerprints.get(field) {
+            let fields = if pattern.ends_with('*') {
+                self.current_fingerprints
+                    .keys()
+                    .chain(self.saved_fingerprints.keys())
+                    .filter(|field| field_matches_pattern(field, &pattern))
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+            } else {
+                BTreeSet::from([pattern])
+            };
+
+            for field in fields {
+                if let Some(value) = self.current_fingerprints.get(&field) {
                     self.saved_fingerprints.insert(field.clone(), *value);
                 } else {
-                    self.saved_fingerprints.remove(field);
+                    self.saved_fingerprints.remove(&field);
                 }
-                self.dirty_fields.remove(field);
+                self.dirty_fields.remove(&field);
             }
         }
         self.refresh_dirty();
@@ -3501,8 +3796,7 @@ impl ProjectSession {
 
         if project_changed {
             self.current_state_id = operation_id;
-            self.update_graph_cache(&transaction_delta);
-            self.update_analysis_cache(&transaction_delta);
+            self.update_session_caches(&transaction_delta);
             self.clear_redo();
             self.push_undo(Transaction {
                 after_state_id: self.current_state_id,
@@ -3649,8 +3943,7 @@ impl ProjectSession {
         self.remember_external_delta(delta_id);
         self.next_transaction_id += 1;
         self.current_state_id = operation_id;
-        self.update_graph_cache(&transaction_delta);
-        self.update_analysis_cache(&transaction_delta);
+        self.update_session_caches(&transaction_delta);
         self.clear_redo();
         self.push_undo(Transaction {
             after_state_id: self.current_state_id,
@@ -3879,6 +4172,14 @@ impl ProjectSession {
                         .iter()
                         .map(|passage| passage.passage_id.clone())
                         .collect::<BTreeSet<_>>();
+                    let changed_source_ids = passages
+                        .iter()
+                        .filter(|passage| match (&passage.before, &passage.after) {
+                            (Some(before), Some(after)) => before.value.text != after.value.text,
+                            _ => true,
+                        })
+                        .map(|passage| passage.passage_id.clone())
+                        .collect::<BTreeSet<_>>();
                     let changed_target_names = passages
                         .iter()
                         .flat_map(|passage| match (&passage.before, &passage.after) {
@@ -3898,13 +4199,16 @@ impl ProjectSession {
                     cache.graph.apply_story_delta(
                         story,
                         &changed_passage_ids,
+                        &changed_source_ids,
                         &changed_target_names,
                     );
-                    cache.layout = cache.graph.layout_snapshot(
-                        story,
-                        &self.project.layout,
-                        &AutoLayoutOptions::default(),
-                    );
+                    if cache.graph.last_topology_changed() {
+                        cache.layout = cache.graph.layout_snapshot(
+                            story,
+                            &self.project.layout,
+                            &AutoLayoutOptions::default(),
+                        );
+                    }
                 } else {
                     self.graph_cache.remove(&story_id);
                 }
@@ -3913,6 +4217,13 @@ impl ProjectSession {
             }
         }
         if top_layout_changed {
+            let cached_story_ids = self.graph_cache.keys().cloned().collect::<Vec<_>>();
+
+            for story_id in cached_story_ids {
+                self.refresh_graph_layout(&story_id);
+            }
+        }
+        if !delta.layout_passages.is_empty() && delta.stories.is_empty() {
             let cached_story_ids = self.graph_cache.keys().cloned().collect::<Vec<_>>();
 
             for story_id in cached_story_ids {
@@ -3938,6 +4249,22 @@ impl ProjectSession {
                     }
 
                     for passage_delta in passages {
+                        if let (Some(before), Some(after)) =
+                            (&passage_delta.before, &passage_delta.after)
+                            && before.value.name == after.value.name
+                            && before.value.text == after.value.text
+                        {
+                            if before.value.tags != after.value.tags
+                                && let Some(analysis) =
+                                    self.analysis_cache.get_mut(story_id).and_then(|sources| {
+                                        sources.get_mut(passage_delta.passage_id.as_ref())
+                                    })
+                            {
+                                analysis.tags.clone_from(&after.value.tags);
+                                analysis.file.tags.clone_from(&after.value.tags);
+                            }
+                            continue;
+                        }
                         let passage = self
                             .project
                             .stories
@@ -4011,6 +4338,242 @@ impl ProjectSession {
                 }
             }
         }
+    }
+
+    fn update_read_model_cache(&mut self, delta: &ProjectDelta) {
+        let revision = self.revision();
+
+        for story_delta in &delta.stories {
+            let graph_facts_changed = ProjectDelta::graph_facts_changed(story_delta);
+            let (after, before, passages, story_id) = match story_delta {
+                StoryDelta::Replace { story_id, .. } => {
+                    self.read_model_cache.remove(story_id);
+                    continue;
+                }
+                StoryDelta::Update {
+                    after,
+                    before,
+                    passages,
+                    story_id,
+                } => (after, before, passages, story_id),
+            };
+            let Some(mut cache) = self.read_model_cache.remove(story_id) else {
+                continue;
+            };
+
+            if !read_model_delta_is_incremental(after, before, passages) {
+                self.read_model_last_touched_source_count = 0;
+                continue;
+            }
+
+            let Some(story) = self
+                .project
+                .stories
+                .iter()
+                .find(|story| &story.id == story_id)
+            else {
+                continue;
+            };
+            let mut touched_source_ids = passages
+                .iter()
+                .map(|passage| passage.passage_id.as_ref().to_owned())
+                .collect::<BTreeSet<_>>();
+            let touched_passage_source_ids = passages
+                .iter()
+                .filter(|passage| match (&passage.before, &passage.after) {
+                    (Some(before), Some(after)) => before.value.text != after.value.text,
+                    _ => true,
+                })
+                .map(|passage| passage.passage_id.as_ref().to_owned())
+                .collect::<BTreeSet<_>>();
+
+            if before.script != after.script {
+                touched_source_ids.insert(format!("{}:script", story_id.as_ref()));
+            }
+            if before.stylesheet != after.stylesheet {
+                touched_source_ids.insert(format!("{}:stylesheet", story_id.as_ref()));
+            }
+            let mut assets_changed = false;
+            let mut symbols_changed = false;
+
+            let mut touched_tags = BTreeSet::new();
+            for passage in passages {
+                let (Some(before), Some(after)) = (&passage.before, &passage.after) else {
+                    continue;
+                };
+                if before.value.tags == after.value.tags {
+                    continue;
+                }
+                let passage_id = passage.passage_id.as_ref().to_owned();
+
+                for tag in &before.value.tags {
+                    touched_tags.insert(tag.clone());
+                    let remove_tag = if let Some(passage_ids) = cache.tag_usage.get_mut(tag) {
+                        passage_ids.remove(&passage_id);
+                        passage_ids.is_empty()
+                    } else {
+                        false
+                    };
+                    if remove_tag {
+                        cache.tag_usage.remove(tag);
+                    }
+                }
+                for tag in &after.value.tags {
+                    touched_tags.insert(tag.clone());
+                    cache
+                        .tag_usage
+                        .entry(tag.clone())
+                        .or_default()
+                        .insert(passage_id.clone());
+                }
+            }
+
+            for source_id in &touched_source_ids {
+                let previous_assets = cache.assets_by_source.get(source_id).cloned();
+                let previous_symbols = cache.symbols_by_source.get(source_id).cloned();
+                let Some(analysis) = self
+                    .analysis_cache
+                    .get(story_id)
+                    .and_then(|sources| sources.get(source_id))
+                    .cloned()
+                else {
+                    cache.contents.remove(&format!("source:{source_id}"));
+                    assets_changed |= cache.assets_by_source.remove(source_id).is_some();
+                    symbols_changed |= cache.symbols_by_source.remove(source_id).is_some();
+                    continue;
+                };
+
+                let file = &analysis.file;
+                cache.contents.insert(
+                    format!("source:{}", file.id),
+                    CoreContentsEntry {
+                        count: file.line_count,
+                        detail: Some(format!("{} characters", file.character_count)),
+                        id: format!("source:{}", file.id),
+                        kind: match &file.kind {
+                            CoreSourceKind::Passage => CoreContentsEntryKind::Passage,
+                            CoreSourceKind::Script => CoreContentsEntryKind::Script,
+                            CoreSourceKind::Stylesheet => CoreContentsEntryKind::Stylesheet,
+                            CoreSourceKind::StoryMetadata => CoreContentsEntryKind::Metadata,
+                        },
+                        label: file.name.clone(),
+                        passage_id: file.passage_id.clone(),
+                        severity: None,
+                        source_id: Some(file.id.clone()),
+                    },
+                );
+                if analysis.assets.is_empty() {
+                    cache.assets_by_source.remove(source_id);
+                } else {
+                    cache
+                        .assets_by_source
+                        .insert(source_id.clone(), analysis.assets);
+                }
+                assets_changed |= previous_assets != cache.assets_by_source.get(source_id).cloned();
+                if analysis.symbols.is_empty() {
+                    cache.symbols_by_source.remove(source_id);
+                } else {
+                    cache
+                        .symbols_by_source
+                        .insert(source_id.clone(), analysis.symbols);
+                }
+                symbols_changed |=
+                    previous_symbols != cache.symbols_by_source.get(source_id).cloned();
+            }
+
+            for tag in touched_tags {
+                cache.contents.remove(&format!("tag:{tag}"));
+                if let Some(passage_ids) = cache.tag_usage.get(&tag) {
+                    let entry = CoreContentsEntry {
+                        count: passage_ids.len(),
+                        detail: story.tag_colors.get(&tag).cloned(),
+                        id: format!("tag:{tag}"),
+                        kind: group_kind(&tag),
+                        label: tag,
+                        passage_id: passage_ids.first().cloned(),
+                        severity: None,
+                        source_id: passage_ids.first().cloned(),
+                    };
+                    cache.contents.insert(entry.id.clone(), entry);
+                }
+            }
+            cache.tag_count = cache.tag_usage.len();
+            cache.contents.insert(
+                format!("metadata:{}", story.id.as_ref()),
+                CoreContentsEntry {
+                    count: story.passages.len(),
+                    detail: Some(story.name.clone()),
+                    id: format!("metadata:{}", story.id.as_ref()),
+                    kind: CoreContentsEntryKind::Metadata,
+                    label: "Story metadata".into(),
+                    passage_id: None,
+                    severity: None,
+                    source_id: Some(format!("{}:metadata", story.id.as_ref())),
+                },
+            );
+            cache.contents.insert(
+                format!("format:{}", story.id.as_ref()),
+                CoreContentsEntry {
+                    count: 1,
+                    detail: Some(format!(
+                        "{} {}",
+                        story.story_format, story.story_format_version
+                    )),
+                    id: format!("format:{}", story.id.as_ref()),
+                    kind: CoreContentsEntryKind::Metadata,
+                    label: "Story format".into(),
+                    passage_id: None,
+                    severity: None,
+                    source_id: Some(format!("{}:metadata", story.id.as_ref())),
+                },
+            );
+            for (tag, passage_ids) in &cache.tag_usage {
+                let entry = CoreContentsEntry {
+                    count: passage_ids.len(),
+                    detail: story.tag_colors.get(tag).cloned(),
+                    id: format!("tag:{tag}"),
+                    kind: group_kind(tag),
+                    label: tag.clone(),
+                    passage_id: passage_ids.first().cloned(),
+                    severity: None,
+                    source_id: passage_ids.first().cloned(),
+                };
+                cache.contents.insert(entry.id.clone(), entry);
+            }
+
+            let graph_cache = self.graph_cache.get(story_id);
+            let topology_changed = graph_facts_changed
+                && graph_cache.is_some_and(|graph_cache| graph_cache.graph.last_topology_changed());
+
+            refresh_read_model_aggregates(
+                story,
+                &mut cache,
+                graph_cache,
+                topology_changed,
+                &touched_passage_source_ids,
+                assets_changed,
+                symbols_changed,
+            );
+            cache.revision = revision;
+            self.read_model_incremental_update_count += 1;
+            self.read_model_last_touched_source_count = touched_source_ids.len();
+            self.read_model_cache.insert(story_id.clone(), cache);
+        }
+
+        if (delta.top_before.is_some() || !delta.layout_passages.is_empty())
+            && delta.stories.is_empty()
+        {
+            for cache in self.read_model_cache.values_mut() {
+                cache.revision = revision;
+            }
+            self.read_model_last_touched_source_count = 0;
+        }
+    }
+
+    fn update_session_caches(&mut self, delta: &ProjectDelta) {
+        self.update_graph_cache(delta);
+        self.update_analysis_cache(delta);
+        self.update_read_model_cache(delta);
     }
 
     fn apply_without_transaction(
@@ -5268,8 +5831,10 @@ impl ProjectSession {
             let stylesheet_source_id = format!("{}:stylesheet", story.id.as_ref());
             let mut active_source_ids = BTreeSet::new();
             let mut assets = Vec::new();
+            let mut assets_by_source = BTreeMap::new();
             let mut files = Vec::new();
             let mut symbols = Vec::new();
+            let mut symbols_by_source = BTreeMap::new();
             let mut tag_usage = BTreeMap::<String, BTreeSet<String>>::new();
 
             for passage in &story.passages {
@@ -5285,9 +5850,15 @@ impl ProjectSession {
                     CoreSearchScope::PassageText,
                 );
 
-                assets.extend(analysis.assets);
+                if !analysis.assets.is_empty() {
+                    assets.extend(analysis.assets.clone());
+                    assets_by_source.insert(passage.id.as_ref().to_owned(), analysis.assets);
+                }
                 files.push(analysis.file);
-                symbols.extend(analysis.symbols);
+                if !analysis.symbols.is_empty() {
+                    symbols.extend(analysis.symbols.clone());
+                    symbols_by_source.insert(passage.id.as_ref().to_owned(), analysis.symbols);
+                }
                 for tag in &passage.tags {
                     tag_usage
                         .entry(tag.clone())
@@ -5318,12 +5889,24 @@ impl ProjectSession {
                 &[],
                 CoreSearchScope::Stylesheet,
             );
-            assets.extend(script_analysis.assets);
-            assets.extend(stylesheet_analysis.assets);
+            if !script_analysis.assets.is_empty() {
+                assets.extend(script_analysis.assets.clone());
+                assets_by_source.insert(script_source_id.clone(), script_analysis.assets);
+            }
+            if !stylesheet_analysis.assets.is_empty() {
+                assets.extend(stylesheet_analysis.assets.clone());
+                assets_by_source.insert(stylesheet_source_id.clone(), stylesheet_analysis.assets);
+            }
             files.push(script_analysis.file);
             files.push(stylesheet_analysis.file);
-            symbols.extend(script_analysis.symbols);
-            symbols.extend(stylesheet_analysis.symbols);
+            if !script_analysis.symbols.is_empty() {
+                symbols.extend(script_analysis.symbols.clone());
+                symbols_by_source.insert(script_source_id, script_analysis.symbols);
+            }
+            if !stylesheet_analysis.symbols.is_empty() {
+                symbols.extend(stylesheet_analysis.symbols.clone());
+                symbols_by_source.insert(stylesheet_source_id, stylesheet_analysis.symbols);
+            }
             if let Some(cache) = self.analysis_cache.get_mut(&story.id) {
                 cache.retain(|source_id, _| active_source_ids.contains(source_id));
             }
@@ -5331,7 +5914,7 @@ impl ProjectSession {
             let known_assets = self.known_asset_inventory(&[])?;
             let asset_inventory =
                 asset_inventory_from_references(&assets, known_assets, self.asset_root.is_some());
-            let tag_entries = tag_entries(&story, tag_usage);
+            let tag_entries = tag_entries(&story, tag_usage.clone());
             self.ensure_graph_cache(&story.id)?;
             let graph = &self
                 .graph_cache
@@ -5404,7 +5987,7 @@ impl ProjectSession {
                 &metadata_source_id,
                 &asset_inventory,
             ));
-            let contents = contents_entries(
+            let content_entries = contents_entries(
                 &story,
                 &files,
                 &tag_entries,
@@ -5414,18 +5997,61 @@ impl ProjectSession {
                 graph,
                 &metadata_source_id,
             );
+            let asset_entry_ids = content_entries
+                .iter()
+                .filter(|entry| entry.kind == CoreContentsEntryKind::Asset)
+                .map(|entry| entry.id.clone())
+                .collect();
+            let diagnostic_entry_ids = content_entries
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        entry.kind,
+                        CoreContentsEntryKind::BrokenLink | CoreContentsEntryKind::Diagnostic
+                    )
+                })
+                .map(|entry| entry.id.clone())
+                .collect();
+            let orphan_entry_ids = content_entries
+                .iter()
+                .filter(|entry| entry.kind == CoreContentsEntryKind::Orphan)
+                .map(|entry| entry.id.clone())
+                .collect();
+            let entry_point_id = content_entries
+                .iter()
+                .find(|entry| entry.kind == CoreContentsEntryKind::EntryPoint)
+                .map(|entry| entry.id.clone());
+            let symbol_entry_ids = content_entries
+                .iter()
+                .filter(|entry| entry.kind == CoreContentsEntryKind::Variable)
+                .map(|entry| entry.id.clone())
+                .collect();
+            let contents = content_entries
+                .into_iter()
+                .map(|entry| (entry.id.clone(), entry))
+                .collect();
 
             self.read_model_cache.insert(
                 story_id.clone(),
                 StoryReadModelCache {
                     asset_inventory,
+                    asset_entry_ids,
+                    assets_by_source,
                     contents,
+                    diagnostic_entry_ids,
                     diagnostics,
+                    entry_point_id,
                     graph: graph.stats().clone().into(),
+                    orphan_entry_ids,
                     revision,
+                    symbol_entry_ids,
+                    symbols_by_source,
                     tag_count: tag_entries.len(),
+                    tag_usage,
                 },
             );
+            self.read_model_full_build_count += 1;
+            self.read_model_last_touched_source_count = story.passages.len() + 2;
         }
 
         Ok(self
@@ -5476,9 +6102,9 @@ impl ProjectSession {
         });
         let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
         let entries = &self.read_model(story_id)?.contents;
-        let facets = contents_facets(entries);
+        let facets = contents_facets(entries.values());
         let mut matching = entries
-            .iter()
+            .values()
             .filter(|entry| contents_filter_matches(entry, &query.filter))
             .collect::<Vec<_>>();
         if let Some(search) = normalized_read_model_query(query.query.as_deref()) {
@@ -6642,9 +7268,12 @@ fn contents_filter_matches(entry: &CoreContentsEntry, filter: &CoreContentsFilte
     }
 }
 
-fn contents_facets(entries: &[CoreContentsEntry]) -> CoreContentsFacets {
+fn contents_facets<'a>(
+    entries: impl IntoIterator<Item = &'a CoreContentsEntry>,
+) -> CoreContentsFacets {
+    let entries = entries.into_iter();
     let mut facets = CoreContentsFacets {
-        all: entries.len(),
+        all: entries.size_hint().0,
         ..CoreContentsFacets::default()
     };
 
@@ -7918,6 +8547,253 @@ fn contents_entries(
     }
 
     entries
+}
+
+fn read_model_delta_is_incremental(
+    after: &Story,
+    before: &Story,
+    passages: &[PassageDelta],
+) -> bool {
+    if before.id != after.id {
+        return false;
+    }
+
+    passages
+        .iter()
+        .all(|delta| match (&delta.before, &delta.after) {
+            (Some(before), Some(after)) => {
+                before.value.id == after.value.id && before.value.name == after.value.name
+            }
+            _ => false,
+        })
+}
+
+fn refresh_read_model_aggregates(
+    story: &Story,
+    cache: &mut StoryReadModelCache,
+    graph_cache: Option<&GraphSessionCache>,
+    topology_changed: bool,
+    touched_passage_source_ids: &BTreeSet<String>,
+    assets_changed: bool,
+    symbols_changed: bool,
+) {
+    let metadata_source_id = format!("{}:metadata", story.id.as_ref());
+    if assets_changed {
+        let mut known_assets = cache.asset_inventory.clone();
+
+        for asset in &mut known_assets {
+            asset.reference_count = 0;
+            asset.references.clear();
+        }
+        let references = cache
+            .assets_by_source
+            .values()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>();
+        cache.asset_inventory = asset_inventory_from_references(
+            &references,
+            known_assets,
+            !cache.asset_inventory.is_empty(),
+        );
+    }
+
+    cache.diagnostics.retain(|diagnostic| {
+        diagnostic.code == "duplicate-passage-name"
+            || (!assets_changed
+                && matches!(diagnostic.code.as_str(), "missing-asset" | "unused-asset"))
+            || (!topology_changed
+                && diagnostic.code == "broken-link"
+                && !touched_passage_source_ids.contains(&diagnostic.source_id))
+    });
+    if story.passage_by_id(&story.start_passage).is_none() {
+        cache.diagnostics.push(CoreDiagnostic {
+            code: "missing-start-passage".into(),
+            end: 0,
+            line: 1,
+            message: "Story start passage is missing".into(),
+            passage_id: None,
+            quick_fixes: vec![CoreQuickFix {
+                command: "set-start-passage".into(),
+                title: "Choose a start passage".into(),
+            }],
+            severity: CoreDiagnosticSeverity::Error,
+            source_id: metadata_source_id.clone(),
+            start: 0,
+        });
+    }
+    if assets_changed {
+        cache.diagnostics.extend(asset_diagnostics(
+            story,
+            &metadata_source_id,
+            &cache.asset_inventory,
+        ));
+    }
+
+    if let Some(graph_cache) = graph_cache {
+        for broken_link in graph_cache
+            .graph
+            .broken_links()
+            .iter()
+            .filter(|broken_link| {
+                topology_changed || touched_passage_source_ids.contains(broken_link.source.as_ref())
+            })
+        {
+            let (line, start, end) = story
+                .passage_by_id(&broken_link.source)
+                .and_then(|passage| locate_link_target(&passage.text, &broken_link.target_name))
+                .unwrap_or((1, 0, broken_link.target_name.len()));
+
+            cache.diagnostics.push(CoreDiagnostic {
+                code: "broken-link".into(),
+                end,
+                line,
+                message: format!("Broken link to \"{}\"", broken_link.target_name),
+                passage_id: Some(broken_link.source.as_ref().to_owned()),
+                quick_fixes: vec![
+                    CoreQuickFix {
+                        command: format!("create-passage:{}", broken_link.target_name),
+                        title: format!("Create \"{}\"", broken_link.target_name),
+                    },
+                    CoreQuickFix {
+                        command: "rename-link-target".into(),
+                        title: "Change link target".into(),
+                    },
+                ],
+                severity: CoreDiagnosticSeverity::Warning,
+                source_id: broken_link.source.as_ref().to_owned(),
+                start,
+            });
+        }
+        cache.graph = graph_cache.graph.stats().clone().into();
+    }
+
+    if assets_changed {
+        for id in std::mem::take(&mut cache.asset_entry_ids) {
+            cache.contents.remove(&id);
+        }
+    }
+    for id in std::mem::take(&mut cache.diagnostic_entry_ids) {
+        cache.contents.remove(&id);
+    }
+    if symbols_changed {
+        for id in std::mem::take(&mut cache.symbol_entry_ids) {
+            cache.contents.remove(&id);
+        }
+    }
+    if topology_changed {
+        for id in std::mem::take(&mut cache.orphan_entry_ids) {
+            cache.contents.remove(&id);
+        }
+    }
+    if let Some(id) = cache.entry_point_id.take() {
+        cache.contents.remove(&id);
+    }
+
+    if let Some(start) = story.passage_by_id(&story.start_passage) {
+        let entry = CoreContentsEntry {
+            count: 1,
+            detail: Some(start.name.clone()),
+            id: format!("entry:{}", start.id.as_ref()),
+            kind: CoreContentsEntryKind::EntryPoint,
+            label: "Start passage".into(),
+            passage_id: Some(start.id.as_ref().to_owned()),
+            severity: None,
+            source_id: Some(start.id.as_ref().to_owned()),
+        };
+        cache.entry_point_id = Some(entry.id.clone());
+        cache.contents.insert(entry.id.clone(), entry);
+    }
+
+    if symbols_changed {
+        let symbols = cache
+            .symbols_by_source
+            .values()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>();
+        for (name, source) in symbol_entries(&symbols) {
+            let entry = CoreContentsEntry {
+                count: source.count,
+                detail: None,
+                id: format!("symbol:{name}"),
+                kind: CoreContentsEntryKind::Variable,
+                label: name,
+                passage_id: source.passage_id,
+                severity: None,
+                source_id: Some(source.source_id),
+            };
+            cache.symbol_entry_ids.insert(entry.id.clone());
+            cache.contents.insert(entry.id.clone(), entry);
+        }
+    }
+
+    if assets_changed {
+        for asset in &cache.asset_inventory {
+            let location = asset.references.first();
+            let entry = CoreContentsEntry {
+                count: asset.reference_count,
+                detail: Some(if asset.missing {
+                    "missing".into()
+                } else if asset.unused {
+                    "unused".into()
+                } else {
+                    asset.kind.clone()
+                }),
+                id: format!("asset:{}", asset.path),
+                kind: CoreContentsEntryKind::Asset,
+                label: asset.path.clone(),
+                passage_id: location.and_then(|reference| reference.passage_id.clone()),
+                severity: asset_status_severity(asset),
+                source_id: Some(
+                    location
+                        .map(|reference| reference.source_id.clone())
+                        .unwrap_or_else(|| format!("{}:assets", story.id.as_ref())),
+                ),
+            };
+            cache.asset_entry_ids.insert(entry.id.clone());
+            cache.contents.insert(entry.id.clone(), entry);
+        }
+    }
+
+    for diagnostic in &cache.diagnostics {
+        let entry = CoreContentsEntry {
+            count: 1,
+            detail: Some(diagnostic.message.clone()),
+            id: format!(
+                "diagnostic:{}:{}:{}",
+                diagnostic.code, diagnostic.source_id, diagnostic.start
+            ),
+            kind: if diagnostic.code == "broken-link" {
+                CoreContentsEntryKind::BrokenLink
+            } else {
+                CoreContentsEntryKind::Diagnostic
+            },
+            label: diagnostic.code.clone(),
+            passage_id: diagnostic.passage_id.clone(),
+            severity: Some(diagnostic.severity.clone()),
+            source_id: Some(diagnostic.source_id.clone()),
+        };
+        cache.diagnostic_entry_ids.insert(entry.id.clone());
+        cache.contents.insert(entry.id.clone(), entry);
+    }
+
+    if topology_changed && let Some(graph_cache) = graph_cache {
+        for node in graph_cache.graph.nodes().filter(|node| node.is_orphan) {
+            let entry = CoreContentsEntry {
+                count: 1,
+                detail: Some(node.name.clone()),
+                id: format!("orphan:{}", node.id.as_ref()),
+                kind: CoreContentsEntryKind::Orphan,
+                label: "Orphan passage".into(),
+                passage_id: Some(node.id.as_ref().to_owned()),
+                severity: Some(CoreDiagnosticSeverity::Info),
+                source_id: Some(node.id.as_ref().to_owned()),
+            };
+            cache.orphan_entry_ids.insert(entry.id.clone());
+            cache.contents.insert(entry.id.clone(), entry);
+        }
+    }
 }
 
 fn group_kind(tag_name: &str) -> CoreContentsEntryKind {
@@ -9270,6 +10146,8 @@ mod tests {
         assert_eq!(cache.revision, initial_revision);
         assert!(!cache.contents.is_empty());
         assert!(cache.asset_inventory.is_empty());
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 0);
 
         session
             .apply(StoryCommand::UpdatePassageText {
@@ -9280,7 +10158,7 @@ mod tests {
             .expect("mutation should apply");
         session
             .contents_page("story-1", CoreContentsQuery::default())
-            .expect("contents page should rebuild at new revision");
+            .expect("contents page should reuse the incrementally updated cache");
         assert_eq!(
             session
                 .read_model_cache
@@ -9288,6 +10166,125 @@ mod tests {
                 .expect("read model cache should refresh")
                 .revision,
             session.revision()
+        );
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 1);
+        assert_eq!(session.read_model_last_touched_source_count, 1);
+
+        session.undo().expect("text edit should undo");
+        session.redo().expect("text edit should redo");
+        session
+            .contents_page("story-1", CoreContentsQuery::default())
+            .expect("contents page should stay current across undo and redo");
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 3);
+        assert_eq!(session.read_model_last_touched_source_count, 1);
+    }
+
+    #[test]
+    fn layout_only_edits_preserve_read_model_without_parsing_sources() {
+        let mut session = session();
+
+        session
+            .contents_page("story-1", CoreContentsQuery::default())
+            .expect("contents page should initialize cache");
+        let parse_count = session.analysis_parse_count;
+
+        session
+            .apply(StoryCommand::MovePassages {
+                story_id: "story-1".into(),
+                moves: vec![PassageMove {
+                    bounds: CoreRect {
+                        height: 100.0,
+                        left: 200.0,
+                        top: 100.0,
+                        width: 100.0,
+                    },
+                    passage_id: "a".into(),
+                }],
+            })
+            .expect("layout edit should apply");
+
+        assert_eq!(session.analysis_parse_count, parse_count);
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 1);
+        assert_eq!(session.read_model_last_touched_source_count, 1);
+        let transaction = session.undo_stack.last().expect("layout history entry");
+        assert!(transaction.delta.top_before.is_none());
+        assert!(transaction.delta.top_after.is_none());
+        assert_eq!(transaction.delta.layout_passages.len(), 1);
+        assert_eq!(transaction.delta.stories.len(), 1);
+    }
+
+    #[test]
+    fn passage_tag_edits_update_read_model_without_reparsing_text() {
+        let mut session = session();
+
+        session
+            .contents_page("story-1", CoreContentsQuery::default())
+            .expect("contents page should initialize cache");
+        let parse_count = session.analysis_parse_count;
+
+        session
+            .apply(StoryCommand::SetPassageTags {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                tags: vec!["chapter-one".into()],
+            })
+            .expect("tag edit should apply");
+        let cache = session
+            .read_model_cache
+            .get(&StoryId::new("story-1"))
+            .expect("read model should stay resident");
+
+        assert_eq!(session.analysis_parse_count, parse_count);
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 1);
+        assert_eq!(cache.tag_count, 1);
+        assert_eq!(
+            cache
+                .contents
+                .get("tag:chapter-one")
+                .map(|entry| (&entry.kind, entry.count)),
+            Some((&CoreContentsEntryKind::Group, 1))
+        );
+    }
+
+    #[test]
+    fn story_metadata_edits_keep_entity_history_and_resident_read_model() {
+        let mut session = session();
+
+        session
+            .contents_page("story-1", CoreContentsQuery::default())
+            .expect("contents page should initialize cache");
+        let parse_count = session.analysis_parse_count;
+
+        session
+            .apply(StoryCommand::RenameStory {
+                name: "Renamed Story".into(),
+                story_id: "story-1".into(),
+            })
+            .expect("story rename should apply");
+        let cache = session
+            .read_model_cache
+            .get(&StoryId::new("story-1"))
+            .expect("read model should stay resident");
+        let transaction = session.undo_stack.last().expect("metadata history entry");
+
+        assert_eq!(session.analysis_parse_count, parse_count);
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 1);
+        assert_eq!(session.read_model_last_touched_source_count, 0);
+        assert!(transaction.delta.top_before.is_none());
+        assert!(transaction.delta.top_after.is_none());
+        assert!(transaction.delta.layout_passages.is_empty());
+        assert_eq!(transaction.delta.stories.len(), 1);
+        assert_eq!(
+            cache
+                .contents
+                .get("metadata:story-1")
+                .and_then(|entry| entry.detail.as_deref()),
+            Some("Renamed Story")
         );
     }
 
@@ -9316,8 +10313,8 @@ mod tests {
         let mut session = session();
 
         session
-            .story_index("story-1", CoreStoryIndexOptions::default())
-            .expect("initial index should populate source cache");
+            .contents_page("story-1", CoreContentsQuery::default())
+            .expect("initial page should populate source and read-model caches");
         let initial_parse_count = session.analysis_parse_count;
         let result = session
             .ingest_external_delta(
@@ -9339,6 +10336,9 @@ mod tests {
         assert_eq!(result.outcome, CoreExternalIngestOutcome::Applied);
         assert!(result.history_recorded);
         assert_eq!(session.analysis_parse_count, initial_parse_count + 1);
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 1);
+        assert_eq!(session.read_model_last_touched_source_count, 1);
         assert_eq!(
             session
                 .project()
@@ -9350,6 +10350,8 @@ mod tests {
             Some("Disk edit [[Next]]")
         );
         session.undo().expect("external text delta should undo");
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 2);
         assert_eq!(
             session
                 .project()

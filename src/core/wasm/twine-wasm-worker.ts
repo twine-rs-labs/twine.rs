@@ -268,6 +268,11 @@ async function handleRequest(
 		computeFinishedAtEpochMs = epochNow();
 
 		const responseBytes = byteSize(result);
+		const readModel = sessions
+			.get(request.sessionId)
+			?.session.performance_diagnostics() as
+			| WasmWorkerMetricBase['readModel']
+			| undefined;
 		const workerRespondedAt = now();
 		const workerRespondedAtEpochMs = epochNow();
 		const metrics: WasmWorkerMetricBase = {
@@ -279,6 +284,7 @@ async function handleRequest(
 					? byteSize(request.snapshot)
 					: responseBytes,
 			requestBytes,
+			readModel,
 			responseBytes,
 			rustFinishedAtEpochMs,
 			rustStartedAtEpochMs,

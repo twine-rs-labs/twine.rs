@@ -11,6 +11,7 @@ export class TwineWasmProjectSession {
     can_undo(): boolean;
     ingest_external_delta(delta: any, force: boolean): any;
     constructor(snapshot: any);
+    performance_diagnostics(): any;
     query_assets_page(story_id: string, query: any): any;
     query_contents_page(story_id: string, query: any): any;
     query_diagnostics_page(story_id: string, query: any): any;
@@ -46,6 +47,7 @@ export interface InitOutput {
     readonly twinewasmprojectsession_can_undo: (a: number) => number;
     readonly twinewasmprojectsession_ingest_external_delta: (a: number, b: any, c: number) => [number, number, number];
     readonly twinewasmprojectsession_new: (a: any) => [number, number, number];
+    readonly twinewasmprojectsession_performance_diagnostics: (a: number) => [number, number, number];
     readonly twinewasmprojectsession_query_assets_page: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_contents_page: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_diagnostics_page: (a: number, b: number, c: number, d: any) => [number, number, number];

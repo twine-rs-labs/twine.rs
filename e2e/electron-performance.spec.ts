@@ -54,6 +54,12 @@ interface PerformanceSnapshot {
 			receivedAtEpochMs: number;
 			requestBytes: number;
 			requestedAtEpochMs: number;
+			readModel?: {
+				parsedSourceCount: number;
+				readModelFullBuildCount: number;
+				readModelIncrementalUpdateCount: number;
+				readModelLastTouchedSourceCount: number;
+			};
 			responseBytes: number;
 			roundTripMs: number;
 			rustFinishedAtEpochMs?: number;
@@ -611,6 +617,35 @@ async function waitForWatcherMetric(
 		.at(-1)!;
 }
 
+async function settleInitialWatcherReview(page: Page) {
+	const acceptDisk = page.getByRole('button', {name: 'Accept Disk'});
+	await page.waitForTimeout(750);
+
+	if (!(await acceptDisk.isVisible())) {
+		return;
+	}
+
+	const before = await snapshot(page);
+	const deltaId = before.renderer.events
+		.filter(event => event.name === 'watcher-review-required')
+		.at(-1)?.detail?.deltaId;
+
+	await acceptDisk.click();
+	await expect(acceptDisk).not.toBeVisible({timeout: watcherTimeout});
+	if (typeof deltaId === 'string') {
+		await pollSnapshot(
+			page,
+			current =>
+				current.renderer.events.some(
+					event =>
+						event.name === 'watcher-acknowledgement-complete' &&
+						event.detail?.deltaId === deltaId
+				),
+			watcherTimeout
+		);
+	}
+}
+
 async function measureEdits(page: Page) {
 	await page
 		.getByRole('group', {name: 'Workspace Mode'})
@@ -831,6 +866,20 @@ async function measureDiagnostic(page: Page, launchToWindowMs: number) {
 		!persisted.renderer.bridgeMetrics
 			.slice(bridgeMetricStart)
 			.some(metric => metric.kind === 'replaceProject')
+	);
+	const mutationMetric = persisted.renderer.bridgeMetrics
+		.slice(bridgeMetricStart)
+		.filter(metric => metric.kind === 'apply')
+		.at(-1);
+	assertInvariant(
+		'diagnostic-read-model-attribution-present',
+		!!mutationMetric?.readModel,
+		JSON.stringify(mutationMetric?.readModel)
+	);
+	assertInvariant(
+		'diagnostic-read-model-update-is-bounded',
+		(mutationMetric?.readModel?.readModelLastTouchedSourceCount ?? 0) <= 1,
+		JSON.stringify(mutationMetric?.readModel)
 	);
 }
 
@@ -1456,6 +1505,16 @@ async function measureWatcher(page: Page, projectPath: string) {
 		'watcher-passage-avoids-recovery',
 		watcher?.recovery === false
 	);
+	assertInvariant(
+		'watcher-read-model-attribution-present',
+		!!ingest?.readModel,
+		JSON.stringify(ingest?.readModel)
+	);
+	assertInvariant(
+		'watcher-read-model-update-is-bounded',
+		(ingest?.readModel?.readModelLastTouchedSourceCount ?? 0) <= 1,
+		JSON.stringify(ingest?.readModel)
+	);
 
 	current = await pollSnapshot(
 		page,
@@ -1728,6 +1787,7 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 		const watcherRunning = await launchFixture();
 
 		try {
+			await settleInitialWatcherReview(watcherRunning.page);
 			const initial = await snapshot(watcherRunning.page);
 
 			assertInvariant(

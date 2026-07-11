@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-07-10
+Last verified: 2026-07-11
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -32,6 +32,9 @@ phase is optimization and release validation, not another ownership migration.
 - Generated bounded Rust/WASM read-model contracts for summaries, cursor pages,
   and selected-passage facts; large Contents no longer eagerly transfers a
   full story index.
+- Entity-maintained Rust read-model caches for ordinary passage text, layout,
+  tag, story-source, start-passage, undo/redo, and external text changes, with
+  perf-only cache-build and touched-source attribution.
 
 ## Proven structural properties
 
@@ -52,9 +55,10 @@ The complete local 10k and 50k benchmark runs verify:
 - The 50k path is structurally correct but substantially misses most absolute
   latency and memory targets.
 - React still retains a complete patch-applied project mirror.
-- Some compatibility routes and broad command families still use scoped full
-  indexes or broad session deltas; they are not part of the large-story default
-  startup path and remain optimization work.
+- Explicitly complete compatibility workflows and broad structural command
+  families still use scoped full indexes or broad session deltas. They are not
+  part of the large-story default startup/edit/watcher path and remain targeted
+  optimization work.
 - Preview/debug runtime inspection is not yet complete across all desktop
   surfaces.
 - Some inherited legacy UI and compatibility code remains available outside the
