@@ -3274,6 +3274,13 @@ async function writeProjectFolderIncremental(
 	}
 
 	const descriptorPassages = descriptorPassageMap(descriptorStory);
+	const passageTextUpdates = new Map(
+		(options.documentUpdates ?? []).flatMap(update =>
+			update.type === 'passageText' && update.storyId === story.id
+				? [[update.passageId, update.text] as const]
+				: []
+		)
+	);
 	const touched = hints.map(hint => {
 		const descriptorPassage = descriptorPassages.get(hint.passageId);
 		const storyPassage = story.passages.find(
@@ -3286,7 +3293,10 @@ async function writeProjectFolderIncremental(
 
 		return {
 			absolutePath: safeProjectFilePath(rootPath, descriptorPassage.file),
-			passage: storyPassage,
+			passage: {
+				...storyPassage,
+				text: passageTextUpdates.get(hint.passageId) ?? storyPassage.text
+			},
 			projectPath: descriptorPassage.file.replace(/\\/g, '/')
 		};
 	});

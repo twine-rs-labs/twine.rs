@@ -170,4 +170,36 @@ describe('applyProjectPatchBatch', () => {
 		expect(sinks.deleteAsset).not.toHaveBeenCalled();
 		expect(sinks.renameAsset).not.toHaveBeenCalled();
 	});
+
+	it('keeps session-owned text out of the React story mirror', () => {
+		const patches = batch([
+			{
+				changes: {layout: null, name: null, tags: null, text: 'patched'},
+				passage_id: 'passage-1',
+				story_id: 'story-1',
+				type: 'passageUpdated'
+			}
+		]);
+		const dispatchBatch = jest.fn();
+		const actions = projectPatchBatchStoryActions(patches, {
+			sessionOwnedDocumentsForStory: () => true
+		});
+
+		expect(actions).toEqual([]);
+		applyProjectPatchBatch(
+			patches,
+			{
+				deleteAsset: jest.fn(),
+				dispatch: jest.fn(),
+				dispatchBatch,
+				dispatchEmptyBatch: true,
+				renameAsset: jest.fn(),
+				replaceAssetInventory: jest.fn(),
+				setDirty: jest.fn(),
+				upsertAsset: jest.fn()
+			},
+			actions
+		);
+		expect(dispatchBatch).toHaveBeenCalledWith([]);
+	});
 });

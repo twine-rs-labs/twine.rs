@@ -1,6 +1,9 @@
 import {Thunk} from 'react-hook-thunk-reducer';
 import {Color} from '../../util/color';
-import type {ProjectFolderSaveHint} from '../persistence/project-folder-save-hints';
+import type {
+	ProjectFolderDocumentUpdate,
+	ProjectFolderSaveHint
+} from '../persistence/project-folder-save-hints';
 import {StoryFormat} from '../story-formats/story-formats.types';
 
 /**
@@ -199,6 +202,7 @@ export type CorePatchStoryAction =
 
 export interface ApplyCorePatchBatchAction {
 	actions: CorePatchStoryAction[];
+	documentUpdates?: ProjectFolderDocumentUpdate[];
 	persistence?: 'skip';
 	persistenceHints?: ProjectFolderSaveHint[];
 	revision?: number;

@@ -45,6 +45,7 @@ import {
 	createWasmCoreWorkerClient
 } from './wasm/twine-wasm-client';
 import {
+	ApplyCorePatchBatchAction,
 	StoriesActionOrThunk,
 	StoriesState,
 	Story,
@@ -62,6 +63,7 @@ import {
 
 export type StoryIndexQuery = string | Partial<CoreStoryIndexOptions>;
 const defaultCoreSessionId = 'library';
+export const sessionOwnedDocumentPassageThreshold = 500;
 
 export type CoreProjectPatchListener = (patches: PatchBatch) => void;
 export interface CoreCommandHistoryOptions {
@@ -580,6 +582,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	};
 	private transactionId = BigInt(0);
 	private sessionId: string;
+	private sessionOwnedDocumentStories = new Set<string>();
 	private wasmClient: CoreProjectSessionClient;
 	private wasmProjectRevision = 1;
 	private wasmProjectReplaceRevision = -1;
@@ -659,6 +662,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		}
 
 		const revision = this.wasmProjectRevision;
+		for (const story of stories) {
+			if (story.passages.length > sessionOwnedDocumentPassageThreshold) {
+				this.sessionOwnedDocumentStories.add(story.id);
+			}
+		}
 		const snapshot = projectSnapshotFromStories(stories);
 		const assets = stories.flatMap(
 			story => this.assetInventoryByStory.get(story.id) ?? []
@@ -840,7 +848,57 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		status?: CoreSessionStatus,
 		externalDeltaId?: string
 	) {
-		const storyActions = projectPatchBatchStoryActions(batch);
+		const persistenceHints = projectFolderSaveHintsForPatchBatch(batch);
+		const storyActions = projectPatchBatchStoryActions(batch, {
+			sessionOwnedDocumentsForStory: storyId =>
+				this.sessionOwnedDocumentStories.has(storyId)
+		});
+		const patchedStoryIds = Array.from(
+			new Set(
+				batch.patches.flatMap(patch =>
+					'story_id' in patch ? [patch.story_id] : []
+				)
+			)
+		);
+		const documentUpdates: NonNullable<
+			ApplyCorePatchBatchAction['documentUpdates']
+		> = [];
+		for (const patch of batch.patches) {
+			if (
+				patch.type === 'passageUpdated' &&
+				patch.changes.text !== null &&
+				this.sessionOwnedDocumentStories.has(patch.story_id)
+			) {
+				documentUpdates.push({
+					passageId: patch.passage_id,
+					storyId: patch.story_id,
+					text: patch.changes.text,
+					type: 'passageText' as const
+				});
+				continue;
+			}
+			if (
+				patch.type === 'storyScriptUpdated' &&
+				this.sessionOwnedDocumentStories.has(patch.story_id)
+			) {
+				documentUpdates.push({
+					storyId: patch.story_id,
+					text: patch.script,
+					type: 'script' as const
+				});
+				continue;
+			}
+			if (
+				patch.type === 'storyStylesheetUpdated' &&
+				this.sessionOwnedDocumentStories.has(patch.story_id)
+			) {
+				documentUpdates.push({
+					storyId: patch.story_id,
+					text: patch.stylesheet,
+					type: 'stylesheet' as const
+				});
+			}
+		}
 
 		this.wasmProjectRevision = nextRevision;
 		this.wasmProjectReplaceRevision = nextRevision;
@@ -855,21 +913,17 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					this.dispatch(
 						{
 							actions,
+							documentUpdates,
 							persistence: externalDeltaId ? 'skip' : undefined,
-							persistenceHints: projectFolderSaveHintsForPatchBatch(batch),
+							persistenceHints,
 							revision: nextRevision,
 							sessionId: this.sessionId,
-							storyIds: Array.from(
-								new Set(
-									actions.flatMap(action =>
-										'storyId' in action ? [action.storyId] : []
-									)
-								)
-							),
+							storyIds: patchedStoryIds,
 							type: 'applyCorePatchBatch'
 						},
 						annotation
 					),
+				dispatchEmptyBatch: persistenceHints.length > 0,
 				renameAsset: (storyId, oldPath, newPath) =>
 					this.renameAsset(storyId, oldPath, newPath),
 				replaceAssetInventory: (storyId, inventory, options) =>

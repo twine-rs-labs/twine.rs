@@ -10,7 +10,17 @@ export type ProjectFolderSaveHint =
 			type: 'full';
 	  };
 
+export type ProjectFolderDocumentUpdate =
+	| {
+			passageId: string;
+			storyId: string;
+			text: string;
+			type: 'passageText';
+	  }
+	| {storyId: string; text: string; type: 'script' | 'stylesheet'};
+
 export interface ProjectFolderSaveOptions {
+	documentUpdates?: ProjectFolderDocumentUpdate[];
 	hints?: ProjectFolderSaveHint[];
 	revision?: number;
 	sessionId?: string;

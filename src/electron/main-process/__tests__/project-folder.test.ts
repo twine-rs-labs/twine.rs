@@ -269,10 +269,6 @@ describe('project-folder native bridge', () => {
 				}
 			]
 		};
-		const changedStory = {
-			...story,
-			passages: [{...story.passages[0], text: 'updated text'}]
-		};
 		const manifestSource = [
 			'schema_version = 1',
 			'name = "Project"',
@@ -312,15 +308,19 @@ describe('project-folder native bridge', () => {
 		await startProjectSession('/native/project.twine.rs', undefined, [
 			'story-id'
 		]);
-		const result = await saveProjectFolder(
-			'/native/project.twine.rs',
-			changedStory,
-			{
-				hints: [
-					{passageId: 'passage-id', storyId: 'story-id', type: 'passageText'}
-				]
-			}
-		);
+		const result = await saveProjectFolder('/native/project.twine.rs', story, {
+			documentUpdates: [
+				{
+					passageId: 'passage-id',
+					storyId: 'story-id',
+					text: 'updated text',
+					type: 'passageText'
+				}
+			],
+			hints: [
+				{passageId: 'passage-id', storyId: 'story-id', type: 'passageText'}
+			]
+		});
 
 		expect(result.performanceTimings?.mode).toBeUndefined();
 		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();

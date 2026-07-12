@@ -110,11 +110,12 @@ export function saveMiddleware(
 				break;
 			}
 			const saves: Array<() => Promise<void>> = [];
-			const touchedStoryIds = new Set(
-				action.actions.flatMap(action =>
+			const touchedStoryIds = new Set([
+				...(action.storyIds ?? []),
+				...action.actions.flatMap(action =>
 					'storyId' in action ? [action.storyId] : []
 				)
-			);
+			]);
 			const deletedStoryIds = new Set(
 				action.actions.flatMap(action =>
 					action.type === 'deleteStory' ? [action.storyId] : []
@@ -148,8 +149,12 @@ export function saveMiddleware(
 				const story = state.find(story => story.id === storyId);
 
 				if (story) {
+					const documentUpdates = (action.documentUpdates ?? []).filter(
+						update => update.storyId === storyId
+					);
 					saves.push(() =>
 						saveStory(story, formats, {
+							documentUpdates,
 							hints: hintsByStory.get(storyId),
 							revision: action.revision,
 							sessionId: action.sessionId

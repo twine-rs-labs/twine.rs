@@ -91,6 +91,48 @@ describe('stories Electron IPC save middleware', () => {
 		expect(saveStoryMock).not.toHaveBeenCalled();
 	});
 
+	it('overlays session-owned document text only for persistence', async () => {
+		const story = storiesState[0];
+		const passage = story.passages[0];
+		const result = saveMiddleware(
+			storiesState,
+			{
+				actions: [],
+				documentUpdates: [
+					{
+						passageId: passage.id,
+						storyId: story.id,
+						text: 'session text',
+						type: 'passageText'
+					}
+				],
+				storyIds: [story.id],
+				type: 'applyCorePatchBatch'
+			},
+			formatsState
+		);
+
+		expect(typeof result).toBe('object');
+		if (typeof result === 'object') {
+			await result.completion;
+		}
+		expect(saveStoryMock).toHaveBeenCalledWith(
+			story,
+			formatsState,
+			expect.objectContaining({
+				documentUpdates: [
+					{
+						passageId: passage.id,
+						storyId: story.id,
+						text: 'session text',
+						type: 'passageText'
+					}
+				]
+			})
+		);
+		expect(storiesState[0].passages[0].text).toBe(passage.text);
+	});
+
 	it.each([
 		[
 			'createPassage',

@@ -22,6 +22,7 @@ import {
 	emptyStoryIndex,
 	insertAssetSnippetCommand,
 	loadDismissedDiagnosticIds,
+	sessionOwnedDocumentPassageThreshold,
 	storyShellIndex,
 	useKnownAssetInventoryForStory,
 	useCoreProjectHost,
@@ -92,7 +93,7 @@ export interface StoryWorkspaceShellProps {
 }
 
 type NavigatorTab = 'passages' | 'contents' | 'assets';
-const deferIndexPassageThreshold = 500;
+const deferIndexPassageThreshold = sessionOwnedDocumentPassageThreshold;
 const passageNavigatorRowHeight = 30;
 
 function boundedWorkbenchSelection(

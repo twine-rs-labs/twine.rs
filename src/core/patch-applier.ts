@@ -11,6 +11,7 @@ export interface ProjectPatchApplicationSinks {
 	deleteAsset(storyId: string, path: string): void;
 	dispatch(action: StoriesAction): void;
 	dispatchBatch?(actions: CorePatchStoryAction[]): void;
+	dispatchEmptyBatch?: boolean;
 	renameAsset(storyId: string, oldPath: string, newPath: string): void;
 	replaceAssetInventory(
 		storyId: string,
@@ -69,7 +70,10 @@ export function applyProjectPatchBatch(
 		}
 	}
 
-	if (storyActions.length > 0 && sinks.dispatchBatch) {
+	if (
+		(storyActions.length > 0 || sinks.dispatchEmptyBatch) &&
+		sinks.dispatchBatch
+	) {
 		sinks.dispatchBatch(storyActions);
 	} else {
 		for (const action of storyActions) {
@@ -80,7 +84,12 @@ export function applyProjectPatchBatch(
 	return {dispatchedStoryActions: storyActions.length};
 }
 
-export function projectPatchBatchStoryActions(batch: PatchBatch) {
+export function projectPatchBatchStoryActions(
+	batch: PatchBatch,
+	options: {
+		sessionOwnedDocumentsForStory?: (storyId: string) => boolean;
+	} = {}
+) {
 	const actions: CorePatchStoryAction[] = [];
 
 	for (const patch of batch.patches) {
@@ -101,14 +110,22 @@ export function projectPatchBatchStoryActions(batch: PatchBatch) {
 				});
 				break;
 
-			case 'passageUpdated':
+			case 'passageUpdated': {
+				const passageProps = passagePatchToProps(
+					patch,
+					options.sessionOwnedDocumentsForStory?.(patch.story_id) ?? false
+				);
+				if (Object.keys(passageProps).length === 0) {
+					break;
+				}
 				actions.push({
 					passageId: patch.passage_id,
-					props: passagePatchToProps(patch),
+					props: passageProps,
 					storyId: patch.story_id,
 					type: 'updatePassage'
 				});
 				break;
+			}
 
 			case 'projectSnapshotReplaced':
 				actions.push({
@@ -148,6 +165,9 @@ export function projectPatchBatchStoryActions(batch: PatchBatch) {
 				break;
 
 			case 'storyScriptUpdated':
+				if (options.sessionOwnedDocumentsForStory?.(patch.story_id)) {
+					break;
+				}
 				actions.push({
 					props: {script: patch.script},
 					storyId: patch.story_id,
@@ -156,6 +176,9 @@ export function projectPatchBatchStoryActions(batch: PatchBatch) {
 				break;
 
 			case 'storyStylesheetUpdated':
+				if (options.sessionOwnedDocumentsForStory?.(patch.story_id)) {
+					break;
+				}
 				actions.push({
 					props: {stylesheet: patch.stylesheet},
 					storyId: patch.story_id,
@@ -234,7 +257,8 @@ function storyMetadataPatchToProps(
 }
 
 function passagePatchToProps(
-	changes: Patch & {type: 'passageUpdated'}
+	changes: Patch & {type: 'passageUpdated'},
+	excludeText = false
 ): Partial<Passage> {
 	const patch = changes.changes;
 
@@ -242,7 +266,7 @@ function passagePatchToProps(
 		...(patch.layout !== null ? patch.layout : {}),
 		...(patch.name !== null ? {name: patch.name} : {}),
 		...(patch.tags !== null ? {tags: patch.tags} : {}),
-		...(patch.text !== null ? {text: patch.text} : {})
+		...(!excludeText && patch.text !== null ? {text: patch.text} : {})
 	};
 }
 
