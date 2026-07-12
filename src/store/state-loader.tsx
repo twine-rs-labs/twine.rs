@@ -6,6 +6,7 @@ import {useStoriesContext} from './stories';
 import {useStoryFormatsContext} from './story-formats';
 import {useStoriesRepair} from './use-stories-repair';
 import {markPerformance, measurePerformance} from '../util/performance';
+import {metadataStory, registerBootstrapStories} from '../core/bootstrap-stories';
 
 async function loadOrDefault<T>(
 	name: string,
@@ -30,8 +31,11 @@ export const StateLoader: React.FC = ({children}) => {
 	const [prefsRepaired, setPrefsRepaired] = React.useState(false);
 	const [formatsRepaired, setFormatsRepaired] = React.useState(false);
 	const [storiesRepaired, setStoriesRepaired] = React.useState(false);
+	const [passageBodiesSeparated, setPassageBodiesSeparated] =
+		React.useState(false);
 	const {dispatch: prefsDispatch, prefs: prefsState} = usePrefsContext();
-	const {dispatch: storiesDispatch} = useStoriesContext();
+	const {dispatch: storiesDispatch, stories: storiesState = []} =
+		useStoriesContext();
 	const {dispatch: formatsDispatch, formats: formatsState} =
 		useStoryFormatsContext();
 	const repairStories = useStoriesRepair();
@@ -112,12 +116,34 @@ export const StateLoader: React.FC = ({children}) => {
 
 	React.useEffect(() => {
 		if (inited && formatsRepaired && prefsRepaired && storiesRepaired) {
+			if (!passageBodiesSeparated) {
+				registerBootstrapStories(storiesState);
+				storiesDispatch({
+					state: storiesState.map(metadataStory),
+					type: 'init'
+				});
+				setPassageBodiesSeparated(true);
+				return;
+			}
+
 			markPerformance('shell-visible');
 			measurePerformance('open-to-shell', 'open-start', 'shell-visible');
 		}
-	}, [formatsRepaired, inited, prefsRepaired, storiesRepaired]);
+	}, [
+		formatsRepaired,
+		inited,
+		passageBodiesSeparated,
+		prefsRepaired,
+		storiesDispatch,
+		storiesRepaired,
+		storiesState
+	]);
 
-	return inited && formatsRepaired && prefsRepaired && storiesRepaired ? (
+	return inited &&
+		formatsRepaired &&
+		prefsRepaired &&
+		storiesRepaired &&
+		passageBodiesSeparated ? (
 		<>{children}</>
 	) : (
 		<LoadingCurtain />

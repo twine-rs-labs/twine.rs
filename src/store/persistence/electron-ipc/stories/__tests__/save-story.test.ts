@@ -14,6 +14,10 @@ import {
 import {saveProjectMetadata} from '../../../../project-metadata';
 import * as fetchStoryFormatProperties from '../../../../../util/story-format/fetch-properties';
 import {saveStory} from '../save-story';
+import {
+	registerStoryMaterializer,
+	unregisterStoryMaterializer
+} from '../../../../../core/bootstrap-stories';
 
 describe('saveStory()', () => {
 	let formatsState: StoryFormatsState;
@@ -34,8 +38,34 @@ describe('saveStory()', () => {
 	});
 
 	afterEach(() => {
+		unregisterStoryMaterializer(story.id);
 		window.localStorage.clear();
 		delete (window as TwineElectronWindow).twineElectron;
+	});
+
+	it('materializes passage documents before a full project-folder save', async () => {
+		const completeStory = fakeStory(2);
+		const metadataStory = {
+			...completeStory,
+			passages: completeStory.passages.map(passage => ({...passage, text: ''}))
+		};
+
+		story = metadataStory;
+		story.storyFormat = formatsState[0].name;
+		story.storyFormatVersion = formatsState[0].version;
+		registerStoryMaterializer(story.id, async () => completeStory);
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+
+		await saveStory(story, formatsState);
+
+		expect(saveProjectFolder).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			completeStory
+		);
 	});
 
 	it('calls saveStoryHtml on the twineElectron global', async () => {

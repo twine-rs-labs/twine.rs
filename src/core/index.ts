@@ -32,6 +32,7 @@ import {storyToSnapshot} from './project-snapshot';
 export * from './project-host';
 export * from './passage-document';
 export * from './materialize-story';
+export * from './bootstrap-stories';
 export * from './project-snapshot';
 export * from './view-models';
 export * from './diagnostic-dismissals';

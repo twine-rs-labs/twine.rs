@@ -37,6 +37,12 @@ import {
 } from './patch-applier';
 import {projectSnapshotFromStories} from './project-snapshot';
 import {
+	bootstrapStory,
+	registerStoryMaterializer,
+	unregisterStoryMaterializer
+} from './bootstrap-stories';
+import {materializeStoryFromSession} from './materialize-story';
+import {
 	projectStoryHydration,
 	subscribeProjectStoryHydration
 } from '../store/project-hydration';
@@ -1946,7 +1952,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		}
 
 		this.dispatch = dispatch;
-		this.stories = stories;
+		this.stories =
+			this.wasmProjectReplaceRevision < 0
+				? stories.map(story => bootstrapStory(story.id) ?? story)
+				: stories;
 		for (const story of stories) {
 			this.sessionOwnedDocumentStories.add(story.id);
 		}
@@ -2342,8 +2351,9 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		this.stories = stories;
 		this.dispatch = dispatch;
 		const grouped = new Map<string, Story[]>();
+		const previousStorySessions = this.storySessions;
 
-		this.storySessions.clear();
+		this.storySessions = new Map();
 		for (const story of stories) {
 			const sessionId = coreSessionIdForStory(story);
 
@@ -2355,7 +2365,11 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			let host = this.hosts.get(sessionId);
 
 			if (!host) {
-				host = new StoreCoreProjectHost(sessionStories, dispatch, {
+				const initialStories = sessionStories.map(
+					story => bootstrapStory(story.id) ?? story
+				);
+
+				host = new StoreCoreProjectHost(initialStories, dispatch, {
 					sessionId,
 					wasmClient: this.client
 				});
@@ -2369,6 +2383,17 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			} else {
 				host.update(sessionStories, dispatch);
 			}
+
+			for (const story of sessionStories) {
+				registerStoryMaterializer(story.id, () =>
+					materializeStoryFromSession(host!, story)
+				);
+			}
+		}
+		for (const storyId of previousStorySessions.keys()) {
+			if (!this.storySessions.has(storyId)) {
+				unregisterStoryMaterializer(storyId);
+			}
 		}
 
 		for (const [sessionId] of this.hosts) {
@@ -2381,6 +2406,9 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	}
 
 	dispose() {
+		for (const storyId of this.storySessions.keys()) {
+			unregisterStoryMaterializer(storyId);
+		}
 		for (const host of this.hosts.values()) {
 			host.disposeEffects();
 		}

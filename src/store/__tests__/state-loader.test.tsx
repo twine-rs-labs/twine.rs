@@ -66,7 +66,8 @@ describe('<StateLoader>', () => {
 		]);
 		expect(storiesDispatchMock.mock.calls).toEqual([
 			[{type: 'init', state: {mockStoriesState: true}}],
-			[{type: 'repair', allFormats: [defaultFormat], defaultFormat}]
+			[{type: 'repair', allFormats: [defaultFormat], defaultFormat}],
+			[{type: 'init', state: []}]
 		]);
 		expect(formatsDispatchMock.mock.calls).toEqual([
 			[{type: 'init', state: {mockStoryFormatsState: true}}],

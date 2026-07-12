@@ -13,6 +13,7 @@ import type {
 	ProjectFolderDocumentUpdate,
 	ProjectFolderSaveOptions
 } from '../../project-folder-save-hints';
+import {materializeRegisteredStory} from '../../../../core/bootstrap-stories';
 
 async function saveNativeProjectFolder(
 	twineElectron: NonNullable<TwineElectronWindow['twineElectron']>,
@@ -54,11 +55,14 @@ async function saveNativeProjectFolder(
 		const includesPassageMetadata = options.hints?.some(
 			hint => hint.type === 'passageMetadata'
 		);
+		const completeStory = useCompactIncrementalPayload
+			? story
+			: await materializeRegisteredStory(story);
 		const saveStory = useCompactIncrementalPayload
 			? {
-					...story,
+					...completeStory,
 					passages: includesPassageMetadata
-						? story.passages.map(passage => ({
+						? completeStory.passages.map(passage => ({
 								...passage,
 								text:
 									passageDocumentUpdates.find(
@@ -66,13 +70,13 @@ async function saveNativeProjectFolder(
 									)?.text ?? passage.text
 							}))
 						: passageDocumentUpdates.flatMap(update => {
-								const passage = story.passages.find(
+								const passage = completeStory.passages.find(
 									candidate => candidate.id === update.passageId
 								);
 								return passage ? [{...passage, text: update.text}] : [];
 							})
 				}
-			: story;
+			: completeStory;
 		const saveOptions = useCompactIncrementalPayload
 			? {...options, incrementalOnly: true}
 			: options;
