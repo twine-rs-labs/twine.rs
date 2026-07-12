@@ -1,6 +1,62 @@
 /* @ts-self-types="./twine_wasm.d.ts" */
 
+/**
+ * Incrementally assembles the initial project snapshot inside WASM so large
+ * passage bodies never need to coexist in one worker request.
+ */
+export class TwineWasmProjectBootstrap {
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        TwineWasmProjectBootstrapFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_twinewasmprojectbootstrap_free(ptr, 0);
+    }
+    /**
+     * @param {string} story_id
+     * @param {any} passages
+     */
+    append_passages(story_id, passages) {
+        const ptr0 = passStringToWasm0(story_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.twinewasmprojectbootstrap_append_passages(this.__wbg_ptr, ptr0, len0, passages);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * @returns {TwineWasmProjectSession}
+     */
+    finish() {
+        const ptr = this.__destroy_into_raw();
+        const ret = wasm.twinewasmprojectbootstrap_finish(ptr);
+        return TwineWasmProjectSession.__wrap(ret);
+    }
+    /**
+     * @param {any} snapshot
+     */
+    constructor(snapshot) {
+        const ret = wasm.twinewasmprojectbootstrap_new(snapshot);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        this.__wbg_ptr = ret[0];
+        TwineWasmProjectBootstrapFinalization.register(this, this.__wbg_ptr, this);
+        return this;
+    }
+}
+if (Symbol.dispose) TwineWasmProjectBootstrap.prototype[Symbol.dispose] = TwineWasmProjectBootstrap.prototype.free;
+
 export class TwineWasmProjectSession {
+    static __wrap(ptr) {
+        const obj = Object.create(TwineWasmProjectSession.prototype);
+        obj.__wbg_ptr = ptr;
+        TwineWasmProjectSessionFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
@@ -613,6 +669,9 @@ function __wbg_get_imports() {
     };
 }
 
+const TwineWasmProjectBootstrapFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_twinewasmprojectbootstrap_free(ptr, 1));
 const TwineWasmProjectSessionFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_twinewasmprojectsession_free(ptr, 1));

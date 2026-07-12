@@ -167,6 +167,18 @@ about 64 MiB, so
 removing passage bodies materially narrowed the JavaScript heap without solving
 total multi-process resident memory.
 
+Chunked Electron-to-WASM bootstrap landed next. The main process now exposes a
+short-lived hydration lease, the renderer transfers at most 1,000 passages per
+IPC/worker request, and a Rust-owned WASM builder assembles the session before
+one atomic finalize. The confirming 50k startup run on 2026-07-12 passed all
+three samples with 50 chunks of about 519 KiB, interactive p50 about 2.41 s,
+post-GC resident p50 about 1.02 GiB, renderer heap about 31 MiB, and WASM linear
+memory about 96 MiB. This is roughly a 40 MiB retained-memory improvement over
+the preceding startup run, without a material latency improvement. The native
+loader still creates and serializes its 38.95 MiB full result inside the main
+process before leasing it; moving the lease into the native load/baseline
+lifecycle remains a separate follow-up.
+
 The focused query run measured Contents at about 53.9 ms and search at about
 14.7 ms; Contents remains slightly above its 50 ms target. Resident memory after
 building query caches was about 1.27 GiB. The watcher run retained one-source
@@ -177,6 +189,7 @@ patching consumed about 557 ms of roughly 574 ms native save time. These results
 make duplicate retained process state and baseline-patch bookkeeping the next
 measured targets; rebuilding Rust ingestion is not justified by the current
 profile.
+
 - native session baseline p50: about 117 ms in the colder attributed run;
 - receipt adoption p50: about 90 ms;
 - post-GC resident memory p50: about 1.26–1.30 GiB.

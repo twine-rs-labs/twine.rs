@@ -39,11 +39,14 @@ Query payloads should remain result- or viewport-bounded.
 
 Passage bodies are not part of the route-facing React story model at runtime.
 Initial load and repair snapshots are registered in the core bootstrap store;
-the mounted provider initializes Rust from those snapshots while React receives
-metadata-only passages. Editors query one document, inspectors query passage
-facts, and complete build/export workflows enumerate revision-bound document
-pages explicitly. Native full-save fallback uses the same registered
-materializer so metadata-only state cannot overwrite files with empty bodies.
+web-local sessions initialize Rust from those snapshots. File-backed sessions
+use an Electron hydration lease: bounded passage chunks are appended to a
+Rust-owned WASM bootstrap and finalized atomically while React receives only
+metadata passages. Recovery retains the full-snapshot path. Editors query one
+document, inspectors query passage facts, and complete build/export workflows
+enumerate revision-bound document pages explicitly. Native full-save fallback
+uses the same registered materializer so metadata-only state cannot overwrite
+files with empty bodies.
 
 `npm run check:core-boundaries` rejects direct passage-body reads in product
 routes and components. Transport, bootstrap, persistence, compatibility import,

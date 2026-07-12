@@ -35,7 +35,10 @@ import {
 	applyProjectPatchBatch,
 	projectPatchBatchStoryActions
 } from './patch-applier';
-import {projectSnapshotFromStories} from './project-snapshot';
+import {
+	passageToSnapshot,
+	projectSnapshotFromStories
+} from './project-snapshot';
 import {
 	bootstrapStory,
 	metadataStory,
@@ -56,6 +59,7 @@ import {
 } from './wasm/twine-wasm-client';
 import {
 	ApplyCorePatchBatchAction,
+	Passage,
 	StoriesActionOrThunk,
 	StoriesState,
 	Story,
@@ -83,6 +87,12 @@ export interface CoreCommandHistoryOptions {
 export type CoreCommandOptions = string | CoreCommandHistoryOptions;
 
 export interface CoreProjectHost {
+	appendHydratedProjectPassages(
+		storyId: string,
+		passages: Passage[]
+	): Promise<void>;
+	beginHydratedProject(storyId: string, stories: Story[]): Promise<void>;
+	finishHydratedProject(storyId: string): Promise<void>;
 	applyExternalDelta(
 		storyId: string,
 		delta: CoreExternalDelta
@@ -115,7 +125,9 @@ export interface CoreProjectHost {
 		options?: StoryIndexQuery
 	): Promise<CoreStoryIndex>;
 	queryStorySummaryAsync(storyId: string): Promise<CoreStorySummary>;
-	queryWorkbenchDockModelAsync(storyId: string): Promise<CoreWorkbenchDockModel>;
+	queryWorkbenchDockModelAsync(
+		storyId: string
+	): Promise<CoreWorkbenchDockModel>;
 	queryContentsPageAsync(
 		storyId: string,
 		options?: Partial<CoreContentsQuery>
@@ -240,6 +252,8 @@ type CoreProjectSessionClient = Pick<
 	| 'acknowledgeSaved'
 	| 'apply'
 	| 'applyExternalDelta'
+	| 'appendProjectBootstrap'
+	| 'beginProjectBootstrap'
 	| 'cachedContentsPage'
 	| 'ingestExternalDelta'
 	| 'cachedGraphProjection'
@@ -259,6 +273,7 @@ type CoreProjectSessionClient = Pick<
 	| 'queryPassageDocument'
 	| 'querySourceDocument'
 	| 'redo'
+	| 'finishProjectBootstrap'
 	| 'replaceProject'
 	| 'undo'
 > & {
@@ -676,6 +691,74 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 	async ensureSessionReady() {
 		await this.ensureWasmProjectSession();
+	}
+
+	async beginHydratedProject(_storyId: string, stories: Story[]) {
+		if (!this.wasmClient.enabled) {
+			throw new Error('WASM core worker is unavailable.');
+		}
+		if (
+			stories.some(
+				story =>
+					!!projectStoryHydration(story.id)?.rootPath &&
+					!knownAssetInventoryScanCompleteForStory(story.id)
+			)
+		) {
+			await new Promise<void>(resolve => {
+				const unsubscribe = subscribeKnownAssetInventory(() => {
+					if (
+						stories.every(
+							story =>
+								!projectStoryHydration(story.id)?.rootPath ||
+								knownAssetInventoryScanCompleteForStory(story.id)
+						)
+					) {
+						unsubscribe();
+						resolve();
+					}
+				});
+			});
+		}
+
+		for (const story of stories) {
+			this.sessionOwnedDocumentStories.add(story.id);
+		}
+		const revision = this.wasmProjectRevision;
+		const snapshot = projectSnapshotFromStories(stories);
+		const assets = stories.flatMap(
+			story => this.assetInventoryByStory.get(story.id) ?? []
+		);
+		this.wasmProjectReplaceRevision = revision;
+		await this.wasmClient.beginProjectBootstrap(
+			this.sessionId,
+			snapshot,
+			revision,
+			assets
+		);
+	}
+
+	async appendHydratedProjectPassages(storyId: string, passages: Passage[]) {
+		await this.wasmClient.appendProjectBootstrap(
+			this.sessionId,
+			storyId,
+			passages.map(passageToSnapshot)
+		);
+	}
+
+	async finishHydratedProject(storyId: string) {
+		const revision = this.wasmProjectRevision;
+		const status = await this.wasmClient.finishProjectBootstrap(
+			this.sessionId,
+			revision
+		);
+		if (status) {
+			this.publishStatus(status);
+		}
+		recordPerformanceHarnessEvent('core-session-stream-hydration-ready', {
+			revision,
+			sessionId: this.sessionId,
+			storyId
+		});
 	}
 
 	async initializeHydratedProject(_storyId: string, stories: Story[]) {
@@ -1338,9 +1421,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			textCharacterCount:
 				passageTextCharacterCount +
 				this.stories.reduce(
-				(total, story) =>
-					total + story.script.length + story.stylesheet.length,
-				0
+					(total, story) =>
+						total + story.script.length + story.stylesheet.length,
+					0
 				)
 		};
 	}
@@ -1658,8 +1741,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			characterCount:
 				this.stories
 					.find(story => story.id === storyId)
-					?.passages.reduce((total, passage) => total + passage.text.length, 0) ??
-				0,
+					?.passages.reduce(
+						(total, passage) => total + passage.text.length,
+						0
+					) ?? 0,
 			diagnosticCount: index.diagnostics.length,
 			errorCount: index.diagnostics.filter(
 				diagnostic => diagnostic.severity === 'error'
@@ -2243,7 +2328,13 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		return (
 			this.hostForStory(storyId)?.queryWorkbenchDockModelAsync(storyId) ??
 			Promise.resolve({
-				assets: {assets: [], nextCursor: null, revision: 0, storyId, totalCount: 0},
+				assets: {
+					assets: [],
+					nextCursor: null,
+					revision: 0,
+					storyId,
+					totalCount: 0
+				},
 				contents: emptyContentsPage(storyId),
 				diagnostics: {
 					diagnostics: [],
@@ -2366,6 +2457,30 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			return Promise.reject(new Error(`No core session for story ${storyId}.`));
 		}
 		return host.initializeHydratedProject(storyId, stories);
+	}
+
+	beginHydratedProject(storyId: string, stories: Story[]) {
+		const host = this.hostForStory(storyId);
+		if (!host) {
+			return Promise.reject(new Error(`No core session for story ${storyId}.`));
+		}
+		return host.beginHydratedProject(storyId, stories);
+	}
+
+	appendHydratedProjectPassages(storyId: string, passages: Passage[]) {
+		const host = this.hostForStory(storyId);
+		if (!host) {
+			return Promise.reject(new Error(`No core session for story ${storyId}.`));
+		}
+		return host.appendHydratedProjectPassages(storyId, passages);
+	}
+
+	finishHydratedProject(storyId: string) {
+		const host = this.hostForStory(storyId);
+		if (!host) {
+			return Promise.reject(new Error(`No core session for story ${storyId}.`));
+		}
+		return host.finishHydratedProject(storyId);
 	}
 
 	runtimeMode() {
@@ -2515,6 +2630,12 @@ export function useCoreProjectSession(storyId: string | undefined) {
 			applyStoryCommand: (command, options) =>
 				host.applyStoryCommand(command, options),
 			ensureSessionReady: readyStoryId => host.ensureSessionReady(readyStoryId),
+			beginHydratedProject: (readyStoryId, stories) =>
+				host.beginHydratedProject(readyStoryId, stories),
+			appendHydratedProjectPassages: (readyStoryId, passages) =>
+				host.appendHydratedProjectPassages(readyStoryId, passages),
+			finishHydratedProject: readyStoryId =>
+				host.finishHydratedProject(readyStoryId),
 			initializeHydratedProject: (readyStoryId, stories) =>
 				host.initializeHydratedProject(readyStoryId, stories),
 			isDirty: () => host.isDirty(storyId),

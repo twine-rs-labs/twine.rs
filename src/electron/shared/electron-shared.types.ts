@@ -1,4 +1,4 @@
-import {Story} from '../../store/stories/stories.types';
+import {Passage, Story} from '../../store/stories/stories.types';
 import type {ProjectFolderSaveOptions} from '../../store/persistence/project-folder-save-hints';
 import type {CoreAssetInventoryEntry} from '../../core';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
@@ -34,9 +34,7 @@ export interface NativeProjectSessionSnapshot {
 	assets: CoreAssetInventoryEntry[];
 	changedPaths: string[];
 	conflicts: NativeProjectSessionConflict[];
-	files: Array<
-		NativeProjectFileEntry & {passageId?: string; storyId?: string}
-	>;
+	files: Array<NativeProjectFileEntry & {passageId?: string; storyId?: string}>;
 	rootPath: string;
 	scannedAt: string;
 	stories: Story[];
@@ -150,6 +148,20 @@ export interface NativeProjectFolderResult {
 	storySourcesLoaded?: boolean;
 	stories: Story[];
 	storyIds: string[];
+}
+
+export interface NativeProjectHydrationStart extends Omit<
+	NativeProjectFolderResult,
+	'passageTextLoaded'
+> {
+	hydrationId: string;
+	passageCount: number;
+}
+
+export interface NativeProjectHydrationChunk {
+	done: boolean;
+	nextCursor: number;
+	passages: Array<{passage: Passage; storyId: string}>;
 }
 
 export interface NativeProjectLoadTimings {
@@ -310,6 +322,16 @@ export interface TwineElectronWindow extends Window {
 			rootPath: string,
 			storyIds?: string[]
 		): Promise<NativeProjectFolderResult>;
+		beginProjectFolderHydration(
+			rootPath: string,
+			storyIds?: string[]
+		): Promise<NativeProjectHydrationStart>;
+		readProjectFolderHydrationChunk(
+			hydrationId: string,
+			cursor: number,
+			limit?: number
+		): Promise<NativeProjectHydrationChunk>;
+		finishProjectFolderHydration(hydrationId: string): Promise<void>;
 		loadPrefs(): Promise<any>;
 		loadStories(): Promise<ElectronLoadedStoryEntry[]>;
 		loadStoryFormats(): Promise<any>;

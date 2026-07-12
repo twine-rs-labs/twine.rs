@@ -70,6 +70,20 @@ export interface NativeProjectFolderResult {
 	storyIds: string[];
 }
 
+export interface NativeProjectHydrationStart extends Omit<
+	NativeProjectFolderResult,
+	'passageTextLoaded'
+> {
+	hydrationId: string;
+	passageCount: number;
+}
+
+export interface NativeProjectHydrationChunk {
+	done: boolean;
+	nextCursor: number;
+	passages: Array<{passage: Passage; storyId: string}>;
+}
+
 export interface NativeProjectLoadTimings {
 	assetScanUs?: number;
 	baselineReceiptUs?: number;
@@ -385,6 +399,10 @@ type RendererProjectMetadataStory = Partial<
 };
 
 const projectSessions = new Map<string, ProjectSessionState>();
+const projectHydrations = new Map<
+	string,
+	{createdAt: number; passages: Array<{passage: Passage; storyId: string}>}
+>();
 const preparedProjectImports = new Map<
 	string,
 	{assets: NativeProjectImportAsset[]; cleanupPath?: string}
@@ -3686,6 +3704,65 @@ export async function hydrateProjectFolder(
 
 	rememberProjectFolder(result);
 	return result;
+}
+
+export async function beginProjectFolderHydration(
+	rootPath: string,
+	storyIds?: string[]
+): Promise<NativeProjectHydrationStart> {
+	const projectFolder = await hydrateProjectFolder(rootPath, storyIds);
+	const hydrationId = uuid();
+	const passages = projectFolder.stories.flatMap(story =>
+		story.passages.map(passage => ({passage, storyId: story.id}))
+	);
+
+	// Leases are intentionally short lived and renderer-owned. Clear abandoned
+	// leases opportunistically without introducing another process timer.
+	const oldestAllowed = Date.now() - 5 * 60 * 1000;
+	for (const [id, lease] of projectHydrations) {
+		if (lease.createdAt < oldestAllowed) {
+			projectHydrations.delete(id);
+		}
+	}
+	projectHydrations.set(hydrationId, {createdAt: Date.now(), passages});
+
+	return {
+		graphLayoutLoaded: projectFolder.graphLayoutLoaded,
+		hydrationId,
+		loadPerformanceTimings: projectFolder.loadPerformanceTimings,
+		passageCount: passages.length,
+		rootPath: projectFolder.rootPath,
+		stories: projectFolder.stories.map(story => ({...story, passages: []})),
+		storyIds: projectFolder.storyIds,
+		storySourcesLoaded: projectFolder.storySourcesLoaded
+	};
+}
+
+export function readProjectFolderHydrationChunk(
+	hydrationId: string,
+	cursor: number,
+	limit = 256
+): NativeProjectHydrationChunk {
+	const lease = projectHydrations.get(hydrationId);
+	if (!lease) {
+		throw new Error(`Unknown or expired project hydration "${hydrationId}".`);
+	}
+	const boundedCursor = Math.max(0, Math.floor(cursor));
+	const boundedLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+	const nextCursor = Math.min(
+		lease.passages.length,
+		boundedCursor + boundedLimit
+	);
+
+	return {
+		done: nextCursor >= lease.passages.length,
+		nextCursor,
+		passages: lease.passages.slice(boundedCursor, nextCursor)
+	};
+}
+
+export function finishProjectFolderHydration(hydrationId: string): void {
+	projectHydrations.delete(hydrationId);
 }
 
 export async function copyProjectImportAssets(

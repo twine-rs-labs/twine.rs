@@ -17,6 +17,7 @@ import {fakeStory} from '../../../test-util';
 import {
 	chooseAssetFile,
 	applyProjectAssetEffect,
+	beginProjectFolderHydration,
 	cleanupStaleProjectAssetEffects,
 	copyProjectImportAssets,
 	copyAssetToProject,
@@ -25,11 +26,13 @@ import {
 	deleteProjectFolder,
 	discardProjectAssetEffect,
 	discardProjectImport,
+	finishProjectFolderHydration,
 	hydrateProjectFolder,
 	listProjectAssets,
 	openProjectFolder,
 	prepareProjectImport,
 	projectSessionSnapshot,
+	readProjectFolderHydrationChunk,
 	renameProjectAsset,
 	replaceProjectAsset,
 	resolveProjectSessionConflicts,
@@ -421,9 +424,7 @@ describe('project-folder native bridge', () => {
 		});
 
 		expect(manifestSource).toContain('name = "Renamed"');
-		expect(manifestSource).toContain(
-			'file = "passages/story/001-start.twee"'
-		);
+		expect(manifestSource).toContain('file = "passages/story/001-start.twee"');
 		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
 	});
 
@@ -994,6 +995,39 @@ describe('project-folder native bridge', () => {
 
 		expect(result.passageTextLoaded).toBe(true);
 		expect(result.stories[0].passages[0].text).toBe('hydrated passage text');
+	});
+
+	it('leases full hydration as bounded passage chunks', async () => {
+		const story = fakeStory(3);
+		loadNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath: '/native/chunked.twine.rs',
+			stories: [story],
+			storyIds: [story.id]
+		});
+
+		const start = await beginProjectFolderHydration(
+			'/native/chunked.twine.rs',
+			[story.id]
+		);
+		expect(start.stories[0].passages).toEqual([]);
+		expect(start.passageCount).toBe(3);
+
+		const first = readProjectFolderHydrationChunk(start.hydrationId, 0, 2);
+		expect(first.passages).toHaveLength(2);
+		expect(first.done).toBe(false);
+		const second = readProjectFolderHydrationChunk(
+			start.hydrationId,
+			first.nextCursor,
+			2
+		);
+		expect(second.passages).toHaveLength(1);
+		expect(second.done).toBe(true);
+
+		finishProjectFolderHydration(start.hydrationId);
+		expect(() => readProjectFolderHydrationChunk(start.hydrationId, 0)).toThrow(
+			'Unknown or expired project hydration'
+		);
 	});
 
 	it('falls back to manifest source files when renderer metadata JSON is mid-write', async () => {

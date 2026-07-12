@@ -385,8 +385,9 @@ async function launchFixture(): Promise<RunningApp> {
 			root
 		});
 		await app?.close().catch(() => undefined);
-		if (app?.process().exitCode === null) {
-			app.process().kill('SIGKILL');
+		const child = app?.process();
+		if (child?.exitCode === null) {
+			child.kill('SIGKILL');
 		}
 		await rm(root, {force: true, recursive: true});
 		await settleLaunchServices();
@@ -2118,6 +2119,9 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				const replacements = startupSnapshot.renderer.bridgeMetrics.filter(
 					metric => metric.kind === 'replaceProject'
 				);
+				const bootstrapFinishes = startupSnapshot.renderer.bridgeMetrics.filter(
+					metric => metric.kind === 'finishProjectBootstrap'
+				);
 
 				assertInvariant(
 					`${startupPrefix}-react-passage-body-mirror-empty`,
@@ -2127,9 +2131,9 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				);
 
 				assertInvariant(
-					`${startupPrefix}-one-initial-project-snapshot`,
-					replacements.length === 1,
-					`replaceProject count ${replacements.length}`
+					`${startupPrefix}-one-streamed-project-bootstrap`,
+					replacements.length === 0 && bootstrapFinishes.length === 1,
+					`replaceProject count ${replacements.length}, bootstrap finish count ${bootstrapFinishes.length}`
 				);
 				assertInvariant(
 					`${startupPrefix}-memory-checkpoints-present`,
@@ -2200,7 +2204,7 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				);
 				assertInvariant(
 					`${startupPrefix}-wasm-memory-attribution-present`,
-					replacements.some(metric => (metric.wasmMemoryBytes ?? 0) > 0)
+					bootstrapFinishes.some(metric => (metric.wasmMemoryBytes ?? 0) > 0)
 				);
 
 				startupMetrics(startupSnapshot, running.launchToWindowMs);

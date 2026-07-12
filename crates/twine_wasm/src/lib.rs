@@ -18,6 +18,41 @@ pub struct TwineWasmProjectSession {
     session: ProjectSession,
 }
 
+/// Incrementally assembles the initial project snapshot inside WASM so large
+/// passage bodies never need to coexist in one worker request.
+#[wasm_bindgen]
+pub struct TwineWasmProjectBootstrap {
+    snapshot: ProjectSnapshot,
+}
+
+#[wasm_bindgen]
+impl TwineWasmProjectBootstrap {
+    #[wasm_bindgen(constructor)]
+    pub fn new(snapshot: JsValue) -> Result<TwineWasmProjectBootstrap, JsValue> {
+        Ok(Self {
+            snapshot: from_js::<ProjectSnapshot>(snapshot)?,
+        })
+    }
+
+    pub fn append_passages(&mut self, story_id: String, passages: JsValue) -> Result<(), JsValue> {
+        let passages = from_js::<Vec<PassageSnapshot>>(passages)?;
+        let story = self
+            .snapshot
+            .stories
+            .iter_mut()
+            .find(|story| story.id == story_id)
+            .ok_or_else(|| JsValue::from_str("Bootstrap passage referenced an unknown story."))?;
+        story.passages.extend(passages);
+        Ok(())
+    }
+
+    pub fn finish(self) -> TwineWasmProjectSession {
+        TwineWasmProjectSession {
+            session: ProjectSession::new(project_from_snapshot(self.snapshot)),
+        }
+    }
+}
+
 #[wasm_bindgen]
 impl TwineWasmProjectSession {
     #[wasm_bindgen(constructor)]

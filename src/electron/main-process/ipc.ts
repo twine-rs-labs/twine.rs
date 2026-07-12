@@ -38,11 +38,14 @@ import {
 	discardProjectAssetEffect,
 	deleteProjectFolder,
 	discardProjectImport,
+	beginProjectFolderHydration,
+	finishProjectFolderHydration,
 	hydrateProjectFolder,
 	listProjectAssets,
 	openProjectFolder,
 	prepareProjectImport,
 	projectSessionSnapshot,
+	readProjectFolderHydrationChunk,
 	renameProjectAsset,
 	replaceProjectAsset,
 	resolveProjectSessionConflicts,
@@ -320,6 +323,21 @@ export function initIpc() {
 		'hydrate-project-folder',
 		async (_event, rootPath: string, storyIds?: string[]) =>
 			hydrateProjectFolder(rootPath, storyIds)
+	);
+	ipcMain.handle(
+		'begin-project-folder-hydration',
+		async (_event, rootPath: string, storyIds?: string[]) =>
+			beginProjectFolderHydration(rootPath, storyIds)
+	);
+	ipcMain.handle(
+		'read-project-folder-hydration-chunk',
+		async (_event, hydrationId: string, cursor: number, limit?: number) =>
+			readProjectFolderHydrationChunk(hydrationId, cursor, limit)
+	);
+	ipcMain.handle(
+		'finish-project-folder-hydration',
+		async (_event, hydrationId: string) =>
+			finishProjectFolderHydration(hydrationId)
 	);
 
 	ipcMain.handle(

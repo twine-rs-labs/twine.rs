@@ -3,6 +3,7 @@ import * as React from 'react';
 import {MemoryRouter} from 'react-router-dom';
 import {DialogsContext} from '../../../dialogs/context';
 import {StorySearchDialog} from '../../../dialogs/story-search';
+import {StoreCoreProjectHost} from '../../../core/project-host';
 import {markProjectStoryHydration} from '../../../store/project-hydration';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {StoriesContext} from '../../../store/stories';
@@ -330,6 +331,64 @@ describe('<StoryWorkspaceShell>', () => {
 				[story.id]
 			)
 		);
+	});
+
+	it('streams project-folder passage bodies into the core session', async () => {
+		const source = storyWithLinkedPassages().story;
+		const begin = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'beginHydratedProject')
+			.mockResolvedValue();
+		const append = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'appendHydratedProjectPassages')
+			.mockResolvedValue();
+		const finish = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'finishHydratedProject')
+			.mockResolvedValue();
+		const finishLease = jest.fn(async () => undefined);
+		(window as any).twineElectron = {
+			beginProjectFolderHydration: jest.fn(async () => ({
+				hydrationId: 'lease-1',
+				passageCount: source.passages.length,
+				rootPath: '/native/project.twine.rs',
+				stories: [{...source, passages: []}],
+				storyIds: [source.id]
+			})),
+			finishProjectFolderHydration: finishLease,
+			hydrateProjectFolder: jest.fn(),
+			readProjectFolderHydrationChunk: jest.fn(async () => ({
+				done: true,
+				nextCursor: source.passages.length,
+				passages: source.passages.map(passage => ({
+					passage,
+					storyId: source.id
+				}))
+			}))
+		};
+		renderComponent('graph', undefined, {
+			configureStory: currentStory => {
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+
+		await waitFor(() => expect(finish).toHaveBeenCalled());
+		expect(begin).toHaveBeenCalledWith(expect.any(String), [
+			expect.objectContaining({passages: []})
+		]);
+		expect(append).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.arrayContaining([
+				expect.objectContaining({text: expect.any(String)})
+			])
+		);
+		expect(finishLease).toHaveBeenCalledWith('lease-1');
 	});
 
 	it('opens indexed story sources from the contents navigator', async () => {

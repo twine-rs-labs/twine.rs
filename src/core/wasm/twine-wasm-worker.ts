@@ -4,16 +4,28 @@ import type {
 	WasmWorkerResponse
 } from './twine-wasm-protocol';
 import type {TwineWasmProjectSession as TwineWasmProjectSessionType} from './pkg/twine_wasm';
+import type {TwineWasmProjectBootstrap as TwineWasmProjectBootstrapType} from './pkg/twine_wasm';
 
 let wasmReady: Promise<void> | undefined;
 let SessionConstructor:
 	| (new (snapshot: unknown) => TwineWasmProjectSessionType)
+	| undefined;
+let BootstrapConstructor:
+	| (new (snapshot: unknown) => TwineWasmProjectBootstrapType)
 	| undefined;
 let wasmMemoryBytes = 0;
 let wasmMemory: WebAssembly.Memory | undefined;
 const sessions = new Map<
 	string,
 	{revision: number; session: TwineWasmProjectSessionType}
+>();
+const bootstraps = new Map<
+	string,
+	{
+		assets: unknown[];
+		bootstrap: TwineWasmProjectBootstrapType;
+		revision: number;
+	}
 >();
 
 function now() {
@@ -46,6 +58,7 @@ async function ensureWasm() {
 			wasmMemory = output.memory;
 			wasmMemoryBytes = wasmMemory.buffer.byteLength;
 			SessionConstructor = module.TwineWasmProjectSession;
+			BootstrapConstructor = module.TwineWasmProjectBootstrap;
 		});
 	}
 
@@ -87,6 +100,50 @@ async function handleRequest(
 
 		computeStartedAtEpochMs = epochNow();
 		switch (request.kind) {
+			case 'beginProjectBootstrap': {
+				if (!BootstrapConstructor) {
+					throw new Error('WASM core module did not expose ProjectBootstrap.');
+				}
+				bootstraps.get(request.sessionId)?.bootstrap.free();
+				bootstraps.set(request.sessionId, {
+					assets: request.assets,
+					bootstrap: new BootstrapConstructor(request.snapshot),
+					revision: request.revision
+				});
+				result = {accepted: true};
+				break;
+			}
+			case 'appendProjectBootstrap': {
+				const entry = bootstraps.get(request.sessionId);
+				if (!entry) {
+					throw new Error(`Missing project bootstrap "${request.sessionId}".`);
+				}
+				entry.bootstrap.append_passages(request.storyId, request.passages);
+				result = {accepted: true};
+				break;
+			}
+			case 'finishProjectBootstrap': {
+				const entry = bootstraps.get(request.sessionId);
+				if (!entry || entry.revision !== request.revision) {
+					throw new Error(
+						`Missing or stale project bootstrap "${request.sessionId}".`
+					);
+				}
+				const nextSession = entry.bootstrap.finish();
+				nextSession.set_revision(request.revision);
+				nextSession.set_asset_inventory(entry.assets);
+				bootstraps.delete(request.sessionId);
+				sessions.get(request.sessionId)?.session.free();
+				sessions.set(request.sessionId, {
+					revision: request.revision,
+					session: nextSession
+				});
+				result = {
+					revision: request.revision,
+					status: nextSession.status()
+				};
+				break;
+			}
 			case 'replaceProject':
 				if (!SessionConstructor) {
 					throw new Error('WASM core module did not expose ProjectSession.');
@@ -274,10 +331,13 @@ async function handleRequest(
 
 			case 'removeSession': {
 				const removed = sessions.get(request.sessionId);
+				const bootstrap = bootstraps.get(request.sessionId);
 
 				removed?.session.free();
+				bootstrap?.bootstrap.free();
 				sessions.delete(request.sessionId);
-				result = {removed: !!removed};
+				bootstraps.delete(request.sessionId);
+				result = {removed: !!removed || !!bootstrap};
 				break;
 			}
 

@@ -1,6 +1,18 @@
 /* tslint:disable */
 /* eslint-disable */
 
+/**
+ * Incrementally assembles the initial project snapshot inside WASM so large
+ * passage bodies never need to coexist in one worker request.
+ */
+export class TwineWasmProjectBootstrap {
+    free(): void;
+    [Symbol.dispose](): void;
+    append_passages(story_id: string, passages: any): void;
+    finish(): TwineWasmProjectSession;
+    constructor(snapshot: any);
+}
+
 export class TwineWasmProjectSession {
     free(): void;
     [Symbol.dispose](): void;
@@ -40,9 +52,13 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly __wbg_twinewasmprojectbootstrap_free: (a: number, b: number) => void;
     readonly __wbg_twinewasmprojectsession_free: (a: number, b: number) => void;
     readonly query_graph_projection: (a: any, b: number, c: number, d: any) => [number, number, number];
     readonly query_story_index: (a: any, b: number, c: number, d: any) => [number, number, number];
+    readonly twinewasmprojectbootstrap_append_passages: (a: number, b: number, c: number, d: any) => [number, number];
+    readonly twinewasmprojectbootstrap_finish: (a: number) => number;
+    readonly twinewasmprojectbootstrap_new: (a: any) => [number, number, number];
     readonly twinewasmprojectsession_acknowledge_saved: (a: number, b: number) => [number, number, number];
     readonly twinewasmprojectsession_apply: (a: number, b: any, c: number) => [number, number, number];
     readonly twinewasmprojectsession_apply_external_delta: (a: number, b: any) => [number, number, number];

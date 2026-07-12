@@ -1,9 +1,13 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const __wbg_twinewasmprojectbootstrap_free: (a: number, b: number) => void;
 export const __wbg_twinewasmprojectsession_free: (a: number, b: number) => void;
 export const query_graph_projection: (a: any, b: number, c: number, d: any) => [number, number, number];
 export const query_story_index: (a: any, b: number, c: number, d: any) => [number, number, number];
+export const twinewasmprojectbootstrap_append_passages: (a: number, b: number, c: number, d: any) => [number, number];
+export const twinewasmprojectbootstrap_finish: (a: number) => number;
+export const twinewasmprojectbootstrap_new: (a: any) => [number, number, number];
 export const twinewasmprojectsession_acknowledge_saved: (a: number, b: number) => [number, number, number];
 export const twinewasmprojectsession_apply: (a: number, b: any, c: number) => [number, number, number];
 export const twinewasmprojectsession_apply_external_delta: (a: number, b: any) => [number, number, number];

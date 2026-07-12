@@ -140,6 +140,28 @@ const bridge = {
 	hydrateProjectFolder(rootPath: string, storyIds?: string[]) {
 		return ipcRenderer.invoke('hydrate-project-folder', rootPath, storyIds);
 	},
+	beginProjectFolderHydration(rootPath: string, storyIds?: string[]) {
+		return ipcRenderer.invoke(
+			'begin-project-folder-hydration',
+			rootPath,
+			storyIds
+		);
+	},
+	readProjectFolderHydrationChunk(
+		hydrationId: string,
+		cursor: number,
+		limit?: number
+	) {
+		return ipcRenderer.invoke(
+			'read-project-folder-hydration-chunk',
+			hydrationId,
+			cursor,
+			limit
+		);
+	},
+	finishProjectFolderHydration(hydrationId: string) {
+		return ipcRenderer.invoke('finish-project-folder-hydration', hydrationId);
+	},
 	listProjectAssets(rootPath: string) {
 		return ipcRenderer.invoke('list-project-assets', rootPath);
 	},

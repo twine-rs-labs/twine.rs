@@ -20,6 +20,7 @@ import type {CoreStoryIndex} from '../bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from '../bindings/CoreStoryIndexOptions';
 import type {CoreStorySummary} from '../bindings/CoreStorySummary';
 import type {ProjectSnapshot} from '../bindings/ProjectSnapshot';
+import type {PassageSnapshot} from '../bindings/PassageSnapshot';
 import type {StoryCommand} from '../bindings/StoryCommand';
 import {recordPerformanceHarnessEvent} from '../../util/performance';
 import {recordCoreBridgeMetric} from './performance';
@@ -48,6 +49,9 @@ type CacheEntry<T> = {
 type SessionMutationKind =
 	| 'acknowledgeSaved'
 	| 'apply'
+	| 'beginProjectBootstrap'
+	| 'appendProjectBootstrap'
+	| 'finishProjectBootstrap'
 	| 'ingestExternalDelta'
 	| 'redo'
 	| 'replaceProject'
@@ -238,6 +242,72 @@ export class WasmCoreWorkerClient {
 			throw new Error(`Unexpected WASM response: ${response.kind}`);
 		}
 
+		this.readyRevisions.set(sessionId, response.result.revision);
+		this.clearQueryCaches(sessionId);
+		return response.result.status;
+	}
+
+	async beginProjectBootstrap(
+		sessionId: string,
+		snapshot: ProjectSnapshot,
+		revision: number,
+		assets: CoreAssetInventoryEntry[] = []
+	) {
+		const response = await this.enqueueMutation(
+			sessionId,
+			'beginProjectBootstrap',
+			() =>
+				this.send({
+					assets,
+					id: 0,
+					kind: 'beginProjectBootstrap',
+					revision,
+					sessionId,
+					snapshot
+				})
+		);
+		if (response.kind !== 'beginProjectBootstrap') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
+	}
+
+	async appendProjectBootstrap(
+		sessionId: string,
+		storyId: string,
+		passages: PassageSnapshot[]
+	) {
+		const response = await this.enqueueMutation(
+			sessionId,
+			'appendProjectBootstrap',
+			() =>
+				this.send({
+					id: 0,
+					kind: 'appendProjectBootstrap',
+					passages,
+					sessionId,
+					storyId
+				})
+		);
+		if (response.kind !== 'appendProjectBootstrap') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
+	}
+
+	async finishProjectBootstrap(sessionId: string, revision: number) {
+		const response = await this.enqueueMutation(
+			sessionId,
+			'finishProjectBootstrap',
+			() =>
+				this.send({
+					id: 0,
+					kind: 'finishProjectBootstrap',
+					revision,
+					sessionId
+				})
+		);
+		if (response.kind !== 'finishProjectBootstrap') {
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		}
 		this.readyRevisions.set(sessionId, response.result.revision);
 		this.clearQueryCaches(sessionId);
 		return response.result.status;

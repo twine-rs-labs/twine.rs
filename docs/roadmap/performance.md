@@ -46,17 +46,20 @@ fixture isolation.
   removed; Rust session status is the only persisted dirty-state authority.
   Stable-identity hydration also reuses the incoming 50k passage objects rather
   than cloning them solely to rewrite an unchanged story ID.
-- File-backed WASM initialization waits for full passage hydration and submits
-  one initial snapshot. Passage bodies are then removed from the React read
-  model; bounded document/fact queries and explicit workflow materialization
-  now serve consumers that previously scanned the complete story.
+- File-backed WASM initialization waits for full passage hydration, then uses a
+  short-lived main-process lease and bounded passage chunks to assemble a
+  Rust-owned WASM bootstrap. No full project snapshot crosses renderer-to-worker
+  IPC. Passage bodies are removed from the React read model; bounded
+  document/fact queries and explicit workflow materialization serve consumers
+  that previously scanned the complete story.
 - Fresh 2026-07-12 validation confirms the retained host passage-body count is
   zero in diagnostic, query, and watcher runs. The 50k startup run still retains
-  about 1.07 GiB across Electron processes and transfers a roughly 38.95 MiB
-  hydration payload; query-cache residency reaches about 1.27 GiB. The next
-  startup/memory change should therefore remove duplicate hydration/bootstrap
-  and retained process representations rather than revisit the React body
-  mirror.
+  about 1.02 GiB across Electron processes after chunked bootstrap; query-cache
+  residency previously reached about 1.27 GiB. The native loader still returns
+  a roughly 38.95 MiB full result to Electron main before that result is leased.
+  The next startup/memory change should integrate streaming with the native
+  load receipt and watcher-baseline lifecycle rather than revisit the React
+  body mirror.
 - The first attributed cleanup reduced 50k shell p50 to about 0.96 s,
   interactive p50 to about 10.4 s, retained resident memory to about 1.14 GiB,
   and WASM linear memory to about 96 MiB.
@@ -83,11 +86,13 @@ fixture isolation.
   shell native time improves from about 557 ms to 245 ms, and shell visibility
   improves from about 771 ms to 480 ms. Invalid or stale caches fall back to
   `twine.toml`; watcher cache paths remain ignored.
-- With manifest parsing removed, the next broad milestone is the bounded
-  renderer project mirror. It should target the roughly 39 MiB hydration IPC
-  payload, approximately 1 s core-session construction, and roughly 1.14 GiB
-  retained process memory together. A smaller shell-only optimization may still
-  pursue the remaining roughly 80 ms over the 400 ms target.
+- The renderer-to-worker bootstrap is now bounded: the confirming 50k run used
+  50 chunks of about 519 KiB and finalized the Rust session in about 430 ms.
+  Interactive p50 was about 2.41 s and retained resident p50 about 1.02 GiB.
+  Remaining initialization work is native-owned streaming that preserves the
+  exact baseline receipt and watcher descriptor while avoiding the full 39 MiB
+  native JSON result. A smaller shell-only optimization may still pursue the
+  remaining roughly 80 ms over the 400 ms target.
 
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.

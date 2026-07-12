@@ -606,7 +606,7 @@ const AssetManager: React.FC<{
 													story.id,
 													asset.path,
 													selectedPassage.id,
-											selectedPassageCharacterCount,
+													selectedPassageCharacterCount,
 													{
 														passageId: selectedPassage.id,
 														snippet: asset.snippet.text
@@ -1242,12 +1242,8 @@ export const StoryWorkspaceShell: React.FC<
 		projectMetadata.status === 'file-backed';
 	const passageTextLoaded =
 		!isFileBackedStory || hydration?.passageTextLoaded !== false;
-	const shellIndex = React.useMemo(
-		() => emptyStoryIndex(story.id),
-		[story.id]
-	);
-	const [dockModel, setDockModel] =
-		React.useState<CoreWorkbenchDockModel>();
+	const shellIndex = React.useMemo(() => emptyStoryIndex(story.id), [story.id]);
+	const [dockModel, setDockModel] = React.useState<CoreWorkbenchDockModel>();
 	const [passageFacts, setPassageFacts] = React.useState<CorePassageFacts>();
 	const openProgress = React.useMemo<StoryOpenProgressState | undefined>(() => {
 		if (isFileBackedStory && hydration?.passageTextLoaded === false) {
@@ -1285,12 +1281,10 @@ export const StoryWorkspaceShell: React.FC<
 		}
 
 		const bridge = (window as TwineElectronWindow).twineElectron;
+		const projectRoot = projectMetadata.rootPath;
 		const hydrateKey = `${projectMetadata.rootPath}:${story.id}`;
 
-		if (
-			!bridge?.hydrateProjectFolder ||
-			hydratingStories.current.has(hydrateKey)
-		) {
+		if (!bridge || hydratingStories.current.has(hydrateKey)) {
 			return;
 		}
 
@@ -1301,70 +1295,131 @@ export const StoryWorkspaceShell: React.FC<
 				return metadata?.rootPath === projectMetadata.rootPath;
 			})
 			.map(candidate => candidate.id);
-		void bridge
-			.hydrateProjectFolder(projectMetadata.rootPath, projectStoryIds)
-			.then(async result => {
-				recordPerformanceHarnessEvent('native-project-hydrated', {
-					...result.loadPerformanceTimings,
-					graphLayoutLoaded: result.graphLayoutLoaded,
-					passageTextLoaded: result.passageTextLoaded,
-					rootPath: result.rootPath,
-					storySourcesLoaded: result.storySourcesLoaded,
-					storyCount: result.stories.length
-				});
-				if (result.stories.length > 0) {
+		void (async () => {
+			const canStream =
+				!!bridge.beginProjectFolderHydration &&
+				!!bridge.readProjectFolderHydrationChunk &&
+				!!bridge.finishProjectFolderHydration;
+			let result;
+			let hydrationChunkCount = 0;
+			if (canStream) {
+				const start = await bridge.beginProjectFolderHydration(
+					projectRoot,
+					projectStoryIds
+				);
+				const metadataStories = start.stories.map(candidate => ({
+					...candidate,
+					passages: [] as Passage[]
+				}));
+				const metadataById = new Map(
+					metadataStories.map(candidate => [candidate.id, candidate])
+				);
+				await coreProjectHost.beginHydratedProject(story.id, start.stories);
+				let cursor = 0;
+				let done = false;
+				try {
+					while (!done) {
+						const chunk = await bridge.readProjectFolderHydrationChunk(
+							start.hydrationId,
+							cursor,
+							1000
+						);
+						hydrationChunkCount++;
+						const byStory = new Map<string, Passage[]>();
+						for (const {passage, storyId} of chunk.passages) {
+							const passages = byStory.get(storyId) ?? [];
+							passages.push(passage);
+							byStory.set(storyId, passages);
+							metadataById.get(storyId)?.passages.push({...passage, text: ''});
+						}
+						for (const [storyId, passages] of byStory) {
+							await coreProjectHost.appendHydratedProjectPassages(
+								storyId,
+								passages
+							);
+						}
+						cursor = chunk.nextCursor;
+						done = chunk.done;
+					}
+					await coreProjectHost.finishHydratedProject(story.id);
+				} finally {
+					await bridge.finishProjectFolderHydration(start.hydrationId);
+				}
+				result = {
+					...start,
+					passageTextLoaded: true,
+					stories: metadataStories
+				};
+			} else {
+				result = await bridge.hydrateProjectFolder(
+					projectRoot,
+					projectStoryIds
+				);
+			}
+
+			recordPerformanceHarnessEvent('native-project-hydrated', {
+				...result.loadPerformanceTimings,
+				hydrationChunkCount,
+				hydrationMode: canStream ? 'streamed' : 'full',
+				graphLayoutLoaded: result.graphLayoutLoaded,
+				passageTextLoaded: result.passageTextLoaded,
+				rootPath: result.rootPath,
+				storySourcesLoaded: result.storySourcesLoaded,
+				storyCount: result.stories.length
+			});
+			if (result.stories.length > 0) {
+				if (!canStream) {
 					await coreProjectHost.initializeHydratedProject(
 						story.id,
 						result.stories
 					);
-					const metadataStories = result.stories.map(candidate => ({
-						...candidate,
-						passages: candidate.passages.map(passage => ({
-							...passage,
-							text: ''
-						}))
-					}));
-					const mergeStarted = performance.now();
-					const hydratedStories = mergeProjectStories(
-						storiesRef.current,
-						metadataStories,
-						{preserveExistingText: false}
-					);
-					recordPerformanceHarnessEvent('renderer-project-hydration-merged', {
-						durationMs: performance.now() - mergeStarted,
-						passageCount: hydratedStories.reduce(
-							(total, candidate) => total + candidate.passages.length,
-							0
-						)
-					});
-
-					const dispatchStarted = performance.now();
-					storiesRef.current = hydratedStories;
-					storiesDispatch({
-						state: hydratedStories,
-						type: 'init'
-					});
-					recordPerformanceHarnessEvent(
-						'renderer-project-hydration-dispatched',
-						{durationMs: performance.now() - dispatchStarted}
-					);
-					for (const hydratedStory of result.stories) {
-						markProjectStoryHydration(hydratedStory.id, {
-							passageTextLoaded: true,
-							rootPath: projectMetadata.rootPath
-						});
-					}
-					markPerformance('all-passages-ready');
-					measurePerformance(
-						'open-to-hydrated',
-						'open-start',
-						'all-passages-ready'
-					);
 				}
-			})
-			.catch(error =>
-				console.warn(`Could not hydrate project folder story: ${error}`)
-			);
+				const metadataStories = result.stories.map(candidate => ({
+					...candidate,
+					passages: candidate.passages.map(passage => ({
+						...passage,
+						text: ''
+					}))
+				}));
+				const mergeStarted = performance.now();
+				const hydratedStories = mergeProjectStories(
+					storiesRef.current,
+					metadataStories,
+					{preserveExistingText: false}
+				);
+				recordPerformanceHarnessEvent('renderer-project-hydration-merged', {
+					durationMs: performance.now() - mergeStarted,
+					passageCount: hydratedStories.reduce(
+						(total, candidate) => total + candidate.passages.length,
+						0
+					)
+				});
+
+				const dispatchStarted = performance.now();
+				storiesRef.current = hydratedStories;
+				storiesDispatch({
+					state: hydratedStories,
+					type: 'init'
+				});
+				recordPerformanceHarnessEvent('renderer-project-hydration-dispatched', {
+					durationMs: performance.now() - dispatchStarted
+				});
+				for (const hydratedStory of result.stories) {
+					markProjectStoryHydration(hydratedStory.id, {
+						passageTextLoaded: true,
+						rootPath: projectMetadata.rootPath
+					});
+				}
+				markPerformance('all-passages-ready');
+				measurePerformance(
+					'open-to-hydrated',
+					'open-start',
+					'all-passages-ready'
+				);
+			}
+		})().catch(error =>
+			console.warn(`Could not hydrate project folder story: ${error}`)
+		);
 	}, [
 		coreProjectHost,
 		passageTextLoaded,
@@ -1411,11 +1466,13 @@ export const StoryWorkspaceShell: React.FC<
 			};
 		}
 		const loadDockModel = () => {
-			void coreProjectHost.queryWorkbenchDockModelAsync(story.id).then(model => {
-				if (active) {
-					setDockModel(model);
-				}
-			});
+			void coreProjectHost
+				.queryWorkbenchDockModelAsync(story.id)
+				.then(model => {
+					if (active) {
+						setDockModel(model);
+					}
+				});
 		};
 
 		loadDockModel();
@@ -1452,7 +1509,7 @@ export const StoryWorkspaceShell: React.FC<
 		passageTextLoaded,
 		patchVersion,
 		selectedPassageId,
-		story,
+		story
 	]);
 
 	const index = React.useMemo<CoreStoryIndex>(
@@ -1490,19 +1547,16 @@ export const StoryWorkspaceShell: React.FC<
 			diagnostics
 		};
 	}, [dismissedDiagnosticIds, index]);
-	const contents = React.useMemo(
-		() => {
-			const model = contentsViewModel(activeIndex);
-			return dockModel
-				? {
+	const contents = React.useMemo(() => {
+		const model = contentsViewModel(activeIndex);
+		return dockModel
+			? {
 					...model,
 					problemCount: dockModel.contents.facets.problems,
 					totalCount: dockModel.contents.totalCount
 				}
-				: model;
-		},
-		[activeIndex, dockModel]
-	);
+			: model;
+	}, [activeIndex, dockModel]);
 	const diagnostics = React.useMemo(
 		() => diagnosticsViewModel(activeIndex, story),
 		[activeIndex, story]
@@ -1553,12 +1607,7 @@ export const StoryWorkspaceShell: React.FC<
 						)
 					])
 			),
-		[
-			dockWindows,
-			passageFacts,
-			selection.passage?.id,
-			story
-		]
+		[dockWindows, passageFacts, selection.passage?.id, story]
 	);
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {t} = useTranslation();
@@ -1688,8 +1737,7 @@ export const StoryWorkspaceShell: React.FC<
 							onTestPassage={onTestPassage}
 							selection={selection}
 							selectedPassageCharacterCount={
-								passageFacts &&
-								passageFacts.passageId === selection.passage?.id
+								passageFacts && passageFacts.passageId === selection.passage?.id
 									? passageFacts.characterCount
 									: 0
 							}

@@ -21,6 +21,7 @@ import type {CoreStoryIndexOptions} from '../bindings/CoreStoryIndexOptions';
 import type {CoreStorySummary} from '../bindings/CoreStorySummary';
 import type {PatchBatch} from '../bindings/PatchBatch';
 import type {ProjectSnapshot} from '../bindings/ProjectSnapshot';
+import type {PassageSnapshot} from '../bindings/PassageSnapshot';
 import type {StoryCommand} from '../bindings/StoryCommand';
 import type {CoreBridgeMetric} from './performance';
 
@@ -71,6 +72,27 @@ export interface WasmWorkerMetricBase {
 }
 
 export type WasmWorkerRequest =
+	| {
+			assets: CoreAssetInventoryEntry[];
+			id: number;
+			kind: 'beginProjectBootstrap';
+			revision: number;
+			sessionId: string;
+			snapshot: ProjectSnapshot;
+	  }
+	| {
+			id: number;
+			kind: 'appendProjectBootstrap';
+			passages: PassageSnapshot[];
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'finishProjectBootstrap';
+			revision: number;
+			sessionId: string;
+	  }
 	| {
 			id: number;
 			kind: 'apply';
@@ -223,6 +245,20 @@ export type WasmWorkerExternalIngestResult = CoreExternalIngestResult & {
 };
 
 export type WasmWorkerSuccess =
+	| {
+			id: number;
+			kind: 'appendProjectBootstrap' | 'beginProjectBootstrap';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: {accepted: boolean};
+	  }
+	| {
+			id: number;
+			kind: 'finishProjectBootstrap';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: {revision: number; status: CoreSessionStatus};
+	  }
 	| {
 			id: number;
 			kind: 'apply';

@@ -7,6 +7,9 @@ export interface CoreBridgeMetric {
 	kind:
 		| 'acknowledgeSaved'
 		| 'apply'
+		| 'appendProjectBootstrap'
+		| 'beginProjectBootstrap'
+		| 'finishProjectBootstrap'
 		| 'ingestExternalDelta'
 		| 'queryGraphProjection'
 		| 'queryAssetsPage'
