@@ -139,27 +139,36 @@ same handles used to read project content. The watcher starts before hydration
 and reconciles only paths observed while the immutable receipt is built;
 watcher-unavailable and recovery paths retain the safe full scan.
 
-The focused 50k startup run on 2026-07-12 passed all structural assertions:
+Bounded parallel hydration and explicit shell/full load profiles landed next.
+The shell skips passage bodies, scripts, stylesheets, graph layout, assets, and
+receipt construction. Full hydration validates paths before work begins, reads
+passages through one process-wide pool capped at eight workers, preserves
+manifest order, and returns receipt metadata from the same file handles.
 
-- shell p50: about 638 ms;
-- hydrated p50: about 5.75 s;
-- interactive p50: about 5.24 s;
-- native session baseline p50: about 96 ms;
-- receipt adoption p50: about 69 ms;
-- no-change receipt catch-up p50: about 0.016 ms;
-- core session construction p50: about 1.04 s.
+The focused 10k run passed with shell p50 about 222 ms, interactive p50 about
+749 ms, and post-GC resident memory about 717 MiB. Two consecutive 50k runs
+also passed every startup invariant and showed the expected cold/warm range:
 
-The following 50k watcher phase also passed passage, asset-review, exact
+- shell p50: about 649–771 ms;
+- native full hydration p50: about 2.03–2.59 s, down from 4.47 s;
+- interactive p50: about 2.84–3.66 s, down from 5.24 s;
+- passage-source read p50: about 1.48–1.88 s for 50,000 files;
+- native session baseline p50: about 117 ms in the colder attributed run;
+- receipt adoption p50: about 90 ms;
+- post-GC resident memory p50: about 1.26–1.30 GiB.
+
+The shell still misses its 400 ms target at 50k. It performs no graph or source
+I/O; TOML parsing alone was about 402 ms p50 in the colder run, so remaining
+shell work is manifest representation/parsing rather than hydration leakage.
+
+The following 50k watcher phase passed passage, asset-review, exact
 acknowledgement, and no-recovery assertions. Post-GC resident memory was about
-1.33 GiB. Main live heap was about 31 MiB, slightly below the earlier run, so
-the higher process RSS is not a retained receipt object graph; subsequent
-memory work should attribute native allocator high-water state, renderer
-working set, and process overhead.
+1.26–1.30 GiB, an improvement over the prior 1.33 GiB but still well above the
+600 MiB target.
 
-The corresponding final 10k startup phase also passes: shell p50 is about
-178 ms and interactive p50 about 1.08 s, both inside their roadmap targets.
-Resident memory remains about 728 MiB, above the 600 MiB target, with roughly
-21 MiB of WASM linear memory.
+The 10k shell and interactive timings remain inside their roadmap targets.
+Resident memory remains above the 600 MiB target, with roughly 21 MiB of WASM
+linear memory.
 
 ## Gates
 

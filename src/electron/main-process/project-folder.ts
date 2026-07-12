@@ -60,21 +60,36 @@ import {
 
 export interface NativeProjectFolderResult {
 	baselineReceipt?: NativeProjectBaselineReceipt;
+	graphLayoutLoaded?: boolean;
 	loadPerformanceTimings?: NativeProjectLoadTimings;
 	passageTextLoaded?: boolean;
 	performanceTimings?: NativeProjectSaveTimings;
 	rootPath: string;
+	storySourcesLoaded?: boolean;
 	stories: Story[];
 	storyIds: string[];
 }
 
 export interface NativeProjectLoadTimings {
+	assetScanUs?: number;
 	baselineReceiptUs?: number;
+	graphLayoutUs?: number;
 	jsJsonParseMs?: number;
 	mainNativeCallMs?: number;
 	modelBuildUs: number;
+	loadProfile?: 'full' | 'shell';
+	manifestParseUs?: number;
+	manifestReadUs?: number;
 	nativeStoryConversionUs: number;
+	parallel?: boolean;
+	passageSourceCount?: number;
+	passageSourceUs?: number;
 	payloadBytes?: number;
+	sourceBytes?: number;
+	sourceJobPrepareUs?: number;
+	storySourceCount?: number;
+	storySourceUs?: number;
+	workerCount?: number;
 }
 
 export interface NativeProjectBaselineReceipt {
@@ -1990,9 +2005,12 @@ async function storiesFromProjectManifest(
 		return metadataStories.map(storyFromMetadata);
 	}
 
-	const graph = await readJsonIfPresent<{
-		passages?: Record<string, Partial<Record<string, number>>>;
-	}>(join(rootPath, '.twine', 'graph.json'), {ignoreInvalidJson: true});
+	const graph =
+		options.loadPassageText === false
+			? undefined
+			: await readJsonIfPresent<{
+					passages?: Record<string, Partial<Record<string, number>>>;
+				}>(join(rootPath, '.twine', 'graph.json'), {ignoreInvalidJson: true});
 	const metadataById = new Map(
 		metadataStories.flatMap(story =>
 			story.id ? [[story.id, story] as const] : []
@@ -2011,13 +2029,19 @@ async function storiesFromProjectManifest(
 		const scriptPath = safeProjectFilePath(rootPath, parsed.script);
 		const stylesheetPath = safeProjectFilePath(rootPath, parsed.stylesheet);
 		const script =
-			(scriptPath ? await readTextIfPresent(scriptPath) : undefined) ??
-			metadataStory?.script ??
-			'';
+			options.loadPassageText === false
+				? ''
+				: ((scriptPath ? await readTextIfPresent(scriptPath) : undefined) ??
+					metadataStory?.script ??
+					'');
 		const stylesheet =
-			(stylesheetPath ? await readTextIfPresent(stylesheetPath) : undefined) ??
-			metadataStory?.stylesheet ??
-			'';
+			options.loadPassageText === false
+				? ''
+				: ((stylesheetPath
+						? await readTextIfPresent(stylesheetPath)
+						: undefined) ??
+					metadataStory?.stylesheet ??
+					'');
 		const metadataPassages = new Map(
 			(metadataStory?.passages ?? [])
 				.filter(
@@ -2135,8 +2159,10 @@ async function readProjectFolder(
 	);
 
 	return {
+		graphLayoutLoaded: options.loadPassageText !== false,
 		passageTextLoaded: options.loadPassageText !== false,
 		rootPath,
+		storySourcesLoaded: options.loadPassageText !== false,
 		stories,
 		storyIds: stories.map(story => story.id)
 	};
@@ -3577,9 +3603,11 @@ export async function hydrateProjectFolder(
 		: stories;
 
 	const result = {
+		graphLayoutLoaded: true,
 		loadPerformanceTimings: projectFolder.loadPerformanceTimings,
 		passageTextLoaded: true,
 		rootPath: projectFolder.rootPath,
+		storySourcesLoaded: true,
 		stories: filteredStories,
 		storyIds: filteredStories.map(story => story.id)
 	};

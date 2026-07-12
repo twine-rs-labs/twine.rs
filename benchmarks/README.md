@@ -109,10 +109,17 @@ renderer hydration and snapshot construction, WASM session initialization,
 memory at startup readiness marks, and a perf-only post-GC retained checkpoint.
 Reports include main/renderer heap, process working sets, WASM linear memory,
 payload sizes, Rust session/cache entity counts, and native baseline-receipt
-construction, adoption, and changed-path catch-up. Startup assertions require
-the accepted watcher baseline to come from the files visited during hydration,
-not a second full project traversal. Startup phase reports are partial evidence
-and cannot be accepted as complete baselines.
+construction, adoption, and changed-path catch-up. Native load attribution also
+separates manifest parsing, graph layout, passage and story sources, assets,
+worker count, and bytes read. Startup assertions require a lightweight shell,
+a complete full hydration, and an accepted watcher baseline from files visited
+during hydration rather than a second traversal. Startup phase reports are
+partial evidence and cannot be accepted as complete baselines.
+
+Full hydration uses a shared pool capped at eight workers. For controlled local
+experiments, `TWINE_NATIVE_LOAD_THREADS=<count>` overrides the pool size and is
+forwarded into benchmark Electron processes. This is diagnostic configuration,
+not a reason to compare reports captured with different worker counts.
 
 Startup and memory metrics carry explicit measurement-contract versions. When
 checkpoint semantics change, matching-machine reports remain visible but are

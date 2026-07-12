@@ -61,10 +61,17 @@ fixture isolation.
   At 50k, the native baseline is about 96 ms p50, receipt adoption about 69 ms,
   and unchanged-path catch-up about 0.016 ms. The subsequent watcher phase
   preserves passage, asset-review, immutable-lease, and recovery assertions.
-- Full hydration is now about 5.75 s p50 and core session construction about
-  1.04 s. Hydration is the next startup target. Retained resident memory remains
-  about 1.33 GiB and needs process/native allocation attribution even though
-  main live heap is only about 31 MiB.
+- Shell and full load profiles are now explicit. Full hydration validates all
+  paths before work begins and reads ordered passage results through one shared
+  pool capped at eight workers. At 50k, native hydration improved from about
+  4.47 s to a measured 2.03–2.59 s p50 range, and interactive startup improved
+  from about 5.24 s to 2.84–3.66 s. The subsequent watcher phase passes.
+- The next startup limit is split between 50k TOML shell parsing (about 402 ms
+  in the colder sample), passage I/O (about 1.48–1.88 s), and core session
+  construction (about 1.04 s). Avoid raising concurrency without controlled
+  evidence; the benchmark supports `TWINE_NATIVE_LOAD_THREADS` experiments.
+- Retained resident memory improved to about 1.26–1.30 GiB but still needs the
+  bounded renderer-mirror milestone to approach the 600 MiB target.
 
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.

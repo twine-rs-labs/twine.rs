@@ -21,7 +21,7 @@ interface NativeProjectAddon {
 	healthJson(): string;
 	listProjectAssetsJson(rootPath: string): string;
 	listRememberedProjectFoldersJson(indexPath: string): string;
-	loadProjectFolderJson(rootPath: string, loadPassageText?: boolean): string;
+	loadProjectFolderJson(rootPath: string, loadProfile?: 'full' | 'shell'): string;
 	prepareProjectImportJson(sourcePath: string): string;
 	prepareHtmlImportJson(
 		sourcePath: string,
@@ -221,7 +221,7 @@ export function loadNativeProjectFolder(
 		const nativeStarted = performance.now();
 		const source = loaded.loadProjectFolderJson(
 			rootPath,
-			options.loadPassageText !== false
+			options.loadPassageText === false ? 'shell' : 'full'
 		);
 		const nativeFinished = performance.now();
 		const parseStarted = performance.now();

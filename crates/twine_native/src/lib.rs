@@ -43,12 +43,16 @@ struct HealthReport {
 struct NativeProjectFolderResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     baseline_receipt: Option<NativeProjectBaselineReceipt>,
+    #[serde(default)]
+    graph_layout_loaded: bool,
     passage_text_loaded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     load_performance_timings: Option<NativeProjectLoadTimings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     performance_timings: Option<NativeProjectSaveTimings>,
     root_path: String,
+    #[serde(default)]
+    story_sources_loaded: bool,
     stories: Vec<NativeStory>,
     story_ids: Vec<String>,
 }
@@ -56,9 +60,22 @@ struct NativeProjectFolderResult {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeProjectLoadTimings {
+    asset_scan_us: u64,
     baseline_receipt_us: u64,
+    graph_layout_us: u64,
+    load_profile: String,
+    manifest_parse_us: u64,
+    manifest_read_us: u64,
     model_build_us: u64,
     native_story_conversion_us: u64,
+    parallel: bool,
+    passage_source_count: usize,
+    passage_source_us: u64,
+    source_bytes: u64,
+    source_job_prepare_us: u64,
+    story_source_count: usize,
+    story_source_us: u64,
+    worker_count: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -257,21 +274,21 @@ pub fn health_json() -> String {
 #[napi(js_name = "loadProjectFolderJson")]
 pub fn load_project_folder_json(
     root_path: String,
-    load_passage_text: Option<bool>,
+    load_profile: Option<String>,
 ) -> NativeResult<String> {
     let collect_timings = std::env::var("TWINE_PERF").is_ok_and(|value| value == "1");
     let root = PathBuf::from(&root_path);
-    let passage_text_loaded = load_passage_text.unwrap_or(true);
+    let passage_text_loaded = load_profile.as_deref() != Some("shell");
+    let load_options = if passage_text_loaded {
+        LoadProjectOptions::full()
+    } else {
+        LoadProjectOptions::shell()
+    };
     let load_started_at = SystemTime::now();
     let started = Instant::now();
-    let loaded = load_project_path_with_receipt(
-        &root,
-        LoadProjectOptions {
-            load_passage_text: passage_text_loaded,
-        },
-    )
-    .map_err(native_error)?;
+    let loaded = load_project_path_with_receipt(&root, load_options).map_err(native_error)?;
     let model_build_us = elapsed_us(started);
+    let store_timings = loaded.timings.clone();
     let project = loaded.project;
     let started = Instant::now();
     let stories = project
@@ -282,11 +299,14 @@ pub fn load_project_folder_json(
     let native_story_conversion_us = elapsed_us(started);
     let story_ids: Vec<String> = stories.iter().map(|story| story.id.clone()).collect();
     let receipt_started = Instant::now();
+    let mut asset_scan_us = 0;
     let baseline_receipt = if passage_text_loaded {
         let mut layout_data = project.layout.clone();
         layout_data.passages.clear();
         let layout_data_json = json_string(&layout_data).map_err(native_error)?;
+        let asset_scan_started = Instant::now();
         let assets = list_project_assets(&root).map_err(native_error)?;
+        asset_scan_us = elapsed_us(asset_scan_started);
         let mut files = loaded
             .files
             .into_iter()
@@ -341,14 +361,29 @@ pub fn load_project_folder_json(
 
     json_string(&NativeProjectFolderResult {
         baseline_receipt,
+        graph_layout_loaded: passage_text_loaded,
         passage_text_loaded,
         load_performance_timings: collect_timings.then_some(NativeProjectLoadTimings {
+            asset_scan_us,
             baseline_receipt_us,
+            graph_layout_us: store_timings.graph_layout_us,
+            load_profile: if passage_text_loaded { "full" } else { "shell" }.into(),
+            manifest_parse_us: store_timings.manifest_parse_us,
+            manifest_read_us: store_timings.manifest_read_us,
             model_build_us,
             native_story_conversion_us,
+            parallel: store_timings.parallel,
+            passage_source_count: store_timings.passage_source_count,
+            passage_source_us: store_timings.passage_source_us,
+            source_bytes: store_timings.source_bytes,
+            source_job_prepare_us: store_timings.source_job_prepare_us,
+            story_source_count: store_timings.story_source_count,
+            story_source_us: store_timings.story_source_us,
+            worker_count: store_timings.worker_count,
         }),
         performance_timings: None,
         root_path,
+        story_sources_loaded: passage_text_loaded,
         stories,
         story_ids,
     })
@@ -401,10 +436,12 @@ pub fn save_project_folder_json(root_path: String, story_json: String) -> Native
 
     json_string(&NativeProjectFolderResult {
         baseline_receipt: None,
+        graph_layout_loaded: true,
         passage_text_loaded: true,
         load_performance_timings: None,
         performance_timings: performance_timings(timings),
         root_path,
+        story_sources_loaded: true,
         stories: vec![NativeStory::from_story(&story)],
         story_ids: vec![story.id.as_ref().to_owned()],
     })
@@ -1668,8 +1705,9 @@ mod tests {
         assert!(sidecar.contains("\"selected\":true"));
         assert!(!sidecar.contains("A very important passage body"));
 
-        let loaded = load_project_folder_json(root.to_string_lossy().into_owned(), Some(true))
-            .expect("project should load with a receipt");
+        let loaded =
+            load_project_folder_json(root.to_string_lossy().into_owned(), Some("full".into()))
+                .expect("project should load with a receipt");
         let loaded: NativeProjectFolderResult =
             serde_json::from_str(&loaded).expect("native load result should parse");
         let receipt = loaded
@@ -1688,6 +1726,20 @@ mod tests {
                 .iter()
                 .any(|file| file.file.path == "twine.toml")
         );
+
+        let shell =
+            load_project_folder_json(root.to_string_lossy().into_owned(), Some("shell".into()))
+                .expect("project shell should load");
+        let shell: NativeProjectFolderResult =
+            serde_json::from_str(&shell).expect("native shell should parse");
+
+        assert!(!shell.passage_text_loaded);
+        assert!(!shell.story_sources_loaded);
+        assert!(!shell.graph_layout_loaded);
+        assert!(shell.baseline_receipt.is_none());
+        assert!(shell.stories[0].script.is_empty());
+        assert!(shell.stories[0].stylesheet.is_empty());
+        assert!(shell.stories[0].passages[0].text.is_empty());
 
         fs::remove_dir_all(root).expect("project should be removed");
     }

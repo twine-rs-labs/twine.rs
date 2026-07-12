@@ -1,5 +1,6 @@
 #![doc = "Persistence interfaces, project-folder storage, and JSON fixture loading."]
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -7,6 +8,7 @@ use std::{
     fs::{self, File},
     io::{BufReader, Read},
     path::{Component, Path, PathBuf},
+    sync::OnceLock,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -19,6 +21,32 @@ use twine_model::{
 const MANIFEST_FILE: &str = "twine.toml";
 const GRAPH_CACHE_DIR: &str = ".twine/cache/graph";
 const GRAPH_LAYOUT_FILE: &str = ".twine/graph.json";
+const PARALLEL_SOURCE_THRESHOLD: usize = 128;
+
+static PROJECT_LOAD_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+
+fn project_load_worker_count() -> usize {
+    std::env::var("TWINE_NATIVE_LOAD_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1)
+                .min(8)
+        })
+}
+
+fn project_load_pool() -> &'static rayon::ThreadPool {
+    PROJECT_LOAD_POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(project_load_worker_count())
+            .thread_name(|index| format!("twine-project-load-{index}"))
+            .build()
+            .expect("bounded project load pool should build")
+    })
+}
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -30,6 +58,13 @@ pub enum StoreError {
 
     #[error("project manifest not found: {0}")]
     ProjectManifestNotFound(PathBuf),
+
+    #[error("failed to read project file {path}: {source}")]
+    ProjectFileRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("project-relative path is unsafe: {0}")]
     UnsafeProjectPath(PathBuf),
@@ -67,8 +102,33 @@ impl Default for SaveOptions {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectLoadProfile {
+    Full,
+    Shell,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LoadProjectOptions {
-    pub load_passage_text: bool,
+    pub profile: ProjectLoadProfile,
+}
+
+impl LoadProjectOptions {
+    pub const fn full() -> Self {
+        Self {
+            profile: ProjectLoadProfile::Full,
+        }
+    }
+
+    pub const fn shell() -> Self {
+        Self {
+            profile: ProjectLoadProfile::Shell,
+        }
+    }
+
+    pub const fn loads_full_content(self) -> bool {
+        matches!(self.profile, ProjectLoadProfile::Full)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -85,13 +145,27 @@ pub struct LoadedProjectFile {
 pub struct LoadedProject {
     pub files: Vec<LoadedProjectFile>,
     pub project: Project,
+    pub timings: ProjectLoadTimings,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ProjectLoadTimings {
+    pub graph_layout_us: u64,
+    pub manifest_parse_us: u64,
+    pub manifest_read_us: u64,
+    pub parallel: bool,
+    pub passage_source_count: usize,
+    pub passage_source_us: u64,
+    pub source_bytes: u64,
+    pub source_job_prepare_us: u64,
+    pub story_source_count: usize,
+    pub story_source_us: u64,
+    pub worker_count: usize,
 }
 
 impl Default for LoadProjectOptions {
     fn default() -> Self {
-        Self {
-            load_passage_text: true,
-        }
+        Self::full()
     }
 }
 
@@ -211,13 +285,22 @@ pub fn load_project_path_with_receipt(
     }
 
     let mut files = Vec::new();
+    let mut timings = ProjectLoadTimings::default();
+    let started = Instant::now();
     let manifest_source =
         read_project_file(root, MANIFEST_FILE, "manifest", None, None, &mut files)?
             .ok_or_else(|| StoreError::ProjectManifestNotFound(manifest_path.clone()))?;
+    timings.manifest_read_us = elapsed_us(started);
+    let started = Instant::now();
     let manifest: ProjectFile = toml::from_str(&manifest_source)?;
-    let project = manifest.into_project(root, options, &mut files)?;
+    timings.manifest_parse_us = elapsed_us(started);
+    let project = manifest.into_project(root, options, &mut files, &mut timings)?;
 
-    Ok(LoadedProject { files, project })
+    Ok(LoadedProject {
+        files,
+        project,
+        timings,
+    })
 }
 
 pub fn save_project_path(
@@ -460,17 +543,78 @@ impl ProjectFile {
         root: &Path,
         options: LoadProjectOptions,
         files: &mut Vec<LoadedProjectFile>,
+        timings: &mut ProjectLoadTimings,
     ) -> Result<Project, StoreError> {
-        let layout: GraphLayout =
-            read_project_file(root, GRAPH_LAYOUT_FILE, "graph", None, None, files)?
+        let ProjectFile {
+            app_version,
+            library,
+            name,
+            schema_version,
+            storage,
+            stories: story_files,
+        } = self;
+        let source_count = story_files
+            .iter()
+            .map(|story| story.passages.len() + 2)
+            .sum::<usize>();
+        let parallel = options.loads_full_content() && source_count >= PARALLEL_SOURCE_THRESHOLD;
+        let load_layout = || -> Result<_, StoreError> {
+            let started = Instant::now();
+            let mut layout_files = Vec::new();
+            let layout = if options.loads_full_content() {
+                read_project_file(
+                    root,
+                    GRAPH_LAYOUT_FILE,
+                    "graph",
+                    None,
+                    None,
+                    &mut layout_files,
+                )?
                 .map(|source| serde_json::from_str(&source))
                 .transpose()?
-                .unwrap_or_default();
-        let mut stories = self
-            .stories
-            .into_iter()
-            .map(|story| story.into_story(root, options, files))
-            .collect::<Result<Vec<_>, _>>()?;
+                .unwrap_or_default()
+            } else {
+                GraphLayout::default()
+            };
+
+            Ok((layout, layout_files, elapsed_us(started)))
+        };
+        let load_stories = || {
+            story_files
+                .into_iter()
+                .map(|story| story.into_story(root, options))
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let (layout_result, stories_result) = if parallel {
+            project_load_pool().install(|| rayon::join(load_layout, load_stories))
+        } else {
+            (load_layout(), load_stories())
+        };
+        let (layout, layout_files, graph_layout_us) = layout_result?;
+        let loaded_stories = stories_result?;
+
+        files.extend(layout_files);
+        timings.graph_layout_us = graph_layout_us;
+        timings.parallel |= parallel;
+        timings.worker_count = if parallel {
+            project_load_pool().current_num_threads()
+        } else {
+            1
+        };
+        let mut stories = Vec::with_capacity(loaded_stories.len());
+
+        for loaded in loaded_stories {
+            timings.parallel |= loaded.parallel;
+            timings.passage_source_count += loaded.passage_source_count;
+            timings.passage_source_us += loaded.passage_source_us;
+            timings.source_bytes += loaded.source_bytes;
+            timings.source_job_prepare_us += loaded.source_job_prepare_us;
+            timings.story_source_count += loaded.story_source_count;
+            timings.story_source_us += loaded.story_source_us;
+            timings.worker_count = timings.worker_count.max(loaded.worker_count);
+            files.extend(loaded.files);
+            stories.push(loaded.story);
+        }
 
         for story in &mut stories {
             layout.apply_to_story(story);
@@ -478,16 +622,29 @@ impl ProjectFile {
 
         Ok(Project {
             layout,
-            library: self.library.into_library(),
+            library: library.into_library(),
             manifest: ProjectManifest {
-                app_version: self.app_version,
-                name: self.name,
-                schema_version: self.schema_version,
-                storage: self.storage,
+                app_version,
+                name,
+                schema_version,
+                storage,
             },
             stories,
         })
     }
+}
+
+struct LoadedStory {
+    files: Vec<LoadedProjectFile>,
+    parallel: bool,
+    passage_source_count: usize,
+    passage_source_us: u64,
+    source_bytes: u64,
+    source_job_prepare_us: u64,
+    story: Story,
+    story_source_count: usize,
+    story_source_us: u64,
+    worker_count: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -602,9 +759,48 @@ impl StoryFile {
         self,
         root: &Path,
         options: LoadProjectOptions,
-        files: &mut Vec<LoadedProjectFile>,
-    ) -> Result<Story, StoreError> {
+    ) -> Result<LoadedStory, StoreError> {
         let source_story_id = self.id.as_ref().to_owned();
+        let preparation_started = Instant::now();
+
+        for relative in std::iter::once(self.script.as_str())
+            .chain(std::iter::once(self.stylesheet.as_str()))
+            .chain(self.passages.iter().map(|passage| passage.file.as_str()))
+            .filter(|relative| !relative.is_empty())
+        {
+            safe_project_relative_path(relative)?;
+        }
+        let source_job_prepare_us = elapsed_us(preparation_started);
+        let mut files = Vec::new();
+        let story_sources_started = Instant::now();
+        let script = if options.loads_full_content() {
+            read_project_file(
+                root,
+                &self.script,
+                "script",
+                Some(&source_story_id),
+                None,
+                &mut files,
+            )?
+            .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let stylesheet = if options.loads_full_content() {
+            read_project_file(
+                root,
+                &self.stylesheet,
+                "stylesheet",
+                Some(&source_story_id),
+                None,
+                &mut files,
+            )?
+            .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let story_source_us = elapsed_us(story_sources_started);
+        let story_source_count = files.len();
         let mut story = Story {
             color: self.color,
             custom_attributes: self.custom_attributes,
@@ -615,41 +811,68 @@ impl StoryFile {
             metadata: metadata_from_json(self.metadata_json),
             name: self.name,
             passages: Vec::new().into(),
-            script: read_project_file(
-                root,
-                &self.script,
-                "script",
-                Some(&source_story_id),
-                None,
-                files,
-            )?
-            .unwrap_or_default(),
+            script,
             snap_to_grid: self.snap_to_grid,
             start_passage: self.start_passage,
             story_format: self.story_format,
             story_format_version: self.story_format_version,
-            stylesheet: read_project_file(
-                root,
-                &self.stylesheet,
-                "stylesheet",
-                Some(&source_story_id),
-                None,
-                files,
-            )?
-            .unwrap_or_default(),
+            stylesheet,
             tags: self.tags,
             tag_colors: self.tag_colors,
             zoom: self.zoom,
         };
 
-        story.passages = self
-            .passages
-            .into_iter()
-            .map(|passage| passage.into_passage(root, &story.id, options, files))
-            .collect::<Result<Vec<_>, _>>()?
-            .into();
+        let passage_count = self.passages.len();
+        let parallel = options.loads_full_content() && passage_count >= PARALLEL_SOURCE_THRESHOLD;
+        let passage_sources_started = Instant::now();
+        let passage_results = if parallel {
+            project_load_pool().install(|| {
+                self.passages
+                    .into_par_iter()
+                    .map(|passage| passage.into_passage(root, &story.id, options))
+                    .collect::<Vec<_>>()
+            })
+        } else {
+            self.passages
+                .into_iter()
+                .map(|passage| passage.into_passage(root, &story.id, options))
+                .collect::<Vec<_>>()
+        };
+        let mut passages = Vec::with_capacity(passage_results.len());
+        let mut passage_source_count = 0;
 
-        Ok(story)
+        for result in passage_results {
+            let loaded = result?;
+
+            passage_source_count += loaded.files.len();
+            files.extend(loaded.files);
+            passages.push(loaded.passage);
+        }
+        let passage_source_us = if options.loads_full_content() {
+            elapsed_us(passage_sources_started)
+        } else {
+            0
+        };
+        let source_bytes = files.iter().map(|file| file.size_bytes).sum();
+
+        story.passages = passages.into();
+
+        Ok(LoadedStory {
+            files,
+            parallel,
+            passage_source_count,
+            passage_source_us,
+            source_bytes,
+            source_job_prepare_us,
+            story,
+            story_source_count,
+            story_source_us,
+            worker_count: if parallel {
+                project_load_pool().current_num_threads()
+            } else {
+                1
+            },
+        })
     }
 }
 
@@ -689,10 +912,10 @@ impl PassageFile {
         root: &Path,
         story_id: &StoryId,
         options: LoadProjectOptions,
-        files: &mut Vec<LoadedProjectFile>,
-    ) -> Result<Passage, StoreError> {
+    ) -> Result<LoadedPassage, StoreError> {
         let source_passage_id = self.id.as_ref().to_owned();
-        Ok(Passage {
+        let mut files = Vec::with_capacity(1);
+        let passage = Passage {
             custom_attributes: self.custom_attributes,
             id: self.id,
             layout: None,
@@ -701,21 +924,28 @@ impl PassageFile {
             source_pid: self.source_pid,
             story: story_id.clone(),
             tags: self.tags,
-            text: if options.load_passage_text {
+            text: if options.loads_full_content() {
                 read_project_file(
                     root,
                     &self.file,
                     "passage",
                     Some(story_id.as_ref()),
                     Some(&source_passage_id),
-                    files,
+                    &mut files,
                 )?
                 .unwrap_or_default()
             } else {
                 String::new()
             },
-        })
+        };
+
+        Ok(LoadedPassage { files, passage })
     }
+}
+
+struct LoadedPassage {
+    files: Vec<LoadedProjectFile>,
+    passage: Passage,
 }
 
 fn metadata_to_json(metadata: &BTreeMap<String, Value>) -> Option<String> {
@@ -749,12 +979,26 @@ fn read_project_file(
     let mut file = match File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(StoreError::Io(error)),
+        Err(error) => {
+            return Err(StoreError::ProjectFileRead {
+                path: relative,
+                source: error,
+            });
+        }
     };
-    let metadata = file.metadata()?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| StoreError::ProjectFileRead {
+            path: relative.clone(),
+            source,
+        })?;
     let mut value = String::new();
 
-    file.read_to_string(&mut value)?;
+    file.read_to_string(&mut value)
+        .map_err(|source| StoreError::ProjectFileRead {
+            path: relative.clone(),
+            source,
+        })?;
     files.push(LoadedProjectFile {
         kind,
         modified_at: metadata.modified().unwrap_or(UNIX_EPOCH),
@@ -1108,6 +1352,8 @@ mod tests {
         assert!(receipt_paths.contains(&("script", "scripts/example.js".into())));
         assert!(receipt_paths.contains(&("stylesheet", "styles/example.css".into())));
         assert!(receipt_paths.contains(&("graph", ".twine/graph.json".into())));
+        assert!(!loaded_with_receipt.timings.parallel);
+        assert_eq!(loaded_with_receipt.timings.worker_count, 1);
 
         let clean_report = save_project_path(&root, &project, &SaveOptions::default())
             .expect("unchanged project should save");
@@ -1158,23 +1404,77 @@ mod tests {
 
         save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
 
-        let loaded = load_project_path_with_options(
-            &root,
-            LoadProjectOptions {
-                load_passage_text: false,
-            },
-        )
-        .expect("project shell should load");
+        let loaded = load_project_path_with_options(&root, LoadProjectOptions::shell())
+            .expect("project shell should load");
 
         assert_eq!(loaded.stories.len(), 1);
-        assert_eq!(loaded.stories[0].script, story.script);
-        assert_eq!(loaded.stories[0].stylesheet, story.stylesheet);
+        assert!(loaded.stories[0].script.is_empty());
+        assert!(loaded.stories[0].stylesheet.is_empty());
         assert_eq!(loaded.stories[0].passages.len(), 1);
         assert_eq!(loaded.stories[0].passages[0].text, "");
+        assert!(loaded.stories[0].passages[0].layout.is_none());
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn bounded_parallel_load_preserves_passage_order_and_receipts() {
+        let root = temp_path("parallel-project");
+        let mut story = story();
+        let prototype = story.passages[0].clone();
+        let passages = (0..256)
+            .map(|index| {
+                let mut passage = prototype.clone();
+
+                passage.id = PassageId::new(format!("passage-{index:04}"));
+                passage.name = format!("Passage {index:04}");
+                passage.text = format!("Source {index:04}");
+                passage
+            })
+            .collect::<Vec<_>>();
+
+        story.start_passage = passages[0].id.clone();
+        story.passages = passages.into();
+        let project = Project::from_story(story.clone());
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        let loaded = load_project_path_with_receipt(&root, LoadProjectOptions::full())
+            .expect("parallel project should load");
+
+        assert!(loaded.timings.parallel);
+        assert!(loaded.timings.worker_count <= 8);
+        assert_eq!(loaded.timings.passage_source_count, 256);
+        assert_eq!(loaded.project.stories[0].passages.len(), 256);
+        for (index, passage) in loaded.project.stories[0].passages.iter().enumerate() {
+            assert_eq!(passage.name, format!("Passage {index:04}"));
+            assert_eq!(passage.text, format!("Source {index:04}"));
+        }
         assert_eq!(
-            loaded.stories[0].passages[0].layout.expect("layout").left,
-            25.0
+            loaded
+                .files
+                .iter()
+                .filter(|file| file.kind == "passage")
+                .count(),
+            256
         );
+
+        let passage_paths = loaded
+            .files
+            .iter()
+            .filter(|file| file.kind == "passage")
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>();
+        fs::write(root.join(&passage_paths[0]), [0xff])
+            .expect("first invalid source should be written");
+        fs::write(root.join(&passage_paths[100]), [0xff])
+            .expect("later invalid source should be written");
+
+        for _ in 0..3 {
+            let error = load_project_path_with_receipt(&root, LoadProjectOptions::full())
+                .expect_err("invalid source encoding should fail");
+
+            assert!(error.to_string().contains(&path_string(&passage_paths[0])));
+        }
 
         fs::remove_dir_all(&root).expect("project should be removed");
     }

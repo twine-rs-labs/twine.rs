@@ -1300,7 +1300,10 @@ export const StoryWorkspaceShell: React.FC<
 			.then(result => {
 				recordPerformanceHarnessEvent('native-project-hydrated', {
 					...result.loadPerformanceTimings,
+					graphLayoutLoaded: result.graphLayoutLoaded,
+					passageTextLoaded: result.passageTextLoaded,
 					rootPath: result.rootPath,
+					storySourcesLoaded: result.storySourcesLoaded,
 					storyCount: result.stories.length
 				});
 				if (result.stories.length > 0) {

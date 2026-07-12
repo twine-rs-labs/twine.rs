@@ -882,6 +882,7 @@ dependencies = [
 name = "twine_store"
 version = "0.1.4"
 dependencies = [
+ "rayon",
  "serde",
  "serde_json",
  "thiserror",

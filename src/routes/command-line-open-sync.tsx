@@ -50,7 +50,10 @@ export const CommandLineOpenSync: React.FC = () => {
 			for (const project of result.openedProjects) {
 				recordPerformanceHarnessEvent('native-project-shell-loaded', {
 					...project.loadPerformanceTimings,
+					graphLayoutLoaded: project.graphLayoutLoaded,
+					passageTextLoaded: project.passageTextLoaded,
 					rootPath: project.rootPath,
+					storySourcesLoaded: project.storySourcesLoaded,
 					storyCount: project.stories.length
 				});
 				const projectStoryIds = projectStoryIdsForCurrentStories(

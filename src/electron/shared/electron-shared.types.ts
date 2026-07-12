@@ -142,21 +142,36 @@ export interface NativeCommandLineOpenResult {
 
 export interface NativeProjectFolderResult {
 	baselineReceipt?: NativeProjectBaselineReceipt;
+	graphLayoutLoaded?: boolean;
 	loadPerformanceTimings?: NativeProjectLoadTimings;
 	passageTextLoaded?: boolean;
 	performanceTimings?: NativeProjectSaveTimings;
 	rootPath: string;
+	storySourcesLoaded?: boolean;
 	stories: Story[];
 	storyIds: string[];
 }
 
 export interface NativeProjectLoadTimings {
+	assetScanUs?: number;
 	baselineReceiptUs?: number;
+	graphLayoutUs?: number;
 	jsJsonParseMs?: number;
 	mainNativeCallMs?: number;
 	modelBuildUs: number;
+	loadProfile?: 'full' | 'shell';
+	manifestParseUs?: number;
+	manifestReadUs?: number;
 	nativeStoryConversionUs: number;
+	parallel?: boolean;
+	passageSourceCount?: number;
+	passageSourceUs?: number;
 	payloadBytes?: number;
+	sourceBytes?: number;
+	sourceJobPrepareUs?: number;
+	storySourceCount?: number;
+	storySourceUs?: number;
+	workerCount?: number;
 }
 
 export interface NativeProjectBaselineReceipt {

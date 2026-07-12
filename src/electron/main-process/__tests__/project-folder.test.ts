@@ -805,7 +805,7 @@ describe('project-folder native bridge', () => {
 		);
 	});
 
-	it('can open a project folder shell without reading passage body files', async () => {
+	it('opens a lightweight shell without reading bodies or graph layout', async () => {
 		const story = {
 			...fakeStory(1),
 			id: 'story-id',
@@ -868,12 +868,12 @@ describe('project-folder native bridge', () => {
 		expect(result?.passageTextLoaded).toBe(false);
 		expect(result?.stories[0].passages[0]).toEqual(
 			expect.objectContaining({
-				height: 144,
-				left: 22,
-				text: '',
-				top: 33,
-				width: 155
+				text: ''
 			})
+		);
+		expect(readJsonMock).not.toHaveBeenCalledWith(
+			expect.stringContaining('.twine/graph.json'),
+			expect.anything()
 		);
 		expect(readFileMock).not.toHaveBeenCalledWith(
 			expect.stringContaining('001-start.twee'),

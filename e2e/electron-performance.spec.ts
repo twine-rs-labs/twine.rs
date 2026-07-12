@@ -187,6 +187,7 @@ const inheritedElectronEnvironmentKeys = [
 	'TEMP',
 	'TMP',
 	'TMPDIR',
+	'TWINE_NATIVE_LOAD_THREADS',
 	'USER',
 	'USERNAME',
 	'USERPROFILE',
@@ -555,6 +556,37 @@ function startupMetrics(
 				? event.detail.baselineReceiptUs / 1000
 				: undefined
 		);
+		for (const field of [
+			'assetScanUs',
+			'graphLayoutUs',
+			'manifestParseUs',
+			'manifestReadUs',
+			'modelBuildUs',
+			'nativeStoryConversionUs',
+			'passageSourceUs',
+			'sourceJobPrepareUs',
+			'storySourceUs'
+		] as const) {
+			addSample(
+				`${prefix}.${field.replace(/Us$/, 'Ms')}`,
+				typeof event.detail?.[field] === 'number'
+					? event.detail[field] / 1000
+					: undefined
+			);
+		}
+		for (const field of [
+			'passageSourceCount',
+			'sourceBytes',
+			'storySourceCount',
+			'workerCount'
+		] as const) {
+			addSample(
+				`${prefix}.${field}`,
+				typeof event.detail?.[field] === 'number'
+					? event.detail[field]
+					: undefined
+			);
+		}
 	}
 	addSample(
 		'startup.hydratedMs',
@@ -2094,6 +2126,27 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 							event.name === 'native-project-hydrated' &&
 							typeof event.detail?.mainNativeCallMs === 'number'
 					)
+				);
+				const shellLoadEvent = startupSnapshot.renderer.events.find(
+					event => event.name === 'native-project-shell-loaded'
+				);
+				const hydrationLoadEvent = startupSnapshot.renderer.events.find(
+					event => event.name === 'native-project-hydrated'
+				);
+
+				assertInvariant(
+					`${startupPrefix}-shell-load-is-lightweight`,
+					shellLoadEvent?.detail?.loadProfile === 'shell' &&
+						shellLoadEvent.detail.passageTextLoaded === false &&
+						shellLoadEvent.detail.storySourcesLoaded === false &&
+						shellLoadEvent.detail.graphLayoutLoaded === false
+				);
+				assertInvariant(
+					`${startupPrefix}-full-hydration-is-complete`,
+					hydrationLoadEvent?.detail?.loadProfile === 'full' &&
+						hydrationLoadEvent.detail.passageTextLoaded === true &&
+						hydrationLoadEvent.detail.storySourcesLoaded === true &&
+						hydrationLoadEvent.detail.graphLayoutLoaded === true
 				);
 				const baselineEvent = startupSnapshot.renderer.events.find(
 					event => event.name === 'native-session-baseline-ready'
