@@ -11,7 +11,8 @@ import {
 	setStoryTagColorCommand,
 	useCoreProjectHost
 } from '../core';
-import type {CoreStoryIndex} from '../core';
+import type {CoreTagEntry} from '../core/bindings/CoreTagEntry';
+import type {CoreContentsPage} from '../core/bindings/CoreContentsPage';
 import './passage-tags.css';
 
 export interface PassageTagsDialogProps extends DialogComponentProps {
@@ -25,30 +26,47 @@ export const PassageTagsDialog: React.FC<PassageTagsDialogProps> = props => {
 
 	const story = storyWithId(stories, storyId);
 	const coreProjectHost = useCoreProjectHost();
-	const [tags, setTags] = React.useState<CoreStoryIndex['tagEntries']>([]);
+	const [tags, setTags] = React.useState<CoreTagEntry[]>([]);
 	React.useEffect(() => {
 		let active = true;
 
 		setTags([]);
-		void coreProjectHost
-			.queryStoryIndexAsync(story.id, {
-				includeAssets: false,
-				includeContents: false,
-				includeDiagnostics: false,
-				includeFiles: false,
-				includeGraph: false,
-				includePassageNames: false,
-				includePassageText: false,
-				includeScript: false,
-				includeStylesheet: false,
-				includeTags: true,
-				includeVariables: false
-			})
-			.then(index => {
-				if (active) {
-					setTags(index.tagEntries);
-				}
-			});
+		void (async () => {
+			const nextTags: CoreTagEntry[] = [];
+
+			for (const filter of ['tag', 'group'] as const) {
+				let cursor: string | null = null;
+
+				do {
+					const page: CoreContentsPage =
+						await coreProjectHost.queryContentsPageAsync(story.id, {
+							cursor,
+							filter,
+							limit: 500,
+							sort: 'name'
+						});
+					nextTags.push(
+						...page.entries.map(entry => ({
+							color: entry.detail,
+							count: entry.count,
+							name: entry.label,
+							passageIds: entry.passageId ? [entry.passageId] : []
+						}))
+					);
+					cursor = page.nextCursor;
+				} while (cursor && active);
+			}
+
+			if (active) {
+				setTags(
+					nextTags.sort((left, right) => left.name.localeCompare(right.name))
+				);
+			}
+		})().catch(error => {
+			if (active) {
+				console.warn(`Rust tag query failed: ${error}`);
+			}
+		});
 
 		return () => {
 			active = false;

@@ -26,6 +26,7 @@ import {
 } from '../../core';
 import type {
 	CoreAssetInventoryEntry,
+	CoreAssetsPage,
 	CoreStoryIndex,
 	PatchBatch
 } from '../../core';
@@ -779,25 +780,31 @@ export const AssetsRoute: React.FC = () => {
 
 		setIndex(undefined);
 
-		void coreProjectHost
-			.queryStoryIndexAsync(story.id, {
-				includeAssets: true,
-				includeContents: false,
-				includeDiagnostics: false,
-				includeFiles: false,
-				includeGraph: false,
-				includePassageNames: false,
-				includePassageText: false,
-				includeScript: false,
-				includeStylesheet: false,
-				includeTags: false,
-				includeVariables: false
-			})
-			.then(index => {
-				if (active) {
-					setIndex(index);
-				}
-			});
+		void (async () => {
+			const assets: CoreAssetInventoryEntry[] = [];
+			let cursor: string | null = null;
+
+			do {
+				const page: CoreAssetsPage = await coreProjectHost.queryAssetsPageAsync(
+					story.id,
+					{
+						cursor,
+						limit: 500
+					}
+				);
+				assets.push(...page.assets);
+				cursor = page.nextCursor;
+			} while (cursor && active);
+
+			if (active) {
+				setIndex({...emptyStoryIndex(story.id), assetInventory: assets});
+			}
+		})().catch(error => {
+			if (active) {
+				console.warn(`Rust assets query failed: ${error}`);
+				setIndex(emptyStoryIndex(story.id));
+			}
+		});
 
 		return () => {
 			active = false;

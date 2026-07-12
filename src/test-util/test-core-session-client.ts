@@ -1,4 +1,6 @@
 import type {CoreAssetInventoryEntry} from '../core/bindings/CoreAssetInventoryEntry';
+import type {CoreAssetsQuery} from '../core/bindings/CoreAssetsQuery';
+import type {CoreContentsQuery} from '../core/bindings/CoreContentsQuery';
 import type {CoreRect} from '../core/bindings/CoreRect';
 import type {CoreSessionMutationResult} from '../core/wasm/twine-wasm-client';
 import type {PassagePatch} from '../core/bindings/PassagePatch';
@@ -170,6 +172,7 @@ export class TestCoreSessionClient {
 	applySync = jest.fn((command: StoryCommand, revision: number) =>
 		this.applyCommand(command, revision)
 	);
+	cachedContentsPage = jest.fn(() => undefined);
 	cachedGraphProjection = jest.fn();
 	cachedStoryIndex = jest.fn();
 	lastGraphProjection = jest.fn();
@@ -178,6 +181,98 @@ export class TestCoreSessionClient {
 			storySnapshotToStory(this.story(storyId)),
 			options
 		)
+	);
+	queryAssetsPage = jest.fn(
+		async (_sessionId: string, storyId: string, query: CoreAssetsQuery) => {
+			const index = storyToCoreIndex(
+				storySnapshotToStory(this.story(storyId)),
+				{includeAssets: true}
+			);
+			const referencesByPath = new Map<string, typeof index.assets>();
+
+			for (const reference of index.assets) {
+				const references = referencesByPath.get(reference.path) ?? [];
+
+				references.push(reference);
+				referencesByPath.set(reference.path, references);
+			}
+			const inferred = [...referencesByPath].map(([path, references]) => ({
+				...assetEntry(path),
+				referenceCount: references.length,
+				references,
+				unused: false
+			}));
+			const assetsByPath = new Map(
+				inferred.map(asset => [asset.path, asset] as const)
+			);
+
+			for (const asset of this.assetInventoryByStory.get(storyId) ?? []) {
+				const inferredAsset = assetsByPath.get(asset.path);
+
+				assetsByPath.set(asset.path, {
+					...inferredAsset,
+					...asset,
+					referenceCount: inferredAsset?.referenceCount ?? asset.referenceCount,
+					references: inferredAsset?.references ?? asset.references,
+					unused: inferredAsset ? false : asset.unused
+				});
+			}
+			const needle = query.query?.trim().toLowerCase();
+			const assets = [...assetsByPath.values()]
+				.filter(asset => !needle || asset.path.toLowerCase().includes(needle))
+				.sort((left, right) => left.path.localeCompare(right.path));
+			const offset = Number(query.cursor ?? 0);
+			const end = Math.min(offset + query.limit, assets.length);
+
+			return {
+				assets: assets.slice(offset, end),
+				nextCursor: end < assets.length ? String(end) : null,
+				revision: this.revision,
+				storyId,
+				totalCount: assets.length
+			};
+		}
+	);
+	queryContentsPage = jest.fn(
+		async (_sessionId: string, storyId: string, query: CoreContentsQuery) => {
+			const index = storyToCoreIndex(
+				storySnapshotToStory(this.story(storyId)),
+				{includeContents: true, includeTags: true}
+			);
+			const entries = index.contents
+				.filter(entry =>
+					query.filter === 'all'
+						? true
+						: query.filter === 'group'
+							? entry.kind === 'group'
+							: entry.kind === query.filter
+				)
+				.sort((left, right) => left.label.localeCompare(right.label));
+			const offset = Number(query.cursor ?? 0);
+			const end = Math.min(offset + query.limit, entries.length);
+
+			return {
+				entries: entries.slice(offset, end),
+				facets: {
+					all: index.contents.length,
+					asset: 0,
+					diagnostics: 0,
+					entryPoint: 0,
+					group: index.contents.filter(entry => entry.kind === 'group').length,
+					metadata: 0,
+					passage: 0,
+					problems: 0,
+					script: 0,
+					stylesheet: 0,
+					tag: index.contents.filter(entry => entry.kind === 'tag').length,
+					variable: 0
+				},
+				nextCursor: end < entries.length ? String(end) : null,
+				revision: this.revision,
+				storyId,
+				totalCount: entries.length
+			};
+		}
 	);
 	queryStoryIndex = jest.fn(async (_sessionId, storyId, options) =>
 		storyToCoreIndex(storySnapshotToStory(this.story(storyId)), options)
