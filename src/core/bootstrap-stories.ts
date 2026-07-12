@@ -1,4 +1,9 @@
-import type {Story, StoryWithDocuments} from '../store/stories';
+import type {
+	Passage,
+	PassageWithText,
+	Story,
+	StoryWithDocuments
+} from '../store/stories';
 
 const bootstrapStories = new Map<string, StoryWithDocuments>();
 const storyMaterializers = new Map<string, () => Promise<StoryWithDocuments>>();
@@ -16,7 +21,12 @@ export function bootstrapStory(storyId: string) {
 export function metadataStory(story: StoryWithDocuments): Story {
 	return {
 		...story,
-		passages: story.passages.map(({text: _text, ...passage}) => passage)
+		passages: story.passages.map(passage => {
+			const metadata = {...passage} as Partial<PassageWithText>;
+
+			delete metadata.text;
+			return metadata as Passage;
+		})
 	};
 }
 

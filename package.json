@@ -141,7 +141,7 @@
 		"build:web": "tsc && vite build",
 		"postbuild:web": "cpy --cwd 'dist/web' './**' '../../electron-build/renderer' && node scripts/archive-web.mjs",
 		"build:electron": "npm-run-all --parallel build:web build:native --serial build:electron-main build:electron-bundle",
-		"build:electron-app": "NODE_ENV=production npm-run-all --parallel build:web build:native --serial build:electron-main",
+		"build:electron-app": "NODE_ENV=production npm-run-all --serial build:web build:native build:electron-main",
 		"prebuild:electron-main": "rimraf electron-build/main",
 		"build:electron-main": "tsc --project tsconfig.electron.json && node scripts/copy-native.mjs",
 		"build:electron-bundle": "npm run release:clean && electron-builder --config electron-builder.config.js --linux --mac --windows --publish=never && npm run release:organize",

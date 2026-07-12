@@ -59,7 +59,6 @@ import {
 } from './wasm/twine-wasm-client';
 import {
 	ApplyCorePatchBatchAction,
-	Passage,
 	PassageWithText,
 	StoriesActionOrThunk,
 	StoriesState,

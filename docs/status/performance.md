@@ -129,8 +129,18 @@ transport uses explicit materialized types, bounded summary/search/contents/
 diagnostics queries no longer fall back to a complete TypeScript index, and the
 old reducer-owned body mutation and passage-map stacks have been deleted. The
 TypeScript build, boundary checks, documentation checks, and full Jest suite
-pass. Fresh 50k performance measurements are the next validation step; the
-figures below predate this final compile-time boundary cleanup.
+pass. Fresh 50k startup, diagnostic, query, and watcher phases on 2026-07-12
+also passed every structural invariant. Startup measured interactive p50 at
+about 2.94 s and post-GC resident p50 at about 1.044 GiB, while the retained
+renderer heap was only about 31 MiB. The boundary cutover is therefore complete,
+but the remaining resident-memory target is dominated by non-React-heap
+representations.
+
+The same validation measured warm edit-to-paint at about 39.4 ms, incremental
+save end-to-end at about 579 ms, Contents p50 at about 63.1 ms, search p50 at
+about 12.9 ms, and watcher observation-to-patch p50 at about 478 ms. Incremental
+save was dominated by its roughly 526 ms baseline patch; watcher core ingestion
+was about 11.1 ms p50 while native delta creation was about 306 ms p50.
 
 The focused 50k startup phase now passes with the corrected startup/memory
 contract. Moving watcher-baseline work out of shell opening, skipping redundant

@@ -19,12 +19,7 @@ import {
 	loadFormatProperties,
 	useStoryFormatsContext
 } from './story-formats';
-import {
-	Story,
-	StoryWithDocuments,
-	storyWithId,
-	useStoriesContext
-} from './stories';
+import {StoryWithDocuments, storyWithId, useStoriesContext} from './stories';
 import {getAppInfo} from '../util/app-info';
 
 export type PublishStoryOptions = PublishOptions & {

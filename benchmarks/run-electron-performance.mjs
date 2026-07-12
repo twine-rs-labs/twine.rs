@@ -118,6 +118,10 @@ async function mtimeMs(file) {
 }
 
 async function newestSourceMtime(entry) {
+	if (entry.endsWith(path.join('native', 'twine_native.node'))) {
+		return 0;
+	}
+
 	let info;
 
 	try {

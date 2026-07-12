@@ -6,7 +6,7 @@ import {
 	storyWithId,
 	storyWithName
 } from '../getters';
-import {fakePassage, fakeStory} from '../../../test-util';
+import {fakeStory} from '../../../test-util';
 import type {StoryWithDocuments as Story} from '../stories.types';
 
 describe('passageWithId()', () => {
