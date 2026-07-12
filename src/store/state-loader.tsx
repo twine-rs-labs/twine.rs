@@ -116,13 +116,20 @@ export const StateLoader: React.FC = ({children}) => {
 
 	React.useEffect(() => {
 		if (inited && formatsRepaired && prefsRepaired && storiesRepaired) {
-			if (!passageBodiesSeparated) {
+			if (
+				!passageBodiesSeparated ||
+				storiesState.some(story =>
+					story.passages.some(passage => passage.text.length > 0)
+				)
+			) {
 				registerBootstrapStories(storiesState);
 				storiesDispatch({
 					state: storiesState.map(metadataStory),
 					type: 'init'
 				});
-				setPassageBodiesSeparated(true);
+				if (!passageBodiesSeparated) {
+					setPassageBodiesSeparated(true);
+				}
 				return;
 			}
 

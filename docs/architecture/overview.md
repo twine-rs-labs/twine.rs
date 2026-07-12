@@ -93,6 +93,9 @@ be reconsidered only through a new decision record.
 
 ## Known architectural boundary
 
-React still holds a complete patch-applied frontend project mirror. Removing
-that mirror would be a separate architecture milestone; performance work must
-not silently introduce another canonical TypeScript model in the meantime.
+React holds a patch-applied metadata and interaction read model. Full passage
+bodies live in Rust sessions and are fetched as selected documents, bounded
+facts/pages, or explicitly materialized complete workflows. Full load and
+repair snapshots are registered outside React before metadata routes mount.
+Scripts and stylesheets remain in the story metadata model for compatibility;
+removing the remaining frontend project metadata mirror is a later milestone.

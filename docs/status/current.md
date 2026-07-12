@@ -54,7 +54,9 @@ The complete local 10k and 50k benchmark runs verify:
 
 - The 50k path is structurally correct but substantially misses most absolute
   latency and memory targets.
-- React still retains a complete patch-applied project mirror.
+- React retains the patch-applied story/passage metadata read model, but passage
+  bodies are session-owned and no longer retained in that read model after
+  bootstrap or native hydration.
 - Explicitly complete compatibility workflows and broad structural command
   families still use scoped full indexes or broad session deltas. They are not
   part of the large-story default startup/edit/watcher path and remain targeted

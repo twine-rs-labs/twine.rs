@@ -138,8 +138,19 @@ function missingAsset(path: string): CoreAssetInventoryEntry {
 			outputPath: path,
 			reason: 'Referenced file is missing'
 		},
-		referenceCount: 0,
-		references: [],
+		referenceCount: 1,
+		references: [
+			{
+				end: path.length,
+				kind: 'stylesheet',
+				line: 1,
+				passageId: null,
+				path,
+				sourceId: 'stylesheet',
+				sourceName: 'Story Stylesheet',
+				start: 0
+			}
+		],
 		sizeBytes: null,
 		snippet: {
 			label: 'Insert asset reference',
@@ -289,6 +300,11 @@ describe('<DiagnosticsRoute>', () => {
 
 	it('reveals stylesheet diagnostics with a source target instead of a passage fallback', async () => {
 		const {history, story} = renderComponentWithHistory(story => {
+			story.id = 'stylesheet-diagnostic-story';
+			story.passages = story.passages.map(passage => ({
+				...passage,
+				story: story.id
+			}));
 			story.passages[0].text = 'No broken links here.';
 			story.stylesheet = '.hero { background: url("assets/missing.png"); }';
 			replaceKnownAssetInventoryForStory(story.id, [

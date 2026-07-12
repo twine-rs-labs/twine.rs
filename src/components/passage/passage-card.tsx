@@ -7,11 +7,12 @@ import {CardContent} from '../container/card';
 import {SelectableCard} from '../container/card/selectable-card';
 import {Passage, TagColors} from '../../store/stories';
 import {TagStripe} from '../tag/tag-stripe';
-import {passageIsEmpty} from '../../util/passage-is-empty';
 import './passage-card.css';
 import {TagBadges} from '../tag/tag-badges';
 
 export interface PassageCardProps {
+	excerpt?: string;
+	isEmpty?: boolean;
 	onEdit: (passage: Passage) => void;
 	onDeselect: (passage: Passage) => void;
 	onDragStart?: DraggableCoreProps['onStart'];
@@ -35,6 +36,8 @@ export const PassageCard: React.FC<PassageCardProps> = React.memo(props => {
 		onEdit,
 		onSelect,
 		passage,
+		excerpt: passageExcerpt = '',
+		isEmpty = false,
 		tagColors,
 		tagDisplay
 	} = props;
@@ -42,16 +45,16 @@ export const PassageCard: React.FC<PassageCardProps> = React.memo(props => {
 	const className = React.useMemo(
 		() =>
 			classNames('passage-card', {
-				empty: passageIsEmpty(passage),
+				empty: isEmpty,
 				selected: passage.selected,
 				[`tag-display-${tagDisplay}`]: true
 			}),
-		[passage, tagDisplay]
+		[isEmpty, passage, tagDisplay]
 	);
 	const container = React.useRef<HTMLDivElement>(null);
 	const excerpt = React.useMemo(() => {
-		if (passage.text.length > 0) {
-			return passage.text.substring(0, excerptLength);
+		if (passageExcerpt.length > 0) {
+			return passageExcerpt.substring(0, excerptLength);
 		}
 
 		return (
@@ -63,7 +66,7 @@ export const PassageCard: React.FC<PassageCardProps> = React.memo(props => {
 				)}
 			</span>
 		);
-	}, [passage.text, t]);
+	}, [passageExcerpt, t]);
 	const style = React.useMemo(
 		() => ({
 			height: passage.height,

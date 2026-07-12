@@ -42,6 +42,17 @@ async function visit(directory) {
 			);
 		}
 		if (
+			/^(?:src\/routes|src\/components|src\/dialogs|src\/route-actions)\//.test(
+				displayPath
+			) &&
+			displayPath !== 'src/routes/build/build-route.tsx' &&
+			/\b(?:passage|selectedPassage|target|start)\.text\b/.test(source)
+		) {
+			violations.push(
+				`${displayPath}: reads a passage body from the React story mirror; use a bounded session query or explicit document materialization`
+			);
+		}
+		if (
 			displayPath === 'src/store/project-session-sync.tsx' &&
 			/\b(?:passageToSnapshot|storyToSnapshot)\b|snapshot\.stories/.test(source)
 		) {

@@ -116,10 +116,12 @@ The repeated watcher profile determines whether graph/index maintenance or
 boundary overhead deserves the next latency change. Startup and retained-memory
 attribution remain the next broader optimization gate.
 
-The first startup/memory cleanup removes retained renderer JSON fingerprints
-of every passage, avoids cloning stable-identity hydration payloads, and blocks
-file-backed WASM initialization until passage text is hydrated. The complete
-React project mirror is deliberately retained pending the new attribution.
+The first startup/memory cleanup removed retained renderer JSON fingerprints
+of every passage, avoided cloning stable-identity hydration payloads, and
+blocked file-backed WASM initialization until passage text was hydrated. The
+later bounded-read-model cutover also removed passage bodies from the mounted
+React story model; complete workflows now materialize revision-bound documents
+from Rust explicitly.
 
 The focused 50k startup phase now passes with the corrected startup/memory
 contract. Moving watcher-baseline work out of shell opening, skipping redundant

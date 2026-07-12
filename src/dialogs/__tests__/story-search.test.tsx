@@ -11,6 +11,7 @@ import {
 	StoryInspector
 } from '../../test-util';
 import {StorySearchDialog, StorySearchDialogProps} from '../story-search';
+import {StoreCoreProjectHost} from '../../core/project-host';
 
 jest.mock('../../components/control/code-area/code-area');
 
@@ -325,6 +326,7 @@ describe('<StorySearchDialog>', () => {
 
 	it('replaces text in passages when the replace button is clicked', async () => {
 		const story = fakeStory(1);
+		const apply = jest.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand');
 
 		story.passages[0].text = 'mock-find';
 		renderComponent(
@@ -343,10 +345,15 @@ describe('<StorySearchDialog>', () => {
 		await waitFor(() => expect(replaceButton).not.toBeDisabled());
 		fireEvent.click(replaceButton);
 		await waitFor(() =>
-			expect(
-				screen.getByTestId(`passage-${story.passages[0].id}`)
-			).toHaveTextContent('mock-replace')
+			expect(apply).toHaveBeenCalledWith(
+				expect.objectContaining({
+					query: expect.objectContaining({replacement: 'mock-replace'}),
+					type: 'replaceAllText'
+				}),
+				'undoChange.replaceAllText'
+			)
 		);
+		apply.mockRestore();
 	});
 
 	it('routes to the source editor for a non-passage search result', async () => {

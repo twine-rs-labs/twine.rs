@@ -38,6 +38,7 @@ import {
 import {projectSnapshotFromStories} from './project-snapshot';
 import {
 	bootstrapStory,
+	metadataStory,
 	registerStoryMaterializer,
 	unregisterStoryMaterializer
 } from './bootstrap-stories';
@@ -261,6 +262,8 @@ type CoreProjectSessionClient = Pick<
 	| 'replaceProject'
 	| 'undo'
 > & {
+	dispose?(): void;
+	removeSession?(sessionId: string): Promise<unknown>;
 	applySync?(
 		command: StoryCommand,
 		revision: number,
@@ -603,6 +606,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	private dispatch: UndoableDispatch;
 	private listeners = new Set<CoreProjectPatchListener>();
 	private mutationQueue: Promise<void> = Promise.resolve();
+	private ownsWasmClient: boolean;
 	private redoEffects: Array<string | undefined> = [];
 	private statusListeners = new Set<(status: CoreSessionStatus) => void>();
 	private undoEffects: Array<string | undefined> = [];
@@ -635,6 +639,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			this.sessionOwnedDocumentStories.add(story.id);
 		}
 		this.sessionId = options.sessionId ?? defaultCoreSessionId;
+		this.ownsWasmClient = !options.wasmClient;
 		this.wasmClient = options.wasmClient ?? createWasmCoreWorkerClient();
 	}
 
@@ -1187,6 +1192,14 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		this.redoEffects = [];
 	}
 
+	dispose() {
+		this.disposeEffects();
+		if (this.ownsWasmClient) {
+			void this.wasmClient.removeSession?.(this.sessionId);
+			this.wasmClient.dispose?.();
+		}
+	}
+
 	async acknowledgeSaved(sessionId: string, revision: number) {
 		if (!this.wasmClient.enabled) {
 			return;
@@ -1218,16 +1231,19 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	) {
 		await this.enqueueMutation(async () => {
 			this.disposeEffects();
-			this.stories = stories;
+			const snapshot = projectSnapshotFromStories(stories);
+			const metadataStories = stories.map(metadataStory);
+
+			this.stories = metadataStories;
 			for (const story of stories) {
 				replaceKnownAssetInventoryForStory(story.id, assets);
 			}
 			this.wasmProjectRevision++;
 			this.wasmProjectReplaceRevision = this.wasmProjectRevision;
-			this.dispatch({state: stories, type: 'init'});
+			this.dispatch({state: metadataStories, type: 'init'});
 			const status = await this.wasmClient.replaceProject(
 				this.sessionId,
-				projectSnapshotFromStories(stories),
+				snapshot,
 				this.wasmProjectRevision,
 				assets
 			);
@@ -1302,23 +1318,30 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	}
 
 	performanceDiagnostics() {
+		const passageTextCharacterCount = this.stories.reduce(
+			(total, story) =>
+				total +
+				story.passages.reduce(
+					(passageTotal, passage) => passageTotal + passage.text.length,
+					0
+				),
+			0
+		);
+
 		return {
+			passageTextCharacterCount,
 			passageCount: this.stories.reduce(
 				(total, story) => total + story.passages.length,
 				0
 			),
 			storyCount: this.stories.length,
-			textCharacterCount: this.stories.reduce(
+			textCharacterCount:
+				passageTextCharacterCount +
+				this.stories.reduce(
 				(total, story) =>
-					total +
-					story.script.length +
-					story.stylesheet.length +
-					story.passages.reduce(
-						(passageTotal, passage) => passageTotal + passage.text.length,
-						0
-					),
+					total + story.script.length + story.stylesheet.length,
 				0
-			)
+				)
 		};
 	}
 
@@ -2453,6 +2476,14 @@ export function useCoreProjectHost() {
 			hostRef.current?.publishStoreStatePatches();
 		}
 	}, [sharedHost, stories]);
+	React.useEffect(
+		() => () => {
+			if (!sharedHost) {
+				hostRef.current?.dispose();
+			}
+		},
+		[sharedHost]
+	);
 
 	return sharedHost ?? hostRef.current!;
 }

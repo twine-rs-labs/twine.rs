@@ -51,6 +51,20 @@ function fileName(path: string) {
 	return path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? 'asset';
 }
 
+function replaceQueryText(
+	text: string,
+	query: string,
+	replacement: string,
+	matchCase: boolean,
+	useRegexes: boolean
+) {
+	const pattern = useRegexes
+		? query
+		: query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+	return text.replace(new RegExp(pattern, matchCase ? 'g' : 'gi'), replacement);
+}
+
 function assetEntry(path: string, sourcePath = path): CoreAssetInventoryEntry {
 	const normalizedPath = normalizedAssetPath(path);
 	const kind = assetKindForPath(path);
@@ -318,7 +332,10 @@ export class TestCoreSessionClient {
 		async (_sessionId: string, storyId: string, query: {limit: number}) => {
 			const diagnostics = storyToCoreIndex(
 				storySnapshotToStory(this.story(storyId)),
-				{includeDiagnostics: true}
+				{
+					includeDiagnostics: true,
+					knownAssets: this.assetInventoryByStory.get(storyId) ?? []
+				}
 			).diagnostics;
 			return {
 				diagnostics: diagnostics.slice(0, query.limit),
@@ -903,14 +920,71 @@ export class TestCoreSessionClient {
 				return [metadataPatch(story.id, story, {tags: command.tags})];
 			}
 
-			case 'setStoryZoom': {
+		case 'setStoryZoom': {
 				const story = this.story(command.story_id);
 
 				story.zoom = command.zoom;
 				return [metadataPatch(story.id, story, {zoom: command.zoom})];
-			}
+		}
 
-			case 'updatePassage': {
+		case 'replaceAllText': {
+			const story = this.story(command.story_id);
+			const replacement = command.query.replacement ?? '';
+			const patches: Patch[] = [];
+			const replace = (text: string) =>
+				replaceQueryText(
+					text,
+					command.query.query,
+					replacement,
+					command.query.matchCase,
+					command.query.useRegexes
+				);
+
+			for (const passage of story.passages) {
+				const name = command.query.includePassageNames
+					? replace(passage.name)
+					: passage.name;
+				const text = command.query.includePassageText
+					? replace(passage.text)
+					: passage.text;
+
+				const nameChanged = name !== passage.name;
+				const textChanged = text !== passage.text;
+
+				if (nameChanged || textChanged) {
+					passage.name = name;
+					passage.text = text;
+					patches.push(
+						passagePatch(story.id, passage, {
+							...emptyPassagePatch(),
+							name: nameChanged ? name : null,
+							text: textChanged ? text : null
+						})
+					);
+				}
+			}
+			if (command.query.includeScript) {
+				const script = replace(story.script);
+				if (script !== story.script) {
+					story.script = script;
+					patches.push({script, story_id: story.id, type: 'storyScriptUpdated'});
+				}
+			}
+			if (command.query.includeStylesheet) {
+				const stylesheet = replace(story.stylesheet);
+				if (stylesheet !== story.stylesheet) {
+					story.stylesheet = stylesheet;
+					patches.push({
+						story_id: story.id,
+						stylesheet,
+						type: 'storyStylesheetUpdated'
+					});
+				}
+			}
+			return patches;
+		}
+
+		case 'updatePassage': {
 				const story = this.story(command.story_id);
 				const passage = this.passage(story, command.passage_id);
 

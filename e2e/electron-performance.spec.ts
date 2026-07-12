@@ -104,6 +104,7 @@ interface PerformanceSnapshot {
 			hosts: Array<{
 				mode: string;
 				sessions: Array<{
+					passageTextCharacterCount: number;
 					revision: number;
 					sessionId: string;
 					storyIds: string[];
@@ -987,6 +988,12 @@ async function measureDiagnostic(page: Page, launchToWindowMs: number) {
 		'one-project-one-session-worker',
 		startupSnapshot.renderer.core.workerClients === 1 &&
 			startupSnapshot.renderer.core.activeSessions === 1
+	);
+	assertInvariant(
+		'react-passage-body-mirror-empty',
+		startupSnapshot.renderer.core.hosts[0].sessions.every(
+			session => session.passageTextCharacterCount === 0
+		)
 	);
 
 	await waitForDiagnosticWarmup(page);
@@ -2213,6 +2220,12 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				initial.renderer.core.workerClients === 1 &&
 					initial.renderer.core.activeSessions === 1
 			);
+			assertInvariant(
+				'react-passage-body-mirror-empty',
+				initial.renderer.core.hosts[0].sessions.every(
+					session => session.passageTextCharacterCount === 0
+				)
+			);
 			if (phase === 'edit') {
 				await measureEdits(running.page);
 			} else if (phase === 'query') {
@@ -2247,6 +2260,12 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				'one-project-one-session-worker',
 				initial.renderer.core.workerClients === 1 &&
 					initial.renderer.core.activeSessions === 1
+			);
+			assertInvariant(
+				'react-passage-body-mirror-empty',
+				initial.renderer.core.hosts[0].sessions.every(
+					session => session.passageTextCharacterCount === 0
+				)
 			);
 			await measureWatcher(watcherRunning.page, watcherRunning.projectPath);
 			diagnostics.watcher = await snapshot(watcherRunning.page);

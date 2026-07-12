@@ -47,8 +47,9 @@ fixture isolation.
   Stable-identity hydration also reuses the incoming 50k passage objects rather
   than cloning them solely to rewrite an unchanged story ID.
 - File-backed WASM initialization waits for full passage hydration and submits
-  one initial snapshot. The complete React mirror remains intentionally in
-  scope until a separate bounded-mirror design is justified by these readings.
+  one initial snapshot. Passage bodies are then removed from the React read
+  model; bounded document/fact queries and explicit workflow materialization
+  now serve consumers that previously scanned the complete story.
 - The first attributed cleanup reduced 50k shell p50 to about 0.96 s,
   interactive p50 to about 10.4 s, retained resident memory to about 1.14 GiB,
   and WASM linear memory to about 96 MiB.

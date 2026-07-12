@@ -4,18 +4,13 @@ import * as detectIt from 'detect-it';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {fakePassage} from '../../../test-util';
-import {passageIsEmpty} from '../../../util/passage-is-empty';
 import {PassageCard, PassageCardProps} from '../passage-card';
 
 jest.mock('../../tag/tag-badges');
 jest.mock('../../tag/tag-stripe');
-jest.mock('../../../util/passage-is-empty');
 
 describe('<PassageCard>', () => {
-	const passageIsEmptyMock = passageIsEmpty as jest.Mock;
 	const oldDeviceType = detectIt.deviceType;
-
-	beforeEach(() => passageIsEmptyMock.mockReturnValue(false));
 
 	afterAll(() => {
 		(detectIt as any).deviceType = oldDeviceType;
@@ -38,7 +33,7 @@ describe('<PassageCard>', () => {
 	it('should include data-passage-tag attribute with space-separated tags', () => {
 		const tags = [faker.lorem.slug(), faker.lorem.slug()];
 		const passage = fakePassage({tags});
-		renderComponent({passage});
+		renderComponent({excerpt: passage.text, passage});
 
 		const passageElement = document.querySelector('.passage-card');
 		expect(passageElement).toHaveAttribute('data-passage-tags', tags.join(' '));
@@ -62,19 +57,17 @@ describe('<PassageCard>', () => {
 	it('displays an excerpt of the passage text', () => {
 		const passage = fakePassage({text: "short text that won't be truncated"});
 
-		renderComponent({passage});
+		renderComponent({excerpt: passage.text, passage});
 		expect(screen.getByText(passage.text)).toBeInTheDocument();
 	});
 
 	it("gives it an 'empty' CSS class if the passage is empty", () => {
-		passageIsEmptyMock.mockReturnValue(true);
-		renderComponent({passage: fakePassage()});
+		renderComponent({isEmpty: true, passage: fakePassage()});
 		expect(document.querySelector('.passage-card.empty')).toBeInTheDocument();
 	});
 
 	it("doesn't give it an 'empty' CSS class if the passage is empty", () => {
-		passageIsEmptyMock.mockReturnValue(false);
-		renderComponent({passage: fakePassage()});
+		renderComponent({isEmpty: false, passage: fakePassage()});
 		expect(
 			document.querySelector('.passage-card.empty')
 		).not.toBeInTheDocument();
