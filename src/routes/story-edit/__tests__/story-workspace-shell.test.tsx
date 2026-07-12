@@ -252,18 +252,19 @@ describe('<StoryWorkspaceShell>', () => {
 		expect(Number(list?.getAttribute('data-visible-count'))).toBeLessThan(80);
 	});
 
-	it('navigates to linked passages from the bottom drawer', () => {
+	it('navigates to linked passages from the bottom drawer', async () => {
 		const {next, onSelectPassage} = renderComponent('text', {
 			bottomDrawerOpen: true
 		});
 
-		within(
+		const drawer = within(
 			screen.getByRole('region', {
 				name: 'routes.storyEdit.workspace.bottomDrawer'
 			})
-		)
-			.getByRole('button', {name: 'Next'})
-			.click();
+		);
+		const nextButton = await drawer.findByRole('button', {name: 'Next'});
+
+		nextButton.click();
 		expect(onSelectPassage).toHaveBeenCalledWith(next);
 		expect(screen.getAllByText('Missing').length).toBeGreaterThan(0);
 	});

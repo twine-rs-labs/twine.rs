@@ -17,6 +17,7 @@ import type {CoreSearchQuery} from './bindings/CoreSearchQuery';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
 import type {CoreStorySummary} from './bindings/CoreStorySummary';
+import type {CoreWorkbenchDockModel} from './bindings/CoreWorkbenchDockModel';
 import type {PassageMove} from './bindings/PassageMove';
 import type {PassagePatch} from './bindings/PassagePatch';
 import type {Patch} from './bindings/Patch';
@@ -55,6 +56,7 @@ export type {
 	CoreStoryIndex,
 	CoreStoryIndexOptions,
 	CoreStorySummary,
+	CoreWorkbenchDockModel,
 	PassageMove,
 	PassagePatch,
 	Patch,

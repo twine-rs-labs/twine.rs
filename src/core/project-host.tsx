@@ -20,6 +20,7 @@ import type {CoreSessionStatus} from './bindings/CoreSessionStatus';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
 import type {CoreStorySummary} from './bindings/CoreStorySummary';
+import type {CoreWorkbenchDockModel} from './bindings/CoreWorkbenchDockModel';
 import type {PatchBatch} from './bindings/PatchBatch';
 import type {StoryCommand} from './bindings/StoryCommand';
 import type {GraphProjectionQuery} from './graph-projection';
@@ -108,6 +109,7 @@ export interface CoreProjectHost {
 		options?: StoryIndexQuery
 	): Promise<CoreStoryIndex>;
 	queryStorySummaryAsync(storyId: string): Promise<CoreStorySummary>;
+	queryWorkbenchDockModelAsync(storyId: string): Promise<CoreWorkbenchDockModel>;
 	queryContentsPageAsync(
 		storyId: string,
 		options?: Partial<CoreContentsQuery>
@@ -1636,6 +1638,41 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		};
 	}
 
+	async queryWorkbenchDockModelAsync(
+		storyId: string
+	): Promise<CoreWorkbenchDockModel> {
+		// These requests are individually serialized behind mutations. Retry the
+		// bounded group if a mutation lands between them so docks never combine
+		// records from different revisions.
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			const [summary, contents, diagnostics, assets] = await Promise.all([
+				this.queryStorySummaryAsync(storyId),
+				this.queryContentsPageAsync(storyId, {limit: 120}),
+				this.queryDiagnosticsPageAsync(storyId, {limit: 120}),
+				this.queryAssetsPageAsync(storyId, {limit: 120})
+			]);
+			const revisions = new Set([
+				summary.revision,
+				contents.revision,
+				diagnostics.revision,
+				assets.revision
+			]);
+
+			if (revisions.size === 1) {
+				return {
+					assets,
+					contents,
+					diagnostics,
+					revision: Math.max(...revisions),
+					storyId,
+					summary
+				};
+			}
+		}
+
+		throw new Error('Could not obtain a revision-consistent workbench model');
+	}
+
 	async queryContentsPageAsync(
 		storyId: string,
 		options: Partial<CoreContentsQuery> = {}
@@ -2138,6 +2175,26 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
+	queryWorkbenchDockModelAsync(storyId: string) {
+		return (
+			this.hostForStory(storyId)?.queryWorkbenchDockModelAsync(storyId) ??
+			Promise.resolve({
+				assets: {assets: [], nextCursor: null, revision: 0, storyId, totalCount: 0},
+				contents: emptyContentsPage(storyId),
+				diagnostics: {
+					diagnostics: [],
+					nextCursor: null,
+					revision: 0,
+					storyId,
+					totalCount: 0
+				},
+				revision: 0,
+				storyId,
+				summary: emptyStorySummary(storyId)
+			} satisfies CoreWorkbenchDockModel)
+		);
+	}
+
 	queryContentsPageAsync(
 		storyId: string,
 		options?: Partial<CoreContentsQuery>
@@ -2375,6 +2432,8 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.queryStoryIndexAsync(queryStoryId, options),
 			queryStorySummaryAsync: queryStoryId =>
 				host.queryStorySummaryAsync(queryStoryId),
+			queryWorkbenchDockModelAsync: queryStoryId =>
+				host.queryWorkbenchDockModelAsync(queryStoryId),
 			queryContentsPageAsync: (queryStoryId, options) =>
 				host.queryContentsPageAsync(queryStoryId, options),
 			querySearchPageAsync: (queryStoryId, options) =>

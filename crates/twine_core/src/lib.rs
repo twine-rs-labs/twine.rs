@@ -870,6 +870,23 @@ pub struct CoreAssetsPage {
     pub total_count: usize,
 }
 
+/// A bounded, revision-consistent snapshot for the story workbench docks.
+///
+/// The renderer must not request a complete `CoreStoryIndex` merely to fill
+/// navigation and inspector chrome. Each collection is deliberately capped;
+/// dedicated routes can continue pagination when the user asks for more.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreWorkbenchDockModel {
+    pub assets: CoreAssetsPage,
+    pub contents: CoreContentsPage,
+    pub diagnostics: CoreDiagnosticsPage,
+    pub revision: u32,
+    pub story_id: String,
+    pub summary: CoreStorySummary,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]

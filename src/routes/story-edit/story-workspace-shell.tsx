@@ -23,10 +23,7 @@ import {
 	insertAssetSnippetCommand,
 	loadDismissedDiagnosticIds,
 	sessionOwnedDocumentPassageThreshold,
-	storyShellIndex,
-	useKnownAssetInventoryForStory,
-	useCoreProjectHost,
-	workbenchSelection
+	useCoreProjectHost
 } from '../../core';
 import type {
 	AssetManagerViewModel,
@@ -38,6 +35,7 @@ import type {
 import type {PatchBatch} from '../../core/bindings/PatchBatch';
 import type {CoreStoryIndex} from '../../core/bindings/CoreStoryIndex';
 import type {CorePassageFacts} from '../../core/bindings/CorePassageFacts';
+import type {CoreWorkbenchDockModel} from '../../core/bindings/CoreWorkbenchDockModel';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {CoreProjectHost} from '../../core/project-host';
 import type {TwineElectronWindow} from '../../electron/shared';
@@ -1228,7 +1226,6 @@ export const StoryWorkspaceShell: React.FC<
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
 	const hydratingStories = React.useRef(new Set<string>());
 	const storiesRef = React.useRef(stories);
-	const knownAssets = useKnownAssetInventoryForStory(story.id);
 	const hydration = useProjectStoryHydration(story.id);
 	const projectMetadata = React.useMemo(
 		() => loadProjectMetadata(story.id),
@@ -1239,16 +1236,12 @@ export const StoryWorkspaceShell: React.FC<
 		projectMetadata.status === 'file-backed';
 	const passageTextLoaded =
 		!isFileBackedStory || hydration?.passageTextLoaded !== false;
-	const usesBoundedReadModel =
-		story.passages.length > deferIndexPassageThreshold;
 	const shellIndex = React.useMemo(
-		() =>
-			usesBoundedReadModel
-				? emptyStoryIndex(story.id)
-				: storyShellIndex(story, knownAssets),
-		[knownAssets, story, usesBoundedReadModel]
+		() => emptyStoryIndex(story.id),
+		[story.id]
 	);
-	const [fullIndex, setFullIndex] = React.useState<CoreStoryIndex>();
+	const [dockModel, setDockModel] =
+		React.useState<CoreWorkbenchDockModel>();
 	const [passageFacts, setPassageFacts] = React.useState<CorePassageFacts>();
 	const openProgress = React.useMemo<StoryOpenProgressState | undefined>(() => {
 		if (isFileBackedStory && hydration?.passageTextLoaded === false) {
@@ -1261,7 +1254,7 @@ export const StoryWorkspaceShell: React.FC<
 
 		return undefined;
 	}, [
-		fullIndex,
+		dockModel,
 		hydration?.passageTextLoaded,
 		isFileBackedStory,
 		passageTextLoaded,
@@ -1412,39 +1405,33 @@ export const StoryWorkspaceShell: React.FC<
 	React.useEffect(() => {
 		let active = true;
 
-		setFullIndex(undefined);
+		setDockModel(undefined);
 
 		if (!passageTextLoaded) {
 			return () => {
 				active = false;
 			};
 		}
-		if (usesBoundedReadModel) {
-			return () => {
-				active = false;
-			};
-		}
-
-		const loadFullIndex = () => {
-			void coreProjectHost.queryStoryIndexAsync(story.id, {}).then(index => {
+		const loadDockModel = () => {
+			void coreProjectHost.queryWorkbenchDockModelAsync(story.id).then(model => {
 				if (active) {
-					setFullIndex(index);
+					setDockModel(model);
 				}
 			});
 		};
 
-		loadFullIndex();
+		loadDockModel();
 
 		return () => {
 			active = false;
 		};
-	}, [coreProjectHost, knownAssets, passageTextLoaded, patchVersion, story]);
+	}, [coreProjectHost, passageTextLoaded, patchVersion, story.id]);
 
 	React.useEffect(() => {
 		let active = true;
 		const passageId = selectedPassageId ?? story.startPassage;
 
-		if (!usesBoundedReadModel || !passageId || !passageTextLoaded) {
+		if (!passageId || !passageTextLoaded) {
 			setPassageFacts(undefined);
 			return () => {
 				active = false;
@@ -1468,10 +1455,18 @@ export const StoryWorkspaceShell: React.FC<
 		patchVersion,
 		selectedPassageId,
 		story,
-		usesBoundedReadModel
 	]);
 
-	const index = fullIndex ?? shellIndex;
+	const index = React.useMemo<CoreStoryIndex>(
+		() => ({
+			...shellIndex,
+			assetInventory: dockModel?.assets.assets ?? [],
+			contents: dockModel?.contents.entries ?? [],
+			diagnostics: dockModel?.diagnostics.diagnostics ?? [],
+			symbols: passageFacts?.symbols ?? []
+		}),
+		[dockModel, passageFacts?.symbols, shellIndex]
+	);
 	const dismissedDiagnosticIds = React.useMemo(
 		() => loadDismissedDiagnosticIds(story.id),
 		[dismissalsVersion, story.id]
@@ -1498,8 +1493,17 @@ export const StoryWorkspaceShell: React.FC<
 		};
 	}, [dismissedDiagnosticIds, index]);
 	const contents = React.useMemo(
-		() => contentsViewModel(activeIndex),
-		[activeIndex]
+		() => {
+			const model = contentsViewModel(activeIndex);
+			return dockModel
+				? {
+					...model,
+					problemCount: dockModel.contents.facets.problems,
+					totalCount: dockModel.contents.totalCount
+				}
+				: model;
+		},
+		[activeIndex, dockModel]
 	);
 	const diagnostics = React.useMemo(
 		() => diagnosticsViewModel(activeIndex, story),
@@ -1510,12 +1514,10 @@ export const StoryWorkspaceShell: React.FC<
 		() =>
 			selectionFromPassageFacts(
 				story,
-				usesBoundedReadModel
-					? boundedWorkbenchSelection(story, selectedPassageId)
-					: workbenchSelection(story, activeIndex, selectedPassageId),
+				boundedWorkbenchSelection(story, selectedPassageId),
 				passageFacts
 			),
-		[activeIndex, passageFacts, selectedPassageId, story, usesBoundedReadModel]
+		[passageFacts, selectedPassageId, story]
 	);
 	const passage = selection.passage;
 	// The dock's open buffers. `undefined` follows the current selection so
@@ -1540,32 +1542,24 @@ export const StoryWorkspaceShell: React.FC<
 					.filter(window_ => window_.kind === 'passage')
 					.map(window_ => [
 						editorWindowId(window_),
-						usesBoundedReadModel
-							? selectionFromPassageFacts(
-									story,
-									boundedWorkbenchSelection(
-										story,
-										window_.kind === 'passage' ? window_.passageId : undefined
-									),
-									window_.kind === 'passage' &&
-										window_.passageId === selection.passage?.id
-										? passageFacts
-										: undefined
-								)
-							: workbenchSelection(
-									story,
-									activeIndex,
-									window_.kind === 'passage' ? window_.passageId : undefined
-								)
+						selectionFromPassageFacts(
+							story,
+							boundedWorkbenchSelection(
+								story,
+								window_.kind === 'passage' ? window_.passageId : undefined
+							),
+							window_.kind === 'passage' &&
+								window_.passageId === selection.passage?.id
+								? passageFacts
+								: undefined
+						)
 					])
 			),
 		[
-			activeIndex,
 			dockWindows,
 			passageFacts,
 			selection.passage?.id,
-			story,
-			usesBoundedReadModel
+			story
 		]
 	);
 	const {dispatch: dialogsDispatch} = useDialogsContext();

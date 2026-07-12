@@ -274,6 +274,75 @@ export class TestCoreSessionClient {
 			};
 		}
 	);
+	queryDiagnosticsPage = jest.fn(
+		async (_sessionId: string, storyId: string, query: {limit: number}) => {
+			const diagnostics = storyToCoreIndex(
+				storySnapshotToStory(this.story(storyId)),
+				{includeDiagnostics: true}
+			).diagnostics;
+			return {
+				diagnostics: diagnostics.slice(0, query.limit),
+				nextCursor: null,
+				revision: this.revision,
+				storyId,
+				totalCount: diagnostics.length
+			};
+		}
+	);
+	queryPassageFacts = jest.fn(
+		async (_sessionId: string, storyId: string, passageId: string) => {
+			const story = storySnapshotToStory(this.story(storyId));
+			const passage = story.passages.find(candidate => candidate.id === passageId);
+			const byName = new Map(story.passages.map(candidate => [candidate.name, candidate]));
+			const linksFor = (source: typeof passage) =>
+				Array.from(source?.text.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g) ?? []).map(
+					match => {
+						const targetName = match[1].trim();
+						const target = byName.get(targetName);
+						return {
+							broken: !target,
+							sourceId: source?.id ?? passageId,
+							targetId: target?.id ?? null,
+							targetName
+						};
+					}
+				);
+			const index = storyToCoreIndex(story, {
+				includeAssets: true,
+				includeDiagnostics: true,
+				includeVariables: true
+			});
+
+			return {
+				assetReferences: index.assets.filter(asset => asset.passageId === passageId),
+				backlinks: story.passages
+					.flatMap(source => linksFor(source))
+					.filter(link => link.targetId === passageId),
+				diagnostics: index.diagnostics.filter(item => item.sourceId === passageId),
+				links: linksFor(passage),
+				passageId,
+				revision: this.revision,
+				storyId,
+				symbols: index.symbols.filter(symbol => symbol.passageId === passageId)
+			};
+		}
+	);
+	queryStorySummary = jest.fn(async (_sessionId: string, storyId: string) => {
+		const story = storySnapshotToStory(this.story(storyId));
+		const index = storyToCoreIndex(story);
+		return {
+			assetCount: index.assetInventory.length,
+			diagnosticCount: index.diagnostics.length,
+			errorCount: index.diagnostics.filter(item => item.severity === 'error').length,
+			graph: index.graph,
+			missingAssetCount: index.assetInventory.filter(asset => asset.missing).length,
+			passageCount: story.passages.length,
+			revision: this.revision,
+			storyId,
+			tagCount: index.tags.length,
+			warningCount: index.diagnostics.filter(item => item.severity === 'warning').length
+		};
+	});
 	queryStoryIndex = jest.fn(async (_sessionId, storyId, options) =>
 		storyToCoreIndex(storySnapshotToStory(this.story(storyId)), options)
 	);
