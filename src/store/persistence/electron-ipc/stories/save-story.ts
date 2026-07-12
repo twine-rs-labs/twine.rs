@@ -49,9 +49,7 @@ async function saveNativeProjectFolder(
 				{type: 'passageText'}
 			> => update.type === 'passageText'
 		);
-		const useCompactIncrementalPayload =
-			documentUpdates.length > 0 &&
-			options.hints?.every(hint => hint.type === 'passageText');
+		const useCompactIncrementalPayload = documentUpdates.length > 0;
 		const completeStory: Story | StoryWithDocuments =
 			useCompactIncrementalPayload
 				? story

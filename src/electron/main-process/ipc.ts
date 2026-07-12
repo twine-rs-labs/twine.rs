@@ -44,6 +44,7 @@ import {
 	listProjectAssets,
 	openProjectFolder,
 	prepareProjectImport,
+	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
 	readProjectFolderHydrationChunk,
 	renameProjectAsset,
@@ -54,6 +55,7 @@ import {
 	stopProjectSession,
 	unsubscribeProjectSession
 } from './project-folder';
+import {nativeHydrationMemoryDiagnostics} from './native';
 import type {
 	NativeCommandLineOpenResult,
 	NativePlatformSettingsUpdate
@@ -75,9 +77,13 @@ function nativePlatformSettings() {
 
 export function initIpc() {
 	if (performanceHarnessEnabled()) {
-		ipcMain.handle('performance-harness-snapshot', async () =>
-			mainPerformanceHarnessSnapshot()
-		);
+		ipcMain.handle('performance-harness-snapshot', async () => ({
+			...mainPerformanceHarnessSnapshot(),
+			owners: {
+				nativeHydration: nativeHydrationMemoryDiagnostics(),
+				projectSessions: projectSessionMemoryDiagnostics()
+			}
+		}));
 		ipcMain.handle('performance-harness-reset', async () =>
 			resetMainPerformanceHarness()
 		);

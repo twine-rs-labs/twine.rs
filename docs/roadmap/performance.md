@@ -15,6 +15,18 @@ fixture isolation.
 
 ### 1. Startup and retained memory — active
 
+- The harness now distinguishes fixed Electron working sets from
+  project-attributable deltas at 100, 10k, and 50k passages. It reports browser,
+  renderer, GPU, and utility roles plus bootstrap, native hydration lease,
+  watcher baseline, descriptor, WASM, and Rust cache owners.
+- Bootstrap documents are released only after successful Rust initialization;
+  native leases are cleared in all completion paths. Post-GC startup assertions
+  require both owners to retain zero passage text.
+- The watcher accepted baseline retains file fingerprints and the lightweight
+  descriptor, not story/passage snapshots. One-file saves update an indexed
+  entry in place and avoid descriptor reload unless structural metadata or
+  layout changed.
+
 - Profile native project load, renderer hydration, session initialization, and
   first-route queries independently.
 - Bound initial story-index and contents payloads to the visible or requested
@@ -166,6 +178,15 @@ surface materially improves against its accepted baseline.
 - Remove or bound the remaining duplicate native hydration, worker request,
   snapshot-construction, and WASM representations rather than recreating a
   frontend passage-body cache.
+- The 2026-07-13 one-sample 100/10k/50k matrix confirms that bootstrap text,
+  hydration leases, hydration text capacity, and accepted-baseline passage
+  snapshots all reach zero. The 50k process still retains about 1.04 GiB:
+  roughly 412 MiB in the browser process, 497 MiB in the renderer process,
+  105 MiB in the GPU process, and 48 MiB in utility. Explicit native path
+  strings account for about 13.5 MiB and WASM linear memory for about 96 MiB.
+  The next investigation should attribute the remaining browser/renderer
+  project-size slope, especially renderer native allocations outside the
+  roughly 52 MiB JavaScript heap.
 
 Exit signal: resident memory drops without replacing measured caches with
 unbounded recomputation.

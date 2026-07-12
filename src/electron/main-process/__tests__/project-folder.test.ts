@@ -323,6 +323,9 @@ describe('project-folder native bridge', () => {
 		await startProjectSession('/native/project.twine.rs', undefined, [
 			'story-id'
 		]);
+		const manifestReadsBeforeSave = readFileMock.mock.calls.filter(call =>
+			String(call[0]).endsWith('twine.toml')
+		).length;
 		const result = await saveProjectFolder('/native/project.twine.rs', story, {
 			documentUpdates: [
 				{
@@ -363,6 +366,11 @@ describe('project-folder native bridge', () => {
 				String(call[0]).includes('/.twine/project.json.')
 			)
 		).toBe(false);
+		expect(
+			readFileMock.mock.calls.filter(call =>
+				String(call[0]).endsWith('twine.toml')
+			).length
+		).toBe(manifestReadsBeforeSave);
 	});
 
 	it('incrementally saves passage names without reallocating source paths', async () => {

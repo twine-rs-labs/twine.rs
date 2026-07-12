@@ -25,6 +25,24 @@ interface PerformanceSnapshot {
 			type: string;
 		}>;
 		memory: {rss: number};
+		owners?: {
+			nativeHydration?: {
+				activeLeaseCount: number;
+				passageCount: number;
+				textCapacityBytes: number;
+				textLengthBytes: number;
+			};
+			projectSessions?: {
+				baselineFileCount: number;
+				baselineFileStringBytes: number;
+				baselinePassageCount: number;
+				candidateCount: number;
+				descriptorPathCount: number;
+				descriptorPathStringBytes: number;
+				resolvedCandidateCount: number;
+				sessionCount: number;
+			};
+		};
 		memoryCheckpoints: Array<{
 			appMetrics: PerformanceSnapshot['main']['appMetrics'];
 			mainHeap: Record<string, number>;
@@ -101,6 +119,11 @@ interface PerformanceSnapshot {
 		}>;
 		core: {
 			activeSessions: number;
+			bootstrap?: {
+				passageCount: number;
+				storyCount: number;
+				textBytes: number;
+			};
 			hosts: Array<{
 				mode: string;
 				sessions: Array<{
@@ -368,7 +391,7 @@ async function launchFixture(): Promise<RunningApp> {
 					names.has('session-initialization-complete')
 				);
 			},
-			smoke ? 30_000 : 10 * 60 * 1000
+			smoke ? 3 * 60 * 1000 : 10 * 60 * 1000
 		);
 		await recordLaunchPhase('session-ready', {
 			pid: app.process().pid,
@@ -378,14 +401,20 @@ async function launchFixture(): Promise<RunningApp> {
 
 		return {app, launchToWindowMs, page, projectPath, root};
 	} catch (error) {
+		let child: ReturnType<ElectronApplication['process']> | undefined;
+		try {
+			child = app?.process();
+		} catch {
+			// Playwright may already have disposed its Electron connection after a
+			// native launch failure. Cleanup must not mask the original error.
+		}
 		await recordLaunchPhase('launch-failed', {
 			error: (error as Error).message,
-			pid: app?.process().pid,
+			pid: child?.pid,
 			retry,
 			root
 		});
 		await app?.close().catch(() => undefined);
-		const child = app?.process();
 		if (child?.exitCode === null) {
 			child.kill('SIGKILL');
 		}
@@ -643,6 +672,10 @@ function startupMetrics(
 			checkpoint
 		])
 	);
+	const baselineMemory = memoryCheckpoints.get('open-start');
+	const baselineByRole = baselineMemory
+		? processWorkingSetByRole(baselineMemory.appMetrics)
+		: new Map<string, number>();
 
 	for (const checkpoint of memoryCheckpoints.values()) {
 		const workingSetKiB = checkpoint.appMetrics.reduce(
@@ -656,6 +689,22 @@ function startupMetrics(
 				? workingSetKiB / 1024
 				: checkpoint.mainMemory.rss / 1024 / 1024
 		);
+		for (const [role, workingSetKiB] of processWorkingSetByRole(
+			checkpoint.appMetrics
+		)) {
+			addSample(
+				`startupMemory.${checkpoint.name}.process.${role.toLowerCase()}MiB`,
+				workingSetKiB / 1024
+			);
+			const baselineKiB = baselineByRole.get(role);
+
+			addSample(
+				`startupMemory.${checkpoint.name}.projectDelta.${role.toLowerCase()}MiB`,
+				baselineKiB === undefined
+					? undefined
+					: (workingSetKiB - baselineKiB) / 1024
+			);
+		}
 		addSample(
 			`startupMemory.${checkpoint.name}.rendererHeapMiB`,
 			typeof checkpoint.renderer.usedJSHeapSize === 'number'
@@ -670,6 +719,20 @@ function startupMetrics(
 		);
 	}
 	captureMemory(snapshot);
+}
+
+function processWorkingSetByRole(
+	metrics: PerformanceSnapshot['main']['appMetrics']
+) {
+	const result = new Map<string, number>();
+
+	for (const metric of metrics) {
+		result.set(
+			metric.type,
+			(result.get(metric.type) ?? 0) + (metric.memory?.workingSetSize ?? 0)
+		);
+	}
+	return result;
 }
 
 async function waitForEvent(
@@ -1496,6 +1559,54 @@ function captureMemory(current: PerformanceSnapshot) {
 		rendererWorkingSetKiB > 0 ? rendererWorkingSetKiB / 1024 : undefined
 	);
 	addSample('memory.mainMiB', current.main.memory.rss / 1024 / 1024);
+	for (const type of ['Browser', 'GPU', 'Tab', 'Utility']) {
+		const workingSet = current.main.appMetrics
+			.filter(metric => metric.type === type)
+			.reduce(
+				(total, metric) => total + (metric.memory?.workingSetSize ?? 0),
+				0
+			);
+
+		addSample(
+			`memory.process.${type.toLowerCase()}MiB`,
+			workingSet > 0 ? workingSet / 1024 : undefined
+		);
+	}
+	const nativeHydration = current.main.owners?.nativeHydration;
+	const projectSessions = current.main.owners?.projectSessions;
+
+	addSample(
+		'memory.owner.nativeHydrationLeaseCount',
+		nativeHydration?.activeLeaseCount
+	);
+	addSample(
+		'memory.owner.nativeHydrationTextCapacityMiB',
+		nativeHydration
+			? nativeHydration.textCapacityBytes / 1024 / 1024
+			: undefined
+	);
+	addSample(
+		'memory.owner.nativeBaselineFileStringMiB',
+		projectSessions
+			? projectSessions.baselineFileStringBytes / 1024 / 1024
+			: undefined
+	);
+	addSample(
+		'memory.owner.nativeBaselinePassageCount',
+		projectSessions?.baselinePassageCount
+	);
+	addSample(
+		'memory.owner.nativeDescriptorPathStringMiB',
+		projectSessions
+			? projectSessions.descriptorPathStringBytes / 1024 / 1024
+			: undefined
+	);
+	addSample(
+		'memory.owner.bootstrapTextMiB',
+		current.renderer.core.bootstrap?.textBytes !== undefined
+			? current.renderer.core.bootstrap.textBytes / 1024 / 1024
+			: undefined
+	);
 }
 
 async function passageFiles(projectPath: string) {
@@ -2139,11 +2250,23 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 					`${startupPrefix}-memory-checkpoints-present`,
 					[
 						'all-passages-ready',
+						'open-start',
 						'session-initialization-complete',
 						'shell-visible',
 						'post-gc-retained'
 					].every(name => checkpointNames.has(name)),
 					JSON.stringify([...checkpointNames])
+				);
+				assertInvariant(
+					`${startupPrefix}-bootstrap-documents-released`,
+					startupSnapshot.renderer.core.bootstrap?.storyCount === 0 &&
+						startupSnapshot.renderer.core.bootstrap.textBytes === 0,
+					JSON.stringify(startupSnapshot.renderer.core.bootstrap)
+				);
+				assertInvariant(
+					`${startupPrefix}-native-hydration-leases-released`,
+					startupSnapshot.main.owners?.nativeHydration?.activeLeaseCount === 0,
+					JSON.stringify(startupSnapshot.main.owners?.nativeHydration)
 				);
 				assertInvariant(
 					`${startupPrefix}-native-load-attribution-present`,

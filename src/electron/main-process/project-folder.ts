@@ -317,6 +317,7 @@ interface ProjectSessionState {
 	awaitingBaselineReceipt?: boolean;
 	baselineReceiptWaiters?: Array<() => void>;
 	baseline?: NativeProjectSessionSnapshot;
+	baselineFileIndex?: Map<string, number>;
 	debounceTimer?: ReturnType<typeof setTimeout>;
 	descriptor?: NativeProjectDescriptor;
 	generation: number;
@@ -2985,6 +2986,18 @@ function ensureProjectSession(rootPath: string) {
 	return session;
 }
 
+function installAcceptedProjectBaseline(
+	session: ProjectSessionState,
+	baseline: NativeProjectSessionSnapshot,
+	descriptor: NativeProjectDescriptor
+) {
+	session.baseline = {...baseline, stories: []};
+	session.baselineFileIndex = new Map(
+		baseline.files.map((file, index) => [file.path, index] as const)
+	);
+	session.descriptor = descriptor;
+}
+
 function beginProjectSessionBaselineCapture(rootPath: string) {
 	const session = ensureProjectSession(rootPath);
 
@@ -3037,7 +3050,7 @@ async function adoptProjectSessionBaselineReceipt(
 			return false;
 		}
 
-		session.baseline = {
+		const baseline: NativeProjectSessionSnapshot = {
 			assets: receipt.assets,
 			changedPaths: [],
 			conflicts: [],
@@ -3048,10 +3061,11 @@ async function adoptProjectSessionBaselineReceipt(
 			stories: [],
 			storyIds: receipt.storyIds
 		};
-		session.descriptor = descriptorFromBaselineReceipt(
+		const descriptor = descriptorFromBaselineReceipt(
 			projectFolder.stories,
 			receipt
 		);
+		installAcceptedProjectBaseline(session, baseline, descriptor);
 		session.pending = undefined;
 		const catchupStarted = performance.now();
 		if (session.pathHints.size > 0 || session.watcherAvailable === false) {
@@ -3103,13 +3117,14 @@ async function refreshProjectSessionBaseline(
 		return;
 	}
 
-	session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
+	const baseline = await readProjectSessionSnapshot(rootPath, undefined, {
 		...hints,
 		storyIds: storyIds ?? session.baseline?.storyIds
 	});
-	session.descriptor = await readProjectDescriptor(rootPath).catch(() =>
-		descriptorFromStories(hints.stories ?? session.baseline?.stories ?? [])
+	const descriptor = await readProjectDescriptor(rootPath).catch(() =>
+		descriptorFromStories(hints.stories ?? baseline.stories)
 	);
+	installAcceptedProjectBaseline(session, baseline, descriptor);
 	session.generation++;
 	session.pending = undefined;
 	if (session.watcher || session.watcherAvailable !== undefined) {
@@ -3253,30 +3268,6 @@ async function projectFileEntryForPath(
 	return entries.find(entry => entry.path === projectPath);
 }
 
-function replaceBaselineStory(
-	baseline: NativeProjectSessionSnapshot,
-	story: Story
-) {
-	return baseline.stories.map(existing =>
-		existing.id === story.id ? story : existing
-	);
-}
-
-function replaceBaselineFiles(
-	baseline: NativeProjectSessionSnapshot,
-	entries: NativeProjectFileEntry[]
-) {
-	const files = new Map(baseline.files.map(file => [file.path, file] as const));
-
-	for (const entry of entries) {
-		files.set(entry.path, entry);
-	}
-
-	return [...files.values()].sort((left, right) =>
-		left.path.localeCompare(right.path)
-	);
-}
-
 async function writeProjectFolderIncremental(
 	rootPath: string,
 	story: Story,
@@ -3396,13 +3387,20 @@ async function writeProjectFolderIncremental(
 		projectPath: string;
 		text: string;
 	}>;
-	const baselineByPath = new Map(
-		session.baseline.files.map(file => [file.path, file] as const)
-	);
+	const baselineFileIndex =
+		session.baselineFileIndex ??
+		new Map(
+			session.baseline.files.map((file, index) => [file.path, index] as const)
+		);
+	session.baselineFileIndex = baselineFileIndex;
 	const conflictStarted = performance.now();
 
 	for (const entry of concreteTouched) {
-		const baselineFile = baselineByPath.get(entry.projectPath);
+		const baselineIndex = baselineFileIndex.get(entry.projectPath);
+		const baselineFile =
+			baselineIndex === undefined
+				? undefined
+				: session.baseline.files[baselineIndex];
 		const currentFile = await projectFileEntryForPath(
 			rootPath,
 			entry.projectPath,
@@ -3444,14 +3442,25 @@ async function writeProjectFolderIncremental(
 		return undefined;
 	}
 
-	session.baseline = {
-		...session.baseline,
-		changedPaths: concreteTouched.map(entry => entry.projectPath),
-		files: replaceBaselineFiles(session.baseline, updatedEntries),
-		scannedAt: new Date().toISOString(),
-		stories: replaceBaselineStory(session.baseline, story)
-	};
-	session.descriptor = await readProjectDescriptor(rootPath);
+	for (const entry of updatedEntries) {
+		const index = baselineFileIndex.get(entry.path);
+
+		if (index === undefined) {
+			return undefined;
+		}
+		session.baseline.files[index] = entry;
+	}
+	session.baseline.changedPaths = concreteTouched.map(
+		entry => entry.projectPath
+	);
+	session.baseline.scannedAt = new Date().toISOString();
+	if (
+		concreteTouched.some(entry =>
+			['graph', 'manifest', 'metadata'].includes(entry.kind)
+		)
+	) {
+		session.descriptor = await readProjectDescriptor(rootPath);
+	}
 	session.generation++;
 	session.pending = undefined;
 	timings.baselinePatchUs = Math.round(
@@ -4314,11 +4323,15 @@ export async function projectSessionSnapshot(
 	const session = ensureProjectSession(rootPath);
 	await waitForProjectSessionBaselineCapture(session);
 	if (!session.baseline) {
-		session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
+		const baseline = await readProjectSessionSnapshot(rootPath, undefined, {
 			storyIds
 		});
+		const descriptor = await readProjectDescriptor(rootPath).catch(() =>
+			descriptorFromStories(baseline.stories)
+		);
+		installAcceptedProjectBaseline(session, baseline, descriptor);
 		session.receiptPerformance = undefined;
-		return session.baseline;
+		return baseline;
 	}
 
 	return readProjectSessionSnapshot(rootPath, session.baseline, {
@@ -4340,14 +4353,13 @@ export async function startProjectSession(
 
 	await waitForProjectSessionBaselineCapture(session);
 	if (!session.baseline) {
-		session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
+		const baseline = await readProjectSessionSnapshot(rootPath, undefined, {
 			storyIds
 		});
-	}
-	if (!session.descriptor) {
-		session.descriptor = await readProjectDescriptor(rootPath).catch(() =>
-			descriptorFromStories(session.baseline?.stories ?? [])
+		const descriptor = await readProjectDescriptor(rootPath).catch(() =>
+			descriptorFromStories(baseline.stories)
 		);
+		installAcceptedProjectBaseline(session, baseline, descriptor);
 	}
 
 	if (!session.watcher) {
@@ -4367,7 +4379,7 @@ export async function startProjectSession(
 		queueMicrotask(() => notifyProjectSession(session));
 	}
 
-	const baseline = session.baseline;
+	const baseline = session.baseline!;
 
 	return {
 		assets: baseline.assets,
@@ -4430,6 +4442,50 @@ export function stopProjectSession(rootPath: string) {
 	});
 	finishProjectSessionBaselineCapture(session);
 	projectSessions.delete(key);
+}
+
+export function projectSessionMemoryDiagnostics() {
+	if (!performanceHarnessEnabled()) {
+		return undefined;
+	}
+
+	let baselineFileCount = 0;
+	let baselineFileStringBytes = 0;
+	let baselinePassageCount = 0;
+	let candidateCount = 0;
+	let descriptorPathCount = 0;
+	let descriptorPathStringBytes = 0;
+	let resolvedCandidateCount = 0;
+
+	for (const session of projectSessions.values()) {
+		baselineFileCount += session.baseline?.files.length ?? 0;
+		baselinePassageCount +=
+			session.baseline?.stories.reduce(
+				(total, story) => total + story.passages.length,
+				0
+			) ?? 0;
+		for (const file of session.baseline?.files ?? []) {
+			baselineFileStringBytes +=
+				(file.path.length + file.fingerprint.length + file.kind.length) * 2;
+		}
+		candidateCount += session.pending ? 1 : 0;
+		descriptorPathCount += session.descriptor?.paths.size ?? 0;
+		for (const path of session.descriptor?.paths.keys() ?? []) {
+			descriptorPathStringBytes += path.length * 2;
+		}
+		resolvedCandidateCount += session.resolvedCandidates.size;
+	}
+
+	return {
+		baselineFileCount,
+		baselineFileStringBytes,
+		baselinePassageCount,
+		candidateCount,
+		descriptorPathCount,
+		descriptorPathStringBytes,
+		resolvedCandidateCount,
+		sessionCount: projectSessions.size
+	};
 }
 
 function projectSessionStart(session: ProjectSessionState) {
@@ -4528,15 +4584,20 @@ export async function resolveProjectSessionConflicts(
 		const candidate = session.pending;
 
 		if (candidate.delta.recovery) {
-			session.baseline = await readProjectSessionSnapshot(rootPath);
-			session.descriptor = await readProjectDescriptor(rootPath);
+			const baseline = await readProjectSessionSnapshot(rootPath);
+			const descriptor = await readProjectDescriptor(rootPath);
+
+			installAcceptedProjectBaseline(session, baseline, descriptor);
 		} else {
-			session.baseline = {
-				...candidate.baseline,
-				changedPaths: [],
-				conflicts: []
-			};
-			session.descriptor = candidate.descriptor;
+			installAcceptedProjectBaseline(
+				session,
+				{
+					...candidate.baseline,
+					changedPaths: [],
+					conflicts: []
+				},
+				candidate.descriptor
+			);
 		}
 		session.generation = candidate.delta.candidateGeneration;
 		session.pending = undefined;

@@ -90,11 +90,46 @@ struct NativeHydrationChunk {
     passages: Vec<NativeHydrationPassage>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeHydrationMemoryDiagnostics {
+    active_lease_count: usize,
+    passage_count: usize,
+    text_capacity_bytes: usize,
+    text_length_bytes: usize,
+}
+
 static HYDRATION_LEASES: OnceLock<Mutex<BTreeMap<String, NativeHydrationLease>>> = OnceLock::new();
 static NEXT_HYDRATION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn hydration_leases() -> &'static Mutex<BTreeMap<String, NativeHydrationLease>> {
     HYDRATION_LEASES.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+#[napi(js_name = "hydrationMemoryDiagnosticsJson")]
+pub fn hydration_memory_diagnostics_json() -> NativeResult<String> {
+    let leases = hydration_leases()
+        .lock()
+        .map_err(|_| napi::Error::from_reason("Native hydration lease lock was poisoned."))?;
+    let mut passage_count = 0;
+    let mut text_capacity_bytes = 0;
+    let mut text_length_bytes = 0;
+
+    for lease in leases.values() {
+        passage_count += lease.passages.len();
+        for (_, passage) in &lease.passages {
+            text_capacity_bytes += passage.text.capacity();
+            text_length_bytes += passage.text.len();
+        }
+    }
+
+    json_string(&NativeHydrationMemoryDiagnostics {
+        active_lease_count: leases.len(),
+        passage_count,
+        text_capacity_bytes,
+        text_length_bytes,
+    })
+    .map_err(native_error)
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1903,6 +1938,13 @@ mod tests {
         assert_eq!(hydration["passageCount"], 1);
         assert_eq!(hydration["stories"][0]["passages"][0]["text"], "");
         assert!(hydration["baselineReceipt"].is_object());
+        let retained: serde_json::Value = serde_json::from_str(
+            &hydration_memory_diagnostics_json().expect("memory diagnostics should load"),
+        )
+        .expect("memory diagnostics should parse");
+        assert_eq!(retained["activeLeaseCount"], 1);
+        assert_eq!(retained["passageCount"], 1);
+        assert!(retained["textLengthBytes"].as_u64().unwrap_or_default() > 0);
 
         let chunk = read_project_folder_hydration_chunk_json(hydration_id.into(), 0, 100)
             .expect("hydration chunk should load");
@@ -1915,6 +1957,12 @@ mod tests {
         assert_eq!(chunk["done"], true);
         finish_project_folder_hydration(hydration_id.into()).expect("hydration should finish");
         assert!(read_project_folder_hydration_chunk_json(hydration_id.into(), 0, 1).is_err());
+        let released: serde_json::Value = serde_json::from_str(
+            &hydration_memory_diagnostics_json().expect("memory diagnostics should load"),
+        )
+        .expect("memory diagnostics should parse");
+        assert_eq!(released["activeLeaseCount"], 0);
+        assert_eq!(released["textLengthBytes"], 0);
 
         fs::remove_dir_all(root).expect("project should be removed");
     }

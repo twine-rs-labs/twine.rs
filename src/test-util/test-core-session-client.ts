@@ -1,6 +1,7 @@
 import type {CoreAssetInventoryEntry} from '../core/bindings/CoreAssetInventoryEntry';
 import type {CoreAssetsQuery} from '../core/bindings/CoreAssetsQuery';
 import type {CoreContentsQuery} from '../core/bindings/CoreContentsQuery';
+import type {CoreDocumentQuery} from '../core/bindings/CoreDocumentQuery';
 import type {CoreSearchQuery} from '../core/bindings/CoreSearchQuery';
 import type {CoreRect} from '../core/bindings/CoreRect';
 import type {CoreSessionMutationResult} from '../core/wasm/twine-wasm-client';
@@ -385,6 +386,60 @@ export class TestCoreSessionClient {
 				totalCount: index.searchHits.length
 			};
 		}
+	);
+	queryDocumentPage = jest.fn(
+		async (_sessionId: string, storyId: string, query: CoreDocumentQuery) => {
+			const story = this.story(storyId);
+			const documents = [
+				...story.passages.map(passage => ({
+					kind: 'passage' as const,
+					passageId: passage.id,
+					text: passage.text
+				})),
+				{
+					kind: 'script' as const,
+					passageId: null,
+					text: story.script
+				},
+				{
+					kind: 'stylesheet' as const,
+					passageId: null,
+					text: story.stylesheet
+				}
+			];
+			const offset = Number(query.cursor ?? 0);
+			const end = Math.min(offset + query.limit, documents.length);
+
+			return {
+				documents: documents.slice(offset, end),
+				nextCursor: end < documents.length ? String(end) : null,
+				revision: this.revision,
+				storyId,
+				totalCount: documents.length
+			};
+		}
+	);
+	queryPassageDocument = jest.fn(
+		async (_sessionId: string, storyId: string, passageId: string) => ({
+			passageId,
+			revision: this.revision,
+			storyId,
+			text:
+				this.story(storyId).passages.find(passage => passage.id === passageId)
+					?.text ?? ''
+		})
+	);
+	querySourceDocument = jest.fn(
+		async (
+			_sessionId: string,
+			storyId: string,
+			kind: 'script' | 'stylesheet'
+		) => ({
+			kind,
+			revision: this.revision,
+			storyId,
+			text: this.story(storyId)[kind]
+		})
 	);
 	queryPassageFacts = jest.fn(
 		async (_sessionId: string, storyId: string, passageId: string) => {

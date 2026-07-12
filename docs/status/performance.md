@@ -2,7 +2,7 @@
 
 Status: current measured snapshot
 Owner: performance maintainers
-Last verified: 2026-07-12
+Last verified: 2026-07-13
 Source of truth: release-mode Electron harness and accepted local baselines
 
 ## Harness state
@@ -141,6 +141,29 @@ save end-to-end at about 579 ms, Contents p50 at about 63.1 ms, search p50 at
 about 12.9 ms, and watcher observation-to-patch p50 at about 478 ms. Incremental
 save was dominated by its roughly 526 ms baseline patch; watcher core ingestion
 was about 11.1 ms p50 while native delta creation was about 306 ms p50.
+
+The follow-up implementation adds fixed-versus-project memory attribution and
+removes the identified transient owners. Bootstrap documents and native
+hydration leases are empty at post-GC readiness. Native accepted watcher state
+no longer retains story/passage snapshots, and text-only persistence updates
+one indexed fingerprint without rebuilding the 50k-entry collection or
+rereading the descriptor.
+
+The focused one-sample memory matrix passed on 2026-07-13:
+
+| Fixture | Resident | Browser | Renderer | GPU | Utility |
+| ------- | -------: | ------: | -------: | --: | ------: |
+| 100     | 524 MiB  | 185 MiB | 189 MiB  | 102 MiB | 48 MiB |
+| 10k     | 665 MiB  | 239 MiB | 272 MiB  | 106 MiB | 48 MiB |
+| 50k     | 1,063 MiB | 412 MiB | 497 MiB | 105 MiB | 48 MiB |
+
+At all three sizes, retained bootstrap text, native hydration text capacity,
+hydration lease count, and accepted-baseline passage count were zero. At 50k,
+the explicitly attributed retained native path strings were about 13.5 MiB
+(7.9 MiB baseline file strings and 5.6 MiB descriptor paths), while WASM linear
+memory was about 96 MiB. The project-size growth is therefore concentrated in
+the browser and renderer working sets rather than the removed transient body
+owners. The 50k resident result remains well above the 600 MiB roadmap target.
 
 The focused 50k startup phase now passes with the corrected startup/memory
 contract. Moving watcher-baseline work out of shell opening, skipping redundant

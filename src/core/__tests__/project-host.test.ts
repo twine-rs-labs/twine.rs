@@ -339,7 +339,9 @@ describe('StoreCoreProjectHost asset commands', () => {
 			1
 		);
 		expect(apply).toHaveBeenCalledWith(command, 1);
-		expect('text' in context.stories[0].passages[0]).toBe(false);
+		expect(
+			context.host.performanceDiagnostics().passageTextCharacterCount
+		).toBe(0);
 		expect(context.host.isDirty()).toBe(true);
 		expect(context.dispatch).toHaveBeenCalledWith(
 			expect.objectContaining({

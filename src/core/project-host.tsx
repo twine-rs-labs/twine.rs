@@ -41,8 +41,10 @@ import {
 } from './project-snapshot';
 import {
 	bootstrapStory,
+	bootstrapStoryPerformanceDiagnostics,
 	metadataStory,
 	registerStoryMaterializer,
+	releaseBootstrapStory,
 	unregisterStoryMaterializer
 } from './bootstrap-stories';
 import {materializeStoryFromSession} from './materialize-story';
@@ -91,6 +93,30 @@ function storiesWithDocuments(stories: Story[]): StoryWithDocuments[] {
 		);
 	}
 	return stories as StoryWithDocuments[];
+}
+
+function waitForSubscribedCondition(
+	subscribe: (listener: () => void) => () => void,
+	condition: () => boolean
+) {
+	if (condition()) {
+		return Promise.resolve();
+	}
+
+	return new Promise<void>(resolve => {
+		let settled = false;
+		const finishIfReady = () => {
+			if (!settled && condition()) {
+				settled = true;
+				unsubscribe();
+				resolve();
+			}
+		};
+		const unsubscribe = subscribe(finishIfReady);
+
+		// Close the gap between the initial check and listener registration.
+		finishIfReady();
+	});
 }
 
 export type StoryIndexQuery = string | Partial<CoreStoryIndexOptions>;
@@ -676,20 +702,13 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					!knownAssetInventoryScanCompleteForStory(story.id)
 			)
 		) {
-			await new Promise<void>(resolve => {
-				const unsubscribe = subscribeKnownAssetInventory(() => {
-					if (
-						stories.every(
-							story =>
-								!projectStoryHydration(story.id)?.rootPath ||
-								knownAssetInventoryScanCompleteForStory(story.id)
-						)
-					) {
-						unsubscribe();
-						resolve();
-					}
-				});
-			});
+			await waitForSubscribedCondition(subscribeKnownAssetInventory, () =>
+				stories.every(
+					story =>
+						!projectStoryHydration(story.id)?.rootPath ||
+						knownAssetInventoryScanCompleteForStory(story.id)
+				)
+			);
 		}
 
 		for (const story of stories) {
@@ -729,6 +748,15 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		if (status) {
 			this.publishStatus(status);
 		}
+		// Streaming bootstrap initializes the same worker session as
+		// replaceProject(). Record it as ready so later readiness checks do not try
+		// to reconstruct a full snapshot from the body-free retained model.
+		this.wasmProjectReplaceRevision = revision;
+		this.wasmProjectReplacePromise = Promise.resolve();
+		this.releaseRetainedPassageBodies();
+		for (const story of this.stories) {
+			releaseBootstrapStory(story.id);
+		}
 		recordPerformanceHarnessEvent('core-session-stream-hydration-ready', {
 			revision,
 			sessionId: this.sessionId,
@@ -747,20 +775,13 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					!knownAssetInventoryScanCompleteForStory(story.id)
 			)
 		) {
-			await new Promise<void>(resolve => {
-				const unsubscribe = subscribeKnownAssetInventory(() => {
-					if (
-						stories.every(
-							story =>
-								!projectStoryHydration(story.id)?.rootPath ||
-								knownAssetInventoryScanCompleteForStory(story.id)
-						)
-					) {
-						unsubscribe();
-						resolve();
-					}
-				});
-			});
+			await waitForSubscribedCondition(subscribeKnownAssetInventory, () =>
+				stories.every(
+					story =>
+						!projectStoryHydration(story.id)?.rootPath ||
+						knownAssetInventoryScanCompleteForStory(story.id)
+				)
+			);
 		}
 
 		const revision = this.wasmProjectRevision;
@@ -780,6 +801,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				}
 			});
 		await this.wasmProjectReplacePromise;
+		for (const story of stories) {
+			releaseBootstrapStory(story.id);
+		}
 		recordPerformanceHarnessEvent('core-session-direct-hydration-ready', {
 			passageCount: snapshot.stories.reduce(
 				(total, story) => total + story.passages.length,
@@ -1441,19 +1465,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				story => projectStoryHydration(story.id)?.passageTextLoaded === false
 			)
 		) {
-			await new Promise<void>(resolve => {
-				const unsubscribe = subscribeProjectStoryHydration(() => {
-					if (
-						this.stories.every(
-							story =>
-								projectStoryHydration(story.id)?.passageTextLoaded !== false
-						)
-					) {
-						unsubscribe();
-						resolve();
-					}
-				});
-			});
+			await waitForSubscribedCondition(subscribeProjectStoryHydration, () =>
+				this.stories.every(
+					story => projectStoryHydration(story.id)?.passageTextLoaded !== false
+				)
+			);
 		}
 		if (
 			this.stories.some(
@@ -1462,20 +1478,13 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					!knownAssetInventoryScanCompleteForStory(story.id)
 			)
 		) {
-			await new Promise<void>(resolve => {
-				const unsubscribe = subscribeKnownAssetInventory(() => {
-					if (
-						this.stories.every(
-							story =>
-								!projectStoryHydration(story.id)?.rootPath ||
-								knownAssetInventoryScanCompleteForStory(story.id)
-						)
-					) {
-						unsubscribe();
-						resolve();
-					}
-				});
-			});
+			await waitForSubscribedCondition(subscribeKnownAssetInventory, () =>
+				this.stories.every(
+					story =>
+						!projectStoryHydration(story.id)?.rootPath ||
+						knownAssetInventoryScanCompleteForStory(story.id)
+				)
+			);
 		}
 		const startedAt =
 			typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -1519,6 +1528,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			this.wasmProjectReplacePromise = replacePromise
 				.then(status => {
 					this.releaseRetainedPassageBodies();
+					for (const story of this.stories) {
+						releaseBootstrapStory(story.id);
+					}
 					if (status) {
 						this.publishStatus(status);
 					}
@@ -1582,7 +1594,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				)
 			)
 		) {
-			this.stories = storiesWithDocuments(this.stories).map(metadataStory);
+			const metadataStories = storiesWithDocuments(this.stories).map(
+				metadataStory
+			);
+
+			this.stories = metadataStories;
 		}
 	}
 
@@ -1945,7 +1961,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		this.stories =
 			this.wasmProjectReplaceRevision < 0
 				? stories.map(story => bootstrapStory(story.id) ?? story)
-				: stories;
+				: stories.map(story =>
+						story.passages.some(passage => 'text' in passage)
+							? metadataStory(storiesWithDocuments([story])[0])
+							: story
+					);
 		for (const story of stories) {
 			this.sessionOwnedDocumentStories.add(story.id);
 		}
@@ -2449,6 +2469,7 @@ export function coreProjectHostPerformanceSnapshot() {
 			(total, host) => total + host.sessions.length,
 			0
 		),
+		bootstrap: bootstrapStoryPerformanceDiagnostics(),
 		hosts,
 		workerClients: hosts.length
 	};

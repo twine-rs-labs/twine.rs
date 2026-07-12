@@ -18,6 +18,7 @@ const harnessEvents: TwinePerformanceEvent[] = [];
 const startupMemoryMarks = new Set([
 	'all-passages-ready',
 	'graph-visible',
+	'open-start',
 	'session-baseline-ready',
 	'session-initialization-complete',
 	'shell-visible'

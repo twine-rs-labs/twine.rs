@@ -26,6 +26,7 @@ interface NativeProjectAddon {
 	finishProjectFolderHydration(hydrationId: string): void;
 	forgetProjectFolderJson(indexPath: string, rootPath: string): string;
 	healthJson(): string;
+	hydrationMemoryDiagnosticsJson(): string;
 	listProjectAssetsJson(rootPath: string): string;
 	listRememberedProjectFoldersJson(indexPath: string): string;
 	loadProjectFolderJson(
@@ -216,6 +217,21 @@ export function nativeProjectHealth() {
 export function nativeProjectDiagnostic() {
 	loadAddon();
 	return diagnostic;
+}
+
+export function nativeHydrationMemoryDiagnostics() {
+	if (process.env.TWINE_PERF !== '1') {
+		return undefined;
+	}
+
+	return callNative<{
+		activeLeaseCount: number;
+		passageCount: number;
+		textCapacityBytes: number;
+		textLengthBytes: number;
+	}>('native hydration memory diagnostics', addon =>
+		addon.hydrationMemoryDiagnosticsJson()
+	);
 }
 
 export function nativeProjectAvailable() {

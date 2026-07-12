@@ -116,6 +116,19 @@ a complete full hydration, and an accepted watcher baseline from files visited
 during hydration rather than a second traversal. Startup phase reports are
 partial evidence and cannot be accepted as complete baselines.
 
+For fast project-size memory attribution, run:
+
+```sh
+npm run perf:electron:memory
+```
+
+This runs one startup sample each at 100, 10k, and 50k passages. Reports retain
+the summed working-set metric for regression continuity and add process-role
+deltas from the `open-start` checkpoint, bootstrap/native-lease ownership, and
+accepted-baseline/descriptor estimates. These diagnostic reports are not
+eligible as baselines; use the normal three-sample startup command for a final
+comparison.
+
 Full hydration uses a shared pool capped at eight workers. For controlled local
 experiments, `TWINE_NATIVE_LOAD_THREADS=<count>` overrides the pool size and is
 forwarded into benchmark Electron processes. This is diagnostic configuration,
