@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 use twine_core::{
     CoreAssetInventoryEntry, CoreAssetsQuery, CoreContentsQuery, CoreDiagnosticsQuery,
-    CoreExternalDelta, CoreExternalIngestMode, CoreGraphProjectionOptions, CoreSearchQuery,
-    CoreSourceKind, CoreStoryIndexOptions, PassageSnapshot, ProjectSession, ProjectSnapshot,
-    StoryCommand, StorySnapshot,
+    CoreDocumentQuery, CoreExternalDelta, CoreExternalIngestMode, CoreGraphProjectionOptions,
+    CoreSearchQuery, CoreSourceKind, CoreStoryIndexOptions, PassageSnapshot, ProjectSession,
+    ProjectSnapshot, StoryCommand, StorySnapshot,
 };
 use twine_model::{
     GraphLayout, GraphPosition, LibraryMetadata, Passage, PassageId, PassageIndex, PassageLayout,
@@ -244,6 +244,20 @@ impl TwineWasmProjectSession {
             &self
                 .session
                 .source_document(&story_id, kind)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_document_page(
+        &self,
+        story_id: String,
+        query: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let query = from_js::<CoreDocumentQuery>(query)?;
+        to_js(
+            &self
+                .session
+                .document_page(&story_id, query)
                 .map_err(core_error)?,
         )
     }

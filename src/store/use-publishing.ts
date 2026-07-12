@@ -12,6 +12,8 @@ import {
 } from '../util/build-package';
 import {useCoreProjectHost} from '../core/project-host';
 import type {CoreAssetInventoryEntry, CoreAssetsPage} from '../core';
+import type {CoreDocumentPage} from '../core';
+import {sessionOwnedDocumentPassageThreshold} from '../core';
 import {usePrefsContext} from './prefs';
 import {
 	formatWithNameAndVersion,
@@ -106,6 +108,54 @@ export function usePublishing(): UsePublishingProps {
 		[coreProjectHost]
 	);
 
+	const completeStoryForPublishing = React.useCallback(
+		async (storyId: string) => {
+			const story = storyWithId(stories, storyId);
+
+			if (story.passages.length <= sessionOwnedDocumentPassageThreshold) {
+				return story;
+			}
+			const passageText = new Map<string, string>();
+			let script = story.script;
+			let stylesheet = story.stylesheet;
+			let cursor: string | null = null;
+
+			do {
+				const page: CoreDocumentPage =
+					await coreProjectHost.queryDocumentPageAsync(storyId, {
+						cursor,
+						limit: 500
+					});
+				for (const document of page.documents) {
+					if (document.kind === 'passage' && document.passageId) {
+						passageText.set(document.passageId, document.text);
+					} else if (document.kind === 'script') {
+						script = document.text;
+					} else if (document.kind === 'stylesheet') {
+						stylesheet = document.text;
+					}
+				}
+				cursor = page.nextCursor;
+			} while (cursor);
+
+			if (passageText.size !== story.passages.length) {
+				throw new Error(
+					'Core document enumeration returned an incomplete story.'
+				);
+			}
+			return {
+				...story,
+				passages: story.passages.map(passage => ({
+					...passage,
+					text: passageText.get(passage.id) ?? ''
+				})),
+				script,
+				stylesheet
+			};
+		},
+		[coreProjectHost, stories]
+	);
+
 	const loadProofFormatProperties = React.useCallback(
 		async (proofingFormat?: ProofingFormatSelection) => {
 			const selectedFormat = proofingFormat ?? prefs.proofingFormat;
@@ -143,7 +193,7 @@ export function usePublishing(): UsePublishingProps {
 			target: StoryBuildTarget,
 			publishOptions?: Omit<BuildStoryPackageOptions, 'buildTarget'>
 		) => {
-			const story = storyWithId(stories, storyId);
+			const story = await completeStoryForPublishing(storyId);
 			const format = formatWithNameAndVersion(
 				formats,
 				story.storyFormat,
@@ -165,24 +215,33 @@ export function usePublishing(): UsePublishingProps {
 				target
 			});
 		},
-		[assetInventoryForStory, formats, stories, storyFormatsDispatch]
+		[
+			assetInventoryForStory,
+			completeStoryForPublishing,
+			formats,
+			storyFormatsDispatch
+		]
 	);
 
 	return {
 		buildStoryPackage,
 		publishArchive: React.useCallback(
-			async storyIds =>
-				publishArchive(
-					storyIds
-						? stories.filter(story => storyIds.includes(story.id))
-						: stories,
+			async storyIds => {
+				const selected = storyIds
+					? stories.filter(story => storyIds.includes(story.id))
+					: stories;
+				return publishArchive(
+					await Promise.all(
+						selected.map(story => completeStoryForPublishing(story.id))
+					),
 					getAppInfo()
-				),
-			[stories]
+				);
+			},
+			[completeStoryForPublishing, stories]
 		),
 		proofStory: React.useCallback(
 			async (storyId, proofingFormat) => {
-				const story = storyWithId(stories, storyId);
+				const story = await completeStoryForPublishing(storyId);
 				const formatProperties =
 					await loadProofFormatProperties(proofingFormat);
 
@@ -192,12 +251,16 @@ export function usePublishing(): UsePublishingProps {
 					target: 'proof'
 				}).html;
 			},
-			[assetInventoryForStory, loadProofFormatProperties, stories]
+			[
+				assetInventoryForStory,
+				completeStoryForPublishing,
+				loadProofFormatProperties
+			]
 		),
 		proofStoryPackage: React.useCallback(
 			async (storyId, options) => {
 				const proofOptions = normalizeProofPackageOptions(options);
-				const story = storyWithId(stories, storyId);
+				const story = await completeStoryForPublishing(storyId);
 				const formatProperties = await loadProofFormatProperties(
 					proofOptions.proofingFormat
 				);
@@ -212,9 +275,9 @@ export function usePublishing(): UsePublishingProps {
 			},
 			[
 				assetInventoryForStory,
+				completeStoryForPublishing,
 				loadProofFormatProperties,
-				normalizeProofPackageOptions,
-				stories
+				normalizeProofPackageOptions
 			]
 		),
 		publishStory: React.useCallback(
@@ -236,14 +299,14 @@ export function usePublishing(): UsePublishingProps {
 		),
 		publishStoryData: React.useCallback(
 			async (storyId: string) => {
-				const story = storyWithId(stories, storyId);
+				const story = await completeStoryForPublishing(storyId);
 
 				return publishStory(story, getAppInfo(), {
 					assetInventory: await assetInventoryForStory(storyId),
 					startOptional: true
 				});
 			},
-			[assetInventoryForStory, stories]
+			[assetInventoryForStory, completeStoryForPublishing]
 		)
 	};
 }

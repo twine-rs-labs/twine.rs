@@ -6,6 +6,8 @@ import type {CoreContentsPage} from './bindings/CoreContentsPage';
 import type {CoreContentsQuery} from './bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from './bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsQuery} from './bindings/CoreDiagnosticsQuery';
+import type {CoreDocumentPage} from './bindings/CoreDocumentPage';
+import type {CoreDocumentQuery} from './bindings/CoreDocumentQuery';
 import type {CorePassageFacts} from './bindings/CorePassageFacts';
 import type {CorePassageDocument} from './bindings/CorePassageDocument';
 import type {CoreSourceDocument} from './bindings/CoreSourceDocument';
@@ -42,6 +44,8 @@ export type {
 	CoreContentsQuery,
 	CoreDiagnosticsPage,
 	CoreDiagnosticsQuery,
+	CoreDocumentPage,
+	CoreDocumentQuery,
 	CorePassageFacts,
 	CorePassageDocument,
 	CoreSourceDocument,

@@ -237,6 +237,13 @@ async function handleRequest(
 				).session.query_diagnostics_page(request.storyId, request.options);
 				break;
 
+			case 'queryDocumentPage':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_document_page(request.storyId, request.options);
+				break;
+
 			case 'queryAssetsPage':
 				result = ensureSession(
 					request.sessionId,

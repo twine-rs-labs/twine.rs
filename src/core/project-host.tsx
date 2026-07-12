@@ -6,6 +6,8 @@ import type {CoreContentsPage} from './bindings/CoreContentsPage';
 import type {CoreContentsQuery} from './bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from './bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsQuery} from './bindings/CoreDiagnosticsQuery';
+import type {CoreDocumentPage} from './bindings/CoreDocumentPage';
+import type {CoreDocumentQuery} from './bindings/CoreDocumentQuery';
 import type {CoreExternalDelta} from './bindings/CoreExternalDelta';
 import type {CoreExternalIngestResult} from './bindings/CoreExternalIngestResult';
 import type {CoreGraphProjection} from './bindings/CoreGraphProjection';
@@ -118,6 +120,10 @@ export interface CoreProjectHost {
 		storyId: string,
 		options?: Partial<CoreDiagnosticsQuery>
 	): Promise<CoreDiagnosticsPage>;
+	queryDocumentPageAsync(
+		storyId: string,
+		options?: Partial<CoreDocumentQuery>
+	): Promise<CoreDocumentPage>;
 	queryAssetsPageAsync(
 		storyId: string,
 		options?: Partial<CoreAssetsQuery>
@@ -239,6 +245,7 @@ type CoreProjectSessionClient = Pick<
 	| 'queryContentsPage'
 	| 'querySearchPage'
 	| 'queryDiagnosticsPage'
+	| 'queryDocumentPage'
 	| 'queryAssetsPage'
 	| 'queryPassageFacts'
 	| 'queryPassageDocument'
@@ -275,6 +282,7 @@ const defaultDiagnosticsQuery: CoreDiagnosticsQuery = {
 	limit: 100,
 	severity: null
 };
+const defaultDocumentQuery: CoreDocumentQuery = {cursor: null, limit: 250};
 const defaultAssetsQuery: CoreAssetsQuery = {
 	cursor: null,
 	limit: 100,
@@ -1760,6 +1768,19 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		} satisfies CoreDiagnosticsPage;
 	}
 
+	async queryDocumentPageAsync(
+		storyId: string,
+		options: Partial<CoreDocumentQuery> = {}
+	) {
+		const revision = await this.ensureWasmProjectSession();
+		return this.wasmClient.queryDocumentPage(
+			this.sessionId,
+			storyId,
+			{...defaultDocumentQuery, ...options},
+			revision
+		);
+	}
+
 	async queryAssetsPageAsync(
 		storyId: string,
 		options: Partial<CoreAssetsQuery> = {}
@@ -2139,6 +2160,17 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
+	queryDocumentPageAsync(
+		storyId: string,
+		options?: Partial<CoreDocumentQuery>
+	) {
+		const host = this.hostForStory(storyId);
+		if (!host) {
+			return Promise.reject(new Error(`No core session for story ${storyId}.`));
+		}
+		return host.queryDocumentPageAsync(storyId, options);
+	}
+
 	queryAssetsPageAsync(storyId: string, options?: Partial<CoreAssetsQuery>) {
 		return (
 			this.hostForStory(storyId)?.queryAssetsPageAsync(storyId, options) ??
@@ -2331,6 +2363,8 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.querySearchPageAsync(queryStoryId, options),
 			queryDiagnosticsPageAsync: (queryStoryId, options) =>
 				host.queryDiagnosticsPageAsync(queryStoryId, options),
+			queryDocumentPageAsync: (queryStoryId, options) =>
+				host.queryDocumentPageAsync(queryStoryId, options),
 			queryAssetsPageAsync: (queryStoryId, options) =>
 				host.queryAssetsPageAsync(queryStoryId, options),
 			queryPassageFactsAsync: (queryStoryId, passageId) =>

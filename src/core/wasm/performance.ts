@@ -12,6 +12,7 @@ export interface CoreBridgeMetric {
 		| 'queryAssetsPage'
 		| 'queryContentsPage'
 		| 'queryDiagnosticsPage'
+		| 'queryDocumentPage'
 		| 'queryPassageFacts'
 		| 'queryPassageDocument'
 		| 'querySourceDocument'

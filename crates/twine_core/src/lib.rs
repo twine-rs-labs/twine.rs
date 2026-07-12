@@ -921,6 +921,47 @@ pub struct CoreSourceDocument {
     pub text: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreDocumentKind {
+    Passage,
+    Script,
+    Stylesheet,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreDocumentQuery {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default = "default_read_model_page_limit")]
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreDocumentEntry {
+    pub kind: CoreDocumentKind,
+    #[serde(default)]
+    pub passage_id: Option<String>,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreDocumentPage {
+    pub documents: Vec<CoreDocumentEntry>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    pub revision: u32,
+    pub story_id: String,
+    pub total_count: usize,
+}
+
 impl From<&Story> for StorySnapshot {
     fn from(value: &Story) -> Self {
         Self {
@@ -6577,6 +6618,61 @@ impl ProjectSession {
         })
     }
 
+    pub fn document_page(
+        &self,
+        story_id: &str,
+        query: CoreDocumentQuery,
+    ) -> Result<CoreDocumentPage, CoreError> {
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let cursor_fingerprint = read_model_query_fingerprint(&query, |query| {
+            query.cursor = None;
+        });
+        let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
+        let story = self.story(story_id)?;
+        let total_count = story.passage_count() + 2;
+        let limit = query.limit.clamp(1, MAX_READ_MODEL_PAGE_LIMIT);
+        let end = (offset + limit).min(total_count);
+        let mut documents = Vec::with_capacity(end.saturating_sub(offset));
+
+        for passage in story
+            .passages
+            .iter()
+            .skip(offset.min(story.passage_count()))
+            .take(end.saturating_sub(offset).min(story.passage_count()))
+        {
+            documents.push(CoreDocumentEntry {
+                kind: CoreDocumentKind::Passage,
+                passage_id: Some(passage.id.as_ref().to_owned()),
+                text: passage.text.clone(),
+            });
+        }
+        for source_index in story.passage_count().max(offset)..end {
+            documents.push(if source_index == story.passage_count() {
+                CoreDocumentEntry {
+                    kind: CoreDocumentKind::Script,
+                    passage_id: None,
+                    text: story.script.clone(),
+                }
+            } else {
+                CoreDocumentEntry {
+                    kind: CoreDocumentKind::Stylesheet,
+                    passage_id: None,
+                    text: story.stylesheet.clone(),
+                }
+            });
+        }
+        let next_cursor =
+            (end < total_count).then(|| format!("{revision}:{cursor_fingerprint}:{end}"));
+
+        Ok(CoreDocumentPage {
+            documents,
+            next_cursor,
+            revision,
+            story_id: story.id.as_ref().to_owned(),
+            total_count,
+        })
+    }
+
     /// Lazily initializes topology once for bounded graph and passage-fact reads.
     /// Mutations update this cache through `update_graph_cache`, so focused reads
     /// never construct a second graph from the complete story.
@@ -9207,6 +9303,51 @@ mod tests {
             .expect("updated passage document");
         assert_eq!(updated.text, "updated");
         assert!(updated.revision > initial.revision);
+    }
+
+    #[test]
+    fn document_pages_are_bounded_complete_and_revision_bound() {
+        let mut session = session();
+        let first = session
+            .document_page(
+                "story-1",
+                CoreDocumentQuery {
+                    cursor: None,
+                    limit: 2,
+                },
+            )
+            .expect("first document page");
+        assert_eq!(first.documents.len(), 2);
+        assert_eq!(first.total_count, 5);
+        let cursor = first.next_cursor.expect("next cursor");
+        let second = session
+            .document_page(
+                "story-1",
+                CoreDocumentQuery {
+                    cursor: Some(cursor.clone()),
+                    limit: 2,
+                },
+            )
+            .expect("second document page");
+        assert_eq!(second.documents.len(), 2);
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "changed".into(),
+            })
+            .expect("mutation");
+        assert_eq!(
+            session.document_page(
+                "story-1",
+                CoreDocumentQuery {
+                    cursor: Some(cursor),
+                    limit: 2,
+                }
+            ),
+            Err(CoreError::StaleReadModelCursor)
+        );
     }
 
     fn dense_source_only_session(target_count: usize) -> ProjectSession {

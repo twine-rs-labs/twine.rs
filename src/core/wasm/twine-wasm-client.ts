@@ -5,6 +5,8 @@ import type {CoreContentsPage} from '../bindings/CoreContentsPage';
 import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsQuery} from '../bindings/CoreDiagnosticsQuery';
+import type {CoreDocumentPage} from '../bindings/CoreDocumentPage';
+import type {CoreDocumentQuery} from '../bindings/CoreDocumentQuery';
 import type {CoreExternalDelta} from '../bindings/CoreExternalDelta';
 import type {CoreExternalIngestResult} from '../bindings/CoreExternalIngestResult';
 import type {CoreGraphProjection} from '../bindings/CoreGraphProjection';
@@ -58,6 +60,7 @@ type ReadModelWorkerRequest = Extract<
 			| 'queryAssetsPage'
 			| 'queryContentsPage'
 			| 'queryDiagnosticsPage'
+			| 'queryDocumentPage'
 			| 'queryPassageFacts'
 			| 'queryPassageDocument'
 			| 'querySourceDocument'
@@ -559,6 +562,22 @@ export class WasmCoreWorkerClient {
 				storyId
 			}
 		);
+	}
+
+	async queryDocumentPage(
+		sessionId: string,
+		storyId: string,
+		options: CoreDocumentQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CoreDocumentPage>(sessionId, storyId, revision, {
+			id: 0,
+			kind: 'queryDocumentPage',
+			options,
+			revision,
+			sessionId,
+			storyId
+		});
 	}
 
 	async queryAssetsPage(
