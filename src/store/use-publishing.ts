@@ -11,15 +11,15 @@ import {
 	type StoryBuildTarget
 } from '../util/build-package';
 import {useCoreProjectHost} from '../core/project-host';
+import {materializeStoryFromSession} from '../core/materialize-story';
 import type {CoreAssetInventoryEntry, CoreAssetsPage} from '../core';
-import type {CoreDocumentPage} from '../core';
 import {usePrefsContext} from './prefs';
 import {
 	formatWithNameAndVersion,
 	loadFormatProperties,
 	useStoryFormatsContext
 } from './story-formats';
-import {storyWithId, useStoriesContext} from './stories';
+import {Story, storyWithId, useStoriesContext} from './stories';
 import {getAppInfo} from '../util/app-info';
 
 export type PublishStoryOptions = PublishOptions & {
@@ -45,6 +45,7 @@ export type ProofStoryPackageOptions =
 	  };
 
 export interface UsePublishingProps {
+	materializeStory: (storyId: string) => Promise<Story>;
 	buildStoryPackage: (
 		storyId: string,
 		target: StoryBuildTarget,
@@ -111,43 +112,7 @@ export function usePublishing(): UsePublishingProps {
 		async (storyId: string) => {
 			const story = storyWithId(stories, storyId);
 
-			const passageText = new Map<string, string>();
-			let script = story.script;
-			let stylesheet = story.stylesheet;
-			let cursor: string | null = null;
-
-			do {
-				const page: CoreDocumentPage =
-					await coreProjectHost.queryDocumentPageAsync(storyId, {
-						cursor,
-						limit: 500
-					});
-				for (const document of page.documents) {
-					if (document.kind === 'passage' && document.passageId) {
-						passageText.set(document.passageId, document.text);
-					} else if (document.kind === 'script') {
-						script = document.text;
-					} else if (document.kind === 'stylesheet') {
-						stylesheet = document.text;
-					}
-				}
-				cursor = page.nextCursor;
-			} while (cursor);
-
-			if (passageText.size !== story.passages.length) {
-				throw new Error(
-					'Core document enumeration returned an incomplete story.'
-				);
-			}
-			return {
-				...story,
-				passages: story.passages.map(passage => ({
-					...passage,
-					text: passageText.get(passage.id) ?? ''
-				})),
-				script,
-				stylesheet
-			};
+			return materializeStoryFromSession(coreProjectHost, story);
 		},
 		[coreProjectHost, stories]
 	);
@@ -220,6 +185,7 @@ export function usePublishing(): UsePublishingProps {
 	);
 
 	return {
+		materializeStory: completeStoryForPublishing,
 		buildStoryPackage,
 		publishArchive: React.useCallback(
 			async storyIds => {

@@ -102,8 +102,6 @@ function boundedWorkbenchSelection(
 		story.passages.find(passage => passage.id === selectedPassageId) ??
 		story.passages.find(passage => passage.id === story.startPassage) ??
 		story.passages[0];
-	const text = passage?.text.trim() ?? '';
-
 	return {
 		assetReferences: [],
 		backlinks: [],
@@ -114,7 +112,7 @@ function boundedWorkbenchSelection(
 		passage,
 		passageNames: [],
 		sourceId: passage?.id,
-		wordCount: text === '' ? 0 : text.split(/\s+/).length
+		wordCount: 0
 	};
 }
 
@@ -155,7 +153,8 @@ function selectionFromPassageFacts(
 		brokenLinks: linkFacts.filter(link => link.broken),
 		diagnostics: facts.diagnostics,
 		linkFacts,
-		links: linkFacts.map(link => link.targetName)
+		links: linkFacts.map(link => link.targetName),
+		wordCount: facts.wordCount
 	};
 }
 const passageNavigatorOverscan = 12;
@@ -471,8 +470,17 @@ const AssetManager: React.FC<{
 	onSelectPassage: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
 	selection: WorkbenchSelection;
+	selectedPassageCharacterCount: number;
 	story: Story;
-}> = ({assets, host, onSelectPassage, onTestPassage, selection, story}) => {
+}> = ({
+	assets,
+	host,
+	onSelectPassage,
+	onTestPassage,
+	selection,
+	selectedPassageCharacterCount,
+	story
+}) => {
 	const history = useHistory();
 	const selectedPassage = selection.passage;
 
@@ -600,7 +608,7 @@ const AssetManager: React.FC<{
 													story.id,
 													asset.path,
 													selectedPassage.id,
-													selectedPassage.text.length,
+											selectedPassageCharacterCount,
 													{
 														passageId: selectedPassage.id,
 														snippet: asset.snippet.text
@@ -1689,6 +1697,12 @@ export const StoryWorkspaceShell: React.FC<
 							onSelectPassage={onSelectPassage}
 							onTestPassage={onTestPassage}
 							selection={selection}
+							selectedPassageCharacterCount={
+								passageFacts &&
+								passageFacts.passageId === selection.passage?.id
+									? passageFacts.characterCount
+									: 0
+							}
 							story={story}
 						/>
 					)}

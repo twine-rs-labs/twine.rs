@@ -9,6 +9,7 @@ import {
 	useCoreProjectHost
 } from '../../core';
 import type {CoreDiagnostic} from '../../core/bindings/CoreDiagnostic';
+import type {CoreStorySummary} from '../../core/bindings/CoreStorySummary';
 import {storyFileName} from '../../electron/shared';
 import {useStorySaveStatus} from '../../store/persistence/save-status';
 import {usePrefsContext} from '../../store/prefs';
@@ -120,18 +121,6 @@ function routeMode(pathname?: string): RouteMode {
 	return {icon: 'files', label: 'Library'};
 }
 
-function storyWordCount(story: Story | undefined) {
-	if (!story) {
-		return 0;
-	}
-
-	return story.passages.reduce((count, passage) => {
-		const text = passage.text.trim();
-
-		return count + (text ? text.split(/\s+/).length : 0);
-	}, 0);
-}
-
 function storySelectionLabel(story: Story | undefined) {
 	if (!story) {
 		return 'No story selected';
@@ -187,7 +176,7 @@ export const AppShell: React.FC = ({children}) => {
 	const {stories} = useStoriesContext();
 	const {prefs} = usePrefsContext();
 	const coreProjectHost = useCoreProjectHost();
-	const {publishStory} = usePublishing();
+	const {materializeStory, publishStory} = usePublishing();
 	const {playStory, proofStory, testStory} = useStoryLaunch();
 	const [paletteOpen, setPaletteOpen] = React.useState(false);
 	const [drawerOpen, setDrawerOpen] = React.useState(false);
@@ -198,6 +187,7 @@ export const AppShell: React.FC = ({children}) => {
 	const [patchVersion, setPatchVersion] = React.useState(0);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
 	const [diagnostics, setDiagnostics] = React.useState<CoreDiagnostic[]>([]);
+	const [storySummary, setStorySummary] = React.useState<CoreStorySummary>();
 	const storySaveStatus = useStorySaveStatus();
 	const [buildState, setBuildState] = React.useState<BuildState>({
 		kind: 'idle',
@@ -237,7 +227,7 @@ export const AppShell: React.FC = ({children}) => {
 	);
 	const diagnosticCount = activeDiagnostics.length;
 	const dismissedDiagnosticCount = diagnostics.length - diagnosticCount;
-	const wordCount = storyWordCount(currentStory);
+	const wordCount = storySummary?.wordCount ?? 0;
 	const crumbLabels = breadcrumbs(pathname, currentStory, mode);
 	const storyOpenProgress = React.useMemo<StoryOpenProgress | undefined>(() => {
 		if (
@@ -261,6 +251,21 @@ export const AppShell: React.FC = ({children}) => {
 		currentStoryHydration?.passageTextLoaded,
 		storyId
 	]);
+
+	React.useEffect(() => {
+		let active = true;
+
+		setStorySummary(undefined);
+		if (currentStory) {
+			void coreProjectHost
+				.queryStorySummaryAsync(currentStory.id)
+				.then(summary => active && setStorySummary(summary));
+		}
+
+		return () => {
+			active = false;
+		};
+	}, [coreProjectHost, currentStory?.id, patchVersion]);
 
 	React.useEffect(() => {
 		let active = true;
@@ -438,13 +443,14 @@ export const AppShell: React.FC = ({children}) => {
 	const runExportTwee = React.useCallback(
 		() =>
 			currentStory &&
-			runBuildAction('Export Twee', () => {
+			runBuildAction('Export Twee', async () => {
+				const completeStory = await materializeStory(currentStory.id);
 				saveTwee(
-					storyToTwee(currentStory),
+					storyToTwee(completeStory),
 					storyFileName(currentStory, '.twee')
 				);
 			}),
-		[currentStory, runBuildAction]
+		[currentStory, materializeStory, runBuildAction]
 	);
 
 	const commands = React.useMemo<AppCommand[]>(() => {

@@ -417,7 +417,13 @@ describe('<StoryWorkspaceShell>', () => {
 
 		expect(storyDispatch).toHaveBeenCalledWith(
 			expect.objectContaining({
-				actions: [expect.objectContaining({type: 'updatePassage'})],
+				actions: [],
+				documentUpdates: [
+					expect.objectContaining({
+						passageId: 'start',
+						type: 'passageText'
+					})
+				],
 				type: 'applyCorePatchBatch'
 			})
 		);
@@ -483,11 +489,17 @@ describe('<StoryWorkspaceShell>', () => {
 						type: 'createPassage',
 						props: expect.objectContaining({
 							name: 'Missing',
-							tags: [],
-							text: ''
+							tags: []
 						}),
 						storyId: story.id
 					}
+				],
+				documentUpdates: [
+					expect.objectContaining({
+						storyId: story.id,
+						text: '',
+						type: 'passageText'
+					})
 				],
 				type: 'applyCorePatchBatch'
 			})

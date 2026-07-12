@@ -51,14 +51,6 @@ function formatDate(date: Date) {
 	}).format(date);
 }
 
-function wordCount(story: Story) {
-	return story.passages.reduce((total, passage) => {
-		const text = passage.text.trim();
-
-		return total + (text ? text.split(/\s+/).length : 0);
-	}, 0);
-}
-
 function allTags(stories: Story[]) {
 	return Array.from(new Set(stories.flatMap(story => story.tags))).sort();
 }
@@ -177,6 +169,24 @@ function HealthBadges({story}: {story: Story}) {
 			</Badge>
 		</div>
 	);
+}
+
+function StoryWordCount({story}: {story: Story}) {
+	const coreProjectHost = useCoreProjectHost();
+	const [count, setCount] = React.useState(0);
+
+	React.useEffect(() => {
+		let active = true;
+
+		void coreProjectHost
+			.queryStorySummaryAsync(story.id)
+			.then(summary => active && setCount(summary.wordCount));
+		return () => {
+			active = false;
+		};
+	}, [coreProjectHost, story.id, story.lastUpdate]);
+
+	return <>{count}</>;
 }
 
 export const InnerStoryListRoute: React.FC = () => {
@@ -545,7 +555,7 @@ export const InnerStoryListRoute: React.FC = () => {
 													{story.storyFormat} {story.storyFormatVersion}
 												</td>
 												<td>{story.passages.length}</td>
-												<td>{wordCount(story)}</td>
+												<td><StoryWordCount story={story} /></td>
 												<td>
 													<HealthBadges story={story} />
 												</td>
@@ -592,7 +602,7 @@ export const InnerStoryListRoute: React.FC = () => {
 												)}
 											</div>
 											<div className="story-list-launcher__project-meta">
-												{story.passages.length} passages · {wordCount(story)}{' '}
+												{story.passages.length} passages · <StoryWordCount story={story} />{' '}
 												words
 											</div>
 											<HealthBadges story={story} />

@@ -147,7 +147,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			memoryKey: passage ? `${story.id}:${passage.id}` : `${story.id}:passage`,
 			name: passage?.name ?? t('routes.storyEdit.workspace.noPassages'),
 			passage,
-			value: passageDocument.document?.text ?? passage?.text ?? ''
+			value: passageDocument.document?.text ?? ''
 		};
 	}, [
 		passage,
