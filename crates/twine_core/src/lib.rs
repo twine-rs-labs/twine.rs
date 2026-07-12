@@ -1192,6 +1192,7 @@ impl From<CoreRect> for GraphViewport {
 pub struct CoreGraphNode {
     pub bounds: CoreRect,
     pub broken_link_count: usize,
+    pub excerpt: String,
     pub id: String,
     pub incoming_count: usize,
     pub is_empty: bool,
@@ -1285,6 +1286,7 @@ impl From<twine_graph::GraphProjection> for CoreGraphProjection {
                 .map(|node| CoreGraphNode {
                     bounds: node.bounds.into(),
                     broken_link_count: node.broken_link_count,
+                    excerpt: node.excerpt,
                     id: node.id.as_ref().to_owned(),
                     incoming_count: node.incoming_count,
                     is_empty: node.is_empty,

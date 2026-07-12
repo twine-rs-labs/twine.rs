@@ -106,6 +106,7 @@ pub struct GraphStats {
 #[serde(rename_all = "camelCase")]
 pub struct GraphNode {
     pub broken_link_count: usize,
+    pub excerpt: String,
     pub id: PassageId,
     pub incoming_count: usize,
     pub is_empty: bool,
@@ -116,6 +117,10 @@ pub struct GraphNode {
     pub outgoing_count: usize,
     pub self_link_count: usize,
     pub tags: Vec<String>,
+}
+
+fn passage_excerpt(text: &str) -> String {
+    text.trim().chars().take(160).collect()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -181,6 +186,7 @@ impl GraphIndex {
                 passage.id.clone(),
                 GraphNode {
                     broken_link_count: 0,
+                    excerpt: passage_excerpt(&passage.text),
                     id: passage.id.clone(),
                     incoming_count: 0,
                     is_empty: passage.text.trim().is_empty(),
@@ -314,6 +320,7 @@ impl GraphIndex {
                 .entry(passage.id.clone())
                 .or_insert_with(|| GraphNode {
                     broken_link_count: 0,
+                    excerpt: passage_excerpt(&passage.text),
                     id: passage.id.clone(),
                     incoming_count: 0,
                     is_empty: passage.text.trim().is_empty(),
@@ -326,6 +333,7 @@ impl GraphIndex {
                     tags: passage.tags.clone(),
                 });
             node.id = passage.id.clone();
+            node.excerpt = passage_excerpt(&passage.text);
             node.is_empty = passage.text.trim().is_empty();
             node.is_start = passage.id == story.start_passage;
             node.name = passage.name.clone();
@@ -516,6 +524,7 @@ impl GraphIndex {
             }
 
             if let Some(node) = self.nodes.get_mut(passage_id) {
+                node.excerpt = passage_excerpt(&passage.text);
                 node.is_empty = is_empty;
                 node.name.clone_from(&passage.name);
                 node.tags.clone_from(&passage.tags);
@@ -675,6 +684,7 @@ impl GraphIndex {
             nodes.push(GraphCanvasNode {
                 broken_link_count: node.broken_link_count,
                 bounds: layout_entry.bounds,
+                excerpt: node.excerpt.clone(),
                 id: node.id.clone(),
                 incoming_count: node.incoming_count,
                 is_empty: node.is_empty,
@@ -1282,6 +1292,7 @@ impl Default for GraphProjectionOptions {
 pub struct GraphCanvasNode {
     pub broken_link_count: usize,
     pub bounds: GraphPosition,
+    pub excerpt: String,
     pub id: PassageId,
     pub incoming_count: usize,
     pub is_empty: bool,

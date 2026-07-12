@@ -2,4 +2,4 @@
 import type { CoreGraphLayoutSource } from "./CoreGraphLayoutSource";
 import type { CoreRect } from "./CoreRect";
 
-export type CoreGraphNode = { bounds: CoreRect, brokenLinkCount: number, id: string, incomingCount: number, isEmpty: boolean, isOrphan: boolean, isStart: boolean, isUnreachable: boolean, layoutSource: CoreGraphLayoutSource, name: string, outgoingCount: number, selfLinkCount: number, tags: Array<string>, };
+export type CoreGraphNode = { bounds: CoreRect, brokenLinkCount: number, excerpt: string, id: string, incomingCount: number, isEmpty: boolean, isOrphan: boolean, isStart: boolean, isUnreachable: boolean, layoutSource: CoreGraphLayoutSource, name: string, outgoingCount: number, selfLinkCount: number, tags: Array<string>, };

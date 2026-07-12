@@ -162,38 +162,6 @@ const graphInitialView: GraphView = {k: 1, x: 80, y: 60};
 const graphFitPadding = 96;
 const noFocusedPassageIds: string[] = [];
 
-function excerpt(text: string) {
-	let compact = '';
-	let previousWhitespace = false;
-	const textLimit = Math.min(text.length, 260);
-
-	for (let index = 0; index < textLimit && compact.length < 160; index++) {
-		const character = text[index];
-		const whitespace =
-			character === ' ' ||
-			character === '\n' ||
-			character === '\r' ||
-			character === '\t';
-
-		if (whitespace) {
-			if (!previousWhitespace && compact.length > 0) {
-				compact += ' ';
-			}
-
-			previousWhitespace = true;
-		} else {
-			compact += character;
-			previousWhitespace = false;
-		}
-	}
-
-	const trimmed = compact.trim();
-
-	return text.length > textLimit || trimmed.length > 157
-		? `${trimmed.slice(0, 157)}...`
-		: trimmed;
-}
-
 function passageRect(passage: Passage): CoreRect {
 	return {
 		height: passage.height,
@@ -973,7 +941,6 @@ function graphProjectionStoryKey(story: Story) {
 			[
 				passage.id,
 				passage.name,
-				passage.text,
 				passage.left,
 				passage.top,
 				passage.width,
@@ -2613,9 +2580,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 													'story-edit-graph-node--generated'
 											)}
 											excerpt={
-												renderedDensity === 'excerpt'
-													? excerpt(passage.text)
-													: undefined
+												renderedDensity === 'excerpt' ? node.excerpt : undefined
 											}
 											links={node.outgoingCount}
 											onClick={event => handleNodeClick(node, event)}

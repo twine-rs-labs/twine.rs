@@ -277,6 +277,7 @@ function buildGraphIndex(story: Story): GraphIndex {
 				width: generatedLayout.cardWidth
 			},
 			brokenLinkCount: 0,
+			excerpt: Array.from(passage.text.trim()).slice(0, 160).join(''),
 			id: passage.id,
 			incomingCount: 0,
 			isEmpty: passage.text.trim() === '',
