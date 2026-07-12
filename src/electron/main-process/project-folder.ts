@@ -37,6 +37,8 @@ import type {
 } from '../../store/persistence/project-folder-save-hints';
 import {
 	diffNativeProjectFileManifest,
+	beginNativeProjectFolderHydration,
+	finishNativeProjectFolderHydration,
 	findNativeTwineHtmlFiles,
 	listNativeProjectAssets,
 	loadNativeProjectFolder,
@@ -44,6 +46,7 @@ import {
 	nativeProjectDiagnostic,
 	prepareNativeHtmlImport,
 	prepareNativeProjectImport,
+	readNativeProjectFolderHydrationChunk,
 	saveNativeProjectFolder
 } from './native';
 import {
@@ -314,7 +317,9 @@ interface ProjectSessionState {
 	debounceTimer?: ReturnType<typeof setTimeout>;
 	descriptor?: NativeProjectDescriptor;
 	generation: number;
-	hydrationPromise?: Promise<NativeProjectFolderResult>;
+	hydrationPromise?: Promise<
+		NativeProjectFolderResult & {hydrationId?: string}
+	>;
 	interval?: ReturnType<typeof setInterval>;
 	listeners: Set<ProjectSessionListener>;
 	pathHints: Set<string>;
@@ -403,6 +408,7 @@ const projectHydrations = new Map<
 	string,
 	{createdAt: number; passages: Array<{passage: Passage; storyId: string}>}
 >();
+const nativeProjectHydrations = new Set<string>();
 const preparedProjectImports = new Map<
 	string,
 	{assets: NativeProjectImportAsset[]; cleanupPath?: string}
@@ -3062,9 +3068,14 @@ async function adoptProjectSessionBaselineReceipt(
 function ensureProjectSessionHydration(rootPath: string) {
 	const session = beginProjectSessionBaselineCapture(rootPath);
 
-	session.hydrationPromise ??= readProjectFolder(rootPath, {
-		loadPassageText: true
-	})
+	session.hydrationPromise ??= (async () => {
+		const nativeStart = beginNativeProjectFolderHydration(rootPath);
+		if (nativeStart) {
+			nativeProjectHydrations.add(nativeStart.hydrationId);
+			return mergeNativeProjectMetadata(rootPath, nativeStart);
+		}
+		return readProjectFolder(rootPath, {loadPassageText: true});
+	})()
 		.then(async projectFolder => {
 			if (!(await adoptProjectSessionBaselineReceipt(projectFolder))) {
 				finishProjectSessionBaselineCapture(session);
@@ -3687,6 +3698,35 @@ export async function hydrateProjectFolder(
 ): Promise<NativeProjectFolderResult> {
 	const projectFolder = await ensureProjectSessionHydration(rootPath);
 	ensureProjectSession(rootPath).hydrationPromise = undefined;
+	if (projectFolder.hydrationId) {
+		const byStory = new Map(
+			projectFolder.stories.map(story => [story.id, story] as const)
+		);
+		let cursor = 0;
+		let done = false;
+		try {
+			while (!done) {
+				const chunk = readProjectFolderHydrationChunk(
+					projectFolder.hydrationId,
+					cursor,
+					1000
+				);
+				for (const {passage, storyId} of chunk.passages) {
+					const story = byStory.get(storyId);
+					const existing = story?.passages.find(
+						candidate => candidate.id === passage.id
+					);
+					if (existing) {
+						existing.text = passage.text;
+					}
+				}
+				cursor = chunk.nextCursor;
+				done = chunk.done;
+			}
+		} finally {
+			finishProjectFolderHydration(projectFolder.hydrationId);
+		}
+	}
 	const {stories} = projectFolder;
 	const filteredStories = storyIds?.length
 		? stories.filter(story => storyIds.includes(story.id))
@@ -3710,9 +3750,24 @@ export async function beginProjectFolderHydration(
 	rootPath: string,
 	storyIds?: string[]
 ): Promise<NativeProjectHydrationStart> {
-	const projectFolder = await hydrateProjectFolder(rootPath, storyIds);
+	const projectFolder = await ensureProjectSessionHydration(rootPath);
+	ensureProjectSession(rootPath).hydrationPromise = undefined;
+	if (projectFolder.hydrationId) {
+		const publicProjectFolder = {...projectFolder};
+		delete publicProjectFolder.baselineReceipt;
+		return {
+			...publicProjectFolder,
+			hydrationId: projectFolder.hydrationId,
+			passageCount: projectFolder.stories.reduce(
+				(total, story) => total + story.passages.length,
+				0
+			),
+			stories: projectFolder.stories.map(story => ({...story, passages: []}))
+		};
+	}
+	const hydratedProjectFolder = await hydrateProjectFolder(rootPath, storyIds);
 	const hydrationId = uuid();
-	const passages = projectFolder.stories.flatMap(story =>
+	const passages = hydratedProjectFolder.stories.flatMap(story =>
 		story.passages.map(passage => ({passage, storyId: story.id}))
 	);
 
@@ -3727,14 +3782,17 @@ export async function beginProjectFolderHydration(
 	projectHydrations.set(hydrationId, {createdAt: Date.now(), passages});
 
 	return {
-		graphLayoutLoaded: projectFolder.graphLayoutLoaded,
+		graphLayoutLoaded: hydratedProjectFolder.graphLayoutLoaded,
 		hydrationId,
-		loadPerformanceTimings: projectFolder.loadPerformanceTimings,
+		loadPerformanceTimings: hydratedProjectFolder.loadPerformanceTimings,
 		passageCount: passages.length,
-		rootPath: projectFolder.rootPath,
-		stories: projectFolder.stories.map(story => ({...story, passages: []})),
-		storyIds: projectFolder.storyIds,
-		storySourcesLoaded: projectFolder.storySourcesLoaded
+		rootPath: hydratedProjectFolder.rootPath,
+		stories: hydratedProjectFolder.stories.map(story => ({
+			...story,
+			passages: []
+		})),
+		storyIds: hydratedProjectFolder.storyIds,
+		storySourcesLoaded: hydratedProjectFolder.storySourcesLoaded
 	};
 }
 
@@ -3743,6 +3801,19 @@ export function readProjectFolderHydrationChunk(
 	cursor: number,
 	limit = 256
 ): NativeProjectHydrationChunk {
+	if (nativeProjectHydrations.has(hydrationId)) {
+		const chunk = readNativeProjectFolderHydrationChunk(
+			hydrationId,
+			cursor,
+			limit
+		);
+		if (!chunk) {
+			throw new Error(
+				`Native project hydration "${hydrationId}" is unavailable.`
+			);
+		}
+		return chunk;
+	}
 	const lease = projectHydrations.get(hydrationId);
 	if (!lease) {
 		throw new Error(`Unknown or expired project hydration "${hydrationId}".`);
@@ -3762,6 +3833,9 @@ export function readProjectFolderHydrationChunk(
 }
 
 export function finishProjectFolderHydration(hydrationId: string): void {
+	if (nativeProjectHydrations.delete(hydrationId)) {
+		finishNativeProjectFolderHydration(hydrationId);
+	}
 	projectHydrations.delete(hydrationId);
 }
 
@@ -4346,6 +4420,11 @@ export function stopProjectSession(rootPath: string) {
 	}
 
 	session.watcher?.close();
+	void session.hydrationPromise?.then(project => {
+		if (project.hydrationId) {
+			finishProjectFolderHydration(project.hydrationId);
+		}
+	});
 	finishProjectSessionBaselineCapture(session);
 	projectSessions.delete(key);
 }

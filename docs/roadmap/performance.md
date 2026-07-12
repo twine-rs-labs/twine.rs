@@ -55,11 +55,11 @@ fixture isolation.
 - Fresh 2026-07-12 validation confirms the retained host passage-body count is
   zero in diagnostic, query, and watcher runs. The 50k startup run still retains
   about 1.02 GiB across Electron processes after chunked bootstrap; query-cache
-  residency previously reached about 1.27 GiB. The native loader still returns
-  a roughly 38.95 MiB full result to Electron main before that result is leased.
-  The next startup/memory change should integrate streaming with the native
-  load receipt and watcher-baseline lifecycle rather than revisit the React
-  body mirror.
+  residency previously reached about 1.27 GiB. Native-owned leasing now moves
+  bodies out of the initial result while retaining exact receipt adoption. The
+  50k native hydration output is about 22.50 MiB, interactive p50 about 2.27 s,
+  and post-GC resident p50 about 1.017 GiB. Remaining payload is metadata and the
+  50k-file receipt rather than duplicate passage documents.
 - The first attributed cleanup reduced 50k shell p50 to about 0.96 s,
   interactive p50 to about 10.4 s, retained resident memory to about 1.14 GiB,
   and WASM linear memory to about 96 MiB.
@@ -89,10 +89,11 @@ fixture isolation.
 - The renderer-to-worker bootstrap is now bounded: the confirming 50k run used
   50 chunks of about 519 KiB and finalized the Rust session in about 430 ms.
   Interactive p50 was about 2.41 s and retained resident p50 about 1.02 GiB.
-  Remaining initialization work is native-owned streaming that preserves the
-  exact baseline receipt and watcher descriptor while avoiding the full 39 MiB
-  native JSON result. A smaller shell-only optimization may still pursue the
-  remaining roughly 80 ms over the 400 ms target.
+  Native-owned streaming now preserves the exact baseline receipt and watcher
+  descriptor while reducing the native result from roughly 39 MiB to 22.5 MiB.
+  Startup, diagnostic, and watcher phases pass. A smaller shell-only
+  optimization may still pursue the remaining roughly 80 ms over the 400 ms
+  target; further payload reduction would require a compact receipt transport.
 
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.

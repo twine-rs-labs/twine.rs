@@ -41,8 +41,10 @@ import {
 	stopProjectSession
 } from '../project-folder';
 import {
+	beginNativeProjectFolderHydration,
 	diffNativeProjectFileManifest,
 	findNativeTwineHtmlFiles,
+	finishNativeProjectFolderHydration,
 	forgetNativeProjectFolder,
 	listNativeProjectAssets,
 	listRememberedNativeProjectFolders,
@@ -51,6 +53,7 @@ import {
 	nativeProjectFileManifest,
 	prepareNativeHtmlImport,
 	prepareNativeProjectImport,
+	readNativeProjectFolderHydrationChunk,
 	rememberNativeProjectFolder,
 	saveNativeProjectFolder
 } from '../native';
@@ -59,8 +62,10 @@ jest.mock('electron');
 jest.mock('extract-zip', () => jest.fn());
 jest.mock('fs-extra');
 jest.mock('../native', () => ({
+	beginNativeProjectFolderHydration: jest.fn(),
 	diffNativeProjectFileManifest: jest.fn(),
 	findNativeTwineHtmlFiles: jest.fn(),
+	finishNativeProjectFolderHydration: jest.fn(),
 	forgetNativeProjectFolder: jest.fn(),
 	listNativeProjectAssets: jest.fn(),
 	listRememberedNativeProjectFolders: jest.fn(),
@@ -69,6 +74,7 @@ jest.mock('../native', () => ({
 	nativeProjectFileManifest: jest.fn(),
 	prepareNativeHtmlImport: jest.fn(),
 	prepareNativeProjectImport: jest.fn(),
+	readNativeProjectFolderHydrationChunk: jest.fn(),
 	rememberNativeProjectFolder: jest.fn(),
 	saveNativeProjectFolder: jest.fn()
 }));
@@ -91,6 +97,10 @@ describe('project-folder native bridge', () => {
 	const writeFileMock = writeFile as jest.Mock;
 	const diffNativeProjectFileManifestMock =
 		diffNativeProjectFileManifest as jest.Mock;
+	const beginNativeProjectFolderHydrationMock =
+		beginNativeProjectFolderHydration as jest.Mock;
+	const finishNativeProjectFolderHydrationMock =
+		finishNativeProjectFolderHydration as jest.Mock;
 	const findNativeTwineHtmlFilesMock = findNativeTwineHtmlFiles as jest.Mock;
 	const forgetNativeProjectFolderMock = forgetNativeProjectFolder as jest.Mock;
 	const listNativeProjectAssetsMock = listNativeProjectAssets as jest.Mock;
@@ -102,6 +112,8 @@ describe('project-folder native bridge', () => {
 	const prepareNativeHtmlImportMock = prepareNativeHtmlImport as jest.Mock;
 	const prepareNativeProjectImportMock =
 		prepareNativeProjectImport as jest.Mock;
+	const readNativeProjectFolderHydrationChunkMock =
+		readNativeProjectFolderHydrationChunk as jest.Mock;
 	const rememberNativeProjectFolderMock =
 		rememberNativeProjectFolder as jest.Mock;
 	const saveNativeProjectFolderMock = saveNativeProjectFolder as jest.Mock;
@@ -1027,6 +1039,37 @@ describe('project-folder native bridge', () => {
 		finishProjectFolderHydration(start.hydrationId);
 		expect(() => readProjectFolderHydrationChunk(start.hydrationId, 0)).toThrow(
 			'Unknown or expired project hydration'
+		);
+	});
+
+	it('keeps native hydration bodies in the addon lease', async () => {
+		const story = fakeStory(1);
+		const passage = {...story.passages[0], text: 'native leased body'};
+		beginNativeProjectFolderHydrationMock.mockReturnValue({
+			graphLayoutLoaded: true,
+			hydrationId: 'native-lease-1',
+			passageCount: 1,
+			passageTextLoaded: true,
+			rootPath: '/native/leased.twine.rs',
+			stories: [{...story, passages: [{...passage, text: ''}]}],
+			storyIds: [story.id],
+			storySourcesLoaded: true
+		});
+		readNativeProjectFolderHydrationChunkMock.mockReturnValue({
+			done: true,
+			nextCursor: 1,
+			passages: [{passage, storyId: story.id}]
+		});
+
+		const start = await beginProjectFolderHydration('/native/leased.twine.rs', [
+			story.id
+		]);
+		expect(start.stories[0].passages).toEqual([]);
+		const chunk = readProjectFolderHydrationChunk(start.hydrationId, 0, 1000);
+		expect(chunk.passages[0].passage.text).toBe('native leased body');
+		finishProjectFolderHydration(start.hydrationId);
+		expect(finishNativeProjectFolderHydrationMock).toHaveBeenCalledWith(
+			'native-lease-1'
 		);
 	});
 

@@ -7,26 +7,41 @@ import type {Story} from '../../store/stories';
 import type {
 	NativeProjectFileEntry,
 	NativeProjectFolderResult,
+	NativeProjectHydrationChunk,
+	NativeProjectHydrationStart,
 	NativeProjectImportSource,
 	NativeProjectSessionConflict
 } from './project-folder';
 
 interface NativeProjectAddon {
+	beginProjectFolderHydrationJson(
+		rootPath: string,
+		storyIdsJson?: string
+	): string;
 	diffProjectFileManifestJson(
 		previousFilesJson: string,
 		currentFilesJson: string
 	): string;
 	findTwineHtmlFilesJson(rootPath: string): string;
+	finishProjectFolderHydration(hydrationId: string): void;
 	forgetProjectFolderJson(indexPath: string, rootPath: string): string;
 	healthJson(): string;
 	listProjectAssetsJson(rootPath: string): string;
 	listRememberedProjectFoldersJson(indexPath: string): string;
-	loadProjectFolderJson(rootPath: string, loadProfile?: 'full' | 'shell'): string;
+	loadProjectFolderJson(
+		rootPath: string,
+		loadProfile?: 'full' | 'shell'
+	): string;
 	prepareProjectImportJson(sourcePath: string): string;
 	prepareHtmlImportJson(
 		sourcePath: string,
 		htmlFilePath: string,
 		sourceKind: string
+	): string;
+	readProjectFolderHydrationChunkJson(
+		hydrationId: string,
+		cursor: number,
+		limit: number
 	): string;
 	projectFileManifestJson(rootPath: string, assetsJson?: string): string;
 	rememberProjectFolderJson(indexPath: string, projectJson: string): string;
@@ -248,6 +263,57 @@ export function loadNativeProjectFolder(
 		warnDiagnostic();
 		return undefined;
 	}
+}
+
+export function beginNativeProjectFolderHydration(
+	rootPath: string,
+	storyIds?: string[]
+) {
+	const loaded = loadAddon();
+	if (!loaded?.beginProjectFolderHydrationJson) {
+		return undefined;
+	}
+	const nativeStarted = performance.now();
+	const source = loaded.beginProjectFolderHydrationJson(
+		rootPath,
+		storyIds?.length ? JSON.stringify(storyIds) : undefined
+	);
+	const nativeFinished = performance.now();
+	const parseStarted = performance.now();
+	const result = parseNativeJson<NativeProjectHydrationStart>(
+		'project hydration start',
+		source
+	);
+	const parseFinished = performance.now();
+
+	if (result?.loadPerformanceTimings && process.env.TWINE_PERF === '1') {
+		result.loadPerformanceTimings = {
+			...result.loadPerformanceTimings,
+			jsJsonParseMs: parseFinished - parseStarted,
+			mainNativeCallMs: nativeFinished - nativeStarted,
+			payloadBytes: Buffer.byteLength(source)
+		};
+	}
+	return reviveProjectFolderResult(result) as NativeProjectHydrationStart;
+}
+
+export function readNativeProjectFolderHydrationChunk(
+	hydrationId: string,
+	cursor: number,
+	limit: number
+) {
+	const loaded = loadAddon();
+	if (!loaded?.readProjectFolderHydrationChunkJson) {
+		return undefined;
+	}
+	return parseNativeJson<NativeProjectHydrationChunk>(
+		'project hydration chunk',
+		loaded.readProjectFolderHydrationChunkJson(hydrationId, cursor, limit)
+	);
+}
+
+export function finishNativeProjectFolderHydration(hydrationId: string) {
+	loadAddon()?.finishProjectFolderHydration?.(hydrationId);
 }
 
 export function saveNativeProjectFolder(rootPath: string, story: Story) {

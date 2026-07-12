@@ -10,6 +10,10 @@ use std::{
     io,
     io::ErrorKind,
     path::{Path, PathBuf},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -55,6 +59,42 @@ struct NativeProjectFolderResult {
     story_sources_loaded: bool,
     stories: Vec<NativeStory>,
     story_ids: Vec<String>,
+}
+
+#[derive(Debug)]
+struct NativeHydrationLease {
+    passages: Vec<(String, NativePassage)>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeHydrationStart {
+    hydration_id: String,
+    passage_count: usize,
+    #[serde(flatten)]
+    project: NativeProjectFolderResult,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeHydrationPassage {
+    passage: NativePassage,
+    story_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeHydrationChunk {
+    done: bool,
+    next_cursor: usize,
+    passages: Vec<NativeHydrationPassage>,
+}
+
+static HYDRATION_LEASES: OnceLock<Mutex<BTreeMap<String, NativeHydrationLease>>> = OnceLock::new();
+static NEXT_HYDRATION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn hydration_leases() -> &'static Mutex<BTreeMap<String, NativeHydrationLease>> {
+    HYDRATION_LEASES.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -286,6 +326,13 @@ pub fn load_project_folder_json(
     root_path: String,
     load_profile: Option<String>,
 ) -> NativeResult<String> {
+    json_string(&load_project_folder(root_path, load_profile)?).map_err(native_error)
+}
+
+fn load_project_folder(
+    root_path: String,
+    load_profile: Option<String>,
+) -> NativeResult<NativeProjectFolderResult> {
     let collect_timings = std::env::var("TWINE_PERF").is_ok_and(|value| value == "1");
     let root = PathBuf::from(&root_path);
     let passage_text_loaded = load_profile.as_deref() != Some("shell");
@@ -369,7 +416,7 @@ pub fn load_project_folder_json(
     };
     let baseline_receipt_us = elapsed_us(receipt_started);
 
-    json_string(&NativeProjectFolderResult {
+    Ok(NativeProjectFolderResult {
         baseline_receipt,
         graph_layout_loaded: passage_text_loaded,
         passage_text_loaded,
@@ -405,7 +452,91 @@ pub fn load_project_folder_json(
         stories,
         story_ids,
     })
+}
+
+#[napi(js_name = "beginProjectFolderHydrationJson")]
+pub fn begin_project_folder_hydration_json(
+    root_path: String,
+    story_ids_json: Option<String>,
+) -> NativeResult<String> {
+    let story_ids = story_ids_json
+        .map(|source| serde_json::from_str::<Vec<String>>(&source).map_err(native_error))
+        .transpose()?;
+    let mut project = load_project_folder(root_path, Some("full".into()))?;
+    if let Some(story_ids) = story_ids.as_ref().filter(|ids| !ids.is_empty()) {
+        project
+            .stories
+            .retain(|story| story_ids.contains(&story.id));
+        project.story_ids = project
+            .stories
+            .iter()
+            .map(|story| story.id.clone())
+            .collect();
+    }
+
+    let mut passages = Vec::new();
+    for story in &mut project.stories {
+        for passage in &mut story.passages {
+            let text = std::mem::take(&mut passage.text);
+            let mut leased = passage.clone();
+            leased.text = text;
+            passages.push((story.id.clone(), leased));
+        }
+    }
+    let passage_count = passages.len();
+    let hydration_id = format!(
+        "native-hydration-{}",
+        NEXT_HYDRATION_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    hydration_leases()
+        .lock()
+        .map_err(|_| napi::Error::from_reason("Native hydration lease lock was poisoned."))?
+        .insert(hydration_id.clone(), NativeHydrationLease { passages });
+
+    json_string(&NativeHydrationStart {
+        hydration_id,
+        passage_count,
+        project,
+    })
     .map_err(native_error)
+}
+
+#[napi(js_name = "readProjectFolderHydrationChunkJson")]
+pub fn read_project_folder_hydration_chunk_json(
+    hydration_id: String,
+    cursor: u32,
+    limit: u32,
+) -> NativeResult<String> {
+    let leases = hydration_leases()
+        .lock()
+        .map_err(|_| napi::Error::from_reason("Native hydration lease lock was poisoned."))?;
+    let lease = leases
+        .get(&hydration_id)
+        .ok_or_else(|| napi::Error::from_reason("Unknown or expired native hydration lease."))?;
+    let cursor = (cursor as usize).min(lease.passages.len());
+    let limit = (limit as usize).clamp(1, 1000);
+    let next_cursor = (cursor + limit).min(lease.passages.len());
+    let passages = lease.passages[cursor..next_cursor]
+        .iter()
+        .cloned()
+        .map(|(story_id, passage)| NativeHydrationPassage { passage, story_id })
+        .collect();
+
+    json_string(&NativeHydrationChunk {
+        done: next_cursor >= lease.passages.len(),
+        next_cursor,
+        passages,
+    })
+    .map_err(native_error)
+}
+
+#[napi(js_name = "finishProjectFolderHydration")]
+pub fn finish_project_folder_hydration(hydration_id: String) -> NativeResult<()> {
+    hydration_leases()
+        .lock()
+        .map_err(|_| napi::Error::from_reason("Native hydration lease lock was poisoned."))?
+        .remove(&hydration_id);
+    Ok(())
 }
 
 #[napi(js_name = "saveProjectFolderJson")]
@@ -1758,6 +1889,32 @@ mod tests {
         assert!(shell.stories[0].script.is_empty());
         assert!(shell.stories[0].stylesheet.is_empty());
         assert!(shell.stories[0].passages[0].text.is_empty());
+
+        let hydration = begin_project_folder_hydration_json(
+            root.to_string_lossy().into_owned(),
+            Some("[\"story-1\"]".into()),
+        )
+        .expect("native hydration should begin");
+        let hydration: serde_json::Value =
+            serde_json::from_str(&hydration).expect("hydration start should parse");
+        let hydration_id = hydration["hydrationId"]
+            .as_str()
+            .expect("hydration should have an ID");
+        assert_eq!(hydration["passageCount"], 1);
+        assert_eq!(hydration["stories"][0]["passages"][0]["text"], "");
+        assert!(hydration["baselineReceipt"].is_object());
+
+        let chunk = read_project_folder_hydration_chunk_json(hydration_id.into(), 0, 100)
+            .expect("hydration chunk should load");
+        let chunk: serde_json::Value =
+            serde_json::from_str(&chunk).expect("hydration chunk should parse");
+        assert_eq!(
+            chunk["passages"][0]["passage"]["text"],
+            "A very important passage body"
+        );
+        assert_eq!(chunk["done"], true);
+        finish_project_folder_hydration(hydration_id.into()).expect("hydration should finish");
+        assert!(read_project_folder_hydration_chunk_json(hydration_id.into(), 0, 1).is_err());
 
         fs::remove_dir_all(root).expect("project should be removed");
     }

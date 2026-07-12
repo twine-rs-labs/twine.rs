@@ -176,8 +176,13 @@ post-GC resident p50 about 1.02 GiB, renderer heap about 31 MiB, and WASM linear
 memory about 96 MiB. This is roughly a 40 MiB retained-memory improvement over
 the preceding startup run, without a material latency improvement. The native
 loader still creates and serializes its 38.95 MiB full result inside the main
-process before leasing it; moving the lease into the native load/baseline
-lifecycle remains a separate follow-up.
+process before leasing it. Native-owned leasing now removes passage bodies from
+that result while preserving the exact watcher baseline receipt. The confirming
+50k run reduced native hydration output from 38.95 MiB to 22.50 MiB, measured
+interactive p50 at about 2.27 s, hydrated p50 at about 3.61 s, and post-GC
+resident p50 at about 1.017 GiB. Diagnostic and watcher phases also passed. The
+remaining native payload is metadata plus the 50k-file baseline receipt, not a
+second passage-body representation.
 
 The focused query run measured Contents at about 53.9 ms and search at about
 14.7 ms; Contents remains slightly above its 50 ms target. Resident memory after
