@@ -1,4 +1,4 @@
-import {Passage} from '../store/stories';
+import {PassageWithText as Passage} from '../store/stories';
 
 /**
  * Returns whether a passage is considered empty, e.g. whether the user has put

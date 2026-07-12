@@ -60,9 +60,11 @@ import {
 import {
 	ApplyCorePatchBatchAction,
 	Passage,
+	PassageWithText,
 	StoriesActionOrThunk,
 	StoriesState,
 	Story,
+	StoryWithDocuments,
 	useStoriesContext
 } from '../store/stories';
 import {loadProjectMetadata} from '../store/project-metadata';
@@ -74,6 +76,23 @@ import {
 	measurePerformanceAfterPaint,
 	recordPerformanceHarnessEvent
 } from '../util/performance';
+
+function storiesWithDocuments(stories: Story[]): StoryWithDocuments[] {
+	if (
+		stories.some(story =>
+			story.passages.some(
+				passage =>
+					!('text' in passage) ||
+					typeof (passage as {text?: unknown}).text !== 'string'
+			)
+		)
+	) {
+		throw new Error(
+			'A complete project snapshot requires materialized documents.'
+		);
+	}
+	return stories as StoryWithDocuments[];
+}
 
 export type StoryIndexQuery = string | Partial<CoreStoryIndexOptions>;
 const defaultCoreSessionId = 'library';
@@ -89,7 +108,7 @@ export type CoreCommandOptions = string | CoreCommandHistoryOptions;
 export interface CoreProjectHost {
 	appendHydratedProjectPassages(
 		storyId: string,
-		passages: Passage[]
+		passages: PassageWithText[]
 	): Promise<void>;
 	beginHydratedProject(storyId: string, stories: Story[]): Promise<void>;
 	finishHydratedProject(storyId: string): Promise<void>;
@@ -162,7 +181,7 @@ export interface CoreProjectHost {
 	): Promise<CoreSourceDocument>;
 	recoverFromSnapshot(
 		storyId: string,
-		stories: Story[],
+		stories: StoryWithDocuments[],
 		assets: CoreAssetInventoryEntry[]
 	): Promise<void>;
 	runtimeMode(): CoreBridgeMode;
@@ -569,52 +588,6 @@ function emptyContentsPage(storyId: string): CoreContentsPage {
 	};
 }
 
-function contentsFacetsFromEntries(entries: CoreContentsPage['entries']) {
-	const facets = emptyContentsPage('').facets;
-
-	for (const entry of entries) {
-		facets.all += 1;
-		switch (entry.kind) {
-			case 'asset':
-				facets.asset += 1;
-				break;
-			case 'entryPoint':
-				facets.entryPoint += 1;
-				break;
-			case 'group':
-				facets.group += 1;
-				break;
-			case 'metadata':
-				facets.metadata += 1;
-				break;
-			case 'passage':
-				facets.passage += 1;
-				break;
-			case 'script':
-				facets.script += 1;
-				break;
-			case 'stylesheet':
-				facets.stylesheet += 1;
-				break;
-			case 'tag':
-				facets.tag += 1;
-				break;
-			case 'variable':
-				facets.variable += 1;
-				break;
-			case 'brokenLink':
-			case 'diagnostic':
-			case 'orphan':
-				facets.diagnostics += 1;
-		}
-		if (entry.severity) {
-			facets.problems += 1;
-		}
-	}
-
-	return facets;
-}
-
 export class StoreCoreProjectHost implements CoreProjectHost {
 	private assetInventoryByStory = sharedAssetInventoryByStory;
 	private dirty = false;
@@ -724,7 +697,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			this.sessionOwnedDocumentStories.add(story.id);
 		}
 		const revision = this.wasmProjectRevision;
-		const snapshot = projectSnapshotFromStories(stories);
+		const snapshot = projectSnapshotFromStories(storiesWithDocuments(stories));
 		const assets = stories.flatMap(
 			story => this.assetInventoryByStory.get(story.id) ?? []
 		);
@@ -737,7 +710,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
-	async appendHydratedProjectPassages(storyId: string, passages: Passage[]) {
+	async appendHydratedProjectPassages(
+		storyId: string,
+		passages: PassageWithText[]
+	) {
 		await this.wasmClient.appendProjectBootstrap(
 			this.sessionId,
 			storyId,
@@ -792,7 +768,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		for (const story of stories) {
 			this.sessionOwnedDocumentStories.add(story.id);
 		}
-		const snapshot = projectSnapshotFromStories(stories);
+		const snapshot = projectSnapshotFromStories(storiesWithDocuments(stories));
 		const assets = stories.flatMap(
 			story => this.assetInventoryByStory.get(story.id) ?? []
 		);
@@ -1309,12 +1285,14 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 	async recoverFromSnapshot(
 		_storiesId: string,
-		stories: Story[],
+		stories: StoryWithDocuments[],
 		assets: CoreAssetInventoryEntry[]
 	) {
 		await this.enqueueMutation(async () => {
 			this.disposeEffects();
-			const snapshot = projectSnapshotFromStories(stories);
+			const snapshot = projectSnapshotFromStories(
+				storiesWithDocuments(stories)
+			);
 			const metadataStories = stories.map(metadataStory);
 
 			this.stories = metadataStories;
@@ -1405,7 +1383,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			(total, story) =>
 				total +
 				story.passages.reduce(
-					(passageTotal, passage) => passageTotal + passage.text.length,
+					(passageTotal, passage) =>
+						passageTotal +
+						('text' in passage && typeof passage.text === 'string'
+							? passage.text.length
+							: 0),
 					0
 				),
 			0
@@ -1508,7 +1490,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		) {
 			const revision = this.wasmProjectRevision;
 			const snapshotStarted = performance.now();
-			const snapshot = projectSnapshotFromStories(this.stories);
+			const snapshot = projectSnapshotFromStories(
+				storiesWithDocuments(this.stories)
+			);
 			recordPerformanceHarnessEvent('core-session-snapshot-built', {
 				durationMs: performance.now() - snapshotStarted,
 				passageCount: snapshot.stories.reduce(
@@ -1575,7 +1559,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			this.wasmProjectReplaceRevision !== this.wasmProjectRevision
 		) {
 			const revision = this.wasmProjectRevision;
-			const snapshot = projectSnapshotFromStories(this.stories);
+			const snapshot = projectSnapshotFromStories(
+				storiesWithDocuments(this.stories)
+			);
 
 			this.wasmProjectReplaceRevision = revision;
 			this.wasmClient.replaceProjectSync(snapshot, revision);
@@ -1589,10 +1575,15 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	private releaseRetainedPassageBodies() {
 		if (
 			this.stories.some(story =>
-				story.passages.some(passage => passage.text.length > 0)
+				story.passages.some(
+					passage =>
+						'text' in passage &&
+						typeof passage.text === 'string' &&
+						passage.text.length > 0
+				)
 			)
 		) {
-			this.stories = this.stories.map(metadataStory);
+			this.stories = storiesWithDocuments(this.stories).map(metadataStory);
 		}
 	}
 
@@ -1712,63 +1703,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			this.wasmClient as Partial<CoreProjectSessionClient>
 		).queryStorySummary?.bind(this.wasmClient);
 
-		if (this.wasmClient.enabled && queryStorySummary) {
-			try {
-				const revision = await this.ensureWasmProjectSession();
-				return await queryStorySummary(this.sessionId, storyId, revision);
-			} catch (error) {
-				console.warn(`Rust story summary query failed: ${error}`);
-			}
+		if (!this.wasmClient.enabled || !queryStorySummary) {
+			throw new Error('Bounded Rust story summary queries are unavailable.');
 		}
-		// Older test doubles and a temporarily stale WASM bundle retain the
-		// compatibility query. Product workers always take the bounded branch.
-		const index = await this.queryStoryIndexAsync(storyId, {
-			includeAssets: true,
-			includeContents: false,
-			includeDiagnostics: true,
-			includeFiles: false,
-			includeGraph: true,
-			includePassageNames: false,
-			includePassageText: false,
-			includeScript: false,
-			includeStylesheet: false,
-			includeTags: true,
-			includeVariables: false
-		});
-
-		return {
-			assetCount: index.assetInventory.length,
-			characterCount:
-				this.stories
-					.find(story => story.id === storyId)
-					?.passages.reduce(
-						(total, passage) => total + passage.text.length,
-						0
-					) ?? 0,
-			diagnosticCount: index.diagnostics.length,
-			errorCount: index.diagnostics.filter(
-				diagnostic => diagnostic.severity === 'error'
-			).length,
-			graph: index.graph,
-			missingAssetCount: index.assetInventory.filter(asset => asset.missing)
-				.length,
-			passageCount:
-				this.stories.find(story => story.id === storyId)?.passages.length ?? 0,
-			revision: this.sessionStatus().revision,
-			storyId,
-			tagCount: index.tagEntries.length,
-			warningCount: index.diagnostics.filter(
-				diagnostic => diagnostic.severity === 'warning'
-			).length,
-			wordCount:
-				this.stories
-					.find(story => story.id === storyId)
-					?.passages.reduce(
-						(total, passage) =>
-							total + passage.text.trim().split(/\s+/).filter(Boolean).length,
-						0
-					) ?? 0
-		};
+		const revision = await this.ensureWasmProjectSession();
+		return queryStorySummary(this.sessionId, storyId, revision);
 	}
 
 	async queryWorkbenchDockModelAsync(
@@ -1839,26 +1778,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					revision
 				);
 			} catch (error) {
-				console.warn(`Rust contents page query failed: ${error}`);
+				throw new Error(`Rust contents page query failed: ${error}`);
 			}
 		}
-		// This compatibility branch supports older test doubles and a stale WASM
-		// bundle. Current product workers always take the bounded request above.
-		const index = await this.queryStoryIndexAsync(storyId, {});
-
-		return {
-			assets: index.assetInventory.filter(asset =>
-				index.contents.some(
-					entry => entry.kind === 'asset' && entry.label === asset.path
-				)
-			),
-			entries: index.contents,
-			facets: contentsFacetsFromEntries(index.contents),
-			nextCursor: null,
-			revision: this.sessionStatus().revision,
-			storyId,
-			totalCount: index.contents.length
-		};
+		throw new Error('Bounded Rust contents queries are unavailable.');
 	}
 
 	async querySearchPageAsync(
@@ -1879,38 +1802,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					revision
 				);
 			} catch (error) {
-				console.warn(`Rust search page query failed: ${error}`);
+				throw new Error(`Rust search page query failed: ${error}`);
 			}
 		}
-		const query = {...defaultSearchQuery, ...options};
-		const index = await this.queryStoryIndexAsync(storyId, {
-			fuzzy: query.fuzzy,
-			includeAssets: false,
-			includeContents: false,
-			includeDiagnostics: false,
-			includeFiles: false,
-			includeGraph: false,
-			includePassageNames: query.includePassageNames,
-			includePassageText: query.includePassageText,
-			includeScript: query.includeScript,
-			includeStylesheet: query.includeStylesheet,
-			includeTags: false,
-			includeVariables: false,
-			matchCase: query.matchCase,
-			query: query.query,
-			replacement: query.replacement,
-			useRegexes: query.useRegexes
-		});
-		const searchHits = index.searchHits.slice(0, query.limit);
-
-		return {
-			nextCursor: null,
-			replacePreviews: index.replacePreviews.slice(0, query.limit),
-			revision: this.sessionStatus().revision,
-			searchHits,
-			storyId,
-			totalCount: index.searchHits.length
-		} satisfies CoreSearchPage;
+		throw new Error('Bounded Rust search queries are unavailable.');
 	}
 
 	async queryDiagnosticsPageAsync(
@@ -1931,34 +1826,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					revision
 				);
 			} catch (error) {
-				console.warn(`Rust diagnostics page query failed: ${error}`);
+				throw new Error(`Rust diagnostics page query failed: ${error}`);
 			}
 		}
-		const index = await this.queryStoryIndexAsync(storyId, {
-			includeAssets: true,
-			includeContents: false,
-			includeDiagnostics: true,
-			includeFiles: false,
-			includeGraph: true,
-			includePassageNames: false,
-			includePassageText: false,
-			includeScript: false,
-			includeStylesheet: false,
-			includeTags: false,
-			includeVariables: false
-		});
-		const diagnostics = index.diagnostics.filter(
-			diagnostic =>
-				!options.severity || diagnostic.severity === options.severity
-		);
-
-		return {
-			diagnostics: diagnostics.slice(0, options.limit ?? 100),
-			nextCursor: null,
-			revision: this.sessionStatus().revision,
-			storyId,
-			totalCount: diagnostics.length
-		} satisfies CoreDiagnosticsPage;
+		throw new Error('Bounded Rust diagnostics queries are unavailable.');
 	}
 
 	async queryDocumentPageAsync(
@@ -2256,7 +2127,7 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 
 	recoverFromSnapshot(
 		storyId: string,
-		stories: Story[],
+		stories: StoryWithDocuments[],
 		assets: CoreAssetInventoryEntry[]
 	) {
 		const host = this.hostForStory(storyId);
@@ -2467,7 +2338,7 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		return host.beginHydratedProject(storyId, stories);
 	}
 
-	appendHydratedProjectPassages(storyId: string, passages: Passage[]) {
+	appendHydratedProjectPassages(storyId: string, passages: PassageWithText[]) {
 		const host = this.hostForStory(storyId);
 		if (!host) {
 			return Promise.reject(new Error(`No core session for story ${storyId}.`));

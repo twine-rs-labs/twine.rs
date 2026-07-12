@@ -9,7 +9,7 @@ import {
 import {projectSnapshotFromStories} from '../project-snapshot';
 import {normalizeStoryIndexOptions, storyToCoreIndex} from '../story-index';
 import {fakePassage, fakeStory} from '../../test-util';
-import type {Story} from '../../store/stories';
+import type {StoryWithDocuments as Story} from '../../store/stories';
 
 function parityStory() {
 	const story = fakeStory(0);

@@ -123,6 +123,15 @@ later bounded-read-model cutover also removed passage bodies from the mounted
 React story model; complete workflows now materialize revision-bound documents
 from Rust explicitly.
 
+The compatibility cleanup following that cutover is complete at the source
+boundary: route-facing `Passage` no longer contains `text`, full-document
+transport uses explicit materialized types, bounded summary/search/contents/
+diagnostics queries no longer fall back to a complete TypeScript index, and the
+old reducer-owned body mutation and passage-map stacks have been deleted. The
+TypeScript build, boundary checks, documentation checks, and full Jest suite
+pass. Fresh 50k performance measurements are the next validation step; the
+figures below predate this final compile-time boundary cleanup.
+
 The focused 50k startup phase now passes with the corrected startup/memory
 contract. Moving watcher-baseline work out of shell opening, skipping redundant
 native-story repair, avoiding stable-identity passage clones, and eliminating a

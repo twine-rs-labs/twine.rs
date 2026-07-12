@@ -2,7 +2,7 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {storyFileName} from '../../electron/shared';
-import {Story} from '../../store/stories';
+import {StoryWithDocuments as Story} from '../../store/stories';
 import {usePublishing} from '../../store/use-publishing';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {fakeStory} from '../../test-util';

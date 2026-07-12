@@ -1,6 +1,6 @@
 import {v4 as uuid} from '@lukeed/uuid';
 import {passageDefaults} from '../../defaults';
-import {Passage, Story} from '../../stories.types';
+import {Passage, PassageWithText, Story} from '../../stories.types';
 
 function logRepair(
 	passage: Passage,
@@ -19,9 +19,18 @@ function logRepair(
 	console.info(message);
 }
 
-export function repairPassage(passage: Passage, parentStory: Story): Passage {
-	const passageDefs = passageDefaults();
-	const repairs: Partial<Passage> = {};
+export function repairPassage<P extends Passage>(
+	passage: P,
+	parentStory: Story
+): P {
+	const completeDefaults = passageDefaults();
+	const passageDefs: Partial<PassageWithText> =
+		'text' in passage
+			? completeDefaults
+			: Object.fromEntries(
+					Object.entries(completeDefaults).filter(([key]) => key !== 'text')
+				);
+	const repairs: Partial<PassageWithText> = {};
 
 	// Give the passage an ID if it has none.
 
@@ -35,15 +44,16 @@ export function repairPassage(passage: Passage, parentStory: Story): Passage {
 	// Apply default properties to the passage.
 
 	for (const key in passageDefs) {
-		const value = passageDefs[key as keyof typeof passageDefs];
-		const defKey = key as keyof typeof passageDefs;
+		const defKey = key as keyof PassageWithText;
+		const value = passageDefs[defKey];
+		const current = (passage as unknown as PassageWithText)[defKey];
 
 		if (
-			(typeof value === 'number' && !Number.isFinite(passage[defKey])) ||
-			typeof value !== typeof passage[defKey]
+			(typeof value === 'number' && !Number.isFinite(current)) ||
+			typeof value !== typeof current
 		) {
-			logRepair(passage, defKey, passageDefs[defKey]);
-			(repairs[defKey] as Passage[typeof defKey]) = passageDefs[defKey];
+			logRepair(passage, defKey as keyof Passage, value);
+			(repairs as Record<string, unknown>)[defKey] = value;
 		}
 	}
 
@@ -105,7 +115,7 @@ export function repairPassage(passage: Passage, parentStory: Story): Passage {
 	}
 
 	if (Object.keys(repairs).length > 0) {
-		return {...passage, ...repairs};
+		return {...passage, ...repairs} as P;
 	}
 
 	return passage;

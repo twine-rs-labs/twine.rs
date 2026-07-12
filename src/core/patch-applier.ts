@@ -4,7 +4,13 @@ import type {Patch} from './bindings/Patch';
 import type {PatchBatch} from './bindings/PatchBatch';
 import type {StoryMetadataPatch} from './bindings/StoryMetadataPatch';
 import type {StorySnapshot} from './bindings/StorySnapshot';
-import type {Passage, StoriesAction, Story} from '../store/stories';
+import type {
+	Passage,
+	PassageWithText,
+	StoriesAction,
+	Story,
+	StoryWithDocuments
+} from '../store/stories';
 import type {CorePatchStoryAction} from '../store/stories/stories.types';
 
 export interface ProjectPatchApplicationSinks {
@@ -202,7 +208,7 @@ export function passageSnapshotToProps(
 	};
 }
 
-export function storySnapshotToStory(story: StorySnapshot): Story {
+export function storySnapshotToStory(story: StorySnapshot): StoryWithDocuments {
 	return {
 		id: story.id,
 		ifid: story.ifid,
@@ -212,7 +218,7 @@ export function storySnapshotToStory(story: StorySnapshot): Story {
 			...passageSnapshotToProps(passage),
 			highlighted: false,
 			selected: false
-		})) as Passage[],
+		})) as PassageWithText[],
 		script: story.script,
 		selected: false,
 		snapToGrid: story.snapToGrid,

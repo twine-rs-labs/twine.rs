@@ -83,18 +83,20 @@ function storyLooksLikeSugarCube(story: Story) {
 		sourceLooksLikeSugarCube(story.stylesheet) ||
 		story.passages.some(
 			passage =>
-				sourceLooksLikeSugarCube(passage.text) ||
+				('text' in passage &&
+					typeof passage.text === 'string' &&
+					sourceLooksLikeSugarCube(passage.text)) ||
 				passage.tags.some(tag => sugarCubeSignalTags.has(tag.toLowerCase()))
 		)
 	);
 }
 
-export function repairStory(
-	story: Story,
+export function repairStory<T extends Story>(
+	story: T,
 	allStories: Story[],
 	allFormats: StoryFormat[],
 	defaultFormat: StoryFormat
-): Story {
+): T {
 	const storyDefs = storyDefaults();
 	const repairs: Partial<Story> = {};
 
@@ -381,7 +383,7 @@ export function repairStory(
 	}
 
 	if (Object.keys(repairs).length > 0) {
-		return {...story, ...repairs};
+		return {...story, ...repairs} as T;
 	}
 
 	return story;

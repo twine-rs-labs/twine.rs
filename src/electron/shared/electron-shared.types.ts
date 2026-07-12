@@ -1,4 +1,8 @@
-import {Passage, Story} from '../../store/stories/stories.types';
+import {
+	PassageWithText,
+	Story,
+	StoryWithDocuments
+} from '../../store/stories/stories.types';
 import type {ProjectFolderSaveOptions} from '../../store/persistence/project-folder-save-hints';
 import type {CoreAssetInventoryEntry} from '../../core';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
@@ -37,7 +41,7 @@ export interface NativeProjectSessionSnapshot {
 	files: Array<NativeProjectFileEntry & {passageId?: string; storyId?: string}>;
 	rootPath: string;
 	scannedAt: string;
-	stories: Story[];
+	stories: StoryWithDocuments[];
 	storyIds: string[];
 }
 
@@ -146,7 +150,7 @@ export interface NativeProjectFolderResult {
 	performanceTimings?: NativeProjectSaveTimings;
 	rootPath: string;
 	storySourcesLoaded?: boolean;
-	stories: Story[];
+	stories: StoryWithDocuments[];
 	storyIds: string[];
 }
 
@@ -161,7 +165,7 @@ export interface NativeProjectHydrationStart extends Omit<
 export interface NativeProjectHydrationChunk {
 	done: boolean;
 	nextCursor: number;
-	passages: Array<{passage: Passage; storyId: string}>;
+	passages: Array<{passage: PassageWithText; storyId: string}>;
 }
 
 export interface NativeProjectLoadTimings {

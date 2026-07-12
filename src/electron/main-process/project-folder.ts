@@ -30,7 +30,10 @@ import {
 	localAssetReferencePath,
 	normalizedAssetPath
 } from '../../core/asset-paths';
-import {Passage, Story} from '../../store/stories';
+import {
+	PassageWithText as Passage,
+	StoryWithDocuments as Story
+} from '../../store/stories';
 import type {
 	ProjectFolderSaveHint,
 	ProjectFolderSaveOptions

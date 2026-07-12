@@ -1,6 +1,7 @@
 import type {CoreAssetInventoryEntry} from '../core/bindings/CoreAssetInventoryEntry';
 import type {CoreAssetsQuery} from '../core/bindings/CoreAssetsQuery';
 import type {CoreContentsQuery} from '../core/bindings/CoreContentsQuery';
+import type {CoreSearchQuery} from '../core/bindings/CoreSearchQuery';
 import type {CoreRect} from '../core/bindings/CoreRect';
 import type {CoreSessionMutationResult} from '../core/wasm/twine-wasm-client';
 import type {PassagePatch} from '../core/bindings/PassagePatch';
@@ -315,7 +316,8 @@ export class TestCoreSessionClient {
 					group: count('group'),
 					metadata: count('metadata'),
 					passage: count('passage'),
-					problems: index.contents.filter(entry => entry.severity !== null).length,
+					problems: index.contents.filter(entry => entry.severity !== null)
+						.length,
 					script: count('script'),
 					stylesheet: count('stylesheet'),
 					tag: count('tag'),
@@ -346,24 +348,66 @@ export class TestCoreSessionClient {
 			};
 		}
 	);
+	querySearchPage = jest.fn(
+		async (_sessionId: string, storyId: string, query: CoreSearchQuery) => {
+			const index = storyToCoreIndex(
+				storySnapshotToStory(this.story(storyId)),
+				{
+					fuzzy: query.fuzzy,
+					includePassageNames: query.includePassageNames,
+					includePassageText: query.includePassageText,
+					includeScript: query.includeScript,
+					includeStylesheet: query.includeStylesheet,
+					matchCase: query.matchCase,
+					query: query.query,
+					replacement: query.replacement,
+					useRegexes: query.useRegexes
+				}
+			);
+			const offset = Number(query.cursor ?? 0);
+			const end = Math.min(offset + query.limit, index.searchHits.length);
+			const pageIds = new Set(
+				index.searchHits
+					.slice(offset, end)
+					.map(hit => `${hit.sourceId}:${hit.scope}:${hit.start}:${hit.end}`)
+			);
+
+			return {
+				nextCursor: end < index.searchHits.length ? String(end) : null,
+				replacePreviews: index.replacePreviews.filter(preview =>
+					pageIds.has(
+						`${preview.sourceId}:${preview.scope}:${preview.start}:${preview.end}`
+					)
+				),
+				revision: this.revision,
+				searchHits: index.searchHits.slice(offset, end),
+				storyId,
+				totalCount: index.searchHits.length
+			};
+		}
+	);
 	queryPassageFacts = jest.fn(
 		async (_sessionId: string, storyId: string, passageId: string) => {
 			const story = storySnapshotToStory(this.story(storyId));
-			const passage = story.passages.find(candidate => candidate.id === passageId);
-			const byName = new Map(story.passages.map(candidate => [candidate.name, candidate]));
+			const passage = story.passages.find(
+				candidate => candidate.id === passageId
+			);
+			const byName = new Map(
+				story.passages.map(candidate => [candidate.name, candidate])
+			);
 			const linksFor = (source: typeof passage) =>
-				Array.from(source?.text.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g) ?? []).map(
-					match => {
-						const targetName = match[1].trim();
-						const target = byName.get(targetName);
-						return {
-							broken: !target,
-							sourceId: source?.id ?? passageId,
-							targetId: target?.id ?? null,
-							targetName
-						};
-					}
-				);
+				Array.from(
+					source?.text.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g) ?? []
+				).map(match => {
+					const targetName = match[1].trim();
+					const target = byName.get(targetName);
+					return {
+						broken: !target,
+						sourceId: source?.id ?? passageId,
+						targetId: target?.id ?? null,
+						targetName
+					};
+				});
 			const index = storyToCoreIndex(story, {
 				includeAssets: true,
 				includeDiagnostics: true,
@@ -371,12 +415,16 @@ export class TestCoreSessionClient {
 			});
 
 			return {
-				assetReferences: index.assets.filter(asset => asset.passageId === passageId),
+				assetReferences: index.assets.filter(
+					asset => asset.passageId === passageId
+				),
 				backlinks: story.passages
 					.flatMap(source => linksFor(source))
 					.filter(link => link.targetId === passageId),
 				characterCount: passage?.text.length ?? 0,
-				diagnostics: index.diagnostics.filter(item => item.sourceId === passageId),
+				diagnostics: index.diagnostics.filter(
+					item => item.sourceId === passageId
+				),
 				excerpt: passage?.text.slice(0, 400) ?? '',
 				isEmpty: !passage?.text.trim(),
 				lineCount: passage?.text.split('\n').length ?? 1,
@@ -399,14 +447,18 @@ export class TestCoreSessionClient {
 				0
 			),
 			diagnosticCount: index.diagnostics.length,
-			errorCount: index.diagnostics.filter(item => item.severity === 'error').length,
+			errorCount: index.diagnostics.filter(item => item.severity === 'error')
+				.length,
 			graph: index.graph,
-			missingAssetCount: index.assetInventory.filter(asset => asset.missing).length,
+			missingAssetCount: index.assetInventory.filter(asset => asset.missing)
+				.length,
 			passageCount: story.passages.length,
 			revision: this.revision,
 			storyId,
 			tagCount: index.tags.length,
-			warningCount: index.diagnostics.filter(item => item.severity === 'warning').length,
+			warningCount: index.diagnostics.filter(
+				item => item.severity === 'warning'
+			).length,
 			wordCount: story.passages.reduce(
 				(total, passage) =>
 					total + passage.text.trim().split(/\s+/).filter(Boolean).length,
@@ -920,71 +972,75 @@ export class TestCoreSessionClient {
 				return [metadataPatch(story.id, story, {tags: command.tags})];
 			}
 
-		case 'setStoryZoom': {
+			case 'setStoryZoom': {
 				const story = this.story(command.story_id);
 
 				story.zoom = command.zoom;
 				return [metadataPatch(story.id, story, {zoom: command.zoom})];
-		}
+			}
 
-		case 'replaceAllText': {
-			const story = this.story(command.story_id);
-			const replacement = command.query.replacement ?? '';
-			const patches: Patch[] = [];
-			const replace = (text: string) =>
-				replaceQueryText(
-					text,
-					command.query.query,
-					replacement,
-					command.query.matchCase,
-					command.query.useRegexes
-				);
-
-			for (const passage of story.passages) {
-				const name = command.query.includePassageNames
-					? replace(passage.name)
-					: passage.name;
-				const text = command.query.includePassageText
-					? replace(passage.text)
-					: passage.text;
-
-				const nameChanged = name !== passage.name;
-				const textChanged = text !== passage.text;
-
-				if (nameChanged || textChanged) {
-					passage.name = name;
-					passage.text = text;
-					patches.push(
-						passagePatch(story.id, passage, {
-							...emptyPassagePatch(),
-							name: nameChanged ? name : null,
-							text: textChanged ? text : null
-						})
+			case 'replaceAllText': {
+				const story = this.story(command.story_id);
+				const replacement = command.query.replacement ?? '';
+				const patches: Patch[] = [];
+				const replace = (text: string) =>
+					replaceQueryText(
+						text,
+						command.query.query,
+						replacement,
+						command.query.matchCase,
+						command.query.useRegexes
 					);
-				}
-			}
-			if (command.query.includeScript) {
-				const script = replace(story.script);
-				if (script !== story.script) {
-					story.script = script;
-					patches.push({script, story_id: story.id, type: 'storyScriptUpdated'});
-				}
-			}
-			if (command.query.includeStylesheet) {
-				const stylesheet = replace(story.stylesheet);
-				if (stylesheet !== story.stylesheet) {
-					story.stylesheet = stylesheet;
-					patches.push({
-						story_id: story.id,
-						stylesheet,
-						type: 'storyStylesheetUpdated'
-					});
-				}
-			}
-			return patches;
-		}
 
-		case 'updatePassage': {
+				for (const passage of story.passages) {
+					const name = command.query.includePassageNames
+						? replace(passage.name)
+						: passage.name;
+					const text = command.query.includePassageText
+						? replace(passage.text)
+						: passage.text;
+
+					const nameChanged = name !== passage.name;
+					const textChanged = text !== passage.text;
+
+					if (nameChanged || textChanged) {
+						passage.name = name;
+						passage.text = text;
+						patches.push(
+							passagePatch(story.id, passage, {
+								...emptyPassagePatch(),
+								name: nameChanged ? name : null,
+								text: textChanged ? text : null
+							})
+						);
+					}
+				}
+				if (command.query.includeScript) {
+					const script = replace(story.script);
+					if (script !== story.script) {
+						story.script = script;
+						patches.push({
+							script,
+							story_id: story.id,
+							type: 'storyScriptUpdated'
+						});
+					}
+				}
+				if (command.query.includeStylesheet) {
+					const stylesheet = replace(story.stylesheet);
+					if (stylesheet !== story.stylesheet) {
+						story.stylesheet = stylesheet;
+						patches.push({
+							story_id: story.id,
+							stylesheet,
+							type: 'storyStylesheetUpdated'
+						});
+					}
+				}
+				return patches;
+			}
+
+			case 'updatePassage': {
 				const story = this.story(command.story_id);
 				const passage = this.passage(story, command.passage_id);
 

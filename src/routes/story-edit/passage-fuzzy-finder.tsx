@@ -4,12 +4,8 @@ import {useHotkeys} from 'react-hotkeys-hook';
 import {useTranslation} from 'react-i18next';
 import {CSSTransition} from 'react-transition-group';
 import {FuzzyFinder} from '../../components/fuzzy-finder';
-import {
-	passagesMatchingFuzzySearch,
-	selectPassage,
-	Story,
-	useStoriesContext
-} from '../../store/stories';
+import {useCoreProjectHost} from '../../core';
+import {selectPassage, Story, useStoriesContext} from '../../store/stories';
 import {Point} from '../../util/geometry';
 
 export interface PassageFuzzyFinderProps {
@@ -33,6 +29,7 @@ export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
 		story
 	} = props;
 	const {dispatch} = useStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const [search, setSearch] = React.useState('');
 	const [debouncedSearch, setDebouncedSearch] = React.useState('');
 	const updateDebouncedSearch = React.useMemo(
@@ -46,21 +43,65 @@ export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
 			),
 		[]
 	);
-	const matches = React.useMemo(
-		() => passagesMatchingFuzzySearch(story.passages, debouncedSearch),
-		[debouncedSearch, story.passages]
-	);
+	const [matches, setMatches] = React.useState<
+		Array<{detail: string; passage: Story['passages'][number]}>
+	>([]);
+	React.useEffect(() => {
+		let active = true;
+		if (!debouncedSearch.trim()) {
+			setMatches([]);
+			return () => {
+				active = false;
+			};
+		}
+		void coreProjectHost
+			.querySearchPageAsync(story.id, {
+				fuzzy: true,
+				includePassageNames: true,
+				includePassageText: true,
+				includeScript: false,
+				includeStylesheet: false,
+				limit: 12,
+				query: debouncedSearch
+			})
+			.then(page => {
+				if (!active) {
+					return;
+				}
+				const seen = new Set<string>();
+				setMatches(
+					page.searchHits
+						.flatMap(hit => {
+							if (!hit.passageId || seen.has(hit.passageId)) {
+								return [];
+							}
+							const passage = story.passages.find(
+								candidate => candidate.id === hit.passageId
+							);
+							if (!passage) {
+								return [];
+							}
+							seen.add(hit.passageId);
+							return [{detail: hit.excerpt, passage}];
+						})
+						.slice(0, 5)
+				);
+			});
+		return () => {
+			active = false;
+		};
+	}, [coreProjectHost, debouncedSearch, story.id, story.passages]);
 	const results = React.useMemo(
 		() =>
 			matches.map(match => ({
 				action: onTestPassage
 					? {
-							label: `Test "${match.name}" from here`,
-							onClick: () => onTestPassage(match)
+							label: `Test "${match.passage.name}" from here`,
+							onClick: () => onTestPassage(match.passage)
 						}
 					: undefined,
-				detail: match.text,
-				heading: match.name
+				detail: match.detail,
+				heading: match.passage.name
 			})),
 		[matches, onTestPassage]
 	);
@@ -73,7 +114,10 @@ export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
 	}
 
 	function handleSelectResult(index: number) {
-		const match = matches[index];
+		const match = matches[index]?.passage;
+		if (!match) {
+			return;
+		}
 
 		if (onRevealPassageInGraph) {
 			onRevealPassageInGraph(match);

@@ -156,11 +156,13 @@ surface materially improves against its accepted baseline.
 
 ### 4. Further memory reduction
 
-- Measure native project storage, WASM session state, frontend mirrors,
+- Measure native project storage, WASM session state, frontend metadata,
   analysis caches, graph data, and serialized transfer buffers separately.
 - Bound or eliminate duplicate retained representations.
-- Measure the metadata-only React model and confirm bootstrap passage bodies
-  are released immediately after successful Rust session initialization.
+- The metadata-only React model is now enforced by distinct route-facing and
+  materialized transport types. Bootstrap passage bodies are released after
+  successful Rust session initialization, and product routes cannot read them
+  from `Passage`.
 - Remove or bound the remaining duplicate native hydration, worker request,
   snapshot-construction, and WASM representations rather than recreating a
   frontend passage-body cache.

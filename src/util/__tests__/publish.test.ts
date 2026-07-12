@@ -1,7 +1,10 @@
 import escape from 'lodash/escape';
 import * as publish from '../publish';
 import {AppInfo} from '../app-info';
-import {Passage, Story} from '../../store/stories';
+import {
+	PassageWithText as Passage,
+	StoryWithDocuments as Story
+} from '../../store/stories';
 import {fakeAppInfo, fakePassage, fakeStory} from '../../test-util';
 import {TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE} from '../story-graph-metadata';
 

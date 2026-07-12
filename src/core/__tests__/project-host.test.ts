@@ -263,9 +263,9 @@ describe('StoreCoreProjectHost asset commands', () => {
 			}),
 			1
 		);
-		expect(context.host.performanceDiagnostics().passageTextCharacterCount).toBe(
-			0
-		);
+		expect(
+			context.host.performanceDiagnostics().passageTextCharacterCount
+		).toBe(0);
 	});
 
 	it('retains bootstrap passage bodies when initialization fails so retry is safe', async () => {
@@ -276,19 +276,19 @@ describe('StoreCoreProjectHost asset commands', () => {
 			.mockResolvedValueOnce(undefined);
 		const context = hostWithStory({text: 'Retry body', wasmClient});
 
-		await expect(
-			context.host.ensureSessionReady()
-		).rejects.toThrow('initialization failed');
-		expect(context.host.performanceDiagnostics().passageTextCharacterCount).toBe(
-			10
+		await expect(context.host.ensureSessionReady()).rejects.toThrow(
+			'initialization failed'
 		);
+		expect(
+			context.host.performanceDiagnostics().passageTextCharacterCount
+		).toBe(10);
 		await context.host.ensureSessionReady();
-		expect(wasmClient.replaceProject.mock.calls[1][1].stories[0].passages[0].text).toBe(
-			'Retry body'
-		);
-		expect(context.host.performanceDiagnostics().passageTextCharacterCount).toBe(
-			0
-		);
+		expect(
+			wasmClient.replaceProject.mock.calls[1][1].stories[0].passages[0].text
+		).toBe('Retry body');
+		expect(
+			context.host.performanceDiagnostics().passageTextCharacterCount
+		).toBe(0);
 	});
 
 	it('releases bootstrap passage bodies after synchronous initialization', async () => {
@@ -303,9 +303,9 @@ describe('StoreCoreProjectHost asset commands', () => {
 			updatePassageTextCommand(context.story.id, context.start.id, 'Next body')
 		);
 
-		expect(context.host.performanceDiagnostics().passageTextCharacterCount).toBe(
-			0
-		);
+		expect(
+			context.host.performanceDiagnostics().passageTextCharacterCount
+		).toBe(0);
 	});
 
 	it('sends commands to Rust and applies only returned passage patches', async () => {
@@ -339,8 +339,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 			1
 		);
 		expect(apply).toHaveBeenCalledWith(command, 1);
-		expect(context.stories[0].passages[0].text).not.toBe('from-rust');
-		expect(context.stories[0].passages[0].text).not.toBe('from-command');
+		expect('text' in context.stories[0].passages[0]).toBe(false);
 		expect(context.host.isDirty()).toBe(true);
 		expect(context.dispatch).toHaveBeenCalledWith(
 			expect.objectContaining({

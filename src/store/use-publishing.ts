@@ -19,7 +19,12 @@ import {
 	loadFormatProperties,
 	useStoryFormatsContext
 } from './story-formats';
-import {Story, storyWithId, useStoriesContext} from './stories';
+import {
+	Story,
+	StoryWithDocuments,
+	storyWithId,
+	useStoriesContext
+} from './stories';
 import {getAppInfo} from '../util/app-info';
 
 export type PublishStoryOptions = PublishOptions & {
@@ -45,7 +50,7 @@ export type ProofStoryPackageOptions =
 	  };
 
 export interface UsePublishingProps {
-	materializeStory: (storyId: string) => Promise<Story>;
+	materializeStory: (storyId: string) => Promise<StoryWithDocuments>;
 	buildStoryPackage: (
 		storyId: string,
 		target: StoryBuildTarget,

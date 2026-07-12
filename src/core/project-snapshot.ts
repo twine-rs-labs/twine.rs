@@ -2,9 +2,9 @@ import type {CoreRect} from './bindings/CoreRect';
 import type {PassageSnapshot} from './bindings/PassageSnapshot';
 import type {ProjectSnapshot} from './bindings/ProjectSnapshot';
 import type {StorySnapshot} from './bindings/StorySnapshot';
-import type {Passage, Story, StoriesState} from '../store/stories';
+import type {PassageWithText, StoryWithDocuments} from '../store/stories';
 
-function finiteLayout(passage: Passage): CoreRect | null {
+function finiteLayout(passage: PassageWithText): CoreRect | null {
 	const layout = {
 		height: passage.height,
 		left: passage.left,
@@ -19,7 +19,7 @@ function finiteLayout(passage: Passage): CoreRect | null {
 		: null;
 }
 
-export function passageToSnapshot(passage: Passage): PassageSnapshot {
+export function passageToSnapshot(passage: PassageWithText): PassageSnapshot {
 	return {
 		id: passage.id,
 		layout: finiteLayout(passage),
@@ -30,7 +30,7 @@ export function passageToSnapshot(passage: Passage): PassageSnapshot {
 	};
 }
 
-export function storyToSnapshot(story: Story): StorySnapshot {
+export function storyToSnapshot(story: StoryWithDocuments): StorySnapshot {
 	return {
 		id: story.id,
 		ifid: story.ifid,
@@ -49,7 +49,7 @@ export function storyToSnapshot(story: Story): StorySnapshot {
 }
 
 export function projectSnapshotFromStories(
-	stories: StoriesState,
+	stories: StoryWithDocuments[],
 	name = stories[0]?.name ?? 'Twine Project'
 ): ProjectSnapshot {
 	return {

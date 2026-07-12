@@ -11,7 +11,6 @@ import type {CoreSearchPage} from '../core/bindings/CoreSearchPage';
 import {
 	StorySearchFlags,
 	highlightPassages,
-	passageReplaceError,
 	selectPassage,
 	storyWithId,
 	useStoriesContext
@@ -57,19 +56,6 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 	const includePassageNames = flags.includePassageNames ?? false;
 	const matchCase = flags.matchCase ?? false;
 	const useRegexes = flags.useRegexes ?? false;
-	const errorText = React.useMemo(() => {
-		const error = passageReplaceError(story.passages, find, replace, flags);
-
-		if (error) {
-			if ('passage' in error) {
-				return t(`dialogs.storySearch.error.${error.error}`, {
-					name: error.passage.name
-				});
-			}
-
-			return t(`dialogs.storySearch.error.${error.error}`);
-		}
-	}, [find, flags, replace, story.passages]);
 	React.useEffect(() => {
 		let active = true;
 		const options = {
@@ -264,10 +250,9 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 					onChange={() => toggleFlag('useRegexes')}
 				/>
 			</div>
-			{errorText && <p className="search-error">{errorText}</p>}
 			<div className="search-results">
 				<Button
-					disabled={!!errorText || replaceableHits.length === 0}
+					disabled={replaceableHits.length === 0}
 					icon="replace"
 					onClick={handleReplace}
 					variant="danger"

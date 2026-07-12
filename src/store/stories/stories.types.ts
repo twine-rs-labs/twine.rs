@@ -43,10 +43,6 @@ export interface Passage {
 	 */
 	tags: string[];
 	/**
-	 * Body text of the passage.
-	 */
-	text: string;
-	/**
 	 * Top (e.g. Y) position of the top-left corner of the passage in pixels.
 	 */
 	top: number;
@@ -54,6 +50,11 @@ export interface Passage {
 	 * Width of the passage in pixels.
 	 */
 	width: number;
+}
+
+/** A passage document used only at explicit transport/materialization boundaries. */
+export interface PassageWithText extends Passage {
+	text: string;
 }
 
 export interface Story {
@@ -117,6 +118,11 @@ export interface Story {
 	 * Zoom level the story is displayed at.
 	 */
 	zoom: number;
+}
+
+/** A complete story snapshot used for import, recovery, build, and persistence. */
+export interface StoryWithDocuments extends Omit<Story, 'passages'> {
+	passages: PassageWithText[];
 }
 
 export type StoriesState = Story[];

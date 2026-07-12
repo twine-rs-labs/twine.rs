@@ -44,7 +44,7 @@ export const StoryInspector: React.FC<StoryInspectorProps> = ({id}) => {
 						data-top={passage.top}
 						data-width={passage.width}
 					>
-						{passage.text}
+						{'text' in passage ? passage.text : ''}
 					</div>
 				))}
 			</div>

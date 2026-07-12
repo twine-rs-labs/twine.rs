@@ -77,7 +77,7 @@ describe('stories Electron IPC save middleware', () => {
 					actions: [
 						{
 							passageId: storiesState[0].passages[0].id,
-							props: {text: 'from disk'},
+							props: {name: 'from disk'},
 							storyId: storiesState[0].id,
 							type: 'updatePassage'
 						}
@@ -130,7 +130,7 @@ describe('stories Electron IPC save middleware', () => {
 				]
 			})
 		);
-		expect(storiesState[0].passages[0].text).toBe(passage.text);
+		expect('text' in storiesState[0].passages[0]).toBe(false);
 	});
 
 	it.each([

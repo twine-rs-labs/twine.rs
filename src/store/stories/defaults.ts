@@ -1,7 +1,7 @@
 import {i18n} from '../../util/i18n';
-import {Passage, Story} from './stories.types';
+import {PassageWithText, Story} from './stories.types';
 
-export const passageDefaults = (): Omit<Passage, 'id' | 'story'> => ({
+export const passageDefaults = (): Omit<PassageWithText, 'id' | 'story'> => ({
 	height: 100,
 	highlighted: false,
 	left: 0,

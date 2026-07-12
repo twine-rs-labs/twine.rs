@@ -1,4 +1,7 @@
-import {Passage, Story} from '../../store/stories';
+import {
+	PassageWithText as Passage,
+	StoryWithDocuments as Story
+} from '../../store/stories';
 import {fakePassage, fakeStory} from '../../test-util';
 import {
 	passageFromTwee,

@@ -1,6 +1,8 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {storyStats, Story} from '../../store/stories';
+import {useCoreProjectHost} from '../../core';
+import type {CoreStorySummary} from '../../core';
+import {Story} from '../../store/stories';
 import './story-stats.css';
 
 const dateFormatter = new Intl.DateTimeFormat([], {
@@ -16,7 +18,17 @@ export const StoryDetailsDialogStats: React.FC<
 	StoryDetailsDialogStatsProps
 > = props => {
 	const {story} = props;
-	const stats = storyStats(story);
+	const coreProjectHost = useCoreProjectHost();
+	const [stats, setStats] = React.useState<CoreStorySummary>();
+	React.useEffect(() => {
+		let active = true;
+		void coreProjectHost
+			.queryStorySummaryAsync(story.id)
+			.then(summary => active && setStats(summary));
+		return () => {
+			active = false;
+		};
+	}, [coreProjectHost, story.id]);
 	const {t} = useTranslation();
 
 	return (
@@ -24,23 +36,23 @@ export const StoryDetailsDialogStats: React.FC<
 			<table className="counts">
 				<tbody>
 					<tr>
-						<td>{stats.characters}</td>
+						<td>{stats?.characterCount ?? '—'}</td>
 						<td>{t('dialogs.storyDetails.stats.characters')}</td>
 					</tr>
 					<tr>
-						<td>{stats.words}</td>
+						<td>{stats?.wordCount ?? '—'}</td>
 						<td>{t('dialogs.storyDetails.stats.words')}</td>
 					</tr>
 					<tr>
-						<td>{stats.passages}</td>
+						<td>{stats?.passageCount ?? story.passages.length}</td>
 						<td>{t('dialogs.storyDetails.stats.passages')}</td>
 					</tr>
 					<tr>
-						<td>{stats.links.length}</td>
+						<td>{stats?.graph.links ?? '—'}</td>
 						<td>{t('dialogs.storyDetails.stats.links')}</td>
 					</tr>
 					<tr>
-						<td>{stats.brokenLinks.length}</td>
+						<td>{stats?.graph.brokenLinks ?? '—'}</td>
 						<td>{t('dialogs.storyDetails.stats.brokenLinks')}</td>
 					</tr>
 				</tbody>

@@ -1,6 +1,6 @@
 import {TwineElectronWindow} from '../../../../../electron/shared';
 import {load} from '../load';
-import {Story} from '../../../../stories/stories.types';
+import {StoryWithDocuments as Story} from '../../../../stories/stories.types';
 import {fakeAppInfo, fakeStory} from '../../../../../test-util';
 import {publishStory} from '../../../../../util/publish';
 import {projectStoryHydration} from '../../../../project-hydration';

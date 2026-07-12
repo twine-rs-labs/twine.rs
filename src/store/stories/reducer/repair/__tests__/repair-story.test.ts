@@ -1,6 +1,6 @@
 import {repairStory} from '../repair-story';
 import * as repairPassage from '../repair-passage';
-import {Story} from '../../../stories.types';
+import {StoryWithDocuments as Story} from '../../../stories.types';
 import {StoryFormat} from '../../../../story-formats';
 import {fakeStory, fakeUnloadedStoryFormat} from '../../../../../test-util';
 

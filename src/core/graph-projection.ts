@@ -9,7 +9,10 @@ import type {CoreGraphProjectionOptions} from './bindings/CoreGraphProjectionOpt
 import type {CoreLinkLayerOptions} from './bindings/CoreLinkLayerOptions';
 import type {CoreRect} from './bindings/CoreRect';
 import type {PassageMove} from './bindings/PassageMove';
-import type {Passage, Story} from '../store/stories';
+import type {
+	PassageWithText as Passage,
+	StoryWithDocuments as Story
+} from '../store/stories';
 import {boundingRect, rectsIntersect} from '../util/geometry';
 import {parseLinks} from '../util/parse-links';
 

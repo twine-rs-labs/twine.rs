@@ -1,6 +1,6 @@
 import type {CoreAssetInventoryEntry} from '../core/bindings/CoreAssetInventoryEntry';
 import type {StoryFormatProperties} from '../store/story-formats';
-import type {Story} from '../store/stories';
+import type {StoryWithDocuments as Story} from '../store/stories';
 import type {AppInfo} from './app-info';
 import type {PublishOptions} from './publish';
 import {publishStoryWithFormat} from './publish';
@@ -169,8 +169,7 @@ function utf8Bytes(value: string) {
 			const low = value.charCodeAt(index + 1);
 
 			if (low >= 0xdc00 && low <= 0xdfff) {
-				codePoint =
-					0x10000 + ((codePoint - 0xd800) << 10) + (low - 0xdc00);
+				codePoint = 0x10000 + ((codePoint - 0xd800) << 10) + (low - 0xdc00);
 				index++;
 			}
 		}
@@ -447,10 +446,7 @@ function dosDateTime(date: Date) {
 	const year = Math.max(1980, date.getFullYear());
 
 	return {
-		date:
-			((year - 1980) << 9) |
-			((date.getMonth() + 1) << 5) |
-			date.getDate(),
+		date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
 		time:
 			(date.getHours() << 11) |
 			(date.getMinutes() << 5) |
@@ -737,11 +733,7 @@ export function createStoryBuildPackage(
 				story,
 				formatProperties.source,
 				appInfo,
-				publishOptionsForTarget(
-					target,
-					renderPublishOptions,
-					htmlCompatibility
-				)
+				publishOptionsForTarget(target, renderPublishOptions, htmlCompatibility)
 			)
 		: '';
 	const files = buildOutputFiles(story, target, html, generatedAt, assets, {

@@ -9,7 +9,6 @@ import type {CoreDiagnosticSeverity} from './bindings/CoreDiagnosticSeverity';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
 import {assetSnippet, normalizedAssetPath} from './asset-paths';
 import type {Passage, Story} from '../store/stories';
-import {parseLinks} from '../util/parse-links';
 
 export interface ContentsViewModelEntry {
 	asset: CoreAssetInventoryEntry | null;
@@ -154,16 +153,6 @@ function contentsFilterLabel(kind: CoreContentsEntryKind) {
 	}
 }
 
-function countWords(text: string) {
-	const trimmed = text.trim();
-
-	if (trimmed === '') {
-		return 0;
-	}
-
-	return trimmed.split(/\s+/).length;
-}
-
 function passageNamesFromIndex(index: CoreStoryIndex) {
 	return index.files
 		.filter(file => file.kind === 'passage')
@@ -175,7 +164,7 @@ export function storyShellIndex(
 	knownAssets: CoreAssetInventoryEntry[] = []
 ): CoreStoryIndex {
 	const files = story.passages.map(passage => ({
-		characterCount: passage.text.length,
+		characterCount: 0,
 		id: passage.id,
 		kind: 'passage' as const,
 		lineCount: 1,
@@ -295,9 +284,7 @@ export function storyShellIndex(
 		],
 		graph: {
 			brokenLinks: 0,
-			emptyPassages: story.passages.filter(
-				passage => passage.text.trim() === ''
-			).length,
+			emptyPassages: 0,
 			links: 0,
 			orphanPassages: 0,
 			passages: story.passages.length,
@@ -325,25 +312,7 @@ export function storyLinkFacts(story: Story): PassageLinkFact[] {
 		return cached;
 	}
 
-	const passagesByName = new Map(
-		story.passages.map(passage => [passage.name, passage])
-	);
 	const facts: PassageLinkFact[] = [];
-
-	for (const source of story.passages) {
-		for (const targetName of parseLinks(source.text, true)) {
-			const target = passagesByName.get(targetName);
-
-			facts.push({
-				broken: !target,
-				self: target?.id === source.id,
-				sourceId: source.id,
-				sourceName: source.name,
-				targetId: target?.id ?? null,
-				targetName
-			});
-		}
-	}
 
 	storyLinkFactsCache.set(story, facts);
 	return facts;
@@ -567,6 +536,6 @@ export function workbenchSelection(
 		passage,
 		passageNames: passageNamesFromIndex(index),
 		sourceId,
-		wordCount: passage ? countWords(passage.text) : 0
+		wordCount: 0
 	};
 }

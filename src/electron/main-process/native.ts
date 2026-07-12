@@ -3,7 +3,7 @@ import {createRequire} from 'module';
 import {join, resolve} from 'path';
 import {performance} from 'perf_hooks';
 import type {CoreAssetInventoryEntry} from '../../core';
-import type {Story} from '../../store/stories';
+import type {StoryWithDocuments as Story} from '../../store/stories';
 import type {
 	NativeProjectFileEntry,
 	NativeProjectFolderResult,

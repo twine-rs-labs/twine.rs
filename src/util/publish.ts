@@ -1,6 +1,9 @@
 import escape from 'lodash/escape';
 import type {CoreAssetInventoryEntry} from '../core/bindings/CoreAssetInventoryEntry';
-import {Passage, Story} from '../store/stories';
+import {
+	PassageWithText as Passage,
+	StoryWithDocuments as Story
+} from '../store/stories';
 import {AppInfo} from './app-info';
 import {i18n} from './i18n';
 import {

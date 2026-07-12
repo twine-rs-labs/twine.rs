@@ -46,7 +46,12 @@ import {
 	useProjectStoryHydration
 } from '../../store/project-hydration';
 import {mergeProjectStories} from '../../store/merge-project-stories';
-import {Passage, Story, useStoriesContext} from '../../store/stories';
+import {
+	Passage,
+	PassageWithText,
+	Story,
+	useStoriesContext
+} from '../../store/stories';
 import {
 	markPerformance,
 	measurePerformance,
@@ -1325,12 +1330,14 @@ export const StoryWorkspaceShell: React.FC<
 							1000
 						);
 						hydrationChunkCount++;
-						const byStory = new Map<string, Passage[]>();
+						const byStory = new Map<string, PassageWithText[]>();
 						for (const {passage, storyId} of chunk.passages) {
 							const passages = byStory.get(storyId) ?? [];
 							passages.push(passage);
 							byStory.set(storyId, passages);
-							metadataById.get(storyId)?.passages.push({...passage, text: ''});
+							const metadataPassage: Passage = {...passage};
+							delete (metadataPassage as Partial<PassageWithText>).text;
+							metadataById.get(storyId)?.passages.push(metadataPassage);
 						}
 						for (const [storyId, passages] of byStory) {
 							await coreProjectHost.appendHydratedProjectPassages(

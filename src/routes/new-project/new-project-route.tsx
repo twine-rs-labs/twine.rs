@@ -20,6 +20,7 @@ import {
 	passageDefaults,
 	storyDefaults,
 	Story,
+	StoryWithDocuments,
 	useStoriesContext
 } from '../../store/stories';
 import type {
@@ -55,7 +56,7 @@ type SourceLayout = 'single' | 'multi';
 interface ImportQueue {
 	fileName: string;
 	preparedImport?: NativeProjectImportSource;
-	stories: Story[];
+	stories: StoryWithDocuments[];
 	selectedIds: string[];
 }
 
@@ -247,7 +248,7 @@ async function parseImportFile(file: File) {
 }
 
 async function persistNativeProjectFolder(
-	story: Story,
+	story: StoryWithDocuments,
 	preferredParent?: string
 ) {
 	const twineElectron = desktopBridge();
@@ -411,7 +412,7 @@ export const NewProjectRoute: React.FC = () => {
 				throw new Error(`There is already a story named "${storyName}"`);
 			}
 
-			const story: Story = {
+			const story: StoryWithDocuments = {
 				...storyDefaults(),
 				id: storyId,
 				ifid: uuid().toUpperCase(),
@@ -526,7 +527,7 @@ export const NewProjectRoute: React.FC = () => {
 		});
 	}
 
-	function storyWithImportIdentity(story: Story) {
+	function storyWithImportIdentity(story: StoryWithDocuments) {
 		const existingStory = stories.find(
 			existing => storyFileName(existing) === storyFileName(story)
 		);

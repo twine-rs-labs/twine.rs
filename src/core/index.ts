@@ -26,7 +26,11 @@ import type {ProjectSnapshot} from './bindings/ProjectSnapshot';
 import type {StoryMetadataPatch} from './bindings/StoryMetadataPatch';
 import type {StoryCommand} from './bindings/StoryCommand';
 import type {StorySnapshot} from './bindings/StorySnapshot';
-import {createUntitledPassage, Story} from '../store/stories';
+import {
+	createUntitledPassage,
+	Story,
+	StoryWithDocuments
+} from '../store/stories';
 import {storyToSnapshot} from './project-snapshot';
 
 export * from './project-host';
@@ -90,7 +94,9 @@ export function createPassageCommand(
 	};
 }
 
-export function createStoryCommand(story: Story | StorySnapshot): StoryCommand {
+export function createStoryCommand(
+	story: StoryWithDocuments | StorySnapshot
+): StoryCommand {
 	return {
 		type: 'createStory',
 		story: 'startPassage' in story ? storyToSnapshot(story) : story
@@ -138,7 +144,7 @@ export function deleteStoryCommand(storyId: string): StoryCommand {
 
 export function replaceStoryCommand(
 	storyId: string,
-	story: Story | StorySnapshot
+	story: StoryWithDocuments | StorySnapshot
 ): StoryCommand {
 	return {
 		type: 'replaceStory',
@@ -164,7 +170,7 @@ export function createUntitledPassageCommand(
 		},
 		name: props.name,
 		tags: props.tags,
-		text: props.text
+		text: ''
 	});
 }
 

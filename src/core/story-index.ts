@@ -19,7 +19,10 @@ import {
 	assetSnippet,
 	normalizedAssetPath
 } from './asset-paths';
-import {Passage, Story} from '../store/stories';
+import {
+	PassageWithText as Passage,
+	StoryWithDocuments as Story
+} from '../store/stories';
 import {parseLinks} from '../util/parse-links';
 import {createRegExp} from '../util/regexp';
 

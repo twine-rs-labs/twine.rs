@@ -16,7 +16,13 @@ import {
 	materializeStoryFromSession,
 	useCoreProjectHost
 } from '../../core';
-import type {CoreStoryIndex} from '../../core';
+import type {
+	CoreAssetInventoryEntry,
+	CoreAssetsPage,
+	CoreDiagnosticsPage,
+	CoreStorySummary
+} from '../../core';
+import type {CoreDiagnostic} from '../../core/bindings/CoreDiagnostic';
 import {FormatLoader} from '../../store/format-loader';
 import {
 	formatWithNameAndVersion,
@@ -24,7 +30,11 @@ import {
 	type StoryFormatProperties,
 	useStoryFormatsContext
 } from '../../store/story-formats';
-import {type Story, useStoriesContext} from '../../store/stories';
+import {
+	type Story,
+	type StoryWithDocuments,
+	useStoriesContext
+} from '../../store/stories';
 import {
 	type ProofingFormatSelection,
 	usePublishing
@@ -53,6 +63,12 @@ type NoteTone = 'ok' | 'warn' | 'error' | 'info';
 interface InlineAssetProfile {
 	count: number;
 	knownSizeBytes: number;
+}
+
+interface BuildReadModel {
+	assets: CoreAssetInventoryEntry[];
+	diagnostics: CoreDiagnostic[];
+	summary?: CoreStorySummary;
 }
 
 interface BuildLogEntry {
@@ -178,9 +194,9 @@ function bytesLabel(bytes: number) {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function inlineAssetProfile(storyIndex?: CoreStoryIndex): InlineAssetProfile {
+function inlineAssetProfile(storyIndex?: BuildReadModel): InlineAssetProfile {
 	const assets =
-		storyIndex?.assetInventory.filter(
+		storyIndex?.assets.filter(
 			asset => asset.publish.copy && asset.exists !== false && !asset.missing
 		) ?? [];
 
@@ -295,7 +311,10 @@ function proofingFormatOptions(formats: StoryFormat[], story?: Story) {
 		}));
 }
 
-function sourceInspection(story: Story, storyIndex?: CoreStoryIndex) {
+function sourceInspection(
+	story: StoryWithDocuments,
+	storyIndex?: BuildReadModel
+) {
 	const start = story.passages.find(
 		passage => passage.id === story.startPassage
 	);
@@ -303,8 +322,8 @@ function sourceInspection(story: Story, storyIndex?: CoreStoryIndex) {
 		`story "${story.name}"`,
 		`  format       ${story.storyFormat} ${story.storyFormatVersion}`,
 		`  passages     ${story.passages.length}`,
-		`  links        ${storyIndex?.graph.links ?? 0}`,
-		`  assets       ${storyIndex?.assetInventory.length ?? 0}`,
+		`  links        ${storyIndex?.summary?.graph.links ?? 0}`,
+		`  assets       ${storyIndex?.assets.length ?? 0}`,
 		`  diagnostics  ${storyIndex?.diagnostics.length ?? 0}`,
 		`  start        ${start?.name ?? 'not set'}`,
 		'',
@@ -387,8 +406,9 @@ export const BuildRoute: React.FC = () => {
 	);
 	const [logs, setLogs] = React.useState<BuildLogEntry[]>([]);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
-	const [storyIndex, setStoryIndex] = React.useState<CoreStoryIndex>();
-	const [inspectionStory, setInspectionStory] = React.useState<Story>();
+	const [storyIndex, setStoryIndex] = React.useState<BuildReadModel>();
+	const [inspectionStory, setInspectionStory] =
+		React.useState<StoryWithDocuments>();
 	const dismissedDiagnosticIds = React.useMemo(
 		() => (story ? loadDismissedDiagnosticIds(story.id) : new Set<string>()),
 		[dismissalsVersion, story]
@@ -444,27 +464,43 @@ export const BuildRoute: React.FC = () => {
 
 		setStoryIndex(undefined);
 
-		// Building is an explicit non-interactive workflow. Keep its complete
-		// inventory request scoped rather than relying on the product default.
-		void coreProjectHost
-			.queryStoryIndexAsync(story.id, {
-				includeAssets: true,
-				includeContents: false,
-				includeDiagnostics: false,
-				includeFiles: false,
-				includeGraph: false,
-				includePassageNames: false,
-				includePassageText: false,
-				includeScript: false,
-				includeStylesheet: false,
-				includeTags: false,
-				includeVariables: false
-			})
-			.then(index => {
-				if (active) {
-					setStoryIndex(index);
-				}
-			});
+		void (async () => {
+			const assets: CoreAssetInventoryEntry[] = [];
+			const diagnostics: CoreDiagnostic[] = [];
+			let assetCursor: string | null = null;
+			let diagnosticCursor: string | null = null;
+			do {
+				const page: CoreAssetsPage = await coreProjectHost.queryAssetsPageAsync(
+					story.id,
+					{
+						cursor: assetCursor,
+						limit: 500,
+						query: null
+					}
+				);
+				assets.push(...page.assets);
+				assetCursor = page.nextCursor;
+			} while (assetCursor);
+			do {
+				const page: CoreDiagnosticsPage =
+					await coreProjectHost.queryDiagnosticsPageAsync(story.id, {
+						cursor: diagnosticCursor,
+						limit: 500,
+						severity: null
+					});
+				diagnostics.push(...page.diagnostics);
+				diagnosticCursor = page.nextCursor;
+			} while (diagnosticCursor);
+			return {
+				assets,
+				diagnostics,
+				summary: await coreProjectHost.queryStorySummaryAsync(story.id)
+			};
+		})().then(index => {
+			if (active) {
+				setStoryIndex(index);
+			}
+		});
 
 		return () => {
 			active = false;
@@ -550,7 +586,7 @@ export const BuildRoute: React.FC = () => {
 		? inspectStoryFormatPublishSafety(formatProperties)
 		: undefined;
 	const missingAssets =
-		storyIndex?.assetInventory
+		storyIndex?.assets
 			.filter(asset => asset.missing)
 			.map(asset => asset.path) ?? [];
 	const diagnostics =

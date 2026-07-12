@@ -1,9 +1,9 @@
-import type {Story} from '../store/stories';
+import type {Story, StoryWithDocuments} from '../store/stories';
 
-const bootstrapStories = new Map<string, Story>();
-const storyMaterializers = new Map<string, () => Promise<Story>>();
+const bootstrapStories = new Map<string, StoryWithDocuments>();
+const storyMaterializers = new Map<string, () => Promise<StoryWithDocuments>>();
 
-export function registerBootstrapStories(stories: Story[]) {
+export function registerBootstrapStories(stories: StoryWithDocuments[]) {
 	for (const story of stories) {
 		bootstrapStories.set(story.id, story);
 	}
@@ -13,10 +13,10 @@ export function bootstrapStory(storyId: string) {
 	return bootstrapStories.get(storyId);
 }
 
-export function metadataStory(story: Story): Story {
+export function metadataStory(story: StoryWithDocuments): Story {
 	return {
 		...story,
-		passages: story.passages.map(passage => ({...passage, text: ''}))
+		passages: story.passages.map(({text: _text, ...passage}) => passage)
 	};
 }
 
@@ -26,7 +26,7 @@ export function clearBootstrapStories() {
 
 export function registerStoryMaterializer(
 	storyId: string,
-	materialize: () => Promise<Story>
+	materialize: () => Promise<StoryWithDocuments>
 ) {
 	storyMaterializers.set(storyId, materialize);
 }
@@ -35,6 +35,22 @@ export function unregisterStoryMaterializer(storyId: string) {
 	storyMaterializers.delete(storyId);
 }
 
-export async function materializeRegisteredStory(story: Story) {
-	return (await storyMaterializers.get(story.id)?.()) ?? story;
+export async function materializeRegisteredStory(
+	story: Story
+): Promise<StoryWithDocuments> {
+	const materialized = await storyMaterializers.get(story.id)?.();
+
+	if (materialized) {
+		return materialized;
+	}
+
+	const bootstrap = bootstrapStories.get(story.id);
+
+	if (bootstrap) {
+		return bootstrap;
+	}
+
+	throw new Error(
+		`No passage document source is registered for story ${story.id}.`
+	);
 }

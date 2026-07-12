@@ -13,7 +13,7 @@ import type {CoreExternalConflict} from '../core/bindings/CoreExternalConflict';
 import {markProjectStoryHydration} from './project-hydration';
 import {loadProjectMetadata, saveProjectMetadata} from './project-metadata';
 import {NativeProjectDeltaQueue} from './native-project-delta-queue';
-import {Story, useStoriesContext} from './stories';
+import {Story, StoryWithDocuments, useStoriesContext} from './stories';
 import {
 	markPerformance,
 	recordPerformanceHarnessEvent
@@ -26,7 +26,7 @@ interface PendingProjectReview {
 	rootPath: string;
 }
 
-function reviveSessionStory(story: Story): Story {
+function reviveSessionStory(story: StoryWithDocuments): StoryWithDocuments {
 	return {
 		...story,
 		lastUpdate: new Date(story.lastUpdate)

@@ -1,5 +1,5 @@
 import {StoryFormatsState} from '../../../../story-formats';
-import {Story} from '../../../../stories';
+import {StoryWithDocuments as Story} from '../../../../stories';
 import {
 	fakeLoadedStoryFormat,
 	fakeStoryFormatProperties,

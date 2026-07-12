@@ -1,6 +1,11 @@
 import {v4 as uuid} from '@lukeed/uuid';
 import sortBy from 'lodash/sortBy';
-import {Passage, passageDefaults, Story, storyDefaults} from '../store/stories';
+import {
+	PassageWithText as Passage,
+	passageDefaults,
+	StoryWithDocuments as Story,
+	storyDefaults
+} from '../store/stories';
 import {unusedName} from './unused-name';
 import {
 	addStoryGraphToStoryData,

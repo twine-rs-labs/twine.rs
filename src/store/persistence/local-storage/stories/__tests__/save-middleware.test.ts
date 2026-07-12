@@ -46,7 +46,7 @@ describe('stories local storage save middleware', () => {
 				actions: [
 					{
 						passageId: state[0].passages[0].id,
-						props: {text: 'from disk'},
+						props: {name: 'from disk'},
 						storyId: state[0].id,
 						type: 'updatePassage'
 					}
@@ -63,7 +63,6 @@ describe('stories local storage save middleware', () => {
 		const transaction = {passageIds: '', storyIds: ''};
 		const passage = state[0].passages[0];
 
-		passage.text = 'stale renderer body';
 		saveMiddleware(state, {
 			actions: [],
 			documentUpdates: [
@@ -93,7 +92,6 @@ describe('stories local storage save middleware', () => {
 			`twine-passages-${passage.id}`,
 			JSON.stringify({...passage, text: 'stored session body'})
 		);
-		passage.text = 'stale renderer body';
 		saveMiddleware(state, {
 			actions: [
 				{

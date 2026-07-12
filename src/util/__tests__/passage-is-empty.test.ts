@@ -1,5 +1,5 @@
 import {faker} from '@faker-js/faker';
-import {Passage} from '../../store/stories';
+import {PassageWithText as Passage} from '../../store/stories';
 import {fakePassage} from '../../test-util';
 import {passageIsEmpty} from '../passage-is-empty';
 

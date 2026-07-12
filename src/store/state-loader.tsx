@@ -6,7 +6,26 @@ import {useStoriesContext} from './stories';
 import {useStoryFormatsContext} from './story-formats';
 import {useStoriesRepair} from './use-stories-repair';
 import {markPerformance, measurePerformance} from '../util/performance';
-import {metadataStory, registerBootstrapStories} from '../core/bootstrap-stories';
+import {
+	metadataStory,
+	registerBootstrapStories
+} from '../core/bootstrap-stories';
+import type {Story, StoryWithDocuments} from './stories';
+
+function storiesWithDocuments(stories: Story[]): StoryWithDocuments[] {
+	if (
+		stories.some(story =>
+			story.passages.some(
+				passage =>
+					!('text' in passage) ||
+					typeof (passage as {text?: unknown}).text !== 'string'
+			)
+		)
+	) {
+		throw new Error('Loaded story state is missing passage documents.');
+	}
+	return stories as StoryWithDocuments[];
+}
 
 async function loadOrDefault<T>(
 	name: string,
@@ -119,12 +138,18 @@ export const StateLoader: React.FC = ({children}) => {
 			if (
 				!passageBodiesSeparated ||
 				storiesState.some(story =>
-					story.passages.some(passage => passage.text.length > 0)
+					story.passages.some(
+						passage =>
+							'text' in passage &&
+							typeof passage.text === 'string' &&
+							passage.text.length > 0
+					)
 				)
 			) {
-				registerBootstrapStories(storiesState);
+				const completeStories = storiesWithDocuments(storiesState);
+				registerBootstrapStories(completeStories);
 				storiesDispatch({
-					state: storiesState.map(metadataStory),
+					state: completeStories.map(metadataStory),
 					type: 'init'
 				});
 				if (!passageBodiesSeparated) {

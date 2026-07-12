@@ -7,7 +7,12 @@
 
 import {v4 as uuid} from '@lukeed/uuid';
 import defaults from 'lodash/defaults';
-import {passageDefaults, storyDefaults, Passage, Story} from '../store/stories';
+import {
+	passageDefaults,
+	storyDefaults,
+	PassageWithText as Passage,
+	StoryWithDocuments as Story
+} from '../store/stories';
 import {
 	applyStoryGraphMetadataToStory,
 	parseStoryGraphHtmlAttribute,
@@ -265,11 +270,11 @@ function finalizeImportedStory(
 	// Merge in defaults. We can't use object spreads here because undefined
 	// values would override defaults.
 
-	const story: Story = defaults(
+	const story = defaults(
 		inferMissingStoryFormat(importedStory),
 		{id: uuid()},
 		storyDefaults()
-	);
+	) as unknown as Story;
 
 	// Override the last update as requested.
 

@@ -51,6 +51,10 @@ files with empty bodies.
 `npm run check:core-boundaries` rejects direct passage-body reads in product
 routes and components. Transport, bootstrap, persistence, compatibility import,
 and explicitly materialized build code remain documented boundary exceptions.
+The route-facing `Passage` type has no `text` field; complete snapshots use the
+separate `PassageWithText` and `StoryWithDocuments` transport types. This makes
+accidental reintroduction of a frontend passage-body mirror a compile-time
+error instead of relying only on runtime discipline.
 
 ## Undo
 
@@ -63,4 +67,6 @@ Platform-standard workbench shortcuts apply outside editable controls.
 Compatibility readers and writers may exist for legacy import/export. They are
 not alternate product mutation paths. New functionality must not add a
 TypeScript parser, index, asset inventory, or reducer history as a second source
-of truth.
+of truth. The former reducer-owned body search/replace helpers and legacy
+passage-map/connection renderers have been removed; bounded Rust queries and the
+current graph projection are the supported product paths.

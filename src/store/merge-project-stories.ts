@@ -42,7 +42,12 @@ function mergeStory(
 	if (
 		!existing.script &&
 		!existing.stylesheet &&
-		!existing.passages.some(passage => passage.text.length > 0)
+		!existing.passages.some(
+			passage =>
+				'text' in passage &&
+				typeof passage.text === 'string' &&
+				passage.text.length > 0
+		)
 	) {
 		return identifiedIncoming;
 	}
@@ -56,9 +61,14 @@ function mergeStory(
 		passages: identifiedIncoming.passages.map(passage => {
 			const existingPassage = existingPassages.get(passage.id);
 
-			return existingPassage?.text
-				? {...passage, text: existingPassage.text}
-				: passage;
+			const text =
+				existingPassage &&
+				'text' in existingPassage &&
+				typeof existingPassage.text === 'string'
+					? existingPassage.text
+					: '';
+
+			return text ? {...passage, text} : passage;
 		}),
 		script: existing.script || identifiedIncoming.script,
 		stylesheet: existing.stylesheet || identifiedIncoming.stylesheet

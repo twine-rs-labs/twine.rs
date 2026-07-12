@@ -1,7 +1,7 @@
 import {faker} from '@faker-js/faker';
 import {AppInfo} from '../util/app-info';
 import {PrefsState} from '../store/prefs';
-import {Passage, Story} from '../store/stories';
+import {PassageWithText, StoryWithDocuments} from '../store/stories';
 import {StoryFormat, StoryFormatProperties} from '../store/story-formats';
 
 export function fakeAppInfo(props?: Partial<AppInfo>): AppInfo {
@@ -13,7 +13,7 @@ export function fakeAppInfo(props?: Partial<AppInfo>): AppInfo {
 	};
 }
 
-export function fakePassage(props?: Partial<Passage>): Passage {
+export function fakePassage(props?: Partial<PassageWithText>): PassageWithText {
 	return {
 		highlighted: false,
 		id: faker.string.uuid(),
@@ -161,13 +161,13 @@ export function fakePrefs(overrides?: Partial<PrefsState>): PrefsState {
 	};
 }
 
-export function fakeStory(passageCount: number = 1): Story {
+export function fakeStory(passageCount: number = 1): StoryWithDocuments {
 	// Ensure tag uniqueness.
 
 	const tag = faker.lorem.word();
 	const tags = [`${tag}-1`, `${tag}-2`, `${tag}-3`];
 
-	const result: Story = {
+	const result: StoryWithDocuments = {
 		id: faker.string.uuid(),
 		lastUpdate: faker.date.past(),
 		ifid: faker.string.uuid().toUpperCase(),

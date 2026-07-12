@@ -13,7 +13,7 @@ import {
 import {addLocalStoryFormat, loadStoryFormats} from './story-formats';
 import {loadPrefs} from './prefs';
 import {openWithScratchFile, openWithScratchPackage} from './scratch-file';
-import {Story} from '../../store/stories/stories.types';
+import {Story, StoryWithDocuments} from '../../store/stories/stories.types';
 import {
 	backupStoryDirectory,
 	chooseStoryDirectoryPath,
@@ -206,7 +206,7 @@ export function initIpc() {
 			_event,
 			rootPath: string,
 			resolution: Parameters<typeof resolveProjectSessionConflicts>[1],
-			stories?: Story[],
+			stories?: StoryWithDocuments[],
 			deltaId?: string
 		) =>
 			deltaId
@@ -305,7 +305,7 @@ export function initIpc() {
 
 	ipcMain.handle(
 		'create-project-folder',
-		async (_event, story: Story, preferredParent?: string) =>
+		async (_event, story: StoryWithDocuments, preferredParent?: string) =>
 			createProjectFolder(story, preferredParent)
 	);
 
@@ -345,7 +345,7 @@ export function initIpc() {
 		async (
 			_event,
 			rootPath: string,
-			story: Story,
+			story: StoryWithDocuments,
 			options?: Parameters<typeof saveProjectFolder>[2]
 		) => saveProjectFolder(rootPath, story, options)
 	);

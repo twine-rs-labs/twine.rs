@@ -1,5 +1,5 @@
 import {TwineElectronWindow} from '../../../../electron/shared';
-import {Story} from '../../../stories';
+import {Story, StoryWithDocuments} from '../../../stories';
 import {publishStory, publishStoryWithFormat} from '../../../../util/publish';
 import {
 	formatWithNameAndVersion,
@@ -51,32 +51,22 @@ async function saveNativeProjectFolder(
 		);
 		const useCompactIncrementalPayload =
 			documentUpdates.length > 0 &&
-			options.hints?.every(hint => hint.type !== 'full');
-		const includesPassageMetadata = options.hints?.some(
-			hint => hint.type === 'passageMetadata'
-		);
-		const completeStory = useCompactIncrementalPayload
-			? story
-			: await materializeRegisteredStory(story);
-		const saveStory = useCompactIncrementalPayload
+			options.hints?.every(hint => hint.type === 'passageText');
+		const completeStory: Story | StoryWithDocuments =
+			useCompactIncrementalPayload
+				? story
+				: await materializeRegisteredStory(story);
+		const saveStory: StoryWithDocuments = useCompactIncrementalPayload
 			? {
 					...completeStory,
-					passages: includesPassageMetadata
-						? completeStory.passages.map(passage => ({
-								...passage,
-								text:
-									passageDocumentUpdates.find(
-										update => update.passageId === passage.id
-									)?.text ?? passage.text
-							}))
-						: passageDocumentUpdates.flatMap(update => {
-								const passage = completeStory.passages.find(
-									candidate => candidate.id === update.passageId
-								);
-								return passage ? [{...passage, text: update.text}] : [];
-							})
+					passages: passageDocumentUpdates.flatMap(update => {
+						const passage = completeStory.passages.find(
+							candidate => candidate.id === update.passageId
+						);
+						return passage ? [{...passage, text: update.text}] : [];
+					})
 				}
-			: completeStory;
+			: (completeStory as StoryWithDocuments);
 		const saveOptions = useCompactIncrementalPayload
 			? {...options, incrementalOnly: true}
 			: options;
@@ -133,6 +123,8 @@ export async function saveStory(
 		return;
 	}
 
+	const completeStory = await materializeRegisteredStory(story);
+
 	let storyHtml: string;
 
 	try {
@@ -144,7 +136,7 @@ export async function saveStory(
 
 		if (format.loadState === 'loaded') {
 			storyHtml = publishStoryWithFormat(
-				story,
+				completeStory,
 				format.properties.source,
 				getAppInfo(),
 				{startOptional: true}
@@ -152,7 +144,7 @@ export async function saveStory(
 		} else {
 			const {source} = await fetchStoryFormatProperties(format.url);
 
-			storyHtml = publishStoryWithFormat(story, source, getAppInfo(), {
+			storyHtml = publishStoryWithFormat(completeStory, source, getAppInfo(), {
 				startOptional: true
 			});
 		}
@@ -162,8 +154,10 @@ export async function saveStory(
 				(error as Error).message
 			}). Trying to save story data only.`
 		);
-		storyHtml = publishStory(story, getAppInfo(), {startOptional: true});
+		storyHtml = publishStory(completeStory, getAppInfo(), {
+			startOptional: true
+		});
 	}
 
-	twineElectron.saveStoryHtml(story, storyHtml);
+	twineElectron.saveStoryHtml(completeStory, storyHtml);
 }

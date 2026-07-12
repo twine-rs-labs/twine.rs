@@ -1,12 +1,12 @@
 import type {CoreDocumentPage} from './bindings/CoreDocumentPage';
 import type {CoreProjectHost} from './project-host';
-import type {Story} from '../store/stories';
+import type {Story, StoryWithDocuments} from '../store/stories';
 
 /** Materializes all source only for workflows that explicitly require it. */
 export async function materializeStoryFromSession(
 	host: CoreProjectHost,
 	story: Story
-): Promise<Story> {
+): Promise<StoryWithDocuments> {
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		const expectedRevision = host.sessionStatus(story.id).revision;
 		const passageText = new Map<string, string>();
@@ -23,7 +23,9 @@ export async function materializeStoryFromSession(
 				);
 				pageRevision ??= page.revision;
 				if (page.revision !== pageRevision) {
-					throw new Error('Core document revision changed during materialization.');
+					throw new Error(
+						'Core document revision changed during materialization.'
+					);
 				}
 				for (const document of page.documents) {
 					if (document.kind === 'passage' && document.passageId) {
@@ -47,7 +49,9 @@ export async function materializeStoryFromSession(
 				passageText.size !== story.passages.length ||
 				story.passages.some(passage => !passageText.has(passage.id))
 			) {
-				throw new Error('Core document enumeration returned an incomplete story.');
+				throw new Error(
+					'Core document enumeration returned an incomplete story.'
+				);
 			}
 
 			return {
@@ -61,14 +65,6 @@ export async function materializeStoryFromSession(
 			};
 		} catch (error) {
 			if (attempt === 1) {
-				if (
-					(error as Error).message.includes(
-						'queryDocumentPage is not a function'
-					) &&
-					story.passages.some(passage => passage.text.length > 0)
-				) {
-					return story;
-				}
 				throw error;
 			}
 		}
