@@ -2120,6 +2120,13 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				);
 
 				assertInvariant(
+					`${startupPrefix}-react-passage-body-mirror-empty`,
+					startupSnapshot.renderer.core.hosts[0]?.sessions.every(
+						session => session.passageTextCharacterCount === 0
+					) ?? false
+				);
+
+				assertInvariant(
 					`${startupPrefix}-one-initial-project-snapshot`,
 					replacements.length === 1,
 					`replaceProject count ${replacements.length}`

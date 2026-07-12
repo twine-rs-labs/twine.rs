@@ -155,6 +155,28 @@ also passed every startup invariant and showed the expected cold/warm range:
 - native full hydration p50: about 2.03–2.59 s, down from 4.47 s;
 - interactive p50: about 2.84–3.66 s, down from 5.24 s;
 - passage-source read p50: about 1.48–1.88 s for 50,000 files;
+
+The metadata-only React passage model was validated on 2026-07-12 with fresh
+50k diagnostic, startup, query, and watcher runs. Diagnostic, query, and watcher
+reports all assert that the retained host passage-body character count is zero.
+Two three-sample startup runs measured interactive p50 at about 2.45–2.73 s,
+full hydration at about 1.83–2.07 s, a 38.95 MiB hydration payload, and resident
+memory at about 1.06–1.07 GiB. All three startup samples in the confirming run
+passed the zero-body assertion. The renderer heap at diagnostic readiness was
+about 64 MiB, so
+removing passage bodies materially narrowed the JavaScript heap without solving
+total multi-process resident memory.
+
+The focused query run measured Contents at about 53.9 ms and search at about
+14.7 ms; Contents remains slightly above its 50 ms target. Resident memory after
+building query caches was about 1.27 GiB. The watcher run retained one-source
+and immutable-lease invariants, with observation-to-patch about 431 ms p50,
+native delta creation about 267 ms p50, and content ingestion about 12.5 ms p50.
+The diagnostic save wrote its one file in about 1.8 ms, while native baseline
+patching consumed about 557 ms of roughly 574 ms native save time. These results
+make duplicate retained process state and baseline-patch bookkeeping the next
+measured targets; rebuilding Rust ingestion is not justified by the current
+profile.
 - native session baseline p50: about 117 ms in the colder attributed run;
 - receipt adoption p50: about 90 ms;
 - post-GC resident memory p50: about 1.26–1.30 GiB.

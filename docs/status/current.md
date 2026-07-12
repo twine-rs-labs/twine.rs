@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-07-11
+Last verified: 2026-07-12
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment

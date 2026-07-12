@@ -1452,6 +1452,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 			this.wasmProjectReplacePromise = replacePromise
 				.then(status => {
+					this.releaseRetainedPassageBodies();
 					if (status) {
 						this.publishStatus(status);
 					}
@@ -1495,10 +1496,21 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 			this.wasmProjectReplaceRevision = revision;
 			this.wasmClient.replaceProjectSync(snapshot, revision);
+			this.releaseRetainedPassageBodies();
 			this.wasmProjectReplacePromise = Promise.resolve();
 		}
 
 		return this.wasmProjectReplaceRevision;
+	}
+
+	private releaseRetainedPassageBodies() {
+		if (
+			this.stories.some(story =>
+				story.passages.some(passage => passage.text.length > 0)
+			)
+		) {
+			this.stories = this.stories.map(metadataStory);
+		}
 	}
 
 	queryGraphProjection(storyId: string, options: GraphProjectionQuery = {}) {

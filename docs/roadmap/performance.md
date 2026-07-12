@@ -50,6 +50,13 @@ fixture isolation.
   one initial snapshot. Passage bodies are then removed from the React read
   model; bounded document/fact queries and explicit workflow materialization
   now serve consumers that previously scanned the complete story.
+- Fresh 2026-07-12 validation confirms the retained host passage-body count is
+  zero in diagnostic, query, and watcher runs. The 50k startup run still retains
+  about 1.07 GiB across Electron processes and transfers a roughly 38.95 MiB
+  hydration payload; query-cache residency reaches about 1.27 GiB. The next
+  startup/memory change should therefore remove duplicate hydration/bootstrap
+  and retained process representations rather than revisit the React body
+  mirror.
 - The first attributed cleanup reduced 50k shell p50 to about 0.96 s,
   interactive p50 to about 10.4 s, retained resident memory to about 1.14 GiB,
   and WASM linear memory to about 96 MiB.
@@ -94,6 +101,9 @@ with unchanged structural assertions.
 - Use the diagnostic phase to keep that path observable. The focused 50k run
   measured about 149 ms native save time for one touched path, so it is not the
   dominant remaining edit cost.
+- The post-cutover diagnostic instead measured about 557 ms in native baseline
+  patching versus about 1.8 ms writing the touched passage. Profile and bound
+  baseline file-entry updates before changing the incremental writer itself.
 - Make local and external passage edits update only that passage's parsed facts,
   search document, links, backlinks, and affected graph topology. Undo/redo
   must use the same forward/inverse cache-delta path.
@@ -143,8 +153,11 @@ surface materially improves against its accepted baseline.
 - Measure native project storage, WASM session state, frontend mirrors,
   analysis caches, graph data, and serialized transfer buffers separately.
 - Bound or eliminate duplicate retained representations.
-- Preserve the current React mirror until its removal is designed as an
-  explicit architecture change.
+- Measure the metadata-only React model and confirm bootstrap passage bodies
+  are released immediately after successful Rust session initialization.
+- Remove or bound the remaining duplicate native hydration, worker request,
+  snapshot-construction, and WASM representations rather than recreating a
+  frontend passage-body cache.
 
 Exit signal: resident memory drops without replacing measured caches with
 unbounded recomputation.

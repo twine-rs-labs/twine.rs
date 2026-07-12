@@ -22,6 +22,7 @@ import {StoriesContext, StoriesState} from '../../store/stories';
 import {StoriesActionOrThunk} from '../../store/stories';
 import {markProjectStoryHydration} from '../../store/project-hydration';
 import {fakePassage, fakeStory} from '../../test-util';
+import {createTestCoreSessionClient} from '../../test-util/test-core-session-client';
 
 describe('StoreCoreProjectHost asset commands', () => {
 	function batch(patches: PatchBatch['patches'], label = 'Rust Command') {
@@ -194,13 +195,19 @@ describe('StoreCoreProjectHost asset commands', () => {
 		}
 	}
 
-	function hostWithStory(options: {wasmClient?: any} = {}) {
+	function hostWithStory(
+		options: {
+			metadataStoreAfterConstruction?: boolean;
+			text?: string;
+			wasmClient?: any;
+		} = {}
+	) {
 		const story = fakeStory(0);
 		const start = fakePassage({
 			id: 'start',
 			name: 'Start',
 			story: story.id,
-			text: ''
+			text: options.text ?? ''
 		});
 		let stories: StoriesState = [{...story, passages: [start]}];
 		const hostRef: {current?: StoreCoreProjectHost} = {};
@@ -219,6 +226,12 @@ describe('StoreCoreProjectHost asset commands', () => {
 		const host = new StoreCoreProjectHost(stories, dispatch, {
 			wasmClient: options.wasmClient
 		});
+		if (options.metadataStoreAfterConstruction) {
+			stories = stories.map(story => ({
+				...story,
+				passages: story.passages.map(passage => ({...passage, text: ''}))
+			}));
+		}
 
 		hostRef.current = host;
 
@@ -232,6 +245,68 @@ describe('StoreCoreProjectHost asset commands', () => {
 			story
 		};
 	}
+
+	it('releases bootstrap passage bodies after async session initialization', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({text: 'Bootstrap body', wasmClient});
+
+		await context.host.ensureSessionReady();
+
+		expect(wasmClient.replaceProject).toHaveBeenCalledWith(
+			'library',
+			expect.objectContaining({
+				stories: [
+					expect.objectContaining({
+						passages: [expect.objectContaining({text: 'Bootstrap body'})]
+					})
+				]
+			}),
+			1
+		);
+		expect(context.host.performanceDiagnostics().passageTextCharacterCount).toBe(
+			0
+		);
+	});
+
+	it('retains bootstrap passage bodies when initialization fails so retry is safe', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+
+		wasmClient.replaceProject
+			.mockRejectedValueOnce(new Error('initialization failed'))
+			.mockResolvedValueOnce(undefined);
+		const context = hostWithStory({text: 'Retry body', wasmClient});
+
+		await expect(
+			context.host.ensureSessionReady()
+		).rejects.toThrow('initialization failed');
+		expect(context.host.performanceDiagnostics().passageTextCharacterCount).toBe(
+			10
+		);
+		await context.host.ensureSessionReady();
+		expect(wasmClient.replaceProject.mock.calls[1][1].stories[0].passages[0].text).toBe(
+			'Retry body'
+		);
+		expect(context.host.performanceDiagnostics().passageTextCharacterCount).toBe(
+			0
+		);
+	});
+
+	it('releases bootstrap passage bodies after synchronous initialization', async () => {
+		const wasmClient = createTestCoreSessionClient();
+		const context = hostWithStory({
+			metadataStoreAfterConstruction: true,
+			text: 'Sync body',
+			wasmClient
+		});
+
+		await context.host.applyStoryCommand(
+			updatePassageTextCommand(context.story.id, context.start.id, 'Next body')
+		);
+
+		expect(context.host.performanceDiagnostics().passageTextCharacterCount).toBe(
+			0
+		);
+	});
 
 	it('sends commands to Rust and applies only returned passage patches', async () => {
 		const apply = jest.fn(async (command: StoryCommand) =>
