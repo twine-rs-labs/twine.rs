@@ -507,6 +507,7 @@ export function emptyStoryIndex(storyId: string): CoreStoryIndex {
 function emptyStorySummary(storyId: string): CoreStorySummary {
 	return {
 		assetCount: 0,
+		characterCount: 0,
 		diagnosticCount: 0,
 		errorCount: 0,
 		graph: emptyGraphStats(),
@@ -515,12 +516,14 @@ function emptyStorySummary(storyId: string): CoreStorySummary {
 		revision: 0,
 		storyId,
 		tagCount: 0,
-		warningCount: 0
+		warningCount: 0,
+		wordCount: 0
 	};
 }
 
 function emptyContentsPage(storyId: string): CoreContentsPage {
 	return {
+		assets: [],
 		entries: [],
 		facets: {
 			all: 0,
@@ -1620,6 +1623,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 		return {
 			assetCount: index.assetInventory.length,
+			characterCount:
+				this.stories
+					.find(story => story.id === storyId)
+					?.passages.reduce((total, passage) => total + passage.text.length, 0) ??
+				0,
 			diagnosticCount: index.diagnostics.length,
 			errorCount: index.diagnostics.filter(
 				diagnostic => diagnostic.severity === 'error'
@@ -1634,7 +1642,15 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			tagCount: index.tagEntries.length,
 			warningCount: index.diagnostics.filter(
 				diagnostic => diagnostic.severity === 'warning'
-			).length
+			).length,
+			wordCount:
+				this.stories
+					.find(story => story.id === storyId)
+					?.passages.reduce(
+						(total, passage) =>
+							total + passage.text.trim().split(/\s+/).filter(Boolean).length,
+						0
+					) ?? 0
 		};
 	}
 
@@ -1714,6 +1730,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		const index = await this.queryStoryIndexAsync(storyId, {});
 
 		return {
+			assets: index.assetInventory.filter(asset =>
+				index.contents.some(
+					entry => entry.kind === 'asset' && entry.label === asset.path
+				)
+			),
 			entries: index.contents,
 			facets: contentsFacetsFromEntries(index.contents),
 			nextCursor: null,
@@ -1881,12 +1902,17 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		return {
 			assetReferences: [],
 			backlinks: [],
+			characterCount: 0,
 			diagnostics: [],
+			excerpt: '',
+			isEmpty: true,
+			lineCount: 1,
 			links: [],
 			passageId,
 			revision: 0,
 			storyId,
-			symbols: []
+			symbols: [],
+			wordCount: 0
 		} satisfies CorePassageFacts;
 	}
 
@@ -2265,12 +2291,17 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			Promise.resolve({
 				assetReferences: [],
 				backlinks: [],
+				characterCount: 0,
 				diagnostics: [],
+				excerpt: '',
+				isEmpty: true,
+				lineCount: 1,
 				links: [],
 				passageId,
 				revision: 0,
 				storyId,
-				symbols: []
+				symbols: [],
+				wordCount: 0
 			} satisfies CorePassageFacts)
 		);
 	}

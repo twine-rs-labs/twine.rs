@@ -4,4 +4,4 @@ import type { CoreGraphStats } from "./CoreGraphStats";
 /**
  * Compact, always-bounded story facts for shell and route chrome.
  */
-export type CoreStorySummary = { assetCount: number, diagnosticCount: number, errorCount: number, graph: CoreGraphStats, missingAssetCount: number, passageCount: number, revision: number, storyId: string, tagCount: number, warningCount: number, };
+export type CoreStorySummary = { assetCount: number, characterCount: number, diagnosticCount: number, errorCount: number, graph: CoreGraphStats, missingAssetCount: number, passageCount: number, revision: number, storyId: string, tagCount: number, warningCount: number, wordCount: number, };

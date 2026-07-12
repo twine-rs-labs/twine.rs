@@ -4,4 +4,4 @@ import type { CoreDiagnostic } from "./CoreDiagnostic";
 import type { CorePassageLinkFact } from "./CorePassageLinkFact";
 import type { CoreSymbol } from "./CoreSymbol";
 
-export type CorePassageFacts = { assetReferences: Array<CoreAssetReference>, backlinks: Array<CorePassageLinkFact>, diagnostics: Array<CoreDiagnostic>, links: Array<CorePassageLinkFact>, passageId: string, revision: number, storyId: string, symbols: Array<CoreSymbol>, };
+export type CorePassageFacts = { assetReferences: Array<CoreAssetReference>, backlinks: Array<CorePassageLinkFact>, characterCount: number, diagnostics: Array<CoreDiagnostic>, excerpt: string, isEmpty: boolean, lineCount: number, links: Array<CorePassageLinkFact>, passageId: string, revision: number, storyId: string, symbols: Array<CoreSymbol>, wordCount: number, };

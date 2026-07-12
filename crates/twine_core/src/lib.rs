@@ -642,6 +642,7 @@ pub struct CoreStoryIndex {
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreStorySummary {
     pub asset_count: usize,
+    pub character_count: usize,
     pub diagnostic_count: usize,
     pub error_count: usize,
     pub graph: CoreGraphStats,
@@ -651,6 +652,7 @@ pub struct CoreStorySummary {
     pub story_id: String,
     pub tag_count: usize,
     pub warning_count: usize,
+    pub word_count: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -732,6 +734,8 @@ pub struct CoreContentsFacets {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreContentsPage {
+    #[serde(default)]
+    pub assets: Vec<CoreAssetInventoryEntry>,
     pub entries: Vec<CoreContentsEntry>,
     pub facets: CoreContentsFacets,
     #[serde(default)]
@@ -905,8 +909,12 @@ pub struct CorePassageFacts {
     pub asset_references: Vec<CoreAssetReference>,
     #[serde(default)]
     pub backlinks: Vec<CorePassageLinkFact>,
+    pub character_count: usize,
     #[serde(default)]
     pub diagnostics: Vec<CoreDiagnostic>,
+    pub excerpt: String,
+    pub is_empty: bool,
+    pub line_count: usize,
     #[serde(default)]
     pub links: Vec<CorePassageLinkFact>,
     pub passage_id: String,
@@ -914,6 +922,7 @@ pub struct CorePassageFacts {
     pub story_id: String,
     #[serde(default)]
     pub symbols: Vec<CoreSymbol>,
+    pub word_count: usize,
 }
 
 /// A revision-bound passage body. Persisted text stays session-owned; callers
@@ -2430,6 +2439,7 @@ struct StoryReadModelCache {
     asset_inventory: Vec<CoreAssetInventoryEntry>,
     asset_entry_ids: BTreeSet<String>,
     assets_by_source: BTreeMap<String, Vec<CoreAssetReference>>,
+    character_count: usize,
     contents: BTreeMap<String, CoreContentsEntry>,
     diagnostic_entry_ids: BTreeSet<String>,
     diagnostics: Vec<CoreDiagnostic>,
@@ -2441,6 +2451,7 @@ struct StoryReadModelCache {
     symbols_by_source: BTreeMap<String, Vec<CoreSymbol>>,
     tag_count: usize,
     tag_usage: BTreeMap<String, BTreeSet<String>>,
+    word_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -4567,6 +4578,21 @@ impl ProjectSession {
             let mut assets_changed = false;
             let mut symbols_changed = false;
 
+            for passage in passages {
+                if let Some(before) = &passage.before {
+                    cache.character_count = cache
+                        .character_count
+                        .saturating_sub(before.value.text.len());
+                    cache.word_count = cache
+                        .word_count
+                        .saturating_sub(before.value.text.split_whitespace().count());
+                }
+                if let Some(after) = &passage.after {
+                    cache.character_count += after.value.text.len();
+                    cache.word_count += after.value.text.split_whitespace().count();
+                }
+            }
+
             let mut touched_tags = BTreeSet::new();
             for passage in passages {
                 let (Some(before), Some(after)) = (&passage.before, &passage.after) else {
@@ -6330,6 +6356,11 @@ impl ProjectSession {
                     asset_inventory,
                     asset_entry_ids,
                     assets_by_source,
+                    character_count: story
+                        .passages
+                        .iter()
+                        .map(|passage| passage.text.len())
+                        .sum(),
                     contents,
                     diagnostic_entry_ids,
                     diagnostics,
@@ -6341,6 +6372,11 @@ impl ProjectSession {
                     symbols_by_source,
                     tag_count: tag_entries.len(),
                     tag_usage,
+                    word_count: story
+                        .passages
+                        .iter()
+                        .map(|passage| passage.text.split_whitespace().count())
+                        .sum(),
                 },
             );
             self.read_model_full_build_count += 1;
@@ -6360,6 +6396,7 @@ impl ProjectSession {
 
         Ok(CoreStorySummary {
             asset_count: read_model.asset_inventory.len(),
+            character_count: read_model.character_count,
             diagnostic_count: read_model.diagnostics.len(),
             error_count: read_model
                 .diagnostics
@@ -6381,6 +6418,7 @@ impl ProjectSession {
                 .iter()
                 .filter(|diagnostic| diagnostic.severity == CoreDiagnosticSeverity::Warning)
                 .count(),
+            word_count: read_model.word_count,
         })
     }
 
@@ -6394,7 +6432,8 @@ impl ProjectSession {
             query.cursor = None;
         });
         let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
-        let entries = &self.read_model(story_id)?.contents;
+        let read_model = self.read_model(story_id)?;
+        let entries = &read_model.contents;
         let facets = contents_facets(entries.values());
         let mut matching = entries
             .values()
@@ -6413,8 +6452,20 @@ impl ProjectSession {
         let total_count = matching.len();
         let (entries, next_cursor) =
             read_model_page_refs(matching, offset, query.limit, revision, cursor_fingerprint);
+        let asset_paths = entries
+            .iter()
+            .filter(|entry| entry.kind == CoreContentsEntryKind::Asset)
+            .map(|entry| entry.label.as_str())
+            .collect::<BTreeSet<_>>();
+        let assets = read_model
+            .asset_inventory
+            .iter()
+            .filter(|asset| asset_paths.contains(asset.path.as_str()))
+            .cloned()
+            .collect();
 
         Ok(CoreContentsPage {
+            assets,
             entries,
             facets,
             next_cursor,
@@ -6712,12 +6763,17 @@ impl ProjectSession {
         Ok(CorePassageFacts {
             asset_references: analysis.assets,
             backlinks,
+            character_count: passage_text.len(),
             diagnostics,
+            excerpt: passage_text.chars().take(400).collect(),
+            is_empty: passage_text.trim().is_empty(),
+            line_count: passage_text.lines().count().max(1),
             links,
             passage_id: passage_id.as_ref().to_owned(),
             revision: self.revision().min(u32::MAX as u64) as u32,
             story_id: story_id.as_ref().to_owned(),
             symbols: analysis.symbols,
+            word_count: passage_text.split_whitespace().count(),
         })
     }
 
@@ -10865,6 +10921,11 @@ mod tests {
             .expect("passage facts should load");
 
         assert_eq!(facts.passage_id, "b");
+        assert_eq!(facts.character_count, 11);
+        assert_eq!(facts.word_count, 1);
+        assert_eq!(facts.line_count, 1);
+        assert_eq!(facts.excerpt, "[[Missing]]");
+        assert!(!facts.is_empty);
         assert!(facts.links.iter().any(|link| link.target_name == "Missing"));
         assert!(
             facts
@@ -10873,6 +10934,40 @@ mod tests {
                 .any(|diagnostic| diagnostic.code == "broken-link")
         );
         assert!(session.analysis_parse_count > baseline);
+    }
+
+    #[test]
+    fn story_summary_counts_update_incrementally_with_passage_text() {
+        let mut session = session();
+        let before = session.story_summary("story-1").expect("initial summary");
+        let full_build_count = session.read_model_full_build_count;
+        let old_text = session
+            .story("story-1")
+            .expect("story")
+            .passage_by_id(&PassageId::new("a"))
+            .expect("passage")
+            .text
+            .clone();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "one two three".into(),
+            })
+            .expect("text edit should apply");
+        let after = session.story_summary("story-1").expect("updated summary");
+
+        assert_eq!(
+            after.character_count,
+            before.character_count - old_text.len() + 13
+        );
+        assert_eq!(
+            after.word_count,
+            before.word_count - old_text.split_whitespace().count() + 3
+        );
+        assert_eq!(session.read_model_full_build_count, full_build_count);
+        assert_eq!(session.read_model_last_touched_source_count, 1);
     }
 
     #[test]

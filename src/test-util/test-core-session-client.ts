@@ -252,6 +252,11 @@ export class TestCoreSessionClient {
 			const end = Math.min(offset + query.limit, entries.length);
 
 			return {
+				assets: index.assetInventory.filter(asset =>
+					entries.some(
+						entry => entry.kind === 'asset' && entry.label === asset.path
+					)
+				),
 				entries: entries.slice(offset, end),
 				facets: {
 					all: index.contents.length,
@@ -318,12 +323,17 @@ export class TestCoreSessionClient {
 				backlinks: story.passages
 					.flatMap(source => linksFor(source))
 					.filter(link => link.targetId === passageId),
+				characterCount: passage?.text.length ?? 0,
 				diagnostics: index.diagnostics.filter(item => item.sourceId === passageId),
+				excerpt: passage?.text.slice(0, 400) ?? '',
+				isEmpty: !passage?.text.trim(),
+				lineCount: passage?.text.split('\n').length ?? 1,
 				links: linksFor(passage),
 				passageId,
 				revision: this.revision,
 				storyId,
-				symbols: index.symbols.filter(symbol => symbol.passageId === passageId)
+				symbols: index.symbols.filter(symbol => symbol.passageId === passageId),
+				wordCount: passage?.text.trim().split(/\s+/).filter(Boolean).length ?? 0
 			};
 		}
 	);
@@ -332,6 +342,10 @@ export class TestCoreSessionClient {
 		const index = storyToCoreIndex(story);
 		return {
 			assetCount: index.assetInventory.length,
+			characterCount: story.passages.reduce(
+				(total, passage) => total + passage.text.length,
+				0
+			),
 			diagnosticCount: index.diagnostics.length,
 			errorCount: index.diagnostics.filter(item => item.severity === 'error').length,
 			graph: index.graph,
@@ -340,7 +354,12 @@ export class TestCoreSessionClient {
 			revision: this.revision,
 			storyId,
 			tagCount: index.tags.length,
-			warningCount: index.diagnostics.filter(item => item.severity === 'warning').length
+			warningCount: index.diagnostics.filter(item => item.severity === 'warning').length,
+			wordCount: story.passages.reduce(
+				(total, passage) =>
+					total + passage.text.trim().split(/\s+/).filter(Boolean).length,
+				0
+			)
 		};
 	});
 	queryStoryIndex = jest.fn(async (_sessionId, storyId, options) =>
