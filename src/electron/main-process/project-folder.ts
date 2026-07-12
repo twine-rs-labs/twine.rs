@@ -78,8 +78,21 @@ export interface NativeProjectLoadTimings {
 	mainNativeCallMs?: number;
 	modelBuildUs: number;
 	loadProfile?: 'full' | 'shell';
+	manifestCacheBytes?: number;
+	manifestCacheDecodeUs?: number;
+	manifestCacheHit?: boolean;
+	manifestCacheMissReason?:
+		| 'hashMismatch'
+		| 'invalidCache'
+		| 'missing'
+		| 'schemaMismatch'
+		| 'versionMismatch';
+	manifestCacheReadUs?: number;
+	manifestDigest?: string;
+	manifestHashUs?: number;
 	manifestParseUs?: number;
 	manifestReadUs?: number;
+	manifestTomlParseUs?: number;
 	nativeStoryConversionUs: number;
 	parallel?: boolean;
 	passageSourceCount?: number;

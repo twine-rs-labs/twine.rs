@@ -559,8 +559,12 @@ function startupMetrics(
 		for (const field of [
 			'assetScanUs',
 			'graphLayoutUs',
+			'manifestCacheDecodeUs',
+			'manifestCacheReadUs',
+			'manifestHashUs',
 			'manifestParseUs',
 			'manifestReadUs',
+			'manifestTomlParseUs',
 			'modelBuildUs',
 			'nativeStoryConversionUs',
 			'passageSourceUs',
@@ -575,6 +579,7 @@ function startupMetrics(
 			);
 		}
 		for (const field of [
+			'manifestCacheBytes',
 			'passageSourceCount',
 			'sourceBytes',
 			'storySourceCount',
@@ -2147,6 +2152,19 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 						hydrationLoadEvent.detail.passageTextLoaded === true &&
 						hydrationLoadEvent.detail.storySourcesLoaded === true &&
 						hydrationLoadEvent.detail.graphLayoutLoaded === true
+				);
+				assertInvariant(
+					`${startupPrefix}-compiled-manifest-cache-used`,
+					shellLoadEvent?.detail?.manifestCacheHit === true &&
+						hydrationLoadEvent?.detail?.manifestCacheHit === true &&
+						shellLoadEvent.detail.manifestTomlParseUs === 0 &&
+						hydrationLoadEvent.detail.manifestTomlParseUs === 0
+				);
+				assertInvariant(
+					`${startupPrefix}-manifest-digest-matches`,
+					typeof shellLoadEvent?.detail?.manifestDigest === 'string' &&
+						shellLoadEvent.detail.manifestDigest ===
+							hydrationLoadEvent?.detail?.manifestDigest
 				);
 				const baselineEvent = startupSnapshot.renderer.events.find(
 					event => event.name === 'native-session-baseline-ready'

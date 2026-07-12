@@ -121,6 +121,12 @@ experiments, `TWINE_NATIVE_LOAD_THREADS=<count>` overrides the pool size and is
 forwarded into benchmark Electron processes. This is diagnostic configuration,
 not a reason to compare reports captured with different worker counts.
 
+Canonical saves also write a validated compiled manifest under `.twine/cache/`.
+Startup reports separate manifest reads, SHA-256 hashing, compiled-cache reads
+and decoding, and TOML fallback parsing. Canonical fixture runs require both
+shell and full hydration to hit the compiled cache, share the same manifest
+digest, and perform no TOML parse. The watcher ignores generated cache paths.
+
 Startup and memory metrics carry explicit measurement-contract versions. When
 checkpoint semantics change, matching-machine reports remain visible but are
 not compared against incompatible historical startup or memory values.

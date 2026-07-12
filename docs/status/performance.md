@@ -161,7 +161,30 @@ The shell still misses its 400 ms target at 50k. It performs no graph or source
 I/O; TOML parsing alone was about 402 ms p50 in the colder run, so remaining
 shell work is manifest representation/parsing rather than hydration leakage.
 
-The following 50k watcher phase passed passage, asset-review, exact
+A validated compiled manifest cache now removes that TOML parse on canonical
+projects without changing authority: every load still reads and SHA-256 hashes
+`twine.toml`, and accepts `.twine/cache/project-manifest.json` only when its
+format, app version, schema, byte length, and digest match. Missing, stale,
+corrupt, or unsafe cache data falls back to authoritative TOML parsing or the
+existing path-safety error. Canonical saves and CLI-generated fixtures write the
+cache atomically with the project tree; watcher code ignores it.
+
+Focused cache validation on 2026-07-12 passed at 10k and 50k:
+
+- 10k compiled decode p50: about 9.9 ms; shell p50: 154 ms; interactive p50:
+  about 630 ms;
+- 50k compiled decode p50: about 34–38 ms versus the former 395–402 ms TOML
+  parse;
+- 50k shell native p50: about 245 ms versus 557 ms;
+- 50k shell p50: about 480 ms versus 771 ms;
+- 50k interactive p50: about 3.42 s in the colder attributed run;
+- 50k post-GC resident memory p50: about 1.14 GiB.
+
+The subsequent 50k watcher phase passed. The shell is now only about 80 ms over
+its report-only target; passage I/O and core session construction dominate the
+remaining interactive path.
+
+The earlier 50k watcher phase passed passage, asset-review, exact
 acknowledgement, and no-recovery assertions. Post-GC resident memory was about
 1.26–1.30 GiB, an improvement over the prior 1.33 GiB but still well above the
 600 MiB target.

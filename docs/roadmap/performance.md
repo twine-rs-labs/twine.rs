@@ -66,12 +66,20 @@ fixture isolation.
   pool capped at eight workers. At 50k, native hydration improved from about
   4.47 s to a measured 2.03–2.59 s p50 range, and interactive startup improved
   from about 5.24 s to 2.84–3.66 s. The subsequent watcher phase passes.
-- The next startup limit is split between 50k TOML shell parsing (about 402 ms
-  in the colder sample), passage I/O (about 1.48–1.88 s), and core session
+- Before the compiled cache, the startup limit was split between 50k TOML shell
+  parsing (about 402 ms), passage I/O (about 1.48–1.88 s), and core session
   construction (about 1.04 s). Avoid raising concurrency without controlled
   evidence; the benchmark supports `TWINE_NATIVE_LOAD_THREADS` experiments.
-- Retained resident memory improved to about 1.26–1.30 GiB but still needs the
-  bounded renderer-mirror milestone to approach the 600 MiB target.
+- A SHA-256-bound compiled manifest cache now replaces the repeated TOML decode
+  on canonical projects. At 50k, compiled decoding is about 34–38 ms p50,
+  shell native time improves from about 557 ms to 245 ms, and shell visibility
+  improves from about 771 ms to 480 ms. Invalid or stale caches fall back to
+  `twine.toml`; watcher cache paths remain ignored.
+- With manifest parsing removed, the next broad milestone is the bounded
+  renderer project mirror. It should target the roughly 39 MiB hydration IPC
+  payload, approximately 1 s core-session construction, and roughly 1.14 GiB
+  retained process memory together. A smaller shell-only optimization may still
+  pursue the remaining roughly 80 ms over the 400 ms target.
 
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.

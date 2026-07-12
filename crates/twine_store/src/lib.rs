@@ -3,6 +3,7 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
@@ -21,6 +22,9 @@ use twine_model::{
 const MANIFEST_FILE: &str = "twine.toml";
 const GRAPH_CACHE_DIR: &str = ".twine/cache/graph";
 const GRAPH_LAYOUT_FILE: &str = ".twine/graph.json";
+const MANIFEST_CACHE_FILE: &str = ".twine/cache/project-manifest.json";
+const MANIFEST_CACHE_FORMAT: &str = "twine.rs/project-manifest-cache";
+const MANIFEST_CACHE_VERSION: u32 = 1;
 const PARALLEL_SOURCE_THRESHOLD: usize = 128;
 
 static PROJECT_LOAD_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
@@ -151,8 +155,16 @@ pub struct LoadedProject {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ProjectLoadTimings {
     pub graph_layout_us: u64,
+    pub manifest_cache_bytes: u64,
+    pub manifest_cache_decode_us: u64,
+    pub manifest_cache_hit: bool,
+    pub manifest_cache_miss_reason: Option<String>,
+    pub manifest_cache_read_us: u64,
+    pub manifest_digest: Option<String>,
+    pub manifest_hash_us: u64,
     pub manifest_parse_us: u64,
     pub manifest_read_us: u64,
+    pub manifest_toml_parse_us: u64,
     pub parallel: bool,
     pub passage_source_count: usize,
     pub passage_source_us: u64,
@@ -291,9 +303,27 @@ pub fn load_project_path_with_receipt(
         read_project_file(root, MANIFEST_FILE, "manifest", None, None, &mut files)?
             .ok_or_else(|| StoreError::ProjectManifestNotFound(manifest_path.clone()))?;
     timings.manifest_read_us = elapsed_us(started);
-    let started = Instant::now();
-    let manifest: ProjectFile = toml::from_str(&manifest_source)?;
-    timings.manifest_parse_us = elapsed_us(started);
+    let hash_started = Instant::now();
+    let manifest_hash = manifest_digest(manifest_source.as_bytes());
+
+    timings.manifest_hash_us = elapsed_us(hash_started);
+    timings.manifest_digest = Some(manifest_hash.clone());
+    let manifest = match read_compiled_project_manifest(
+        root,
+        &manifest_hash,
+        manifest_source.len(),
+        &mut timings,
+    )? {
+        Some(project_file) => project_file,
+        None => {
+            let started = Instant::now();
+            let project_file = toml::from_str(&manifest_source)?;
+
+            timings.manifest_toml_parse_us = elapsed_us(started);
+            timings.manifest_parse_us = timings.manifest_toml_parse_us;
+            project_file
+        }
+    };
     let project = manifest.into_project(root, options, &mut files, &mut timings)?;
 
     Ok(LoadedProject {
@@ -301,6 +331,76 @@ pub fn load_project_path_with_receipt(
         project,
         timings,
     })
+}
+
+fn manifest_digest(source: &[u8]) -> String {
+    let digest = Sha256::digest(source);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+
+    for byte in digest {
+        use std::fmt::Write;
+
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
+}
+
+fn read_compiled_project_manifest(
+    root: &Path,
+    manifest_hash: &str,
+    manifest_size: usize,
+    timings: &mut ProjectLoadTimings,
+) -> Result<Option<ProjectFile>, StoreError> {
+    let started = Instant::now();
+    let source = match fs::read(root.join(MANIFEST_CACHE_FILE)) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            timings.manifest_cache_read_us = elapsed_us(started);
+            timings.manifest_cache_miss_reason = Some("missing".into());
+            return Ok(None);
+        }
+        Err(_) => {
+            timings.manifest_cache_read_us = elapsed_us(started);
+            timings.manifest_cache_miss_reason = Some("invalidCache".into());
+            return Ok(None);
+        }
+    };
+
+    timings.manifest_cache_read_us = elapsed_us(started);
+    timings.manifest_cache_bytes = source.len().try_into().unwrap_or(u64::MAX);
+    let started = Instant::now();
+    let cache = match serde_json::from_slice::<CompiledProjectManifest>(&source) {
+        Ok(cache) => cache,
+        Err(_) => {
+            timings.manifest_cache_decode_us = elapsed_us(started);
+            timings.manifest_cache_miss_reason = Some("invalidCache".into());
+            return Ok(None);
+        }
+    };
+
+    timings.manifest_cache_decode_us = elapsed_us(started);
+    let miss_reason = if cache.format != MANIFEST_CACHE_FORMAT {
+        Some("invalidCache")
+    } else if cache.version != MANIFEST_CACHE_VERSION {
+        Some("versionMismatch")
+    } else if cache.app_version != env!("CARGO_PKG_VERSION") {
+        Some("versionMismatch")
+    } else if cache.project_schema_version != cache.project.schema_version {
+        Some("schemaMismatch")
+    } else if cache.manifest_size != manifest_size as u64 || cache.manifest_hash != manifest_hash {
+        Some("hashMismatch")
+    } else {
+        None
+    };
+
+    if let Some(reason) = miss_reason {
+        timings.manifest_cache_miss_reason = Some(reason.into());
+        return Ok(None);
+    }
+
+    timings.manifest_cache_hit = true;
+    timings.manifest_parse_us = timings.manifest_cache_decode_us;
+    Ok(Some(cache.project))
 }
 
 pub fn save_project_path(
@@ -465,10 +565,22 @@ fn write_project_to_dir(
         )?;
     }
 
-    fs::write(
-        root.join(MANIFEST_FILE),
-        toml::to_string_pretty(&project_file)?,
-    )?;
+    let manifest_source = toml::to_string_pretty(&project_file)?;
+
+    fs::write(root.join(MANIFEST_FILE), &manifest_source)?;
+    if options.write_generated_indexes {
+        let cache = CompiledProjectManifest {
+            app_version: env!("CARGO_PKG_VERSION").into(),
+            format: MANIFEST_CACHE_FORMAT.into(),
+            manifest_hash: manifest_digest(manifest_source.as_bytes()),
+            manifest_size: manifest_source.len().try_into().unwrap_or(u64::MAX),
+            project_schema_version: project_file.schema_version,
+            project: project_file,
+            version: MANIFEST_CACHE_VERSION,
+        };
+
+        fs::write(root.join(MANIFEST_CACHE_FILE), serde_json::to_vec(&cache)?)?;
+    }
 
     Ok(())
 }
@@ -520,6 +632,17 @@ struct ProjectFile {
     storage: StoragePolicy,
     #[serde(default)]
     stories: Vec<StoryFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CompiledProjectManifest {
+    app_version: String,
+    format: String,
+    manifest_hash: String,
+    manifest_size: u64,
+    project: ProjectFile,
+    project_schema_version: u32,
+    version: u32,
 }
 
 fn schema_version() -> u32 {
@@ -1325,6 +1448,7 @@ mod tests {
         assert!(root.join("styles/example.css").exists());
         assert!(root.join("assets").is_dir());
         assert!(root.join(".twine/cache/graph/example.graph.json").exists());
+        assert!(root.join(MANIFEST_CACHE_FILE).exists());
         assert!(root.join(".twine/graph.json").exists());
 
         let loaded = load_project_path(&root).expect("project should load");
@@ -1354,11 +1478,77 @@ mod tests {
         assert!(receipt_paths.contains(&("graph", ".twine/graph.json".into())));
         assert!(!loaded_with_receipt.timings.parallel);
         assert_eq!(loaded_with_receipt.timings.worker_count, 1);
+        assert!(loaded_with_receipt.timings.manifest_cache_hit);
+        assert_eq!(loaded_with_receipt.timings.manifest_toml_parse_us, 0);
 
         let clean_report = save_project_path(&root, &project, &SaveOptions::default())
             .expect("unchanged project should save");
 
         assert!(!clean_report.dirty);
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn compiled_manifest_cache_is_validated_and_never_bypasses_path_safety() {
+        let root = temp_path("manifest-cache");
+        let project = Project::from_story(story());
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        let cache_path = root.join(MANIFEST_CACHE_FILE);
+        let manifest_path = root.join(MANIFEST_FILE);
+        let valid_cache = fs::read(&cache_path).expect("cache should be readable");
+        let original_manifest = fs::read_to_string(&manifest_path).expect("manifest should read");
+
+        fs::write(&cache_path, b"not json").expect("corrupt cache should write");
+        let corrupt = load_project_path_with_receipt(&root, LoadProjectOptions::shell())
+            .expect("corrupt cache should fall back to TOML");
+
+        assert!(!corrupt.timings.manifest_cache_hit);
+        assert_eq!(
+            corrupt.timings.manifest_cache_miss_reason.as_deref(),
+            Some("invalidCache")
+        );
+        assert!(corrupt.timings.manifest_toml_parse_us > 0);
+
+        fs::write(&cache_path, &valid_cache).expect("valid cache should be restored");
+        let changed_manifest =
+            original_manifest.replacen("name = \"Example\"", "name = \"Changed\"", 1);
+
+        assert_eq!(changed_manifest.len(), original_manifest.len());
+        fs::write(&manifest_path, &changed_manifest).expect("changed manifest should write");
+        let changed = load_project_path_with_receipt(&root, LoadProjectOptions::shell())
+            .expect("same-size manifest change should parse authoritative TOML");
+
+        assert!(!changed.timings.manifest_cache_hit);
+        assert_eq!(
+            changed.timings.manifest_cache_miss_reason.as_deref(),
+            Some("hashMismatch")
+        );
+
+        fs::write(&manifest_path, &original_manifest).expect("manifest should be restored");
+        let mut unsafe_cache: CompiledProjectManifest =
+            serde_json::from_slice(&valid_cache).expect("valid cache should parse");
+
+        unsafe_cache.project.stories[0].passages[0].file = "../outside.twee".into();
+        fs::write(
+            &cache_path,
+            serde_json::to_vec(&unsafe_cache).expect("unsafe cache should serialize"),
+        )
+        .expect("unsafe cache should write");
+        let error = load_project_path_with_receipt(&root, LoadProjectOptions::full())
+            .expect_err("unsafe cached path should be rejected");
+
+        assert!(matches!(error, StoreError::UnsafeProjectPath(_)));
+
+        fs::remove_file(&cache_path).expect("cache should be removed");
+        let missing = load_project_path_with_receipt(&root, LoadProjectOptions::shell())
+            .expect("missing cache should fall back");
+
+        assert_eq!(
+            missing.timings.manifest_cache_miss_reason.as_deref(),
+            Some("missing")
+        );
 
         fs::remove_dir_all(&root).expect("project should be removed");
     }
