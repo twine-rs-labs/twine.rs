@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use twine_core::{
     CoreAssetInventoryEntry, CoreAssetsQuery, CoreContentsQuery, CoreDiagnosticsQuery,
     CoreExternalDelta, CoreExternalIngestMode, CoreGraphProjectionOptions, CoreSearchQuery,
-    CoreStoryIndexOptions, PassageSnapshot, ProjectSession, ProjectSnapshot, StoryCommand,
-    StorySnapshot,
+    CoreSourceKind, CoreStoryIndexOptions, PassageSnapshot, ProjectSession, ProjectSnapshot,
+    StoryCommand, StorySnapshot,
 };
 use twine_model::{
     GraphLayout, GraphPosition, LibraryMetadata, Passage, PassageId, PassageIndex, PassageLayout,
@@ -213,6 +213,37 @@ impl TwineWasmProjectSession {
             &self
                 .session
                 .passage_facts(&story_id, &passage_id)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_passage_document(
+        &self,
+        story_id: String,
+        passage_id: String,
+    ) -> Result<JsValue, JsValue> {
+        to_js(
+            &self
+                .session
+                .passage_document(&story_id, &passage_id)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_source_document(
+        &self,
+        story_id: String,
+        kind: String,
+    ) -> Result<JsValue, JsValue> {
+        let kind = match kind.as_str() {
+            "script" => CoreSourceKind::Script,
+            "stylesheet" => CoreSourceKind::Stylesheet,
+            _ => return Err(JsValue::from_str("Unsupported story source kind.")),
+        };
+        to_js(
+            &self
+                .session
+                .source_document(&story_id, kind)
                 .map_err(core_error)?,
         )
     }

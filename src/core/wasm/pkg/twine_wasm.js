@@ -154,6 +154,22 @@ export class TwineWasmProjectSession {
      * @param {string} passage_id
      * @returns {any}
      */
+    query_passage_document(story_id, passage_id) {
+        const ptr0 = passStringToWasm0(story_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(passage_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.twinewasmprojectsession_query_passage_document(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @param {string} story_id
+     * @param {string} passage_id
+     * @returns {any}
+     */
     query_passage_facts(story_id, passage_id) {
         const ptr0 = passStringToWasm0(story_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
@@ -174,6 +190,22 @@ export class TwineWasmProjectSession {
         const ptr0 = passStringToWasm0(story_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.twinewasmprojectsession_query_search_page(this.__wbg_ptr, ptr0, len0, query);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @param {string} story_id
+     * @param {string} kind
+     * @returns {any}
+     */
+    query_source_document(story_id, kind) {
+        const ptr0 = passStringToWasm0(story_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.twinewasmprojectsession_query_source_document(this.__wbg_ptr, ptr0, len0, ptr1, len1);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

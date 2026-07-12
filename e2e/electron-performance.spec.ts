@@ -800,7 +800,7 @@ async function waitForDiagnosticWarmup(page: Page) {
 	await pollSnapshot(
 		page,
 		current =>
-			(current.renderer.core.hosts[0]?.sessions[0]?.revision ?? 0) >= 2 &&
+			(current.renderer.core.hosts[0]?.sessions[0]?.revision ?? 0) >= 1 &&
 			current.renderer.entries.some(
 				event => event.name === 'session-baseline-ready'
 			) &&
@@ -808,7 +808,7 @@ async function waitForDiagnosticWarmup(page: Page) {
 				event => event.name === 'session-initialization-complete'
 			) &&
 			current.renderer.entries.some(
-				entry => entry.name === 'graph-query-result'
+				entry => entry.name === 'all-passages-ready'
 			),
 		180_000
 	);
@@ -866,6 +866,7 @@ async function measureEdits(page: Page) {
 		.getByRole('group', {name: 'Workspace Mode'})
 		.getByRole('tab', {name: 'Text'})
 		.click();
+	await waitForEvent(page, 'core-passage-document-ready');
 	const editor = page.locator('[data-testid^="story-editor-window-"]').first();
 
 	await expect(editor).toBeVisible();

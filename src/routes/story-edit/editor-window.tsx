@@ -14,10 +14,9 @@ import {TagCardButton} from '../../components/tag/tag-card-button';
 import {
 	setPassageTagsCommand,
 	setStoryTagColorCommand,
-	updatePassageTextCommand,
-	updateStoryScriptCommand,
-	updateStoryStylesheetCommand,
-	useCoreProjectHost
+	useCorePassageDocument,
+	useCoreProjectHost,
+	useCoreSourceDocument
 } from '../../core';
 import type {CoreStoryIndex, WorkbenchSelection} from '../../core';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
@@ -111,6 +110,15 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		spec.kind === 'passage'
 			? story.passages.find(candidate => candidate.id === spec.passageId)
 			: undefined;
+	const passageDocument = useCorePassageDocument(story.id, passage?.id);
+	const scriptDocument = useCoreSourceDocument(
+		spec.kind === 'script' ? story.id : undefined,
+		spec.kind === 'script' ? 'script' : undefined
+	);
+	const stylesheetDocument = useCoreSourceDocument(
+		spec.kind === 'stylesheet' ? story.id : undefined,
+		spec.kind === 'stylesheet' ? 'stylesheet' : undefined
+	);
 
 	const buffer = React.useMemo<ResolvedBuffer>(() => {
 		if (spec.kind === 'script') {
@@ -119,7 +127,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				language: 'javascript',
 				memoryKey: `${story.id}:script`,
 				name: t('routes.storyEdit.toolbar.javaScript'),
-				value: story.script
+				value: scriptDocument.document?.text ?? story.script
 			};
 		}
 
@@ -129,7 +137,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				language: 'css',
 				memoryKey: `${story.id}:stylesheet`,
 				name: t('routes.storyEdit.toolbar.stylesheet'),
-				value: story.stylesheet
+				value: stylesheetDocument.document?.text ?? story.stylesheet
 			};
 		}
 
@@ -139,9 +147,19 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			memoryKey: passage ? `${story.id}:${passage.id}` : `${story.id}:passage`,
 			name: passage?.name ?? t('routes.storyEdit.workspace.noPassages'),
 			passage,
-			value: passage?.text ?? ''
+			value: passageDocument.document?.text ?? passage?.text ?? ''
 		};
-	}, [passage, spec.kind, story.id, story.script, story.stylesheet, t]);
+	}, [
+		passage,
+		passageDocument.document?.text,
+		scriptDocument.document?.text,
+		spec.kind,
+		story.id,
+		story.script,
+		story.stylesheet,
+		stylesheetDocument.document?.text,
+		t
+	]);
 
 	const [localText, setLocalText] = React.useState(buffer.value);
 	const pendingText = React.useRef<string>();
@@ -186,30 +204,25 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	const commitText = React.useCallback(
 		(text: string) => {
 			if (spec.kind === 'passage') {
-				if (passage && text !== passage.text) {
-					coreProjectHost.applyStoryCommand(
-						updatePassageTextCommand(story.id, passage.id, text)
-					);
+				if (passage) {
+					void passageDocument.apply(text);
 				}
 			} else if (spec.kind === 'script') {
-				if (text !== story.script) {
-					coreProjectHost.applyStoryCommand(
-						updateStoryScriptCommand(story.id, text)
-					);
-				}
-			} else if (text !== story.stylesheet) {
-				coreProjectHost.applyStoryCommand(
-					updateStoryStylesheetCommand(story.id, text)
-				);
+				void scriptDocument.apply(text);
+			} else {
+				void stylesheetDocument.apply(text);
 			}
 		},
 		[
 			coreProjectHost,
 			passage,
+			passageDocument,
+			scriptDocument,
 			spec.kind,
 			story.id,
 			story.script,
-			story.stylesheet
+			story.stylesheet,
+			stylesheetDocument
 		]
 	);
 

@@ -7,6 +7,8 @@ import type {CoreContentsQuery} from './bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from './bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsQuery} from './bindings/CoreDiagnosticsQuery';
 import type {CorePassageFacts} from './bindings/CorePassageFacts';
+import type {CorePassageDocument} from './bindings/CorePassageDocument';
+import type {CoreSourceDocument} from './bindings/CoreSourceDocument';
 import type {CoreRect} from './bindings/CoreRect';
 import type {CoreSearchPage} from './bindings/CoreSearchPage';
 import type {CoreSearchQuery} from './bindings/CoreSearchQuery';
@@ -25,6 +27,7 @@ import {createUntitledPassage, Story} from '../store/stories';
 import {storyToSnapshot} from './project-snapshot';
 
 export * from './project-host';
+export * from './passage-document';
 export * from './project-snapshot';
 export * from './view-models';
 export * from './diagnostic-dismissals';
@@ -40,6 +43,8 @@ export type {
 	CoreDiagnosticsPage,
 	CoreDiagnosticsQuery,
 	CorePassageFacts,
+	CorePassageDocument,
+	CoreSourceDocument,
 	CoreRect,
 	CoreSearchPage,
 	CoreSearchQuery,

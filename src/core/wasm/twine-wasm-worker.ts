@@ -251,6 +251,20 @@ async function handleRequest(
 				).session.query_passage_facts(request.storyId, request.passageId);
 				break;
 
+			case 'queryPassageDocument':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_passage_document(request.storyId, request.passageId);
+				break;
+
+			case 'querySourceDocument':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_source_document(request.storyId, request.sourceKind);
+				break;
+
 			case 'removeSession': {
 				const removed = sessions.get(request.sessionId);
 

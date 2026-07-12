@@ -16,8 +16,10 @@ export const twinewasmprojectsession_query_assets_page: (a: number, b: number, c
 export const twinewasmprojectsession_query_contents_page: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_diagnostics_page: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_graph_projection: (a: number, b: number, c: number, d: any) => [number, number, number];
+export const twinewasmprojectsession_query_passage_document: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const twinewasmprojectsession_query_passage_facts: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const twinewasmprojectsession_query_search_page: (a: number, b: number, c: number, d: any) => [number, number, number];
+export const twinewasmprojectsession_query_source_document: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const twinewasmprojectsession_query_story_index: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_story_summary: (a: number, b: number, c: number) => [number, number, number];
 export const twinewasmprojectsession_redo: (a: number) => [number, number, number];

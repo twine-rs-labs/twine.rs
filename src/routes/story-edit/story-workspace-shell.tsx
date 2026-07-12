@@ -1295,9 +1295,15 @@ export const StoryWorkspaceShell: React.FC<
 		}
 
 		hydratingStories.current.add(hydrateKey);
+		const projectStoryIds = stories
+			.filter(candidate => {
+				const metadata = loadProjectMetadata(candidate.id);
+				return metadata?.rootPath === projectMetadata.rootPath;
+			})
+			.map(candidate => candidate.id);
 		void bridge
-			.hydrateProjectFolder(projectMetadata.rootPath, [story.id])
-			.then(result => {
+			.hydrateProjectFolder(projectMetadata.rootPath, projectStoryIds)
+			.then(async result => {
 				recordPerformanceHarnessEvent('native-project-hydrated', {
 					...result.loadPerformanceTimings,
 					graphLayoutLoaded: result.graphLayoutLoaded,
@@ -1307,10 +1313,27 @@ export const StoryWorkspaceShell: React.FC<
 					storyCount: result.stories.length
 				});
 				if (result.stories.length > 0) {
+					await coreProjectHost.initializeHydratedProject(
+						story.id,
+						result.stories
+					);
+					const metadataStories = result.stories.map(candidate =>
+						candidate.passages.length > deferIndexPassageThreshold
+							? {
+									...candidate,
+									passages: candidate.passages.map(passage => ({
+										...passage,
+										text: ''
+									})),
+									script: '',
+									stylesheet: ''
+								}
+							: candidate
+					);
 					const mergeStarted = performance.now();
 					const hydratedStories = mergeProjectStories(
 						storiesRef.current,
-						result.stories,
+						metadataStories,
 						{
 							preserveExistingText: true
 						}
@@ -1333,10 +1356,12 @@ export const StoryWorkspaceShell: React.FC<
 						'renderer-project-hydration-dispatched',
 						{durationMs: performance.now() - dispatchStarted}
 					);
-					markProjectStoryHydration(story.id, {
-						passageTextLoaded: true,
-						rootPath: projectMetadata.rootPath
-					});
+					for (const hydratedStory of result.stories) {
+						markProjectStoryHydration(hydratedStory.id, {
+							passageTextLoaded: true,
+							rootPath: projectMetadata.rootPath
+						});
+					}
 					markPerformance('all-passages-ready');
 					measurePerformance(
 						'open-to-hydrated',
@@ -1348,7 +1373,14 @@ export const StoryWorkspaceShell: React.FC<
 			.catch(error =>
 				console.warn(`Could not hydrate project folder story: ${error}`)
 			);
-	}, [passageTextLoaded, projectMetadata, stories, storiesDispatch, story.id]);
+	}, [
+		coreProjectHost,
+		passageTextLoaded,
+		projectMetadata,
+		stories,
+		storiesDispatch,
+		story.id
+	]);
 
 	React.useEffect(
 		() =>

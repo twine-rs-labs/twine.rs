@@ -10,6 +10,8 @@ import type {CoreExternalDelta} from './bindings/CoreExternalDelta';
 import type {CoreExternalIngestResult} from './bindings/CoreExternalIngestResult';
 import type {CoreGraphProjection} from './bindings/CoreGraphProjection';
 import type {CorePassageFacts} from './bindings/CorePassageFacts';
+import type {CorePassageDocument} from './bindings/CorePassageDocument';
+import type {CoreSourceDocument} from './bindings/CoreSourceDocument';
 import type {CoreSearchPage} from './bindings/CoreSearchPage';
 import type {CoreSearchQuery} from './bindings/CoreSearchQuery';
 import type {CoreSessionStatus} from './bindings/CoreSessionStatus';
@@ -79,6 +81,7 @@ export interface CoreProjectHost {
 		options?: CoreCommandOptions
 	): Promise<PatchBatch | undefined>;
 	ensureSessionReady(storyId: string): Promise<void>;
+	initializeHydratedProject(storyId: string, stories: Story[]): Promise<void>;
 	ingestExternalDelta(
 		storyId: string,
 		delta: CoreExternalDelta,
@@ -121,6 +124,14 @@ export interface CoreProjectHost {
 		storyId: string,
 		passageId: string
 	): Promise<CorePassageFacts>;
+	queryPassageDocumentAsync(
+		storyId: string,
+		passageId: string
+	): Promise<CorePassageDocument>;
+	querySourceDocumentAsync(
+		storyId: string,
+		kind: 'script' | 'stylesheet'
+	): Promise<CoreSourceDocument>;
 	recoverFromSnapshot(
 		storyId: string,
 		stories: Story[],
@@ -228,6 +239,8 @@ type CoreProjectSessionClient = Pick<
 	| 'queryDiagnosticsPage'
 	| 'queryAssetsPage'
 	| 'queryPassageFacts'
+	| 'queryPassageDocument'
+	| 'querySourceDocument'
 	| 'redo'
 	| 'replaceProject'
 	| 'undo'
@@ -616,6 +629,57 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 	async ensureSessionReady() {
 		await this.ensureWasmProjectSession();
+	}
+
+	async initializeHydratedProject(_storyId: string, stories: Story[]) {
+		if (!this.wasmClient.enabled) {
+			throw new Error('WASM core worker is unavailable.');
+		}
+		if (
+			stories.some(
+				story =>
+					!!projectStoryHydration(story.id)?.rootPath &&
+					!knownAssetInventoryScanCompleteForStory(story.id)
+			)
+		) {
+			await new Promise<void>(resolve => {
+				const unsubscribe = subscribeKnownAssetInventory(() => {
+					if (
+						stories.every(
+							story =>
+								!projectStoryHydration(story.id)?.rootPath ||
+								knownAssetInventoryScanCompleteForStory(story.id)
+						)
+					) {
+						unsubscribe();
+						resolve();
+					}
+				});
+			});
+		}
+
+		const revision = this.wasmProjectRevision;
+		const snapshot = projectSnapshotFromStories(stories);
+		const assets = stories.flatMap(
+			story => this.assetInventoryByStory.get(story.id) ?? []
+		);
+		this.wasmProjectReplaceRevision = revision;
+		this.wasmProjectReplacePromise = this.wasmClient
+			.replaceProject(this.sessionId, snapshot, revision, assets)
+			.then(status => {
+				if (status) {
+					this.publishStatus(status);
+				}
+			});
+		await this.wasmProjectReplacePromise;
+		recordPerformanceHarnessEvent('core-session-direct-hydration-ready', {
+			passageCount: snapshot.stories.reduce(
+				(total, story) => total + story.passages.length,
+				0
+			),
+			revision,
+			sessionId: this.sessionId
+		});
 	}
 
 	async applyExternalDelta(
@@ -1682,6 +1746,29 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		} satisfies CorePassageFacts;
 	}
 
+	async queryPassageDocumentAsync(storyId: string, passageId: string) {
+		const revision = await this.ensureWasmProjectSession();
+		return this.wasmClient.queryPassageDocument(
+			this.sessionId,
+			storyId,
+			passageId,
+			revision
+		);
+	}
+
+	async querySourceDocumentAsync(
+		storyId: string,
+		kind: 'script' | 'stylesheet'
+	) {
+		const revision = await this.ensureWasmProjectSession();
+		return this.wasmClient.querySourceDocument(
+			this.sessionId,
+			storyId,
+			kind,
+			revision
+		);
+	}
+
 	subscribeToPatches(listener: CoreProjectPatchListener) {
 		this.listeners.add(listener);
 
@@ -2013,6 +2100,30 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
+	queryPassageDocumentAsync(storyId: string, passageId: string) {
+		const host = this.hostForStory(storyId);
+		if (!host) {
+			return Promise.reject(new Error(`No core session for story ${storyId}.`));
+		}
+		return host.queryPassageDocumentAsync(storyId, passageId);
+	}
+
+	querySourceDocumentAsync(storyId: string, kind: 'script' | 'stylesheet') {
+		const host = this.hostForStory(storyId);
+		if (!host) {
+			return Promise.reject(new Error(`No core session for story ${storyId}.`));
+		}
+		return host.querySourceDocumentAsync(storyId, kind);
+	}
+
+	initializeHydratedProject(storyId: string, stories: Story[]) {
+		const host = this.hostForStory(storyId);
+		if (!host) {
+			return Promise.reject(new Error(`No core session for story ${storyId}.`));
+		}
+		return host.initializeHydratedProject(storyId, stories);
+	}
+
 	runtimeMode() {
 		return this.client.mode;
 	}
@@ -2133,6 +2244,8 @@ export function useCoreProjectSession(storyId: string | undefined) {
 			applyStoryCommand: (command, options) =>
 				host.applyStoryCommand(command, options),
 			ensureSessionReady: readyStoryId => host.ensureSessionReady(readyStoryId),
+			initializeHydratedProject: (readyStoryId, stories) =>
+				host.initializeHydratedProject(readyStoryId, stories),
 			isDirty: () => host.isDirty(storyId),
 			queryGraphProjection: (queryStoryId, options) =>
 				host.queryGraphProjection(queryStoryId, options),
@@ -2154,6 +2267,10 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.queryAssetsPageAsync(queryStoryId, options),
 			queryPassageFactsAsync: (queryStoryId, passageId) =>
 				host.queryPassageFactsAsync(queryStoryId, passageId),
+			queryPassageDocumentAsync: (queryStoryId, passageId) =>
+				host.queryPassageDocumentAsync(queryStoryId, passageId),
+			querySourceDocumentAsync: (queryStoryId, kind) =>
+				host.querySourceDocumentAsync(queryStoryId, kind),
 			recoverFromSnapshot: (recoveryStoryId, recoveryStories, assets) =>
 				host.recoverFromSnapshot(recoveryStoryId, recoveryStories, assets),
 			redo: () => host.redo(storyId),

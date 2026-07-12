@@ -10,6 +10,8 @@ import type {CoreExternalIngestResult} from '../bindings/CoreExternalIngestResul
 import type {CoreGraphProjection} from '../bindings/CoreGraphProjection';
 import type {CoreGraphProjectionOptions} from '../bindings/CoreGraphProjectionOptions';
 import type {CorePassageFacts} from '../bindings/CorePassageFacts';
+import type {CorePassageDocument} from '../bindings/CorePassageDocument';
+import type {CoreSourceDocument} from '../bindings/CoreSourceDocument';
 import type {CoreSearchPage} from '../bindings/CoreSearchPage';
 import type {CoreSearchQuery} from '../bindings/CoreSearchQuery';
 import type {CoreStoryIndex} from '../bindings/CoreStoryIndex';
@@ -57,6 +59,8 @@ type ReadModelWorkerRequest = Extract<
 			| 'queryContentsPage'
 			| 'queryDiagnosticsPage'
 			| 'queryPassageFacts'
+			| 'queryPassageDocument'
+			| 'querySourceDocument'
 			| 'querySearchPage'
 			| 'queryStorySummary';
 	}
@@ -587,6 +591,48 @@ export class WasmCoreWorkerClient {
 			sessionId,
 			storyId
 		});
+	}
+
+	async queryPassageDocument(
+		sessionId: string,
+		storyId: string,
+		passageId: string,
+		revision: number
+	) {
+		return this.queryReadModel<CorePassageDocument>(
+			sessionId,
+			storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'queryPassageDocument',
+				passageId,
+				revision,
+				sessionId,
+				storyId
+			}
+		);
+	}
+
+	async querySourceDocument(
+		sessionId: string,
+		storyId: string,
+		sourceKind: 'script' | 'stylesheet',
+		revision: number
+	) {
+		return this.queryReadModel<CoreSourceDocument>(
+			sessionId,
+			storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'querySourceDocument',
+				revision,
+				sessionId,
+				sourceKind,
+				storyId
+			}
+		);
 	}
 
 	private async queryReadModel<T>(

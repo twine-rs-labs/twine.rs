@@ -899,6 +899,28 @@ pub struct CorePassageFacts {
     pub symbols: Vec<CoreSymbol>,
 }
 
+/// A revision-bound passage body. Persisted text stays session-owned; callers
+/// request only the document they are actively displaying.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageDocument {
+    pub passage_id: String,
+    pub revision: u32,
+    pub story_id: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreSourceDocument {
+    pub kind: CoreSourceKind,
+    pub revision: u32,
+    pub story_id: String,
+    pub text: String,
+}
+
 impl From<&Story> for StorySnapshot {
     fn from(value: &Story) -> Self {
         Self {
@@ -6511,6 +6533,48 @@ impl ProjectSession {
         })
     }
 
+    pub fn passage_document(
+        &self,
+        story_id: &str,
+        passage_id: &str,
+    ) -> Result<CorePassageDocument, CoreError> {
+        let passage_id = PassageId::new(passage_id);
+        let story = self.story(story_id)?;
+        let passage = story
+            .passage_by_id(&passage_id)
+            .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+
+        Ok(CorePassageDocument {
+            passage_id: passage_id.as_ref().to_owned(),
+            revision: self.revision().min(u32::MAX as u64) as u32,
+            story_id: story.id.as_ref().to_owned(),
+            text: passage.text.clone(),
+        })
+    }
+
+    pub fn source_document(
+        &self,
+        story_id: &str,
+        kind: CoreSourceKind,
+    ) -> Result<CoreSourceDocument, CoreError> {
+        let story = self.story(story_id)?;
+        let text = match kind {
+            CoreSourceKind::Script => story.script.clone(),
+            CoreSourceKind::Stylesheet => story.stylesheet.clone(),
+            CoreSourceKind::Passage | CoreSourceKind::StoryMetadata => {
+                return Err(CoreError::UnsupportedCommand(
+                    "passage sources require passage_document".into(),
+                ));
+            }
+        };
+        Ok(CoreSourceDocument {
+            kind,
+            revision: self.revision().min(u32::MAX as u64) as u32,
+            story_id: story.id.as_ref().to_owned(),
+            text,
+        })
+    }
+
     /// Lazily initializes topology once for bounded graph and passage-fact reads.
     /// Mutations update this cache through `update_graph_cache`, so focused reads
     /// never construct a second graph from the complete story.
@@ -9119,6 +9183,28 @@ mod tests {
             stories: vec![story],
             ..Project::default()
         })
+    }
+
+    #[test]
+    fn revision_bound_documents_follow_session_mutations() {
+        let mut session = session();
+        let initial = session
+            .passage_document("story-1", "a")
+            .expect("passage document");
+        assert_eq!(initial.text, "[[Next]] [[Label->Next]] [[Next<-Back]]");
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "updated".into(),
+            })
+            .expect("text update");
+        let updated = session
+            .passage_document("story-1", "a")
+            .expect("updated passage document");
+        assert_eq!(updated.text, "updated");
+        assert!(updated.revision > initial.revision);
     }
 
     fn dense_source_only_session(target_count: usize) -> ProjectSession {

@@ -9,6 +9,8 @@ import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsQuery} from '../bindings/CoreDiagnosticsQuery';
 import type {CorePassageFacts} from '../bindings/CorePassageFacts';
+import type {CorePassageDocument} from '../bindings/CorePassageDocument';
+import type {CoreSourceDocument} from '../bindings/CoreSourceDocument';
 import type {CoreSearchPage} from '../bindings/CoreSearchPage';
 import type {CoreSearchQuery} from '../bindings/CoreSearchQuery';
 import type {CoreSessionStatus} from '../bindings/CoreSessionStatus';
@@ -165,6 +167,22 @@ export type WasmWorkerRequest =
 			storyId: string;
 	  }
 	| {
+			id: number;
+			kind: 'queryPassageDocument';
+			passageId: string;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'querySourceDocument';
+			revision: number;
+			sessionId: string;
+			sourceKind: 'script' | 'stylesheet';
+			storyId: string;
+	  }
+	| {
 			assets: CoreAssetInventoryEntry[];
 			id: number;
 			kind: 'replaceProject';
@@ -285,6 +303,20 @@ export type WasmWorkerSuccess =
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: CorePassageFacts;
+	  }
+	| {
+			id: number;
+			kind: 'queryPassageDocument';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CorePassageDocument;
+	  }
+	| {
+			id: number;
+			kind: 'querySourceDocument';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CoreSourceDocument;
 	  }
 	| {
 			id: number;
