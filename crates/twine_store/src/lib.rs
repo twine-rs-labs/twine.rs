@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::BufReader,
+    io::{BufReader, Read},
     path::{Component, Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -69,6 +69,22 @@ impl Default for SaveOptions {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LoadProjectOptions {
     pub load_passage_text: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoadedProjectFile {
+    pub kind: &'static str,
+    pub modified_at: SystemTime,
+    pub passage_id: Option<String>,
+    pub path: PathBuf,
+    pub size_bytes: u64,
+    pub story_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LoadedProject {
+    pub files: Vec<LoadedProjectFile>,
+    pub project: Project,
 }
 
 impl Default for LoadProjectOptions {
@@ -180,6 +196,13 @@ pub fn load_project_path_with_options(
     root: impl AsRef<Path>,
     options: LoadProjectOptions,
 ) -> Result<Project, StoreError> {
+    Ok(load_project_path_with_receipt(root, options)?.project)
+}
+
+pub fn load_project_path_with_receipt(
+    root: impl AsRef<Path>,
+    options: LoadProjectOptions,
+) -> Result<LoadedProject, StoreError> {
     let root = root.as_ref();
     let manifest_path = root.join(MANIFEST_FILE);
 
@@ -187,9 +210,14 @@ pub fn load_project_path_with_options(
         return Err(StoreError::ProjectManifestNotFound(manifest_path));
     }
 
-    let manifest: ProjectFile = toml::from_str(&fs::read_to_string(&manifest_path)?)?;
+    let mut files = Vec::new();
+    let manifest_source =
+        read_project_file(root, MANIFEST_FILE, "manifest", None, None, &mut files)?
+            .ok_or_else(|| StoreError::ProjectManifestNotFound(manifest_path.clone()))?;
+    let manifest: ProjectFile = toml::from_str(&manifest_source)?;
+    let project = manifest.into_project(root, options, &mut files)?;
 
-    manifest.into_project(root, options)
+    Ok(LoadedProject { files, project })
 }
 
 pub fn save_project_path(
@@ -427,16 +455,21 @@ impl ProjectFile {
         }
     }
 
-    fn into_project(self, root: &Path, options: LoadProjectOptions) -> Result<Project, StoreError> {
-        let layout = if root.join(GRAPH_LAYOUT_FILE).exists() {
-            serde_json::from_str(&fs::read_to_string(root.join(GRAPH_LAYOUT_FILE))?)?
-        } else {
-            GraphLayout::default()
-        };
+    fn into_project(
+        self,
+        root: &Path,
+        options: LoadProjectOptions,
+        files: &mut Vec<LoadedProjectFile>,
+    ) -> Result<Project, StoreError> {
+        let layout: GraphLayout =
+            read_project_file(root, GRAPH_LAYOUT_FILE, "graph", None, None, files)?
+                .map(|source| serde_json::from_str(&source))
+                .transpose()?
+                .unwrap_or_default();
         let mut stories = self
             .stories
             .into_iter()
-            .map(|story| story.into_story(root, options))
+            .map(|story| story.into_story(root, options, files))
             .collect::<Result<Vec<_>, _>>()?;
 
         for story in &mut stories {
@@ -565,7 +598,13 @@ impl StoryFile {
         }
     }
 
-    fn into_story(self, root: &Path, options: LoadProjectOptions) -> Result<Story, StoreError> {
+    fn into_story(
+        self,
+        root: &Path,
+        options: LoadProjectOptions,
+        files: &mut Vec<LoadedProjectFile>,
+    ) -> Result<Story, StoreError> {
+        let source_story_id = self.id.as_ref().to_owned();
         let mut story = Story {
             color: self.color,
             custom_attributes: self.custom_attributes,
@@ -576,12 +615,28 @@ impl StoryFile {
             metadata: metadata_from_json(self.metadata_json),
             name: self.name,
             passages: Vec::new().into(),
-            script: read_optional(root, &self.script)?,
+            script: read_project_file(
+                root,
+                &self.script,
+                "script",
+                Some(&source_story_id),
+                None,
+                files,
+            )?
+            .unwrap_or_default(),
             snap_to_grid: self.snap_to_grid,
             start_passage: self.start_passage,
             story_format: self.story_format,
             story_format_version: self.story_format_version,
-            stylesheet: read_optional(root, &self.stylesheet)?,
+            stylesheet: read_project_file(
+                root,
+                &self.stylesheet,
+                "stylesheet",
+                Some(&source_story_id),
+                None,
+                files,
+            )?
+            .unwrap_or_default(),
             tags: self.tags,
             tag_colors: self.tag_colors,
             zoom: self.zoom,
@@ -590,7 +645,7 @@ impl StoryFile {
         story.passages = self
             .passages
             .into_iter()
-            .map(|passage| passage.into_passage(root, &story.id, options))
+            .map(|passage| passage.into_passage(root, &story.id, options, files))
             .collect::<Result<Vec<_>, _>>()?
             .into();
 
@@ -634,7 +689,9 @@ impl PassageFile {
         root: &Path,
         story_id: &StoryId,
         options: LoadProjectOptions,
+        files: &mut Vec<LoadedProjectFile>,
     ) -> Result<Passage, StoreError> {
+        let source_passage_id = self.id.as_ref().to_owned();
         Ok(Passage {
             custom_attributes: self.custom_attributes,
             id: self.id,
@@ -645,7 +702,15 @@ impl PassageFile {
             story: story_id.clone(),
             tags: self.tags,
             text: if options.load_passage_text {
-                read_optional(root, &self.file)?
+                read_project_file(
+                    root,
+                    &self.file,
+                    "passage",
+                    Some(story_id.as_ref()),
+                    Some(&source_passage_id),
+                    files,
+                )?
+                .unwrap_or_default()
             } else {
                 String::new()
             },
@@ -667,18 +732,38 @@ fn metadata_from_json(value: Option<String>) -> BTreeMap<String, Value> {
         .unwrap_or_default()
 }
 
-fn read_optional(root: &Path, relative: &str) -> Result<String, StoreError> {
+fn read_project_file(
+    root: &Path,
+    relative: &str,
+    kind: &'static str,
+    story_id: Option<&str>,
+    passage_id: Option<&str>,
+    files: &mut Vec<LoadedProjectFile>,
+) -> Result<Option<String>, StoreError> {
     if relative.is_empty() {
-        return Ok(String::new());
+        return Ok(None);
     }
 
     let relative = safe_project_relative_path(relative)?;
+    let path = root.join(&relative);
+    let mut file = match File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(StoreError::Io(error)),
+    };
+    let metadata = file.metadata()?;
+    let mut value = String::new();
 
-    match fs::read_to_string(root.join(relative)) {
-        Ok(value) => Ok(value),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(StoreError::Io(error)),
-    }
+    file.read_to_string(&mut value)?;
+    files.push(LoadedProjectFile {
+        kind,
+        modified_at: metadata.modified().unwrap_or(UNIX_EPOCH),
+        passage_id: passage_id.map(str::to_owned),
+        path: relative,
+        size_bytes: metadata.len(),
+        story_id: story_id.map(str::to_owned),
+    });
+    Ok(Some(value))
 }
 
 fn safe_project_relative_path(relative: &str) -> Result<PathBuf, StoreError> {
@@ -1008,6 +1093,21 @@ mod tests {
             loaded.stories[0].passages[0].layout.expect("layout").left,
             25.0
         );
+
+        let loaded_with_receipt =
+            load_project_path_with_receipt(&root, LoadProjectOptions::default())
+                .expect("project and receipt should load");
+        let receipt_paths = loaded_with_receipt
+            .files
+            .iter()
+            .map(|file| (file.kind, path_string(&file.path)))
+            .collect::<BTreeSet<_>>();
+
+        assert!(receipt_paths.contains(&("manifest", "twine.toml".into())));
+        assert!(receipt_paths.contains(&("passage", "passages/example/0001-start.twee".into())));
+        assert!(receipt_paths.contains(&("script", "scripts/example.js".into())));
+        assert!(receipt_paths.contains(&("stylesheet", "styles/example.css".into())));
+        assert!(receipt_paths.contains(&("graph", ".twine/graph.json".into())));
 
         let clean_report = save_project_path(&root, &project, &SaveOptions::default())
             .expect("unchanged project should save");

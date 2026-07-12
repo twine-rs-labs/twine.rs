@@ -51,11 +51,20 @@ fixture isolation.
   scope until a separate bounded-mirror design is justified by these readings.
 - The first attributed cleanup reduced 50k shell p50 to about 0.96 s,
   interactive p50 to about 10.4 s, retained resident memory to about 1.14 GiB,
-  and WASM linear memory to about 96 MiB. The next startup optimization should
-  replace the 9.45 s full file-entry baseline scan with descriptor-derived or
-  incrementally persisted fingerprints, while preserving watcher correctness.
-- Full hydration remains about 7.96 s and core session construction about
-  1.07 s. Optimize those only after the baseline scan is no longer dominant.
+  and WASM linear memory to about 96 MiB.
+- Native hydration now returns an immutable baseline receipt assembled from the
+  file handles it already reads. The main process installs its watcher before
+  hydration, adopts that receipt, and reconciles only changed-path hints that
+  arrived during loading. A full metadata scan remains the explicit fallback
+  when recursive watching is unavailable or the receipt is invalid.
+- Focused 10k/50k startup runs verify there is no second full project traversal.
+  At 50k, the native baseline is about 96 ms p50, receipt adoption about 69 ms,
+  and unchanged-path catch-up about 0.016 ms. The subsequent watcher phase
+  preserves passage, asset-review, immutable-lease, and recovery assertions.
+- Full hydration is now about 5.75 s p50 and core session construction about
+  1.04 s. Hydration is the next startup target. Retained resident memory remains
+  about 1.33 GiB and needs process/native allocation attribution even though
+  main live heap is only about 31 MiB.
 
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.

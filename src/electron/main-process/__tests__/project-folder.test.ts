@@ -423,6 +423,60 @@ describe('project-folder native bridge', () => {
 		);
 	});
 
+	it('adopts the full native load receipt without rescanning project files', async () => {
+		const story = fakeStory(1);
+		const realFs = jest.requireActual<typeof import('fs')>('fs');
+		const rootPath = `/tmp/twine-receipt-${Date.now()}.twine.rs`;
+		realFs.mkdirSync(rootPath, {recursive: true});
+		const manifestFile = {
+			fingerprint: '1:42',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 42
+		};
+
+		loadNativeProjectFolderMock
+			.mockReturnValueOnce({
+				passageTextLoaded: false,
+				rootPath,
+				stories: [story],
+				storyIds: [story.id]
+			})
+			.mockReturnValueOnce({
+				baselineReceipt: {
+					assets: [],
+					completedAt: '2026-06-21T16:00:01.000Z',
+					files: [manifestFile],
+					id: 'load-1',
+					layoutDataJson: '{}',
+					rootPath,
+					schemaVersion: 1,
+					startedAt: '2026-06-21T16:00:00.000Z',
+					storyIds: [story.id]
+				},
+				passageTextLoaded: true,
+				rootPath,
+				stories: [story],
+				storyIds: [story.id]
+			});
+
+		try {
+			await openProjectFolder(rootPath, {loadPassageText: false});
+			await hydrateProjectFolder(rootPath, [story.id]);
+			const start = await startProjectSession(rootPath, undefined, [story.id]);
+
+			expect(start).toEqual(
+				expect.objectContaining({generation: 1, storyIds: [story.id]})
+			);
+			expect(nativeProjectFileManifestMock).not.toHaveBeenCalled();
+		} finally {
+			stopProjectSession(rootPath);
+			realFs.rmSync(rootPath, {force: true, recursive: true});
+		}
+	});
+
 	it('keeps project loading native-only when legacy fallback is disabled', async () => {
 		const previousFallback = process.env.TWINE_LEGACY_PROJECT_FALLBACK;
 
@@ -578,7 +632,7 @@ describe('project-folder native bridge', () => {
 		);
 	});
 
-	it('reuses the opened asset inventory for the session baseline', async () => {
+	it('rescans assets only for an explicit session snapshot', async () => {
 		readFileMock.mockImplementation(async path => {
 			if (path.endsWith('twine.toml')) {
 				return [
@@ -649,7 +703,7 @@ describe('project-folder native bridge', () => {
 			readdirMock.mock.calls.filter(([path]) =>
 				String(path).endsWith('/assets')
 			)
-		).toHaveLength(1);
+		).toHaveLength(2);
 	});
 
 	it('opens a native project folder from manifest source files when present', async () => {

@@ -500,10 +500,19 @@ function startupMetrics(
 				? event.detail.baselinePrimeMs
 				: undefined
 		);
+		for (const field of ['receiptAdoptionMs', 'receiptCatchupMs'] as const) {
+			addSample(
+				`startupStage.native-${field}`,
+				typeof event.detail?.[field] === 'number'
+					? event.detail[field]
+					: undefined
+			);
+		}
 		for (const field of [
 			'assetCount',
 			'baselineFileCount',
-			'descriptorPathCount'
+			'descriptorPathCount',
+			'receiptFileCount'
 		] as const) {
 			addSample(
 				`startupEntities.native.${field}`,
@@ -538,6 +547,12 @@ function startupMetrics(
 			`${prefix}.payloadMiB`,
 			typeof event.detail?.payloadBytes === 'number'
 				? event.detail.payloadBytes / 1024 / 1024
+				: undefined
+		);
+		addSample(
+			`${prefix}.baselineReceiptMs`,
+			typeof event.detail?.baselineReceiptUs === 'number'
+				? event.detail.baselineReceiptUs / 1000
 				: undefined
 		);
 	}
@@ -2079,6 +2094,21 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 							event.name === 'native-project-hydrated' &&
 							typeof event.detail?.mainNativeCallMs === 'number'
 					)
+				);
+				const baselineEvent = startupSnapshot.renderer.events.find(
+					event => event.name === 'native-session-baseline-ready'
+				);
+
+				assertInvariant(
+					`${startupPrefix}-uses-native-baseline-receipt`,
+					baselineEvent?.detail?.baselineMode === 'receipt',
+					String(baselineEvent?.detail?.baselineMode)
+				);
+				assertInvariant(
+					`${startupPrefix}-receipt-covers-baseline`,
+					baselineEvent?.detail?.receiptFileCount ===
+						baselineEvent?.detail?.baselineFileCount,
+					`${baselineEvent?.detail?.receiptFileCount}/${baselineEvent?.detail?.baselineFileCount}`
 				);
 				assertInvariant(
 					`${startupPrefix}-wasm-memory-attribution-present`,

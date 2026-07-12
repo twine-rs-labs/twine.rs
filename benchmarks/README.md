@@ -108,8 +108,11 @@ It runs three fresh processes and records native shell/full-text load stages,
 renderer hydration and snapshot construction, WASM session initialization,
 memory at startup readiness marks, and a perf-only post-GC retained checkpoint.
 Reports include main/renderer heap, process working sets, WASM linear memory,
-payload sizes, and Rust session/cache entity counts. Startup phase reports are
-partial evidence and cannot be accepted as complete baselines.
+payload sizes, Rust session/cache entity counts, and native baseline-receipt
+construction, adoption, and changed-path catch-up. Startup assertions require
+the accepted watcher baseline to come from the files visited during hydration,
+not a second full project traversal. Startup phase reports are partial evidence
+and cannot be accepted as complete baselines.
 
 Startup and memory metrics carry explicit measurement-contract versions. When
 checkpoint semantics change, matching-machine reports remain visible but are

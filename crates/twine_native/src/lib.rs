@@ -15,7 +15,8 @@ use std::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use twine_model::{GraphPosition, Passage, Project, StoragePolicy, Story};
 use twine_store::{
-    LoadProjectOptions, SaveOptions, load_project_path_with_options, save_project_path,
+    LoadProjectOptions, LoadedProjectFile, SaveOptions, load_project_path_with_receipt,
+    save_project_path,
 };
 
 const IMPORT_ASSET_EXTENSIONS: &[&str] = &[
@@ -40,6 +41,8 @@ struct HealthReport {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeProjectFolderResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline_receipt: Option<NativeProjectBaselineReceipt>,
     passage_text_loaded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     load_performance_timings: Option<NativeProjectLoadTimings>,
@@ -53,8 +56,34 @@ struct NativeProjectFolderResult {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeProjectLoadTimings {
+    baseline_receipt_us: u64,
     model_build_us: u64,
     native_story_conversion_us: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeProjectBaselineReceipt {
+    assets: Vec<CoreAssetInventoryEntry>,
+    completed_at: String,
+    files: Vec<NativeProjectBaselineFile>,
+    id: String,
+    layout_data_json: String,
+    root_path: String,
+    schema_version: u32,
+    started_at: String,
+    story_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeProjectBaselineFile {
+    #[serde(flatten)]
+    file: NativeProjectFileEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    passage_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    story_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -233,8 +262,9 @@ pub fn load_project_folder_json(
     let collect_timings = std::env::var("TWINE_PERF").is_ok_and(|value| value == "1");
     let root = PathBuf::from(&root_path);
     let passage_text_loaded = load_passage_text.unwrap_or(true);
+    let load_started_at = SystemTime::now();
     let started = Instant::now();
-    let project = load_project_path_with_options(
+    let loaded = load_project_path_with_receipt(
         &root,
         LoadProjectOptions {
             load_passage_text: passage_text_loaded,
@@ -242,6 +272,7 @@ pub fn load_project_folder_json(
     )
     .map_err(native_error)?;
     let model_build_us = elapsed_us(started);
+    let project = loaded.project;
     let started = Instant::now();
     let stories = project
         .stories
@@ -249,11 +280,70 @@ pub fn load_project_folder_json(
         .map(NativeStory::from_story)
         .collect::<Vec<_>>();
     let native_story_conversion_us = elapsed_us(started);
-    let story_ids = stories.iter().map(|story| story.id.clone()).collect();
+    let story_ids: Vec<String> = stories.iter().map(|story| story.id.clone()).collect();
+    let receipt_started = Instant::now();
+    let baseline_receipt = if passage_text_loaded {
+        let mut layout_data = project.layout.clone();
+        layout_data.passages.clear();
+        let layout_data_json = json_string(&layout_data).map_err(native_error)?;
+        let assets = list_project_assets(&root).map_err(native_error)?;
+        let mut files = loaded
+            .files
+            .into_iter()
+            .map(|file| {
+                let passage_id = file.passage_id.clone();
+                let story_id = file.story_id.clone();
+
+                NativeProjectBaselineFile {
+                    file: native_project_file_entry_from_loaded(file),
+                    passage_id,
+                    story_id,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut supplemental_files = Vec::new();
+        scan_project_files(
+            &root,
+            ".twine/project.json",
+            "metadata",
+            &mut supplemental_files,
+        )
+        .map_err(native_error)?;
+        supplemental_files.extend(assets.iter().filter_map(asset_project_file_entry));
+        files.extend(
+            supplemental_files
+                .into_iter()
+                .map(|file| NativeProjectBaselineFile {
+                    file,
+                    passage_id: None,
+                    story_id: None,
+                }),
+        );
+        files.sort_by(|left, right| left.file.path.cmp(&right.file.path));
+        files.dedup_by(|left, right| left.file.path == right.file.path);
+        let completed_at = SystemTime::now();
+
+        Some(NativeProjectBaselineReceipt {
+            assets,
+            completed_at: system_time_to_iso(completed_at),
+            files,
+            id: format!("load-{}", system_time_to_ms(completed_at)),
+            layout_data_json,
+            root_path: root_path.clone(),
+            schema_version: project.manifest.schema_version,
+            started_at: system_time_to_iso(load_started_at),
+            story_ids: story_ids.clone(),
+        })
+    } else {
+        None
+    };
+    let baseline_receipt_us = elapsed_us(receipt_started);
 
     json_string(&NativeProjectFolderResult {
+        baseline_receipt,
         passage_text_loaded,
         load_performance_timings: collect_timings.then_some(NativeProjectLoadTimings {
+            baseline_receipt_us,
             model_build_us,
             native_story_conversion_us,
         }),
@@ -310,6 +400,7 @@ pub fn save_project_folder_json(root_path: String, story_json: String) -> Native
     timings.total_us = elapsed_us(total_started);
 
     json_string(&NativeProjectFolderResult {
+        baseline_receipt: None,
         passage_text_loaded: true,
         load_performance_timings: None,
         performance_timings: performance_timings(timings),
@@ -879,6 +970,19 @@ fn native_project_file_entry(
         mtime_ms,
         path: project_path,
         size_bytes: stats.len(),
+    }
+}
+
+fn native_project_file_entry_from_loaded(file: LoadedProjectFile) -> NativeProjectFileEntry {
+    let mtime_ms = system_time_to_ms(file.modified_at);
+
+    NativeProjectFileEntry {
+        fingerprint: format!("{mtime_ms}:{}", file.size_bytes),
+        kind: file.kind.to_owned(),
+        modified_at: system_time_to_iso(file.modified_at),
+        mtime_ms,
+        path: slash_path(&file.path),
+        size_bytes: file.size_bytes,
     }
 }
 
@@ -1563,6 +1667,27 @@ mod tests {
         assert!(sidecar.contains("\"highlighted\":true"));
         assert!(sidecar.contains("\"selected\":true"));
         assert!(!sidecar.contains("A very important passage body"));
+
+        let loaded = load_project_folder_json(root.to_string_lossy().into_owned(), Some(true))
+            .expect("project should load with a receipt");
+        let loaded: NativeProjectFolderResult =
+            serde_json::from_str(&loaded).expect("native load result should parse");
+        let receipt = loaded
+            .baseline_receipt
+            .expect("full native load should include a baseline receipt");
+
+        assert!(
+            receipt
+                .files
+                .iter()
+                .any(|file| file.file.path == "passages/native-save/0001-start.twee")
+        );
+        assert!(
+            receipt
+                .files
+                .iter()
+                .any(|file| file.file.path == "twine.toml")
+        );
 
         fs::remove_dir_all(root).expect("project should be removed");
     }

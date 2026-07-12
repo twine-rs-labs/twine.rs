@@ -34,7 +34,9 @@ export interface NativeProjectSessionSnapshot {
 	assets: CoreAssetInventoryEntry[];
 	changedPaths: string[];
 	conflicts: NativeProjectSessionConflict[];
-	files: NativeProjectFileEntry[];
+	files: Array<
+		NativeProjectFileEntry & {passageId?: string; storyId?: string}
+	>;
 	rootPath: string;
 	scannedAt: string;
 	stories: Story[];
@@ -78,8 +80,12 @@ export interface NativeProjectSessionStart {
 	performanceTimings?: {
 		assetCount: number;
 		baselineFileCount: number;
+		baselineMode?: 'full' | 'receipt';
 		baselinePrimeMs: number;
 		descriptorPathCount: number;
+		receiptAdoptionMs?: number;
+		receiptCatchupMs?: number;
+		receiptFileCount?: number;
 	};
 	rootPath: string;
 	storyIds: string[];
@@ -135,6 +141,7 @@ export interface NativeCommandLineOpenResult {
 }
 
 export interface NativeProjectFolderResult {
+	baselineReceipt?: NativeProjectBaselineReceipt;
 	loadPerformanceTimings?: NativeProjectLoadTimings;
 	passageTextLoaded?: boolean;
 	performanceTimings?: NativeProjectSaveTimings;
@@ -144,11 +151,24 @@ export interface NativeProjectFolderResult {
 }
 
 export interface NativeProjectLoadTimings {
+	baselineReceiptUs?: number;
 	jsJsonParseMs?: number;
 	mainNativeCallMs?: number;
 	modelBuildUs: number;
 	nativeStoryConversionUs: number;
 	payloadBytes?: number;
+}
+
+export interface NativeProjectBaselineReceipt {
+	assets: CoreAssetInventoryEntry[];
+	completedAt: string;
+	files: NativeProjectFileEntry[];
+	id: string;
+	layoutDataJson: string;
+	rootPath: string;
+	schemaVersion: number;
+	startedAt: string;
+	storyIds: string[];
 }
 
 export interface NativeProjectSaveTimings {

@@ -59,6 +59,7 @@ import {
 } from './performance-harness';
 
 export interface NativeProjectFolderResult {
+	baselineReceipt?: NativeProjectBaselineReceipt;
 	loadPerformanceTimings?: NativeProjectLoadTimings;
 	passageTextLoaded?: boolean;
 	performanceTimings?: NativeProjectSaveTimings;
@@ -68,11 +69,26 @@ export interface NativeProjectFolderResult {
 }
 
 export interface NativeProjectLoadTimings {
+	baselineReceiptUs?: number;
 	jsJsonParseMs?: number;
 	mainNativeCallMs?: number;
 	modelBuildUs: number;
 	nativeStoryConversionUs: number;
 	payloadBytes?: number;
+}
+
+export interface NativeProjectBaselineReceipt {
+	assets: CoreAssetInventoryEntry[];
+	completedAt: string;
+	files: Array<
+		NativeProjectFileEntry & {passageId?: string; storyId?: string}
+	>;
+	id: string;
+	layoutDataJson: string;
+	rootPath: string;
+	schemaVersion: number;
+	startedAt: string;
+	storyIds: string[];
 }
 
 export interface NativeProjectSaveTimings {
@@ -207,8 +223,12 @@ export interface NativeProjectSessionStart {
 	performanceTimings?: {
 		assetCount: number;
 		baselineFileCount: number;
+		baselineMode?: 'full' | 'receipt';
 		baselinePrimeMs: number;
 		descriptorPathCount: number;
+		receiptAdoptionMs?: number;
+		receiptCatchupMs?: number;
+		receiptFileCount?: number;
 	};
 	rootPath: string;
 	storyIds: string[];
@@ -248,11 +268,13 @@ interface ProjectSessionResolutionRecord {
 type ProjectSessionListener = (delta: NativeProjectSessionDelta) => void;
 
 interface ProjectSessionState {
-	baselineReusableUntil?: number;
+	awaitingBaselineReceipt?: boolean;
+	baselineReceiptWaiters?: Array<() => void>;
 	baseline?: NativeProjectSessionSnapshot;
 	debounceTimer?: ReturnType<typeof setTimeout>;
 	descriptor?: NativeProjectDescriptor;
 	generation: number;
+	hydrationPromise?: Promise<NativeProjectFolderResult>;
 	interval?: ReturnType<typeof setInterval>;
 	listeners: Set<ProjectSessionListener>;
 	pathHints: Set<string>;
@@ -266,6 +288,11 @@ interface ProjectSessionState {
 	rescanReconcileRequested?: boolean;
 	rescanRequested?: boolean;
 	resolvedCandidates: Map<string, ProjectSessionResolutionRecord>;
+	receiptPerformance?: {
+		adoptionMs: number;
+		catchupMs: number;
+		fileCount: number;
+	};
 	rootPath: string;
 	scanning?: boolean;
 	watcher?: FSWatcher;
@@ -653,8 +680,26 @@ async function readProjectLayout(rootPath: string) {
 	delete layoutData.passages;
 	return {
 		layout,
-		layoutDataJson: JSON.stringify(layoutData)
+		layoutDataJson: canonicalJsonString(layoutData)
 	};
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(canonicalJsonValue);
+	}
+	if (value && typeof value === 'object') {
+		return Object.fromEntries(
+			Object.entries(value as Record<string, unknown>)
+				.sort(([left], [right]) => left.localeCompare(right))
+				.map(([key, nested]) => [key, canonicalJsonValue(nested)])
+		);
+	}
+	return value;
+}
+
+function canonicalJsonString(value: unknown) {
+	return JSON.stringify(canonicalJsonValue(value));
 }
 
 async function readProjectDescriptor(
@@ -846,6 +891,44 @@ function descriptorFromStories(stories: Story[]): NativeProjectDescriptor {
 		}))
 	};
 
+	descriptor.paths = descriptorPathMap(descriptor);
+	return descriptor;
+}
+
+function descriptorFromBaselineReceipt(
+	stories: Story[],
+	receipt: NativeProjectBaselineReceipt
+) {
+	const descriptor = descriptorFromStories(stories);
+	const sourcesByStory = new Map<string, typeof receipt.files>();
+
+	for (const source of receipt.files) {
+		if (!source.storyId) {
+			continue;
+		}
+		const sources = sourcesByStory.get(source.storyId) ?? [];
+
+		sources.push(source);
+		sourcesByStory.set(source.storyId, sources);
+	}
+	for (const story of descriptor.stories) {
+		const sources = sourcesByStory.get(story.id as string) ?? [];
+		const passagePaths = new Map(
+			sources
+				.filter(source => source.kind === 'passage' && source.passageId)
+				.map(source => [source.passageId as string, source.path] as const)
+		);
+
+		story.script = sources.find(source => source.kind === 'script')?.path ?? '';
+		story.stylesheet =
+			sources.find(source => source.kind === 'stylesheet')?.path ?? '';
+		for (const passage of story.passages) {
+			passage.file = passagePaths.get(passage.id as string) ?? '';
+		}
+	}
+	descriptor.layoutDataJson = canonicalJsonString(
+		JSON.parse(receipt.layoutDataJson) as unknown
+	);
 	descriptor.paths = descriptorPathMap(descriptor);
 	return descriptor;
 }
@@ -2766,6 +2849,9 @@ async function pollProjectSession(
 }
 
 function scheduleProjectSessionPoll(session: ProjectSessionState) {
+	if (!session.baseline) {
+		return;
+	}
 	if (session.debounceTimer) {
 		clearTimeout(session.debounceTimer);
 	}
@@ -2835,6 +2921,111 @@ function ensureProjectSession(rootPath: string) {
 	return session;
 }
 
+function beginProjectSessionBaselineCapture(rootPath: string) {
+	const session = ensureProjectSession(rootPath);
+
+	session.awaitingBaselineReceipt = true;
+	if (!session.watcher) {
+		installProjectSessionWatcher(session);
+	}
+	return session;
+}
+
+function finishProjectSessionBaselineCapture(session: ProjectSessionState) {
+	session.awaitingBaselineReceipt = false;
+	for (const resolveWaiter of session.baselineReceiptWaiters ?? []) {
+		resolveWaiter();
+	}
+	session.baselineReceiptWaiters = [];
+}
+
+async function waitForProjectSessionBaselineCapture(
+	session: ProjectSessionState
+) {
+	if (!session.awaitingBaselineReceipt) {
+		return;
+	}
+
+	await new Promise<void>(resolveWaiter => {
+		session.baselineReceiptWaiters ??= [];
+		session.baselineReceiptWaiters.push(resolveWaiter);
+	});
+}
+
+async function adoptProjectSessionBaselineReceipt(
+	projectFolder: NativeProjectFolderResult
+) {
+	const adoptionStarted = performance.now();
+	const receipt = projectFolder.baselineReceipt;
+
+	if (!receipt) {
+		return false;
+	}
+	const rootPath = resolve(projectFolder.rootPath);
+	const session = projectSessions.get(projectSessionKey(rootPath));
+
+	if (!session) {
+		return false;
+	}
+
+	try {
+		if (
+			resolve(receipt.rootPath) !== rootPath ||
+			receipt.schemaVersion !== 1
+		) {
+			return false;
+		}
+
+		session.baseline = {
+			assets: receipt.assets,
+			changedPaths: [],
+			conflicts: [],
+			files: receipt.files,
+			passageTextLoaded: true,
+			rootPath,
+			scannedAt: receipt.completedAt,
+			stories: [],
+			storyIds: receipt.storyIds
+		};
+		session.descriptor = descriptorFromBaselineReceipt(
+			projectFolder.stories,
+			receipt
+		);
+		session.pending = undefined;
+		const catchupStarted = performance.now();
+		if (session.pathHints.size > 0 || session.watcherAvailable === false) {
+			await pollProjectSession(session, session.watcherAvailable === false);
+		}
+		session.receiptPerformance = {
+			adoptionMs: performance.now() - adoptionStarted,
+			catchupMs: performance.now() - catchupStarted,
+			fileCount: receipt.files.length
+		};
+		return true;
+	} finally {
+		finishProjectSessionBaselineCapture(session);
+	}
+}
+
+function ensureProjectSessionHydration(rootPath: string) {
+	const session = beginProjectSessionBaselineCapture(rootPath);
+
+	session.hydrationPromise ??= readProjectFolder(rootPath, {
+		loadPassageText: true
+	})
+		.then(async projectFolder => {
+			if (!(await adoptProjectSessionBaselineReceipt(projectFolder))) {
+				finishProjectSessionBaselineCapture(session);
+			}
+			return projectFolder;
+		})
+		.catch(error => {
+			finishProjectSessionBaselineCapture(session);
+			throw error;
+		});
+	return session.hydrationPromise;
+}
+
 async function refreshProjectSessionBaseline(
 	rootPath: string,
 	storyIds?: string[],
@@ -2855,7 +3046,6 @@ async function refreshProjectSessionBaseline(
 	);
 	session.generation++;
 	session.pending = undefined;
-	session.baselineReusableUntil = undefined;
 	if (session.watcher || session.watcherAvailable !== undefined) {
 		installProjectSessionWatcher(session);
 	}
@@ -3345,20 +3535,42 @@ export async function openProjectFolder(
 			{code: 'ENOTDIR'}
 		);
 	}
+	const openedRootPath = rootPath;
+	const session = beginProjectSessionBaselineCapture(openedRootPath);
 
-	const projectFolder = await readProjectFolder(rootPath, options);
-	rememberProjectFolder(projectFolder);
+	let projectFolder: NativeProjectFolderResult;
+	try {
+		projectFolder = await readProjectFolder(openedRootPath, options);
+		if (projectFolder.baselineReceipt) {
+			await adoptProjectSessionBaselineReceipt(projectFolder);
+		} else if (options.loadPassageText !== false) {
+			finishProjectSessionBaselineCapture(session);
+		}
+	} catch (error) {
+		finishProjectSessionBaselineCapture(session);
+		throw error;
+	}
+	if (projectFolder.passageTextLoaded === false) {
+		setTimeout(() => {
+			if (projectSessions.get(projectSessionKey(openedRootPath)) === session) {
+				void ensureProjectSessionHydration(openedRootPath).catch(() => undefined);
+			}
+		}, 0);
+	}
+	const publicProjectFolder = {...projectFolder};
 
-	return projectFolder;
+	delete publicProjectFolder.baselineReceipt;
+	rememberProjectFolder(publicProjectFolder);
+
+	return publicProjectFolder;
 }
 
 export async function hydrateProjectFolder(
 	rootPath: string,
 	storyIds?: string[]
 ): Promise<NativeProjectFolderResult> {
-	const projectFolder = await readProjectFolder(rootPath, {
-		loadPassageText: true
-	});
+	const projectFolder = await ensureProjectSessionHydration(rootPath);
+	ensureProjectSession(rootPath).hydrationPromise = undefined;
 	const {stories} = projectFolder;
 	const filteredStories = storyIds?.length
 		? stories.filter(story => storyIds.includes(story.id))
@@ -3846,19 +4058,12 @@ export async function projectSessionSnapshot(
 	storyIds?: string[]
 ) {
 	const session = ensureProjectSession(rootPath);
-	if (
-		session.baseline &&
-		session.baselineReusableUntil &&
-		Date.now() <= session.baselineReusableUntil &&
-		(!storyIds?.length ||
-			storyIds.every(storyId => session.baseline?.storyIds.includes(storyId)))
-	) {
-		return session.baseline;
-	}
+	await waitForProjectSessionBaselineCapture(session);
 	if (!session.baseline) {
 		session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
 			storyIds
 		});
+		session.receiptPerformance = undefined;
 		return session.baseline;
 	}
 
@@ -3879,7 +4084,7 @@ export async function startProjectSession(
 		session.listeners.add(listener);
 	}
 
-	const baselineWasMissing = !session.baseline;
+	await waitForProjectSessionBaselineCapture(session);
 	if (!session.baseline) {
 		session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
 			storyIds
@@ -3908,12 +4113,7 @@ export async function startProjectSession(
 		queueMicrotask(() => notifyProjectSession(session));
 	}
 
-	const baseline = baselineWasMissing
-		? session.baseline
-		: await readProjectSessionSnapshot(rootPath, undefined, {
-				storyIds: storyIds ?? session.baseline.storyIds
-			});
-	session.baselineReusableUntil = Date.now() + projectSessionFallbackPollMs;
+	const baseline = session.baseline;
 
 	return {
 		assets: baseline.assets,
@@ -3922,8 +4122,12 @@ export async function startProjectSession(
 			? {
 					assetCount: baseline.assets.length,
 					baselineFileCount: baseline.files.length,
+					baselineMode: session.receiptPerformance ? 'receipt' : 'full',
 					baselinePrimeMs: performance.now() - baselineStarted,
-					descriptorPathCount: session.descriptor?.paths.size ?? 0
+					descriptorPathCount: session.descriptor?.paths.size ?? 0,
+					receiptAdoptionMs: session.receiptPerformance?.adoptionMs,
+					receiptCatchupMs: session.receiptPerformance?.catchupMs,
+					receiptFileCount: session.receiptPerformance?.fileCount
 				}
 			: undefined,
 		rootPath: baseline.rootPath,
@@ -3965,6 +4169,7 @@ export function stopProjectSession(rootPath: string) {
 	}
 
 	session.watcher?.close();
+	finishProjectSessionBaselineCapture(session);
 	projectSessions.delete(key);
 }
 

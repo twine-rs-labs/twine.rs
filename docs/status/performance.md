@@ -133,11 +133,28 @@ pre-optimization run as follows:
 - renderer working set: about 945 MiB to 580 MiB;
 - WASM linear memory: about 508 MiB to 96 MiB.
 
-The remaining critical path is now the native file-manifest/watcher-baseline
-scan at about 9.45 s p50, overlapping a full native hydration load of about
-7.96 s. Core session construction is about 1.07 s. Renderer retained JS heap is
-only about 74 MiB, so the next memory work should target WASM/native/process
-representations rather than another renderer JSON cleanup.
+The former native file-manifest/watcher-baseline scan measured about 9.45 s p50.
+Native hydration now collects file fingerprints and source mappings from the
+same handles used to read project content. The watcher starts before hydration
+and reconciles only paths observed while the immutable receipt is built;
+watcher-unavailable and recovery paths retain the safe full scan.
+
+The focused 50k startup run on 2026-07-12 passed all structural assertions:
+
+- shell p50: about 638 ms;
+- hydrated p50: about 5.75 s;
+- interactive p50: about 5.24 s;
+- native session baseline p50: about 96 ms;
+- receipt adoption p50: about 69 ms;
+- no-change receipt catch-up p50: about 0.016 ms;
+- core session construction p50: about 1.04 s.
+
+The following 50k watcher phase also passed passage, asset-review, exact
+acknowledgement, and no-recovery assertions. Post-GC resident memory was about
+1.33 GiB. Main live heap was about 31 MiB, slightly below the earlier run, so
+the higher process RSS is not a retained receipt object graph; subsequent
+memory work should attribute native allocator high-water state, renderer
+working set, and process overhead.
 
 The corresponding final 10k startup phase also passes: shell p50 is about
 178 ms and interactive p50 about 1.08 s, both inside their roadmap targets.
