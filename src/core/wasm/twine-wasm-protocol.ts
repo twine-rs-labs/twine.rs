@@ -45,10 +45,15 @@ export interface WasmWorkerMetricBase {
 	requestBytes: number;
 	responseBytes: number;
 	readModel?: {
+		analysisCacheSourceCount: number;
+		historyBytes: number;
 		parsedSourceCount: number;
+		passageCount: number;
 		readModelFullBuildCount: number;
 		readModelIncrementalUpdateCount: number;
 		readModelLastTouchedSourceCount: number;
+		redoEntryCount: number;
+		undoEntryCount: number;
 	};
 	mutationStages?: WasmMutationStageTimings;
 	rustFinishedAtEpochMs?: number;
@@ -58,6 +63,7 @@ export interface WasmWorkerMetricBase {
 	workerReceivedAtEpochMs: number;
 	workerRespondedAt: number;
 	workerRespondedAtEpochMs: number;
+	wasmMemoryBytes?: number;
 }
 
 export type WasmWorkerRequest =

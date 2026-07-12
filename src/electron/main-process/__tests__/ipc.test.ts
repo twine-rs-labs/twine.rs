@@ -430,7 +430,11 @@ describe('initIpc()', () => {
 			stories: [],
 			storyIds: []
 		});
-		expect(saveProjectFolderMock).toHaveBeenCalledWith('/mock/project', story);
+		expect(saveProjectFolderMock).toHaveBeenCalledWith(
+			'/mock/project',
+			story,
+			undefined
+		);
 		await revealLibrary[1]();
 		expect(revealStoryDirectoryMock).toHaveBeenCalled();
 	});

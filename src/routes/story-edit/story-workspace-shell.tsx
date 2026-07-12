@@ -49,7 +49,11 @@ import {
 } from '../../store/project-hydration';
 import {mergeProjectStories} from '../../store/merge-project-stories';
 import {Passage, Story, useStoriesContext} from '../../store/stories';
-import {markPerformance, measurePerformance} from '../../util/performance';
+import {
+	markPerformance,
+	measurePerformance,
+	recordPerformanceHarnessEvent
+} from '../../util/performance';
 import {EditorDockLayout, StoryEditMode} from './workspace-state';
 import {EditorDock} from './editor-dock';
 import {EditorWindowSpec, editorWindowId} from './editor-window-spec';
@@ -1294,7 +1298,13 @@ export const StoryWorkspaceShell: React.FC<
 		void bridge
 			.hydrateProjectFolder(projectMetadata.rootPath, [story.id])
 			.then(result => {
+				recordPerformanceHarnessEvent('native-project-hydrated', {
+					...result.loadPerformanceTimings,
+					rootPath: result.rootPath,
+					storyCount: result.stories.length
+				});
 				if (result.stories.length > 0) {
+					const mergeStarted = performance.now();
 					const hydratedStories = mergeProjectStories(
 						storiesRef.current,
 						result.stories,
@@ -1302,12 +1312,24 @@ export const StoryWorkspaceShell: React.FC<
 							preserveExistingText: true
 						}
 					);
+					recordPerformanceHarnessEvent('renderer-project-hydration-merged', {
+						durationMs: performance.now() - mergeStarted,
+						passageCount: hydratedStories.reduce(
+							(total, candidate) => total + candidate.passages.length,
+							0
+						)
+					});
 
+					const dispatchStarted = performance.now();
 					storiesRef.current = hydratedStories;
 					storiesDispatch({
 						state: hydratedStories,
 						type: 'init'
 					});
+					recordPerformanceHarnessEvent(
+						'renderer-project-hydration-dispatched',
+						{durationMs: performance.now() - dispatchStarted}
+					);
 					markProjectStoryHydration(story.id, {
 						passageTextLoaded: true,
 						rootPath: projectMetadata.rootPath

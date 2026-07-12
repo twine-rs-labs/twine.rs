@@ -75,6 +75,12 @@ export interface NativeProjectSessionPerformanceTrace {
 export interface NativeProjectSessionStart {
 	assets: CoreAssetInventoryEntry[];
 	generation: number;
+	performanceTimings?: {
+		assetCount: number;
+		baselineFileCount: number;
+		baselinePrimeMs: number;
+		descriptorPathCount: number;
+	};
 	rootPath: string;
 	storyIds: string[];
 }
@@ -129,11 +135,20 @@ export interface NativeCommandLineOpenResult {
 }
 
 export interface NativeProjectFolderResult {
+	loadPerformanceTimings?: NativeProjectLoadTimings;
 	passageTextLoaded?: boolean;
 	performanceTimings?: NativeProjectSaveTimings;
 	rootPath: string;
 	stories: Story[];
 	storyIds: string[];
+}
+
+export interface NativeProjectLoadTimings {
+	jsJsonParseMs?: number;
+	mainNativeCallMs?: number;
+	modelBuildUs: number;
+	nativeStoryConversionUs: number;
+	payloadBytes?: number;
 }
 
 export interface NativeProjectSaveTimings {
@@ -205,6 +220,8 @@ export interface NativeAddLocalStoryFormatResult {
 
 export interface TwineElectronWindow extends Window {
 	twinePerformanceNative?: {
+		checkpoint(name: string, renderer: Record<string, number>): Promise<void>;
+		collectGarbage(): Promise<void>;
 		reset(): Promise<void>;
 		snapshot(): Promise<unknown>;
 	};

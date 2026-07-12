@@ -15,6 +15,33 @@ export interface TwinePerformanceEvent {
 }
 
 const harnessEvents: TwinePerformanceEvent[] = [];
+const startupMemoryMarks = new Set([
+	'all-passages-ready',
+	'graph-visible',
+	'session-baseline-ready',
+	'session-initialization-complete',
+	'shell-visible'
+]);
+
+function rendererMemorySnapshot(): Record<string, number> {
+	const memory = (
+		performanceApi() as Performance & {
+			memory?: {
+				jsHeapSizeLimit: number;
+				totalJSHeapSize: number;
+				usedJSHeapSize: number;
+			};
+		}
+	).memory;
+
+	return memory
+		? {
+				jsHeapSizeLimit: memory.jsHeapSizeLimit,
+				totalJSHeapSize: memory.totalJSHeapSize,
+				usedJSHeapSize: memory.usedJSHeapSize
+			}
+		: {};
+}
 
 function performanceApi() {
 	return typeof window !== 'undefined' ? window.performance : undefined;
@@ -29,6 +56,18 @@ export function markPerformance(name: string) {
 
 	try {
 		performance.mark(`${prefix}:${name}`);
+		if (startupMemoryMarks.has(name)) {
+			void (
+				window as Window & {
+					twinePerformanceNative?: {
+						checkpoint(
+							name: string,
+							renderer: Record<string, number>
+						): Promise<void>;
+					};
+				}
+			).twinePerformanceNative?.checkpoint(name, rendererMemorySnapshot());
+		}
 	} catch {
 		// Performance marks are diagnostics only.
 	}

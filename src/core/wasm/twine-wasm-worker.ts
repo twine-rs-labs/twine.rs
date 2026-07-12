@@ -9,6 +9,8 @@ let wasmReady: Promise<void> | undefined;
 let SessionConstructor:
 	| (new (snapshot: unknown) => TwineWasmProjectSessionType)
 	| undefined;
+let wasmMemoryBytes = 0;
+let wasmMemory: WebAssembly.Memory | undefined;
 const sessions = new Map<
 	string,
 	{revision: number; session: TwineWasmProjectSessionType}
@@ -40,7 +42,9 @@ function byteSize(value: unknown) {
 async function ensureWasm() {
 	if (!wasmReady) {
 		wasmReady = import('./pkg/twine_wasm').then(async module => {
-			await module.default();
+			const output = await module.default();
+			wasmMemory = output.memory;
+			wasmMemoryBytes = wasmMemory.buffer.byteLength;
 			SessionConstructor = module.TwineWasmProjectSession;
 		});
 	}
@@ -266,6 +270,7 @@ async function handleRequest(
 
 		computeMs = now() - computeStartedAt;
 		computeFinishedAtEpochMs = epochNow();
+		wasmMemoryBytes = wasmMemory?.buffer.byteLength ?? wasmMemoryBytes;
 
 		const responseBytes = byteSize(result);
 		const diagnostics = sessions
@@ -277,12 +282,17 @@ async function handleRequest(
 			| undefined;
 		const readModel = diagnostics
 			? {
+					analysisCacheSourceCount: diagnostics.analysisCacheSourceCount,
+					historyBytes: diagnostics.historyBytes,
 					parsedSourceCount: diagnostics.parsedSourceCount,
+					passageCount: diagnostics.passageCount,
 					readModelFullBuildCount: diagnostics.readModelFullBuildCount,
 					readModelIncrementalUpdateCount:
 						diagnostics.readModelIncrementalUpdateCount,
 					readModelLastTouchedSourceCount:
-						diagnostics.readModelLastTouchedSourceCount
+						diagnostics.readModelLastTouchedSourceCount,
+					redoEntryCount: diagnostics.redoEntryCount,
+					undoEntryCount: diagnostics.undoEntryCount
 				}
 			: undefined;
 		const workerRespondedAt = now();
@@ -306,6 +316,7 @@ async function handleRequest(
 			workerReceivedAt,
 			workerReceivedAtEpochMs,
 			workerRespondedAt,
+			wasmMemoryBytes,
 			workerRespondedAtEpochMs
 		};
 

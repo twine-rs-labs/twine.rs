@@ -25,6 +25,14 @@ interface PerformanceSnapshot {
 			type: string;
 		}>;
 		memory: {rss: number};
+		memoryCheckpoints: Array<{
+			appMetrics: PerformanceSnapshot['main']['appMetrics'];
+			mainHeap: Record<string, number>;
+			mainMemory: {rss: number};
+			name: string;
+			recordedAtEpochMs: number;
+			renderer: Record<string, number>;
+		}>;
 		timings: Array<{name: string; timeMs: number}>;
 		watcherMetrics: Array<{
 			assetChanges: number;
@@ -71,10 +79,15 @@ interface PerformanceSnapshot {
 			requestBytes: number;
 			requestedAtEpochMs: number;
 			readModel?: {
+				analysisCacheSourceCount: number;
+				historyBytes: number;
 				parsedSourceCount: number;
+				passageCount: number;
 				readModelFullBuildCount: number;
 				readModelIncrementalUpdateCount: number;
 				readModelLastTouchedSourceCount: number;
+				redoEntryCount: number;
+				undoEntryCount: number;
 			};
 			responseBytes: number;
 			roundTripMs: number;
@@ -84,6 +97,7 @@ interface PerformanceSnapshot {
 			transferMs: number;
 			workerReceivedAtEpochMs: number;
 			workerRespondedAtEpochMs: number;
+			wasmMemoryBytes?: number;
 		}>;
 		core: {
 			activeSessions: number;
@@ -311,6 +325,8 @@ async function launchFixture(): Promise<RunningApp> {
 		});
 		app = await electron.launch({
 			args: [
+				'--enable-precise-memory-info',
+				'--js-flags=--expose-gc',
 				mainPath,
 				`--storyLibraryFolderPath=${library}`,
 				`--backupFolderPath=${backups}`,
@@ -451,6 +467,80 @@ function startupMetrics(
 		'startup.shellMs',
 		lastEntry(snapshot, 'open-to-shell', 'measure')?.duration
 	);
+	for (const eventName of [
+		'native-project-shell-loaded',
+		'native-project-hydrated',
+		'renderer-project-shell-dispatched',
+		'renderer-project-hydration-merged',
+		'renderer-project-hydration-dispatched',
+		'core-session-snapshot-built',
+		'core-session-ready',
+		'native-session-baseline-ready'
+	]) {
+		for (const event of snapshot.renderer.events.filter(
+			candidate =>
+				candidate.name === eventName &&
+				(eventName !== 'core-session-ready' ||
+					candidate.detail?.mode === 'replace')
+		)) {
+			const duration = event.detail?.durationMs;
+
+			addSample(
+				`startupStage.${eventName}Ms`,
+				typeof duration === 'number' ? duration : undefined
+			);
+		}
+	}
+	for (const event of snapshot.renderer.events.filter(
+		candidate => candidate.name === 'native-session-baseline-ready'
+	)) {
+		addSample(
+			'startupStage.native-session-baselineMs',
+			typeof event.detail?.baselinePrimeMs === 'number'
+				? event.detail.baselinePrimeMs
+				: undefined
+		);
+		for (const field of [
+			'assetCount',
+			'baselineFileCount',
+			'descriptorPathCount'
+		] as const) {
+			addSample(
+				`startupEntities.native.${field}`,
+				typeof event.detail?.[field] === 'number'
+					? event.detail[field]
+					: undefined
+			);
+		}
+	}
+	for (const event of snapshot.renderer.events.filter(candidate =>
+		['native-project-shell-loaded', 'native-project-hydrated'].includes(
+			candidate.name
+		)
+	)) {
+		const prefix = `startupLoad.${
+			event.name === 'native-project-shell-loaded' ? 'shell' : 'hydration'
+		}`;
+
+		addSample(
+			`${prefix}.nativeCallMs`,
+			typeof event.detail?.mainNativeCallMs === 'number'
+				? event.detail.mainNativeCallMs
+				: undefined
+		);
+		addSample(
+			`${prefix}.jsonParseMs`,
+			typeof event.detail?.jsJsonParseMs === 'number'
+				? event.detail.jsJsonParseMs
+				: undefined
+		);
+		addSample(
+			`${prefix}.payloadMiB`,
+			typeof event.detail?.payloadBytes === 'number'
+				? event.detail.payloadBytes / 1024 / 1024
+				: undefined
+		);
+	}
 	addSample(
 		'startup.hydratedMs',
 		lastEntry(snapshot, 'open-to-hydrated', 'measure')?.duration
@@ -468,6 +558,63 @@ function startupMetrics(
 			? undefined
 			: graphVisible - openStart
 	);
+	addSample(
+		'startupMemory.wasmLinearMiB',
+		snapshot.renderer.bridgeMetrics
+			.map(metric => metric.wasmMemoryBytes ?? 0)
+			.reduce((largest, value) => Math.max(largest, value), 0) /
+			1024 /
+			1024
+	);
+	const initializedSession = snapshot.renderer.bridgeMetrics.find(
+		metric => metric.kind === 'replaceProject'
+	);
+	if (initializedSession?.readModel) {
+		for (const field of [
+			'analysisCacheSourceCount',
+			'historyBytes',
+			'passageCount',
+			'redoEntryCount',
+			'undoEntryCount'
+		] as const) {
+			addSample(
+				`startupEntities.rust.${field}`,
+				initializedSession.readModel[field]
+			);
+		}
+	}
+	const memoryCheckpoints = new Map(
+		(snapshot.main.memoryCheckpoints ?? []).map(checkpoint => [
+			checkpoint.name,
+			checkpoint
+		])
+	);
+
+	for (const checkpoint of memoryCheckpoints.values()) {
+		const workingSetKiB = checkpoint.appMetrics.reduce(
+			(total, metric) => total + (metric.memory?.workingSetSize ?? 0),
+			0
+		);
+
+		addSample(
+			`startupMemory.${checkpoint.name}.residentMiB`,
+			workingSetKiB > 0
+				? workingSetKiB / 1024
+				: checkpoint.mainMemory.rss / 1024 / 1024
+		);
+		addSample(
+			`startupMemory.${checkpoint.name}.rendererHeapMiB`,
+			typeof checkpoint.renderer.usedJSHeapSize === 'number'
+				? checkpoint.renderer.usedJSHeapSize / 1024 / 1024
+				: undefined
+		);
+		addSample(
+			`startupMemory.${checkpoint.name}.mainHeapMiB`,
+			typeof checkpoint.mainHeap.used_heap_size === 'number'
+				? checkpoint.mainHeap.used_heap_size / 1024 / 1024
+				: undefined
+		);
+	}
 	captureMemory(snapshot);
 }
 
@@ -1821,6 +1968,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				diagnostics,
 				diagnostic: phase === 'diagnostic',
 				environment: {
+					metricContracts: {memory: 2, startup: 2},
 					git: {dirty: gitDirty, revision: gitRevision},
 					machine: {
 						arch: process.arch,
@@ -1895,7 +2043,47 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 			const running = await launchFixture();
 
 			try {
+				await running.page.evaluate(() =>
+					(window as any).twinePerformance.collectRetainedMemory()
+				);
 				const startupSnapshot = await snapshot(running.page);
+				const startupPrefix = `startup-${index + 1}`;
+				const checkpointNames = new Set(
+					startupSnapshot.main.memoryCheckpoints.map(
+						checkpoint => checkpoint.name
+					)
+				);
+				const replacements = startupSnapshot.renderer.bridgeMetrics.filter(
+					metric => metric.kind === 'replaceProject'
+				);
+
+				assertInvariant(
+					`${startupPrefix}-one-initial-project-snapshot`,
+					replacements.length === 1,
+					`replaceProject count ${replacements.length}`
+				);
+				assertInvariant(
+					`${startupPrefix}-memory-checkpoints-present`,
+					[
+						'all-passages-ready',
+						'session-initialization-complete',
+						'shell-visible',
+						'post-gc-retained'
+					].every(name => checkpointNames.has(name)),
+					JSON.stringify([...checkpointNames])
+				);
+				assertInvariant(
+					`${startupPrefix}-native-load-attribution-present`,
+					startupSnapshot.renderer.events.some(
+						event =>
+							event.name === 'native-project-hydrated' &&
+							typeof event.detail?.mainNativeCallMs === 'number'
+					)
+				);
+				assertInvariant(
+					`${startupPrefix}-wasm-memory-attribution-present`,
+					replacements.some(metric => (metric.wasmMemoryBytes ?? 0) > 0)
+				);
 
 				startupMetrics(startupSnapshot, running.launchToWindowMs);
 				diagnostics.startup.push(startupSnapshot);

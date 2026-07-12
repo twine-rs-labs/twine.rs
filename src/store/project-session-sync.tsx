@@ -227,20 +227,9 @@ export const ProjectSessionSync: React.FC = () => {
 			rememberSessionStart(start);
 			const targetStoryId = rootStoriesRef.current.get(start.rootPath)?.[0]?.id;
 
-			if (!targetStoryId || start.assets.length === 0) {
-				return;
+			if (targetStoryId) {
+				await coreProjectHost.ensureSessionReady(targetStoryId);
 			}
-			await coreProjectHost.ingestExternalDelta(
-				targetStoryId,
-				{
-					changes: start.assets.map(asset => ({
-						asset,
-						type: 'upsertAsset' as const
-					})),
-					id: `baseline:${start.rootPath}:${start.generation}`
-				},
-				{force: true}
-			);
 		},
 		[coreProjectHost]
 	);
@@ -278,6 +267,10 @@ export const ProjectSessionSync: React.FC = () => {
 						return;
 					}
 
+					recordPerformanceHarnessEvent('native-session-baseline-ready', {
+						...start.performanceTimings,
+						rootPath: start.rootPath
+					});
 					await synchronizeStartAssets(start);
 					// The native baseline is ready before the initial asset inventory has
 					// necessarily crossed the serialized core-session queue. Keep a

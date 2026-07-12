@@ -2,7 +2,7 @@
 
 Status: current measured snapshot
 Owner: performance maintainers
-Last verified: 2026-07-11
+Last verified: 2026-07-12
 Source of truth: release-mode Electron harness and accepted local baselines
 
 ## Harness state
@@ -32,6 +32,12 @@ cost. `npm run perf:electron:50k:diagnostic` performs one production launch and
 one edit/save/acknowledgement cycle, records the same structural assertions, and
 adds perf-gated native save-stage timings. Diagnostic reports are partial by
 design and are not accepted as baselines.
+
+Focused startup commands now run three fresh processes and collect stage-level
+native load, hydration, snapshot, worker/session, and graph-readiness timings.
+They also capture main/renderer heap and working sets at startup milestones,
+WASM linear memory, Rust cache/entity counts, and a perf-only post-GC retained
+checkpoint. These startup reports are partial evidence, not accepted baselines.
 
 ## Recent focused validation
 
@@ -109,6 +115,34 @@ counters. Both diagnostic and watcher Electron phases pass those assertions.
 The repeated watcher profile determines whether graph/index maintenance or
 boundary overhead deserves the next latency change. Startup and retained-memory
 attribution remain the next broader optimization gate.
+
+The first startup/memory cleanup removes retained renderer JSON fingerprints
+of every passage, avoids cloning stable-identity hydration payloads, and blocks
+file-backed WASM initialization until passage text is hydrated. The complete
+React project mirror is deliberately retained pending the new attribution.
+
+The focused 50k startup phase now passes with the corrected startup/memory
+contract. Moving watcher-baseline work out of shell opening, skipping redundant
+native-story repair, avoiding stable-identity passage clones, and eliminating a
+second initial asset ingestion improved the measured p50s from the attributed
+pre-optimization run as follows:
+
+- shell: about 22.7 s to 0.96 s;
+- fully hydrated/interactive: about 33.8 s to 10.4 s;
+- post-GC resident memory: about 1.62 GiB to 1.14 GiB;
+- renderer working set: about 945 MiB to 580 MiB;
+- WASM linear memory: about 508 MiB to 96 MiB.
+
+The remaining critical path is now the native file-manifest/watcher-baseline
+scan at about 9.45 s p50, overlapping a full native hydration load of about
+7.96 s. Core session construction is about 1.07 s. Renderer retained JS heap is
+only about 74 MiB, so the next memory work should target WASM/native/process
+representations rather than another renderer JSON cleanup.
+
+The corresponding final 10k startup phase also passes: shell p50 is about
+178 ms and interactive p50 about 1.08 s, both inside their roadmap targets.
+Resident memory remains about 728 MiB, above the 600 MiB target, with roughly
+21 MiB of WASM linear memory.
 
 ## Gates
 

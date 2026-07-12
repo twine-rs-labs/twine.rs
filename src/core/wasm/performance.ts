@@ -30,10 +30,15 @@ export interface CoreBridgeMetric {
 	requestBytes: number;
 	requestedAtEpochMs: number;
 	readModel?: {
+		analysisCacheSourceCount: number;
+		historyBytes: number;
 		parsedSourceCount: number;
+		passageCount: number;
 		readModelFullBuildCount: number;
 		readModelIncrementalUpdateCount: number;
 		readModelLastTouchedSourceCount: number;
+		redoEntryCount: number;
+		undoEntryCount: number;
 	};
 	responseBytes: number;
 	roundTripMs: number;
@@ -44,6 +49,7 @@ export interface CoreBridgeMetric {
 	transferMs: number;
 	workerReceivedAtEpochMs: number;
 	workerRespondedAtEpochMs: number;
+	wasmMemoryBytes?: number;
 }
 
 const maxMetrics = 80;

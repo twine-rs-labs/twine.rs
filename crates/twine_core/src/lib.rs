@@ -2368,12 +2368,17 @@ struct SourceAnalysisCache {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoreSessionPerformanceDiagnostics {
+    pub analysis_cache_source_count: usize,
+    pub history_bytes: usize,
     #[serde(default)]
     pub last_mutation: Option<CoreMutationStageTimings>,
     pub parsed_source_count: usize,
+    pub passage_count: usize,
     pub read_model_full_build_count: usize,
     pub read_model_incremental_update_count: usize,
     pub read_model_last_touched_source_count: usize,
+    pub redo_entry_count: usize,
+    pub undo_entry_count: usize,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -3492,11 +3497,21 @@ impl ProjectSession {
 
     pub fn performance_diagnostics(&self) -> CoreSessionPerformanceDiagnostics {
         CoreSessionPerformanceDiagnostics {
+            analysis_cache_source_count: self.analysis_cache.values().map(BTreeMap::len).sum(),
+            history_bytes: self.history_bytes,
             last_mutation: self.last_mutation_stage_timings.clone(),
             parsed_source_count: self.analysis_parse_count,
+            passage_count: self
+                .project
+                .stories
+                .iter()
+                .map(|story| story.passages.len())
+                .sum(),
             read_model_full_build_count: self.read_model_full_build_count,
             read_model_incremental_update_count: self.read_model_incremental_update_count,
             read_model_last_touched_source_count: self.read_model_last_touched_source_count,
+            redo_entry_count: self.redo_stack.len(),
+            undo_entry_count: self.undo_stack.len(),
         }
     }
 

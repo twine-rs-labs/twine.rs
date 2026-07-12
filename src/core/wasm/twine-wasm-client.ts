@@ -827,6 +827,7 @@ export class WasmCoreWorkerClient {
 				receivedAtEpochMs - metrics.workerRespondedAtEpochMs
 			),
 			workerReceivedAtEpochMs: metrics.workerReceivedAtEpochMs,
+			wasmMemoryBytes: metrics.wasmMemoryBytes,
 			workerRespondedAtEpochMs: metrics.workerRespondedAtEpochMs
 		});
 	}

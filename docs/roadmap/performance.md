@@ -2,7 +2,7 @@
 
 Status: active
 Owner: performance and architecture maintainers
-Last verified: 2026-07-11
+Last verified: 2026-07-12
 Source of truth: outstanding work revealed by accepted 10k/50k baselines
 
 ## Objective
@@ -13,7 +13,7 @@ fixture isolation.
 
 ## Work order
 
-### 1. Bounded startup read model — implemented, validation pending
+### 1. Startup and retained memory — active
 
 - Profile native project load, renderer hydration, session initialization, and
   first-route queries independently.
@@ -37,6 +37,25 @@ fixture isolation.
   roughly 28 MiB compatibility index. Remaining work is cold-start profiling
   and removal of compatibility full-index calls from explicitly complete
   workflows where paging is practical.
+- The focused startup phase now attributes native shell and full-text loads,
+  JSON parsing, renderer hydration, snapshot construction, worker/WASM session
+  initialization, and first graph readiness. Memory checkpoints cover the same
+  phases plus post-GC retained state, including WASM linear memory and Rust
+  entity/cache counts.
+- Renderer full-story JSON fingerprints and their repeated scans have been
+  removed; Rust session status is the only persisted dirty-state authority.
+  Stable-identity hydration also reuses the incoming 50k passage objects rather
+  than cloning them solely to rewrite an unchanged story ID.
+- File-backed WASM initialization waits for full passage hydration and submits
+  one initial snapshot. The complete React mirror remains intentionally in
+  scope until a separate bounded-mirror design is justified by these readings.
+- The first attributed cleanup reduced 50k shell p50 to about 0.96 s,
+  interactive p50 to about 10.4 s, retained resident memory to about 1.14 GiB,
+  and WASM linear memory to about 96 MiB. The next startup optimization should
+  replace the 9.45 s full file-entry baseline scan with descriptor-derived or
+  incrementally persisted fingerprints, while preserving watcher correctness.
+- Full hydration remains about 7.96 s and core session construction about
+  1.07 s. Optimize those only after the baseline scan is no longer dominant.
 
 Exit signal: shell and interactive phases show a material baseline improvement
 with unchanged structural assertions.
@@ -94,7 +113,7 @@ focused 50k measurements.
 Exit signal: no full-source rebuilds, bounded rendering remains true, and each
 surface materially improves against its accepted baseline.
 
-### 4. Memory
+### 4. Further memory reduction
 
 - Measure native project storage, WASM session state, frontend mirrors,
   analysis caches, graph data, and serialized transfer buffers separately.

@@ -7,6 +7,10 @@ export interface MergeProjectStoriesOptions {
 }
 
 function storyWithExistingIdentity(story: Story, existing: Story): Story {
+	if (story.id === existing.id) {
+		return story;
+	}
+
 	return {
 		...story,
 		id: existing.id,
@@ -33,6 +37,13 @@ function mergeStory(
 	}
 
 	if (!options.preserveExistingText) {
+		return identifiedIncoming;
+	}
+	if (
+		!existing.script &&
+		!existing.stylesheet &&
+		!existing.passages.some(passage => passage.text.length > 0)
+	) {
 		return identifiedIncoming;
 	}
 

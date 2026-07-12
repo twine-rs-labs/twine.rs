@@ -258,6 +258,16 @@ if ((process as any).contextIsolated) {
 
 if (process.env.TWINE_PERF === '1') {
 	(window as any).twinePerformanceNative = {
+		checkpoint(name: string, renderer: Record<string, number>) {
+			return ipcRenderer.invoke(
+				'performance-harness-checkpoint',
+				name,
+				renderer
+			);
+		},
+		collectGarbage() {
+			return ipcRenderer.invoke('performance-harness-collect-garbage');
+		},
 		reset() {
 			return ipcRenderer.invoke('performance-harness-reset');
 		},

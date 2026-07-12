@@ -16,7 +16,6 @@ import type {CoreSessionStatus} from './bindings/CoreSessionStatus';
 import type {CoreStoryIndex} from './bindings/CoreStoryIndex';
 import type {CoreStoryIndexOptions} from './bindings/CoreStoryIndexOptions';
 import type {CoreStorySummary} from './bindings/CoreStorySummary';
-import type {Patch} from './bindings/Patch';
 import type {PatchBatch} from './bindings/PatchBatch';
 import type {StoryCommand} from './bindings/StoryCommand';
 import type {GraphProjectionQuery} from './graph-projection';
@@ -32,6 +31,10 @@ import {
 	projectPatchBatchStoryActions
 } from './patch-applier';
 import {projectSnapshotFromStories} from './project-snapshot';
+import {
+	projectStoryHydration,
+	subscribeProjectStoryHydration
+} from '../store/project-hydration';
 import {normalizeStoryIndexOptions} from './story-index';
 import type {CoreBridgeMode} from './wasm/performance';
 import {
@@ -75,6 +78,7 @@ export interface CoreProjectHost {
 		command: StoryCommand,
 		options?: CoreCommandOptions
 	): Promise<PatchBatch | undefined>;
+	ensureSessionReady(storyId: string): Promise<void>;
 	ingestExternalDelta(
 		storyId: string,
 		delta: CoreExternalDelta,
@@ -416,40 +420,6 @@ function assetInventoryEntry(
 	};
 }
 
-function persistableStoryFingerprint(story: Story) {
-	return JSON.stringify({
-		ifid: story.ifid,
-		id: story.id,
-		name: story.name,
-		passages: story.passages.map(passage => ({
-			height: passage.height,
-			id: passage.id,
-			left: passage.left,
-			name: passage.name,
-			story: passage.story,
-			tags: passage.tags,
-			text: passage.text,
-			top: passage.top,
-			width: passage.width
-		})),
-		script: story.script,
-		snapToGrid: story.snapToGrid,
-		startPassage: story.startPassage,
-		storyFormat: story.storyFormat,
-		storyFormatVersion: story.storyFormatVersion,
-		stylesheet: story.stylesheet,
-		tagColors: story.tagColors,
-		tags: story.tags,
-		zoom: story.zoom
-	});
-}
-
-function storyFingerprintMap(stories: StoriesState) {
-	return new Map(
-		stories.map(story => [story.id, persistableStoryFingerprint(story)])
-	);
-}
-
 function emptyGraphStats() {
 	return {
 		brokenLinks: 0,
@@ -586,8 +556,6 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	private statusListeners = new Set<(status: CoreSessionStatus) => void>();
 	private undoEffects: Array<string | undefined> = [];
 	private pendingSessionPatchDispatches = 0;
-	private publishedStories = new Map<string, Story>();
-	private savedStoryFingerprints: Map<string, string>;
 	private stories: StoriesState;
 	private status: CoreSessionStatus = {
 		canRedo: false,
@@ -611,7 +579,6 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	) {
 		this.dispatch = dispatch;
 		this.stories = stories;
-		this.savedStoryFingerprints = storyFingerprintMap(stories);
 		this.sessionId = options.sessionId ?? defaultCoreSessionId;
 		this.wasmClient = options.wasmClient ?? createWasmCoreWorkerClient();
 	}
@@ -645,6 +612,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			revision: this.status.revision
 		});
 		return batch;
+	}
+
+	async ensureSessionReady() {
+		await this.ensureWasmProjectSession();
 	}
 
 	async applyExternalDelta(
@@ -1077,7 +1048,6 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				result.revision,
 				result.status
 			);
-			this.savedStoryFingerprints = storyFingerprintMap(this.stories);
 		});
 	}
 
@@ -1089,7 +1059,6 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		await this.enqueueMutation(async () => {
 			this.disposeEffects();
 			this.stories = stories;
-			this.savedStoryFingerprints = storyFingerprintMap(stories);
 			for (const story of stories) {
 				replaceKnownAssetInventoryForStory(story.id, assets);
 			}
@@ -1137,27 +1106,6 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
-	private currentDirtyState() {
-		const currentIds = new Set(this.stories.map(story => story.id));
-
-		for (const story of this.stories) {
-			if (
-				this.savedStoryFingerprints.get(story.id) !==
-				persistableStoryFingerprint(story)
-			) {
-				return true;
-			}
-		}
-
-		for (const storyId of this.savedStoryFingerprints.keys()) {
-			if (!currentIds.has(storyId)) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
 	private renameAsset(storyId: string, path: string, newPath: string) {
 		const oldAsset = this.assetForPath(storyId, path);
 		const renamed = {
@@ -1184,32 +1132,34 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	}
 
 	publishStoreStatePatches() {
-		const dirty = this.currentDirtyState();
-		const patches: Patch[] = [
-			...(dirty !== this.dirty
-				? [{dirty, type: 'dirtyStateChanged' as const}]
-				: [])
-		];
-
-		this.publishedStories = new Map(
-			this.stories.map(story => [story.id, story])
-		);
-		this.dirty = dirty;
-
-		if (patches.length > 0) {
-			this.transactionId++;
-			this.listeners.forEach(listener =>
-				listener({
-					label: 'store-index-refresh',
-					patches,
-					transactionId: this.transactionId
-				})
-			);
-		}
+		// Persisted dirty state is owned by the Rust session. Store updates here are
+		// hydration or view-state changes and must not trigger a second full-project
+		// comparison in the renderer.
 	}
 
 	runtimeMode() {
 		return this.wasmClient.mode;
+	}
+
+	performanceDiagnostics() {
+		return {
+			passageCount: this.stories.reduce(
+				(total, story) => total + story.passages.length,
+				0
+			),
+			storyCount: this.stories.length,
+			textCharacterCount: this.stories.reduce(
+				(total, story) =>
+					total +
+					story.script.length +
+					story.stylesheet.length +
+					story.passages.reduce(
+						(passageTotal, passage) => passageTotal + passage.text.length,
+						0
+					),
+				0
+			)
+		};
 	}
 
 	private normalizedStoryIndexOptions(
@@ -1239,6 +1189,47 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		if (!this.wasmClient.enabled) {
 			throw new Error('WASM core worker is unavailable.');
 		}
+		if (
+			this.stories.some(
+				story => projectStoryHydration(story.id)?.passageTextLoaded === false
+			)
+		) {
+			await new Promise<void>(resolve => {
+				const unsubscribe = subscribeProjectStoryHydration(() => {
+					if (
+						this.stories.every(
+							story =>
+								projectStoryHydration(story.id)?.passageTextLoaded !== false
+						)
+					) {
+						unsubscribe();
+						resolve();
+					}
+				});
+			});
+		}
+		if (
+			this.stories.some(
+				story =>
+					!!projectStoryHydration(story.id)?.rootPath &&
+					!knownAssetInventoryScanCompleteForStory(story.id)
+			)
+		) {
+			await new Promise<void>(resolve => {
+				const unsubscribe = subscribeKnownAssetInventory(() => {
+					if (
+						this.stories.every(
+							story =>
+								!projectStoryHydration(story.id)?.rootPath ||
+								knownAssetInventoryScanCompleteForStory(story.id)
+						)
+					) {
+						unsubscribe();
+						resolve();
+					}
+				});
+			});
+		}
 		const startedAt =
 			typeof performance !== 'undefined' ? performance.now() : Date.now();
 		const reusedReadySession =
@@ -1250,7 +1241,17 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			this.wasmProjectReplaceRevision !== this.wasmProjectRevision
 		) {
 			const revision = this.wasmProjectRevision;
+			const snapshotStarted = performance.now();
 			const snapshot = projectSnapshotFromStories(this.stories);
+			recordPerformanceHarnessEvent('core-session-snapshot-built', {
+				durationMs: performance.now() - snapshotStarted,
+				passageCount: snapshot.stories.reduce(
+					(total, story) => total + story.passages.length,
+					0
+				),
+				revision,
+				sessionId: this.sessionId
+			});
 			const assets = this.stories.flatMap(
 				story => this.assetInventoryByStory.get(story.id) ?? []
 			);
@@ -1293,6 +1294,13 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	private ensureWasmProjectSessionSync() {
 		if (!this.wasmClient.enabled || !this.wasmClient.replaceProjectSync) {
 			throw new Error('WASM core worker is unavailable.');
+		}
+		if (
+			this.stories.some(
+				story => projectStoryHydration(story.id)?.passageTextLoaded === false
+			)
+		) {
+			throw new Error('Core session initialization is waiting for hydration.');
 		}
 
 		if (
@@ -1754,6 +1762,7 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		return {
 			mode: this.client.mode,
 			sessions: Array.from(this.hosts, ([sessionId, host]) => ({
+				...host.performanceDiagnostics(),
 				revision: host.sessionStatus().revision,
 				sessionId,
 				storyIds: Array.from(this.storySessions)
@@ -1818,6 +1827,17 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			command,
 			options
 		);
+	}
+
+	async ensureSessionReady(storyId: string) {
+		const host = this.hostForStory(storyId);
+
+		if (!host) {
+			throw new Error(
+				`No core project session is available for story "${storyId}".`
+			);
+		}
+		await host.ensureSessionReady();
 	}
 
 	applyExternalDelta(storyId: string, delta: CoreExternalDelta) {
@@ -2112,6 +2132,7 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.ingestExternalDelta(deltaStoryId, delta, options),
 			applyStoryCommand: (command, options) =>
 				host.applyStoryCommand(command, options),
+			ensureSessionReady: readyStoryId => host.ensureSessionReady(readyStoryId),
 			isDirty: () => host.isDirty(storyId),
 			queryGraphProjection: (queryStoryId, options) =>
 				host.queryGraphProjection(queryStoryId, options),

@@ -1,6 +1,7 @@
 import {existsSync} from 'fs';
 import {createRequire} from 'module';
 import {join, resolve} from 'path';
+import {performance} from 'perf_hooks';
 import type {CoreAssetInventoryEntry} from '../../core';
 import type {Story} from '../../store/stories';
 import type {
@@ -210,11 +211,43 @@ export function loadNativeProjectFolder(
 	rootPath: string,
 	options: {loadPassageText?: boolean} = {}
 ) {
-	return reviveProjectFolderResult(
-		callNative<NativeProjectFolderResult>('project load', addon =>
-			addon.loadProjectFolderJson(rootPath, options.loadPassageText !== false)
-		)
-	);
+	const loaded = loadAddon();
+
+	if (!loaded) {
+		return undefined;
+	}
+
+	try {
+		const nativeStarted = performance.now();
+		const source = loaded.loadProjectFolderJson(
+			rootPath,
+			options.loadPassageText !== false
+		);
+		const nativeFinished = performance.now();
+		const parseStarted = performance.now();
+		const result = parseNativeJson<NativeProjectFolderResult>(
+			'project load',
+			source
+		);
+		const parseFinished = performance.now();
+
+		if (result?.loadPerformanceTimings && process.env.TWINE_PERF === '1') {
+			result.loadPerformanceTimings = {
+				...result.loadPerformanceTimings,
+				jsJsonParseMs: parseFinished - parseStarted,
+				mainNativeCallMs: nativeFinished - nativeStarted,
+				payloadBytes: Buffer.byteLength(source)
+			};
+		}
+
+		return reviveProjectFolderResult(result);
+	} catch (error) {
+		diagnostic = `Native project backend project load failed: ${
+			(error as Error).message
+		}`;
+		warnDiagnostic();
+		return undefined;
+	}
 }
 
 export function saveNativeProjectFolder(rootPath: string, story: Story) {

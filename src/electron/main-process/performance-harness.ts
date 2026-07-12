@@ -3,6 +3,7 @@ import {appendFileSync} from 'fs';
 import {tmpdir} from 'os';
 import {isAbsolute, join, relative, resolve} from 'path';
 import {performance} from 'perf_hooks';
+import {getHeapStatistics} from 'v8';
 
 export interface NativeWatcherPerformanceMetric {
 	assetChanges: number;
@@ -34,6 +35,14 @@ const timings: Array<{name: string; timeMs: number}> = [
 ];
 const watcherMetrics: NativeWatcherPerformanceMetric[] = [];
 const watcherTraceEvents: NativeWatcherTraceEvent[] = [];
+const memoryCheckpoints: Array<{
+	appMetrics: ReturnType<typeof app.getAppMetrics>;
+	mainHeap: ReturnType<typeof getHeapStatistics>;
+	mainMemory: NodeJS.MemoryUsage;
+	name: string;
+	recordedAtEpochMs: number;
+	renderer: Record<string, number>;
+}> = [];
 
 export function performanceEpochNow() {
 	return performance.timeOrigin + performance.now();
@@ -158,6 +167,25 @@ export function recordWatcherTraceEvent(
 export function resetMainPerformanceHarness() {
 	watcherMetrics.length = 0;
 	watcherTraceEvents.length = 0;
+	memoryCheckpoints.length = 0;
+}
+
+export function recordMemoryCheckpoint(
+	name: string,
+	renderer: Record<string, number> = {}
+) {
+	if (!enabled) {
+		return;
+	}
+
+	memoryCheckpoints.push({
+		appMetrics: app.getAppMetrics(),
+		mainHeap: getHeapStatistics(),
+		mainMemory: process.memoryUsage(),
+		name,
+		recordedAtEpochMs: performanceEpochNow(),
+		renderer
+	});
 }
 
 export function mainPerformanceHarnessSnapshot() {
@@ -167,6 +195,7 @@ export function mainPerformanceHarnessSnapshot() {
 
 	return {
 		appMetrics: app.getAppMetrics(),
+		memoryCheckpoints: [...memoryCheckpoints],
 		memory: process.memoryUsage(),
 		timings: [...timings],
 		watcherMetrics: [...watcherMetrics],

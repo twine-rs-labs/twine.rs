@@ -11,6 +11,7 @@ import {
 } from './performance';
 
 export interface TwinePerformanceHarness {
+	collectRetainedMemory(): Promise<void>;
 	reset(): Promise<void>;
 	snapshot(): Promise<{
 		main: unknown;
@@ -36,6 +37,31 @@ export function installPerformanceHarness() {
 	}
 
 	harnessWindow.twinePerformance = {
+		async collectRetainedMemory() {
+			(globalThis as typeof globalThis & {gc?: () => void}).gc?.();
+			await native.collectGarbage();
+			await new Promise(resolve => window.setTimeout(resolve, 0));
+			await native.checkpoint(
+				'post-gc-retained',
+				((): Record<string, number> => {
+					const memory = (
+						performance as Performance & {
+							memory?: {
+								totalJSHeapSize: number;
+								usedJSHeapSize: number;
+							};
+						}
+					).memory;
+
+					return memory
+						? {
+								totalJSHeapSize: memory.totalJSHeapSize,
+								usedJSHeapSize: memory.usedJSHeapSize
+							}
+						: {};
+				})()
+			);
+		},
 		async reset() {
 			resetRendererPerformance();
 			resetCoreBridgeMetrics();

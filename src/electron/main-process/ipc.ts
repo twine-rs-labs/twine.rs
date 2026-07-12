@@ -57,6 +57,7 @@ import type {
 } from '../shared';
 import {
 	mainPerformanceHarnessSnapshot,
+	recordMemoryCheckpoint,
 	performanceHarnessEnabled,
 	resetMainPerformanceHarness
 } from './performance-harness';
@@ -77,6 +78,14 @@ export function initIpc() {
 		ipcMain.handle('performance-harness-reset', async () =>
 			resetMainPerformanceHarness()
 		);
+		ipcMain.handle(
+			'performance-harness-checkpoint',
+			async (_event, name: string, renderer: Record<string, number>) =>
+				recordMemoryCheckpoint(name, renderer)
+		);
+		ipcMain.handle('performance-harness-collect-garbage', async () => {
+			global.gc?.();
+		});
 	}
 
 	void Promise.resolve(cleanupStaleProjectAssetEffects()).catch(error => {

@@ -8,13 +8,15 @@ import {
 import {markProjectStoryHydration} from '../store/project-hydration';
 import {saveProjectMetadata} from '../store/project-metadata';
 import {useStoriesContext} from '../store/stories';
-import {useStoriesRepair} from '../store/use-stories-repair';
-import {markPerformance, measurePerformance} from '../util/performance';
+import {
+	markPerformance,
+	measurePerformance,
+	recordPerformanceHarnessEvent
+} from '../util/performance';
 
 export const CommandLineOpenSync: React.FC = () => {
 	const consumed = React.useRef(false);
 	const history = useHistory();
-	const repairStories = useStoriesRepair();
 	const {dispatch, stories} = useStoriesContext();
 	const storiesRef = React.useRef(stories);
 
@@ -46,6 +48,11 @@ export const CommandLineOpenSync: React.FC = () => {
 			let mergedStories = storiesRef.current;
 
 			for (const project of result.openedProjects) {
+				recordPerformanceHarnessEvent('native-project-shell-loaded', {
+					...project.loadPerformanceTimings,
+					rootPath: project.rootPath,
+					storyCount: project.stories.length
+				});
 				const projectStoryIds = projectStoryIdsForCurrentStories(
 					mergedStories,
 					project.stories,
@@ -72,9 +79,16 @@ export const CommandLineOpenSync: React.FC = () => {
 			}
 
 			if (openedStoryIds.length > 0) {
+				const dispatchStarted = performance.now();
 				storiesRef.current = mergedStories;
 				dispatch({state: mergedStories, type: 'init'});
-				repairStories();
+				recordPerformanceHarnessEvent('renderer-project-shell-dispatched', {
+					durationMs: performance.now() - dispatchStarted,
+					passageCount: mergedStories.reduce(
+						(total, story) => total + story.passages.length,
+						0
+					)
+				});
 				markPerformance('shell-visible');
 				measurePerformance('open-to-shell', 'open-start', 'shell-visible');
 				history.push(`/stories/${openedStoryIds[0]}`);
@@ -107,7 +121,7 @@ export const CommandLineOpenSync: React.FC = () => {
 		return () => {
 			cancelled = true;
 		};
-	}, [dispatch, history, repairStories, stories]);
+	}, [dispatch, history, stories]);
 
 	return null;
 };

@@ -59,11 +59,20 @@ import {
 } from './performance-harness';
 
 export interface NativeProjectFolderResult {
+	loadPerformanceTimings?: NativeProjectLoadTimings;
 	passageTextLoaded?: boolean;
 	performanceTimings?: NativeProjectSaveTimings;
 	rootPath: string;
 	stories: Story[];
 	storyIds: string[];
+}
+
+export interface NativeProjectLoadTimings {
+	jsJsonParseMs?: number;
+	mainNativeCallMs?: number;
+	modelBuildUs: number;
+	nativeStoryConversionUs: number;
+	payloadBytes?: number;
 }
 
 export interface NativeProjectSaveTimings {
@@ -195,6 +204,12 @@ export interface NativeProjectSessionPerformanceTrace {
 export interface NativeProjectSessionStart {
 	assets: CoreAssetInventoryEntry[];
 	generation: number;
+	performanceTimings?: {
+		assetCount: number;
+		baselineFileCount: number;
+		baselinePrimeMs: number;
+		descriptorPathCount: number;
+	};
 	rootPath: string;
 	storyIds: string[];
 }
@@ -233,8 +248,8 @@ interface ProjectSessionResolutionRecord {
 type ProjectSessionListener = (delta: NativeProjectSessionDelta) => void;
 
 interface ProjectSessionState {
-	baseline?: NativeProjectSessionSnapshot;
 	baselineReusableUntil?: number;
+	baseline?: NativeProjectSessionSnapshot;
 	debounceTimer?: ReturnType<typeof setTimeout>;
 	descriptor?: NativeProjectDescriptor;
 	generation: number;
@@ -2846,48 +2861,6 @@ async function refreshProjectSessionBaseline(
 	}
 }
 
-async function primeProjectSessionBaseline(
-	rootPath: string,
-	hints: ProjectSessionSnapshotHints
-) {
-	const session = ensureProjectSession(rootPath);
-
-	session.baseline = await readProjectSessionSnapshot(
-		rootPath,
-		undefined,
-		hints
-	);
-	session.descriptor = await readProjectDescriptor(rootPath).catch(() =>
-		descriptorFromStories(hints.stories ?? session.baseline?.stories ?? [])
-	);
-	session.pending = undefined;
-	session.baselineReusableUntil = Date.now() + projectSessionFallbackPollMs;
-
-	return session.baseline;
-}
-
-function reusableProjectSessionBaseline(
-	session: ProjectSessionState,
-	storyIds?: string[]
-) {
-	if (
-		!session.baseline ||
-		!session.baselineReusableUntil ||
-		Date.now() > session.baselineReusableUntil
-	) {
-		return undefined;
-	}
-
-	if (
-		storyIds?.length &&
-		!storyIds.every(storyId => session.baseline?.storyIds.includes(storyId))
-	) {
-		return undefined;
-	}
-
-	return session.baseline;
-}
-
 export async function createProjectFolder(
 	story: Story,
 	preferredParent?: string
@@ -3163,7 +3136,6 @@ async function writeProjectFolderIncremental(
 	session.descriptor = descriptor;
 	session.generation++;
 	session.pending = undefined;
-	session.baselineReusableUntil = undefined;
 	timings.baselinePatchUs = Math.round(
 		(performance.now() - baselinePatchStarted) * 1000
 	);
@@ -3375,10 +3347,6 @@ export async function openProjectFolder(
 	}
 
 	const projectFolder = await readProjectFolder(rootPath, options);
-	await primeProjectSessionBaseline(rootPath, {
-		stories: projectFolder.stories,
-		storyIds: projectFolder.storyIds
-	});
 	rememberProjectFolder(projectFolder);
 
 	return projectFolder;
@@ -3397,6 +3365,7 @@ export async function hydrateProjectFolder(
 		: stories;
 
 	const result = {
+		loadPerformanceTimings: projectFolder.loadPerformanceTimings,
 		passageTextLoaded: true,
 		rootPath: projectFolder.rootPath,
 		stories: filteredStories,
@@ -3877,12 +3846,15 @@ export async function projectSessionSnapshot(
 	storyIds?: string[]
 ) {
 	const session = ensureProjectSession(rootPath);
-	const reusable = reusableProjectSessionBaseline(session, storyIds);
-
-	if (reusable) {
-		return reusable;
+	if (
+		session.baseline &&
+		session.baselineReusableUntil &&
+		Date.now() <= session.baselineReusableUntil &&
+		(!storyIds?.length ||
+			storyIds.every(storyId => session.baseline?.storyIds.includes(storyId)))
+	) {
+		return session.baseline;
 	}
-
 	if (!session.baseline) {
 		session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
 			storyIds
@@ -3900,6 +3872,7 @@ export async function startProjectSession(
 	listener?: ProjectSessionListener,
 	storyIds?: string[]
 ) {
+	const baselineStarted = performance.now();
 	const session = ensureProjectSession(rootPath);
 
 	if (listener) {
@@ -3907,8 +3880,6 @@ export async function startProjectSession(
 	}
 
 	const baselineWasMissing = !session.baseline;
-	const reusable = reusableProjectSessionBaseline(session, storyIds);
-
 	if (!session.baseline) {
 		session.baseline = await readProjectSessionSnapshot(rootPath, undefined, {
 			storyIds
@@ -3937,17 +3908,24 @@ export async function startProjectSession(
 		queueMicrotask(() => notifyProjectSession(session));
 	}
 
-	const baseline =
-		reusable ??
-		(baselineWasMissing
-			? session.baseline
-			: await readProjectSessionSnapshot(rootPath, undefined, {
-					storyIds: storyIds ?? session.baseline.storyIds
-				}));
+	const baseline = baselineWasMissing
+		? session.baseline
+		: await readProjectSessionSnapshot(rootPath, undefined, {
+				storyIds: storyIds ?? session.baseline.storyIds
+			});
+	session.baselineReusableUntil = Date.now() + projectSessionFallbackPollMs;
 
 	return {
 		assets: baseline.assets,
 		generation: session.generation,
+		performanceTimings: performanceHarnessEnabled()
+			? {
+					assetCount: baseline.assets.length,
+					baselineFileCount: baseline.files.length,
+					baselinePrimeMs: performance.now() - baselineStarted,
+					descriptorPathCount: session.descriptor?.paths.size ?? 0
+				}
+			: undefined,
 		rootPath: baseline.rootPath,
 		storyIds: baseline.storyIds
 	} satisfies NativeProjectSessionStart;

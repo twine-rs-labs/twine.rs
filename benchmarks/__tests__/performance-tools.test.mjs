@@ -137,6 +137,41 @@ test('does not compare timing across different machines', () => {
 	assert.equal(result.passed, true);
 });
 
+test('does not compare metrics whose measurement contract changed', () => {
+	const budgets = {
+		metrics: {
+			'startup.interactiveMs': {
+				category: 'electron',
+				enforceTarget: false,
+				stat: 'p50',
+				target: 1500
+			}
+		},
+		regressions: {electron: {floor: 5, percent: 15}}
+	};
+	const result = evaluatePerformanceReport(
+		{
+			aggregates: {'startup.interactiveMs': {p50: 3000}},
+			assertions: [],
+			environment: {
+				fingerprint: 'same',
+				metricContracts: {startup: 2}
+			}
+		},
+		budgets,
+		{
+			aggregates: {'startup.interactiveMs': {p50: 1000}},
+			environment: {fingerprint: 'same'}
+		}
+	);
+
+	assert.equal(result.baselineStatus, 'matched');
+	assert.equal(
+		result.checks.some(check => check.kind === 'regression'),
+		false
+	);
+});
+
 test('accepts only complete all-phase baseline reports', () => {
 	const budgets = {
 		metrics: {

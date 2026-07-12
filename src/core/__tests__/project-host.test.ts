@@ -13,12 +13,14 @@ import {
 } from '..';
 import {
 	knownAssetInventoryForStory,
+	replaceKnownAssetInventoryForStory,
 	StoreCoreProjectHost,
 	useCoreProjectHost
 } from '../project-host';
 import {reducer as storiesReducer} from '../../store/stories/reducer';
 import {StoriesContext, StoriesState} from '../../store/stories';
 import {StoriesActionOrThunk} from '../../store/stories';
+import {markProjectStoryHydration} from '../../store/project-hydration';
 import {fakePassage, fakeStory} from '../../test-util';
 
 describe('StoreCoreProjectHost asset commands', () => {
@@ -278,6 +280,32 @@ describe('StoreCoreProjectHost asset commands', () => {
 			}),
 			'undoChange.editPassage'
 		);
+	});
+
+	it('waits for file-backed passage hydration before initializing WASM', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const command = updatePassageTextCommand(
+			context.story.id,
+			context.start.id,
+			'after hydration'
+		);
+
+		markProjectStoryHydration(context.story.id, {
+			passageTextLoaded: false,
+			rootPath: '/project'
+		});
+		const applying = context.host.applyStoryCommand(command);
+		await flushCommand();
+		expect(wasmClient.replaceProject).not.toHaveBeenCalled();
+
+		markProjectStoryHydration(context.story.id, {
+			passageTextLoaded: true,
+			rootPath: '/project'
+		});
+		replaceKnownAssetInventoryForStory(context.story.id, []);
+		await applying;
+		expect(wasmClient.replaceProject).toHaveBeenCalledTimes(1);
 	});
 
 	it('uses the worker-advanced revision for follow-up commands', async () => {

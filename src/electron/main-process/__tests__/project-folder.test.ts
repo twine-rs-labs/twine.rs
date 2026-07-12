@@ -410,7 +410,7 @@ describe('project-folder native bridge', () => {
 				storyIds: [story.id]
 			})
 		);
-		expect(readFileMock).toHaveBeenCalledWith(
+		expect(readFileMock).not.toHaveBeenCalledWith(
 			'/native/moon-castle.twine.rs/twine.toml',
 			'utf8'
 		);

@@ -42,10 +42,19 @@ struct HealthReport {
 struct NativeProjectFolderResult {
     passage_text_loaded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    load_performance_timings: Option<NativeProjectLoadTimings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     performance_timings: Option<NativeProjectSaveTimings>,
     root_path: String,
     stories: Vec<NativeStory>,
     story_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeProjectLoadTimings {
+    model_build_us: u64,
+    native_story_conversion_us: u64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -221,8 +230,10 @@ pub fn load_project_folder_json(
     root_path: String,
     load_passage_text: Option<bool>,
 ) -> NativeResult<String> {
+    let collect_timings = std::env::var("TWINE_PERF").is_ok_and(|value| value == "1");
     let root = PathBuf::from(&root_path);
     let passage_text_loaded = load_passage_text.unwrap_or(true);
+    let started = Instant::now();
     let project = load_project_path_with_options(
         &root,
         LoadProjectOptions {
@@ -230,15 +241,22 @@ pub fn load_project_folder_json(
         },
     )
     .map_err(native_error)?;
+    let model_build_us = elapsed_us(started);
+    let started = Instant::now();
     let stories = project
         .stories
         .iter()
         .map(NativeStory::from_story)
         .collect::<Vec<_>>();
+    let native_story_conversion_us = elapsed_us(started);
     let story_ids = stories.iter().map(|story| story.id.clone()).collect();
 
     json_string(&NativeProjectFolderResult {
         passage_text_loaded,
+        load_performance_timings: collect_timings.then_some(NativeProjectLoadTimings {
+            model_build_us,
+            native_story_conversion_us,
+        }),
         performance_timings: None,
         root_path,
         stories,
@@ -293,6 +311,7 @@ pub fn save_project_folder_json(root_path: String, story_json: String) -> Native
 
     json_string(&NativeProjectFolderResult {
         passage_text_loaded: true,
+        load_performance_timings: None,
         performance_timings: performance_timings(timings),
         root_path,
         stories: vec![NativeStory::from_story(&story)],

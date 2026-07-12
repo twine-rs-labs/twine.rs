@@ -188,6 +188,17 @@ export function evaluatePerformanceReport(report, budgets, baseline) {
 
 	if (baselineStatus === 'matched') {
 		for (const [name, budget] of Object.entries(budgets.metrics ?? {})) {
+			const metricNamespace = name.split('.')[0];
+			const reportContract = report.environment?.metricContracts?.[metricNamespace];
+			const baselineContract =
+				baseline.environment?.metricContracts?.[metricNamespace];
+
+			if (
+				(reportContract !== undefined || baselineContract !== undefined) &&
+				reportContract !== baselineContract
+			) {
+				continue;
+			}
 			const actual = metricValue(report, name, budget.stat);
 			const previous = metricValue(baseline, name, budget.stat);
 

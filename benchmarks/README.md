@@ -97,6 +97,24 @@ baseline or compared against a local baseline. It preserves the structural
 assertions needed during optimization without requiring repeated full 50k
 benchmark runs.
 
+For startup and retained-memory work, run the focused startup phase:
+
+```sh
+npm run perf:electron:10k:startup
+npm run perf:electron:50k:startup
+```
+
+It runs three fresh processes and records native shell/full-text load stages,
+renderer hydration and snapshot construction, WASM session initialization,
+memory at startup readiness marks, and a perf-only post-GC retained checkpoint.
+Reports include main/renderer heap, process working sets, WASM linear memory,
+payload sizes, and Rust session/cache entity counts. Startup phase reports are
+partial evidence and cannot be accepted as complete baselines.
+
+Startup and memory metrics carry explicit measurement-contract versions. When
+checkpoint semantics change, matching-machine reports remain visible but are
+not compared against incompatible historical startup or memory values.
+
 For the passage text fast path, the diagnostic also requires `incremental` save
 mode and one touched project path. Its save-stage metrics distinguish native
 conflict checking, touched-file writes, baseline patching, and Rust save
