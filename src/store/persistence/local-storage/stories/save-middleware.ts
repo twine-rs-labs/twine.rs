@@ -17,6 +17,31 @@ import {
 
 let lastState: StoriesState;
 
+function passageForCorePersistence(
+	passage: ReturnType<typeof passageWithId>,
+	documentText: string | undefined
+) {
+	if (documentText !== undefined) {
+		return {...passage, text: documentText};
+	}
+	const serialized = window.localStorage.getItem(
+		`twine-passages-${passage.id}`
+	);
+	if (serialized) {
+		try {
+			const stored = JSON.parse(serialized) as {text?: unknown};
+
+			if (typeof stored.text === 'string') {
+				return {...passage, text: stored.text};
+			}
+		} catch {
+			// The existing loader reports corrupt records. Preserve the current
+			// in-memory fallback here rather than blocking an otherwise valid save.
+		}
+	}
+	return passage;
+}
+
 /**
  * A middleware function to save changes to local storage. This should be called
  * *after* the main reducer runs.
@@ -31,16 +56,53 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 			if (action.persistence === 'skip') {
 				break;
 			}
-			const touchedStoryIds = new Set(
-				action.actions.flatMap(action =>
+			const touchedStoryIds = new Set([
+				...(action.storyIds ?? []),
+				...action.actions.flatMap(action =>
 					'storyId' in action ? [action.storyId] : []
-				)
-			);
+				),
+				...(action.documentUpdates ?? []).map(update => update.storyId)
+			]);
 			const deletedStoryIds = new Set(
 				action.actions.flatMap(action =>
 					action.type === 'deleteStory' ? [action.storyId] : []
 				)
 			);
+			const touchedPassagesByStory = new Map<string, Set<string>>();
+			for (const coreAction of action.actions) {
+				if (
+					(coreAction.type === 'updatePassage' ||
+						coreAction.type === 'deletePassage') &&
+					'passageId' in coreAction
+				) {
+					const ids = touchedPassagesByStory.get(coreAction.storyId) ?? new Set();
+					ids.add(coreAction.passageId);
+					touchedPassagesByStory.set(coreAction.storyId, ids);
+				} else if (
+					coreAction.type === 'createPassage' &&
+					coreAction.props.id
+				) {
+					const ids = touchedPassagesByStory.get(coreAction.storyId) ?? new Set();
+					ids.add(coreAction.props.id);
+					touchedPassagesByStory.set(coreAction.storyId, ids);
+				} else if (
+					coreAction.type === 'updateStory' &&
+					coreAction.props.passages
+				) {
+					touchedPassagesByStory.set(
+						coreAction.storyId,
+						new Set(coreAction.props.passages.map(passage => passage.id))
+					);
+				}
+			}
+			for (const update of action.documentUpdates ?? []) {
+				if (update.type !== 'passageText') {
+					continue;
+				}
+				const ids = touchedPassagesByStory.get(update.storyId) ?? new Set();
+				ids.add(update.passageId);
+				touchedPassagesByStory.set(update.storyId, ids);
+			}
 
 			doUpdateTransaction(transaction => {
 				for (const storyId of deletedStoryIds) {
@@ -70,8 +132,26 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 					}
 
 					saveStory(transaction, story);
-					for (const passage of story.passages) {
-						savePassage(transaction, passage);
+					for (const passageId of touchedPassagesByStory.get(storyId) ?? []) {
+						const passage = story.passages.find(
+							candidate => candidate.id === passageId
+						);
+						if (!passage) {
+							continue;
+						}
+						const update = (action.documentUpdates ?? []).find(
+							candidate =>
+								candidate.type === 'passageText' &&
+								candidate.storyId === storyId &&
+								candidate.passageId === passageId
+						);
+						savePassage(
+							transaction,
+							passageForCorePersistence(
+								passage,
+								update?.type === 'passageText' ? update.text : undefined
+							)
+						);
 					}
 					for (const passage of previous?.passages ?? []) {
 						if (!story.passages.some(current => current.id === passage.id)) {

@@ -96,7 +96,10 @@ export function projectPatchBatchStoryActions(
 		switch (patch.type) {
 			case 'passageCreated':
 				actions.push({
-					props: passageSnapshotToProps(patch.passage),
+					props: passageSnapshotToProps(
+						patch.passage,
+						options.sessionOwnedDocumentsForStory?.(patch.story_id) ?? false
+					),
 					storyId: patch.story_id,
 					type: 'createPassage'
 				});
@@ -165,9 +168,6 @@ export function projectPatchBatchStoryActions(
 				break;
 
 			case 'storyScriptUpdated':
-				if (options.sessionOwnedDocumentsForStory?.(patch.story_id)) {
-					break;
-				}
 				actions.push({
 					props: {script: patch.script},
 					storyId: patch.story_id,
@@ -176,9 +176,6 @@ export function projectPatchBatchStoryActions(
 				break;
 
 			case 'storyStylesheetUpdated':
-				if (options.sessionOwnedDocumentsForStory?.(patch.story_id)) {
-					break;
-				}
 				actions.push({
 					props: {stylesheet: patch.stylesheet},
 					storyId: patch.story_id,
@@ -192,7 +189,8 @@ export function projectPatchBatchStoryActions(
 }
 
 export function passageSnapshotToProps(
-	passage: PassageSnapshot
+	passage: PassageSnapshot,
+	excludeText = false
 ): Partial<Passage> & Pick<Passage, 'id' | 'story'> {
 	return {
 		id: passage.id,
@@ -200,7 +198,7 @@ export function passageSnapshotToProps(
 		name: passage.name,
 		story: passage.storyId,
 		tags: passage.tags,
-		text: passage.text
+		...(!excludeText ? {text: passage.text} : {})
 	};
 }
 

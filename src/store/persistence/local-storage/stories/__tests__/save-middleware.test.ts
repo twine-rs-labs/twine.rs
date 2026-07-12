@@ -22,6 +22,7 @@ describe('stories local storage save middleware', () => {
 
 	beforeEach(() => {
 		state = [fakeStory()];
+		window.localStorage.clear();
 		warnSpy = jest.spyOn(console, 'warn').mockReturnValue();
 	});
 
@@ -56,6 +57,60 @@ describe('stories local storage save middleware', () => {
 		).toEqual({completion: expect.any(Promise), persisted: false});
 		expect(doUpdateTransactionMock).not.toHaveBeenCalled();
 		expect(saveStoryMock).not.toHaveBeenCalled();
+	});
+
+	it('persists a core document update without reading stale React text', () => {
+		const transaction = {passageIds: '', storyIds: ''};
+		const passage = state[0].passages[0];
+
+		passage.text = 'stale renderer body';
+		saveMiddleware(state, {
+			actions: [],
+			documentUpdates: [
+				{
+					passageId: passage.id,
+					storyId: state[0].id,
+					text: 'session body',
+					type: 'passageText'
+				}
+			],
+			storyIds: [state[0].id],
+			type: 'applyCorePatchBatch'
+		});
+		doUpdateTransactionMock.mock.calls[0][0](transaction);
+
+		expect(savePassageMock).toHaveBeenCalledWith(transaction, {
+			...passage,
+			text: 'session body'
+		});
+	});
+
+	it('preserves the stored body during a metadata-only core update', () => {
+		const transaction = {passageIds: '', storyIds: ''};
+		const passage = state[0].passages[0];
+
+		window.localStorage.setItem(
+			`twine-passages-${passage.id}`,
+			JSON.stringify({...passage, text: 'stored session body'})
+		);
+		passage.text = 'stale renderer body';
+		saveMiddleware(state, {
+			actions: [
+				{
+					passageId: passage.id,
+					props: {name: passage.name},
+					storyId: state[0].id,
+					type: 'updatePassage'
+				}
+			],
+			type: 'applyCorePatchBatch'
+		});
+		doUpdateTransactionMock.mock.calls[0][0](transaction);
+
+		expect(savePassageMock).toHaveBeenCalledWith(transaction, {
+			...passage,
+			text: 'stored session body'
+		});
 	});
 
 	describe('when a createPassage action is received', () => {

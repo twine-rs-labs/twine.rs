@@ -626,6 +626,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	) {
 		this.dispatch = dispatch;
 		this.stories = stories;
+		for (const story of stories) {
+			this.sessionOwnedDocumentStories.add(story.id);
+		}
 		this.sessionId = options.sessionId ?? defaultCoreSessionId;
 		this.wasmClient = options.wasmClient ?? createWasmCoreWorkerClient();
 	}
@@ -694,9 +697,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 		const revision = this.wasmProjectRevision;
 		for (const story of stories) {
-			if (story.passages.length > sessionOwnedDocumentPassageThreshold) {
-				this.sessionOwnedDocumentStories.add(story.id);
-			}
+			this.sessionOwnedDocumentStories.add(story.id);
 		}
 		const snapshot = projectSnapshotFromStories(stories);
 		const assets = stories.flatMap(
@@ -897,6 +898,18 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		> = [];
 		for (const patch of batch.patches) {
 			if (
+				patch.type === 'passageCreated' &&
+				this.sessionOwnedDocumentStories.has(patch.story_id)
+			) {
+				documentUpdates.push({
+					passageId: patch.passage.id,
+					storyId: patch.story_id,
+					text: patch.passage.text,
+					type: 'passageText' as const
+				});
+				continue;
+			}
+			if (
 				patch.type === 'passageUpdated' &&
 				patch.changes.text !== null &&
 				this.sessionOwnedDocumentStories.has(patch.story_id)
@@ -908,27 +921,6 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					type: 'passageText' as const
 				});
 				continue;
-			}
-			if (
-				patch.type === 'storyScriptUpdated' &&
-				this.sessionOwnedDocumentStories.has(patch.story_id)
-			) {
-				documentUpdates.push({
-					storyId: patch.story_id,
-					text: patch.script,
-					type: 'script' as const
-				});
-				continue;
-			}
-			if (
-				patch.type === 'storyStylesheetUpdated' &&
-				this.sessionOwnedDocumentStories.has(patch.story_id)
-			) {
-				documentUpdates.push({
-					storyId: patch.story_id,
-					text: patch.stylesheet,
-					type: 'stylesheet' as const
-				});
 			}
 		}
 		const classifiedAt = performance.now();
@@ -1956,6 +1948,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 
 		this.dispatch = dispatch;
 		this.stories = stories;
+		for (const story of stories) {
+			this.sessionOwnedDocumentStories.add(story.id);
+		}
 	}
 }
 

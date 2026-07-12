@@ -13,7 +13,6 @@ import {
 import {useCoreProjectHost} from '../core/project-host';
 import type {CoreAssetInventoryEntry, CoreAssetsPage} from '../core';
 import type {CoreDocumentPage} from '../core';
-import {sessionOwnedDocumentPassageThreshold} from '../core';
 import {usePrefsContext} from './prefs';
 import {
 	formatWithNameAndVersion,
@@ -112,9 +111,6 @@ export function usePublishing(): UsePublishingProps {
 		async (storyId: string) => {
 			const story = storyWithId(stories, storyId);
 
-			if (story.passages.length <= sessionOwnedDocumentPassageThreshold) {
-				return story;
-			}
 			const passageText = new Map<string, string>();
 			let script = story.script;
 			let stylesheet = story.stylesheet;

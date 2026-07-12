@@ -264,17 +264,19 @@ describe('StoreCoreProjectHost asset commands', () => {
 			1
 		);
 		expect(apply).toHaveBeenCalledWith(command, 1);
-		expect(context.stories[0].passages[0].text).toBe('from-rust');
+		expect(context.stories[0].passages[0].text).not.toBe('from-rust');
 		expect(context.stories[0].passages[0].text).not.toBe('from-command');
 		expect(context.host.isDirty()).toBe(true);
 		expect(context.dispatch).toHaveBeenCalledWith(
 			expect.objectContaining({
-				actions: [
-					expect.objectContaining({
+				actions: [],
+				documentUpdates: [
+					{
 						passageId: 'start',
-						props: {text: 'from-rust'},
-						type: 'updatePassage'
-					})
+						storyId: context.story.id,
+						text: 'from-rust',
+						type: 'passageText'
+					}
 				],
 				type: 'applyCorePatchBatch'
 			}),
