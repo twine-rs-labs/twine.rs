@@ -51,15 +51,26 @@ async function saveNativeProjectFolder(
 		const useCompactIncrementalPayload =
 			documentUpdates.length > 0 &&
 			options.hints?.every(hint => hint.type !== 'full');
+		const includesPassageMetadata = options.hints?.some(
+			hint => hint.type === 'passageMetadata'
+		);
 		const saveStory = useCompactIncrementalPayload
 			? {
 					...story,
-					passages: passageDocumentUpdates.flatMap(update => {
-						const passage = story.passages.find(
-							candidate => candidate.id === update.passageId
-						);
-						return passage ? [{...passage, text: update.text}] : [];
-					})
+					passages: includesPassageMetadata
+						? story.passages.map(passage => ({
+								...passage,
+								text:
+									passageDocumentUpdates.find(
+										update => update.passageId === passage.id
+									)?.text ?? passage.text
+							}))
+						: passageDocumentUpdates.flatMap(update => {
+								const passage = story.passages.find(
+									candidate => candidate.id === update.passageId
+								);
+								return passage ? [{...passage, text: update.text}] : [];
+							})
 				}
 			: story;
 		const saveOptions = useCompactIncrementalPayload

@@ -158,6 +158,45 @@ describe('saveStory()', () => {
 		);
 	});
 
+	it('retains passage metadata for incremental manifest saves', async () => {
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		const renamed = {...story.passages[0], name: 'Renamed'};
+		story = {...story, passages: [renamed, ...story.passages.slice(1)]};
+
+		await saveStory(story, formatsState, {
+			documentUpdates: [
+				{
+					passageId: renamed.id,
+					storyId: story.id,
+					text: 'updated link',
+					type: 'passageText'
+				}
+			],
+			hints: [
+				{passageId: renamed.id, storyId: story.id, type: 'passageMetadata'},
+				{passageId: renamed.id, storyId: story.id, type: 'passageText'}
+			]
+		});
+
+		expect(saveProjectFolder).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			expect.objectContaining({
+				passages: expect.arrayContaining([
+					expect.objectContaining({
+						id: renamed.id,
+						name: 'Renamed',
+						text: 'updated link'
+					})
+				])
+			}),
+			expect.objectContaining({incrementalOnly: true})
+		);
+	});
+
 	it('surfaces native project save failures without falling back to legacy HTML', async () => {
 		saveProjectFolder.mockRejectedValue(new Error('Permission denied'));
 		saveProjectMetadata(story.id, {

@@ -98,6 +98,7 @@ export function replaceAllTextCommand(
 	query: string,
 	replacement: string,
 	options: {
+		includePassageNames?: boolean;
 		includePassageText?: boolean;
 		includeScript?: boolean;
 		includeStylesheet?: boolean;
@@ -109,7 +110,7 @@ export function replaceAllTextCommand(
 		query: {
 			cursor: null,
 			fuzzy: false,
-			includePassageNames: false,
+			includePassageNames: options.includePassageNames ?? false,
 			includePassageText: options.includePassageText ?? true,
 			includeScript: options.includeScript ?? true,
 			includeStylesheet: options.includeStylesheet ?? true,

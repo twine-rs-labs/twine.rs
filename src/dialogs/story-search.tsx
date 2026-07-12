@@ -12,7 +12,6 @@ import {
 	StorySearchFlags,
 	highlightPassages,
 	passageReplaceError,
-	replaceInStoryCommand,
 	selectPassage,
 	storyWithId,
 	useStoriesContext
@@ -180,12 +179,11 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 
 	function handleReplace() {
 		void coreProjectHost.applyStoryCommand(
-			flags.includePassageNames
-				? replaceInStoryCommand(story, find, replace, flags)
-				: replaceAllTextCommand(story.id, find, replace, {
-						matchCase: flags.matchCase,
-						useRegexes: flags.useRegexes
-					}),
+			replaceAllTextCommand(story.id, find, replace, {
+				includePassageNames: flags.includePassageNames,
+				matchCase: flags.matchCase,
+				useRegexes: flags.useRegexes
+			}),
 			'undoChange.replaceAllText'
 		);
 	}

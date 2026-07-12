@@ -4740,9 +4740,9 @@ impl ProjectSession {
                 "cannot replace an empty string".to_owned(),
             ));
         }
-        if query.fuzzy || query.include_passage_names {
+        if query.fuzzy {
             return Err(CoreError::UnsupportedCommand(
-                "replace-all text does not support fuzzy or passage-name replacement".to_owned(),
+                "replace-all text does not support fuzzy replacement".to_owned(),
             ));
         }
 
@@ -4775,6 +4775,42 @@ impl ProjectSession {
             .ok_or_else(|| CoreError::StoryNotFound(story_id.to_owned()))?
             .clone();
         let mut commands = Vec::new();
+
+        if query.include_passage_names {
+            let renamed = story
+                .passages
+                .iter()
+                .map(|passage| (passage.id.as_ref().to_owned(), replace(&passage.name)))
+                .collect::<Vec<_>>();
+            let mut names = BTreeSet::new();
+
+            for (_, name) in &renamed {
+                if name.trim().is_empty() {
+                    return Err(CoreError::UnsupportedCommand(
+                        "replacement would create an empty passage name".to_owned(),
+                    ));
+                }
+                if !names.insert(name.clone()) {
+                    return Err(CoreError::DuplicatePassageName(name.clone()));
+                }
+            }
+            for (passage_id, name) in renamed {
+                let passage = story
+                    .passages
+                    .iter()
+                    .find(|passage| passage.id.as_ref() == passage_id)
+                    .expect("replacement passage should exist");
+
+                if name != passage.name {
+                    commands.push(StoryCommand::RenamePassage {
+                        name,
+                        passage_id,
+                        story_id: story_id.to_owned(),
+                        update_references: true,
+                    });
+                }
+            }
+        }
 
         if query.include_passage_text {
             for passage in story.passages.iter() {
@@ -9440,6 +9476,48 @@ mod tests {
                 .expect("passage")
                 .text
                 .contains("$1")
+        );
+    }
+
+    #[test]
+    fn replace_all_renames_passages_and_updates_links_atomically() {
+        let mut session = session();
+        let batch = session
+            .apply(StoryCommand::ReplaceAllText {
+                query: CoreSearchQuery {
+                    include_passage_text: false,
+                    include_script: false,
+                    include_stylesheet: false,
+                    match_case: true,
+                    query: "Next".into(),
+                    replacement: Some("After".into()),
+                    ..CoreSearchQuery::default()
+                },
+                story_id: "story-1".into(),
+            })
+            .expect("passage-name replacement should apply");
+
+        assert_eq!(session.undo_stack.len(), 1);
+        assert_eq!(
+            session.project.stories[0]
+                .passages
+                .id_for_name("After")
+                .map(|id| id.as_ref()),
+            Some("b")
+        );
+        assert!(batch.patches.iter().any(|patch| matches!(
+            patch,
+            Patch::PassageUpdated { changes, passage_id, .. }
+                if passage_id == "b" && changes.name.as_deref() == Some("After")
+        )));
+        assert!(
+            session.project.stories[0]
+                .passages
+                .iter()
+                .next()
+                .expect("start passage")
+                .text
+                .contains("[[After]]")
         );
     }
 

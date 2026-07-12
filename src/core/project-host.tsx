@@ -365,12 +365,11 @@ function projectFolderSaveHintsForPatchBatch(batch: PatchBatch) {
 	for (const patch of batch.patches) {
 		switch (patch.type) {
 			case 'passageUpdated':
-				if (
-					patch.changes.text !== null &&
-					patch.changes.name === null &&
-					patch.changes.tags === null &&
-					patch.changes.layout === null
-				) {
+				if (patch.changes.layout !== null) {
+					addFull(patch.story_id, 'passage layout changed');
+					break;
+				}
+				if (patch.changes.text !== null) {
 					const existing = hints.get(patch.story_id);
 
 					if (existing?.type !== 'full') {
@@ -380,8 +379,13 @@ function projectFolderSaveHintsForPatchBatch(batch: PatchBatch) {
 							type: 'passageText'
 						});
 					}
-				} else {
-					addFull(patch.story_id, 'passage metadata or layout changed');
+				}
+				if (patch.changes.name !== null || patch.changes.tags !== null) {
+					hints.set(`${patch.story_id}:${patch.passage_id}:metadata`, {
+						passageId: patch.passage_id,
+						storyId: patch.story_id,
+						type: 'passageMetadata'
+					});
 				}
 				break;
 

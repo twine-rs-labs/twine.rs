@@ -9,6 +9,11 @@ export type ProjectFolderSaveHint =
 			type: 'script' | 'stylesheet';
 	  }
 	| {
+			passageId: string;
+			storyId: string;
+			type: 'passageMetadata';
+	  }
+	| {
 			reason: string;
 			storyId: string;
 			type: 'full';

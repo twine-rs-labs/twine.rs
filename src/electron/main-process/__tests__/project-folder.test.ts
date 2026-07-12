@@ -350,6 +350,83 @@ describe('project-folder native bridge', () => {
 		).toBe(false);
 	});
 
+	it('incrementally saves passage names without reallocating source paths', async () => {
+		const story = {
+			...fakeStory(1),
+			id: 'story-id',
+			name: 'Story',
+			passages: [
+				{
+					...fakeStory(1).passages[0],
+					id: 'passage-id',
+					name: 'Renamed',
+					text: ''
+				}
+			]
+		};
+		let manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'start_passage = "passage-id"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/001-start.twee"'
+		].join('\n');
+		const files = [
+			{
+				fingerprint: '1:0',
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 0
+			},
+			{
+				fingerprint: '1:0',
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'passages/story/001-start.twee',
+				sizeBytes: 0
+			}
+		];
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : ''
+		);
+		writeFileMock.mockImplementation(async (path, source) => {
+			if (String(path).includes('/twine.toml.')) {
+				manifestSource = String(source);
+			}
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockReturnValue(files);
+
+		await startProjectSession('/native/project.twine.rs', undefined, [
+			'story-id'
+		]);
+		await saveProjectFolder('/native/project.twine.rs', story, {
+			hints: [
+				{
+					passageId: 'passage-id',
+					storyId: 'story-id',
+					type: 'passageMetadata'
+				}
+			]
+		});
+
+		expect(manifestSource).toContain('name = "Renamed"');
+		expect(manifestSource).toContain(
+			'file = "passages/story/001-start.twee"'
+		);
+		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
+	});
+
 	it('opens a native project folder from renderer metadata', async () => {
 		const story = fakeStory(1);
 

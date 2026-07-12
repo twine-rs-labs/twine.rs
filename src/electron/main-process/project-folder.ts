@@ -3190,9 +3190,7 @@ function incrementalDocumentHints(
 	if (!hints?.length) {
 		return undefined;
 	}
-	if (
-		hints.some(hint => hint.storyId !== storyId || hint.type === 'full')
-	) {
+	if (hints.some(hint => hint.storyId !== storyId || hint.type === 'full')) {
 		return undefined;
 	}
 
@@ -3292,20 +3290,34 @@ async function writeProjectFolderIncremental(
 				: []
 		)
 	);
-	const touched = hints.map(hint => {
+	const touched: Array<
+		| {
+				absolutePath: string | undefined;
+				kind: NativeProjectFileKind;
+				projectPath: string;
+				text: string;
+		  }
+		| undefined
+	> = [];
+	for (const hint of hints) {
+		if (hint.type === 'passageMetadata') {
+			continue;
+		}
 		if (hint.type !== 'passageText') {
 			const projectPath = descriptorStory[hint.type]?.replace(/\\/g, '/');
 			const text = sourceTextUpdates.get(hint.type);
 
 			if (!projectPath || text === undefined) {
-				return undefined;
+				touched.push(undefined);
+				continue;
 			}
-			return {
+			touched.push({
 				absolutePath: safeProjectFilePath(rootPath, projectPath),
 				kind: hint.type,
 				projectPath,
 				text
-			};
+			});
+			continue;
 		}
 		const descriptorPassage = descriptorPassages.get(hint.passageId);
 		const storyPassage = story.passages.find(
@@ -3313,16 +3325,32 @@ async function writeProjectFolderIncremental(
 		);
 
 		if (!descriptorPassage?.file || !storyPassage) {
-			return undefined;
+			touched.push(undefined);
+			continue;
 		}
 
-		return {
+		touched.push({
 			absolutePath: safeProjectFilePath(rootPath, descriptorPassage.file),
 			kind: 'passage' as const,
 			projectPath: descriptorPassage.file.replace(/\\/g, '/'),
 			text: passageTextUpdates.get(hint.passageId) ?? storyPassage.text
-		};
-	});
+		});
+	}
+	if (hints.some(hint => hint.type === 'passageMetadata')) {
+		const passageFiles = story.passages.map(passage =>
+			descriptorPassages.get(passage.id)?.file?.replace(/\\/g, '/')
+		);
+
+		if (passageFiles.some(path => !path)) {
+			return undefined;
+		}
+		touched.push({
+			absolutePath: join(rootPath, 'twine.toml'),
+			kind: 'manifest',
+			projectPath: 'twine.toml',
+			text: projectToml(story, passageFiles as string[])
+		});
+	}
 
 	if (
 		touched.some(entry => !entry || !entry.absolutePath || !entry.projectPath)
@@ -3391,7 +3419,7 @@ async function writeProjectFolderIncremental(
 		scannedAt: new Date().toISOString(),
 		stories: replaceBaselineStory(session.baseline, story)
 	};
-	session.descriptor = descriptor;
+	session.descriptor = await readProjectDescriptor(rootPath);
 	session.generation++;
 	session.pending = undefined;
 	timings.baselinePatchUs = Math.round(
