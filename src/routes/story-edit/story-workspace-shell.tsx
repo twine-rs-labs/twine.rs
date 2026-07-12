@@ -22,7 +22,6 @@ import {
 	emptyStoryIndex,
 	insertAssetSnippetCommand,
 	loadDismissedDiagnosticIds,
-	sessionOwnedDocumentPassageThreshold,
 	useCoreProjectHost
 } from '../../core';
 import type {
@@ -91,7 +90,6 @@ export interface StoryWorkspaceShellProps {
 }
 
 type NavigatorTab = 'passages' | 'contents' | 'assets';
-const deferIndexPassageThreshold = sessionOwnedDocumentPassageThreshold;
 const passageNavigatorRowHeight = 30;
 
 function boundedWorkbenchSelection(
@@ -1319,26 +1317,18 @@ export const StoryWorkspaceShell: React.FC<
 						story.id,
 						result.stories
 					);
-					const metadataStories = result.stories.map(candidate =>
-						candidate.passages.length > deferIndexPassageThreshold
-							? {
-									...candidate,
-									passages: candidate.passages.map(passage => ({
-										...passage,
-										text: ''
-									})),
-									script: '',
-									stylesheet: ''
-								}
-							: candidate
-					);
+					const metadataStories = result.stories.map(candidate => ({
+						...candidate,
+						passages: candidate.passages.map(passage => ({
+							...passage,
+							text: ''
+						}))
+					}));
 					const mergeStarted = performance.now();
 					const hydratedStories = mergeProjectStories(
 						storiesRef.current,
 						metadataStories,
-						{
-							preserveExistingText: true
-						}
+						{preserveExistingText: false}
 					);
 					recordPerformanceHarnessEvent('renderer-project-hydration-merged', {
 						durationMs: performance.now() - mergeStarted,

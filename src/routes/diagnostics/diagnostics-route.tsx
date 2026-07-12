@@ -619,7 +619,7 @@ export const DiagnosticsRoute: React.FC = () => {
 						</div>
 						<div className="diagnostics-route__code">
 							{selectedPassage
-								? selectedPassage.text || selectedPassage.name
+								? selectedPassage.name
 								: selectedItem.core.sourceId}
 						</div>
 						<div className="diagnostics-route__section-title">Proposed Fix</div>

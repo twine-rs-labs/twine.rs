@@ -1013,7 +1013,7 @@ export const AssetsRoute: React.FC = () => {
 		);
 	}
 
-	function insertSnippet(asset: AssetManagerViewModelEntry) {
+	async function insertSnippet(asset: AssetManagerViewModelEntry) {
 		if (!story) {
 			return;
 		}
@@ -1024,12 +1024,17 @@ export const AssetsRoute: React.FC = () => {
 			return;
 		}
 
-		coreProjectHost.applyStoryCommand(
+		const facts = await coreProjectHost.queryPassageFactsAsync(
+			story.id,
+			target.id
+		);
+
+		await coreProjectHost.applyStoryCommand(
 			insertAssetSnippetCommand(
 				story.id,
 				asset.path,
 				target.id,
-				target.text.length,
+				facts.characterCount,
 				{
 					passageId: target.id,
 					snippet: asset.snippet.text

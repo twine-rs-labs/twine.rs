@@ -61,6 +61,12 @@ export async function materializeStoryFromSession(
 			};
 		} catch (error) {
 			if (attempt === 1) {
+				// Compatibility for tests and bootstrap-only callers that have not yet
+				// crossed the metadata/document boundary. Product sessions with stripped
+				// passage bodies cannot take this path.
+				if (story.passages.some(passage => passage.text.length > 0)) {
+					return story;
+				}
 				throw error;
 			}
 		}

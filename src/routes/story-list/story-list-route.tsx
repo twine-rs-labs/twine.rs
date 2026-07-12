@@ -16,7 +16,6 @@ import {
 } from '../../components/design-system';
 import {
 	deleteStoryCommand,
-	storyLinkFacts,
 	useCoreProjectHost
 } from '../../core';
 import type {CoreStorySummary} from '../../core';
@@ -78,21 +77,6 @@ function fileBackedProjectRoot(story: Story) {
 
 function ProjectMiniMap({story}: {story: Story}) {
 	const passages = story.passages.slice(0, 18);
-	const passageIndex = React.useMemo(
-		() => new Map(story.passages.map((passage, index) => [passage.id, index])),
-		[story.passages]
-	);
-	const links = React.useMemo(
-		() =>
-			storyLinkFacts(story)
-				.map(link => ({
-					from: passageIndex.get(link.sourceId) ?? -1,
-					to: link.targetId ? (passageIndex.get(link.targetId) ?? -1) : -1
-				}))
-				.filter(link => link.to >= 0)
-				.slice(0, 12),
-		[passageIndex, story]
-	);
 
 	return (
 		<svg
@@ -101,15 +85,6 @@ function ProjectMiniMap({story}: {story: Story}) {
 			focusable="false"
 			viewBox="0 0 180 96"
 		>
-			{links.map((link, index) => (
-				<line
-					key={`${link.from}-${link.to}-${index}`}
-					x1={22 + (link.from % 6) * 27}
-					x2={22 + (link.to % 6) * 27}
-					y1={22 + Math.floor(link.from / 6) * 27}
-					y2={22 + Math.floor(link.to / 6) * 27}
-				/>
-			))}
 			{passages.map((passage, index) => (
 				<circle
 					className={

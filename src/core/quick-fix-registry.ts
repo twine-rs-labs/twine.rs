@@ -3,7 +3,7 @@ import type {CoreQuickFix} from './bindings/CoreQuickFix';
 import type {StoryCommand} from './bindings/StoryCommand';
 import {createPassageCommand, updatePassageTextCommand} from './index';
 import type {CoreProjectHost} from './project-host';
-import type {Passage, Story} from '../store/stories';
+import type {Story} from '../store/stories';
 
 export interface RegisteredQuickFixAction {
 	apply: () => void;
@@ -26,10 +26,10 @@ function startPassage(story: Story) {
 	return story.passages.find(passage => passage.id === story.startPassage);
 }
 
-function linkTextToPassage(start: Passage, target: Passage) {
-	const separator = start.text.trim() === '' ? '' : '\n';
+function linkTextToPassage(text: string, targetName: string) {
+	const separator = text.trim() === '' ? '' : '\n';
 
-	return `${start.text}${separator}[[${target.name}]]`;
+	return `${text}${separator}[[${targetName}]]`;
 }
 
 function createPassageQuickFix(
@@ -77,24 +77,25 @@ function linkFromStartQuickFix(
 	const start = startPassage(story);
 	const target = linkedPassage(story, diagnostic);
 	const enabled = !!start && !!target && start.id !== target.id;
-	const storyCommand =
-		enabled && start && target
-			? updatePassageTextCommand(
-					story.id,
-					start.id,
-					linkTextToPassage(start, target)
-				)
-			: undefined;
 
 	return {
 		apply: () => {
-			if (storyCommand) {
-				host.applyStoryCommand(storyCommand);
+			if (enabled && start && target) {
+				void host
+					.queryPassageDocumentAsync(story.id, start.id)
+					.then(document =>
+						host.applyStoryCommand(
+							updatePassageTextCommand(
+								story.id,
+								start.id,
+								linkTextToPassage(document.text, target.name)
+							)
+						)
+					);
 			}
 		},
 		command: quickFix.command,
 		enabled,
-		storyCommand,
 		title: quickFix.title
 	};
 }

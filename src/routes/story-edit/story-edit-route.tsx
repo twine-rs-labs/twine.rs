@@ -24,6 +24,7 @@ import {useInitialPassageCreation} from './use-initial-passage-creation';
 import {usePassageChangeHandlers} from './use-passage-change-handlers';
 import {useViewCenter} from './use-view-center';
 import {StoryWorkspaceShell} from './story-workspace-shell';
+import {useCoreProjectHost} from '../../core';
 import {
 	useStoryEditScrollMemory,
 	useStoryEditWorkspace
@@ -52,7 +53,7 @@ function sourceTextForTarget(story: Story, target: SourceNavigationTarget) {
 		return story.stylesheet;
 	}
 
-	return story.passages.find(passage => passage.id === target.passageId)?.text;
+	return undefined;
 }
 
 function sourcePositionForQuery(
@@ -66,6 +67,15 @@ function sourcePositionForQuery(
 	if (sourceText === undefined) {
 		return undefined;
 	}
+
+	return sourcePositionForText(sourceText, offsetValue, lineValue);
+}
+
+function sourcePositionForText(
+	sourceText: string,
+	offsetValue: string | null,
+	lineValue: string | null
+) {
 
 	const offset = parsedInteger(offsetValue, 0);
 
@@ -98,6 +108,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 	const location = useLocation();
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {dispatch} = useStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const {testStory} = useStoryLaunch();
 	const [fuzzyFinderOpen, setFuzzyFinderOpen] = React.useState(false);
 	const [graphRevealRequest, setGraphRevealRequest] = React.useState({
@@ -305,13 +316,17 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 						passage => passage.id === resolvedTarget.passageId
 					)
 				: undefined;
+		const offsetValue = search.get('offset');
+		const lineValue = search.get('line');
 		const revealPosition = resolvedTarget
-			? sourcePositionForQuery(
-					story,
-					resolvedTarget,
-					search.get('offset'),
-					search.get('line')
-				)
+			? resolvedTarget.kind === 'passage'
+				? parsedInteger(offsetValue, 0)
+				: sourcePositionForQuery(
+						story,
+						resolvedTarget,
+						offsetValue,
+						lineValue
+					)
 			: undefined;
 
 		handledRevealQuery.current = location.search;
@@ -349,6 +364,32 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 					});
 					return next;
 				});
+			} else if (
+				resolvedTarget?.kind === 'passage' &&
+				lineValue !== null
+			) {
+				void coreProjectHost
+					.queryPassageDocumentAsync(story.id, resolvedTarget.passageId)
+					.then(document => {
+						const position = sourcePositionForText(
+							document.text,
+							null,
+							lineValue
+						);
+
+						if (position !== undefined) {
+							setRevealRequests(current => {
+								const next = new Map(current);
+								const previous = current.get(windowId);
+
+								next.set(windowId, {
+									key: (previous?.key ?? 0) + 1,
+									position
+								});
+								return next;
+							});
+						}
+					});
 			}
 
 			if (query) {
@@ -383,6 +424,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 			});
 		}
 	}, [
+		coreProjectHost,
 		dialogsDispatch,
 		handleChoosePassage,
 		location.search,

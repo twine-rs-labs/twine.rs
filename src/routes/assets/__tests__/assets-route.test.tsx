@@ -308,17 +308,23 @@ describe('<AssetsRoute>', () => {
 	});
 
 	it('inserts the selected asset snippet through the core host', async () => {
-		const {result} = renderComponent();
+		const apply = jest.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand');
+
+		renderComponent();
 
 		await openAssetsFolder();
 		fireEvent.click(assetCard('assets/cover.png'));
 		fireEvent.click(screen.getByRole('button', {name: 'Insert into Passage'}));
 
 		await waitFor(() =>
-			expect(
-				result.container.querySelector('[data-id="start"]')
-			).toHaveTextContent('<img src="assets/cover.png" alt="">')
+			expect(apply).toHaveBeenCalledWith(
+				expect.objectContaining({
+					passage_id: 'start',
+					type: 'insertAssetSnippet'
+				})
+			)
 		);
+		apply.mockRestore();
 	});
 
 	it('tests the first passage that references the selected asset', async () => {
@@ -487,6 +493,7 @@ describe('<AssetsRoute>', () => {
 	});
 
 	it('renames native asset files before updating story references', async () => {
+		const apply = jest.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand');
 		const {story} = assetStory();
 		const projectSessionSnapshot = jest
 			.fn()
@@ -509,7 +516,7 @@ describe('<AssetsRoute>', () => {
 			renameProjectAsset
 		};
 
-		const result = render(
+		render(
 			<FakeStateProvider stories={[story]}>
 				<MemoryRouter initialEntries={[`/stories/${story.id}/assets`]}>
 					<Route path="/stories/:storyId/assets">
@@ -538,8 +545,16 @@ describe('<AssetsRoute>', () => {
 				'assets/hero.png'
 			)
 		);
-		expect(
-			result.container.querySelector('[data-id="start"]')
-		).toHaveTextContent('assets/hero.png');
+		await waitFor(() =>
+			expect(apply).toHaveBeenCalledWith(
+				expect.objectContaining({
+					new_path: 'assets/hero.png',
+					path: 'assets/cover.png',
+					type: 'renameAsset'
+				}),
+				expect.anything()
+			)
+		);
+		apply.mockRestore();
 	});
 });

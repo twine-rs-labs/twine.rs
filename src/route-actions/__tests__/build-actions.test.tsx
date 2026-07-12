@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {storyFileName} from '../../electron/shared';
@@ -115,12 +115,14 @@ describe('<BuildActions>', () => {
 			expect(await screen.findByText('mock-publish-error')).toBeInTheDocument();
 		});
 
-		it('displays a button to export the story as Twee', () => {
+		it('displays a button to export the story as Twee', async () => {
 			expect(saveTweeMock).not.toHaveBeenCalled();
 			fireEvent.click(button('routeActions.build.exportAsTwee'));
-			expect(saveTweeMock.mock.calls).toEqual([
-				[storyToTwee(story), storyFileName(story, '.twee')]
-			]);
+			await waitFor(() =>
+				expect(saveTweeMock.mock.calls).toEqual([
+					[storyToTwee(story), storyFileName(story, '.twee')]
+				])
+			);
 		});
 	});
 

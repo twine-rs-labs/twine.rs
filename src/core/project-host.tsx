@@ -66,7 +66,6 @@ import {
 
 export type StoryIndexQuery = string | Partial<CoreStoryIndexOptions>;
 const defaultCoreSessionId = 'library';
-export const sessionOwnedDocumentPassageThreshold = 500;
 
 export type CoreProjectPatchListener = (patches: PatchBatch) => void;
 export interface CoreCommandHistoryOptions {

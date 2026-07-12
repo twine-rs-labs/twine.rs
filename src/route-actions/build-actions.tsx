@@ -2,6 +2,7 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next/';
 import {Badge, Button} from '../components/design-system';
 import {storyFileName} from '../electron/shared';
+import {materializeStoryFromSession, useCoreProjectHost} from '../core';
 import {Story} from '../store/stories';
 import {usePublishing} from '../store/use-publishing';
 import {useStoryLaunch} from '../store/use-story-launch';
@@ -15,6 +16,7 @@ export interface BuildActionsProps {
 type BusyAction = 'test' | 'play' | 'proof' | 'publish' | 'twee';
 
 export const BuildActions: React.FC<BuildActionsProps> = ({story}) => {
+	const coreProjectHost = useCoreProjectHost();
 	const {publishStory} = usePublishing();
 	const {playStory, proofStory, testStory} = useStoryLaunch();
 	const {t} = useTranslation();
@@ -94,10 +96,18 @@ export const BuildActions: React.FC<BuildActionsProps> = ({story}) => {
 				disabled={!story}
 				icon="file-code"
 				loading={busyAction === 'twee'}
-				onClick={() =>
-					run('twee', () => {
+					onClick={() =>
+					run('twee', async () => {
 						if (story) {
-							saveTwee(storyToTwee(story), storyFileName(story, '.twee'));
+							const completeStory = await materializeStoryFromSession(
+								coreProjectHost,
+								story
+							);
+
+							saveTwee(
+								storyToTwee(completeStory),
+								storyFileName(story, '.twee')
+							);
 						}
 					})
 				}

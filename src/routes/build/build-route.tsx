@@ -13,6 +13,7 @@ import {
 	diagnosticDismissalsChangedEvent,
 	diagnosticIdentity,
 	loadDismissedDiagnosticIds,
+	materializeStoryFromSession,
 	useCoreProjectHost
 } from '../../core';
 import type {CoreStoryIndex} from '../../core';
@@ -387,10 +388,30 @@ export const BuildRoute: React.FC = () => {
 	const [logs, setLogs] = React.useState<BuildLogEntry[]>([]);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
 	const [storyIndex, setStoryIndex] = React.useState<CoreStoryIndex>();
+	const [inspectionStory, setInspectionStory] = React.useState<Story>();
 	const dismissedDiagnosticIds = React.useMemo(
 		() => (story ? loadDismissedDiagnosticIds(story.id) : new Set<string>()),
 		[dismissalsVersion, story]
 	);
+
+	React.useEffect(() => {
+		let active = true;
+
+		if (!inspectOpen || inspectTab !== 'source' || !story) {
+			setInspectionStory(undefined);
+			return () => {
+				active = false;
+			};
+		}
+
+		void materializeStoryFromSession(coreProjectHost, story)
+			.then(completeStory => active && setInspectionStory(completeStory))
+			.catch(error => active && setError((error as Error).message));
+
+		return () => {
+			active = false;
+		};
+	}, [coreProjectHost, inspectOpen, inspectTab, story]);
 
 	const activeDefinition = exportDefinition(exportFormat);
 	const activeTarget = targetForExport(exportFormat);
@@ -891,8 +912,11 @@ export const BuildRoute: React.FC = () => {
 			: visibleNotes;
 
 	const sourceInspectionText = React.useMemo(
-		() => (inspectOpen && story ? sourceInspection(story, storyIndex) : ''),
-		[inspectOpen, story, storyIndex]
+		() =>
+			inspectOpen && inspectionStory
+				? sourceInspection(inspectionStory, storyIndex)
+				: 'Loading story documents…',
+		[inspectOpen, inspectionStory, storyIndex]
 	);
 	const htmlInspectionText = React.useMemo(
 		() => (inspectOpen ? htmlInspection(build) : ''),
