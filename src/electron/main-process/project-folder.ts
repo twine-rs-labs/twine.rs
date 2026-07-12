@@ -3115,6 +3115,11 @@ export async function saveProjectFolder(
 		story,
 		options
 	);
+	if (!incrementalProject && options.incrementalOnly) {
+		throw new Error(
+			'Incremental document save could not be represented safely.'
+		);
+	}
 	const writtenProject =
 		incrementalProject ?? (await writeProjectFolder(rootPath, story));
 
@@ -3150,7 +3155,9 @@ export async function saveProjectFolder(
 		storyIds: [story.id]
 	};
 
-	rememberProjectFolder(result);
+	if (!options.incrementalOnly) {
+		rememberProjectFolder(result);
+	}
 	return result;
 }
 

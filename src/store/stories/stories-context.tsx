@@ -35,7 +35,9 @@ export const StoriesContextProvider: React.FC = props => {
 	const persistedReducer: React.Reducer<StoriesState, StoriesAction> =
 		React.useMemo(
 			() => (state, action) => {
+				const reducerStarted = performance.now();
 				const newState = reducer(state, action);
+				const reducedAt = performance.now();
 
 				try {
 					const persistence = storiesPersistence.saveMiddleware(
@@ -43,6 +45,12 @@ export const StoriesContextProvider: React.FC = props => {
 						action,
 						formats
 					);
+					recordPerformanceHarnessEvent('stories-dispatch-stages', {
+						action: action.type,
+						persistenceSetupMs: performance.now() - reducedAt,
+						reducerMs: reducedAt - reducerStarted,
+						totalMs: performance.now() - reducerStarted
+					});
 
 					if (typeof persistence === 'object') {
 						void persistence.completion

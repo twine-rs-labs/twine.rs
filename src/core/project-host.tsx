@@ -848,6 +848,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		status?: CoreSessionStatus,
 		externalDeltaId?: string
 	) {
+		const patchStarted = performance.now();
 		const persistenceHints = projectFolderSaveHintsForPatchBatch(batch);
 		const storyActions = projectPatchBatchStoryActions(batch, {
 			sessionOwnedDocumentsForStory: storyId =>
@@ -899,6 +900,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				});
 			}
 		}
+		const classifiedAt = performance.now();
 
 		this.wasmProjectRevision = nextRevision;
 		this.wasmProjectReplaceRevision = nextRevision;
@@ -939,6 +941,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			},
 			storyActions
 		);
+		const dispatchedAt = performance.now();
 
 		if (externalDeltaId) {
 			recordPerformanceHarnessEvent('external-delta-patch-applied', {
@@ -949,6 +952,17 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			});
 		}
 		this.publishPatchBatch(batch);
+		const publishedAt = performance.now();
+		recordPerformanceHarnessEvent('renderer-patch-stages', {
+			classificationMs: classifiedAt - patchStarted,
+			dispatchMs: dispatchedAt - classifiedAt,
+			documentUpdates: documentUpdates.length,
+			patchCount: batch.patches.length,
+			publishMs: publishedAt - dispatchedAt,
+			revision: nextRevision,
+			storyActions: storyActions.length,
+			totalMs: publishedAt - patchStarted
+		});
 		if (status) {
 			this.publishStatus(status);
 		}

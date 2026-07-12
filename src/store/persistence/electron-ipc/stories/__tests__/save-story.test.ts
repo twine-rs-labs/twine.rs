@@ -106,6 +106,37 @@ describe('saveStory()', () => {
 		expect(saveStoryHtml).not.toHaveBeenCalled();
 	});
 
+	it('sends only touched passages for session-owned incremental saves', async () => {
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		const passage = story.passages[0];
+
+		await saveStory(story, formatsState, {
+			documentUpdates: [
+				{
+					passageId: passage.id,
+					storyId: story.id,
+					text: 'session text',
+					type: 'passageText'
+				}
+			],
+			hints: [{passageId: passage.id, storyId: story.id, type: 'passageText'}]
+		});
+
+		expect(saveProjectFolder).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			expect.objectContaining({
+				passages: [
+					expect.objectContaining({id: passage.id, text: 'session text'})
+				]
+			}),
+			expect.objectContaining({incrementalOnly: true})
+		);
+	});
+
 	it('surfaces native project save failures without falling back to legacy HTML', async () => {
 		saveProjectFolder.mockRejectedValue(new Error('Permission denied'));
 		saveProjectMetadata(story.id, {

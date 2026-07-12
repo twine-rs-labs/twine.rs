@@ -1913,7 +1913,8 @@ async function measureWatcher(page: Page, projectPath: string) {
 				readModel.parsedSourceCount ===
 					(previousReadModel?.parsedSourceCount ?? 0) + 1 &&
 				readModel.readModelIncrementalUpdateCount ===
-					(previousReadModel?.readModelIncrementalUpdateCount ?? 0) + 1,
+					(previousReadModel?.readModelIncrementalUpdateCount ?? 0) +
+						((previousReadModel?.readModelFullBuildCount ?? 0) > 0 ? 1 : 0),
 			JSON.stringify({previousReadModel, readModel})
 		);
 		previousReadModel = readModel;

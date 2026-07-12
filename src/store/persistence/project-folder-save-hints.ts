@@ -22,6 +22,7 @@ export type ProjectFolderDocumentUpdate =
 export interface ProjectFolderSaveOptions {
 	documentUpdates?: ProjectFolderDocumentUpdate[];
 	hints?: ProjectFolderSaveHint[];
+	incrementalOnly?: boolean;
 	revision?: number;
 	sessionId?: string;
 }

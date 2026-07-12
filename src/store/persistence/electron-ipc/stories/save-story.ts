@@ -9,7 +9,10 @@ import {getAppInfo} from '../../../../util/app-info';
 import {fetchStoryFormatProperties} from '../../../../util/story-format/fetch-properties';
 import {loadProjectMetadata} from '../../../project-metadata';
 import {recordPerformanceHarnessEvent} from '../../../../util/performance';
-import type {ProjectFolderSaveOptions} from '../../project-folder-save-hints';
+import type {
+	ProjectFolderDocumentUpdate,
+	ProjectFolderSaveOptions
+} from '../../project-folder-save-hints';
 
 async function saveNativeProjectFolder(
 	twineElectron: NonNullable<TwineElectronWindow['twineElectron']>,
@@ -36,17 +39,46 @@ async function saveNativeProjectFolder(
 			rootPath: projectMetadata.rootPath,
 			storyId: story.id
 		});
+		const passageDocumentUpdates = (options.documentUpdates ?? []).filter(
+			(
+				update
+			): update is Extract<
+				ProjectFolderDocumentUpdate,
+				{type: 'passageText'}
+			> => update.type === 'passageText'
+		);
+		const useCompactIncrementalPayload =
+			passageDocumentUpdates.length > 0 &&
+			passageDocumentUpdates.length === options.documentUpdates?.length &&
+			options.hints?.every(hint => hint.type === 'passageText');
+		const saveStory = useCompactIncrementalPayload
+			? {
+					...story,
+					passages: passageDocumentUpdates.flatMap(update => {
+						const passage = story.passages.find(
+							candidate => candidate.id === update.passageId
+						);
+						return passage ? [{...passage, text: update.text}] : [];
+					})
+				}
+			: story;
+		const saveOptions = useCompactIncrementalPayload
+			? {...options, incrementalOnly: true}
+			: options;
 		const hasOptions =
-			!!options.hints?.length ||
-			options.revision !== undefined ||
-			options.sessionId !== undefined;
+			!!saveOptions.hints?.length ||
+			saveOptions.revision !== undefined ||
+			saveOptions.sessionId !== undefined;
 		const result = hasOptions
 			? await twineElectron.saveProjectFolder(
 					projectMetadata.rootPath,
-					story,
-					options
+					saveStory,
+					saveOptions
 				)
-			: await twineElectron.saveProjectFolder(projectMetadata.rootPath, story);
+			: await twineElectron.saveProjectFolder(
+					projectMetadata.rootPath,
+					saveStory
+				);
 		recordPerformanceHarnessEvent('save-native-call-completed', {
 			rootPath: projectMetadata.rootPath,
 			storyId: story.id
