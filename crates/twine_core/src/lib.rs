@@ -1449,6 +1449,10 @@ pub enum StoryCommand {
         source_path: String,
         story_id: String,
     },
+    ReplaceAllText {
+        query: CoreSearchQuery,
+        story_id: String,
+    },
     ReplaceStory {
         story: StorySnapshot,
         story_id: String,
@@ -1542,6 +1546,7 @@ impl StoryCommand {
             Self::RenameStory { .. } => "Rename Story",
             Self::RenameStoryTag { .. } => "Rename Story Tag",
             Self::ReplaceAsset { .. } => "Replace Asset",
+            Self::ReplaceAllText { .. } => "Replace All Text",
             Self::ReplaceStory { .. } => "Replace Story",
             Self::RestorePassages { .. } => "Restore Passages",
             Self::RevealAsset { .. } => "Reveal Asset",
@@ -1602,6 +1607,7 @@ impl StoryCommand {
                 CoreHistoryKind::RenameTag
             }
             Self::ReplaceAsset { .. } => CoreHistoryKind::ReplaceAsset,
+            Self::ReplaceAllText { .. } => CoreHistoryKind::EditPassage,
             Self::ReplaceStory { .. } => CoreHistoryKind::StoryDetails,
             Self::SaveGeneratedLayout { .. } => CoreHistoryKind::SaveLayout,
             Self::SetStartPassage { .. } => CoreHistoryKind::SetStartPassage,
@@ -4724,6 +4730,89 @@ impl ProjectSession {
         self.update_read_model_cache(delta);
     }
 
+    fn replace_all_text(
+        &mut self,
+        story_id: &str,
+        query: CoreSearchQuery,
+    ) -> Result<Vec<Patch>, CoreError> {
+        if query.query.is_empty() {
+            return Err(CoreError::UnsupportedCommand(
+                "cannot replace an empty string".to_owned(),
+            ));
+        }
+        if query.fuzzy || query.include_passage_names {
+            return Err(CoreError::UnsupportedCommand(
+                "replace-all text does not support fuzzy or passage-name replacement".to_owned(),
+            ));
+        }
+
+        let pattern = if query.use_regexes {
+            query.query.clone()
+        } else {
+            regex::escape(&query.query)
+        };
+        let pattern = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(!query.match_case)
+            .build()
+            .map_err(|error| CoreError::UnsupportedCommand(error.to_string()))?;
+        let replacement = query.replacement.unwrap_or_default();
+        let replace = |source: &str| {
+            if query.use_regexes {
+                pattern
+                    .replace_all(source, replacement.as_str())
+                    .into_owned()
+            } else {
+                pattern
+                    .replace_all(source, |_: &regex::Captures<'_>| replacement.as_str())
+                    .into_owned()
+            }
+        };
+        let story = self
+            .project
+            .stories
+            .iter()
+            .find(|story| story.id.as_ref() == story_id)
+            .ok_or_else(|| CoreError::StoryNotFound(story_id.to_owned()))?
+            .clone();
+        let mut commands = Vec::new();
+
+        if query.include_passage_text {
+            for passage in story.passages.iter() {
+                let text = replace(&passage.text);
+
+                if text != passage.text {
+                    commands.push(StoryCommand::UpdatePassageText {
+                        passage_id: passage.id.as_ref().to_owned(),
+                        story_id: story_id.to_owned(),
+                        text,
+                    });
+                }
+            }
+        }
+        if query.include_script {
+            let script = replace(&story.script);
+
+            if script != story.script {
+                commands.push(StoryCommand::UpdateStoryScript {
+                    script,
+                    story_id: story_id.to_owned(),
+                });
+            }
+        }
+        if query.include_stylesheet {
+            let stylesheet = replace(&story.stylesheet);
+
+            if stylesheet != story.stylesheet {
+                commands.push(StoryCommand::UpdateStoryStylesheet {
+                    story_id: story_id.to_owned(),
+                    stylesheet,
+                });
+            }
+        }
+
+        self.apply_without_transaction(StoryCommand::Batch { commands })
+    }
+
     fn apply_without_transaction(
         &mut self,
         command: StoryCommand,
@@ -4823,6 +4912,9 @@ impl ProjectSession {
                 source_path,
                 story_id,
             } => self.replace_asset(&story_id, &path, &source_path),
+            StoryCommand::ReplaceAllText { query, story_id } => {
+                self.replace_all_text(&story_id, query)
+            }
             StoryCommand::ReplaceStory { story, story_id } => self.replace_story(&story_id, story),
             StoryCommand::RevealAsset { path, story_id } => self.reveal_asset(&story_id, &path),
             StoryCommand::RestorePassages { story_id, passages } => {
@@ -9281,6 +9373,74 @@ mod tests {
             stories: vec![story],
             ..Project::default()
         })
+    }
+
+    #[test]
+    fn replace_all_text_is_one_incremental_session_transaction() {
+        let mut session = session();
+        session.project.stories[0].script = "const target = 'Next';".into();
+        session.project.stories[0].stylesheet = ".Next { color: red; }".into();
+
+        let batch = session
+            .apply(StoryCommand::ReplaceAllText {
+                query: CoreSearchQuery {
+                    include_passage_names: false,
+                    match_case: true,
+                    query: "Next".into(),
+                    replacement: Some("After".into()),
+                    ..CoreSearchQuery::default()
+                },
+                story_id: "story-1".into(),
+            })
+            .expect("replace-all should apply");
+
+        assert_eq!(session.undo_stack.len(), 1);
+        assert!(batch.patches.iter().any(|patch| matches!(
+            patch,
+            Patch::PassageUpdated { changes, .. }
+                if changes.text.as_deref().is_some_and(|text| text.contains("After"))
+        )));
+        assert!(batch
+            .patches
+            .iter()
+            .any(|patch| matches!(patch, Patch::StoryScriptUpdated { script, .. } if script.contains("After"))));
+        assert!(batch.patches.iter().any(
+            |patch| matches!(patch, Patch::StoryStylesheetUpdated { stylesheet, .. } if stylesheet.contains("After"))
+        ));
+
+        session
+            .undo()
+            .expect("replace-all should undo as one entry");
+        assert!(session.project.stories[0].script.contains("Next"));
+        assert!(session.project.stories[0].stylesheet.contains("Next"));
+    }
+
+    #[test]
+    fn literal_replace_all_treats_dollar_signs_literally() {
+        let mut session = session();
+        session
+            .apply(StoryCommand::ReplaceAllText {
+                query: CoreSearchQuery {
+                    include_passage_names: false,
+                    include_script: false,
+                    include_stylesheet: false,
+                    query: "Next".into(),
+                    replacement: Some("$1".into()),
+                    ..CoreSearchQuery::default()
+                },
+                story_id: "story-1".into(),
+            })
+            .expect("literal replacement should apply");
+
+        assert!(
+            session.project.stories[0]
+                .passages
+                .iter()
+                .next()
+                .expect("passage")
+                .text
+                .contains("$1")
+        );
     }
 
     #[test]

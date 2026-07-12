@@ -391,10 +391,24 @@ function projectFolderSaveHintsForPatchBatch(batch: PatchBatch) {
 			case 'storyCreated':
 			case 'storyDeleted':
 			case 'storyMetadataUpdated':
-			case 'storyScriptUpdated':
-			case 'storyStylesheetUpdated':
 			case 'projectSnapshotReplaced':
 				addFull('story_id' in patch ? patch.story_id : undefined, patch.type);
+				break;
+			case 'storyScriptUpdated':
+				if (hints.get(patch.story_id)?.type !== 'full') {
+					hints.set(`${patch.story_id}:script`, {
+						storyId: patch.story_id,
+						type: 'script'
+					});
+				}
+				break;
+			case 'storyStylesheetUpdated':
+				if (hints.get(patch.story_id)?.type !== 'full') {
+					hints.set(`${patch.story_id}:stylesheet`, {
+						storyId: patch.story_id,
+						type: 'stylesheet'
+					});
+				}
 				break;
 		}
 	}

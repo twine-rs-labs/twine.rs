@@ -3183,7 +3183,7 @@ function emptySaveTimings(
 	};
 }
 
-function passageTextHints(
+function incrementalDocumentHints(
 	hints: ProjectFolderSaveHint[] | undefined,
 	storyId: string
 ) {
@@ -3191,15 +3191,12 @@ function passageTextHints(
 		return undefined;
 	}
 	if (
-		hints.some(hint => hint.storyId !== storyId || hint.type !== 'passageText')
+		hints.some(hint => hint.storyId !== storyId || hint.type === 'full')
 	) {
 		return undefined;
 	}
 
-	return hints.filter(
-		(hint): hint is Extract<ProjectFolderSaveHint, {type: 'passageText'}> =>
-			hint.type === 'passageText'
-	);
+	return hints as Array<Exclude<ProjectFolderSaveHint, {type: 'full'}>>;
 }
 
 async function atomicWriteText(path: string, text: string) {
@@ -3257,7 +3254,7 @@ async function writeProjectFolderIncremental(
 ): Promise<NativeProjectFolderResult | undefined> {
 	const totalStarted = performance.now();
 	const timings = emptySaveTimings('incremental');
-	const hints = passageTextHints(options.hints, story.id);
+	const hints = incrementalDocumentHints(options.hints, story.id);
 
 	if (!hints?.length) {
 		return undefined;
@@ -3288,7 +3285,28 @@ async function writeProjectFolderIncremental(
 				: []
 		)
 	);
+	const sourceTextUpdates = new Map(
+		(options.documentUpdates ?? []).flatMap(update =>
+			update.type !== 'passageText' && update.storyId === story.id
+				? [[update.type, update.text] as const]
+				: []
+		)
+	);
 	const touched = hints.map(hint => {
+		if (hint.type !== 'passageText') {
+			const projectPath = descriptorStory[hint.type]?.replace(/\\/g, '/');
+			const text = sourceTextUpdates.get(hint.type);
+
+			if (!projectPath || text === undefined) {
+				return undefined;
+			}
+			return {
+				absolutePath: safeProjectFilePath(rootPath, projectPath),
+				kind: hint.type,
+				projectPath,
+				text
+			};
+		}
 		const descriptorPassage = descriptorPassages.get(hint.passageId);
 		const storyPassage = story.passages.find(
 			passage => passage.id === hint.passageId
@@ -3300,11 +3318,9 @@ async function writeProjectFolderIncremental(
 
 		return {
 			absolutePath: safeProjectFilePath(rootPath, descriptorPassage.file),
-			passage: {
-				...storyPassage,
-				text: passageTextUpdates.get(hint.passageId) ?? storyPassage.text
-			},
-			projectPath: descriptorPassage.file.replace(/\\/g, '/')
+			kind: 'passage' as const,
+			projectPath: descriptorPassage.file.replace(/\\/g, '/'),
+			text: passageTextUpdates.get(hint.passageId) ?? storyPassage.text
 		};
 	});
 
@@ -3316,8 +3332,9 @@ async function writeProjectFolderIncremental(
 
 	const concreteTouched = touched as Array<{
 		absolutePath: string;
-		passage: Passage;
+		kind: NativeProjectFileKind;
 		projectPath: string;
+		text: string;
 	}>;
 	const baselineByPath = new Map(
 		session.baseline.files.map(file => [file.path, file] as const)
@@ -3329,7 +3346,7 @@ async function writeProjectFolderIncremental(
 		const currentFile = await projectFileEntryForPath(
 			rootPath,
 			entry.projectPath,
-			'passage'
+			entry.kind
 		);
 
 		if (!baselineFile || !currentFile) {
@@ -3348,7 +3365,7 @@ async function writeProjectFolderIncremental(
 	const writeStarted = performance.now();
 
 	for (const entry of concreteTouched) {
-		await atomicWriteText(entry.absolutePath, entry.passage.text);
+		await atomicWriteText(entry.absolutePath, entry.text);
 	}
 	timings.writeTouchedFilesUs = Math.round(
 		(performance.now() - writeStarted) * 1000
@@ -3358,7 +3375,7 @@ async function writeProjectFolderIncremental(
 	const updatedEntries = (
 		await Promise.all(
 			concreteTouched.map(entry =>
-				projectFileEntryForPath(rootPath, entry.projectPath, 'passage')
+				projectFileEntryForPath(rootPath, entry.projectPath, entry.kind)
 			)
 		)
 	).filter((entry): entry is NativeProjectFileEntry => !!entry);

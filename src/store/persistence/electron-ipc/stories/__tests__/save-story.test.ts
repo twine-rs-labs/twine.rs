@@ -137,6 +137,27 @@ describe('saveStory()', () => {
 		);
 	});
 
+	it('uses the compact incremental path for session-owned source saves', async () => {
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+
+		await saveStory(story, formatsState, {
+			documentUpdates: [
+				{storyId: story.id, text: 'const changed = true;', type: 'script'}
+			],
+			hints: [{storyId: story.id, type: 'script'}]
+		});
+
+		expect(saveProjectFolder).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			expect.objectContaining({passages: []}),
+			expect.objectContaining({incrementalOnly: true})
+		);
+	});
+
 	it('surfaces native project save failures without falling back to legacy HTML', async () => {
 		saveProjectFolder.mockRejectedValue(new Error('Permission denied'));
 		saveProjectMetadata(story.id, {

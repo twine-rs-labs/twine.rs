@@ -93,6 +93,37 @@ export function createStoryCommand(story: Story | StorySnapshot): StoryCommand {
 	};
 }
 
+export function replaceAllTextCommand(
+	storyId: string,
+	query: string,
+	replacement: string,
+	options: {
+		includePassageText?: boolean;
+		includeScript?: boolean;
+		includeStylesheet?: boolean;
+		matchCase?: boolean;
+		useRegexes?: boolean;
+	} = {}
+): StoryCommand {
+	return {
+		query: {
+			cursor: null,
+			fuzzy: false,
+			includePassageNames: false,
+			includePassageText: options.includePassageText ?? true,
+			includeScript: options.includeScript ?? true,
+			includeStylesheet: options.includeStylesheet ?? true,
+			limit: 100,
+			matchCase: options.matchCase ?? false,
+			query,
+			replacement,
+			useRegexes: options.useRegexes ?? false
+		},
+		story_id: storyId,
+		type: 'replaceAllText'
+	};
+}
+
 export function deleteStoryCommand(storyId: string): StoryCommand {
 	return {
 		type: 'deleteStory',

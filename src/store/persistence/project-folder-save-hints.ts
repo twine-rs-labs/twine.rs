@@ -5,6 +5,10 @@ export type ProjectFolderSaveHint =
 			type: 'passageText';
 	  }
 	| {
+			storyId: string;
+			type: 'script' | 'stylesheet';
+	  }
+	| {
 			reason: string;
 			storyId: string;
 			type: 'full';

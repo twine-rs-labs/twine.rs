@@ -39,7 +39,8 @@ async function saveNativeProjectFolder(
 			rootPath: projectMetadata.rootPath,
 			storyId: story.id
 		});
-		const passageDocumentUpdates = (options.documentUpdates ?? []).filter(
+		const documentUpdates = options.documentUpdates ?? [];
+		const passageDocumentUpdates = documentUpdates.filter(
 			(
 				update
 			): update is Extract<
@@ -48,9 +49,8 @@ async function saveNativeProjectFolder(
 			> => update.type === 'passageText'
 		);
 		const useCompactIncrementalPayload =
-			passageDocumentUpdates.length > 0 &&
-			passageDocumentUpdates.length === options.documentUpdates?.length &&
-			options.hints?.every(hint => hint.type === 'passageText');
+			documentUpdates.length > 0 &&
+			options.hints?.every(hint => hint.type !== 'full');
 		const saveStory = useCompactIncrementalPayload
 			? {
 					...story,

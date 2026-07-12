@@ -5,7 +5,7 @@ import {useHistory} from 'react-router-dom';
 import {DialogCard} from '../components/container/dialog-card';
 import {CodeArea} from '../components/control/code-area';
 import {Button, Checkbox} from '../components/design-system';
-import {useCoreProjectHost} from '../core';
+import {replaceAllTextCommand, useCoreProjectHost} from '../core';
 import type {CoreSearchHit} from '../core/bindings/CoreSearchHit';
 import type {CoreSearchPage} from '../core/bindings/CoreSearchPage';
 import {
@@ -180,7 +180,12 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 
 	function handleReplace() {
 		void coreProjectHost.applyStoryCommand(
-			replaceInStoryCommand(story, find, replace, flags),
+			flags.includePassageNames
+				? replaceInStoryCommand(story, find, replace, flags)
+				: replaceAllTextCommand(story.id, find, replace, {
+						matchCase: flags.matchCase,
+						useRegexes: flags.useRegexes
+					}),
 			'undoChange.replaceAllText'
 		);
 	}
