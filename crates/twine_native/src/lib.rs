@@ -1019,7 +1019,7 @@ fn native_project_file_entry(
     let mtime_ms = system_time_to_ms(mtime);
 
     NativeProjectFileEntry {
-        fingerprint: format!("{mtime_ms}:{}", stats.len()),
+        fingerprint: format!("{}:{}", mtime_ms.trunc() as u64, stats.len()),
         kind: kind.to_owned(),
         modified_at: system_time_to_iso(mtime),
         mtime_ms,
@@ -1032,7 +1032,7 @@ fn native_project_file_entry_from_loaded(file: LoadedProjectFile) -> NativeProje
     let mtime_ms = system_time_to_ms(file.modified_at);
 
     NativeProjectFileEntry {
-        fingerprint: format!("{mtime_ms}:{}", file.size_bytes),
+        fingerprint: format!("{}:{}", mtime_ms.trunc() as u64, file.size_bytes),
         kind: file.kind.to_owned(),
         modified_at: system_time_to_iso(file.modified_at),
         mtime_ms,
@@ -1047,7 +1047,7 @@ fn asset_project_file_entry(asset: &CoreAssetInventoryEntry) -> Option<NativePro
     let mtime_ms = parse_iso_to_ms(modified_at).unwrap_or(0.0);
 
     Some(NativeProjectFileEntry {
-        fingerprint: format!("{mtime_ms}:{size}"),
+        fingerprint: format!("{}:{size}", mtime_ms.trunc() as u64),
         kind: "asset".into(),
         modified_at: modified_at.clone(),
         mtime_ms,

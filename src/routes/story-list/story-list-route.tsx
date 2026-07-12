@@ -144,14 +144,20 @@ function HealthBadges({story}: {story: Story}) {
 		let active = true;
 
 		setSummary(undefined);
-		void coreProjectHost.queryStorySummaryAsync(story.id).then(summary => {
-			if (active) {
-				setSummary(summary);
-			}
-		});
+		// Route transitions keep the library mounted briefly. Do not enqueue an
+		// expensive large-story health scan that will be obsolete by the time the
+		// workbench opens; worker requests cannot be canceled after submission.
+		const timeout = window.setTimeout(() => {
+			void coreProjectHost.queryStorySummaryAsync(story.id).then(summary => {
+				if (active) {
+					setSummary(summary);
+				}
+			});
+		}, 250);
 
 		return () => {
 			active = false;
+			window.clearTimeout(timeout);
 		};
 	}, [coreProjectHost, story.id, story]);
 

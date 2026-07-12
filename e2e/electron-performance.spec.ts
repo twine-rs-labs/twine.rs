@@ -995,6 +995,7 @@ async function measureDiagnostic(page: Page, launchToWindowMs: number) {
 		.getByRole('group', {name: 'Workspace Mode'})
 		.getByRole('tab', {name: 'Text'})
 		.click();
+	await waitForEvent(page, 'core-passage-document-ready');
 	const editor = page.locator('[data-testid^="story-editor-window-"]').first();
 
 	await expect(editor).toBeVisible();

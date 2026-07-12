@@ -108,9 +108,7 @@ export interface NativeProjectLoadTimings {
 export interface NativeProjectBaselineReceipt {
 	assets: CoreAssetInventoryEntry[];
 	completedAt: string;
-	files: Array<
-		NativeProjectFileEntry & {passageId?: string; storyId?: string}
-	>;
+	files: Array<NativeProjectFileEntry & {passageId?: string; storyId?: string}>;
 	id: string;
 	layoutDataJson: string;
 	rootPath: string;
@@ -1792,7 +1790,7 @@ async function scanProjectFiles(
 	}
 
 	files.push({
-		fingerprint: `${fileStats.mtimeMs}:${fileStats.size}`,
+		fingerprint: `${Math.trunc(fileStats.mtimeMs)}:${fileStats.size}`,
 		kind,
 		modifiedAt: fileStats.mtime.toISOString(),
 		mtimeMs: fileStats.mtimeMs,
@@ -1812,7 +1810,7 @@ function assetProjectFileEntry(
 	const mtimeMs = Number.isFinite(parsedMtimeMs) ? parsedMtimeMs : 0;
 
 	return {
-		fingerprint: `${mtimeMs}:${asset.sizeBytes}`,
+		fingerprint: `${Math.trunc(mtimeMs)}:${asset.sizeBytes}`,
 		kind: 'asset',
 		modifiedAt: asset.modifiedAt,
 		mtimeMs,
@@ -3008,10 +3006,7 @@ async function adoptProjectSessionBaselineReceipt(
 	}
 
 	try {
-		if (
-			resolve(receipt.rootPath) !== rootPath ||
-			receipt.schemaVersion !== 1
-		) {
+		if (resolve(receipt.rootPath) !== rootPath || receipt.schemaVersion !== 1) {
 			return false;
 		}
 
@@ -3592,7 +3587,9 @@ export async function openProjectFolder(
 	if (projectFolder.passageTextLoaded === false) {
 		setTimeout(() => {
 			if (projectSessions.get(projectSessionKey(openedRootPath)) === session) {
-				void ensureProjectSessionHydration(openedRootPath).catch(() => undefined);
+				void ensureProjectSessionHydration(openedRootPath).catch(
+					() => undefined
+				);
 			}
 		}, 0);
 	}
