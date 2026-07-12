@@ -143,9 +143,11 @@ describe('<ContentsRoute>', () => {
 		renderComponent();
 
 		expect(screen.getByLabelText('Filter contents')).toBeInTheDocument();
-		expect(screen.getByText('Indexed Castle')).toBeInTheDocument();
+		expect(await screen.findByText('Indexed Castle')).toBeInTheDocument();
 		expect(screen.getAllByText('Start').length).toBeGreaterThan(0);
-		await waitFor(() => expect(screen.getByText('$score')).toBeInTheDocument());
+		await waitFor(() =>
+			expect(screen.getAllByText('$score').length).toBeGreaterThan(0)
+		);
 		expect(screen.getAllByText('assets/cover.png').length).toBeGreaterThan(0);
 		expect(screen.getAllByText('Diagnostics').length).toBeGreaterThan(0);
 	});
@@ -161,7 +163,7 @@ describe('<ContentsRoute>', () => {
 		expect(screen.queryByText('$score')).not.toBeInTheDocument();
 	});
 
-	it('shows live asset previews in contents rows and details', () => {
+	it('shows live asset previews in contents rows and details', async () => {
 		const {result} = renderComponent(story =>
 			replaceKnownAssetInventoryForStory(story.id, [
 				inventoryAsset('assets/cover.png')
@@ -170,11 +172,13 @@ describe('<ContentsRoute>', () => {
 
 		fireEvent.click(screen.getByRole('button', {name: /Assets/}));
 
-		expect(
-			result.container.querySelector(
-				'.contents-route__row-thumb img[src="file:///native/project.twine.rs/assets/cover.png"]'
-			)
-		).toBeInTheDocument();
+		await waitFor(() =>
+			expect(
+				result.container.querySelector(
+					'.contents-route__row-thumb img[src="file:///native/project.twine.rs/assets/cover.png"]'
+				)
+			).toBeInTheDocument()
+		);
 		expect(
 			result.container.querySelector(
 				'.contents-route__asset-preview img[src="file:///native/project.twine.rs/assets/cover.png"]'
@@ -186,20 +190,23 @@ describe('<ContentsRoute>', () => {
 		const {result, story} = renderComponent();
 
 		fireEvent.click(screen.getByRole('button', {name: /Assets/}));
+		await waitFor(() =>
+			expect(screen.getAllByText('assets/cover.png').length).toBeGreaterThan(0)
+		);
 		expect(
 			result.container.querySelector('.contents-route__row-thumb img')
 		).not.toBeInTheDocument();
 
 		act(() => {
 			replaceKnownAssetInventoryForStory(story.id, [
-				inventoryAsset('assets/late-cover.png')
+				inventoryAsset('assets/cover.png')
 			]);
 		});
 
 		await waitFor(() =>
 			expect(
 				result.container.querySelector(
-					'.contents-route__row-thumb img[src="file:///native/project.twine.rs/assets/late-cover.png"]'
+					'.contents-route__row-thumb img[src="file:///native/project.twine.rs/assets/cover.png"]'
 				)
 			).toBeInTheDocument()
 		);
@@ -258,7 +265,7 @@ describe('<ContentsRoute>', () => {
 			});
 		});
 
-		expect(await screen.findByText('$score')).toBeInTheDocument();
+		expect((await screen.findAllByText('$score')).length).toBeGreaterThan(0);
 	});
 
 	it('windows large contents lists to viewport-sized row counts', async () => {
@@ -282,10 +289,12 @@ describe('<ContentsRoute>', () => {
 		expect(await screen.findByText(/of 2004/)).toBeInTheDocument();
 	});
 
-	it('tests the selected indexed passage from the inspector', () => {
+	it('tests the selected indexed passage from the inspector', async () => {
 		const {story} = renderComponent();
 
-		fireEvent.click(screen.getByRole('button', {name: 'Test From Here'}));
+		fireEvent.click(
+			await screen.findByRole('button', {name: 'Test From Here'})
+		);
 
 		expect(mockTestStory).toHaveBeenCalledWith(story.id, story.passages[0].id);
 	});

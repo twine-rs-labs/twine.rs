@@ -237,40 +237,75 @@ export class TestCoreSessionClient {
 		async (_sessionId: string, storyId: string, query: CoreContentsQuery) => {
 			const index = storyToCoreIndex(
 				storySnapshotToStory(this.story(storyId)),
-				{includeContents: true, includeTags: true}
+				{
+					includeAssets: true,
+					includeContents: true,
+					includeDiagnostics: true,
+					includePassageNames: true,
+					includeScript: true,
+					includeStylesheet: true,
+					includeTags: true,
+					includeVariables: true,
+					knownAssets: this.assetInventoryByStory.get(storyId) ?? []
+				}
 			);
+			const matchesFilter = (entry: (typeof index.contents)[number]) => {
+				switch (query.filter) {
+					case 'all':
+						return true;
+					case 'diagnostics':
+						return ['brokenLink', 'diagnostic', 'orphan'].includes(entry.kind);
+					case 'problems':
+						return entry.severity !== null;
+					default:
+						return entry.kind === query.filter;
+				}
+			};
+			const needle = query.query?.trim().toLowerCase();
 			const entries = index.contents
-				.filter(entry =>
-					query.filter === 'all'
-						? true
-						: query.filter === 'group'
-							? entry.kind === 'group'
-							: entry.kind === query.filter
+				.filter(
+					entry =>
+						matchesFilter(entry) &&
+						(!needle ||
+							entry.label.toLowerCase().includes(needle) ||
+							entry.detail?.toLowerCase().includes(needle))
 				)
-				.sort((left, right) => left.label.localeCompare(right.label));
+				.sort((left, right) => {
+					if (query.sort === 'issues') {
+						const severity = Number(!!right.severity) - Number(!!left.severity);
+						if (severity) {
+							return severity;
+						}
+					}
+					return left.label.localeCompare(right.label);
+				});
 			const offset = Number(query.cursor ?? 0);
 			const end = Math.min(offset + query.limit, entries.length);
+			const pageEntries = entries.slice(offset, end);
+			const count = (kind: (typeof index.contents)[number]['kind']) =>
+				index.contents.filter(entry => entry.kind === kind).length;
 
 			return {
 				assets: index.assetInventory.filter(asset =>
-					entries.some(
+					pageEntries.some(
 						entry => entry.kind === 'asset' && entry.label === asset.path
 					)
 				),
-				entries: entries.slice(offset, end),
+				entries: pageEntries,
 				facets: {
 					all: index.contents.length,
-					asset: 0,
-					diagnostics: 0,
-					entryPoint: 0,
-					group: index.contents.filter(entry => entry.kind === 'group').length,
-					metadata: 0,
-					passage: 0,
-					problems: 0,
-					script: 0,
-					stylesheet: 0,
-					tag: index.contents.filter(entry => entry.kind === 'tag').length,
-					variable: 0
+					asset: count('asset'),
+					diagnostics:
+						count('brokenLink') + count('diagnostic') + count('orphan'),
+					entryPoint: count('entryPoint'),
+					group: count('group'),
+					metadata: count('metadata'),
+					passage: count('passage'),
+					problems: index.contents.filter(entry => entry.severity !== null).length,
+					script: count('script'),
+					stylesheet: count('stylesheet'),
+					tag: count('tag'),
+					variable: count('variable')
 				},
 				nextCursor: end < entries.length ? String(end) : null,
 				revision: this.revision,
@@ -371,8 +406,16 @@ export class TestCoreSessionClient {
 		return null;
 	});
 	replaceProject = jest.fn(
-		async (_sessionId: string, snapshot: ProjectSnapshot, revision: number) => {
+		async (
+			_sessionId: string,
+			snapshot: ProjectSnapshot,
+			revision: number,
+			assets: CoreAssetInventoryEntry[] = []
+		) => {
 			this.replaceProjectSync(snapshot, revision);
+			for (const story of snapshot.stories) {
+				this.assetInventoryByStory.set(story.id, assets);
+			}
 		}
 	);
 	replaceProjectSync = jest.fn((snapshot: ProjectSnapshot, revision = 1) => {

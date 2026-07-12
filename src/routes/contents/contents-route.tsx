@@ -14,17 +14,14 @@ import {
 	emptyStoryIndex,
 	replaceKnownAssetInventoryForStory,
 	setStartPassageCommand,
-	storyShellIndex,
 	useKnownAssetInventoryForStory,
-	useCoreProjectHost,
-	workbenchSelection
+	useCoreProjectHost
 } from '../../core';
 import type {ContentsViewModelEntry} from '../../core/view-models';
 import type {CoreAssetReference} from '../../core/bindings/CoreAssetReference';
 import type {CoreContentsEntryKind} from '../../core/bindings/CoreContentsEntryKind';
 import type {CoreContentsPage} from '../../core/bindings/CoreContentsPage';
 import type {CorePassageFacts} from '../../core/bindings/CorePassageFacts';
-import type {CoreStoryIndex} from '../../core/bindings/CoreStoryIndex';
 import {fileUrlForPath} from '../../core/asset-paths';
 import type {TwineElectronWindow} from '../../electron/shared';
 import {selectPassage, Story, useStoriesContext} from '../../store/stories';
@@ -71,7 +68,6 @@ type ContentsRenderItem =
 const virtualGroupHeight = 34;
 const virtualRowHeight = 47;
 const virtualOverscan = 8;
-const deferIndexPassageThreshold = 500;
 const virtualFallbackHeight = 800;
 
 const typeFilters: Array<{
@@ -380,18 +376,7 @@ export const ContentsRoute: React.FC = () => {
 		!!inferredProjectRoot;
 	const passageTextLoaded =
 		!isFileBackedStory || hydration?.passageTextLoaded !== false;
-	const usesPagedContents =
-		!!story && story.passages.length > deferIndexPassageThreshold;
-	const shellIndex = React.useMemo(
-		() =>
-			story
-				? usesPagedContents
-					? emptyStoryIndex(story.id)
-					: storyShellIndex(story, knownAssets)
-				: undefined,
-		[knownAssets, story, usesPagedContents]
-	);
-	const [fullIndex, setFullIndex] = React.useState<CoreStoryIndex>();
+	const usesPagedContents = !!story;
 	const [contentsPage, setContentsPage] = React.useState<CoreContentsPage>();
 	const [selectedPassageFacts, setSelectedPassageFacts] =
 		React.useState<CorePassageFacts>();
@@ -480,14 +465,12 @@ export const ContentsRoute: React.FC = () => {
 		let active = true;
 
 		if (!story || !passageTextLoaded) {
-			setFullIndex(undefined);
 			setContentsPage(undefined);
 			return () => {
 				active = false;
 			};
 		}
 
-		setFullIndex(undefined);
 		if (usesPagedContents) {
 			setContentsPage(undefined);
 			markPerformance('contents-page-query-submit');
@@ -519,23 +502,12 @@ export const ContentsRoute: React.FC = () => {
 			};
 		}
 
-		const loadFullIndex = () => {
-			void coreProjectHost.queryStoryIndexAsync(story.id, {}).then(index => {
-				if (active) {
-					setFullIndex(index);
-				}
-			});
-		};
-
-		loadFullIndex();
-
 		return () => {
 			active = false;
 		};
 	}, [
 		coreProjectHost,
 		filter,
-		knownAssets,
 		passageTextLoaded,
 		patchVersion,
 		query,
@@ -546,15 +518,24 @@ export const ContentsRoute: React.FC = () => {
 
 	const pagedIndex = React.useMemo(
 		() =>
-			story && contentsPage
+			story
 				? {
 						...emptyStoryIndex(story.id),
-						contents: contentsPage.entries
+						assetInventory: [
+							...knownAssets,
+							...(contentsPage?.assets ?? []).filter(
+								asset =>
+									!knownAssets.some(
+										current => current.normalizedPath === asset.normalizedPath
+									)
+							)
+						],
+						contents: contentsPage?.entries ?? []
 					}
 				: undefined,
-		[contentsPage, story]
+		[contentsPage, knownAssets, story]
 	);
-	const index = fullIndex ?? (usesPagedContents ? pagedIndex : shellIndex);
+	const index = pagedIndex;
 	const contents = React.useMemo(
 		() => (index ? contentsViewModel(index) : undefined),
 		[index]
@@ -648,7 +629,7 @@ export const ContentsRoute: React.FC = () => {
 	React.useEffect(() => {
 		let active = true;
 
-		if (!usesPagedContents || !story || !selectedPassage) {
+		if (!story || !selectedPassage) {
 			setSelectedPassageFacts(undefined);
 			return () => {
 				active = false;
@@ -668,19 +649,15 @@ export const ContentsRoute: React.FC = () => {
 		};
 	}, [coreProjectHost, selectedPassage, story, usesPagedContents]);
 	const selectedFacts =
-		usesPagedContents && selectedPassageFacts && selectedPassage
+		selectedPassageFacts && selectedPassage
 			? {
 					assetReferences: selectedPassageFacts.assetReferences,
 					backlinks: selectedPassageFacts.backlinks,
 					diagnostics: selectedPassageFacts.diagnostics,
 					linkFacts: selectedPassageFacts.links,
-					wordCount: selectedPassage.text.trim()
-						? selectedPassage.text.trim().split(/\s+/).length
-						: 0
+					wordCount: selectedPassageFacts.wordCount
 				}
-			: story && index && selectedPassage
-				? workbenchSelection(story, index, selectedPassage.id)
-				: undefined;
+			: undefined;
 	const canRevealSelectedEntry = canRevealEntryInSource(selectedEntry);
 
 	React.useEffect(() => {
