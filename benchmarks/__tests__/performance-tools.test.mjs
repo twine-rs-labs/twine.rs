@@ -62,6 +62,28 @@ test('merges independently checkpointed benchmark phases', () => {
 	assert.equal(merged.test.status, 'passed');
 });
 
+test('preserves detailed memory diagnostics for focused reports', () => {
+	const report = {
+		assertions: [],
+		diagnostics: {
+			bridgeMetrics: [],
+			memoryDetail: {owners: {activeEditorCount: 0}},
+			startup: []
+		},
+		environment: {machine: {}, versions: {}},
+		fixture: {passageCount: 50_000},
+		kind: 'twine-electron-performance',
+		phase: 'memory-detail',
+		samples: {},
+		schemaVersion: 1
+	};
+	const merged = mergeRawPerformanceReports([report], {
+		'memory-detail': {status: 'passed'}
+	});
+
+	assert.equal(merged.diagnostics.memoryDetail.owners.activeEditorCount, 0);
+});
+
 test('uses the greater percentage or absolute regression allowance', () => {
 	assert.equal(regressionAllowance(100, {floor: 5, percent: 15}), 15);
 	assert.equal(regressionAllowance(10, {floor: 5, percent: 15}), 5);

@@ -24,7 +24,7 @@ const startupMemoryMarks = new Set([
 	'shell-visible'
 ]);
 
-function rendererMemorySnapshot(): Record<string, number> {
+export function rendererHeapMemorySnapshot(): Record<string, number> {
 	const memory = (
 		performanceApi() as Performance & {
 			memory?: {
@@ -67,7 +67,7 @@ export function markPerformance(name: string) {
 						): Promise<void>;
 					};
 				}
-			).twinePerformanceNative?.checkpoint(name, rendererMemorySnapshot());
+			).twinePerformanceNative?.checkpoint(name, rendererHeapMemorySnapshot());
 		}
 	} catch {
 		// Performance marks are diagnostics only.

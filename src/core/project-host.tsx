@@ -169,6 +169,7 @@ export interface CoreProjectHost {
 		options?: StoryIndexQuery
 	): Promise<CoreStoryIndex>;
 	queryStorySummaryAsync(storyId: string): Promise<CoreStorySummary>;
+	queryStoryWordCountAsync(storyId: string): Promise<number>;
 	queryWorkbenchDockModelAsync(
 		storyId: string
 	): Promise<CoreWorkbenchDockModel>;
@@ -308,6 +309,7 @@ type CoreProjectSessionClient = Pick<
 	| 'queryGraphProjection'
 	| 'queryStoryIndex'
 	| 'queryStorySummary'
+	| 'queryStoryWordCount'
 	| 'queryContentsPage'
 	| 'querySearchPage'
 	| 'queryDiagnosticsPage'
@@ -1515,7 +1517,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			);
 
 			this.wasmProjectReplaceRevision = revision;
-			const replacePromise =
+			const replaceResult =
 				assets.length > 0
 					? this.wasmClient.replaceProject(
 							this.sessionId,
@@ -1525,7 +1527,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 						)
 					: this.wasmClient.replaceProject(this.sessionId, snapshot, revision);
 
-			this.wasmProjectReplacePromise = replacePromise
+			this.wasmProjectReplacePromise = Promise.resolve(replaceResult)
 				.then(status => {
 					this.releaseRetainedPassageBodies();
 					for (const story of this.stories) {
@@ -1723,6 +1725,21 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		}
 		const revision = await this.ensureWasmProjectSession();
 		return queryStorySummary(this.sessionId, storyId, revision);
+	}
+
+	async queryStoryWordCountAsync(storyId: string) {
+		const queryStoryWordCount = (
+			this.wasmClient as Partial<CoreProjectSessionClient>
+		).queryStoryWordCount?.bind(this.wasmClient);
+
+		if (!this.wasmClient.enabled) {
+			throw new Error('Rust story word-count query is unavailable.');
+		}
+		if (!queryStoryWordCount) {
+			return (await this.queryStorySummaryAsync(storyId)).wordCount;
+		}
+		const revision = await this.ensureWasmProjectSession();
+		return queryStoryWordCount(this.sessionId, storyId, revision);
 	}
 
 	async queryWorkbenchDockModelAsync(
@@ -2030,6 +2047,7 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 
 	performanceDiagnostics() {
 		return {
+			client: this.client.performanceDiagnostics(),
 			mode: this.client.mode,
 			sessions: Array.from(this.hosts, ([sessionId, host]) => ({
 				...host.performanceDiagnostics(),
@@ -2212,6 +2230,19 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			this.hostForStory(storyId)?.queryStorySummaryAsync(storyId) ??
 			Promise.resolve(emptyStorySummary(storyId))
 		);
+	}
+
+	queryStoryWordCountAsync(storyId: string) {
+		const host = this.hostForStory(storyId);
+
+		if (!host) {
+			return Promise.reject(
+				new Error(
+					`No core project session is available for story "${storyId}".`
+				)
+			);
+		}
+		return host.queryStoryWordCountAsync(storyId);
 	}
 
 	queryWorkbenchDockModelAsync(storyId: string) {
@@ -2540,6 +2571,8 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.queryStoryIndexAsync(queryStoryId, options),
 			queryStorySummaryAsync: queryStoryId =>
 				host.queryStorySummaryAsync(queryStoryId),
+			queryStoryWordCountAsync: queryStoryId =>
+				host.queryStoryWordCountAsync(queryStoryId),
 			queryWorkbenchDockModelAsync: queryStoryId =>
 				host.queryWorkbenchDockModelAsync(queryStoryId),
 			queryContentsPageAsync: (queryStoryId, options) =>

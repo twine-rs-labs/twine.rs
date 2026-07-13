@@ -35,6 +35,7 @@ export class TwineWasmProjectSession {
     query_source_document(story_id: string, kind: string): any;
     query_story_index(story_id: string, options: any): any;
     query_story_summary(story_id: string): any;
+    query_story_word_count(story_id: string): number;
     redo(): any;
     revision(): number;
     set_asset_inventory(inventory: any): void;
@@ -78,6 +79,7 @@ export interface InitOutput {
     readonly twinewasmprojectsession_query_source_document: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly twinewasmprojectsession_query_story_index: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_story_summary: (a: number, b: number, c: number) => [number, number, number];
+    readonly twinewasmprojectsession_query_story_word_count: (a: number, b: number, c: number) => [number, number, number];
     readonly twinewasmprojectsession_redo: (a: number) => [number, number, number];
     readonly twinewasmprojectsession_revision: (a: number) => number;
     readonly twinewasmprojectsession_set_asset_inventory: (a: number, b: any) => [number, number];

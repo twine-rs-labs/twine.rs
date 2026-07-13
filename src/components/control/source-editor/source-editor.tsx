@@ -54,6 +54,11 @@ import * as React from 'react';
 import type {CodeEditorThemePreference} from '../../../store/prefs';
 import {usePrefsContext} from '../../../store/prefs';
 import {useComputedTheme} from '../../../store/prefs/use-computed-theme';
+import {
+	registerPerformanceEditorOwner,
+	unregisterPerformanceEditorOwner,
+	updatePerformanceEditorOwner
+} from '../../../util/performance-memory-owners';
 import './source-editor.css';
 import {sourceEditorThemeExtension} from './themes';
 
@@ -795,7 +800,10 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 					...baseExtensions(props, prefs.codeEditorTheme, appTheme),
 					EditorView.updateListener.of(update => {
 						if (update.docChanged) {
-							onChange.current(update.state.doc.toString());
+							const text = update.state.doc.toString();
+
+							onChange.current(text);
+							updatePerformanceEditorOwner(props.id, text);
 						}
 
 						if (update.docChanged || update.selectionSet) {
@@ -822,6 +830,7 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		});
 
 		viewRef.current = view;
+		registerPerformanceEditorOwner(props.id, props.value);
 		window.requestAnimationFrame(() => {
 			view.scrollDOM.scrollTo({
 				left: memory.scrollLeft ?? 0,
@@ -831,6 +840,7 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		});
 
 		return () => {
+			unregisterPerformanceEditorOwner(props.id);
 			view.destroy();
 			viewRef.current = undefined;
 		};

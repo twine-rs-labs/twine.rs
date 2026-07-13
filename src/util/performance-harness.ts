@@ -7,11 +7,14 @@ import type {TwineElectronWindow} from '../electron/shared';
 import {
 	performanceEventSnapshot,
 	performanceSnapshot,
+	rendererHeapMemorySnapshot,
 	resetRendererPerformance
 } from './performance';
+import {rendererMemoryOwnerSnapshot} from './performance-memory-owners';
 
 export interface TwinePerformanceHarness {
-	collectRetainedMemory(): Promise<void>;
+	checkpoint(name: string): Promise<void>;
+	collectRetainedMemory(name?: string): Promise<void>;
 	reset(): Promise<void>;
 	snapshot(): Promise<{
 		main: unknown;
@@ -28,6 +31,27 @@ export interface TwinePerformanceWindow extends TwineElectronWindow {
 	twinePerformance?: TwinePerformanceHarness;
 }
 
+function rendererCheckpointSnapshot() {
+	const core = coreProjectHostPerformanceSnapshot();
+	const client = core.hosts[0]?.client;
+	const readModel = client?.readModel;
+
+	return {
+		...rendererHeapMemorySnapshot(),
+		...rendererMemoryOwnerSnapshot(),
+		workerCachedPayloadBytes: client?.cachedPayloadBytes ?? 0,
+		workerPendingRequestCount: client?.pendingRequestCount ?? 0,
+		workerReadModelCacheEntryCount: client?.readModelCacheEntryCount ?? 0,
+		workerSessionQueueCount: client?.sessionQueueCount ?? 0,
+		workerWasmMemoryBytes: client?.wasmMemoryBytes ?? 0,
+		rustAnalysisCacheSourceCount: readModel?.analysisCacheSourceCount ?? 0,
+		rustFingerprintEntryCount: readModel?.fingerprintEntryCount ?? 0,
+		rustGraphCacheStoryCount: readModel?.graphCacheStoryCount ?? 0,
+		rustProjectDocumentBytes: readModel?.projectDocumentBytes ?? 0,
+		rustReadModelCacheStoryCount: readModel?.readModelCacheStoryCount ?? 0
+	};
+}
+
 export function installPerformanceHarness() {
 	const harnessWindow = window as TwinePerformanceWindow;
 	const native = harnessWindow.twinePerformanceNative;
@@ -37,30 +61,14 @@ export function installPerformanceHarness() {
 	}
 
 	harnessWindow.twinePerformance = {
-		async collectRetainedMemory() {
+		async checkpoint(name: string) {
+			await native.checkpoint(name, rendererCheckpointSnapshot());
+		},
+		async collectRetainedMemory(name = 'post-gc-retained') {
 			(globalThis as typeof globalThis & {gc?: () => void}).gc?.();
 			await native.collectGarbage();
 			await new Promise(resolve => window.setTimeout(resolve, 0));
-			await native.checkpoint(
-				'post-gc-retained',
-				((): Record<string, number> => {
-					const memory = (
-						performance as Performance & {
-							memory?: {
-								totalJSHeapSize: number;
-								usedJSHeapSize: number;
-							};
-						}
-					).memory;
-
-					return memory
-						? {
-								totalJSHeapSize: memory.totalJSHeapSize,
-								usedJSHeapSize: memory.usedJSHeapSize
-							}
-						: {};
-				})()
-			);
+			await native.checkpoint(name, rendererCheckpointSnapshot());
 		},
 		async reset() {
 			resetRendererPerformance();
@@ -74,7 +82,8 @@ export function installPerformanceHarness() {
 					bridgeMetrics: coreBridgeMetricsSnapshot(),
 					core: coreProjectHostPerformanceSnapshot(),
 					entries: performanceSnapshot(),
-					events: performanceEventSnapshot()
+					events: performanceEventSnapshot(),
+					owners: rendererMemoryOwnerSnapshot()
 				}
 			};
 		}

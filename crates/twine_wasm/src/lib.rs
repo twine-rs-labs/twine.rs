@@ -179,6 +179,10 @@ impl TwineWasmProjectSession {
         to_js(&self.session.story_summary(&story_id).map_err(core_error)?)
     }
 
+    pub fn query_story_word_count(&self, story_id: String) -> Result<usize, JsValue> {
+        self.session.story_word_count(&story_id).map_err(core_error)
+    }
+
     pub fn query_contents_page(
         &mut self,
         story_id: String,

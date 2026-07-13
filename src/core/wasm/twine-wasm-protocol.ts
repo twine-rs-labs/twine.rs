@@ -51,9 +51,13 @@ export interface WasmWorkerMetricBase {
 	responseBytes: number;
 	readModel?: {
 		analysisCacheSourceCount: number;
+		fingerprintEntryCount: number;
+		graphCacheStoryCount: number;
 		historyBytes: number;
 		parsedSourceCount: number;
 		passageCount: number;
+		projectDocumentBytes: number;
+		readModelCacheStoryCount: number;
 		readModelFullBuildCount: number;
 		readModelIncrementalUpdateCount: number;
 		readModelLastTouchedSourceCount: number;
@@ -146,6 +150,13 @@ export type WasmWorkerRequest =
 	| {
 			id: number;
 			kind: 'queryStorySummary';
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryStoryWordCount';
 			revision: number;
 			sessionId: string;
 			storyId: string;
@@ -314,6 +325,13 @@ export type WasmWorkerSuccess =
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: CoreStorySummary;
+	  }
+	| {
+			id: number;
+			kind: 'queryStoryWordCount';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: number;
 	  }
 	| {
 			id: number;

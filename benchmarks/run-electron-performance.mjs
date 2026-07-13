@@ -30,7 +30,13 @@ const smoke = args.includes('--smoke');
 const phaseIndex = args.indexOf('--phase');
 const requestedPhase = phaseIndex >= 0 ? args[phaseIndex + 1] : 'all';
 const completePhases = ['startup', 'edit', 'query', 'graph', 'watcher'];
-const validPhases = ['all', 'diagnostic', 'interaction', ...completePhases];
+const validPhases = [
+	'all',
+	'diagnostic',
+	'interaction',
+	'memory-detail',
+	...completePhases
+];
 
 if (!Number.isInteger(size) || size <= 0) {
 	throw new Error('--size must be a positive integer.');

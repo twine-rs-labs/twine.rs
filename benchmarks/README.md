@@ -63,7 +63,9 @@ npm run perf:prepare
 
 This generates JSON story input and delegates project-folder creation to the
 release `twine_cli import` command. Generated sources, projects, reports, and
-baselines are ignored by Git.
+baselines are ignored by Git. Rust/WASM is rebuilt before the renderer bundle,
+so Rust query or diagnostics changes cannot leave a stale core module in the
+release harness.
 
 Performance commands refuse to launch when the production Electron build is
 older than app or native sources. Re-run `npm run perf:prepare` after changing
@@ -128,6 +130,24 @@ deltas from the `open-start` checkpoint, bootstrap/native-lease ownership, and
 accepted-baseline/descriptor estimates. These diagnostic reports are not
 eligible as baselines; use the normal three-sample startup command for a final
 comparison.
+
+For lifecycle-level renderer attribution, run one of:
+
+```sh
+npm run perf:electron:memory-detail:100
+npm run perf:electron:memory-detail:10k
+npm run perf:electron:memory-detail:50k
+```
+
+The detailed phase records retained checkpoints before the editor, after editor
+creation, after one edit and save, after editor closure, and across a bounded
+Contents route visit. Each checkpoint includes process-role working sets,
+renderer and main heap fields, active editor document ownership, worker query
+cache/pending-request state, Rust session owner counts, native hydration leases,
+and baseline/descriptor estimates. It asserts that editor documents, completed
+requests, session queues, bootstrap bodies, and hydration leases are released.
+Like the startup memory matrix, this is focused diagnostic evidence and cannot
+be accepted as a complete baseline.
 
 Full hydration uses a shared pool capped at eight workers. For controlled local
 experiments, `TWINE_NATIVE_LOAD_THREADS=<count>` overrides the pool size and is

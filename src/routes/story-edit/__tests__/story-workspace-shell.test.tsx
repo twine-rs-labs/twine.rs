@@ -135,6 +135,7 @@ describe('<StoryWorkspaceShell>', () => {
 	beforeEach(() => window.localStorage.clear());
 
 	afterEach(() => {
+		jest.restoreAllMocks();
 		delete (window as any).twineElectron;
 	});
 
@@ -533,7 +534,9 @@ describe('<StoryWorkspaceShell>', () => {
 	});
 
 	it('dispatches executable diagnostic quick fixes', async () => {
-		const {story, storyDispatch} = renderComponent('text');
+		const {story, storyDispatch} = renderComponent('text', {
+			bottomDrawerOpen: true
+		});
 
 		await waitFor(() =>
 			expect(
@@ -566,7 +569,9 @@ describe('<StoryWorkspaceShell>', () => {
 	});
 
 	it('reveals diagnostics in the graph explicitly', async () => {
-		const {onRevealPassageInGraph, start} = renderComponent('text');
+		const {onRevealPassageInGraph, start} = renderComponent('text', {
+			bottomDrawerOpen: true
+		});
 
 		await waitFor(() =>
 			expect(

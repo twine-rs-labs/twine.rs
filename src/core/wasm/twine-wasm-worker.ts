@@ -273,6 +273,15 @@ async function handleRequest(
 				).session.query_story_summary(request.storyId);
 				break;
 
+			case 'queryStoryWordCount':
+				result = (
+					ensureSession(request.sessionId, request.revision)
+						.session as unknown as {
+						query_story_word_count(storyId: string): number;
+					}
+				).query_story_word_count(request.storyId);
+				break;
+
 			case 'queryContentsPage':
 				result = ensureSession(
 					request.sessionId,
@@ -364,9 +373,13 @@ async function handleRequest(
 		const readModel = diagnostics
 			? {
 					analysisCacheSourceCount: diagnostics.analysisCacheSourceCount,
+					fingerprintEntryCount: diagnostics.fingerprintEntryCount,
+					graphCacheStoryCount: diagnostics.graphCacheStoryCount,
 					historyBytes: diagnostics.historyBytes,
 					parsedSourceCount: diagnostics.parsedSourceCount,
 					passageCount: diagnostics.passageCount,
+					projectDocumentBytes: diagnostics.projectDocumentBytes,
+					readModelCacheStoryCount: diagnostics.readModelCacheStoryCount,
 					readModelFullBuildCount: diagnostics.readModelFullBuildCount,
 					readModelIncrementalUpdateCount:
 						diagnostics.readModelIncrementalUpdateCount,

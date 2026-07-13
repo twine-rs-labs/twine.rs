@@ -27,6 +27,7 @@ export const twinewasmprojectsession_query_search_page: (a: number, b: number, c
 export const twinewasmprojectsession_query_source_document: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const twinewasmprojectsession_query_story_index: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_story_summary: (a: number, b: number, c: number) => [number, number, number];
+export const twinewasmprojectsession_query_story_word_count: (a: number, b: number, c: number) => [number, number, number];
 export const twinewasmprojectsession_redo: (a: number) => [number, number, number];
 export const twinewasmprojectsession_revision: (a: number) => number;
 export const twinewasmprojectsession_set_asset_inventory: (a: number, b: any) => [number, number];

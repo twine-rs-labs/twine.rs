@@ -22,6 +22,7 @@ export interface CoreBridgeMetric {
 		| 'querySearchPage'
 		| 'queryStoryIndex'
 		| 'queryStorySummary'
+		| 'queryStoryWordCount'
 		| 'redo'
 		| 'removeSession'
 		| 'replaceProject'
@@ -37,9 +38,13 @@ export interface CoreBridgeMetric {
 	requestedAtEpochMs: number;
 	readModel?: {
 		analysisCacheSourceCount: number;
+		fingerprintEntryCount: number;
+		graphCacheStoryCount: number;
 		historyBytes: number;
 		parsedSourceCount: number;
 		passageCount: number;
+		projectDocumentBytes: number;
+		readModelCacheStoryCount: number;
 		readModelFullBuildCount: number;
 		readModelIncrementalUpdateCount: number;
 		readModelLastTouchedSourceCount: number;

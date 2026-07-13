@@ -521,6 +521,15 @@ export class TestCoreSessionClient {
 			)
 		};
 	});
+	queryStoryWordCount = jest.fn(async (_sessionId: string, storyId: string) => {
+		const story = storySnapshotToStory(this.story(storyId));
+
+		return story.passages.reduce(
+			(total, passage) =>
+				total + passage.text.trim().split(/\s+/).filter(Boolean).length,
+			0
+		);
+	});
 	queryStoryIndex = jest.fn(async (_sessionId, storyId, options) =>
 		storyToCoreIndex(storySnapshotToStory(this.story(storyId)), options)
 	);

@@ -14,10 +14,7 @@ import {
 	TablerIcon,
 	Tag
 } from '../../components/design-system';
-import {
-	deleteStoryCommand,
-	useCoreProjectHost
-} from '../../core';
+import {deleteStoryCommand, useCoreProjectHost} from '../../core';
 import type {CoreStorySummary} from '../../core';
 import {
 	AppDonationDialog,
@@ -120,7 +117,7 @@ function HealthBadges({story}: {story: Story}) {
 					setSummary(summary);
 				}
 			});
-		}, 250);
+		}, 2000);
 
 		return () => {
 			active = false;
@@ -154,8 +151,8 @@ function StoryWordCount({story}: {story: Story}) {
 		let active = true;
 
 		void coreProjectHost
-			.queryStorySummaryAsync(story.id)
-			.then(summary => active && setCount(summary.wordCount));
+			.queryStoryWordCountAsync(story.id)
+			.then(wordCount => active && setCount(wordCount));
 		return () => {
 			active = false;
 		};
@@ -530,7 +527,9 @@ export const InnerStoryListRoute: React.FC = () => {
 													{story.storyFormat} {story.storyFormatVersion}
 												</td>
 												<td>{story.passages.length}</td>
-												<td><StoryWordCount story={story} /></td>
+												<td>
+													<StoryWordCount story={story} />
+												</td>
 												<td>
 													<HealthBadges story={story} />
 												</td>
@@ -577,8 +576,8 @@ export const InnerStoryListRoute: React.FC = () => {
 												)}
 											</div>
 											<div className="story-list-launcher__project-meta">
-												{story.passages.length} passages · <StoryWordCount story={story} />{' '}
-												words
+												{story.passages.length} passages ·{' '}
+												<StoryWordCount story={story} /> words
 											</div>
 											<HealthBadges story={story} />
 											<div className="story-list-launcher__card-foot">

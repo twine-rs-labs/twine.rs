@@ -1250,6 +1250,8 @@ export const StoryWorkspaceShell: React.FC<
 	const shellIndex = React.useMemo(() => emptyStoryIndex(story.id), [story.id]);
 	const [dockModel, setDockModel] = React.useState<CoreWorkbenchDockModel>();
 	const [passageFacts, setPassageFacts] = React.useState<CorePassageFacts>();
+	const [navigatorTab, setNavigatorTab] = usePersistedNavigatorTab(story.id);
+	const needsDockModel = navigatorTab !== 'passages' || bottomDrawerOpen;
 	const openProgress = React.useMemo<StoryOpenProgressState | undefined>(() => {
 		if (isFileBackedStory && hydration?.passageTextLoaded === false) {
 			return {
@@ -1467,12 +1469,18 @@ export const StoryWorkspaceShell: React.FC<
 
 		setDockModel(undefined);
 
-		if (!passageTextLoaded) {
+		if (!passageTextLoaded || !needsDockModel) {
 			return () => {
 				active = false;
 			};
 		}
 		const loadDockModel = () => {
+			recordPerformanceHarnessEvent('workbench-dock-model-requested', {
+				bottomDrawerOpen,
+				navigatorTab,
+				passageCount: story.passages.length,
+				storyId: story.id
+			});
 			void coreProjectHost
 				.queryWorkbenchDockModelAsync(story.id)
 				.then(model => {
@@ -1487,7 +1495,15 @@ export const StoryWorkspaceShell: React.FC<
 		return () => {
 			active = false;
 		};
-	}, [coreProjectHost, passageTextLoaded, patchVersion, story.id]);
+	}, [
+		coreProjectHost,
+		bottomDrawerOpen,
+		needsDockModel,
+		navigatorTab,
+		passageTextLoaded,
+		patchVersion,
+		story.id
+	]);
 
 	React.useEffect(() => {
 		let active = true;
@@ -1618,7 +1634,6 @@ export const StoryWorkspaceShell: React.FC<
 	);
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {t} = useTranslation();
-	const [navigatorTab, setNavigatorTab] = usePersistedNavigatorTab(story.id);
 	const showGraph = mode === 'graph' || mode === 'split';
 	const showText = mode === 'text' || mode === 'split';
 

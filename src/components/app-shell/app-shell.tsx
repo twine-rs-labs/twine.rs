@@ -9,7 +9,6 @@ import {
 	useCoreProjectHost
 } from '../../core';
 import type {CoreDiagnostic} from '../../core/bindings/CoreDiagnostic';
-import type {CoreStorySummary} from '../../core/bindings/CoreStorySummary';
 import {storyFileName} from '../../electron/shared';
 import {useStorySaveStatus} from '../../store/persistence/save-status';
 import {usePrefsContext} from '../../store/prefs';
@@ -187,7 +186,7 @@ export const AppShell: React.FC = ({children}) => {
 	const [patchVersion, setPatchVersion] = React.useState(0);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
 	const [diagnostics, setDiagnostics] = React.useState<CoreDiagnostic[]>([]);
-	const [storySummary, setStorySummary] = React.useState<CoreStorySummary>();
+	const [wordCount, setWordCount] = React.useState(0);
 	const storySaveStatus = useStorySaveStatus();
 	const [buildState, setBuildState] = React.useState<BuildState>({
 		kind: 'idle',
@@ -227,7 +226,6 @@ export const AppShell: React.FC = ({children}) => {
 	);
 	const diagnosticCount = activeDiagnostics.length;
 	const dismissedDiagnosticCount = diagnostics.length - diagnosticCount;
-	const wordCount = storySummary?.wordCount ?? 0;
 	const crumbLabels = breadcrumbs(pathname, currentStory, mode);
 	const storyOpenProgress = React.useMemo<StoryOpenProgress | undefined>(() => {
 		if (
@@ -255,11 +253,11 @@ export const AppShell: React.FC = ({children}) => {
 	React.useEffect(() => {
 		let active = true;
 
-		setStorySummary(undefined);
+		setWordCount(0);
 		if (currentStory) {
 			void coreProjectHost
-				.queryStorySummaryAsync(currentStory.id)
-				.then(summary => active && setStorySummary(summary));
+				.queryStoryWordCountAsync(currentStory.id)
+				.then(count => active && setWordCount(count));
 		}
 
 		return () => {

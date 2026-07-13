@@ -26,6 +26,28 @@ fixture isolation.
   descriptor, not story/passage snapshots. One-file saves update an indexed
   entry in place and avoid descriptor reload unless structural metadata or
   layout changed.
+- A focused memory-detail phase now samples before editor creation, after editor
+  creation and GC, after edit/save, after editor closure and GC, and across a
+  bounded Contents visit. It attributes active editor document bytes, worker
+  query-cache payloads and queues, Rust document/fingerprint/cache owners, main
+  and renderer heap fields, and Electron process-role working sets. Release
+  assertions prevent completed requests, editor documents, bootstrap bodies,
+  or hydration leases from silently becoming retained owners.
+- The first 50k detailed trace attributed the previous editor-time memory jump
+  to eager aggregate queries, not CodeMirror. Shell and launcher word counts now
+  use a cache-free scalar Rust query, and large-story aggregate dock queries are
+  deferred until Contents, Assets, or global diagnostics are requested. The
+  confirming trace kept analysis sources at one and the read-model cache empty
+  through editor open/edit/save/close; the edit worker round trip was about
+  7.5 ms and editor lifecycle retained roughly 6 MiB. The following standard
+  diagnostic measured about 18.3 ms edit round trip and 19.9 ms edit-to-paint,
+  materially improved from the preceding 36.6 ms sample and now close to the
+  16.6 ms target.
+- Selected-passage backlinks still construct a complete graph cache, growing
+  WASM from about 96 MiB to 197.5 MiB. Explicitly opening Contents constructs
+  the 50,002-source read model, takes about 14.4 s cold, and grows WASM to about
+  251.6 MiB. Compact/lazy graph backlinks are the next normal-workspace target;
+  compact incremental Contents analysis follows as the explicit-route target.
 
 - Profile native project load, renderer hydration, session initialization, and
   first-route queries independently.

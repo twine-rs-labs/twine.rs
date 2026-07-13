@@ -151,11 +151,11 @@ rereading the descriptor.
 
 The focused one-sample memory matrix passed on 2026-07-13:
 
-| Fixture | Resident | Browser | Renderer | GPU | Utility |
-| ------- | -------: | ------: | -------: | --: | ------: |
-| 100     | 524 MiB  | 185 MiB | 189 MiB  | 102 MiB | 48 MiB |
-| 10k     | 665 MiB  | 239 MiB | 272 MiB  | 106 MiB | 48 MiB |
-| 50k     | 1,063 MiB | 412 MiB | 497 MiB | 105 MiB | 48 MiB |
+| Fixture |  Resident | Browser | Renderer |     GPU | Utility |
+| ------- | --------: | ------: | -------: | ------: | ------: |
+| 100     |   524 MiB | 185 MiB |  189 MiB | 102 MiB |  48 MiB |
+| 10k     |   665 MiB | 239 MiB |  272 MiB | 106 MiB |  48 MiB |
+| 50k     | 1,063 MiB | 412 MiB |  497 MiB | 105 MiB |  48 MiB |
 
 At all three sizes, retained bootstrap text, native hydration text capacity,
 hydration lease count, and accepted-baseline passage count were zero. At 50k,
@@ -164,6 +164,35 @@ the explicitly attributed retained native path strings were about 13.5 MiB
 memory was about 96 MiB. The project-size growth is therefore concentrated in
 the browser and renderer working sets rather than the removed transient body
 owners. The 50k resident result remains well above the 600 MiB roadmap target.
+The additive `memory-detail` phase now separates editor creation, edit/save,
+editor disposal, and bounded Contents-route checkpoints and reports worker,
+Rust, native, and renderer owner counts at the same points. The confirming 50k
+run passed on 2026-07-13. It found that editor creation, one edit/save, and
+editor disposal add only about 6 MiB retained and leave no editor document,
+pending worker request, or session queue behind.
+
+The same trace identified two large Rust/WASM owners:
+
+- Selected-passage facts currently construct the complete graph/backlink cache.
+  This grows WASM linear memory from about 96 MiB to 197.5 MiB and leaves the
+  normal editor workspace at about 1.13 GiB resident.
+- Opening Contents explicitly constructs the 50,002-source analysis/read-model
+  cache. The cold query took about 14.4 s, grew WASM to about 251.6 MiB, and
+  left about 1.18 GiB resident after returning to the workbench.
+
+Automatic launcher/app-shell word counts now use a scalar Rust query, and the
+aggregate workbench dock model is deferred until Contents, Assets, or global
+diagnostics are opened. Consequently a normal edit no longer waits behind the
+cold full read-model build: its measured worker round trip was about 7.5 ms.
+Graph/backlink representation and cold Contents construction are now the
+dominant memory and latency targets.
+
+The standard 50k diagnostic also passed after the deferral change. Its single
+warm edit measured about 18.3 ms round trip and 19.9 ms to paint, down from the
+preceding roughly 36.6 ms sample and close to the 16.6 ms target. Incremental
+save remained fast at about 78.3 ms end to end, 6.9 ms native, and 0.22 ms for
+baseline patching. The edit retained one analyzed source and no full read-model
+cache.
 
 The focused 50k startup phase now passes with the corrected startup/memory
 contract. Moving watcher-baseline work out of shell opening, skipping redundant

@@ -76,6 +76,7 @@ export function mergeRawPerformanceReports(reports, phaseResults = {}) {
 
 		for (const key of [
 			'interaction',
+			'memoryDetail',
 			'watcher',
 			'watcherAsset',
 			'watcherPassage'
@@ -189,7 +190,8 @@ export function evaluatePerformanceReport(report, budgets, baseline) {
 	if (baselineStatus === 'matched') {
 		for (const [name, budget] of Object.entries(budgets.metrics ?? {})) {
 			const metricNamespace = name.split('.')[0];
-			const reportContract = report.environment?.metricContracts?.[metricNamespace];
+			const reportContract =
+				report.environment?.metricContracts?.[metricNamespace];
 			const baselineContract =
 				baseline.environment?.metricContracts?.[metricNamespace];
 

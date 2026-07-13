@@ -12,5 +12,17 @@ describe('WasmCoreWorkerClient', () => {
 
 		expect(client.enabled).toBe(false);
 		expect(client.mode).toBe('unavailable');
+		expect(client.performanceDiagnostics()).toEqual({
+			cachedPayloadBytes: 0,
+			graphCacheEntryCount: 0,
+			indexCacheEntryCount: 0,
+			lastGraphEntryCount: 0,
+			wasmMemoryBytes: 0,
+			pendingRequestCount: 0,
+			readModelCacheEntryCount: 0,
+			readModel: undefined,
+			readySessionCount: 0,
+			sessionQueueCount: 0
+		});
 	});
 });

@@ -2468,11 +2468,15 @@ struct SourceAnalysisCache {
 #[serde(rename_all = "camelCase")]
 pub struct CoreSessionPerformanceDiagnostics {
     pub analysis_cache_source_count: usize,
+    pub fingerprint_entry_count: usize,
+    pub graph_cache_story_count: usize,
     pub history_bytes: usize,
     #[serde(default)]
     pub last_mutation: Option<CoreMutationStageTimings>,
     pub parsed_source_count: usize,
     pub passage_count: usize,
+    pub project_document_bytes: usize,
+    pub read_model_cache_story_count: usize,
     pub read_model_full_build_count: usize,
     pub read_model_incremental_update_count: usize,
     pub read_model_last_touched_source_count: usize,
@@ -3597,6 +3601,9 @@ impl ProjectSession {
     pub fn performance_diagnostics(&self) -> CoreSessionPerformanceDiagnostics {
         CoreSessionPerformanceDiagnostics {
             analysis_cache_source_count: self.analysis_cache.values().map(BTreeMap::len).sum(),
+            fingerprint_entry_count: self.current_fingerprints.len()
+                + self.saved_fingerprints.len(),
+            graph_cache_story_count: self.graph_cache.len(),
             history_bytes: self.history_bytes,
             last_mutation: self.last_mutation_stage_timings.clone(),
             parsed_source_count: self.analysis_parse_count,
@@ -3606,6 +3613,21 @@ impl ProjectSession {
                 .iter()
                 .map(|story| story.passages.len())
                 .sum(),
+            project_document_bytes: self
+                .project
+                .stories
+                .iter()
+                .map(|story| {
+                    story.script.len()
+                        + story.stylesheet.len()
+                        + story
+                            .passages
+                            .iter()
+                            .map(|passage| passage.text.len())
+                            .sum::<usize>()
+                })
+                .sum::<usize>(),
+            read_model_cache_story_count: self.read_model_cache.len(),
             read_model_full_build_count: self.read_model_full_build_count,
             read_model_incremental_update_count: self.read_model_incremental_update_count,
             read_model_last_touched_source_count: self.read_model_last_touched_source_count,
@@ -6420,6 +6442,15 @@ impl ProjectSession {
                 .count(),
             word_count: read_model.word_count,
         })
+    }
+
+    pub fn story_word_count(&self, story_id: &str) -> Result<usize, CoreError> {
+        Ok(self
+            .story(story_id)?
+            .passages
+            .iter()
+            .map(|passage| passage.text.split_whitespace().count())
+            .sum())
     }
 
     pub fn contents_page(
@@ -9482,6 +9513,17 @@ mod tests {
             stories: vec![story],
             ..Project::default()
         })
+    }
+
+    #[test]
+    fn word_count_query_does_not_build_analysis_or_read_model_caches() {
+        let session = session();
+
+        assert_eq!(session.story_word_count("story-1").unwrap(), 4);
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.analysis_cache_source_count, 0);
+        assert_eq!(diagnostics.graph_cache_story_count, 0);
+        assert_eq!(diagnostics.read_model_cache_story_count, 0);
     }
 
     #[test]

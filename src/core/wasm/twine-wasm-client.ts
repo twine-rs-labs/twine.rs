@@ -24,7 +24,7 @@ import type {PassageSnapshot} from '../bindings/PassageSnapshot';
 import type {StoryCommand} from '../bindings/StoryCommand';
 import {recordPerformanceHarnessEvent} from '../../util/performance';
 import {recordCoreBridgeMetric} from './performance';
-import type {CoreBridgeMode} from './performance';
+import type {CoreBridgeMetric, CoreBridgeMode} from './performance';
 import TwineWasmWorker from './twine-wasm-worker?worker';
 import type {
 	WasmWorkerFailure,
@@ -69,7 +69,8 @@ type ReadModelWorkerRequest = Extract<
 			| 'queryPassageDocument'
 			| 'querySourceDocument'
 			| 'querySearchPage'
-			| 'queryStorySummary';
+			| 'queryStorySummary'
+			| 'queryStoryWordCount';
 	}
 >;
 
@@ -106,6 +107,14 @@ function epochNow() {
 		: Date.now();
 }
 
+function estimatedJsonBytes(value: unknown) {
+	try {
+		return JSON.stringify(value).length * 2;
+	} catch {
+		return 0;
+	}
+}
+
 function isWasmEnabled() {
 	if (process.env.NODE_ENV === 'test') {
 		return false;
@@ -137,6 +146,10 @@ export class WasmCoreWorkerClient {
 	private indexCache = new Map<string, CacheEntry<CoreStoryIndex>>();
 	private indexQueryGenerations = new Map<string, number>();
 	private lastGraphByStory = new Map<string, CacheEntry<CoreGraphProjection>>();
+	private lastReadModelDiagnostics:
+		| NonNullable<CoreBridgeMetric['readModel']>
+		| undefined;
+	private lastWasmMemoryBytes = 0;
 	private readModelCache = new Map<string, CacheEntry<unknown>>();
 	private readModelQueryGenerations = new Map<string, number>();
 	private nextId = 1;
@@ -174,6 +187,31 @@ export class WasmCoreWorkerClient {
 
 	get enabled() {
 		return !!this.worker && !this.disabledReason;
+	}
+
+	performanceDiagnostics() {
+		const cacheEntries = [
+			...this.graphCache.values(),
+			...this.indexCache.values(),
+			...this.lastGraphByStory.values(),
+			...this.readModelCache.values()
+		];
+
+		return {
+			cachedPayloadBytes: cacheEntries.reduce(
+				(total, entry) => total + estimatedJsonBytes(entry.result),
+				0
+			),
+			graphCacheEntryCount: this.graphCache.size,
+			indexCacheEntryCount: this.indexCache.size,
+			lastGraphEntryCount: this.lastGraphByStory.size,
+			pendingRequestCount: this.pending.size,
+			readModelCacheEntryCount: this.readModelCache.size,
+			readModel: this.lastReadModelDiagnostics,
+			readySessionCount: this.readyRevisions.size,
+			sessionQueueCount: this.sessionQueues.size,
+			wasmMemoryBytes: this.lastWasmMemoryBytes
+		};
 	}
 
 	dispose() {
@@ -543,6 +581,20 @@ export class WasmCoreWorkerClient {
 		return this.queryReadModel<CoreStorySummary>(sessionId, storyId, revision, {
 			id: 0,
 			kind: 'queryStorySummary',
+			revision,
+			sessionId,
+			storyId
+		});
+	}
+
+	async queryStoryWordCount(
+		sessionId: string,
+		storyId: string,
+		revision: number
+	) {
+		return this.queryReadModel<number>(sessionId, storyId, revision, {
+			id: 0,
+			kind: 'queryStoryWordCount',
 			revision,
 			sessionId,
 			storyId
@@ -930,6 +982,9 @@ export class WasmCoreWorkerClient {
 		if (!metrics) {
 			return;
 		}
+		this.lastWasmMemoryBytes =
+			metrics.wasmMemoryBytes ?? this.lastWasmMemoryBytes;
+		this.lastReadModelDiagnostics = metrics.readModel;
 
 		recordCoreBridgeMetric({
 			computeMs: metrics.computeMs,

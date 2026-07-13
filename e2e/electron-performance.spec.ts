@@ -24,7 +24,13 @@ interface PerformanceSnapshot {
 			pid: number;
 			type: string;
 		}>;
-		memory: {rss: number};
+		memory: {
+			arrayBuffers?: number;
+			external?: number;
+			heapTotal?: number;
+			heapUsed?: number;
+			rss: number;
+		};
 		owners?: {
 			nativeHydration?: {
 				activeLeaseCount: number;
@@ -46,7 +52,7 @@ interface PerformanceSnapshot {
 		memoryCheckpoints: Array<{
 			appMetrics: PerformanceSnapshot['main']['appMetrics'];
 			mainHeap: Record<string, number>;
-			mainMemory: {rss: number};
+			mainMemory: PerformanceSnapshot['main']['memory'];
 			name: string;
 			recordedAtEpochMs: number;
 			renderer: Record<string, number>;
@@ -98,9 +104,13 @@ interface PerformanceSnapshot {
 			requestedAtEpochMs: number;
 			readModel?: {
 				analysisCacheSourceCount: number;
+				fingerprintEntryCount: number;
+				graphCacheStoryCount: number;
 				historyBytes: number;
 				parsedSourceCount: number;
 				passageCount: number;
+				projectDocumentBytes: number;
+				readModelCacheStoryCount: number;
 				readModelFullBuildCount: number;
 				readModelIncrementalUpdateCount: number;
 				readModelLastTouchedSourceCount: number;
@@ -125,6 +135,20 @@ interface PerformanceSnapshot {
 				textBytes: number;
 			};
 			hosts: Array<{
+				client?: {
+					cachedPayloadBytes: number;
+					graphCacheEntryCount: number;
+					indexCacheEntryCount: number;
+					lastGraphEntryCount: number;
+					wasmMemoryBytes: number;
+					pendingRequestCount: number;
+					readModelCacheEntryCount: number;
+					readModel?: NonNullable<
+						PerformanceSnapshot['renderer']['bridgeMetrics'][number]['readModel']
+					>;
+					readySessionCount: number;
+					sessionQueueCount: number;
+				};
 				mode: string;
 				sessions: Array<{
 					passageTextCharacterCount: number;
@@ -134,6 +158,10 @@ interface PerformanceSnapshot {
 				}>;
 			}>;
 			workerClients: number;
+		};
+		owners?: {
+			activeEditorCount: number;
+			editorDocumentBytes: number;
 		};
 		entries: Array<{
 			duration: number;
@@ -171,6 +199,7 @@ const benchmarkPhases = [
 	'diagnostic',
 	'edit',
 	'graph',
+	'memory-detail',
 	'query',
 	'startup',
 	'watcher'
@@ -183,6 +212,7 @@ const assertions: Array<{detail?: string; name: string; passed: boolean}> = [];
 const diagnostics: {
 	bridgeMetrics: PerformanceSnapshot['renderer']['bridgeMetrics'];
 	interaction?: PerformanceSnapshot;
+	memoryDetail?: PerformanceSnapshot;
 	startup: PerformanceSnapshot[];
 	watcher?: PerformanceSnapshot;
 	watcherAsset?: PerformanceSnapshot;
@@ -879,6 +909,24 @@ async function waitForDiagnosticWarmup(page: Page) {
 	);
 }
 
+async function waitForInitialReadModelSettle(page: Page) {
+	// Startup readiness intentionally precedes nonessential dock queries. Give
+	// those effects one turn to submit, then wait until their worker requests and
+	// mutation queue are both drained so editor deltas are measured separately.
+	await page.waitForTimeout(500);
+	await pollSnapshot(
+		page,
+		current => {
+			const client = current.renderer.core.hosts[0]?.client;
+
+			return (
+				client?.pendingRequestCount === 0 && client?.sessionQueueCount === 0
+			);
+		},
+		10 * 60 * 1000
+	);
+}
+
 async function waitForWatcherMetric(
 	page: Page,
 	expectedPath: string,
@@ -931,10 +979,12 @@ async function measureEdits(page: Page) {
 		.getByRole('group', {name: 'Workspace Mode'})
 		.getByRole('tab', {name: 'Text'})
 		.click();
-	await waitForEvent(page, 'core-passage-document-ready');
-	const editor = page.locator('[data-testid^="story-editor-window-"]').first();
+	const editorWindow = page.locator('.story-edit-editor-window').first();
+	const editor = editorWindow
+		.locator('[data-testid^="story-editor-window-"]')
+		.first();
 
-	await expect(editor).toBeVisible();
+	await expect(editor).toBeVisible({timeout: 60_000});
 	const content = editor.locator('.cm-content');
 	const revisions: number[] = [];
 
@@ -1168,6 +1218,135 @@ async function measureDiagnostic(page: Page, launchToWindowMs: number) {
 		'diagnostic-read-model-update-is-bounded',
 		(mutationMetric?.readModel?.readModelLastTouchedSourceCount ?? 0) <= 1,
 		JSON.stringify(mutationMetric?.readModel)
+	);
+}
+
+async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
+	const startupSnapshot = await snapshot(page);
+
+	startupMetrics(startupSnapshot, launchToWindowMs);
+	diagnostics.startup.push(startupSnapshot);
+	await waitForDiagnosticWarmup(page);
+	await reset(page);
+	await recordMemoryDetailCheckpoint(page, 'pre-read-model-settle', true);
+	await waitForInitialReadModelSettle(page);
+	await recordMemoryDetailCheckpoint(page, 'before-editor', true);
+
+	await page
+		.getByRole('group', {name: 'Workspace Mode'})
+		.getByRole('tab', {name: 'Text'})
+		.click();
+	const editorWindow = page.locator('.story-edit-editor-window').first();
+	const editor = editorWindow
+		.locator('[data-testid^="story-editor-window-"]')
+		.first();
+
+	await expect(editor).toBeVisible({timeout: 60_000});
+	await recordMemoryDetailCheckpoint(page, 'editor-open');
+	await recordMemoryDetailCheckpoint(page, 'post-editor-gc', true);
+
+	const content = editor.locator('.cm-content');
+	const previousRevision = await currentRevision(page);
+
+	await content.click();
+	await page.keyboard.press('End');
+	await page.keyboard.insertText(' memory-detail-profile');
+	await waitForEvent(page, 'mutation-applied');
+	await waitForMeasure(page, 'mutation-to-paint');
+	await recordMemoryDetailCheckpoint(page, 'post-edit-paint');
+	const revision = await waitForRevisionAfter(page, previousRevision);
+
+	await waitForDiagnosticSaveCompletion(page, revision, watcherTimeout);
+	await recordMemoryDetailCheckpoint(page, 'post-save-acknowledgement');
+	await recordMemoryDetailCheckpoint(page, 'post-edit-gc', true);
+
+	await editorWindow.getByRole('button', {name: /^Close /}).click();
+	await expect(editorWindow).not.toBeVisible();
+	await recordMemoryDetailCheckpoint(page, 'editor-closed');
+	await recordMemoryDetailCheckpoint(page, 'post-editor-close-gc', true);
+
+	await page.getByTitle('Contents').click();
+	await expect(page.getByLabel('Contents', {exact: true})).toBeVisible();
+	await waitForMark(page, 'contents-visible');
+	await recordMemoryDetailCheckpoint(page, 'contents-open');
+	await page.getByTitle('Workbench').click();
+	await expect(page.locator('.story-edit-workspace')).toBeVisible();
+	await waitForInitialReadModelSettle(page);
+	await recordMemoryDetailCheckpoint(page, 'post-contents-close-gc', true);
+
+	const current = await snapshot(page);
+	const checkpointByName = new Map(
+		current.main.memoryCheckpoints.map(checkpoint => [
+			checkpoint.name,
+			checkpoint
+		])
+	);
+	const postEditor = checkpointByName.get('post-editor-gc');
+	const postEdit = checkpointByName.get('post-edit-gc');
+	const postClose = checkpointByName.get('post-editor-close-gc');
+	const postContents = checkpointByName.get('post-contents-close-gc');
+	const client = current.renderer.core.hosts[0]?.client;
+
+	captureMemory(current);
+	captureMemoryDetailCheckpoints(current);
+	captureBridgeMetrics(current);
+	diagnostics.memoryDetail = current;
+	assertInvariant(
+		'memory-detail-checkpoints-present',
+		[
+			'pre-read-model-settle',
+			'before-editor',
+			'editor-open',
+			'post-editor-gc',
+			'post-edit-paint',
+			'post-save-acknowledgement',
+			'post-edit-gc',
+			'editor-closed',
+			'post-editor-close-gc',
+			'contents-open',
+			'post-contents-close-gc'
+		].every(name => checkpointByName.has(name))
+	);
+	assertInvariant(
+		'memory-detail-one-active-editor',
+		postEditor?.renderer.activeEditorCount === 1,
+		JSON.stringify(postEditor?.renderer)
+	);
+	assertInvariant(
+		'memory-detail-editor-released',
+		postClose?.renderer.activeEditorCount === 0 &&
+			postClose?.renderer.editorDocumentBytes === 0,
+		JSON.stringify(postClose?.renderer)
+	);
+	assertInvariant(
+		'memory-detail-edit-keeps-analysis-bounded',
+		(postEdit?.renderer.rustAnalysisCacheSourceCount ?? Infinity) <= 1 &&
+			postEdit?.renderer.rustReadModelCacheStoryCount === 0,
+		JSON.stringify(postEdit?.renderer)
+	);
+	assertInvariant(
+		'memory-detail-contents-builds-on-demand',
+		(postContents?.renderer.rustAnalysisCacheSourceCount ?? 0) > 1 &&
+			postContents?.renderer.rustReadModelCacheStoryCount === 1,
+		JSON.stringify(postContents?.renderer)
+	);
+	assertInvariant(
+		'memory-detail-no-pending-worker-requests',
+		client?.pendingRequestCount === 0,
+		JSON.stringify(client)
+	);
+	assertInvariant(
+		'memory-detail-no-session-queue',
+		client?.sessionQueueCount === 0,
+		JSON.stringify(client)
+	);
+	assertInvariant(
+		'memory-detail-bootstrap-released',
+		current.renderer.core.bootstrap?.textBytes === 0
+	);
+	assertInvariant(
+		'memory-detail-native-hydration-released',
+		current.main.owners?.nativeHydration?.activeLeaseCount === 0
 	);
 }
 
@@ -1607,6 +1786,125 @@ function captureMemory(current: PerformanceSnapshot) {
 			? current.renderer.core.bootstrap.textBytes / 1024 / 1024
 			: undefined
 	);
+	const client = current.renderer.core.hosts[0]?.client;
+
+	addSample(
+		'memory.owner.workerCachedPayloadMiB',
+		client ? client.cachedPayloadBytes / 1024 / 1024 : undefined
+	);
+	addSample('memory.owner.workerPendingRequests', client?.pendingRequestCount);
+	addSample('memory.owner.workerSessionQueues', client?.sessionQueueCount);
+	addSample(
+		'memory.owner.workerReadModelCacheEntries',
+		client?.readModelCacheEntryCount
+	);
+	addSample(
+		'memory.owner.activeEditorCount',
+		current.renderer.owners?.activeEditorCount
+	);
+	addSample(
+		'memory.owner.editorDocumentMiB',
+		current.renderer.owners
+			? current.renderer.owners.editorDocumentBytes / 1024 / 1024
+			: undefined
+	);
+	const rust = current.renderer.bridgeMetrics
+		.map(metric => metric.readModel)
+		.filter(Boolean)
+		.at(-1);
+
+	addSample(
+		'memory.owner.rustProjectDocumentsMiB',
+		rust ? rust.projectDocumentBytes / 1024 / 1024 : undefined
+	);
+	addSample('memory.owner.rustAnalysisSources', rust?.analysisCacheSourceCount);
+	addSample('memory.owner.rustFingerprintEntries', rust?.fingerprintEntryCount);
+	addSample('memory.owner.rustGraphCacheStories', rust?.graphCacheStoryCount);
+	addSample(
+		'memory.owner.rustReadModelCacheStories',
+		rust?.readModelCacheStoryCount
+	);
+}
+
+async function recordMemoryDetailCheckpoint(
+	page: Page,
+	name: string,
+	retained = false
+) {
+	await page.evaluate(
+		async ({checkpointName, collectRetained}) => {
+			const harness = (window as any).twinePerformance;
+
+			if (collectRetained) {
+				await harness.collectRetainedMemory(checkpointName);
+			} else {
+				await harness.checkpoint(checkpointName);
+			}
+		},
+		{checkpointName: name, collectRetained: retained}
+	);
+}
+
+function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
+	const checkpoints = current.main.memoryCheckpoints;
+	const baseline = checkpoints.find(
+		checkpoint => checkpoint.name === 'before-editor'
+	);
+	const baselineRoles = baseline
+		? processWorkingSetByRole(baseline.appMetrics)
+		: new Map<string, number>();
+
+	for (const checkpoint of checkpoints) {
+		const prefix = `memoryDetail.${checkpoint.name}`;
+		const workingSetKiB = checkpoint.appMetrics.reduce(
+			(total, metric) => total + (metric.memory?.workingSetSize ?? 0),
+			0
+		);
+
+		addSample(`${prefix}.residentMiB`, workingSetKiB / 1024);
+		for (const [role, value] of processWorkingSetByRole(
+			checkpoint.appMetrics
+		)) {
+			addSample(`${prefix}.process.${role.toLowerCase()}MiB`, value / 1024);
+			addSample(
+				`${prefix}.delta.${role.toLowerCase()}MiB`,
+				baselineRoles.has(role)
+					? (value - baselineRoles.get(role)!) / 1024
+					: undefined
+			);
+		}
+		for (const field of [
+			'usedJSHeapSize',
+			'totalJSHeapSize',
+			'activeEditorCount',
+			'editorDocumentBytes',
+			'workerCachedPayloadBytes',
+			'workerPendingRequestCount',
+			'workerReadModelCacheEntryCount',
+			'workerSessionQueueCount',
+			'workerWasmMemoryBytes',
+			'rustAnalysisCacheSourceCount',
+			'rustFingerprintEntryCount',
+			'rustGraphCacheStoryCount',
+			'rustProjectDocumentBytes',
+			'rustReadModelCacheStoryCount'
+		]) {
+			addSample(
+				`${prefix}.renderer.${field}`,
+				typeof checkpoint.renderer[field] === 'number'
+					? checkpoint.renderer[field]
+					: undefined
+			);
+		}
+		for (const field of ['heapUsed', 'heapTotal', 'external', 'arrayBuffers']) {
+			addSample(
+				`${prefix}.main.${field}`,
+				typeof checkpoint.mainMemory[field] === 'number'
+					? checkpoint.mainMemory[field]
+					: undefined
+			);
+		}
+	}
 }
 
 async function passageFiles(projectPath: string) {
@@ -2141,6 +2439,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				createdAt: new Date().toISOString(),
 				diagnostics,
 				diagnostic: phase === 'diagnostic',
+				memoryDetail: phase === 'memory-detail',
 				environment: {
 					metricContracts: {memory: 2, startup: 2},
 					git: {dirty: gitDirty, revision: gitRevision},
@@ -2161,7 +2460,8 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				fixture: fixtureManifest,
 				kind: 'twine-electron-performance',
 				phase,
-				sampleCount: phase === 'diagnostic' ? 1 : undefined,
+				sampleCount:
+					phase === 'diagnostic' || phase === 'memory-detail' ? 1 : undefined,
 				samples,
 				schemaVersion: 1,
 				smoke,
@@ -2207,6 +2507,16 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 
 		try {
 			await measureDiagnostic(running.page, running.launchToWindowMs);
+		} finally {
+			await closeFixture(running);
+		}
+	}
+
+	if (phase === 'memory-detail') {
+		const running = await launchFixture();
+
+		try {
+			await measureMemoryDetail(running.page, running.launchToWindowMs);
 		} finally {
 			await closeFixture(running);
 		}
