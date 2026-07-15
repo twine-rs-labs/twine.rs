@@ -1,6 +1,8 @@
 import type {CoreAssetInventoryEntry} from '../bindings/CoreAssetInventoryEntry';
 import type {CoreAssetsPage} from '../bindings/CoreAssetsPage';
 import type {CoreAssetsQuery} from '../bindings/CoreAssetsQuery';
+import type {CoreBacklinksPage} from '../bindings/CoreBacklinksPage';
+import type {CoreBacklinksQuery} from '../bindings/CoreBacklinksQuery';
 import type {CoreContentsPage} from '../bindings/CoreContentsPage';
 import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
@@ -12,6 +14,7 @@ import type {CoreExternalIngestResult} from '../bindings/CoreExternalIngestResul
 import type {CoreGraphProjection} from '../bindings/CoreGraphProjection';
 import type {CoreGraphProjectionOptions} from '../bindings/CoreGraphProjectionOptions';
 import type {CorePassageFacts} from '../bindings/CorePassageFacts';
+import type {CorePassageLocalFacts} from '../bindings/CorePassageLocalFacts';
 import type {CorePassageDocument} from '../bindings/CorePassageDocument';
 import type {CoreSourceDocument} from '../bindings/CoreSourceDocument';
 import type {CoreSearchPage} from '../bindings/CoreSearchPage';
@@ -66,6 +69,8 @@ type ReadModelWorkerRequest = Extract<
 			| 'queryDiagnosticsPage'
 			| 'queryDocumentPage'
 			| 'queryPassageFacts'
+			| 'queryPassageLocalFacts'
+			| 'queryBacklinksPage'
 			| 'queryPassageDocument'
 			| 'querySourceDocument'
 			| 'querySearchPage'
@@ -732,6 +737,50 @@ export class WasmCoreWorkerClient {
 			sessionId,
 			storyId
 		});
+	}
+
+	async queryPassageLocalFacts(
+		sessionId: string,
+		storyId: string,
+		passageId: string,
+		revision: number
+	) {
+		return this.queryReadModel<CorePassageLocalFacts>(
+			sessionId,
+			storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'queryPassageLocalFacts',
+				passageId,
+				revision,
+				sessionId,
+				storyId
+			}
+		);
+	}
+
+	async queryBacklinksPage(
+		sessionId: string,
+		storyId: string,
+		passageId: string,
+		options: CoreBacklinksQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CoreBacklinksPage>(
+			sessionId,
+			storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'queryBacklinksPage',
+				options,
+				passageId,
+				revision,
+				sessionId,
+				storyId
+			}
+		);
 	}
 
 	async queryPassageDocument(

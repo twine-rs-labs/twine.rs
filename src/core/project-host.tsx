@@ -2,6 +2,8 @@ import * as React from 'react';
 import type {CoreAssetInventoryEntry} from './bindings/CoreAssetInventoryEntry';
 import type {CoreAssetsPage} from './bindings/CoreAssetsPage';
 import type {CoreAssetsQuery} from './bindings/CoreAssetsQuery';
+import type {CoreBacklinksPage} from './bindings/CoreBacklinksPage';
+import type {CoreBacklinksQuery} from './bindings/CoreBacklinksQuery';
 import type {CoreContentsPage} from './bindings/CoreContentsPage';
 import type {CoreContentsQuery} from './bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from './bindings/CoreDiagnosticsPage';
@@ -12,6 +14,7 @@ import type {CoreExternalDelta} from './bindings/CoreExternalDelta';
 import type {CoreExternalIngestResult} from './bindings/CoreExternalIngestResult';
 import type {CoreGraphProjection} from './bindings/CoreGraphProjection';
 import type {CorePassageFacts} from './bindings/CorePassageFacts';
+import type {CorePassageLocalFacts} from './bindings/CorePassageLocalFacts';
 import type {CorePassageDocument} from './bindings/CorePassageDocument';
 import type {CoreSourceDocument} from './bindings/CoreSourceDocument';
 import type {CoreSearchPage} from './bindings/CoreSearchPage';
@@ -197,6 +200,15 @@ export interface CoreProjectHost {
 		storyId: string,
 		passageId: string
 	): Promise<CorePassageFacts>;
+	queryPassageLocalFactsAsync(
+		storyId: string,
+		passageId: string
+	): Promise<CorePassageLocalFacts>;
+	queryBacklinksPageAsync(
+		storyId: string,
+		passageId: string,
+		options?: Partial<CoreBacklinksQuery>
+	): Promise<CoreBacklinksPage>;
 	queryPassageDocumentAsync(
 		storyId: string,
 		passageId: string
@@ -315,7 +327,9 @@ type CoreProjectSessionClient = Pick<
 	| 'queryDiagnosticsPage'
 	| 'queryDocumentPage'
 	| 'queryAssetsPage'
+	| 'queryBacklinksPage'
 	| 'queryPassageFacts'
+	| 'queryPassageLocalFacts'
 	| 'queryPassageDocument'
 	| 'querySourceDocument'
 	| 'redo'
@@ -359,6 +373,7 @@ const defaultAssetsQuery: CoreAssetsQuery = {
 	limit: 100,
 	query: null
 };
+const defaultBacklinksQuery: CoreBacklinksQuery = {cursor: null, limit: 8};
 const defaultSearchQuery: CoreSearchQuery = {
 	cursor: null,
 	fuzzy: false,
@@ -437,8 +452,15 @@ function projectFolderSaveHintsForPatchBatch(batch: PatchBatch) {
 		switch (patch.type) {
 			case 'passageUpdated':
 				if (patch.changes.layout !== null) {
-					addFull(patch.story_id, 'passage layout changed');
-					break;
+					const existing = hints.get(patch.story_id);
+
+					if (existing?.type !== 'full') {
+						hints.set(`${patch.story_id}:${patch.passage_id}:layout`, {
+							passageId: patch.passage_id,
+							storyId: patch.story_id,
+							type: 'passageLayout'
+						});
+					}
 				}
 				if (patch.changes.text !== null) {
 					const existing = hints.get(patch.story_id);
@@ -600,6 +622,7 @@ function emptyContentsPage(storyId: string): CoreContentsPage {
 			diagnostics: 0,
 			entryPoint: 0,
 			group: 0,
+			intelligenceComplete: false,
 			metadata: 0,
 			passage: 0,
 			problems: 0,
@@ -1936,6 +1959,67 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		} satisfies CorePassageFacts;
 	}
 
+	async queryPassageLocalFactsAsync(storyId: string, passageId: string) {
+		if (this.wasmClient.enabled) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await this.wasmClient.queryPassageLocalFacts(
+					this.sessionId,
+					storyId,
+					passageId,
+					revision
+				);
+			} catch (error) {
+				console.warn(`Rust local passage facts query failed: ${error}`);
+			}
+		}
+
+		return {
+			assetReferences: [],
+			characterCount: 0,
+			diagnostics: [],
+			excerpt: '',
+			isEmpty: true,
+			lineCount: 1,
+			links: [],
+			passageId,
+			revision: 0,
+			storyId,
+			symbols: [],
+			wordCount: 0
+		} satisfies CorePassageLocalFacts;
+	}
+
+	async queryBacklinksPageAsync(
+		storyId: string,
+		passageId: string,
+		options: Partial<CoreBacklinksQuery> = {}
+	) {
+		if (this.wasmClient.enabled) {
+			try {
+				const revision = await this.ensureWasmProjectSession();
+				return await this.wasmClient.queryBacklinksPage(
+					this.sessionId,
+					storyId,
+					passageId,
+					{...defaultBacklinksQuery, ...options},
+					revision
+				);
+			} catch (error) {
+				console.warn(`Rust backlinks page query failed: ${error}`);
+			}
+		}
+
+		return {
+			backlinks: [],
+			nextCursor: null,
+			passageId,
+			revision: 0,
+			storyId,
+			totalCount: 0
+		} satisfies CoreBacklinksPage;
+	}
+
 	async queryPassageDocumentAsync(storyId: string, passageId: string) {
 		const revision = await this.ensureWasmProjectSession();
 		return this.wasmClient.queryPassageDocument(
@@ -2356,6 +2440,51 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
+	queryPassageLocalFactsAsync(storyId: string, passageId: string) {
+		return (
+			this.hostForStory(storyId)?.queryPassageLocalFactsAsync(
+				storyId,
+				passageId
+			) ??
+			Promise.resolve({
+				assetReferences: [],
+				characterCount: 0,
+				diagnostics: [],
+				excerpt: '',
+				isEmpty: true,
+				lineCount: 1,
+				links: [],
+				passageId,
+				revision: 0,
+				storyId,
+				symbols: [],
+				wordCount: 0
+			} satisfies CorePassageLocalFacts)
+		);
+	}
+
+	queryBacklinksPageAsync(
+		storyId: string,
+		passageId: string,
+		options?: Partial<CoreBacklinksQuery>
+	) {
+		return (
+			this.hostForStory(storyId)?.queryBacklinksPageAsync(
+				storyId,
+				passageId,
+				options
+			) ??
+			Promise.resolve({
+				backlinks: [],
+				nextCursor: null,
+				passageId,
+				revision: 0,
+				storyId,
+				totalCount: 0
+			} satisfies CoreBacklinksPage)
+		);
+	}
+
 	queryPassageDocumentAsync(storyId: string, passageId: string) {
 		const host = this.hostForStory(storyId);
 		if (!host) {
@@ -2587,6 +2716,10 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.queryAssetsPageAsync(queryStoryId, options),
 			queryPassageFactsAsync: (queryStoryId, passageId) =>
 				host.queryPassageFactsAsync(queryStoryId, passageId),
+			queryPassageLocalFactsAsync: (queryStoryId, passageId) =>
+				host.queryPassageLocalFactsAsync(queryStoryId, passageId),
+			queryBacklinksPageAsync: (queryStoryId, passageId, options) =>
+				host.queryBacklinksPageAsync(queryStoryId, passageId, options),
 			queryPassageDocumentAsync: (queryStoryId, passageId) =>
 				host.queryPassageDocumentAsync(queryStoryId, passageId),
 			querySourceDocumentAsync: (queryStoryId, kind) =>

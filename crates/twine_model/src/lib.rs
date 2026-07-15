@@ -206,6 +206,14 @@ impl PassageIndex {
         self.entries.get_mut(id)
     }
 
+    pub fn get_at(&self, index: usize) -> Option<&Passage> {
+        self.entries.get_index(index).map(|(_, passage)| passage)
+    }
+
+    pub fn rank_of(&self, id: &PassageId) -> Option<usize> {
+        self.entries.get_index_of(id)
+    }
+
     pub fn id_for_name(&self, name: &str) -> Option<&PassageId> {
         self.names.get(name)
     }

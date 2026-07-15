@@ -2,6 +2,8 @@ import type {CoreGraphProjectionOptions} from './bindings/CoreGraphProjectionOpt
 import type {CoreAssetInventoryEntry} from './bindings/CoreAssetInventoryEntry';
 import type {CoreAssetsPage} from './bindings/CoreAssetsPage';
 import type {CoreAssetsQuery} from './bindings/CoreAssetsQuery';
+import type {CoreBacklinksPage} from './bindings/CoreBacklinksPage';
+import type {CoreBacklinksQuery} from './bindings/CoreBacklinksQuery';
 import type {CoreContentsPage} from './bindings/CoreContentsPage';
 import type {CoreContentsQuery} from './bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from './bindings/CoreDiagnosticsPage';
@@ -9,6 +11,7 @@ import type {CoreDiagnosticsQuery} from './bindings/CoreDiagnosticsQuery';
 import type {CoreDocumentPage} from './bindings/CoreDocumentPage';
 import type {CoreDocumentQuery} from './bindings/CoreDocumentQuery';
 import type {CorePassageFacts} from './bindings/CorePassageFacts';
+import type {CorePassageLocalFacts} from './bindings/CorePassageLocalFacts';
 import type {CorePassageDocument} from './bindings/CorePassageDocument';
 import type {CoreSourceDocument} from './bindings/CoreSourceDocument';
 import type {CoreRect} from './bindings/CoreRect';
@@ -47,6 +50,8 @@ export type {
 	CoreAssetInventoryEntry,
 	CoreAssetsPage,
 	CoreAssetsQuery,
+	CoreBacklinksPage,
+	CoreBacklinksQuery,
 	CoreContentsPage,
 	CoreContentsQuery,
 	CoreDiagnosticsPage,
@@ -54,6 +59,7 @@ export type {
 	CoreDocumentPage,
 	CoreDocumentQuery,
 	CorePassageFacts,
+	CorePassageLocalFacts,
 	CorePassageDocument,
 	CoreSourceDocument,
 	CoreRect,

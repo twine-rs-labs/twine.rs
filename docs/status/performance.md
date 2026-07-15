@@ -2,7 +2,7 @@
 
 Status: current measured snapshot
 Owner: performance maintainers
-Last verified: 2026-07-13
+Last verified: 2026-07-15
 Source of truth: release-mode Electron harness and accepted local baselines
 
 ## Harness state
@@ -40,6 +40,32 @@ WASM linear memory, Rust cache/entity counts, and a perf-only post-GC retained
 checkpoint. These startup reports are partial evidence, not accepted baselines.
 
 ## Recent focused validation
+
+Fresh release-mode 50k query, graph, edit, and watcher phases passed on
+2026-07-15 after the compact Contents, layout-save, external-ingest, and harness
+changes landed. All structural assertions passed.
+
+- Cold Contents reached a matching painted result in about 308 ms. The first
+  core request took about 255 ms and transferred 18.5 KiB without constructing
+  a graph or full read model. Warm Contents measured 70.2 ms p95, with the
+  cached core request at 5.7 ms p95 and result-to-paint at 25.9 ms p95. Search
+  measured 24.8 ms p95.
+- Twenty clean edit samples measured 17.6 ms worker round trip and 23.4 ms
+  edit-to-paint at p95. No measured edit overlapped external ingestion.
+- Four real graph drags advanced and persisted four revisions. Every save used
+  layout-only native incremental persistence; the full-save fallback count was
+  zero. Graph frames measured 33.4 ms p95 with a 400.1 ms maximum outlier.
+- Five warm external passage edits measured 4.3 ms core ingestion p95. Graph
+  and read-model work were each at or below 0.1 ms, history work was zero, and
+  topology-neutral text changes performed no graph reparse. Observation to
+  renderer patch measured 324.8 ms p95, dominated by the roughly 151 ms watcher
+  coalescing window and 164.8 ms native delta creation p95.
+
+These results close the project-scale fallback goals. The strongest next
+latency candidate is graph frame stability, followed by the remaining Contents
+and edit paint overhead. Resident memory still ranges from about 1.17 GiB in
+the edit phase to 1.48 GiB in the graph phase, so browser/renderer working-set
+attribution remains the next broader architectural investigation.
 
 The 50k diagnostic, query, graph, and watcher phases passed on 2026-07-10. They
 validate the incremental project-folder save path, bounded Contents path, and
@@ -187,12 +213,68 @@ cold full read-model build: its measured worker round trip was about 7.5 ms.
 Graph/backlink representation and cold Contents construction are now the
 dominant memory and latency targets.
 
+The selected-passage path has subsequently been split. Local passage facts now
+parse only the selected source and resolve
+its outgoing links through the story name index; they do not initialize graph
+layout, reachability, or the full read model. Exact backlinks load independently
+as a revision-bound page backed by a 16-entry/4 MiB LRU. A cold backlink lookup
+streams all passage sources because an exact incoming count inherently requires
+examining them, but retains only matching compact link records. Resident entries
+are updated from one changed source across apply, undo/redo, and external text
+ingestion. Product routes no longer call the compatibility combined-passage
+query. The detailed memory phase now reports backlink scan/cache ownership and
+asserts bounded product query payloads.
+
+The confirming 50k memory-detail run on 2026-07-13 passed. Before opening the
+editor it retained about 1.026 GiB resident and 100.2 MiB of WASM, with one
+analyzed source, one empty-target backlink-cache entry, and no graph or full
+read-model cache. This replaces the preceding roughly 1.13 GiB/197.5 MiB
+selected-passage state, removing about 97 MiB of WASM and roughly 100 MiB of
+total resident memory in this one-sample comparison. Local facts transferred
+782 bytes in about 10.7 ms round trip; the first backlink page transferred 116
+bytes, completed within the same 16.4 ms serialized query window, and scanned
+50,000 sources once without retaining unrelated edges. The normal product path
+issued no compatibility passage-facts request.
+
+Contents is now clearly the next large explicit cost in this trace: its cold
+page took about 38.4 s and grew WASM to 271.8 MiB by constructing the
+50,002-source analysis/read-model and full graph caches. That one-sample time is
+colder than the preceding 14.4 s observation, but both identify the same
+remaining owner rather than a selected-passage regression.
+
+The follow-up removes that eager work from the default Contents page. A compact,
+revision-bound catalog now supplies passage, tag, entry-point, script,
+stylesheet, and story-metadata rows without source parsing, graph construction,
+or the full read model. Asset, variable, problem, orphan, and diagnostic filters
+still initialize the complete intelligence cache on demand. Incomplete facet
+counts are identified in the response and rendered as deferred rather than as
+false zeroes. The benchmark now correlates a new query submit to its matching
+result and post-result paint, reports cold and warm pages separately, and
+requires the worker queue to drain before the phase completes.
+
+Layout persistence and external ingestion were narrowed at the same boundary.
+A passage move carries a `passageLayout` hint, skips document materialization,
+and atomically updates only `.twine/graph.json` after checking its accepted
+fingerprint; the native baseline and descriptor are patched in place. Common
+non-structural external batches use compact story/passage/project-layout deltas
+instead of cloning the complete session and project. The graph phase now makes a
+real layout edit and blocks on an incremental save acknowledgement with no full
+fallback or in-flight revision.
+
 The standard 50k diagnostic also passed after the deferral change. Its single
 warm edit measured about 18.3 ms round trip and 19.9 ms to paint, down from the
 preceding roughly 36.6 ms sample and close to the 16.6 ms target. Incremental
 save remained fast at about 78.3 ms end to end, 6.9 ms native, and 0.22 ms for
 baseline patching. The edit retained one analyzed source and no full read-model
 cache.
+
+The rebuilt post-backlink-cutover diagnostic passed with essentially the same
+edit result: about 18.7 ms worker round trip and 20.4 ms to paint. Incremental
+save measured about 111.3 ms end to end and 7.5 ms native, while resident memory
+was about 1.025 GiB. A transient pre-refinement sample exposed and removed a
+50k-rank-map clone from backlink maintenance; the final updater resolves the
+changed passage rank directly and parses that source once for every resident
+backlink target.
 
 The focused 50k startup phase now passes with the corrected startup/memory
 contract. Moving watcher-baseline work out of shell opening, skipping redundant

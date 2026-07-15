@@ -2,10 +2,10 @@
 
 use std::collections::BTreeMap;
 use twine_core::{
-    CoreAssetInventoryEntry, CoreAssetsQuery, CoreContentsQuery, CoreDiagnosticsQuery,
-    CoreDocumentQuery, CoreExternalDelta, CoreExternalIngestMode, CoreGraphProjectionOptions,
-    CoreSearchQuery, CoreSourceKind, CoreStoryIndexOptions, PassageSnapshot, ProjectSession,
-    ProjectSnapshot, StoryCommand, StorySnapshot,
+    CoreAssetInventoryEntry, CoreAssetsQuery, CoreBacklinksQuery, CoreContentsQuery,
+    CoreDiagnosticsQuery, CoreDocumentQuery, CoreExternalDelta, CoreExternalIngestMode,
+    CoreGraphProjectionOptions, CoreSearchQuery, CoreSourceKind, CoreStoryIndexOptions,
+    PassageSnapshot, ProjectSession, ProjectSnapshot, StoryCommand, StorySnapshot,
 };
 use twine_model::{
     GraphLayout, GraphPosition, LibraryMetadata, Passage, PassageId, PassageIndex, PassageLayout,
@@ -252,6 +252,34 @@ impl TwineWasmProjectSession {
             &self
                 .session
                 .passage_facts(&story_id, &passage_id)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_passage_local_facts(
+        &mut self,
+        story_id: String,
+        passage_id: String,
+    ) -> Result<JsValue, JsValue> {
+        to_js(
+            &self
+                .session
+                .passage_local_facts(&story_id, &passage_id)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_backlinks_page(
+        &mut self,
+        story_id: String,
+        passage_id: String,
+        query: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let query = from_js::<CoreBacklinksQuery>(query)?;
+        to_js(
+            &self
+                .session
+                .backlinks_page(&story_id, &passage_id, query)
                 .map_err(core_error)?,
         )
     }

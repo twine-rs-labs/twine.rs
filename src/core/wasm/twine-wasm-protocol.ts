@@ -4,6 +4,8 @@ import type {CoreExternalIngestResult} from '../bindings/CoreExternalIngestResul
 import type {CoreGraphProjectionOptions} from '../bindings/CoreGraphProjectionOptions';
 import type {CoreAssetsPage} from '../bindings/CoreAssetsPage';
 import type {CoreAssetsQuery} from '../bindings/CoreAssetsQuery';
+import type {CoreBacklinksPage} from '../bindings/CoreBacklinksPage';
+import type {CoreBacklinksQuery} from '../bindings/CoreBacklinksQuery';
 import type {CoreContentsPage} from '../bindings/CoreContentsPage';
 import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
@@ -11,6 +13,7 @@ import type {CoreDiagnosticsQuery} from '../bindings/CoreDiagnosticsQuery';
 import type {CoreDocumentPage} from '../bindings/CoreDocumentPage';
 import type {CoreDocumentQuery} from '../bindings/CoreDocumentQuery';
 import type {CorePassageFacts} from '../bindings/CorePassageFacts';
+import type {CorePassageLocalFacts} from '../bindings/CorePassageLocalFacts';
 import type {CorePassageDocument} from '../bindings/CorePassageDocument';
 import type {CoreSourceDocument} from '../bindings/CoreSourceDocument';
 import type {CoreSearchPage} from '../bindings/CoreSearchPage';
@@ -51,6 +54,11 @@ export interface WasmWorkerMetricBase {
 	responseBytes: number;
 	readModel?: {
 		analysisCacheSourceCount: number;
+		backlinkCacheBytes: number;
+		backlinkCacheEntryCount: number;
+		backlinkCacheHitCount: number;
+		backlinkScanCount: number;
+		backlinkScannedSourceCount: number;
 		fingerprintEntryCount: number;
 		graphCacheStoryCount: number;
 		historyBytes: number;
@@ -204,6 +212,23 @@ export type WasmWorkerRequest =
 	| {
 			id: number;
 			kind: 'queryPassageFacts';
+			passageId: string;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryPassageLocalFacts';
+			passageId: string;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryBacklinksPage';
+			options: CoreBacklinksQuery;
 			passageId: string;
 			revision: number;
 			sessionId: string;
@@ -374,6 +399,20 @@ export type WasmWorkerSuccess =
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: CorePassageFacts;
+	  }
+	| {
+			id: number;
+			kind: 'queryPassageLocalFacts';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CorePassageLocalFacts;
+	  }
+	| {
+			id: number;
+			kind: 'queryBacklinksPage';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CoreBacklinksPage;
 	  }
 	| {
 			id: number;

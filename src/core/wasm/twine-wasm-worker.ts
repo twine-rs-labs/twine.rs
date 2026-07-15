@@ -324,6 +324,24 @@ async function handleRequest(
 				).session.query_passage_facts(request.storyId, request.passageId);
 				break;
 
+			case 'queryPassageLocalFacts':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_passage_local_facts(request.storyId, request.passageId);
+				break;
+
+			case 'queryBacklinksPage':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_backlinks_page(
+					request.storyId,
+					request.passageId,
+					request.options
+				);
+				break;
+
 			case 'queryPassageDocument':
 				result = ensureSession(
 					request.sessionId,
@@ -373,6 +391,11 @@ async function handleRequest(
 		const readModel = diagnostics
 			? {
 					analysisCacheSourceCount: diagnostics.analysisCacheSourceCount,
+					backlinkCacheBytes: diagnostics.backlinkCacheBytes,
+					backlinkCacheEntryCount: diagnostics.backlinkCacheEntryCount,
+					backlinkCacheHitCount: diagnostics.backlinkCacheHitCount,
+					backlinkScanCount: diagnostics.backlinkScanCount,
+					backlinkScannedSourceCount: diagnostics.backlinkScannedSourceCount,
 					fingerprintEntryCount: diagnostics.fingerprintEntryCount,
 					graphCacheStoryCount: diagnostics.graphCacheStoryCount,
 					historyBytes: diagnostics.historyBytes,

@@ -21,7 +21,8 @@ import type {ContentsViewModelEntry} from '../../core/view-models';
 import type {CoreAssetReference} from '../../core/bindings/CoreAssetReference';
 import type {CoreContentsEntryKind} from '../../core/bindings/CoreContentsEntryKind';
 import type {CoreContentsPage} from '../../core/bindings/CoreContentsPage';
-import type {CorePassageFacts} from '../../core/bindings/CorePassageFacts';
+import type {CoreBacklinksPage} from '../../core/bindings/CoreBacklinksPage';
+import type {CorePassageLocalFacts} from '../../core/bindings/CorePassageLocalFacts';
 import {fileUrlForPath} from '../../core/asset-paths';
 import type {TwineElectronWindow} from '../../electron/shared';
 import {selectPassage, Story, useStoriesContext} from '../../store/stories';
@@ -95,6 +96,30 @@ const problemFilters: Array<{
 	{id: 'problems', icon: 'alert-triangle', label: 'All Problems'},
 	{id: 'entryPoint', icon: 'rocket', label: 'Entry Points'}
 ];
+
+const deferredIntelligenceFilters = new Set<ContentsFilter>([
+	'asset',
+	'diagnostics',
+	'problems',
+	'variable'
+]);
+
+function contentsFilterCountLabel(
+	page: CoreContentsPage | undefined,
+	filter: ContentsFilter,
+	count: number
+) {
+	if (page && !page.facets.intelligenceComplete) {
+		if (filter === 'all') {
+			return `${count}+`;
+		}
+		if (deferredIntelligenceFilters.has(filter)) {
+			return '—';
+		}
+	}
+
+	return count;
+}
 
 function storyForId(stories: Story[], storyId: string | undefined) {
 	return stories.find(story => story.id === storyId);
@@ -379,7 +404,9 @@ export const ContentsRoute: React.FC = () => {
 	const usesPagedContents = !!story;
 	const [contentsPage, setContentsPage] = React.useState<CoreContentsPage>();
 	const [selectedPassageFacts, setSelectedPassageFacts] =
-		React.useState<CorePassageFacts>();
+		React.useState<CorePassageLocalFacts>();
+	const [selectedBacklinks, setSelectedBacklinks] =
+		React.useState<CoreBacklinksPage>();
 
 	React.useLayoutEffect(() => {
 		markPerformance('contents-route-committed');
@@ -631,18 +658,25 @@ export const ContentsRoute: React.FC = () => {
 
 		if (!story || !selectedPassage) {
 			setSelectedPassageFacts(undefined);
+			setSelectedBacklinks(undefined);
 			return () => {
 				active = false;
 			};
 		}
 
-		void coreProjectHost
-			.queryPassageFactsAsync(story.id, selectedPassage.id)
-			.then(facts => {
-				if (active) {
-					setSelectedPassageFacts(facts.revision > 0 ? facts : undefined);
-				}
-			});
+		setSelectedPassageFacts(undefined);
+		setSelectedBacklinks(undefined);
+		void Promise.all([
+			coreProjectHost.queryPassageLocalFactsAsync(story.id, selectedPassage.id),
+			coreProjectHost.queryBacklinksPageAsync(story.id, selectedPassage.id, {
+				limit: 50
+			})
+		]).then(([facts, backlinks]) => {
+			if (active) {
+				setSelectedPassageFacts(facts.revision > 0 ? facts : undefined);
+				setSelectedBacklinks(backlinks.revision > 0 ? backlinks : undefined);
+			}
+		});
 
 		return () => {
 			active = false;
@@ -652,7 +686,10 @@ export const ContentsRoute: React.FC = () => {
 		selectedPassageFacts && selectedPassage
 			? {
 					assetReferences: selectedPassageFacts.assetReferences,
-					backlinks: selectedPassageFacts.backlinks,
+					backlinks:
+						selectedBacklinks?.revision === selectedPassageFacts.revision
+							? selectedBacklinks.backlinks
+							: [],
 					diagnostics: selectedPassageFacts.diagnostics,
 					linkFacts: selectedPassageFacts.links,
 					wordCount: selectedPassageFacts.wordCount
@@ -667,7 +704,7 @@ export const ContentsRoute: React.FC = () => {
 	}, [selectedEntry, selectedId]);
 
 	React.useEffect(() => {
-		if (contents) {
+		if (contents && (!usesPagedContents || contentsPage)) {
 			markPerformanceAfterPaint('contents-visible');
 			if (usesPagedContents && contentsPage) {
 				measurePerformanceAfterPaint(
@@ -836,7 +873,11 @@ export const ContentsRoute: React.FC = () => {
 						<TablerIcon icon={candidate.icon} />
 						<span>{candidate.label}</span>
 						<span className="contents-route__count">
-							{filterCounts.get(candidate.id) ?? 0}
+							{contentsFilterCountLabel(
+								contentsPage,
+								candidate.id,
+								filterCounts.get(candidate.id) ?? 0
+							)}
 						</span>
 					</button>
 				))}
@@ -852,7 +893,11 @@ export const ContentsRoute: React.FC = () => {
 						<TablerIcon icon={candidate.icon} />
 						<span>{candidate.label}</span>
 						<span className="contents-route__count">
-							{filterCounts.get(candidate.id) ?? 0}
+							{contentsFilterCountLabel(
+								contentsPage,
+								candidate.id,
+								filterCounts.get(candidate.id) ?? 0
+							)}
 						</span>
 					</button>
 				))}

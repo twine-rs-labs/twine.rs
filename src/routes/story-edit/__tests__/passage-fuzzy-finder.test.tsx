@@ -43,7 +43,7 @@ describe('PassageFuzzyFinder', () => {
 			expect(onClose).toBeCalledTimes(1);
 		});
 
-		it('updates results based on what the user enters', () => {
+		it('updates results based on what the user enters', async () => {
 			const story = fakeStory(1);
 
 			story.passages[0].name = 'a name';
@@ -51,12 +51,12 @@ describe('PassageFuzzyFinder', () => {
 			renderComponent({}, story);
 			fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
 			expect(
-				screen.getByRole('button', {name: 'a name text'})
+				await screen.findByRole('button', {name: 'a name a name'})
 			).toBeInTheDocument();
 		});
 
 		describe('When a result is selected', () => {
-			it('centers the view on a passage and selects it when a result is selected', () => {
+			it('centers the view on a passage and selects it when a result is selected', async () => {
 				const setCenter = jest.fn();
 				const story = fakeStory(1);
 
@@ -66,11 +66,13 @@ describe('PassageFuzzyFinder', () => {
 				renderComponent({setCenter}, story);
 				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
 				expect(setCenter).not.toBeCalled();
-				fireEvent.click(screen.getByRole('button', {name: 'a name text'}));
+				fireEvent.click(
+					await screen.findByRole('button', {name: 'a name a name'})
+				);
 				expect(setCenter.mock.calls).toEqual([[story.passages[0]]]);
 			});
 
-			it('uses explicit graph reveal instead of scroll centering when available', () => {
+			it('uses explicit graph reveal instead of scroll centering when available', async () => {
 				const onRevealPassageInGraph = jest.fn();
 				const setCenter = jest.fn();
 				const story = fakeStory(1);
@@ -80,12 +82,14 @@ describe('PassageFuzzyFinder', () => {
 				story.passages[0].text = 'text';
 				renderComponent({onRevealPassageInGraph, setCenter}, story);
 				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
-				fireEvent.click(screen.getByRole('button', {name: 'a name text'}));
+				fireEvent.click(
+					await screen.findByRole('button', {name: 'a name a name'})
+				);
 				expect(onRevealPassageInGraph).toHaveBeenCalledWith(story.passages[0]);
 				expect(setCenter).not.toBeCalled();
 			});
 
-			it('calls the onClose prop', () => {
+			it('calls the onClose prop', async () => {
 				const onClose = jest.fn();
 				const story = fakeStory(1);
 
@@ -95,11 +99,13 @@ describe('PassageFuzzyFinder', () => {
 				renderComponent({onClose}, story);
 				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
 				expect(onClose).not.toBeCalled();
-				fireEvent.click(screen.getByRole('button', {name: 'a name text'}));
+				fireEvent.click(
+					await screen.findByRole('button', {name: 'a name a name'})
+				);
 				expect(onClose).toBeCalledTimes(1);
 			});
 
-			it('tests a result from the search row action', () => {
+			it('tests a result from the search row action', async () => {
 				const onTestPassage = jest.fn();
 				const story = fakeStory(1);
 
@@ -108,7 +114,7 @@ describe('PassageFuzzyFinder', () => {
 				renderComponent({onTestPassage}, story);
 				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
 				fireEvent.click(
-					screen.getByRole('button', {name: 'Test "a name" from here'})
+					await screen.findByRole('button', {name: 'Test "a name" from here'})
 				);
 
 				expect(onTestPassage).toHaveBeenCalledWith(story.passages[0]);

@@ -2,7 +2,7 @@
 
 Status: active
 Owner: performance and architecture maintainers
-Last verified: 2026-07-12
+Last verified: 2026-07-15
 Source of truth: outstanding work revealed by accepted 10k/50k baselines
 
 ## Objective
@@ -43,11 +43,18 @@ fixture isolation.
   diagnostic measured about 18.3 ms edit round trip and 19.9 ms edit-to-paint,
   materially improved from the preceding 36.6 ms sample and now close to the
   16.6 ms target.
-- Selected-passage backlinks still construct a complete graph cache, growing
-  WASM from about 96 MiB to 197.5 MiB. Explicitly opening Contents constructs
-  the 50,002-source read model, takes about 14.4 s cold, and grows WASM to about
-  251.6 MiB. Compact/lazy graph backlinks are the next normal-workspace target;
-  compact incremental Contents analysis follows as the explicit-route target.
+- Selected-passage facts are now split into a one-source local query and a
+  revision-bound backlink page. The backlink page uses a 16-entry/4 MiB LRU,
+  retains only matching compact records, and patches resident targets from one
+  changed source. Full graph layout/reachability remains explicit graph or
+  aggregate work. The confirming 50k memory-detail run retained about 100.2 MiB
+  of WASM and 1.026 GiB resident before editor open, with no graph/read-model
+  cache, versus the preceding 197.5 MiB/1.13 GiB selected-passage state. Local
+  facts and the first backlink page completed in a serialized 16.4 ms window
+  with 782-byte and 116-byte responses. The default Contents route no longer
+  constructs the 50,002-source read model or graph. Fresh 50k validation on
+  2026-07-15 measured about 308 ms cold and 70.2 ms warm p95, with a 5.7 ms
+  cached core request p95. Expensive intelligence filters remain explicit.
 
 - Profile native project load, renderer hydration, session initialization, and
   first-route queries independently.
@@ -158,6 +165,21 @@ with unchanged structural assertions.
   batches, and explicit recovery retain compatibility fallbacks. These should
   be narrowed by command family, but they are no longer on the ordinary edit,
   undo/redo, Contents, or watcher text path.
+- Layout-only persistence now carries touched-passage hints through the renderer
+  and atomically rewrites only `.twine/graph.json`; it preserves unrelated graph
+  metadata, checks the accepted fingerprint, and patches the native baseline and
+  descriptor without materializing passage documents. The graph benchmark makes
+  a real layout edit and rejects full-save fallback or an unacknowledged final
+  revision.
+- Common non-structural external batches now build one compact entity delta for
+  passage fields/layout, story metadata/sources/start passage, and project graph
+  metadata. Structural upsert/delete and asset recovery retain the compatibility
+  path; ordinary watcher changes no longer clone the complete session/project.
+- Fresh 50k validation persisted four layout revisions through four incremental
+  native saves with zero full-save fallbacks. Twenty clean edit samples measured
+  23.4 ms paint p95. Five warm external edits measured 4.3 ms compact core
+  ingestion p95, with no history work or graph reparse for topology-neutral
+  text changes.
 
 Exit signal: a one-passage edit or external delta does no project-scale index
 rebuild; edit-to-paint and watcher ingestion materially improve against the
@@ -167,6 +189,13 @@ focused 50k measurements.
 
 - Keep contents/search payloads result-bounded and avoid rebuilding complete
   frontend view models.
+- The default All/Group page and basic Passage, Tag, Project, Script, and
+  Stylesheet filters now use a revision-bound source-metadata catalog. Building
+  and updating it parses no source, initializes no graph, and retains no full
+  read model. Asset, variable, problem, orphan, and diagnostic intelligence is
+  loaded only when its filter requires it. The harness separately records cold
+  and warm Contents timings and requires the matching result to be painted with
+  the worker queue drained.
 - Profile graph layout, projection transfer, React reconciliation, canvas edge
   work, and frame scheduling separately.
 - Reduce watcher observation and Rust reindex latency while retaining
@@ -184,6 +213,11 @@ focused 50k measurements.
   boundary at 0.1 ms p50, while observation-to-patch remained about 416 ms p50.
   Optimize the fixed watcher coalescing/native-delta and renderer-patch portions
   before changing the incremental Rust index pipeline.
+- The 2026-07-15 run confirms that the core is no longer the watcher bottleneck:
+  compact ingestion was 4.3 ms p95 while observation-to-patch was 324.8 ms p95.
+  Graph interaction is now the clearest latency target at 33.4 ms frame p95 and
+  a 400.1 ms maximum outlier. Contents and edit paint remain smaller follow-ups
+  at 70.2 ms and 23.4 ms p95 respectively.
 
 Exit signal: no full-source rebuilds, bounded rendering remains true, and each
 surface materially improves against its accepted baseline.

@@ -448,6 +448,217 @@ describe('project-folder native bridge', () => {
 		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
 	});
 
+	it('incrementally saves moved passage layout and patches the session baseline', async () => {
+		const original = fakeStory(2);
+		const story = {
+			...original,
+			id: 'story-id',
+			name: 'Story',
+			passages: original.passages.map((passage, index) => ({
+				...passage,
+				id: `passage-${index + 1}`,
+				left: index === 0 ? 420 : passage.left,
+				story: 'story-id',
+				top: index === 0 ? 240 : passage.top
+			}))
+		};
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'start_passage = "passage-1"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "First"',
+			'file = "passages/story/001-first.twee"',
+			'[[stories.passages]]',
+			'id = "passage-2"',
+			'name = "Second"',
+			'file = "passages/story/002-second.twee"'
+		].join('\n');
+		const initialGraph = {
+			passages: {
+				'passage-1': {height: 100, left: 10, top: 20, width: 100},
+				'passage-2': {height: 110, left: 30, top: 40, width: 120}
+			},
+			viewport: {scale: 0.75}
+		};
+		let graphWritten = false;
+		const manifestFile = {
+			fingerprint: '1:0',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 0
+		};
+		const graphFile = () => ({
+			fingerprint: graphWritten ? '2:0' : '1:0',
+			kind: 'graph' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: graphWritten ? 2 : 1,
+			path: '.twine/graph.json',
+			sizeBytes: 0
+		});
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : ''
+		);
+		readJsonMock.mockImplementation(async path =>
+			String(path).endsWith('.twine/graph.json') ? initialGraph : {}
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockImplementation(() => [
+			manifestFile,
+			graphFile()
+		]);
+		statMock.mockImplementation(async path => {
+			const graph = String(path).endsWith('.twine/graph.json');
+			const mtimeMs = graph && graphWritten ? 2 : 1;
+
+			return {
+				isDirectory: () => false,
+				isFile: () => true,
+				mtime: new Date('2026-06-21T16:00:00.000Z'),
+				mtimeMs,
+				size: 0
+			};
+		});
+		moveMock.mockImplementation(async (_source, target) => {
+			if (String(target).endsWith('.twine/graph.json')) {
+				graphWritten = true;
+			}
+		});
+
+		await startProjectSession('/native/project.twine.rs', undefined, [
+			'story-id'
+		]);
+		await saveProjectFolder('/native/project.twine.rs', story, {
+			hints: [
+				{passageId: 'passage-1', storyId: 'story-id', type: 'passageLayout'}
+			],
+			incrementalOnly: true,
+			revision: 7,
+			sessionId: 'project:/native/project.twine.rs'
+		});
+
+		const graphWrite = writeFileMock.mock.calls.find(call =>
+			/^\/native\/project\.twine\.rs\/\.twine\/graph\.json\..+\.tmp$/.test(
+				String(call[0])
+			)
+		);
+		expect(graphWrite).toBeDefined();
+		const savedGraph = JSON.parse(String(graphWrite?.[1]));
+
+		expect(savedGraph).toEqual({
+			passages: {
+				'passage-1': expect.objectContaining({left: 420, top: 240}),
+				'passage-2': initialGraph.passages['passage-2']
+			},
+			viewport: {scale: 0.75}
+		});
+		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
+		expect(
+			writeFileMock.mock.calls.some(call =>
+				String(call[0]).includes('/.twine/project.json.')
+			)
+		).toBe(false);
+		expect(
+			writeFileMock.mock.calls.some(call =>
+				String(call[0]).endsWith('/twine.toml')
+			)
+		).toBe(false);
+		await expect(
+			projectSessionSnapshot('/native/project.twine.rs', ['story-id'])
+		).resolves.toEqual(
+			expect.objectContaining({changedPaths: [], conflicts: []})
+		);
+	});
+
+	it('refuses an incremental layout save when graph.json changed externally', async () => {
+		const story = {
+			...fakeStory(1),
+			id: 'story-id',
+			passages: [
+				{
+					...fakeStory(1).passages[0],
+					id: 'passage-id',
+					left: 420,
+					story: 'story-id'
+				}
+			]
+		};
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/001-start.twee"'
+		].join('\n');
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : ''
+		);
+		readJsonMock.mockResolvedValue({
+			passages: {
+				'passage-id': {height: 100, left: 10, top: 20, width: 100}
+			}
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockReturnValue([
+			{
+				fingerprint: '1:0',
+				kind: 'manifest',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 0
+			},
+			{
+				fingerprint: '1:0',
+				kind: 'graph',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: '.twine/graph.json',
+				sizeBytes: 0
+			}
+		]);
+		statMock.mockResolvedValue({
+			isDirectory: () => false,
+			isFile: () => true,
+			mtime: new Date('2026-06-21T16:00:00.000Z'),
+			mtimeMs: 2,
+			size: 0
+		});
+
+		await startProjectSession('/native/project.twine.rs', undefined, [
+			'story-id'
+		]);
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story, {
+				hints: [
+					{
+						passageId: 'passage-id',
+						storyId: 'story-id',
+						type: 'passageLayout'
+					}
+				],
+				incrementalOnly: true
+			})
+		).rejects.toThrow(
+			'.twine/graph.json changed outside twine.rs; refusing to overwrite it.'
+		);
+		expect(moveMock).not.toHaveBeenCalled();
+	});
+
 	it('opens a native project folder from renderer metadata', async () => {
 		const story = fakeStory(1);
 

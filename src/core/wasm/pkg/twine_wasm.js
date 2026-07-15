@@ -165,6 +165,23 @@ export class TwineWasmProjectSession {
     }
     /**
      * @param {string} story_id
+     * @param {string} passage_id
+     * @param {any} query
+     * @returns {any}
+     */
+    query_backlinks_page(story_id, passage_id, query) {
+        const ptr0 = passStringToWasm0(story_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(passage_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.twinewasmprojectsession_query_backlinks_page(this.__wbg_ptr, ptr0, len0, ptr1, len1, query);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @param {string} story_id
      * @param {any} query
      * @returns {any}
      */
@@ -246,6 +263,22 @@ export class TwineWasmProjectSession {
         const ptr1 = passStringToWasm0(passage_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.twinewasmprojectsession_query_passage_facts(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @param {string} story_id
+     * @param {string} passage_id
+     * @returns {any}
+     */
+    query_passage_local_facts(story_id, passage_id) {
+        const ptr0 = passStringToWasm0(story_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(passage_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.twinewasmprojectsession_query_passage_local_facts(this.__wbg_ptr, ptr0, len0, ptr1, len1);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

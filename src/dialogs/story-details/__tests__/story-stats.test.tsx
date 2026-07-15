@@ -1,8 +1,8 @@
 import {faker} from '@faker-js/faker';
-import {render, screen} from '@testing-library/react';
+import {render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {fakeStory} from '../../../test-util';
+import {FakeStateProvider, fakeStory} from '../../../test-util';
 import {
 	StoryDetailsDialogStats,
 	StoryDetailsDialogStatsProps
@@ -10,10 +10,16 @@ import {
 
 describe('<StoryDetailsDialogStats>', () => {
 	function renderComponent(props?: StoryDetailsDialogStatsProps) {
-		return render(<StoryDetailsDialogStats story={fakeStory()} {...props} />);
+		const story = props?.story ?? fakeStory();
+
+		return render(
+			<FakeStateProvider stories={[story]}>
+				<StoryDetailsDialogStats story={story} />
+			</FakeStateProvider>
+		);
 	}
 
-	it('shows a character count for the story', () => {
+	it('shows a character count for the story', async () => {
 		const story = fakeStory(2);
 		const text = faker.lorem.words(50);
 		const text2 = faker.lorem.words(50);
@@ -26,12 +32,14 @@ describe('<StoryDetailsDialogStats>', () => {
 			'dialogs.storyDetails.stats.characters'
 		).parentNode;
 
-		expect(row!.querySelectorAll('td')[0].textContent).toBe(
-			(text.length + text2.length).toString()
+		await waitFor(() =>
+			expect(row!.querySelectorAll('td')[0].textContent).toBe(
+				(text.length + text2.length).toString()
+			)
 		);
 	});
 
-	it('shows a word count for the story', () => {
+	it('shows a word count for the story', async () => {
 		const story = fakeStory(2);
 		const text = faker.lorem.words(10);
 		const text2 = faker.lorem.words(25);
@@ -42,7 +50,9 @@ describe('<StoryDetailsDialogStats>', () => {
 
 		const row = screen.getByText('dialogs.storyDetails.stats.words').parentNode;
 
-		expect(row!.querySelectorAll('td')[0].textContent).toBe('35');
+		await waitFor(() =>
+			expect(row!.querySelectorAll('td')[0].textContent).toBe('35')
+		);
 	});
 
 	it('shows a passage count for the story', () => {
@@ -60,7 +70,7 @@ describe('<StoryDetailsDialogStats>', () => {
 		);
 	});
 
-	it('shows a distinct link count for the story', () => {
+	it('shows a distinct link count for the story', async () => {
 		const story = fakeStory(2);
 
 		story.passages[0].name = 'a';
@@ -71,10 +81,12 @@ describe('<StoryDetailsDialogStats>', () => {
 
 		const row = screen.getByText('dialogs.storyDetails.stats.links').parentNode;
 
-		expect(row!.querySelectorAll('td')[0].textContent).toBe('2');
+		await waitFor(() =>
+			expect(row!.querySelectorAll('td')[0].textContent).toBe('2')
+		);
 	});
 
-	it('shows a broken link count for the story', () => {
+	it('shows a broken link count for the story', async () => {
 		const story = fakeStory(2);
 
 		story.passages[0].name = 'a';
@@ -87,7 +99,9 @@ describe('<StoryDetailsDialogStats>', () => {
 			'dialogs.storyDetails.stats.brokenLinks'
 		).parentNode;
 
-		expect(row!.querySelectorAll('td')[0].textContent).toBe('1');
+		await waitFor(() =>
+			expect(row!.querySelectorAll('td')[0].textContent).toBe('1')
+		);
 	});
 
 	it('shows the time the story was last updated', () => {

@@ -3230,7 +3230,7 @@ function emptySaveTimings(
 	};
 }
 
-function incrementalDocumentHints(
+function incrementalSaveHints(
 	hints: ProjectFolderSaveHint[] | undefined,
 	storyId: string
 ) {
@@ -3275,7 +3275,7 @@ async function writeProjectFolderIncremental(
 ): Promise<NativeProjectFolderResult | undefined> {
 	const totalStarted = performance.now();
 	const timings = emptySaveTimings('incremental');
-	const hints = incrementalDocumentHints(options.hints, story.id);
+	const hints = incrementalSaveHints(options.hints, story.id);
 
 	if (!hints?.length) {
 		return undefined;
@@ -3299,6 +3299,9 @@ async function writeProjectFolderIncremental(
 	}
 
 	const descriptorPassages = descriptorPassageMap(descriptorStory);
+	const storyPassages = new Map(
+		story.passages.map(passage => [passage.id, passage] as const)
+	);
 	const passageTextUpdates = new Map(
 		(options.documentUpdates ?? []).flatMap(update =>
 			update.type === 'passageText' && update.storyId === story.id
@@ -3313,6 +3316,7 @@ async function writeProjectFolderIncremental(
 				: []
 		)
 	);
+	let updatedLayout: NativeProjectDescriptor['layout'] | undefined;
 	const touched: Array<
 		| {
 				absolutePath: string | undefined;
@@ -3323,7 +3327,7 @@ async function writeProjectFolderIncremental(
 		| undefined
 	> = [];
 	for (const hint of hints) {
-		if (hint.type === 'passageMetadata') {
+		if (hint.type === 'passageMetadata' || hint.type === 'passageLayout') {
 			continue;
 		}
 		if (hint.type !== 'passageText') {
@@ -3343,9 +3347,7 @@ async function writeProjectFolderIncremental(
 			continue;
 		}
 		const descriptorPassage = descriptorPassages.get(hint.passageId);
-		const storyPassage = story.passages.find(
-			passage => passage.id === hint.passageId
-		);
+		const storyPassage = storyPassages.get(hint.passageId);
 
 		if (!descriptorPassage?.file || !storyPassage) {
 			touched.push(undefined);
@@ -3357,6 +3359,57 @@ async function writeProjectFolderIncremental(
 			kind: 'passage' as const,
 			projectPath: descriptorPassage.file.replace(/\\/g, '/'),
 			text: passageTextUpdates.get(hint.passageId) ?? storyPassage.text
+		});
+	}
+	const passageLayoutHints = hints.filter(
+		(hint): hint is Extract<ProjectFolderSaveHint, {type: 'passageLayout'}> =>
+			hint.type === 'passageLayout'
+	);
+
+	if (passageLayoutHints.length > 0) {
+		const nextLayout = {...descriptor.layout};
+
+		for (const hint of passageLayoutHints) {
+			const descriptorPassage = descriptorPassages.get(hint.passageId);
+			const storyPassage = storyPassages.get(hint.passageId);
+
+			if (!descriptorPassage || !storyPassage) {
+				return undefined;
+			}
+			const bounds = {
+				height: storyPassage.height,
+				left: storyPassage.left,
+				top: storyPassage.top,
+				width: storyPassage.width
+			};
+
+			if (Object.values(bounds).some(value => !Number.isFinite(value))) {
+				return undefined;
+			}
+			nextLayout[hint.passageId] = bounds;
+		}
+
+		let layoutData: unknown;
+
+		try {
+			layoutData = JSON.parse(descriptor.layoutDataJson);
+		} catch {
+			return undefined;
+		}
+		if (
+			!layoutData ||
+			typeof layoutData !== 'object' ||
+			Array.isArray(layoutData)
+		) {
+			return undefined;
+		}
+
+		updatedLayout = nextLayout;
+		touched.push({
+			absolutePath: join(rootPath, '.twine', 'graph.json'),
+			kind: 'graph',
+			projectPath: '.twine/graph.json',
+			text: JSON.stringify({...layoutData, passages: nextLayout}, null, 2)
 		});
 	}
 	if (hints.some(hint => hint.type === 'passageMetadata')) {
@@ -3455,11 +3508,11 @@ async function writeProjectFolderIncremental(
 	);
 	session.baseline.scannedAt = new Date().toISOString();
 	if (
-		concreteTouched.some(entry =>
-			['graph', 'manifest', 'metadata'].includes(entry.kind)
-		)
+		concreteTouched.some(entry => ['manifest', 'metadata'].includes(entry.kind))
 	) {
 		session.descriptor = await readProjectDescriptor(rootPath);
+	} else if (updatedLayout) {
+		session.descriptor = {...descriptor, layout: updatedLayout};
 	}
 	session.generation++;
 	session.pending = undefined;

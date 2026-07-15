@@ -33,7 +33,8 @@ import type {
 } from '../../core';
 import type {PatchBatch} from '../../core/bindings/PatchBatch';
 import type {CoreStoryIndex} from '../../core/bindings/CoreStoryIndex';
-import type {CorePassageFacts} from '../../core/bindings/CorePassageFacts';
+import type {CoreBacklinksPage} from '../../core/bindings/CoreBacklinksPage';
+import type {CorePassageLocalFacts} from '../../core/bindings/CorePassageLocalFacts';
 import type {CoreWorkbenchDockModel} from '../../core/bindings/CoreWorkbenchDockModel';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {CoreProjectHost} from '../../core/project-host';
@@ -107,6 +108,7 @@ function boundedWorkbenchSelection(
 		story.passages[0];
 	return {
 		assetReferences: [],
+		backlinkCount: 0,
 		backlinks: [],
 		brokenLinks: [],
 		diagnostics: [],
@@ -122,7 +124,8 @@ function boundedWorkbenchSelection(
 function selectionFromPassageFacts(
 	story: Story,
 	selection: WorkbenchSelection,
-	facts: CorePassageFacts | undefined
+	facts: CorePassageLocalFacts | undefined,
+	backlinkPage?: CoreBacklinksPage
 ): WorkbenchSelection {
 	if (!facts || facts.passageId !== selection.passage?.id) {
 		return selection;
@@ -138,7 +141,9 @@ function selectionFromPassageFacts(
 		targetId: link.targetId,
 		targetName: link.targetName
 	}));
-	const backlinks = facts.backlinks.map(link => ({
+	const backlinks = (
+		backlinkPage?.revision === facts.revision ? backlinkPage.backlinks : []
+	).map(link => ({
 		broken: link.broken,
 		self: link.sourceId === link.targetId,
 		sourceId: link.sourceId,
@@ -152,6 +157,8 @@ function selectionFromPassageFacts(
 	return {
 		...selection,
 		assetReferences: facts.assetReferences,
+		backlinkCount:
+			backlinkPage?.revision === facts.revision ? backlinkPage.totalCount : 0,
 		backlinks,
 		brokenLinks: linkFacts.filter(link => link.broken),
 		diagnostics: facts.diagnostics,
@@ -939,7 +946,7 @@ const Inspector: React.FC<{
 			</OutlineSection>
 
 			<OutlineSection
-				count={backlinks.length}
+				count={selection.backlinkCount}
 				icon="arrow-back-up"
 				title={t('routes.storyEdit.workspace.backlinks')}
 			>
@@ -1249,7 +1256,9 @@ export const StoryWorkspaceShell: React.FC<
 		!isFileBackedStory || hydration?.passageTextLoaded !== false;
 	const shellIndex = React.useMemo(() => emptyStoryIndex(story.id), [story.id]);
 	const [dockModel, setDockModel] = React.useState<CoreWorkbenchDockModel>();
-	const [passageFacts, setPassageFacts] = React.useState<CorePassageFacts>();
+	const [passageFacts, setPassageFacts] =
+		React.useState<CorePassageLocalFacts>();
+	const [backlinkPage, setBacklinkPage] = React.useState<CoreBacklinksPage>();
 	const [navigatorTab, setNavigatorTab] = usePersistedNavigatorTab(story.id);
 	const needsDockModel = navigatorTab !== 'passages' || bottomDrawerOpen;
 	const openProgress = React.useMemo<StoryOpenProgressState | undefined>(() => {
@@ -1511,16 +1520,26 @@ export const StoryWorkspaceShell: React.FC<
 
 		if (!passageId || !passageTextLoaded) {
 			setPassageFacts(undefined);
+			setBacklinkPage(undefined);
 			return () => {
 				active = false;
 			};
 		}
 
+		setPassageFacts(undefined);
+		setBacklinkPage(undefined);
 		void coreProjectHost
-			.queryPassageFactsAsync(story.id, passageId)
+			.queryPassageLocalFactsAsync(story.id, passageId)
 			.then(facts => {
 				if (active) {
 					setPassageFacts(facts.revision > 0 ? facts : undefined);
+				}
+			});
+		void coreProjectHost
+			.queryBacklinksPageAsync(story.id, passageId, {limit: 8})
+			.then(page => {
+				if (active) {
+					setBacklinkPage(page.revision > 0 ? page : undefined);
 				}
 			});
 
@@ -1590,9 +1609,10 @@ export const StoryWorkspaceShell: React.FC<
 			selectionFromPassageFacts(
 				story,
 				boundedWorkbenchSelection(story, selectedPassageId),
-				passageFacts
+				passageFacts,
+				backlinkPage
 			),
-		[passageFacts, selectedPassageId, story]
+		[backlinkPage, passageFacts, selectedPassageId, story]
 	);
 	const passage = selection.passage;
 	// The dock's open buffers. `undefined` follows the current selection so
@@ -1626,11 +1646,15 @@ export const StoryWorkspaceShell: React.FC<
 							window_.kind === 'passage' &&
 								window_.passageId === selection.passage?.id
 								? passageFacts
+								: undefined,
+							window_.kind === 'passage' &&
+								window_.passageId === selection.passage?.id
+								? backlinkPage
 								: undefined
 						)
 					])
 			),
-		[dockWindows, passageFacts, selection.passage?.id, story]
+		[backlinkPage, dockWindows, passageFacts, selection.passage?.id, story]
 	);
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {t} = useTranslation();

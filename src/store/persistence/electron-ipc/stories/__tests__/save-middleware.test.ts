@@ -5,6 +5,7 @@ import {fakeLoadedStoryFormat, fakeStory} from '../../../../../test-util';
 import {TwineElectronWindow} from '../../../../../electron/shared';
 import {saveProjectMetadata} from '../../../../project-metadata';
 import {saveStory} from '../save-story';
+import {metadataStory} from '../../../../../core/bootstrap-stories';
 
 jest.mock('../save-story');
 
@@ -22,7 +23,7 @@ describe('stories Electron IPC save middleware', () => {
 		onceStoryRenamed = jest.fn();
 		deleteStory = jest.fn();
 		renameStory = jest.fn();
-		storiesState = [fakeStory(2)];
+		storiesState = [metadataStory(fakeStory(2))];
 		storiesState[0].storyFormat = formatsState[0].name;
 		storiesState[0].storyFormatVersion = formatsState[0].version;
 		(window as any).twineElectron = {

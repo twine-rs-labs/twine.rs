@@ -5,7 +5,7 @@ import {storyFileName} from '../../electron/shared';
 import {StoryWithDocuments as Story} from '../../store/stories';
 import {usePublishing} from '../../store/use-publishing';
 import {useStoryLaunch} from '../../store/use-story-launch';
-import {fakeStory} from '../../test-util';
+import {FakeStateProvider, fakeStory} from '../../test-util';
 import {saveTwee} from '../../util/save-file';
 import {storyToTwee} from '../../util/twee';
 import {BuildActions, BuildActionsProps} from '../build-actions';
@@ -21,7 +21,15 @@ describe('<BuildActions>', () => {
 	const button = (name: string) => screen.getByRole('button', {name});
 
 	function renderComponent(props?: Partial<BuildActionsProps>) {
-		return render(<BuildActions story={fakeStory()} {...props} />);
+		const story = Object.prototype.hasOwnProperty.call(props ?? {}, 'story')
+			? props?.story
+			: fakeStory();
+
+		return render(
+			<FakeStateProvider stories={story ? [story] : []}>
+				<BuildActions story={story} />
+			</FakeStateProvider>
+		);
 	}
 
 	describe('when not given a story prop', () => {

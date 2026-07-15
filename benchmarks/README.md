@@ -144,8 +144,11 @@ creation, after one edit and save, after editor closure, and across a bounded
 Contents route visit. Each checkpoint includes process-role working sets,
 renderer and main heap fields, active editor document ownership, worker query
 cache/pending-request state, Rust session owner counts, native hydration leases,
-and baseline/descriptor estimates. It asserts that editor documents, completed
-requests, session queues, bootstrap bodies, and hydration leases are released.
+and baseline/descriptor estimates. Selected-passage attribution additionally
+records local-fact and backlink query payloads, backlink scan/cache counts and
+bytes, and rejects the compatibility combined passage-facts query on product
+routes. It asserts that editor documents, completed requests, session queues,
+bootstrap bodies, and hydration leases are released.
 Like the startup memory matrix, this is focused diagnostic evidence and cannot
 be accepted as a complete baseline.
 
@@ -185,7 +188,9 @@ runtime variance rather than graph-position variance. Each edit completes native
 acknowledgement before the next starts. It reports distribution aggregates for
 native observation, Rust ingestion stages, the WASM boundary, renderer patch
 application, and end-to-end latency. One asset-only edit then verifies the
-review path without mixing startup work into either scenario.
+review path without mixing startup work into either scenario. A
+topology-neutral passage edit must avoid graph reparsing; the native watcher
+still reads exactly the one changed source file.
 
 Edit, query, and graph phases also have size-specific subsystem commands:
 
@@ -195,6 +200,15 @@ npm run perf:electron:50k:edit
 npm run perf:electron:50k:query
 npm run perf:electron:50k:graph
 ```
+
+Contents timing is correlated to a new query submit, its matching worker result,
+and the first paint that commits that result; an empty route placeholder is not
+a completed sample. Reports separate the first cold Contents page from warm
+reopens, and the query phase must finish with no pending worker requests or
+session work. Ordinary edit aggregates exclude samples that overlap an external
+delta and report those separately. The graph phase performs a real node-layout
+mutation and blocks unless its final revision is acknowledged through an
+incremental native save with no full-save fallback or work left in flight.
 
 For a quick harness check, build and generate the 100-passage fixture once,
 then run the abbreviated scenario:

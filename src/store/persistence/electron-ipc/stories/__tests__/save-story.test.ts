@@ -188,6 +188,48 @@ describe('saveStory()', () => {
 		);
 	});
 
+	it('uses a compact touched-passage payload for layout-only saves', async () => {
+		story = fakeStory(3);
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		const moved = {...story.passages[1], left: 420, top: 240};
+		story = {
+			...story,
+			passages: [story.passages[0], moved, story.passages[2]]
+		};
+		const materialize = jest.fn(async () => story);
+
+		registerStoryMaterializer(story.id, materialize);
+		await saveStory(story, formatsState, {
+			hints: [{passageId: moved.id, storyId: story.id, type: 'passageLayout'}],
+			revision: 7,
+			sessionId: 'project:/native/moon-castle.twine.rs'
+		});
+
+		expect(materialize).not.toHaveBeenCalled();
+		expect(saveProjectFolder).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			expect.objectContaining({
+				passages: [
+					expect.objectContaining({
+						id: moved.id,
+						left: 420,
+						text: '',
+						top: 240
+					})
+				]
+			}),
+			expect.objectContaining({
+				incrementalOnly: true,
+				revision: 7,
+				sessionId: 'project:/native/moon-castle.twine.rs'
+			})
+		);
+	});
+
 	it('retains passage metadata for incremental manifest saves', async () => {
 		saveProjectMetadata(story.id, {
 			rootPath: '/native/moon-castle.twine.rs',

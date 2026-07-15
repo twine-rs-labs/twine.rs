@@ -14,6 +14,11 @@ export type ProjectFolderSaveHint =
 			type: 'passageMetadata';
 	  }
 	| {
+			passageId: string;
+			storyId: string;
+			type: 'passageLayout';
+	  }
+	| {
 			reason: string;
 			storyId: string;
 			type: 'full';

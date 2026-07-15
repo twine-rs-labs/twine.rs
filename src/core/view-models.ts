@@ -79,6 +79,7 @@ export interface AssetManagerViewModel {
 
 export interface WorkbenchSelection {
 	assetReferences: CoreAssetReference[];
+	backlinkCount: number;
 	backlinks: PassageLinkFact[];
 	brokenLinks: PassageLinkFact[];
 	diagnostics: CoreDiagnostic[];
@@ -521,6 +522,12 @@ export function workbenchSelection(
 		assetReferences: sourceId
 			? index.assets.filter(asset => asset.sourceId === sourceId)
 			: [],
+		backlinkCount: passage
+			? allLinkFacts.filter(
+					fact =>
+						fact.sourceId !== passage.id && fact.targetName === passage.name
+				).length
+			: 0,
 		backlinks: passage
 			? allLinkFacts.filter(
 					fact =>

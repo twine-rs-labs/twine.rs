@@ -14,15 +14,18 @@ use ts_rs::TS;
 use twine_graph::{
     AutoLayoutOptions, GraphDirection, GraphEdgeKind, GraphFocus, GraphIndex, GraphLayoutSnapshot,
     GraphLayoutSource, GraphLayoutState, GraphProjectionOptions, GraphViewport, LinkEdge,
-    LinkLayerOptions,
+    LinkLayerOptions, passage_link_edges,
 };
 use twine_model::{
-    GraphPosition, Passage, PassageId, PassageIndex, PassageLayout, Project, Story, StoryId,
+    GraphLayout, GraphPosition, Passage, PassageId, PassageIndex, PassageLayout, Project, Story,
+    StoryId,
 };
 use web_time::Instant;
 
 const MAX_HISTORY_ENTRIES: usize = 200;
 const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
+const MAX_BACKLINK_CACHE_ENTRIES: usize = 16;
+const MAX_BACKLINK_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -721,6 +724,9 @@ pub struct CoreContentsFacets {
     pub diagnostics: usize,
     pub entry_point: usize,
     pub group: usize,
+    // False when only source-metadata facets are available. Expensive
+    // intelligence facets are populated after an on-demand filtered query.
+    pub intelligence_complete: bool,
     pub metadata: usize,
     pub passage: usize,
     pub problems: usize,
@@ -923,6 +929,59 @@ pub struct CorePassageFacts {
     #[serde(default)]
     pub symbols: Vec<CoreSymbol>,
     pub word_count: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageLocalFacts {
+    #[serde(default)]
+    pub asset_references: Vec<CoreAssetReference>,
+    pub character_count: usize,
+    #[serde(default)]
+    pub diagnostics: Vec<CoreDiagnostic>,
+    pub excerpt: String,
+    pub is_empty: bool,
+    pub line_count: usize,
+    #[serde(default)]
+    pub links: Vec<CorePassageLinkFact>,
+    pub passage_id: String,
+    pub revision: u32,
+    pub story_id: String,
+    #[serde(default)]
+    pub symbols: Vec<CoreSymbol>,
+    pub word_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreBacklinksQuery {
+    pub cursor: Option<String>,
+    #[serde(default = "default_backlinks_page_limit")]
+    pub limit: usize,
+}
+
+impl Default for CoreBacklinksQuery {
+    fn default() -> Self {
+        Self {
+            cursor: None,
+            limit: default_backlinks_page_limit(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreBacklinksPage {
+    #[serde(default)]
+    pub backlinks: Vec<CorePassageLinkFact>,
+    pub next_cursor: Option<String>,
+    pub passage_id: String,
+    pub revision: u32,
+    pub story_id: String,
+    pub total_count: usize,
 }
 
 /// A revision-bound passage body. Persisted text stays session-owned; callers
@@ -1837,6 +1896,7 @@ enum StoryDelta {
 #[derive(Clone, Debug, Default, Serialize)]
 struct ProjectDelta {
     layout_passages: Vec<ProjectLayoutPassageDelta>,
+    project_layout: Option<ProjectLayoutDelta>,
     top_after: Option<Project>,
     top_before: Option<Project>,
     stories: Vec<StoryDelta>,
@@ -1847,6 +1907,12 @@ struct ProjectLayoutPassageDelta {
     after: Option<PassageLayout>,
     before: Option<PassageLayout>,
     passage_id: PassageId,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ProjectLayoutDelta {
+    after: GraphLayout,
+    before: GraphLayout,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2039,6 +2105,7 @@ impl ProjectDelta {
 
         Self {
             layout_passages,
+            project_layout: None,
             top_after: top_changed.then_some(after_top),
             top_before: top_changed.then_some(before_top),
             stories,
@@ -2054,6 +2121,18 @@ impl ProjectDelta {
             project.layout = top.layout.clone();
             project.library = top.library.clone();
             project.manifest = top.manifest.clone();
+        }
+
+        if let Some(delta) = &self.project_layout {
+            let value = if forward { &delta.after } else { &delta.before };
+
+            project.layout.annotations.clone_from(&value.annotations);
+            project.layout.groups.clone_from(&value.groups);
+            project.layout.metadata.clone_from(&value.metadata);
+            project
+                .layout
+                .saved_layouts
+                .clone_from(&value.saved_layouts);
         }
 
         for delta in &self.layout_passages {
@@ -2316,6 +2395,16 @@ fn story_shell_without_passages(story: &Story) -> Story {
     }
 }
 
+fn project_layout_shell_without_passages(layout: &GraphLayout) -> GraphLayout {
+    GraphLayout {
+        annotations: layout.annotations.clone(),
+        groups: layout.groups.clone(),
+        metadata: layout.metadata.clone(),
+        passages: BTreeMap::new(),
+        saved_layouts: layout.saved_layouts.clone(),
+    }
+}
+
 fn sync_fingerprints_for_delta(
     project: &Project,
     values: &mut BTreeMap<String, u64>,
@@ -2330,6 +2419,13 @@ fn sync_fingerprints_for_delta(
             "project:layout".to_owned(),
         ]);
         insert_project_fingerprints(values, project);
+    }
+    if delta.project_layout.is_some() {
+        touched.insert("project:layout".to_owned());
+        values.insert(
+            "project:layout".into(),
+            fingerprint(&project_layout_shell_without_passages(&project.layout)),
+        );
     }
 
     for story_delta in &delta.stories {
@@ -2430,6 +2526,25 @@ struct GraphSessionCache {
     layout: GraphLayoutSnapshot,
 }
 
+#[derive(Clone, Debug)]
+struct BacklinkCacheEntry {
+    byte_size: usize,
+    revision: u64,
+    source_ranks: Vec<usize>,
+    target_name: String,
+}
+
+/// Source-metadata-only Contents records. Building this catalog never parses a
+/// source or initializes the graph, so the default Contents route can return a
+/// bounded useful page before the expensive intelligence indexes are needed.
+#[derive(Clone, Debug)]
+struct StoryContentsCatalog {
+    contents: BTreeMap<String, CoreContentsEntry>,
+    facets: CoreContentsFacets,
+    revision: u64,
+    tag_usage: BTreeMap<String, BTreeSet<String>>,
+}
+
 /// Compact server-side read records shared by Contents, diagnostics, assets,
 /// and shell summary queries. This deliberately excludes files, symbols,
 /// search hits, previews, and the complete compatibility `CoreStoryIndex`:
@@ -2468,6 +2583,11 @@ struct SourceAnalysisCache {
 #[serde(rename_all = "camelCase")]
 pub struct CoreSessionPerformanceDiagnostics {
     pub analysis_cache_source_count: usize,
+    pub backlink_cache_bytes: usize,
+    pub backlink_cache_entry_count: usize,
+    pub backlink_cache_hit_count: usize,
+    pub backlink_scan_count: usize,
+    pub backlink_scanned_source_count: usize,
     pub fingerprint_entry_count: usize,
     pub graph_cache_story_count: usize,
     pub history_bytes: usize,
@@ -2538,10 +2658,10 @@ fn project_fingerprints(project: &Project) -> BTreeMap<String, u64> {
 fn insert_project_fingerprints(values: &mut BTreeMap<String, u64>, project: &Project) {
     values.insert("project:manifest".into(), fingerprint(&project.manifest));
     values.insert("project:library".into(), fingerprint(&project.library));
-    let mut layout_metadata = project.layout.clone();
-
-    layout_metadata.passages.clear();
-    values.insert("project:layout".into(), fingerprint(&layout_metadata));
+    values.insert(
+        "project:layout".into(),
+        fingerprint(&project_layout_shell_without_passages(&project.layout)),
+    );
 }
 
 fn insert_story_fingerprints(
@@ -2749,6 +2869,27 @@ fn external_change_identity(change: &CoreExternalChange) -> (Option<String>, Opt
     }
 }
 
+fn compact_external_delta_supported(changes: &[CoreExternalChange]) -> bool {
+    changes.iter().all(|change| {
+        matches!(
+            change,
+            CoreExternalChange::UpdatePassage { .. }
+                | CoreExternalChange::UpdatePassageLayout { .. }
+                | CoreExternalChange::UpdateProjectLayout { .. }
+                | CoreExternalChange::UpdateStoryMetadata { .. }
+                | CoreExternalChange::UpdateStoryScript { .. }
+                | CoreExternalChange::UpdateStoryStartPassage { .. }
+                | CoreExternalChange::UpdateStoryStylesheet { .. }
+        )
+    })
+}
+
+#[derive(Default)]
+struct CompactExternalPlan {
+    candidate_fingerprints: BTreeMap<String, u64>,
+    project_layouts: BTreeMap<usize, GraphLayout>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectSession {
     analysis_cache: BTreeMap<StoryId, BTreeMap<String, SourceAnalysisCache>>,
@@ -2756,6 +2897,12 @@ pub struct ProjectSession {
     applied_external_delta_ids: VecDeque<String>,
     asset_inventory: Vec<CoreAssetInventoryEntry>,
     asset_root: Option<PathBuf>,
+    backlink_cache: BTreeMap<StoryId, BTreeMap<PassageId, BacklinkCacheEntry>>,
+    backlink_cache_lru: VecDeque<(StoryId, PassageId)>,
+    backlink_cache_hit_count: usize,
+    backlink_scan_count: usize,
+    backlink_scanned_source_count: usize,
+    contents_catalog_cache: BTreeMap<StoryId, StoryContentsCatalog>,
     current_fingerprints: BTreeMap<String, u64>,
     read_model_cache: BTreeMap<StoryId, StoryReadModelCache>,
     read_model_full_build_count: usize,
@@ -2785,6 +2932,12 @@ impl ProjectSession {
             applied_external_delta_ids: VecDeque::new(),
             asset_inventory: Vec::new(),
             asset_root: None,
+            backlink_cache: BTreeMap::new(),
+            backlink_cache_lru: VecDeque::new(),
+            backlink_cache_hit_count: 0,
+            backlink_scan_count: 0,
+            backlink_scanned_source_count: 0,
+            contents_catalog_cache: BTreeMap::new(),
             current_fingerprints: saved_fingerprints.clone(),
             read_model_cache: BTreeMap::new(),
             read_model_full_build_count: 0,
@@ -3601,6 +3754,16 @@ impl ProjectSession {
     pub fn performance_diagnostics(&self) -> CoreSessionPerformanceDiagnostics {
         CoreSessionPerformanceDiagnostics {
             analysis_cache_source_count: self.analysis_cache.values().map(BTreeMap::len).sum(),
+            backlink_cache_bytes: self
+                .backlink_cache
+                .values()
+                .flat_map(BTreeMap::values)
+                .map(|entry| entry.byte_size)
+                .sum(),
+            backlink_cache_entry_count: self.backlink_cache.values().map(BTreeMap::len).sum(),
+            backlink_cache_hit_count: self.backlink_cache_hit_count,
+            backlink_scan_count: self.backlink_scan_count,
+            backlink_scanned_source_count: self.backlink_scanned_source_count,
             fingerprint_entry_count: self.current_fingerprints.len()
                 + self.saved_fingerprints.len(),
             graph_cache_story_count: self.graph_cache.len(),
@@ -3762,6 +3925,193 @@ impl ProjectSession {
         self.refresh_dirty_fields(touched);
     }
 
+    fn plan_compact_external_changes(
+        &self,
+        changes: &[CoreExternalChange],
+    ) -> Result<CompactExternalPlan, CoreError> {
+        let mut plan = CompactExternalPlan::default();
+        let mut planned_names = BTreeMap::<(String, String), String>::new();
+
+        for (index, change) in changes.iter().enumerate() {
+            match change {
+                CoreExternalChange::UpdatePassage {
+                    changes,
+                    passage_id,
+                    story_id,
+                } => {
+                    let story = self.story(story_id)?;
+                    let passage_id_model = PassageId::new(passage_id);
+                    if story.passage_by_id(&passage_id_model).is_none() {
+                        return Err(CoreError::PassageNotFound(passage_id.clone()));
+                    }
+                    let prefix = format!("passage:{story_id}:{passage_id}");
+
+                    if let Some(layout) = &changes.layout {
+                        plan.candidate_fingerprints.insert(
+                            format!("{prefix}:layout"),
+                            fingerprint(&Some(GraphPosition::from(layout.clone()))),
+                        );
+                    }
+                    if let Some(name) = &changes.name {
+                        let duplicate_planned = planned_names.iter().any(
+                            |((planned_story_id, planned_passage_id), planned_name)| {
+                                planned_story_id == story_id
+                                    && planned_passage_id != passage_id
+                                    && planned_name == name
+                            },
+                        );
+                        let duplicate_existing = story
+                            .passages
+                            .id_for_name(name)
+                            .filter(|existing_id| existing_id.as_ref() != passage_id)
+                            .is_some_and(|existing_id| {
+                                planned_names
+                                    .get(&(story_id.clone(), existing_id.as_ref().to_owned()))
+                                    .map_or(true, |planned_name| planned_name == name)
+                            });
+                        if duplicate_planned || duplicate_existing {
+                            return Err(CoreError::DuplicatePassageName(name.clone()));
+                        }
+                        planned_names.insert((story_id.clone(), passage_id.clone()), name.clone());
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:name"), fingerprint(name));
+                    }
+                    if let Some(tags) = &changes.tags {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:tags"), fingerprint(tags));
+                    }
+                    if let Some(text) = &changes.text {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:text"), fingerprint(text));
+                    }
+                }
+                CoreExternalChange::UpdatePassageLayout {
+                    layout,
+                    passage_id,
+                    story_id,
+                } => {
+                    let story = self.story(story_id)?;
+                    if story.passage_by_id(&PassageId::new(passage_id)).is_none() {
+                        return Err(CoreError::PassageNotFound(passage_id.clone()));
+                    }
+                    plan.candidate_fingerprints.insert(
+                        format!("passage:{story_id}:{passage_id}:layout"),
+                        fingerprint(&layout.clone().map(GraphPosition::from)),
+                    );
+                }
+                CoreExternalChange::UpdateProjectLayout { layout_json } => {
+                    let mut layout = serde_json::from_str::<GraphLayout>(layout_json)
+                        .map_err(|error| CoreError::UnsupportedCommand(error.to_string()))?;
+                    layout.passages.clear();
+                    plan.candidate_fingerprints
+                        .insert("project:layout".into(), fingerprint(&layout));
+                    plan.project_layouts.insert(index, layout);
+                }
+                CoreExternalChange::UpdateStoryMetadata { changes, story_id } => {
+                    self.story(story_id)?;
+                    let prefix = format!("story:{story_id}");
+
+                    if let Some(value) = &changes.name {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:name"), fingerprint(value));
+                    }
+                    if let Some(value) = changes.snap_to_grid {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:snapToGrid"), fingerprint(&value));
+                    }
+                    if let Some(value) = &changes.story_format {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:storyFormat"), fingerprint(value));
+                    }
+                    if let Some(value) = &changes.story_format_version {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:storyFormatVersion"), fingerprint(value));
+                    }
+                    if let Some(value) = &changes.tag_colors {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:tagColors"), fingerprint(value));
+                    }
+                    if let Some(value) = &changes.tags {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:tags"), fingerprint(value));
+                    }
+                    if let Some(value) = changes.zoom {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:zoom"), fingerprint(&value));
+                    }
+                }
+                CoreExternalChange::UpdateStoryStartPassage {
+                    passage_id,
+                    story_id,
+                } => {
+                    let story = self.story(story_id)?;
+                    if !passage_id.is_empty()
+                        && story.passage_by_id(&PassageId::new(passage_id)).is_none()
+                    {
+                        return Err(CoreError::PassageNotFound(passage_id.clone()));
+                    }
+                    plan.candidate_fingerprints.insert(
+                        format!("story:{story_id}:startPassage"),
+                        fingerprint(&PassageId::new(passage_id)),
+                    );
+                }
+                CoreExternalChange::UpdateStoryScript { script, story_id } => {
+                    self.story(story_id)?;
+                    plan.candidate_fingerprints
+                        .insert(format!("story:{story_id}:script"), fingerprint(script));
+                }
+                CoreExternalChange::UpdateStoryStylesheet {
+                    story_id,
+                    stylesheet,
+                } => {
+                    self.story(story_id)?;
+                    plan.candidate_fingerprints.insert(
+                        format!("story:{story_id}:stylesheet"),
+                        fingerprint(stylesheet),
+                    );
+                }
+                _ => {
+                    return Err(CoreError::UnsupportedCommand(
+                        "external change is not compact-ingest compatible".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok(plan)
+    }
+
+    fn compact_external_conflicts(
+        &self,
+        changes: &[CoreExternalChange],
+        candidate_fingerprints: &BTreeMap<String, u64>,
+    ) -> Vec<CoreExternalConflict> {
+        let mut conflicts = Vec::new();
+
+        for change in changes {
+            for field in external_change_field_patterns(change) {
+                if !self.dirty_fields.contains(&field)
+                    || self.current_fingerprints.get(&field) == candidate_fingerprints.get(&field)
+                {
+                    continue;
+                }
+                let (story_id, passage_id) = external_change_identity(change);
+
+                conflicts.push(CoreExternalConflict {
+                    field: field.clone(),
+                    message: format!("{field} changed both locally and on disk."),
+                    passage_id,
+                    path: None,
+                    story_id,
+                });
+            }
+        }
+
+        conflicts.sort_by(|left, right| left.field.cmp(&right.field));
+        conflicts.dedup_by(|left, right| left.field == right.field);
+        conflicts
+    }
+
     fn external_conflicts(
         &self,
         changes: &[CoreExternalChange],
@@ -3856,6 +4206,7 @@ impl ProjectSession {
         delta: CoreExternalDelta,
         mode: CoreExternalIngestMode,
     ) -> Result<CoreExternalIngestResult, CoreError> {
+        self.last_mutation_stage_timings = None;
         if !delta.id.is_empty() && self.applied_external_delta_ids.contains(&delta.id) {
             return Ok(CoreExternalIngestResult {
                 batch: None,
@@ -3885,6 +4236,10 @@ impl ProjectSession {
                 passage_id,
                 changes.text.clone().expect("text change should be present"),
             );
+        }
+
+        if compact_external_delta_supported(&delta.changes) {
+            return self.ingest_compact_external_delta(delta, mode);
         }
 
         let mut candidate = self.clone();
@@ -3984,6 +4339,341 @@ impl ProjectSession {
             batch: Some(batch),
             conflicts: Vec::new(),
             history_recorded: project_changed,
+            outcome: CoreExternalIngestOutcome::Applied,
+            status: self.status(),
+        })
+    }
+
+    fn ingest_compact_external_delta(
+        &mut self,
+        delta: CoreExternalDelta,
+        mode: CoreExternalIngestMode,
+    ) -> Result<CoreExternalIngestResult, CoreError> {
+        let mut plan = self.plan_compact_external_changes(&delta.changes)?;
+        let conflicts =
+            self.compact_external_conflicts(&delta.changes, &plan.candidate_fingerprints);
+
+        if mode == CoreExternalIngestMode::Auto && !conflicts.is_empty() {
+            return Ok(CoreExternalIngestResult {
+                batch: None,
+                conflicts,
+                history_recorded: false,
+                outcome: CoreExternalIngestOutcome::Conflict,
+                status: self.status(),
+            });
+        }
+
+        let mut touched_story_ids = BTreeSet::<StoryId>::new();
+        let mut touched_passage_ids = BTreeSet::<(StoryId, PassageId)>::new();
+        let mut touched_project_passage_layouts = BTreeSet::<PassageId>::new();
+        let mut renamed_story_ids = BTreeSet::<StoryId>::new();
+
+        for change in &delta.changes {
+            match change {
+                CoreExternalChange::UpdatePassage {
+                    changes,
+                    passage_id,
+                    story_id,
+                } => {
+                    let story_id = StoryId::new(story_id);
+                    let passage_id = PassageId::new(passage_id);
+                    touched_story_ids.insert(story_id.clone());
+                    touched_passage_ids.insert((story_id.clone(), passage_id.clone()));
+                    if changes.layout.is_some() {
+                        touched_project_passage_layouts.insert(passage_id);
+                    }
+                    if changes.name.is_some() {
+                        renamed_story_ids.insert(story_id);
+                    }
+                }
+                CoreExternalChange::UpdatePassageLayout {
+                    passage_id,
+                    story_id,
+                    ..
+                } => {
+                    let story_id = StoryId::new(story_id);
+                    touched_story_ids.insert(story_id.clone());
+                    touched_passage_ids.insert((story_id, PassageId::new(passage_id)));
+                }
+                CoreExternalChange::UpdateStoryMetadata { story_id, .. }
+                | CoreExternalChange::UpdateStoryScript { story_id, .. }
+                | CoreExternalChange::UpdateStoryStartPassage { story_id, .. }
+                | CoreExternalChange::UpdateStoryStylesheet { story_id, .. } => {
+                    touched_story_ids.insert(StoryId::new(story_id));
+                }
+                CoreExternalChange::UpdateProjectLayout { .. } => {}
+                _ => unreachable!("compact external changes were prevalidated"),
+            }
+        }
+
+        let before_story_shells = touched_story_ids
+            .iter()
+            .map(|story_id| {
+                Ok((
+                    story_id.clone(),
+                    story_shell_without_passages(self.story(story_id.as_ref())?),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, CoreError>>()?;
+        let before_passages = touched_passage_ids
+            .iter()
+            .map(|(story_id, passage_id)| {
+                let story = self.story(story_id.as_ref())?;
+                let index = story
+                    .passages
+                    .rank_of(passage_id)
+                    .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+                let value = story
+                    .passage_by_id(passage_id)
+                    .expect("passage rank should resolve")
+                    .clone();
+
+                Ok((
+                    (story_id.clone(), passage_id.clone()),
+                    IndexedPassage { index, value },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, CoreError>>()?;
+        let before_project_passage_layouts = touched_project_passage_layouts
+            .iter()
+            .map(|passage_id| {
+                (
+                    passage_id.clone(),
+                    self.project.layout.passages.get(passage_id).cloned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let before_project_layout = (!plan.project_layouts.is_empty())
+            .then(|| project_layout_shell_without_passages(&self.project.layout));
+
+        for (index, change) in delta.changes.iter().enumerate() {
+            match change {
+                CoreExternalChange::UpdatePassage {
+                    changes,
+                    passage_id,
+                    story_id,
+                } => {
+                    let passage_id_model = PassageId::new(passage_id);
+                    {
+                        let passage = self
+                            .story_mut(story_id)?
+                            .passage_by_id_mut(&passage_id_model)
+                            .expect("compact external passage was prevalidated");
+
+                        if let Some(name) = &changes.name {
+                            passage.name.clone_from(name);
+                        }
+                        if let Some(text) = &changes.text {
+                            passage.text.clone_from(text);
+                        }
+                        if let Some(tags) = &changes.tags {
+                            passage.tags.clone_from(tags);
+                        }
+                        if let Some(layout) = &changes.layout {
+                            passage.layout = Some(GraphPosition::from(layout.clone()));
+                        }
+                    }
+                    if let Some(layout) = &changes.layout {
+                        self.project.layout.passages.insert(
+                            passage_id_model,
+                            PassageLayout {
+                                bounds: GraphPosition::from(layout.clone()),
+                                ..PassageLayout::default()
+                            },
+                        );
+                    }
+                }
+                CoreExternalChange::UpdatePassageLayout {
+                    layout,
+                    passage_id,
+                    story_id,
+                } => {
+                    self.story_mut(story_id)?
+                        .passage_by_id_mut(&PassageId::new(passage_id))
+                        .expect("compact external passage was prevalidated")
+                        .layout = layout.clone().map(GraphPosition::from);
+                }
+                CoreExternalChange::UpdateProjectLayout { .. } => {
+                    let layout = plan
+                        .project_layouts
+                        .remove(&index)
+                        .expect("compact project layout was prevalidated");
+                    self.project.layout.annotations = layout.annotations;
+                    self.project.layout.groups = layout.groups;
+                    self.project.layout.metadata = layout.metadata;
+                    self.project.layout.saved_layouts = layout.saved_layouts;
+                }
+                CoreExternalChange::UpdateStoryMetadata { changes, story_id } => {
+                    let story = self.story_mut(story_id)?;
+
+                    if let Some(value) = &changes.name {
+                        story.name.clone_from(value);
+                    }
+                    if let Some(value) = changes.snap_to_grid {
+                        story.snap_to_grid = value;
+                    }
+                    if let Some(value) = &changes.story_format {
+                        story.story_format.clone_from(value);
+                    }
+                    if let Some(value) = &changes.story_format_version {
+                        story.story_format_version.clone_from(value);
+                    }
+                    if let Some(value) = &changes.tag_colors {
+                        story.tag_colors.clone_from(value);
+                    }
+                    if let Some(value) = &changes.tags {
+                        story.tags.clone_from(value);
+                    }
+                    if let Some(value) = changes.zoom {
+                        story.zoom = value;
+                    }
+                }
+                CoreExternalChange::UpdateStoryScript { script, story_id } => {
+                    self.story_mut(story_id)?.script.clone_from(script);
+                }
+                CoreExternalChange::UpdateStoryStartPassage {
+                    passage_id,
+                    story_id,
+                } => {
+                    self.story_mut(story_id)?.start_passage = PassageId::new(passage_id);
+                }
+                CoreExternalChange::UpdateStoryStylesheet {
+                    story_id,
+                    stylesheet,
+                } => {
+                    self.story_mut(story_id)?.stylesheet.clone_from(stylesheet);
+                }
+                _ => unreachable!("compact external changes were prevalidated"),
+            }
+        }
+        for story_id in renamed_story_ids {
+            self.story_mut(story_id.as_ref())?
+                .passages
+                .rebuild_name_index();
+        }
+
+        let mut story_deltas = Vec::new();
+        for story_id in touched_story_ids {
+            let before = before_story_shells
+                .get(&story_id)
+                .expect("touched story shell was captured")
+                .clone();
+            let story = self.story(story_id.as_ref())?;
+            let after = story_shell_without_passages(story);
+            let passages = touched_passage_ids
+                .iter()
+                .filter(|(candidate_story_id, _)| candidate_story_id == &story_id)
+                .filter_map(|key| {
+                    let before = before_passages
+                        .get(key)
+                        .expect("touched passage was captured")
+                        .clone();
+                    let after = IndexedPassage {
+                        index: story
+                            .passages
+                            .rank_of(&key.1)
+                            .expect("touched passage should remain present"),
+                        value: story
+                            .passage_by_id(&key.1)
+                            .expect("touched passage should remain present")
+                            .clone(),
+                    };
+
+                    (before.value != after.value).then_some(PassageDelta {
+                        after: Some(after),
+                        before: Some(before),
+                        passage_id: key.1.clone(),
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            if before != after || !passages.is_empty() {
+                story_deltas.push(StoryDelta::Update {
+                    after,
+                    before,
+                    passages,
+                    story_id,
+                });
+            }
+        }
+        let layout_passages = before_project_passage_layouts
+            .into_iter()
+            .filter_map(|(passage_id, before)| {
+                let after = self.project.layout.passages.get(&passage_id).cloned();
+
+                (before != after).then_some(ProjectLayoutPassageDelta {
+                    after,
+                    before,
+                    passage_id,
+                })
+            })
+            .collect::<Vec<_>>();
+        let project_layout = before_project_layout.and_then(|before| {
+            let after = project_layout_shell_without_passages(&self.project.layout);
+
+            (before != after).then_some(ProjectLayoutDelta { after, before })
+        });
+        let transaction_delta = ProjectDelta {
+            layout_passages,
+            project_layout,
+            stories: story_deltas,
+            ..ProjectDelta::default()
+        };
+        let project_changed = !transaction_delta.stories.is_empty()
+            || !transaction_delta.layout_passages.is_empty()
+            || transaction_delta.project_layout.is_some();
+        let dirty_before = self.dirty;
+        let before_state_id = self.current_state_id;
+        let operation_id = self.next_transaction_id;
+
+        if project_changed {
+            self.sync_fingerprints(&transaction_delta);
+        }
+        self.accept_external_fingerprints(&delta.changes);
+        self.remember_external_delta(delta.id);
+
+        if !project_changed {
+            let mut patches = Vec::new();
+            push_dirty_patch(&mut patches, dirty_before, self.dirty);
+
+            return Ok(CoreExternalIngestResult {
+                batch: Some(PatchBatch {
+                    label: "External Changes".into(),
+                    patches,
+                    transaction_id: operation_id,
+                }),
+                conflicts: Vec::new(),
+                history_recorded: false,
+                outcome: CoreExternalIngestOutcome::NoOp,
+                status: self.status(),
+            });
+        }
+
+        self.next_transaction_id += 1;
+        self.current_state_id = operation_id;
+        let mut patches = transaction_delta.patches(true);
+        self.update_session_caches(&transaction_delta);
+        self.clear_redo();
+        self.push_undo(Transaction {
+            after_state_id: self.current_state_id,
+            assets: Vec::new(),
+            before_state_id,
+            byte_size: 0,
+            delta: transaction_delta,
+            kind: CoreHistoryKind::ExternalChanges,
+            label: "External Changes".into(),
+        });
+        push_dirty_patch(&mut patches, dirty_before, self.dirty);
+        let batch = PatchBatch {
+            label: "External Changes".into(),
+            patches,
+            transaction_id: operation_id,
+        };
+
+        Ok(CoreExternalIngestResult {
+            batch: Some(batch),
+            conflicts: Vec::new(),
+            history_recorded: true,
             outcome: CoreExternalIngestOutcome::Applied,
             status: self.status(),
         })
@@ -4124,6 +4814,7 @@ impl ProjectSession {
 
         let stage_started = Instant::now();
         self.update_graph_cache(&transaction_delta);
+        self.update_backlink_cache(&transaction_delta);
         timings.graph_ms = elapsed_ms(stage_started);
         if let Some(graph) = self.graph_cache.get(&story_id).map(|cache| &cache.graph) {
             timings.graph_parsed_source_count = graph.last_incremental_parse_count();
@@ -4131,6 +4822,7 @@ impl ProjectSession {
         }
 
         let stage_started = Instant::now();
+        self.update_contents_catalog_cache(&transaction_delta);
         self.update_analysis_cache(&transaction_delta);
         timings.analysis_ms = elapsed_ms(stage_started);
 
@@ -4351,11 +5043,12 @@ impl ProjectSession {
     }
 
     fn update_graph_cache(&mut self, delta: &ProjectDelta) {
-        let top_layout_changed = delta
-            .top_before
-            .as_ref()
-            .zip(delta.top_after.as_ref())
-            .is_some_and(|(before, after)| before.layout != after.layout);
+        let top_layout_changed = delta.project_layout.is_some()
+            || delta
+                .top_before
+                .as_ref()
+                .zip(delta.top_after.as_ref())
+                .is_some_and(|(before, after)| before.layout != after.layout);
         for story_delta in &delta.stories {
             let story_id = match story_delta {
                 StoryDelta::Replace { story_id, .. } | StoryDelta::Update { story_id, .. } => {
@@ -4540,6 +5233,136 @@ impl ProjectSession {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    fn update_contents_catalog_cache(&mut self, delta: &ProjectDelta) {
+        let revision = self.revision();
+
+        for story_delta in &delta.stories {
+            let (after, before, passages, story_id) = match story_delta {
+                StoryDelta::Replace { story_id, .. } => {
+                    self.contents_catalog_cache.remove(story_id);
+                    continue;
+                }
+                StoryDelta::Update {
+                    after,
+                    before,
+                    passages,
+                    story_id,
+                } => (after, before, passages, story_id),
+            };
+            let Some(mut catalog) = self.contents_catalog_cache.remove(story_id) else {
+                continue;
+            };
+            let Some(story) = self
+                .project
+                .stories
+                .iter()
+                .find(|story| &story.id == story_id)
+            else {
+                continue;
+            };
+            let mut touched_tags = BTreeSet::new();
+
+            for passage in passages {
+                if let Some(before) = &passage.before {
+                    catalog
+                        .contents
+                        .remove(&format!("source:{}", before.value.id.as_ref()));
+                    for tag in &before.value.tags {
+                        touched_tags.insert(tag.clone());
+                        let remove_tag =
+                            catalog.tag_usage.get_mut(tag).is_some_and(|passage_ids| {
+                                passage_ids.remove(before.value.id.as_ref());
+                                passage_ids.is_empty()
+                            });
+                        if remove_tag {
+                            catalog.tag_usage.remove(tag);
+                        }
+                    }
+                }
+                if let Some(after) = &passage.after {
+                    let entry = basic_source_contents_entry(
+                        after.value.id.as_ref(),
+                        &after.value.name,
+                        &after.value.text,
+                        CoreContentsEntryKind::Passage,
+                        Some(after.value.id.as_ref()),
+                    );
+                    catalog.contents.insert(entry.id.clone(), entry);
+                    for tag in &after.value.tags {
+                        touched_tags.insert(tag.clone());
+                        catalog
+                            .tag_usage
+                            .entry(tag.clone())
+                            .or_default()
+                            .insert(after.value.id.as_ref().to_owned());
+                    }
+                }
+            }
+
+            if before.script != after.script {
+                let source_id = format!("{}:script", story.id.as_ref());
+                let entry = basic_source_contents_entry(
+                    &source_id,
+                    "Story JavaScript",
+                    &story.script,
+                    CoreContentsEntryKind::Script,
+                    None,
+                );
+                catalog.contents.insert(entry.id.clone(), entry);
+            }
+            if before.stylesheet != after.stylesheet {
+                let source_id = format!("{}:stylesheet", story.id.as_ref());
+                let entry = basic_source_contents_entry(
+                    &source_id,
+                    "Story Stylesheet",
+                    &story.stylesheet,
+                    CoreContentsEntryKind::Stylesheet,
+                    None,
+                );
+                catalog.contents.insert(entry.id.clone(), entry);
+            }
+
+            for entry in basic_story_metadata_contents_entries(story) {
+                catalog.contents.insert(entry.id.clone(), entry);
+            }
+            catalog
+                .contents
+                .remove(&format!("entry:{}", before.start_passage.as_ref()));
+            catalog
+                .contents
+                .remove(&format!("entry:{}", after.start_passage.as_ref()));
+            if let Some(entry) = basic_story_entry_point(story) {
+                catalog.contents.insert(entry.id.clone(), entry);
+            }
+
+            if before.tag_colors != after.tag_colors {
+                touched_tags.extend(catalog.tag_usage.keys().cloned());
+            }
+            for tag in touched_tags {
+                catalog.contents.remove(&format!("tag:{tag}"));
+                if let Some(passage_ids) = catalog.tag_usage.get(&tag) {
+                    let entry = basic_tag_contents_entry(story, &tag, passage_ids);
+                    catalog.contents.insert(entry.id.clone(), entry);
+                }
+            }
+
+            catalog.facets = contents_facets(catalog.contents.values());
+            catalog.revision = revision;
+            self.contents_catalog_cache
+                .insert(story_id.clone(), catalog);
+        }
+
+        if (delta.top_before.is_some()
+            || delta.project_layout.is_some()
+            || !delta.layout_passages.is_empty())
+            && delta.stories.is_empty()
+        {
+            for catalog in self.contents_catalog_cache.values_mut() {
+                catalog.revision = revision;
             }
         }
     }
@@ -4779,7 +5602,9 @@ impl ProjectSession {
             self.read_model_cache.insert(story_id.clone(), cache);
         }
 
-        if (delta.top_before.is_some() || !delta.layout_passages.is_empty())
+        if (delta.top_before.is_some()
+            || delta.project_layout.is_some()
+            || !delta.layout_passages.is_empty())
             && delta.stories.is_empty()
         {
             for cache in self.read_model_cache.values_mut() {
@@ -4791,8 +5616,135 @@ impl ProjectSession {
 
     fn update_session_caches(&mut self, delta: &ProjectDelta) {
         self.update_graph_cache(delta);
+        self.update_backlink_cache(delta);
+        self.update_contents_catalog_cache(delta);
         self.update_analysis_cache(delta);
         self.update_read_model_cache(delta);
+    }
+
+    fn update_backlink_cache(&mut self, delta: &ProjectDelta) {
+        let revision = self.revision();
+
+        for story_delta in &delta.stories {
+            let (story_id, passages) = match story_delta {
+                StoryDelta::Replace { story_id, .. } => {
+                    self.backlink_cache.remove(story_id);
+                    self.backlink_cache_lru
+                        .retain(|(cached_story_id, _)| cached_story_id != story_id);
+                    continue;
+                }
+                StoryDelta::Update {
+                    story_id, passages, ..
+                } => (story_id, passages),
+            };
+            if !self.backlink_cache.contains_key(story_id) {
+                continue;
+            }
+            let structural_or_name_change =
+                passages
+                    .iter()
+                    .any(|passage| match (&passage.before, &passage.after) {
+                        (Some(before), Some(after)) => before.value.name != after.value.name,
+                        _ => true,
+                    });
+            if structural_or_name_change {
+                self.backlink_cache.remove(story_id);
+                self.backlink_cache_lru
+                    .retain(|(cached_story_id, _)| cached_story_id != story_id);
+                continue;
+            }
+
+            let changed_source_ids = passages
+                .iter()
+                .filter(|passage| match (&passage.before, &passage.after) {
+                    (Some(before), Some(after)) => before.value.text != after.value.text,
+                    _ => true,
+                })
+                .map(|passage| passage.passage_id.clone())
+                .collect::<BTreeSet<_>>();
+            if changed_source_ids.is_empty() {
+                if let Some(entries) = self.backlink_cache.get_mut(story_id) {
+                    for entry in entries.values_mut() {
+                        entry.revision = revision;
+                    }
+                }
+                continue;
+            }
+
+            let (replacements, changed_ranks) = {
+                let Some(story) = self
+                    .project
+                    .stories
+                    .iter()
+                    .find(|story| &story.id == story_id)
+                else {
+                    self.backlink_cache.remove(story_id);
+                    continue;
+                };
+                let target_entries = self
+                    .backlink_cache
+                    .get(story_id)
+                    .expect("backlink cache exists")
+                    .iter()
+                    .map(|(id, entry)| (id.clone(), entry.target_name.clone()))
+                    .collect::<Vec<_>>();
+                let target_ids = target_entries
+                    .iter()
+                    .map(|(target_id, _)| target_id.clone())
+                    .collect::<BTreeSet<_>>();
+                let changed_sources = changed_source_ids
+                    .iter()
+                    .filter_map(|source_id| {
+                        Some((
+                            story.passages.rank_of(source_id)?,
+                            story.passage_by_id(source_id)?,
+                        ))
+                    })
+                    .collect::<Vec<_>>();
+                let changed_ranks = changed_sources
+                    .iter()
+                    .map(|(rank, _)| *rank)
+                    .collect::<BTreeSet<_>>();
+                let mut additions = BTreeMap::<PassageId, Vec<usize>>::new();
+
+                for (source_rank, source) in changed_sources {
+                    for edge in passage_link_edges(story, source) {
+                        let Some(target_id) = edge.target else {
+                            continue;
+                        };
+                        if edge.source != target_id && target_ids.contains(&target_id) {
+                            additions.entry(target_id).or_default().push(source_rank);
+                        }
+                    }
+                }
+                (
+                    target_entries
+                        .into_iter()
+                        .map(|(target_id, target_name)| {
+                            let additions = additions.remove(&target_id).unwrap_or_default();
+                            (target_id, target_name, additions)
+                        })
+                        .collect::<Vec<_>>(),
+                    changed_ranks,
+                )
+            };
+
+            if let Some(entries) = self.backlink_cache.get_mut(story_id) {
+                for (target_id, target_name, additions) in replacements {
+                    let Some(entry) = entries.get_mut(&target_id) else {
+                        continue;
+                    };
+                    entry
+                        .source_ranks
+                        .retain(|source_rank| !changed_ranks.contains(source_rank));
+                    entry.source_ranks.extend(additions);
+                    entry.source_ranks.sort_unstable();
+                    entry.byte_size = entry.source_ranks.len() * std::mem::size_of::<usize>();
+                    entry.revision = revision;
+                    entry.target_name = target_name;
+                }
+            }
+        }
     }
 
     fn replace_all_text(
@@ -6154,6 +7106,28 @@ impl ProjectSession {
         })
     }
 
+    /// Lazily builds source-metadata-only Contents records. The catalog is
+    /// compact relative to source analysis and is updated from mutation deltas.
+    fn contents_catalog(&mut self, story_id: &str) -> Result<&StoryContentsCatalog, CoreError> {
+        let story_id = StoryId::new(story_id);
+        let revision = self.revision();
+        let current = self
+            .contents_catalog_cache
+            .get(&story_id)
+            .is_some_and(|catalog| catalog.revision == revision);
+
+        if !current {
+            let catalog = basic_story_contents_catalog(self.story(story_id.as_ref())?, revision);
+            self.contents_catalog_cache
+                .insert(story_id.clone(), catalog);
+        }
+
+        Ok(self
+            .contents_catalog_cache
+            .get(&story_id)
+            .expect("contents catalog was initialized"))
+    }
+
     /// Lazily builds the bounded read model from source and graph caches. It
     /// never creates a `CoreStoryIndex`; that compatibility type remains for
     /// explicit callers only and is too large to retain for a 50k story.
@@ -6463,47 +7437,34 @@ impl ProjectSession {
             query.cursor = None;
         });
         let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
-        let read_model = self.read_model(story_id)?;
-        let entries = &read_model.contents;
-        let facets = contents_facets(entries.values());
-        let mut matching = entries
-            .values()
-            .filter(|entry| contents_filter_matches(entry, &query.filter))
-            .collect::<Vec<_>>();
-        if let Some(search) = normalized_read_model_query(query.query.as_deref()) {
-            matching.retain(|entry| {
-                entry.label.to_lowercase().contains(&search)
-                    || entry
-                        .detail
-                        .as_deref()
-                        .is_some_and(|detail| detail.to_lowercase().contains(&search))
-            });
-        }
-        sort_contents_entry_refs(&mut matching, &query.sort);
-        let total_count = matching.len();
-        let (entries, next_cursor) =
-            read_model_page_refs(matching, offset, query.limit, revision, cursor_fingerprint);
-        let asset_paths = entries
-            .iter()
-            .filter(|entry| entry.kind == CoreContentsEntryKind::Asset)
-            .map(|entry| entry.label.as_str())
-            .collect::<BTreeSet<_>>();
-        let assets = read_model
-            .asset_inventory
-            .iter()
-            .filter(|asset| asset_paths.contains(asset.path.as_str()))
-            .cloned()
-            .collect();
+        if contents_query_uses_basic_catalog(&query) {
+            let catalog = self.contents_catalog(story_id)?;
 
-        Ok(CoreContentsPage {
-            assets,
-            entries,
-            facets,
-            next_cursor,
+            return Ok(contents_page_from_records(
+                story_id,
+                revision,
+                cursor_fingerprint,
+                offset,
+                &query,
+                &catalog.contents,
+                catalog.facets.clone(),
+                &[],
+            ));
+        }
+
+        let read_model = self.read_model(story_id)?;
+        let mut facets = contents_facets(read_model.contents.values());
+        facets.intelligence_complete = true;
+        Ok(contents_page_from_records(
+            story_id,
             revision,
-            story_id: story_id.to_owned(),
-            total_count,
-        })
+            cursor_fingerprint,
+            offset,
+            &query,
+            &read_model.contents,
+            facets,
+            &read_model.asset_inventory,
+        ))
     }
 
     pub fn search_page(
@@ -6688,13 +7649,13 @@ impl ProjectSession {
         })
     }
 
-    pub fn passage_facts(
+    pub fn passage_local_facts(
         &mut self,
         story_id: &str,
         passage_id: &str,
-    ) -> Result<CorePassageFacts, CoreError> {
+    ) -> Result<CorePassageLocalFacts, CoreError> {
         let passage_id = PassageId::new(passage_id);
-        let (story_id, passage_name, passage_text, passage_tags, duplicate_name) = {
+        let (story_id, passage_name, passage_text, passage_tags, duplicate_name, edges) = {
             let story = self.story(story_id)?;
             let passage = story
                 .passage_by_id(&passage_id)
@@ -6711,6 +7672,7 @@ impl ProjectSession {
                     .filter(|candidate| candidate.name == passage.name)
                     .nth(1)
                     .is_some(),
+                passage_link_edges(story, passage),
             )
         };
         let analysis = self.source_analysis(
@@ -6723,45 +7685,23 @@ impl ProjectSession {
             &passage_tags,
             CoreSearchScope::PassageText,
         );
-        self.ensure_graph_cache(&story_id)?;
-        let graph = &self
-            .graph_cache
-            .get(&story_id)
-            .expect("graph cache was initialized")
-            .graph;
-        let links = graph
-            .links_from(&passage_id)
+        let mut diagnostics = edges
             .iter()
-            .map(core_passage_link_fact)
-            .collect();
-        let backlinks = graph
-            .backlinks_to(&passage_id)
-            .iter()
-            .flat_map(|source_id| graph.links_from(source_id))
-            .filter(|edge| edge.target.as_ref() == Some(&passage_id))
-            .map(core_passage_link_fact)
-            .collect();
-        let mut diagnostics = graph
-            .broken_links()
-            .iter()
-            .filter(|broken_link| broken_link.source == passage_id)
-            .map(|broken_link| {
-                let (line, start, end) = locate_link_target(
-                    &passage_text,
-                    &broken_link.target_name,
-                )
-                .unwrap_or((1, 0, broken_link.target_name.len()));
+            .filter(|edge| edge.target.is_none())
+            .map(|edge| {
+                let (line, start, end) = locate_link_target(&passage_text, &edge.target_name)
+                    .unwrap_or((1, 0, edge.target_name.len()));
 
                 CoreDiagnostic {
                     code: "broken-link".into(),
                     end,
                     line,
-                    message: format!("Broken link to \"{}\"", broken_link.target_name),
+                    message: format!("Broken link to \"{}\"", edge.target_name),
                     passage_id: Some(passage_id.as_ref().to_owned()),
                     quick_fixes: vec![
                         CoreQuickFix {
-                            command: format!("create-passage:{}", broken_link.target_name),
-                            title: format!("Create \"{}\"", broken_link.target_name),
+                            command: format!("create-passage:{}", edge.target_name),
+                            title: format!("Create \"{}\"", edge.target_name),
                         },
                         CoreQuickFix {
                             command: "rename-link-target".into(),
@@ -6791,20 +7731,210 @@ impl ProjectSession {
             });
         }
 
-        Ok(CorePassageFacts {
+        Ok(CorePassageLocalFacts {
             asset_references: analysis.assets,
-            backlinks,
             character_count: passage_text.len(),
             diagnostics,
             excerpt: passage_text.chars().take(400).collect(),
             is_empty: passage_text.trim().is_empty(),
             line_count: passage_text.lines().count().max(1),
-            links,
+            links: edges.iter().map(core_passage_link_fact).collect(),
             passage_id: passage_id.as_ref().to_owned(),
             revision: self.revision().min(u32::MAX as u64) as u32,
             story_id: story_id.as_ref().to_owned(),
             symbols: analysis.symbols,
             word_count: passage_text.split_whitespace().count(),
+        })
+    }
+
+    fn ensure_backlink_cache(
+        &mut self,
+        story_id: &StoryId,
+        passage_id: &PassageId,
+    ) -> Result<(), CoreError> {
+        let revision = self.revision();
+        let current = self
+            .backlink_cache
+            .get(story_id)
+            .and_then(|entries| entries.get(passage_id))
+            .is_some_and(|entry| entry.revision == revision);
+        if current {
+            self.backlink_cache_hit_count += 1;
+            self.touch_backlink_cache(story_id, passage_id);
+            return Ok(());
+        }
+
+        let (target_name, source_ranks, scanned_sources) = {
+            let story = self.story(story_id.as_ref())?;
+            let target = story
+                .passage_by_id(passage_id)
+                .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+            let mut source_ranks = Vec::new();
+
+            for (rank, source) in story.passages.iter().enumerate() {
+                source_ranks.extend(
+                    passage_link_edges(story, source)
+                        .into_iter()
+                        .filter(|edge| {
+                            edge.source != *passage_id && edge.target.as_ref() == Some(passage_id)
+                        })
+                        .map(|_| rank),
+                );
+            }
+            (target.name.clone(), source_ranks, story.passage_count())
+        };
+        let byte_size = source_ranks.len() * std::mem::size_of::<usize>();
+
+        self.backlink_scan_count += 1;
+        self.backlink_scanned_source_count += scanned_sources;
+        self.backlink_cache
+            .entry(story_id.clone())
+            .or_default()
+            .insert(
+                passage_id.clone(),
+                BacklinkCacheEntry {
+                    byte_size,
+                    revision,
+                    source_ranks,
+                    target_name,
+                },
+            );
+        self.touch_backlink_cache(story_id, passage_id);
+        self.prune_backlink_cache();
+        Ok(())
+    }
+
+    fn touch_backlink_cache(&mut self, story_id: &StoryId, passage_id: &PassageId) {
+        self.backlink_cache_lru
+            .retain(|key| key != &(story_id.clone(), passage_id.clone()));
+        self.backlink_cache_lru
+            .push_back((story_id.clone(), passage_id.clone()));
+    }
+
+    fn prune_backlink_cache(&mut self) {
+        loop {
+            let entry_count = self
+                .backlink_cache
+                .values()
+                .map(BTreeMap::len)
+                .sum::<usize>();
+            let byte_count = self
+                .backlink_cache
+                .values()
+                .flat_map(BTreeMap::values)
+                .map(|entry| entry.byte_size)
+                .sum::<usize>();
+            if entry_count <= MAX_BACKLINK_CACHE_ENTRIES && byte_count <= MAX_BACKLINK_CACHE_BYTES {
+                break;
+            }
+            let Some((story_id, passage_id)) = self.backlink_cache_lru.pop_front() else {
+                break;
+            };
+            if let Some(entries) = self.backlink_cache.get_mut(&story_id) {
+                entries.remove(&passage_id);
+                if entries.is_empty() {
+                    self.backlink_cache.remove(&story_id);
+                }
+            }
+        }
+    }
+
+    pub fn backlinks_page(
+        &mut self,
+        story_id: &str,
+        passage_id: &str,
+        query: CoreBacklinksQuery,
+    ) -> Result<CoreBacklinksPage, CoreError> {
+        let story_id = StoryId::new(story_id);
+        let passage_id = PassageId::new(passage_id);
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let cursor_fingerprint = read_model_query_fingerprint(&query, |query| {
+            query.cursor = None;
+        }) ^ fingerprint(&(story_id.as_ref(), passage_id.as_ref()));
+        let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
+        self.ensure_backlink_cache(&story_id, &passage_id)?;
+        let entry = self
+            .backlink_cache
+            .get(&story_id)
+            .and_then(|entries| entries.get(&passage_id))
+            .expect("backlink cache was initialized");
+        let total_count = entry.source_ranks.len();
+        let target_name = entry.target_name.clone();
+        let (source_ranks, next_cursor) = read_model_page_refs(
+            entry.source_ranks.iter().collect(),
+            offset,
+            query.limit.min(MAX_READ_MODEL_PAGE_LIMIT),
+            revision,
+            cursor_fingerprint,
+        );
+        let story = self.story(story_id.as_ref())?;
+        let backlinks = source_ranks
+            .into_iter()
+            .filter_map(|source_rank| story.passages.get_at(source_rank))
+            .map(|source| CorePassageLinkFact {
+                broken: false,
+                source_id: source.id.as_ref().to_owned(),
+                target_id: Some(passage_id.as_ref().to_owned()),
+                target_name: target_name.clone(),
+            })
+            .collect();
+
+        Ok(CoreBacklinksPage {
+            backlinks,
+            next_cursor,
+            passage_id: passage_id.as_ref().to_owned(),
+            revision,
+            story_id: story_id.as_ref().to_owned(),
+            total_count,
+        })
+    }
+
+    /// Compatibility composition for non-product callers. Product routes use
+    /// `passage_local_facts` and the bounded backlink page independently.
+    pub fn passage_facts(
+        &mut self,
+        story_id: &str,
+        passage_id: &str,
+    ) -> Result<CorePassageFacts, CoreError> {
+        let local = self.passage_local_facts(story_id, passage_id)?;
+        let story_id_key = StoryId::new(story_id);
+        let passage_id_key = PassageId::new(passage_id);
+        self.ensure_backlink_cache(&story_id_key, &passage_id_key)?;
+        let (target_name, source_ranks) = {
+            let entry = self
+                .backlink_cache
+                .get(&story_id_key)
+                .and_then(|entries| entries.get(&passage_id_key));
+            entry
+                .map(|entry| (entry.target_name.clone(), entry.source_ranks.clone()))
+                .unwrap_or_default()
+        };
+        let story = self.story(story_id)?;
+        let backlinks = source_ranks
+            .into_iter()
+            .filter_map(|source_rank| story.passages.get_at(source_rank))
+            .map(|source| CorePassageLinkFact {
+                broken: false,
+                source_id: source.id.as_ref().to_owned(),
+                target_id: Some(passage_id.to_owned()),
+                target_name: target_name.clone(),
+            })
+            .collect();
+
+        Ok(CorePassageFacts {
+            asset_references: local.asset_references,
+            backlinks,
+            character_count: local.character_count,
+            diagnostics: local.diagnostics,
+            excerpt: local.excerpt,
+            is_empty: local.is_empty,
+            line_count: local.line_count,
+            links: local.links,
+            passage_id: local.passage_id,
+            revision: local.revision,
+            story_id: local.story_id,
+            symbols: local.symbols,
+            word_count: local.word_count,
         })
     }
 
@@ -7617,6 +8747,10 @@ fn default_read_model_page_limit() -> usize {
     100
 }
 
+fn default_backlinks_page_limit() -> usize {
+    8
+}
+
 const MAX_READ_MODEL_PAGE_LIMIT: usize = 250;
 
 fn read_model_query_fingerprint<T>(query: &T, clear_cursor: impl FnOnce(&mut T)) -> u64
@@ -7720,6 +8854,76 @@ fn contents_group(kind: &CoreContentsEntryKind) -> &'static str {
         | CoreContentsEntryKind::Metadata
         | CoreContentsEntryKind::Script
         | CoreContentsEntryKind::Stylesheet => "Project",
+    }
+}
+
+fn contents_query_uses_basic_catalog(query: &CoreContentsQuery) -> bool {
+    match query.filter {
+        CoreContentsFilter::All => {
+            normalized_read_model_query(query.query.as_deref()).is_none()
+                && query.sort == CoreContentsSort::Group
+        }
+        CoreContentsFilter::EntryPoint
+        | CoreContentsFilter::Group
+        | CoreContentsFilter::Metadata
+        | CoreContentsFilter::Passage
+        | CoreContentsFilter::Script
+        | CoreContentsFilter::Stylesheet
+        | CoreContentsFilter::Tag => true,
+        CoreContentsFilter::Asset
+        | CoreContentsFilter::Diagnostics
+        | CoreContentsFilter::Problems
+        | CoreContentsFilter::Variable => false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn contents_page_from_records(
+    story_id: &str,
+    revision: u32,
+    cursor_fingerprint: u64,
+    offset: usize,
+    query: &CoreContentsQuery,
+    records: &BTreeMap<String, CoreContentsEntry>,
+    facets: CoreContentsFacets,
+    asset_inventory: &[CoreAssetInventoryEntry],
+) -> CoreContentsPage {
+    let mut matching = records
+        .values()
+        .filter(|entry| contents_filter_matches(entry, &query.filter))
+        .collect::<Vec<_>>();
+    if let Some(search) = normalized_read_model_query(query.query.as_deref()) {
+        matching.retain(|entry| {
+            entry.label.to_lowercase().contains(&search)
+                || entry
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.to_lowercase().contains(&search))
+        });
+    }
+    sort_contents_entry_refs(&mut matching, &query.sort);
+    let total_count = matching.len();
+    let (entries, next_cursor) =
+        read_model_page_refs(matching, offset, query.limit, revision, cursor_fingerprint);
+    let asset_paths = entries
+        .iter()
+        .filter(|entry| entry.kind == CoreContentsEntryKind::Asset)
+        .map(|entry| entry.label.as_str())
+        .collect::<BTreeSet<_>>();
+    let assets = asset_inventory
+        .iter()
+        .filter(|asset| asset_paths.contains(asset.path.as_str()))
+        .cloned()
+        .collect();
+
+    CoreContentsPage {
+        assets,
+        entries,
+        facets,
+        next_cursor,
+        revision,
+        story_id: story_id.to_owned(),
+        total_count,
     }
 }
 
@@ -8872,6 +10076,146 @@ fn tag_entries(story: &Story, tag_usage: BTreeMap<String, BTreeSet<String>>) -> 
         .collect()
 }
 
+fn basic_source_contents_entry(
+    source_id: &str,
+    name: &str,
+    source: &str,
+    kind: CoreContentsEntryKind,
+    passage_id: Option<&str>,
+) -> CoreContentsEntry {
+    CoreContentsEntry {
+        count: line_count(source),
+        detail: Some(format!("{} characters", source.len())),
+        id: format!("source:{source_id}"),
+        kind,
+        label: name.to_owned(),
+        passage_id: passage_id.map(str::to_owned),
+        severity: None,
+        source_id: Some(source_id.to_owned()),
+    }
+}
+
+fn basic_story_metadata_contents_entries(story: &Story) -> [CoreContentsEntry; 2] {
+    let metadata_source_id = format!("{}:metadata", story.id.as_ref());
+
+    [
+        CoreContentsEntry {
+            count: story.passages.len(),
+            detail: Some(story.name.clone()),
+            id: format!("metadata:{}", story.id.as_ref()),
+            kind: CoreContentsEntryKind::Metadata,
+            label: "Story metadata".into(),
+            passage_id: None,
+            severity: None,
+            source_id: Some(metadata_source_id.clone()),
+        },
+        CoreContentsEntry {
+            count: 1,
+            detail: Some(format!(
+                "{} {}",
+                story.story_format, story.story_format_version
+            )),
+            id: format!("format:{}", story.id.as_ref()),
+            kind: CoreContentsEntryKind::Metadata,
+            label: "Story format".into(),
+            passage_id: None,
+            severity: None,
+            source_id: Some(metadata_source_id),
+        },
+    ]
+}
+
+fn basic_story_entry_point(story: &Story) -> Option<CoreContentsEntry> {
+    let start = story.passage_by_id(&story.start_passage)?;
+
+    Some(CoreContentsEntry {
+        count: 1,
+        detail: Some(start.name.clone()),
+        id: format!("entry:{}", start.id.as_ref()),
+        kind: CoreContentsEntryKind::EntryPoint,
+        label: "Start passage".into(),
+        passage_id: Some(start.id.as_ref().to_owned()),
+        severity: None,
+        source_id: Some(start.id.as_ref().to_owned()),
+    })
+}
+
+fn basic_tag_contents_entry(
+    story: &Story,
+    tag: &str,
+    passage_ids: &BTreeSet<String>,
+) -> CoreContentsEntry {
+    CoreContentsEntry {
+        count: passage_ids.len(),
+        detail: story.tag_colors.get(tag).cloned(),
+        id: format!("tag:{tag}"),
+        kind: group_kind(tag),
+        label: tag.to_owned(),
+        passage_id: passage_ids.first().cloned(),
+        severity: None,
+        source_id: passage_ids.first().cloned(),
+    }
+}
+
+fn basic_story_contents_catalog(story: &Story, revision: u64) -> StoryContentsCatalog {
+    let mut contents = BTreeMap::new();
+    let mut tag_usage = BTreeMap::<String, BTreeSet<String>>::new();
+
+    for entry in basic_story_metadata_contents_entries(story) {
+        contents.insert(entry.id.clone(), entry);
+    }
+    if let Some(entry) = basic_story_entry_point(story) {
+        contents.insert(entry.id.clone(), entry);
+    }
+    for passage in &story.passages {
+        let entry = basic_source_contents_entry(
+            passage.id.as_ref(),
+            &passage.name,
+            &passage.text,
+            CoreContentsEntryKind::Passage,
+            Some(passage.id.as_ref()),
+        );
+        contents.insert(entry.id.clone(), entry);
+        for tag in &passage.tags {
+            tag_usage
+                .entry(tag.clone())
+                .or_default()
+                .insert(passage.id.as_ref().to_owned());
+        }
+    }
+
+    let script_source_id = format!("{}:script", story.id.as_ref());
+    let script = basic_source_contents_entry(
+        &script_source_id,
+        "Story JavaScript",
+        &story.script,
+        CoreContentsEntryKind::Script,
+        None,
+    );
+    contents.insert(script.id.clone(), script);
+    let stylesheet_source_id = format!("{}:stylesheet", story.id.as_ref());
+    let stylesheet = basic_source_contents_entry(
+        &stylesheet_source_id,
+        "Story Stylesheet",
+        &story.stylesheet,
+        CoreContentsEntryKind::Stylesheet,
+        None,
+    );
+    contents.insert(stylesheet.id.clone(), stylesheet);
+
+    for (tag, passage_ids) in &tag_usage {
+        let entry = basic_tag_contents_entry(story, tag, passage_ids);
+        contents.insert(entry.id.clone(), entry);
+    }
+
+    StoryContentsCatalog {
+        facets: contents_facets(contents.values()),
+        contents,
+        revision,
+        tag_usage,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn contents_entries(
     story: &Story,
@@ -9524,6 +10868,7 @@ mod tests {
         assert_eq!(diagnostics.analysis_cache_source_count, 0);
         assert_eq!(diagnostics.graph_cache_story_count, 0);
         assert_eq!(diagnostics.read_model_cache_story_count, 0);
+        assert!(diagnostics.last_mutation.is_none());
     }
 
     #[test]
@@ -10085,6 +11430,273 @@ mod tests {
         assert_eq!(result.outcome, CoreExternalIngestOutcome::Conflict);
         assert_eq!(result.conflicts.len(), 1);
         assert_eq!(session.revision(), 2);
+    }
+
+    #[test]
+    fn compact_external_same_value_accepts_dirty_field_without_conflict() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::UpdateStoryScript {
+                script: "local script".into(),
+                story_id: "story-1".into(),
+            })
+            .expect("local script edit");
+        assert!(session.dirty());
+        let revision = session.revision();
+        let result = session
+            .ingest_external_delta(
+                CoreExternalDelta {
+                    changes: vec![CoreExternalChange::UpdateStoryScript {
+                        script: "local script".into(),
+                        story_id: "story-1".into(),
+                    }],
+                    id: "same-script".into(),
+                },
+                CoreExternalIngestMode::Auto,
+            )
+            .expect("same incoming value should be accepted");
+
+        assert_eq!(result.outcome, CoreExternalIngestOutcome::NoOp);
+        assert!(result.conflicts.is_empty());
+        assert!(!result.history_recorded);
+        assert!(!session.dirty());
+        assert_eq!(session.revision(), revision);
+    }
+
+    #[test]
+    fn compact_external_mixed_batch_is_bounded_undoable_and_idempotent() {
+        let mut large_story = story();
+        large_story.passages = (0..5_000)
+            .map(|index| {
+                passage(
+                    &format!("passage-{index:05}"),
+                    &format!("Passage {index:05}"),
+                    "body",
+                    index as f64,
+                )
+            })
+            .collect::<Vec<_>>()
+            .into();
+        large_story.start_passage = PassageId::new("passage-00000");
+        let original_name = large_story.name.clone();
+        let original_start = large_story.start_passage.clone();
+        let mut session = ProjectSession::new(Project {
+            layout: GraphLayout::from_story_layout(&large_story),
+            stories: vec![large_story],
+            ..Project::default()
+        });
+        let mut disk_layout = GraphLayout::default();
+        disk_layout
+            .metadata
+            .insert("source".into(), serde_json::json!("disk"));
+        let delta = CoreExternalDelta {
+            changes: vec![
+                CoreExternalChange::UpdatePassage {
+                    changes: PassagePatch {
+                        layout: Some(CoreRect {
+                            height: 120.0,
+                            left: 900.0,
+                            top: 40.0,
+                            width: 160.0,
+                        }),
+                        name: Some("Renamed Passage".into()),
+                        tags: Some(vec!["disk".into()]),
+                        text: Some("disk body".into()),
+                    },
+                    passage_id: "passage-00001".into(),
+                    story_id: "story-1".into(),
+                },
+                CoreExternalChange::UpdatePassageLayout {
+                    layout: None,
+                    passage_id: "passage-00002".into(),
+                    story_id: "story-1".into(),
+                },
+                CoreExternalChange::UpdatePassageLayout {
+                    layout: Some(CoreRect {
+                        height: 100.0,
+                        left: 1_200.0,
+                        top: 80.0,
+                        width: 100.0,
+                    }),
+                    passage_id: "passage-00003".into(),
+                    story_id: "story-1".into(),
+                },
+                CoreExternalChange::UpdateStoryMetadata {
+                    changes: StoryMetadataPatch {
+                        name: Some("Disk Story".into()),
+                        zoom: Some(1.5),
+                        ..StoryMetadataPatch::default()
+                    },
+                    story_id: "story-1".into(),
+                },
+                CoreExternalChange::UpdateStoryStartPassage {
+                    passage_id: "passage-00004".into(),
+                    story_id: "story-1".into(),
+                },
+                CoreExternalChange::UpdateStoryScript {
+                    script: "const disk = true;".into(),
+                    story_id: "story-1".into(),
+                },
+                CoreExternalChange::UpdateStoryStylesheet {
+                    story_id: "story-1".into(),
+                    stylesheet: ".disk {}".into(),
+                },
+                CoreExternalChange::UpdateProjectLayout {
+                    layout_json: serde_json::to_string(&disk_layout).expect("layout json"),
+                },
+            ],
+            id: "compact-mixed".into(),
+        };
+
+        let result = session
+            .ingest_external_delta(delta.clone(), CoreExternalIngestMode::Force)
+            .expect("compact mixed batch");
+
+        assert_eq!(result.outcome, CoreExternalIngestOutcome::Applied);
+        assert!(result.history_recorded);
+        assert!(!session.dirty());
+        assert_eq!(session.undo_stack.len(), 1);
+        let transaction = session.undo_stack.last().expect("external transaction");
+        assert_eq!(transaction.delta.stories.len(), 1);
+        let StoryDelta::Update {
+            after,
+            before,
+            passages,
+            ..
+        } = &transaction.delta.stories[0]
+        else {
+            panic!("expected compact story delta");
+        };
+        assert!(before.passages.is_empty());
+        assert!(after.passages.is_empty());
+        assert_eq!(passages.len(), 3);
+        assert_eq!(transaction.delta.layout_passages.len(), 1);
+        let project_layout = transaction
+            .delta
+            .project_layout
+            .as_ref()
+            .expect("compact project layout delta");
+        assert!(project_layout.before.passages.is_empty());
+        assert!(project_layout.after.passages.is_empty());
+        assert!(transaction.byte_size < 100_000);
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.analysis_cache_source_count, 0);
+        assert_eq!(diagnostics.graph_cache_story_count, 0);
+        assert_eq!(diagnostics.read_model_cache_story_count, 0);
+        assert!(diagnostics.last_mutation.is_none());
+        assert_eq!(
+            session.current_fingerprints.get("project:layout"),
+            session.saved_fingerprints.get("project:layout")
+        );
+        assert_eq!(
+            session.project.layout.metadata.get("source"),
+            Some(&serde_json::json!("disk"))
+        );
+
+        session.undo().expect("undo compact external batch");
+        assert!(session.dirty());
+        assert_eq!(session.story("story-1").unwrap().name, original_name);
+        assert_eq!(
+            session.story("story-1").unwrap().start_passage,
+            original_start
+        );
+        assert!(session.project.layout.metadata.get("source").is_none());
+        session.redo().expect("redo compact external batch");
+        assert!(!session.dirty());
+        assert_eq!(session.story("story-1").unwrap().name, "Disk Story");
+        assert_eq!(
+            session.project.layout.metadata.get("source"),
+            Some(&serde_json::json!("disk"))
+        );
+        let revision = session.revision();
+        let duplicate = session
+            .ingest_external_delta(delta, CoreExternalIngestMode::Force)
+            .expect("duplicate compact delta");
+        assert_eq!(duplicate.outcome, CoreExternalIngestOutcome::NoOp);
+        assert_eq!(session.revision(), revision);
+    }
+
+    #[test]
+    fn compact_external_batch_conflicts_and_validation_do_not_partially_apply() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "local text".into(),
+            })
+            .expect("local text");
+        session
+            .apply(StoryCommand::UpdateStoryScript {
+                script: "local script".into(),
+                story_id: "story-1".into(),
+            })
+            .expect("local script");
+        let revision = session.revision();
+        let incoming = CoreExternalDelta {
+            changes: vec![
+                CoreExternalChange::UpdateStoryMetadata {
+                    changes: StoryMetadataPatch {
+                        name: Some("Disk Story".into()),
+                        ..StoryMetadataPatch::default()
+                    },
+                    story_id: "story-1".into(),
+                },
+                CoreExternalChange::UpdateStoryScript {
+                    script: "disk script".into(),
+                    story_id: "story-1".into(),
+                },
+            ],
+            id: "compact-conflict".into(),
+        };
+        let conflict = session
+            .ingest_external_delta(incoming.clone(), CoreExternalIngestMode::Auto)
+            .expect("compact conflict");
+
+        assert_eq!(conflict.outcome, CoreExternalIngestOutcome::Conflict);
+        assert_eq!(conflict.conflicts.len(), 1);
+        assert_eq!(conflict.conflicts[0].field, "story:story-1:script");
+        assert_eq!(session.revision(), revision);
+        assert_eq!(session.story("story-1").unwrap().name, "Example");
+        assert_eq!(session.story("story-1").unwrap().script, "local script");
+
+        let forced = session
+            .ingest_external_delta(incoming, CoreExternalIngestMode::Force)
+            .expect("force compact batch");
+        assert_eq!(forced.outcome, CoreExternalIngestOutcome::Applied);
+        assert_eq!(session.story("story-1").unwrap().name, "Disk Story");
+        assert_eq!(session.story("story-1").unwrap().script, "disk script");
+        assert!(
+            session.dirty(),
+            "unrelated local passage text remains dirty"
+        );
+
+        let revision = session.revision();
+        let undo_count = session.undo_stack.len();
+        let error = session.ingest_external_delta(
+            CoreExternalDelta {
+                changes: vec![
+                    CoreExternalChange::UpdateStoryMetadata {
+                        changes: StoryMetadataPatch {
+                            name: Some("Must Not Apply".into()),
+                            ..StoryMetadataPatch::default()
+                        },
+                        story_id: "story-1".into(),
+                    },
+                    CoreExternalChange::UpdateProjectLayout {
+                        layout_json: "not json".into(),
+                    },
+                ],
+                id: "compact-invalid".into(),
+            },
+            CoreExternalIngestMode::Force,
+        );
+        assert!(matches!(error, Err(CoreError::UnsupportedCommand(_))));
+        assert_eq!(session.revision(), revision);
+        assert_eq!(session.undo_stack.len(), undo_count);
+        assert_eq!(session.story("story-1").unwrap().name, "Disk Story");
     }
 
     #[test]
@@ -10773,6 +12385,225 @@ mod tests {
     }
 
     #[test]
+    fn cold_basic_contents_page_is_bounded_without_analysis_graph_or_read_model() {
+        let mut large_story = story();
+        large_story.passages = (0..5_000)
+            .map(|index| {
+                passage(
+                    &format!("passage-{index:05}"),
+                    &format!("Passage {index:05}"),
+                    "A compact passage body.",
+                    index as f64,
+                )
+            })
+            .collect::<Vec<_>>()
+            .into();
+        large_story.start_passage = PassageId::new("passage-00000");
+        let mut session = ProjectSession::new(Project {
+            stories: vec![large_story],
+            ..Project::default()
+        });
+
+        let page = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    limit: 32,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("cold basic contents page");
+
+        assert_eq!(page.entries.len(), 32);
+        assert_eq!(page.facets.passage, 5_000);
+        assert_eq!(page.facets.metadata, 2);
+        assert_eq!(page.facets.entry_point, 1);
+        assert_eq!(page.facets.script, 1);
+        assert_eq!(page.facets.stylesheet, 1);
+        assert_eq!(page.facets.asset, 0);
+        assert_eq!(page.facets.diagnostics, 0);
+        assert_eq!(page.facets.variable, 0);
+        assert!(!page.facets.intelligence_complete);
+        assert_eq!(page.total_count, 5_005);
+        assert!(page.next_cursor.is_some());
+        assert!(
+            page.entries
+                .iter()
+                .all(|entry| entry.kind == CoreContentsEntryKind::Passage)
+        );
+
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.analysis_cache_source_count, 0);
+        assert_eq!(diagnostics.parsed_source_count, 0);
+        assert_eq!(diagnostics.graph_cache_story_count, 0);
+        assert_eq!(diagnostics.read_model_cache_story_count, 0);
+        assert_eq!(diagnostics.read_model_full_build_count, 0);
+        assert_eq!(session.contents_catalog_cache.len(), 1);
+        assert_eq!(
+            session
+                .contents_catalog_cache
+                .get(&StoryId::new("story-1"))
+                .map(|catalog| catalog.contents.len()),
+            Some(5_005)
+        );
+
+        let passage_page = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Passage,
+                    limit: 5,
+                    query: Some("Passage 04999".into()),
+                    sort: CoreContentsSort::Name,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("catalog passage search");
+        assert_eq!(passage_page.total_count, 1);
+        assert_eq!(passage_page.entries[0].label, "Passage 04999");
+        assert_eq!(session.performance_diagnostics().parsed_source_count, 0);
+        assert!(session.graph_cache.is_empty());
+        assert!(session.read_model_cache.is_empty());
+    }
+
+    #[test]
+    fn expensive_contents_filters_build_intelligence_only_on_demand() {
+        let mut story = story();
+        story
+            .passage_by_id_mut(&PassageId::new("a"))
+            .expect("start passage")
+            .text = "Set $score. assets/cover.png [[Missing]]".into();
+        let mut session = ProjectSession::new(Project {
+            stories: vec![story],
+            ..Project::default()
+        });
+
+        session
+            .contents_page("story-1", CoreContentsQuery::default())
+            .expect("basic page");
+        assert_eq!(session.analysis_parse_count, 0);
+        assert!(session.graph_cache.is_empty());
+        assert!(session.read_model_cache.is_empty());
+
+        let variables = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Variable,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("variable page");
+        assert!(
+            variables
+                .entries
+                .iter()
+                .any(|entry| entry.label == "$score")
+        );
+        assert!(variables.facets.intelligence_complete);
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_cache.len(), 1);
+        assert_eq!(session.graph_cache.len(), 1);
+        assert_eq!(session.analysis_cache.len(), 1);
+
+        let diagnostics = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Diagnostics,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("diagnostics page");
+        assert!(diagnostics.entries.iter().any(|entry| {
+            entry.kind == CoreContentsEntryKind::BrokenLink
+                && entry
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("Missing"))
+        }));
+
+        let assets = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Asset,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("assets page");
+        assert!(
+            assets
+                .entries
+                .iter()
+                .any(|entry| entry.label == "assets/cover.png")
+        );
+        assert_eq!(session.read_model_full_build_count, 1);
+    }
+
+    #[test]
+    fn basic_contents_catalog_updates_incrementally_across_mutations() {
+        let mut session = session();
+
+        session
+            .contents_page("story-1", CoreContentsQuery::default())
+            .expect("initialize basic catalog");
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "one\ntwo".into(),
+            })
+            .expect("text edit");
+        session
+            .apply(StoryCommand::SetPassageTags {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                tags: vec!["chapter-one".into()],
+            })
+            .expect("tag edit");
+
+        let passages = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Passage,
+                    query: Some("Start".into()),
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("updated passage catalog");
+        let start = passages
+            .entries
+            .iter()
+            .find(|entry| entry.source_id.as_deref() == Some("a"))
+            .expect("start catalog entry");
+        assert_eq!(start.count, 2);
+        assert_eq!(start.detail.as_deref(), Some("7 characters"));
+
+        let groups = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Group,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("updated group catalog");
+        assert_eq!(groups.total_count, 1);
+        assert_eq!(groups.entries[0].label, "chapter-one");
+        assert_eq!(groups.entries[0].count, 1);
+        assert_eq!(groups.revision, session.revision() as u32);
+
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.analysis_cache_source_count, 0);
+        assert_eq!(diagnostics.parsed_source_count, 0);
+        assert_eq!(diagnostics.graph_cache_story_count, 0);
+        assert_eq!(diagnostics.read_model_cache_story_count, 0);
+        assert_eq!(diagnostics.read_model_full_build_count, 0);
+    }
+
+    #[test]
     fn direct_search_page_does_not_build_a_compatibility_index() {
         let mut session = session();
         let baseline_parse_count = session.analysis_parse_count;
@@ -10799,7 +12630,13 @@ mod tests {
         let mut session = session();
 
         session
-            .contents_page("story-1", CoreContentsQuery::default())
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Diagnostics,
+                    ..CoreContentsQuery::default()
+                },
+            )
             .expect("contents page should initialize cache");
         let story_id = StoryId::new("story-1");
         let initial_revision = session.revision();
@@ -10851,7 +12688,13 @@ mod tests {
         let mut session = session();
 
         session
-            .contents_page("story-1", CoreContentsQuery::default())
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Diagnostics,
+                    ..CoreContentsQuery::default()
+                },
+            )
             .expect("contents page should initialize cache");
         let parse_count = session.analysis_parse_count;
 
@@ -10886,7 +12729,13 @@ mod tests {
         let mut session = session();
 
         session
-            .contents_page("story-1", CoreContentsQuery::default())
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Diagnostics,
+                    ..CoreContentsQuery::default()
+                },
+            )
             .expect("contents page should initialize cache");
         let parse_count = session.analysis_parse_count;
 
@@ -10920,7 +12769,13 @@ mod tests {
         let mut session = session();
 
         session
-            .contents_page("story-1", CoreContentsQuery::default())
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Diagnostics,
+                    ..CoreContentsQuery::default()
+                },
+            )
             .expect("contents page should initialize cache");
         let parse_count = session.analysis_parse_count;
 
@@ -10979,6 +12834,117 @@ mod tests {
     }
 
     #[test]
+    fn local_passage_facts_do_not_build_graph_or_read_model() {
+        let mut session = session();
+        let baseline = session.analysis_parse_count;
+
+        let facts = session
+            .passage_local_facts("story-1", "b")
+            .expect("local passage facts should load");
+
+        assert_eq!(facts.passage_id, "b");
+        assert!(facts.links.iter().any(|link| link.target_name == "Missing"));
+        assert!(
+            facts
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "broken-link")
+        );
+        assert_eq!(session.analysis_parse_count, baseline + 1);
+        assert!(session.graph_cache.is_empty());
+        assert!(session.read_model_cache.is_empty());
+    }
+
+    #[test]
+    fn backlinks_are_bounded_cached_and_revision_bound() {
+        let mut session = session();
+        let story = session
+            .project
+            .stories
+            .iter_mut()
+            .find(|story| story.id.as_ref() == "story-1")
+            .expect("story");
+        story
+            .passages
+            .push(passage("d", "Fourth", "[[Next]]", 600.0));
+        story
+            .passages
+            .push(passage("e", "Fifth", "[[Next]]", 800.0));
+        let first = session
+            .backlinks_page(
+                "story-1",
+                "b",
+                CoreBacklinksQuery {
+                    cursor: None,
+                    limit: 2,
+                },
+            )
+            .expect("first backlink page");
+
+        assert_eq!(first.backlinks.len(), 2);
+        assert_eq!(first.total_count, 3);
+        assert!(first.next_cursor.is_some());
+        assert!(session.graph_cache.is_empty());
+        assert_eq!(session.backlink_scan_count, 1);
+        assert_eq!(session.backlink_scanned_source_count, 5);
+
+        let second = session
+            .backlinks_page(
+                "story-1",
+                "b",
+                CoreBacklinksQuery {
+                    cursor: first.next_cursor.clone(),
+                    limit: 2,
+                },
+            )
+            .expect("second backlink page");
+        assert_eq!(second.backlinks.len(), 1);
+        assert_eq!(session.backlink_scan_count, 1);
+        assert_eq!(session.backlink_cache_hit_count, 1);
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: String::new(),
+            })
+            .expect("text edit should update the resident backlink cache");
+        let updated = session
+            .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+            .expect("updated backlinks");
+        assert_eq!(updated.total_count, 2);
+        assert_eq!(session.backlink_scan_count, 1);
+
+        session.undo().expect("undo");
+        assert_eq!(
+            session
+                .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+                .expect("undo backlinks")
+                .total_count,
+            3
+        );
+        session.redo().expect("redo");
+        assert_eq!(
+            session
+                .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+                .expect("redo backlinks")
+                .total_count,
+            2
+        );
+        assert_eq!(session.backlink_scan_count, 1);
+
+        let stale = session.backlinks_page(
+            "story-1",
+            "b",
+            CoreBacklinksQuery {
+                cursor: first.next_cursor,
+                limit: 2,
+            },
+        );
+        assert_eq!(stale, Err(CoreError::StaleReadModelCursor));
+    }
+
+    #[test]
     fn story_summary_counts_update_incrementally_with_passage_text() {
         let mut session = session();
         let before = session.story_summary("story-1").expect("initial summary");
@@ -11016,8 +12982,18 @@ mod tests {
     fn external_passage_text_reuses_incremental_cache_and_history() {
         let mut session = session();
 
+        let initial_backlinks = session
+            .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+            .expect("initial backlink page");
+        assert_eq!(initial_backlinks.total_count, 1);
         session
-            .contents_page("story-1", CoreContentsQuery::default())
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Diagnostics,
+                    ..CoreContentsQuery::default()
+                },
+            )
             .expect("initial page should populate source and read-model caches");
         let initial_parse_count = session.analysis_parse_count;
         let result = session
@@ -11025,7 +13001,7 @@ mod tests {
                 CoreExternalDelta {
                     changes: vec![CoreExternalChange::UpdatePassage {
                         changes: PassagePatch {
-                            text: Some("Disk edit [[Next]]".into()),
+                            text: Some("Disk edit".into()),
                             ..PassagePatch::default()
                         },
                         passage_id: "a".into(),
@@ -11060,6 +13036,11 @@ mod tests {
         assert_eq!(session.read_model_full_build_count, 1);
         assert_eq!(session.read_model_incremental_update_count, 1);
         assert_eq!(session.read_model_last_touched_source_count, 1);
+        let updated_backlinks = session
+            .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+            .expect("updated backlink page");
+        assert_eq!(updated_backlinks.total_count, 0);
+        assert_eq!(session.backlink_scan_count, 1);
         assert_eq!(
             session
                 .project()
@@ -11068,7 +13049,7 @@ mod tests {
                 .find(|story| story.id == StoryId::new("story-1"))
                 .and_then(|story| story.passage_by_id(&PassageId::new("a")))
                 .map(|passage| passage.text.as_str()),
-            Some("Disk edit [[Next]]")
+            Some("Disk edit")
         );
         session.undo().expect("external text delta should undo");
         assert_eq!(session.read_model_full_build_count, 1);

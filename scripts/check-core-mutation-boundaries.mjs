@@ -45,6 +45,16 @@ async function visit(directory) {
 			/^(?:src\/routes|src\/components|src\/dialogs|src\/route-actions)\//.test(
 				displayPath
 			) &&
+			/\bqueryPassageFactsAsync\s*\(/.test(source)
+		) {
+			violations.push(
+				`${displayPath}: requests compatibility passage facts; use local passage facts plus a bounded backlink page`
+			);
+		}
+		if (
+			/^(?:src\/routes|src\/components|src\/dialogs|src\/route-actions)\//.test(
+				displayPath
+			) &&
 			displayPath !== 'src/routes/build/build-route.tsx' &&
 			/\b(?:passage|selectedPassage|target|start)\.text\b/.test(source)
 		) {

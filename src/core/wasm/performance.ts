@@ -17,6 +17,8 @@ export interface CoreBridgeMetric {
 		| 'queryDiagnosticsPage'
 		| 'queryDocumentPage'
 		| 'queryPassageFacts'
+		| 'queryPassageLocalFacts'
+		| 'queryBacklinksPage'
 		| 'queryPassageDocument'
 		| 'querySourceDocument'
 		| 'querySearchPage'
@@ -38,6 +40,11 @@ export interface CoreBridgeMetric {
 	requestedAtEpochMs: number;
 	readModel?: {
 		analysisCacheSourceCount: number;
+		backlinkCacheBytes: number;
+		backlinkCacheEntryCount: number;
+		backlinkCacheHitCount: number;
+		backlinkScanCount: number;
+		backlinkScannedSourceCount: number;
 		fingerprintEntryCount: number;
 		graphCacheStoryCount: number;
 		historyBytes: number;

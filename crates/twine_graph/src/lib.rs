@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use twine_model::{GraphLayout, GraphPosition, PassageId, PassageLayout, Story};
+use twine_model::{GraphLayout, GraphPosition, Passage, PassageId, PassageLayout, Story};
 use twine_parse::{LinkParseOptions, parse_standard_links};
 
 fn default_true() -> bool {
@@ -1057,6 +1057,26 @@ impl GraphIndex {
     fn story_order_index(&self, id: &PassageId) -> usize {
         self.story_rank.get(id).copied().unwrap_or(usize::MAX)
     }
+}
+
+/// Parses and resolves only one passage's outgoing links. This is shared by
+/// bounded passage-fact queries that must not initialize the complete graph.
+pub fn passage_link_edges(story: &Story, passage: &Passage) -> Vec<LinkEdge> {
+    parse_standard_links(
+        &passage.text,
+        LinkParseOptions {
+            internal_only: true,
+        },
+    )
+    .into_iter()
+    .map(|link| LinkEdge {
+        source: passage.id.clone(),
+        target: story
+            .passage_by_name(&link.target)
+            .map(|target| target.id.clone()),
+        target_name: link.target,
+    })
+    .collect()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -2,6 +2,7 @@ import {renderHook} from '@testing-library/react-hooks';
 import * as React from 'react';
 import {
 	CoreAssetInventoryEntry,
+	movePassagesCommand,
 	PatchBatch,
 	queryGraphProjectionCommand,
 	renameStoryCommand,
@@ -357,6 +358,48 @@ describe('StoreCoreProjectHost asset commands', () => {
 				type: 'applyCorePatchBatch'
 			}),
 			'undoChange.editPassage'
+		);
+	});
+
+	it('emits an incremental passage layout save hint for move patches', async () => {
+		const wasmClient = fakeWasmClient(async command =>
+			batch([
+				{
+					changes: {
+						layout: {height: 100, left: 320, top: 180, width: 100},
+						name: null,
+						tags: null,
+						text: null
+					},
+					passage_id: 'start',
+					story_id: (command as any).story_id,
+					type: 'passageUpdated'
+				}
+			])
+		);
+		const context = hostWithStory({wasmClient});
+
+		await context.host.applyStoryCommand(
+			movePassagesCommand(context.story.id, [
+				{
+					bounds: {height: 100, left: 320, top: 180, width: 100},
+					passageId: 'start'
+				}
+			])
+		);
+
+		expect(context.dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				persistenceHints: [
+					{
+						passageId: 'start',
+						storyId: context.story.id,
+						type: 'passageLayout'
+					}
+				],
+				type: 'applyCorePatchBatch'
+			}),
+			'undoChange.movePassage'
 		);
 	});
 

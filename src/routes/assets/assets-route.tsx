@@ -1024,7 +1024,7 @@ export const AssetsRoute: React.FC = () => {
 			return;
 		}
 
-		const facts = await coreProjectHost.queryPassageFactsAsync(
+		const facts = await coreProjectHost.queryPassageLocalFactsAsync(
 			story.id,
 			target.id
 		);

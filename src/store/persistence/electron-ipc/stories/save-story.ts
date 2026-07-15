@@ -11,6 +11,7 @@ import {loadProjectMetadata} from '../../../project-metadata';
 import {recordPerformanceHarnessEvent} from '../../../../util/performance';
 import type {
 	ProjectFolderDocumentUpdate,
+	ProjectFolderSaveHint,
 	ProjectFolderSaveOptions
 } from '../../project-folder-save-hints';
 import {materializeRegisteredStory} from '../../../../core/bootstrap-stories';
@@ -49,20 +50,41 @@ async function saveNativeProjectFolder(
 				{type: 'passageText'}
 			> => update.type === 'passageText'
 		);
-		const useCompactIncrementalPayload = documentUpdates.length > 0;
+		const layoutHints = (options.hints ?? []).filter(
+			(hint): hint is Extract<ProjectFolderSaveHint, {type: 'passageLayout'}> =>
+				hint.type === 'passageLayout'
+		);
+		const layoutOnlySave =
+			layoutHints.length > 0 &&
+			layoutHints.length === (options.hints?.length ?? 0);
+		const useCompactIncrementalPayload =
+			documentUpdates.length > 0 || layoutOnlySave;
 		const completeStory: Story | StoryWithDocuments =
 			useCompactIncrementalPayload
 				? story
 				: await materializeRegisteredStory(story);
+		const passageTextById = new Map(
+			passageDocumentUpdates.map(update => [update.passageId, update.text])
+		);
+		const needsCompletePassageMetadata = options.hints?.some(
+			hint => hint.type === 'passageMetadata'
+		);
+		const compactPassageIds = new Set(
+			needsCompletePassageMetadata
+				? completeStory.passages.map(passage => passage.id)
+				: [
+						...passageDocumentUpdates.map(update => update.passageId),
+						...layoutHints.map(hint => hint.passageId)
+					]
+		);
 		const saveStory: StoryWithDocuments = useCompactIncrementalPayload
 			? {
 					...completeStory,
-					passages: passageDocumentUpdates.flatMap(update => {
-						const passage = completeStory.passages.find(
-							candidate => candidate.id === update.passageId
-						);
-						return passage ? [{...passage, text: update.text}] : [];
-					})
+					passages: completeStory.passages.flatMap(passage =>
+						compactPassageIds.has(passage.id)
+							? [{...passage, text: passageTextById.get(passage.id) ?? ''}]
+							: []
+					)
 				}
 			: (completeStory as StoryWithDocuments);
 		const saveOptions = useCompactIncrementalPayload

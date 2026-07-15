@@ -315,6 +315,7 @@ export class TestCoreSessionClient {
 						count('brokenLink') + count('diagnostic') + count('orphan'),
 					entryPoint: count('entryPoint'),
 					group: count('group'),
+					intelligenceComplete: true,
 					metadata: count('metadata'),
 					passage: count('passage'),
 					problems: index.contents.filter(entry => entry.severity !== null)
@@ -489,6 +490,40 @@ export class TestCoreSessionClient {
 				storyId,
 				symbols: index.symbols.filter(symbol => symbol.passageId === passageId),
 				wordCount: passage?.text.trim().split(/\s+/).filter(Boolean).length ?? 0
+			};
+		}
+	);
+	queryPassageLocalFacts = jest.fn(
+		async (sessionId: string, storyId: string, passageId: string) => {
+			const {backlinks, ...facts} = await this.queryPassageFacts(
+				sessionId,
+				storyId,
+				passageId
+			);
+			void backlinks;
+			return facts;
+		}
+	);
+	queryBacklinksPage = jest.fn(
+		async (
+			sessionId: string,
+			storyId: string,
+			passageId: string,
+			options: {cursor: string | null; limit: number}
+		) => {
+			const facts = await this.queryPassageFacts(sessionId, storyId, passageId);
+			const offset = options.cursor
+				? Number(options.cursor.split(':').at(-1))
+				: 0;
+			const end = Math.min(offset + options.limit, facts.backlinks.length);
+			return {
+				backlinks: facts.backlinks.slice(offset, end),
+				nextCursor:
+					end < facts.backlinks.length ? `${this.revision}:test:${end}` : null,
+				passageId,
+				revision: this.revision,
+				storyId,
+				totalCount: facts.backlinks.length
 			};
 		}
 	);

@@ -104,6 +104,11 @@ interface PerformanceSnapshot {
 			requestedAtEpochMs: number;
 			readModel?: {
 				analysisCacheSourceCount: number;
+				backlinkCacheBytes: number;
+				backlinkCacheEntryCount: number;
+				backlinkCacheHitCount: number;
+				backlinkScanCount: number;
+				backlinkScannedSourceCount: number;
 				fingerprintEntryCount: number;
 				graphCacheStoryCount: number;
 				historyBytes: number;
@@ -927,6 +932,135 @@ async function waitForInitialReadModelSettle(page: Page) {
 	);
 }
 
+function workerClients(current: PerformanceSnapshot) {
+	return current.renderer.core.hosts.flatMap(host =>
+		host.client ? [host.client] : []
+	);
+}
+
+async function waitForWorkerIdle(
+	page: Page,
+	timeout = smoke ? 3 * 60 * 1000 : 10 * 60 * 1000
+) {
+	return pollSnapshot(
+		page,
+		current => {
+			const clients = workerClients(current);
+
+			return (
+				clients.length > 0 &&
+				clients.every(
+					client =>
+						client.pendingRequestCount === 0 && client.sessionQueueCount === 0
+				)
+			);
+		},
+		timeout
+	);
+}
+
+function pendingPersistenceRevisions(current: PerformanceSnapshot) {
+	const terminalRevisions = new Set(
+		current.renderer.events.flatMap(event =>
+			[
+				'save-acknowledgement-complete',
+				'save-acknowledgement-failed',
+				'persistence-save-failed'
+			].includes(event.name) && typeof event.detail?.revision === 'number'
+				? [event.detail.revision]
+				: []
+		)
+	);
+
+	return Array.from(
+		new Set(
+			current.renderer.events.flatMap(event =>
+				event.name === 'persistence-save-queued' &&
+				typeof event.detail?.revision === 'number'
+					? [event.detail.revision]
+					: []
+			)
+		)
+	).filter(revision => !terminalRevisions.has(revision));
+}
+
+async function waitForPersistenceIdle(
+	page: Page,
+	timeout = smoke ? 3 * 60 * 1000 : 10 * 60 * 1000
+) {
+	return pollSnapshot(
+		page,
+		current => pendingPersistenceRevisions(current).length === 0,
+		timeout
+	);
+}
+
+async function waitForContentsQueryPaintAfter(
+	page: Page,
+	startedAt: number,
+	timeout = 60_000
+) {
+	return pollSnapshot(
+		page,
+		current => {
+			const submit = lastEntry(current, 'contents-page-query-submit', 'mark');
+			const result = lastEntry(current, 'contents-page-query-result', 'mark');
+			const paintEnd = lastEntry(
+				current,
+				'contents-page-result-to-paint-end',
+				'mark'
+			);
+			const resultToPaint = lastEntry(
+				current,
+				'contents-page-result-to-paint',
+				'measure'
+			);
+			const visible = lastEntry(current, 'contents-visible', 'mark');
+
+			return (
+				!!submit &&
+				!!result &&
+				!!paintEnd &&
+				!!resultToPaint &&
+				!!visible &&
+				submit.startTime >= startedAt &&
+				result.startTime >= submit.startTime &&
+				paintEnd.startTime >= result.startTime &&
+				visible.startTime >= result.startTime
+			);
+		},
+		timeout
+	);
+}
+
+async function waitForMarkAfter(
+	page: Page,
+	name: string,
+	startedAt: number,
+	afterName?: string,
+	timeout = 60_000
+) {
+	return pollSnapshot(
+		page,
+		current => {
+			const mark = lastEntry(current, name, 'mark');
+			const after = afterName
+				? lastEntry(current, afterName, 'mark')
+				: undefined;
+
+			return (
+				!!mark &&
+				mark.startTime >= startedAt &&
+				(!afterName ||
+					(!!after &&
+						after.startTime >= startedAt &&
+						mark.startTime >= after.startTime))
+			);
+		},
+		timeout
+	);
+}
+
 async function waitForWatcherMetric(
 	page: Page,
 	expectedPath: string,
@@ -987,6 +1121,8 @@ async function measureEdits(page: Page) {
 	await expect(editor).toBeVisible({timeout: 60_000});
 	const content = editor.locator('.cm-content');
 	const revisions: number[] = [];
+	let cleanMeasuredSamples = 0;
+	let externallyContaminatedSamples = 0;
 
 	for (let index = 0; index < (smoke ? 3 : 22); index++) {
 		await recordLaunchPhase('benchmark-sample-started', {
@@ -995,6 +1131,8 @@ async function measureEdits(page: Page) {
 			surface: 'edit'
 		});
 		await reset(page);
+		const bridgeMetricStart = (await snapshot(page)).renderer.bridgeMetrics
+			.length;
 		let previousRevision = await currentRevision(page);
 		await content.click();
 		await page.keyboard.press('End');
@@ -1004,17 +1142,16 @@ async function measureEdits(page: Page) {
 		previousRevision = await waitForRevisionAfter(page, previousRevision);
 		revisions.push(previousRevision);
 		let current = await snapshot(page);
-
-		if (index >= 2) {
-			addSample(
-				'edit.roundTripMs',
-				lastEntry(current, 'mutation-round-trip', 'measure')?.duration
-			);
-			addSample(
-				'edit.paintMs',
-				lastEntry(current, 'mutation-to-paint', 'measure')?.duration
-			);
-		}
+		const editRoundTripMs = lastEntry(
+			current,
+			'mutation-round-trip',
+			'measure'
+		)?.duration;
+		const editPaintMs = lastEntry(
+			current,
+			'mutation-to-paint',
+			'measure'
+		)?.duration;
 		const undo = page.getByRole('button', {name: /^Undo/});
 
 		await expect(undo).toBeEnabled();
@@ -1023,12 +1160,11 @@ async function measureEdits(page: Page) {
 		previousRevision = await waitForRevisionAfter(page, previousRevision);
 		revisions.push(previousRevision);
 		current = await snapshot(page);
-		if (index >= 2) {
-			addSample(
-				'undo.roundTripMs',
-				lastEntry(current, 'undo-round-trip', 'measure')?.duration
-			);
-		}
+		const undoRoundTripMs = lastEntry(
+			current,
+			'undo-round-trip',
+			'measure'
+		)?.duration;
 		const redo = page.getByRole('button', {name: /^Redo/});
 
 		await expect(redo).toBeEnabled();
@@ -1037,11 +1173,45 @@ async function measureEdits(page: Page) {
 		previousRevision = await waitForRevisionAfter(page, previousRevision);
 		revisions.push(previousRevision);
 		current = await snapshot(page);
-		if (index >= 2) {
-			addSample(
-				'redo.roundTripMs',
-				lastEntry(current, 'redo-round-trip', 'measure')?.duration
+		const redoRoundTripMs = lastEntry(
+			current,
+			'redo-round-trip',
+			'measure'
+		)?.duration;
+		const externalIngestMetrics = current.renderer.bridgeMetrics
+			.slice(bridgeMetricStart)
+			.filter(metric =>
+				['applyExternalDelta', 'ingestExternalDelta'].includes(metric.kind)
 			);
+
+		if (index >= 2) {
+			if (externalIngestMetrics.length === 0) {
+				cleanMeasuredSamples++;
+				addSample('edit.roundTripMs', editRoundTripMs);
+				addSample('edit.paintMs', editPaintMs);
+				addSample('undo.roundTripMs', undoRoundTripMs);
+				addSample('redo.roundTripMs', redoRoundTripMs);
+			} else {
+				externallyContaminatedSamples++;
+				addSample(
+					'edit.externalIngestContaminated.roundTripMs',
+					editRoundTripMs
+				);
+				addSample('edit.externalIngestContaminated.paintMs', editPaintMs);
+				addSample(
+					'undo.externalIngestContaminated.roundTripMs',
+					undoRoundTripMs
+				);
+				addSample(
+					'redo.externalIngestContaminated.roundTripMs',
+					redoRoundTripMs
+				);
+			}
+			for (const metric of externalIngestMetrics) {
+				addSample('edit.externalIngest.roundTripMs', metric.roundTripMs);
+				addSample('edit.externalIngest.computeMs', metric.computeMs);
+				addSample('edit.externalIngest.queuedMs', metric.queuedMs);
+			}
 		}
 		assertInvariant(
 			`edit-${index}-avoids-full-replace`,
@@ -1057,6 +1227,24 @@ async function measureEdits(page: Page) {
 		});
 	}
 
+	assertInvariant(
+		'edit-clean-sample-coverage',
+		cleanMeasuredSamples > 0,
+		`${cleanMeasuredSamples} clean; ${externallyContaminatedSamples} external-ingest-contaminated`
+	);
+	assertInvariant(
+		'edit-ordinary-timings-exclude-external-ingest',
+		(samples['edit.roundTripMs']?.length ?? 0) === cleanMeasuredSamples &&
+			(samples['edit.paintMs']?.length ?? 0) === cleanMeasuredSamples,
+		`${samples['edit.roundTripMs']?.length ?? 0}/${cleanMeasuredSamples} round trips; ${
+			samples['edit.paintMs']?.length ?? 0
+		}/${cleanMeasuredSamples} paints`
+	);
+	addSample('edit.cleanSampleCount', cleanMeasuredSamples);
+	addSample(
+		'edit.externalIngestContaminatedSampleCount',
+		externallyContaminatedSamples
+	);
 	assertInvariant(
 		'edit-undo-redo-revisions-monotonic',
 		revisions.every(
@@ -1286,6 +1474,12 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 	const postClose = checkpointByName.get('post-editor-close-gc');
 	const postContents = checkpointByName.get('post-contents-close-gc');
 	const client = current.renderer.core.hosts[0]?.client;
+	const localFactsMetric = current.renderer.bridgeMetrics
+		.filter(metric => metric.kind === 'queryPassageLocalFacts')
+		.at(-1);
+	const backlinkMetric = current.renderer.bridgeMetrics
+		.filter(metric => metric.kind === 'queryBacklinksPage')
+		.at(-1);
 
 	captureMemory(current);
 	captureMemoryDetailCheckpoints(current);
@@ -1325,9 +1519,23 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 		JSON.stringify(postEdit?.renderer)
 	);
 	assertInvariant(
-		'memory-detail-contents-builds-on-demand',
-		(postContents?.renderer.rustAnalysisCacheSourceCount ?? 0) > 1 &&
-			postContents?.renderer.rustReadModelCacheStoryCount === 1,
+		'memory-detail-selected-passage-uses-bounded-queries',
+		!!localFactsMetric &&
+			!!backlinkMetric &&
+			localFactsMetric.responseBytes <= 32 * 1024 &&
+			(backlinkMetric.readModel?.backlinkCacheEntryCount ?? Infinity) <= 1 &&
+			(backlinkMetric.readModel?.backlinkCacheBytes ?? Infinity) <=
+				4 * 1024 * 1024 &&
+			!current.renderer.bridgeMetrics.some(
+				metric => metric.kind === 'queryPassageFacts'
+			),
+		JSON.stringify({backlinkMetric, localFactsMetric})
+	);
+	assertInvariant(
+		'memory-detail-default-contents-stays-bounded',
+		(postContents?.renderer.rustAnalysisCacheSourceCount ?? Infinity) <= 2 &&
+			postContents?.renderer.rustGraphCacheStoryCount === 0 &&
+			postContents?.renderer.rustReadModelCacheStoryCount === 0,
 		JSON.stringify(postContents?.renderer)
 	);
 	assertInvariant(
@@ -1364,15 +1572,27 @@ async function measureContents(page: Page) {
 
 		await page.getByTitle('Contents').click();
 		await expect(page.getByLabel('Contents', {exact: true})).toBeVisible();
-		await page.waitForFunction(
-			() =>
-				performance
-					.getEntriesByName('twine:contents-visible')
-					.some(entry => entry.entryType === 'mark'),
-			undefined,
-			{timeout: 60_000}
-		);
+		await waitForContentsQueryPaintAfter(page, startedAt);
+		await expect(page.locator('.contents-route__row').first()).toBeVisible({
+			timeout: 60_000
+		});
 		const current = await snapshot(page);
+		const querySubmit = lastEntry(
+			current,
+			'contents-page-query-submit',
+			'mark'
+		);
+		const queryResult = lastEntry(
+			current,
+			'contents-page-query-result',
+			'mark'
+		);
+		const resultToPaint = lastEntry(
+			current,
+			'contents-page-result-to-paint',
+			'measure'
+		);
+		const contentsVisible = lastEntry(current, 'contents-visible', 'mark');
 		const contentsTrace = current.renderer.events
 			.filter(
 				event =>
@@ -1391,10 +1611,35 @@ async function measureContents(page: Page) {
 			.filter(event => event.name === 'core-session-ready')
 			.at(-1);
 
-		if (index >= 2) {
+		assertInvariant(
+			`contents-${index}-matching-result-painted`,
+			!!querySubmit &&
+				!!queryResult &&
+				!!resultToPaint &&
+				!!contentsVisible &&
+				queryResult.startTime >= querySubmit.startTime &&
+				contentsVisible.startTime >= queryResult.startTime,
+			JSON.stringify({contentsVisible, queryResult, querySubmit, resultToPaint})
+		);
+		if (index === 0) {
+			addSample(
+				'query.contentsColdMs',
+				contentsVisible ? contentsVisible.startTime - startedAt : undefined
+			);
+			addSample(
+				'query.contentsColdRequestMs',
+				lastEntry(current, 'contents-page-query-round-trip', 'measure')
+					?.duration
+			);
+			addSample('query.contentsColdResultToPaintMs', resultToPaint?.duration);
+		} else if (index >= 2) {
 			addSample(
 				'query.contentsMs',
-				lastEntry(current, 'contents-visible', 'mark')!.startTime - startedAt
+				contentsVisible ? contentsVisible.startTime - startedAt : undefined
+			);
+			addSample(
+				'query.contentsWarmMs',
+				contentsVisible ? contentsVisible.startTime - startedAt : undefined
 			);
 			addSample(
 				'query.contentsRequestMs',
@@ -1470,17 +1715,42 @@ async function measureContents(page: Page) {
 			contentsMetrics.every(metric => metric.responseBytes <= 1_000_000),
 			contentsMetrics.map(metric => metric.responseBytes).join(', ')
 		);
+		assertInvariant(
+			`contents-${index}-uses-compact-catalog`,
+			contentsMetrics.every(
+				metric =>
+					!!metric.readModel &&
+					metric.readModel.analysisCacheSourceCount <= 1 &&
+					metric.readModel.graphCacheStoryCount === 0 &&
+					metric.readModel.readModelCacheStoryCount === 0 &&
+					metric.readModel.readModelFullBuildCount === 0
+			),
+			JSON.stringify(contentsMetrics.map(metric => metric.readModel))
+		);
 		addSample(
 			'query.contentsPayloadBytes',
 			contentsMetrics.at(-1)?.responseBytes
 		);
 		captureBridgeMetrics(current);
+		await waitForWorkerIdle(page);
 		await recordLaunchPhase('benchmark-sample-completed', {
 			index,
 			phase,
 			surface: 'contents'
 		});
 	}
+	const idle = await waitForWorkerIdle(page);
+	const clients = workerClients(idle);
+
+	assertInvariant(
+		'contents-phase-worker-idle',
+		clients.length > 0 &&
+			clients.every(
+				client =>
+					client.pendingRequestCount === 0 && client.sessionQueueCount === 0
+			),
+		JSON.stringify(clients)
+	);
 }
 
 async function measureSearch(page: Page) {
@@ -1493,12 +1763,27 @@ async function measureSearch(page: Page) {
 			phase,
 			surface: 'search'
 		});
-		await input.fill('');
+		if (await input.inputValue()) {
+			const clearStartedAt = await page.evaluate(() => performance.now());
+
+			await input.fill('');
+			await waitForContentsQueryPaintAfter(page, clearStartedAt);
+			await waitForWorkerIdle(page);
+		}
 		await reset(page);
 		const startedAt = await page.evaluate(() => performance.now());
 
 		await input.fill(`Passage ${String((index % 9) + 1).padStart(6, '0')}`);
-		await waitForMark(page, 'contents-search-visible');
+		await waitForContentsQueryPaintAfter(page, startedAt);
+		await expect(page.locator('.contents-route__row').first()).toBeVisible({
+			timeout: 60_000
+		});
+		await waitForMarkAfter(
+			page,
+			'contents-search-visible',
+			startedAt,
+			'contents-page-query-result'
+		);
 		const current = await snapshot(page);
 
 		if (index >= 2) {
@@ -1514,6 +1799,18 @@ async function measureSearch(page: Page) {
 			surface: 'search'
 		});
 	}
+	const idle = await waitForWorkerIdle(page);
+	const clients = workerClients(idle);
+
+	assertInvariant(
+		'query-phase-worker-idle',
+		clients.length > 0 &&
+			clients.every(
+				client =>
+					client.pendingRequestCount === 0 && client.sessionQueueCount === 0
+			),
+		JSON.stringify(clients)
+	);
 }
 
 function capturePersistenceMetrics(current: PerformanceSnapshot) {
@@ -1667,7 +1964,6 @@ async function measureGraph(page: Page) {
 		.getByRole('group', {name: 'Workspace Mode'})
 		.getByRole('tab', {name: 'Graph'})
 		.click();
-	await reset(page);
 	const viewport = page.locator('.story-edit-graph-viewport');
 
 	await expect(viewport).toBeVisible();
@@ -1691,6 +1987,11 @@ async function measureGraph(page: Page) {
 		nodeCount > 0 && nodeCount < 500,
 		`${nodeCount} mounted nodes`
 	);
+	await waitForWorkerIdle(page);
+	await waitForPersistenceIdle(page);
+	await reset(page);
+	const measurementStartedAtEpochMs = Date.now();
+	const baselineRevision = await currentRevision(page);
 
 	for (let index = 0; index < (smoke ? 1 : 5); index++) {
 		const box = await viewport.boundingBox();
@@ -1715,7 +2016,109 @@ async function measureGraph(page: Page) {
 			addSample('graph.frameMaxMs', frame);
 		}
 	}
-	captureBridgeMetrics(await snapshot(page));
+
+	const node = nodes.first();
+
+	await expect(node).toBeVisible();
+	const nodeBox = await node.boundingBox();
+
+	if (!nodeBox) {
+		throw new Error('Graph node has no bounding box.');
+	}
+	await page.mouse.move(
+		nodeBox.x + nodeBox.width / 2,
+		nodeBox.y + nodeBox.height / 2
+	);
+	await page.mouse.down();
+	await page.mouse.move(
+		nodeBox.x + nodeBox.width / 2 + 32,
+		nodeBox.y + nodeBox.height / 2 + 24,
+		{steps: 6}
+	);
+	await page.mouse.up();
+	await waitForRevisionAfter(page, baselineRevision);
+	await waitForWorkerIdle(page);
+	const finalRevision = await currentRevision(page);
+	const persisted = await waitForRevisionEvent(
+		page,
+		[
+			'save-acknowledgement-complete',
+			'save-acknowledgement-failed',
+			'persistence-save-failed'
+		],
+		finalRevision,
+		watcherTimeout
+	);
+	const settled = await waitForPersistenceIdle(page, watcherTimeout);
+	const nativeSaves = settled.renderer.events.filter(
+		event =>
+			event.name === 'save-native-timings' &&
+			event.epochTime >= measurementStartedAtEpochMs
+	);
+	const pendingRevisions = pendingPersistenceRevisions(settled);
+	const clients = workerClients(settled);
+
+	addSample('graph.layoutRevisionDelta', finalRevision - baselineRevision);
+	addSample('graph.layoutSaveCount', nativeSaves.length);
+	addSample(
+		'graph.layoutFullSaveFallbackCount',
+		nativeSaves.filter(
+			event =>
+				event.detail?.mode === 'full' ||
+				typeof event.detail?.fallbackReason === 'string'
+		).length
+	);
+	capturePersistenceMetrics(settled);
+	captureNativeSaveMetrics(settled);
+	captureBridgeMetrics(settled);
+	assertInvariant(
+		'graph-layout-interaction-advances-revision',
+		finalRevision > baselineRevision,
+		`${baselineRevision} -> ${finalRevision}`
+	);
+	assertInvariant(
+		'graph-final-revision-persisted',
+		persisted.renderer.events.some(
+			event =>
+				event.name === 'save-acknowledgement-complete' &&
+				event.detail?.revision === finalRevision
+		),
+		`revision ${finalRevision}`
+	);
+	assertInvariant(
+		'graph-layout-save-timings-present',
+		nativeSaves.length > 0,
+		`${nativeSaves.length} native saves`
+	);
+	assertInvariant(
+		'graph-layout-saves-use-incremental-mode',
+		nativeSaves.length > 0 &&
+			nativeSaves.every(event => event.detail?.mode === 'incremental'),
+		JSON.stringify(nativeSaves.map(event => event.detail))
+	);
+	assertInvariant(
+		'graph-layout-saves-avoid-full-save-fallback',
+		nativeSaves.every(
+			event =>
+				event.detail?.mode !== 'full' &&
+				typeof event.detail?.fallbackReason !== 'string'
+		),
+		JSON.stringify(nativeSaves.map(event => event.detail))
+	);
+	assertInvariant(
+		'graph-phase-no-save-in-flight',
+		pendingRevisions.length === 0,
+		pendingRevisions.join(', ')
+	);
+	assertInvariant(
+		'graph-phase-worker-idle',
+		clients.length > 0 &&
+			clients.every(
+				client =>
+					client.pendingRequestCount === 0 && client.sessionQueueCount === 0
+			),
+		JSON.stringify(clients)
+	);
 }
 
 function captureMemory(current: PerformanceSnapshot) {
@@ -1818,6 +2221,19 @@ function captureMemory(current: PerformanceSnapshot) {
 		rust ? rust.projectDocumentBytes / 1024 / 1024 : undefined
 	);
 	addSample('memory.owner.rustAnalysisSources', rust?.analysisCacheSourceCount);
+	addSample(
+		'memory.owner.rustBacklinkCacheMiB',
+		rust ? rust.backlinkCacheBytes / 1024 / 1024 : undefined
+	);
+	addSample(
+		'memory.owner.rustBacklinkCacheEntries',
+		rust?.backlinkCacheEntryCount
+	);
+	addSample('memory.owner.rustBacklinkScans', rust?.backlinkScanCount);
+	addSample(
+		'memory.owner.rustBacklinkScannedSources',
+		rust?.backlinkScannedSourceCount
+	);
 	addSample('memory.owner.rustFingerprintEntries', rust?.fingerprintEntryCount);
 	addSample('memory.owner.rustGraphCacheStories', rust?.graphCacheStoryCount);
 	addSample(
@@ -1884,6 +2300,11 @@ function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
 			'workerSessionQueueCount',
 			'workerWasmMemoryBytes',
 			'rustAnalysisCacheSourceCount',
+			'rustBacklinkCacheBytes',
+			'rustBacklinkCacheEntryCount',
+			'rustBacklinkCacheHitCount',
+			'rustBacklinkScanCount',
+			'rustBacklinkScannedSourceCount',
 			'rustFingerprintEntryCount',
 			'rustGraphCacheStoryCount',
 			'rustProjectDocumentBytes',
@@ -2245,8 +2666,8 @@ async function measureWatcherPassageSample(
 		JSON.stringify({stageSum, totalMs: stages?.totalMs})
 	);
 	assertInvariant(
-		`watcher-${sampleLabel}-rust-parses-one-source`,
-		stages?.graphParsedSourceCount === 1,
+		`watcher-${sampleLabel}-rust-avoids-graph-reparse`,
+		stages?.topologyChanged === false && stages.graphParsedSourceCount === 0,
 		JSON.stringify(stages)
 	);
 
