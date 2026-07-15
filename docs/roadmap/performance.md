@@ -55,6 +55,20 @@ fixture isolation.
   constructs the 50,002-source read model or graph. Fresh 50k validation on
   2026-07-15 measured about 308 ms cold and 70.2 ms warm p95, with a 5.7 ms
   cached core request p95. Expensive intelligence filters remain explicit.
+- All-filter label searches now stay on the compact Contents catalog; variables,
+  assets, problems, and diagnostics still build intelligence only through their
+  explicit filters. The confirming 50k query retained 116.5 MiB of WASM instead
+  of 299.25 MiB, built no graph or complete read model, and measured 1.18 GiB
+  post-GC resident memory.
+- Save acknowledgement now merges only dirty fingerprint fields into the saved
+  map. It preserves untouched key allocations and handles create/delete without
+  the previous 500k-entry clone and its roughly 12–21 MiB WASM high-water cost.
+- Memory contract 3 reports live and post-GC process working sets plus renderer
+  heap, main heap/external memory, WASM, and residual runtime ownership. The
+  latest query split is about 632 MiB Tab, 394 MiB Browser, 106 MiB GPU, and
+  48 MiB Utility; finer attribution should focus on the 459 MiB renderer and
+  358 MiB main native/runtime residuals rather than React documents or query
+  payloads.
 
 - Profile native project load, renderer hydration, session initialization, and
   first-route queries independently.

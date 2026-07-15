@@ -118,6 +118,14 @@ a complete full hydration, and an accepted watcher baseline from files visited
 during hydration rather than a second traversal. Startup phase reports are
 partial evidence and cannot be accepted as complete baselines.
 
+Normal edit, graph, and query phases record both `memory.live.*` before forced
+collection and `memory.retained.*` afterward. The canonical `memory.*` values
+use the retained checkpoint under memory contract 3. Renderer residual subtracts
+renderer JS heap and worker WASM from Tab working set; main residual subtracts
+main JS heap and external memory from Browser working set. Logical owners such
+as cached payloads, project documents, and Rust caches are nested breakdowns and
+must not be added to those top-level values again.
+
 For fast project-size memory attribution, run:
 
 ```sh

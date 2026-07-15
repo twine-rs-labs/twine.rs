@@ -39,6 +39,13 @@ They also capture main/renderer heap and working sets at startup milestones,
 WASM linear memory, Rust cache/entity counts, and a perf-only post-GC retained
 checkpoint. These startup reports are partial evidence, not accepted baselines.
 
+Standard edit/query/graph phases now use memory measurement contract 3. They
+record both the live final state and an explicit post-GC retained checkpoint,
+including renderer/main heap, worker WASM linear memory, Electron process-role
+working sets, and non-additive logical owner details. Residual renderer and main
+working sets subtract only top-level heap/WASM or heap/external owners so nested
+payload, document, and Rust cache counters are not double-counted.
+
 ## Recent focused validation
 
 Fresh release-mode 50k query, graph, edit, and watcher phases passed on
@@ -48,13 +55,16 @@ changes landed. All structural assertions passed.
 - Cold Contents reached a matching painted result in about 308 ms. The first
   core request took about 255 ms and transferred 18.5 KiB without constructing
   a graph or full read model. Warm Contents measured 70.2 ms p95, with the
-  cached core request at 5.7 ms p95 and result-to-paint at 25.9 ms p95. Search
-  measured 24.8 ms p95.
+  cached core request at 5.7 ms p95 and result-to-paint at 25.9 ms p95. The
+  follow-up compact All-filter search measured 17.4 ms p95 and retained only
+  nine selected-passage analyses, no graph, and no complete read model.
 - Twenty clean edit samples measured 17.6 ms worker round trip and 23.4 ms
   edit-to-paint at p95. No measured edit overlapped external ingestion.
-- Four real graph drags advanced and persisted four revisions. Every save used
-  layout-only native incremental persistence; the full-save fallback count was
-  zero. Graph frames measured 33.4 ms p95 with a 400.1 ms maximum outlier.
+- Five paced graph pans changed only the world transform and advanced no core
+  revision. One deliberate graph drag advanced exactly one revision and used
+  one layout-only native incremental save. Graph frames measured 17.2 ms p95
+  with a 151.0 ms maximum, down from 33.4/400.1 ms. The remaining isolated
+  maximum coincides with a bounded viewport-projection refresh, not a save.
 - Five warm external passage edits measured 4.3 ms core ingestion p95. Graph
   and read-model work were each at or below 0.1 ms, history work was zero, and
   topology-neutral text changes performed no graph reparse. Observation to

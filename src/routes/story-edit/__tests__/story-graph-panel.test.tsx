@@ -1,12 +1,16 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {StoreCoreProjectHost} from '../../../core/project-host';
+import type {PatchBatch} from '../../../core/bindings/PatchBatch';
 import {defaults as prefsDefaults} from '../../../store/prefs/defaults';
 import {PrefsContext, PrefsState} from '../../../store/prefs';
 import {reducer as prefsReducer} from '../../../store/prefs/reducer';
 import {StoriesContext} from '../../../store/stories';
 import {fakePassage, fakeStory} from '../../../test-util';
-import {StoryGraphPanel} from '../story-graph-panel';
+import {
+	graphProjectionChangeForPatchBatch,
+	StoryGraphPanel
+} from '../story-graph-panel';
 import type {
 	StoryGraphWorkspaceOptions,
 	StoryGraphWorkspaceView
@@ -142,6 +146,7 @@ function renderComponent(
 		onSelectIds,
 		onTestPassage,
 		result,
+		rerender: () => result.rerender(<TestComponent />),
 		start,
 		storiesDispatch,
 		story
@@ -152,6 +157,10 @@ function nodeButton(container: HTMLElement, passageId: string) {
 	return container.querySelector(
 		`[data-passage-id="${passageId}"] .tw-node`
 	) as HTMLElement;
+}
+
+function patchBatch(...patches: PatchBatch['patches']): PatchBatch {
+	return {label: 'test', patches, transactionId: 1n};
 }
 
 // Reads the single world transform (translate(x,y) scale(k)) the graph rides.
@@ -300,6 +309,112 @@ describe('<StoryGraphPanel>', () => {
 		fireEvent.click(screen.getByRole('button', {name: 'Broken links'}));
 
 		expect(nodeButton(result.container, 'start')).toHaveTextContent('Start');
+	});
+
+	it('classifies structural and text graph projection patches', () => {
+		const textPatch = {
+			changes: {layout: null, name: null, tags: null, text: '[[Next]]'},
+			passage_id: 'start',
+			story_id: 'story',
+			type: 'passageUpdated' as const
+		};
+		const layoutPatch = {
+			...textPatch,
+			changes: {
+				layout: {height: 100, left: 20, top: 30, width: 100},
+				name: null,
+				tags: null,
+				text: null
+			}
+		};
+
+		expect(
+			graphProjectionChangeForPatchBatch(patchBatch(textPatch), 'story')
+		).toBe('deferred');
+		expect(
+			graphProjectionChangeForPatchBatch(patchBatch(layoutPatch), 'story')
+		).toBe('immediate');
+		expect(
+			graphProjectionChangeForPatchBatch(patchBatch(layoutPatch), 'other')
+		).toBeUndefined();
+		expect(
+			graphProjectionChangeForPatchBatch(
+				patchBatch({
+					passage_id: 'start',
+					story_id: 'story',
+					type: 'startPassageChanged'
+				}),
+				'story'
+			)
+		).toBe('immediate');
+	});
+
+	it('coalesces text projection refreshes and ignores selection refreshes', async () => {
+		const querySpy = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'queryGraphProjectionAsync'
+		);
+		let patchListener:
+			| Parameters<StoreCoreProjectHost['subscribeToPatches']>[0]
+			| undefined;
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'subscribeToPatches')
+			.mockImplementation(listener => {
+				patchListener = listener;
+				return jest.fn();
+			});
+		const {rerender, result, story} = renderComponent();
+
+		await waitForNode(result.container, 'start');
+		await waitFor(() => expect(querySpy).toHaveBeenCalled());
+		querySpy.mockClear();
+
+		story.passages = story.passages.map(passage => ({
+			...passage,
+			selected: passage.id === 'next'
+		}));
+		rerender();
+		await new Promise(resolve => window.setTimeout(resolve, 0));
+		expect(querySpy).not.toHaveBeenCalled();
+
+		act(() => {
+			patchListener?.(
+				patchBatch(
+					{
+						changes: {layout: null, name: null, tags: null, text: 'N'},
+						passage_id: 'next',
+						story_id: story.id,
+						type: 'passageUpdated'
+					},
+					{
+						changes: {layout: null, name: null, tags: null, text: 'Ne'},
+						passage_id: 'next',
+						story_id: story.id,
+						type: 'passageUpdated'
+					}
+				)
+			);
+		});
+		expect(querySpy).not.toHaveBeenCalled();
+		await waitFor(() => expect(querySpy).toHaveBeenCalledTimes(1));
+
+		querySpy.mockClear();
+		act(() => {
+			patchListener?.(
+				patchBatch({
+					changes: {
+						layout: {height: 100, left: 185, top: 0, width: 100},
+						name: null,
+						tags: null,
+						text: null
+					},
+					passage_id: 'next',
+					story_id: story.id,
+					type: 'passageUpdated'
+				})
+			);
+		});
+		await waitFor(() => expect(querySpy).toHaveBeenCalledTimes(1));
 	});
 
 	it('tests the selected passage from the graph toolbar', () => {
@@ -645,6 +760,62 @@ describe('<StoryGraphPanel>', () => {
 
 		expect(after.x).toBe(start.x - 50);
 		expect(after.y).toBe(start.y - 30);
+	});
+
+	it('gives Space-panning precedence over passage dragging', async () => {
+		const {onSelect, result} = renderComponent();
+		const viewport = result.container.querySelector(
+			'.story-edit-graph-viewport'
+		) as HTMLElement;
+		const startNode = await waitForNode(result.container, 'start');
+		const before = worldView(result.container);
+
+		onSelect.mockClear();
+		applyStoryCommandSpy.mockClear();
+		fireEvent.keyDown(window, {code: 'Space', key: ' '});
+		fireEvent.pointerDown(
+			startNode,
+			new PointerEvent('pointerdown', {
+				button: 0,
+				clientX: 120,
+				clientY: 110,
+				pointerId: 10
+			})
+		);
+		// Exercise react-draggable's mouse path too. Its synchronous guard must
+		// cancel even before the Space state update has rendered.
+		fireEvent.mouseDown(startNode, {button: 0, clientX: 120, clientY: 110});
+		fireEvent.pointerMove(
+			viewport,
+			new PointerEvent('pointermove', {
+				button: 0,
+				clientX: 70,
+				clientY: 80,
+				pointerId: 10
+			})
+		);
+		fireEvent.mouseMove(document, {clientX: 70, clientY: 80});
+		fireEvent.pointerUp(
+			viewport,
+			new PointerEvent('pointerup', {
+				button: 0,
+				clientX: 70,
+				clientY: 80,
+				pointerId: 10
+			})
+		);
+		fireEvent.mouseUp(document, {clientX: 70, clientY: 80});
+		fireEvent.keyUp(window, {code: 'Space', key: ' '});
+
+		expect(worldView(result.container)).toEqual({
+			...before,
+			x: before.x - 50,
+			y: before.y - 30
+		});
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(applyStoryCommandSpy).not.toHaveBeenCalledWith(
+			expect.objectContaining({type: 'movePassages'})
+		);
 	});
 
 	it('persists graph workspace view through the debounced callback', async () => {

@@ -23,6 +23,8 @@ export interface TwinePerformanceHarness {
 			core: ReturnType<typeof coreProjectHostPerformanceSnapshot>;
 			entries: ReturnType<typeof performanceSnapshot>;
 			events: ReturnType<typeof performanceEventSnapshot>;
+			heap: ReturnType<typeof rendererHeapMemorySnapshot>;
+			owners: ReturnType<typeof rendererMemoryOwnerSnapshot>;
 		};
 	}>;
 }
@@ -88,6 +90,7 @@ export function installPerformanceHarness() {
 					core: coreProjectHostPerformanceSnapshot(),
 					entries: performanceSnapshot(),
 					events: performanceEventSnapshot(),
+					heap: rendererHeapMemorySnapshot(),
 					owners: rendererMemoryOwnerSnapshot()
 				}
 			};

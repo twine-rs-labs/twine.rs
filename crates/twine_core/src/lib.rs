@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry},
     fs,
     hash::{DefaultHasher, Hash, Hasher},
     io::Read,
@@ -3872,8 +3872,7 @@ impl ProjectSession {
 
         if revision == self.revision() {
             self.saved_state_id = self.current_state_id;
-            self.saved_fingerprints = self.current_fingerprints.clone();
-            self.dirty_fields.clear();
+            self.accept_current_fingerprints_as_saved();
             self.dirty = false;
         }
 
@@ -3905,6 +3904,24 @@ impl ProjectSession {
 
     fn refresh_dirty(&mut self) {
         self.dirty = !self.dirty_fields.is_empty();
+    }
+
+    fn accept_current_fingerprints_as_saved(&mut self) {
+        for field in std::mem::take(&mut self.dirty_fields) {
+            match self.current_fingerprints.get(&field).copied() {
+                Some(value) => match self.saved_fingerprints.entry(field) {
+                    Entry::Occupied(mut entry) => *entry.get_mut() = value,
+                    Entry::Vacant(entry) => {
+                        entry.insert(value);
+                    }
+                },
+                None => {
+                    self.saved_fingerprints.remove(&field);
+                }
+            }
+        }
+
+        debug_assert_eq!(self.saved_fingerprints, self.current_fingerprints);
     }
 
     fn refresh_dirty_fields(&mut self, touched: impl IntoIterator<Item = String>) {
@@ -8860,8 +8877,7 @@ fn contents_group(kind: &CoreContentsEntryKind) -> &'static str {
 fn contents_query_uses_basic_catalog(query: &CoreContentsQuery) -> bool {
     match query.filter {
         CoreContentsFilter::All => {
-            normalized_read_model_query(query.query.as_deref()).is_none()
-                && query.sort == CoreContentsSort::Group
+            matches!(query.sort, CoreContentsSort::Group | CoreContentsSort::Name)
         }
         CoreContentsFilter::EntryPoint
         | CoreContentsFilter::Group
@@ -11296,6 +11312,83 @@ mod tests {
     }
 
     #[test]
+    fn save_acknowledgement_updates_only_dirty_fingerprints() {
+        let mut session = session();
+        let untouched_field = "passage:story-1:b:text";
+        let untouched_key_pointer = session
+            .saved_fingerprints
+            .get_key_value(untouched_field)
+            .expect("untouched saved fingerprint")
+            .0
+            .as_ptr();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "saved without cloning every fingerprint".into(),
+            })
+            .expect("text edit");
+        assert_eq!(
+            session.dirty_fields,
+            BTreeSet::from(["passage:story-1:a:text".into()])
+        );
+
+        session.acknowledge_saved(session.revision());
+
+        assert!(!session.dirty());
+        assert!(session.dirty_fields.is_empty());
+        assert_eq!(session.saved_fingerprints, session.current_fingerprints);
+        assert_eq!(
+            session
+                .saved_fingerprints
+                .get_key_value(untouched_field)
+                .expect("untouched saved fingerprint")
+                .0
+                .as_ptr(),
+            untouched_key_pointer
+        );
+    }
+
+    #[test]
+    fn save_acknowledgement_merges_created_and_deleted_fingerprints() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::CreatePassage {
+                id: Some("created".into()),
+                layout: None,
+                name: Some("Created".into()),
+                story_id: "story-1".into(),
+                tags: vec![],
+                text: "New passage".into(),
+            })
+            .expect("create passage");
+        session.acknowledge_saved(session.revision());
+        assert_eq!(session.saved_fingerprints, session.current_fingerprints);
+        assert!(
+            session
+                .saved_fingerprints
+                .contains_key("passage:story-1:created:text")
+        );
+
+        session
+            .apply(StoryCommand::DeletePassages {
+                passage_ids: vec!["created".into()],
+                story_id: "story-1".into(),
+            })
+            .expect("delete passage");
+        session.acknowledge_saved(session.revision());
+        assert_eq!(session.saved_fingerprints, session.current_fingerprints);
+        assert!(
+            session
+                .saved_fingerprints
+                .keys()
+                .all(|field| !field.starts_with("passage:story-1:created:"))
+        );
+    }
+
+    #[test]
     fn stale_save_acknowledgement_does_not_mark_newer_state_clean() {
         let mut session = session();
 
@@ -11314,9 +11407,13 @@ mod tests {
                 text: "newer".into(),
             })
             .expect("newer edit");
+        let saved_before = session.saved_fingerprints.clone();
+        let dirty_before = session.dirty_fields.clone();
 
         session.acknowledge_saved(persisted_revision);
         assert!(session.status().dirty);
+        assert_eq!(session.saved_fingerprints, saved_before);
+        assert_eq!(session.dirty_fields, dirty_before);
     }
 
     #[test]
@@ -12464,6 +12561,25 @@ mod tests {
         assert_eq!(session.performance_diagnostics().parsed_source_count, 0);
         assert!(session.graph_cache.is_empty());
         assert!(session.read_model_cache.is_empty());
+
+        let all_search = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    query: Some("Passage 04999".into()),
+                    sort: CoreContentsSort::Name,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("catalog All-filter search");
+        assert_eq!(all_search.total_count, 1);
+        assert_eq!(all_search.entries[0].label, "Passage 04999");
+        assert!(!all_search.facets.intelligence_complete);
+        let diagnostics = session.performance_diagnostics();
+        assert_eq!(diagnostics.analysis_cache_source_count, 0);
+        assert_eq!(diagnostics.graph_cache_story_count, 0);
+        assert_eq!(diagnostics.read_model_cache_story_count, 0);
+        assert_eq!(diagnostics.read_model_full_build_count, 0);
     }
 
     #[test]

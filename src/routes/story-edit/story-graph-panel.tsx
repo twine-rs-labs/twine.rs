@@ -26,6 +26,7 @@ import type {CoreGraphNode} from '../../core/bindings/CoreGraphNode';
 import type {CoreGraphProjection} from '../../core/bindings/CoreGraphProjection';
 import type {CoreLinkLayerOptions} from '../../core/bindings/CoreLinkLayerOptions';
 import type {CoreRect} from '../../core/bindings/CoreRect';
+import type {PatchBatch} from '../../core/bindings/PatchBatch';
 import {Passage, Story} from '../../store/stories';
 import {Point, Rect, rectFromPoints, rectsIntersect} from '../../util/geometry';
 import {markPerformanceAfterPaint} from '../../util/performance';
@@ -154,6 +155,7 @@ const resizeSnapActivationDistance = 18;
 const graphResizeMinimum = 40;
 const graphProjectionTileSize = 600;
 const graphProjectionOverscan = 1200;
+const graphProjectionTextRefreshDelayMs = 250;
 const graphMinZoom = 0.2;
 const graphMaxZoom = 2.4;
 const graphButtonZoomFactor = 1.18;
@@ -933,22 +935,45 @@ function selectedIdKey(ids: string[]) {
 	return ids.join('\u0000');
 }
 
-function graphProjectionStoryKey(story: Story) {
-	return [
-		story.id,
-		story.startPassage,
-		...story.passages.map(passage =>
-			[
-				passage.id,
-				passage.name,
-				passage.left,
-				passage.top,
-				passage.width,
-				passage.height,
-				passage.tags.join('\u0002')
-			].join('\u0001')
-		)
-	].join('\u0000');
+export function graphProjectionChangeForPatchBatch(
+	batch: PatchBatch,
+	storyId: string
+): 'deferred' | 'immediate' | undefined {
+	let deferred = false;
+
+	for (const patch of batch.patches) {
+		if (patch.type === 'projectSnapshotReplaced') {
+			return 'immediate';
+		}
+
+		if (!('story_id' in patch) || patch.story_id !== storyId) {
+			continue;
+		}
+
+		switch (patch.type) {
+			case 'layoutSaved':
+			case 'passageCreated':
+			case 'passageDeleted':
+			case 'startPassageChanged':
+				return 'immediate';
+
+			case 'passageUpdated':
+				if (
+					patch.changes.layout !== null ||
+					patch.changes.name !== null ||
+					patch.changes.tags !== null
+				) {
+					return 'immediate';
+				}
+				deferred ||= patch.changes.text !== null;
+				break;
+
+			default:
+				break;
+		}
+	}
+
+	return deferred ? 'deferred' : undefined;
 }
 
 function interactionBounds(
@@ -1037,8 +1062,10 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		initialGraphView(storyZoomSeed.current.zoom, graphView)
 	);
 	const visibleZoom = view.k;
+	const panningViewRef = React.useRef<GraphView>();
 	const viewRef = React.useRef(view);
-	viewRef.current = view;
+	const renderedView = panningViewRef.current ?? view;
+	viewRef.current = renderedView;
 	const persistZoomFrame = React.useRef<number>();
 	const persistGraphViewFrame = React.useRef<number>();
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
@@ -1066,6 +1093,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		graphOptions?.tool ?? 'select'
 	);
 	const [spaceDown, setSpaceDown] = React.useState(false);
+	const spaceDownRef = React.useRef(false);
 	const [viewport, setViewport] = React.useState<ViewportState>({
 		height: 1,
 		left: 0,
@@ -1073,6 +1101,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		width: 1
 	});
 	const viewportRef = React.useRef<HTMLDivElement>(null);
+	const gridRef = React.useRef<HTMLDivElement>(null);
 	const canvasRef = React.useRef<HTMLDivElement>(null);
 	const minimapRef = React.useRef<HTMLDivElement>(null);
 	const viewportFrame = React.useRef<number>();
@@ -1084,9 +1113,14 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		React.useState('');
 	const [asyncProjection, setAsyncProjection] =
 		React.useState<AsyncProjectionState>();
+	const [graphProjectionRevision, setGraphProjectionRevision] =
+		React.useState(0);
+	const deferredGraphProjectionRefresh = React.useRef<number>();
 	const panRef = React.useRef<{
 		left: number;
 		moved: boolean;
+		currentLeft: number;
+		currentTop: number;
 		pointerId?: number;
 		startLeft: number;
 		startTop: number;
@@ -1111,10 +1145,6 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	const persistedSelectionKey = React.useMemo(
 		() => selectedIdKey(selectedPassageIds),
 		[selectedPassageIds]
-	);
-	const graphStoryKey = React.useMemo(
-		() => graphProjectionStoryKey(story),
-		[story]
 	);
 	const selectedIdSet = React.useMemo(
 		() => optimisticSelectedIds.current ?? new Set(selectedPassageIds),
@@ -1190,6 +1220,37 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			: emptyGraphProjection();
 
 	React.useEffect(() => {
+		const unsubscribe = host.subscribeToPatches(batch => {
+			const change = graphProjectionChangeForPatchBatch(batch, story.id);
+
+			if (!change) {
+				return;
+			}
+			if (deferredGraphProjectionRefresh.current !== undefined) {
+				window.clearTimeout(deferredGraphProjectionRefresh.current);
+				deferredGraphProjectionRefresh.current = undefined;
+			}
+			if (change === 'immediate') {
+				setGraphProjectionRevision(revision => revision + 1);
+				return;
+			}
+
+			deferredGraphProjectionRefresh.current = window.setTimeout(() => {
+				deferredGraphProjectionRefresh.current = undefined;
+				setGraphProjectionRevision(revision => revision + 1);
+			}, graphProjectionTextRefreshDelayMs);
+		});
+
+		return () => {
+			unsubscribe();
+			if (deferredGraphProjectionRefresh.current !== undefined) {
+				window.clearTimeout(deferredGraphProjectionRefresh.current);
+				deferredGraphProjectionRefresh.current = undefined;
+			}
+		};
+	}, [host, story.id]);
+
+	React.useEffect(() => {
 		let active = true;
 
 		void host
@@ -1203,7 +1264,13 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		return () => {
 			active = false;
 		};
-	}, [graphStoryKey, host, projectionQuery, projectionQueryKey, story.id]);
+	}, [
+		graphProjectionRevision,
+		host,
+		projectionQuery,
+		projectionQueryKey,
+		story.id
+	]);
 
 	React.useEffect(() => {
 		if (projection.nodes.length > 0 || projection.bounds) {
@@ -1511,7 +1578,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		tool
 	]);
 
-	React.useEffect(() => {
+	const scheduleGraphViewPersistence = React.useCallback(() => {
 		if (!onGraphViewChange) {
 			return;
 		}
@@ -1524,7 +1591,11 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			persistGraphViewFrame.current = undefined;
 			onGraphViewChange(viewRef.current);
 		}, 400);
-	}, [onGraphViewChange, view]);
+	}, [onGraphViewChange]);
+
+	React.useEffect(() => {
+		scheduleGraphViewPersistence();
+	}, [scheduleGraphViewPersistence, view]);
 
 	// The logical viewport (used for projection tiling + minimap) is a pure
 	// function of the transform, so recompute it whenever the view changes.
@@ -1611,7 +1682,8 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				return;
 			}
 
-			if (event.code === 'Space' && !spaceDown) {
+			if (event.code === 'Space' && !spaceDownRef.current) {
+				spaceDownRef.current = true;
 				setSpaceDown(true);
 				event.preventDefault();
 			} else if (event.key === 'v' || event.key === 'V') {
@@ -1633,6 +1705,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			}
 
 			if (event.code === 'Space') {
+				spaceDownRef.current = false;
 				setSpaceDown(false);
 			}
 		}
@@ -1644,7 +1717,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			window.removeEventListener('keydown', handleKeyDown);
 			window.removeEventListener('keyup', handleKeyUp);
 		};
-	}, [spaceDown, zoomAtViewportCenter]);
+	}, [zoomAtViewportCenter]);
 
 	React.useEffect(() => {
 		if (!contextMenu) {
@@ -1811,10 +1884,13 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		event: React.PointerEvent<HTMLDivElement>
 	) {
 		setContextMenu(undefined);
+		const wantPan =
+			tool === 'pan' || spaceDownRef.current || event.button === 1;
 
 		if (
 			![0, 1].includes(event.button) ||
-			(event.target as HTMLElement).closest(graphInteractiveSelector)
+			(!wantPan &&
+				(event.target as HTMLElement).closest(graphInteractiveSelector))
 		) {
 			return;
 		}
@@ -1827,16 +1903,20 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 		const pointerId =
 			typeof event.pointerId === 'number' ? event.pointerId : undefined;
-		const wantPan = panning || event.button === 1;
 
 		if (wantPan) {
+			const startView = viewRef.current;
+
+			panningViewRef.current = startView;
 			panRef.current = {
-				left: view.x,
+				currentLeft: startView.x,
+				currentTop: startView.y,
+				left: startView.x,
 				moved: false,
 				pointerId,
-				startLeft: view.x,
-				startTop: view.y,
-				top: view.y,
+				startLeft: startView.x,
+				startTop: startView.y,
+				top: startView.y,
 				x: event.clientX,
 				y: event.clientY
 			};
@@ -1909,7 +1989,23 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 		pan.moved =
 			Math.abs(nextX - pan.startLeft) > 3 || Math.abs(nextY - pan.startTop) > 3;
-		setView(current => ({...current, x: nextX, y: nextY}));
+		pan.currentLeft = nextX;
+		pan.currentTop = nextY;
+		const nextView = {...viewRef.current, x: nextX, y: nextY};
+
+		panningViewRef.current = nextView;
+		viewRef.current = nextView;
+		if (canvasRef.current) {
+			canvasRef.current.style.transform = `translate(${nextX}px, ${nextY}px) scale(${nextView.k})`;
+		}
+		if (gridRef.current) {
+			gridRef.current.style.backgroundPosition = `${
+				nextX - (graphSnapGridSize * nextView.k) / 2
+			}px ${nextY - (graphSnapGridSize * nextView.k) / 2}px, ${
+				nextX - (graphSnapMajorGridSize * nextView.k) / 2
+			}px ${nextY - (graphSnapMajorGridSize * nextView.k) / 2}px`;
+		}
+		scheduleGraphViewPersistence();
 		event.preventDefault();
 	}
 
@@ -1930,18 +2026,29 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			return;
 		}
 
+		const pan = panRef.current;
+
 		if (
 			element &&
-			panRef.current &&
-			(panRef.current.pointerId === undefined ||
-				panRef.current.pointerId === event.pointerId)
+			pan &&
+			(pan.pointerId === undefined || pan.pointerId === event.pointerId)
 		) {
-			if (panRef.current.pointerId !== undefined) {
-				element.releasePointerCapture(panRef.current.pointerId);
+			if (pan.pointerId !== undefined) {
+				element.releasePointerCapture(pan.pointerId);
 			}
 			element.classList.remove('story-edit-graph-viewport--panning');
+			const nextView = {
+				...viewRef.current,
+				x: pan.currentLeft,
+				y: pan.currentTop
+			};
+
+			panningViewRef.current = undefined;
+			viewRef.current = nextView;
+			setView(nextView);
 		}
 
+		panningViewRef.current = undefined;
 		panRef.current = undefined;
 	}
 
@@ -2120,6 +2227,10 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		event: DraggableEvent,
 		data: DraggableData
 	) {
+		if (tool === 'pan' || spaceDownRef.current) {
+			return false;
+		}
+
 		const passage = passagesById.get(node.id);
 
 		if (!passage) {
@@ -2255,6 +2366,10 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	}
 
 	function handleResizeStart(node: CoreGraphNode, data: DraggableData) {
+		if (tool === 'pan' || spaceDownRef.current) {
+			return false;
+		}
+
 		const ids =
 			selectedIdSet.has(node.id) && selectedIdSet.size > 0
 				? Array.from(selectedIdSet)
@@ -2377,7 +2492,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		node: CoreGraphNode,
 		event: React.PointerEvent<HTMLDivElement>
 	) {
-		if (event.button !== 0) {
+		if (event.button !== 0 || tool === 'pan' || spaceDownRef.current) {
 			return;
 		}
 
@@ -2491,16 +2606,21 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				<div
 					aria-hidden
 					className="story-edit-graph-grid"
+					ref={gridRef}
 					style={{
 						backgroundPosition: `${
-							view.x - (graphSnapGridSize * view.k) / 2
-						}px ${view.y - (graphSnapGridSize * view.k) / 2}px, ${
-							view.x - (graphSnapMajorGridSize * view.k) / 2
-						}px ${view.y - (graphSnapMajorGridSize * view.k) / 2}px`,
-						backgroundSize: `${graphSnapGridSize * view.k}px ${
-							graphSnapGridSize * view.k
-						}px, ${graphSnapMajorGridSize * view.k}px ${
-							graphSnapMajorGridSize * view.k
+							renderedView.x - (graphSnapGridSize * renderedView.k) / 2
+						}px ${
+							renderedView.y - (graphSnapGridSize * renderedView.k) / 2
+						}px, ${
+							renderedView.x - (graphSnapMajorGridSize * renderedView.k) / 2
+						}px ${
+							renderedView.y - (graphSnapMajorGridSize * renderedView.k) / 2
+						}px`,
+						backgroundSize: `${graphSnapGridSize * renderedView.k}px ${
+							graphSnapGridSize * renderedView.k
+						}px, ${graphSnapMajorGridSize * renderedView.k}px ${
+							graphSnapMajorGridSize * renderedView.k
 						}px`
 					}}
 				/>
@@ -2508,7 +2628,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 					className="story-edit-graph-canvas"
 					ref={canvasRef}
 					style={{
-						transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`,
+						transform: `translate(${renderedView.x}px, ${renderedView.y}px) scale(${renderedView.k})`,
 						transformOrigin: '0 0'
 					}}
 				>
@@ -2548,6 +2668,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 							return (
 								<DraggableCore
 									cancel=".story-edit-graph-node__resize"
+									disabled={panning}
 									key={node.id}
 									onDrag={(event, data) => handleDrag(data)}
 									onStart={(event, data) => handleDragStart(node, event, data)}
@@ -2598,6 +2719,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 										/>
 										{selectedIdSet.has(node.id) && (
 											<DraggableCore
+												disabled={panning}
 												onDrag={(event, data) => handleResize(data)}
 												onStart={(event, data) => handleResizeStart(node, data)}
 												onStop={handleResizeStop}
@@ -2610,7 +2732,11 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 													)}
 													onClick={event => event.stopPropagation()}
 													onDoubleClick={event => event.stopPropagation()}
-													onPointerDown={event => event.stopPropagation()}
+													onPointerDown={event => {
+														if (tool !== 'pan' && !spaceDownRef.current) {
+															event.stopPropagation();
+														}
+													}}
 													type="button"
 												>
 													<TablerIcon

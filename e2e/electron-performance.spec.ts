@@ -168,6 +168,11 @@ interface PerformanceSnapshot {
 			activeEditorCount: number;
 			editorDocumentBytes: number;
 		};
+		heap: {
+			jsHeapSizeLimit?: number;
+			totalJSHeapSize?: number;
+			usedJSHeapSize?: number;
+		};
 		entries: Array<{
 			duration: number;
 			name: string;
@@ -1801,6 +1806,7 @@ async function measureSearch(page: Page) {
 	}
 	const idle = await waitForWorkerIdle(page);
 	const clients = workerClients(idle);
+	const readModel = clients[0]?.readModel;
 
 	assertInvariant(
 		'query-phase-worker-idle',
@@ -1810,6 +1816,17 @@ async function measureSearch(page: Page) {
 					client.pendingRequestCount === 0 && client.sessionQueueCount === 0
 			),
 		JSON.stringify(clients)
+	);
+	assertInvariant(
+		'query-search-keeps-expensive-intelligence-deferred',
+		!!readModel &&
+			readModel.analysisCacheSourceCount <= 16 &&
+			readModel.parsedSourceCount <= 16 &&
+			readModel.backlinkCacheEntryCount <= 16 &&
+			readModel.graphCacheStoryCount === 0 &&
+			readModel.readModelCacheStoryCount === 0 &&
+			readModel.readModelFullBuildCount === 0,
+		JSON.stringify(readModel)
 	);
 }
 
@@ -1954,12 +1971,36 @@ async function sampleFrames(page: Page, frameCount = 90) {
 	);
 }
 
+async function panMouseAcrossFrames(
+	page: Page,
+	start: {x: number; y: number},
+	end: {x: number; y: number},
+	steps = 20
+) {
+	await page.mouse.move(start.x, start.y);
+	await page.mouse.down({button: 'middle'});
+	for (let step = 1; step <= steps; step++) {
+		await page.evaluate(
+			() => new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+		);
+		const progress = step / steps;
+
+		await page.mouse.move(
+			start.x + (end.x - start.x) * progress,
+			start.y + (end.y - start.y) * progress
+		);
+	}
+	await page.mouse.up({button: 'middle'});
+}
+
 async function measureGraph(page: Page) {
 	await page.getByTitle('Workbench').click();
 	await page
 		.getByRole('complementary', {name: 'Passages'})
 		.getByRole('button', {name: /^Passage 000001/})
 		.click();
+	const graphOpenedAt = await page.evaluate(() => performance.now());
+
 	await page
 		.getByRole('group', {name: 'Workspace Mode'})
 		.getByRole('tab', {name: 'Graph'})
@@ -1980,6 +2021,20 @@ async function measureGraph(page: Page) {
 		await focus.click();
 		await expect(nodes.first()).toBeVisible({timeout: 60_000});
 	}
+	await waitForMarkAfter(
+		page,
+		'graph-visible',
+		graphOpenedAt,
+		'graph-query-result',
+		60_000
+	);
+	await waitForWorkerIdle(page);
+	await page.evaluate(
+		() =>
+			new Promise<void>(resolve =>
+				requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+			)
+	);
 	const nodeCount = await nodes.count();
 
 	assertInvariant(
@@ -1992,6 +2047,9 @@ async function measureGraph(page: Page) {
 	await reset(page);
 	const measurementStartedAtEpochMs = Date.now();
 	const baselineRevision = await currentRevision(page);
+	const initialGraphTransform = await page
+		.locator('.story-edit-graph-canvas')
+		.evaluate(element => (element as HTMLElement).style.transform);
 
 	for (let index = 0; index < (smoke ? 1 : 5); index++) {
 		const box = await viewport.boundingBox();
@@ -2001,14 +2059,11 @@ async function measureGraph(page: Page) {
 		}
 		const framesPromise = sampleFrames(page);
 
-		await page.keyboard.down('Space');
-		await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5);
-		await page.mouse.down();
-		await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45, {
-			steps: 20
-		});
-		await page.mouse.up();
-		await page.keyboard.up('Space');
+		await panMouseAcrossFrames(
+			page,
+			{x: box.x + box.width * 0.6, y: box.y + box.height * 0.5},
+			{x: box.x + box.width * 0.4, y: box.y + box.height * 0.45}
+		);
 		const frames = await framesPromise;
 
 		for (const frame of frames) {
@@ -2016,8 +2071,55 @@ async function measureGraph(page: Page) {
 			addSample('graph.frameMaxMs', frame);
 		}
 	}
+	await waitForWorkerIdle(page);
+	await waitForPersistenceIdle(page);
+	const revisionAfterPanning = await currentRevision(page);
+	const finalGraphTransform = await page
+		.locator('.story-edit-graph-canvas')
+		.evaluate(element => (element as HTMLElement).style.transform);
 
-	const node = nodes.first();
+	assertInvariant(
+		'graph-panning-changes-world-transform',
+		finalGraphTransform !== initialGraphTransform,
+		`${initialGraphTransform} -> ${finalGraphTransform}`
+	);
+	assertInvariant(
+		'graph-panning-does-not-mutate-layout',
+		revisionAfterPanning === baselineRevision,
+		`${baselineRevision} -> ${revisionAfterPanning}`
+	);
+	const nodeCountAfterPanning = await nodes.count();
+
+	assertInvariant(
+		'graph-panning-keeps-mounted-node-count-bounded',
+		nodeCountAfterPanning > 0 && nodeCountAfterPanning < 1000,
+		`${nodeCountAfterPanning} mounted nodes`
+	);
+	addSample('graph.mountedNodeCount', nodeCountAfterPanning);
+	const visibleNodeIndex = await viewport.evaluate(element => {
+		const viewportBounds = element.getBoundingClientRect();
+
+		return Array.from(
+			element.querySelectorAll<HTMLElement>('.story-edit-graph-node')
+		).findIndex(node => {
+			const bounds = node.getBoundingClientRect();
+			const centerX = bounds.left + bounds.width / 2;
+			const centerY = bounds.top + bounds.height / 2;
+
+			return (
+				centerX >= viewportBounds.left + 20 &&
+				centerX <= viewportBounds.right - 20 &&
+				centerY >= viewportBounds.top + 20 &&
+				centerY <= viewportBounds.bottom - 20
+			);
+		});
+	});
+
+	if (visibleNodeIndex < 0) {
+		throw new Error('Graph viewport has no draggable visible node.');
+	}
+
+	const node = nodes.nth(visibleNodeIndex);
 
 	await expect(node).toBeVisible();
 	const nodeBox = await node.boundingBox();
@@ -2073,7 +2175,7 @@ async function measureGraph(page: Page) {
 	captureBridgeMetrics(settled);
 	assertInvariant(
 		'graph-layout-interaction-advances-revision',
-		finalRevision > baselineRevision,
+		finalRevision === baselineRevision + 1,
 		`${baselineRevision} -> ${finalRevision}`
 	);
 	assertInvariant(
@@ -2087,7 +2189,7 @@ async function measureGraph(page: Page) {
 	);
 	assertInvariant(
 		'graph-layout-save-timings-present',
-		nativeSaves.length > 0,
+		nativeSaves.length === 1,
 		`${nativeSaves.length} native saves`
 	);
 	assertInvariant(
@@ -2121,125 +2223,147 @@ async function measureGraph(page: Page) {
 	);
 }
 
-function captureMemory(current: PerformanceSnapshot) {
+function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
+	const mib = 1024 * 1024;
+	const metric = (name: string, value: number | undefined) =>
+		addSample(`${prefix}.${name}`, value);
 	const workingSetKiB = current.main.appMetrics.reduce(
-		(total, metric) => total + (metric.memory?.workingSetSize ?? 0),
+		(total, process) => total + (process.memory?.workingSetSize ?? 0),
 		0
 	);
-	const rendererWorkingSetKiB = current.main.appMetrics
-		.filter(metric => metric.type === 'Tab')
-		.reduce((total, metric) => total + (metric.memory?.workingSetSize ?? 0), 0);
+	const processWorkingSets = processWorkingSetByRole(current.main.appMetrics);
+	const processMiB = (type: string) => {
+		const value = processWorkingSets.get(type) ?? 0;
 
-	addSample(
-		'memory.residentMiB',
-		workingSetKiB > 0
-			? workingSetKiB / 1024
-			: current.main.memory.rss / 1024 / 1024
+		return value > 0 ? value / 1024 : undefined;
+	};
+	const rendererWorkingSetMiB = processMiB('Tab');
+	const browserWorkingSetMiB = processMiB('Browser');
+	const rendererHeapUsedMiB =
+		current.renderer.heap.usedJSHeapSize === undefined
+			? undefined
+			: current.renderer.heap.usedJSHeapSize / mib;
+	const mainHeapUsedMiB =
+		current.main.memory.heapUsed === undefined
+			? undefined
+			: current.main.memory.heapUsed / mib;
+	const mainExternalMiB =
+		current.main.memory.external === undefined
+			? undefined
+			: current.main.memory.external / mib;
+	const client = current.renderer.core.hosts[0]?.client;
+	const workerWasmMiB =
+		client?.wasmMemoryBytes === undefined
+			? undefined
+			: client.wasmMemoryBytes / mib;
+
+	metric(
+		'residentMiB',
+		workingSetKiB > 0 ? workingSetKiB / 1024 : current.main.memory.rss / mib
 	);
-	addSample(
-		'memory.rendererMiB',
-		rendererWorkingSetKiB > 0 ? rendererWorkingSetKiB / 1024 : undefined
-	);
-	addSample('memory.mainMiB', current.main.memory.rss / 1024 / 1024);
+	metric('rendererMiB', rendererWorkingSetMiB);
+	metric('mainMiB', current.main.memory.rss / mib);
 	for (const type of ['Browser', 'GPU', 'Tab', 'Utility']) {
-		const workingSet = current.main.appMetrics
-			.filter(metric => metric.type === type)
-			.reduce(
-				(total, metric) => total + (metric.memory?.workingSetSize ?? 0),
-				0
-			);
-
-		addSample(
-			`memory.process.${type.toLowerCase()}MiB`,
-			workingSet > 0 ? workingSet / 1024 : undefined
-		);
+		metric(`process.${type.toLowerCase()}MiB`, processMiB(type));
 	}
+	metric('heap.rendererUsedMiB', rendererHeapUsedMiB);
+	metric(
+		'heap.rendererTotalMiB',
+		current.renderer.heap.totalJSHeapSize === undefined
+			? undefined
+			: current.renderer.heap.totalJSHeapSize / mib
+	);
+	metric('heap.mainUsedMiB', mainHeapUsedMiB);
+	metric(
+		'heap.mainTotalMiB',
+		current.main.memory.heapTotal === undefined
+			? undefined
+			: current.main.memory.heapTotal / mib
+	);
+	metric('heap.mainExternalMiB', mainExternalMiB);
+	metric(
+		'heap.mainArrayBuffersMiB',
+		current.main.memory.arrayBuffers === undefined
+			? undefined
+			: current.main.memory.arrayBuffers / mib
+	);
+	metric(
+		'residual.rendererAfterHeapAndWasmMiB',
+		rendererWorkingSetMiB !== undefined &&
+			rendererHeapUsedMiB !== undefined &&
+			workerWasmMiB !== undefined
+			? Math.max(0, rendererWorkingSetMiB - rendererHeapUsedMiB - workerWasmMiB)
+			: undefined
+	);
+	metric(
+		'residual.mainAfterHeapAndExternalMiB',
+		browserWorkingSetMiB !== undefined &&
+			mainHeapUsedMiB !== undefined &&
+			mainExternalMiB !== undefined
+			? Math.max(0, browserWorkingSetMiB - mainHeapUsedMiB - mainExternalMiB)
+			: undefined
+	);
+
 	const nativeHydration = current.main.owners?.nativeHydration;
 	const projectSessions = current.main.owners?.projectSessions;
 
-	addSample(
-		'memory.owner.nativeHydrationLeaseCount',
-		nativeHydration?.activeLeaseCount
+	metric('owner.nativeHydrationLeaseCount', nativeHydration?.activeLeaseCount);
+	metric(
+		'owner.nativeHydrationTextCapacityMiB',
+		nativeHydration ? nativeHydration.textCapacityBytes / mib : undefined
 	);
-	addSample(
-		'memory.owner.nativeHydrationTextCapacityMiB',
-		nativeHydration
-			? nativeHydration.textCapacityBytes / 1024 / 1024
-			: undefined
+	metric(
+		'owner.nativeBaselineFileStringMiB',
+		projectSessions ? projectSessions.baselineFileStringBytes / mib : undefined
 	);
-	addSample(
-		'memory.owner.nativeBaselineFileStringMiB',
-		projectSessions
-			? projectSessions.baselineFileStringBytes / 1024 / 1024
-			: undefined
-	);
-	addSample(
-		'memory.owner.nativeBaselinePassageCount',
+	metric(
+		'owner.nativeBaselinePassageCount',
 		projectSessions?.baselinePassageCount
 	);
-	addSample(
-		'memory.owner.nativeDescriptorPathStringMiB',
+	metric(
+		'owner.nativeDescriptorPathStringMiB',
 		projectSessions
-			? projectSessions.descriptorPathStringBytes / 1024 / 1024
+			? projectSessions.descriptorPathStringBytes / mib
 			: undefined
 	);
-	addSample(
-		'memory.owner.bootstrapTextMiB',
-		current.renderer.core.bootstrap?.textBytes !== undefined
-			? current.renderer.core.bootstrap.textBytes / 1024 / 1024
-			: undefined
+	metric(
+		'owner.bootstrapTextMiB',
+		current.renderer.core.bootstrap?.textBytes === undefined
+			? undefined
+			: current.renderer.core.bootstrap.textBytes / mib
 	);
-	const client = current.renderer.core.hosts[0]?.client;
-
-	addSample(
-		'memory.owner.workerCachedPayloadMiB',
-		client ? client.cachedPayloadBytes / 1024 / 1024 : undefined
+	metric('owner.workerWasmLinearMiB', workerWasmMiB);
+	metric(
+		'owner.workerCachedPayloadMiB',
+		client ? client.cachedPayloadBytes / mib : undefined
 	);
-	addSample('memory.owner.workerPendingRequests', client?.pendingRequestCount);
-	addSample('memory.owner.workerSessionQueues', client?.sessionQueueCount);
-	addSample(
-		'memory.owner.workerReadModelCacheEntries',
-		client?.readModelCacheEntryCount
-	);
-	addSample(
-		'memory.owner.activeEditorCount',
-		current.renderer.owners?.activeEditorCount
-	);
-	addSample(
-		'memory.owner.editorDocumentMiB',
+	metric('owner.workerPendingRequests', client?.pendingRequestCount);
+	metric('owner.workerSessionQueues', client?.sessionQueueCount);
+	metric('owner.workerReadModelCacheEntries', client?.readModelCacheEntryCount);
+	metric('owner.activeEditorCount', current.renderer.owners?.activeEditorCount);
+	metric(
+		'owner.editorDocumentMiB',
 		current.renderer.owners
-			? current.renderer.owners.editorDocumentBytes / 1024 / 1024
+			? current.renderer.owners.editorDocumentBytes / mib
 			: undefined
 	);
-	const rust = current.renderer.bridgeMetrics
-		.map(metric => metric.readModel)
-		.filter(Boolean)
-		.at(-1);
+	const rust = client?.readModel;
 
-	addSample(
-		'memory.owner.rustProjectDocumentsMiB',
-		rust ? rust.projectDocumentBytes / 1024 / 1024 : undefined
+	metric(
+		'owner.rustProjectDocumentsMiB',
+		rust ? rust.projectDocumentBytes / mib : undefined
 	);
-	addSample('memory.owner.rustAnalysisSources', rust?.analysisCacheSourceCount);
-	addSample(
-		'memory.owner.rustBacklinkCacheMiB',
-		rust ? rust.backlinkCacheBytes / 1024 / 1024 : undefined
+	metric('owner.rustAnalysisSources', rust?.analysisCacheSourceCount);
+	metric(
+		'owner.rustBacklinkCacheMiB',
+		rust ? rust.backlinkCacheBytes / mib : undefined
 	);
-	addSample(
-		'memory.owner.rustBacklinkCacheEntries',
-		rust?.backlinkCacheEntryCount
-	);
-	addSample('memory.owner.rustBacklinkScans', rust?.backlinkScanCount);
-	addSample(
-		'memory.owner.rustBacklinkScannedSources',
-		rust?.backlinkScannedSourceCount
-	);
-	addSample('memory.owner.rustFingerprintEntries', rust?.fingerprintEntryCount);
-	addSample('memory.owner.rustGraphCacheStories', rust?.graphCacheStoryCount);
-	addSample(
-		'memory.owner.rustReadModelCacheStories',
-		rust?.readModelCacheStoryCount
-	);
+	metric('owner.rustBacklinkCacheEntries', rust?.backlinkCacheEntryCount);
+	metric('owner.rustBacklinkScans', rust?.backlinkScanCount);
+	metric('owner.rustBacklinkScannedSources', rust?.backlinkScannedSourceCount);
+	metric('owner.rustFingerprintEntries', rust?.fingerprintEntryCount);
+	metric('owner.rustGraphCacheStories', rust?.graphCacheStoryCount);
+	metric('owner.rustReadModelCacheStories', rust?.readModelCacheStoryCount);
 }
 
 async function recordMemoryDetailCheckpoint(
@@ -2862,7 +2986,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				diagnostic: phase === 'diagnostic',
 				memoryDetail: phase === 'memory-detail',
 				environment: {
-					metricContracts: {memory: 2, startup: 2},
+					metricContracts: {memory: 3, startup: 2},
 					git: {dirty: gitDirty, revision: gitRevision},
 					machine: {
 						arch: process.arch,
@@ -3100,10 +3224,32 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				await measureGraph(running.page);
 			}
 
-			const finalSnapshot = await snapshot(running.page);
+			const liveSnapshot = await snapshot(running.page);
 
-			diagnostics.interaction = finalSnapshot;
-			captureMemory(finalSnapshot);
+			captureMemory(liveSnapshot, 'memory.live');
+			await recordMemoryDetailCheckpoint(
+				running.page,
+				'phase-final-retained',
+				true
+			);
+			const retainedSnapshot = await snapshot(running.page);
+
+			diagnostics.interaction = retainedSnapshot;
+			captureMemory(retainedSnapshot);
+			captureMemory(retainedSnapshot, 'memory.retained');
+			assertInvariant(
+				'final-retained-memory-checkpoint-present',
+				retainedSnapshot.main.memoryCheckpoints.some(
+					checkpoint => checkpoint.name === 'phase-final-retained'
+				)
+			);
+			assertInvariant(
+				'final-memory-primary-owners-present',
+				(retainedSnapshot.renderer.heap.usedJSHeapSize ?? 0) > 0 &&
+					(retainedSnapshot.main.memory.heapUsed ?? 0) > 0 &&
+					(retainedSnapshot.renderer.core.hosts[0]?.client?.wasmMemoryBytes ??
+						0) > 0
+			);
 		} finally {
 			await closeFixture(running);
 		}

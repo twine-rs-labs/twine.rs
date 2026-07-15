@@ -23,6 +23,7 @@ const startupMemoryMarks = new Set([
 	'session-initialization-complete',
 	'shell-visible'
 ]);
+const recordedStartupMemoryMarks = new Set<string>();
 
 export function rendererHeapMemorySnapshot(): Record<string, number> {
 	const memory = (
@@ -57,7 +58,8 @@ export function markPerformance(name: string) {
 
 	try {
 		performance.mark(`${prefix}:${name}`);
-		if (startupMemoryMarks.has(name)) {
+		if (startupMemoryMarks.has(name) && !recordedStartupMemoryMarks.has(name)) {
+			recordedStartupMemoryMarks.add(name);
 			void (
 				window as Window & {
 					twinePerformanceNative?: {
