@@ -1,9 +1,12 @@
 {
 	"compilerOptions": {
-		"module": "CommonJS",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
 		"noEmit": false,
 		"outDir": "electron-build/main",
-		"target": "es6"
+		"rootDir": ".",
+		"target": "es6",
+		"types": ["node", "vite/client"]
 	},
 	"extends": "./tsconfig.json",
 	"exclude": ["**/*.test.*"],
