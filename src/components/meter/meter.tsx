@@ -2,6 +2,7 @@ import * as React from 'react';
 import './meter.css';
 
 export interface MeterProps {
+	children?: React.ReactNode;
 	domId: string;
 	percent: number;
 }

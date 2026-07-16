@@ -1,14 +1,14 @@
-import {fireEvent, render, screen} from '@testing-library/react';
-import {createMemoryHistory, MemoryHistory} from 'history';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {Router} from 'react-router-dom';
+import {MemoryRouter} from 'react-router';
 import {useStoryLaunch} from '../../../store/use-story-launch';
 import {
 	fakePrefs,
 	FakeStateProvider,
 	FakeStateProviderProps,
 	fakeStory,
+	LocationInspector,
 	PrefInspector,
 	StoryInspector
 } from '../../../test-util';
@@ -30,11 +30,10 @@ describe('<StoryCards>', () => {
 
 	async function renderComponent(
 		props?: Partial<StoryCardsProps>,
-		contexts?: FakeStateProviderProps,
-		history?: MemoryHistory
+		contexts?: FakeStateProviderProps
 	) {
 		const result = render(
-			<Router history={history ?? createMemoryHistory()}>
+			<MemoryRouter>
 				<FakeStateProvider {...contexts}>
 					<StoryCards
 						onSelectStory={jest.fn()}
@@ -44,7 +43,8 @@ describe('<StoryCards>', () => {
 					<StoryInspector />
 					<PrefInspector name="storyTagColors" />
 				</FakeStateProvider>
-			</Router>
+				<LocationInspector />
+			</MemoryRouter>
 		);
 
 		return result;
@@ -102,12 +102,16 @@ describe('<StoryCards>', () => {
 	});
 
 	it('navigates to /stories/:id when a story is edited', async () => {
-		const history = createMemoryHistory();
 		const stories = [fakeStory()];
 
-		await renderComponent({stories}, {}, history);
+		await renderComponent({stories});
 		fireEvent.click(screen.getByText('onEdit'));
-		expect(history.location.pathname).toBe(`/stories/${stories[0].id}`);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${stories[0].id}`
+			)
+		);
 	});
 
 	it('is accessible', async () => {

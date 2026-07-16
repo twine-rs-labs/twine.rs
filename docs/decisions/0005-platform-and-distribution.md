@@ -2,7 +2,7 @@
 
 Status: accepted
 Decision date: 2026-06-22
-Last verified: 2026-07-04
+Last verified: 2026-07-16
 
 This record closes the M7 platform/documentation slice for the current Electron
 desktop app path. It documents what the app supports now, what is intentionally
@@ -81,7 +81,13 @@ Decision:
 Current target:
 
 - Universal macOS DMG.
-- Signed/notarized when Apple credentials are present.
+- Local builds are ad-hoc signed only when no real signing path or complete
+  notarization credential set is present; they remain unnotarized.
+- Release builds are notarized only after a valid Developer ID Application
+  signature is verified and all Apple notarization credentials are present.
+- A complete notarization credential set enables Electron Builder's
+  `forceCodeSigning` guard, so an unavailable or invalid release identity fails
+  packaging rather than silently producing an unsigned artifact.
 - Manual update check through the existing update-check action.
 
 Decision:
@@ -89,6 +95,10 @@ Decision:
 - Automatic updates stay off until a signed, tested update feed exists for every
   production channel. M7 records the strategy and keeps manual update checks
   visible rather than silently enabling a partial updater.
+- Ad-hoc signing is a local file-access identity fallback, not a substitute for
+  Developer ID signing or Gatekeeper notarization. Explicit signing config,
+  signing environment variables, auto-discovered keychain identities, and valid
+  existing signatures are preserved.
 - Mac App Store distribution remains separate from the current DMG channel
   because it would require entitlement, sandbox, and review constraints that
   affect local folder access.

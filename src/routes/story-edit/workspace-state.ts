@@ -414,7 +414,7 @@ export function setStoryEditScrollMemory(
 export function useStoryEditScrollMemory(
 	storyId: string,
 	mode: StoryEditMode,
-	elementRef: React.RefObject<HTMLElement>
+	elementRef: React.RefObject<HTMLElement | null>
 ) {
 	React.useLayoutEffect(() => {
 		const element = elementRef.current;

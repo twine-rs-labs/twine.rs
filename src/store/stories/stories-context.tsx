@@ -1,5 +1,5 @@
 import * as React from 'react';
-import useThunkReducer from 'react-hook-thunk-reducer';
+import useThunkReducer from '../../util/use-thunk-reducer';
 import {usePersistence} from '../persistence/use-persistence';
 import {reducer} from './reducer';
 import {
@@ -28,7 +28,9 @@ function queueStorySaveStatus(status: StorySaveStatus) {
 	Promise.resolve().then(() => publishStorySaveStatus(status));
 }
 
-export const StoriesContextProvider: React.FC = props => {
+export const StoriesContextProvider: React.FC<
+	React.PropsWithChildren
+> = props => {
 	const {stories: storiesPersistence} = usePersistence();
 	const {formats} = useStoryFormatsContext();
 	const {reportError} = useStoreErrorReporter();

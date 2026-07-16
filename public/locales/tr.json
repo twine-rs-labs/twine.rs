@@ -115,8 +115,8 @@
 		},
 		"storyCard": {
 			"lastUpdated": "En son {{date}} tarihinde düzenlendi",
-			"passageCount": "1 Bölüm",
-			"passageCount_plural": "{{count}} Bölüm"
+			"passageCount_one": "1 Bölüm",
+			"passageCount_other": "{{count}} Bölüm"
 		},
 		"storyFormatItem": {
 			"author": "{{author}} tarafından",
@@ -133,8 +133,8 @@
 			"useProofingFormat": "İmla Düzeltme Biçimi Olarak Kullan"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "1 Öykü Biçimi Yükleniyor...",
-			"loadingCount_plural": "{{loadingCount}} Öykü Biçimi Yükleniyor"
+			"loadingCount_one": "1 Öykü Biçimi Yükleniyor...",
+			"loadingCount_other": "{{loadingCount}} Öykü Biçimi Yükleniyor"
 		},
 		"tagEditor": {
 			"alreadyExists": "Bu isme sahip bir etiket zaten var."
@@ -244,8 +244,8 @@
 			"find": "Bul",
 			"includePassageNames": "Bölüm Başlıklarını Dahil Et",
 			"matchCase": "Büyük Küçük Harf Eşleştir",
-			"matchCount": "{{count}} eşleşen bölüm",
-			"matchCount_plural": "{{count}} eşleşen bölüm",
+			"matchCount_one": "{{count}} eşleşen bölüm",
+			"matchCount_other": "{{count}} eşleşen bölüm",
 			"replaceAll": "Tüm Bölümlerde Değiştir",
 			"replaceWith": "Şununla Değiştir",
 			"useRegexes": "Düzenli İfade (RegEx) Kullan"
@@ -322,12 +322,12 @@
 		"storyList": {
 			"library": "Kitaplık",
 			"noStories": "Şu an Twine'da kayıtlı hiçbir öykü yok. Başlamak için yeni bir öykü yaratın veya var olan bir öyküyü içe aktarın.",
-			"taggedTitleCount": "1 Öykü Etiketli",
-			"taggedTitleCount_0": "Hiç Öykü Etiketli Değil",
-			"taggedTitleCount_plural": "{{count}} Öykü Etiketli",
-			"titleCount": "1 Öykü",
-			"titleCount_0": "Hiç Öykü Yok",
-			"titleCount_plural": "{{count}} Öykü",
+			"taggedTitleCount_zero": "Hiç Öykü Etiketli Değil",
+			"taggedTitleCount_one": "1 Öykü Etiketli",
+			"taggedTitleCount_other": "{{count}} Öykü Etiketli",
+			"titleCount_zero": "Hiç Öykü Yok",
+			"titleCount_one": "1 Öykü",
+			"titleCount_other": "{{count}} Öykü",
 			"titleGeneric": "Öyküler",
 			"toolbar": {
 				"archive": "Arşivle",

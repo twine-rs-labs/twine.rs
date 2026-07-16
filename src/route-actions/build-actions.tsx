@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {useTranslation} from 'react-i18next/';
+import {useTranslation} from 'react-i18next';
 import {Badge, Button} from '../components/design-system';
 import {storyFileName} from '../electron/shared';
 import {materializeStoryFromSession, useCoreProjectHost} from '../core';
@@ -96,7 +96,7 @@ export const BuildActions: React.FC<BuildActionsProps> = ({story}) => {
 				disabled={!story}
 				icon="file-code"
 				loading={busyAction === 'twee'}
-					onClick={() =>
+				onClick={() =>
 					run('twee', async () => {
 						if (story) {
 							const completeStory = await materializeStoryFromSession(

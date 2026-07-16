@@ -1,6 +1,6 @@
 import * as React from 'react';
 import classNames from 'classnames';
-import {useHistory, useParams} from 'react-router-dom';
+import {useNavigate, useParams} from 'react-router';
 import {
 	Badge,
 	Button,
@@ -374,9 +374,9 @@ function canRevealEntryInSource(entry: ContentsViewModelEntry | undefined) {
 }
 
 export const ContentsRoute: React.FC = () => {
-	const {storyId} = useParams<{storyId: string}>();
+	const {storyId = ''} = useParams<'storyId'>();
 	const {dispatch, stories} = useStoriesContext();
-	const history = useHistory();
+	const navigate = useNavigate();
 	const {testStory} = useStoryLaunch();
 	const coreProjectHost = useCoreProjectHost();
 	const story = storyForId(stories, storyId);
@@ -741,7 +741,7 @@ export const ContentsRoute: React.FC = () => {
 			}
 
 			dispatch(selectPassage(story, passage, true));
-			history.push(
+			navigate(
 				sourceTarget(story, {
 					mode,
 					target: {kind: 'passage', passageId: passage.id}
@@ -751,7 +751,7 @@ export const ContentsRoute: React.FC = () => {
 		}
 
 		if (entry.core.kind === 'variable') {
-			history.push(
+			navigate(
 				sourceTarget(story, {
 					search: {query: entry.label, scope: 'variable'}
 				})
@@ -780,7 +780,7 @@ export const ContentsRoute: React.FC = () => {
 			}
 		}
 
-		history.push(sourceTarget(story, {target}));
+		navigate(sourceTarget(story, {target}));
 	}
 
 	function openReference(reference: CoreAssetReference) {
@@ -804,7 +804,7 @@ export const ContentsRoute: React.FC = () => {
 			}
 		}
 
-		history.push(
+		navigate(
 			sourceTarget(story, {
 				line: reference.line,
 				offset: reference.start,

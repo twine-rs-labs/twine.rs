@@ -37,9 +37,26 @@
 	pointer-events: auto;
 }
 
-.dialogs .dialog-card.collapsed,
-.dialogs .dialog-card.fixed-size {
-	flex: 0;
+.dialogs .dialog-transition-shell {
+	display: flex;
+	flex: 1 1 0;
+	flex-direction: column;
+	min-height: 0;
+	pointer-events: none;
+	width: 100%;
+}
+
+.dialogs .dialog-transition-shell.collapsed,
+.dialogs .dialog-transition-shell.fixed-size {
+	flex: 0 0 auto;
+	min-height: auto;
+}
+
+.dialogs .dialog-transition-shell > .dialog-card,
+.dialogs .dialog-transition-shell > .background-dialog-card {
+	flex: 1 1 auto;
+	min-height: 0;
+	width: 100%;
 }
 
 .dialogs .maximized {
@@ -48,4 +65,5 @@
 	left: 0;
 	right: 0;
 	bottom: 0;
+	width: auto;
 }

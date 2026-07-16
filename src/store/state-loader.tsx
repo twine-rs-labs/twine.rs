@@ -44,8 +44,7 @@ async function loadOrDefault<T>(
 	}
 }
 
-export const StateLoader: React.FC = ({children}) => {
-	const [initing, setIniting] = React.useState(false);
+export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 	const [inited, setInited] = React.useState(false);
 	const [prefsRepaired, setPrefsRepaired] = React.useState(false);
 	const [formatsRepaired, setFormatsRepaired] = React.useState(false);
@@ -59,6 +58,15 @@ export const StateLoader: React.FC = ({children}) => {
 		useStoryFormatsContext();
 	const repairStories = useStoriesRepair();
 	const {prefs, stories, storyFormats} = usePersistence();
+	const initializationRef = React.useRef<
+		| Promise<{
+				formatsState: Awaited<ReturnType<typeof storyFormats.load>>;
+				prefsState: Awaited<ReturnType<typeof prefs.load>>;
+				storiesState: Awaited<ReturnType<typeof stories.load>>;
+		  }>
+		| undefined
+	>(undefined);
+	const initializationAppliedRef = React.useRef(false);
 
 	// Done in steps so that the repair action can see the inited state, and then
 	// each repair action can see the results of the preceding ones.
@@ -67,9 +75,11 @@ export const StateLoader: React.FC = ({children}) => {
 	// formats -> prefs (so it can repair bad format preferences) -> stories
 
 	React.useEffect(() => {
-		async function run() {
-			if (!initing) {
-				markPerformance('open-start');
+		let canceled = false;
+
+		if (!initializationRef.current) {
+			markPerformance('open-start');
+			initializationRef.current = (async () => {
 				const formatsState = await loadOrDefault(
 					'story formats',
 					storyFormats.load,
@@ -78,20 +88,30 @@ export const StateLoader: React.FC = ({children}) => {
 				const prefsState = await loadOrDefault('preferences', prefs.load, {});
 				const storiesState = await loadOrDefault('stories', stories.load, []);
 
+				return {formatsState, prefsState, storiesState};
+			})();
+		}
+
+		void initializationRef.current.then(
+			({formatsState, prefsState, storiesState}) => {
+				if (canceled || initializationAppliedRef.current) {
+					return;
+				}
+
+				initializationAppliedRef.current = true;
 				formatsDispatch({type: 'init', state: formatsState});
 				prefsDispatch({type: 'init', state: prefsState});
 				storiesDispatch({type: 'init', state: storiesState});
 				markPerformance('all-passages-ready');
 				setInited(true);
 			}
-		}
+		);
 
-		run();
-		setIniting(true);
+		return () => {
+			canceled = true;
+		};
 	}, [
 		formatsDispatch,
-		inited,
-		initing,
 		prefs,
 		prefsDispatch,
 		stories,

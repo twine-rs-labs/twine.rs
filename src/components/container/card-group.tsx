@@ -1,9 +1,10 @@
 import * as React from 'react';
 import './card-group.css';
 
-export type CardGroupProps =
+export type CardGroupProps = React.PropsWithChildren<
 	| {columns: number; maxWidth?: string}
-	| {columnWidth: number | string; maxWidth?: string};
+	| {columnWidth: number | string; maxWidth?: string}
+>;
 
 export const CardGroup: React.FC<CardGroupProps> = props => {
 	const style: React.CSSProperties = {

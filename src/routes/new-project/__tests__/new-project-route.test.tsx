@@ -1,18 +1,27 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
-import {createMemoryHistory} from 'history';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {Router} from 'react-router-dom';
+import {MemoryRouter, useNavigate} from 'react-router';
 import {
 	FakeStateProvider,
 	fakeLoadedStoryFormat,
 	fakeStory,
+	LocationInspector,
 	StoryInspector
 } from '../../../test-util';
 import {NewProjectRoute} from '../new-project-route';
 
+const HistoryBackButton: React.FC = () => {
+	const navigate = useNavigate();
+
+	return <button onClick={() => navigate(-1)}>History back</button>;
+};
+
 describe('<NewProjectRoute>', () => {
-	function renderComponent(path = '/new-project') {
+	function renderComponent(
+		path = '/new-project',
+		initialEntries: string[] = [path]
+	) {
 		const harloweFormat = fakeLoadedStoryFormat(
 			{name: 'Harlowe', version: '3.3.9'},
 			{name: 'Harlowe', version: '3.3.9'}
@@ -25,9 +34,8 @@ describe('<NewProjectRoute>', () => {
 			{name: 'SugarCube', version: '2.35.0'},
 			{name: 'SugarCube', version: '2.35.0'}
 		);
-		const history = createMemoryHistory({initialEntries: [path]});
 		const result = render(
-			<Router history={history}>
+			<MemoryRouter initialEntries={initialEntries}>
 				<FakeStateProvider
 					prefs={{storyFormat: {name: 'Harlowe', version: '3.3.9'}}}
 					stories={[]}
@@ -36,10 +44,12 @@ describe('<NewProjectRoute>', () => {
 					<NewProjectRoute />
 					<StoryInspector />
 				</FakeStateProvider>
-			</Router>
+				<LocationInspector />
+				<HistoryBackButton />
+			</MemoryRouter>
 		);
 
-		return {...result, history};
+		return result;
 	}
 
 	afterEach(() => {
@@ -55,7 +65,7 @@ describe('<NewProjectRoute>', () => {
 			})),
 			getStoryLibraryFolder: jest.fn(async () => '/native/library')
 		};
-		const {container, history} = renderComponent();
+		const {container} = renderComponent();
 
 		fireEvent.change(screen.getByLabelText('Project name'), {
 			target: {value: 'Moon Castle'}
@@ -74,7 +84,11 @@ describe('<NewProjectRoute>', () => {
 		expect(
 			(window as any).twineElectron.createProjectFolder
 		).toHaveBeenCalled();
-		expect(history.location.pathname).toMatch(/^\/stories\//);
+		await waitFor(() =>
+			expect(
+				screen.getByTestId('location').getAttribute('data-pathname')
+			).toMatch(/^\/stories\//)
+		);
 		expect(
 			container.querySelector('[data-name="Opening"]')
 		).toBeInTheDocument();
@@ -92,6 +106,26 @@ describe('<NewProjectRoute>', () => {
 		expect(screen.getByLabelText('Source file')).toHaveAttribute(
 			'accept',
 			'.html,.htm,.twee,.tw,.zip'
+		);
+	});
+
+	it('replaces the current history entry when changing workspace tabs', async () => {
+		renderComponent('/new-project', ['/before', '/new-project']);
+
+		fireEvent.click(screen.getByRole('tab', {name: 'Import'}));
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/new-project/import'
+			)
+		);
+
+		fireEvent.click(screen.getByRole('button', {name: 'History back'}));
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/before'
+			)
 		);
 	});
 
@@ -127,7 +161,7 @@ describe('<NewProjectRoute>', () => {
 		const zipFile = new File(['zip'], 'Transylvania.zip', {
 			type: 'application/zip'
 		});
-		const {container, history} = renderComponent('/new-project/import');
+		const {container} = renderComponent('/new-project/import');
 		const importScreen = container.querySelector('.new-project-route__import');
 
 		fireEvent.drop(importScreen!, {
@@ -163,7 +197,12 @@ describe('<NewProjectRoute>', () => {
 		expect(
 			(window as any).twineElectron.discardProjectImport
 		).toHaveBeenCalledWith('import-1');
-		expect(history.location.pathname).toBe('/');
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/'
+			)
+		);
 	});
 
 	it('repairs a SugarCube zip before writing the imported project folder', async () => {
@@ -283,7 +322,7 @@ describe('<NewProjectRoute>', () => {
 			}))
 		};
 
-		const {history} = renderComponent('/new-project/import');
+		renderComponent('/new-project/import');
 
 		fireEvent.click(screen.getByRole('button', {name: /open project folder/i}));
 
@@ -293,7 +332,10 @@ describe('<NewProjectRoute>', () => {
 				'Native Story'
 			)
 		);
-		expect(history.location.pathname).toBe('/');
+		expect(screen.getByTestId('location')).toHaveAttribute(
+			'data-pathname',
+			'/'
+		);
 	});
 
 	it('shows progress while opening native project folders', async () => {

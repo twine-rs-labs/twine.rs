@@ -1,4 +1,4 @@
-import {IconInfoCircle} from '@tabler/icons';
+import {IconInfoCircle} from '@tabler/icons-react';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import UAParser from 'ua-parser-js';

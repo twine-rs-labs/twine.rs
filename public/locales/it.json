@@ -116,8 +116,9 @@
 		},
 		"storyCard": {
 			"lastUpdated": "Ultima modifica il {{date}}",
-			"passageCount": "1 passaggio",
-			"passageCount_plural": "{{count}} passagi"
+			"passageCount_one": "1 passaggio",
+			"passageCount_many": "{{count}} passagi",
+			"passageCount_other": "{{count}} passagi"
 		},
 		"storyFormatItem": {
 			"author": "di {{author}}",
@@ -134,8 +135,9 @@
 			"useProofingFormat": "Utilizzare come formato di bozze"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "Caricamento 1 Formato storia...",
-			"loadingCount_plural": "Loading {{loadingCount}} Formati della storia..."
+			"loadingCount_one": "Caricamento 1 Formato storia...",
+			"loadingCount_many": "Loading {{loadingCount}} Formati della storia...",
+			"loadingCount_other": "Loading {{loadingCount}} Formati della storia..."
 		},
 		"tagEditor": {
 			"alreadyExists": "Esiste già un tag con questo nome."
@@ -245,8 +247,9 @@
 			"find": "Trova",
 			"includePassageNames": "Includi i nomi dei passaggi",
 			"matchCase": "Caso di corrispondenza",
-			"matchCount": "{{count}} passaggio corrispondente",
-			"matchCount_plural": "{{count}} passaggi corrispondenti",
+			"matchCount_one": "{{count}} passaggio corrispondente",
+			"matchCount_many": "{{count}} passaggi corrispondenti",
+			"matchCount_other": "{{count}} passaggi corrispondenti",
 			"noMatches": "Nessun passaggio corrispondente",
 			"replaceAll": "Sostituisci in tutti i passaggi",
 			"replaceWith": "Sostituisci con",
@@ -341,12 +344,14 @@
 		"storyList": {
 			"library": "Libreria",
 			"noStories": "Al momento non ci sono storie salvate in Twine. Per iniziare, puoi creare una nuova storia o importarne una esistente da un file.",
-			"taggedTitleCount": "1 storia taggata",
-			"taggedTitleCount_0": "Nessuna storia taggata",
-			"taggedTitleCount_plural": "{{count}} Storie taggate",
-			"titleCount": "1 Storia",
-			"titleCount_0": "Nessuna storia",
-			"titleCount_plural": "{{count}} Storie",
+			"taggedTitleCount_zero": "Nessuna storia taggata",
+			"taggedTitleCount_one": "1 storia taggata",
+			"taggedTitleCount_many": "{{count}} Storie taggate",
+			"taggedTitleCount_other": "{{count}} Storie taggate",
+			"titleCount_zero": "Nessuna storia",
+			"titleCount_one": "1 Storia",
+			"titleCount_many": "{{count}} Storie",
+			"titleCount_other": "{{count}} Storie",
 			"titleGeneric": "Storie",
 			"toolbar": {
 				"archive": "Archivio",

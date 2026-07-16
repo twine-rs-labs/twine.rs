@@ -7,7 +7,7 @@ import {
 } from '../stories.types';
 import {isValidTagName} from '../../../util/tag';
 import {storyPassageTags} from '../getters';
-import {Thunk} from 'react-hook-thunk-reducer';
+import {Thunk} from '../../../util/use-thunk-reducer';
 import {colorString} from '../../../util/color';
 
 /**

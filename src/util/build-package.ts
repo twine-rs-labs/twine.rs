@@ -23,18 +23,10 @@ export type StoryBuildTarget =
 	| 'package';
 
 export type StoryHtmlBuildTarget =
-	| 'play'
-	| 'test'
-	| 'proof'
-	| 'publish'
-	| 'export-html';
+	'play' | 'test' | 'proof' | 'publish' | 'export-html';
 
 export type StoryBuildOutputKind =
-	| 'archive'
-	| 'html'
-	| 'json'
-	| 'package-manifest'
-	| 'twee';
+	'archive' | 'html' | 'json' | 'package-manifest' | 'twee';
 
 export type StoryBuildOutputRole = 'manifest' | 'primary' | 'supporting';
 

@@ -2,7 +2,7 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {setPref, usePrefsContext} from '../../store/prefs';
 import {MenuButton} from '../../components/control/menu-button';
-import {IconFilter} from '@tabler/icons';
+import {IconFilter} from '@tabler/icons-react';
 
 export const StoryFormatsFilterButton: React.FC = () => {
 	const {dispatch, prefs} = usePrefsContext();

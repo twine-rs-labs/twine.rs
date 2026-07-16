@@ -1,7 +1,7 @@
 import {act, fireEvent, render, screen, within} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {StoreCoreProjectHost} from '../../core';
+import {CoreProjectHostProvider, StoreCoreProjectHost} from '../../core';
 import {StoriesContext, StoriesContextProps} from '../../store/stories';
 import {fakeStory} from '../../test-util';
 import {PassageTagsDialog, PassageTagsDialogProps} from '../passage-tags';
@@ -27,16 +27,18 @@ describe('<PassageTagsDialog>', () => {
 					...storiesContext
 				}}
 			>
-				<PassageTagsDialog
-					collapsed={false}
-					onChangeCollapsed={jest.fn()}
-					onChangeHighlighted={jest.fn()}
-					onChangeMaximized={jest.fn()}
-					onChangeProps={jest.fn()}
-					onClose={jest.fn()}
-					storyId={story.id}
-					{...props}
-				/>
+				<CoreProjectHostProvider>
+					<PassageTagsDialog
+						collapsed={false}
+						onChangeCollapsed={jest.fn()}
+						onChangeHighlighted={jest.fn()}
+						onChangeMaximized={jest.fn()}
+						onChangeProps={jest.fn()}
+						onClose={jest.fn()}
+						storyId={story.id}
+						{...props}
+					/>
+				</CoreProjectHostProvider>
 			</StoriesContext.Provider>
 		);
 

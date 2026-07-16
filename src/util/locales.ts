@@ -30,6 +30,15 @@ export const locales = [
 	{code: 'zh-cn', name: '中文(简体)'}
 ];
 
+/** Returns the canonical on-disk JSON filename for a locale code. */
+export function localeFilename(locale: string) {
+	try {
+		return `${Intl.getCanonicalLocales(locale)[0]}.json`;
+	} catch {
+		return `${locale}.json`;
+	}
+}
+
 /**
  * Finds the closest match for a locale in app-supported locales, for example
  * mapping `en-US` to `en`. If none are plausible, this returns `en` as a

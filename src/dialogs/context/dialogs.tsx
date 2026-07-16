@@ -1,16 +1,53 @@
 import * as React from 'react';
-import {useScrollbarSize} from 'react-scrollbar-size';
+import classnames from 'classnames';
 import {CSSTransition, TransitionGroup} from 'react-transition-group';
 import {useDialogsContext} from '.';
 import {usePrefsContext} from '../../store/prefs';
+import {useScrollbarSize} from '../../util/use-scrollbar-size';
 import './dialogs.css';
 
 // TODO move this to separate module to avoid circular dep
-const DialogTransition: React.FC = props => (
-	<CSSTransition classNames="pop" timeout={200} {...props}>
-		{props.children}
-	</CSSTransition>
-);
+interface DialogTransitionProps {
+	children?: React.ReactNode;
+	collapsed: boolean;
+	in?: boolean;
+	maximized: boolean;
+	style?: React.CSSProperties;
+}
+
+const DialogTransition: React.FC<DialogTransitionProps> = ({
+	children,
+	collapsed,
+	in: inProp,
+	maximized,
+	style
+}) => {
+	const nodeRef = React.useRef<HTMLDivElement>(null);
+	const [fixedSize, setFixedSize] = React.useState(false);
+
+	React.useLayoutEffect(() => {
+		setFixedSize(
+			nodeRef.current?.firstElementChild?.classList.contains('fixed-size') ??
+				false
+		);
+	}, [children]);
+
+	return (
+		<CSSTransition classNames="pop" in={inProp} nodeRef={nodeRef} timeout={200}>
+			<div
+				className={classnames('dialog-transition-shell', {
+					collapsed,
+					'fixed-size': fixedSize,
+					maximized
+				})}
+				ref={nodeRef}
+				style={style}
+			>
+				{children}
+			</div>
+		</CSSTransition>
+	);
+};
 
 export const Dialogs: React.FC = () => {
 	const {height, width} = useScrollbarSize();
@@ -49,14 +86,13 @@ export const Dialogs: React.FC = () => {
 					};
 
 					return (
-						<DialogTransition key={index}>
-							{dialog.maximized ? (
-								<div className="maximized" style={maximizedStyle}>
-									<dialog.component {...dialog.props} {...managementProps} />
-								</div>
-							) : (
-								<dialog.component {...dialog.props} {...managementProps} />
-							)}
+						<DialogTransition
+							collapsed={dialog.collapsed}
+							key={index}
+							maximized={dialog.maximized}
+							style={dialog.maximized ? maximizedStyle : undefined}
+						>
+							<dialog.component {...dialog.props} {...managementProps} />
 						</DialogTransition>
 					);
 				})}

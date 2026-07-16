@@ -1,5 +1,5 @@
 import {v4 as uuid} from '@lukeed/uuid';
-import {Thunk} from 'react-hook-thunk-reducer';
+import {Thunk} from '../../../util/use-thunk-reducer';
 import {PrefsState} from '../../prefs';
 import {StoriesAction, StoriesState, Story} from '../stories.types';
 

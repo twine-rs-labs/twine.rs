@@ -1,4 +1,4 @@
-import {Thunk} from 'react-hook-thunk-reducer';
+import {Thunk} from '../../../util/use-thunk-reducer';
 import {Color} from '../../../util/color';
 import {isValidTagName} from '../../../util/tag';
 import {StoriesState, Story, UpdateStoryAction} from '../stories.types';

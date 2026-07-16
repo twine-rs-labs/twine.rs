@@ -70,7 +70,6 @@ export function useFormatCodeMirrorToolbar(
 						// commands only.
 
 						(CodeMirror.commands as any)[namespacedCommand] =
-							// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
 							editorExtensions.codeMirror!.commands![commandName];
 					}
 				}

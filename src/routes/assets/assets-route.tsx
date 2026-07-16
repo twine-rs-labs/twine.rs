@@ -1,6 +1,6 @@
 import * as React from 'react';
 import classNames from 'classnames';
-import {useHistory, useParams} from 'react-router-dom';
+import {useNavigate, useParams} from 'react-router';
 import {
 	Badge,
 	Button,
@@ -607,11 +607,11 @@ const AssetFolderTreeNode: React.FC<{
 };
 
 export const AssetsRoute: React.FC = () => {
-	const {storyId} = useParams<{storyId: string}>();
+	const {storyId = ''} = useParams<'storyId'>();
 	const {dispatch, stories} = useStoriesContext();
 	const {prefs} = usePrefsContext();
 	const {testStory} = useStoryLaunch();
-	const history = useHistory();
+	const navigate = useNavigate();
 	const coreProjectHost = useCoreProjectHost();
 	const story = storyForId(stories, storyId);
 	const [folder, setFolder] = React.useState<AssetScope>('All Assets');
@@ -1068,7 +1068,7 @@ export const AssetsRoute: React.FC = () => {
 			}
 		}
 
-		history.push(
+		navigate(
 			sourceTarget(story, {
 				line: reference.line,
 				offset: reference.start,
@@ -1098,7 +1098,7 @@ export const AssetsRoute: React.FC = () => {
 			}
 		}
 
-		history.push(
+		navigate(
 			sourceTarget(story, {
 				line: reference.line,
 				offset: reference.start,

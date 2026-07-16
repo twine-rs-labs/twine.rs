@@ -1,14 +1,19 @@
 import * as React from 'react';
-import * as ReactDOM from 'react-dom';
+import {createRoot} from 'react-dom/client';
 import {App} from './app';
 import './util/i18n';
 import {installPerformanceHarness} from './util/performance-harness';
 
 installPerformanceHarness();
 
-ReactDOM.render(
+const rootElement = document.getElementById('root');
+
+if (!rootElement) {
+	throw new Error('Could not find the root application element.');
+}
+
+createRoot(rootElement).render(
 	<React.StrictMode>
 		<App />
-	</React.StrictMode>,
-	document.getElementById('root')
+	</React.StrictMode>
 );

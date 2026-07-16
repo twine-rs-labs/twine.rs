@@ -1,7 +1,6 @@
 import {dialog, shell} from 'electron';
 import {version as appVersion} from '../../../package.json';
 import {gt} from 'semver';
-import fetch from 'node-fetch';
 import {i18n} from './locales';
 
 const updateUrlEnvVar = 'TWINE_RS_UPDATE_URL';
@@ -39,7 +38,7 @@ export async function checkForUpdate() {
 
 	try {
 		const {url, version} = (await (
-			await fetch(checkUrl)
+			await globalThis.fetch(checkUrl)
 		).json()) as unknown as VersionResponse;
 
 		console.log(`Received version ${version}, url ${url}`);

@@ -1,12 +1,5 @@
 export type DesignSystemHue =
-	| 'red'
-	| 'orange'
-	| 'yellow'
-	| 'green'
-	| 'teal'
-	| 'cyan'
-	| 'blue'
-	| 'purple';
+	'red' | 'orange' | 'yellow' | 'green' | 'teal' | 'cyan' | 'blue' | 'purple';
 
 export const hueToToken: Record<DesignSystemHue, string> = {
 	red: 'var(--sem-error)',

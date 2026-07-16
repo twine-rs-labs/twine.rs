@@ -1,74 +1,18 @@
-const {execFileSync} = require('child_process');
-const {notarize} = require('@electron/notarize');
-const path = require('path');
+const {
+	createMacBuildHooks,
+	hasCompleteNotarizationEnv
+} = require('./scripts/electron-builder-hooks.cjs');
 const pkg = require('./package.json');
 
 const isPreview =
 	/alpha|beta|pre/.test(pkg.version) || process.env.FORCE_PREVIEW;
 const productName = 'Twine RS';
 const artifactProductName = 'Twine-RS';
-
-function macAppPath(context) {
-	return path.join(
-		context.appOutDir,
-		`${context.packager.appInfo.productFilename || productName}.app`
-	);
-}
+const {afterPack, afterSign} = createMacBuildHooks({productName});
 
 module.exports = {
-	async afterSign(context) {
-		if (context.packager.platform.name === 'mac') {
-			const missingNotarizationEnv = [
-				'APPLE_APP_ID',
-				'APPLE_ID',
-				'APPLE_ID_PASSWORD',
-				'APPLE_TEAM_ID'
-			].filter(key => !(key in process.env));
-			const appPath = macAppPath(context);
-
-			if (missingNotarizationEnv.length > 0) {
-				console.log(
-					`${missingNotarizationEnv.join(
-						', '
-					)} environment variable(s) are not set, skipping notarization`
-				);
-				console.log('Ad hoc signing Mac app for local file access identity...');
-				execFileSync('/usr/bin/codesign', [
-					'--force',
-					'--deep',
-					'--sign',
-					'-',
-					appPath
-				]);
-				return;
-			}
-
-			console.log('Notarizing Mac app...');
-			await notarize({
-				appBundleId: process.env.APPLE_APP_ID,
-				appPath,
-				appleId: process.env.APPLE_ID,
-				appleIdPassword: process.env.APPLE_ID_PASSWORD,
-				teamId: process.env.APPLE_TEAM_ID
-			});
-		}
-	},
-
-	// This step was necessary to ad hoc sign the app. Otherwise, on Apple Silicon
-	// you get repeated prompts for file access. This is commented out because we
-	// are able to sign the app thanks to the Interactive Fiction Technology
-	// Foundation, but originally figuring this problem out took forever, so the
-	// code below might be helpful to others making builds.
-	// The code below was cribbed from https://github.com/alacritty/alacritty/issues/5840.
-	//
-	// afterSign(context) {
-	// 	if (context.packager.platform.name === 'mac') {
-	// 		console.log('Ad hoc signing Mac app...');
-	// 		child_process.execSync(
-	// 			'codesign --force --deep --sign - "release/mac-universal/Twine RS.app"'
-	// 		);
-	// 	}
-	// },
+	afterPack,
+	afterSign,
 	appId: 'rs.twine.app',
 	productName,
 	directories: {
@@ -95,7 +39,9 @@ module.exports = {
 	mac: {
 		artifactName: `${artifactProductName}-${pkg.version}-mac-universal.\${ext}`,
 		category: 'public.app-category.developer-tools',
+		forceCodeSigning: hasCompleteNotarizationEnv(process.env),
 		icon: `icons/app-${isPreview ? 'preview' : 'release'}.png`,
+		notarize: false,
 		target: {arch: ['universal'], target: 'dmg'}
 	},
 	nsis: {

@@ -1,13 +1,13 @@
 import * as React from 'react';
-import {usePopper} from 'react-popper';
 import {CSSTransition} from 'react-transition-group';
+import {usePopper, UsePopperOptions} from '../../util/use-popper';
 import {ButtonBar, ButtonBarSeparator} from '../container/button-bar';
 import {ButtonCard} from '../container/button-card';
 import {IconEmpty} from '../image/icon';
 import {IconButton, IconButtonProps} from './icon-button';
 import './menu-button.css';
 import {CheckboxButton} from './checkbox-button';
-import {IconCheck} from '@tabler/icons';
+import {IconCheck} from '@tabler/icons-react';
 
 export interface UncheckableLabeledMenuItem {
 	disabled?: boolean;
@@ -23,8 +23,7 @@ export interface CheckableLabeledMenuItem extends UncheckableLabeledMenuItem {
 }
 
 export type LabeledMenuItem =
-	| UncheckableLabeledMenuItem
-	| CheckableLabeledMenuItem;
+	UncheckableLabeledMenuItem | CheckableLabeledMenuItem;
 
 export interface MenuSeparator {
 	separator: true;
@@ -40,8 +39,17 @@ export const MenuButton: React.FC<MenuButtonProps> = props => {
 		null
 	);
 	const [menuEl, setMenuEl] = React.useState<HTMLDivElement | null>(null);
+	const menuRef = React.useRef<HTMLDivElement | null>(null);
 	const [open, setOpen] = React.useState(false);
-	const {styles, attributes} = usePopper(buttonEl, menuEl, {strategy: 'fixed'});
+	const popperOptions = React.useMemo<UsePopperOptions>(
+		() => ({strategy: 'fixed'}),
+		[]
+	);
+	const setMenu = React.useCallback((element: HTMLDivElement | null) => {
+		menuRef.current = element;
+		setMenuEl(element);
+	}, []);
+	const {styles, attributes} = usePopper(buttonEl, menuEl, popperOptions);
 
 	React.useEffect(() => {
 		const closer = () => setOpen(false);
@@ -64,12 +72,13 @@ export const MenuButton: React.FC<MenuButtonProps> = props => {
 				classNames="fade-out"
 				in={open}
 				mountOnEnter
+				nodeRef={menuRef}
 				timeout={200}
 				unmountOnExit
 			>
 				<div
 					className="menu-button-menu"
-					ref={setMenuEl}
+					ref={setMenu}
 					style={styles.popper}
 					{...attributes.popper}
 				>

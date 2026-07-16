@@ -1,4 +1,3 @@
-import {clear, mockUserAgent} from 'jest-useragent-mock';
 import {isElectronMain, isElectronRenderer} from '../is-electron';
 
 // Grabbed one from https://user-agents.net/applications/electron.
@@ -10,13 +9,17 @@ const nonElectronUserAgent =
 	'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:70.0) Gecko/20100101 Firefox/70.0';
 
 describe('isElectronRenderer', () => {
-	afterAll(clear);
-
 	it('sniffs Electron context using user agent', () => {
-		mockUserAgent(electronUserAgent);
-		expect(isElectronRenderer()).toBe(true);
-		mockUserAgent(nonElectronUserAgent);
-		expect(isElectronRenderer()).toBe(false);
+		const userAgentSpy = jest.spyOn(window.navigator, 'userAgent', 'get');
+
+		try {
+			userAgentSpy.mockReturnValue(electronUserAgent);
+			expect(isElectronRenderer()).toBe(true);
+			userAgentSpy.mockReturnValue(nonElectronUserAgent);
+			expect(isElectronRenderer()).toBe(false);
+		} finally {
+			userAgentSpy.mockRestore();
+		}
 	});
 });
 

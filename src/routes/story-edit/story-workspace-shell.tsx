@@ -1,7 +1,7 @@
 import classNames from 'classnames';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {useHistory} from 'react-router-dom';
+import {useNavigate} from 'react-router';
 import {
 	Badge,
 	Button,
@@ -491,7 +491,7 @@ const AssetManager: React.FC<{
 	selectedPassageCharacterCount,
 	story
 }) => {
-	const history = useHistory();
+	const navigate = useNavigate();
 	const selectedPassage = selection.passage;
 
 	function revealFirstUsage(path: string) {
@@ -510,7 +510,7 @@ const AssetManager: React.FC<{
 		}
 
 		if (target && reference) {
-			history.push(
+			navigate(
 				sourceTarget(story, {
 					line: reference.line,
 					offset: reference.start,
@@ -538,7 +538,7 @@ const AssetManager: React.FC<{
 			<div className="story-edit-asset-toolbar">
 				<Button
 					icon="photo"
-					onClick={() => history.push(`/stories/${story.id}/assets`)}
+					onClick={() => navigate(`/stories/${story.id}/assets`)}
 					size="sm"
 					variant="primary"
 				>
@@ -1238,7 +1238,7 @@ export const StoryWorkspaceShell: React.FC<
 		story
 	} = props;
 	const coreProjectHost = useCoreProjectHost();
-	const history = useHistory();
+	const navigate = useNavigate();
 	const {dispatch: storiesDispatch, stories} = useStoriesContext();
 	const [patchVersion, setPatchVersion] = React.useState(0);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
@@ -1697,7 +1697,7 @@ export const StoryWorkspaceShell: React.FC<
 				}
 			}
 
-			history.push(
+			navigate(
 				sourceTarget(story, {
 					line: assetReference.line,
 					offset: assetReference.start,

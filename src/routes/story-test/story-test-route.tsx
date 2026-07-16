@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {useHistory, useParams} from 'react-router-dom';
+import {useNavigate, useParams} from 'react-router';
 import {useCoreProjectHost} from '../../core';
 import type {CoreStorySummary} from '../../core';
 import {usePublishing} from '../../store/use-publishing';
@@ -13,11 +13,8 @@ import {
 export const StoryTestRoute: React.FC = () => {
 	const [publishError, setPublishError] = React.useState<Error>();
 	const [html, setHtml] = React.useState<string>();
-	const {passageId, storyId} = useParams<{
-		passageId: string;
-		storyId: string;
-	}>();
-	const history = useHistory();
+	const {passageId, storyId = ''} = useParams<'passageId' | 'storyId'>();
+	const navigate = useNavigate();
 	const {publishStory} = usePublishing();
 	const coreProjectHost = useCoreProjectHost();
 	const publishStoryRef = React.useRef(publishStory);
@@ -105,24 +102,24 @@ export const StoryTestRoute: React.FC = () => {
 			html={html}
 			missingStoryMessage={`There is no story with ID "${storyId}".`}
 			onRevealGraph={runtimePassageId =>
-				history.push(
+				navigate(
 					`/stories/${storyId}?mode=graph${passageQuery(runtimePassageId)}`
 				)
 			}
 			onRevealSource={runtimePassageId =>
-				history.push(
+				navigate(
 					`/stories/${storyId}?mode=text${passageQuery(runtimePassageId)}`
 				)
 			}
 			onTestCurrentPassage={runtimePassageId =>
-				history.push(
+				navigate(
 					`/stories/${storyId}/test/${encodeURIComponent(runtimePassageId)}`
 				)
 			}
 			onTestFromStart={
 				startPassage
 					? () =>
-							history.push(
+							navigate(
 								`/stories/${storyId}/test/${encodeURIComponent(
 									startPassage.id
 								)}`

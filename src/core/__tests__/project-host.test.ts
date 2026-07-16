@@ -1,4 +1,4 @@
-import {renderHook} from '@testing-library/react-hooks';
+import {render, renderHook, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {
 	CoreAssetInventoryEntry,
@@ -15,6 +15,9 @@ import {
 import {
 	knownAssetInventoryForStory,
 	replaceKnownAssetInventoryForStory,
+	coreProjectHostPerformanceSnapshot,
+	CoreProjectHost,
+	CoreProjectHostProvider,
 	StoreCoreProjectHost,
 	useCoreProjectHost
 } from '../project-host';
@@ -840,16 +843,169 @@ describe('StoreCoreProjectHost asset commands', () => {
 });
 
 describe('useCoreProjectHost', () => {
-	it('uses stories context when no undoable stories provider exists', () => {
+	type HostWithDiagnostics = CoreProjectHost & {
+		performanceDiagnostics(): {
+			sessions: Array<{sessionId: string; storyIds: string[]}>;
+		};
+	};
+	const CaptureHost: React.FC<{
+		onHost: (host: CoreProjectHost) => void;
+	}> = ({onHost}) => {
+		const host = useCoreProjectHost();
+
+		React.useLayoutEffect(() => onHost(host), [host, onHost]);
+		return null;
+	};
+	const hostStoryIds = (host: CoreProjectHost) =>
+		(host as HostWithDiagnostics)
+			.performanceDiagnostics()
+			.sessions.flatMap(session => session.storyIds);
+	const providerTree = (
+		stories: StoriesState,
+		dispatch: (action: StoriesActionOrThunk) => void,
+		children?: React.ReactNode
+	) =>
+		React.createElement(
+			StoriesContext.Provider,
+			{value: {dispatch, stories}},
+			React.createElement(CoreProjectHostProvider, null, children)
+		);
+
+	it('requires an explicit provider', () => {
+		expect(() => renderHook(() => useCoreProjectHost())).toThrow(
+			'useCoreProjectHost must be used within a CoreProjectHostProvider.'
+		);
+	});
+
+	it('does not let a throwing provider render mutate a live host with the same dispatch', () => {
+		const dispatch = jest.fn();
+		const liveStory = {...fakeStory(), id: 'live-story'};
+		const abortedStory = {...fakeStory(), id: 'aborted-story'};
+		let liveHost: CoreProjectHost | undefined;
+		const live = render(
+			providerTree(
+				[liveStory],
+				dispatch,
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						liveHost = host;
+					}
+				})
+			)
+		);
+		const ThrowingChild = () => {
+			throw new Error('aborted provider render');
+		};
+
+		expect(liveHost).toBeDefined();
+		expect(hostStoryIds(liveHost!)).toEqual(['live-story']);
+		expect(() =>
+			render(
+				providerTree(
+					[abortedStory],
+					dispatch,
+					React.createElement(ThrowingChild)
+				)
+			)
+		).toThrow('aborted provider render');
+		expect(hostStoryIds(liveHost!)).toEqual(['live-story']);
+
+		live.unmount();
+	});
+
+	it('retains its host, worker, and sessions when dispatch identity changes', () => {
+		const story = {...fakeStory(), id: 'dispatch-story'};
+		const initialHostCount = coreProjectHostPerformanceSnapshot().workerClients;
+		let capturedHost: CoreProjectHost | undefined;
+		const capture = (host: CoreProjectHost) => {
+			capturedHost = host;
+		};
+		const tree = (dispatch: (action: StoriesActionOrThunk) => void) =>
+			providerTree(
+				[story],
+				dispatch,
+				React.createElement(CaptureHost, {onHost: capture})
+			);
+		const rendered = render(tree(jest.fn()));
+		const initialHost = capturedHost;
+		const initialSessions = (
+			initialHost as HostWithDiagnostics
+		).performanceDiagnostics().sessions;
+
+		rendered.rerender(tree(jest.fn()));
+
+		expect(capturedHost).toBe(initialHost);
+		expect(
+			(capturedHost as HostWithDiagnostics).performanceDiagnostics().sessions
+		).toEqual(initialSessions);
+		expect(coreProjectHostPerformanceSnapshot().workerClients).toBe(
+			initialHostCount + 1
+		);
+		rendered.unmount();
+		expect(coreProjectHostPerformanceSnapshot().workerClients).toBe(
+			initialHostCount
+		);
+	});
+
+	it('creates distinct hosts for providers that share a dispatch', () => {
 		const story = fakeStory();
-		const wrapper: React.FC = ({children}) =>
+		const dispatch = jest.fn();
+		const hosts: CoreProjectHost[] = [];
+		const capture = (index: number) => (host: CoreProjectHost) => {
+			hosts[index] = host;
+		};
+		const initialHostCount = coreProjectHostPerformanceSnapshot().workerClients;
+		const rendered = render(
 			React.createElement(
 				StoriesContext.Provider,
-				{value: {dispatch: jest.fn(), stories: [story]}},
-				children
-			);
-		const {result} = renderHook(() => useCoreProjectHost(), {wrapper});
+				{value: {dispatch, stories: [story]}},
+				React.createElement(
+					React.Fragment,
+					null,
+					React.createElement(
+						CoreProjectHostProvider,
+						null,
+						React.createElement(CaptureHost, {onHost: capture(0)})
+					),
+					React.createElement(
+						CoreProjectHostProvider,
+						null,
+						React.createElement(CaptureHost, {onHost: capture(1)})
+					)
+				)
+			)
+		);
 
-		expect(result.current.queryStoryIndex(story.id).storyId).toBe(story.id);
+		expect(hosts).toHaveLength(2);
+		expect(hosts[0]).not.toBe(hosts[1]);
+		expect(coreProjectHostPerformanceSnapshot().workerClients).toBe(
+			initialHostCount + 2
+		);
+		rendered.unmount();
+		expect(coreProjectHostPerformanceSnapshot().workerClients).toBe(
+			initialHostCount
+		);
+	});
+
+	it('disposes StrictMode replay hosts and the committed host on unmount', async () => {
+		const story = fakeStory();
+		const initialHostCount = coreProjectHostPerformanceSnapshot().workerClients;
+		const {unmount} = render(
+			React.createElement(
+				React.StrictMode,
+				null,
+				providerTree([story], jest.fn())
+			)
+		);
+
+		expect(coreProjectHostPerformanceSnapshot().workerClients).toBe(
+			initialHostCount + 1
+		);
+		unmount();
+		await waitFor(() =>
+			expect(coreProjectHostPerformanceSnapshot().workerClients).toBe(
+				initialHostCount
+			)
+		);
 	});
 });

@@ -1,7 +1,7 @@
 import {v4 as uuid} from '@lukeed/uuid';
 import classNames from 'classnames';
 import * as React from 'react';
-import {useHistory, useLocation} from 'react-router-dom';
+import {useNavigate, useLocation} from 'react-router';
 import {
 	Badge,
 	Button,
@@ -280,7 +280,7 @@ async function persistNativeProjectFolder(
 }
 
 export const NewProjectRoute: React.FC = () => {
-	const history = useHistory();
+	const navigate = useNavigate();
 	const location = useLocation();
 	const repairStories = useStoriesRepair();
 	const {prefs} = usePrefsContext();
@@ -384,9 +384,9 @@ export const NewProjectRoute: React.FC = () => {
 		const nextTab = value as NewProjectTab;
 
 		setTab(nextTab);
-		history.replace(
-			nextTab === 'import' ? '/new-project/import' : '/new-project'
-		);
+		navigate(nextTab === 'import' ? '/new-project/import' : '/new-project', {
+			replace: true
+		});
 	}
 
 	async function handleCreate(event: React.FormEvent) {
@@ -456,7 +456,7 @@ export const NewProjectRoute: React.FC = () => {
 				workspaceStorageKey(storyId),
 				JSON.stringify({mode: initialMode, selectedPassageId: passageId})
 			);
-			history.push(`/stories/${storyId}`);
+			navigate(`/stories/${storyId}`);
 		} catch (error) {
 			setError((error as Error).message);
 		}
@@ -600,7 +600,7 @@ export const NewProjectRoute: React.FC = () => {
 
 			dispatch(importStoriesAction(storiesToImport, stories));
 			repairStories();
-			history.push('/');
+			navigate('/');
 		} catch (error) {
 			setImportError((error as Error).message);
 		} finally {
@@ -700,7 +700,7 @@ export const NewProjectRoute: React.FC = () => {
 			repairStories();
 			markPerformance('shell-visible');
 			measurePerformance('open-to-shell', 'open-start', 'shell-visible');
-			history.push('/');
+			navigate('/');
 
 			if (result.passageTextLoaded) {
 				markPerformance('all-passages-ready');
@@ -827,7 +827,7 @@ export const NewProjectRoute: React.FC = () => {
 								</Badge>
 							)}
 							<div className="new-project-route__actions">
-								<Button icon="arrow-back-up" onClick={() => history.push('/')}>
+								<Button icon="arrow-back-up" onClick={() => navigate('/')}>
 									Cancel
 								</Button>
 								<Button icon="plus" type="submit" variant="primary">
@@ -996,7 +996,7 @@ export const NewProjectRoute: React.FC = () => {
 							)}
 						</Panel>
 						<div className="new-project-route__actions">
-							<Button icon="arrow-back-up" onClick={() => history.push('/')}>
+							<Button icon="arrow-back-up" onClick={() => navigate('/')}>
 								Cancel
 							</Button>
 							<Button

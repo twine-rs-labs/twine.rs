@@ -11,7 +11,15 @@ import {
 	StoryFormatSelectProps
 } from '../story-format-select';
 
+const mockTranslate = jest.fn((key: string) => key);
+
+jest.mock('react-i18next', () => ({
+	useTranslation: () => ({t: mockTranslate})
+}));
+
 describe('<StoryFormatSelect>', () => {
+	beforeEach(() => mockTranslate.mockImplementation(key => key));
+
 	function renderComponent(props?: Partial<StoryFormatSelectProps>) {
 		const format = fakeLoadedStoryFormat();
 
@@ -55,6 +63,10 @@ describe('<StoryFormatSelect>', () => {
 		expect(options[1].textContent).toBe(
 			'components.storyFormatSelect.loadingCount'
 		);
+		expect(mockTranslate).toHaveBeenCalledWith(
+			'components.storyFormatSelect.loadingCount',
+			{count: 1, loadingCount: 1}
+		);
 	});
 
 	it('selects the selected format', () => {
@@ -73,7 +85,7 @@ describe('<StoryFormatSelect>', () => {
 		fireEvent.change(screen.getByRole('combobox'), {
 			target: {value: formats[1].id}
 		});
-		expect(onChange).toBeCalledTimes(1);
+		expect(onChange).toHaveBeenCalledTimes(1);
 	});
 
 	it('is accessible', async () => {

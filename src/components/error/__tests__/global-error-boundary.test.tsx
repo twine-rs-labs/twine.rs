@@ -13,12 +13,17 @@ describe('<GlobalErrorBoundary>', () => {
 	});
 
 	it('shows an error message if a child component throws an error', () => {
-		jest.spyOn(console, 'error').mockReturnValue();
+		const onCaughtError = jest.fn();
 
 		render(
 			<GlobalErrorBoundary>
 				<ErrorComponent />
-			</GlobalErrorBoundary>
+			</GlobalErrorBoundary>,
+			{onCaughtError}
+		);
+		expect(onCaughtError).toHaveBeenCalledWith(
+			expect.objectContaining({message: 'mock-error'}),
+			expect.objectContaining({componentStack: expect.any(String)})
 		);
 		expect(
 			screen.getByText('Something went wrong', {exact: false})

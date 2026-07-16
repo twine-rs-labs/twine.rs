@@ -6,7 +6,7 @@ export interface MarqueeSelectionProps {
 	/**
 	 * Container DOM element to attach events to.
 	 */
-	container: React.RefObject<HTMLElement>;
+	container: React.RefObject<HTMLElement | null>;
 	/**
 	 * Ignores click events on any element matching this selector. This is so that
 	 * drags beginning on a passage card can be ignored.

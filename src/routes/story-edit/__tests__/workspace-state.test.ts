@@ -1,4 +1,4 @@
-import {act, renderHook} from '@testing-library/react-hooks';
+import {act, renderHook} from '@testing-library/react';
 import * as React from 'react';
 import {PrefsContext} from '../../../store/prefs';
 import {defaults as prefsDefaults} from '../../../store/prefs/defaults';
@@ -122,7 +122,7 @@ describe('story edit workspace state', () => {
 	it('persists graph view without rerendering the route workspace', () => {
 		const story = fakeStory();
 		let renderCount = 0;
-		const wrapper: React.FC = ({children}) =>
+		const wrapper: React.FC<React.PropsWithChildren> = ({children}) =>
 			React.createElement(
 				PrefsContext.Provider,
 				{value: {dispatch: jest.fn(), prefs: prefsDefaults()}},

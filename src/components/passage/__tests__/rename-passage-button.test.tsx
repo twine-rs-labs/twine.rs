@@ -42,7 +42,7 @@ describe('<RenamePassageButton>', () => {
 			await waitFor(() =>
 				expect(screen.getByRole('button', {name: 'common.save'})).toBeEnabled()
 			);
-			expect(onRename).not.toBeCalled();
+			expect(onRename).not.toHaveBeenCalled();
 			fireEvent.click(screen.getByRole('button', {name: 'common.save'}));
 			expect(onRename.mock.calls).toEqual([['new-name']]);
 		});

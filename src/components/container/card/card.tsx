@@ -3,6 +3,7 @@ import classNames from 'classnames';
 import './card.css';
 
 export interface CardProps {
+	children?: React.ReactNode;
 	floating?: boolean;
 	highlighted?: boolean;
 }

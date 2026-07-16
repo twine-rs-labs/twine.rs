@@ -115,8 +115,10 @@
 		},
 		"storyCard": {
 			"lastUpdated": "Последние изменения: {{date}}",
-			"passageCount": "1 история",
-			"passageCount_plural": "Количество историй: {{count}}"
+			"passageCount_one": "1 история",
+			"passageCount_few": "Количество историй: {{count}}",
+			"passageCount_many": "Количество историй: {{count}}",
+			"passageCount_other": "Количество историй: {{count}}"
 		},
 		"storyFormatItem": {
 			"author": "Автор: {{author}}",
@@ -133,8 +135,10 @@
 			"useProofingFormat": "Использовать как формат проверки"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "Загрузка 1 формата истории...",
-			"loadingCount_plural": "Загрузка {{loadingCount}} форматов истории..."
+			"loadingCount_one": "Загрузка 1 формата истории...",
+			"loadingCount_few": "Загрузка {{loadingCount}} форматов истории...",
+			"loadingCount_many": "Загрузка {{loadingCount}} форматов истории...",
+			"loadingCount_other": "Загрузка {{loadingCount}} форматов истории..."
 		},
 		"tagEditor": {
 			"alreadyExists": "Тег с таким именем уже существует."
@@ -244,8 +248,10 @@
 			"find": "Заменить",
 			"includePassageNames": "Искать в названиях Параграфов",
 			"matchCase": "Учитывать регистр",
-			"matchCount": "Найдено {{count}} совпадение ",
-			"matchCount_plural": "Количество совпадений: {{count}}",
+			"matchCount_one": "Найдено {{count}} совпадение ",
+			"matchCount_few": "Количество совпадений: {{count}}",
+			"matchCount_many": "Количество совпадений: {{count}}",
+			"matchCount_other": "Количество совпадений: {{count}}",
 			"noMatches": "Не найдено совпадающих Параграфов",
 			"replaceAll": "Заменить во всех параграфах",
 			"replaceWith": "Заменить на",
@@ -340,12 +346,16 @@
 		"storyList": {
 			"library": "Библиотека",
 			"noStories": "В данный момент в Twine нет сохраненных историй. Для начала вы можете либо создать новую историю, либо импортировать существующую из файла.",
-			"taggedTitleCount": "1 Tagged Story",
-			"taggedTitleCount_0": "No Tagged Stories",
-			"taggedTitleCount_plural": "{{count}} Tagged Stories",
-			"titleCount": "1 история",
-			"titleCount_0": "Нет историй",
-			"titleCount_plural": "Количество историй: {{count}}",
+			"taggedTitleCount_zero": "No Tagged Stories",
+			"taggedTitleCount_one": "1 Tagged Story",
+			"taggedTitleCount_few": "{{count}} Tagged Stories",
+			"taggedTitleCount_many": "{{count}} Tagged Stories",
+			"taggedTitleCount_other": "{{count}} Tagged Stories",
+			"titleCount_zero": "Нет историй",
+			"titleCount_one": "1 история",
+			"titleCount_few": "Количество историй: {{count}}",
+			"titleCount_many": "Количество историй: {{count}}",
+			"titleCount_other": "Количество историй: {{count}}",
 			"titleGeneric": "Истории",
 			"toolbar": {
 				"archive": "Архив",

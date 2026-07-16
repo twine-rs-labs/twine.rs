@@ -59,22 +59,39 @@ installed. A file named `2.json` is created under `dist/` which contains
 information relevant to the autoupdater process, and is currently posted to
 https://twinery.org/latestversion/2.json.
 
-The build process looks for these environment variables when notarizing a macOS
-build:
+Notarized macOS builds require a valid Developer ID Application signing identity
+and all of these environment variables:
 
-- `APPLE_APP_ID`: The app ID to use. The convention is `country.company.appname`.
+- `APPLE_APP_ID`: The signed bundle identifier. It must match the identifier in
+  the packaged app's Developer ID signature.
 - `APPLE_ID`: User name of the Apple account to use for notarization.
 - `APPLE_ID_PASSWORD`: App-specific password for the Apple account to use for
   notarization.
 - `APPLE_TEAM_ID`: ID of the Apple team account to use for notarization.
 
-If any of these environment variables are not set, the build process will skip
-notarizing. This means users will need to right-click the application and open
-it manually.
+A real signing identity can be selected through Electron Builder's
+`mac.identity` option, `CSC_NAME`, or `CSC_LINK`, or discovered in the macOS
+keychain. When the notarization credentials are incomplete and no real signing
+path is configured or discovered, local macOS builds are ad-hoc signed. That
+local signature avoids repeated file-access identity prompts, but it is not a
+Developer ID signature and is not notarized; Gatekeeper may still require users
+to right-click the application and open it manually.
+
+The local fallback does not replace a valid existing signature. If keychain
+identity discovery cannot be verified, it conservatively skips ad-hoc signing.
+After Electron Builder signs a release, the build submits it for notarization
+only when the signature is a valid Developer ID Application signature, its
+identifier matches `APPLE_APP_ID`, and every credential above is present.
+Providing the complete credential set also enables Electron Builder's
+`forceCodeSigning` guard, so a missing or invalid signing identity fails the
+release build instead of producing an unsigned artifact.
 
 You must have the full Xcode app installed to notarize the app, not just the
 Xcode command line tools.
 
-`npm test` will test the source code respectively.
+`npm test` runs Jest in interactive watch mode. Automated workflows should run
+`npm run test:ci`, which runs the Jest suite once and then the packaging hook
+tests. `npm run test:packaging` runs only the noninteractive Electron Builder
+configuration and hook tests.
 
 `npm run clean` will delete existing files in `electron-build/` and `dist/`.

@@ -1,6 +1,11 @@
 import * as React from 'react';
-import useThunkReducer from 'react-hook-thunk-reducer';
+import useThunkReducer from '../util/use-thunk-reducer';
 import {fakeLoadedStoryFormat} from '.';
+import {
+	CoreProjectHost,
+	CoreProjectHostContext,
+	CoreProjectHostProvider
+} from '../core/project-host';
 import {DialogsContextProvider} from '../dialogs';
 import {PrefsContext, PrefsState} from '../store/prefs';
 import {reducer as prefsReducer} from '../store/prefs/reducer';
@@ -11,6 +16,8 @@ import {reducer as storyFormatsReducer} from '../store/story-formats/reducer';
 import {fakePrefs, fakeStory} from './fakes';
 
 export interface FakeStateProviderProps {
+	children?: React.ReactNode;
+	coreProjectHost?: CoreProjectHost;
 	prefs?: Partial<PrefsState>;
 	stories?: StoriesState;
 	storyFormats?: StoryFormatsState;
@@ -35,6 +42,15 @@ export const FakeStateProvider: React.FC<FakeStateProviderProps> = props => {
 		storyFormatsReducer,
 		props.storyFormats ?? [format]
 	);
+	const children = props.coreProjectHost ? (
+		<CoreProjectHostContext.Provider value={props.coreProjectHost}>
+			<DialogsContextProvider>{props.children}</DialogsContextProvider>
+		</CoreProjectHostContext.Provider>
+	) : (
+		<CoreProjectHostProvider>
+			<DialogsContextProvider>{props.children}</DialogsContextProvider>
+		</CoreProjectHostProvider>
+	);
 
 	return (
 		<PrefsContext.Provider value={{dispatch: prefsDispatch, prefs: prefsState}}>
@@ -44,7 +60,7 @@ export const FakeStateProvider: React.FC<FakeStateProviderProps> = props => {
 				<StoriesContext.Provider
 					value={{dispatch: storiesDispatch, stories: storiesState}}
 				>
-					<DialogsContextProvider>{props.children}</DialogsContextProvider>
+					{children}
 				</StoriesContext.Provider>
 			</StoryFormatsContext.Provider>
 		</PrefsContext.Provider>

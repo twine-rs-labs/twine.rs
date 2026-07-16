@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import classNames from 'classnames';
-import {IconWriting} from '@tabler/icons';
+import {IconWriting} from '@tabler/icons-react';
 import {colors, Color} from '../../util/color';
 import {PromptButton, PromptValidationResponse} from '../control/prompt-button';
 import {TextSelect} from '../control/text-select';

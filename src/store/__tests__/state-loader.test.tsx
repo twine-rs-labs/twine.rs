@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {render, screen, waitFor} from '@testing-library/react';
+import {act, render, screen, waitFor} from '@testing-library/react';
 import {fakeUnloadedStoryFormat} from '../../test-util';
 import {usePersistence} from '../persistence/use-persistence';
 import {usePrefsContext} from '../prefs';
@@ -55,7 +55,7 @@ describe('<StateLoader>', () => {
 
 	it('dispatches init and repair actions once mounted', async () => {
 		render(<StateLoader />);
-		await waitFor(() => expect(storiesDispatchMock).toBeCalled());
+		await waitFor(() => expect(storiesDispatchMock).toHaveBeenCalled());
 
 		// Order of these actions is crucial. The init must come before the repair.
 		// Order of store repairs is tested below.
@@ -77,7 +77,7 @@ describe('<StateLoader>', () => {
 
 	it('repairs story formats, then preferences, then stories', async () => {
 		render(<StateLoader />);
-		await waitFor(() => expect(storiesDispatchMock).toBeCalled());
+		await waitFor(() => expect(storiesDispatchMock).toHaveBeenCalled());
 
 		// The second invocation will be the repair--tested above.
 
@@ -96,8 +96,8 @@ describe('<StateLoader>', () => {
 			.mockReturnValue(repairStories);
 
 		render(<StateLoader />);
-		await waitFor(() => expect(storiesDispatchMock).toBeCalled());
-		expect(repairStories).toBeCalledTimes(1);
+		await waitFor(() => expect(storiesDispatchMock).toHaveBeenCalled());
+		expect(repairStories).toHaveBeenCalledTimes(1);
 		repairSpy.mockRestore();
 	});
 
@@ -118,7 +118,7 @@ describe('<StateLoader>', () => {
 		}));
 
 		render(<StateLoader />);
-		await waitFor(() => expect(prefsDispatchMock).toBeCalled());
+		await waitFor(() => expect(prefsDispatchMock).toHaveBeenCalled());
 		expect(prefsDispatchMock.mock.calls[1]).toEqual([
 			{type: 'repair', allFormats: repairedFormats}
 		]);
@@ -161,7 +161,7 @@ describe('<StateLoader>', () => {
 			formats: formatsRepaired ? repairedFormats : [defaultFormat]
 		}));
 		render(<StateLoader />);
-		await waitFor(() => expect(storiesDispatchMock).toBeCalled());
+		await waitFor(() => expect(storiesDispatchMock).toHaveBeenCalled());
 		expect(storiesDispatchMock.mock.calls[1]).toEqual([
 			{
 				type: 'repair',
@@ -207,5 +207,75 @@ describe('<StateLoader>', () => {
 		expect(storiesDispatchMock.mock.calls[0]).toEqual([
 			{type: 'init', state: []}
 		]);
+	});
+
+	it('loads and applies persistence exactly once in StrictMode', async () => {
+		const loadPrefs = jest.fn(async () => ({mockPrefsState: true}));
+		const loadStories = jest.fn(async () => ({mockStoriesState: true}));
+		const loadStoryFormats = jest.fn(async () => ({
+			mockStoryFormatsState: true
+		}));
+
+		(usePersistence as jest.Mock).mockReturnValue({
+			prefs: {load: loadPrefs},
+			stories: {load: loadStories},
+			storyFormats: {load: loadStoryFormats}
+		});
+		render(
+			<React.StrictMode>
+				<StateLoader />
+			</React.StrictMode>
+		);
+
+		await waitFor(() =>
+			expect(storiesDispatchMock).toHaveBeenCalledWith({
+				state: {mockStoriesState: true},
+				type: 'init'
+			})
+		);
+		expect(loadPrefs).toHaveBeenCalledTimes(1);
+		expect(loadStories).toHaveBeenCalledTimes(1);
+		expect(loadStoryFormats).toHaveBeenCalledTimes(1);
+		expect(
+			prefsDispatchMock.mock.calls.filter(([action]) => action.type === 'init')
+		).toHaveLength(1);
+		expect(
+			storiesDispatchMock.mock.calls.filter(
+				([action]) => action.type === 'init'
+			)
+		).toHaveLength(2);
+		expect(
+			formatsDispatchMock.mock.calls.filter(
+				([action]) => action.type === 'init'
+			)
+		).toHaveLength(1);
+	});
+
+	it('does not apply persistence after unmounting during a load', async () => {
+		let resolveFormats!: (value: {mockStoryFormatsState: boolean}) => void;
+		const loadStoryFormats = jest.fn(
+			() =>
+				new Promise<{mockStoryFormatsState: boolean}>(resolve => {
+					resolveFormats = resolve;
+				})
+		);
+
+		(usePersistence as jest.Mock).mockReturnValue({
+			prefs: {load: async () => ({mockPrefsState: true})},
+			stories: {load: async () => ({mockStoriesState: true})},
+			storyFormats: {load: loadStoryFormats}
+		});
+		const {unmount} = render(<StateLoader />);
+
+		await waitFor(() => expect(loadStoryFormats).toHaveBeenCalledTimes(1));
+		unmount();
+		await act(async () => {
+			resolveFormats({mockStoryFormatsState: true});
+			await Promise.resolve();
+		});
+
+		expect(prefsDispatchMock).not.toHaveBeenCalled();
+		expect(storiesDispatchMock).not.toHaveBeenCalled();
+		expect(formatsDispatchMock).not.toHaveBeenCalled();
 	});
 });

@@ -214,6 +214,66 @@ describe('<PassageCard>', () => {
 
 	it.todo('passes through drag events');
 
+	it('runs forwarded ref cleanup once per attachment in StrictMode', () => {
+		const cleanups: jest.Mock[] = [];
+		const ref = jest.fn<
+			ReturnType<React.RefCallback<HTMLDivElement>>,
+			Parameters<React.RefCallback<HTMLDivElement>>
+		>(element => {
+			if (element) {
+				const cleanup = jest.fn();
+
+				cleanups.push(cleanup);
+				return cleanup;
+			}
+		});
+		const {unmount} = render(
+			<React.StrictMode>
+				<PassageCard
+					onDeselect={jest.fn()}
+					onEdit={jest.fn()}
+					onSelect={jest.fn()}
+					passage={fakePassage()}
+					ref={ref}
+					tagColors={{}}
+					tagDisplay="color"
+				/>
+			</React.StrictMode>
+		);
+
+		expect(cleanups).toHaveLength(
+			ref.mock.calls.filter(([element]) => element).length
+		);
+		expect(cleanups.length).toBeGreaterThan(0);
+		unmount();
+		cleanups.forEach(cleanup => expect(cleanup).toHaveBeenCalledTimes(1));
+		expect(ref).not.toHaveBeenCalledWith(null);
+	});
+
+	it('forwards null on detach when a callback ref has no cleanup', () => {
+		const ref = jest.fn<
+			ReturnType<React.RefCallback<HTMLDivElement>>,
+			Parameters<React.RefCallback<HTMLDivElement>>
+		>();
+		const {unmount} = render(
+			<PassageCard
+				onDeselect={jest.fn()}
+				onEdit={jest.fn()}
+				onSelect={jest.fn()}
+				passage={fakePassage()}
+				ref={ref}
+				tagColors={{}}
+				tagDisplay="color"
+			/>
+		);
+
+		expect(ref).toHaveBeenCalledTimes(1);
+		expect(ref.mock.calls[0][0]).toBeInstanceOf(HTMLDivElement);
+		unmount();
+		expect(ref).toHaveBeenCalledTimes(2);
+		expect(ref).toHaveBeenLastCalledWith(null);
+	});
+
 	it('is accessible', async () => {
 		const {container} = renderComponent();
 

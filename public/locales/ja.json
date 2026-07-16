@@ -119,8 +119,7 @@
 		},
 		"storyCard": {
 			"lastUpdated": "{{date}}に最終編集",
-			"passageCount": "パッセージ1件",
-			"passageCount_plural": "パッセージ{{count}}件"
+			"passageCount_other": "パッセージ{{count}}件"
 		},
 		"storyFormatItem": {
 			"author": "作者: {{author}}",
@@ -137,15 +136,14 @@
 			"useProofingFormat": "校正用形式として使用"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "ストーリー形式を1件読み込み中...",
-			"loadingCount_plural": "ストーリー形式を{{loadingCount}}件読み込み中..."
+			"loadingCount_other": "ストーリー形式を{{loadingCount}}件読み込み中..."
 		},
 		"tagCardButton": {
 			"alreadyAdded": "このタグ名はすでに追加されています。",
 			"addLabel": "タグを追加",
 			"invalidName": "有効なタグ名を入力してください。",
 			"tagNameLabel": "タグ名",
-			"tagsWithCount_plural": "タグ（{{count}}）"
+			"tagsWithCount_other": "タグ（{{count}}）"
 		},
 		"tagEditor": {
 			"alreadyExists": "同じ名前のタグがすでにあります。"
@@ -260,8 +258,7 @@
 			"find": "検索",
 			"includePassageNames": "パッセージ名も含める",
 			"matchCase": "大文字小文字を区別",
-			"matchCount": "一致したパッセージ{{count}}件",
-			"matchCount_plural": "一致したパッセージ{{count}}件",
+			"matchCount_other": "一致したパッセージ{{count}}件",
 			"noMatches": "一致するパッセージはありません",
 			"replaceAll": "すべてのパッセージで置換",
 			"replaceWith": "置換後",
@@ -356,12 +353,10 @@
 		"storyList": {
 			"library": "ライブラリ",
 			"noStories": "現在、Twineに保存されているストーリーはありません。開始するには、新しいストーリーを作成するか、ファイルから既存のストーリーをインポートします。",
-			"taggedTitleCount": "タグ付きストーリー1件",
-			"taggedTitleCount_0": "タグ付きストーリーなし",
-			"taggedTitleCount_plural": "タグ付きストーリー{{count}}件",
-			"titleCount": "ストーリー1件",
-			"titleCount_0": "ストーリーなし",
-			"titleCount_plural": "ストーリー{{count}}件",
+			"taggedTitleCount_zero": "タグ付きストーリーなし",
+			"taggedTitleCount_other": "タグ付きストーリー{{count}}件",
+			"titleCount_zero": "ストーリーなし",
+			"titleCount_other": "ストーリー{{count}}件",
 			"titleGeneric": "ストーリー",
 			"toolbar": {
 				"archive": "アーカイブ",

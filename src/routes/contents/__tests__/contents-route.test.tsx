@@ -1,12 +1,13 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
-import {createMemoryHistory} from 'history';
 import * as React from 'react';
-import {MemoryRouter, Route, Router} from 'react-router-dom';
+import {MemoryRouter} from 'react-router';
 import {
 	FakeStateProvider,
 	fakePassage,
 	fakeStory,
-	StoryInspector
+	LocationInspector,
+	StoryInspector,
+	TestRoute
 } from '../../../test-util';
 import {
 	replaceKnownAssetInventoryForStory,
@@ -93,10 +94,10 @@ function renderComponent(
 	const result = render(
 		<FakeStateProvider stories={[story]}>
 			<MemoryRouter initialEntries={[`/stories/${story.id}/contents`]}>
-				<Route path="/stories/:storyId/contents">
+				<TestRoute path="/stories/:storyId/contents">
 					<ContentsRoute />
 					<StoryInspector id={story.id} />
-				</Route>
+				</TestRoute>
 			</MemoryRouter>
 		</FakeStateProvider>
 	);
@@ -104,28 +105,26 @@ function renderComponent(
 	return {result, story};
 }
 
-function renderComponentWithHistory(
+function renderComponentWithLocation(
 	configure?: (story: ReturnType<typeof indexedStory>['story']) => void
 ) {
 	const {story} = indexedStory();
 
 	configure?.(story);
 
-	const history = createMemoryHistory({
-		initialEntries: [`/stories/${story.id}/contents`]
-	});
 	const result = render(
 		<FakeStateProvider stories={[story]}>
-			<Router history={history}>
-				<Route path="/stories/:storyId/contents">
+			<MemoryRouter initialEntries={[`/stories/${story.id}/contents`]}>
+				<TestRoute path="/stories/:storyId/contents">
 					<ContentsRoute />
 					<StoryInspector id={story.id} />
-				</Route>
-			</Router>
+				</TestRoute>
+				<LocationInspector />
+			</MemoryRouter>
 		</FakeStateProvider>
 	);
 
-	return {history, result, story};
+	return {result, story};
 }
 
 describe('<ContentsRoute>', () => {
@@ -300,7 +299,7 @@ describe('<ContentsRoute>', () => {
 	});
 
 	it('reveals variables through story search instead of a first source', async () => {
-		const {history} = renderComponentWithHistory();
+		renderComponentWithLocation();
 
 		fireEvent.click(screen.getByRole('button', {name: /Variables/}));
 		await waitFor(() =>
@@ -308,9 +307,15 @@ describe('<ContentsRoute>', () => {
 		);
 		fireEvent.click(screen.getByRole('button', {name: 'Reveal in Source'}));
 
-		const query = new URLSearchParams(history.location.search);
-
-		expect(history.location.pathname).toBe('/stories/story-id');
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/stories/story-id'
+			)
+		);
+		const query = new URLSearchParams(
+			screen.getByTestId('location').getAttribute('data-search') ?? ''
+		);
 		expect(query.get('q')).toBe('$score');
 		expect(query.get('scope')).toBe('variable');
 		expect(query.get('source')).toBeNull();
@@ -318,7 +323,7 @@ describe('<ContentsRoute>', () => {
 	});
 
 	it('reveals stylesheet asset references to the stylesheet source target', async () => {
-		const {history, story} = renderComponentWithHistory(story => {
+		const {story} = renderComponentWithLocation(story => {
 			story.stylesheet = '.hero { background: url("assets/bg.png"); }';
 		});
 
@@ -329,9 +334,15 @@ describe('<ContentsRoute>', () => {
 		fireEvent.click(screen.getAllByText('assets/bg.png')[0].closest('button')!);
 		fireEvent.click(screen.getByRole('button', {name: 'Reveal in Source'}));
 
-		const query = new URLSearchParams(history.location.search);
-
-		expect(history.location.pathname).toBe(`/stories/${story.id}`);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${story.id}`
+			)
+		);
+		const query = new URLSearchParams(
+			screen.getByTestId('location').getAttribute('data-search') ?? ''
+		);
 		expect(query.get('mode')).toBe('text');
 		expect(query.get('source')).toBe('stylesheet');
 		expect(query.get('passage')).toBeNull();

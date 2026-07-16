@@ -86,9 +86,7 @@ export const PassageNode: React.FC<PassageNodeProps> = ({
 						{tags.map((tag, index) => (
 							<span
 								className={
-									tagDisplay === 'name'
-										? 'tw-node__tag-name'
-										: 'tw-node__tag'
+									tagDisplay === 'name' ? 'tw-node__tag-name' : 'tw-node__tag'
 								}
 								key={`${tag}-${index}`}
 								style={

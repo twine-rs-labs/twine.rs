@@ -3,6 +3,7 @@ import classNames from 'classnames';
 import './button-bar.css';
 
 export interface ButtonBarProps {
+	children?: React.ReactNode;
 	orientation?: 'horizontal' | 'vertical';
 }
 

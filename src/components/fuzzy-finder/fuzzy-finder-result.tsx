@@ -1,4 +1,4 @@
-import {IconChevronsRight} from '@tabler/icons';
+import {IconChevronsRight} from '@tabler/icons-react';
 import classNames from 'classnames';
 import * as React from 'react';
 import './fuzzy-finder-result.css';

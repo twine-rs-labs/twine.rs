@@ -32,6 +32,7 @@ export const StoryFormatSelect: React.FC<StoryFormatSelectProps> = props => {
 		options.push({
 			disabled: true,
 			label: t('components.storyFormatSelect.loadingCount', {
+				count: loadingFormats.length,
 				loadingCount: loadingFormats.length
 			}),
 			value: ''

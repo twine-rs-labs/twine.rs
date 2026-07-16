@@ -1,4 +1,4 @@
-import {Thunk} from 'react-hook-thunk-reducer';
+import {Thunk, ThunkDispatch} from '../../util/use-thunk-reducer';
 import {Color} from '../../util/color';
 import type {
 	ProjectFolderDocumentUpdate,
@@ -220,10 +220,9 @@ export interface ApplyCorePatchBatchAction {
 export type StoriesAction = CorePatchStoryAction | ApplyCorePatchBatchAction;
 
 export type StoriesActionOrThunk =
-	| StoriesAction
-	| Thunk<StoriesState, StoriesAction>;
+	StoriesAction | Thunk<StoriesState, StoriesAction>;
 
-export type StoriesDispatch = React.Dispatch<StoriesActionOrThunk>;
+export type StoriesDispatch = ThunkDispatch<StoriesState, StoriesAction>;
 
 export interface StorySearchFlags {
 	includePassageNames?: boolean;

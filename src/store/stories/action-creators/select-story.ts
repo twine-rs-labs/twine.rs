@@ -1,4 +1,4 @@
-import {Thunk} from 'react-hook-thunk-reducer';
+import {Thunk} from '../../../util/use-thunk-reducer';
 import {StoriesState, Story, UpdateStoryAction} from '../stories.types';
 
 /**

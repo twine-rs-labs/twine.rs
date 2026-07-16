@@ -1,4 +1,4 @@
-import {IconSpace} from '@tabler/icons';
+import {IconSpace} from '@tabler/icons-react';
 import * as React from 'react';
 
 export interface VisibleWhitespaceProps {

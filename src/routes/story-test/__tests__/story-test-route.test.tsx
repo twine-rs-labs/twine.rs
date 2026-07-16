@@ -1,7 +1,7 @@
 import {render, screen, waitFor} from '@testing-library/react';
-import {createHashHistory} from 'history';
 import * as React from 'react';
-import {HashRouter, Route} from 'react-router-dom';
+import {HashRouter, Route, Routes} from 'react-router';
+import {CoreProjectHostProvider} from '../../../core';
 import {StoriesContext} from '../../../store/stories';
 import {usePublishing} from '../../../store/use-publishing';
 import {fakeStory} from '../../../test-util';
@@ -13,20 +13,25 @@ describe('<StoryTestRoute>', () => {
 	const usePublishingMock = usePublishing as jest.Mock;
 
 	function renderComponent(route: string) {
-		const history = createHashHistory();
 		const story = {...fakeStory(), id: '123'};
 
-		history.push(route);
+		window.location.hash = route;
 		return render(
 			<StoriesContext.Provider value={{dispatch: jest.fn(), stories: [story]}}>
-				<HashRouter>
-					<Route path="/stories/:storyId/test" exact>
-						<StoryTestRoute />
-					</Route>
-					<Route path="/stories/:storyId/test/:passageId" exact>
-						<StoryTestRoute />
-					</Route>
-				</HashRouter>
+				<CoreProjectHostProvider>
+					<HashRouter>
+						<Routes>
+							<Route
+								element={<StoryTestRoute />}
+								path="/stories/:storyId/test"
+							/>
+							<Route
+								element={<StoryTestRoute />}
+								path="/stories/:storyId/test/:passageId"
+							/>
+						</Routes>
+					</HashRouter>
+				</CoreProjectHostProvider>
 			</StoriesContext.Provider>
 		);
 	}

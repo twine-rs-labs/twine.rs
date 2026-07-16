@@ -28,7 +28,7 @@ export const i18n = i18next.createInstance();
 
 export async function initLocales() {
 	console.log(`Initializing i18next without locale`);
-	i18n.init({
+	await i18n.init({
 		debug: true,
 		fallbackLng: 'en-us',
 		interpolation: {
@@ -72,7 +72,7 @@ export async function initLocales() {
 		const {locale} = await loadPrefs();
 
 		console.log(`Changing i18next language to ${locale}`);
-		i18n.changeLanguage(locale);
+		await i18n.changeLanguage(locale);
 	} catch (error) {
 		console.warn("Preference couldn't be loaded, using default locale");
 	}

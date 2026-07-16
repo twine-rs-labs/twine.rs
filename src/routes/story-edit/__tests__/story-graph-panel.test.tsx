@@ -1,6 +1,9 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
-import {StoreCoreProjectHost} from '../../../core/project-host';
+import {
+	CoreProjectHostProvider,
+	StoreCoreProjectHost
+} from '../../../core/project-host';
 import type {PatchBatch} from '../../../core/bindings/PatchBatch';
 import {defaults as prefsDefaults} from '../../../store/prefs/defaults';
 import {PrefsContext, PrefsState} from '../../../store/prefs';
@@ -83,7 +86,7 @@ function renderComponent(
 	const onTestPassage = jest.fn();
 	const storiesDispatch = jest.fn();
 	const initialSelectedPassageId = options.selectedPassageId ?? start.id;
-	const TestProviders: React.FC = ({children}) => {
+	const TestProviders: React.FC<React.PropsWithChildren> = ({children}) => {
 		const [prefs, prefsDispatch] = React.useReducer(prefsReducer, {
 			...prefsDefaults(),
 			...options.prefs
@@ -94,7 +97,7 @@ function renderComponent(
 				<StoriesContext.Provider
 					value={{dispatch: storiesDispatch, stories: [story]}}
 				>
-					{children}
+					<CoreProjectHostProvider>{children}</CoreProjectHostProvider>
 				</StoriesContext.Provider>
 			</PrefsContext.Provider>
 		);
@@ -355,8 +358,7 @@ describe('<StoryGraphPanel>', () => {
 			'queryGraphProjectionAsync'
 		);
 		let patchListener:
-			| Parameters<StoreCoreProjectHost['subscribeToPatches']>[0]
-			| undefined;
+			Parameters<StoreCoreProjectHost['subscribeToPatches']>[0] | undefined;
 		jest
 			.spyOn(StoreCoreProjectHost.prototype, 'subscribeToPatches')
 			.mockImplementation(listener => {
@@ -1167,7 +1169,7 @@ describe('<StoryGraphPanel>', () => {
 					<StoriesContext.Provider
 						value={{dispatch: jest.fn(), stories: [currentStory]}}
 					>
-						<>
+						<CoreProjectHostProvider>
 							<button
 								onClick={() =>
 									setCurrentStory(current => ({
@@ -1190,7 +1192,7 @@ describe('<StoryGraphPanel>', () => {
 								selectedPassageId="start"
 								story={currentStory}
 							/>
-						</>
+						</CoreProjectHostProvider>
 					</StoriesContext.Provider>
 				</PrefsContext.Provider>
 			);

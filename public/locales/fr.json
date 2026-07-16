@@ -105,8 +105,9 @@
 		},
 		"storyCard": {
 			"lastUpdated": "Dernière modification le {{date}}",
-			"passageCount": "1 passage",
-			"passageCount_plural": "{{count}} passages"
+			"passageCount_one": "1 passage",
+			"passageCount_many": "{{count}} passages",
+			"passageCount_other": "{{count}} passages"
 		},
 		"storyFormatItem": {
 			"author": "par {{author}}",
@@ -123,8 +124,9 @@
 			"useProofingFormat": "Utiliser en tant que Format de Vérification"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "Chargement d'un Format d'Histoire...",
-			"loadingCount_plural": "Charement de {{loadingCount}} Formats d'Histoire..."
+			"loadingCount_one": "Chargement d'un Format d'Histoire...",
+			"loadingCount_many": "Charement de {{loadingCount}} Formats d'Histoire...",
+			"loadingCount_other": "Charement de {{loadingCount}} Formats d'Histoire..."
 		},
 		"tagEditor": {
 			"alreadyExists": "Une balise portant ce nom existe déjà."
@@ -212,8 +214,9 @@
 			"find": "Rechercher",
 			"includePassageNames": "Inclure les noms des passages",
 			"matchCase": "Casse exacte",
-			"matchCount": "{{count}} passage trouvé",
-			"matchCount_plural": "{{count}} passages trouvés",
+			"matchCount_one": "{{count}} passage trouvé",
+			"matchCount_many": "{{count}} passages trouvés",
+			"matchCount_other": "{{count}} passages trouvés",
 			"noMatches": "Aucun passage trouvé",
 			"replaceAll": "Remplacer dans tous les Passages",
 			"replaceWith": "Remplacer Par",
@@ -327,12 +330,14 @@
 				"sortName": "Nom",
 				"storyFormats": "Formats"
 			},
-			"taggedTitleCount": "1 Histoire balisée",
-			"taggedTitleCount_0": "Aucune histoire balisée",
-			"taggedTitleCount_plural": "{{count}} histoires balisées",
-			"titleCount": "1 histoire",
-			"titleCount_0": "Aucune histoire",
-			"titleCount_plural": "{{count}} histoires",
+			"taggedTitleCount_zero": "Aucune histoire balisée",
+			"taggedTitleCount_one": "1 Histoire balisée",
+			"taggedTitleCount_many": "{{count}} histoires balisées",
+			"taggedTitleCount_other": "{{count}} histoires balisées",
+			"titleCount_zero": "Aucune histoire",
+			"titleCount_one": "1 histoire",
+			"titleCount_many": "{{count}} histoires",
+			"titleCount_other": "{{count}} histoires",
 			"toolbar": {
 				"archive": "Archive",
 				"createStoryButton": {

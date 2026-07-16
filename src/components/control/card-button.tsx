@@ -1,6 +1,6 @@
 import * as React from 'react';
-import {usePopper} from 'react-popper';
 import {CSSTransition} from 'react-transition-group';
+import {usePopper, UsePopperOptions} from '../../util/use-popper';
 import {Card} from '../container/card';
 import {IconButton, IconButtonProps} from './icon-button';
 import './card-button.css';
@@ -11,6 +11,7 @@ export interface CardButtonProps extends IconButtonProps {
 	 * ARIA label for the card that opens.
 	 */
 	ariaLabel: string;
+	children?: React.ReactNode;
 	/**
 	 * Callback for when the open status of the card should change.
 	 */
@@ -27,7 +28,16 @@ export const CardButton: React.FC<CardButtonProps> = props => {
 		null
 	);
 	const [cardEl, setCardEl] = React.useState<HTMLDivElement | null>(null);
-	const {styles, attributes} = usePopper(buttonEl, cardEl, {strategy: 'fixed'});
+	const cardRef = React.useRef<HTMLDivElement | null>(null);
+	const popperOptions = React.useMemo<UsePopperOptions>(
+		() => ({strategy: 'fixed'}),
+		[]
+	);
+	const setCard = React.useCallback((element: HTMLDivElement | null) => {
+		cardRef.current = element;
+		setCardEl(element);
+	}, []);
+	const {styles, attributes} = usePopper(buttonEl, cardEl, popperOptions);
 
 	function filterEventsOutsideFocusTrap(event: MouseEvent | TouchEvent) {
 		const narrowedTarget = event.target as HTMLElement;
@@ -57,6 +67,7 @@ export const CardButton: React.FC<CardButtonProps> = props => {
 				classNames="fade-out"
 				in={open}
 				mountOnEnter
+				nodeRef={cardRef}
 				timeout={200}
 				unmountOnExit
 			>
@@ -69,7 +80,7 @@ export const CardButton: React.FC<CardButtonProps> = props => {
 					<div
 						aria-label={ariaLabel}
 						className="card-button-card"
-						ref={setCardEl}
+						ref={setCard}
 						role="dialog"
 						style={styles.popper}
 						{...attributes.popper}

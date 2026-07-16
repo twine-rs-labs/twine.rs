@@ -30,7 +30,7 @@ describe('<TagCardButton>', () => {
 		renderComponent({tags: ['one', 'two']});
 		expect(
 			screen.getByRole('button', {
-				name: 'components.tagCardButton.tagsWithCount_plural'
+				name: 'components.tagCardButton.tagsWithCount'
 			})
 		).toBeVisible();
 	});
@@ -59,7 +59,7 @@ describe('<TagCardButton>', () => {
 			});
 			fireEvent.click(
 				screen.getByRole('button', {
-					name: 'components.tagCardButton.tagsWithCount_plural'
+					name: 'components.tagCardButton.tagsWithCount'
 				})
 			);
 			expect(
@@ -110,7 +110,7 @@ describe('<TagCardButton>', () => {
 			renderComponent({tags: ['test']});
 			fireEvent.click(
 				screen.getByRole('button', {
-					name: 'components.tagCardButton.tagsWithCount_plural'
+					name: 'components.tagCardButton.tagsWithCount'
 				})
 			);
 			fireEvent.change(
@@ -161,7 +161,7 @@ describe('<TagCardButton>', () => {
 				renderComponent({tags: ['test1', 'test2']});
 				fireEvent.click(
 					screen.getByRole('button', {
-						name: 'components.tagCardButton.tagsWithCount_plural'
+						name: 'components.tagCardButton.tagsWithCount'
 					})
 				);
 				expect(screen.getByRole('button', {name: 'test1'})).toBeVisible();
@@ -174,7 +174,7 @@ describe('<TagCardButton>', () => {
 				renderComponent({onChangeColor, tags: ['test']});
 				fireEvent.click(
 					screen.getByRole('button', {
-						name: 'components.tagCardButton.tagsWithCount_plural'
+						name: 'components.tagCardButton.tagsWithCount'
 					})
 				);
 				fireEvent.click(screen.getByRole('button', {name: 'test'}));
@@ -189,7 +189,7 @@ describe('<TagCardButton>', () => {
 				renderComponent({onRemove, tags: ['test']});
 				fireEvent.click(
 					screen.getByRole('button', {
-						name: 'components.tagCardButton.tagsWithCount_plural'
+						name: 'components.tagCardButton.tagsWithCount'
 					})
 				);
 				fireEvent.click(screen.getByRole('button', {name: 'test'}));

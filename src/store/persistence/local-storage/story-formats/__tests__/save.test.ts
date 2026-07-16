@@ -23,8 +23,6 @@ describe('story formats local storage save', () => {
 
 		// This will change IDs on us--we can't do a simple compare.
 
-		/* eslint-disable jest/no-conditional-expect */
-
 		if (format1.name === formats[0].name) {
 			expect(format1).toEqual(
 				expect.objectContaining({
@@ -63,7 +61,6 @@ describe('story formats local storage save', () => {
 			throw new Error('First story format not present in window.localStorage.');
 		}
 
-		/* eslint-enable jest/no-conditional-expect */
 		expect.assertions(2);
 	});
 

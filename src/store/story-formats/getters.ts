@@ -1,5 +1,5 @@
-import isAbsoluteUrl from 'is-absolute-url';
 import semverLt from 'semver/functions/lt';
+import {hasUrlScheme} from '../../util/has-url-scheme';
 import {StoryFormat} from './story-formats.types';
 import {PrefsState} from '../prefs';
 import {gt} from 'semver';
@@ -36,7 +36,7 @@ export function formatImageUrl(format: StoryFormat) {
 		throw new Error('Format has no image property');
 	}
 
-	if (isAbsoluteUrl(format.properties.image)) {
+	if (hasUrlScheme(format.properties.image)) {
 		return format.properties.image;
 	}
 

@@ -1,5 +1,5 @@
 import {ModeFactory} from 'codemirror';
-import {Thunk} from 'react-hook-thunk-reducer';
+import {ThunkDispatch} from '../../util/use-thunk-reducer';
 
 interface BaseStoryFormat {
 	id: string;
@@ -32,8 +32,7 @@ export type StoryFormatToolbarButton = {
 };
 
 export type StoryFormatToolbarMenuItem =
-	| Omit<StoryFormatToolbarButton, 'icon'>
-	| {type: 'separator'};
+	Omit<StoryFormatToolbarButton, 'icon'> | {type: 'separator'};
 
 export type StoryFormatToolbarItem =
 	| StoryFormatToolbarButton
@@ -58,11 +57,7 @@ export type StoryFormatToolbarFactory = (
 ) => StoryFormatToolbarItem[];
 
 export type StoryFormatModuleSlot =
-	| 'runtime'
-	| 'preview'
-	| 'editor'
-	| 'diagnostics'
-	| 'devtools';
+	'runtime' | 'preview' | 'editor' | 'diagnostics' | 'devtools';
 
 export interface StoryFormatDeclaredModule {
 	id: string;
@@ -156,8 +151,9 @@ export type StoryFormatsAction =
 	| {type: 'delete'; id: string}
 	| {type: 'update'; id: string; props: Partial<StoryFormat>};
 
-export type StoryFormatsDispatch = React.Dispatch<
-	StoryFormatsAction | Thunk<StoryFormatsState, StoryFormatsAction>
+export type StoryFormatsDispatch = ThunkDispatch<
+	StoryFormatsState,
+	StoryFormatsAction
 >;
 
 export interface StoryFormatsContextProps {

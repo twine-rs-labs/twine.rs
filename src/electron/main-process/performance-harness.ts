@@ -21,10 +21,7 @@ export interface NativeWatcherTraceEvent {
 	deltaId: string;
 	rootPath: string;
 	stage:
-		| 'delta-created'
-		| 'native-notified'
-		| 'scan-started'
-		| 'watcher-observed';
+		'delta-created' | 'native-notified' | 'scan-started' | 'watcher-observed';
 	timeEpochMs: number;
 }
 

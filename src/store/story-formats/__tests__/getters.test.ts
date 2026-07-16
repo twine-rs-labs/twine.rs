@@ -81,6 +81,13 @@ describe('formatImageUrl', () => {
 
 		expect(formatImageUrl(format)).toBe(image);
 	});
+
+	it('preserves non-HTTP URLs with a scheme', () => {
+		const image = 'data:image/svg+xml,%3Csvg%3E';
+		const format = fakeLoadedStoryFormat({}, {image});
+
+		expect(formatImageUrl(format)).toBe(image);
+	});
 });
 
 describe('formatWithId', () => {

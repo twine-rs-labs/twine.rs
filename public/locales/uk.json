@@ -119,9 +119,10 @@
 		},
 		"storyCard": {
 			"lastUpdated": "Дата редагування: {{date}}",
-			"passageCount": "1 параграф",
-			"passageCount_1": "{{count}} параграфи",
-			"passageCount_2": "{{count}} параграфів"
+			"passageCount_one": "1 параграф",
+			"passageCount_few": "{{count}} параграфи",
+			"passageCount_many": "{{count}} параграфів",
+			"passageCount_other": "{{count}} параграфів"
 		},
 		"storyFormatItem": {
 			"author": "Автор: {{author}}",
@@ -138,16 +139,20 @@
 			"useProofingFormat": "Використовувати як формат для вичитки"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "Завантажується формат оповідання...",
-			"loadingCount_1": "Завантажуються {{loadingCount}} формати оповідання...",
-			"loadingCount_2": "Завантажується {{loadingCount}} форматів оповідання..."
+			"loadingCount_one": "Завантажується формат оповідання...",
+			"loadingCount_few": "Завантажуються {{loadingCount}} формати оповідання...",
+			"loadingCount_many": "Завантажується {{loadingCount}} форматів оповідання...",
+			"loadingCount_other": "Завантажується {{loadingCount}} форматів оповідання..."
 		},
 		"tagCardButton": {
 			"alreadyAdded": "Така мітка вже існує.",
 			"addLabel": "Додати мітку",
 			"invalidName": "Введіть коректну назву мітки.",
 			"tagNameLabel": "Назва мітки",
-			"tagsWithCount_plural": "Мітки ({{count}})"
+			"tagsWithCount_one": "Мітки ({{count}})",
+			"tagsWithCount_few": "Мітки ({{count}})",
+			"tagsWithCount_many": "Мітки ({{count}})",
+			"tagsWithCount_other": "Мітки ({{count}})"
 		},
 		"tagEditor": {
 			"alreadyExists": "Мітка з такою назвою вже існує."
@@ -262,9 +267,10 @@
 			"find": "Знайти",
 			"includePassageNames": "Включати назви параграфів",
 			"matchCase": "Співпадіння за регістром",
-			"matchCount": "Знайдено {{count}} параграф",
-			"matchCount_1": "Знайдено {{count}} параграфи",
-			"matchCount_2": "Знайдено {{count}} параграфів",
+			"matchCount_one": "Знайдено {{count}} параграф",
+			"matchCount_few": "Знайдено {{count}} параграфи",
+			"matchCount_many": "Знайдено {{count}} параграфів",
+			"matchCount_other": "Знайдено {{count}} параграфів",
 			"noMatches": "Немає підходящих параграфів",
 			"replaceAll": "Замінити у всіх параграфах",
 			"replaceWith": "Замінити на",
@@ -359,14 +365,16 @@
 		"storyList": {
 			"library": "Бібліотека",
 			"noStories": "Зараз в Twine немає оповідань. Ви можете створити нове оповідання або імпортувати вже існуюче з файлу.",
-			"taggedTitleCount": "1 оповідання з мітками",
-			"taggedTitleCount_0": "Немає оповідань з мітками",
-			"taggedTitleCount_1": "{{count}} оповідання з мітками",
-			"taggedTitleCount_2": "{{count}} оповідань з мітками",
-			"titleCount": "1 оповідання",
-			"titleCount_0": "Немає оповідань",
-			"titleCount_1": "{{count}} оповідання",
-			"titleCount_2": "{{count}} оповідань",
+			"taggedTitleCount_zero": "Немає оповідань з мітками",
+			"taggedTitleCount_one": "1 оповідання з мітками",
+			"taggedTitleCount_few": "{{count}} оповідання з мітками",
+			"taggedTitleCount_many": "{{count}} оповідань з мітками",
+			"taggedTitleCount_other": "{{count}} оповідань з мітками",
+			"titleCount_zero": "Немає оповідань",
+			"titleCount_one": "1 оповідання",
+			"titleCount_few": "{{count}} оповідання",
+			"titleCount_many": "{{count}} оповідань",
+			"titleCount_other": "{{count}} оповідань",
 			"titleGeneric": "Оповідання",
 			"toolbar": {
 				"archive": "Архів",

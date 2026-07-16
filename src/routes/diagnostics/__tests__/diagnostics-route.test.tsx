@@ -1,7 +1,6 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
-import {createMemoryHistory} from 'history';
 import * as React from 'react';
-import {MemoryRouter, Route, Router} from 'react-router-dom';
+import {MemoryRouter} from 'react-router';
 import {
 	replaceKnownAssetInventoryForStory,
 	type CoreAssetInventoryEntry
@@ -10,7 +9,9 @@ import {
 	FakeStateProvider,
 	fakePassage,
 	fakeStory,
-	StoryInspector
+	LocationInspector,
+	StoryInspector,
+	TestRoute
 } from '../../../test-util';
 import {DiagnosticsRoute} from '../diagnostics-route';
 
@@ -54,10 +55,10 @@ function renderComponent() {
 	const result = render(
 		<FakeStateProvider stories={[story]}>
 			<MemoryRouter initialEntries={[`/stories/${story.id}/diagnostics`]}>
-				<Route path="/stories/:storyId/diagnostics">
+				<TestRoute path="/stories/:storyId/diagnostics">
 					<DiagnosticsRoute />
 					<StoryInspector id={story.id} />
-				</Route>
+				</TestRoute>
 			</MemoryRouter>
 		</FakeStateProvider>
 	);
@@ -65,28 +66,26 @@ function renderComponent() {
 	return {result, story};
 }
 
-function renderComponentWithHistory(
+function renderComponentWithLocation(
 	configure?: (story: ReturnType<typeof diagnosticStory>['story']) => void
 ) {
 	const {story} = diagnosticStory();
 
 	configure?.(story);
 
-	const history = createMemoryHistory({
-		initialEntries: [`/stories/${story.id}/diagnostics`]
-	});
 	const result = render(
 		<FakeStateProvider stories={[story]}>
-			<Router history={history}>
-				<Route path="/stories/:storyId/diagnostics">
+			<MemoryRouter initialEntries={[`/stories/${story.id}/diagnostics`]}>
+				<TestRoute path="/stories/:storyId/diagnostics">
 					<DiagnosticsRoute />
 					<StoryInspector id={story.id} />
-				</Route>
-			</Router>
+				</TestRoute>
+				<LocationInspector />
+			</MemoryRouter>
 		</FakeStateProvider>
 	);
 
-	return {history, result, story};
+	return {result, story};
 }
 
 function renderCleanComponent() {
@@ -112,9 +111,9 @@ function renderCleanComponent() {
 	const result = render(
 		<FakeStateProvider stories={[story]}>
 			<MemoryRouter initialEntries={[`/stories/${story.id}/diagnostics`]}>
-				<Route path="/stories/:storyId/diagnostics">
+				<TestRoute path="/stories/:storyId/diagnostics">
 					<DiagnosticsRoute />
-				</Route>
+				</TestRoute>
 			</MemoryRouter>
 		</FakeStateProvider>
 	);
@@ -299,7 +298,7 @@ describe('<DiagnosticsRoute>', () => {
 	});
 
 	it('reveals stylesheet diagnostics with a source target instead of a passage fallback', async () => {
-		const {history, story} = renderComponentWithHistory(story => {
+		const {story} = renderComponentWithLocation(story => {
 			story.id = 'stylesheet-diagnostic-story';
 			story.passages = story.passages.map(passage => ({
 				...passage,
@@ -318,9 +317,15 @@ describe('<DiagnosticsRoute>', () => {
 
 		fireEvent.click(screen.getByRole('button', {name: 'Reveal Source'}));
 
-		const query = new URLSearchParams(history.location.search);
-
-		expect(history.location.pathname).toBe(`/stories/${story.id}`);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${story.id}`
+			)
+		);
+		const query = new URLSearchParams(
+			screen.getByTestId('location').getAttribute('data-search') ?? ''
+		);
 		expect(query.get('mode')).toBe('text');
 		expect(query.get('source')).toBe('stylesheet');
 		expect(query.get('passage')).toBeNull();

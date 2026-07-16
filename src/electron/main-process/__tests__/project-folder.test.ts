@@ -1,5 +1,6 @@
 import {dialog} from 'electron';
 import {createHash} from 'crypto';
+import {FSWatcher, watch} from 'fs';
 import {
 	copy,
 	mkdtemp,
@@ -60,6 +61,7 @@ import {
 
 jest.mock('electron');
 jest.mock('extract-zip', () => jest.fn());
+jest.mock('fs', () => ({...jest.requireActual('fs'), watch: jest.fn()}));
 jest.mock('fs-extra');
 jest.mock('../native', () => ({
 	beginNativeProjectFolderHydration: jest.fn(),
@@ -94,6 +96,7 @@ describe('project-folder native bridge', () => {
 	const removeMock = remove as jest.Mock;
 	const showOpenDialogMock = dialog.showOpenDialog as jest.Mock;
 	const statMock = stat as jest.Mock;
+	const watchMock = watch as jest.Mock;
 	const writeFileMock = writeFile as jest.Mock;
 	const diffNativeProjectFileManifestMock =
 		diffNativeProjectFileManifest as jest.Mock;
@@ -153,6 +156,9 @@ describe('project-folder native bridge', () => {
 			mtimeMs: 1,
 			size: 0
 		}));
+		watchMock.mockImplementation(
+			jest.requireActual<typeof import('fs')>('fs').watch
+		);
 	});
 
 	afterEach(() => {
@@ -1841,6 +1847,75 @@ describe('project-folder native bridge', () => {
 				]
 			})
 		);
+	});
+
+	it('cancels a stopped pending start without installing stale session resources', async () => {
+		const rootPath = '/native/project.twine.rs';
+		let resolveBaseline!: (files: []) => void;
+		const delayedBaseline = new Promise<[]>(resolve => {
+			resolveBaseline = resolve;
+		});
+		const watcher = {close: jest.fn()};
+		const setIntervalSpy = jest.spyOn(global, 'setInterval');
+		const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
+
+		watchMock.mockReturnValue(watcher as unknown as FSWatcher);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce(delayedBaseline)
+			.mockReturnValue([]);
+
+		try {
+			const staleStart = startProjectSession(rootPath, jest.fn(), ['stale']);
+
+			for (
+				let attempts = 0;
+				attempts < 10 && nativeProjectFileManifestMock.mock.calls.length === 0;
+				attempts++
+			) {
+				await Promise.resolve();
+			}
+			expect(nativeProjectFileManifestMock).toHaveBeenCalledTimes(1);
+
+			stopProjectSession(rootPath);
+			const liveStart = await startProjectSession(rootPath, jest.fn(), [
+				'live'
+			]);
+
+			expect(liveStart.storyIds).toEqual(['live']);
+			expect(watchMock).toHaveBeenCalledTimes(1);
+			expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+			expect(clearIntervalSpy).not.toHaveBeenCalled();
+			expect(watcher.close).not.toHaveBeenCalled();
+
+			resolveBaseline([]);
+			await expect(staleStart).rejects.toMatchObject({
+				code: 'PROJECT_SESSION_START_CANCELED'
+			});
+			expect(watchMock).toHaveBeenCalledTimes(1);
+			expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+
+			await expect(
+				startProjectSession(rootPath, undefined, ['live'])
+			).resolves.toEqual(
+				expect.objectContaining({
+					generation: liveStart.generation,
+					storyIds: ['live']
+				})
+			);
+			expect(watchMock).toHaveBeenCalledTimes(1);
+			expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+
+			const interval = setIntervalSpy.mock.results[0].value;
+
+			stopProjectSession(rootPath);
+			expect(watcher.close).toHaveBeenCalledTimes(1);
+			expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
+		} finally {
+			stopProjectSession(rootPath);
+			setIntervalSpy.mockRestore();
+			clearIntervalSpy.mockRestore();
+		}
 	});
 
 	it('emits a generation-bound passage delta without loading the full project', async () => {

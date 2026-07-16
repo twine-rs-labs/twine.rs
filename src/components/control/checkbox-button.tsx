@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {IconSquare, IconSquareCheck} from '@tabler/icons';
+import {IconSquare, IconSquareCheck} from '@tabler/icons-react';
 import {IconButton, IconButtonProps} from './icon-button';
 
 export interface CheckboxButtonProps extends Omit<

@@ -77,7 +77,11 @@ const FormatLogo: React.FC<{format: StoryFormat; className?: string}> = ({
 
 	if (format.loadState !== 'loaded') {
 		return (
-			<div className={classes} data-format-state="loading" title="Loading manifest">
+			<div
+				className={classes}
+				data-format-state="loading"
+				title="Loading manifest"
+			>
 				<TablerIcon icon="loader-2" />
 			</div>
 		);

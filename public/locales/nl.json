@@ -112,8 +112,8 @@
 		},
 		"storyCard": {
 			"lastUpdated": "Voor het laatst bewerkt op {{date}}",
-			"passageCount": "1 passage",
-			"passageCount_plural": "{{count}} passages"
+			"passageCount_one": "1 passage",
+			"passageCount_other": "{{count}} passages"
 		},
 		"storyFormatItem": {
 			"author": "door {{author}}",
@@ -130,8 +130,8 @@
 			"useProofingFormat": "Gebruik een proeflees formaat"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "Laden van 1 verhaal formaat...",
-			"loadingCount_plural": "Laden van {{loadingCount}} verhaal formaten..."
+			"loadingCount_one": "Laden van 1 verhaal formaat...",
+			"loadingCount_other": "Laden van {{loadingCount}} verhaal formaten..."
 		},
 		"tagEditor": {
 			"alreadyExists": "Een label met deze naam bestaat al."
@@ -240,8 +240,8 @@
 			"find": "Zoek",
 			"includePassageNames": "Passagenamen opnemen",
 			"matchCase": "Match Case",
-			"matchCount": "{{count}} Bijpassende Passage",
-			"matchCount_plural": "{{count}} Bijpassende Passage",
+			"matchCount_one": "{{count}} Bijpassende Passage",
+			"matchCount_other": "{{count}} Bijpassende Passage",
 			"noMatches": "Geen Bijpassende Passage",
 			"replaceAll": "Vervang In Alle Passages",
 			"replaceWith": "Vervang Met",
@@ -318,12 +318,12 @@
 		"storyList": {
 			"library": "Bibliotheek",
 			"noStories": "Er zijn momenteel geen verhalen opgeslagen in Twine. Om aan de slag te gaan, kunt u een nieuw verhaal maken of een bestaand verhaal uit een bestand importeren.",
-			"taggedTitleCount": "1 Getagd Verhaal",
-			"taggedTitleCount_0": "Geen Getagden Verhalen",
-			"taggedTitleCount_plural": "{{count}} Getagden Verhalen",
-			"titleCount": "1 Verhaal",
-			"titleCount_0": "Geen Verhalen",
-			"titleCount_plural": "{{count}} Verhalen",
+			"taggedTitleCount_zero": "Geen Getagden Verhalen",
+			"taggedTitleCount_one": "1 Getagd Verhaal",
+			"taggedTitleCount_other": "{{count}} Getagden Verhalen",
+			"titleCount_zero": "Geen Verhalen",
+			"titleCount_one": "1 Verhaal",
+			"titleCount_other": "{{count}} Verhalen",
 			"titleGeneric": "Verhalen",
 			"toolbar": {
 				"archive": "Archief",

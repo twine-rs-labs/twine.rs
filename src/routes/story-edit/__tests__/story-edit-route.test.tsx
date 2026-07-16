@@ -1,40 +1,38 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
-import {createMemoryHistory} from 'history';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {Helmet} from 'react-helmet';
-import {Route, Router} from 'react-router-dom';
+import {MemoryRouter, useNavigate} from 'react-router';
 import {AppShell} from '../../../components/app-shell';
-import {Story, useStoriesContext} from '../../../store/stories';
+import {Story} from '../../../store/stories';
 import {
 	fakeLoadedStoryFormat,
 	FakeStateProvider,
 	FakeStateProviderProps,
 	fakeStory,
-	StoryInspector
+	LocationInspector,
+	StoryInspector,
+	TestRoute
 } from '../../../test-util';
 import {InnerStoryEditRoute} from '../story-edit-route';
 
-const TestStoryEditRoute: React.FC<{
-	initialEntry?: (story: Story) => string;
-}> = ({initialEntry}) => {
-	const {stories} = useStoriesContext();
+const HistoryBackButton: React.FC = () => {
+	const navigate = useNavigate();
 
+	return <button onClick={() => navigate(-1)}>History back</button>;
+};
+
+const TestStoryEditRoute: React.FC = () => {
 	return (
-		<Router
-			history={createMemoryHistory({
-				initialEntries: [
-					initialEntry?.(stories[0]) ?? `/stories/${stories[0].id}`
-				]
-			})}
-		>
+		<>
 			<AppShell>
-				<Route path="/stories/:storyId">
+				<TestRoute path="/stories/:storyId">
 					<InnerStoryEditRoute />
 					<StoryInspector />
-				</Route>
+				</TestRoute>
 			</AppShell>
-		</Router>
+			<LocationInspector />
+			<HistoryBackButton />
+		</>
 	);
 };
 
@@ -46,7 +44,7 @@ describe('<StoryEditRoute>', () => {
 	async function renderComponent(
 		story: Story,
 		contexts?: FakeStateProviderProps,
-		initialEntry?: (story: Story) => string
+		initialEntry?: (story: Story) => string | string[]
 	) {
 		const format = fakeLoadedStoryFormat();
 
@@ -55,14 +53,21 @@ describe('<StoryEditRoute>', () => {
 
 		jest.useFakeTimers();
 
+		const requestedEntry = initialEntry?.(story) ?? `/stories/${story.id}`;
 		const result = render(
-			<FakeStateProvider
-				{...contexts}
-				stories={[story]}
-				storyFormats={[format]}
+			<MemoryRouter
+				initialEntries={
+					Array.isArray(requestedEntry) ? requestedEntry : [requestedEntry]
+				}
 			>
-				<TestStoryEditRoute initialEntry={initialEntry} />
-			</FakeStateProvider>
+				<FakeStateProvider
+					{...contexts}
+					stories={[story]}
+					storyFormats={[format]}
+				>
+					<TestStoryEditRoute />
+				</FakeStateProvider>
+			</MemoryRouter>
 		);
 
 		act(() => {
@@ -80,16 +85,31 @@ describe('<StoryEditRoute>', () => {
 		const story = fakeStory();
 
 		await renderComponent(story);
-		expect(Helmet.peek().title).toBe(`${story.name} - Twine RS`);
+		expect(document.title).toBe(`${story.name} - Twine RS`);
 	});
 
-	it('redirects to the story list if the story ID no longer exists', async () => {
-		await renderComponent(fakeStory(), undefined, () => '/stories/missing');
+	it('replaces the missing story route with the story list route', async () => {
+		await renderComponent(fakeStory(), undefined, () => [
+			'/before',
+			'/stories/missing'
+		]);
 
 		await waitFor(() =>
 			expect(
 				screen.queryByTestId('story-inspector-default')
 			).not.toBeInTheDocument()
+		);
+		expect(screen.getByTestId('location')).toHaveAttribute(
+			'data-pathname',
+			'/'
+		);
+
+		fireEvent.click(screen.getByRole('button', {name: 'History back'}));
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/before'
+			)
 		);
 	});
 

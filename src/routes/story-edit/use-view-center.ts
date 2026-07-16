@@ -6,7 +6,7 @@ import {Point} from '../../util/geometry';
 
 export function useViewCenter(
 	story: Story,
-	elementRef: React.RefObject<HTMLElement>
+	elementRef: React.RefObject<HTMLElement | null>
 ) {
 	const {dialogs} = useDialogsContext();
 	const {prefs} = usePrefsContext();

@@ -1,13 +1,13 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
-import {createMemoryHistory} from 'history';
 import * as React from 'react';
-import {Router} from 'react-router-dom';
+import {MemoryRouter} from 'react-router';
 import {useStoriesContext} from '../../store/stories';
 import {
 	FakeStateProvider,
 	FakeStateProviderProps,
 	fakeStory,
+	LocationInspector,
 	StoryInspector
 } from '../../test-util';
 import {StorySearchDialog, StorySearchDialogProps} from '../story-search';
@@ -46,17 +46,17 @@ describe('<StorySearchDialog>', () => {
 		props?: Partial<StorySearchDialogProps>,
 		context?: Partial<FakeStateProviderProps>
 	) {
-		const history = createMemoryHistory();
 		const result = render(
 			<FakeStateProvider {...context}>
-				<Router history={history}>
+				<MemoryRouter>
 					<StoryInspector />
 					<TestStorySearchDialog {...props} />
-				</Router>
+					<LocationInspector />
+				</MemoryRouter>
 			</FakeStateProvider>
 		);
 
-		return {...result, history};
+		return result;
 	}
 
 	// Needed because the dialog dispatches actions on unmount.
@@ -331,14 +331,20 @@ describe('<StorySearchDialog>', () => {
 
 		story.passages[0].text = '';
 		story.script = 'const mockFind = true;';
-		const {history} = renderComponent({find: 'mockFind'}, {stories: [story]});
+		renderComponent({find: 'mockFind'}, {stories: [story]});
 		fireEvent.click(
 			await screen.findByRole('button', {name: /Story JavaScript/})
 		);
 
-		const query = new URLSearchParams(history.location.search);
-
-		expect(history.location.pathname).toBe(`/stories/${story.id}`);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${story.id}`
+			)
+		);
+		const query = new URLSearchParams(
+			screen.getByTestId('location').getAttribute('data-search') ?? ''
+		);
 		expect(query.get('source')).toBe('script');
 		expect(query.get('q')).toBe('mockFind');
 		expect(Number(query.get('offset'))).toBe(story.script.indexOf('mockFind'));

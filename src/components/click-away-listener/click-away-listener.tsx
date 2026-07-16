@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 export interface ClickAwayListenerProps {
+	children?: React.ReactNode;
 	ignoreSelector?: string;
 	onClickAway: () => void;
 }

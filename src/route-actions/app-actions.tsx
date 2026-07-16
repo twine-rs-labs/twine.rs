@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {useHistory} from 'react-router-dom';
+import {useLocation, useNavigate} from 'react-router';
 import {IconButton} from '../components/design-system';
 import {
 	AboutTwineDialog,
@@ -15,22 +15,23 @@ export interface AppActionsProps {
 export const AppActions: React.FC<AppActionsProps> = props => {
 	const {dispatch: contextDispatch} = useDialogsContext();
 	const dispatch = props.dialogsDispatch ?? contextDispatch;
-	const history = useHistory();
+	const location = useLocation();
+	const navigate = useNavigate();
 	const {t} = useTranslation();
 
 	return (
 		<div className="route-action-group">
 			<IconButton
-				disabled={history.location.pathname === '/settings'}
+				disabled={location.pathname === '/settings'}
 				icon="settings"
 				label={t('routeActions.app.preferences')}
-				onClick={() => history.push('/settings')}
+				onClick={() => navigate('/settings')}
 			/>
 			<IconButton
-				disabled={history.location.pathname === '/formats'}
+				disabled={location.pathname === '/formats'}
 				icon="file-code"
 				label={t('routeActions.app.storyFormats')}
-				onClick={() => history.push('/formats')}
+				onClick={() => navigate('/formats')}
 			/>
 			<IconButton
 				icon="award"

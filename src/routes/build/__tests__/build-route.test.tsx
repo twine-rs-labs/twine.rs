@@ -1,6 +1,6 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
-import {MemoryRouter, Route} from 'react-router-dom';
+import {MemoryRouter} from 'react-router';
 import {
 	replaceKnownAssetInventoryForStory,
 	type CoreAssetInventoryEntry
@@ -8,7 +8,8 @@ import {
 import {
 	fakeLoadedStoryFormat,
 	FakeStateProvider,
-	fakeStory
+	fakeStory,
+	TestRoute
 } from '../../../test-util';
 import {saveFile} from '../../../util/save-file';
 import {BuildRoute} from '../build-route';
@@ -29,7 +30,10 @@ jest.mock('../../../util/save-file', () => ({
 	saveFile: jest.fn()
 }));
 
-function exportableAsset(path: string, sizeBytes: number): CoreAssetInventoryEntry {
+function exportableAsset(
+	path: string,
+	sizeBytes: number
+): CoreAssetInventoryEntry {
 	return {
 		durationMs: null,
 		exists: true,
@@ -92,9 +96,9 @@ describe('<BuildRoute>', () => {
 				storyFormats={[format]}
 			>
 				<MemoryRouter initialEntries={[`/stories/${story.id}/build`]}>
-					<Route path="/stories/:storyId/build">
+					<TestRoute path="/stories/:storyId/build">
 						<BuildRoute />
-					</Route>
+					</TestRoute>
 				</MemoryRouter>
 			</FakeStateProvider>
 		);

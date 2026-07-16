@@ -19,7 +19,7 @@
 }
 
 .color-select > label > .control::after {
-	background: url('~@tabler/icons/icons/chevron-down.svg');
+	background: url('./chevron-down.svg');
 	background-position: center;
 	content: '';
 	opacity: 0.25; /* trying to make it match border */

@@ -2,13 +2,7 @@ import {Color} from '../../util/color';
 import {StoryFormat} from '../story-formats';
 
 export type GraphCardSizePreference =
-	| 'large'
-	| 'medium'
-	| 'narrow'
-	| 'small'
-	| 'tall'
-	| 'twine'
-	| 'wide';
+	'large' | 'medium' | 'narrow' | 'small' | 'tall' | 'twine' | 'wide';
 
 export type StoryEditModePreference = 'auto' | 'graph' | 'split' | 'text';
 
@@ -19,11 +13,7 @@ export type SharingModePreference = 'off' | 'local-file' | 'published-url';
 export type IntegrationPreference = 'manual' | 'off';
 
 export type CodeEditorThemePreference =
-	| 'twine'
-	| 'one-dark'
-	| 'solarized-light'
-	| 'solarized-dark'
-	| 'high-contrast';
+	'twine' | 'one-dark' | 'solarized-light' | 'solarized-dark' | 'high-contrast';
 
 export type PrefsAction =
 	| {type: 'init'; state: Partial<PrefsState>}

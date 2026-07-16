@@ -1,9 +1,12 @@
-import {fireEvent, render, screen} from '@testing-library/react';
+import {act, fireEvent, render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
+import {MemoryRouter} from 'react-router';
 import {useStoriesContext} from '../../../../store/stories';
 import {FakeStateProvider, FakeStateProviderProps} from '../../../../test-util';
 import {FindReplaceButton} from '../find-replace-button';
+
+jest.mock('../../../../components/control/code-area/code-area');
 
 const TestFindReplaceButton: React.FC = () => {
 	const {stories} = useStoriesContext();
@@ -12,15 +15,19 @@ const TestFindReplaceButton: React.FC = () => {
 };
 
 describe('<FindReplaceButton>', () => {
+	afterEach(async () => await act(() => Promise.resolve()));
+
 	function renderComponent(contexts?: FakeStateProviderProps) {
 		return render(
-			<FakeStateProvider {...contexts}>
-				<TestFindReplaceButton />
-			</FakeStateProvider>
+			<MemoryRouter>
+				<FakeStateProvider {...contexts}>
+					<TestFindReplaceButton />
+				</FakeStateProvider>
+			</MemoryRouter>
 		);
 	}
 
-	it('opens the find/replace dialog when clicked', () => {
+	it('opens the find/replace dialog when clicked', async () => {
 		renderComponent();
 		fireEvent.click(
 			screen.getByRole('button', {
@@ -28,6 +35,13 @@ describe('<FindReplaceButton>', () => {
 			})
 		);
 		expect(screen.getByText('dialogs.storySearch.title')).toBeInTheDocument();
+		fireEvent.change(
+			screen.getByRole('textbox', {name: 'dialogs.storySearch.find'}),
+			{target: {value: 'needle-that-is-not-present'}}
+		);
+		expect(
+			await screen.findByText('dialogs.storySearch.noMatches')
+		).toBeInTheDocument();
 	});
 
 	it('is accessible', async () => {

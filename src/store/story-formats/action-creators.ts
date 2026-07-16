@@ -1,10 +1,11 @@
-import {Thunk} from 'react-hook-thunk-reducer';
+import {Thunk} from '../../util/use-thunk-reducer';
 import {fetchStoryFormatProperties} from '../../util/story-format/fetch-properties';
 import {
 	StoryFormat,
 	StoryFormatProperties,
 	StoryFormatsAction,
-	StoryFormatsDispatch
+	StoryFormatsDispatch,
+	StoryFormatsState
 } from './story-formats.types';
 
 const pendingFormatLoads = new Map<
@@ -71,7 +72,6 @@ async function loadFormatThunk(
 				try {
 					const hydrateResult: Partial<StoryFormatProperties> = {};
 
-					// eslint-disable-next-line no-new-func
 					const hydrateFunc = new Function(properties.hydrate);
 
 					hydrateFunc.call(hydrateResult);
@@ -112,7 +112,7 @@ async function loadFormatThunk(
  */
 export function loadAllFormatProperties(
 	formats: StoryFormat[]
-): Thunk<StoryFormat[], StoryFormatsAction> {
+): Thunk<StoryFormatsState, StoryFormatsAction, void | Promise<void>> {
 	const toLoad = formats.filter(
 		f => f.loadState !== 'loaded' && f.loadState !== 'loading'
 	);
@@ -133,7 +133,13 @@ export function loadAllFormatProperties(
  * try again. This returns a thunk which in turns returns a promise resolving to
  * the format properties, which can be useful if you need them immediately.
  */
-export function loadFormatProperties(format: StoryFormat) {
+export function loadFormatProperties(
+	format: StoryFormat
+): Thunk<
+	StoryFormatsState,
+	StoryFormatsAction,
+	StoryFormatProperties | Promise<StoryFormatProperties | undefined>
+> {
 	if (format.loadState === 'loaded') {
 		return () => format.properties;
 	}

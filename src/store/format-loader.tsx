@@ -10,6 +10,7 @@ import {
 
 export interface FormatLoaderProps {
 	block?: boolean;
+	children?: React.ReactNode;
 }
 
 export const FormatLoader: React.FC<FormatLoaderProps> = ({

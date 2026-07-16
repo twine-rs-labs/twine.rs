@@ -32,6 +32,9 @@ export const DialogStack: React.FC<DialogStackProps> = ({
 	childKeys
 }) => {
 	const containerRef = React.useRef<HTMLDivElement>(null);
+	const transitionRefs = React.useRef(
+		new Map<string, React.RefObject<HTMLDivElement | null>>()
+	);
 	const [expanded, setExpanded] = React.useState(false);
 
 	// We need to reverse the order of children for rendering so that tab order is
@@ -51,10 +54,19 @@ export const DialogStack: React.FC<DialogStackProps> = ({
 		() => [...childKeys].reverse(),
 		[childKeys]
 	);
+	React.useEffect(() => {
+		for (const key of transitionRefs.current.keys()) {
+			if (!childKeysInRenderOrder.includes(key)) {
+				transitionRefs.current.delete(key);
+			}
+		}
+	}, [childKeysInRenderOrder]);
 
 	// Remember the last change in childKeys.
 
-	const lastChildKeysInRenderOrder = React.useRef<string[]>();
+	const lastChildKeysInRenderOrder = React.useRef<string[] | undefined>(
+		undefined
+	);
 
 	React.useEffect(() => {
 		lastChildKeysInRenderOrder.current = childKeysInRenderOrder;
@@ -108,6 +120,13 @@ export const DialogStack: React.FC<DialogStackProps> = ({
 			)}
 			<TransitionGroup component={null}>
 				{childrenInRenderOrder.map((child, index) => {
+					const childKey = childKeysInRenderOrder[index];
+					let nodeRef = transitionRefs.current.get(childKey);
+
+					if (!nodeRef) {
+						nodeRef = React.createRef<HTMLDivElement>();
+						transitionRefs.current.set(childKey, nodeRef);
+					}
 					// This is the unexpanded top position of the dialog card. If the card
 					// is not overflowed, then it's moved down to an even multiple of
 					// headerHeight. If the card is overflowed, then it is moved down
@@ -162,8 +181,9 @@ export const DialogStack: React.FC<DialogStackProps> = ({
 					return (
 						<CSSTransition
 							classNames="pop"
+							nodeRef={nodeRef}
 							timeout={200}
-							key={childKeysInRenderOrder[index]}
+							key={childKey}
 						>
 							<div
 								className={classnames('dialog-height-setter', {
@@ -171,6 +191,7 @@ export const DialogStack: React.FC<DialogStackProps> = ({
 										foregroundIsRising &&
 										index === childrenInRenderOrder.length - 1
 								})}
+								ref={nodeRef}
 								style={{height}}
 								{...focusHandlers}
 							>

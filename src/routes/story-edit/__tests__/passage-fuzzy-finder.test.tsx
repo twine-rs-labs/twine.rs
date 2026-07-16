@@ -38,9 +38,9 @@ describe('PassageFuzzyFinder', () => {
 			const onClose = jest.fn();
 
 			renderComponent({onClose});
-			expect(onClose).not.toBeCalled();
+			expect(onClose).not.toHaveBeenCalled();
 			fireEvent.click(screen.getByRole('button', {name: 'Close'}));
-			expect(onClose).toBeCalledTimes(1);
+			expect(onClose).toHaveBeenCalledTimes(1);
 		});
 
 		it('updates results based on what the user enters', async () => {
@@ -65,7 +65,7 @@ describe('PassageFuzzyFinder', () => {
 				story.passages[0].text = 'text';
 				renderComponent({setCenter}, story);
 				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
-				expect(setCenter).not.toBeCalled();
+				expect(setCenter).not.toHaveBeenCalled();
 				fireEvent.click(
 					await screen.findByRole('button', {name: 'a name a name'})
 				);
@@ -86,7 +86,7 @@ describe('PassageFuzzyFinder', () => {
 					await screen.findByRole('button', {name: 'a name a name'})
 				);
 				expect(onRevealPassageInGraph).toHaveBeenCalledWith(story.passages[0]);
-				expect(setCenter).not.toBeCalled();
+				expect(setCenter).not.toHaveBeenCalled();
 			});
 
 			it('calls the onClose prop', async () => {
@@ -98,11 +98,11 @@ describe('PassageFuzzyFinder', () => {
 				story.passages[0].text = 'text';
 				renderComponent({onClose}, story);
 				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
-				expect(onClose).not.toBeCalled();
+				expect(onClose).not.toHaveBeenCalled();
 				fireEvent.click(
 					await screen.findByRole('button', {name: 'a name a name'})
 				);
-				expect(onClose).toBeCalledTimes(1);
+				expect(onClose).toHaveBeenCalledTimes(1);
 			});
 
 			it('tests a result from the search row action', async () => {

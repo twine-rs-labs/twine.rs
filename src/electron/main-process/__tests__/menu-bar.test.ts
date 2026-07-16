@@ -103,7 +103,7 @@ describe('initMenuBar', () => {
 
 			expect(item).not.toBeUndefined();
 			item.click();
-			expect(chooseStoryDirectoryPathMock).toBeCalledTimes(1);
+			expect(chooseStoryDirectoryPathMock).toHaveBeenCalledTimes(1);
 		});
 
 		it('adds a Reset Story Library Folder menu item to the application menu', () => {
@@ -113,7 +113,7 @@ describe('initMenuBar', () => {
 
 			expect(item).not.toBeUndefined();
 			item.click();
-			expect(resetStoryDirectoryPathMock).toBeCalledTimes(1);
+			expect(resetStoryDirectoryPathMock).toHaveBeenCalledTimes(1);
 		});
 
 		it('adds a Show Story Library menu item to the View menu', () => {
@@ -123,7 +123,7 @@ describe('initMenuBar', () => {
 
 			expect(item).not.toBeUndefined();
 			item.click();
-			expect(revealStoryDirectoryMock).toBeCalledTimes(1);
+			expect(revealStoryDirectoryMock).toHaveBeenCalledTimes(1);
 		});
 
 		it('creates a Window menu with standard menu items', () => {
@@ -165,7 +165,7 @@ describe('initMenuBar', () => {
 
 				expect(item).not.toBeUndefined();
 				item.click();
-				expect(openDevToolsMock).toBeCalled();
+				expect(openDevToolsMock).toHaveBeenCalled();
 			});
 
 			describe('its Disable Hardware Acceleration menu item', () => {
@@ -182,7 +182,7 @@ describe('initMenuBar', () => {
 
 					expect(item).not.toBeUndefined();
 					item.click();
-					expect(toggleHardwareAccelerationMock).toBeCalledTimes(1);
+					expect(toggleHardwareAccelerationMock).toHaveBeenCalledTimes(1);
 				});
 
 				it('is unchecked if the pref is falsy', () => {
@@ -281,7 +281,7 @@ describe('initMenuBar', () => {
 
 			expect(item).not.toBeUndefined();
 			item.click();
-			expect(chooseStoryDirectoryPathMock).toBeCalledTimes(1);
+			expect(chooseStoryDirectoryPathMock).toHaveBeenCalledTimes(1);
 		});
 
 		it('adds a Reset Story Library Folder menu item to the application menu', () => {
@@ -291,7 +291,7 @@ describe('initMenuBar', () => {
 
 			expect(item).not.toBeUndefined();
 			item.click();
-			expect(resetStoryDirectoryPathMock).toBeCalledTimes(1);
+			expect(resetStoryDirectoryPathMock).toHaveBeenCalledTimes(1);
 		});
 
 		it('adds a Show Story Library menu item to the View menu', () => {
@@ -301,7 +301,7 @@ describe('initMenuBar', () => {
 
 			expect(item).not.toBeUndefined();
 			item.click();
-			expect(revealStoryDirectoryMock).toBeCalledTimes(1);
+			expect(revealStoryDirectoryMock).toHaveBeenCalledTimes(1);
 		});
 
 		it('creates a Window menu with standard menu items', () => {
@@ -341,7 +341,7 @@ describe('initMenuBar', () => {
 
 				expect(item).not.toBeUndefined();
 				item.click();
-				expect(openDevToolsMock).toBeCalled();
+				expect(openDevToolsMock).toHaveBeenCalled();
 			});
 
 			describe('its Disable Hardware Acceleration menu item', () => {
@@ -358,7 +358,7 @@ describe('initMenuBar', () => {
 
 					expect(item).not.toBeUndefined();
 					item.click();
-					expect(toggleHardwareAccelerationMock).toBeCalledTimes(1);
+					expect(toggleHardwareAccelerationMock).toHaveBeenCalledTimes(1);
 				});
 
 				it('is unchecked if the pref is falsy', () => {

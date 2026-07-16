@@ -116,8 +116,8 @@
 		},
 		"storyCard": {
 			"lastUpdated": "Zuletzt bearbeitet am {{date}}",
-			"passageCount": "1 Abschnitt",
-			"passageCount_plural": "{{count}} Abschnitte"
+			"passageCount_one": "1 Abschnitt",
+			"passageCount_other": "{{count}} Abschnitte"
 		},
 		"storyFormatItem": {
 			"author": "von {{author}}",
@@ -134,8 +134,8 @@
 			"useProofingFormat": "Benutze Als Korrektur Format"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "Lade 1 Geschichtsformat...",
-			"loadingCount_plural": "Lade {{loadingCount}} Geschichtsformate..."
+			"loadingCount_one": "Lade 1 Geschichtsformat...",
+			"loadingCount_other": "Lade {{loadingCount}} Geschichtsformate..."
 		},
 		"tagEditor": {
 			"alreadyExists": "Ein Tag mit diesem Namen existiert bereits."
@@ -244,8 +244,8 @@
 			"find": "Suche",
 			"includePassageNames": "Namen der Abschnitte durchsuchen",
 			"matchCase": "Groß-/Kleinschreibung beachten",
-			"matchCount": "{{count}} Abschnitt stimmt überein",
-			"matchCount_plural": "{{count}} Abschnitte stimmen überein",
+			"matchCount_one": "{{count}} Abschnitt stimmt überein",
+			"matchCount_other": "{{count}} Abschnitte stimmen überein",
 			"noMatches": "Keine gefundenen Abschnitte",
 			"replaceAll": "Ersetze in allen Abschnitten",
 			"replaceWith": "Ersetzen mit",
@@ -340,12 +340,12 @@
 		"storyList": {
 			"library": "Bibliothek",
 			"noStories": "Es sind derzeit noch keine Geschichten in Twine gespeichert. Du kannst entweder eine neue Geschichte erstellen oder eine bestehende Geschichte importieren.",
-			"taggedTitleCount": "1 Geschichte mit Tags",
-			"taggedTitleCount_0": "Keine Geschichten mit Tags",
-			"taggedTitleCount_plural": "{{count}} Geschichten mit Tags",
-			"titleCount": "1 Geschichte",
-			"titleCount_0": "Keine Geschichten",
-			"titleCount_plural": "{{count}} Geschichten",
+			"taggedTitleCount_zero": "Keine Geschichten mit Tags",
+			"taggedTitleCount_one": "1 Geschichte mit Tags",
+			"taggedTitleCount_other": "{{count}} Geschichten mit Tags",
+			"titleCount_zero": "Keine Geschichten",
+			"titleCount_one": "1 Geschichte",
+			"titleCount_other": "{{count}} Geschichten",
 			"titleGeneric": "Geschichten",
 			"toolbar": {
 				"archive": "Archiv",

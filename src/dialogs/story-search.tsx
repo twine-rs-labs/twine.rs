@@ -1,7 +1,7 @@
 import * as React from 'react';
 import debounce from 'lodash/debounce';
 import {useTranslation} from 'react-i18next';
-import {useHistory} from 'react-router-dom';
+import {useNavigate} from 'react-router';
 import {DialogCard} from '../components/container/dialog-card';
 import {CodeArea} from '../components/control/code-area';
 import {Button, Checkbox} from '../components/design-system';
@@ -46,7 +46,7 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 		props;
 	const closingRef = React.useRef(false);
 	const {dispatch: dialogsDispatch} = useDialogsContext();
-	const history = useHistory();
+	const navigate = useNavigate();
 	const {dispatch, stories} = useStoriesContext();
 	const {t} = useTranslation();
 	const story = storyWithId(stories, storyId);
@@ -189,7 +189,7 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 		}
 
 		if (target) {
-			history.push(
+			navigate(
 				sourceTarget(story, {
 					line: hit.line,
 					offset: hit.start,

@@ -1,8 +1,8 @@
 import {app, dialog} from 'electron';
 import {copy, mkdirp, pathExists, readFile, stat, writeFile} from 'fs-extra';
 import {dirname, isAbsolute, join, relative, resolve} from 'path';
-import isAbsoluteUrl from 'is-absolute-url';
 import {fileUrlForPath} from '../../core/asset-paths';
+import {hasUrlScheme} from '../../util/has-url-scheme';
 import {loadJsonFile} from './json-file';
 import {extractStoryFormatProperties} from './story-format-source';
 
@@ -26,7 +26,9 @@ function managedFormatsDirectory() {
 }
 
 function sanitizeSegment(value: string) {
-	return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'format';
+	return (
+		value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'format'
+	);
 }
 
 /**
@@ -81,7 +83,7 @@ export async function addLocalStoryFormat(): Promise<
 	// Bring the format's icon along if it's a relative file, so the screen's
 	// <img> resolves it next to the copied format.js. Absolute URLs (http/data)
 	// are used as-is by the renderer and need no copying.
-	if (properties.image && !isAbsoluteUrl(properties.image)) {
+	if (properties.image && !hasUrlScheme(properties.image)) {
 		const imageSource = join(sourceDir, properties.image);
 		const imageTarget = join(targetDir, properties.image);
 		const within = relative(targetDir, imageTarget);

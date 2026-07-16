@@ -1,4 +1,4 @@
-import {IconCheck, IconX} from '@tabler/icons';
+import {IconCheck, IconX} from '@tabler/icons-react';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {ButtonBar} from '../container/button-bar';

@@ -152,8 +152,7 @@ export class WasmCoreWorkerClient {
 	private indexQueryGenerations = new Map<string, number>();
 	private lastGraphByStory = new Map<string, CacheEntry<CoreGraphProjection>>();
 	private lastReadModelDiagnostics:
-		| NonNullable<CoreBridgeMetric['readModel']>
-		| undefined;
+		NonNullable<CoreBridgeMetric['readModel']> | undefined;
 	private lastWasmMemoryBytes = 0;
 	private readModelCache = new Map<string, CacheEntry<unknown>>();
 	private readModelQueryGenerations = new Map<string, number>();

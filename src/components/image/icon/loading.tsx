@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {IconCircle} from '@tabler/icons';
+import {IconCircle} from '@tabler/icons-react';
 import './loading.css';
 
 export const IconLoading: React.FC = () => {

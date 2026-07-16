@@ -1,7 +1,13 @@
 import {toHaveNoViolations} from 'jest-axe';
 import {configure} from '@testing-library/dom';
+import {TextDecoder, TextEncoder} from 'node:util';
 import '@testing-library/jest-dom';
 import 'jest-canvas-mock';
+
+Object.defineProperties(globalThis, {
+	TextDecoder: {configurable: true, value: TextDecoder},
+	TextEncoder: {configurable: true, value: TextEncoder}
+});
 
 // Always mock these files so that Jest doesn't see import.meta.
 

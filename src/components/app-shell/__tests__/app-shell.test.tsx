@@ -1,6 +1,7 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
-import {MemoryRouter} from 'react-router-dom';
+import {MemoryRouter} from 'react-router';
+import {CoreProjectHostProvider} from '../../../core';
 import {publishStorySaveStatus} from '../../../store/persistence/save-status';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {markProjectStoryHydration} from '../../../store/project-hydration';
@@ -55,11 +56,13 @@ const MockRouteActions: React.FC = () => {
 function renderShell(story: Story, route = `/stories/${story.id}`) {
 	return render(
 		<StoriesContext.Provider value={{dispatch: jest.fn(), stories: [story]}}>
-			<MemoryRouter initialEntries={[route]}>
-				<AppShell>
-					<MockRouteActions />
-				</AppShell>
-			</MemoryRouter>
+			<CoreProjectHostProvider>
+				<MemoryRouter initialEntries={[route]}>
+					<AppShell>
+						<MockRouteActions />
+					</AppShell>
+				</MemoryRouter>
+			</CoreProjectHostProvider>
 		</StoriesContext.Provider>
 	);
 }
@@ -112,7 +115,7 @@ describe('AppShell', () => {
 		expect(screen.getByText('Dock Content')).toBeInTheDocument();
 		expect(screen.getByText('Opening')).toBeInTheDocument();
 		expect(screen.getByTitle('Open Opening')).toBeInTheDocument();
-		expect(screen.getByText('5 words')).toBeInTheDocument();
+		expect(await screen.findByText('5 words')).toBeInTheDocument();
 	});
 
 	it('shows shell story-opening progress while a file-backed story hydrates', () => {

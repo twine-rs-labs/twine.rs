@@ -1,6 +1,6 @@
 import * as React from 'react';
 import classNames from 'classnames';
-import {useHistory, useParams} from 'react-router-dom';
+import {useNavigate, useParams} from 'react-router';
 import {Badge, Button, Input, TablerIcon} from '../../components/design-system';
 import {
 	diagnosticDismissalsChangedEvent,
@@ -114,9 +114,9 @@ function typeCount(items: RouteDiagnosticItem[], group: string) {
 }
 
 export const DiagnosticsRoute: React.FC = () => {
-	const {storyId} = useParams<{storyId: string}>();
+	const {storyId = ''} = useParams<'storyId'>();
 	const {dispatch, stories} = useStoriesContext();
-	const history = useHistory();
+	const navigate = useNavigate();
 	const {testStory} = useStoryLaunch();
 	const coreProjectHost = useCoreProjectHost();
 	const story = storyForId(stories, storyId);
@@ -283,7 +283,7 @@ export const DiagnosticsRoute: React.FC = () => {
 			}
 
 			dispatch(selectPassage(story, passage, true));
-			history.push(
+			navigate(
 				sourceTarget(story, {
 					mode,
 					target: {kind: 'passage', passageId: passage.id}
@@ -302,7 +302,7 @@ export const DiagnosticsRoute: React.FC = () => {
 			dispatch(selectPassage(story, passage, true));
 		}
 
-		history.push(
+		navigate(
 			sourceTarget(story, {
 				line: item.core.line,
 				mode,

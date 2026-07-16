@@ -115,6 +115,42 @@ describe('<StoryCard>', () => {
 		expect(onRemoveTag.mock.calls).toEqual([['mock-tag']]);
 	});
 
+	it('runs forwarded ref cleanup once per attachment in StrictMode', () => {
+		const cleanups: jest.Mock[] = [];
+		const ref = jest.fn<
+			ReturnType<React.RefCallback<HTMLDivElement>>,
+			Parameters<React.RefCallback<HTMLDivElement>>
+		>(element => {
+			if (element) {
+				const cleanup = jest.fn();
+
+				cleanups.push(cleanup);
+				return cleanup;
+			}
+		});
+		const {unmount} = render(
+			<React.StrictMode>
+				<StoryCard
+					onChangeTagColor={jest.fn()}
+					onEdit={jest.fn()}
+					onRemoveTag={jest.fn()}
+					onSelect={jest.fn()}
+					ref={ref}
+					story={fakeStory()}
+					storyTagColors={{}}
+				/>
+			</React.StrictMode>
+		);
+
+		expect(cleanups).toHaveLength(
+			ref.mock.calls.filter(([element]) => element).length
+		);
+		expect(cleanups.length).toBeGreaterThan(0);
+		unmount();
+		cleanups.forEach(cleanup => expect(cleanup).toHaveBeenCalledTimes(1));
+		expect(ref).not.toHaveBeenCalledWith(null);
+	});
+
 	it('is accessible', async () => {
 		const {container} = renderComponent();
 

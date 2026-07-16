@@ -1,4 +1,4 @@
-import {renderHook} from '@testing-library/react-hooks';
+import {renderHook} from '@testing-library/react';
 import {useStoryLaunch} from '../use-story-launch';
 import {isElectronRenderer} from '../../util/is-electron';
 import {usePublishing} from '../use-publishing';
@@ -56,7 +56,7 @@ describe('useStoryLaunch', () => {
 		it('opens a new browser window when playing a story', () => {
 			const {result} = renderHook(() => useStoryLaunch());
 
-			expect(openSpy).not.toBeCalled();
+			expect(openSpy).not.toHaveBeenCalled();
 			result.current.playStory('mock-story-id');
 			expect(openSpy.mock.calls).toEqual([
 				['#/stories/mock-story-id/play', '_blank']
@@ -66,7 +66,7 @@ describe('useStoryLaunch', () => {
 		it('opens a new browser window when proofing a story', () => {
 			const {result} = renderHook(() => useStoryLaunch());
 
-			expect(openSpy).not.toBeCalled();
+			expect(openSpy).not.toHaveBeenCalled();
 			result.current.proofStory('mock-story-id');
 			expect(openSpy.mock.calls).toEqual([
 				['#/stories/mock-story-id/proof', '_blank']
@@ -76,7 +76,7 @@ describe('useStoryLaunch', () => {
 		it('opens a new browser window when testing a story', () => {
 			const {result} = renderHook(() => useStoryLaunch());
 
-			expect(openSpy).not.toBeCalled();
+			expect(openSpy).not.toHaveBeenCalled();
 			result.current.testStory('mock-story-id');
 			expect(openSpy.mock.calls).toEqual([
 				['#/stories/mock-story-id/test', '_blank']
@@ -96,7 +96,7 @@ describe('useStoryLaunch', () => {
 		it('calls openWithScratchPackage() on the twineElectron global when playing a story', async () => {
 			const {result} = renderHook(() => useStoryLaunch());
 
-			expect(openWithScratchPackage).not.toBeCalled();
+			expect(openWithScratchPackage).not.toHaveBeenCalled();
 			await result.current.playStory('mock-story-id');
 			expect(openWithScratchPackage.mock.calls).toEqual([
 				[
@@ -149,15 +149,15 @@ describe('useStoryLaunch', () => {
 		it('throws an error when playing a story if the twineElectron global is not present', () => {
 			delete (window as any).twineElectron;
 
-			const {result} = renderHook(() => useStoryLaunch());
-
-			expect(() => result.current.playStory('mock-story-id')).toThrow();
+			expect(() => renderHook(() => useStoryLaunch())).toThrow(
+				'Electron bridge is not present on window.'
+			);
 		});
 
 		it('calls openWithScratchPackage() on the twineElectron global when proofing a story', async () => {
 			const {result} = renderHook(() => useStoryLaunch());
 
-			expect(openWithScratchPackage).not.toBeCalled();
+			expect(openWithScratchPackage).not.toHaveBeenCalled();
 			await result.current.proofStory('mock-story-id');
 			expect(openWithScratchPackage.mock.calls).toEqual([
 				[
@@ -171,15 +171,15 @@ describe('useStoryLaunch', () => {
 		it('throws an error when proofing a story if the twineElectron global is not present', () => {
 			delete (window as any).twineElectron;
 
-			const {result} = renderHook(() => useStoryLaunch());
-
-			expect(() => result.current.proofStory('mock-story-id')).toThrow();
+			expect(() => renderHook(() => useStoryLaunch())).toThrow(
+				'Electron bridge is not present on window.'
+			);
 		});
 
 		it('calls openWithScratchPackage() on the twineElectron global when testing a story', async () => {
 			const {result} = renderHook(() => useStoryLaunch());
 
-			expect(openWithScratchPackage).not.toBeCalled();
+			expect(openWithScratchPackage).not.toHaveBeenCalled();
 			await result.current.testStory('mock-story-id');
 			expect(openWithScratchPackage.mock.calls).toEqual([
 				[
@@ -193,9 +193,9 @@ describe('useStoryLaunch', () => {
 		it('throws an error when testing a story if the twineElectron global is not present', () => {
 			delete (window as any).twineElectron;
 
-			const {result} = renderHook(() => useStoryLaunch());
-
-			expect(() => result.current.testStory('mock-story-id')).toThrow();
+			expect(() => renderHook(() => useStoryLaunch())).toThrow(
+				'Electron bridge is not present on window.'
+			);
 		});
 	});
 });

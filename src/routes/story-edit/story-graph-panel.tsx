@@ -1,6 +1,11 @@
 import classNames from 'classnames';
 import * as React from 'react';
-import {DraggableCore, DraggableData, DraggableEvent} from 'react-draggable';
+import {
+	DraggableCore as ReactDraggableCore,
+	DraggableCoreProps,
+	DraggableData,
+	DraggableEvent
+} from 'react-draggable';
 import {
 	Badge,
 	Button,
@@ -42,6 +47,23 @@ import type {
 	StoryGraphWorkspaceOptions,
 	StoryGraphWorkspaceView
 } from './workspace-state';
+
+function keyedElementRef<ElementType extends HTMLElement>(
+	refs: Map<string, React.RefObject<ElementType | null>>,
+	key: string
+) {
+	let ref = refs.get(key);
+
+	if (!ref) {
+		ref = React.createRef<ElementType>();
+		refs.set(key, ref);
+	}
+
+	return ref;
+}
+
+const DraggableCore: React.FC<Partial<DraggableCoreProps>> = props =>
+	React.createElement(ReactDraggableCore, props);
 
 export interface StoryGraphPanelProps {
 	graphOptions?: StoryGraphWorkspaceOptions;
@@ -1030,6 +1052,12 @@ function minimapTransform(bounds: CoreRect | null): MinimapTransform {
 }
 
 export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
+	const draggableNodeRefs = React.useRef(
+		new Map<string, React.RefObject<HTMLDivElement | null>>()
+	);
+	const resizeHandleRefs = React.useRef(
+		new Map<string, React.RefObject<HTMLButtonElement | null>>()
+	);
 	const {
 		graphOptions,
 		graphView,
@@ -1062,12 +1090,12 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		initialGraphView(storyZoomSeed.current.zoom, graphView)
 	);
 	const visibleZoom = view.k;
-	const panningViewRef = React.useRef<GraphView>();
+	const panningViewRef = React.useRef<GraphView | undefined>(undefined);
 	const viewRef = React.useRef(view);
 	const renderedView = panningViewRef.current ?? view;
 	viewRef.current = renderedView;
-	const persistZoomFrame = React.useRef<number>();
-	const persistGraphViewFrame = React.useRef<number>();
+	const persistZoomFrame = React.useRef<number | undefined>(undefined);
+	const persistGraphViewFrame = React.useRef<number | undefined>(undefined);
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const [density, setDensity] = React.useState<GraphDensity>(
 		() => graphOptions?.density ?? defaultGraphDensity(story)
@@ -1081,7 +1109,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		graphLayers(graphOptions)
 	);
 	const [drag, setDrag] = React.useState<DragState>();
-	const dragRef = React.useRef<DragState>();
+	const dragRef = React.useRef<DragState | undefined>(undefined);
 	const [marquee, setMarquee] = React.useState<MarqueeState>();
 	const [contextMenu, setContextMenu] = React.useState<GraphContextMenuState>();
 	const [optimisticMoveBounds, setOptimisticMoveBounds] = React.useState<
@@ -1104,31 +1132,40 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	const gridRef = React.useRef<HTMLDivElement>(null);
 	const canvasRef = React.useRef<HTMLDivElement>(null);
 	const minimapRef = React.useRef<HTMLDivElement>(null);
-	const viewportFrame = React.useRef<number>();
-	const lastAutoCenteredSelection = React.useRef<string>();
-	const lastRevealRequestKey = React.useRef<number>();
-	const optimisticSelectedIds = React.useRef<Set<string>>();
-	const selectionHandledOnPointerDown = React.useRef<string>();
+	const viewportFrame = React.useRef<number | undefined>(undefined);
+	const lastAutoCenteredSelection = React.useRef<string | undefined>(undefined);
+	const lastRevealRequestKey = React.useRef<number | undefined>(undefined);
+	const optimisticSelectedIds = React.useRef<Set<string> | undefined>(
+		undefined
+	);
+	const selectionHandledOnPointerDown = React.useRef<string | undefined>(
+		undefined
+	);
 	const [optimisticSelectionKey, setOptimisticSelectionKey] =
 		React.useState('');
 	const [asyncProjection, setAsyncProjection] =
 		React.useState<AsyncProjectionState>();
 	const [graphProjectionRevision, setGraphProjectionRevision] =
 		React.useState(0);
-	const deferredGraphProjectionRefresh = React.useRef<number>();
-	const panRef = React.useRef<{
-		left: number;
-		moved: boolean;
-		currentLeft: number;
-		currentTop: number;
-		pointerId?: number;
-		startLeft: number;
-		startTop: number;
-		top: number;
-		x: number;
-		y: number;
-	}>();
-	const minimapDragRef = React.useRef<number>();
+	const deferredGraphProjectionRefresh = React.useRef<number | undefined>(
+		undefined
+	);
+	const panRef = React.useRef<
+		| {
+				left: number;
+				moved: boolean;
+				currentLeft: number;
+				currentTop: number;
+				pointerId?: number;
+				startLeft: number;
+				startTop: number;
+				top: number;
+				x: number;
+				y: number;
+		  }
+		| undefined
+	>(undefined);
+	const minimapDragRef = React.useRef<number | undefined>(undefined);
 	const recentlyDragged = React.useRef(false);
 	const panning = tool === 'pan' || spaceDown;
 	const selectedPassageIds = React.useMemo(() => {
@@ -1330,6 +1367,17 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			})),
 		[logicalGraphBounds, logicalNodeById, orientation, projection.nodes]
 	);
+	React.useEffect(() => {
+		const visibleIds = new Set(displayNodes.map(node => node.id));
+
+		for (const refs of [draggableNodeRefs.current, resizeHandleRefs.current]) {
+			for (const id of refs.keys()) {
+				if (!visibleIds.has(id)) {
+					refs.delete(id);
+				}
+			}
+		}
+	}, [displayNodes]);
 	const displayNodeById = React.useMemo(
 		() => new Map(displayNodes.map(node => [node.id, node])),
 		[displayNodes]
@@ -2666,6 +2714,14 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 					)}
 					<div className="story-edit-graph-nodes">
 						{displayNodes.map(node => {
+							const draggableNodeRef = keyedElementRef(
+								draggableNodeRefs.current,
+								node.id
+							);
+							const resizeHandleRef = keyedElementRef(
+								resizeHandleRefs.current,
+								node.id
+							);
 							const passage = passagesById.get(node.id);
 							const bounds = nodeDisplayBounds(node);
 							const resizeHandleCorner = resizeCorner(orientation);
@@ -2683,6 +2739,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 									cancel=".story-edit-graph-node__resize"
 									disabled={panning}
 									key={node.id}
+									nodeRef={draggableNodeRef}
 									onDrag={(event, data) => handleDrag(data)}
 									onStart={(event, data) => handleDragStart(node, event, data)}
 									onStop={handleDragStop}
@@ -2696,6 +2753,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 										data-passage-id={node.id}
 										data-selected={displaySelectedIdSet.has(node.id)}
 										onPointerDown={event => handleNodePointerDown(node, event)}
+										ref={draggableNodeRef}
 										style={{
 											height: bounds.height,
 											left: bounds.left,
@@ -2733,6 +2791,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 										{selectedIdSet.has(node.id) && (
 											<DraggableCore
 												disabled={panning}
+												nodeRef={resizeHandleRef}
 												onDrag={(event, data) => handleResize(data)}
 												onStart={(event, data) => handleResizeStart(node, data)}
 												onStop={handleResizeStop}
@@ -2750,6 +2809,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 															event.stopPropagation();
 														}
 													}}
+													ref={resizeHandleRef}
 													type="button"
 												>
 													<TablerIcon

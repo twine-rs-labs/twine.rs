@@ -121,8 +121,8 @@
 		},
 		"storyCard": {
 			"lastUpdated": "Last edited on {{date}}",
-			"passageCount": "1 passage",
-			"passageCount_plural": "{{count}} passages"
+			"passageCount_one": "1 passage",
+			"passageCount_other": "{{count}} passages"
 		},
 		"storyFormatItem": {
 			"author": "by {{author}}",
@@ -139,15 +139,16 @@
 			"useProofingFormat": "Use As Proofing Format"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "Loading 1 Story Format...",
-			"loadingCount_plural": "Loading {{loadingCount}} Story Formats..."
+			"loadingCount_one": "Loading 1 Story Format...",
+			"loadingCount_other": "Loading {{loadingCount}} Story Formats..."
 		},
 		"tagCardButton": {
 			"alreadyAdded": "This tag name has already been added.",
 			"addLabel": "Add Tag",
 			"invalidName": "Please enter a valid tag name.",
 			"tagNameLabel": "Tag Name",
-			"tagsWithCount_plural": "Tags ({{count}})"
+			"tagsWithCount_one": "Tags ({{count}})",
+			"tagsWithCount_other": "Tags ({{count}})"
 		},
 		"tagEditor": {
 			"alreadyExists": "A tag with this name already exists."
@@ -216,8 +217,8 @@
 			"sizeWide": "Wide"
 		},
 		"passageTags": {
-			"count": "{{count}} passage",
-			"count_plural": "{{count}} passages",
+			"count_one": "{{count}} passage",
+			"count_other": "{{count}} passages",
 			"noTags": "No tags have been added to passages in this story.",
 			"title": "Passage Tags"
 		},
@@ -278,8 +279,8 @@
 			"find": "Find",
 			"includePassageNames": "Include Passage Names",
 			"matchCase": "Match Case",
-			"matchCount": "{{count}} matching result",
-			"matchCount_plural": "{{count}} matching results",
+			"matchCount_one": "{{count}} matching result",
+			"matchCount_other": "{{count}} matching results",
 			"noMatches": "No matching results",
 			"ready": "Enter text to find matches across this story.",
 			"replaceAll": "Replace In Story Sources",
@@ -433,12 +434,12 @@
 		"storyList": {
 			"library": "Library",
 			"noStories": "There are no stories saved in Twine right now. To get started, you can either create a new story or import an existing one from a file.",
-			"taggedTitleCount": "1 Tagged Story",
-			"taggedTitleCount_0": "No Tagged Stories",
-			"taggedTitleCount_plural": "{{count}} Tagged Stories",
-			"titleCount": "1 Story",
-			"titleCount_0": "No Stories",
-			"titleCount_plural": "{{count}} Stories",
+			"taggedTitleCount_zero": "No Tagged Stories",
+			"taggedTitleCount_one": "1 Tagged Story",
+			"taggedTitleCount_other": "{{count}} Tagged Stories",
+			"titleCount_zero": "No Stories",
+			"titleCount_one": "1 Story",
+			"titleCount_other": "{{count}} Stories",
 			"titleGeneric": "Stories",
 			"toolbar": {
 				"archive": "Archive",

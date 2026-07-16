@@ -1,6 +1,6 @@
 import {v4 as uuid} from '@lukeed/uuid';
 import * as React from 'react';
-import useThunkReducer from 'react-hook-thunk-reducer';
+import useThunkReducer from '../../util/use-thunk-reducer';
 import {usePersistence} from '../persistence/use-persistence';
 import {builtins} from './defaults';
 import {
@@ -31,7 +31,9 @@ StoryFormatsContext.displayName = 'StoryFormats';
 export const useStoryFormatsContext = () =>
 	React.useContext(StoryFormatsContext);
 
-export const StoryFormatsContextProvider: React.FC = props => {
+export const StoryFormatsContextProvider: React.FC<
+	React.PropsWithChildren
+> = props => {
 	const {storyFormats} = usePersistence();
 	const {reportError} = useStoreErrorReporter();
 	const persistedReducer: React.Reducer<StoryFormatsState, StoryFormatsAction> =

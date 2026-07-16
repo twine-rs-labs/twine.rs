@@ -31,6 +31,7 @@ export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
 	const {dispatch} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
 	const [search, setSearch] = React.useState('');
+	const transitionRef = React.useRef<HTMLDivElement>(null);
 	const [debouncedSearch, setDebouncedSearch] = React.useState('');
 	const updateDebouncedSearch = React.useMemo(
 		() =>
@@ -133,11 +134,13 @@ export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
 		<CSSTransition
 			classNames="pop"
 			mountOnEnter
+			nodeRef={transitionRef}
 			timeout={200}
 			unmountOnExit
 			in={open}
 		>
 			<FuzzyFinder
+				ref={transitionRef}
 				noResultsText={t('components.passageFuzzyFinder.noResults')}
 				onClose={onClose}
 				onChangeSearch={handleChangeSearch}

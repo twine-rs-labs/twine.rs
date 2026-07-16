@@ -1,5 +1,10 @@
 import * as React from 'react';
-import {HashRouter, Route, Switch} from 'react-router-dom';
+import {
+	HashRouter,
+	Route,
+	Routes as RouterRoutes,
+	useLocation
+} from 'react-router';
 import {AppShell} from '../components/app-shell';
 import {AssetsRoute} from './assets';
 import {BuildRoute} from './build';
@@ -15,6 +20,15 @@ import {StoryPlayRoute} from './story-play';
 import {StoryProofRoute} from './story-proof';
 import {StoryTestRoute} from './story-test';
 
+const UnmatchedRoute: React.FC = () => {
+	const location = useLocation();
+
+	console.warn(
+		`No route for path "${location.pathname}", rendering story list`
+	);
+	return <StoryListRoute />;
+};
+
 export const Routes: React.FC = () => {
 	// A <HashRouter> is used to make our lives easier--to load local story
 	// formats, we need the document HREF to reflect where the HTML file is.
@@ -25,62 +39,33 @@ export const Routes: React.FC = () => {
 		<HashRouter>
 			<CommandLineOpenSync />
 			<AppShell>
-				<Switch>
-					<Route exact path="/">
-						<StoryListRoute />
-					</Route>
-					<Route exact path="/welcome">
-						<StoryListRoute />
-					</Route>
-					<Route exact path="/new-project">
-						<NewProjectRoute />
-					</Route>
-					<Route path="/new-project/import">
-						<NewProjectRoute />
-					</Route>
-					<Route exact path="/formats">
-						<StoryFormatsRoute />
-					</Route>
-					<Route exact path="/settings">
-						<SettingsRoute />
-					</Route>
-					<Route path="/stories/:storyId/build">
-						<BuildRoute />
-					</Route>
-					<Route path="/stories/:storyId/contents">
-						<ContentsRoute />
-					</Route>
-					<Route path="/stories/:storyId/diagnostics">
-						<DiagnosticsRoute />
-					</Route>
-					<Route path="/stories/:storyId/assets">
-						<AssetsRoute />
-					</Route>
-					<Route path="/stories/:storyId/play">
-						<StoryPlayRoute />
-					</Route>
-					<Route path="/stories/:storyId/proof">
-						<StoryProofRoute />
-					</Route>
-					<Route path="/stories/:storyId/test/:passageId">
-						<StoryTestRoute />
-					</Route>
-					<Route path="/stories/:storyId/test">
-						<StoryTestRoute />
-					</Route>
-					<Route path="/stories/:storyId">
-						<StoryEditRoute />
-					</Route>
+				<RouterRoutes>
+					<Route element={<StoryListRoute />} path="/" />
+					<Route element={<StoryListRoute />} path="/welcome" />
+					<Route element={<NewProjectRoute />} path="/new-project" />
+					<Route element={<NewProjectRoute />} path="/new-project/import" />
+					<Route element={<StoryFormatsRoute />} path="/formats" />
+					<Route element={<SettingsRoute />} path="/settings" />
+					<Route element={<BuildRoute />} path="/stories/:storyId/build" />
 					<Route
-						path="*"
-						render={path => {
-							console.warn(
-								`No route for path "${path.location.pathname}", rendering story list`
-							);
-							return <StoryListRoute />;
-						}}
-					></Route>
-				</Switch>
+						element={<ContentsRoute />}
+						path="/stories/:storyId/contents"
+					/>
+					<Route
+						element={<DiagnosticsRoute />}
+						path="/stories/:storyId/diagnostics"
+					/>
+					<Route element={<AssetsRoute />} path="/stories/:storyId/assets" />
+					<Route element={<StoryPlayRoute />} path="/stories/:storyId/play" />
+					<Route element={<StoryProofRoute />} path="/stories/:storyId/proof" />
+					<Route
+						element={<StoryTestRoute />}
+						path="/stories/:storyId/test/:passageId"
+					/>
+					<Route element={<StoryTestRoute />} path="/stories/:storyId/test" />
+					<Route element={<StoryEditRoute />} path="/stories/:storyId" />
+					<Route element={<UnmatchedRoute />} path="*" />
+				</RouterRoutes>
 			</AppShell>
 		</HashRouter>
 	);

@@ -1,4 +1,4 @@
-import {renderHook} from '@testing-library/react-hooks';
+import {renderHook} from '@testing-library/react';
 import {fakeStory} from '../../test-util';
 import {useCodeMirrorPassageHints} from '../use-codemirror-passage-hints';
 

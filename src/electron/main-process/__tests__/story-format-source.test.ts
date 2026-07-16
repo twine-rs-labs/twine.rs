@@ -12,7 +12,8 @@ describe('extractStoryFormatProperties()', () => {
 	});
 
 	it('parses a this.storyFormat() variant with surrounding whitespace', () => {
-		const source = '\n  this.storyFormat ( {"name":"X","version":"1.0.0"} ) ;\n';
+		const source =
+			'\n  this.storyFormat ( {"name":"X","version":"1.0.0"} ) ;\n';
 
 		expect(extractStoryFormatProperties(source).name).toBe('X');
 	});

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import classNames from 'classnames';
-import {useHistory, useLocation} from 'react-router-dom';
+import {useNavigate, useLocation} from 'react-router';
 import twineMarkUrl from '../../assets/twine-mark.svg';
 import {
 	diagnosticDismissalsChangedEvent,
@@ -168,8 +168,8 @@ function breadcrumbs(
 	return [mode.label];
 }
 
-export const AppShell: React.FC = ({children}) => {
-	const history = useHistory();
+export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
+	const navigate = useNavigate();
 	const location = useLocation();
 	const pathname = location.pathname ?? '';
 	const {stories} = useStoriesContext();
@@ -460,7 +460,7 @@ export const AppShell: React.FC = ({children}) => {
 				icon: 'files',
 				id: 'nav.library',
 				label: 'Story Library',
-				run: () => history.push('/'),
+				run: () => navigate('/'),
 				shortcut: shortcut('nav.library')
 			},
 			{
@@ -468,14 +468,14 @@ export const AppShell: React.FC = ({children}) => {
 				icon: 'puzzle',
 				id: 'nav.formats',
 				label: 'Story Formats',
-				run: () => history.push('/formats')
+				run: () => navigate('/formats')
 			},
 			{
 				group: 'Navigation',
 				icon: 'settings',
 				id: 'nav.settings',
 				label: 'Settings',
-				run: () => history.push('/settings'),
+				run: () => navigate('/settings'),
 				shortcut: shortcut('nav.settings')
 			},
 			{
@@ -483,7 +483,7 @@ export const AppShell: React.FC = ({children}) => {
 				icon: 'folder-plus',
 				id: 'nav.new-project',
 				label: 'New Project',
-				run: () => history.push('/new-project'),
+				run: () => navigate('/new-project'),
 				shortcut: shortcut('nav.new-project')
 			},
 			{
@@ -492,7 +492,7 @@ export const AppShell: React.FC = ({children}) => {
 				icon: 'layout-columns',
 				id: 'nav.current-story',
 				label: currentStory ? `Edit ${currentStory.name}` : 'Edit Story',
-				run: () => currentStory && history.push(`/stories/${currentStory.id}`),
+				run: () => currentStory && navigate(`/stories/${currentStory.id}`),
 				shortcut: shortcut('nav.current-story')
 			},
 			{
@@ -502,7 +502,7 @@ export const AppShell: React.FC = ({children}) => {
 				id: 'build.screen',
 				label: 'Build & Export',
 				run: () =>
-					currentStory && history.push(`/stories/${currentStory.id}/build`),
+					currentStory && navigate(`/stories/${currentStory.id}/build`),
 				shortcut: shortcut('build.screen')
 			},
 			{
@@ -514,7 +514,7 @@ export const AppShell: React.FC = ({children}) => {
 				run: () => {
 					if (currentStory) {
 						markPerformance('contents-navigation-start');
-						history.push(`/stories/${currentStory.id}/contents`);
+						navigate(`/stories/${currentStory.id}/contents`);
 					}
 				}
 			},
@@ -525,8 +525,7 @@ export const AppShell: React.FC = ({children}) => {
 				id: 'nav.diagnostics',
 				label: 'Diagnostics',
 				run: () =>
-					currentStory &&
-					history.push(`/stories/${currentStory.id}/diagnostics`)
+					currentStory && navigate(`/stories/${currentStory.id}/diagnostics`)
 			},
 			{
 				disabled: !currentStory,
@@ -535,7 +534,7 @@ export const AppShell: React.FC = ({children}) => {
 				id: 'nav.assets',
 				label: 'Assets',
 				run: () =>
-					currentStory && history.push(`/stories/${currentStory.id}/assets`)
+					currentStory && navigate(`/stories/${currentStory.id}/assets`)
 			},
 			{
 				disabled: !currentStory,
@@ -592,7 +591,7 @@ export const AppShell: React.FC = ({children}) => {
 				id: `story.${story.id}`,
 				keywords: [story.name],
 				label: story.name,
-				run: () => history.push(`/stories/${story.id}`)
+				run: () => navigate(`/stories/${story.id}`)
 			}))
 		];
 
@@ -600,7 +599,7 @@ export const AppShell: React.FC = ({children}) => {
 	}, [
 		activeToolbarTab,
 		currentStory,
-		history,
+		navigate,
 		prefs.keybindingPreset,
 		routeTabs,
 		runExportHtml,
@@ -715,7 +714,7 @@ export const AppShell: React.FC = ({children}) => {
 					<button
 						aria-current={pathname === '/' ? 'page' : undefined}
 						className="app-shell__rail-button"
-						onClick={() => history.push('/')}
+						onClick={() => navigate('/')}
 						title="Stories"
 						type="button"
 					>
@@ -737,7 +736,7 @@ export const AppShell: React.FC = ({children}) => {
 						className="app-shell__rail-button"
 						disabled={!currentStory}
 						onClick={() =>
-							currentStory && history.push(`/stories/${currentStory.id}`)
+							currentStory && navigate(`/stories/${currentStory.id}`)
 						}
 						title="Workbench"
 						type="button"
@@ -753,7 +752,7 @@ export const AppShell: React.FC = ({children}) => {
 						onClick={() => {
 							if (currentStory) {
 								markPerformance('contents-navigation-start');
-								history.push(`/stories/${currentStory.id}/contents`);
+								navigate(`/stories/${currentStory.id}/contents`);
 							}
 						}}
 						title="Contents"
@@ -768,7 +767,7 @@ export const AppShell: React.FC = ({children}) => {
 						className="app-shell__rail-button"
 						disabled={!currentStory}
 						onClick={() =>
-							currentStory && history.push(`/stories/${currentStory.id}/assets`)
+							currentStory && navigate(`/stories/${currentStory.id}/assets`)
 						}
 						title="Assets"
 						type="button"
@@ -791,7 +790,7 @@ export const AppShell: React.FC = ({children}) => {
 						className="app-shell__rail-button"
 						disabled={!currentStory}
 						onClick={() =>
-							currentStory && history.push(`/stories/${currentStory.id}/build`)
+							currentStory && navigate(`/stories/${currentStory.id}/build`)
 						}
 						title="Build & Export"
 						type="button"
@@ -806,7 +805,7 @@ export const AppShell: React.FC = ({children}) => {
 						disabled={!currentStory}
 						onClick={() =>
 							currentStory &&
-							history.push(`/stories/${currentStory.id}/diagnostics`)
+							navigate(`/stories/${currentStory.id}/diagnostics`)
 						}
 						title="Diagnostics"
 						type="button"
@@ -819,7 +818,7 @@ export const AppShell: React.FC = ({children}) => {
 					<button
 						aria-current={pathname.startsWith('/formats') ? 'page' : undefined}
 						className="app-shell__rail-button"
-						onClick={() => history.push('/formats')}
+						onClick={() => navigate('/formats')}
 						title="Story Formats"
 						type="button"
 					>
@@ -828,7 +827,7 @@ export const AppShell: React.FC = ({children}) => {
 					<button
 						aria-current={pathname.startsWith('/settings') ? 'page' : undefined}
 						className="app-shell__rail-button"
-						onClick={() => history.push('/settings')}
+						onClick={() => navigate('/settings')}
 						title="Settings"
 						type="button"
 					>
@@ -839,7 +838,7 @@ export const AppShell: React.FC = ({children}) => {
 							pathname.startsWith('/new-project') ? 'page' : undefined
 						}
 						className="app-shell__rail-button"
-						onClick={() => history.push('/new-project')}
+						onClick={() => navigate('/new-project')}
 						title="New Project"
 						type="button"
 					>
@@ -935,7 +934,7 @@ export const AppShell: React.FC = ({children}) => {
 						)}
 						disabled={!currentStory}
 						onClick={() =>
-							currentStory && history.push(`/stories/${currentStory.id}`)
+							currentStory && navigate(`/stories/${currentStory.id}`)
 						}
 						title={
 							currentStory

@@ -191,7 +191,21 @@ export class TestCoreSessionClient {
 	cachedContentsPage = jest.fn(() => undefined);
 	cachedGraphProjection = jest.fn();
 	cachedStoryIndex = jest.fn();
+	dispose = jest.fn();
 	lastGraphProjection = jest.fn();
+	removeSession = jest.fn(async () => undefined);
+	performanceDiagnostics = jest.fn(() => ({
+		cachedPayloadBytes: 0,
+		graphCacheEntryCount: 0,
+		indexCacheEntryCount: 0,
+		lastGraphEntryCount: 0,
+		pendingRequestCount: 0,
+		readModel: undefined,
+		readModelCacheEntryCount: 0,
+		readySessionCount: 0,
+		sessionQueueCount: 0,
+		wasmMemoryBytes: 0
+	}));
 	queryGraphProjection = jest.fn(async (_sessionId, storyId, options) =>
 		storyToCoreGraphProjection(
 			storySnapshotToStory(this.story(storyId)),

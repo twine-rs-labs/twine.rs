@@ -1,9 +1,8 @@
 import {render, screen} from '@testing-library/react';
 import * as React from 'react';
 import {Routes} from '..';
-import {createHashHistory} from 'history';
 import {PrefsContext, PrefsContextProps} from '../../store/prefs';
-import {fakePrefs} from '../../test-util';
+import {FakeStateProvider, fakePrefs} from '../../test-util';
 
 jest.mock('../story-edit/story-edit-route');
 jest.mock('../story-list/story-list-route');
@@ -20,21 +19,26 @@ jest.mock('../story-test/story-test-route');
 
 describe('<Routes>', () => {
 	function renderAtRoute(route: string, context?: Partial<PrefsContextProps>) {
-		const history = createHashHistory();
-
-		history.push(route);
+		window.location.hash = route;
 		return render(
-			<PrefsContext.Provider
-				value={{
-					dispatch: jest.fn(),
-					prefs: fakePrefs({welcomeSeen: true}),
-					...context
-				}}
-			>
-				<Routes />
-			</PrefsContext.Provider>
+			<FakeStateProvider>
+				<PrefsContext.Provider
+					value={{
+						dispatch: jest.fn(),
+						prefs: fakePrefs({welcomeSeen: true}),
+						...context
+					}}
+				>
+					<Routes />
+				</PrefsContext.Provider>
+			</FakeStateProvider>
 		);
 	}
+
+	afterEach(() => {
+		jest.restoreAllMocks();
+		window.location.hash = '';
+	});
 
 	describe("when the user doesn't have a welcomeSeen pref", () => {
 		it('renders the requested app route', () => {
@@ -49,7 +53,18 @@ describe('<Routes>', () => {
 	describe('when the user has a welcomeSeen pref', () => {
 		it('renders the story edit route at /stories/:id', () => {
 			renderAtRoute('/stories/123');
-			expect(screen.getByTestId('mock-story-edit-route')).toBeInTheDocument();
+			expect(screen.getByTestId('mock-story-edit-route')).toHaveAttribute(
+				'data-story-id',
+				'123'
+			);
+		});
+
+		it('renders the exact story edit route while preserving its query string', () => {
+			renderAtRoute('/stories/123?mode=text&passage=456');
+			expect(screen.getByTestId('mock-story-edit-route')).toHaveAttribute(
+				'data-search',
+				'?mode=text&passage=456'
+			);
 		});
 
 		it('renders the story list at /', () => {
@@ -106,7 +121,10 @@ describe('<Routes>', () => {
 
 		it('renders the story test route at /stories/:storyId/test/:passageId', () => {
 			renderAtRoute('/stories/123/test/456');
-			expect(screen.getByTestId('mock-story-test-route')).toBeInTheDocument();
+			expect(screen.getByTestId('mock-story-test-route')).toHaveAttribute(
+				'data-passage-id',
+				'456'
+			);
 		});
 
 		it('renders the story list route at /welcome', () => {
@@ -124,10 +142,21 @@ describe('<Routes>', () => {
 			expect(screen.getByTestId('mock-new-project-route')).toBeInTheDocument();
 		});
 
-		it('renders the story list route for unknown routes', () => {
-			jest.spyOn(console, 'warn').mockReturnValue();
-			renderAtRoute('/unknown-route');
-			expect(screen.getByTestId('mock-story-list-route')).toBeInTheDocument();
-		});
+		it.each([
+			'/unknown-route',
+			'/stories/123/build/extra',
+			'/stories/123/unknown'
+		])(
+			'warns and renders the story list route for unmatched path %s',
+			route => {
+				const warn = jest.spyOn(console, 'warn').mockReturnValue();
+
+				renderAtRoute(route);
+				expect(screen.getByTestId('mock-story-list-route')).toBeInTheDocument();
+				expect(warn).toHaveBeenCalledWith(
+					`No route for path "${route}", rendering story list`
+				);
+			}
+		);
 	});
 });

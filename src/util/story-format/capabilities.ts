@@ -12,9 +12,7 @@ import {
 } from './modules';
 
 export type StoryFormatBundleInclusionPolicy =
-	| 'legacy-monolith'
-	| 'declared-modules'
-	| 'runtime-only';
+	'legacy-monolith' | 'declared-modules' | 'runtime-only';
 
 export interface StoryFormatCapabilityManifest {
 	autocomplete: boolean;

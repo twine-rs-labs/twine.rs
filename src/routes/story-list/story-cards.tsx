@@ -1,8 +1,8 @@
 import * as React from 'react';
-import {useHistory} from 'react-router-dom';
+import {useNavigate} from 'react-router';
 import {CSSTransition, TransitionGroup} from 'react-transition-group';
 import {CardGroup} from '../../components/container/card-group';
-import {StoryCard} from '../../components/story/story-card';
+import {StoryCard, StoryCardProps} from '../../components/story/story-card';
 import {setPref, usePrefsContext} from '../../store/prefs';
 import {Story} from '../../store/stories';
 import {setStoryTagsCommand, useCoreProjectHost} from '../../core';
@@ -18,11 +18,24 @@ export interface StoryCardsProps {
 	stories: Story[];
 }
 
+const TransitionedStoryCard: React.FC<StoryCardProps & {in?: boolean}> = ({
+	in: inProp,
+	...props
+}) => {
+	const nodeRef = React.useRef<HTMLDivElement>(null);
+
+	return (
+		<CSSTransition classNames="pop" in={inProp} nodeRef={nodeRef} timeout={200}>
+			<StoryCard ref={nodeRef} {...props} />
+		</CSSTransition>
+	);
+};
+
 export const StoryCards: React.FC<StoryCardsProps> = props => {
 	const {onSelectStory, stories} = props;
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const coreProjectHost = useCoreProjectHost();
-	const history = useHistory();
+	const navigate = useNavigate();
 
 	function handleChangeTagColor(tagName: string, color: Color) {
 		prefsDispatch(
@@ -47,16 +60,15 @@ export const StoryCards: React.FC<StoryCardsProps> = props => {
 			<CardGroup columnWidth={cardWidth}>
 				<TransitionGroup component={null}>
 					{stories.map(story => (
-						<CSSTransition classNames="pop" key={story.id} timeout={200}>
-							<StoryCard
-								onChangeTagColor={handleChangeTagColor}
-								onEdit={() => history.push(`/stories/${story.id}`)}
-								onRemoveTag={name => handleRemoveTag(story, name)}
-								onSelect={() => onSelectStory(story)}
-								story={story}
-								storyTagColors={prefs.storyTagColors}
-							/>
-						</CSSTransition>
+						<TransitionedStoryCard
+							key={story.id}
+							onChangeTagColor={handleChangeTagColor}
+							onEdit={() => navigate(`/stories/${story.id}`)}
+							onRemoveTag={name => handleRemoveTag(story, name)}
+							onSelect={() => onSelectStory(story)}
+							story={story}
+							storyTagColors={prefs.storyTagColors}
+						/>
 					))}
 				</TransitionGroup>
 			</CardGroup>

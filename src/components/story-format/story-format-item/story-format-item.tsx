@@ -1,4 +1,4 @@
-import {IconAlertTriangle, IconStar, IconTrash} from '@tabler/icons';
+import {IconAlertTriangle, IconStar, IconTrash} from '@tabler/icons-react';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {formatImageUrl, StoryFormat} from '../../../store/story-formats';

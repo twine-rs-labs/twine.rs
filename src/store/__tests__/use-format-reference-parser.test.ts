@@ -1,4 +1,4 @@
-import {renderHook} from '@testing-library/react-hooks';
+import {renderHook} from '@testing-library/react';
 import {useFormatReferenceParser} from '../use-format-reference-parser';
 import {
 	fakeFailedStoryFormat,
@@ -130,10 +130,9 @@ describe('useFormatReferenceParser()', () => {
 		});
 
 		it('throws an error if a nonexistent format is requested', () => {
-			expect(
+			expect(() =>
 				renderHook(() => useFormatReferenceParser('nonexistent', '1.0.0'))
-					.result.error
-			).not.toBeUndefined();
+			).toThrow();
 		});
 	});
 

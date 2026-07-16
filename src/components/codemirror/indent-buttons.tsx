@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {IconIndentDecrease, IconIndentIncrease} from '@tabler/icons';
+import {IconIndentDecrease, IconIndentIncrease} from '@tabler/icons-react';
 import {IconButton} from '../control/icon-button';
 
 export interface IndentButtonsProps {

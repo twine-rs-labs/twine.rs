@@ -6,6 +6,7 @@ jest.mock('i18next');
 jest.mock('../prefs');
 
 describe('initLocales()', () => {
+	const initMock = i18next.init as jest.Mock;
 	const changeLanguageMock = i18next.changeLanguage as jest.Mock;
 	const loadPrefsMock = loadPrefs as jest.Mock;
 
@@ -13,16 +14,41 @@ describe('initLocales()', () => {
 		jest.spyOn(console, 'log').mockReturnValue();
 	});
 
-	it('sets the locale based on user preference', async () => {
+	it('awaits initialization and the user-preferred language change', async () => {
+		let resolveInit!: () => void;
+		let resolveLanguageChange!: () => void;
+		let settled = false;
+
+		initMock.mockReturnValue(
+			new Promise<void>(resolve => (resolveInit = () => resolve()))
+		);
 		loadPrefsMock.mockResolvedValue({locale: 'mock-locale'});
-		await initLocales();
+		changeLanguageMock.mockReturnValue(
+			new Promise<void>(resolve => (resolveLanguageChange = () => resolve()))
+		);
+		const initialization = initLocales().then(() => (settled = true));
+
+		await Promise.resolve();
+		expect(loadPrefsMock).not.toHaveBeenCalled();
+		expect(settled).toBe(false);
+
+		resolveInit();
+		await Promise.resolve();
+		await Promise.resolve();
 		expect(changeLanguageMock.mock.calls).toEqual([['mock-locale']]);
+		expect(settled).toBe(false);
+
+		resolveLanguageChange();
+		await initialization;
+		expect(settled).toBe(true);
 	});
 
 	it('does not throw an error if loading user preferences fails', async () => {
 		jest.spyOn(console, 'warn').mockReturnValue();
+		initMock.mockResolvedValue(undefined);
 		loadPrefsMock.mockRejectedValue(new Error());
-		expect(async () => await initLocales()).not.toThrow();
+
+		await expect(initLocales()).resolves.toBeUndefined();
 		expect(changeLanguageMock).not.toHaveBeenCalled();
 	});
 });

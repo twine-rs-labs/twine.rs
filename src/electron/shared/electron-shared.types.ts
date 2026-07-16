@@ -94,9 +94,7 @@ export interface NativeProjectSessionStart {
 }
 
 export type NativeProjectSessionResolution =
-	| 'acceptDisk'
-	| 'dismiss'
-	| 'keepApp';
+	'acceptDisk' | 'dismiss' | 'keepApp';
 
 export type NativeLinkHandlingMode = 'block' | 'system';
 export type NativeScratchAssetStrategy = 'copy' | 'link';
@@ -273,8 +271,7 @@ export interface ElectronNativeProjectStoryEntry {
 }
 
 export type ElectronLoadedStoryEntry =
-	| ElectronLegacyStoryFile
-	| ElectronNativeProjectStoryEntry;
+	ElectronLegacyStoryFile | ElectronNativeProjectStoryEntry;
 
 export interface NativeAddLocalStoryFormatResult {
 	name: string;

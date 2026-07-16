@@ -1,8 +1,7 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
-import {createMemoryHistory} from 'history';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {Router} from 'react-router-dom';
+import {MemoryRouter} from 'react-router';
 import {
 	loadProjectMetadata,
 	saveProjectMetadata
@@ -11,7 +10,8 @@ import {useDonationCheck} from '../../../store/prefs/use-donation-check';
 import {
 	FakeStateProvider,
 	FakeStateProviderProps,
-	fakeStory
+	fakeStory,
+	LocationInspector
 } from '../../../test-util';
 import {InnerStoryListRoute} from '../story-list-route';
 
@@ -34,16 +34,16 @@ describe('<StoryListRoute>', () => {
 	});
 
 	function renderComponent(contexts?: FakeStateProviderProps) {
-		const history = createMemoryHistory();
 		const result = render(
-			<Router history={history}>
+			<MemoryRouter>
 				<FakeStateProvider {...contexts}>
 					<InnerStoryListRoute />
 				</FakeStateProvider>
-			</Router>
+				<LocationInspector />
+			</MemoryRouter>
 		);
 
-		return {...result, history};
+		return result;
 	}
 
 	it('displays launcher actions', () => {
@@ -55,11 +55,16 @@ describe('<StoryListRoute>', () => {
 		expect(screen.getByRole('button', {name: /import/i})).toBeInTheDocument();
 	});
 
-	it('navigates to the new project route', () => {
-		const {history} = renderComponent();
+	it('navigates to the new project route', async () => {
+		renderComponent();
 
 		fireEvent.click(screen.getByRole('button', {name: /new project/i}));
-		expect(history.location.pathname).toBe('/new-project');
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/new-project'
+			)
+		);
 	});
 
 	it('displays a warning for Safari users', () => {

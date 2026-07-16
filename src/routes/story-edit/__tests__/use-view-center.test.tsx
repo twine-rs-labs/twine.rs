@@ -1,5 +1,5 @@
 import {faker} from '@faker-js/faker';
-import {renderHook} from '@testing-library/react-hooks';
+import {renderHook} from '@testing-library/react';
 import * as React from 'react';
 import {DialogsContext} from '../../../dialogs';
 import {Story} from '../../../store/stories';

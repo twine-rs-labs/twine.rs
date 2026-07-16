@@ -1,44 +1,45 @@
-import {fireEvent, render, screen} from '@testing-library/react';
-import {createMemoryHistory, MemoryHistory} from 'history';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {Router} from 'react-router-dom';
-import {FakeStateProvider, FakeStateProviderProps} from '../../test-util';
+import {MemoryRouter} from 'react-router';
+import {
+	FakeStateProvider,
+	FakeStateProviderProps,
+	LocationInspector
+} from '../../test-util';
 import {AppActions} from '../app-actions';
 
 describe('<AppActions>', () => {
-	function renderComponent(
-		contexts?: FakeStateProviderProps,
-		history?: MemoryHistory
-	) {
+	function renderComponent(contexts?: FakeStateProviderProps, route = '/') {
 		return render(
-			<Router history={history ?? createMemoryHistory()}>
+			<MemoryRouter initialEntries={[route]}>
 				<FakeStateProvider {...contexts}>
 					<AppActions />
 				</FakeStateProvider>
-			</Router>
+				<LocationInspector />
+			</MemoryRouter>
 		);
 	}
 
-	it('navigates to the Settings route instead of opening the legacy preferences dialog', () => {
-		const history = createMemoryHistory({initialEntries: ['/']});
-
-		renderComponent(undefined, history);
+	it('navigates to the Settings route instead of opening the legacy preferences dialog', async () => {
+		renderComponent();
 		fireEvent.click(
 			screen.getByRole('button', {name: 'routeActions.app.preferences'})
 		);
 
-		expect(history.location.pathname).toBe('/settings');
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/settings'
+			)
+		);
 		expect(
 			screen.queryByText('dialogs.appPrefs.title')
 		).not.toBeInTheDocument();
 	});
 
 	it('disables the preferences action on the Settings route', () => {
-		renderComponent(
-			undefined,
-			createMemoryHistory({initialEntries: ['/settings']})
-		);
+		renderComponent(undefined, '/settings');
 
 		expect(
 			screen.getByRole('button', {name: 'routeActions.app.preferences'})
@@ -56,25 +57,25 @@ describe('<AppActions>', () => {
 		expect(screen.getByText('dialogs.aboutTwine.title')).toBeInTheDocument();
 	});
 
-	it('navigates to the Story Formats route instead of opening the legacy dialog', () => {
-		const history = createMemoryHistory({initialEntries: ['/']});
-
-		renderComponent(undefined, history);
+	it('navigates to the Story Formats route instead of opening the legacy dialog', async () => {
+		renderComponent();
 		fireEvent.click(
 			screen.getByRole('button', {name: 'routeActions.app.storyFormats'})
 		);
 
-		expect(history.location.pathname).toBe('/formats');
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/formats'
+			)
+		);
 		expect(
 			screen.queryByText('dialogs.storyFormats.title')
 		).not.toBeInTheDocument();
 	});
 
 	it('disables the story formats action on the Story Formats route', () => {
-		renderComponent(
-			undefined,
-			createMemoryHistory({initialEntries: ['/formats']})
-		);
+		renderComponent(undefined, '/formats');
 
 		expect(
 			screen.getByRole('button', {name: 'routeActions.app.storyFormats'})

@@ -125,8 +125,9 @@ export function usePublishing(): UsePublishingProps {
 				selectedFormat.name,
 				selectedFormat.version
 			);
-			const formatProperties =
-				await loadFormatProperties(format)(storyFormatsDispatch);
+			const formatProperties = await storyFormatsDispatch(
+				loadFormatProperties(format)
+			);
 
 			if (!formatProperties) {
 				throw new Error(`Couldn't load story format properties`);
@@ -160,8 +161,9 @@ export function usePublishing(): UsePublishingProps {
 				story.storyFormat,
 				story.storyFormatVersion
 			);
-			const formatProperties =
-				await loadFormatProperties(format)(storyFormatsDispatch);
+			const formatProperties = await storyFormatsDispatch(
+				loadFormatProperties(format)
+			);
 
 			if (!formatProperties) {
 				throw new Error(`Couldn't load story format properties`);

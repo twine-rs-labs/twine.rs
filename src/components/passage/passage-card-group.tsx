@@ -11,9 +11,22 @@ export interface PassageCardGroupProps extends Omit<
 	passages: Passage[];
 }
 
+const TransitionedPassageCard: React.FC<PassageCardProps & {in?: boolean}> = ({
+	in: inProp,
+	...props
+}) => {
+	const nodeRef = React.useRef<HTMLDivElement>(null);
+
+	return (
+		<CSSTransition classNames="pop" in={inProp} nodeRef={nodeRef} timeout={200}>
+			<PassageCard ref={nodeRef} {...props} />
+		</CSSTransition>
+	);
+};
+
 export const PassageCardGroup: React.FC<PassageCardGroupProps> = React.memo(
 	props => {
-		const {passages} = props;
+		const {passages, ...cardProps} = props;
 
 		// Passages must be sorted so that tabbing around follows a logical pattern.
 
@@ -32,9 +45,11 @@ export const PassageCardGroup: React.FC<PassageCardGroupProps> = React.memo(
 		return (
 			<TransitionGroup component={null}>
 				{sortedPassages.map(passage => (
-					<CSSTransition classNames="pop" key={passage.id} timeout={200}>
-						<PassageCard passage={passage} {...props} />
-					</CSSTransition>
+					<TransitionedPassageCard
+						key={passage.id}
+						passage={passage}
+						{...cardProps}
+					/>
 				))}
 			</TransitionGroup>
 		);

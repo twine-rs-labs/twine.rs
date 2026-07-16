@@ -116,8 +116,9 @@
 		},
 		"storyCard": {
 			"lastUpdated": "Editada pela última vez em {{date}}",
-			"passageCount": "1 passagem",
-			"passageCount_plural": "{{count}} passagens"
+			"passageCount_one": "1 passagem",
+			"passageCount_many": "{{count}} passagens",
+			"passageCount_other": "{{count}} passagens"
 		},
 		"storyFormatItem": {
 			"author": "de {{author}}",
@@ -134,8 +135,9 @@
 			"useProofingFormat": "Usar como Formato de Revisão"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "A carregar 1 Formato de História...",
-			"loadingCount_plural": "A carregar {{loadingCount}} Formatos de História..."
+			"loadingCount_one": "A carregar 1 Formato de História...",
+			"loadingCount_many": "A carregar {{loadingCount}} Formatos de História...",
+			"loadingCount_other": "A carregar {{loadingCount}} Formatos de História..."
 		},
 		"tagEditor": {
 			"alreadyExists": "Já existe uma etiqueta com esse nome."
@@ -244,8 +246,9 @@
 			"find": "Encontrar",
 			"includePassageNames": "Incluir os Títulos das Passagens",
 			"matchCase": "Sensível a maiúsculas/minúsculas",
-			"matchCount": "{{count}} passagem correspondente",
-			"matchCount_plural": "{{count}} passagens correspondentes",
+			"matchCount_one": "{{count}} passagem correspondente",
+			"matchCount_many": "{{count}} passagens correspondentes",
+			"matchCount_other": "{{count}} passagens correspondentes",
 			"noMatches": "Sem passagens correspondentes",
 			"replaceAll": "Substituir em todas as passagens",
 			"replaceWith": "Substituir por",
@@ -340,12 +343,14 @@
 		"storyList": {
 			"library": "Biblioteca",
 			"noStories": "Não há histórias gravadas no Twine neste momento. Para começares, podes criar uma nova história ou importar uma de um ficheiro.",
-			"taggedTitleCount": "1 História Etiquetada",
-			"taggedTitleCount_0": "Não Há Histórias Etiquetadas",
-			"taggedTitleCount_plural": "{{count}} Histórias Etiquetadas",
-			"titleCount": "1 História",
-			"titleCount_0": "Não há Histórias",
-			"titleCount_plural": "{{count}} Histórias",
+			"taggedTitleCount_zero": "Não Há Histórias Etiquetadas",
+			"taggedTitleCount_one": "1 História Etiquetada",
+			"taggedTitleCount_many": "{{count}} Histórias Etiquetadas",
+			"taggedTitleCount_other": "{{count}} Histórias Etiquetadas",
+			"titleCount_zero": "Não há Histórias",
+			"titleCount_one": "1 História",
+			"titleCount_many": "{{count}} Histórias",
+			"titleCount_other": "{{count}} Histórias",
 			"titleGeneric": "Histórias",
 			"toolbar": {
 				"archive": "Arquivar",

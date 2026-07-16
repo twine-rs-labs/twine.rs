@@ -1,9 +1,11 @@
 import * as React from 'react';
-import useErrorBoundary from 'use-error-boundary';
+import {useErrorBoundary} from './use-error-boundary';
 import {ErrorMessage} from './error-message';
 import './global-error-boundary.css';
 
-export const GlobalErrorBoundary: React.FC = ({children}) => {
+export const GlobalErrorBoundary: React.FC<React.PropsWithChildren> = ({
+	children
+}) => {
 	const {ErrorBoundary, didCatch, error} = useErrorBoundary();
 
 	// Non-localized because our localization might be broken.
@@ -27,7 +29,7 @@ export const GlobalErrorBoundary: React.FC = ({children}) => {
 					</p>
 				</ErrorMessage>
 				<p>Details:</p>
-				<pre>{error.stack}</pre>
+				<pre>{error?.stack}</pre>
 			</div>
 		</div>
 	) : (

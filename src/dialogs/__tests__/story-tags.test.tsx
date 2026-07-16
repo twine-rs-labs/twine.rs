@@ -1,7 +1,7 @@
 import {act, fireEvent, render, screen, within} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {StoreCoreProjectHost} from '../../core';
+import {CoreProjectHostProvider, StoreCoreProjectHost} from '../../core';
 import {PrefsContext, PrefsContextProps} from '../../store/prefs';
 import {StoriesContext, StoriesContextProps} from '../../store/stories';
 import {fakePrefs, fakeStory} from '../../test-util';
@@ -33,15 +33,17 @@ describe('<StoryTagsDialog>', () => {
 						...storiesContext
 					}}
 				>
-					<StoryTagsDialog
-						collapsed={false}
-						onChangeCollapsed={jest.fn()}
-						onChangeHighlighted={jest.fn()}
-						onChangeMaximized={jest.fn()}
-						onChangeProps={jest.fn()}
-						onClose={jest.fn()}
-						{...props}
-					/>
+					<CoreProjectHostProvider>
+						<StoryTagsDialog
+							collapsed={false}
+							onChangeCollapsed={jest.fn()}
+							onChangeHighlighted={jest.fn()}
+							onChangeMaximized={jest.fn()}
+							onChangeProps={jest.fn()}
+							onClose={jest.fn()}
+							{...props}
+						/>
+					</CoreProjectHostProvider>
 				</StoriesContext.Provider>
 			</PrefsContext.Provider>
 		);

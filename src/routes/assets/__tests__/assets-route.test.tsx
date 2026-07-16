@@ -1,16 +1,18 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
-import {createMemoryHistory} from 'history';
 import * as React from 'react';
-import {MemoryRouter, Route, Router} from 'react-router-dom';
+import {MemoryRouter} from 'react-router';
 import {
 	FakeStateProvider,
 	fakePassage,
 	fakeStory,
-	StoryInspector
+	LocationInspector,
+	StoryInspector,
+	TestRoute
 } from '../../../test-util';
 import {
 	knownAssetInventoryForStory,
 	replaceKnownAssetInventoryForStory,
+	type CoreProjectHost,
 	type CoreAssetInventoryEntry
 } from '../../../core';
 import {StoreCoreProjectHost} from '../../../core/project-host';
@@ -100,15 +102,15 @@ function projectSnapshot(assets: CoreAssetInventoryEntry[]) {
 	};
 }
 
-function renderComponent() {
+function renderComponent(coreProjectHost?: CoreProjectHost) {
 	const {story} = assetStory();
 	const result = render(
-		<FakeStateProvider stories={[story]}>
+		<FakeStateProvider coreProjectHost={coreProjectHost} stories={[story]}>
 			<MemoryRouter initialEntries={[`/stories/${story.id}/assets`]}>
-				<Route path="/stories/:storyId/assets">
+				<TestRoute path="/stories/:storyId/assets">
 					<AssetsRoute />
 					<StoryInspector id={story.id} />
-				</Route>
+				</TestRoute>
 			</MemoryRouter>
 		</FakeStateProvider>
 	);
@@ -116,26 +118,24 @@ function renderComponent() {
 	return {result, story};
 }
 
-function renderComponentWithHistory(configure?: (story: Story) => void) {
+function renderComponentWithLocation(configure?: (story: Story) => void) {
 	const {story} = assetStory();
 
 	configure?.(story);
 
-	const history = createMemoryHistory({
-		initialEntries: [`/stories/${story.id}/assets`]
-	});
 	const result = render(
 		<FakeStateProvider stories={[story]}>
-			<Router history={history}>
-				<Route path="/stories/:storyId/assets">
+			<MemoryRouter initialEntries={[`/stories/${story.id}/assets`]}>
+				<TestRoute path="/stories/:storyId/assets">
 					<AssetsRoute />
 					<StoryInspector id={story.id} />
-				</Route>
-			</Router>
+				</TestRoute>
+				<LocationInspector />
+			</MemoryRouter>
 		</FakeStateProvider>
 	);
 
-	return {history, result, story};
+	return {result, story};
 }
 
 function assetCard(path: string) {
@@ -194,7 +194,7 @@ describe('<AssetsRoute>', () => {
 	});
 
 	it('reveals stylesheet asset references without falling back to a passage', async () => {
-		const {history, story} = renderComponentWithHistory(story => {
+		const {story} = renderComponentWithLocation(story => {
 			story.stylesheet = '.hero { background: url("assets/bg.png"); }';
 		});
 
@@ -202,9 +202,15 @@ describe('<AssetsRoute>', () => {
 		fireEvent.click(assetCard('assets/bg.png'));
 		fireEvent.click(screen.getByRole('button', {name: 'Find Usages'}));
 
-		const query = new URLSearchParams(history.location.search);
-
-		expect(history.location.pathname).toBe(`/stories/${story.id}`);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${story.id}`
+			)
+		);
+		const query = new URLSearchParams(
+			screen.getByTestId('location').getAttribute('data-search') ?? ''
+		);
 		expect(query.get('mode')).toBe('text');
 		expect(query.get('source')).toBe('stylesheet');
 		expect(query.get('passage')).toBeNull();
@@ -233,9 +239,9 @@ describe('<AssetsRoute>', () => {
 		render(
 			<FakeStateProvider stories={[story]}>
 				<MemoryRouter initialEntries={[`/stories/${story.id}/assets`]}>
-					<Route path="/stories/:storyId/assets">
+					<TestRoute path="/stories/:storyId/assets">
 						<AssetsRoute />
-					</Route>
+					</TestRoute>
 				</MemoryRouter>
 			</FakeStateProvider>
 		);
@@ -279,9 +285,9 @@ describe('<AssetsRoute>', () => {
 		const result = render(
 			<FakeStateProvider stories={[story]}>
 				<MemoryRouter initialEntries={[`/stories/${story.id}/assets`]}>
-					<Route path="/stories/:storyId/assets">
+					<TestRoute path="/stories/:storyId/assets">
 						<AssetsRoute />
-					</Route>
+					</TestRoute>
 				</MemoryRouter>
 			</FakeStateProvider>
 		);
@@ -308,14 +314,35 @@ describe('<AssetsRoute>', () => {
 	});
 
 	it('inserts the selected asset snippet through the core host', async () => {
-		const apply = jest.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand');
+		const {story} = assetStory();
+		const host = new StoreCoreProjectHost([story], jest.fn());
+		const apply = jest
+			.spyOn(host, 'applyStoryCommand')
+			.mockResolvedValue(undefined);
+		const queryFacts = jest
+			.spyOn(host, 'queryPassageLocalFactsAsync')
+			.mockResolvedValue({
+				assetReferences: [],
+				characterCount: 0,
+				diagnostics: [],
+				excerpt: '',
+				isEmpty: true,
+				lineCount: 0,
+				links: [],
+				passageId: 'start',
+				revision: 1,
+				storyId: 'story-id',
+				symbols: [],
+				wordCount: 0
+			});
 
-		renderComponent();
+		const {result} = renderComponent(host);
 
 		await openAssetsFolder();
 		fireEvent.click(assetCard('assets/cover.png'));
 		fireEvent.click(screen.getByRole('button', {name: 'Insert into Passage'}));
 
+		await waitFor(() => expect(queryFacts).toHaveBeenCalled());
 		await waitFor(() =>
 			expect(apply).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -324,7 +351,8 @@ describe('<AssetsRoute>', () => {
 				})
 			)
 		);
-		apply.mockRestore();
+		result.unmount();
+		host.dispose();
 	});
 
 	it('tests the first passage that references the selected asset', async () => {
@@ -345,12 +373,10 @@ describe('<AssetsRoute>', () => {
 		});
 		fireEvent.click(screen.getByRole('button', {name: 'Import Asset'}));
 
-		await waitFor(() =>
-			expect(assetCard('assets/ambient.mp3')).toBeInTheDocument()
-		);
-
 		fireEvent.click(
-			screen.getByRole('button', {name: 'Select asset assets/ambient.mp3'})
+			await screen.findByRole('button', {
+				name: 'Select asset assets/ambient.mp3'
+			})
 		);
 
 		expect(screen.getAllByText('Unused').length).toBeGreaterThan(0);
@@ -391,9 +417,9 @@ describe('<AssetsRoute>', () => {
 		render(
 			<FakeStateProvider stories={[story]}>
 				<MemoryRouter initialEntries={[`/stories/${story.id}/assets`]}>
-					<Route path="/stories/:storyId/assets">
+					<TestRoute path="/stories/:storyId/assets">
 						<AssetsRoute />
-					</Route>
+					</TestRoute>
 				</MemoryRouter>
 			</FakeStateProvider>
 		);
@@ -408,7 +434,11 @@ describe('<AssetsRoute>', () => {
 				'/tmp/native-cover.png'
 			)
 		);
-		expect(assetCard('assets/native-cover.png')).toBeInTheDocument();
+		expect(
+			await screen.findByRole('button', {
+				name: 'Select asset assets/native-cover.png'
+			})
+		).toBeInTheDocument();
 	});
 
 	it('loads live native project assets and surfaces unused files', async () => {
@@ -431,9 +461,9 @@ describe('<AssetsRoute>', () => {
 		render(
 			<FakeStateProvider stories={[story]}>
 				<MemoryRouter initialEntries={[`/stories/${story.id}/assets`]}>
-					<Route path="/stories/:storyId/assets">
+					<TestRoute path="/stories/:storyId/assets">
 						<AssetsRoute />
-					</Route>
+					</TestRoute>
 				</MemoryRouter>
 			</FakeStateProvider>
 		);
@@ -477,9 +507,9 @@ describe('<AssetsRoute>', () => {
 		render(
 			<FakeStateProvider stories={[story]}>
 				<MemoryRouter initialEntries={[`/stories/${story.id}/assets`]}>
-					<Route path="/stories/:storyId/assets">
+					<TestRoute path="/stories/:storyId/assets">
 						<AssetsRoute />
-					</Route>
+					</TestRoute>
 				</MemoryRouter>
 			</FakeStateProvider>
 		);
@@ -493,7 +523,10 @@ describe('<AssetsRoute>', () => {
 	});
 
 	it('renames native asset files before updating story references', async () => {
-		const apply = jest.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand');
+		const apply = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'applyStoryCommand'
+		);
 		const {story} = assetStory();
 		const projectSessionSnapshot = jest
 			.fn()
@@ -519,10 +552,10 @@ describe('<AssetsRoute>', () => {
 		render(
 			<FakeStateProvider stories={[story]}>
 				<MemoryRouter initialEntries={[`/stories/${story.id}/assets`]}>
-					<Route path="/stories/:storyId/assets">
+					<TestRoute path="/stories/:storyId/assets">
 						<AssetsRoute />
 						<StoryInspector id={story.id} />
-					</Route>
+					</TestRoute>
 				</MemoryRouter>
 			</FakeStateProvider>
 		);

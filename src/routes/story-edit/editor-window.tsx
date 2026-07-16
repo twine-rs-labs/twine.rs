@@ -162,8 +162,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	]);
 
 	const [localText, setLocalText] = React.useState(buffer.value);
-	const pendingText = React.useRef<string>();
-	const pendingTimeout = React.useRef<number>();
+	const pendingText = React.useRef<string | undefined>(undefined);
+	const pendingTimeout = React.useRef<number | undefined>(undefined);
 	const dirty = localText !== buffer.value;
 
 	const passageNames = selection?.passageNames ?? [];

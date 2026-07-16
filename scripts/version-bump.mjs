@@ -48,7 +48,9 @@ function parseVersion(version) {
 	const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
 
 	if (!match) {
-		throw new Error(`Expected a plain semver version like 0.1.0, got ${version}`);
+		throw new Error(
+			`Expected a plain semver version like 0.1.0, got ${version}`
+		);
 	}
 
 	return {

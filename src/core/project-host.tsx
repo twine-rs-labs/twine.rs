@@ -2177,13 +2177,18 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	}
 
 	async applyStoryCommand(command: StoryCommand, options?: CoreCommandOptions) {
+		const applyToHost = (host: StoreCoreProjectHost) =>
+			options === undefined
+				? host.applyStoryCommand(command)
+				: host.applyStoryCommand(command, options);
+
 		if (command.type === 'renameStoryTag') {
 			const completed: StoreCoreProjectHost[] = [];
 			let lastBatch: PatchBatch | undefined;
 
 			try {
 				for (const host of this.hosts.values()) {
-					lastBatch = await host.applyStoryCommand(command, options);
+					lastBatch = await applyToHost(host);
 					completed.push(host);
 				}
 				return lastBatch;
@@ -2195,10 +2200,7 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			}
 		}
 
-		return this.requireHostForCommand(command).applyStoryCommand(
-			command,
-			options
-		);
+		return applyToHost(this.requireHostForCommand(command));
 	}
 
 	async ensureSessionReady(storyId: string) {
@@ -2600,7 +2602,7 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			if (!grouped.has(sessionId)) {
 				this.hosts.get(sessionId)?.disposeEffects();
 				this.hosts.delete(sessionId);
-				void this.client.removeSession(sessionId);
+				void this.client.removeSession?.(sessionId);
 			}
 		}
 	}
@@ -2636,34 +2638,15 @@ export function coreProjectHostPerformanceSnapshot() {
 }
 
 export function useCoreProjectHost() {
-	const sharedHost = React.useContext(CoreProjectHostContext);
-	const {dispatch: storiesDispatch, stories} = useStoriesContext();
-	const dispatch: UndoableDispatch = action => storiesDispatch(action);
-	const hostRef = React.useRef<StoreCoreProjectHost>();
+	const host = React.useContext(CoreProjectHostContext);
 
-	if (!sharedHost && !hostRef.current) {
-		hostRef.current = new StoreCoreProjectHost(stories, dispatch);
+	if (!host) {
+		throw new Error(
+			'useCoreProjectHost must be used within a CoreProjectHostProvider.'
+		);
 	}
 
-	if (!sharedHost) {
-		hostRef.current?.update(stories, dispatch);
-	}
-
-	React.useEffect(() => {
-		if (!sharedHost) {
-			hostRef.current?.publishStoreStatePatches();
-		}
-	}, [sharedHost, stories]);
-	React.useEffect(
-		() => () => {
-			if (!sharedHost) {
-				hostRef.current?.dispose();
-			}
-		},
-		[sharedHost]
-	);
-
-	return sharedHost ?? hostRef.current!;
+	return host;
 }
 
 export function useCoreProjectSession(storyId: string | undefined) {
@@ -2738,26 +2721,45 @@ export function useCoreProjectSession(storyId: string | undefined) {
 	);
 }
 
-export const CoreProjectHostProvider: React.FC = ({children}) => {
+export const CoreProjectHostProvider: React.FC<React.PropsWithChildren> = ({
+	children
+}) => {
 	const {dispatch, stories} = useStoriesContext();
-	const hostRef = React.useRef<ProjectScopedCoreProjectHost>();
-
-	if (!hostRef.current) {
-		hostRef.current = new ProjectScopedCoreProjectHost(stories, action =>
-			dispatch(action)
-		);
-	}
-
-	hostRef.current.update(stories, action => dispatch(action));
-	React.useEffect(
-		() => () => {
-			hostRef.current?.dispose();
-		},
-		[]
+	const [host, setHost] = React.useState<ProjectScopedCoreProjectHost>();
+	const committedState = React.useRef({dispatch, stories});
+	const hostRef = React.useRef<ProjectScopedCoreProjectHost | undefined>(
+		undefined
 	);
 
+	React.useInsertionEffect(() => {
+		committedState.current = {dispatch, stories};
+		hostRef.current?.update(stories, action => dispatch(action));
+	}, [dispatch, stories]);
+
+	React.useLayoutEffect(() => {
+		const committed = committedState.current;
+		const nextHost = new ProjectScopedCoreProjectHost(
+			committed.stories,
+			action => committed.dispatch(action)
+		);
+
+		hostRef.current = nextHost;
+		setHost(nextHost);
+
+		return () => {
+			if (hostRef.current === nextHost) {
+				hostRef.current = undefined;
+			}
+			nextHost.dispose();
+		};
+	}, []);
+
+	if (!host) {
+		return null;
+	}
+
 	return (
-		<CoreProjectHostContext.Provider value={hostRef.current}>
+		<CoreProjectHostContext.Provider value={host}>
 			{children}
 		</CoreProjectHostContext.Provider>
 	);

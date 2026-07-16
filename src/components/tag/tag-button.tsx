@@ -1,7 +1,7 @@
 import * as React from 'react';
 import classNames from 'classnames';
 import {useTranslation} from 'react-i18next';
-import {IconChevronDown} from '@tabler/icons';
+import {IconChevronDown} from '@tabler/icons-react';
 import {MenuButton} from '../control/menu-button';
 import {colors, Color} from '../../util/color';
 import './tag-button.css';

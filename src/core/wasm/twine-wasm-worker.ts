@@ -8,11 +8,9 @@ import type {TwineWasmProjectBootstrap as TwineWasmProjectBootstrapType} from '.
 
 let wasmReady: Promise<void> | undefined;
 let SessionConstructor:
-	| (new (snapshot: unknown) => TwineWasmProjectSessionType)
-	| undefined;
+	(new (snapshot: unknown) => TwineWasmProjectSessionType) | undefined;
 let BootstrapConstructor:
-	| (new (snapshot: unknown) => TwineWasmProjectBootstrapType)
-	| undefined;
+	(new (snapshot: unknown) => TwineWasmProjectBootstrapType) | undefined;
 let wasmMemoryBytes = 0;
 let wasmMemory: WebAssembly.Memory | undefined;
 const sessions = new Map<

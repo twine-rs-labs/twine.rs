@@ -73,7 +73,7 @@ import {
 	IconMovie,
 	IconMusic,
 	IconPackage,
-	IconPackgeExport,
+	IconPackageExport,
 	IconPhoto,
 	IconPhotoOff,
 	IconPlayerPlay,
@@ -102,7 +102,7 @@ import {
 	IconWindow,
 	IconWriting,
 	IconX
-} from '@tabler/icons';
+} from '@tabler/icons-react';
 
 export interface TablerIconProps {
 	className?: string;
@@ -187,8 +187,7 @@ const iconRegistry: Record<string, typeof IconCircle> = {
 	movie: IconMovie,
 	music: IconMusic,
 	package: IconPackage,
-	// @tabler/icons 1.x ships this export with the historical misspelling.
-	'package-export': IconPackgeExport,
+	'package-export': IconPackageExport,
 	photo: IconPhoto,
 	'photo-off': IconPhotoOff,
 	'player-play': IconPlayerPlay,

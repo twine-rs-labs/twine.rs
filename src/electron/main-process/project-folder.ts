@@ -201,9 +201,7 @@ export type NativeProjectFileKind =
 	| 'asset';
 
 export type NativeProjectSessionResolution =
-	| 'acceptDisk'
-	| 'dismiss'
-	| 'keepApp';
+	'acceptDisk' | 'dismiss' | 'keepApp';
 
 export interface NativeProjectFileEntry {
 	fingerprint: string;
@@ -408,6 +406,7 @@ type RendererProjectMetadataStory = Partial<
 };
 
 const projectSessions = new Map<string, ProjectSessionState>();
+const projectSessionStartCanceledCode = 'PROJECT_SESSION_START_CANCELED';
 const projectHydrations = new Map<
 	string,
 	{createdAt: number; passages: Array<{passage: Passage; storyId: string}>}
@@ -2018,8 +2017,7 @@ function projectSessionConflicts(
 
 function graphLayoutForPassage(
 	graph:
-		| {passages?: Record<string, Partial<Record<string, number>>>}
-		| undefined,
+		{passages?: Record<string, Partial<Record<string, number>>>} | undefined,
 	passageId: string
 ) {
 	return graph?.passages?.[passageId] ?? {};
@@ -2984,6 +2982,18 @@ function ensureProjectSession(rootPath: string) {
 	}
 
 	return session;
+}
+
+function assertCurrentProjectSession(
+	rootPath: string,
+	session: ProjectSessionState
+) {
+	if (projectSessions.get(projectSessionKey(rootPath)) !== session) {
+		throw Object.assign(
+			new Error(`Project session start was canceled for ${rootPath}.`),
+			{code: projectSessionStartCanceledCode}
+		);
+	}
 }
 
 function installAcceptedProjectBaseline(
@@ -4405,13 +4415,16 @@ export async function startProjectSession(
 	}
 
 	await waitForProjectSessionBaselineCapture(session);
+	assertCurrentProjectSession(rootPath, session);
 	if (!session.baseline) {
 		const baseline = await readProjectSessionSnapshot(rootPath, undefined, {
 			storyIds
 		});
+		assertCurrentProjectSession(rootPath, session);
 		const descriptor = await readProjectDescriptor(rootPath).catch(() =>
 			descriptorFromStories(baseline.stories)
 		);
+		assertCurrentProjectSession(rootPath, session);
 		installAcceptedProjectBaseline(session, baseline, descriptor);
 	}
 
@@ -4429,9 +4442,14 @@ export async function startProjectSession(
 	}
 
 	if (session.pending) {
-		queueMicrotask(() => notifyProjectSession(session));
+		queueMicrotask(() => {
+			if (projectSessions.get(projectSessionKey(rootPath)) === session) {
+				notifyProjectSession(session);
+			}
+		});
 	}
 
+	assertCurrentProjectSession(rootPath, session);
 	const baseline = session.baseline!;
 
 	return {

@@ -35,7 +35,7 @@ describe('<StoryFormatItem>', () => {
 	it('shows an error icon if the format failed to load', () => {
 		renderComponent({format: fakeFailedStoryFormat()});
 		expect(
-			document.querySelector('.icon-tabler-alert-triangle')
+			document.querySelector('.tabler-icon-alert-triangle')
 		).toBeInTheDocument();
 	});
 

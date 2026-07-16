@@ -63,11 +63,7 @@ import './source-editor.css';
 import {sourceEditorThemeExtension} from './themes';
 
 export type SourceEditorLanguage =
-	| 'css'
-	| 'html'
-	| 'javascript'
-	| 'text'
-	| 'twine';
+	'css' | 'html' | 'javascript' | 'text' | 'twine';
 
 export interface SourceEditorProps {
 	autocompletePassageNames?: string[];
@@ -776,7 +772,7 @@ function baseExtensions(
 
 export const SourceEditor: React.FC<SourceEditorProps> = props => {
 	const editorContainer = React.useRef<HTMLDivElement>(null);
-	const viewRef = React.useRef<EditorView>();
+	const viewRef = React.useRef<EditorView | undefined>(undefined);
 	const onChange = React.useRef(props.onChange);
 	const {prefs} = usePrefsContext();
 	const appTheme = useComputedTheme();

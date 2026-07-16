@@ -75,14 +75,13 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 						coreAction.type === 'deletePassage') &&
 					'passageId' in coreAction
 				) {
-					const ids = touchedPassagesByStory.get(coreAction.storyId) ?? new Set();
+					const ids =
+						touchedPassagesByStory.get(coreAction.storyId) ?? new Set();
 					ids.add(coreAction.passageId);
 					touchedPassagesByStory.set(coreAction.storyId, ids);
-				} else if (
-					coreAction.type === 'createPassage' &&
-					coreAction.props.id
-				) {
-					const ids = touchedPassagesByStory.get(coreAction.storyId) ?? new Set();
+				} else if (coreAction.type === 'createPassage' && coreAction.props.id) {
+					const ids =
+						touchedPassagesByStory.get(coreAction.storyId) ?? new Set();
 					ids.add(coreAction.props.id);
 					touchedPassagesByStory.set(coreAction.storyId, ids);
 				} else if (

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {useHistory, useParams} from 'react-router-dom';
+import {useNavigate, useParams} from 'react-router';
 import {
 	Badge,
 	Button,
@@ -377,8 +377,8 @@ function htmlInspection(build?: StoryBuildPackage) {
 }
 
 export const BuildRoute: React.FC = () => {
-	const {storyId} = useParams<{storyId: string}>();
-	const history = useHistory();
+	const {storyId = ''} = useParams<'storyId'>();
+	const navigate = useNavigate();
 	const {stories} = useStoriesContext();
 	const story = storyForId(stories, storyId);
 	const coreProjectHost = useCoreProjectHost();
@@ -784,7 +784,7 @@ export const BuildRoute: React.FC = () => {
 				detail: 'Resolve active error diagnostics before exporting this story.',
 				icon: 'alert-octagon',
 				id: 'story-diagnostics',
-				onAction: () => history.push(`/stories/${story?.id}/diagnostics`),
+				onAction: () => navigate(`/stories/${story?.id}/diagnostics`),
 				title: `${errorDiagnostics.length} story issue${
 					errorDiagnostics.length === 1 ? '' : 's'
 				}`,
@@ -918,7 +918,7 @@ export const BuildRoute: React.FC = () => {
 		exportFormat,
 		formatOptions.htmlCompatibility,
 		formatOptions.htmlInlineAssets,
-		history,
+		navigate,
 		inlineAssetsAutoDisabled,
 		inlineAssetsAutoReason,
 		missingAssets,

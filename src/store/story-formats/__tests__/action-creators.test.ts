@@ -111,6 +111,8 @@ describe('loadFormatProperties', () => {
 	const fetchPropertiesMock = fetchStoryFormatProperties as jest.Mock;
 	let dispatch: jest.Mock;
 	let format: StoryFormat;
+	const invokeLoad = (formatToLoad: StoryFormat) =>
+		loadFormatProperties(formatToLoad)(dispatch, () => [format]);
 
 	beforeEach(() => {
 		dispatch = jest.fn();
@@ -119,9 +121,8 @@ describe('loadFormatProperties', () => {
 	});
 
 	it('sets the format state to loading while properties are being fetched', () => {
-		// eslint-disable-next-line @typescript-eslint/no-empty-function
 		fetchPropertiesMock.mockImplementationOnce(() => new Promise(() => {}));
-		loadFormatProperties(format)(dispatch);
+		invokeLoad(format);
 		expect(dispatch.mock.calls).toEqual([
 			[{type: 'update', id: format.id, props: {loadState: 'loading'}}]
 		]);
@@ -142,7 +143,7 @@ describe('loadFormatProperties', () => {
 		});
 
 		it('sets the format properties and state as loaded', async () => {
-			await loadFormatProperties(format)(dispatch);
+			await invokeLoad(format);
 			expect(dispatch.mock.calls.length).toBe(2);
 
 			// First call is tested above.
@@ -158,7 +159,7 @@ describe('loadFormatProperties', () => {
 
 		it('loads the format properties even if the format previously failed to load', async () => {
 			format = fakeFailedStoryFormat();
-			await loadFormatProperties(format)(dispatch);
+			await invokeLoad(format);
 			expect(dispatch.mock.calls).toEqual([
 				[{type: 'update', id: format.id, props: {loadState: 'loading'}}],
 				[
@@ -172,12 +173,12 @@ describe('loadFormatProperties', () => {
 		});
 
 		it('returns the format properties', async () =>
-			expect(await loadFormatProperties(format)(dispatch)).toBe(properties));
+			expect(await invokeLoad(format)).toBe(properties));
 
 		describe('if the format properties contain a hydrate property', () => {
 			it('merges in properties set on this by the hydrate property', async () => {
 				properties.hydrate = 'this.hydrated = true';
-				await loadFormatProperties(format)(dispatch);
+				await invokeLoad(format);
 				expect(dispatch.mock.calls).toEqual([
 					[{type: 'update', id: format.id, props: {loadState: 'loading'}}],
 					[
@@ -197,7 +198,7 @@ describe('loadFormatProperties', () => {
 				const origName = properties.name;
 
 				properties.hydrate = 'this.name = "failed"';
-				await loadFormatProperties(format)(dispatch);
+				await invokeLoad(format);
 				expect(dispatch.mock.calls).toEqual([
 					[{type: 'update', id: format.id, props: {loadState: 'loading'}}],
 					[
@@ -216,7 +217,7 @@ describe('loadFormatProperties', () => {
 			it('does not throw an error and does not alter properties if the hydrate property throws', async () => {
 				jest.spyOn(console, 'error').mockReturnValue();
 				properties.hydrate = 'this.hydrated = true; throw new Error();';
-				await loadFormatProperties(format)(dispatch);
+				await invokeLoad(format);
 				expect(dispatch.mock.calls).toEqual([
 					[{type: 'update', id: format.id, props: {loadState: 'loading'}}],
 					[
@@ -250,7 +251,7 @@ describe('loadFormatProperties', () => {
 		});
 
 		it("sets the load error and state as 'error' if loading properties fails", async () => {
-			await loadFormatProperties(format)(dispatch);
+			await invokeLoad(format);
 			expect(dispatch.mock.calls.length).toBe(2);
 
 			// First call is tested above.
@@ -265,7 +266,7 @@ describe('loadFormatProperties', () => {
 		beforeEach(() => (format = fakeLoadedStoryFormat()));
 
 		it('dispatches no actions', async () => {
-			await loadFormatProperties(format)(dispatch);
+			await invokeLoad(format);
 			expect(dispatch.mock.calls).toEqual([]);
 		});
 
@@ -273,7 +274,7 @@ describe('loadFormatProperties', () => {
 			const loadedProps = (format as StoryFormat & {loadState: 'loaded'})
 				.properties;
 
-			expect(await loadFormatProperties(format)(dispatch)).toBe(loadedProps);
+			expect(await invokeLoad(format)).toBe(loadedProps);
 		});
 	});
 
@@ -289,11 +290,11 @@ describe('loadFormatProperties', () => {
 					})
 			);
 
-			const firstLoad = loadFormatProperties(format)(dispatch);
-			const secondLoad = loadFormatProperties({
+			const firstLoad = invokeLoad(format);
+			const secondLoad = invokeLoad({
 				...format,
 				loadState: 'loading'
-			})(dispatch);
+			});
 
 			expect(fetchPropertiesMock).toHaveBeenCalledTimes(1);
 			expect(dispatch.mock.calls).toEqual([

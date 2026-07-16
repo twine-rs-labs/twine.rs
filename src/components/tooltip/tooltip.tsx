@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {CSSTransition} from 'react-transition-group';
-import {usePopper} from 'react-popper';
 import {Placement} from '@popperjs/core';
+import {usePopper, UsePopperOptions} from '../../util/use-popper';
 import './tooltip.css';
 
 export interface TooltipProps {
@@ -22,13 +22,22 @@ export const Tooltip: React.FC<TooltipProps> = props => {
 	const {anchor, label, position = 'top'} = props;
 	const [tooltipEl, setTooltipEl] = React.useState<HTMLDivElement | null>(null);
 	const [arrowEl, setArrowEl] = React.useState<HTMLDivElement | null>(null);
+	const tooltipRef = React.useRef<HTMLDivElement | null>(null);
 	const [visible, setVisible] = React.useState(false);
-	const appearTimeout = React.useRef<number>();
-	const {styles, attributes} = usePopper(anchor, tooltipEl, {
-		modifiers: [{name: 'arrow', options: {element: arrowEl}}, {name: 'flip'}],
-		placement: position,
-		strategy: 'fixed'
-	});
+	const appearTimeout = React.useRef<number | undefined>(undefined);
+	const popperOptions = React.useMemo<UsePopperOptions>(
+		() => ({
+			modifiers: [{name: 'arrow', options: {element: arrowEl}}, {name: 'flip'}],
+			placement: position,
+			strategy: 'fixed'
+		}),
+		[arrowEl, position]
+	);
+	const setTooltip = React.useCallback((element: HTMLDivElement | null) => {
+		tooltipRef.current = element;
+		setTooltipEl(element);
+	}, []);
+	const {styles, attributes} = usePopper(anchor, tooltipEl, popperOptions);
 
 	React.useEffect(() => {
 		const handleOnEnter = () => {
@@ -60,13 +69,14 @@ export const Tooltip: React.FC<TooltipProps> = props => {
 			classNames="fade-in-out"
 			in={visible}
 			mountOnEnter
+			nodeRef={tooltipRef}
 			timeout={200}
 			unmountOnExit
 		>
 			<div
 				aria-hidden
 				className="tooltip"
-				ref={setTooltipEl}
+				ref={setTooltip}
 				role="tooltip"
 				style={styles.popper}
 				{...attributes.popper}

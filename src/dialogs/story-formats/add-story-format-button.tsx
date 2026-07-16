@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {IconPlus} from '@tabler/icons';
+import {IconPlus} from '@tabler/icons-react';
 import {
 	createFromProperties,
 	useStoryFormatsContext

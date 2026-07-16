@@ -1,5 +1,4 @@
 import * as React from 'react';
-import {Helmet} from 'react-helmet';
 import {isElectronRenderer} from '../../util/is-electron';
 
 export interface DocumentTitleProps {
@@ -29,23 +28,26 @@ export function brandedDocumentTitle(title: string) {
 export const DocumentTitle: React.FC<DocumentTitleProps> = ({title}) => {
 	const documentTitle = brandedDocumentTitle(title);
 
-	// Using `history.goBack()` doesn't seem to cause Electron to update the
-	// window title bar--possibly tied to using a <HashRouter>. If it does in a
-	// future version, we can just use react-helmet directly.
-
 	React.useEffect(() => {
-		if (isElectronRenderer()) {
-			const timeout = window.setTimeout(() => {
-				document.querySelector('title')!.textContent = documentTitle;
-			}, 0);
+		const previousTitle = document.title;
+		let timeout: number | undefined;
+		document.title = documentTitle;
 
-			return () => window.clearTimeout(timeout);
+		if (isElectronRenderer()) {
+			// Hash history navigation does not immediately update Electron's native
+			// title bar, so retain the delayed update used by the previous adapter.
+			timeout = window.setTimeout(() => {
+				document.title = documentTitle;
+			}, 0);
 		}
+
+		return () => {
+			if (timeout !== undefined) {
+				window.clearTimeout(timeout);
+			}
+			document.title = previousTitle;
+		};
 	}, [documentTitle]);
 
-	return (
-		<Helmet>
-			<title>{documentTitle}</title>
-		</Helmet>
-	);
+	return null;
 };

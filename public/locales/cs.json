@@ -116,8 +116,10 @@
 		},
 		"storyCard": {
 			"lastUpdated": "Naposled editováno na {{date}}",
-			"passageCount": "1 pasáž",
-			"passageCount_plural": "{{count}} pasáží"
+			"passageCount_one": "1 pasáž",
+			"passageCount_few": "{{count}} pasáží",
+			"passageCount_many": "{{count}} pasáží",
+			"passageCount_other": "{{count}} pasáží"
 		},
 		"storyFormatItem": {
 			"author": "Autor: {{author}}",
@@ -134,8 +136,10 @@
 			"useProofingFormat": "Použít jako korekturní formát"
 		},
 		"storyFormatSelect": {
-			"loadingCount": "Načítání jednoho formátu příběhu...",
-			"loadingCount_plural": "Načítání {{loadingCount}} formátů příběhu..."
+			"loadingCount_one": "Načítání jednoho formátu příběhu...",
+			"loadingCount_few": "Načítání {{loadingCount}} formátů příběhu...",
+			"loadingCount_many": "Načítání {{loadingCount}} formátů příběhu...",
+			"loadingCount_other": "Načítání {{loadingCount}} formátů příběhu..."
 		},
 		"tagEditor": {
 			"alreadyExists": "Značka s tímto názvem už existuje."
@@ -239,8 +243,10 @@
 			"find": "Najít",
 			"includePassageNames": "Zahrnout názvy pasáží",
 			"matchCase": "Rozlišovat velká a malá písmena",
-			"matchCount": "{{count}} shodující se pasáž",
-			"matchCount_plural": "{{count}} shodujících se pasáží",
+			"matchCount_one": "{{count}} shodující se pasáž",
+			"matchCount_few": "{{count}} shodujících se pasáží",
+			"matchCount_many": "{{count}} shodujících se pasáží",
+			"matchCount_other": "{{count}} shodujících se pasáží",
 			"noMatches": "Žádné shodující se pasáže",
 			"replaceAll": "Nahradit ve všech pasážích",
 			"replaceWith": "Nahradit s",
@@ -335,12 +341,16 @@
 		"storyList": {
 			"library": "Knihovna",
 			"noStories": "Ve Twinu nejsou uložené žádné příběhy. Aby jste začali, můžete buď vytvořit nový příběh nebo ze souboru importovat již existující.",
-			"taggedTitleCount": "1 příběh se značkou",
-			"taggedTitleCount_0": "Žádné příběhy se značkou",
-			"taggedTitleCount_plural": "{{count}} příbehů se značkou",
-			"titleCount": "1 příběh",
-			"titleCount_0": "Žádné příběhy",
-			"titleCount_plural": "{{count}} příběhů",
+			"taggedTitleCount_zero": "Žádné příběhy se značkou",
+			"taggedTitleCount_one": "1 příběh se značkou",
+			"taggedTitleCount_few": "{{count}} příbehů se značkou",
+			"taggedTitleCount_many": "{{count}} příbehů se značkou",
+			"taggedTitleCount_other": "{{count}} příbehů se značkou",
+			"titleCount_zero": "Žádné příběhy",
+			"titleCount_one": "1 příběh",
+			"titleCount_few": "{{count}} příběhů",
+			"titleCount_many": "{{count}} příběhů",
+			"titleCount_other": "{{count}} příběhů",
 			"titleGeneric": "Příběhy",
 			"toolbar": {
 				"archive": "Archiv",

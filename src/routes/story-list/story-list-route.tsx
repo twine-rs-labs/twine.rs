@@ -1,6 +1,6 @@
 import orderBy from 'lodash/orderBy';
 import * as React from 'react';
-import {useHistory} from 'react-router-dom';
+import {useNavigate} from 'react-router';
 import {ClickAwayListener} from '../../components/click-away-listener';
 import {SafariWarningCard} from '../../components/error';
 import {
@@ -152,7 +152,12 @@ function StoryWordCount({story}: {story: Story}) {
 
 		void coreProjectHost
 			.queryStoryWordCountAsync(story.id)
-			.then(wordCount => active && setCount(wordCount));
+			.then(wordCount => active && setCount(wordCount))
+			.catch(error => {
+				if (active) {
+					console.error('Could not query the story word count.', error);
+				}
+			});
 		return () => {
 			active = false;
 		};
@@ -162,7 +167,7 @@ function StoryWordCount({story}: {story: Story}) {
 }
 
 export const InnerStoryListRoute: React.FC = () => {
-	const history = useHistory();
+	const navigate = useNavigate();
 	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const {dispatch: storiesDispatch, stories} = useStoriesContext();
@@ -234,7 +239,7 @@ export const InnerStoryListRoute: React.FC = () => {
 	}
 
 	function openStory(story: Story) {
-		history.push(`/stories/${story.id}`);
+		navigate(`/stories/${story.id}`);
 	}
 
 	function selectProject(story: Story, additive: boolean) {
@@ -307,7 +312,7 @@ export const InnerStoryListRoute: React.FC = () => {
 				<Button
 					block
 					icon="plus"
-					onClick={() => history.push('/new-project')}
+					onClick={() => navigate('/new-project')}
 					variant="primary"
 				>
 					New Project
@@ -315,7 +320,7 @@ export const InnerStoryListRoute: React.FC = () => {
 				<Button
 					block
 					icon="file-import"
-					onClick={() => history.push('/new-project/import')}
+					onClick={() => navigate('/new-project/import')}
 				>
 					Import
 				</Button>
@@ -435,14 +440,14 @@ export const InnerStoryListRoute: React.FC = () => {
 								<div>
 									<Button
 										icon="plus"
-										onClick={() => history.push('/new-project')}
+										onClick={() => navigate('/new-project')}
 										variant="primary"
 									>
 										New Project
 									</Button>
 									<Button
 										icon="file-import"
-										onClick={() => history.push('/new-project/import')}
+										onClick={() => navigate('/new-project/import')}
 									>
 										Import
 									</Button>

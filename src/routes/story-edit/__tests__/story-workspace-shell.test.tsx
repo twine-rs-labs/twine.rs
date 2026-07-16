@@ -1,9 +1,18 @@
-import {render, screen, waitFor, within} from '@testing-library/react';
+import {
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within
+} from '@testing-library/react';
 import * as React from 'react';
-import {MemoryRouter} from 'react-router-dom';
+import {MemoryRouter} from 'react-router';
 import {DialogsContext} from '../../../dialogs/context';
 import {StorySearchDialog} from '../../../dialogs/story-search';
-import {StoreCoreProjectHost} from '../../../core/project-host';
+import {
+	CoreProjectHostProvider,
+	StoreCoreProjectHost
+} from '../../../core/project-host';
 import {markProjectStoryHydration} from '../../../store/project-hydration';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {StoriesContext} from '../../../store/stories';
@@ -96,24 +105,26 @@ function renderComponent(
 						stories: [story]
 					}}
 				>
-					<StoryWorkspaceShell
-						bottomDrawerOpen={false}
-						editorDockLayout="tile"
-						graphPanel={<div data-testid="graph-panel" />}
-						leftDockCollapsed={false}
-						mode={mode}
-						onChangeBottomDrawerOpen={jest.fn()}
-						onChangeEditorDockLayout={jest.fn()}
-						onChangeLeftDockCollapsed={jest.fn()}
-						onChangeRightDockCollapsed={jest.fn()}
-						onOpenEditorWindow={onOpenEditorWindow}
-						onRevealPassageInGraph={onRevealPassageInGraph}
-						onSelectPassage={onSelectPassage}
-						rightDockCollapsed={false}
-						selectedPassageId={start.id}
-						story={story}
-						{...props}
-					/>
+					<CoreProjectHostProvider>
+						<StoryWorkspaceShell
+							bottomDrawerOpen={false}
+							editorDockLayout="tile"
+							graphPanel={<div data-testid="graph-panel" />}
+							leftDockCollapsed={false}
+							mode={mode}
+							onChangeBottomDrawerOpen={jest.fn()}
+							onChangeEditorDockLayout={jest.fn()}
+							onChangeLeftDockCollapsed={jest.fn()}
+							onChangeRightDockCollapsed={jest.fn()}
+							onOpenEditorWindow={onOpenEditorWindow}
+							onRevealPassageInGraph={onRevealPassageInGraph}
+							onSelectPassage={onSelectPassage}
+							rightDockCollapsed={false}
+							selectedPassageId={start.id}
+							story={story}
+							{...props}
+						/>
+					</CoreProjectHostProvider>
 				</StoriesContext.Provider>
 			</DialogsContext.Provider>
 		</MemoryRouter>
@@ -367,6 +378,11 @@ describe('<StoryWorkspaceShell>', () => {
 		};
 		renderComponent('graph', undefined, {
 			configureStory: currentStory => {
+				source.id = currentStory.id;
+				source.passages = source.passages.map(passage => ({
+					...passage,
+					story: currentStory.id
+				}));
 				saveProjectMetadata(currentStory.id, {
 					rootPath: '/native/project.twine.rs',
 					status: 'file-backed',
@@ -489,19 +505,19 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 	});
 
-	it('keeps asset management in the full asset route', () => {
+	it('keeps asset management in the full asset route', async () => {
 		renderComponent('text');
 
-		within(
-			screen.getByRole('complementary', {
-				name: 'routes.storyEdit.workspace.leftDock'
-			})
-		)
-			.getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
-			.click();
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.leftDock'
+				})
+			).getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
+		);
 
 		expect(
-			screen.getByRole('button', {name: 'Asset Manager'})
+			await screen.findByRole('button', {name: 'Asset Manager'})
 		).toBeInTheDocument();
 		expect(screen.queryByRole('button', {name: 'Import Asset'})).toBeNull();
 		expect(screen.queryByRole('button', {name: 'Rename'})).toBeNull();

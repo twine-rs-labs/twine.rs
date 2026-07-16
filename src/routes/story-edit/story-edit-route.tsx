@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {Redirect, useLocation, useParams} from 'react-router-dom';
+import {Navigate, useLocation, useParams} from 'react-router';
 import {MainContent} from '../../components/container/main-content';
 import {DocumentTitle} from '../../components/document-title/document-title';
 import {DialogsContextProvider} from '../../dialogs';
@@ -76,7 +76,6 @@ function sourcePositionForText(
 	offsetValue: string | null,
 	lineValue: string | null
 ) {
-
 	const offset = parsedInteger(offsetValue, 0);
 
 	if (offset !== undefined) {
@@ -193,12 +192,10 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 				return;
 			}
 
-			const specs = passages.map(
-				(passage): EditorWindowSpec => ({
-					kind: 'passage',
-					passageId: passage.id
-				})
-			);
+			const specs = passages.map((passage): EditorWindowSpec => ({
+				kind: 'passage',
+				passageId: passage.id
+			}));
 
 			workspace.setEditorWindows(current => {
 				const next = [...(current ?? materializedWindows())];
@@ -321,12 +318,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		const revealPosition = resolvedTarget
 			? resolvedTarget.kind === 'passage'
 				? parsedInteger(offsetValue, 0)
-				: sourcePositionForQuery(
-						story,
-						resolvedTarget,
-						offsetValue,
-						lineValue
-					)
+				: sourcePositionForQuery(story, resolvedTarget, offsetValue, lineValue)
 			: undefined;
 
 		handledRevealQuery.current = location.search;
@@ -364,10 +356,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 					});
 					return next;
 				});
-			} else if (
-				resolvedTarget?.kind === 'passage' &&
-				lineValue !== null
-			) {
+			} else if (resolvedTarget?.kind === 'passage' && lineValue !== null) {
 				void coreProjectHost
 					.queryPassageDocumentAsync(story.id, resolvedTarget.passageId)
 					.then(document => {
@@ -511,11 +500,15 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 };
 
 export const InnerStoryEditRoute: React.FC = () => {
-	const {storyId} = useParams<{storyId: string}>();
+	const {storyId = ''} = useParams<'storyId'>();
 	const {stories} = useStoriesContext();
 	const story = stories.find(candidate => candidate.id === storyId);
 
-	return story ? <StoryEditRouteForStory story={story} /> : <Redirect to="/" />;
+	return story ? (
+		<StoryEditRouteForStory story={story} />
+	) : (
+		<Navigate replace to="/" />
+	);
 };
 
 // This is a separate component so that the inner one can use dialog context.

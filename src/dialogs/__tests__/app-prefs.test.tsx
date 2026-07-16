@@ -137,9 +137,12 @@ describe('<AppPrefsDialog>', () => {
 
 	it('changes the code editor theme preference when changed', () => {
 		renderComponent({codeEditorTheme: 'twine'});
-		fireEvent.change(screen.getByLabelText('dialogs.appPrefs.codeEditorTheme'), {
-			target: {value: 'solarized-dark'}
-		});
+		fireEvent.change(
+			screen.getByLabelText('dialogs.appPrefs.codeEditorTheme'),
+			{
+				target: {value: 'solarized-dark'}
+			}
+		);
 		expect(
 			screen.getByTestId('pref-inspector-codeEditorTheme')
 		).toHaveTextContent('solarized-dark');
