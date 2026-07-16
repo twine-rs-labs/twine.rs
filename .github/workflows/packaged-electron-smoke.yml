@@ -1,0 +1,44 @@
+name: Packaged Electron smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-smoke:
+    name: ${{ matrix.os }} packaged smoke
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Rust WASM tooling
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-bindgen-cli --version 0.2.125 --locked
+      - run: npm ci
+      - name: Build production Electron app
+        run: npm run build:electron-app:ci
+        env:
+          NODE_ENV: production
+      - name: Package native unpacked app
+        run: npm run package:electron:dir
+        env:
+          NODE_ENV: production
+      - name: Smoke packaged app on Windows
+        if: runner.os == 'Windows'
+        run: npm run e2e:electron:packaged
+      - name: Smoke packaged app on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run e2e:electron:packaged

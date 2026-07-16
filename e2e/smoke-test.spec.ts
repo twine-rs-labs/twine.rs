@@ -147,7 +147,11 @@ test('opens the D6 Contents, Diagnostics, and Assets surfaces', async ({
 	await expect(page).toHaveURL(/#\/stories\/[^/]+\/contents$/);
 	await expect(page.getByLabel('Contents', {exact: true})).toBeVisible();
 	await expect(page.getByLabel('Filter contents')).toBeVisible();
+	const contentsFilters = page.getByLabel('Contents filters');
+
+	await contentsFilters.getByRole('button', {name: /Variables/}).click();
 	await expect(page.getByText('$score').first()).toBeVisible();
+	await contentsFilters.getByRole('button', {name: /Assets/}).click();
 	await expect(page.getByText('assets/cover.png').first()).toBeVisible();
 	await expect(
 		page.getByRole('button', {name: 'Reveal in Source'})
