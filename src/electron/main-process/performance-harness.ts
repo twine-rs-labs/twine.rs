@@ -39,6 +39,7 @@ const memoryCheckpoints: Array<{
 	appMetrics: ReturnType<typeof app.getAppMetrics>;
 	mainHeap: ReturnType<typeof getHeapStatistics>;
 	mainMemory: NodeJS.MemoryUsage;
+	mainProcessMemory?: Electron.ProcessMemoryInfo;
 	name: string;
 	recordedAtEpochMs: number;
 	renderer: Record<string, number>;
@@ -172,7 +173,8 @@ export function resetMainPerformanceHarness() {
 
 export function recordMemoryCheckpoint(
 	name: string,
-	renderer: Record<string, number> = {}
+	renderer: Record<string, number> = {},
+	mainProcessMemory?: Electron.ProcessMemoryInfo
 ) {
 	if (!enabled) {
 		return;
@@ -182,13 +184,16 @@ export function recordMemoryCheckpoint(
 		appMetrics: app.getAppMetrics(),
 		mainHeap: getHeapStatistics(),
 		mainMemory: process.memoryUsage(),
+		mainProcessMemory,
 		name,
 		recordedAtEpochMs: performanceEpochNow(),
 		renderer
 	});
 }
 
-export function mainPerformanceHarnessSnapshot() {
+export function mainPerformanceHarnessSnapshot(
+	processMemory?: Electron.ProcessMemoryInfo
+) {
 	if (!enabled) {
 		throw new Error('The Electron performance harness is disabled.');
 	}
@@ -197,6 +202,7 @@ export function mainPerformanceHarnessSnapshot() {
 		appMetrics: app.getAppMetrics(),
 		memoryCheckpoints: [...memoryCheckpoints],
 		memory: process.memoryUsage(),
+		processMemory,
 		timings: [...timings],
 		watcherMetrics: [...watcherMetrics],
 		watcherTraceEvents: [...watcherTraceEvents]

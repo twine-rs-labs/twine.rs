@@ -26,7 +26,7 @@ const report = await readJson(source);
 const budgets = await readJson(
 	path.join(repoRoot, 'benchmarks', 'budgets.json')
 );
-const errors = baselineCandidateErrors(report, budgets);
+const errors = baselineCandidateErrors(report, budgets, {requireClean: true});
 
 if (errors.length > 0) {
 	throw new Error(`Cannot accept baseline:\n- ${errors.join('\n- ')}`);

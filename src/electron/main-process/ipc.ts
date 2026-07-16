@@ -77,20 +77,27 @@ function nativePlatformSettings() {
 
 export function initIpc() {
 	if (performanceHarnessEnabled()) {
-		ipcMain.handle('performance-harness-snapshot', async () => ({
-			...mainPerformanceHarnessSnapshot(),
-			owners: {
-				nativeHydration: nativeHydrationMemoryDiagnostics(),
-				projectSessions: projectSessionMemoryDiagnostics()
-			}
-		}));
+		ipcMain.handle('performance-harness-snapshot', async () => {
+			const processMemory = await process.getProcessMemoryInfo();
+
+			return {
+				...mainPerformanceHarnessSnapshot(processMemory),
+				owners: {
+					nativeHydration: nativeHydrationMemoryDiagnostics(),
+					projectSessions: projectSessionMemoryDiagnostics()
+				}
+			};
+		});
 		ipcMain.handle('performance-harness-reset', async () =>
 			resetMainPerformanceHarness()
 		);
 		ipcMain.handle(
 			'performance-harness-checkpoint',
-			async (_event, name: string, renderer: Record<string, number>) =>
-				recordMemoryCheckpoint(name, renderer)
+			async (_event, name: string, renderer: Record<string, number>) => {
+				const processMemory = await process.getProcessMemoryInfo();
+
+				recordMemoryCheckpoint(name, renderer, processMemory);
+			}
 		);
 		ipcMain.handle('performance-harness-collect-garbage', async () => {
 			global.gc?.();

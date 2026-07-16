@@ -31,6 +31,15 @@ interface PerformanceSnapshot {
 			heapUsed?: number;
 			rss: number;
 		};
+		processMemory?: {
+			private: number;
+			residentSet: number;
+		};
+		rendererNativeMemory?: {
+			blinkMemory: {allocated: number; total: number};
+			pid: number;
+			processMemory: {private: number; residentSet: number};
+		};
 		owners?: {
 			nativeHydration?: {
 				activeLeaseCount: number;
@@ -53,6 +62,7 @@ interface PerformanceSnapshot {
 			appMetrics: PerformanceSnapshot['main']['appMetrics'];
 			mainHeap: Record<string, number>;
 			mainMemory: PerformanceSnapshot['main']['memory'];
+			mainProcessMemory?: PerformanceSnapshot['main']['processMemory'];
 			name: string;
 			recordedAtEpochMs: number;
 			renderer: Record<string, number>;
@@ -755,6 +765,24 @@ function startupMetrics(
 			`startupMemory.${checkpoint.name}.mainHeapMiB`,
 			typeof checkpoint.mainHeap.used_heap_size === 'number'
 				? checkpoint.mainHeap.used_heap_size / 1024 / 1024
+				: undefined
+		);
+		addSample(
+			`startupMemory.${checkpoint.name}.private.mainMiB`,
+			checkpoint.mainProcessMemory?.private === undefined
+				? undefined
+				: checkpoint.mainProcessMemory.private / 1024
+		);
+		addSample(
+			`startupMemory.${checkpoint.name}.private.rendererMiB`,
+			typeof checkpoint.renderer.rendererPrivateKiB === 'number'
+				? checkpoint.renderer.rendererPrivateKiB / 1024
+				: undefined
+		);
+		addSample(
+			`startupMemory.${checkpoint.name}.blink.allocatedMiB`,
+			typeof checkpoint.renderer.rendererBlinkAllocatedKiB === 'number'
+				? checkpoint.renderer.rendererBlinkAllocatedKiB / 1024
 				: undefined
 		);
 	}
@@ -1952,12 +1980,22 @@ function captureNativeSaveMetrics(current: PerformanceSnapshot) {
 async function sampleFrames(page: Page, frameCount = 90) {
 	return page.evaluate(
 		count =>
-			new Promise<number[]>(resolve => {
-				const samples: number[] = [];
+			new Promise<
+				Array<{durationMs: number; endTimeMs: number; startTimeMs: number}>
+			>(resolve => {
+				const samples: Array<{
+					durationMs: number;
+					endTimeMs: number;
+					startTimeMs: number;
+				}> = [];
 				let previous = performance.now();
 
 				function frame(now: number) {
-					samples.push(now - previous);
+					samples.push({
+						durationMs: now - previous,
+						endTimeMs: now,
+						startTimeMs: previous
+					});
 					previous = now;
 					if (samples.length >= count) {
 						resolve(samples.slice(1));
@@ -2067,8 +2105,14 @@ async function measureGraph(page: Page) {
 		const frames = await framesPromise;
 
 		for (const frame of frames) {
-			addSample('graph.frameMs', frame);
-			addSample('graph.frameMaxMs', frame);
+			addSample('graph.frameMs', frame.durationMs);
+			addSample('graph.frameMaxMs', frame.durationMs);
+			if (frame.durationMs > 25) {
+				addSample('graph.frameOutlierDurationMs', frame.durationMs);
+				addSample('graph.frameOutlierStartMs', frame.startTimeMs);
+				addSample('graph.frameOutlierEndMs', frame.endTimeMs);
+				addSample('graph.frameOutlierPanIndex', index);
+			}
 		}
 	}
 	await waitForWorkerIdle(page);
@@ -2256,6 +2300,28 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 		client?.wasmMemoryBytes === undefined
 			? undefined
 			: client.wasmMemoryBytes / mib;
+	const mainPrivateMiB = current.main.processMemory?.private
+		? current.main.processMemory.private / 1024
+		: undefined;
+	const rendererPrivateMiB = current.main.rendererNativeMemory?.processMemory
+		.private
+		? current.main.rendererNativeMemory.processMemory.private / 1024
+		: undefined;
+	const projectBearingPrivateMiB =
+		mainPrivateMiB === undefined || rendererPrivateMiB === undefined
+			? undefined
+			: mainPrivateMiB + rendererPrivateMiB;
+	const knownPrivateOwnerMiB = [
+		mainHeapUsedMiB,
+		mainExternalMiB,
+		rendererHeapUsedMiB,
+		workerWasmMiB
+	].every(value => value !== undefined)
+		? mainHeapUsedMiB! +
+			mainExternalMiB! +
+			rendererHeapUsedMiB! +
+			workerWasmMiB!
+		: undefined;
 
 	metric(
 		'residentMiB',
@@ -2263,6 +2329,28 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 	);
 	metric('rendererMiB', rendererWorkingSetMiB);
 	metric('mainMiB', current.main.memory.rss / mib);
+	metric('private.mainMiB', mainPrivateMiB);
+	metric('private.rendererMiB', rendererPrivateMiB);
+	metric('private.projectBearingMiB', projectBearingPrivateMiB);
+	metric('private.knownOwnerMiB', knownPrivateOwnerMiB);
+	metric(
+		'private.knownOwnerShare',
+		knownPrivateOwnerMiB === undefined || !projectBearingPrivateMiB
+			? undefined
+			: knownPrivateOwnerMiB / projectBearingPrivateMiB
+	);
+	metric(
+		'blink.allocatedMiB',
+		current.main.rendererNativeMemory?.blinkMemory.allocated === undefined
+			? undefined
+			: current.main.rendererNativeMemory.blinkMemory.allocated / 1024
+	);
+	metric(
+		'blink.totalMiB',
+		current.main.rendererNativeMemory?.blinkMemory.total === undefined
+			? undefined
+			: current.main.rendererNativeMemory.blinkMemory.total / 1024
+	);
 	for (const type of ['Browser', 'GPU', 'Tab', 'Utility']) {
 		metric(`process.${type.toLowerCase()}MiB`, processMiB(type));
 	}
@@ -2301,6 +2389,22 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 			mainHeapUsedMiB !== undefined &&
 			mainExternalMiB !== undefined
 			? Math.max(0, browserWorkingSetMiB - mainHeapUsedMiB - mainExternalMiB)
+			: undefined
+	);
+	metric(
+		'residual.rendererPrivateAfterHeapAndWasmMiB',
+		rendererPrivateMiB !== undefined &&
+			rendererHeapUsedMiB !== undefined &&
+			workerWasmMiB !== undefined
+			? Math.max(0, rendererPrivateMiB - rendererHeapUsedMiB - workerWasmMiB)
+			: undefined
+	);
+	metric(
+		'residual.mainPrivateAfterHeapAndExternalMiB',
+		mainPrivateMiB !== undefined &&
+			mainHeapUsedMiB !== undefined &&
+			mainExternalMiB !== undefined
+			? Math.max(0, mainPrivateMiB - mainHeapUsedMiB - mainExternalMiB)
 			: undefined
 	);
 
@@ -2393,6 +2497,8 @@ function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
 	const baselineRoles = baseline
 		? processWorkingSetByRole(baseline.appMetrics)
 		: new Map<string, number>();
+	const baselineMainPrivateKiB = baseline?.mainProcessMemory?.private;
+	const baselineRendererPrivateKiB = baseline?.renderer.rendererPrivateKiB;
 
 	for (const checkpoint of checkpoints) {
 		const prefix = `memoryDetail.${checkpoint.name}`;
@@ -2402,6 +2508,40 @@ function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
 		);
 
 		addSample(`${prefix}.residentMiB`, workingSetKiB / 1024);
+		addSample(
+			`${prefix}.private.mainMiB`,
+			checkpoint.mainProcessMemory?.private === undefined
+				? undefined
+				: checkpoint.mainProcessMemory.private / 1024
+		);
+		addSample(
+			`${prefix}.private.rendererMiB`,
+			typeof checkpoint.renderer.rendererPrivateKiB === 'number'
+				? checkpoint.renderer.rendererPrivateKiB / 1024
+				: undefined
+		);
+		addSample(
+			`${prefix}.private.delta.mainMiB`,
+			checkpoint.mainProcessMemory?.private === undefined ||
+				baselineMainPrivateKiB === undefined
+				? undefined
+				: (checkpoint.mainProcessMemory.private - baselineMainPrivateKiB) / 1024
+		);
+		addSample(
+			`${prefix}.private.delta.rendererMiB`,
+			typeof checkpoint.renderer.rendererPrivateKiB !== 'number' ||
+				typeof baselineRendererPrivateKiB !== 'number'
+				? undefined
+				: (checkpoint.renderer.rendererPrivateKiB -
+						baselineRendererPrivateKiB) /
+						1024
+		);
+		addSample(
+			`${prefix}.blink.allocatedMiB`,
+			typeof checkpoint.renderer.rendererBlinkAllocatedKiB === 'number'
+				? checkpoint.renderer.rendererBlinkAllocatedKiB / 1024
+				: undefined
+		);
 		for (const [role, value] of processWorkingSetByRole(
 			checkpoint.appMetrics
 		)) {
@@ -2986,7 +3126,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				diagnostic: phase === 'diagnostic',
 				memoryDetail: phase === 'memory-detail',
 				environment: {
-					metricContracts: {memory: 3, startup: 2},
+					metricContracts: {memory: 3, memoryAttribution: 1, startup: 2},
 					git: {dirty: gitDirty, revision: gitRevision},
 					machine: {
 						arch: process.arch,
@@ -3249,6 +3389,14 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 					(retainedSnapshot.main.memory.heapUsed ?? 0) > 0 &&
 					(retainedSnapshot.renderer.core.hosts[0]?.client?.wasmMemoryBytes ??
 						0) > 0
+			);
+			assertInvariant(
+				'final-memory-native-private-present',
+				(retainedSnapshot.main.processMemory?.private ?? 0) > 0 &&
+					(retainedSnapshot.main.rendererNativeMemory?.processMemory.private ??
+						0) > 0 &&
+					(retainedSnapshot.main.rendererNativeMemory?.blinkMemory.total ?? 0) >
+						0
 			);
 		} finally {
 			await closeFixture(running);

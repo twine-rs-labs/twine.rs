@@ -21,7 +21,11 @@ test('calculates stable nearest-rank percentiles and aggregates', () => {
 
 test('merges independently checkpointed benchmark phases', () => {
 	const common = {
-		environment: {machine: {}, versions: {}},
+		environment: {
+			git: {dirty: false, revision: 'abc123'},
+			machine: {},
+			versions: {}
+		},
 		fixture: {passageCount: 50_000},
 		kind: 'twine-electron-performance',
 		schemaVersion: 1
@@ -55,7 +59,17 @@ test('merges independently checkpointed benchmark phases', () => {
 	assert.deepEqual(merged.samples, {shell: [10, 20], watcher: [5]});
 	assert.deepEqual(merged.assertions, [
 		{name: 'startup', passed: true},
-		{name: 'watcher', passed: true}
+		{name: 'watcher', passed: true},
+		{
+			detail: '["abc123","abc123"]',
+			name: 'git-revision-stable-across-phases',
+			passed: true
+		},
+		{
+			detail: '[false,false]',
+			name: 'git-dirty-state-stable-across-phases',
+			passed: true
+		}
 	]);
 	assert.equal(merged.diagnostics.startup.length, 1);
 	assert.equal(merged.diagnostics.watcher.trace, true);
@@ -70,7 +84,11 @@ test('preserves detailed memory diagnostics for focused reports', () => {
 			memoryDetail: {owners: {activeEditorCount: 0}},
 			startup: []
 		},
-		environment: {machine: {}, versions: {}},
+		environment: {
+			git: {dirty: false, revision: 'abc123'},
+			machine: {},
+			versions: {}
+		},
 		fixture: {passageCount: 50_000},
 		kind: 'twine-electron-performance',
 		phase: 'memory-detail',
@@ -221,6 +239,48 @@ test('accepts only complete all-phase baseline reports', () => {
 	};
 
 	assert.deepEqual(baselineCandidateErrors(report, budgets), []);
+	assert.match(
+		baselineCandidateErrors(report, budgets, {requireClean: true}).join(' '),
+		/clean Git revision/
+	);
+	assert.deepEqual(
+		baselineCandidateErrors(
+			{
+				...report,
+				assertions: [
+					{
+						name: 'git-revision-stable-across-phases',
+						passed: true
+					},
+					{
+						name: 'git-dirty-state-stable-across-phases',
+						passed: true
+					}
+				],
+				environment: {
+					...report.environment,
+					git: {dirty: false, revision: 'abc123'}
+				}
+			},
+			budgets,
+			{requireClean: true}
+		),
+		[]
+	);
+	assert.match(
+		baselineCandidateErrors(
+			{
+				...report,
+				environment: {
+					...report.environment,
+					git: {dirty: false, revision: 'abc123'}
+				}
+			},
+			budgets,
+			{requireClean: true}
+		).join(' '),
+		/git-revision-stable-across-phases/
+	);
 	assert.match(
 		baselineCandidateErrors({...report, phase: 'watcher'}, budgets).join(' '),
 		/all-phase/

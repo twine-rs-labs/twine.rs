@@ -86,10 +86,32 @@ export function mergeRawPerformanceReports(reports, phaseResults = {}) {
 			}
 		}
 	}
+	const gitStates = reports.map(report => report.environment?.git);
+	const gitRevisions = gitStates.map(state => state?.revision);
+	const gitDirtyStates = gitStates.map(state => state?.dirty);
+	const mergedAssertions = reports.flatMap(report => report.assertions ?? []);
+
+	mergedAssertions.push(
+		{
+			detail: JSON.stringify(gitRevisions),
+			name: 'git-revision-stable-across-phases',
+			passed:
+				gitRevisions.every(
+					revision => typeof revision === 'string' && revision
+				) && gitRevisions.every(revision => revision === gitRevisions[0])
+		},
+		{
+			detail: JSON.stringify(gitDirtyStates),
+			name: 'git-dirty-state-stable-across-phases',
+			passed:
+				gitDirtyStates.every(state => typeof state === 'boolean') &&
+				gitDirtyStates.every(state => state === gitDirtyStates[0])
+		}
+	);
 
 	return {
 		...first,
-		assertions: reports.flatMap(report => report.assertions ?? []),
+		assertions: mergedAssertions,
 		createdAt: new Date().toISOString(),
 		diagnostics,
 		phase: reports.length === 1 ? first.phase : 'all',
@@ -234,7 +256,11 @@ export function evaluatePerformanceReport(report, budgets, baseline) {
 	};
 }
 
-export function baselineCandidateErrors(report, budgets) {
+export function baselineCandidateErrors(
+	report,
+	budgets,
+	{requireClean = false} = {}
+) {
 	const errors = [];
 
 	if (
@@ -263,6 +289,30 @@ export function baselineCandidateErrors(report, budgets) {
 	}
 	if (report.evaluation?.passed !== true) {
 		errors.push('The report has blocking invariant failures.');
+	}
+	if (
+		requireClean &&
+		(report.environment?.git?.dirty !== false ||
+			typeof report.environment?.git?.revision !== 'string' ||
+			!report.environment.git.revision)
+	) {
+		errors.push('An accepted baseline must come from a clean Git revision.');
+	}
+	if (requireClean) {
+		for (const name of [
+			'git-revision-stable-across-phases',
+			'git-dirty-state-stable-across-phases'
+		]) {
+			if (
+				!report.assertions?.some(
+					assertion => assertion.name === name && assertion.passed === true
+				)
+			) {
+				errors.push(
+					`An accepted baseline must include a passing ${name} assertion.`
+				);
+			}
+		}
 	}
 
 	return errors;

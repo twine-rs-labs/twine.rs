@@ -1,9 +1,14 @@
+import {act, renderHook} from '@testing-library/react-hooks';
+import * as React from 'react';
+import {PrefsContext} from '../../../store/prefs';
+import {defaults as prefsDefaults} from '../../../store/prefs/defaults';
 import {fakePassage, fakeStory} from '../../../test-util';
 import {
 	initialModeForStory,
 	preferredModeForStory,
 	readProjectWorkspaceForStory,
-	setStoryEditScrollMemory
+	setStoryEditScrollMemory,
+	useStoryEditWorkspace
 } from '../workspace-state';
 
 describe('story edit workspace state', () => {
@@ -111,6 +116,34 @@ describe('story edit workspace state', () => {
 		).toEqual({
 			graph: {left: 10, top: 20},
 			text: {left: 30, top: 40}
+		});
+	});
+
+	it('persists graph view without rerendering the route workspace', () => {
+		const story = fakeStory();
+		let renderCount = 0;
+		const wrapper: React.FC = ({children}) =>
+			React.createElement(
+				PrefsContext.Provider,
+				{value: {dispatch: jest.fn(), prefs: prefsDefaults()}},
+				children
+			);
+		const {result} = renderHook(
+			() => {
+				renderCount++;
+				return useStoryEditWorkspace(story);
+			},
+			{wrapper}
+		);
+		const settledRenderCount = renderCount;
+
+		act(() => result.current.setGraphView({k: 1.2, x: -80, y: 45}));
+
+		expect(renderCount).toBe(settledRenderCount);
+		expect(readProjectWorkspaceForStory(story).graphView).toEqual({
+			k: 1.2,
+			x: -80,
+			y: 45
 		});
 	});
 

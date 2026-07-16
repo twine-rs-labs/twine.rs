@@ -272,6 +272,17 @@ const bridge = {
 	}
 };
 
+async function rendererNativeMemorySnapshot() {
+	const processMemory = await process.getProcessMemoryInfo();
+	const blinkMemory = process.getBlinkMemoryInfo();
+
+	return {
+		blinkMemory,
+		pid: process.pid,
+		processMemory
+	};
+}
+
 if ((process as any).contextIsolated) {
 	contextBridge.exposeInMainWorld('twineElectron', bridge);
 } else {
@@ -280,12 +291,17 @@ if ((process as any).contextIsolated) {
 
 if (process.env.TWINE_PERF === '1') {
 	(window as any).twinePerformanceNative = {
-		checkpoint(name: string, renderer: Record<string, number>) {
-			return ipcRenderer.invoke(
-				'performance-harness-checkpoint',
-				name,
-				renderer
-			);
+		async checkpoint(name: string, renderer: Record<string, number>) {
+			const nativeMemory = await rendererNativeMemorySnapshot();
+
+			return ipcRenderer.invoke('performance-harness-checkpoint', name, {
+				...renderer,
+				rendererBlinkAllocatedKiB: nativeMemory.blinkMemory.allocated,
+				rendererBlinkTotalKiB: nativeMemory.blinkMemory.total,
+				rendererPid: nativeMemory.pid,
+				rendererPrivateKiB: nativeMemory.processMemory.private,
+				rendererResidentSetKiB: nativeMemory.processMemory.residentSet
+			});
 		},
 		collectGarbage() {
 			return ipcRenderer.invoke('performance-harness-collect-garbage');
@@ -293,8 +309,13 @@ if (process.env.TWINE_PERF === '1') {
 		reset() {
 			return ipcRenderer.invoke('performance-harness-reset');
 		},
-		snapshot() {
-			return ipcRenderer.invoke('performance-harness-snapshot');
+		async snapshot() {
+			const [main, rendererNativeMemory] = await Promise.all([
+				ipcRenderer.invoke('performance-harness-snapshot'),
+				rendererNativeMemorySnapshot()
+			]);
+
+			return {...main, rendererNativeMemory};
 		}
 	};
 }

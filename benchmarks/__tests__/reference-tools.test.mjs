@@ -92,6 +92,52 @@ test('creates a deterministic, normalized historical reference', () => {
 	assert.equal('diagnostics' in first, false);
 });
 
+test('classifies a clean report as a clean-commit baseline', () => {
+	const report = exampleReport();
+
+	report.environment.git = {dirty: false, revision: 'def456'};
+	report.assertions.push(
+		{name: 'git-revision-stable-across-phases', passed: true},
+		{name: 'git-dirty-state-stable-across-phases', passed: true}
+	);
+	const summary = createPerformanceReferenceSummary(report, {
+		sourceReportFile: 'benchmarks/results/source.json',
+		sourceReportSha256: sha256('source report')
+	});
+
+	assert.equal(summary.classification, 'clean-commit-baseline');
+	assert.deepEqual(summary.provenance.limitations, []);
+});
+
+test('requires phase-stable provenance for clean classification', () => {
+	const report = exampleReport();
+
+	report.environment.git = {dirty: false, revision: 'def456'};
+	const summary = createPerformanceReferenceSummary(report, {
+		sourceReportFile: 'benchmarks/results/source.json',
+		sourceReportSha256: sha256('source report')
+	});
+
+	assert.equal(summary.classification, 'historical-initial-baseline');
+	assert.match(summary.provenance.limitations[0], /phase-stable/);
+});
+
+test('does not classify missing Git provenance as a clean baseline', () => {
+	const report = exampleReport();
+
+	delete report.environment.git;
+	const summary = createPerformanceReferenceSummary(report, {
+		sourceReportFile: 'benchmarks/results/source.json',
+		sourceReportSha256: sha256('source report')
+	});
+
+	assert.equal(summary.classification, 'historical-initial-baseline');
+	assert.match(
+		summary.provenance.limitations[0],
+		/verified clean Git revision/
+	);
+});
+
 test('hashes equivalent objects independently of key order', () => {
 	assert.equal(
 		objectSha256({a: 1, b: {c: 2, d: 3}}),

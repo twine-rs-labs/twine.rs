@@ -89,16 +89,35 @@ export function createPerformanceReferenceSummary(
 	{sourceReportFile, sourceReportSha256}
 ) {
 	const limitations = [];
+	const phaseProvenanceVerified = [
+		'git-revision-stable-across-phases',
+		'git-dirty-state-stable-across-phases'
+	].every(name =>
+		report.assertions?.some(
+			assertion => assertion.name === name && assertion.passed === true
+		)
+	);
+	const cleanRevision =
+		report.environment?.git?.dirty === false &&
+		typeof report.environment.git.revision === 'string' &&
+		report.environment.git.revision.length > 0 &&
+		phaseProvenanceVerified;
 
 	if (report.environment?.git?.dirty) {
 		limitations.push(
 			'The source report was captured from a dirty worktree. This snapshot is historical performance evidence, not proof of clean-commit reproducibility.'
 		);
+	} else if (!cleanRevision) {
+		limitations.push(
+			'The source report has no phase-stable, verified clean Git revision. This snapshot is historical performance evidence, not proof of clean-commit reproducibility.'
+		);
 	}
 
 	return {
 		aggregates: report.aggregates,
-		classification: 'historical-initial-baseline',
+		classification: cleanRevision
+			? 'clean-commit-baseline'
+			: 'historical-initial-baseline',
 		createdAt: report.createdAt,
 		environment: report.environment,
 		evaluation: {

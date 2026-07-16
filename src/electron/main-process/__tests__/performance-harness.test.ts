@@ -106,4 +106,19 @@ describe('Electron performance harness isolation', () => {
 			]
 		);
 	});
+
+	it('includes native private memory in snapshots', () => {
+		process.env.TWINE_PERF = '1';
+		process.env.TWINE_PERF_USER_DATA = join(
+			tmpdir(),
+			'twine-rs-perf-test',
+			'user-data'
+		);
+		const harness = loadHarness();
+		const processMemory = {private: 120, residentSet: 140, shared: 20};
+
+		expect(
+			harness.mainPerformanceHarnessSnapshot(processMemory).processMemory
+		).toEqual(processMemory);
+	});
 });

@@ -1281,6 +1281,10 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		() => new Map(projection.nodes.map(node => [node.id, node])),
 		[projection.nodes]
 	);
+	const persistedStoryBounds = React.useMemo(
+		() => storyPassageBounds(story.passages),
+		[story.passages]
+	);
 	const logicalNodeById = React.useMemo(() => {
 		if (Object.keys(optimisticMoveBounds).length === 0) {
 			return projectedNodeById;
@@ -1295,12 +1299,21 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			])
 		);
 	}, [optimisticMoveBounds, projectedNodeById, projection.nodes]);
-	const logicalGraphBounds = React.useMemo(
-		() =>
+	const logicalGraphBounds = React.useMemo(() => {
+		if (Object.keys(optimisticMoveBounds).length === 0) {
+			return persistedStoryBounds ?? projection.bounds;
+		}
+
+		return (
 			storyPassageBounds(story.passages, optimisticMoveBounds) ??
-			projection.bounds,
-		[optimisticMoveBounds, projection.bounds, story.passages]
-	);
+			projection.bounds
+		);
+	}, [
+		optimisticMoveBounds,
+		persistedStoryBounds,
+		projection.bounds,
+		story.passages
+	]);
 	const displayBounds = React.useMemo(
 		() => orientedBounds(logicalGraphBounds, orientation),
 		[logicalGraphBounds, orientation]

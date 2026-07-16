@@ -489,6 +489,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 	const [graphView, setGraphViewState] = React.useState<
 		StoryGraphWorkspaceView | undefined
 	>(() => initialProjectWorkspace.graphView);
+	const graphViewRef = React.useRef(graphView);
 	const [graphOptions, setGraphOptionsState] =
 		React.useState<StoryGraphWorkspaceOptions>(
 			() => initialProjectWorkspace.graphOptions ?? {}
@@ -504,13 +505,25 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 	}, []);
 	const setGraphView = React.useCallback<
 		React.Dispatch<React.SetStateAction<StoryGraphWorkspaceView | undefined>>
-	>(value => {
-		setGraphViewState(current => {
+	>(
+		value => {
+			const current = graphViewRef.current;
 			const next = typeof value === 'function' ? value(current) : value;
 
-			return graphViewEqual(current, next) ? current : next;
-		});
-	}, []);
+			if (graphViewEqual(current, next)) {
+				return;
+			}
+
+			graphViewRef.current = next;
+			const projectWorkspace = readProjectWorkspace(story.id);
+
+			writeJson(projectStorageKey(story.id), {
+				...projectWorkspace,
+				graphView: next
+			});
+		},
+		[story.id]
+	);
 
 	React.useEffect(() => {
 		const projectWorkspace = readProjectWorkspaceForStory(story);
@@ -531,6 +544,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		setEditorDockLayout(projectWorkspace.editorDockLayout ?? 'tile');
 		setEditorWindows(projectWorkspace.editorWindows);
 		setActiveWindowId(projectWorkspace.activeWindowId);
+		graphViewRef.current = projectWorkspace.graphView;
 		setGraphViewState(projectWorkspace.graphView);
 		setGraphOptionsState(projectWorkspace.graphOptions ?? {});
 	}, [prefs.preferredStoryEditMode, story.id]);
@@ -558,7 +572,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 			editorDockLayout,
 			editorWindows,
 			graphOptions,
-			graphView,
+			graphView: graphViewRef.current,
 			mode,
 			selectedPassageId
 		});
@@ -567,7 +581,6 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		editorDockLayout,
 		editorWindows,
 		graphOptions,
-		graphView,
 		mode,
 		selectedPassageId,
 		story.id
