@@ -1,0 +1,4550 @@
+{
+	"aggregates": {
+		"startup.launchToWindowMs": {
+			"count": 3,
+			"max": 882.6274580000027,
+			"mean": 776.3411106666705,
+			"min": 702.0698330000014,
+			"p50": 744.3260410000075,
+			"p95": 882.6274580000027
+		},
+		"startup.shellMs": {
+			"count": 3,
+			"max": 4188.199999988079,
+			"mean": 3762.2000000079474,
+			"min": 3533.800000011921,
+			"p50": 3564.600000023842,
+			"p95": 4188.199999988079
+		},
+		"startupStage.renderer-project-shell-dispatchedMs": {
+			"count": 3,
+			"max": 6.4000000059604645,
+			"mean": 6.266666670640309,
+			"min": 6.199999988079071,
+			"p50": 6.200000017881393,
+			"p95": 6.4000000059604645
+		},
+		"startupStage.renderer-project-hydration-mergedMs": {
+			"count": 3,
+			"max": 0.20000001788139343,
+			"mean": 0.1999999980131785,
+			"min": 0.19999998807907104,
+			"p50": 0.19999998807907104,
+			"p95": 0.20000001788139343
+		},
+		"startupStage.renderer-project-hydration-dispatchedMs": {
+			"count": 3,
+			"max": 108.2999999821186,
+			"mean": 85.16666665673256,
+			"min": 72.5,
+			"p50": 74.69999998807907,
+			"p95": 108.2999999821186
+		},
+		"startupStage.native-session-baselineMs": {
+			"count": 3,
+			"max": 168.2338749999999,
+			"mean": 120.61179133333341,
+			"min": 93.94154100000014,
+			"p50": 99.65995800000019,
+			"p95": 168.2338749999999
+		},
+		"startupStage.native-receiptAdoptionMs": {
+			"count": 3,
+			"max": 153.73966700000028,
+			"mean": 107.89922266666674,
+			"min": 80.90116699999999,
+			"p50": 89.05683399999998,
+			"p95": 153.73966700000028
+		},
+		"startupStage.native-receiptCatchupMs": {
+			"count": 3,
+			"max": 0.022207999999864114,
+			"mean": 0.016888666666697343,
+			"min": 0.013166000000182976,
+			"p50": 0.015292000000044936,
+			"p95": 0.022207999999864114
+		},
+		"startupEntities.native.assetCount": {
+			"count": 3,
+			"max": 2,
+			"mean": 2,
+			"min": 2,
+			"p50": 2,
+			"p95": 2
+		},
+		"startupEntities.native.baselineFileCount": {
+			"count": 3,
+			"max": 50006,
+			"mean": 50006,
+			"min": 50006,
+			"p50": 50006,
+			"p95": 50006
+		},
+		"startupEntities.native.descriptorPathCount": {
+			"count": 3,
+			"max": 50002,
+			"mean": 50002,
+			"min": 50002,
+			"p50": 50002,
+			"p95": 50002
+		},
+		"startupEntities.native.receiptFileCount": {
+			"count": 3,
+			"max": 50006,
+			"mean": 50006,
+			"min": 50006,
+			"p50": 50006,
+			"p95": 50006
+		},
+		"startupLoad.shell.nativeCallMs": {
+			"count": 3,
+			"max": 264.0116250000001,
+			"mean": 252.22636100000008,
+			"min": 245.93025000000011,
+			"p50": 246.737208,
+			"p95": 264.0116250000001
+		},
+		"startupLoad.shell.jsonParseMs": {
+			"count": 3,
+			"max": 35.91254200000003,
+			"mean": 32.054180666666674,
+			"min": 29.721708000000035,
+			"p50": 30.528291999999965,
+			"p95": 35.91254200000003
+		},
+		"startupLoad.shell.payloadMiB": {
+			"count": 3,
+			"max": 9.446392059326172,
+			"mean": 9.446392059326172,
+			"min": 9.446392059326172,
+			"p50": 9.446392059326172,
+			"p95": 9.446392059326172
+		},
+		"startupLoad.shell.baselineReceiptMs": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.shell.assetScanMs": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.shell.graphLayoutMs": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.shell.manifestCacheDecodeMs": {
+			"count": 3,
+			"max": 46.203,
+			"mean": 43.94566666666666,
+			"min": 42.816,
+			"p50": 42.818,
+			"p95": 46.203
+		},
+		"startupLoad.shell.manifestCacheReadMs": {
+			"count": 3,
+			"max": 2.651,
+			"mean": 2.3913333333333333,
+			"min": 2.031,
+			"p50": 2.492,
+			"p95": 2.651
+		},
+		"startupLoad.shell.manifestHashMs": {
+			"count": 3,
+			"max": 54.81,
+			"mean": 54.028999999999996,
+			"min": 53.56,
+			"p50": 53.717,
+			"p95": 54.81
+		},
+		"startupLoad.shell.manifestParseMs": {
+			"count": 3,
+			"max": 46.203,
+			"mean": 43.94566666666666,
+			"min": 42.816,
+			"p50": 42.818,
+			"p95": 46.203
+		},
+		"startupLoad.shell.manifestReadMs": {
+			"count": 3,
+			"max": 4.977,
+			"mean": 4.634333333333333,
+			"min": 4.113,
+			"p50": 4.813,
+			"p95": 4.977
+		},
+		"startupLoad.shell.manifestTomlParseMs": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.shell.modelBuildMs": {
+			"count": 3,
+			"max": 183.478,
+			"mean": 177.93999999999997,
+			"min": 174.519,
+			"p50": 175.823,
+			"p95": 183.478
+		},
+		"startupLoad.shell.nativeStoryConversionMs": {
+			"count": 3,
+			"max": 17.998,
+			"mean": 16.572333333333333,
+			"min": 15.653,
+			"p50": 16.066,
+			"p95": 17.998
+		},
+		"startupLoad.shell.passageSourceMs": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.shell.sourceJobPrepareMs": {
+			"count": 3,
+			"max": 20.26,
+			"mean": 19.376333333333335,
+			"min": 18.361,
+			"p50": 19.508,
+			"p95": 20.26
+		},
+		"startupLoad.shell.storySourceMs": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.shell.manifestCacheBytes": {
+			"count": 3,
+			"max": 8495054,
+			"mean": 8495054,
+			"min": 8495054,
+			"p50": 8495054,
+			"p95": 8495054
+		},
+		"startupLoad.shell.passageSourceCount": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.shell.sourceBytes": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.shell.storySourceCount": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.shell.workerCount": {
+			"count": 3,
+			"max": 1,
+			"mean": 1,
+			"min": 1,
+			"p50": 1,
+			"p95": 1
+		},
+		"startupLoad.hydration.nativeCallMs": {
+			"count": 3,
+			"max": 1801.072209,
+			"mean": 1758.8662783333332,
+			"min": 1686.7750839999999,
+			"p50": 1788.751542,
+			"p95": 1801.072209
+		},
+		"startupLoad.hydration.jsonParseMs": {
+			"count": 3,
+			"max": 50.112959000000046,
+			"mean": 45.38366699999991,
+			"min": 42.88462499999969,
+			"p50": 43.15341699999999,
+			"p95": 50.112959000000046
+		},
+		"startupLoad.hydration.payloadMiB": {
+			"count": 3,
+			"max": 22.496623039245605,
+			"mean": 22.496551195780437,
+			"min": 22.496451377868652,
+			"p50": 22.49657917022705,
+			"p95": 22.496623039245605
+		},
+		"startupLoad.hydration.baselineReceiptMs": {
+			"count": 3,
+			"max": 52.914,
+			"mean": 43.00133333333334,
+			"min": 35.961,
+			"p50": 40.129,
+			"p95": 52.914
+		},
+		"startupLoad.hydration.assetScanMs": {
+			"count": 3,
+			"max": 0.855,
+			"mean": 0.6536666666666666,
+			"min": 0.545,
+			"p50": 0.561,
+			"p95": 0.855
+		},
+		"startupLoad.hydration.graphLayoutMs": {
+			"count": 3,
+			"max": 38.17,
+			"mean": 33.49733333333334,
+			"min": 30.697,
+			"p50": 31.625,
+			"p95": 38.17
+		},
+		"startupLoad.hydration.manifestCacheDecodeMs": {
+			"count": 3,
+			"max": 29.15,
+			"mean": 29.007666666666665,
+			"min": 28.793,
+			"p50": 29.08,
+			"p95": 29.15
+		},
+		"startupLoad.hydration.manifestCacheReadMs": {
+			"count": 3,
+			"max": 1.601,
+			"mean": 1.5170000000000001,
+			"min": 1.46,
+			"p50": 1.49,
+			"p95": 1.601
+		},
+		"startupLoad.hydration.manifestHashMs": {
+			"count": 3,
+			"max": 36.311,
+			"mean": 36.179,
+			"min": 36.082,
+			"p50": 36.144,
+			"p95": 36.311
+		},
+		"startupLoad.hydration.manifestParseMs": {
+			"count": 3,
+			"max": 29.15,
+			"mean": 29.007666666666665,
+			"min": 28.793,
+			"p50": 29.08,
+			"p95": 29.15
+		},
+		"startupLoad.hydration.manifestReadMs": {
+			"count": 3,
+			"max": 2.344,
+			"mean": 2.2399999999999998,
+			"min": 2.177,
+			"p50": 2.199,
+			"p95": 2.344
+		},
+		"startupLoad.hydration.manifestTomlParseMs": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupLoad.hydration.modelBuildMs": {
+			"count": 3,
+			"max": 1628.137,
+			"mean": 1574.464,
+			"min": 1470.297,
+			"p50": 1624.958,
+			"p95": 1628.137
+		},
+		"startupLoad.hydration.nativeStoryConversionMs": {
+			"count": 3,
+			"max": 33.417,
+			"mean": 25.66633333333333,
+			"min": 20.993,
+			"p50": 22.589,
+			"p95": 33.417
+		},
+		"startupLoad.hydration.passageSourceMs": {
+			"count": 3,
+			"max": 1513.708,
+			"mean": 1449.7366666666667,
+			"min": 1332.906,
+			"p50": 1502.596,
+			"p95": 1513.708
+		},
+		"startupLoad.hydration.sourceJobPrepareMs": {
+			"count": 3,
+			"max": 18.184,
+			"mean": 17.07766666666667,
+			"min": 15.915,
+			"p50": 17.134,
+			"p95": 18.184
+		},
+		"startupLoad.hydration.storySourceMs": {
+			"count": 3,
+			"max": 0.215,
+			"mean": 0.21333333333333335,
+			"min": 0.211,
+			"p50": 0.214,
+			"p95": 0.215
+		},
+		"startupLoad.hydration.manifestCacheBytes": {
+			"count": 3,
+			"max": 8495054,
+			"mean": 8495054,
+			"min": 8495054,
+			"p50": 8495054,
+			"p95": 8495054
+		},
+		"startupLoad.hydration.passageSourceCount": {
+			"count": 3,
+			"max": 50000,
+			"mean": 50000,
+			"min": 50000,
+			"p50": 50000,
+			"p95": 50000
+		},
+		"startupLoad.hydration.sourceBytes": {
+			"count": 3,
+			"max": 17050330,
+			"mean": 17050330,
+			"min": 17050330,
+			"p50": 17050330,
+			"p95": 17050330
+		},
+		"startupLoad.hydration.storySourceCount": {
+			"count": 3,
+			"max": 2,
+			"mean": 2,
+			"min": 2,
+			"p50": 2,
+			"p95": 2
+		},
+		"startupLoad.hydration.workerCount": {
+			"count": 3,
+			"max": 8,
+			"mean": 8,
+			"min": 8,
+			"p50": 8,
+			"p95": 8
+		},
+		"startup.hydratedMs": {
+			"count": 3,
+			"max": 4201,
+			"mean": 3772.3333333333335,
+			"min": 3544.5,
+			"p50": 3571.5,
+			"p95": 4201
+		},
+		"startup.interactiveMs": {
+			"count": 3,
+			"max": 2350.9000000059605,
+			"mean": 2330.733333339294,
+			"min": 2303.0999999940395,
+			"p50": 2338.2000000178814,
+			"p95": 2350.9000000059605
+		},
+		"startupMemory.wasmLinearMiB": {
+			"count": 3,
+			"max": 96.5625,
+			"mean": 96.5625,
+			"min": 96.5625,
+			"p50": 96.5625,
+			"p95": 96.5625
+		},
+		"startupMemory.open-start.residentMiB": {
+			"count": 3,
+			"max": 437.828125,
+			"mean": 436.8645833333333,
+			"min": 435.90625,
+			"p50": 436.859375,
+			"p95": 437.828125
+		},
+		"startupMemory.open-start.process.browserMiB": {
+			"count": 3,
+			"max": 178.546875,
+			"mean": 177.89583333333334,
+			"min": 177.4375,
+			"p50": 177.703125,
+			"p95": 178.546875
+		},
+		"startupMemory.open-start.projectDelta.browserMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupMemory.open-start.process.gpuMiB": {
+			"count": 3,
+			"max": 82.21875,
+			"mean": 81.79166666666667,
+			"min": 81.4375,
+			"p50": 81.71875,
+			"p95": 82.21875
+		},
+		"startupMemory.open-start.projectDelta.gpuMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupMemory.open-start.process.utilityMiB": {
+			"count": 3,
+			"max": 46.828125,
+			"mean": 46.802083333333336,
+			"min": 46.78125,
+			"p50": 46.796875,
+			"p95": 46.828125
+		},
+		"startupMemory.open-start.projectDelta.utilityMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupMemory.open-start.process.tabMiB": {
+			"count": 3,
+			"max": 131.015625,
+			"mean": 130.375,
+			"min": 129.96875,
+			"p50": 130.140625,
+			"p95": 131.015625
+		},
+		"startupMemory.open-start.projectDelta.tabMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"startupMemory.open-start.rendererHeapMiB": {
+			"count": 3,
+			"max": 8.243141174316406,
+			"mean": 8.231220245361328,
+			"min": 8.213871002197266,
+			"p50": 8.236648559570312,
+			"p95": 8.243141174316406
+		},
+		"startupMemory.open-start.mainHeapMiB": {
+			"count": 3,
+			"max": 9.347434997558594,
+			"mean": 9.257865905761719,
+			"min": 9.201393127441406,
+			"p50": 9.224769592285156,
+			"p95": 9.347434997558594
+		},
+		"startupMemory.open-start.private.mainMiB": {
+			"count": 3,
+			"max": 53.8447265625,
+			"mean": 53.053059895833336,
+			"min": 52.3603515625,
+			"p50": 52.9541015625,
+			"p95": 53.8447265625
+		},
+		"startupMemory.open-start.private.rendererMiB": {
+			"count": 3,
+			"max": 31.7666015625,
+			"mean": 31.4853515625,
+			"min": 31.3291015625,
+			"p50": 31.3603515625,
+			"p95": 31.7666015625
+		},
+		"startupMemory.open-start.blink.allocatedMiB": {
+			"count": 3,
+			"max": 1.5576171875,
+			"mean": 1.4879557291666667,
+			"min": 1.453125,
+			"p50": 1.453125,
+			"p95": 1.5576171875
+		},
+		"startupMemory.all-passages-ready.residentMiB": {
+			"count": 3,
+			"max": 711.296875,
+			"mean": 710.203125,
+			"min": 708.4375,
+			"p50": 710.875,
+			"p95": 711.296875
+		},
+		"startupMemory.all-passages-ready.process.browserMiB": {
+			"count": 3,
+			"max": 373.03125,
+			"mean": 371.1510416666667,
+			"min": 369.265625,
+			"p50": 371.15625,
+			"p95": 373.03125
+		},
+		"startupMemory.all-passages-ready.projectDelta.browserMiB": {
+			"count": 3,
+			"max": 195.59375,
+			"mean": 193.25520833333334,
+			"min": 190.71875,
+			"p50": 193.453125,
+			"p95": 195.59375
+		},
+		"startupMemory.all-passages-ready.process.gpuMiB": {
+			"count": 3,
+			"max": 103.25,
+			"mean": 102.71875,
+			"min": 102.390625,
+			"p50": 102.515625,
+			"p95": 103.25
+		},
+		"startupMemory.all-passages-ready.projectDelta.gpuMiB": {
+			"count": 3,
+			"max": 21.078125,
+			"mean": 20.927083333333332,
+			"min": 20.671875,
+			"p50": 21.03125,
+			"p95": 21.078125
+		},
+		"startupMemory.all-passages-ready.process.utilityMiB": {
+			"count": 3,
+			"max": 48.125,
+			"mean": 48.114583333333336,
+			"min": 48.09375,
+			"p50": 48.125,
+			"p95": 48.125
+		},
+		"startupMemory.all-passages-ready.projectDelta.utilityMiB": {
+			"count": 3,
+			"max": 1.34375,
+			"mean": 1.3125,
+			"min": 1.296875,
+			"p50": 1.296875,
+			"p95": 1.34375
+		},
+		"startupMemory.all-passages-ready.process.tabMiB": {
+			"count": 3,
+			"max": 188.53125,
+			"mean": 188.21875,
+			"min": 187.75,
+			"p50": 188.375,
+			"p95": 188.53125
+		},
+		"startupMemory.all-passages-ready.projectDelta.tabMiB": {
+			"count": 3,
+			"max": 58.234375,
+			"mean": 57.84375,
+			"min": 57.515625,
+			"p50": 57.78125,
+			"p95": 58.234375
+		},
+		"startupMemory.all-passages-ready.rendererHeapMiB": {
+			"count": 3,
+			"max": 8.926139831542969,
+			"mean": 8.613983154296875,
+			"min": 8.30636978149414,
+			"p50": 8.609439849853516,
+			"p95": 8.926139831542969
+		},
+		"startupMemory.all-passages-ready.mainHeapMiB": {
+			"count": 3,
+			"max": 51.57411193847656,
+			"mean": 51.45189412434896,
+			"min": 51.22011947631836,
+			"p50": 51.56145095825195,
+			"p95": 51.57411193847656
+		},
+		"startupMemory.all-passages-ready.private.mainMiB": {
+			"count": 3,
+			"max": 167.205078125,
+			"mean": 165.8349609375,
+			"min": 164.3447265625,
+			"p50": 165.955078125,
+			"p95": 167.205078125
+		},
+		"startupMemory.all-passages-ready.private.rendererMiB": {
+			"count": 3,
+			"max": 40.7978515625,
+			"mean": 40.527018229166664,
+			"min": 40.3916015625,
+			"p50": 40.3916015625,
+			"p95": 40.7978515625
+		},
+		"startupMemory.all-passages-ready.blink.allocatedMiB": {
+			"count": 3,
+			"max": 3.6982421875,
+			"mean": 3.6888020833333335,
+			"min": 3.671875,
+			"p50": 3.6962890625,
+			"p95": 3.6982421875
+		},
+		"startupMemory.shell-visible.residentMiB": {
+			"count": 3,
+			"max": 718.40625,
+			"mean": 715.296875,
+			"min": 711.1875,
+			"p50": 716.296875,
+			"p95": 718.40625
+		},
+		"startupMemory.shell-visible.process.browserMiB": {
+			"count": 3,
+			"max": 375.484375,
+			"mean": 372.7760416666667,
+			"min": 371.140625,
+			"p50": 371.703125,
+			"p95": 375.484375
+		},
+		"startupMemory.shell-visible.projectDelta.browserMiB": {
+			"count": 3,
+			"max": 198.046875,
+			"mean": 194.88020833333334,
+			"min": 193.15625,
+			"p50": 193.4375,
+			"p95": 198.046875
+		},
+		"startupMemory.shell-visible.process.gpuMiB": {
+			"count": 3,
+			"max": 103.25,
+			"mean": 102.71875,
+			"min": 102.390625,
+			"p50": 102.515625,
+			"p95": 103.25
+		},
+		"startupMemory.shell-visible.projectDelta.gpuMiB": {
+			"count": 3,
+			"max": 21.078125,
+			"mean": 20.927083333333332,
+			"min": 20.671875,
+			"p50": 21.03125,
+			"p95": 21.078125
+		},
+		"startupMemory.shell-visible.process.utilityMiB": {
+			"count": 3,
+			"max": 48.125,
+			"mean": 48.114583333333336,
+			"min": 48.09375,
+			"p50": 48.125,
+			"p95": 48.125
+		},
+		"startupMemory.shell-visible.projectDelta.utilityMiB": {
+			"count": 3,
+			"max": 1.34375,
+			"mean": 1.3125,
+			"min": 1.296875,
+			"p50": 1.296875,
+			"p95": 1.34375
+		},
+		"startupMemory.shell-visible.process.tabMiB": {
+			"count": 3,
+			"max": 193.953125,
+			"mean": 191.6875,
+			"min": 188.703125,
+			"p50": 192.40625,
+			"p95": 193.953125
+		},
+		"startupMemory.shell-visible.projectDelta.tabMiB": {
+			"count": 3,
+			"max": 62.9375,
+			"mean": 61.3125,
+			"min": 58.5625,
+			"p50": 62.4375,
+			"p95": 62.9375
+		},
+		"startupMemory.shell-visible.rendererHeapMiB": {
+			"count": 3,
+			"max": 9.406533241271973,
+			"mean": 9.240488688151041,
+			"min": 9.008092880249023,
+			"p50": 9.306839942932129,
+			"p95": 9.406533241271973
+		},
+		"startupMemory.shell-visible.mainHeapMiB": {
+			"count": 3,
+			"max": 51.57727813720703,
+			"mean": 51.455281575520836,
+			"min": 51.22361755371094,
+			"p50": 51.56494903564453,
+			"p95": 51.57727813720703
+		},
+		"startupMemory.shell-visible.private.mainMiB": {
+			"count": 3,
+			"max": 167.423828125,
+			"mean": 165.98600260416666,
+			"min": 164.5322265625,
+			"p50": 166.001953125,
+			"p95": 167.423828125
+		},
+		"startupMemory.shell-visible.private.rendererMiB": {
+			"count": 3,
+			"max": 42.2666015625,
+			"mean": 42.152018229166664,
+			"min": 42.0478515625,
+			"p50": 42.1416015625,
+			"p95": 42.2666015625
+		},
+		"startupMemory.shell-visible.blink.allocatedMiB": {
+			"count": 3,
+			"max": 6.7578125,
+			"mean": 5.860026041666667,
+			"min": 5.2734375,
+			"p50": 5.548828125,
+			"p95": 6.7578125
+		},
+		"startupMemory.session-baseline-ready.residentMiB": {
+			"count": 3,
+			"max": 737.75,
+			"mean": 737.2604166666666,
+			"min": 736.390625,
+			"p50": 737.640625,
+			"p95": 737.75
+		},
+		"startupMemory.session-baseline-ready.process.browserMiB": {
+			"count": 3,
+			"max": 374.921875,
+			"mean": 374.046875,
+			"min": 372.953125,
+			"p50": 374.265625,
+			"p95": 374.921875
+		},
+		"startupMemory.session-baseline-ready.projectDelta.browserMiB": {
+			"count": 3,
+			"max": 197.484375,
+			"mean": 196.15104166666666,
+			"min": 194.40625,
+			"p50": 196.5625,
+			"p95": 197.484375
+		},
+		"startupMemory.session-baseline-ready.process.gpuMiB": {
+			"count": 3,
+			"max": 103.921875,
+			"mean": 103.72395833333333,
+			"min": 103.53125,
+			"p50": 103.71875,
+			"p95": 103.921875
+		},
+		"startupMemory.session-baseline-ready.projectDelta.gpuMiB": {
+			"count": 3,
+			"max": 22.28125,
+			"mean": 21.932291666666668,
+			"min": 21.703125,
+			"p50": 21.8125,
+			"p95": 22.28125
+		},
+		"startupMemory.session-baseline-ready.process.utilityMiB": {
+			"count": 3,
+			"max": 48.125,
+			"mean": 48.114583333333336,
+			"min": 48.09375,
+			"p50": 48.125,
+			"p95": 48.125
+		},
+		"startupMemory.session-baseline-ready.projectDelta.utilityMiB": {
+			"count": 3,
+			"max": 1.34375,
+			"mean": 1.3125,
+			"min": 1.296875,
+			"p50": 1.296875,
+			"p95": 1.34375
+		},
+		"startupMemory.session-baseline-ready.process.tabMiB": {
+			"count": 3,
+			"max": 211.59375,
+			"mean": 211.375,
+			"min": 211.0625,
+			"p50": 211.46875,
+			"p95": 211.59375
+		},
+		"startupMemory.session-baseline-ready.projectDelta.tabMiB": {
+			"count": 3,
+			"max": 81.328125,
+			"mean": 81,
+			"min": 80.578125,
+			"p50": 81.09375,
+			"p95": 81.328125
+		},
+		"startupMemory.session-baseline-ready.rendererHeapMiB": {
+			"count": 3,
+			"max": 22.156192779541016,
+			"mean": 21.16964276631673,
+			"min": 20.632421493530273,
+			"p50": 20.720314025878906,
+			"p95": 22.156192779541016
+		},
+		"startupMemory.session-baseline-ready.mainHeapMiB": {
+			"count": 3,
+			"max": 54.64905548095703,
+			"mean": 54.528602600097656,
+			"min": 54.297664642333984,
+			"p50": 54.63908767700195,
+			"p95": 54.64905548095703
+		},
+		"startupMemory.session-baseline-ready.private.mainMiB": {
+			"count": 3,
+			"max": 168.3134765625,
+			"mean": 165.54329427083334,
+			"min": 164.095703125,
+			"p50": 164.220703125,
+			"p95": 168.3134765625
+		},
+		"startupMemory.session-baseline-ready.private.rendererMiB": {
+			"count": 3,
+			"max": 101.3447265625,
+			"mean": 100.68326822916667,
+			"min": 99.8759765625,
+			"p50": 100.8291015625,
+			"p95": 101.3447265625
+		},
+		"startupMemory.session-baseline-ready.blink.allocatedMiB": {
+			"count": 3,
+			"max": 8.525390625,
+			"mean": 7.6396484375,
+			"min": 7.185546875,
+			"p50": 7.2080078125,
+			"p95": 8.525390625
+		},
+		"startupMemory.session-initialization-complete.residentMiB": {
+			"count": 3,
+			"max": 1033.625,
+			"mean": 1031.3229166666667,
+			"min": 1029.0625,
+			"p50": 1031.28125,
+			"p95": 1033.625
+		},
+		"startupMemory.session-initialization-complete.process.browserMiB": {
+			"count": 3,
+			"max": 415.65625,
+			"mean": 411.9166666666667,
+			"min": 410.046875,
+			"p50": 410.046875,
+			"p95": 415.65625
+		},
+		"startupMemory.session-initialization-complete.projectDelta.browserMiB": {
+			"count": 3,
+			"max": 238.21875,
+			"mean": 234.02083333333334,
+			"min": 231.5,
+			"p50": 232.34375,
+			"p95": 238.21875
+		},
+		"startupMemory.session-initialization-complete.process.gpuMiB": {
+			"count": 3,
+			"max": 103.609375,
+			"mean": 103.453125,
+			"min": 103.203125,
+			"p50": 103.546875,
+			"p95": 103.609375
+		},
+		"startupMemory.session-initialization-complete.projectDelta.gpuMiB": {
+			"count": 3,
+			"max": 22.171875,
+			"mean": 21.661458333333332,
+			"min": 20.984375,
+			"p50": 21.828125,
+			"p95": 22.171875
+		},
+		"startupMemory.session-initialization-complete.process.utilityMiB": {
+			"count": 3,
+			"max": 48.140625,
+			"mean": 48.130208333333336,
+			"min": 48.125,
+			"p50": 48.125,
+			"p95": 48.140625
+		},
+		"startupMemory.session-initialization-complete.projectDelta.utilityMiB": {
+			"count": 3,
+			"max": 1.34375,
+			"mean": 1.328125,
+			"min": 1.296875,
+			"p50": 1.34375,
+			"p95": 1.34375
+		},
+		"startupMemory.session-initialization-complete.process.tabMiB": {
+			"count": 3,
+			"max": 471.84375,
+			"mean": 467.8229166666667,
+			"min": 463.953125,
+			"p50": 467.671875,
+			"p95": 471.84375
+		},
+		"startupMemory.session-initialization-complete.projectDelta.tabMiB": {
+			"count": 3,
+			"max": 340.828125,
+			"mean": 337.4479166666667,
+			"min": 333.984375,
+			"p50": 337.53125,
+			"p95": 340.828125
+		},
+		"startupMemory.session-initialization-complete.rendererHeapMiB": {
+			"count": 3,
+			"max": 82.83151054382324,
+			"mean": 80.33146158854167,
+			"min": 75.53593254089355,
+			"p50": 82.6269416809082,
+			"p95": 82.83151054382324
+		},
+		"startupMemory.session-initialization-complete.mainHeapMiB": {
+			"count": 3,
+			"max": 32.58879852294922,
+			"mean": 32.58446502685547,
+			"min": 32.57905960083008,
+			"p50": 32.58553695678711,
+			"p95": 32.58879852294922
+		},
+		"startupMemory.session-initialization-complete.private.mainMiB": {
+			"count": 3,
+			"max": 171.595703125,
+			"mean": 167.9599609375,
+			"min": 164.7978515625,
+			"p50": 167.486328125,
+			"p95": 171.595703125
+		},
+		"startupMemory.session-initialization-complete.private.rendererMiB": {
+			"count": 3,
+			"max": 332.4228515625,
+			"mean": 329.1728515625,
+			"min": 322.8759765625,
+			"p50": 332.2197265625,
+			"p95": 332.4228515625
+		},
+		"startupMemory.session-initialization-complete.blink.allocatedMiB": {
+			"count": 3,
+			"max": 5.333984375,
+			"mean": 5.241861979166667,
+			"min": 5.0908203125,
+			"p50": 5.30078125,
+			"p95": 5.333984375
+		},
+		"startupMemory.post-gc-retained.residentMiB": {
+			"count": 3,
+			"max": 1033.625,
+			"mean": 1031.3229166666667,
+			"min": 1029.0625,
+			"p50": 1031.28125,
+			"p95": 1033.625
+		},
+		"startupMemory.post-gc-retained.process.browserMiB": {
+			"count": 3,
+			"max": 415.65625,
+			"mean": 411.9166666666667,
+			"min": 410.046875,
+			"p50": 410.046875,
+			"p95": 415.65625
+		},
+		"startupMemory.post-gc-retained.projectDelta.browserMiB": {
+			"count": 3,
+			"max": 238.21875,
+			"mean": 234.02083333333334,
+			"min": 231.5,
+			"p50": 232.34375,
+			"p95": 238.21875
+		},
+		"startupMemory.post-gc-retained.process.gpuMiB": {
+			"count": 3,
+			"max": 103.609375,
+			"mean": 103.453125,
+			"min": 103.203125,
+			"p50": 103.546875,
+			"p95": 103.609375
+		},
+		"startupMemory.post-gc-retained.projectDelta.gpuMiB": {
+			"count": 3,
+			"max": 22.171875,
+			"mean": 21.661458333333332,
+			"min": 20.984375,
+			"p50": 21.828125,
+			"p95": 22.171875
+		},
+		"startupMemory.post-gc-retained.process.utilityMiB": {
+			"count": 3,
+			"max": 48.140625,
+			"mean": 48.130208333333336,
+			"min": 48.125,
+			"p50": 48.125,
+			"p95": 48.140625
+		},
+		"startupMemory.post-gc-retained.projectDelta.utilityMiB": {
+			"count": 3,
+			"max": 1.34375,
+			"mean": 1.328125,
+			"min": 1.296875,
+			"p50": 1.34375,
+			"p95": 1.34375
+		},
+		"startupMemory.post-gc-retained.process.tabMiB": {
+			"count": 3,
+			"max": 471.84375,
+			"mean": 467.8229166666667,
+			"min": 463.953125,
+			"p50": 467.671875,
+			"p95": 471.84375
+		},
+		"startupMemory.post-gc-retained.projectDelta.tabMiB": {
+			"count": 3,
+			"max": 340.828125,
+			"mean": 337.4479166666667,
+			"min": 333.984375,
+			"p50": 337.53125,
+			"p95": 340.828125
+		},
+		"startupMemory.post-gc-retained.rendererHeapMiB": {
+			"count": 3,
+			"max": 51.913193702697754,
+			"mean": 51.88859430948893,
+			"min": 51.84350872039795,
+			"p50": 51.909080505371094,
+			"p95": 51.913193702697754
+		},
+		"startupMemory.post-gc-retained.mainHeapMiB": {
+			"count": 3,
+			"max": 32.59177780151367,
+			"mean": 32.587457021077476,
+			"min": 32.58205032348633,
+			"p50": 32.58854293823242,
+			"p95": 32.59177780151367
+		},
+		"startupMemory.post-gc-retained.private.mainMiB": {
+			"count": 3,
+			"max": 171.595703125,
+			"mean": 167.9599609375,
+			"min": 164.7978515625,
+			"p50": 167.486328125,
+			"p95": 171.595703125
+		},
+		"startupMemory.post-gc-retained.private.rendererMiB": {
+			"count": 3,
+			"max": 332.4384765625,
+			"mean": 329.1988932291667,
+			"min": 322.8759765625,
+			"p50": 332.2822265625,
+			"p95": 332.4384765625
+		},
+		"startupMemory.post-gc-retained.blink.allocatedMiB": {
+			"count": 3,
+			"max": 5.30078125,
+			"mean": 5.226888020833333,
+			"min": 5.158203125,
+			"p50": 5.2216796875,
+			"p95": 5.30078125
+		},
+		"memory.residentMiB": {
+			"count": 6,
+			"max": 1257.8125,
+			"mean": 1097.1744791666667,
+			"min": 1029.0625,
+			"p50": 1033.625,
+			"p95": 1257.8125
+		},
+		"memory.rendererMiB": {
+			"count": 6,
+			"max": 670.90625,
+			"mean": 527.2994791666666,
+			"min": 463.953125,
+			"p50": 471.84375,
+			"p95": 670.90625
+		},
+		"memory.mainMiB": {
+			"count": 6,
+			"max": 445.734375,
+			"mean": 414.1354166666667,
+			"min": 389.828125,
+			"p50": 410.046875,
+			"p95": 445.734375
+		},
+		"memory.private.mainMiB": {
+			"count": 6,
+			"max": 190.267578125,
+			"mean": 167.19449869791666,
+			"min": 146.126953125,
+			"p50": 164.7978515625,
+			"p95": 190.267578125
+		},
+		"memory.private.rendererMiB": {
+			"count": 6,
+			"max": 518.783203125,
+			"mean": 376.8580729166667,
+			"min": 322.9228515625,
+			"p50": 332.4384765625,
+			"p95": 518.783203125
+		},
+		"memory.private.projectBearingMiB": {
+			"count": 6,
+			"max": 681.67578125,
+			"mean": 544.0525716145834,
+			"min": 494.5185546875,
+			"p50": 499.7685546875,
+			"p95": 681.67578125
+		},
+		"memory.private.knownOwnerMiB": {
+			"count": 6,
+			"max": 282.7275094985962,
+			"mean": 220.77398220698038,
+			"min": 185.53986358642578,
+			"p50": 185.61754035949707,
+			"p95": 282.7275094985962
+		},
+		"memory.private.knownOwnerShare": {
+			"count": 6,
+			"max": 0.5073878490462806,
+			"mean": 0.4038675446290789,
+			"min": 0.3714070015380655,
+			"p50": 0.37531056603262425,
+			"p95": 0.5073878490462806
+		},
+		"memory.blink.allocatedMiB": {
+			"count": 6,
+			"max": 19.3603515625,
+			"mean": 7.779296875,
+			"min": 5.158203125,
+			"p50": 5.30078125,
+			"p95": 19.3603515625
+		},
+		"memory.blink.totalMiB": {
+			"count": 6,
+			"max": 57.75,
+			"mean": 23.26806640625,
+			"min": 7.875,
+			"p50": 8.072265625,
+			"p95": 57.75
+		},
+		"memory.process.browserMiB": {
+			"count": 6,
+			"max": 445.734375,
+			"mean": 414.1354166666667,
+			"min": 389.828125,
+			"p50": 410.046875,
+			"p95": 445.734375
+		},
+		"memory.process.gpuMiB": {
+			"count": 6,
+			"max": 125.25,
+			"mean": 107.5625,
+			"min": 103.203125,
+			"p50": 103.609375,
+			"p95": 125.25
+		},
+		"memory.process.tabMiB": {
+			"count": 6,
+			"max": 670.90625,
+			"mean": 527.2994791666666,
+			"min": 463.953125,
+			"p50": 471.84375,
+			"p95": 670.90625
+		},
+		"memory.process.utilityMiB": {
+			"count": 6,
+			"max": 48.265625,
+			"mean": 48.177083333333336,
+			"min": 48.125,
+			"p50": 48.140625,
+			"p95": 48.265625
+		},
+		"memory.heap.rendererUsedMiB": {
+			"count": 6,
+			"max": 71.39270687103271,
+			"mean": 57.18326139450073,
+			"min": 53.537903785705566,
+			"p50": 53.613131523132324,
+			"p95": 71.39270687103271
+		},
+		"memory.heap.rendererTotalMiB": {
+			"count": 6,
+			"max": 186.86500072479248,
+			"mean": 136.3311603864034,
+			"min": 121.82674217224121,
+			"p50": 125.32296562194824,
+			"p95": 186.86500072479248
+		},
+		"memory.heap.mainUsedMiB": {
+			"count": 6,
+			"max": 71.7242202758789,
+			"mean": 39.39304288228353,
+			"min": 32.59206008911133,
+			"p50": 32.60100173950195,
+			"p95": 71.7242202758789
+		},
+		"memory.heap.mainTotalMiB": {
+			"count": 6,
+			"max": 124.390625,
+			"mean": 97.97916666666667,
+			"min": 91.84375,
+			"p50": 92.59375,
+			"p95": 124.390625
+		},
+		"memory.heap.mainExternalMiB": {
+			"count": 6,
+			"max": 2.856532096862793,
+			"mean": 2.8435112635294595,
+			"min": 2.840907096862793,
+			"p50": 2.840907096862793,
+			"p95": 2.856532096862793
+		},
+		"memory.heap.mainArrayBuffersMiB": {
+			"count": 6,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.residual.rendererAfterHeapAndWasmMiB": {
+			"count": 6,
+			"max": 430.2635431289673,
+			"mean": 348.76205110549927,
+			"min": 309.6501178741455,
+			"p50": 317.4962434768677,
+			"p95": 430.2635431289673
+		},
+		"memory.residual.mainAfterHeapAndExternalMiB": {
+			"count": 6,
+			"max": 380.2232828140259,
+			"mean": 371.8988625208537,
+			"min": 354.3640375137329,
+			"p50": 374.60496616363525,
+			"p95": 380.2232828140259
+		},
+		"memory.residual.rendererPrivateAfterHeapAndWasmMiB": {
+			"count": 6,
+			"max": 278.1404962539673,
+			"mean": 198.32064485549927,
+			"min": 158.8073444366455,
+			"p50": 182.10659503936768,
+			"p95": 278.1404962539673
+		},
+		"memory.residual.mainPrivateAfterHeapAndExternalMiB": {
+			"count": 6,
+			"max": 136.16273593902588,
+			"mean": 124.95794455210368,
+			"min": 110.66286563873291,
+			"p50": 125.83242893218994,
+			"p95": 136.16273593902588
+		},
+		"memory.owner.nativeHydrationLeaseCount": {
+			"count": 6,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.owner.nativeHydrationTextCapacityMiB": {
+			"count": 6,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.owner.nativeBaselineFileStringMiB": {
+			"count": 6,
+			"max": 7.896968841552734,
+			"mean": 7.896968841552734,
+			"min": 7.896968841552734,
+			"p50": 7.896968841552734,
+			"p95": 7.896968841552734
+		},
+		"memory.owner.nativeBaselinePassageCount": {
+			"count": 6,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.owner.nativeDescriptorPathStringMiB": {
+			"count": 6,
+			"max": 5.60774040222168,
+			"mean": 5.60774040222168,
+			"min": 5.60774040222168,
+			"p50": 5.60774040222168,
+			"p95": 5.60774040222168
+		},
+		"memory.owner.bootstrapTextMiB": {
+			"count": 6,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.owner.workerWasmLinearMiB": {
+			"count": 6,
+			"max": 169.25,
+			"mean": 121.35416666666667,
+			"min": 96.5625,
+			"p50": 96.5625,
+			"p95": 169.25
+		},
+		"memory.owner.workerCachedPayloadMiB": {
+			"count": 6,
+			"max": 2.2368412017822266,
+			"mean": 0.3846486409505208,
+			"min": 0.0017986297607421875,
+			"p50": 0.0024929046630859375,
+			"p95": 2.2368412017822266
+		},
+		"memory.owner.workerPendingRequests": {
+			"count": 6,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.owner.workerSessionQueues": {
+			"count": 6,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.owner.workerReadModelCacheEntries": {
+			"count": 6,
+			"max": 31,
+			"mean": 8.166666666666666,
+			"min": 3,
+			"p50": 4,
+			"p95": 31
+		},
+		"memory.owner.activeEditorCount": {
+			"count": 6,
+			"max": 1,
+			"mean": 0.6666666666666666,
+			"min": 0,
+			"p50": 1,
+			"p95": 1
+		},
+		"memory.owner.editorDocumentMiB": {
+			"count": 6,
+			"max": 0.00096893310546875,
+			"mean": 0.0004876454671223958,
+			"min": 0,
+			"p50": 0.000652313232421875,
+			"p95": 0.00096893310546875
+		},
+		"memory.owner.rustProjectDocumentsMiB": {
+			"count": 6,
+			"max": 16.2606201171875,
+			"mean": 16.2604881922404,
+			"min": 16.260461807250977,
+			"p50": 16.260461807250977,
+			"p95": 16.2606201171875
+		},
+		"memory.owner.rustAnalysisSources": {
+			"count": 6,
+			"max": 9,
+			"mean": 2.5,
+			"min": 1,
+			"p50": 1,
+			"p95": 9
+		},
+		"memory.owner.rustBacklinkCacheMiB": {
+			"count": 6,
+			"max": 0.00003814697265625,
+			"mean": 0.000006993611653645833,
+			"min": 0,
+			"p50": 0,
+			"p95": 0.00003814697265625
+		},
+		"memory.owner.rustBacklinkCacheEntries": {
+			"count": 6,
+			"max": 9,
+			"mean": 2.5,
+			"min": 1,
+			"p50": 1,
+			"p95": 9
+		},
+		"memory.owner.rustBacklinkScans": {
+			"count": 6,
+			"max": 9,
+			"mean": 2.5,
+			"min": 1,
+			"p50": 1,
+			"p95": 9
+		},
+		"memory.owner.rustBacklinkScannedSources": {
+			"count": 6,
+			"max": 450000,
+			"mean": 125000,
+			"min": 50000,
+			"p50": 50000,
+			"p95": 450000
+		},
+		"memory.owner.rustFingerprintEntries": {
+			"count": 6,
+			"max": 500030,
+			"mean": 500030,
+			"min": 500030,
+			"p50": 500030,
+			"p95": 500030
+		},
+		"memory.owner.rustGraphCacheStories": {
+			"count": 6,
+			"max": 1,
+			"mean": 0.16666666666666666,
+			"min": 0,
+			"p50": 0,
+			"p95": 1
+		},
+		"memory.owner.rustReadModelCacheStories": {
+			"count": 6,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"edit.roundTripMs": {
+			"count": 20,
+			"max": 13.299999982118607,
+			"mean": 11.960000002384186,
+			"min": 11.300000011920929,
+			"p50": 11.900000005960464,
+			"p95": 12.600000023841858
+		},
+		"edit.paintMs": {
+			"count": 20,
+			"max": 17.900000005960464,
+			"mean": 13.804999999701977,
+			"min": 12.699999988079071,
+			"p50": 13.399999976158142,
+			"p95": 15.199999988079071
+		},
+		"undo.roundTripMs": {
+			"count": 20,
+			"max": 65,
+			"mean": 60.704999999701975,
+			"min": 59,
+			"p50": 60.19999998807907,
+			"p95": 61.79999998211861
+		},
+		"redo.roundTripMs": {
+			"count": 20,
+			"max": 62.400000005960464,
+			"mean": 60.975000004470346,
+			"min": 59.5,
+			"p50": 61.099999994039536,
+			"p95": 62.20000001788139
+		},
+		"edit.cleanSampleCount": {
+			"count": 1,
+			"max": 20,
+			"mean": 20,
+			"min": 20,
+			"p50": 20,
+			"p95": 20
+		},
+		"edit.externalIngestContaminatedSampleCount": {
+			"count": 1,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"persistence.queueMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"persistence.saveMs": {
+			"count": 4,
+			"max": 171.300048828125,
+			"mean": 81.3499755859375,
+			"min": 11.199951171875,
+			"p50": 12.699951171875,
+			"p95": 171.300048828125
+		},
+		"persistence.notifyMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"persistence.acknowledgementMs": {
+			"count": 4,
+			"max": 104.39990234375,
+			"mean": 52.949951171875,
+			"min": 7.099853515625,
+			"p50": 49.10009765625,
+			"p95": 104.39990234375
+		},
+		"save.acknowledgementMs": {
+			"count": 4,
+			"max": 104.39990234375,
+			"mean": 52.949951171875,
+			"min": 7.099853515625,
+			"p50": 49.10009765625,
+			"p95": 104.39990234375
+		},
+		"persistence.endToEndMs": {
+			"count": 4,
+			"max": 277.199951171875,
+			"mean": 135.64990234375,
+			"min": 63,
+			"p50": 63.599853515625,
+			"p95": 277.199951171875
+		},
+		"save.endToEndMs": {
+			"count": 4,
+			"max": 277.199951171875,
+			"mean": 135.64990234375,
+			"min": 63,
+			"p50": 63.599853515625,
+			"p95": 277.199951171875
+		},
+		"save.nativeTotalMs": {
+			"count": 4,
+			"max": 41.949,
+			"mean": 14.3585,
+			"min": 4.998,
+			"p50": 5.016,
+			"p95": 41.949
+		},
+		"save.nativeDeserializeMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.projectBuildMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.writeProjectMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.collectOldFilesMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.writeTempProjectMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.copyAssetsMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.collectNewFilesMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.dirtyCompareMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.changedFilePlanMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.rootSwapMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.sidecarMs": {
+			"count": 4,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"save.baselineRefreshMs": {
+			"count": 4,
+			"max": 0.001,
+			"mean": 0.00025,
+			"min": 0,
+			"p50": 0,
+			"p95": 0.001
+		},
+		"save.touchedPathCount": {
+			"count": 4,
+			"max": 1,
+			"mean": 1,
+			"min": 1,
+			"p50": 1,
+			"p95": 1
+		},
+		"save.conflictCheckMs": {
+			"count": 4,
+			"max": 0.375,
+			"mean": 0.2525,
+			"min": 0.174,
+			"p50": 0.209,
+			"p95": 0.375
+		},
+		"save.writeTouchedFilesMs": {
+			"count": 4,
+			"max": 3.536,
+			"mean": 1.8775,
+			"min": 1.241,
+			"p50": 1.288,
+			"p95": 3.536
+		},
+		"save.baselinePatchMs": {
+			"count": 4,
+			"max": 0.144,
+			"mean": 0.08975,
+			"min": 0.066,
+			"p50": 0.074,
+			"p95": 0.144
+		},
+		"memory.live.residentMiB": {
+			"count": 3,
+			"max": 1261.796875,
+			"mean": 1179.375,
+			"min": 1123.03125,
+			"p50": 1153.296875,
+			"p95": 1261.796875
+		},
+		"memory.live.rendererMiB": {
+			"count": 3,
+			"max": 674.875,
+			"mean": 601.6354166666666,
+			"min": 520.296875,
+			"p50": 609.734375,
+			"p95": 674.875
+		},
+		"memory.live.mainMiB": {
+			"count": 3,
+			"max": 450.390625,
+			"mean": 417.8385416666667,
+			"min": 389.625,
+			"p50": 413.5,
+			"p95": 450.390625
+		},
+		"memory.live.private.mainMiB": {
+			"count": 3,
+			"max": 191.439453125,
+			"mean": 167.392578125,
+			"min": 147.783203125,
+			"p50": 162.955078125,
+			"p95": 191.439453125
+		},
+		"memory.live.private.rendererMiB": {
+			"count": 3,
+			"max": 527.017578125,
+			"mean": 452.4339192708333,
+			"min": 373.9697265625,
+			"p50": 456.314453125,
+			"p95": 527.017578125
+		},
+		"memory.live.private.projectBearingMiB": {
+			"count": 3,
+			"max": 689.97265625,
+			"mean": 619.8264973958334,
+			"min": 565.4091796875,
+			"p50": 604.09765625,
+			"p95": 689.97265625
+		},
+		"memory.live.private.knownOwnerMiB": {
+			"count": 3,
+			"max": 359.0974063873291,
+			"mean": 298.6261739730835,
+			"min": 250.3866605758667,
+			"p50": 286.3944549560547,
+			"p95": 359.0974063873291
+		},
+		"memory.live.private.knownOwnerShare": {
+			"count": 3,
+			"max": 0.5204516485320198,
+			"mean": 0.4804860313563421,
+			"min": 0.41448043703756166,
+			"p50": 0.5065260084994447,
+			"p95": 0.5204516485320198
+		},
+		"memory.live.blink.allocatedMiB": {
+			"count": 3,
+			"max": 30.611328125,
+			"mean": 23.543294270833332,
+			"min": 9.5263671875,
+			"p50": 30.4921875,
+			"p95": 30.611328125
+		},
+		"memory.live.blink.totalMiB": {
+			"count": 3,
+			"max": 70.375,
+			"mean": 43.744466145833336,
+			"min": 21.625,
+			"p50": 39.2333984375,
+			"p95": 70.375
+		},
+		"memory.live.process.browserMiB": {
+			"count": 3,
+			"max": 450.390625,
+			"mean": 417.8385416666667,
+			"min": 389.625,
+			"p50": 413.5,
+			"p95": 450.390625
+		},
+		"memory.live.process.gpuMiB": {
+			"count": 3,
+			"max": 125.265625,
+			"mean": 111.67708333333333,
+			"min": 104.09375,
+			"p50": 105.671875,
+			"p95": 125.265625
+		},
+		"memory.live.process.tabMiB": {
+			"count": 3,
+			"max": 674.875,
+			"mean": 601.6354166666666,
+			"min": 520.296875,
+			"p50": 609.734375,
+			"p95": 674.875
+		},
+		"memory.live.process.utilityMiB": {
+			"count": 3,
+			"max": 48.265625,
+			"mean": 48.223958333333336,
+			"min": 48.15625,
+			"p50": 48.25,
+			"p95": 48.265625
+		},
+		"memory.live.heap.rendererUsedMiB": {
+			"count": 3,
+			"max": 147.04326152801514,
+			"mean": 92.06016794840495,
+			"min": 60.541016578674316,
+			"p50": 68.59622573852539,
+			"p95": 147.04326152801514
+		},
+		"memory.live.heap.rendererTotalMiB": {
+			"count": 3,
+			"max": 194.80291652679443,
+			"mean": 151.90195337931314,
+			"min": 125.32569217681885,
+			"p50": 135.57725143432617,
+			"p95": 194.80291652679443
+		},
+		"memory.live.heap.mainUsedMiB": {
+			"count": 3,
+			"max": 70.30940628051758,
+			"mean": 57.574057261149086,
+			"min": 39.96323776245117,
+			"p50": 62.449527740478516,
+			"p95": 70.30940628051758
+		},
+		"memory.live.heap.mainTotalMiB": {
+			"count": 3,
+			"max": 130.703125,
+			"mean": 107.453125,
+			"min": 94.109375,
+			"p50": 97.546875,
+			"p95": 130.703125
+		},
+		"memory.live.heap.mainExternalMiB": {
+			"count": 3,
+			"max": 2.856532096862793,
+			"mean": 2.8461154301961265,
+			"min": 2.840907096862793,
+			"p50": 2.840907096862793,
+			"p95": 2.856532096862793
+		},
+		"memory.live.heap.mainArrayBuffersMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.live.residual.rendererAfterHeapAndWasmMiB": {
+			"count": 3,
+			"max": 424.6381492614746,
+			"mean": 363.4294153849284,
+			"min": 307.0683584213257,
+			"p50": 358.58173847198486,
+			"p95": 424.6381492614746
+		},
+		"memory.live.residual.mainAfterHeapAndExternalMiB": {
+			"count": 3,
+			"max": 377.22468662261963,
+			"mean": 357.41836897532147,
+			"min": 324.3345651626587,
+			"p50": 370.69585514068604,
+			"p95": 377.22468662261963
+		},
+		"memory.live.residual.rendererPrivateAfterHeapAndWasmMiB": {
+			"count": 3,
+			"max": 271.2182273864746,
+			"mean": 214.22791798909506,
+			"min": 160.74120998382568,
+			"p50": 210.72431659698486,
+			"p95": 271.2182273864746
+		},
+		"memory.live.residual.mainPrivateAfterHeapAndExternalMiB": {
+			"count": 3,
+			"max": 120.15093326568604,
+			"mean": 106.97240543365479,
+			"min": 82.49276828765869,
+			"p50": 118.27351474761963,
+			"p95": 120.15093326568604
+		},
+		"memory.live.owner.nativeHydrationLeaseCount": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.live.owner.nativeHydrationTextCapacityMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.live.owner.nativeBaselineFileStringMiB": {
+			"count": 3,
+			"max": 7.896968841552734,
+			"mean": 7.896968841552734,
+			"min": 7.896968841552734,
+			"p50": 7.896968841552734,
+			"p95": 7.896968841552734
+		},
+		"memory.live.owner.nativeBaselinePassageCount": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.live.owner.nativeDescriptorPathStringMiB": {
+			"count": 3,
+			"max": 5.60774040222168,
+			"mean": 5.60774040222168,
+			"min": 5.60774040222168,
+			"p50": 5.60774040222168,
+			"p95": 5.60774040222168
+		},
+		"memory.live.owner.bootstrapTextMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.live.owner.workerWasmLinearMiB": {
+			"count": 3,
+			"max": 169.25,
+			"mean": 146.14583333333334,
+			"min": 116.5,
+			"p50": 152.6875,
+			"p95": 169.25
+		},
+		"memory.live.owner.workerCachedPayloadMiB": {
+			"count": 3,
+			"max": 2.2368412017822266,
+			"mean": 0.7668043772379557,
+			"min": 0.0017986297607421875,
+			"p50": 0.06177330017089844,
+			"p95": 2.2368412017822266
+		},
+		"memory.live.owner.workerPendingRequests": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.live.owner.workerSessionQueues": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.live.owner.workerReadModelCacheEntries": {
+			"count": 3,
+			"max": 31,
+			"mean": 12.333333333333334,
+			"min": 3,
+			"p50": 3,
+			"p95": 31
+		},
+		"memory.live.owner.activeEditorCount": {
+			"count": 3,
+			"max": 1,
+			"mean": 0.3333333333333333,
+			"min": 0,
+			"p50": 0,
+			"p95": 1
+		},
+		"memory.live.owner.editorDocumentMiB": {
+			"count": 3,
+			"max": 0.00096893310546875,
+			"mean": 0.0003229777018229167,
+			"min": 0,
+			"p50": 0,
+			"p95": 0.00096893310546875
+		},
+		"memory.live.owner.rustProjectDocumentsMiB": {
+			"count": 3,
+			"max": 16.2606201171875,
+			"mean": 16.260514577229817,
+			"min": 16.260461807250977,
+			"p50": 16.260461807250977,
+			"p95": 16.2606201171875
+		},
+		"memory.live.owner.rustAnalysisSources": {
+			"count": 3,
+			"max": 9,
+			"mean": 4,
+			"min": 1,
+			"p50": 2,
+			"p95": 9
+		},
+		"memory.live.owner.rustBacklinkCacheMiB": {
+			"count": 3,
+			"max": 0.00003814697265625,
+			"mean": 0.000013987223307291666,
+			"min": 0,
+			"p50": 0.000003814697265625,
+			"p95": 0.00003814697265625
+		},
+		"memory.live.owner.rustBacklinkCacheEntries": {
+			"count": 3,
+			"max": 9,
+			"mean": 4,
+			"min": 1,
+			"p50": 2,
+			"p95": 9
+		},
+		"memory.live.owner.rustBacklinkScans": {
+			"count": 3,
+			"max": 9,
+			"mean": 4,
+			"min": 1,
+			"p50": 2,
+			"p95": 9
+		},
+		"memory.live.owner.rustBacklinkScannedSources": {
+			"count": 3,
+			"max": 450000,
+			"mean": 200000,
+			"min": 50000,
+			"p50": 100000,
+			"p95": 450000
+		},
+		"memory.live.owner.rustFingerprintEntries": {
+			"count": 3,
+			"max": 500030,
+			"mean": 500030,
+			"min": 500030,
+			"p50": 500030,
+			"p95": 500030
+		},
+		"memory.live.owner.rustGraphCacheStories": {
+			"count": 3,
+			"max": 1,
+			"mean": 0.3333333333333333,
+			"min": 0,
+			"p50": 0,
+			"p95": 1
+		},
+		"memory.live.owner.rustReadModelCacheStories": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.retained.residentMiB": {
+			"count": 3,
+			"max": 1257.8125,
+			"mean": 1163.0260416666667,
+			"min": 1115.390625,
+			"p50": 1115.875,
+			"p95": 1257.8125
+		},
+		"memory.retained.rendererMiB": {
+			"count": 3,
+			"max": 670.90625,
+			"mean": 586.7760416666666,
+			"min": 517.796875,
+			"p50": 571.625,
+			"p95": 670.90625
+		},
+		"memory.retained.mainMiB": {
+			"count": 3,
+			"max": 445.734375,
+			"mean": 416.3541666666667,
+			"min": 389.828125,
+			"p50": 413.5,
+			"p95": 445.734375
+		},
+		"memory.retained.private.mainMiB": {
+			"count": 3,
+			"max": 190.267578125,
+			"mean": 166.42903645833334,
+			"min": 146.126953125,
+			"p50": 162.892578125,
+			"p95": 190.267578125
+		},
+		"memory.retained.private.rendererMiB": {
+			"count": 3,
+			"max": 518.783203125,
+			"mean": 424.5016276041667,
+			"min": 366.9541015625,
+			"p50": 387.767578125,
+			"p95": 518.783203125
+		},
+		"memory.retained.private.projectBearingMiB": {
+			"count": 3,
+			"max": 681.67578125,
+			"mean": 590.9306640625,
+			"min": 533.89453125,
+			"p50": 557.2216796875,
+			"p95": 681.67578125
+		},
+		"memory.retained.private.knownOwnerMiB": {
+			"count": 3,
+			"max": 282.7275094985962,
+			"mean": 255.9628168741862,
+			"min": 207.45808506011963,
+			"p50": 277.7028560638428,
+			"p95": 282.7275094985962
+		},
+		"memory.retained.private.knownOwnerShare": {
+			"count": 3,
+			"max": 0.5073878490462806,
+			"mean": 0.4344484959183643,
+			"min": 0.38857503292719786,
+			"p50": 0.4073826057816144,
+			"p95": 0.5073878490462806
+		},
+		"memory.retained.blink.allocatedMiB": {
+			"count": 3,
+			"max": 19.3603515625,
+			"mean": 10.331705729166666,
+			"min": 5.759765625,
+			"p50": 5.875,
+			"p95": 19.3603515625
+		},
+		"memory.retained.blink.totalMiB": {
+			"count": 3,
+			"max": 57.75,
+			"mean": 38.5537109375,
+			"min": 21,
+			"p50": 36.9111328125,
+			"p95": 57.75
+		},
+		"memory.retained.process.browserMiB": {
+			"count": 3,
+			"max": 445.734375,
+			"mean": 416.3541666666667,
+			"min": 389.828125,
+			"p50": 413.5,
+			"p95": 445.734375
+		},
+		"memory.retained.process.gpuMiB": {
+			"count": 3,
+			"max": 125.25,
+			"mean": 111.671875,
+			"min": 104.09375,
+			"p50": 105.671875,
+			"p95": 125.25
+		},
+		"memory.retained.process.tabMiB": {
+			"count": 3,
+			"max": 670.90625,
+			"mean": 586.7760416666666,
+			"min": 517.796875,
+			"p50": 571.625,
+			"p95": 670.90625
+		},
+		"memory.retained.process.utilityMiB": {
+			"count": 3,
+			"max": 48.265625,
+			"mean": 48.223958333333336,
+			"min": 48.15625,
+			"p50": 48.25,
+			"p95": 48.265625
+		},
+		"memory.retained.heap.rendererUsedMiB": {
+			"count": 3,
+			"max": 71.39270687103271,
+			"mean": 60.78198719024658,
+			"min": 55.45925712585449,
+			"p50": 55.49399757385254,
+			"p95": 71.39270687103271
+		},
+		"memory.retained.heap.rendererTotalMiB": {
+			"count": 3,
+			"max": 186.86500072479248,
+			"mean": 144.6715695063273,
+			"min": 121.82674217224121,
+			"p50": 125.32296562194824,
+			"p95": 186.86500072479248
+		},
+		"memory.retained.heap.mainUsedMiB": {
+			"count": 3,
+			"max": 71.7242202758789,
+			"mean": 46.188880920410156,
+			"min": 32.6231803894043,
+			"p50": 34.219242095947266,
+			"p95": 71.7242202758789
+		},
+		"memory.retained.heap.mainTotalMiB": {
+			"count": 3,
+			"max": 124.390625,
+			"mean": 103.53125,
+			"min": 92.09375,
+			"p50": 94.109375,
+			"p95": 124.390625
+		},
+		"memory.retained.heap.mainExternalMiB": {
+			"count": 3,
+			"max": 2.856532096862793,
+			"mean": 2.8461154301961265,
+			"min": 2.840907096862793,
+			"p50": 2.840907096862793,
+			"p95": 2.856532096862793
+		},
+		"memory.retained.heap.mainArrayBuffersMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.retained.residual.rendererAfterHeapAndWasmMiB": {
+			"count": 3,
+			"max": 430.2635431289673,
+			"mean": 379.84822114308673,
+			"min": 309.6501178741455,
+			"p50": 399.63100242614746,
+			"p95": 430.2635431289673
+		},
+		"memory.retained.residual.mainAfterHeapAndExternalMiB": {
+			"count": 3,
+			"max": 376.43985080718994,
+			"mean": 367.31917031606037,
+			"min": 354.3640375137329,
+			"p50": 371.1536226272583,
+			"p95": 376.43985080718994
+		},
+		"memory.retained.residual.rendererPrivateAfterHeapAndWasmMiB": {
+			"count": 3,
+			"max": 278.1404962539673,
+			"mean": 217.57380708058676,
+			"min": 158.8073444366455,
+			"p50": 215.77358055114746,
+			"p95": 278.1404962539673
+		},
+		"memory.retained.residual.mainPrivateAfterHeapAndExternalMiB": {
+			"count": 3,
+			"max": 125.83242893218994,
+			"mean": 117.39404010772705,
+			"min": 110.66286563873291,
+			"p50": 115.6868257522583,
+			"p95": 125.83242893218994
+		},
+		"memory.retained.owner.nativeHydrationLeaseCount": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.retained.owner.nativeHydrationTextCapacityMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.retained.owner.nativeBaselineFileStringMiB": {
+			"count": 3,
+			"max": 7.896968841552734,
+			"mean": 7.896968841552734,
+			"min": 7.896968841552734,
+			"p50": 7.896968841552734,
+			"p95": 7.896968841552734
+		},
+		"memory.retained.owner.nativeBaselinePassageCount": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.retained.owner.nativeDescriptorPathStringMiB": {
+			"count": 3,
+			"max": 5.60774040222168,
+			"mean": 5.60774040222168,
+			"min": 5.60774040222168,
+			"p50": 5.60774040222168,
+			"p95": 5.60774040222168
+		},
+		"memory.retained.owner.bootstrapTextMiB": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.retained.owner.workerWasmLinearMiB": {
+			"count": 3,
+			"max": 169.25,
+			"mean": 146.14583333333334,
+			"min": 116.5,
+			"p50": 152.6875,
+			"p95": 169.25
+		},
+		"memory.retained.owner.workerCachedPayloadMiB": {
+			"count": 3,
+			"max": 2.2368412017822266,
+			"mean": 0.7668043772379557,
+			"min": 0.0017986297607421875,
+			"p50": 0.06177330017089844,
+			"p95": 2.2368412017822266
+		},
+		"memory.retained.owner.workerPendingRequests": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.retained.owner.workerSessionQueues": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"memory.retained.owner.workerReadModelCacheEntries": {
+			"count": 3,
+			"max": 31,
+			"mean": 12.333333333333334,
+			"min": 3,
+			"p50": 3,
+			"p95": 31
+		},
+		"memory.retained.owner.activeEditorCount": {
+			"count": 3,
+			"max": 1,
+			"mean": 0.3333333333333333,
+			"min": 0,
+			"p50": 0,
+			"p95": 1
+		},
+		"memory.retained.owner.editorDocumentMiB": {
+			"count": 3,
+			"max": 0.00096893310546875,
+			"mean": 0.0003229777018229167,
+			"min": 0,
+			"p50": 0,
+			"p95": 0.00096893310546875
+		},
+		"memory.retained.owner.rustProjectDocumentsMiB": {
+			"count": 3,
+			"max": 16.2606201171875,
+			"mean": 16.260514577229817,
+			"min": 16.260461807250977,
+			"p50": 16.260461807250977,
+			"p95": 16.2606201171875
+		},
+		"memory.retained.owner.rustAnalysisSources": {
+			"count": 3,
+			"max": 9,
+			"mean": 4,
+			"min": 1,
+			"p50": 2,
+			"p95": 9
+		},
+		"memory.retained.owner.rustBacklinkCacheMiB": {
+			"count": 3,
+			"max": 0.00003814697265625,
+			"mean": 0.000013987223307291666,
+			"min": 0,
+			"p50": 0.000003814697265625,
+			"p95": 0.00003814697265625
+		},
+		"memory.retained.owner.rustBacklinkCacheEntries": {
+			"count": 3,
+			"max": 9,
+			"mean": 4,
+			"min": 1,
+			"p50": 2,
+			"p95": 9
+		},
+		"memory.retained.owner.rustBacklinkScans": {
+			"count": 3,
+			"max": 9,
+			"mean": 4,
+			"min": 1,
+			"p50": 2,
+			"p95": 9
+		},
+		"memory.retained.owner.rustBacklinkScannedSources": {
+			"count": 3,
+			"max": 450000,
+			"mean": 200000,
+			"min": 50000,
+			"p50": 100000,
+			"p95": 450000
+		},
+		"memory.retained.owner.rustFingerprintEntries": {
+			"count": 3,
+			"max": 500030,
+			"mean": 500030,
+			"min": 500030,
+			"p50": 500030,
+			"p95": 500030
+		},
+		"memory.retained.owner.rustGraphCacheStories": {
+			"count": 3,
+			"max": 1,
+			"mean": 0.3333333333333333,
+			"min": 0,
+			"p50": 0,
+			"p95": 1
+		},
+		"memory.retained.owner.rustReadModelCacheStories": {
+			"count": 3,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"query.contentsColdMs": {
+			"count": 1,
+			"max": 180.09999999403954,
+			"mean": 180.09999999403954,
+			"min": 180.09999999403954,
+			"p50": 180.09999999403954,
+			"p95": 180.09999999403954
+		},
+		"query.contentsColdRequestMs": {
+			"count": 1,
+			"max": 127.7999999821186,
+			"mean": 127.7999999821186,
+			"min": 127.7999999821186,
+			"p50": 127.7999999821186,
+			"p95": 127.7999999821186
+		},
+		"query.contentsColdResultToPaintMs": {
+			"count": 1,
+			"max": 13.300000011920929,
+			"mean": 13.300000011920929,
+			"min": 13.300000011920929,
+			"p50": 13.300000011920929,
+			"p95": 13.300000011920929
+		},
+		"query.contentsPayloadBytes": {
+			"count": 1,
+			"max": 18517,
+			"mean": 18517,
+			"min": 18517,
+			"p50": 18517,
+			"p95": 18517
+		},
+		"query.contentsMs": {
+			"count": 20,
+			"max": 71.2000000178814,
+			"mean": 63.225000004470346,
+			"min": 56.900000005960464,
+			"p50": 62.70000001788139,
+			"p95": 68.7000000178814
+		},
+		"query.contentsWarmMs": {
+			"count": 20,
+			"max": 71.2000000178814,
+			"mean": 63.225000004470346,
+			"min": 56.900000005960464,
+			"p50": 62.70000001788139,
+			"p95": 68.7000000178814
+		},
+		"query.contentsRequestMs": {
+			"count": 20,
+			"max": 4.9000000059604645,
+			"mean": 4.05499999821186,
+			"min": 3.7999999821186066,
+			"p50": 4,
+			"p95": 4.299999982118607
+		},
+		"query.contentsNavigationToCommitMs": {
+			"count": 20,
+			"max": 5.5,
+			"mean": 4.199999997019768,
+			"min": 3.5999999940395355,
+			"p50": 4.199999988079071,
+			"p95": 4.5999999940395355
+		},
+		"query.contentsCommitToRequestMs": {
+			"count": 20,
+			"max": 0.10000002384185791,
+			"mean": 0.020000001788139342,
+			"min": 0,
+			"p50": 0,
+			"p95": 0.10000002384185791
+		},
+		"query.contentsResultToPaintMs": {
+			"count": 20,
+			"max": 25.900000005960464,
+			"mean": 24.340000005066393,
+			"min": 16.80000001192093,
+			"p50": 24.599999994039536,
+			"p95": 25.900000005960464
+		},
+		"query.contentsSessionQueueMs": {
+			"count": 20,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"query.contentsSessionReadyMs": {
+			"count": 20,
+			"max": 0.800000011920929,
+			"mean": 0.6699999988079071,
+			"min": 0.5,
+			"p50": 0.699999988079071,
+			"p95": 0.7999999821186066
+		},
+		"query.searchMs": {
+			"count": 20,
+			"max": 26.30000001192093,
+			"mean": 17.17500000447035,
+			"min": 10.199999988079071,
+			"p50": 16.700000017881393,
+			"p95": 25.5
+		},
+		"graph.frameMs": {
+			"count": 445,
+			"max": 33.399999999999636,
+			"mean": 16.70255730337078,
+			"min": 14.699999999998909,
+			"p50": 16.69999999999891,
+			"p95": 17.899999999999636
+		},
+		"graph.frameMaxMs": {
+			"count": 445,
+			"max": 33.399999999999636,
+			"mean": 16.70255730337078,
+			"min": 14.699999999998909,
+			"p50": 16.69999999999891,
+			"p95": 17.899999999999636
+		},
+		"graph.frameOutlierDurationMs": {
+			"count": 1,
+			"max": 33.399999999999636,
+			"mean": 33.399999999999636,
+			"min": 33.399999999999636,
+			"p50": 33.399999999999636,
+			"p95": 33.399999999999636
+		},
+		"graph.frameOutlierStartMs": {
+			"count": 1,
+			"max": 10630.6,
+			"mean": 10630.6,
+			"min": 10630.6,
+			"p50": 10630.6,
+			"p95": 10630.6
+		},
+		"graph.frameOutlierEndMs": {
+			"count": 1,
+			"max": 10664,
+			"mean": 10664,
+			"min": 10664,
+			"p50": 10664,
+			"p95": 10664
+		},
+		"graph.frameOutlierPanIndex": {
+			"count": 1,
+			"max": 3,
+			"mean": 3,
+			"min": 3,
+			"p50": 3,
+			"p95": 3
+		},
+		"graph.mountedNodeCount": {
+			"count": 1,
+			"max": 572,
+			"mean": 572,
+			"min": 572,
+			"p50": 572,
+			"p95": 572
+		},
+		"graph.layoutRevisionDelta": {
+			"count": 1,
+			"max": 1,
+			"mean": 1,
+			"min": 1,
+			"p50": 1,
+			"p95": 1
+		},
+		"graph.layoutSaveCount": {
+			"count": 1,
+			"max": 1,
+			"mean": 1,
+			"min": 1,
+			"p50": 1,
+			"p95": 1
+		},
+		"graph.layoutFullSaveFallbackCount": {
+			"count": 1,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"watcher.contentIngestMs": {
+			"count": 5,
+			"max": 4.900146484375,
+			"mean": 4.260009765625,
+			"min": 3.199951171875,
+			"p50": 4.5,
+			"p95": 4.900146484375
+		},
+		"watcher.observationToScanMs": {
+			"count": 6,
+			"max": 152.349853515625,
+			"mean": 151.85453287760416,
+			"min": 150.541748046875,
+			"p50": 152.3017578125,
+			"p95": 152.349853515625
+		},
+		"watcher.nativeDeltaCreationMs": {
+			"count": 6,
+			"max": 156.4306640625,
+			"mean": 149.70206705729166,
+			"min": 133.435302734375,
+			"p50": 151.841064453125,
+			"p95": 156.4306640625
+		},
+		"watcher.nativeToRendererMs": {
+			"count": 6,
+			"max": 0.079833984375,
+			"mean": 0.0020345052083333335,
+			"min": -0.046875,
+			"p50": -0.004638671875,
+			"p95": 0.079833984375
+		},
+		"watcher.rendererToWorkerMs": {
+			"count": 6,
+			"max": 0.10009765625,
+			"mean": 0.050048828125,
+			"min": 0,
+			"p50": 0,
+			"p95": 0.10009765625
+		},
+		"watcher.rustIngestMs": {
+			"count": 6,
+			"max": 497.199951171875,
+			"mean": 85.58329264322917,
+			"min": 2.599853515625,
+			"p50": 3.400146484375,
+			"p95": 497.199951171875
+		},
+		"watcher.rustToPatchMs": {
+			"count": 5,
+			"max": 0.800048828125,
+			"mean": 0.560009765625,
+			"min": 0.300048828125,
+			"p50": 0.599853515625,
+			"p95": 0.800048828125
+		},
+		"watcher.observationToPatchMs": {
+			"count": 5,
+			"max": 311.921630859375,
+			"mean": 305.16474609375,
+			"min": 289.397216796875,
+			"p50": 307.790771484375,
+			"p95": 311.921630859375
+		},
+		"incremental.reindexComputeMs": {
+			"count": 5,
+			"max": 3.699999988079071,
+			"mean": 3.2599999964237214,
+			"min": 2.5999999940395355,
+			"p50": 3.4000000059604645,
+			"p95": 3.699999988079071
+		},
+		"watcher.coreTotalMs": {
+			"count": 5,
+			"max": 3.6,
+			"mean": 3.1,
+			"min": 2.4,
+			"p50": 3.3,
+			"p95": 3.6
+		},
+		"watcher.lookupAndDeltaMs": {
+			"count": 5,
+			"max": 2.6,
+			"mean": 1.9799999999999998,
+			"min": 1.5,
+			"p50": 2,
+			"p95": 2.6
+		},
+		"watcher.fingerprintMs": {
+			"count": 5,
+			"max": 0.1,
+			"mean": 0.06000000000000001,
+			"min": 0,
+			"p50": 0.1,
+			"p95": 0.1
+		},
+		"watcher.savepointMs": {
+			"count": 5,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"watcher.graphMs": {
+			"count": 5,
+			"max": 0.1,
+			"mean": 0.04,
+			"min": 0,
+			"p50": 0,
+			"p95": 0.1
+		},
+		"watcher.analysisMs": {
+			"count": 5,
+			"max": 1.3,
+			"mean": 1,
+			"min": 0.8,
+			"p50": 0.9,
+			"p95": 1.3
+		},
+		"watcher.readModelMs": {
+			"count": 5,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"watcher.historyMs": {
+			"count": 5,
+			"max": 0.1,
+			"mean": 0.02,
+			"min": 0,
+			"p50": 0,
+			"p95": 0.1
+		},
+		"watcher.patchFinalizeMs": {
+			"count": 5,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"watcher.coreUnattributedMs": {
+			"count": 5,
+			"max": 0,
+			"mean": 0,
+			"min": 0,
+			"p50": 0,
+			"p95": 0
+		},
+		"watcher.wasmBoundaryMs": {
+			"count": 5,
+			"max": 0.20000000000000018,
+			"mean": 0.1599609375000001,
+			"min": 0.09995117187499991,
+			"p50": 0.1998535156250001,
+			"p95": 0.20000000000000018
+		},
+		"watcher.assetReviewMs": {
+			"count": 1,
+			"max": 498.19999998807907,
+			"mean": 498.19999998807907,
+			"min": 498.19999998807907,
+			"p50": 498.19999998807907,
+			"p95": 498.19999998807907
+		}
+	},
+	"classification": "clean-commit-baseline",
+	"createdAt": "2026-07-16T09:51:22.248Z",
+	"environment": {
+		"metricContracts": {
+			"memory": 3,
+			"memoryAttribution": 1,
+			"startup": 2
+		},
+		"git": {
+			"dirty": false,
+			"revision": "bd13ddd6aa94a9823bdc5ad655725844d452c834"
+		},
+		"machine": {
+			"arch": "arm64",
+			"cpu": "Apple M4",
+			"cpuCount": 10,
+			"memoryBytes": 25769803776,
+			"node": "v24.18.0",
+			"platform": "darwin",
+			"release": "25.5.0"
+		},
+		"versions": {
+			"electron": "41.2.0",
+			"playwright": "1.61.0"
+		},
+		"fingerprint": "f83c0f8cbc7f386b"
+	},
+	"evaluation": {
+		"baselineStatus": "matched",
+		"checks": [
+			{
+				"actual": 15.199999988079071,
+				"blocking": true,
+				"kind": "regression",
+				"limit": 1568.7150000017136,
+				"name": "edit.paintMs",
+				"passed": true
+			},
+			{
+				"actual": 33.399999999999636,
+				"blocking": true,
+				"kind": "regression",
+				"limit": 4484.884999999993,
+				"name": "graph.frameMaxMs",
+				"passed": true
+			},
+			{
+				"actual": 17.899999999999636,
+				"blocking": true,
+				"kind": "regression",
+				"limit": 2875,
+				"name": "graph.frameMs",
+				"passed": true
+			},
+			{
+				"actual": 3.699999988079071,
+				"blocking": true,
+				"kind": "regression",
+				"limit": 677.05,
+				"name": "incremental.reindexComputeMs",
+				"passed": true
+			},
+			{
+				"actual": 68.7000000178814,
+				"blocking": true,
+				"kind": "regression",
+				"limit": 3837.8949999965726,
+				"name": "query.contentsMs",
+				"passed": true
+			},
+			{
+				"actual": 25.5,
+				"blocking": true,
+				"kind": "regression",
+				"limit": 53.705000003427266,
+				"name": "query.searchMs",
+				"passed": true
+			},
+			{
+				"actual": 15.199999988079071,
+				"blocking": false,
+				"kind": "target",
+				"limit": 16.6,
+				"name": "edit.paintMs",
+				"passed": true
+			},
+			{
+				"actual": 33.399999999999636,
+				"blocking": false,
+				"kind": "target",
+				"limit": 50,
+				"name": "graph.frameMaxMs",
+				"passed": true
+			},
+			{
+				"actual": 17.899999999999636,
+				"blocking": false,
+				"kind": "target",
+				"limit": 16.6,
+				"name": "graph.frameMs",
+				"passed": false
+			},
+			{
+				"actual": 3.699999988079071,
+				"blocking": false,
+				"kind": "target",
+				"limit": 5,
+				"name": "incremental.reindexComputeMs",
+				"passed": true
+			},
+			{
+				"actual": 1033.625,
+				"blocking": false,
+				"kind": "target",
+				"limit": 600,
+				"name": "memory.residentMiB",
+				"passed": false
+			},
+			{
+				"actual": 68.7000000178814,
+				"blocking": false,
+				"kind": "target",
+				"limit": 50,
+				"name": "query.contentsMs",
+				"passed": false
+			},
+			{
+				"actual": 25.5,
+				"blocking": false,
+				"kind": "target",
+				"limit": 50,
+				"name": "query.searchMs",
+				"passed": true
+			},
+			{
+				"actual": 2338.2000000178814,
+				"blocking": false,
+				"kind": "target",
+				"limit": 1500,
+				"name": "startup.interactiveMs",
+				"passed": false
+			},
+			{
+				"actual": 3564.600000023842,
+				"blocking": false,
+				"kind": "target",
+				"limit": 400,
+				"name": "startup.shellMs",
+				"passed": false
+			}
+		],
+		"passed": true
+	},
+	"fixture": {
+		"bodyWords": 32,
+		"files": ["benchmarks/fixtures/generated/sources/story-50000.story.json"],
+		"linkCounts": {
+			"branch": 49993,
+			"broken": 1351,
+			"next": 49999,
+			"self": 495,
+			"total": 101838
+		},
+		"passageCount": 50000,
+		"storyFormat": "Harlowe",
+		"storyFormatVersion": "3.3.9",
+		"assets": ["assets/perf/pixel.svg", "assets/perf/readme.txt"],
+		"projectPath": "benchmarks/fixtures/generated/projects/story-50000.twine.rs",
+		"sourcePath": "benchmarks/fixtures/generated/sources/story-50000.story.json",
+		"manifestSha256": "0a254a11edc3b3d4cfd8581662967f054af806d9ecd0f93fdcd03e6a18f064f1"
+	},
+	"invariants": {
+		"checks": [
+			{
+				"name": "contents-0-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-0-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-0-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-0-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-0-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-0-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-0-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-1-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-1-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-1-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-1-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-1-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-1-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-1-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-10-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-10-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-10-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-10-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-10-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-10-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-10-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-11-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-11-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-11-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-11-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-11-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-11-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-11-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-12-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-12-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-12-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-12-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-12-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-12-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-12-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-13-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-13-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-13-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-13-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-13-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-13-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-13-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-14-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-14-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-14-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-14-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-14-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-14-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-14-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-15-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-15-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-15-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-15-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-15-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-15-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-15-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-16-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-16-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-16-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-16-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-16-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-16-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-16-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-17-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-17-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-17-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-17-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-17-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-17-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-17-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-18-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-18-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-18-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-18-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-18-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-18-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-18-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-19-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-19-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-19-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-19-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-19-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-19-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-19-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-2-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-2-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-2-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-2-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-2-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-2-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-2-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-20-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-20-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-20-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-20-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-20-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-20-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-20-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-21-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-21-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-21-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-21-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-21-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-21-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-21-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-3-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-3-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-3-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-3-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-3-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-3-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-3-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-4-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-4-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-4-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-4-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-4-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-4-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-4-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-5-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-5-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-5-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-5-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-5-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-5-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-5-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-6-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-6-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-6-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-6-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-6-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-6-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-6-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-7-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-7-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-7-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-7-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-7-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-7-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-7-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-8-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-8-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-8-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-8-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-8-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-8-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-8-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-9-avoids-full-index-transfer",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-9-matching-result-painted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-9-payload-is-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-9-queue-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-9-session-ready-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-9-uses-compact-catalog",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-9-uses-wasm-worker",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "contents-phase-worker-idle",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-0-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-1-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-10-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-11-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-12-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-13-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-14-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-15-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-16-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-17-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-18-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-19-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-2-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-20-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-21-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-3-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-4-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-5-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-6-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-7-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-8-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-9-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-clean-sample-coverage",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-final-revision-persisted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-ordinary-timings-exclude-external-ingest",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "edit-undo-redo-revisions-monotonic",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "final-memory-native-private-present",
+				"occurrences": 3,
+				"passed": true
+			},
+			{
+				"name": "final-memory-primary-owners-present",
+				"occurrences": 3,
+				"passed": true
+			},
+			{
+				"name": "final-retained-memory-checkpoint-present",
+				"occurrences": 3,
+				"passed": true
+			},
+			{
+				"name": "git-dirty-state-stable-across-phases",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "git-revision-stable-across-phases",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-final-revision-persisted",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-layout-interaction-advances-revision",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-layout-save-timings-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-layout-saves-avoid-full-save-fallback",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-layout-saves-use-incremental-mode",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-panning-changes-world-transform",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-panning-does-not-mutate-layout",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-panning-keeps-mounted-node-count-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-phase-no-save-in-flight",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-phase-worker-idle",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "graph-viewport-node-count-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "one-project-one-session-worker",
+				"occurrences": 4,
+				"passed": true
+			},
+			{
+				"name": "phase-edit-completed",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "phase-graph-completed",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "phase-query-completed",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "phase-startup-completed",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "phase-watcher-completed",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "query-phase-worker-idle",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "query-search-keeps-expensive-intelligence-deferred",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "react-passage-body-mirror-empty",
+				"occurrences": 4,
+				"passed": true
+			},
+			{
+				"name": "source-fixture-manifest-unchanged",
+				"occurrences": 5,
+				"passed": true
+			},
+			{
+				"name": "source-fixture-tree-unchanged",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-bootstrap-documents-released",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-compiled-manifest-cache-used",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-full-hydration-is-complete",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-manifest-digest-matches",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-memory-checkpoints-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-native-hydration-leases-released",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-native-load-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-one-streamed-project-bootstrap",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-react-passage-body-mirror-empty",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-receipt-covers-baseline",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-shell-load-is-lightweight",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-uses-native-baseline-receipt",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-1-wasm-memory-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-bootstrap-documents-released",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-compiled-manifest-cache-used",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-full-hydration-is-complete",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-manifest-digest-matches",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-memory-checkpoints-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-native-hydration-leases-released",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-native-load-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-one-streamed-project-bootstrap",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-react-passage-body-mirror-empty",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-receipt-covers-baseline",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-shell-load-is-lightweight",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-uses-native-baseline-receipt",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-2-wasm-memory-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-bootstrap-documents-released",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-compiled-manifest-cache-used",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-full-hydration-is-complete",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-manifest-digest-matches",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-memory-checkpoints-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-native-hydration-leases-released",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-native-load-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-one-streamed-project-bootstrap",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-react-passage-body-mirror-empty",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-receipt-covers-baseline",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-shell-load-is-lightweight",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-uses-native-baseline-receipt",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "startup-3-wasm-memory-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "temporary-run-root-removed",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "user-data-paths-isolated",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "wasm-worker-mode-active",
+				"occurrences": 4,
+				"passed": true
+			},
+			{
+				"name": "watcher-asset-avoids-recovery",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-asset-enters-review",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-asset-observed",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-asset-parses-no-story-source",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-avoids-full-replace",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-1-avoids-full-read-model-build",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-1-rust-avoids-graph-reparse",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-1-rust-stage-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-1-rust-stage-correlation",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-1-rust-stage-sum-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-1-updates-one-source",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-2-avoids-full-read-model-build",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-2-rust-avoids-graph-reparse",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-2-rust-stage-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-2-rust-stage-correlation",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-2-rust-stage-sum-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-2-updates-one-source",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-3-avoids-full-read-model-build",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-3-rust-avoids-graph-reparse",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-3-rust-stage-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-3-rust-stage-correlation",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-3-rust-stage-sum-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-3-updates-one-source",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-4-avoids-full-read-model-build",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-4-rust-avoids-graph-reparse",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-4-rust-stage-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-4-rust-stage-correlation",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-4-rust-stage-sum-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-4-updates-one-source",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-5-avoids-full-read-model-build",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-5-rust-avoids-graph-reparse",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-5-rust-stage-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-5-rust-stage-correlation",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-5-rust-stage-sum-bounded",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-5-updates-one-source",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-acknowledged",
+				"occurrences": 6,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-applied",
+				"occurrences": 6,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-avoids-recovery",
+				"occurrences": 6,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-observed",
+				"occurrences": 6,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-parses-one-source",
+				"occurrences": 6,
+				"passed": true
+			},
+			{
+				"name": "watcher-passage-trace-complete",
+				"occurrences": 6,
+				"passed": true
+			},
+			{
+				"name": "watcher-read-model-attribution-present",
+				"occurrences": 6,
+				"passed": true
+			},
+			{
+				"name": "watcher-read-model-update-is-bounded",
+				"occurrences": 6,
+				"passed": true
+			},
+			{
+				"name": "watcher-warmup-rust-avoids-graph-reparse",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-warmup-rust-stage-attribution-present",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-warmup-rust-stage-correlation",
+				"occurrences": 1,
+				"passed": true
+			},
+			{
+				"name": "watcher-warmup-rust-stage-sum-bounded",
+				"occurrences": 1,
+				"passed": true
+			}
+		],
+		"failed": 0,
+		"passed": 297,
+		"total": 297
+	},
+	"kind": "twine-electron-performance-reference",
+	"provenance": {
+		"budgetsSha256": "c3e6e0dd87baee020c64f50b979d0df213be8d21271cd850e5bf12a747820ad8",
+		"limitations": [],
+		"sourceReport": {
+			"file": "benchmarks/results/electron-2026-07-16T09-46-23-323Z-50000.json",
+			"sha256": "c4ea371d45b06d1624f7de4694685ec37b4d95e0aa5fe984a72ad40b1b84c699",
+			"tracked": false
+		}
+	},
+	"run": {
+		"phase": "all",
+		"phases": {
+			"edit": {
+				"finishedAt": "2026-07-16T09:49:15.024Z",
+				"startedAt": "2026-07-16T09:48:15.480Z",
+				"status": "passed"
+			},
+			"graph": {
+				"finishedAt": "2026-07-16T09:50:42.673Z",
+				"startedAt": "2026-07-16T09:50:04.307Z",
+				"status": "passed"
+			},
+			"query": {
+				"finishedAt": "2026-07-16T09:50:00.801Z",
+				"startedAt": "2026-07-16T09:49:18.528Z",
+				"status": "passed"
+			},
+			"startup": {
+				"finishedAt": "2026-07-16T09:48:11.973Z",
+				"startedAt": "2026-07-16T09:46:24.168Z",
+				"status": "passed"
+			},
+			"watcher": {
+				"finishedAt": "2026-07-16T09:51:18.741Z",
+				"startedAt": "2026-07-16T09:50:46.177Z",
+				"status": "passed"
+			}
+		},
+		"smoke": false,
+		"testStatus": "passed"
+	},
+	"schemaVersion": 1
+}

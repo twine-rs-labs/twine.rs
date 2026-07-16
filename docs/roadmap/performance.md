@@ -2,7 +2,7 @@
 
 Status: active
 Owner: performance and architecture maintainers
-Last verified: 2026-07-15
+Last verified: 2026-07-16
 Source of truth: outstanding work revealed by accepted 10k/50k baselines
 
 ## Objective
@@ -229,9 +229,17 @@ focused 50k measurements.
   before changing the incremental Rust index pipeline.
 - The 2026-07-15 run confirms that the core is no longer the watcher bottleneck:
   compact ingestion was 4.3 ms p95 while observation-to-patch was 324.8 ms p95.
-  Graph interaction is now the clearest latency target at 33.4 ms frame p95 and
-  a 400.1 ms maximum outlier. Contents and edit paint remain smaller follow-ups
-  at 70.2 ms and 23.4 ms p95 respectively.
+  It selected graph interaction as the next latency target at 33.4 ms frame p95
+  and a 400.1 ms maximum outlier.
+- Graph viewport state now persists outside route React rendering, ordinary
+  interaction no longer rescans the 50k-story bounds, and frame outliers record
+  timestamps for correlation. Three clean 50k repeats on 2026-07-16 measured
+  17.3–17.7 ms p95. The two warm repeats stayed at 33.3–33.4 ms maximum; only
+  the first cold repeat exceeded 50 ms, at 135.1 ms. The final clean all-phase
+  baseline measured 17.9 ms p95 and 33.4 ms maximum. Graph stability is closed
+  as an active goal, so a deeper viewport-projection rewrite is conditional on
+  a future reproducible regression. Contents and edit paint remain smaller
+  optional follow-ups.
 
 Exit signal: no full-source rebuilds, bounded rendering remains true, and each
 surface materially improves against its accepted baseline.
@@ -257,9 +265,20 @@ surface materially improves against its accepted baseline.
   The next investigation should attribute the remaining browser/renderer
   project-size slope, especially renderer native allocations outside the
   roughly 52 MiB JavaScript heap.
+- The repeatable three-sample matrix on 2026-07-16 measured project-bearing
+  private memory at 136.8 MiB for 100 passages and 499.5 MiB for 50k, a
+  362.7 MiB increase. Known logical owners explain about 162.1 MiB, or 44.7%,
+  of that slope. The de-duplicated macOS physical footprint grew from 442.3 MiB
+  to 811.9 MiB. Application VM tag 16 accounted for about 345.3 MiB of the
+  369.6 MiB physical increase, with 248.9 MiB in the Tab process and 114.0 MiB
+  in the Browser process; GPU and utility growth was negligible.
+- The next goal is to use V8/Chromium heap or memory-infra profiling to split
+  that application-tag growth by process and concrete project representation.
+  Optimize the largest repeatable owner only after that attribution, preserving
+  the measured WASM, native baseline, bounded-query, and graph invariants.
 
-Exit signal: resident memory drops without replacing measured caches with
-unbounded recomputation.
+Exit signal: the dominant V8-backed project-size owner is named and resident
+memory drops without replacing measured caches with unbounded recomputation.
 
 ## Targets
 

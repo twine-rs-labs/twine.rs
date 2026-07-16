@@ -2,7 +2,7 @@
 
 Status: current measured snapshot
 Owner: performance maintainers
-Last verified: 2026-07-15
+Last verified: 2026-07-16
 Source of truth: release-mode Electron harness and accepted local baselines
 
 ## Harness state
@@ -15,17 +15,16 @@ process memory.
 
 Complete 10k and 50k Apple M4 runs pass all machine-independent structural
 invariants. Matching local baselines are accepted. Raw reports and
-machine-specific baselines remain ignored, while normalized historical
+machine-specific baselines remain ignored, while normalized reproducibility
 evidence is tracked:
 
-- [10k reference](../../benchmarks/reference/2026-07-03-apple-m4-10000.summary.json)
-- [50k reference](../../benchmarks/reference/2026-07-03-apple-m4-50000.summary.json)
+- [10k reference](../../benchmarks/reference/2026-07-16-apple-m4-10000.summary.json)
+- [50k reference](../../benchmarks/reference/2026-07-16-apple-m4-50000.summary.json)
 
-Both source reports were captured from the same dirty worktree. The artifacts
-preserve that limitation, the recorded Git revision, environment and dependency
-versions, fixture identity, all aggregates, normalized invariant results, and
-source-report hashes. They document the initial baseline without claiming
-clean-commit reproducibility.
+Both source reports were captured from clean revision `bd13ddd6`, retained that
+revision and clean state through all five phases, and passed every blocking
+invariant. The earlier July 3 dirty-worktree summaries remain tracked as
+historical evidence.
 
 A short diagnostic phase now exists for iteration on the dominant 50k edit/save
 cost. `npm run perf:electron:50k:diagnostic` performs one production launch and
@@ -46,7 +45,34 @@ working sets, and non-additive logical owner details. Residual renderer and main
 working sets subtract only top-level heap/WASM or heap/external owners so nested
 payload, document, and Rust cache counters are not double-counted.
 
+The repeatable memory matrix adds native main/renderer private memory,
+project-bearing private memory, and Blink allocation counters to that logical
+owner model. On macOS, an optional multi-process physical-footprint sample
+further separates growth by Electron role and VM category without summing
+shared regions once per process.
+
 ## Recent focused validation
+
+The complete 10k and 50k suites passed and were accepted as clean local
+baselines on 2026-07-16. Their cross-phase provenance assertions remained on
+revision `bd13ddd6`, and all blocking invariants passed. At 50k, graph frames
+measured 17.9 ms p95 and 33.4 ms maximum with no frame over 50 ms. Three clean
+focused repeats measured 17.3–17.7 ms p95; both warm repeats stayed at
+33.3–33.4 ms maximum, while the first cold repeat contained one 135.1 ms
+outlier. Persisting graph viewport state outside route rendering and avoiding a
+50k-story bounds scan during ordinary interaction have therefore closed graph
+frame stability as the next optimization goal; a deeper projection rewrite is
+not currently warranted.
+
+The three-sample 100/10k/50k matrix found repeatable project-bearing private
+growth from 136.8 MiB to 499.5 MiB. Known logical owners explain about 44.7% of
+that increase. The de-duplicated macOS physical footprint grew from 442.3 MiB
+to 811.9 MiB; about 345.3 MiB of the 369.6 MiB increase was in application VM
+tag 16, concentrated in the Tab (+248.9 MiB) and Browser (+114.0 MiB)
+processes. GPU and utility growth was negligible. The next performance goal is
+therefore to attribute those V8-backed allocations to concrete renderer and
+main-process project representations, then optimize the largest owner. Smaller
+Contents, edit-paint, and startup misses remain conditional follow-ups.
 
 Fresh release-mode 50k query, graph, edit, and watcher phases passed on
 2026-07-15 after the compact Contents, layout-save, external-ingest, and harness
@@ -71,18 +97,14 @@ changes landed. All structural assertions passed.
   renderer patch measured 324.8 ms p95, dominated by the roughly 151 ms watcher
   coalescing window and 164.8 ms native delta creation p95.
 
-These results close the project-scale fallback goals. The strongest next
-latency candidate is graph frame stability, followed by the remaining Contents
-and edit paint overhead. Resident memory still ranges from about 1.17 GiB in
-the edit phase to 1.48 GiB in the graph phase, so browser/renderer working-set
-attribution remains the next broader architectural investigation.
+These results closed the project-scale fallback goals and motivated the graph
+and memory work validated above.
 
 The 50k diagnostic, query, graph, and watcher phases passed on 2026-07-10. They
 validate the incremental project-folder save path, bounded Contents path, and
 steady-state watcher path without requiring another complete multi-phase run.
-These ignored local reports are current engineering evidence; the tracked July
-3 summaries remain the durable accepted baseline until a new complete suite is
-accepted.
+These ignored local reports remain historical engineering evidence; the clean
+July 16 summaries now provide the durable accepted reference.
 
 - A passage text edit used `incremental` save mode, touched one project path,
   and completed its native save in about 63 ms. The file write itself took

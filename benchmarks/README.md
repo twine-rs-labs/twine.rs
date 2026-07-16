@@ -132,12 +132,27 @@ For fast project-size memory attribution, run:
 npm run perf:electron:memory
 ```
 
-This runs one startup sample each at 100, 10k, and 50k passages. Reports retain
-the summed working-set metric for regression continuity and add process-role
-deltas from the `open-start` checkpoint, bootstrap/native-lease ownership, and
-accepted-baseline/descriptor estimates. These diagnostic reports are not
-eligible as baselines; use the normal three-sample startup command for a final
-comparison.
+This runs three fresh startup processes each at 100, 10k, and 50k passages and
+emits a `memory-matrix-*.json` decision artifact. Reports retain the summed
+working-set metric for regression continuity and add native private memory for
+the main and renderer processes, project-bearing private memory, Blink
+allocation counters, process-role deltas from the `open-start` checkpoint,
+bootstrap/native-lease ownership, and accepted-baseline/descriptor estimates.
+The matrix requires one clean revision, machine fingerprint, and measurement
+contract across every sample, then reports whether project-size growth is
+repeatable and sufficiently attributed. These diagnostic reports are not
+eligible as baselines.
+
+On macOS, add de-duplicated physical-footprint attribution with:
+
+```sh
+npm run perf:electron:memory:footprint:macos
+```
+
+This captures all Electron child processes in one `/usr/bin/footprint` sample,
+then reports physical growth by process role and VM category. It may require
+permission to inspect Electron child processes. Its `memoryFootprint1` contract
+is focused diagnostic evidence, not a portable or accepted baseline.
 
 For lifecycle-level renderer attribution, run one of:
 
@@ -289,7 +304,9 @@ The accepted baseline is stored under the ignored
 runs on that machine fail when Electron timings regress by more than 15% or
 5 ms, native timings by more than 10% or 2 ms, or resident memory by more than
 10% or 32 MiB. Partial startup, edit, query, graph, or watcher reports are
-rejected as baselines, as are reports missing any budgeted metric.
+rejected as baselines, as are reports missing any budgeted metric. Acceptance
+also requires a clean worktree and the same recorded Git revision and dirty
+state in every benchmark phase.
 
 Recheck the newest report, optionally for a particular size:
 

@@ -9,10 +9,16 @@ They are documentation evidence, not machine-specific regression baselines.
 Local baselines remain under the ignored `benchmarks/results/baselines/`
 directory.
 
-The initial 10k and 50k snapshots were generated from complete passing reports
-captured from a dirty worktree. That limitation is recorded inside each
-artifact. Replace them only when a future performance run occurs naturally;
-they do not justify rerunning the suite solely for documentation.
+The current clean references are:
+
+- [10k clean baseline](./2026-07-16-apple-m4-10000.summary.json)
+- [50k clean baseline](./2026-07-16-apple-m4-50000.summary.json)
+
+Their complete source reports used one clean Git revision and passed the
+cross-phase revision and dirty-state assertions. The initial
+[10k historical snapshot](./2026-07-03-apple-m4-10000.summary.json) and
+[50k historical snapshot](./2026-07-03-apple-m4-50000.summary.json) remain for
+comparison; their dirty-worktree limitation is recorded inside each artifact.
 
 Create a reference from an existing complete report:
 
