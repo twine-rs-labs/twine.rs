@@ -74,6 +74,19 @@ therefore to attribute those V8-backed allocations to concrete renderer and
 main-process project representations, then optimize the largest owner. Smaller
 Contents, edit-paint, and startup misses remain conditional follow-ups.
 
+A source-free, serialized 100/50k V8 live-heap diagnostic then tested that
+next step. Main and renderer snapshots reconcile with the harness used-heap
+deltas within 0.22 MiB combined. The renderer retains exactly three passage
+presentation objects per passage, but their joint retained growth is 39.12 MiB,
+or 39.69 MiB including all three direct holders. The largest independently
+removable root is the 20.37 MiB body-free core-host copy; the other roots are
+React alternate props and required renderer context. The family therefore
+misses the predeclared 40 MiB owner gate and the diagnostic has only one pair,
+so no optimization was selected. See the
+[tracked diagnostic summary](../../benchmarks/reference/2026-07-16-apple-m4-v8-memory-attribution.summary.json).
+If memory attribution resumes, the justified next probe is clean, repeated,
+and worker-inclusive; passage-model deduplication is not an active goal.
+
 Fresh release-mode 50k query, graph, edit, and watcher phases passed on
 2026-07-15 after the compact Contents, layout-save, external-ingest, and harness
 changes landed. All structural assertions passed.

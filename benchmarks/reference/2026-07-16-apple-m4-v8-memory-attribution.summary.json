@@ -1,0 +1,129 @@
+{
+	"kind": "twine-v8-live-heap-attribution-summary",
+	"schemaVersion": 1,
+	"createdAt": "2026-07-16T11:14:50.123Z",
+	"classification": "focused-diagnostic",
+	"provenance": {
+		"revision": "580ca22affdf1e278872f28940ec8b1bdb3b1e91",
+		"dirty": true,
+		"dirtyPaths": [".codex/", "AGENTS.md"],
+		"buildFresh": true,
+		"serializedExecution": true,
+		"repositoryMutatedByProbe": false,
+		"baselineAcceptable": false,
+		"machine": {
+			"arch": "arm64",
+			"cpu": "Apple M4",
+			"cpuCount": 10,
+			"memoryBytes": 25769803776,
+			"platform": "darwin",
+			"release": "25.5.0"
+		},
+		"versions": {
+			"node": "24.18.0",
+			"electron": "41.2.0",
+			"playwright": "1.61.0"
+		},
+		"contracts": {
+			"memory": 3,
+			"memoryAttribution": 1,
+			"probe": "source-free-v8-live-heap-v1"
+		}
+	},
+	"fixtures": {
+		"100": {
+			"fingerprint": "96d41835806d46dfcc5ff440612f2be23b237080964fcc7a288a7b5d4b2f36af",
+			"unchanged": true
+		},
+		"50000": {
+			"fingerprint": "1883fe6049f0d57c187dd114a4b15e2e48e04413102f812fd08f38a66f91509f",
+			"unchanged": true
+		}
+	},
+	"readinessAndInvariants": {
+		"allPassagesReady": true,
+		"baselineReady": true,
+		"sessionInitialized": true,
+		"bootstrapReleased": true,
+		"hydrationLeasesReleased": true,
+		"reactPassageBodiesReleased": true,
+		"workerIdle": true,
+		"fixtureTreesUnchanged": true,
+		"isolatedUserData": true,
+		"finalElectronProcessRemaining": false
+	},
+	"growth100To50000MiB": {
+		"projectBearingPrivate": 373.5478515625,
+		"physicalFootprint": 368.2973327636719,
+		"v8ApplicationTag16": 342.34375,
+		"mainHeapUsed": 25.185897827148438,
+		"rendererHeapUsed": 41.015563011169434,
+		"mainAndRendererAllocatedHeap": 186.5635061264038,
+		"allocatedMinusUsedHeapCapacity": 120.36204528808594,
+		"workerWasmLinear": 94.5625
+	},
+	"heapSnapshotReconciliation": {
+		"mainSnapshotDeltaMiB": 25.2095,
+		"mainHarnessDeltaMiB": 25.1859,
+		"rendererSnapshotDeltaMiB": 41.2059,
+		"rendererHarnessDeltaMiB": 41.0156
+	},
+	"rendererPassageFamily": {
+		"shapeFields": [
+			"id",
+			"name",
+			"tags",
+			"story",
+			"height",
+			"width",
+			"left",
+			"top",
+			"selected",
+			"highlighted"
+		],
+		"copiesPerPassage": 3,
+		"objectCount100": 300,
+		"objectCount50000": 150000,
+		"retainedObjectsAndDescendantsMiB": 39.11843490600586,
+		"retainedIncludingDirectHoldersMiB": 39.68949508666992,
+		"nonOverlappingCopyGrowthMiB": {
+			"coreHostStoriesWithoutText": 20.367813110351562,
+			"reactPropsWithEmptyText": 8.990596771240234,
+			"rendererContextWithEmptyText": 3.4263877868652344,
+			"sharedAcrossCopies": 6.333637237548828
+		}
+	},
+	"dominatorAnalysis": {
+		"algorithm": "Lengauer-Tarjan over root-reachable V8 heap nodes; weak edges excluded",
+		"jointRetention": "Block all family roots and recompute strong reachability so shared descendants are counted once",
+		"validation": {
+			"rootRetainedEqualsReachableSelf": true,
+			"missingImmediateDominators": 0,
+			"edgeDominatorViolations": 0,
+			"renderer100IndependentAlgorithmMismatches": 0
+		}
+	},
+	"decision": {
+		"concreteOwnerThresholdMiB": 40,
+		"measuredMiB": 39.68949508666992,
+		"marginMiB": -0.3105049133300781,
+		"ownerGateMet": false,
+		"repeatabilityRequired": "same owner in at least two of three pairs with no more than 20% variation",
+		"samplePairCount": 1,
+		"repeatabilityGateMet": false,
+		"optimizationSelected": false,
+		"recommendation": "Stop without implementation. If memory attribution resumes, use a clean repeated worker-inclusive profile."
+	},
+	"limitations": [
+		"The worktree contained untracked project agent configuration, so this is not baseline evidence.",
+		"Only one forced-GC 100/50k pair was captured.",
+		"The dedicated worker heap was not snapshotted; its WASM linear memory was measured separately.",
+		"Generic V8 capacity and WASM growth are not concrete optimization owners."
+	],
+	"sourceEvidence": {
+		"kind": "twine-v8-live-heap-final-evidence",
+		"bytes": 31519,
+		"sha256": "d4a84a006923dad03059b89a4de52ebe96c65fefcc34ec47362b2d2f5944e8c8",
+		"rawArtifactsTracked": false
+	}
+}

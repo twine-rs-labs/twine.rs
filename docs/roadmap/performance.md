@@ -276,8 +276,21 @@ surface materially improves against its accepted baseline.
   that application-tag growth by process and concrete project representation.
   Optimize the largest repeatable owner only after that attribution, preserving
   the measured WASM, native baseline, bounded-query, and graph invariants.
+- A serialized source-free 100/50k V8 snapshot comparison completed that first
+  attribution step. Main and renderer snapshots reproduced their harness
+  used-heap deltas within 0.22 MiB combined. Three renderer passage-view-model
+  copies jointly retain 39.12 MiB of growth, or 39.69 MiB with their direct
+  holders. Their non-overlapping roots are a 20.37 MiB body-free core-host
+  copy, 8.99 MiB of React alternate props, and 3.43 MiB of required renderer
+  context, with 6.33 MiB shared. No root clears the 40 MiB concrete-owner gate,
+  and the single snapshot pair does not clear the repeatability gate.
+- Stop this optimization branch without changing the passage model. If memory
+  work resumes, capture clean repeated Browser, page, and dedicated-worker
+  profiles. Resume implementation only when a non-generic owner clears the
+  retained-size and repeatability gates; do not assign generic V8 capacity or
+  WASM pages to the renderer passage family.
 
-Exit signal: the dominant V8-backed project-size owner is named and resident
+Exit signal: a repeatable concrete owner clears the decision gates and resident
 memory drops without replacing measured caches with unbounded recomputation.
 
 ## Targets

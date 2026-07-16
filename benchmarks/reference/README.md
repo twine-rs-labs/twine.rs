@@ -20,6 +20,13 @@ cross-phase revision and dirty-state assertions. The initial
 [50k historical snapshot](./2026-07-03-apple-m4-50000.summary.json) remain for
 comparison; their dirty-worktree limitation is recorded inside each artifact.
 
+Focused diagnostics can also preserve a small normalized decision record when
+the raw evidence is too large to track. The
+[V8 live-heap attribution summary](./2026-07-16-apple-m4-v8-memory-attribution.summary.json)
+records a serialized 100/50k heap-snapshot comparison and its stop decision.
+It is explicitly dirty, single-pair diagnostic evidence, not an accepted
+baseline or a substitute for the clean references above.
+
 Create a reference from an existing complete report:
 
 ```sh
