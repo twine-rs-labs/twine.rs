@@ -40,6 +40,23 @@ function report(passageCount, privateMiB, knownOwnerMiB) {
 	};
 }
 
+function withFootprint(item, totalMiB, mallocMiB, vmMiB) {
+	const aggregate = value => ({
+		count: 3,
+		max: value + 1,
+		mean: value,
+		min: value - 1,
+		p50: value,
+		p95: value + 1
+	});
+
+	item.aggregates['footprint.totalMiB'] = aggregate(totalMiB);
+	item.aggregates['footprint.category.malloc-largeMiB'] = aggregate(mallocMiB);
+	item.aggregates['footprint.category.untagged-vm-allocateMiB'] =
+		aggregate(vmMiB);
+	return item;
+}
+
 test('creates a repeatable memory-growth decision matrix', () => {
 	const matrix = createMemoryMatrix(
 		[report(100, 400, 300), report(10_000, 500, 390), report(50_000, 900, 750)],
@@ -122,4 +139,24 @@ test('selects the newest complete same-revision cohort', () => {
 	assert.ok(
 		selected.every(item => item.report.environment.git.revision === 'old')
 	);
+});
+
+test('uses de-duplicated footprint categories when logical owners are incomplete', () => {
+	const matrix = createMemoryMatrix([
+		withFootprint(report(100, 400, 50), 450, 300, 150),
+		withFootprint(report(10_000, 500, 70), 550, 370, 180),
+		withFootprint(report(50_000, 900, 100), 950, 650, 300)
+	]);
+
+	assert.equal(matrix.decision.logicalAttributionSufficient, false);
+	assert.equal(matrix.decision.footprintAttributionAvailable, true);
+	assert.equal(matrix.footprint.categoryCoverage, 1);
+	assert.equal(
+		matrix.decision.recommendation,
+		'optimize-largest-footprint-category'
+	);
+	assert.deepEqual(matrix.footprint.categoryGrowthMiB[0], {
+		growthMiB: 350,
+		name: 'malloc-largeMiB'
+	});
 });

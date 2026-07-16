@@ -74,6 +74,15 @@ function finiteMetric(report, name, stat = 'p50') {
 	return Number.isFinite(value) ? value : undefined;
 }
 
+function metricMap(report, prefix) {
+	return Object.fromEntries(
+		Object.keys(report.aggregates ?? {})
+			.filter(name => name.startsWith(prefix))
+			.map(name => [name.slice(prefix.length), finiteMetric(report, name)])
+			.filter(([, value]) => value !== undefined)
+	);
+}
+
 function profile(report, sourceFile) {
 	const median = finiteMetric(report, primaryMetric);
 	const minimum = finiteMetric(report, primaryMetric, 'min');
@@ -86,6 +95,9 @@ function profile(report, sourceFile) {
 
 	return {
 		blinkAllocatedMiB: finiteMetric(report, 'memory.blink.allocatedMiB'),
+		footprintCategoriesMiB: metricMap(report, 'footprint.category.'),
+		footprintProcessesMiB: metricMap(report, 'footprint.process.'),
+		footprintTotalMiB: finiteMetric(report, 'footprint.totalMiB'),
 		knownOwnerMiB: finiteMetric(report, 'memory.private.knownOwnerMiB'),
 		mainHeapMiB: finiteMetric(report, 'memory.heap.mainUsedMiB'),
 		mainPrivateMiB: finiteMetric(report, 'memory.private.mainMiB'),
@@ -201,21 +213,56 @@ export function createMemoryMatrix(
 		privateGrowthMiB > 0 ? knownOwnerGrowthMiB / privateGrowthMiB : undefined;
 	const repeatable = profiles.every(item => item.repeatability.passed);
 	const growthWarrantsOptimization = repeatable && privateGrowthMiB >= 128;
-	const attributionSufficient =
+	const logicalAttributionSufficient =
 		knownOwnerGrowthShare !== undefined && knownOwnerGrowthShare >= 0.8;
+	const footprintMeasurementsAvailable = profiles.every(item =>
+		Number.isFinite(item.footprintTotalMiB)
+	);
+	const footprintCategoryNames = new Set(
+		profiles.flatMap(item => Object.keys(item.footprintCategoriesMiB))
+	);
+	const allFootprintCategoryGrowthMiB = [...footprintCategoryNames].map(
+		name => ({
+			growthMiB:
+				(large.footprintCategoriesMiB[name] ?? 0) -
+				(small.footprintCategoriesMiB[name] ?? 0),
+			name
+		})
+	);
+	const footprintCategoryGrowthMiB = allFootprintCategoryGrowthMiB
+		.filter(item => item.growthMiB > 0)
+		.sort((left, right) => right.growthMiB - left.growthMiB);
+	const footprintGrowthMiB = footprintMeasurementsAvailable
+		? large.footprintTotalMiB - small.footprintTotalMiB
+		: undefined;
+	const footprintCategoryCoverage =
+		footprintGrowthMiB > 0
+			? allFootprintCategoryGrowthMiB.reduce(
+					(total, item) => total + item.growthMiB,
+					0
+				) / footprintGrowthMiB
+			: undefined;
+	const footprintAttributionAvailable =
+		footprintCategoryCoverage !== undefined && footprintCategoryCoverage >= 0.8;
+	const attributionSufficient =
+		logicalAttributionSufficient || footprintAttributionAvailable;
 
 	return {
 		createdAt: new Date().toISOString(),
 		decision: {
 			attributionSufficient,
+			footprintAttributionAvailable,
 			growthWarrantsOptimization,
+			logicalAttributionSufficient,
 			recommendation: !repeatable
 				? 'repeat-and-stabilize-memory-matrix'
 				: !growthWarrantsOptimization
 					? 'hold-current-memory-design'
-					: attributionSufficient
-						? 'optimize-largest-attributed-owner'
-						: 'deepen-native-memory-attribution',
+					: footprintAttributionAvailable
+						? 'optimize-largest-footprint-category'
+						: logicalAttributionSufficient
+							? 'optimize-largest-attributed-owner'
+							: 'deepen-native-memory-attribution',
 			repeatable
 		},
 		environment: {
@@ -224,8 +271,19 @@ export function createMemoryMatrix(
 				dirty: [...dirtyStates][0],
 				revision: [...revisions][0]
 			},
-			metricContracts: {memory: 3, memoryAttribution: 1}
+			metricContracts: {
+				memory: 3,
+				memoryAttribution: 1,
+				...(footprintAttributionAvailable ? {memoryFootprint: 1} : {})
+			}
 		},
+		footprint: footprintAttributionAvailable
+			? {
+					categoryCoverage: footprintCategoryCoverage,
+					categoryGrowthMiB: footprintCategoryGrowthMiB,
+					growth100To50kMiB: footprintGrowthMiB
+				}
+			: undefined,
 		growth: {
 			knownOwnerGrowthMiB,
 			knownOwnerGrowthShare,

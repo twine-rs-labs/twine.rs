@@ -210,6 +210,7 @@ const fixturePath = process.env.TWINE_PERF_FIXTURE;
 const reportPath = process.env.TWINE_PERF_REPORT;
 const passageCount = Number.parseInt(process.env.TWINE_PERF_SIZE ?? '', 10);
 const smoke = process.env.TWINE_PERF_SMOKE === '1';
+const footprintEnabled = process.env.TWINE_PERF_FOOTPRINT === '1';
 const phase = process.env.TWINE_PERF_PHASE;
 const runRoot = process.env.TWINE_PERF_RUN_ROOT;
 const launchTracePath = process.env.TWINE_PERF_LAUNCH_TRACE;
@@ -787,6 +788,84 @@ function startupMetrics(
 		);
 	}
 	captureMemory(snapshot);
+}
+
+function footprintMetricSegment(name: string) {
+	return name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-|-$/g, '');
+}
+
+async function captureMacFootprint(
+	snapshot: PerformanceSnapshot,
+	label: string
+) {
+	if (!footprintEnabled) {
+		return;
+	}
+	if (process.platform !== 'darwin') {
+		throw new Error('TWINE_PERF_FOOTPRINT=1 is supported only on macOS.');
+	}
+	if (!runRoot) {
+		throw new Error('TWINE_PERF_RUN_ROOT is required for footprint capture.');
+	}
+
+	const pids = Array.from(
+		new Set(snapshot.main.appMetrics.map(metric => metric.pid))
+	);
+	const output = path.join(runRoot, `footprint-${label}.json`);
+	const args = ['--json', output];
+
+	for (const pid of pids) {
+		args.push('--pid', String(pid));
+	}
+	execFileSync('/usr/bin/footprint', args, {
+		encoding: 'utf8',
+		maxBuffer: 20 * 1024 * 1024,
+		stdio: ['ignore', 'ignore', 'pipe']
+	});
+	const footprint = JSON.parse(await readFile(output, 'utf8'));
+	const mib = 1024 * 1024;
+
+	addSample(
+		'footprint.totalMiB',
+		typeof footprint['total footprint'] === 'number'
+			? footprint['total footprint'] / mib
+			: undefined
+	);
+	for (const [name, category] of Object.entries(footprint.summary ?? {})) {
+		const dirty = (category as {dirty?: number}).dirty;
+
+		if (name !== 'total' && typeof dirty === 'number') {
+			addSample(
+				`footprint.category.${footprintMetricSegment(name)}MiB`,
+				dirty / mib
+			);
+		}
+	}
+
+	const roleByPid = new Map(
+		snapshot.main.appMetrics.map(metric => [metric.pid, metric.type])
+	);
+	const footprintByRole = new Map<string, number>();
+
+	for (const processInfo of footprint.processes ?? []) {
+		const role = roleByPid.get(processInfo.pid);
+
+		if (role && typeof processInfo.footprint === 'number') {
+			footprintByRole.set(
+				role,
+				(footprintByRole.get(role) ?? 0) + processInfo.footprint
+			);
+		}
+	}
+	for (const [role, bytes] of footprintByRole) {
+		addSample(
+			`footprint.process.${footprintMetricSegment(role)}MiB`,
+			bytes / mib
+		);
+	}
 }
 
 function processWorkingSetByRole(
@@ -3126,7 +3205,12 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				diagnostic: phase === 'diagnostic',
 				memoryDetail: phase === 'memory-detail',
 				environment: {
-					metricContracts: {memory: 3, memoryAttribution: 1, startup: 2},
+					metricContracts: {
+						memory: 3,
+						memoryAttribution: 1,
+						...(footprintEnabled ? {memoryFootprint: 1} : {}),
+						startup: 2
+					},
 					git: {dirty: gitDirty, revision: gitRevision},
 					machine: {
 						arch: process.arch,
@@ -3326,6 +3410,7 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				);
 
 				startupMetrics(startupSnapshot, running.launchToWindowMs);
+				await captureMacFootprint(startupSnapshot, startupPrefix);
 				diagnostics.startup.push(startupSnapshot);
 			} finally {
 				await closeFixture(running);
