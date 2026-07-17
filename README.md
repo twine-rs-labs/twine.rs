@@ -51,6 +51,11 @@ npm install
 cargo test --workspace
 ```
 
+Electron downloads its desktop runtime on demand. The first desktop launch or
+performance preparation therefore needs network access; later runs reuse the
+cached runtime. The repository scripts perform this download before launching
+Electron so it does not become part of a benchmark measurement.
+
 ## Run
 
 ```sh

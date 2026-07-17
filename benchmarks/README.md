@@ -61,6 +61,10 @@ Prepare deterministic 10k and 50k project folders:
 npm run perf:prepare
 ```
 
+Preparation installs the Electron runtime before building fixtures. The first
+run needs network access; later runs reuse Electron's download cache. Keeping
+this download in preparation prevents it from affecting launch measurements.
+
 This generates JSON story input and delegates project-folder creation to the
 release `twine_cli import` command. Generated sources, projects, reports, and
 baselines are ignored by Git. Rust/WASM is rebuilt before the renderer bundle,
