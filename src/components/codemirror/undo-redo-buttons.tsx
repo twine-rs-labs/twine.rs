@@ -2,16 +2,14 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {IconArrowBack, IconArrowForward} from '@tabler/icons-react';
 import {IconButton} from '../control/icon-button';
+import type {SourceEditorHandle} from '../control/source-editor';
 
 export interface UndoRedoButtonsProps {
 	/**
 	 * Disables both buttons no matter the state of the editor.
 	 */
 	disabled?: boolean;
-	/**
-	 * CodeMirror instance to interact with.
-	 */
-	editor?: CodeMirror.Editor;
+	editor?: SourceEditorHandle;
 	/**
 	 * A change in this prop triggers a render (probably, put the editor value
 	 * here). This is necessary because the editor instance itself is mutable, so
@@ -28,18 +26,18 @@ export const UndoRedoButtons: React.FC<UndoRedoButtonsProps> = props => {
 
 	React.useEffect(() => {
 		if (editor) {
-			const history = editor.historySize();
+			const history = editor.getSnapshot();
 
-			setCanRedo(history.redo > 0);
-			setCanUndo(history.undo > 0);
+			setCanRedo(history.canRedo);
+			setCanUndo(history.canUndo);
 		} else {
 			setCanRedo(false);
 			setCanUndo(false);
 		}
 	}, [editor, watch]);
 
-	function execCommand(command: string) {
-		editor?.execCommand(command);
+	function execCommand(command: 'redo' | 'undo') {
+		editor?.runCommand(command);
 		editor?.focus();
 	}
 

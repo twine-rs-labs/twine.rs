@@ -3,7 +3,6 @@ import debounce from 'lodash/debounce';
 import {useTranslation} from 'react-i18next';
 import {useNavigate} from 'react-router';
 import {DialogCard} from '../components/container/dialog-card';
-import {CodeArea} from '../components/control/code-area';
 import {Button, Checkbox} from '../components/design-system';
 import {replaceAllTextCommand, useCoreProjectHost} from '../core';
 import type {CoreSearchHit} from '../core/bindings/CoreSearchHit';
@@ -23,13 +22,6 @@ import {useDialogsContext} from './context';
 import {DialogComponentProps} from './dialogs.types';
 import {canOpenStorySource, openStorySourceDialog} from './story-source-dialog';
 import './story-search.css';
-
-// See https://github.com/codemirror/CodeMirror/issues/5444
-
-const ignoreTab: any = {
-	Tab: false,
-	'Shift-Tab': false
-};
 
 // We put as much state as possible into props so that if the dialog switches
 // position and is re-rendered as a new component, nothing is lost.
@@ -215,23 +207,26 @@ export const StorySearchDialog: React.FC<StorySearchDialogProps> = props => {
 			onClose={handleClose}
 		>
 			<div className="search-fields">
-				<CodeArea
-					id="story-search-dialog-find"
-					label={t('dialogs.storySearch.find')}
-					onChangeText={handleSearchForChange}
-					options={{
-						extraKeys: ignoreTab,
-						mode: 'text'
-					}}
-					value={find}
-				/>
-				<CodeArea
-					id="story-search-dialog-replace-with"
-					label={t('dialogs.storySearch.replaceWith')}
-					onChangeText={handleReplaceWithChange}
-					options={{extraKeys: ignoreTab, mode: 'text'}}
-					value={replace}
-				/>
+				<div className="search-field">
+					<label htmlFor="story-search-dialog-find">
+						{t('dialogs.storySearch.find')}
+					</label>
+					<textarea
+						id="story-search-dialog-find"
+						onChange={event => handleSearchForChange(event.target.value)}
+						value={find}
+					/>
+				</div>
+				<div className="search-field">
+					<label htmlFor="story-search-dialog-replace-with">
+						{t('dialogs.storySearch.replaceWith')}
+					</label>
+					<textarea
+						id="story-search-dialog-replace-with"
+						onChange={event => handleReplaceWithChange(event.target.value)}
+						value={replace}
+					/>
+				</div>
 			</div>
 			<div className="search-flags">
 				<Checkbox

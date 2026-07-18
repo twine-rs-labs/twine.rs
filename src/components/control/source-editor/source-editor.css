@@ -7,7 +7,7 @@
 	position: relative;
 }
 
-.source-editor > [role='textbox'] {
+.source-editor > [data-testid] {
 	display: flex;
 	flex: 1;
 	min-height: 0;
@@ -19,8 +19,8 @@
 	background: var(--source-editor-bg, var(--ink-3));
 	color: var(--source-editor-fg, var(--tx-2));
 	flex: 1;
-	font-family: var(--font-mono);
-	font-size: 13px;
+	font-family: var(--source-editor-font-family, var(--font-mono));
+	font-size: var(--source-editor-font-size, 13px);
 	height: 100%;
 	line-height: var(--lh-code);
 	min-height: 0;
@@ -70,6 +70,11 @@
 .source-editor .cm-cursor {
 	border-left-color: var(--source-editor-active-line-border, var(--acc-blue));
 	border-left-width: 2px;
+}
+
+.source-editor--static-cursor.cm-focused,
+.source-editor--static-cursor .cm-focused > .cm-scroller > .cm-cursorLayer {
+	animation: none !important;
 }
 
 .source-editor .cm-line {

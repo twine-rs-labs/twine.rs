@@ -1,6 +1,10 @@
 import {Thunk} from '../../util/use-thunk-reducer';
 import {fetchStoryFormatProperties} from '../../util/story-format/fetch-properties';
 import {
+	hydrateStoryFormatProperties,
+	isBundledUnsupportedHarloweFormat
+} from '../../util/story-format/hydrate-properties';
+import {
 	StoryFormat,
 	StoryFormatProperties,
 	StoryFormatsAction,
@@ -60,34 +64,23 @@ async function loadFormatThunk(
 
 	const loadPromise = (async () => {
 		try {
-			let properties = await fetchStoryFormatProperties(format.url);
-
-			// If the format contains a `hydrate` property, try running it and merge in
-			// properties that function creates by modifiying what's bound to its
-			// `this`. This allows creation of properties that can't be serialized to
-			// JSON on the format. The hydrate function cannot override properties
-			// already present in the format properties, e.g. to change its source.
-
-			if (properties.hydrate) {
-				try {
-					const hydrateResult: Partial<StoryFormatProperties> = {};
-
-					const hydrateFunc = new Function(properties.hydrate);
-
-					hydrateFunc.call(hydrateResult);
-					properties = {...hydrateResult, ...properties};
-				} catch (e) {
-					console.error(
-						`Format ${format.id} has a hydrate property but it threw an error when called`,
-						e
-					);
-				}
-			}
+			const rawProperties = await fetchStoryFormatProperties(format.url);
+			const hydration = hydrateStoryFormatProperties(rawProperties, {
+				skipLegacyHarloweEditor: isBundledUnsupportedHarloweFormat(format)
+			});
+			const properties = hydration.properties;
 
 			dispatch({
 				type: 'update',
 				id: format.id,
-				props: {properties, loadState: 'loaded'}
+				props: {
+					...(hydration.diagnostic ||
+					format.editorIntegrationDiagnostic !== undefined
+						? {editorIntegrationDiagnostic: hydration.diagnostic}
+						: {}),
+					properties,
+					loadState: 'loaded'
+				}
 			});
 
 			return properties;

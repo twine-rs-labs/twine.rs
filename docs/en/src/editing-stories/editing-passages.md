@@ -2,13 +2,14 @@
 
 To edit a passage, select it and choose _Edit_ from the Passage top toolbar tab.
 If you're using a mouse, you can also double-click a passage to edit it. This
-will open a dialog where you can make changes to the passage.
+opens the passage in the workbench editor. You can use the Text view for the
+full editor dock or Split view to keep the story graph visible beside it.
 
-Most of the passage edit dialog is taken up by a text area where you can enter
-text that the player will see when playing your story. To be more precise, the
-text you enter will be rendered by the story format when your story is played.
-For instance, you might enter code into your passage to set variables or
-conditionally display some text.
+Most of a passage editor is taken up by a CodeMirror 6 source editor where you
+can enter text that the player will see when playing your story. To be more
+precise, the text you enter will be rendered by the story format when your story
+is played. For instance, you might enter code into your passage to set variables
+or conditionally display some text.
 
 The font and size of the text can be customized in [Twine's
 preferences](../preferences). This doesn't change what the passage looks like
@@ -26,29 +27,23 @@ moment.
 ## Leading and Trailing Space in Passage Names
 
 If a passage has leading or trailing spaces in its name (like " Hello" or
-"Goodbye "), then Twine will show placeholder symbols in the passage edit dialog
-name that look like ␣. These symbols are shown so that you can distinguish
-between passages that have these spaces and those that don't. In other words,
-Twine treats a passage named "Hello" and one named "Hello " as two unrelated
-passages. (And usually, you will want to give your passages names that don't
-differ by just spaces.)
+"Goodbye "), then Twine will show placeholder symbols in the editor title that
+look like ␣. These symbols are shown so that you can distinguish between
+passages that have these spaces and those that don't. In other words, Twine
+treats a passage named "Hello" and one named "Hello " as two unrelated passages.
+(And usually, you will want to give your passages names that don't differ by
+just spaces.)
 
 These symbols are only visible in Twine, not when your story is played.
 
 ## Editing Multiple Passages
 
-If you edit a passage while another is open for editing, the new edit dialog
-will appear on top of the existing one. Twine will keep up to five passage edit
-dialogs open below the most recent one. If you open more than that, Twine will
-close the oldest passage edit dialog for you.
-
-Click or tap a passage edit dialog in the background to bring it to the front,
-or select the close button in the dialog to close it.
-
-If you have more than three passage edit dialogs open, Twine will overlap the
-oldest to save screen space. Point or tap on the overlapped dialogs to reveal
-them, and move your mouse away or tap elsewhere to restore them to their
-previous state.
+Opening another passage adds another buffer to the editor dock. Full-width Text
+view can tile buffers in columns or stack them vertically; the narrower Split
+view stacks them. Click or tap a buffer to focus it, drag its title bar to
+reorder it, or use its close button to remove it from the dock. Each buffer
+keeps its own document, selection, undo history, story-format toolbar state, and
+syntax parser state.
 
 ## Automatically-Created Links
 
@@ -73,29 +68,24 @@ format.
 
 ## The Passage Toolbar
 
-At the top of the passage edit dialog is a toolbar that lets you make changes to
-other aspects of passage than its text.
-
-- _Undo_ and _Redo_ undo and redo changes you've made in the text editor only.
-  Other kinds of changes can be undone using the [top toolbar undo and redo
-  buttons](undoing.md).
-- _Tag_ [adds tags to a passage](tagging.md).
-- _Size_ changes the size of the passage's card in the map. A story format
-  could change how your passage is displayed based on its size, but usually,
-  this doesn't have any effect on the experience of playing the story.
-- _Rename_ changes the name of the passage.
-- _Start Story Here_ makes this passage the start passage for the story. If this
-  button is disabled, it's because the passage is already the start passage.
+The passage editor header contains per-buffer controls: find in editor, close,
+[tags](tagging.md), link and backlink counts, test from this passage, and reveal
+in graph. Story-level passage actions such as rename, size, and _Start Story
+Here_ remain in the Passage top toolbar. CodeMirror's focused-editor undo and
+redo history is separate from project-level changes outside editable controls;
+see [Undoing and Redoing](undoing.md).
 
 ## Story Format Toolbars
 
-Story formats can extend Twine's passage edit dialog to include a toolbar with
-functionality specific to the format. You should check the documentation for
-your story format for details on how it works.
+Compatible story formats can extend each passage editor with a toolbar rendered
+by the workbench. You should check the documentation for your story format for
+details on how it works.
 
-If something goes wrong with a story format toolbar, Twine will hide it so that
-you can continue editing. Closing the dialog and re-opening it should bring back
-the format toolbar--assuming the problem was a transitory one.
+If a format mode, command, or toolbar makes an unsupported editor call, Twine
+disables only the failing integration feature for that editor, shows a
+content-free compatibility diagnostic, and keeps the generic CodeMirror 6
+editor usable. Reopening the buffer or reloading the format creates a fresh
+per-editor runtime.
 
 Story format toolbars can be turned off permanently by [disabling story format
 extensions](../story-formats/extensions.md).

@@ -8,6 +8,7 @@ import {
 	evaluatePerformanceReport,
 	machineFingerprint,
 	markdownReport,
+	performanceBaselinePath,
 	readJson,
 	writeJson
 } from './performance-tools.mjs';
@@ -29,13 +30,11 @@ const budgets = await readJson(
 	path.join(repoRoot, 'benchmarks', 'budgets.json')
 );
 const fingerprint = machineFingerprint(raw.environment);
-const baselinePath = path.join(
-	repoRoot,
-	'benchmarks',
-	'results',
-	'baselines',
-	`${fingerprint}-${raw.fixture.passageCount}.json`
-);
+const resultsDir = path.join(repoRoot, 'benchmarks', 'results');
+const baselinePath = performanceBaselinePath(resultsDir, {
+	...raw,
+	environment: {...raw.environment, fingerprint}
+});
 let baseline;
 
 if (!raw.smoke && !raw.diagnostic) {

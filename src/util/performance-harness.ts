@@ -10,12 +10,16 @@ import {
 	rendererHeapMemorySnapshot,
 	resetRendererPerformance
 } from './performance';
-import {rendererMemoryOwnerSnapshot} from './performance-memory-owners';
+import {
+	rendererMemoryOwnerSnapshot,
+	selectPerformanceEditorText
+} from './performance-memory-owners';
 
 export interface TwinePerformanceHarness {
 	checkpoint(name: string): Promise<void>;
 	collectRetainedMemory(name?: string): Promise<void>;
 	reset(): Promise<void>;
+	selectEditorText(id: string, query: string): boolean;
 	snapshot(): Promise<{
 		main: unknown;
 		renderer: {
@@ -72,7 +76,25 @@ export function installPerformanceHarness() {
 			await native.checkpoint(name, rendererCheckpointSnapshot());
 		},
 		async collectRetainedMemory(name = 'post-gc-retained') {
-			(globalThis as typeof globalThis & {gc?: () => void}).gc?.();
+			const collectRendererGarbage = () => {
+				const collect = (globalThis as typeof globalThis & {gc?: () => void})
+					.gc;
+
+				if (typeof collect !== 'function') {
+					throw new Error(
+						'Renderer garbage collection is unavailable in the performance harness'
+					);
+				}
+				collect();
+			};
+
+			// WeakRef targets are not eligible for collection until a later job.
+			// Multiple event-loop turns make the retained-object probe
+			// deterministic without keeping the target alive by observing it.
+			for (let pass = 0; pass < 3; pass++) {
+				await new Promise(resolve => window.setTimeout(resolve, 0));
+				collectRendererGarbage();
+			}
 			await native.collectGarbage();
 			await new Promise(resolve => window.setTimeout(resolve, 0));
 			await native.checkpoint(name, rendererCheckpointSnapshot());
@@ -81,6 +103,9 @@ export function installPerformanceHarness() {
 			resetRendererPerformance();
 			resetCoreBridgeMetrics();
 			await native.reset();
+		},
+		selectEditorText(id, query) {
+			return selectPerformanceEditorText(id, query);
 		},
 		async snapshot() {
 			return {

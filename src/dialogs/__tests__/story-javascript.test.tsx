@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {useStoriesContext} from '../../store/stories';
@@ -9,8 +9,6 @@ import {
 	StoryInspector
 } from '../../test-util';
 import {StoryJavaScriptDialog} from '../story-javascript';
-
-jest.mock('../../components/control/code-area/code-area');
 
 const TestStoryJavaScriptDialog = () => {
 	const {stories} = useStoriesContext();
@@ -52,20 +50,20 @@ describe('<StoryJavaScriptDialog>', () => {
 
 		expect(
 			screen.getByLabelText('dialogs.storyJavaScript.editorLabel')
-		).toHaveValue('mock-story-javascript');
+		).toHaveTextContent('mock-story-javascript');
 	});
 
-	it("changes the story's JavaScript as edits are made", () => {
-		renderComponent();
-		fireEvent.change(
-			screen.getByLabelText('dialogs.storyJavaScript.editorLabel'),
-			{
-				target: {value: 'mock-change'}
-			}
+	it("changes the story's JavaScript as edits are made", async () => {
+		const {container} = renderComponent();
+		const content = container.querySelector('.cm-content')!;
+
+		content.textContent = 'mock-change';
+		fireEvent.input(content);
+		await waitFor(() =>
+			expect(
+				screen.getByTestId('story-inspector-javascript-default')
+			).toHaveTextContent('mock-change')
 		);
-		expect(
-			screen.getByTestId('story-inspector-javascript-default')
-		).toHaveTextContent('mock-change');
 	});
 
 	it('uses the code editor font preferences', () => {
@@ -78,36 +76,43 @@ describe('<StoryJavaScriptDialog>', () => {
 			}
 		});
 
-		const editor = screen.getByTestId('mock-code-area');
+		const editor = screen
+			.getByTestId('story-javascript-dialog-code-area')
+			.closest('.source-editor') as HTMLElement;
 
-		expect(editor.dataset.fontFamily).toBe('mock-font-family');
-		expect(editor.dataset.fontScale).toBe('2');
+		expect(editor.style.getPropertyValue('--source-editor-font-family')).toBe(
+			'mock-font-family'
+		);
+		expect(editor.style.getPropertyValue('--source-editor-font-size')).toBe(
+			'26px'
+		);
 	});
 
-	it('sets the code area in JavaScript mode and autofocuses it', () => {
-		renderComponent();
-		expect(
-			JSON.parse(screen.getByTestId('mock-code-area')!.dataset.options!)
-		).toEqual(expect.objectContaining({autofocus: true, mode: 'javascript'}));
+	it('sets the source editor to JavaScript mode', () => {
+		const {container} = renderComponent();
+
+		expect(container.querySelector('.cm-foldGutter')).toBeInTheDocument();
 	});
 
 	it('blinks the cursor if that preference is not set', () => {
 		renderComponent({prefs: {editorCursorBlinks: true}});
-		expect(
-			JSON.parse(screen.getByTestId('mock-code-area')!.dataset.options!)
-		).not.toEqual(expect.objectContaining({cursorBlinkRate: 0}));
+		expect(document.querySelector('.source-editor')).not.toHaveClass(
+			'source-editor--static-cursor'
+		);
 	});
 
 	it("doesn't blink the cursor if that preference is set", () => {
 		renderComponent({prefs: {editorCursorBlinks: false}});
-		expect(
-			JSON.parse(screen.getByTestId('mock-code-area')!.dataset.options!)
-		).toEqual(expect.objectContaining({cursorBlinkRate: 0}));
+		expect(document.querySelector('.source-editor')).toHaveClass(
+			'source-editor--static-cursor'
+		);
 	});
 
-	it('renders its code area', () => {
+	it('renders its source editor', () => {
 		renderComponent();
-		expect(screen.getByTestId('mock-code-area')).toBeInTheDocument();
+		expect(
+			screen.getByTestId('story-javascript-dialog-code-area')
+		).toBeInTheDocument();
 	});
 
 	it('shows undo, redo, and indent buttons', () => {
@@ -128,8 +133,64 @@ describe('<StoryJavaScriptDialog>', () => {
 		).toBeInTheDocument();
 	});
 
-	it.todo('indents code with its indent buttons');
-	it.todo('undos and redos changes with the undo/redo buttons');
+	it('indents and unindents code with its indent buttons', async () => {
+		const story = fakeStory();
+
+		story.script = 'const value = 1;';
+
+		renderComponent({stories: [story]});
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'components.indentButtons.indent'
+			})
+		);
+		await waitFor(() =>
+			expect(
+				screen.getByTestId('story-inspector-javascript-default').textContent
+			).toBe('  const value = 1;')
+		);
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'components.indentButtons.unindent'
+			})
+		);
+		await waitFor(() =>
+			expect(
+				screen.getByTestId('story-inspector-javascript-default').textContent
+			).toBe('const value = 1;')
+		);
+	});
+
+	it('undoes and redoes changes with the undo/redo buttons', async () => {
+		const story = fakeStory();
+
+		story.script = 'before();';
+		const {container} = renderComponent({stories: [story]});
+		const content = container.querySelector('.cm-content')!;
+
+		content.textContent = 'after();';
+		fireEvent.input(content);
+		const undo = screen.getByRole('button', {name: 'common.undo'});
+
+		await waitFor(() => expect(undo).toBeEnabled());
+		fireEvent.click(undo);
+		await waitFor(() =>
+			expect(
+				screen.getByTestId('story-inspector-javascript-default')
+			).toHaveTextContent('before();')
+		);
+
+		const redo = screen.getByRole('button', {name: 'common.redo'});
+
+		await waitFor(() => expect(redo).toBeEnabled());
+		fireEvent.click(redo);
+		await waitFor(() =>
+			expect(
+				screen.getByTestId('story-inspector-javascript-default')
+			).toHaveTextContent('after();')
+		);
+	});
 
 	it('is accessible', async () => {
 		const {container} = renderComponent();

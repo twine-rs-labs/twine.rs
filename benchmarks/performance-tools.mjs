@@ -89,6 +89,7 @@ export function mergeRawPerformanceReports(reports, phaseResults = {}) {
 	const gitStates = reports.map(report => report.environment?.git);
 	const gitRevisions = gitStates.map(state => state?.revision);
 	const gitDirtyStates = gitStates.map(state => state?.dirty);
+	const fixtureVariants = reports.map(reportFixtureVariant);
 	const mergedAssertions = reports.flatMap(report => report.assertions ?? []);
 
 	mergedAssertions.push(
@@ -106,6 +107,11 @@ export function mergeRawPerformanceReports(reports, phaseResults = {}) {
 			passed:
 				gitDirtyStates.every(state => typeof state === 'boolean') &&
 				gitDirtyStates.every(state => state === gitDirtyStates[0])
+		},
+		{
+			detail: JSON.stringify(fixtureVariants),
+			name: 'fixture-variant-stable-across-phases',
+			passed: fixtureVariants.every(variant => variant === fixtureVariants[0])
 		}
 	);
 
@@ -151,6 +157,30 @@ export function machineFingerprint(environment) {
 	});
 
 	return createHash('sha256').update(stable).digest('hex').slice(0, 16);
+}
+
+export function reportFixtureVariant(report) {
+	const variant = report.fixture?.fixtureVariant ?? 'default';
+
+	if (
+		typeof variant !== 'string' ||
+		!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(variant)
+	) {
+		throw new Error(`Invalid performance fixture variant: ${String(variant)}.`);
+	}
+
+	return variant;
+}
+
+export function performanceBaselinePath(resultsDir, report) {
+	const variant = reportFixtureVariant(report);
+	const suffix = variant === 'default' ? '' : `-${variant}`;
+
+	return path.join(
+		resultsDir,
+		'baselines',
+		`${report.environment.fingerprint}-${report.fixture.passageCount}${suffix}.json`
+	);
 }
 
 export function regressionAllowance(baselineValue, policy) {
@@ -204,7 +234,8 @@ export function evaluatePerformanceReport(report, budgets, baseline) {
 
 	if (baseline) {
 		baselineStatus =
-			baseline.environment?.fingerprint === report.environment?.fingerprint
+			baseline.environment?.fingerprint === report.environment?.fingerprint &&
+			reportFixtureVariant(baseline) === reportFixtureVariant(report)
 				? 'matched'
 				: 'mismatched';
 	}
@@ -327,7 +358,7 @@ export async function writeJson(file, value) {
 	await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-export async function latestReport(resultsDir, size) {
+export async function latestReport(resultsDir, size, variant = 'default') {
 	let files;
 
 	try {
@@ -339,9 +370,25 @@ export async function latestReport(resultsDir, size) {
 		throw error;
 	}
 
-	const suffix = size ? `-${size}.json` : '.json';
 	const candidates = files
-		.filter(file => file.startsWith('electron-') && file.endsWith(suffix))
+		.filter(file => {
+			if (!file.startsWith('electron-')) {
+				return false;
+			}
+
+			const match = file.match(/-(\d+)(?:-([a-z][a-z0-9-]*))?\.json$/i);
+
+			if (!match) {
+				return false;
+			}
+
+			const fileSize = Number.parseInt(match[1], 10);
+			const fileVariant = match[2] ?? 'default';
+
+			return (
+				(size === undefined || fileSize === size) && fileVariant === variant
+			);
+		})
 		.sort()
 		.reverse();
 

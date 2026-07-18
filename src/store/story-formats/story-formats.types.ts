@@ -1,7 +1,13 @@
-import {ModeFactory} from 'codemirror';
+import type {StoryFormatHydrationDiagnostic} from '../../util/story-format/hydrate-properties';
+import type {
+	LegacyEditorFacade,
+	ReadOnlyLegacyEditorFacade
+} from '../../util/story-format/legacy-editor/legacy-editor-facade';
+import type {LegacyStreamModeFactory} from '../../util/story-format/legacy-editor/legacy-stream-mode';
 import {ThunkDispatch} from '../../util/use-thunk-reducer';
 
 interface BaseStoryFormat {
+	editorIntegrationDiagnostic?: StoryFormatHydrationDiagnostic;
 	id: string;
 	loadState: 'unloaded' | 'loading' | 'loaded' | 'error';
 	name: string;
@@ -52,7 +58,7 @@ export interface StoryFormatToolbarFactoryEnvironment {
 }
 
 export type StoryFormatToolbarFactory = (
-	editor: CodeMirror.Editor,
+	editor: ReadOnlyLegacyEditorFacade,
 	environment: StoryFormatToolbarFactoryEnvironment
 ) => StoryFormatToolbarItem[];
 
@@ -118,8 +124,8 @@ export interface StoryFormatProperties {
 		twine?: {
 			[semverSpec: string]: {
 				codeMirror?: {
-					commands?: Record<string, (editor: CodeMirror.Editor) => void>;
-					mode?: ModeFactory<unknown>;
+					commands?: Record<string, (editor: LegacyEditorFacade) => void>;
+					mode?: LegacyStreamModeFactory<unknown>;
 					toolbar?: StoryFormatToolbarFactory;
 				};
 				references?: {

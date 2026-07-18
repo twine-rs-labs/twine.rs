@@ -37,7 +37,11 @@ function forceCodeSigningFor(env) {
 	);
 }
 
-function context({identity, platform = 'darwin'} = {}) {
+function context({
+	appOutDir = '/tmp/twine-builder-test/mac-universal',
+	identity,
+	platform = 'darwin'
+} = {}) {
 	const platformSpecificBuildOptions = {};
 
 	if (identity !== undefined) {
@@ -45,7 +49,7 @@ function context({identity, platform = 'darwin'} = {}) {
 	}
 
 	return {
-		appOutDir: '/tmp/twine-builder-test/mac-universal',
+		appOutDir,
 		electronPlatformName: platform,
 		packager: {
 			appInfo: {productFilename: 'Twine RS'},
@@ -156,6 +160,47 @@ test('afterPack ad-hoc signs an unsigned local macOS build', async () => {
 			'--sign',
 			'-',
 			'/tmp/twine-builder-test/mac-universal/Twine RS.app'
+		],
+		file: '/usr/bin/codesign'
+	});
+});
+
+test('afterPack defers ad-hoc signing for universal merge inputs', async () => {
+	for (const arch of ['arm64', 'x64']) {
+		const deps = dependencies();
+
+		await afterPack(
+			context({
+				appOutDir: `/tmp/twine-builder-test/mac-universal-${arch}-temp`
+			}),
+			deps
+		);
+
+		assert.equal(
+			deps.calls.some(call => call.args[0] === '--force'),
+			false
+		);
+		assert.deepEqual(deps.logs, [
+			'Deferring local ad-hoc signing until after the universal app is merged.'
+		]);
+	}
+});
+
+test('afterPack still ad-hoc signs a standalone architecture build', async () => {
+	const deps = dependencies();
+
+	await afterPack(
+		context({appOutDir: '/tmp/twine-builder-test/mac-x64'}),
+		deps
+	);
+
+	assert.deepEqual(deps.calls.at(-1), {
+		args: [
+			'--force',
+			'--deep',
+			'--sign',
+			'-',
+			'/tmp/twine-builder-test/mac-x64/Twine RS.app'
 		],
 		file: '/usr/bin/codesign'
 	});

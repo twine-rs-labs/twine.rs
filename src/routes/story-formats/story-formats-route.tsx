@@ -7,6 +7,7 @@ import {
 	TablerIcon
 } from '../../components/design-system';
 import type {TwineElectronWindow} from '../../electron/shared';
+import {getAppInfo} from '../../util/app-info';
 import {FormatLoader} from '../../store/format-loader';
 import {setPref, usePrefsContext} from '../../store/prefs';
 import {
@@ -20,7 +21,10 @@ import {
 } from '../../store/story-formats';
 import {
 	fetchStoryFormatProperties,
+	hydrateStoryFormatProperties,
 	inspectStoryFormatPublishSafety,
+	isBundledUnsupportedHarloweFormat,
+	resolveStoryFormatEditorIntegration,
 	storyFormatCapabilities
 } from '../../util/story-format';
 import './story-formats-route.css';
@@ -254,6 +258,12 @@ export const StoryFormatsRoute: React.FC = () => {
 					disabled.version === selectedFormat.version
 			)
 		: false;
+	const selectedEditorIntegration = selectedFormat
+		? resolveStoryFormatEditorIntegration(selectedFormat, {
+				disabled: editorExtensionsDisabled,
+				twineVersion: getAppInfo().twineCompatibilityVersion
+			})
+		: undefined;
 
 	React.useEffect(() => {
 		if (
@@ -369,11 +379,19 @@ export const StoryFormatsRoute: React.FC = () => {
 		setDevLoopStatus({kind: 'pending', message: 'Reloading format'});
 
 		try {
-			const properties = await fetchStoryFormatProperties(selectedFormat.url);
+			const rawProperties = await fetchStoryFormatProperties(
+				selectedFormat.url
+			);
+			const hydration = hydrateStoryFormatProperties(rawProperties, {
+				skipLegacyHarloweEditor:
+					isBundledUnsupportedHarloweFormat(selectedFormat)
+			});
+			const properties = hydration.properties;
 
 			formatsDispatch({
 				id: selectedFormat.id,
 				props: {
+					editorIntegrationDiagnostic: hydration.diagnostic,
 					loadState: 'loaded',
 					name: properties.name,
 					properties,
@@ -624,6 +642,34 @@ export const StoryFormatsRoute: React.FC = () => {
 									</span>
 								</div>
 							))}
+
+							<div className="story-formats-route__section-title">
+								Editor Compatibility
+							</div>
+							<div className="story-formats-route__row">
+								<TablerIcon
+									icon={
+										selectedFormat.editorIntegrationDiagnostic
+											? 'alert-triangle'
+											: selectedEditorIntegration?.type === 'adapted-legacy'
+												? 'circle-check'
+												: 'info-circle'
+									}
+								/>
+								<span className="story-formats-route__row-label">
+									{selectedFormat.editorIntegrationDiagnostic?.message ??
+										(selectedEditorIntegration?.type === 'adapted-legacy'
+											? 'Adapted legacy editor integration'
+											: selectedEditorIntegration?.type === 'native'
+												? 'Native CM6 editor integration'
+												: selectedEditorIntegration?.message)}
+								</span>
+								{selectedFormat.editorIntegrationDiagnostic?.unsupportedApi && (
+									<span className="story-formats-route__row-value">
+										{selectedFormat.editorIntegrationDiagnostic.unsupportedApi}
+									</span>
+								)}
+							</div>
 
 							<div className="story-formats-route__section-title">
 								Publish Safety

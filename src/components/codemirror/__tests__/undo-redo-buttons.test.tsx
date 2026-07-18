@@ -6,9 +6,9 @@ import {UndoRedoButtons, UndoRedoButtonsProps} from '../undo-redo-buttons';
 describe('<UndoRedoButtons>', () => {
 	function renderComponent(props?: Partial<UndoRedoButtonsProps>) {
 		const mockEditor = {
-			execCommand: jest.fn(),
+			runCommand: jest.fn(),
 			focus: jest.fn(),
-			historySize: () => ({redo: 0, undo: 0})
+			getSnapshot: () => ({canRedo: false, canUndo: false})
 		};
 
 		return render(
@@ -18,35 +18,35 @@ describe('<UndoRedoButtons>', () => {
 
 	it('sends an undo command and focuses the editor when the undo button is clicked', () => {
 		const editor = {
-			execCommand: jest.fn(),
+			runCommand: jest.fn(),
 			focus: jest.fn(),
-			historySize: () => ({redo: 1, undo: 1})
+			getSnapshot: () => ({canRedo: true, canUndo: true})
 		};
 
 		renderComponent({editor: editor as any});
 		fireEvent.click(screen.getByText('common.undo'));
-		expect(editor.execCommand.mock.calls).toEqual([['undo']]);
+		expect(editor.runCommand.mock.calls).toEqual([['undo']]);
 		expect(editor.focus).toHaveBeenCalledTimes(1);
 	});
 
 	it('sends a redo command and focuses the editor when the redo button is clicked', () => {
 		const editor = {
-			execCommand: jest.fn(),
+			runCommand: jest.fn(),
 			focus: jest.fn(),
-			historySize: () => ({redo: 1, undo: 1})
+			getSnapshot: () => ({canRedo: true, canUndo: true})
 		};
 
 		renderComponent({editor: editor as any});
 		fireEvent.click(screen.getByText('common.redo'));
-		expect(editor.execCommand.mock.calls).toEqual([['redo']]);
+		expect(editor.runCommand.mock.calls).toEqual([['redo']]);
 		expect(editor.focus).toHaveBeenCalledTimes(1);
 	});
 
 	it('disables both buttons if the disabled prop is set', () => {
 		const editor = {
-			execCommand: jest.fn(),
+			runCommand: jest.fn(),
 			focus: jest.fn(),
-			historySize: () => ({redo: 1, undo: 1})
+			getSnapshot: () => ({canRedo: true, canUndo: true})
 		};
 
 		renderComponent({editor: editor as any});
@@ -62,7 +62,7 @@ describe('<UndoRedoButtons>', () => {
 
 	it('disables the undo button if there is no undo history in the editor', () => {
 		const editor = {
-			historySize: () => ({redo: 1, undo: 0})
+			getSnapshot: () => ({canRedo: true, canUndo: false})
 		};
 
 		renderComponent({editor: editor as any});
@@ -71,7 +71,7 @@ describe('<UndoRedoButtons>', () => {
 
 	it('disables the redo button if there is no redo history in the editor', () => {
 		const editor = {
-			historySize: () => ({redo: 0, undo: 1})
+			getSnapshot: () => ({canRedo: false, canUndo: true})
 		};
 
 		renderComponent({editor: editor as any});

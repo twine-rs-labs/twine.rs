@@ -1,6 +1,11 @@
 import {expect, test} from '@playwright/test';
 import type {TestInfo} from '@playwright/test';
-import {_electron as electron, ElectronApplication, Page} from 'playwright';
+import {
+	_electron as electron,
+	ElectronApplication,
+	Locator,
+	Page
+} from 'playwright';
 import {execFileSync} from 'node:child_process';
 import {
 	appendFile,
@@ -177,6 +182,11 @@ interface PerformanceSnapshot {
 		owners?: {
 			activeEditorCount: number;
 			editorDocumentBytes: number;
+			retainedEditorViewCount: number;
+			retainedLegacyDocumentServiceCount: number;
+			retainedLegacyModeAdapterCount: number;
+			retainedLegacyToolbarDescriptorSetCount: number;
+			retainedLegacyToolbarFacadeCount: number;
 		};
 		heap: {
 			jsHeapSizeLimit?: number;
@@ -207,6 +217,7 @@ interface RunningApp {
 }
 
 const fixturePath = process.env.TWINE_PERF_FIXTURE;
+const fixtureVariant = process.env.TWINE_PERF_FIXTURE_VARIANT ?? 'default';
 const reportPath = process.env.TWINE_PERF_REPORT;
 const passageCount = Number.parseInt(process.env.TWINE_PERF_SIZE ?? '', 10);
 const smoke = process.env.TWINE_PERF_SMOKE === '1';
@@ -531,6 +542,115 @@ function lastEntry(snapshot: PerformanceSnapshot, name: string, type?: string) {
 	return snapshot.renderer.entries
 		.filter(entry => entry.name === name && (!type || entry.type === type))
 		.at(-1);
+}
+
+function legacyFormatEventCount(
+	current: PerformanceSnapshot,
+	name: string,
+	formatName = 'Chapbook'
+) {
+	return current.renderer.events.filter(
+		event => event.name === name && event.detail?.formatName === formatName
+	).length;
+}
+
+interface EditLongTaskEntry {
+	duration: number;
+	startTime: number;
+}
+
+async function startEditLongTaskObservation(page: Page) {
+	const supported = await page.evaluate(() => {
+		const Observer = globalThis.PerformanceObserver;
+
+		if (
+			typeof Observer === 'undefined' ||
+			!Observer.supportedEntryTypes?.includes('longtask')
+		) {
+			return false;
+		}
+
+		const harnessWindow = window as any;
+		const previous = harnessWindow.__twineEditLongTaskProbe;
+
+		previous?.observer?.disconnect();
+		const entries: EditLongTaskEntry[] = [];
+		const observer = new Observer(list => {
+			entries.push(
+				...list.getEntries().map(entry => ({
+					duration: entry.duration,
+					startTime: entry.startTime
+				}))
+			);
+		});
+
+		observer.observe({buffered: false, type: 'longtask'});
+		harnessWindow.__twineEditLongTaskProbe = {entries, observer};
+		return true;
+	});
+
+	assertInvariant(
+		'edit-long-task-api-supported',
+		supported,
+		'PerformanceObserver longtask entries are required for the edit phase.'
+	);
+	if (!supported) {
+		throw new Error(
+			'The Long Tasks API is unsupported; edit responsiveness cannot be verified.'
+		);
+	}
+}
+
+async function mutationWindowLongTasks(
+	page: Page,
+	measurement: {duration: number; startTime: number}
+) {
+	await page.waitForTimeout(0);
+	return page.evaluate(
+		({windowEnd, windowStart}) => {
+			const probe = (window as any).__twineEditLongTaskProbe as
+				| {
+						entries: EditLongTaskEntry[];
+						observer: PerformanceObserver;
+				  }
+				| undefined;
+
+			if (!probe) {
+				throw new Error('Edit Long Tasks observer was not initialized.');
+			}
+			probe.entries.push(
+				...probe.observer.takeRecords().map(entry => ({
+					duration: entry.duration,
+					startTime: entry.startTime
+				}))
+			);
+			const matching = probe.entries.filter(
+				entry =>
+					entry.startTime < windowEnd &&
+					entry.startTime + entry.duration > windowStart
+			);
+
+			const retained = probe.entries.filter(
+				entry => entry.startTime + entry.duration > windowEnd
+			);
+
+			probe.entries.splice(0, probe.entries.length, ...retained);
+			return matching;
+		},
+		{
+			windowEnd: measurement.startTime + measurement.duration,
+			windowStart: measurement.startTime
+		}
+	);
+}
+
+async function stopEditLongTaskObservation(page: Page) {
+	await page.evaluate(() => {
+		const harnessWindow = window as any;
+
+		harnessWindow.__twineEditLongTaskProbe?.observer?.disconnect();
+		delete harnessWindow.__twineEditLongTaskProbe;
+	});
 }
 
 function startupMetrics(
@@ -1236,6 +1356,44 @@ async function measureEdits(page: Page) {
 	let cleanMeasuredSamples = 0;
 	let externallyContaminatedSamples = 0;
 
+	if (fixtureVariant === 'chapbook') {
+		try {
+			await waitForEvent(page, 'core-passage-document-ready');
+		} catch (error) {
+			throw new Error(
+				`${(error as Error).message}\nEditor readiness: ${JSON.stringify({
+					contentLength: (await content.textContent())?.length ?? 0,
+					editorId: await editor.getAttribute('data-testid'),
+					editorWindowLabel: await editorWindow.getAttribute('aria-label'),
+					textTabSelected: await page
+						.getByRole('group', {name: 'Workspace Mode'})
+						.getByRole('tab', {name: 'Text'})
+						.getAttribute('aria-selected')
+				})}`
+			);
+		}
+		try {
+			await waitForEvent(page, 'legacy-editor-adapter-created');
+			await waitForEvent(page, 'legacy-lookahead-line-index-rebuilt');
+		} catch (error) {
+			const current = await snapshot(page);
+
+			throw new Error(
+				`${(error as Error).message}\nLegacy editor readiness: ${JSON.stringify(
+					{
+						contentLength: (await content.textContent())?.length ?? 0,
+						events: current.renderer.events.filter(event =>
+							/^(core-passage|legacy-editor|legacy-lookahead|source-editor)/.test(
+								event.name
+							)
+						)
+					}
+				)}`
+			);
+		}
+	}
+	await startEditLongTaskObservation(page);
+
 	for (let index = 0; index < (smoke ? 3 : 22); index++) {
 		await recordLaunchPhase('benchmark-sample-started', {
 			index,
@@ -1248,6 +1406,8 @@ async function measureEdits(page: Page) {
 		let previousRevision = await currentRevision(page);
 		await content.click();
 		await page.keyboard.press('End');
+		const editorInputStartedAt = await page.evaluate(() => performance.now());
+
 		await page.keyboard.insertText(` perf-${index}`);
 		await waitForEvent(page, 'mutation-applied');
 		await waitForMeasure(page, 'mutation-to-paint');
@@ -1259,11 +1419,23 @@ async function measureEdits(page: Page) {
 			'mutation-round-trip',
 			'measure'
 		)?.duration;
-		const editPaintMs = lastEntry(
-			current,
-			'mutation-to-paint',
-			'measure'
-		)?.duration;
+		const editPaintEntry = lastEntry(current, 'mutation-to-paint', 'measure');
+		const editPaintMs = editPaintEntry?.duration;
+		const editorInputWindow = editPaintEntry
+			? {
+					duration: Math.max(
+						0,
+						editPaintEntry.startTime +
+							editPaintEntry.duration -
+							editorInputStartedAt
+					),
+					startTime: editorInputStartedAt
+				}
+			: undefined;
+		const editorInputLongTasks =
+			index >= 2 && editorInputWindow
+				? await mutationWindowLongTasks(page, editorInputWindow)
+				: [];
 		const undo = page.getByRole('button', {name: /^Undo/});
 
 		await expect(undo).toBeEnabled();
@@ -1297,6 +1469,31 @@ async function measureEdits(page: Page) {
 			);
 
 		if (index >= 2) {
+			assertInvariant(
+				`edit-${index}-mutation-window-captured`,
+				!!editPaintEntry,
+				JSON.stringify(editPaintEntry)
+			);
+			const longestEditorInputTask = Math.max(
+				0,
+				...editorInputLongTasks.map(entry => entry.duration)
+			);
+
+			addSample('edit.inputToPaintLongTaskWindowMaxMs', longestEditorInputTask);
+			for (const entry of editorInputLongTasks) {
+				addSample('edit.inputToPaintLongTaskMs', entry.duration);
+			}
+			assertInvariant(
+				`edit-${index}-input-to-paint-has-no-long-task`,
+				editorInputLongTasks.every(entry => entry.duration <= 50),
+				JSON.stringify({
+					longTasks: editorInputLongTasks,
+					window: {
+						duration: editorInputWindow?.duration,
+						startTime: editorInputWindow?.startTime
+					}
+				})
+			);
 			if (externalIngestMetrics.length === 0) {
 				cleanMeasuredSamples++;
 				addSample('edit.roundTripMs', editRoundTripMs);
@@ -1331,6 +1528,49 @@ async function measureEdits(page: Page) {
 				metric => metric.kind === 'replaceProject'
 			)
 		);
+		if (fixtureVariant === 'chapbook') {
+			const adapterEvents = current.renderer.events.filter(
+				event =>
+					event.name === 'legacy-editor-adapter-created' &&
+					event.detail?.formatName === 'Chapbook'
+			);
+			const adapterRebuilds = adapterEvents.length;
+			const editorLifecycleEvents = current.renderer.events.filter(event =>
+				['source-editor-view-created', 'source-editor-view-destroyed'].includes(
+					event.name
+				)
+			);
+			const lineIndexRebuilds = legacyFormatEventCount(
+				current,
+				'legacy-lookahead-line-index-rebuilt'
+			);
+
+			addSample('chapbook.ordinary.adapterRebuildCount', adapterRebuilds);
+			addSample(
+				'chapbook.ordinary.editorViewLifecycleEventCount',
+				editorLifecycleEvents.length
+			);
+			addSample('chapbook.ordinary.lineIndexRebuildCount', lineIndexRebuilds);
+			assertInvariant(
+				`chapbook-ordinary-${index}-preserves-adapter-and-line-index`,
+				adapterRebuilds === 0 &&
+					editorLifecycleEvents.length === 0 &&
+					lineIndexRebuilds === 0,
+				JSON.stringify({
+					adapterEvents: adapterEvents.map(event => event.detail),
+					adapterRebuilds,
+					delimiterEvents: current.renderer.events
+						.filter(
+							event =>
+								event.name === 'legacy-delimiter-presence-changed' &&
+								event.detail?.formatName === 'Chapbook'
+						)
+						.map(event => event.detail),
+					editorLifecycleEvents,
+					lineIndexRebuilds
+				})
+			);
+		}
 		captureBridgeMetrics(current);
 		await recordLaunchPhase('benchmark-sample-completed', {
 			index,
@@ -1338,6 +1578,15 @@ async function measureEdits(page: Page) {
 			surface: 'edit'
 		});
 	}
+	await stopEditLongTaskObservation(page);
+	assertInvariant(
+		'edit-input-to-paint-long-task-window-sample-coverage',
+		(samples['edit.inputToPaintLongTaskWindowMaxMs']?.length ?? 0) ===
+			(smoke ? 1 : 20),
+		`${samples['edit.inputToPaintLongTaskWindowMaxMs']?.length ?? 0}/${
+			smoke ? 1 : 20
+		}`
+	);
 
 	assertInvariant(
 		'edit-clean-sample-coverage',
@@ -1386,6 +1635,315 @@ async function measureEdits(page: Page) {
 			`revision ${finalRevision}`
 		);
 	}
+
+	if (fixtureVariant === 'chapbook') {
+		await measureChapbookOrdinaryEditLocations(page, content);
+		await measureChapbookDelimiterInvalidation(page, content);
+	}
+}
+
+async function revealEditorSearchMatch(
+	page: Page,
+	content: Locator,
+	query: string
+) {
+	const editorId = await content
+		.locator('xpath=ancestor::*[@data-testid][1]')
+		.getAttribute('data-testid');
+	const selected = await page.evaluate(
+		({id, text}) => (window as any).twinePerformance.selectEditorText(id, text),
+		{id: editorId, text: query}
+	);
+
+	assertInvariant(
+		`chapbook-location-${query.slice(-4)}-selected`,
+		selected,
+		`${editorId ?? 'missing editor'}; ${query}`
+	);
+	await page.keyboard.press('ArrowRight');
+}
+
+async function measureChapbookOrdinaryEditLocations(
+	page: Page,
+	content: Locator
+) {
+	const probes = [
+		{
+			label: 'beginning',
+			query: 'benchmark variable 0001: value 0001'
+		},
+		{
+			label: 'middle',
+			query: 'benchmark variable 2048: value 2048'
+		},
+		{label: 'end', query: 'benchmark variable 4096: value 4096'}
+	];
+
+	for (const [ordinal, probe] of probes.entries()) {
+		await reset(page);
+		await revealEditorSearchMatch(page, content, probe.query);
+		let previousRevision = await currentRevision(page);
+		const suffix = ` [perf-${probe.label}]`;
+
+		await page.keyboard.insertText(suffix);
+		await waitForEvent(page, 'mutation-applied');
+		await waitForMeasure(page, 'mutation-to-paint');
+		await expect(content.locator('.cm-activeLine')).toHaveText(
+			`${probe.query}${suffix}`
+		);
+		const editRevision = await waitForRevisionAfter(page, previousRevision);
+		const editPersisted = await waitForRevisionEvent(
+			page,
+			['save-acknowledgement-complete', 'persistence-save-failed'],
+			editRevision,
+			watcherTimeout
+		);
+
+		assertInvariant(
+			`chapbook-ordinary-${probe.label}-edit-persisted`,
+			editPersisted.renderer.events.some(
+				event =>
+					event.name === 'save-acknowledgement-complete' &&
+					event.detail?.revision === editRevision
+			),
+			`revision ${editRevision}`
+		);
+
+		previousRevision = editRevision;
+		const undo = page.getByRole('button', {name: /^Undo/});
+		const controlledSyncCount = (await snapshot(page)).renderer.events.filter(
+			event => event.name === 'source-editor-controlled-value-synchronized'
+		).length;
+
+		await expect(undo).toBeEnabled();
+		await undo.click();
+		await waitForEvent(page, 'undo-applied');
+		const restoreRevision = await waitForRevisionAfter(page, previousRevision);
+
+		// Project undo restores story content but does not promise to retain the
+		// editor's active line. The next probe reveals its own unique target, so
+		// document-wide marker removal is the relevant restoration contract.
+		await expect(content).not.toContainText(suffix);
+		const restorePersisted = await waitForRevisionEvent(
+			page,
+			['save-acknowledgement-complete', 'persistence-save-failed'],
+			restoreRevision,
+			watcherTimeout
+		);
+
+		const synchronized = await pollSnapshot(
+			page,
+			current =>
+				current.renderer.events.filter(
+					event => event.name === 'source-editor-controlled-value-synchronized'
+				).length > controlledSyncCount
+		);
+		if (
+			synchronized.renderer.events.some(
+				event => event.name === 'legacy-delimiter-presence-changed'
+			)
+		) {
+			await waitForEvent(page, 'source-editor-dynamic-extensions-applied');
+		}
+		const current = await snapshot(page);
+		const adapterEvents = current.renderer.events.filter(
+			event =>
+				event.name === 'legacy-editor-adapter-created' &&
+				event.detail?.formatName === 'Chapbook'
+		);
+		const delimiterEvents = current.renderer.events.filter(
+			event =>
+				event.name === 'legacy-delimiter-presence-changed' &&
+				event.detail?.formatName === 'Chapbook'
+		);
+		const adapterRebuilds = legacyFormatEventCount(
+			current,
+			'legacy-editor-adapter-created'
+		);
+		const lineIndexRebuilds = legacyFormatEventCount(
+			current,
+			'legacy-lookahead-line-index-rebuilt'
+		);
+
+		addSample('chapbook.ordinaryLocation.ordinal', ordinal);
+		addSample(
+			`chapbook.ordinaryLocation.${probe.label}.adapterRebuildCount`,
+			adapterRebuilds
+		);
+		addSample(
+			`chapbook.ordinaryLocation.${probe.label}.lineIndexRebuildCount`,
+			lineIndexRebuilds
+		);
+		assertInvariant(
+			`chapbook-ordinary-${probe.label}-preserves-adapter-and-line-index`,
+			adapterRebuilds === 0 && lineIndexRebuilds === 0,
+			JSON.stringify({
+				adapterEvents: adapterEvents.map(event => event.detail),
+				adapterRebuilds,
+				delimiterEvents: delimiterEvents.map(event => event.detail),
+				lineIndexRebuilds
+			})
+		);
+		assertInvariant(
+			`chapbook-ordinary-${probe.label}-content-restored`,
+			restorePersisted.renderer.events.some(
+				event =>
+					event.name === 'save-acknowledgement-complete' &&
+					event.detail?.revision === restoreRevision
+			),
+			`${probe.query}; revision ${restoreRevision}`
+		);
+	}
+}
+
+async function measureChapbookDelimiterInvalidation(
+	page: Page,
+	content: Locator
+) {
+	await reset(page);
+	let previousRevision = await currentRevision(page);
+
+	await content.click();
+	await page.keyboard.press(
+		process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End'
+	);
+	await page.keyboard.down('Shift');
+	await page.keyboard.press('ArrowLeft');
+	await page.keyboard.press('ArrowLeft');
+	await page.keyboard.up('Shift');
+	await page.keyboard.press('Backspace');
+	await waitForEvent(page, 'mutation-applied');
+	await waitForMeasure(page, 'mutation-to-paint');
+	await expect(content.locator('.cm-activeLine')).toHaveText('');
+	await waitForEvent(page, 'legacy-editor-adapter-created');
+	await waitForEvent(page, 'legacy-lookahead-line-index-rebuilt');
+	const removalRevision = await waitForRevisionAfter(page, previousRevision);
+	let current = await snapshot(page);
+	const removalAdapterRebuilds = legacyFormatEventCount(
+		current,
+		'legacy-editor-adapter-created'
+	);
+	const removalLineIndexRebuilds = legacyFormatEventCount(
+		current,
+		'legacy-lookahead-line-index-rebuilt'
+	);
+
+	addSample(
+		'chapbook.delimiterRemove.roundTripMs',
+		lastEntry(current, 'mutation-round-trip', 'measure')?.duration
+	);
+	addSample(
+		'chapbook.delimiterRemove.paintMs',
+		lastEntry(current, 'mutation-to-paint', 'measure')?.duration
+	);
+	addSample(
+		'chapbook.delimiterRemove.adapterRebuildCount',
+		removalAdapterRebuilds
+	);
+	addSample(
+		'chapbook.delimiterRemove.lineIndexRebuildCount',
+		removalLineIndexRebuilds
+	);
+	assertInvariant(
+		'chapbook-delimiter-remove-rebuilds-once',
+		removalAdapterRebuilds === 1 && removalLineIndexRebuilds === 1,
+		JSON.stringify({
+			adapterRebuilds: removalAdapterRebuilds,
+			lineIndexRebuilds: removalLineIndexRebuilds
+		})
+	);
+	assertInvariant(
+		'chapbook-delimiter-remove-avoids-full-replace',
+		!current.renderer.bridgeMetrics.some(
+			metric => metric.kind === 'replaceProject'
+		)
+	);
+	const removalPersisted = await waitForRevisionEvent(
+		page,
+		['save-acknowledgement-complete', 'persistence-save-failed'],
+		removalRevision,
+		watcherTimeout
+	);
+
+	assertInvariant(
+		'chapbook-delimiter-remove-persisted',
+		removalPersisted.renderer.events.some(
+			event =>
+				event.name === 'save-acknowledgement-complete' &&
+				event.detail?.revision === removalRevision
+		),
+		`revision ${removalRevision}`
+	);
+
+	await reset(page);
+	previousRevision = removalRevision;
+	await content.click();
+	await page.keyboard.press(
+		process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End'
+	);
+	await page.keyboard.insertText('--');
+	await waitForEvent(page, 'mutation-applied');
+	await waitForMeasure(page, 'mutation-to-paint');
+	await expect(content.locator('.cm-activeLine')).toHaveText('--');
+	await waitForEvent(page, 'legacy-editor-adapter-created');
+	await waitForEvent(page, 'legacy-lookahead-line-index-rebuilt');
+	const additionRevision = await waitForRevisionAfter(page, previousRevision);
+
+	current = await snapshot(page);
+	const additionAdapterRebuilds = legacyFormatEventCount(
+		current,
+		'legacy-editor-adapter-created'
+	);
+	const additionLineIndexRebuilds = legacyFormatEventCount(
+		current,
+		'legacy-lookahead-line-index-rebuilt'
+	);
+	addSample(
+		'chapbook.delimiterAdd.roundTripMs',
+		lastEntry(current, 'mutation-round-trip', 'measure')?.duration
+	);
+	addSample(
+		'chapbook.delimiterAdd.paintMs',
+		lastEntry(current, 'mutation-to-paint', 'measure')?.duration
+	);
+	addSample(
+		'chapbook.delimiterAdd.adapterRebuildCount',
+		additionAdapterRebuilds
+	);
+	addSample(
+		'chapbook.delimiterAdd.lineIndexRebuildCount',
+		additionLineIndexRebuilds
+	);
+	assertInvariant(
+		'chapbook-delimiter-add-rebuilds-once',
+		additionAdapterRebuilds === 1 && additionLineIndexRebuilds === 1,
+		JSON.stringify({
+			adapterRebuilds: additionAdapterRebuilds,
+			lineIndexRebuilds: additionLineIndexRebuilds
+		})
+	);
+	assertInvariant(
+		'chapbook-delimiter-add-avoids-full-replace',
+		!current.renderer.bridgeMetrics.some(
+			metric => metric.kind === 'replaceProject'
+		)
+	);
+	const additionPersisted = await waitForRevisionEvent(
+		page,
+		['save-acknowledgement-complete', 'persistence-save-failed'],
+		additionRevision,
+		watcherTimeout
+	);
+
+	assertInvariant(
+		'chapbook-delimiter-add-persisted',
+		additionPersisted.renderer.events.some(
+			event =>
+				event.name === 'save-acknowledgement-complete' &&
+				event.detail?.revision === additionRevision
+		),
+		`revision ${additionRevision}`
+	);
 }
 
 async function measureDiagnostic(page: Page, launchToWindowMs: number) {
@@ -1530,18 +2088,47 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 	await reset(page);
 	await recordMemoryDetailCheckpoint(page, 'pre-read-model-settle', true);
 	await waitForInitialReadModelSettle(page);
-	await recordMemoryDetailCheckpoint(page, 'before-editor', true);
-
 	await page
 		.getByRole('group', {name: 'Workspace Mode'})
 		.getByRole('tab', {name: 'Text'})
 		.click();
+	const defaultEditorWindow = page.locator('.story-edit-editor-window').first();
+
+	await expect(defaultEditorWindow).toBeVisible({timeout: 60_000});
+	await defaultEditorWindow.getByRole('button', {name: /^Close /}).click();
+	await expect(defaultEditorWindow).not.toBeVisible();
+	await pollSnapshot(
+		page,
+		current => current.renderer.owners?.activeEditorCount === 0
+	);
+	await recordMemoryDetailCheckpoint(page, 'before-editor', true);
+
+	const selectedPassage = page.locator(
+		'.story-edit-passage-list-item[aria-current="true"]'
+	);
+
+	await expect(selectedPassage).toBeVisible({timeout: 60_000});
+	await selectedPassage.click();
+	const editSelectedPassage = page.getByRole('button', {
+		exact: true,
+		name: 'Edit'
+	});
+
+	await expect(editSelectedPassage).toBeEnabled();
+	const editorOpenStartedAt = nodePerformance.now();
+
+	await editSelectedPassage.click();
 	const editorWindow = page.locator('.story-edit-editor-window').first();
 	const editor = editorWindow
 		.locator('[data-testid^="story-editor-window-"]')
 		.first();
 
 	await expect(editor).toBeVisible({timeout: 60_000});
+	await pollSnapshot(
+		page,
+		current => current.renderer.owners?.activeEditorCount === 1
+	);
+	addSample('editor.openMs', nodePerformance.now() - editorOpenStartedAt);
 	await recordMemoryDetailCheckpoint(page, 'editor-open');
 	await recordMemoryDetailCheckpoint(page, 'post-editor-gc', true);
 
@@ -1562,8 +2149,257 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 
 	await editorWindow.getByRole('button', {name: /^Close /}).click();
 	await expect(editorWindow).not.toBeVisible();
+	await pollSnapshot(
+		page,
+		current =>
+			current.renderer.owners?.activeEditorCount === 0 &&
+			current.renderer.owners?.editorDocumentBytes === 0
+	);
 	await recordMemoryDetailCheckpoint(page, 'editor-closed');
 	await recordMemoryDetailCheckpoint(page, 'post-editor-close-gc', true);
+	const passageItems = page.locator('.story-edit-passage-list-item');
+	const lifecycleTargets: Array<{index: number; name: string}> = [];
+
+	for (
+		let index = 0;
+		index < (await passageItems.count()) && lifecycleTargets.length < 4;
+		index++
+	) {
+		const item = passageItems.nth(index);
+
+		if ((await item.getAttribute('aria-current')) !== 'true') {
+			lifecycleTargets.push({
+				index,
+				name:
+					(
+						await item.locator('.story-edit-passage-list-name').textContent()
+					)?.trim() ?? `passage-${index}`
+			});
+		}
+	}
+	assertInvariant(
+		'memory-detail-distinct-passage-coverage',
+		lifecycleTargets.length === 4 &&
+			new Set(lifecycleTargets.map(target => target.name)).size === 4,
+		JSON.stringify(lifecycleTargets)
+	);
+	const lifecycleStart = await snapshot(page);
+	const lifecycleAdapterStart = legacyFormatEventCount(
+		lifecycleStart,
+		'legacy-editor-adapter-created'
+	);
+	const lifecycleLineIndexStart = legacyFormatEventCount(
+		lifecycleStart,
+		'legacy-lookahead-line-index-rebuilt'
+	);
+	const lifecycleWindows: Array<{
+		target: (typeof lifecycleTargets)[number];
+		window: Locator;
+	}> = [];
+
+	for (const [cycle, target] of lifecycleTargets.entries()) {
+		const beforeOpen = await snapshot(page);
+		const adapterCountBefore = legacyFormatEventCount(
+			beforeOpen,
+			'legacy-editor-adapter-created'
+		);
+		const lineIndexCountBefore = legacyFormatEventCount(
+			beforeOpen,
+			'legacy-lookahead-line-index-rebuilt'
+		);
+
+		await passageItems.nth(target.index).click();
+		const distinctOpenStartedAt = nodePerformance.now();
+
+		await editSelectedPassage.click();
+		const targetWindow = page.locator('.story-edit-editor-window').filter({
+			has: page
+				.locator('.story-edit-editor-window-name')
+				.filter({hasText: target.name})
+		});
+
+		await expect(targetWindow).toBeVisible({timeout: 60_000});
+		await expect(targetWindow).toHaveAttribute('aria-label', target.name);
+		const opened = await pollSnapshot(
+			page,
+			current =>
+				current.renderer.owners?.activeEditorCount === cycle + 1 &&
+				(fixtureVariant !== 'chapbook' ||
+					(legacyFormatEventCount(current, 'legacy-editor-adapter-created') >
+						adapterCountBefore &&
+						legacyFormatEventCount(
+							current,
+							'legacy-lookahead-line-index-rebuilt'
+						) > lineIndexCountBefore))
+		);
+		addSample(
+			'memoryDetail.distinctEditor.openMs',
+			nodePerformance.now() - distinctOpenStartedAt
+		);
+		addSample(
+			'memoryDetail.distinctEditor.openDocumentBytes',
+			opened.renderer.owners?.editorDocumentBytes
+		);
+		if (fixtureVariant === 'chapbook') {
+			const adapterCreations =
+				legacyFormatEventCount(opened, 'legacy-editor-adapter-created') -
+				adapterCountBefore;
+			const lineIndexCreations =
+				legacyFormatEventCount(opened, 'legacy-lookahead-line-index-rebuilt') -
+				lineIndexCountBefore;
+
+			addSample(
+				'memoryDetail.distinctEditor.adapterCreationCount',
+				adapterCreations
+			);
+			addSample(
+				'memoryDetail.distinctEditor.lineIndexCreationCount',
+				lineIndexCreations
+			);
+			assertInvariant(
+				`memory-detail-distinct-editor-${cycle + 1}-creates-one-legacy-integration`,
+				adapterCreations === 1 && lineIndexCreations === 1,
+				JSON.stringify({
+					adapterCreations,
+					lineIndexCreations,
+					passage: target.name
+				})
+			);
+		}
+
+		const targetContent = targetWindow.locator('.cm-content');
+		const revisionBeforeEdit = await currentRevision(page);
+
+		await targetContent.click();
+		await page.keyboard.press('End');
+		await page.keyboard.insertText(` memory-editor-${cycle + 1}`);
+		const editRevision = await waitForRevisionAfter(page, revisionBeforeEdit);
+
+		await waitForDiagnosticSaveCompletion(page, editRevision, watcherTimeout);
+		if (fixtureVariant === 'chapbook') {
+			const toolbar = targetWindow.getByRole('toolbar', {
+				name: 'Chapbook editor toolbar'
+			});
+			const style = toolbar.getByRole('button', {name: 'Style'});
+			const link = toolbar.getByRole('button', {name: 'Link'});
+
+			await expect(toolbar).toBeVisible();
+			await expect(style).toBeEnabled();
+			await expect(link).toBeEnabled();
+			await page.keyboard.down('Shift');
+			await page.keyboard.press('ArrowLeft');
+			await page.keyboard.up('Shift');
+			await expect(link).toBeDisabled();
+			await expect(style).toBeEnabled();
+			await page.keyboard.press('ArrowRight');
+			await expect(link).toBeEnabled();
+
+			const edited = await snapshot(page);
+			const editAdapterCreations =
+				legacyFormatEventCount(edited, 'legacy-editor-adapter-created') -
+				legacyFormatEventCount(opened, 'legacy-editor-adapter-created');
+			const editLineIndexCreations =
+				legacyFormatEventCount(edited, 'legacy-lookahead-line-index-rebuilt') -
+				legacyFormatEventCount(opened, 'legacy-lookahead-line-index-rebuilt');
+
+			addSample(
+				'memoryDetail.distinctEditor.editAdapterRebuildCount',
+				editAdapterCreations
+			);
+			addSample(
+				'memoryDetail.distinctEditor.editLineIndexRebuildCount',
+				editLineIndexCreations
+			);
+			assertInvariant(
+				`memory-detail-distinct-editor-${cycle + 1}-edit-preserves-integration`,
+				editAdapterCreations === 0 && editLineIndexCreations === 0,
+				JSON.stringify({
+					adapterCreations: editAdapterCreations,
+					lineIndexCreations: editLineIndexCreations,
+					passage: target.name
+				})
+			);
+		}
+		lifecycleWindows.push({target, window: targetWindow});
+	}
+	const allEditorsOpen = await snapshot(page);
+
+	assertInvariant(
+		'memory-detail-four-distinct-editors-open',
+		allEditorsOpen.renderer.owners?.activeEditorCount === 4 &&
+			(allEditorsOpen.renderer.owners?.editorDocumentBytes ?? 0) > 0,
+		JSON.stringify(allEditorsOpen.renderer.owners)
+	);
+	if (fixtureVariant === 'chapbook') {
+		const adapterCreations =
+			legacyFormatEventCount(allEditorsOpen, 'legacy-editor-adapter-created') -
+			lifecycleAdapterStart;
+		const lineIndexCreations =
+			legacyFormatEventCount(
+				allEditorsOpen,
+				'legacy-lookahead-line-index-rebuilt'
+			) - lifecycleLineIndexStart;
+
+		assertInvariant(
+			'memory-detail-four-editors-create-four-legacy-integrations',
+			adapterCreations === 4 && lineIndexCreations === 4,
+			JSON.stringify({adapterCreations, lineIndexCreations})
+		);
+	}
+	await recordMemoryDetailCheckpoint(page, 'four-distinct-editors-open');
+
+	for (const [cycle, opened] of lifecycleWindows.entries()) {
+		await opened.window.locator('.story-edit-editor-window-bar').click();
+		await expect(opened.window).toHaveClass(/is-active/);
+		addSample('memoryDetail.distinctEditor.focusOrdinal', cycle);
+		assertInvariant(
+			`memory-detail-distinct-editor-${cycle + 1}-focusable`,
+			await opened.window.evaluate(element =>
+				element.classList.contains('is-active')
+			),
+			opened.target.name
+		);
+	}
+
+	for (let cycle = lifecycleWindows.length - 1; cycle >= 0; cycle--) {
+		const opened = lifecycleWindows[cycle];
+
+		await opened.window.getByRole('button', {name: /^Close /}).click();
+		await expect(opened.window).not.toBeVisible();
+		const remainingEditorCount = cycle;
+		const closed = await pollSnapshot(
+			page,
+			current =>
+				current.renderer.owners?.activeEditorCount === remainingEditorCount &&
+				(remainingEditorCount > 0
+					? (current.renderer.owners?.editorDocumentBytes ?? 0) > 0
+					: current.renderer.owners?.editorDocumentBytes === 0)
+		);
+		addSample(
+			'memoryDetail.distinctEditor.afterCloseDocumentBytes',
+			closed.renderer.owners?.editorDocumentBytes
+		);
+		addSample(
+			'memoryDetail.distinctEditor.afterCloseEditorCount',
+			closed.renderer.owners?.activeEditorCount
+		);
+		assertInvariant(
+			`memory-detail-distinct-editor-${cycle + 1}-close-releases-owner`,
+			closed.renderer.owners?.activeEditorCount === remainingEditorCount &&
+				(remainingEditorCount > 0
+					? (closed.renderer.owners?.editorDocumentBytes ?? 0) > 0
+					: closed.renderer.owners?.editorDocumentBytes === 0),
+			JSON.stringify({
+				owners: closed.renderer.owners,
+				passage: opened.target.name
+			})
+		);
+	}
+	await recordMemoryDetailCheckpoint(
+		page,
+		'post-distinct-editor-cycles-gc',
+		true
+	);
 
 	await page.getByTitle('Contents').click();
 	await expect(page.getByLabel('Contents', {exact: true})).toBeVisible();
@@ -1584,7 +2420,10 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 	const postEditor = checkpointByName.get('post-editor-gc');
 	const postEdit = checkpointByName.get('post-edit-gc');
 	const postClose = checkpointByName.get('post-editor-close-gc');
+	const fourOpen = checkpointByName.get('four-distinct-editors-open');
+	const postCycles = checkpointByName.get('post-distinct-editor-cycles-gc');
 	const postContents = checkpointByName.get('post-contents-close-gc');
+	const beforeEditor = checkpointByName.get('before-editor');
 	const client = current.renderer.core.hosts[0]?.client;
 	const localFactsMetric = current.renderer.bridgeMetrics
 		.filter(metric => metric.kind === 'queryPassageLocalFacts')
@@ -1592,6 +2431,7 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 	const backlinkMetric = current.renderer.bridgeMetrics
 		.filter(metric => metric.kind === 'queryBacklinksPage')
 		.at(-1);
+	const selectedPassageQueryBound = lifecycleTargets.length + 1;
 
 	captureMemory(current);
 	captureMemoryDetailCheckpoints(current);
@@ -1609,9 +2449,17 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 			'post-edit-gc',
 			'editor-closed',
 			'post-editor-close-gc',
+			'four-distinct-editors-open',
+			'post-distinct-editor-cycles-gc',
 			'contents-open',
 			'post-contents-close-gc'
 		].every(name => checkpointByName.has(name))
+	);
+	assertInvariant(
+		'memory-detail-before-editor-has-no-active-editor',
+		beforeEditor?.renderer.activeEditorCount === 0 &&
+			beforeEditor?.renderer.editorDocumentBytes === 0,
+		JSON.stringify(beforeEditor?.renderer)
 	);
 	assertInvariant(
 		'memory-detail-one-active-editor',
@@ -1621,8 +2469,52 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 	assertInvariant(
 		'memory-detail-editor-released',
 		postClose?.renderer.activeEditorCount === 0 &&
-			postClose?.renderer.editorDocumentBytes === 0,
+			postClose?.renderer.editorDocumentBytes === 0 &&
+			postClose?.renderer.retainedEditorViewCount === 0 &&
+			postClose?.renderer.retainedLegacyDocumentServiceCount === 0 &&
+			postClose?.renderer.retainedLegacyModeAdapterCount === 0 &&
+			postClose?.renderer.retainedLegacyToolbarDescriptorSetCount === 0 &&
+			postClose?.renderer.retainedLegacyToolbarFacadeCount === 0,
 		JSON.stringify(postClose?.renderer)
+	);
+	assertInvariant(
+		'memory-detail-distinct-editors-released',
+		postCycles?.renderer.activeEditorCount === 0 &&
+			postCycles?.renderer.editorDocumentBytes === 0 &&
+			postCycles?.renderer.retainedEditorViewCount === 0 &&
+			postCycles?.renderer.retainedLegacyDocumentServiceCount === 0 &&
+			postCycles?.renderer.retainedLegacyModeAdapterCount === 0 &&
+			postCycles?.renderer.retainedLegacyToolbarDescriptorSetCount === 0 &&
+			postCycles?.renderer.retainedLegacyToolbarFacadeCount === 0,
+		JSON.stringify(postCycles?.renderer)
+	);
+	assertInvariant(
+		'memory-detail-distinct-editor-retained-memory-bounded',
+		(postCycles?.renderer.usedJSHeapSize ?? Infinity) <=
+			(postClose?.renderer.usedJSHeapSize ?? 0) + 8 * 1024 * 1024 &&
+			(postCycles?.renderer.rendererPrivateKiB ?? Infinity) <=
+				(postClose?.renderer.rendererPrivateKiB ?? 0) + 64 * 1024,
+		JSON.stringify({
+			postClose: postClose?.renderer,
+			postCycles: postCycles?.renderer
+		})
+	);
+	assertInvariant(
+		'memory-detail-four-editor-checkpoint-owned',
+		fourOpen?.renderer.activeEditorCount === 4 &&
+			(fourOpen?.renderer.editorDocumentBytes ?? 0) > 0 &&
+			fourOpen?.renderer.retainedEditorViewCount === 4 &&
+			(fixtureVariant === 'chapbook'
+				? fourOpen?.renderer.retainedLegacyDocumentServiceCount === 4 &&
+					fourOpen?.renderer.retainedLegacyModeAdapterCount === 4 &&
+					(fourOpen?.renderer.retainedLegacyToolbarDescriptorSetCount ?? 0) >=
+						4 &&
+					fourOpen?.renderer.retainedLegacyToolbarFacadeCount === 8
+				: fourOpen?.renderer.retainedLegacyDocumentServiceCount === 0 &&
+					fourOpen?.renderer.retainedLegacyModeAdapterCount === 0 &&
+					fourOpen?.renderer.retainedLegacyToolbarDescriptorSetCount === 0 &&
+					fourOpen?.renderer.retainedLegacyToolbarFacadeCount === 0),
+		JSON.stringify(fourOpen?.renderer)
 	);
 	assertInvariant(
 		'memory-detail-edit-keeps-analysis-bounded',
@@ -1635,7 +2527,8 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 		!!localFactsMetric &&
 			!!backlinkMetric &&
 			localFactsMetric.responseBytes <= 32 * 1024 &&
-			(backlinkMetric.readModel?.backlinkCacheEntryCount ?? Infinity) <= 1 &&
+			(backlinkMetric.readModel?.backlinkCacheEntryCount ?? Infinity) <=
+				selectedPassageQueryBound &&
 			(backlinkMetric.readModel?.backlinkCacheBytes ?? Infinity) <=
 				4 * 1024 * 1024 &&
 			!current.renderer.bridgeMetrics.some(
@@ -1645,7 +2538,8 @@ async function measureMemoryDetail(page: Page, launchToWindowMs: number) {
 	);
 	assertInvariant(
 		'memory-detail-default-contents-stays-bounded',
-		(postContents?.renderer.rustAnalysisCacheSourceCount ?? Infinity) <= 2 &&
+		(postContents?.renderer.rustAnalysisCacheSourceCount ?? Infinity) <=
+			selectedPassageQueryBound &&
 			postContents?.renderer.rustGraphCacheStoryCount === 0 &&
 			postContents?.renderer.rustReadModelCacheStoryCount === 0,
 		JSON.stringify(postContents?.renderer)
@@ -2530,6 +3424,26 @@ function captureMemory(current: PerformanceSnapshot, prefix = 'memory') {
 			? current.renderer.owners.editorDocumentBytes / mib
 			: undefined
 	);
+	metric(
+		'owner.retainedEditorViews',
+		current.renderer.owners?.retainedEditorViewCount
+	);
+	metric(
+		'owner.retainedLegacyDocumentServices',
+		current.renderer.owners?.retainedLegacyDocumentServiceCount
+	);
+	metric(
+		'owner.retainedLegacyModeAdapters',
+		current.renderer.owners?.retainedLegacyModeAdapterCount
+	);
+	metric(
+		'owner.retainedLegacyToolbarDescriptorSets',
+		current.renderer.owners?.retainedLegacyToolbarDescriptorSetCount
+	);
+	metric(
+		'owner.retainedLegacyToolbarFacades',
+		current.renderer.owners?.retainedLegacyToolbarFacadeCount
+	);
 	const rust = client?.readModel;
 
 	metric(
@@ -2637,6 +3551,11 @@ function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
 			'totalJSHeapSize',
 			'activeEditorCount',
 			'editorDocumentBytes',
+			'retainedEditorViewCount',
+			'retainedLegacyDocumentServiceCount',
+			'retainedLegacyModeAdapterCount',
+			'retainedLegacyToolbarDescriptorSetCount',
+			'retainedLegacyToolbarFacadeCount',
 			'workerCachedPayloadBytes',
 			'workerPendingRequestCount',
 			'workerReadModelCacheEntryCount',
@@ -2885,7 +3804,7 @@ async function measureWatcherPassageSample(
 			event.name === 'watcher-delta-observed' &&
 			event.detail?.deltaId === deltaId
 	);
-	let applied = current.renderer.events.find(
+	const applied = current.renderer.events.find(
 		event =>
 			event.name === 'external-delta-patch-applied' &&
 			event.detail?.deltaId === deltaId
@@ -3245,7 +4164,8 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 	);
 }
 
-test.afterEach(async ({}, testInfo) => {
+test.afterEach(async ({browserName}, testInfo) => {
+	void browserName;
 	await writeRawPerformanceReport(testInfo);
 });
 

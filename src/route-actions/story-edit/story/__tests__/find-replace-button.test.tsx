@@ -6,8 +6,6 @@ import {useStoriesContext} from '../../../../store/stories';
 import {FakeStateProvider, FakeStateProviderProps} from '../../../../test-util';
 import {FindReplaceButton} from '../find-replace-button';
 
-jest.mock('../../../../components/control/code-area/code-area');
-
 const TestFindReplaceButton: React.FC = () => {
 	const {stories} = useStoriesContext();
 

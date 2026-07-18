@@ -2,7 +2,7 @@
 
 Status: current
 Owner: React/core integration maintainers
-Last verified: 2026-07-12
+Last verified: 2026-07-18
 Source of truth: product mutation and query boundaries
 
 ## Persisted mutations
@@ -70,3 +70,21 @@ TypeScript parser, index, asset inventory, or reducer history as a second source
 of truth. The former reducer-owned body search/replace helpers and legacy
 passage-map/connection renderers have been removed; bounded Rust queries and the
 current graph projection are the supported product paths.
+
+Story-format editor compatibility is similarly bounded. All editing surfaces
+use the app-owned CodeMirror 6 `SourceEditor` or an intentional native textarea.
+Compatible legacy stream modes, commands, and toolbar descriptors run through
+per-editor adapters with app-owned types; formats never receive a raw
+CodeMirror 6 view. Unsupported API access fails closed to generic syntax and is
+reported without passage content. Harlowe's DOM- and CodeMirror-5-coupled
+hydration is rejected before execution, while its serialized runtime source is
+left unchanged for play, test, proof, and publish.
+
+CodeMirror retains each `StreamLanguage` node type for the renderer lifetime.
+The resolver therefore caches one immutable language recipe per hydrated format
+identity, while each editor installs a facet-scoped disposable runtime. Editor
+teardown clears that runtime's document service, format mode, and diagnostic
+callback so the shared language cannot retain passage or React state.
+
+`npm run check:no-codemirror5` prevents the removed CodeMirror 5 runtime and
+React wrapper from returning to production source.

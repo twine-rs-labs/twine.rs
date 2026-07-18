@@ -104,6 +104,56 @@ describe('<StoryFormatsRoute>', () => {
 		);
 	});
 
+	it('shows the Harlowe generic editor compatibility fallback', () => {
+		const format = fakeLoadedStoryFormat(
+			{
+				name: 'Harlowe',
+				url: 'story-formats/harlowe-3.3.9/format.js',
+				userAdded: false,
+				version: '3.3.9'
+			},
+			{name: 'Harlowe', source: '{{STORY_DATA}}', version: '3.3.9'}
+		);
+
+		render(
+			<FakeStateProvider storyFormats={[format]}>
+				<StoryFormatsRoute />
+			</FakeStateProvider>
+		);
+
+		expect(
+			screen.getByText('Generic CM6 editor; legacy format toolbar unavailable')
+		).toBeInTheDocument();
+	});
+
+	it('surfaces a content-free runtime editor diagnostic', () => {
+		const format = fakeLoadedStoryFormat();
+
+		format.editorIntegrationDiagnostic = {
+			code: 'legacy-editor-runtime-error',
+			feature: 'mode',
+			message:
+				'Legacy editor mode disabled after an unsupported format API call',
+			unsupportedApi: 'lineOracle'
+		};
+
+		render(
+			<FakeStateProvider storyFormats={[format]}>
+				<StoryFormatsRoute />
+			</FakeStateProvider>
+		);
+
+		expect(
+			screen.getByText(
+				'Legacy editor mode disabled after an unsupported format API call'
+			)
+		).toBeInTheDocument();
+		expect(screen.getByText('lineOracle')).toBeInTheDocument();
+		expect(
+			screen.queryByText('Adapted legacy editor integration')
+		).not.toBeInTheDocument();
+	});
+
 	it('reloads the selected format from its URL for the dev loop', async () => {
 		(fetchStoryFormatProperties as jest.Mock).mockResolvedValue({
 			...fakeStoryFormatProperties(),

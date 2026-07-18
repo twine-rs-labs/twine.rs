@@ -3,11 +3,12 @@ import {useTranslation} from 'react-i18next';
 import {IndentButtons, UndoRedoButtons} from '../components/codemirror';
 import {ButtonBar} from '../components/container/button-bar';
 import {DialogCard, DialogEditor} from '../components/container/dialog-card';
-import {CodeArea} from '../components/control/code-area';
+import {
+	SourceEditor,
+	type SourceEditorHandle
+} from '../components/control/source-editor';
 import {updateStoryScriptCommand, useCoreProjectHost} from '../core';
-import {usePrefsContext} from '../store/prefs';
 import {storyWithId, useStoriesContext} from '../store/stories';
-import {codeMirrorOptionsFromPrefs} from '../util/codemirror-options';
 import {DialogComponentProps} from './dialogs.types';
 import './story-javascript.css';
 
@@ -19,12 +20,18 @@ export const StoryJavaScriptDialog: React.FC<
 	StoryJavaScriptDialogProps
 > = props => {
 	const {storyId, ...other} = props;
-	const [cmEditor, setCmEditor] = React.useState<CodeMirror.Editor>();
+	const [editor, setEditor] = React.useState<SourceEditorHandle>();
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
-	const {prefs} = usePrefsContext();
 	const story = storyWithId(stories, storyId);
 	const {t} = useTranslation();
+	const handleEditorRef = React.useCallback(
+		(instance: SourceEditorHandle | null) =>
+			setEditor(current =>
+				current === (instance ?? undefined) ? current : (instance ?? undefined)
+			),
+		[]
+	);
 
 	const handleChangeText = (text: string) => {
 		coreProjectHost.applyStoryCommand(updateStoryScriptCommand(story.id, text));
@@ -38,26 +45,17 @@ export const StoryJavaScriptDialog: React.FC<
 			maximizable
 		>
 			<ButtonBar>
-				<UndoRedoButtons editor={cmEditor} watch={story.script} />
-				<IndentButtons editor={cmEditor} />
+				<UndoRedoButtons editor={editor} watch={story.script} />
+				<IndentButtons editor={editor} />
 			</ButtonBar>
 			<DialogEditor>
-				<CodeArea
-					editorDidMount={setCmEditor}
-					fontFamily={prefs.codeEditorFontFamily}
-					fontScale={prefs.codeEditorFontScale}
+				<SourceEditor
 					id="story-javascript-dialog-code-area"
 					label={t('dialogs.storyJavaScript.editorLabel')}
-					labelHidden
-					onChangeEditor={setCmEditor}
-					onChangeText={handleChangeText}
-					options={{
-						...codeMirrorOptionsFromPrefs(prefs),
-						autofocus: true,
-						lineWrapping: true,
-						mode: 'javascript',
-						placeholder: t('dialogs.storyJavaScript.explanation')
-					}}
+					language="javascript"
+					onChange={handleChangeText}
+					placeholderText={t('dialogs.storyJavaScript.explanation')}
+					ref={handleEditorRef}
 					value={story.script}
 				/>
 			</DialogEditor>

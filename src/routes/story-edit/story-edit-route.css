@@ -1421,6 +1421,19 @@ button.story-edit-contents-item:focus-visible {
 	min-width: 0;
 }
 
+.story-edit-editor-window > .story-format-toolbar {
+	background: var(--ink-2);
+	border-top: 1px solid var(--line-1);
+	flex: none;
+	overflow-x: auto;
+	padding: var(--sp-1) var(--sp-2);
+}
+
+.story-format-toolbar img {
+	height: 18px;
+	width: 18px;
+}
+
 .story-edit-editor-window-empty {
 	align-items: center;
 	color: var(--tx-3);

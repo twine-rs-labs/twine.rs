@@ -136,6 +136,10 @@ function inspectMacSignature(appPath, {execFileSync, spawnSync}) {
 	return {identifier, kind: 'other'};
 }
 
+function isUniversalMergeInput(context) {
+	return /-(?:arm64|x64)-temp$/.test(context.appOutDir);
+}
+
 function createMacBuildHooks({productName}) {
 	function macAppPath(context) {
 		return path.join(
@@ -164,6 +168,13 @@ function createMacBuildHooks({productName}) {
 		if (signingIntent.present) {
 			dependencies.log(
 				`Skipping local ad-hoc signing because ${signingIntent.reason}.`
+			);
+			return;
+		}
+
+		if (isUniversalMergeInput(context)) {
+			dependencies.log(
+				'Deferring local ad-hoc signing until after the universal app is merged.'
 			);
 			return;
 		}

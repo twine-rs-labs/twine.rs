@@ -61,6 +61,22 @@ Prepare deterministic 10k and 50k project folders:
 npm run perf:prepare
 ```
 
+Prepare an isolated 10k Chapbook 2.3.1 project without replacing the default
+Harlowe fixtures:
+
+```sh
+npm run perf:prepare:chapbook:10k
+```
+
+The Chapbook fixture is stored under
+`benchmarks/fixtures/generated/variants/chapbook/`. Run its focused editor and
+memory-detail phases with:
+
+```sh
+npm run perf:electron:chapbook:10k:edit
+npm run perf:electron:chapbook:memory-detail:10k
+```
+
 Preparation installs the Electron runtime before building fixtures. The first
 run needs network access; later runs reuse Electron's download cache. Keeping
 this download in preparation prevents it from affecting launch measurements.
@@ -166,16 +182,24 @@ npm run perf:electron:memory-detail:10k
 npm run perf:electron:memory-detail:50k
 ```
 
-The detailed phase records retained checkpoints before the editor, after editor
-creation, after one edit and save, after editor closure, and across a bounded
-Contents route visit. Each checkpoint includes process-role working sets,
-renderer and main heap fields, active editor document ownership, worker query
-cache/pending-request state, Rust session owner counts, native hydration leases,
-and baseline/descriptor estimates. Selected-passage attribution additionally
-records local-fact and backlink query payloads, backlink scan/cache counts and
-bytes, and rejects the compatibility combined passage-facts query on product
-routes. It asserts that editor documents, completed requests, session queues,
-bootstrap bodies, and hydration leases are released.
+The detailed phase closes the default workspace editor, waits for zero active
+editors, and records that state as `before-editor`. It then opens exactly one
+measured editor and records retained checkpoints after editor creation, after
+one edit and save, and after editor closure; `editor.openMs` measures the first
+open through visible, owner-ready state. A compact lifecycle probe next holds
+four distinct passage editors open at once, focuses each window, then closes
+them while verifying the owner count steps back to zero and document ownership
+is released after forced collection. Chapbook runs also record exactly one
+adapter and look-ahead line-index creation per opened passage. The phase
+finishes with a bounded Contents route visit. Each checkpoint includes
+process-role working sets, renderer and main heap fields, active editor
+document ownership, worker query cache/pending-request state, Rust session owner
+counts, native hydration leases, and baseline/descriptor estimates.
+Selected-passage attribution additionally records local-fact and backlink query
+payloads, backlink scan/cache counts and bytes, and rejects the compatibility
+combined passage-facts query on product routes. It asserts that editor
+documents, completed requests, session queues, bootstrap bodies, and hydration
+leases are released.
 Like the startup memory matrix, this is focused diagnostic evidence and cannot
 be accepted as a complete baseline.
 
@@ -233,9 +257,15 @@ and the first paint that commits that result; an empty route placeholder is not
 a completed sample. Reports separate the first cold Contents page from warm
 reopens, and the query phase must finish with no pending worker requests or
 session work. Ordinary edit aggregates exclude samples that overlap an external
-delta and report those separately. The graph phase performs a real node-layout
-mutation and blocks unless its final revision is acknowledged through an
-incremental native save with no full-save fallback or work left in flight.
+delta and report those separately. After two warm-up edits, the edit phase uses
+Chromium's Long Tasks API to observe each complete editor-input-to-paint window
+and blocks on any editor-window task over 50 ms; lack of API support is an
+explicit failure. Chapbook runs additionally edit, persist, and restore
+deterministic lines at the beginning, middle, and end of the 4,096-line
+variable preamble, requiring zero adapter or look-ahead index rebuilds at every
+location. The graph phase performs a real node-layout mutation and blocks
+unless its final revision is acknowledged through an incremental native save
+with no full-save fallback or work left in flight.
 
 For a quick harness check, build and generate the 100-passage fixture once,
 then run the abbreviated scenario:
@@ -274,6 +304,24 @@ worker receipt, Rust ingestion, and renderer patch application. This separates
 debounce/scanning, IPC, Rust compute, and reducer costs when a large fixture
 misses the watcher deadline.
 
+## Editor bundle comparison
+
+After a production Electron renderer build, compare the CSS and JavaScript
+entry assets referenced by its `index.html` with the retained CodeMirror 5
+production reference:
+
+```sh
+npm run build:electron-app
+npm run perf:bundle
+```
+
+The tracked
+[`reference/editor-bundle-codemirror5.json`](./reference/editor-bundle-codemirror5.json)
+records the original asset names, raw sizes, gzip sizes, and SHA-256 hashes.
+The check resolves only the current entry assets from the generated HTML, so
+stale hashed files left by an earlier local build cannot inflate the result.
+It fails unless the current combined gzip size is smaller than that reference.
+
 ## Tracked reference summaries
 
 Raw reports and accepted regression baselines remain ignored. Small normalized
@@ -304,8 +352,13 @@ npm run perf:baseline -- --from benchmarks/results/electron-...-10000.json
 ```
 
 The accepted baseline is stored under the ignored
-`benchmarks/results/baselines/` directory using a machine fingerprint. Later
-runs on that machine fail when Electron timings regress by more than 15% or
+`benchmarks/results/baselines/` directory using a machine fingerprint. Default
+fixtures retain the legacy `<fingerprint>-<size>.json` filename; non-default
+fixtures append their variant, such as
+`<fingerprint>-10000-chapbook.json`. Reporting, acceptance, and rechecks reject
+cross-variant comparison, so Chapbook cannot load or overwrite a default
+Harlowe baseline. Later runs on that machine fail when Electron timings regress
+by more than 15% or
 5 ms, native timings by more than 10% or 2 ms, or resident memory by more than
 10% or 32 MiB. Partial startup, edit, query, graph, or watcher reports are
 rejected as baselines, as are reports missing any budgeted metric. Acceptance

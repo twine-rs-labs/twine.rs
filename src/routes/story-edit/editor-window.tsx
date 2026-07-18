@@ -6,6 +6,8 @@ import {
 	Button,
 	IconButton,
 	SourceEditor,
+	SourceEditorDocumentChange,
+	SourceEditorHandle,
 	SourceEditorLanguage,
 	TablerIcon
 } from '../../components/design-system';
@@ -21,8 +23,17 @@ import {
 import type {CoreStoryIndex, WorkbenchSelection} from '../../core';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import {Passage, Story, storyPassageTags} from '../../store/stories';
+import {useStoryFormatsContext} from '../../store/story-formats';
+import {useFormatEditorIntegration} from '../../store/use-format-editor-integration';
 import {Color, colorString} from '../../util/color';
+import {recordPerformanceHarnessEvent} from '../../util/performance';
+import {registerPerformanceRetainedObject} from '../../util/performance-memory-owners';
+import {
+	createLegacyStreamDocumentService,
+	type LegacyStreamModeAdapter
+} from '../../util/story-format/legacy-editor/legacy-stream-mode';
 import type {EditorWindowSpec} from './editor-window-spec';
+import {StoryFormatToolbar} from './story-format-toolbar';
 
 export interface EditorWindowProps {
 	active: boolean;
@@ -74,6 +85,128 @@ interface ResolvedBuffer {
 	value: string;
 }
 
+interface TextInterval {
+	from: number;
+	to: number;
+}
+
+function mergeIntervals(intervals: TextInterval[]) {
+	const sorted = [...intervals].sort((left, right) => left.from - right.from);
+	const merged: TextInterval[] = [];
+
+	for (const interval of sorted) {
+		const previous = merged[merged.length - 1];
+
+		if (previous && interval.from <= previous.to) {
+			previous.to = Math.max(previous.to, interval.to);
+		} else {
+			merged.push({...interval});
+		}
+	}
+
+	return merged;
+}
+
+function completeLineInterval(document: string, from: number, to: number) {
+	const boundedFrom = Math.max(0, Math.min(from, document.length));
+	const boundedTo = Math.max(boundedFrom, Math.min(to, document.length));
+	const previousNewline =
+		boundedFrom === 0 ? -1 : document.lastIndexOf('\n', boundedFrom - 1);
+	const nextNewline = document.indexOf('\n', boundedTo);
+
+	return {
+		from: previousNewline === -1 ? 0 : previousNewline + 1,
+		to: nextNewline === -1 ? document.length : nextNewline + 1
+	};
+}
+
+export function countDelimiterLines(
+	document: string,
+	intervals?: TextInterval[]
+) {
+	const regions = intervals ?? [{from: 0, to: document.length}];
+	let count = 0;
+
+	for (const {from, to} of mergeIntervals(regions)) {
+		const text = document.slice(from, to);
+		const delimiterPattern = /(?:^|\n)--(?=\r?\n|$)/g;
+		let match: RegExpExecArray | null;
+
+		while ((match = delimiterPattern.exec(text))) {
+			const delimiterPosition =
+				from + match.index + (match[0].startsWith('\n') ? 1 : 0);
+
+			// Chapbook discovers its variables section with lookAhead(), so a
+			// delimiter on the current first line is not part of the predicate.
+			if (delimiterPosition > 0) {
+				count++;
+			}
+		}
+	}
+
+	return count;
+}
+
+export function delimiterDelta(
+	previousDocument: string,
+	change: SourceEditorDocumentChange
+) {
+	const oldIntervals = change.edits.map(edit =>
+		completeLineInterval(previousDocument, edit.from, edit.to)
+	);
+	const newIntervals = change.edits.map(edit =>
+		completeLineInterval(change.document, edit.fromNew, edit.toNew)
+	);
+
+	return (
+		countDelimiterLines(change.document, newIntervals) -
+		countDelimiterLines(previousDocument, oldIntervals)
+	);
+}
+
+export function nextDelimiterState(
+	previousCount: number,
+	previousDocument: string,
+	change: SourceEditorDocumentChange
+) {
+	const estimatedCount = Math.max(
+		0,
+		previousCount + delimiterDelta(previousDocument, change)
+	);
+	const hadDelimiter = previousCount > 0;
+
+	if (hadDelimiter === estimatedCount > 0) {
+		return {count: estimatedCount, presenceChanged: false};
+	}
+
+	// A controlled value echo can combine edits whose coordinate ranges make
+	// incremental accounting conservative. Verify only apparent presence
+	// transitions; this keeps ordinary edits bounded to changed lines.
+	const verifiedCount = countDelimiterLines(change.document);
+
+	return {
+		count: verifiedCount,
+		presenceChanged: hadDelimiter !== verifiedCount > 0
+	};
+}
+
+export function legacyDocumentUpdateStrategy(
+	lookAheadPolicy: 'chapbook-delimiter-presence' | 'current-document',
+	delimiterPresenceChanged: boolean
+): 'preserve-look-ahead' | 'replace-document' {
+	return lookAheadPolicy === 'chapbook-delimiter-presence' &&
+		!delimiterPresenceChanged
+		? 'preserve-look-ahead'
+		: 'replace-document';
+}
+
+export function shouldAcceptAuthoritativeText(
+	expectedText: string | undefined,
+	authoritativeText: string
+) {
+	return expectedText === undefined || expectedText === authoritativeText;
+}
+
 /**
  * One self-contained, closeable editor buffer (a passage, the story
  * JavaScript, or the story Stylesheet). The titlebar carries ONLY per-buffer
@@ -100,6 +233,17 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	} = props;
 	const {t} = useTranslation();
 	const coreProjectHost = useCoreProjectHost();
+	const {dispatch: storyFormatsDispatch} = useStoryFormatsContext();
+	const formatIntegration = useFormatEditorIntegration(
+		story.storyFormat,
+		story.storyFormatVersion
+	);
+	const [editor, setEditor] = React.useState<SourceEditorHandle>();
+	const [readyBufferId, setReadyBufferId] = React.useState<string>();
+	const [adapterFailure, setAdapterFailure] = React.useState<Error>();
+	const [delimiterGeneration, setDelimiterGeneration] = React.useState(0);
+	const delimiterCount = React.useRef<number | undefined>(undefined);
+	const reportedIntegrationFailures = React.useRef(new Set<string>());
 	const [searchRequestKey, setSearchRequestKey] = React.useState(0);
 	const combinedSearchRequestKey =
 		searchRequest?.key !== undefined
@@ -162,14 +306,19 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	]);
 
 	const [localText, setLocalText] = React.useState(buffer.value);
+	const currentBufferValue = React.useRef(buffer.value);
+	const expectedText = React.useRef<string | undefined>(undefined);
 	const pendingText = React.useRef<string | undefined>(undefined);
 	const pendingTimeout = React.useRef<number | undefined>(undefined);
 	const dirty = localText !== buffer.value;
 
+	currentBufferValue.current = buffer.value;
+
 	const passageNames = selection?.passageNames ?? [];
 	const links = selection?.links ?? [];
-	const brokenLinks = (selection?.brokenLinks ?? []).map(
-		fact => fact.targetName
+	const brokenLinks = React.useMemo(
+		() => (selection?.brokenLinks ?? []).map(fact => fact.targetName),
+		[selection?.brokenLinks]
 	);
 	const backlinks = selection?.backlinks ?? [];
 	const outgoingPassages = (selection?.linkFacts ?? [])
@@ -205,12 +354,12 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		(text: string) => {
 			if (spec.kind === 'passage') {
 				if (passage) {
-					void passageDocument.apply(text);
+					return passageDocument.apply(text);
 				}
 			} else if (spec.kind === 'script') {
-				void scriptDocument.apply(text);
+				return scriptDocument.apply(text);
 			} else {
-				void stylesheetDocument.apply(text);
+				return stylesheetDocument.apply(text);
 			}
 		},
 		[
@@ -225,26 +374,42 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			stylesheetDocument
 		]
 	);
+	const commitTextRef = React.useRef(commitText);
 
 	React.useEffect(() => {
-		setLocalText(buffer.value);
-	}, [buffer.id, buffer.value]);
+		commitTextRef.current = commitText;
+	}, [commitText]);
 
 	// Flush any pending edit when the buffer changes or the window closes.
-	React.useEffect(
-		() => () => {
+	React.useEffect(() => {
+		expectedText.current = undefined;
+
+		return () => {
 			if (pendingTimeout.current) {
 				window.clearTimeout(pendingTimeout.current);
 				pendingTimeout.current = undefined;
 			}
 
 			if (pendingText.current !== undefined) {
-				commitText(pendingText.current);
+				void Promise.resolve(commitTextRef.current(pendingText.current)).catch(
+					() => {
+						// The owning project host may already be gone during app
+						// teardown. Normal in-session commits retain their error path.
+					}
+				);
 				pendingText.current = undefined;
 			}
-		},
-		[buffer.id, commitText]
-	);
+		};
+	}, [buffer.id]);
+
+	React.useEffect(() => {
+		if (!shouldAcceptAuthoritativeText(expectedText.current, buffer.value)) {
+			return;
+		}
+
+		expectedText.current = undefined;
+		setLocalText(buffer.value);
+	}, [buffer.id, buffer.value]);
 
 	const handleChangeText = React.useCallback(
 		(text: string) => {
@@ -253,6 +418,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			}
 
 			setLocalText(text);
+			expectedText.current = text;
 			pendingText.current = text;
 
 			if (pendingTimeout.current) {
@@ -262,10 +428,10 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			pendingTimeout.current = window.setTimeout(() => {
 				pendingTimeout.current = undefined;
 				pendingText.current = undefined;
-				commitText(text);
+				void commitTextRef.current(text);
 			}, 300);
 		},
-		[commitText, passage, spec.kind]
+		[passage, spec.kind]
 	);
 
 	function handleAddTag(name: string) {
@@ -305,6 +471,350 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	}
 
 	const missingPassage = spec.kind === 'passage' && !passage;
+	const passageDocumentSettled =
+		spec.kind === 'passage' &&
+		!!passage &&
+		!passageDocument.loading &&
+		passageDocument.document?.storyId === story.id &&
+		passageDocument.document.passageId === passage.id;
+	const formatIntegrationApplies =
+		passageDocumentSettled &&
+		readyBufferId === buffer.id &&
+		buffer.language === 'twine' &&
+		formatIntegration.type === 'adapted-legacy';
+	const legacyCodeMirror =
+		formatIntegration.type === 'adapted-legacy'
+			? formatIntegration.codeMirror
+			: undefined;
+	const handleEditorRef = React.useCallback(
+		(instance: SourceEditorHandle | null) =>
+			setEditor(current =>
+				current === (instance ?? undefined) ? current : (instance ?? undefined)
+			),
+		[]
+	);
+
+	React.useEffect(() => {
+		setReadyBufferId(undefined);
+
+		if (!editor || !passageDocumentSettled) {
+			return;
+		}
+
+		if (editor.getSnapshot().document === currentBufferValue.current) {
+			setReadyBufferId(buffer.id);
+		}
+
+		return editor.subscribeDocumentChanges(change => {
+			if (change.document === currentBufferValue.current) {
+				setReadyBufferId(buffer.id);
+			}
+		});
+	}, [buffer.id, editor, passageDocumentSettled]);
+
+	React.useEffect(() => {
+		setAdapterFailure(undefined);
+		setDelimiterGeneration(0);
+		delimiterCount.current = undefined;
+	}, [buffer.id, formatIntegration.key]);
+
+	const legacyDocumentServiceRef = React.useRef<
+		| {
+				bufferId: string;
+				editor: SourceEditorHandle;
+				integrationKey: string;
+				lifecycleToken: number;
+				mode: unknown;
+				service: ReturnType<typeof createLegacyStreamDocumentService>;
+		  }
+		| undefined
+	>(undefined);
+	const legacyDocumentServiceLifecycle = React.useRef(0);
+	const [, renderLegacyResources] = React.useReducer(
+		(revision: number) => revision + 1,
+		0
+	);
+	const legacyDocumentServiceState = legacyDocumentServiceRef.current;
+	const legacyDocumentService =
+		legacyDocumentServiceState &&
+		legacyDocumentServiceState.bufferId === buffer.id &&
+		legacyDocumentServiceState.editor === editor &&
+		legacyDocumentServiceState.integrationKey === formatIntegration.key &&
+		legacyDocumentServiceState.mode === legacyCodeMirror?.mode &&
+		formatIntegrationApplies
+			? legacyDocumentServiceState.service
+			: undefined;
+
+	React.useEffect(() => {
+		if (!editor || !formatIntegrationApplies || !legacyCodeMirror?.mode) {
+			return;
+		}
+
+		const service = createLegacyStreamDocumentService(
+			editor.getSnapshot().document,
+			{
+				onLineIndexRebuild: metrics => {
+					recordPerformanceHarnessEvent('legacy-lookahead-line-index-rebuilt', {
+						formatName: formatIntegration.formatName,
+						formatVersion: formatIntegration.formatVersion,
+						integrationKey: formatIntegration.key,
+						lineIndexRebuilds: metrics.lineIndexRebuilds
+					});
+				}
+			}
+		);
+
+		registerPerformanceRetainedObject('legacyDocumentService', service);
+		const lifecycleToken = ++legacyDocumentServiceLifecycle.current;
+
+		legacyDocumentServiceRef.current = {
+			bufferId: buffer.id,
+			editor,
+			integrationKey: formatIntegration.key,
+			lifecycleToken,
+			mode: legacyCodeMirror.mode,
+			service
+		};
+
+		renderLegacyResources();
+		return () => {
+			const current = legacyDocumentServiceRef.current;
+
+			if (current?.lifecycleToken === lifecycleToken) {
+				current.service.dispose();
+				legacyDocumentServiceRef.current = undefined;
+			}
+		};
+	}, [
+		buffer.id,
+		editor,
+		formatIntegration.key,
+		formatIntegration.type === 'adapted-legacy'
+			? formatIntegration.formatName
+			: undefined,
+		formatIntegration.type === 'adapted-legacy'
+			? formatIntegration.formatVersion
+			: undefined,
+		formatIntegrationApplies,
+		legacyCodeMirror?.mode
+	]);
+
+	React.useEffect(() => {
+		if (
+			!editor ||
+			!legacyDocumentService ||
+			!formatIntegrationApplies ||
+			!legacyCodeMirror?.mode
+		) {
+			return;
+		}
+
+		let previousDocument = editor.getSnapshot().document;
+
+		legacyDocumentService.replaceDocument(previousDocument);
+		delimiterCount.current = countDelimiterLines(previousDocument);
+
+		const unsubscribe = editor.subscribeDocumentChanges(change => {
+			const hadDelimiter = (delimiterCount.current ?? 0) > 0;
+			const nextDelimiter = nextDelimiterState(
+				delimiterCount.current ?? 0,
+				previousDocument,
+				change
+			);
+			delimiterCount.current = nextDelimiter.count;
+			const delimiterPresenceChanged = nextDelimiter.presenceChanged;
+			const updateStrategy = legacyDocumentUpdateStrategy(
+				formatIntegration.lookAheadPolicy,
+				delimiterPresenceChanged
+			);
+
+			if (updateStrategy === 'preserve-look-ahead') {
+				legacyDocumentService.preserveLookAheadSnapshot();
+			} else {
+				legacyDocumentService.replaceDocument(change.document);
+			}
+			previousDocument = change.document;
+
+			if (delimiterPresenceChanged) {
+				recordPerformanceHarnessEvent('legacy-delimiter-presence-changed', {
+					editCount: change.edits.length,
+					formatName: formatIntegration.formatName,
+					formatVersion: formatIntegration.formatVersion,
+					integrationKey: formatIntegration.key,
+					nextDelimiterCount: delimiterCount.current,
+					previousHadDelimiter: hadDelimiter
+				});
+				setDelimiterGeneration(generation => generation + 1);
+			}
+		});
+
+		return () => {
+			unsubscribe();
+		};
+	}, [
+		editor,
+		formatIntegration.key,
+		formatIntegration.type === 'adapted-legacy'
+			? formatIntegration.formatName
+			: undefined,
+		formatIntegration.type === 'adapted-legacy'
+			? formatIntegration.formatVersion
+			: undefined,
+		formatIntegration.type === 'adapted-legacy'
+			? formatIntegration.lookAheadPolicy
+			: undefined,
+		formatIntegrationApplies,
+		legacyCodeMirror?.mode,
+		legacyDocumentService
+	]);
+
+	const reportIntegrationFailure = React.useCallback(
+		(feature: 'command' | 'mode' | 'toolbar', error: Error) => {
+			const apiName =
+				'apiName' in error && typeof error.apiName === 'string'
+					? error.apiName
+					: undefined;
+			const detail = apiName ?? error.message;
+			const key = `${formatIntegration.key}:${feature}:${error.name}:${detail}`;
+
+			if (!reportedIntegrationFailures.current.has(key)) {
+				reportedIntegrationFailures.current.add(key);
+				if (formatIntegration.type === 'adapted-legacy') {
+					storyFormatsDispatch({
+						id: formatIntegration.formatId,
+						props: {
+							editorIntegrationDiagnostic: {
+								code: 'legacy-editor-runtime-error',
+								feature,
+								message: apiName
+									? `Legacy editor ${feature} disabled after an unsupported format API call`
+									: `Legacy editor ${feature} disabled: ${error.message}`,
+								unsupportedApi: apiName
+							}
+						},
+						type: 'update'
+					});
+				}
+				console.warn(
+					`Story format editor fallback for ${story.storyFormat} ${story.storyFormatVersion}: ${feature} failed (${error.name}: ${detail})`
+				);
+			}
+		},
+		[
+			formatIntegration.key,
+			formatIntegration.type,
+			formatIntegration.type === 'adapted-legacy'
+				? formatIntegration.formatId
+				: undefined,
+			story.storyFormat,
+			story.storyFormatVersion,
+			storyFormatsDispatch
+		]
+	);
+
+	const reportIntegrationFailureRef = React.useRef(reportIntegrationFailure);
+
+	reportIntegrationFailureRef.current = reportIntegrationFailure;
+	const modeAdapterRecipe =
+		formatIntegration.type === 'adapted-legacy'
+			? formatIntegration.modeAdapterRecipe
+			: undefined;
+
+	const adaptedModeKey =
+		!adapterFailure &&
+		legacyDocumentService &&
+		modeAdapterRecipe &&
+		formatIntegrationApplies
+			? `${buffer.id}:${formatIntegration.key}:${delimiterGeneration}`
+			: undefined;
+	const adaptedModeRef = React.useRef<
+		| {
+				adapter: LegacyStreamModeAdapter;
+				key: string;
+				lifecycleToken: number;
+				recipe: NonNullable<typeof modeAdapterRecipe>;
+				service: ReturnType<typeof createLegacyStreamDocumentService>;
+		  }
+		| undefined
+	>(undefined);
+	const adaptedModeLifecycle = React.useRef(0);
+	const adaptedModeState = adaptedModeRef.current;
+	const adaptedMode =
+		adaptedModeKey &&
+		adaptedModeState?.key === adaptedModeKey &&
+		adaptedModeState.recipe === modeAdapterRecipe &&
+		adaptedModeState.service === legacyDocumentService
+			? adaptedModeState.adapter
+			: undefined;
+
+	React.useEffect(() => {
+		if (
+			!adaptedModeKey ||
+			!legacyDocumentService ||
+			!formatIntegrationApplies ||
+			!modeAdapterRecipe ||
+			adapterFailure
+		) {
+			return;
+		}
+
+		const adapter = modeAdapterRecipe.create({
+			documentService: legacyDocumentService,
+			onFailure: failure => {
+				const error = new Error(failure.message) as Error & {
+					apiName?: string;
+				};
+
+				error.name = `LegacyStreamMode${failure.kind}`;
+				error.apiName = failure.unsupportedApi;
+				queueMicrotask(() => {
+					reportIntegrationFailureRef.current('mode', error);
+					setAdapterFailure(error);
+				});
+			}
+		});
+
+		registerPerformanceRetainedObject('legacyModeAdapter', adapter);
+		recordPerformanceHarnessEvent('legacy-editor-adapter-created', {
+			delimiterGeneration,
+			formatName: formatIntegration.formatName,
+			formatVersion: formatIntegration.formatVersion,
+			integrationKey: formatIntegration.key
+		});
+		const lifecycleToken = ++adaptedModeLifecycle.current;
+
+		adaptedModeRef.current = {
+			adapter,
+			key: adaptedModeKey,
+			lifecycleToken,
+			recipe: modeAdapterRecipe,
+			service: legacyDocumentService
+		};
+
+		renderLegacyResources();
+		return () => {
+			const current = adaptedModeRef.current;
+
+			if (current?.lifecycleToken === lifecycleToken) {
+				current.adapter.dispose();
+				adaptedModeRef.current = undefined;
+			}
+		};
+	}, [
+		adaptedModeKey,
+		adapterFailure,
+		delimiterGeneration,
+		formatIntegration.key,
+		formatIntegration.type === 'adapted-legacy'
+			? formatIntegration.formatName
+			: undefined,
+		formatIntegration.type === 'adapted-legacy'
+			? formatIntegration.formatVersion
+			: undefined,
+		formatIntegrationApplies,
+		legacyDocumentService,
+		modeAdapterRecipe
+	]);
 
 	return (
 		<section
@@ -404,13 +914,25 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 					<SourceEditor
 						autocompletePassageNames={passageNames}
 						brokenLinkNames={spec.kind === 'passage' ? brokenLinks : undefined}
+						dynamicExtensions={
+							adaptedMode ? [adaptedMode.extension] : undefined
+						}
+						dynamicExtensionsKey={`${buffer.id}:${formatIntegration.key}:${delimiterGeneration}:${
+							adapterFailure ? 'failed' : adaptedMode ? 'active' : 'inactive'
+						}`}
 						id={`story-editor-window-${buffer.id}`}
 						key={buffer.id}
 						label={t('dialogs.passageEdit.passageTextEditorLabel')}
 						language={buffer.language}
 						memoryKey={buffer.memoryKey}
 						onChange={handleChangeText}
+						onDynamicExtensionError={error => {
+							reportIntegrationFailure('mode', error);
+							setAdapterFailure(error);
+						}}
 						placeholderText={t('dialogs.passageEdit.passageTextPlaceholder')}
+						ref={handleEditorRef}
+						replaceGenericTwineSyntax={!!adaptedMode}
 						revealPosition={
 							revealRequest?.position !== undefined
 								? {
@@ -426,6 +948,16 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 					/>
 				</div>
 			)}
+
+			{editor &&
+				formatIntegrationApplies &&
+				formatIntegration.codeMirror.toolbar && (
+					<StoryFormatToolbar
+						editor={editor}
+						integration={formatIntegration}
+						onFailure={reportIntegrationFailure}
+					/>
+				)}
 
 			{spec.kind === 'passage' && brokenLinks.length > 0 && (
 				<div className="story-edit-editor-window-diag">

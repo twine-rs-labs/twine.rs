@@ -1,9 +1,12 @@
+import {redo, undo} from '@codemirror/commands';
+import {EditorView} from '@codemirror/view';
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {MemoryRouter, useNavigate} from 'react-router';
 import {AppShell} from '../../../components/app-shell';
 import {Story} from '../../../store/stories';
+import {useStoryFormatsContext} from '../../../store/story-formats';
 import {
 	fakeLoadedStoryFormat,
 	FakeStateProvider,
@@ -21,6 +24,20 @@ const HistoryBackButton: React.FC = () => {
 	return <button onClick={() => navigate(-1)}>History back</button>;
 };
 
+const FormatDiagnosticInspector: React.FC = () => {
+	const {formats} = useStoryFormatsContext();
+	const diagnostic = formats[0]?.editorIntegrationDiagnostic;
+
+	return (
+		<div
+			data-testid="format-editor-diagnostic"
+			data-unsupported-api={diagnostic?.unsupportedApi}
+		>
+			{diagnostic?.message ?? ''}
+		</div>
+	);
+};
+
 const TestStoryEditRoute: React.FC = () => {
 	return (
 		<>
@@ -28,6 +45,7 @@ const TestStoryEditRoute: React.FC = () => {
 				<TestRoute path="/stories/:storyId">
 					<InnerStoryEditRoute />
 					<StoryInspector />
+					<FormatDiagnosticInspector />
 				</TestRoute>
 			</AppShell>
 			<LocationInspector />
@@ -50,6 +68,7 @@ describe('<StoryEditRoute>', () => {
 
 		format.name = story.storyFormat;
 		format.version = story.storyFormatVersion;
+		const storyFormats = contexts?.storyFormats ?? [format];
 
 		jest.useFakeTimers();
 
@@ -63,7 +82,7 @@ describe('<StoryEditRoute>', () => {
 				<FakeStateProvider
 					{...contexts}
 					stories={[story]}
-					storyFormats={[format]}
+					storyFormats={storyFormats}
 				>
 					<TestStoryEditRoute />
 				</FakeStateProvider>
@@ -124,6 +143,199 @@ describe('<StoryEditRoute>', () => {
 			screen.getByRole('tab', {name: 'common.passage'})
 		).toBeInTheDocument();
 	});
+
+	it('contains a live unsupported command, stays editable, and records its format diagnostic', async () => {
+		const previousCompatibilityVersion =
+			process.env.VITE_TWINE_COMPATIBILITY_VERSION;
+		const warn = jest.spyOn(console, 'warn').mockImplementation();
+		const story = fakeStory();
+		const format = fakeLoadedStoryFormat(
+			{name: 'Unsupported Legacy Editor', version: '1.0.0'},
+			{
+				editorExtensions: {
+					twine: {
+						'^2.0.0': {
+							codeMirror: {
+								commands: {
+									break(editor) {
+										void (editor as unknown as {display: unknown}).display;
+									}
+								},
+								toolbar: () => [
+									{
+										command: 'break',
+										icon: 'data:image/png;base64,AA==',
+										label: 'Break unsupported command',
+										type: 'button'
+									}
+								]
+							}
+						}
+					}
+				},
+				name: 'Unsupported Legacy Editor',
+				source: '{{STORY_DATA}}',
+				version: '1.0.0'
+			}
+		);
+
+		story.storyFormat = format.name;
+		story.storyFormatVersion = format.version;
+		story.passages[0].text = '(if: true)[still editable]';
+		process.env.VITE_TWINE_COMPATIBILITY_VERSION = '2.12.0';
+		const {container} = await renderComponent(story, {
+			storyFormats: [format]
+		});
+
+		fireEvent.click(
+			screen.getByRole('tab', {
+				name: 'routes.storyEdit.workspace.textMode'
+			})
+		);
+		await waitFor(() =>
+			expect(
+				container.querySelector('[data-testid^="story-editor-window-"]')
+			).toBeInTheDocument()
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {
+				name: 'Break unsupported command'
+			})
+		);
+		await waitFor(() =>
+			expect(screen.getByTestId('format-editor-diagnostic')).toHaveTextContent(
+				'Legacy editor command disabled after an unsupported format API call'
+			)
+		);
+		await waitFor(() =>
+			expect(
+				container.querySelector(
+					'[data-testid^="story-editor-window-"] .cm-twine-macro'
+				)
+			).toBeInTheDocument()
+		);
+
+		const content = container.querySelector(
+			'[data-testid^="story-editor-window-"] .cm-content'
+		);
+
+		if (!(content instanceof HTMLElement)) {
+			throw new Error('Live story editor content was not mounted');
+		}
+		const view = EditorView.findFromDOM(content);
+
+		if (!view) {
+			throw new Error('Live story editor view was not available');
+		}
+		await waitFor(() =>
+			expect(view.state.doc.toString()).toBe('(if: true)[still editable]')
+		);
+
+		act(() => {
+			view.dispatch({
+				changes: {
+					from: 0,
+					insert: '(if: false)[fallback saved]',
+					to: view.state.doc.length
+				}
+			});
+		});
+		expect(view.state.doc.toString()).toBe('(if: false)[fallback saved]');
+		act(() => {
+			expect(undo(view)).toBe(true);
+		});
+		expect(view.state.doc.toString()).not.toBe('(if: false)[fallback saved]');
+		act(() => {
+			expect(redo(view)).toBe(true);
+		});
+		expect(view.state.doc.toString()).toBe('(if: false)[fallback saved]');
+		try {
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining(
+					'Story format editor fallback for Unsupported Legacy Editor 1.0.0: command failed (UnsupportedLegacyEditorApiError: display)'
+				)
+			);
+		} finally {
+			warn.mockRestore();
+			if (previousCompatibilityVersion === undefined) {
+				delete process.env.VITE_TWINE_COMPATIBILITY_VERSION;
+			} else {
+				process.env.VITE_TWINE_COMPATIBILITY_VERSION =
+					previousCompatibilityVersion;
+			}
+		}
+	}, 15_000);
+
+	it('reports a live stream-mode failure without misdiagnosing it as an unsupported API', async () => {
+		const previousCompatibilityVersion =
+			process.env.VITE_TWINE_COMPATIBILITY_VERSION;
+		const warn = jest.spyOn(console, 'warn').mockImplementation();
+		const story = fakeStory();
+		const format = fakeLoadedStoryFormat(
+			{name: 'Broken Legacy Mode', version: '1.0.0'},
+			{
+				editorExtensions: {
+					twine: {
+						'^2.0.0': {
+							codeMirror: {
+								mode: () => ({
+									token() {
+										throw new Error('mode exploded');
+									}
+								})
+							}
+						}
+					}
+				},
+				name: 'Broken Legacy Mode',
+				source: '{{STORY_DATA}}',
+				version: '1.0.0'
+			}
+		);
+
+		story.storyFormat = format.name;
+		story.storyFormatVersion = format.version;
+		story.passages[0].text = 'still editable';
+		process.env.VITE_TWINE_COMPATIBILITY_VERSION = '2.12.0';
+		const {container} = await renderComponent(story, {
+			storyFormats: [format]
+		});
+
+		fireEvent.click(
+			screen.getByRole('tab', {
+				name: 'routes.storyEdit.workspace.textMode'
+			})
+		);
+		await waitFor(() =>
+			expect(
+				container.querySelector('[data-testid^="story-editor-window-"]')
+			).toBeInTheDocument()
+		);
+		await waitFor(() =>
+			expect(screen.getByTestId('format-editor-diagnostic')).toHaveTextContent(
+				'Legacy editor mode disabled: Legacy stream mode threw during token.'
+			)
+		);
+		expect(screen.getByTestId('format-editor-diagnostic')).not.toHaveAttribute(
+			'data-unsupported-api'
+		);
+
+		try {
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining(
+					'mode failed (LegacyStreamModeexception: Legacy stream mode threw during token.)'
+				)
+			);
+		} finally {
+			warn.mockRestore();
+			if (previousCompatibilityVersion === undefined) {
+				delete process.env.VITE_TWINE_COMPATIBILITY_VERSION;
+			} else {
+				process.env.VITE_TWINE_COMPATIBILITY_VERSION =
+					previousCompatibilityVersion;
+			}
+		}
+	}, 15_000);
 
 	it('displays a story graph panel', async () => {
 		await renderComponent(fakeStory());

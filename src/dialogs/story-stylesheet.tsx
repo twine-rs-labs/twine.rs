@@ -3,11 +3,12 @@ import {useTranslation} from 'react-i18next';
 import {IndentButtons, UndoRedoButtons} from '../components/codemirror';
 import {ButtonBar} from '../components/container/button-bar';
 import {DialogCard, DialogEditor} from '../components/container/dialog-card';
-import {CodeArea} from '../components/control/code-area';
+import {
+	SourceEditor,
+	type SourceEditorHandle
+} from '../components/control/source-editor';
 import {updateStoryStylesheetCommand, useCoreProjectHost} from '../core';
-import {usePrefsContext} from '../store/prefs';
 import {storyWithId, useStoriesContext} from '../store/stories';
-import {codeMirrorOptionsFromPrefs} from '../util/codemirror-options';
 import {DialogComponentProps} from './dialogs.types';
 import './story-stylesheet.css';
 
@@ -19,12 +20,18 @@ export const StoryStylesheetDialog: React.FC<
 	StoryStylesheetDialogProps
 > = props => {
 	const {storyId, ...other} = props;
-	const [cmEditor, setCmEditor] = React.useState<CodeMirror.Editor>();
+	const [editor, setEditor] = React.useState<SourceEditorHandle>();
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
-	const {prefs} = usePrefsContext();
 	const story = storyWithId(stories, storyId);
 	const {t} = useTranslation();
+	const handleEditorRef = React.useCallback(
+		(instance: SourceEditorHandle | null) =>
+			setEditor(current =>
+				current === (instance ?? undefined) ? current : (instance ?? undefined)
+			),
+		[]
+	);
 
 	const handleChangeText = (text: string) => {
 		coreProjectHost.applyStoryCommand(
@@ -40,26 +47,17 @@ export const StoryStylesheetDialog: React.FC<
 			maximizable
 		>
 			<ButtonBar>
-				<UndoRedoButtons editor={cmEditor} watch={story.script} />
-				<IndentButtons editor={cmEditor} />
+				<UndoRedoButtons editor={editor} watch={story.stylesheet} />
+				<IndentButtons editor={editor} />
 			</ButtonBar>
 			<DialogEditor>
-				<CodeArea
-					editorDidMount={setCmEditor}
-					fontFamily={prefs.codeEditorFontFamily}
-					fontScale={prefs.codeEditorFontScale}
+				<SourceEditor
 					id="story-stylesheet-dialog-code-area"
 					label={t('dialogs.storyStylesheet.editorLabel')}
-					labelHidden
-					onChangeEditor={setCmEditor}
-					onChangeText={handleChangeText}
-					options={{
-						...codeMirrorOptionsFromPrefs(prefs),
-						autofocus: true,
-						lineWrapping: true,
-						mode: 'css',
-						placeholder: t('dialogs.storyStylesheet.explanation')
-					}}
+					language="css"
+					onChange={handleChangeText}
+					placeholderText={t('dialogs.storyStylesheet.explanation')}
+					ref={handleEditorRef}
 					value={story.stylesheet}
 				/>
 			</DialogEditor>

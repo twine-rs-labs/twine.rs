@@ -1,0 +1,20 @@
+{
+	"capturedOn": "2026-07-17",
+	"description": "Last local production renderer artifacts before the CodeMirror 5 dependency removal.",
+	"gzipBytes": 578028,
+	"assets": [
+		{
+			"gzipBytes": 549291,
+			"name": "index-BQPpH5-T.js",
+			"rawBytes": 1750444,
+			"sha256": "94aa082a2cecd73a1749267e3c41940053d47e249f2ceb83c536bd4b9d0d49a7"
+		},
+		{
+			"gzipBytes": 28737,
+			"name": "index-CJPntc97.css",
+			"rawBytes": 171030,
+			"sha256": "e88f5410b5da2b9540d9ec2dc9ca506df516d35ca9799cc1242c7f54e718ac48"
+		}
+	],
+	"source": "electron-build/renderer/assets from the pre-migration production build retained in the local Phase 0 workspace"
+}

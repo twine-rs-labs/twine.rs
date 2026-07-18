@@ -6,14 +6,6 @@
 	flex-direction: column;
 }
 
-.dialog-card .dialog-editor .code-area {
+.dialog-card .dialog-editor .source-editor {
 	flex: 1;
-}
-
-.dialog-card .dialog-editor .code-area .CodeMirror {
-	border-bottom: none;
-	border-left: none;
-	border-radius: 0;
-	border-right: none;
-	padding: var(--grid-size);
 }

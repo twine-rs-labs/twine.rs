@@ -13,8 +13,6 @@ import {
 import {StorySearchDialog, StorySearchDialogProps} from '../story-search';
 import {StoreCoreProjectHost} from '../../core/project-host';
 
-jest.mock('../../components/control/code-area/code-area');
-
 const TestStorySearchDialog = (props: Partial<StorySearchDialogProps>) => {
 	const [open, setOpen] = React.useState(true);
 	const {stories} = useStoriesContext();
@@ -71,6 +69,15 @@ describe('<StorySearchDialog>', () => {
 			expect(screen.getByRole('textbox', {name: label})).toHaveValue(
 				'test-value'
 			);
+		});
+
+		it('supports multiline values', () => {
+			renderComponent({[propName]: 'first line\nsecond line'});
+
+			const field = screen.getByRole('textbox', {name: label});
+
+			expect(field).toBeInstanceOf(HTMLTextAreaElement);
+			expect(field).toHaveValue('first line\nsecond line');
 		});
 
 		it('updates props on itself when the field is changed', () => {
@@ -370,9 +377,25 @@ describe('<StorySearchDialog>', () => {
 		).toBeDisabled();
 	});
 
-	it('renders its code areas', () => {
+	it('keeps the fields in native tab order', () => {
 		renderComponent();
-		expect(screen.getAllByTestId('mock-code-area')).toHaveLength(2);
+
+		const find = screen.getByRole('textbox', {
+			name: 'dialogs.storySearch.find'
+		});
+		const replace = screen.getByRole('textbox', {
+			name: 'dialogs.storySearch.replaceWith'
+		});
+
+		expect(find).toBeInstanceOf(HTMLTextAreaElement);
+		expect(replace).toBeInstanceOf(HTMLTextAreaElement);
+		expect(find.tabIndex).toBe(0);
+		expect(replace.tabIndex).toBe(0);
+		expect(
+			find.compareDocumentPosition(replace) & Node.DOCUMENT_POSITION_FOLLOWING
+		).toBeTruthy();
+		expect(fireEvent.keyDown(find, {key: 'Tab'})).toBe(true);
+		expect(fireEvent.keyDown(replace, {key: 'Tab', shiftKey: true})).toBe(true);
 	});
 
 	it('is accessible', async () => {

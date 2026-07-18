@@ -4,6 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
 	baselineCandidateErrors,
+	performanceBaselinePath,
 	readJson,
 	writeJson
 } from './performance-tools.mjs';
@@ -32,12 +33,9 @@ if (errors.length > 0) {
 	throw new Error(`Cannot accept baseline:\n- ${errors.join('\n- ')}`);
 }
 
-const destination = path.join(
-	repoRoot,
-	'benchmarks',
-	'results',
-	'baselines',
-	`${report.environment.fingerprint}-${report.fixture.passageCount}.json`
+const destination = performanceBaselinePath(
+	path.join(repoRoot, 'benchmarks', 'results'),
+	report
 );
 
 await writeJson(destination, report);

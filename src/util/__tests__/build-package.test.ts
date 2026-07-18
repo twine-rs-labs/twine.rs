@@ -1,3 +1,6 @@
+import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {
 	buildAssetCopyPlan,
 	createStoryBuildPackage,
@@ -7,9 +10,31 @@ import {
 import {
 	fakeAppInfo,
 	fakeStory,
-	fakeStoryFormatProperties
+	fakeStoryFormatProperties,
+	unsupportedLegacyEditorFormatProperties
 } from '../../test-util';
 import type {CoreAssetInventoryEntry} from '../../core/bindings/CoreAssetInventoryEntry';
+import type {StoryFormatProperties} from '../../store/story-formats';
+
+function bundledFormatProperties(path: string): StoryFormatProperties {
+	let properties: StoryFormatProperties | undefined;
+	const source = readFileSync(
+		join(process.cwd(), 'public', 'story-formats', path, 'format.js'),
+		'utf8'
+	);
+
+	new Function('window', source)({
+		storyFormat(value: StoryFormatProperties) {
+			properties = value;
+		}
+	});
+
+	if (!properties) {
+		throw new Error(`No story format manifest found in ${path}`);
+	}
+
+	return properties;
+}
 
 function asset(
 	props: Partial<CoreAssetInventoryEntry> = {}
@@ -44,7 +69,151 @@ function asset(
 	};
 }
 
+function editorMigrationBuildStory(name: string, version: string) {
+	const story = fakeStory(2);
+
+	Object.assign(story, {
+		id: 'editor-migration-story',
+		ifid: '11111111-2222-4333-8444-555555555555',
+		name: 'Editor Migration Fixture',
+		script: 'window.fixtureReady = true;',
+		selected: false,
+		snapToGrid: false,
+		startPassage: 'start',
+		storyFormat: name,
+		storyFormatVersion: version,
+		stylesheet: 'body { color: #123456; }',
+		tagColors: {fixture: 'blue'},
+		tags: ['migration', 'fixture'],
+		zoom: 1
+	});
+	Object.assign(story.passages[0], {
+		height: 100,
+		highlighted: false,
+		id: 'start',
+		left: 100,
+		name: 'Start',
+		selected: false,
+		story: story.id,
+		tags: ['fixture'],
+		text: 'Welcome to [[Second]].',
+		top: 200,
+		width: 100
+	});
+	Object.assign(story.passages[1], {
+		height: 120,
+		highlighted: false,
+		id: 'second',
+		left: 320,
+		name: 'Second',
+		selected: false,
+		story: story.id,
+		tags: [],
+		text: 'The second passage.',
+		top: 240,
+		width: 140
+	});
+	return story;
+}
+
 describe('M6 build package', () => {
+	it.each([
+		['Chapbook', '2.3.1', 'chapbook-2.3.1'],
+		['Harlowe', '3.3.9', 'harlowe-3.3.9'],
+		['Paperthin', '1.0.0', 'paperthin-1.0.0'],
+		['Snowman', '2.1.1', 'snowman-2.1.1'],
+		['SugarCube', '2.37.3', 'sugarcube-2.37.3']
+	])(
+		'builds unchanged play, test, and publish HTML with the bundled %s runtime',
+		(name, version, fixture) => {
+			const story = fakeStory();
+			const properties = bundledFormatProperties(fixture);
+
+			story.storyFormat = name;
+			story.storyFormatVersion = version;
+
+			for (const target of ['play', 'test', 'publish'] as const) {
+				const result = createStoryBuildPackage(story, fakeAppInfo(), {
+					formatProperties: properties,
+					target
+				});
+
+				expect(result.html).toContain('<tw-storydata');
+				expect(result.html).toContain(`format="${name}"`);
+				expect(result.html).toContain(`format-version="${version}"`);
+				expect(result.report.target).toBe(target);
+			}
+		}
+	);
+
+	it('matches the frozen runtime output matrix across the editor migration', () => {
+		const appInfo = fakeAppInfo({
+			name: 'twine.rs',
+			twineCompatibilityVersion: '2.12.0',
+			version: '0.1.4'
+		});
+		const formats = [
+			['Chapbook', '2.3.1', bundledFormatProperties('chapbook-2.3.1')],
+			['Harlowe', '3.3.9', bundledFormatProperties('harlowe-3.3.9')],
+			['Paperthin', '1.0.0', bundledFormatProperties('paperthin-1.0.0')],
+			['Snowman', '2.1.1', bundledFormatProperties('snowman-2.1.1')],
+			['SugarCube', '2.37.3', bundledFormatProperties('sugarcube-2.37.3')],
+			[
+				'Unsupported Legacy Editor',
+				'1.0.0',
+				unsupportedLegacyEditorFormatProperties()
+			]
+		] as const;
+		const matrix = formats.flatMap(([name, version, properties]) => {
+			const story = editorMigrationBuildStory(name, version);
+
+			return (['play', 'test', 'publish'] as const).map(target => {
+				const html = createStoryBuildPackage(story, appInfo, {
+					formatProperties: properties,
+					target
+				}).html;
+
+				return [
+					name,
+					version,
+					target,
+					createHash('sha256').update(html).digest('hex')
+				];
+			});
+		});
+		const proofProperties = bundledFormatProperties('paperthin-1.0.0');
+
+		for (const [name, version] of formats) {
+			const proofHtml = createStoryBuildPackage(
+				editorMigrationBuildStory(name, version),
+				appInfo,
+				{formatProperties: proofProperties, target: 'proof'}
+			).html;
+
+			matrix.push([
+				name,
+				version,
+				'proof-via-paperthin',
+				createHash('sha256').update(proofHtml).digest('hex')
+			]);
+		}
+		expect(
+			createHash('sha256').update(JSON.stringify(matrix)).digest('hex')
+		).toMatchInlineSnapshot(
+			`"b2c45ee09f194fb227c906a38971e53f9aa273573da56ea42e43550af333428e"`
+		);
+	});
+
+	it('builds proof HTML with the unchanged bundled Paperthin runtime', () => {
+		const result = createStoryBuildPackage(fakeStory(), fakeAppInfo(), {
+			formatProperties: bundledFormatProperties('paperthin-1.0.0'),
+			target: 'proof'
+		});
+
+		expect(result.html).toContain('<tw-storydata');
+		expect(result.report.target).toBe('proof');
+	});
+
 	it('creates a copy plan from publishable asset inventory', () => {
 		expect(filePathFromFileUrl('file:///tmp/cover%20art.png')).toBe(
 			'/tmp/cover art.png'

@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-07-12
+Last verified: 2026-07-18
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -35,6 +35,22 @@ phase is optimization and release validation, not another ownership migration.
 - Entity-maintained Rust read-model caches for ordinary passage text, layout,
   tag, story-source, start-passage, undo/redo, and external text changes, with
   perf-only cache-build and touched-source attribution.
+- CodeMirror 6 on every active editing surface, with a bounded per-editor
+  adapter for compatible Chapbook legacy modes, commands, and toolbar
+  descriptors. Harlowe and unsupported extensions fail closed to the generic
+  editor without changing story-format runtime source.
+- Instrumented Chapbook performance fixtures prove zero adapter/index rebuilds
+  across 22 warmed edit/undo/redo samples, zero long tasks across 20 complete
+  input-to-paint windows, zero rebuilds at beginning/middle/end locations, and
+  one bounded rebuild when delimiter presence changes. A four-concurrent-editor
+  workload edits and focuses every passage, exercises selection-sensitive
+  toolbar state, and returns actual WeakRef-observed editor, adapter, document,
+  descriptor, and facade objects to zero after forced GC. The checked-in bundle
+  gate is 66,575 gzip bytes (11.52%) smaller than the CM5 reference, with no
+  known CM5 runtime marker in emitted JavaScript or CSS. Generic and adapted
+  Electron evaluations pass at 29.4 ms and 22.6 ms edit-paint p95,
+  respectively; the 16.6 ms target remains report-only, and a clean Electron 43
+  baseline is still needed before claiming a matched 15% regression comparison.
 
 ## Proven structural properties
 
@@ -63,8 +79,7 @@ The complete local 10k and 50k benchmark runs verify:
   optimization work.
 - Preview/debug runtime inspection is not yet complete across all desktop
   surfaces.
-- Some inherited legacy UI and compatibility code remains available outside the
-  primary workbench.
+- Some inherited compatibility UI remains outside the primary workbench.
 - Packaged-app, cross-platform, and hosted-CI performance coverage remains
   incomplete.
 - The user manual is still predominantly inherited Twine documentation and
@@ -74,6 +89,8 @@ The complete local 10k and 50k benchmark runs verify:
 
 Only unfinished outcomes belong in the active roadmap:
 
-1. [`Performance optimization`](../roadmap/performance.md)
-2. [`Product-depth and legacy retirement`](../roadmap/product.md)
-3. [`Release validation`](../roadmap/release.md)
+1. [`CodeMirror 6 migration`](../roadmap/codemirror-6-migration.md) — accept
+   and compare a clean same-revision Electron baseline.
+2. [`Performance optimization`](../roadmap/performance.md)
+3. [`Product-depth and legacy retirement`](../roadmap/product.md)
+4. [`Release validation`](../roadmap/release.md)

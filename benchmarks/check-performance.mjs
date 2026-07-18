@@ -6,6 +6,7 @@ import {
 	baselineCandidateErrors,
 	evaluatePerformanceReport,
 	latestReport,
+	performanceBaselinePath,
 	readJson
 } from './performance-tools.mjs';
 
@@ -17,12 +18,14 @@ const resultsDir = path.join(repoRoot, 'benchmarks', 'results');
 const args = process.argv.slice(2);
 const inputIndex = args.indexOf('--input');
 const sizeIndex = args.indexOf('--size');
+const variantIndex = args.indexOf('--variant');
 const size =
 	sizeIndex >= 0 ? Number.parseInt(args[sizeIndex + 1], 10) : undefined;
+const variant = variantIndex >= 0 ? args[variantIndex + 1] : 'default';
 const reportFile =
 	inputIndex >= 0
 		? path.resolve(repoRoot, args[inputIndex + 1])
-		: await latestReport(resultsDir, size);
+		: await latestReport(resultsDir, size, variant);
 
 if (!reportFile) {
 	throw new Error('No Electron performance report is available.');
@@ -32,11 +35,7 @@ const report = await readJson(reportFile);
 const budgets = await readJson(
 	path.join(repoRoot, 'benchmarks', 'budgets.json')
 );
-const baselineFile = path.join(
-	resultsDir,
-	'baselines',
-	`${report.environment.fingerprint}-${report.fixture.passageCount}.json`
-);
+const baselineFile = performanceBaselinePath(resultsDir, report);
 let baseline;
 
 if (!report.smoke) {

@@ -1,7 +1,12 @@
 import {importStories, importStoriesAsync} from '../import';
 import {publishStory} from '../publish';
 import {TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE} from '../story-graph-metadata';
-import {fakeAppInfo} from '../../test-util';
+import {resolveStoryFormatEditorIntegration} from '../story-format';
+import {
+	fakeAppInfo,
+	fakeLoadedStoryFormat,
+	minimalLegacyEditorFormatProperties
+} from '../../test-util';
 
 const testHtml = `
 <tw-storydata name="Test" startnode="1" zoom="1.5" creator="Twine" creator-version="2.0.11" ifid="3AE380EE-4B34-4D0D-A8E2-BE624EB271C9" format="SugarCube" options="" hidden><tw-tag name="my-tag" color="purple" /><style role="stylesheet" id="twine-user-stylesheet" type="text/twine-css">* { color: red }
@@ -172,6 +177,49 @@ describe('importStories', () => {
 			'3.3.9',
 			'2.37.3'
 		]);
+	});
+
+	it('does not execute editor integration embedded in imported published HTML', () => {
+		delete (window as any).importedEditorIntegrationExecuted;
+		const [story] = importStories(`
+			<script>
+				window.importedEditorIntegrationExecuted = true;
+				window.storyFormat({
+					name: 'Embedded Format',
+					version: '9.9.9',
+					editorExtensions: {twine: {'*': {codeMirror: {}}}}
+				});
+			</script>
+			<tw-storydata name="Older Story" format="Chapbook" format-version="1.2.3" hidden>
+				<tw-passagedata pid="1" name="Start">Hello</tw-passagedata>
+			</tw-storydata>
+		`);
+
+		expect((window as any).importedEditorIntegrationExecuted).toBeUndefined();
+		expect(story).toEqual(
+			expect.objectContaining({
+				storyFormat: 'Chapbook',
+				storyFormatVersion: '1.2.3'
+			})
+		);
+		expect(story.passages[0].name).toBe('Start');
+
+		const installedProperties = minimalLegacyEditorFormatProperties();
+
+		installedProperties.name = 'Chapbook';
+		installedProperties.version = '1.2.3';
+		const installed = fakeLoadedStoryFormat(
+			{name: 'Chapbook', version: '1.2.3'},
+			installedProperties
+		);
+		const integration = resolveStoryFormatEditorIntegration(installed, {
+			twineVersion: '2.10.0'
+		});
+
+		expect(integration.type).toBe('adapted-legacy');
+		if (integration.type === 'adapted-legacy') {
+			expect(integration.codeMirror.commands).toHaveProperty('insertMarker');
+		}
 	});
 
 	it('infers SugarCube when imported story data omits format attributes', () => {

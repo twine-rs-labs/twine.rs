@@ -2,12 +2,61 @@ import {createHash} from 'node:crypto';
 import {mkdir, readdir, stat, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 
+export const performanceFixtureVariants = {
+	default: {
+		storyFormat: 'Harlowe',
+		storyFormatVersion: '3.3.9'
+	},
+	chapbook: {
+		storyFormat: 'Chapbook',
+		storyFormatVersion: '2.3.1'
+	}
+};
+
+export const chapbookFixtureVariableLineCount = 4096;
+
 export const performanceFixtureAssets = {
 	'pixel.svg':
 		'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="#7c3aed"/></svg>\n',
 	'readme.txt':
 		'Deterministic asset used by the Electron performance harness.\n'
 };
+
+export function chapbookPerformancePassageText(originalText) {
+	const variables = Array.from(
+		{length: chapbookFixtureVariableLineCount},
+		(_, index) => {
+			const suffix = String(index + 1).padStart(4, '0');
+
+			return `benchmark variable ${suffix}: value ${suffix}`;
+		}
+	);
+
+	return `${variables.join('\n')}\n${originalText}\n--`;
+}
+
+export function parseFixtureVariant(argv, fallback = 'default') {
+	const variantFlag = argv.indexOf('--variant');
+	const variant = variantFlag >= 0 ? argv[variantFlag + 1] : fallback;
+
+	if (!variant || !(variant in performanceFixtureVariants)) {
+		throw new Error(
+			`--variant must be one of: ${Object.keys(performanceFixtureVariants).join(
+				', '
+			)}.`
+		);
+	}
+	return variant;
+}
+
+export function performanceFixtureVariantRoot(generatedRoot, variant) {
+	if (!(variant in performanceFixtureVariants)) {
+		throw new Error(`Unknown performance fixture variant: ${variant}.`);
+	}
+	return variant === 'default'
+		? generatedRoot
+		: path.join(generatedRoot, 'variants', variant);
+}
 
 export function parseFixtureSizes(argv, fallback = '10000,50000') {
 	const sizeFlag = argv.indexOf('--sizes');
@@ -25,13 +74,14 @@ export function parseFixtureSizes(argv, fallback = '10000,50000') {
 
 export function performanceFixtureManifest(
 	sourceManifest,
-	{projectPath, sourcePath}
+	{fixtureVariant = 'default', projectPath, sourcePath}
 ) {
 	return {
 		...sourceManifest,
 		assets: Object.keys(performanceFixtureAssets)
 			.sort()
 			.map(filename => `assets/perf/${filename}`),
+		fixtureVariant,
 		projectPath,
 		sourcePath
 	};

@@ -176,6 +176,37 @@ describe('loadFormatProperties', () => {
 			expect(await invokeLoad(format)).toBe(properties));
 
 		describe('if the format properties contain a hydrate property', () => {
+			it('attempts the bounded hydration contract for a user format named Harlowe', async () => {
+				format = fakePendingStoryFormat({
+					name: 'Harlowe',
+					url: 'https://example.invalid/custom-harlowe/format.js',
+					userAdded: true,
+					version: '3.3.9'
+				});
+				properties = fakeStoryFormatProperties();
+				properties.name = 'Harlowe';
+				properties.version = '3.3.9';
+				properties.hydrate = 'this.customEditorHydrated = true';
+				fetchPropertiesMock.mockReset();
+				fetchPropertiesMock.mockResolvedValue(properties);
+
+				await invokeLoad(format);
+
+				expect(dispatch.mock.calls[1]).toEqual([
+					{
+						type: 'update',
+						id: format.id,
+						props: {
+							loadState: 'loaded',
+							properties: {
+								...properties,
+								customEditorHydrated: true
+							}
+						}
+					}
+				]);
+			});
+
 			it('merges in properties set on this by the hydrate property', async () => {
 				properties.hydrate = 'this.hydrated = true';
 				await invokeLoad(format);
@@ -225,12 +256,44 @@ describe('loadFormatProperties', () => {
 							type: 'update',
 							id: format.id,
 							props: {
+								editorIntegrationDiagnostic: {
+									code: 'hydrate-error',
+									message: 'Editor extensions could not be hydrated: '
+								},
 								loadState: 'loaded',
 								properties
 							}
 						}
 					]
 				]);
+			});
+
+			it('does not execute Harlowe legacy editor hydration', async () => {
+				format = fakePendingStoryFormat({
+					name: 'Harlowe',
+					url: 'story-formats/harlowe-3.3.9/format.js',
+					userAdded: false,
+					version: '3.3.9'
+				});
+				properties.name = 'Harlowe';
+				properties.version = '3.3.9';
+				properties.hydrate = 'globalThis.harloweLegacyHydrationExecuted = true';
+				delete (globalThis as any).harloweLegacyHydrationExecuted;
+
+				await invokeLoad(format);
+
+				expect(
+					(globalThis as any).harloweLegacyHydrationExecuted
+				).toBeUndefined();
+				expect(dispatch.mock.calls[1][0].props).toEqual({
+					editorIntegrationDiagnostic: {
+						code: 'legacy-harlowe-editor-unsupported',
+						message: 'Generic CM6 editor; legacy format toolbar unavailable',
+						unsupportedApi: 'Harlowe CodeMirror 5 editor runtime'
+					},
+					loadState: 'loaded',
+					properties
+				});
 			});
 		});
 	});

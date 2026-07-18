@@ -126,6 +126,19 @@ writing, this version doesn't exist) would see it as `"blue"`.
 
 ## CodeMirror Syntax Highlighting
 
+> **twine.rs compatibility note:** twine.rs uses CodeMirror 6 and adapts only
+> the documented stream-mode subset of this CodeMirror 5 API. Supported stream
+> operations are `eol`, `sol`, `peek`, `next`, `eat`, `eatWhile`, `eatSpace`,
+> `skipTo`, `skipToEnd`, `backUp`, `column`, `indentation`, `match`, `current`,
+> and `lookAhead`, with `startState`, `copyState`, `blankLine`, and `token`
+> lifecycle methods. Commands receive a bounded editor/document facade, and
+> toolbar descriptors are validated and rendered by the application. Overlays,
+> marks, coordinates, custom events, arbitrary DOM, global command
+> registration, and CodeMirror internals are unsupported. Unsupported
+> extensions fall back to generic CodeMirror 6 editing. Harlowe's legacy
+> extension is intentionally not initialized; its runtime and published output
+> are unchanged.
+
 Twine uses [CodeMirror] in its passage editor, which allows modes to be defined
 which apply formatting to source code. A story format can define its own mode
 to, for example, highlight special instructions that the story format accepts.
@@ -189,6 +202,13 @@ commands that are triggered by buttons in the toolbar.
   commands can consist of any code, however, which in turn may call other
   CodeMirror commands or otherwise do whatever it likes.
 
+In twine.rs, commands are scoped to the format and editor that owns them; they
+are never added to a global registry. They may use only `getDoc`, `getValue`,
+`getRange`, `replaceRange`, `getSelection`, `getSelections`,
+`somethingSelected`, `replaceSelection`, `replaceSelections`, `getCursor`,
+`setCursor`, `indexFromPos`, `posFromIndex`, and `focus`. Toolbar factories get
+a read-only version of that facade.
+
 ## CodeMirror Toolbar
 
 A CodeMirror toolbar is specified through a hydrated function:
@@ -250,6 +270,10 @@ The `toolbar` function receives two arguments from Twine:
   properties available on this object. As the documentation indicates, you may
   use methods that start with either `doc` or `cm`; for example,
   `editor.getSelection()`.
+
+  twine.rs provides the read-only bounded facade listed above rather than a raw
+  CodeMirror instance. Accessing any other method or property makes the toolbar
+  unavailable for that editor while generic editing continues.
 - `environment` is an object with information related to Twine itself:
 
   - `environment.appTheme` is either the string `dark` or `light`, depending on

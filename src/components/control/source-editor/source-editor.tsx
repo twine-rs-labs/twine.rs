@@ -1,5 +1,7 @@
 import {
+	Annotation,
 	Compartment,
+	EditorSelection,
 	EditorState,
 	Extension,
 	RangeSetBuilder
@@ -8,7 +10,13 @@ import {
 	defaultKeymap,
 	history,
 	historyKeymap,
-	indentWithTab
+	indentLess,
+	indentMore,
+	indentWithTab,
+	redo,
+	redoDepth,
+	undo,
+	undoDepth
 } from '@codemirror/commands';
 import {
 	bracketMatching,
@@ -56,30 +64,100 @@ import {usePrefsContext} from '../../../store/prefs';
 import {useComputedTheme} from '../../../store/prefs/use-computed-theme';
 import {
 	registerPerformanceEditorOwner,
+	registerPerformanceRetainedObject,
 	unregisterPerformanceEditorOwner,
 	updatePerformanceEditorOwner
 } from '../../../util/performance-memory-owners';
+import {recordPerformanceHarnessEvent} from '../../../util/performance';
 import './source-editor.css';
 import {sourceEditorThemeExtension} from './themes';
+
+const controlledValueSync = Annotation.define<boolean>();
 
 export type SourceEditorLanguage =
 	'css' | 'html' | 'javascript' | 'text' | 'twine';
 
+export type SourceEditorCommand = 'indentLess' | 'indentMore' | 'redo' | 'undo';
+
+export interface SourceEditorSelection {
+	anchor: number;
+	head: number;
+}
+
+export interface SourceEditorSnapshot {
+	canRedo: boolean;
+	canUndo: boolean;
+	document: string;
+	mainSelectionIndex: number;
+	selections: SourceEditorSelection[];
+}
+
+export interface SourceEditorEdit {
+	from: number;
+	insert: string;
+	to: number;
+}
+
+export interface SourceEditorDocumentChange {
+	document: string;
+	edits: Array<
+		SourceEditorEdit & {
+			fromNew: number;
+			toNew: number;
+		}
+	>;
+}
+
+export interface SourceEditorHandle {
+	applyEdits: (
+		edits: SourceEditorEdit[],
+		selections?: SourceEditorSelection[],
+		mainSelectionIndex?: number
+	) => void;
+	focus: () => void;
+	getSnapshot: () => SourceEditorSnapshot;
+	isAlive: () => boolean;
+	runCommand: (command: SourceEditorCommand) => boolean;
+	setSelections: (
+		selections: SourceEditorSelection[],
+		mainSelectionIndex?: number
+	) => void;
+	subscribe: (listener: (snapshot: SourceEditorSnapshot) => void) => () => void;
+	subscribeDocumentChanges: (
+		listener: (change: SourceEditorDocumentChange) => void
+	) => () => void;
+}
+
 export interface SourceEditorProps {
 	autocompletePassageNames?: string[];
 	brokenLinkNames?: string[];
+	dynamicExtensions?: Extension[];
+	dynamicExtensionsKey?: string;
 	id: string;
 	label: string;
 	language?: SourceEditorLanguage;
 	memoryKey?: string;
 	onChange: (value: string) => void;
+	onDynamicExtensionError?: (error: Error) => void;
 	placeholderText?: string;
 	readOnly?: boolean;
+	replaceGenericTwineSyntax?: boolean;
 	revealPosition?: {key: number; position: number};
 	searchQuery?: string;
 	searchRequestKey?: number | string;
 	selfLinkName?: string;
 	value: string;
+}
+
+interface SourceEditorCompartments {
+	autocomplete: Compartment;
+	dynamic: Compartment;
+	folding: Compartment;
+	language: Compartment;
+	readOnly: Compartment;
+	theme: Compartment;
+	twineDecorations: Compartment;
+	wrapping: Compartment;
 }
 
 interface SourceEditorMemory {
@@ -89,13 +167,19 @@ interface SourceEditorMemory {
 	scrollTop?: number;
 }
 
-const languageCompartment = new Compartment();
-const readOnlyCompartment = new Compartment();
-const autocompleteCompartment = new Compartment();
-const foldingCompartment = new Compartment();
-const twineDecorationCompartment = new Compartment();
-const wrappingCompartment = new Compartment();
-const themeCompartment = new Compartment();
+function createCompartments(): SourceEditorCompartments {
+	return {
+		autocomplete: new Compartment(),
+		dynamic: new Compartment(),
+		folding: new Compartment(),
+		language: new Compartment(),
+		readOnly: new Compartment(),
+		theme: new Compartment(),
+		twineDecorations: new Compartment(),
+		wrapping: new Compartment()
+	};
+}
+
 const diagnosticMarker = new (class extends GutterMarker {
 	toDOM() {
 		const marker = document.createElement('span');
@@ -529,7 +613,8 @@ function addChapbookTokenDecorations(
 function twineTokenDecorations(
 	language: SourceEditorLanguage,
 	brokenLinkNames: string[] = [],
-	selfLinkName?: string
+	selfLinkName?: string,
+	includeGenericSyntax = true
 ) {
 	if (language !== 'twine') {
 		return [];
@@ -601,72 +686,74 @@ function twineTokenDecorations(
 							}
 						}
 
-						addCommentTokenDecorations(
-							text,
-							from,
-							entries,
-							linkRanges,
-							commentRanges
-						);
-						addStringTokenDecorations(
-							text,
-							from,
-							entries,
-							[...linkRanges, ...commentRanges],
-							stringRanges
-						);
-						addHarloweTokenDecorations(
-							text,
-							from,
-							entries,
-							linkRanges,
-							stringRanges
-						);
-						addSugarCubeTokenDecorations(text, from, entries, linkRanges);
-						addSnowmanTokenDecorations(text, from, entries, linkRanges);
-						addChapbookTokenDecorations(text, from, entries, linkRanges);
+						if (includeGenericSyntax) {
+							addCommentTokenDecorations(
+								text,
+								from,
+								entries,
+								linkRanges,
+								commentRanges
+							);
+							addStringTokenDecorations(
+								text,
+								from,
+								entries,
+								[...linkRanges, ...commentRanges],
+								stringRanges
+							);
+							addHarloweTokenDecorations(
+								text,
+								from,
+								entries,
+								linkRanges,
+								stringRanges
+							);
+							addSugarCubeTokenDecorations(text, from, entries, linkRanges);
+							addSnowmanTokenDecorations(text, from, entries, linkRanges);
+							addChapbookTokenDecorations(text, from, entries, linkRanges);
 
-						const blockedRanges = [
-							...linkRanges,
-							...commentRanges,
-							...stringRanges
-						];
-						const tokenPatterns: Array<{
-							className: string;
-							regexp: RegExp;
-							tokenGroup?: number;
-						}> = [
-							{
-								className: 'cm-twine-variable',
-								regexp:
-									/(^|[^A-Za-z0-9_])(\$[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*|_[A-Za-z_]\w*|\?[A-Za-z_]\w*|\|[A-Za-z_]\w*>)/g,
-								tokenGroup: 2
-							},
-							{
-								className: 'cm-twine-tag',
-								regexp: /(^|[\s([,{])(#[-A-Za-z0-9_]+)/g,
-								tokenGroup: 2
-							}
-						];
+							const blockedRanges = [
+								...linkRanges,
+								...commentRanges,
+								...stringRanges
+							];
+							const tokenPatterns: Array<{
+								className: string;
+								regexp: RegExp;
+								tokenGroup?: number;
+							}> = [
+								{
+									className: 'cm-twine-variable',
+									regexp:
+										/(^|[^A-Za-z0-9_])(\$[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*|_[A-Za-z_]\w*|\?[A-Za-z_]\w*|\|[A-Za-z_]\w*>)/g,
+									tokenGroup: 2
+								},
+								{
+									className: 'cm-twine-tag',
+									regexp: /(^|[\s([,{])(#[-A-Za-z0-9_]+)/g,
+									tokenGroup: 2
+								}
+							];
 
-						for (const {className, regexp, tokenGroup} of tokenPatterns) {
-							while ((match = regexp.exec(text))) {
-								const token = tokenGroup ? match[tokenGroup] : match[0];
-								const matchOffset = tokenGroup
-									? match.index + match[0].lastIndexOf(token)
-									: match.index + match[0].search(/\S/);
-								const absoluteFrom = from + matchOffset;
-								const absoluteTo = absoluteFrom + token.trimStart().length;
+							for (const {className, regexp, tokenGroup} of tokenPatterns) {
+								while ((match = regexp.exec(text))) {
+									const token = tokenGroup ? match[tokenGroup] : match[0];
+									const matchOffset = tokenGroup
+										? match.index + match[0].lastIndexOf(token)
+										: match.index + match[0].search(/\S/);
+									const absoluteFrom = from + matchOffset;
+									const absoluteTo = absoluteFrom + token.trimStart().length;
 
-								if (
-									absoluteFrom < absoluteTo &&
-									!rangeOverlaps(blockedRanges, absoluteFrom, absoluteTo)
-								) {
-									entries.push({
-										decoration: Decoration.mark({class: className}),
-										from: absoluteFrom,
-										to: absoluteTo
-									});
+									if (
+										absoluteFrom < absoluteTo &&
+										!rangeOverlaps(blockedRanges, absoluteFrom, absoluteTo)
+									) {
+										entries.push({
+											decoration: Decoration.mark({class: className}),
+											from: absoluteFrom,
+											to: absoluteTo
+										});
+									}
 								}
 							}
 						}
@@ -728,14 +815,15 @@ function twineTokenDecorations(
 function baseExtensions(
 	props: SourceEditorProps,
 	codeEditorTheme: CodeEditorThemePreference,
-	appTheme: ReturnType<typeof useComputedTheme>
+	appTheme: ReturnType<typeof useComputedTheme>,
+	compartments: SourceEditorCompartments
 ): Extension[] {
 	return [
 		lineNumbers(),
 		highlightActiveLineGutter(),
 		highlightSpecialChars(),
 		history(),
-		foldingCompartment.of(foldingExtension(props.language ?? 'twine')),
+		compartments.folding.of(foldingExtension(props.language ?? 'twine')),
 		drawSelection(),
 		indentOnInput(),
 		bracketMatching(),
@@ -743,17 +831,24 @@ function baseExtensions(
 		highlightActiveLine(),
 		highlightSelectionMatches(),
 		placeholder(props.placeholderText ?? ''),
-		themeCompartment.of(sourceEditorThemeExtension(codeEditorTheme, appTheme)),
-		autocompleteCompartment.of(
+		EditorView.contentAttributes.of({
+			'aria-label': props.label,
+			id: `${props.id}-content`
+		}),
+		compartments.theme.of(
+			sourceEditorThemeExtension(codeEditorTheme, appTheme)
+		),
+		compartments.autocomplete.of(
 			autocompletion({
 				override: [completionSource(props.autocompletePassageNames)]
 			})
 		),
-		twineDecorationCompartment.of(
+		compartments.twineDecorations.of(
 			twineTokenDecorations(
 				props.language ?? 'twine',
 				props.brokenLinkNames,
-				props.selfLinkName
+				props.selfLinkName,
+				!props.replaceGenericTwineSyntax
 			)
 		),
 		keymap.of([
@@ -764,22 +859,179 @@ function baseExtensions(
 			...closeBracketsKeymap,
 			...searchKeymap
 		]),
-		languageCompartment.of(languageExtension(props.language ?? 'twine')),
-		readOnlyCompartment.of(EditorState.readOnly.of(props.readOnly ?? false)),
-		wrappingCompartment.of(EditorView.lineWrapping)
+		compartments.language.of(languageExtension(props.language ?? 'twine')),
+		compartments.readOnly.of(EditorState.readOnly.of(props.readOnly ?? false)),
+		compartments.wrapping.of(EditorView.lineWrapping),
+		// Dynamic extensions are installed after the base view is live so a bad
+		// third-party extension cannot prevent the generic editor from mounting.
+		compartments.dynamic.of([])
 	];
 }
 
-export const SourceEditor: React.FC<SourceEditorProps> = props => {
+function snapshot(
+	view: EditorView,
+	document = view.state.doc.toString()
+): SourceEditorSnapshot {
+	return {
+		canRedo: redoDepth(view.state) > 0,
+		canUndo: undoDepth(view.state) > 0,
+		document,
+		mainSelectionIndex: view.state.selection.ranges.indexOf(
+			view.state.selection.main
+		),
+		selections: view.state.selection.ranges.map(range => ({
+			anchor: range.anchor,
+			head: range.head
+		}))
+	};
+}
+
+export const SourceEditor = React.forwardRef<
+	SourceEditorHandle,
+	SourceEditorProps
+>((props, forwardedRef) => {
 	const editorContainer = React.useRef<HTMLDivElement>(null);
 	const viewRef = React.useRef<EditorView | undefined>(undefined);
+	const documentRef = React.useRef(props.value);
+	const valueRef = React.useRef(props.value);
 	const onChange = React.useRef(props.onChange);
+	const onDynamicExtensionError = React.useRef(props.onDynamicExtensionError);
+	const compartments = React.useRef(createCompartments()).current;
+	const subscribers = React.useRef(
+		new Set<(snapshot: SourceEditorSnapshot) => void>()
+	).current;
+	const documentChangeSubscribers = React.useRef(
+		new Set<(change: SourceEditorDocumentChange) => void>()
+	).current;
+	valueRef.current = props.value;
 	const {prefs} = usePrefsContext();
 	const appTheme = useComputedTheme();
+	const reportDynamicExtensionError = React.useCallback(
+		(error: unknown) => {
+			const normalized =
+				error instanceof Error ? error : new Error(String(error));
+
+			onDynamicExtensionError.current?.(normalized);
+			queueMicrotask(() => {
+				const view = viewRef.current;
+
+				if (!view) {
+					return;
+				}
+
+				try {
+					view.dispatch({
+						effects: [
+							compartments.dynamic.reconfigure([]),
+							compartments.twineDecorations.reconfigure(
+								twineTokenDecorations(
+									props.language ?? 'twine',
+									props.brokenLinkNames,
+									props.selfLinkName,
+									true
+								)
+							)
+						]
+					});
+				} catch {
+					// The generic base editor was mounted without dynamic extensions.
+					// A second failure is isolated to CodeMirror's exception sink.
+				}
+			});
+		},
+		[compartments, props.brokenLinkNames, props.language, props.selfLinkName]
+	);
 
 	React.useEffect(() => {
 		onChange.current = props.onChange;
 	}, [props.onChange]);
+
+	React.useEffect(() => {
+		onDynamicExtensionError.current = props.onDynamicExtensionError;
+	}, [props.onDynamicExtensionError]);
+
+	React.useImperativeHandle(
+		forwardedRef,
+		() => ({
+			applyEdits(edits, selections, mainSelectionIndex = 0) {
+				const view = viewRef.current;
+
+				if (!view) {
+					return;
+				}
+
+				view.dispatch({
+					changes: edits,
+					selection: selections
+						? EditorSelection.create(
+								selections.map(range =>
+									EditorSelection.range(range.anchor, range.head)
+								),
+								Math.max(0, Math.min(mainSelectionIndex, selections.length - 1))
+							)
+						: undefined
+				});
+			},
+			focus() {
+				viewRef.current?.focus();
+			},
+			getSnapshot() {
+				const view = viewRef.current;
+
+				return view
+					? snapshot(view, documentRef.current)
+					: {
+							canRedo: false,
+							canUndo: false,
+							document: valueRef.current,
+							mainSelectionIndex: 0,
+							selections: [{anchor: 0, head: 0}]
+						};
+			},
+			isAlive() {
+				return viewRef.current !== undefined;
+			},
+			runCommand(command) {
+				const view = viewRef.current;
+
+				if (!view) {
+					return false;
+				}
+
+				return {indentLess, indentMore, redo, undo}[command](view);
+			},
+			setSelections(selections, mainSelectionIndex = 0) {
+				const view = viewRef.current;
+
+				if (!view || selections.length === 0) {
+					return;
+				}
+
+				view.dispatch({
+					selection: EditorSelection.create(
+						selections.map(range =>
+							EditorSelection.range(range.anchor, range.head)
+						),
+						Math.max(0, Math.min(mainSelectionIndex, selections.length - 1))
+					)
+				});
+			},
+			subscribe(listener) {
+				subscribers.add(listener);
+
+				if (viewRef.current) {
+					listener(snapshot(viewRef.current, documentRef.current));
+				}
+
+				return () => subscribers.delete(listener);
+			},
+			subscribeDocumentChanges(listener) {
+				documentChangeSubscribers.add(listener);
+				return () => documentChangeSubscribers.delete(listener);
+			}
+		}),
+		[documentChangeSubscribers, subscribers]
+	);
 
 	React.useEffect(() => {
 		if (!editorContainer.current) {
@@ -787,19 +1039,55 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		}
 
 		const memory = loadMemory(props.memoryKey);
+		documentRef.current = props.value;
 		const view = new EditorView({
 			parent: editorContainer.current,
 			state: EditorState.create({
 				doc: props.value,
 				selection: selectionFromMemory(memory, props.value),
 				extensions: [
-					...baseExtensions(props, prefs.codeEditorTheme, appTheme),
+					...baseExtensions(
+						props,
+						prefs.codeEditorTheme,
+						appTheme,
+						compartments
+					),
+					EditorView.exceptionSink.of(reportDynamicExtensionError),
 					EditorView.updateListener.of(update => {
 						if (update.docChanged) {
 							const text = update.state.doc.toString();
+							const edits: SourceEditorDocumentChange['edits'] = [];
+							const isControlledValueSync = update.transactions.some(
+								transaction => transaction.annotation(controlledValueSync)
+							);
 
-							onChange.current(text);
+							documentRef.current = text;
+							update.changes.iterChanges((from, to, fromNew, toNew, inserted) =>
+								edits.push({
+									from,
+									fromNew,
+									insert: inserted.toString(),
+									to,
+									toNew
+								})
+							);
+
+							if (!isControlledValueSync) {
+								onChange.current(text);
+							}
 							updatePerformanceEditorOwner(props.id, text);
+							documentChangeSubscribers.forEach(listener =>
+								listener({document: text, edits})
+							);
+							if (isControlledValueSync) {
+								recordPerformanceHarnessEvent(
+									'source-editor-controlled-value-synchronized',
+									{
+										documentLength: text.length,
+										editorId: props.id
+									}
+								);
+							}
 						}
 
 						if (update.docChanged || update.selectionSet) {
@@ -809,6 +1097,18 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 								scrollLeft: update.view.scrollDOM.scrollLeft,
 								scrollTop: update.view.scrollDOM.scrollTop
 							});
+						}
+
+						if (
+							subscribers.size > 0 &&
+							(update.docChanged || update.selectionSet)
+						) {
+							const currentSnapshot = snapshot(
+								update.view,
+								documentRef.current
+							);
+
+							subscribers.forEach(listener => listener(currentSnapshot));
 						}
 					}),
 					EditorView.domEventHandlers({
@@ -826,19 +1126,54 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		});
 
 		viewRef.current = view;
-		registerPerformanceEditorOwner(props.id, props.value);
-		window.requestAnimationFrame(() => {
+		registerPerformanceRetainedObject('editorView', view);
+		recordPerformanceHarnessEvent('source-editor-view-created', {
+			editorId: props.id,
+			memoryKey: props.memoryKey ?? ''
+		});
+		registerPerformanceEditorOwner(props.id, props.value, {
+			selectText(query) {
+				const currentView = viewRef.current;
+				const from = currentView?.state.doc.toString().indexOf(query) ?? -1;
+
+				if (!currentView || from < 0) {
+					return false;
+				}
+
+				currentView.dispatch({
+					scrollIntoView: true,
+					selection: {anchor: from, head: from + query.length}
+				});
+				currentView.focus();
+				return true;
+			}
+		});
+		const focusFrame = window.requestAnimationFrame(() => {
 			view.scrollDOM.scrollTo({
 				left: memory.scrollLeft ?? 0,
 				top: memory.scrollTop ?? 0
 			});
-			view.focus();
+
+			if (prefs.editorFocusPreference === 'passage-start') {
+				view.dispatch({selection: {anchor: 0}});
+			}
+
+			if (prefs.editorFocusPreference !== 'none') {
+				view.focus();
+			}
 		});
 
 		return () => {
+			window.cancelAnimationFrame(focusFrame);
+			recordPerformanceHarnessEvent('source-editor-view-destroyed', {
+				editorId: props.id,
+				memoryKey: props.memoryKey ?? ''
+			});
 			unregisterPerformanceEditorOwner(props.id);
 			view.destroy();
 			viewRef.current = undefined;
+			subscribers.clear();
+			documentChangeSubscribers.clear();
 		};
 		// The editor must be recreated when the memory key changes to restore the
 		// correct selection for a newly selected passage.
@@ -848,7 +1183,7 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		const view = viewRef.current;
 
 		view?.dispatch({
-			effects: themeCompartment.reconfigure(
+			effects: compartments.theme.reconfigure(
 				sourceEditorThemeExtension(prefs.codeEditorTheme, appTheme)
 			)
 		});
@@ -857,11 +1192,12 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 	React.useEffect(() => {
 		const view = viewRef.current;
 
-		if (!view || view.state.doc.toString() === props.value) {
+		if (!view || documentRef.current === props.value) {
 			return;
 		}
 
 		view.dispatch({
+			annotations: controlledValueSync.of(true),
 			changes: {from: 0, to: view.state.doc.length, insert: props.value}
 		});
 	}, [props.value]);
@@ -871,10 +1207,10 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 
 		view?.dispatch({
 			effects: [
-				languageCompartment.reconfigure(
+				compartments.language.reconfigure(
 					languageExtension(props.language ?? 'twine')
 				),
-				foldingCompartment.reconfigure(
+				compartments.folding.reconfigure(
 					foldingExtension(props.language ?? 'twine')
 				)
 			]
@@ -885,7 +1221,7 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		const view = viewRef.current;
 
 		view?.dispatch({
-			effects: readOnlyCompartment.reconfigure(
+			effects: compartments.readOnly.reconfigure(
 				EditorState.readOnly.of(props.readOnly ?? false)
 			)
 		});
@@ -895,7 +1231,7 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		const view = viewRef.current;
 
 		view?.dispatch({
-			effects: autocompleteCompartment.reconfigure(
+			effects: compartments.autocomplete.reconfigure(
 				autocompletion({
 					override: [completionSource(props.autocompletePassageNames)]
 				})
@@ -907,15 +1243,48 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		const view = viewRef.current;
 
 		view?.dispatch({
-			effects: twineDecorationCompartment.reconfigure(
+			effects: compartments.twineDecorations.reconfigure(
 				twineTokenDecorations(
 					props.language ?? 'twine',
 					props.brokenLinkNames,
-					props.selfLinkName
+					props.selfLinkName,
+					!props.replaceGenericTwineSyntax
 				)
 			)
 		});
-	}, [props.brokenLinkNames, props.language, props.selfLinkName]);
+	}, [
+		compartments,
+		props.brokenLinkNames,
+		props.language,
+		props.replaceGenericTwineSyntax,
+		props.selfLinkName
+	]);
+
+	React.useEffect(() => {
+		const view = viewRef.current;
+
+		if (!view) {
+			return;
+		}
+
+		try {
+			view.dispatch({
+				effects: compartments.dynamic.reconfigure(props.dynamicExtensions ?? [])
+			});
+			recordPerformanceHarnessEvent(
+				'source-editor-dynamic-extensions-applied',
+				{
+					dynamicExtensionsKey: props.dynamicExtensionsKey ?? '',
+					editorId: props.id
+				}
+			);
+		} catch (error) {
+			reportDynamicExtensionError(error);
+			view.dispatch({
+				effects: compartments.dynamic.reconfigure([])
+			});
+		}
+	}, [compartments, props.dynamicExtensionsKey]);
 
 	React.useEffect(() => {
 		const view = viewRef.current;
@@ -964,18 +1333,33 @@ export const SourceEditor: React.FC<SourceEditorProps> = props => {
 		view.focus();
 	}, [props.revealPosition?.key, props.revealPosition?.position]);
 
+	const codeFont = (props.language ?? 'twine') !== 'twine';
+	const fontFamily = codeFont
+		? prefs.codeEditorFontFamily
+		: prefs.passageEditorFontFamily;
+	const fontScale = codeFont
+		? prefs.codeEditorFontScale
+		: prefs.passageEditorFontScale;
+	const editorStyle = {
+		'--source-editor-font-family': fontFamily.includes(' ')
+			? `"${fontFamily}"`
+			: fontFamily,
+		'--source-editor-font-size': `${13 * fontScale}px`
+	} as React.CSSProperties;
+
 	return (
-		<div className="source-editor">
-			<label className="screen-reader-only" htmlFor={props.id}>
+		<div
+			className={`source-editor${
+				prefs.editorCursorBlinks ? '' : ' source-editor--static-cursor'
+			}`}
+			style={editorStyle}
+		>
+			<label className="screen-reader-only" htmlFor={`${props.id}-content`}>
 				{props.label}
 			</label>
-			<div
-				aria-label={props.label}
-				data-testid={props.id}
-				id={props.id}
-				ref={editorContainer}
-				role="textbox"
-			/>
+			<div data-testid={props.id} id={props.id} ref={editorContainer} />
 		</div>
 	);
-};
+});
+
+SourceEditor.displayName = 'SourceEditor';

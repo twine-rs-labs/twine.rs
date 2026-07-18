@@ -13,7 +13,11 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {treeMetadataFingerprint} from './fixture-tools.mjs';
+import {
+	parseFixtureVariant,
+	performanceFixtureVariantRoot,
+	treeMetadataFingerprint
+} from './fixture-tools.mjs';
 import {mergeRawPerformanceReports, writeJson} from './performance-tools.mjs';
 
 const repoRoot = path.resolve(
@@ -21,6 +25,7 @@ const repoRoot = path.resolve(
 	'..'
 );
 const args = process.argv.slice(2);
+const fixtureVariant = parseFixtureVariant(args);
 const sizeIndex = args.indexOf('--size');
 const size = Number.parseInt(
 	sizeIndex >= 0 ? args[sizeIndex + 1] : '10000',
@@ -52,19 +57,30 @@ const phases =
 			? ['edit', 'query', 'graph']
 			: [requestedPhase];
 
-const fixture = path.join(
+const generatedRoot = path.join(
 	repoRoot,
 	'benchmarks',
 	'fixtures',
-	'generated',
+	'generated'
+);
+const fixtureVariantRoot = performanceFixtureVariantRoot(
+	generatedRoot,
+	fixtureVariant
+);
+const fixture = path.join(
+	fixtureVariantRoot,
 	'projects',
 	`story-${size}.twine.rs`
 );
+const reportVariantSuffix =
+	fixtureVariant === 'default' ? '' : `-${fixtureVariant}`;
 const report = path.join(
 	repoRoot,
 	'benchmarks',
 	'results',
-	`electron-${new Date().toISOString().replace(/[:.]/g, '-')}-${size}.json`
+	`electron-${new Date()
+		.toISOString()
+		.replace(/[:.]/g, '-')}-${size}${reportVariantSuffix}.json`
 );
 const checkpoint = report.replace(/\.json$/, '.checkpoint.json');
 const main = path.join(
@@ -108,7 +124,8 @@ const buildArtifacts = [main, renderer, native];
 
 await access(fixture).catch(() => {
 	throw new Error(
-		`Missing fixture ${fixture}. Run npm run perf:prepare first.`
+		`Missing fixture ${fixture}. Run node benchmarks/prepare-project-fixtures.mjs ` +
+			`--sizes ${size} --variant ${fixtureVariant} first.`
 	);
 });
 await access(main).catch(() => {
@@ -223,6 +240,7 @@ const checkpointState = {
 	runId,
 	schemaVersion: 1,
 	size,
+	fixtureVariant,
 	status: 'running',
 	updatedAt: new Date().toISOString()
 };
@@ -304,6 +322,7 @@ try {
 				env: {
 					...process.env,
 					TWINE_PERF_FIXTURE: fixture,
+					TWINE_PERF_FIXTURE_VARIANT: fixtureVariant,
 					TWINE_PERF_LAUNCH_TRACE: launchTrace,
 					TWINE_PERF_PHASE: phase,
 					TWINE_PERF_REPORT: partialReport,
