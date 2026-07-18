@@ -13,6 +13,7 @@ thiserror.workspace = true
 ts-rs.workspace = true
 twine_graph.workspace = true
 twine_model.workspace = true
+twine_parse.workspace = true
 web-time.workspace = true
 
 [lints]

@@ -3,6 +3,8 @@ import * as React from 'react';
 import {useNavigate} from 'react-router';
 import {ClickAwayListener} from '../../components/click-away-listener';
 import {SafariWarningCard} from '../../components/error';
+import {StorageQuota} from '../../components/storage-quota/storage-quota';
+import {TagCardButton} from '../../components/tag/tag-card-button';
 import {
 	Badge,
 	Button,
@@ -14,28 +16,38 @@ import {
 	TablerIcon,
 	Tag
 } from '../../components/design-system';
-import {deleteStoryCommand, useCoreProjectHost} from '../../core';
+import {
+	deleteStoryCommand,
+	setStoryTagsCommand,
+	useCoreProjectHost
+} from '../../core';
 import type {CoreStorySummary} from '../../core';
 import {
 	AppDonationDialog,
 	DialogsContextProvider,
+	StoryTagsDialog,
 	useDialogsContext
 } from '../../dialogs';
 import {storyFileName} from '../../electron/shared';
-import {usePrefsContext} from '../../store/prefs';
+import {setPref, usePrefsContext} from '../../store/prefs';
 import {useDonationCheck} from '../../store/prefs/use-donation-check';
 import {
 	deselectAllStories,
 	deselectStory,
+	duplicateStory,
 	selectStory,
 	Story,
 	useStoriesContext
 } from '../../store/stories';
+import {usePublishing} from '../../store/use-publishing';
 import {
 	deleteProjectMetadata,
 	loadProjectMetadata
 } from '../../store/project-metadata';
 import type {TwineElectronWindow} from '../../electron/shared';
+import {archiveFilename} from '../../util/publish';
+import {saveHtml} from '../../util/save-file';
+import {Color, colorString} from '../../util/color';
 import './story-list-route.css';
 
 type LauncherView = 'table' | 'cards';
@@ -172,14 +184,17 @@ export const InnerStoryListRoute: React.FC = () => {
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const {dispatch: storiesDispatch, stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
+	const {materializeStory, publishArchive} = usePublishing();
 	const {shouldShowDonationPrompt} = useDonationCheck();
 	const [query, setQuery] = React.useState('');
 	const [view, setView] = React.useState<LauncherView>('table');
+	const [archiveRunning, setArchiveRunning] = React.useState(false);
 	const selectedStories = React.useMemo(
 		() => stories.filter(story => story.selected),
 		[stories]
 	);
 	const tags = React.useMemo(() => allTags(stories), [stories]);
+	const nativeDesktop = !!desktopBridge();
 
 	const visibleStories = React.useMemo(() => {
 		const normalizedQuery = query.trim().toLowerCase();
@@ -242,6 +257,55 @@ export const InnerStoryListRoute: React.FC = () => {
 		navigate(`/stories/${story.id}`);
 	}
 
+	async function duplicateProject(story: Story) {
+		const completeStory = await materializeStory(story.id);
+
+		storiesDispatch(duplicateStory(completeStory, stories));
+	}
+
+	function addStoryTag(story: Story, name: string) {
+		if (!tags.includes(name)) {
+			prefsDispatch(
+				setPref('storyTagColors', {
+					...prefs.storyTagColors,
+					[name]: colorString(name)
+				})
+			);
+		}
+
+		void coreProjectHost.applyStoryCommand(
+			setStoryTagsCommand(story.id, [...story.tags, name])
+		);
+	}
+
+	function removeStoryTag(story: Story, name: string) {
+		void coreProjectHost.applyStoryCommand(
+			setStoryTagsCommand(
+				story.id,
+				story.tags.filter(tag => tag !== name)
+			)
+		);
+	}
+
+	function changeStoryTagColor(name: string, color: Color) {
+		prefsDispatch(
+			setPref('storyTagColors', {...prefs.storyTagColors, [name]: color})
+		);
+	}
+
+	async function exportLibraryArchive() {
+		if (archiveRunning || stories.length === 0) {
+			return;
+		}
+
+		setArchiveRunning(true);
+		try {
+			saveHtml(await publishArchive(), archiveFilename());
+		} finally {
+			setArchiveRunning(false);
+		}
+	}
+
 	function selectProject(story: Story, additive: boolean) {
 		storiesDispatch(selectStory(story, !additive));
 	}
@@ -261,11 +325,11 @@ export const InnerStoryListRoute: React.FC = () => {
 					[
 						`Delete project "${story.name}"?`,
 						'',
-						`This will delete files from ${rootPath}.`,
+						`This will move project files from ${rootPath}.`,
 						'',
 						`It will remove ${projectStories.length} ${
 							projectStories.length === 1 ? 'story' : 'stories'
-						} from this library. This cannot be undone.`
+						} from this library. The project folder will be moved to the operating system trash.`
 					].join('\n')
 				)
 			: window.confirm(
@@ -306,6 +370,30 @@ export const InnerStoryListRoute: React.FC = () => {
 		void deleteStory(story);
 	}
 
+	function stopAndDuplicateStory(
+		story: Story,
+		event: React.MouseEvent<HTMLButtonElement>
+	) {
+		event.stopPropagation();
+		void duplicateProject(story);
+	}
+
+	function storyTagEditor(story: Story) {
+		return (
+			<span onClick={event => event.stopPropagation()}>
+				<TagCardButton
+					allTags={tags}
+					id={`story-tag-input-${story.id}`}
+					onAdd={name => addStoryTag(story, name)}
+					onChangeColor={changeStoryTagColor}
+					onRemove={name => removeStoryTag(story, name)}
+					tagColors={prefs.storyTagColors}
+					tags={story.tags}
+				/>
+			</span>
+		);
+	}
+
 	return (
 		<div className="story-list-launcher">
 			<aside className="story-list-launcher__rail" aria-label="Project actions">
@@ -324,6 +412,14 @@ export const InnerStoryListRoute: React.FC = () => {
 				>
 					Import
 				</Button>
+				<Button
+					block
+					disabled={archiveRunning || stories.length === 0}
+					icon="archive"
+					onClick={() => void exportLibraryArchive()}
+				>
+					{archiveRunning ? 'Exporting…' : 'Export Library Archive'}
+				</Button>
 				<div className="story-list-launcher__rail-section">
 					<span className="story-list-launcher__rail-title">Library</span>
 					<button
@@ -340,6 +436,19 @@ export const InnerStoryListRoute: React.FC = () => {
 						<TablerIcon icon="files" />
 						<span>All projects</span>
 						<Badge>{stories.length}</Badge>
+					</button>
+					<button
+						className="story-list-launcher__rail-item"
+						onClick={() =>
+							dialogsDispatch({
+								type: 'addDialog',
+								component: StoryTagsDialog
+							})
+						}
+						type="button"
+					>
+						<TablerIcon icon="tags" />
+						<span>Story Tags</span>
 					</button>
 					<button
 						className="story-list-launcher__rail-item"
@@ -375,6 +484,25 @@ export const InnerStoryListRoute: React.FC = () => {
 								</Tag>
 							))}
 						</div>
+					</div>
+				)}
+				{!nativeDesktop && (
+					<div className="story-list-launcher__storage">
+						<strong>Storage &amp; Backups</strong>
+						<p>
+							Your projects are saved in this browser. Export a library archive
+							before clearing browser data or switching browsers.
+						</p>
+						<StorageQuota watch={stories} />
+						<Button
+							block
+							disabled={archiveRunning || stories.length === 0}
+							icon="download"
+							onClick={() => void exportLibraryArchive()}
+							size="sm"
+						>
+							Export Backup
+						</Button>
 					</div>
 				)}
 			</aside>
@@ -511,6 +639,18 @@ export const InnerStoryListRoute: React.FC = () => {
 															Open
 														</Button>
 														<Button
+															aria-label={`Duplicate story ${story.name}`}
+															icon="copy"
+															onClick={event =>
+																stopAndDuplicateStory(story, event)
+															}
+															size="sm"
+															variant="ghost"
+														>
+															Duplicate
+														</Button>
+														{storyTagEditor(story)}
+														<Button
 															aria-label={`Delete story ${story.name}`}
 															icon="trash"
 															onClick={event =>
@@ -591,6 +731,18 @@ export const InnerStoryListRoute: React.FC = () => {
 												</Badge>
 												<div className="story-list-launcher__card-actions">
 													<span>{formatDate(story.lastUpdate)}</span>
+													<Button
+														aria-label={`Duplicate story ${story.name}`}
+														icon="copy"
+														onClick={event =>
+															stopAndDuplicateStory(story, event)
+														}
+														size="sm"
+														variant="ghost"
+													>
+														Duplicate
+													</Button>
+													{storyTagEditor(story)}
 													<Button
 														aria-label={`Delete story ${story.name}`}
 														icon="trash"

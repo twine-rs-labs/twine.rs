@@ -875,6 +875,7 @@ dependencies = [
  "ts-rs",
  "twine_graph",
  "twine_model",
+ "twine_parse",
  "web-time",
 ]
 

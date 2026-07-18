@@ -1,7 +1,7 @@
 import {FSWatcher, watch} from 'fs';
 import {createHash} from 'crypto';
 import {tmpdir} from 'os';
-import {dialog} from 'electron';
+import {dialog, shell} from 'electron';
 import {v4 as uuid} from '@lukeed/uuid';
 import extractZip from 'extract-zip';
 import {
@@ -4375,7 +4375,7 @@ export async function deleteProjectFolder(rootPath: string) {
 	}
 
 	stopProjectSession(absoluteRootPath);
-	await remove(absoluteRootPath);
+	await shell.trashItem(absoluteRootPath);
 	forgetProjectFolder(absoluteRootPath);
 }
 

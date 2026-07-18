@@ -1,14 +1,10 @@
 import * as React from 'react';
 import {formatEditorExtensions} from '../util/story-format';
-import {
-	formatWithNameAndVersion,
-	loadFormatProperties,
-	useStoryFormatsContext
-} from './story-formats';
+import {loadFormatProperties, useStoryFormatsContext} from './story-formats';
 import {formatEditorExtensionsDisabled, usePrefsContext} from './prefs';
 import {getAppInfo} from '../util/app-info';
 
-const emptyFunc = () => [];
+export const emptyFormatReferenceParser = () => [];
 
 export function useFormatReferenceParser(
 	formatName: string,
@@ -16,7 +12,9 @@ export function useFormatReferenceParser(
 ) {
 	const {prefs} = usePrefsContext();
 	const {dispatch, formats} = useStoryFormatsContext();
-	const format = formatWithNameAndVersion(formats, formatName, formatVersion);
+	const format = formats.find(
+		format => format.name === formatName && format.version === formatVersion
+	);
 	const [editorExtensions, setEditorExtensions] =
 		React.useState<ReturnType<typeof formatEditorExtensions>>();
 	const extensionsDisabled = formatEditorExtensionsDisabled(
@@ -26,7 +24,8 @@ export function useFormatReferenceParser(
 	);
 
 	React.useEffect(() => {
-		if (extensionsDisabled) {
+		if (extensionsDisabled || !format) {
+			setEditorExtensions(undefined);
 			return;
 		}
 
@@ -39,9 +38,11 @@ export function useFormatReferenceParser(
 		}
 	}, [dispatch, extensionsDisabled, format]);
 
-	if (extensionsDisabled) {
-		return emptyFunc;
+	if (extensionsDisabled || !format) {
+		return emptyFormatReferenceParser;
 	}
 
-	return editorExtensions?.references?.parsePassageText ?? emptyFunc;
+	return (
+		editorExtensions?.references?.parsePassageText ?? emptyFormatReferenceParser
+	);
 }

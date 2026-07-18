@@ -9,6 +9,10 @@ import {defaults as prefsDefaults} from '../../../store/prefs/defaults';
 import {PrefsContext, PrefsState} from '../../../store/prefs';
 import {reducer as prefsReducer} from '../../../store/prefs/reducer';
 import {StoriesContext} from '../../../store/stories';
+import {
+	emptyFormatReferenceParser,
+	useFormatReferenceParser
+} from '../../../store/use-format-reference-parser';
 import {fakePassage, fakeStory} from '../../../test-util';
 import {
 	graphProjectionChangeForPatchBatch,
@@ -18,6 +22,15 @@ import type {
 	StoryGraphWorkspaceOptions,
 	StoryGraphWorkspaceView
 } from '../workspace-state';
+
+jest.mock('../../../store/use-format-reference-parser', () => {
+	const emptyFormatReferenceParser = () => [];
+
+	return {
+		emptyFormatReferenceParser,
+		useFormatReferenceParser: jest.fn(() => emptyFormatReferenceParser)
+	};
+});
 
 function graphStory(generatedLayout = false) {
 	const story = fakeStory(0);
@@ -166,6 +179,12 @@ function patchBatch(...patches: PatchBatch['patches']): PatchBatch {
 	return {label: 'test', patches, transactionId: 1n};
 }
 
+beforeEach(() => {
+	(useFormatReferenceParser as jest.Mock).mockReturnValue(
+		emptyFormatReferenceParser
+	);
+});
+
 // Reads the single world transform (translate(x,y) scale(k)) the graph rides.
 function worldView(container: HTMLElement): {k: number; x: number; y: number} {
 	const canvas = container.querySelector(
@@ -250,6 +269,34 @@ describe('<StoryGraphPanel>', () => {
 		expect(screen.getByTestId('story-graph-edges-canvas')).toHaveAttribute(
 			'data-connected-edge-count',
 			'2'
+		);
+	});
+
+	it('renders and toggles story-format-defined reference edges', async () => {
+		(useFormatReferenceParser as jest.Mock).mockReturnValue((text: string) =>
+			text.includes('Next') ? ['Next'] : []
+		);
+		renderComponent();
+
+		await waitFor(() =>
+			expect(screen.getByTestId('story-graph-edges-canvas')).toHaveAttribute(
+				'data-edge-kinds',
+				expect.stringContaining('reference')
+			)
+		);
+		const toggle = screen.getByRole('button', {
+			name: 'Story format references'
+		});
+
+		expect(toggle).toHaveAttribute('aria-pressed', 'true');
+		fireEvent.click(toggle);
+		await waitFor(() =>
+			expect(
+				screen.getByTestId('story-graph-edges-canvas')
+			).not.toHaveAttribute(
+				'data-edge-kinds',
+				expect.stringContaining('reference')
+			)
 		);
 	});
 

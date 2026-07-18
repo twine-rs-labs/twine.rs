@@ -2,6 +2,8 @@ import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {MemoryRouter} from 'react-router';
+import {saveAs} from 'file-saver';
+import {StoreCoreProjectHost} from '../../../core/project-host';
 import {
 	loadProjectMetadata,
 	saveProjectMetadata
@@ -17,12 +19,14 @@ import {InnerStoryListRoute} from '../story-list-route';
 
 jest.mock('../../../store/prefs/use-donation-check');
 jest.mock('../../../components/error/safari-warning-card');
+jest.mock('file-saver');
 
 describe('<StoryListRoute>', () => {
 	const useDonationCheckMock = useDonationCheck as jest.Mock;
 
 	beforeEach(() => {
 		window.localStorage.clear();
+		jest.mocked(saveAs).mockClear();
 		useDonationCheckMock.mockReturnValue({
 			shouldShowDonationPrompt: () => false
 		});
@@ -53,6 +57,13 @@ describe('<StoryListRoute>', () => {
 			screen.getByRole('button', {name: /new project/i})
 		).toBeInTheDocument();
 		expect(screen.getByRole('button', {name: /import/i})).toBeInTheDocument();
+		expect(
+			screen.getByRole('button', {name: /export library archive/i})
+		).toBeEnabled();
+		expect(
+			screen.getByRole('button', {name: /story tags/i})
+		).toBeInTheDocument();
+		expect(screen.getByText('Storage & Backups')).toBeInTheDocument();
 	});
 
 	it('navigates to the new project route', async () => {
@@ -75,6 +86,67 @@ describe('<StoryListRoute>', () => {
 	it('displays story rows if there are stories in state', () => {
 		renderComponent({stories: [fakeStory()]});
 		expect(screen.getByTestId('story-list-row')).toBeInTheDocument();
+	});
+
+	it('duplicates a complete story from the launcher', async () => {
+		const story = fakeStory();
+
+		story.name = 'Duplicate Me';
+		renderComponent({stories: [story]});
+		fireEvent.click(
+			screen.getByRole('button', {name: /duplicate story duplicate me/i})
+		);
+
+		await waitFor(() =>
+			expect(screen.getAllByTestId('story-list-row')).toHaveLength(2)
+		);
+	});
+
+	it('assigns story tags from the launcher', async () => {
+		const story = fakeStory();
+		const applyStoryCommand = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.mockResolvedValue(undefined);
+
+		story.tags = [];
+		renderComponent({stories: [story]});
+		fireEvent.click(screen.getByRole('button', {name: 'common.tags'}));
+		fireEvent.change(
+			screen.getByRole('combobox', {
+				name: 'components.tagCardButton.tagNameLabel'
+			}),
+			{target: {value: 'release-candidate'}}
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'common.add'}));
+
+		await waitFor(() =>
+			expect(applyStoryCommand).toHaveBeenCalledWith({
+				story_id: story.id,
+				tags: ['release-candidate'],
+				type: 'setStoryTags'
+			})
+		);
+	});
+
+	it('exports a restorable archive of the complete library', async () => {
+		renderComponent({stories: [fakeStory()]});
+		fireEvent.click(
+			screen.getByRole('button', {name: /export library archive/i})
+		);
+
+		await waitFor(() => expect(saveAs).toHaveBeenCalledTimes(1));
+		const [archive, filename] = jest.mocked(saveAs).mock.calls[0];
+
+		expect(archive).toBeInstanceOf(Blob);
+		expect((archive as Blob).type).toBe('text/html;charset=utf-8');
+		expect(filename).toBe('store.archiveFilename');
+	});
+
+	it('opens global story tag management from the launcher', () => {
+		renderComponent({stories: [fakeStory()]});
+		fireEvent.click(screen.getByRole('button', {name: /story tags/i}));
+
+		expect(screen.getByText('dialogs.storyTags.title')).toBeInTheDocument();
 	});
 
 	it('deletes a file-backed project folder after confirming the directory', async () => {
@@ -101,7 +173,9 @@ describe('<StoryListRoute>', () => {
 			expect(deleteProjectFolder).toHaveBeenCalledWith(rootPath)
 		);
 		expect(confirmSpy).toHaveBeenCalledWith(
-			expect.stringContaining(`This will delete files from ${rootPath}.`)
+			expect.stringContaining(
+				'The project folder will be moved to the operating system trash.'
+			)
 		);
 		await waitFor(() =>
 			expect(screen.queryByTestId('story-list-row')).not.toBeInTheDocument()

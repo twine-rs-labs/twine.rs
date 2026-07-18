@@ -8,6 +8,7 @@ import {
 	Switch,
 	TablerIcon
 } from '../../components/design-system';
+import {FontSelect} from '../../components/control/font-select';
 import type {TwineElectronWindow} from '../../electron/shared';
 import type {
 	NativeBackupResult,
@@ -85,13 +86,6 @@ const formatFilterOptions = [
 	{label: 'Current', value: 'current'},
 	{label: 'All', value: 'all'},
 	{label: 'User-added', value: 'user'}
-];
-
-const fontScaleOptions = [
-	{label: '90%', value: '0.9'},
-	{label: '100%', value: '1'},
-	{label: '110%', value: '1.1'},
-	{label: '125%', value: '1.25'}
 ];
 
 const codeEditorThemeOptions = [
@@ -553,28 +547,30 @@ export const SettingsRoute: React.FC = () => {
 							label="Blinking cursor"
 							onChange={value => dispatch(setPref('editorCursorBlinks', value))}
 						/>
-						<div className="settings-route__field">
-							<span>Passage type</span>
-							<Select
-								ariaLabel="Passage editor font scale"
-								onChange={value =>
-									dispatch(setPref('passageEditorFontScale', Number(value)))
-								}
-								options={fontScaleOptions}
-								value={String(prefs.passageEditorFontScale)}
-							/>
-						</div>
-						<div className="settings-route__field">
-							<span>Code type</span>
-							<Select
-								ariaLabel="Code editor font scale"
-								onChange={value =>
-									dispatch(setPref('codeEditorFontScale', Number(value)))
-								}
-								options={fontScaleOptions}
-								value={String(prefs.codeEditorFontScale)}
-							/>
-						</div>
+						<FontSelect
+							familyLabel="Passage editor font"
+							fontFamily={prefs.passageEditorFontFamily}
+							fontScale={prefs.passageEditorFontScale}
+							onChangeFamily={value =>
+								dispatch(setPref('passageEditorFontFamily', value))
+							}
+							onChangeScale={value =>
+								dispatch(setPref('passageEditorFontScale', value))
+							}
+							scaleLabel="Passage editor scale"
+						/>
+						<FontSelect
+							familyLabel="Code editor font"
+							fontFamily={prefs.codeEditorFontFamily}
+							fontScale={prefs.codeEditorFontScale}
+							onChangeFamily={value =>
+								dispatch(setPref('codeEditorFontFamily', value))
+							}
+							onChangeScale={value =>
+								dispatch(setPref('codeEditorFontScale', value))
+							}
+							scaleLabel="Code editor scale"
+						/>
 						<div className="settings-route__field">
 							<span>Code theme</span>
 							<Select

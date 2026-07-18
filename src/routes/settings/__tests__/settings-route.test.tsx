@@ -35,6 +35,8 @@ describe('<SettingsRoute>', () => {
 			screen.getByText('Right-click creates passages')
 		).toBeInTheDocument();
 		expect(screen.getByText('Code theme')).toBeInTheDocument();
+		expect(screen.getByText('Passage editor font')).toBeInTheDocument();
+		expect(screen.getByText('Code editor font')).toBeInTheDocument();
 		expect(screen.getByText('Storage')).toBeInTheDocument();
 		expect(screen.getByText('Backups')).toBeInTheDocument();
 		expect(screen.getByText('Story Formats')).toBeInTheDocument();
@@ -62,10 +64,16 @@ describe('<SettingsRoute>', () => {
 		fireEvent.change(screen.getByLabelText('Code editor theme'), {
 			target: {value: 'one-dark'}
 		});
+		fireEvent.change(screen.getByLabelText('Passage editor font'), {
+			target: {value: 'var(--font-mono)'}
+		});
 		fireEvent.click(screen.getByText('Right-click creates passages'));
 
 		expect(screen.getByDisplayValue('/Users/test/Stories')).toBeInTheDocument();
 		expect(screen.getByLabelText('Code editor theme')).toHaveValue('one-dark');
+		expect(screen.getByLabelText('Passage editor font')).toHaveValue(
+			'var(--font-mono)'
+		);
 		expect(
 			screen.getByLabelText('Right-click creates passages')
 		).not.toBeChecked();

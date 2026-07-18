@@ -23,9 +23,9 @@ import {
 	setStoryZoomCommand,
 	useCoreProjectHost
 } from '../../core';
+import {materializeStoryFromSession} from '../../core/materialize-story';
 import {setPref, usePrefsContext} from '../../store/prefs';
 import type {GraphCardSizePreference} from '../../store/prefs';
-import type {CoreGraphEdge} from '../../core/bindings/CoreGraphEdge';
 import type {CoreGraphLayoutState} from '../../core/bindings/CoreGraphLayoutState';
 import type {CoreGraphNode} from '../../core/bindings/CoreGraphNode';
 import type {CoreGraphProjection} from '../../core/bindings/CoreGraphProjection';
@@ -33,6 +33,11 @@ import type {CoreLinkLayerOptions} from '../../core/bindings/CoreLinkLayerOption
 import type {CoreRect} from '../../core/bindings/CoreRect';
 import type {PatchBatch} from '../../core/bindings/PatchBatch';
 import {Passage, Story} from '../../store/stories';
+import type {StoryWithDocuments} from '../../store/stories';
+import {
+	emptyFormatReferenceParser,
+	useFormatReferenceParser
+} from '../../store/use-format-reference-parser';
 import {Point, Rect, rectFromPoints, rectsIntersect} from '../../util/geometry';
 import {markPerformanceAfterPaint} from '../../util/performance';
 import {
@@ -42,11 +47,16 @@ import {
 } from './graph-grid';
 import type {
 	StoryGraphDensity,
+	StoryGraphLayerOptions,
 	StoryGraphOrientation,
 	StoryGraphTool,
 	StoryGraphWorkspaceOptions,
 	StoryGraphWorkspaceView
 } from './workspace-state';
+import {
+	formatReferenceEdges,
+	type StoryGraphEdge
+} from './format-reference-edges';
 
 function keyedElementRef<ElementType extends HTMLElement>(
 	refs: Map<string, React.RefObject<ElementType | null>>,
@@ -158,6 +168,11 @@ interface GraphContextMenuState {
 
 interface AsyncProjectionState {
 	projection: CoreGraphProjection;
+	storyId: string;
+}
+
+interface AsyncReferenceStoryState {
+	story: StoryWithDocuments;
 	storyId: string;
 }
 
@@ -472,11 +487,20 @@ function initialGraphView(
 
 function graphLayers(
 	options: StoryGraphWorkspaceOptions | undefined
-): CoreLinkLayerOptions {
+): StoryGraphLayerOptions {
 	return {
 		broken: options?.layers?.broken ?? true,
+		references: options?.layers?.references ?? true,
 		resolved: options?.layers?.resolved ?? true,
 		selfLinks: options?.layers?.selfLinks ?? true
+	};
+}
+
+function coreGraphLayers(layers: StoryGraphLayerOptions): CoreLinkLayerOptions {
+	return {
+		broken: layers.broken,
+		resolved: layers.resolved,
+		selfLinks: layers.selfLinks
 	};
 }
 
@@ -485,11 +509,12 @@ function sameGraphView(left: GraphView, right: GraphView) {
 }
 
 function sameGraphLayers(
-	left: CoreLinkLayerOptions,
-	right: CoreLinkLayerOptions
+	left: StoryGraphLayerOptions,
+	right: StoryGraphLayerOptions
 ) {
 	return (
 		left.broken === right.broken &&
+		left.references === right.references &&
 		left.resolved === right.resolved &&
 		left.selfLinks === right.selfLinks
 	);
@@ -581,7 +606,7 @@ function verticalEdgeCurve(source: CoreRect, target: CoreRect) {
 	};
 }
 
-function edgeCurve(edge: CoreGraphEdge, nodeById: Map<string, CoreGraphNode>) {
+function edgeCurve(edge: StoryGraphEdge, nodeById: Map<string, CoreGraphNode>) {
 	const source = nodeById.get(edge.sourceId)?.bounds ?? edge.sourceBounds;
 	const sourceRight = source.left + source.width;
 	const sourceMiddle = source.top + source.height / 2;
@@ -631,7 +656,7 @@ function edgeCurve(edge: CoreGraphEdge, nodeById: Map<string, CoreGraphNode>) {
 }
 
 function edgeRouteDebug(
-	edges: CoreGraphEdge[],
+	edges: StoryGraphEdge[],
 	nodeById: Map<string, CoreGraphNode>
 ) {
 	return edges
@@ -672,7 +697,7 @@ function drawArrow(
 
 interface GraphEdgesCanvasProps {
 	drawBounds: CoreRect;
-	edges: CoreGraphEdge[];
+	edges: StoryGraphEdge[];
 	nodeById: Map<string, CoreGraphNode>;
 	selectedNodeIds: Set<string>;
 	visibleZoom: number;
@@ -736,6 +761,8 @@ const GraphEdgesCanvas: React.FC<GraphEdgesCanvasProps> = ({
 		const colors = {
 			broken:
 				styles.getPropertyValue('--sem-error').trim() || 'rgb(214, 85, 74)',
+			reference:
+				styles.getPropertyValue('--tx-4').trim() || 'rgb(140, 145, 155)',
 			resolved:
 				styles.getPropertyValue('--sem-link').trim() || 'rgb(92, 151, 255)',
 			selected:
@@ -758,7 +785,13 @@ const GraphEdgesCanvas: React.FC<GraphEdgesCanvasProps> = ({
 			context.lineWidth = connected ? 3.5 : 2;
 			context.strokeStyle = color;
 			context.fillStyle = color;
-			context.setLineDash(edge.kind === 'broken' ? [6, 5] : []);
+			context.setLineDash(
+				edge.kind === 'broken'
+					? [6, 5]
+					: edge.kind === 'reference'
+						? [2, 5]
+						: []
+			);
 			context.beginPath();
 			context.moveTo(curve.x, curve.y);
 			context.bezierCurveTo(
@@ -1076,6 +1109,9 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		story
 	} = props;
 	const host = useCoreProjectHost();
+	const storyRef = React.useRef(story);
+
+	storyRef.current = story;
 	const passageCount = story.passages.length;
 	const storyZoomSeed = React.useRef({storyId: story.id, zoom: story.zoom});
 
@@ -1105,7 +1141,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	const [focusSelection, setFocusSelection] = React.useState(
 		graphOptions?.focusSelection ?? false
 	);
-	const [layers, setLayers] = React.useState<CoreLinkLayerOptions>(() =>
+	const [layers, setLayers] = React.useState<StoryGraphLayerOptions>(() =>
 		graphLayers(graphOptions)
 	);
 	const [drag, setDrag] = React.useState<DragState>();
@@ -1145,6 +1181,8 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		React.useState('');
 	const [asyncProjection, setAsyncProjection] =
 		React.useState<AsyncProjectionState>();
+	const [asyncReferenceStory, setAsyncReferenceStory] =
+		React.useState<AsyncReferenceStoryState>();
 	const [graphProjectionRevision, setGraphProjectionRevision] =
 		React.useState(0);
 	const deferredGraphProjectionRefresh = React.useRef<number | undefined>(
@@ -1217,6 +1255,12 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		height: defaultSizePreset.height,
 		width: defaultSizePreset.width
 	};
+	const referenceParser = useFormatReferenceParser(
+		story.storyFormat,
+		story.storyFormatVersion
+	);
+	const formatReferencesAvailable =
+		referenceParser !== emptyFormatReferenceParser;
 	const measuredViewport =
 		viewport.height > 1 && viewport.width > 1 ? viewport : null;
 	const projectionViewportKey = measuredViewport
@@ -1228,7 +1272,9 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		return measuredViewport ? bufferedViewport(source) : source;
 	}, [projectionViewportKey]);
 	const queryViewport =
-		focusSelection || orientation !== 'right' ? null : projectionViewport;
+		focusSelection || orientation !== 'right' || formatReferencesAvailable
+			? null
+			: projectionViewport;
 	const focusPassageIds = focusSelection
 		? selectedPassageIds
 		: noFocusedPassageIds;
@@ -1242,7 +1288,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 							radius: 1
 						}
 					: null,
-			layers,
+			layers: coreGraphLayers(layers),
 			viewport: queryViewport
 		}),
 		[focusPassageIds, layers, queryViewport]
@@ -1255,6 +1301,39 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		asyncProjection?.storyId === story.id
 			? asyncProjection.projection
 			: emptyGraphProjection();
+
+	React.useEffect(() => {
+		let active = true;
+
+		if (!formatReferencesAvailable) {
+			setAsyncReferenceStory(undefined);
+			return;
+		}
+
+		void materializeStoryFromSession(host, storyRef.current)
+			.then(materialized => {
+				if (active) {
+					setAsyncReferenceStory({story: materialized, storyId: story.id});
+				}
+			})
+			.catch(error => {
+				if (active) {
+					console.warn('Could not load story-format graph references.', error);
+					setAsyncReferenceStory(undefined);
+				}
+			});
+
+		return () => {
+			active = false;
+		};
+	}, [
+		formatReferencesAvailable,
+		graphProjectionRevision,
+		host,
+		passageCount,
+		referenceParser,
+		story.id
+	]);
 
 	React.useEffect(() => {
 		const unsubscribe = host.subscribeToPatches(batch => {
@@ -1382,9 +1461,29 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		() => new Map(displayNodes.map(node => [node.id, node])),
 		[displayNodes]
 	);
+	const referenceEdges = React.useMemo(
+		() =>
+			layers.references &&
+			asyncReferenceStory?.storyId === story.id &&
+			formatReferencesAvailable
+				? formatReferenceEdges(
+						asyncReferenceStory.story,
+						projection,
+						referenceParser
+					)
+				: [],
+		[
+			asyncReferenceStory,
+			formatReferencesAvailable,
+			layers.references,
+			projection,
+			referenceParser,
+			story.id
+		]
+	);
 	const displayEdges = React.useMemo(
 		() =>
-			projection.edges.map(edge => ({
+			[...projection.edges, ...referenceEdges].map(edge => ({
 				...edge,
 				sourceBounds: displayRect(
 					edge.sourceBounds,
@@ -1395,7 +1494,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 					? displayRect(edge.targetBounds, orientation, logicalGraphBounds)
 					: edge.targetBounds
 			})),
-		[logicalGraphBounds, orientation, projection.edges]
+		[logicalGraphBounds, orientation, projection.edges, referenceEdges]
 	);
 	const liveNodeById = React.useMemo(() => {
 		if (!drag && !resize) {
@@ -2894,6 +2993,20 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 						}
 						size="sm"
 					/>
+					{formatReferencesAvailable && (
+						<IconButton
+							active={layers.references}
+							icon="braces"
+							label="Story format references"
+							onClick={() =>
+								setLayers(current => ({
+									...current,
+									references: !current.references
+								}))
+							}
+							size="sm"
+						/>
+					)}
 					<IconButton
 						active={focusSelection}
 						disabled={selectedPassageIds.length === 0}

@@ -28,10 +28,14 @@ export interface StoryGraphWorkspaceView {
 	y: number;
 }
 
+export type StoryGraphLayerOptions = CoreLinkLayerOptions & {
+	references: boolean;
+};
+
 export interface StoryGraphWorkspaceOptions {
 	density?: StoryGraphDensity;
 	focusSelection?: boolean;
-	layers?: Partial<CoreLinkLayerOptions>;
+	layers?: Partial<StoryGraphLayerOptions>;
 	orientation?: StoryGraphOrientation;
 	tool?: StoryGraphTool;
 }
@@ -189,6 +193,9 @@ function graphOptionsFromValue(value: unknown): StoryGraphWorkspaceOptions {
 						: {}),
 					...(typeof candidate.layers.resolved === 'boolean'
 						? {resolved: candidate.layers.resolved}
+						: {}),
+					...(typeof candidate.layers.references === 'boolean'
+						? {references: candidate.layers.references}
 						: {}),
 					...(typeof candidate.layers.selfLinks === 'boolean'
 						? {selfLinks: candidate.layers.selfLinks}

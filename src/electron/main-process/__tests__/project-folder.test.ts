@@ -1,4 +1,4 @@
-import {dialog} from 'electron';
+import {dialog, shell} from 'electron';
 import {createHash} from 'crypto';
 import {FSWatcher, watch} from 'fs';
 import {
@@ -2448,7 +2448,8 @@ describe('project-folder native bridge', () => {
 	it('deletes validated native project folders', async () => {
 		await deleteProjectFolder('/native/project.twine.rs');
 
-		expect(removeMock).toHaveBeenCalledWith('/native/project.twine.rs');
+		expect(shell.trashItem).toHaveBeenCalledWith('/native/project.twine.rs');
+		expect(removeMock).not.toHaveBeenCalledWith('/native/project.twine.rs');
 	});
 
 	it('refuses to delete folders that are not native project folders', async () => {
@@ -2463,6 +2464,7 @@ describe('project-folder native bridge', () => {
 		await expect(deleteProjectFolder('/native/not-a-project')).rejects.toThrow(
 			'must end with .twine.rs'
 		);
+		expect(shell.trashItem).not.toHaveBeenCalled();
 		expect(removeMock).not.toHaveBeenCalled();
 	});
 
@@ -2484,6 +2486,7 @@ describe('project-folder native bridge', () => {
 		await expect(
 			deleteProjectFolder('/native/project.twine.rs')
 		).rejects.toThrow('no twine.toml project manifest was found');
+		expect(shell.trashItem).not.toHaveBeenCalled();
 		expect(removeMock).not.toHaveBeenCalled();
 	});
 

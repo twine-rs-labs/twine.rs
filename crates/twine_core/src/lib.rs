@@ -20,6 +20,7 @@ use twine_model::{
     GraphLayout, GraphPosition, Passage, PassageId, PassageIndex, PassageLayout, Project, Story,
     StoryId,
 };
+use twine_parse::{LinkParseOptions, parse_standard_links};
 use web_time::Instant;
 
 const MAX_HISTORY_ENTRIES: usize = 200;
@@ -3154,9 +3155,16 @@ impl ProjectSession {
         let transaction_id = self.next_transaction_id;
         let story_id = StoryId::new(story_id);
         let passage_id = PassageId::new(passage_id);
-        let (passage_index, before, story_shell) = {
+        let (
+            before,
+            before_index,
+            before_shell,
+            newly_linked_names,
+            orphaned_passages,
+            linked_layouts,
+        ) = {
             let story = self.story(story_id.as_ref())?;
-            let passage_index = story
+            let before_index = story
                 .passages
                 .iter()
                 .position(|passage| passage.id == passage_id)
@@ -3174,32 +3182,129 @@ impl ProjectSession {
                 });
             }
 
-            (passage_index, before, story_shell_without_passages(story))
-        };
-        let after = {
-            let passage = self
-                .story_mut(story_id.as_ref())?
-                .passage_by_id_mut(&passage_id)
-                .expect("passage index should resolve");
+            let old_links = standard_link_names(&before.text);
+            let new_links = standard_link_names(&text);
+            let old_link_names = old_links.iter().cloned().collect::<BTreeSet<_>>();
+            let new_link_names = new_links.iter().cloned().collect::<BTreeSet<_>>();
+            let orphaned_passages = old_links
+                .iter()
+                .filter(|name| !new_link_names.contains(*name))
+                .filter_map(|name| story.passage_by_name(name))
+                .filter(|candidate| {
+                    candidate.id != story.start_passage
+                        && passage_is_untouched(candidate)
+                        && !story.passages.iter().any(|source| {
+                            source.id != passage_id
+                                && standard_link_names(&source.text)
+                                    .iter()
+                                    .any(|target| target == &candidate.name)
+                        })
+                })
+                .filter_map(|candidate| {
+                    story
+                        .passages
+                        .rank_of(&candidate.id)
+                        .map(|index| (index, candidate.clone()))
+                })
+                .collect::<Vec<_>>();
+            let orphaned_ids = orphaned_passages
+                .iter()
+                .map(|(_, passage)| passage.id.clone())
+                .collect::<BTreeSet<_>>();
+            let newly_linked_names = new_links
+                .into_iter()
+                .filter(|name| !old_link_names.contains(name))
+                .filter(|name| story.passages.id_for_name(name).is_none())
+                .collect::<Vec<_>>();
+            let linked_layouts =
+                linked_passage_layouts(story, &before, newly_linked_names.len(), &orphaned_ids);
 
-            passage.text = text.clone();
-            passage.clone()
+            (
+                before,
+                before_index,
+                story_shell_without_passages(story),
+                newly_linked_names,
+                orphaned_passages,
+                linked_layouts,
+            )
+        };
+        let orphaned_ids = orphaned_passages
+            .iter()
+            .map(|(_, passage)| passage.id.clone())
+            .collect::<BTreeSet<_>>();
+        let (after_shell, passage_deltas) = {
+            let story = self.story_mut(story_id.as_ref())?;
+
+            story.passages = story
+                .passages
+                .iter()
+                .filter(|passage| !orphaned_ids.contains(&passage.id))
+                .cloned()
+                .collect();
+            let source = story
+                .passage_by_id_mut(&passage_id)
+                .expect("passage index should resolve after orphan cleanup");
+            source.text = text;
+            let after = source.clone();
+            let after_index = story
+                .passages
+                .rank_of(&passage_id)
+                .expect("updated passage should remain indexed");
+            let mut passage_deltas = vec![PassageDelta {
+                after: Some(IndexedPassage {
+                    index: after_index,
+                    value: after,
+                }),
+                before: Some(IndexedPassage {
+                    index: before_index,
+                    value: before,
+                }),
+                passage_id: passage_id.clone(),
+            }];
+
+            passage_deltas.extend(orphaned_passages.into_iter().map(|(index, passage)| {
+                PassageDelta {
+                    after: None,
+                    before: Some(IndexedPassage {
+                        index,
+                        value: passage.clone(),
+                    }),
+                    passage_id: passage.id,
+                }
+            }));
+
+            for (name, layout) in newly_linked_names.into_iter().zip(linked_layouts) {
+                let id = PassageId::new(next_passage_id(story));
+                let passage = Passage {
+                    custom_attributes: BTreeMap::new(),
+                    id: id.clone(),
+                    layout: Some(layout),
+                    metadata: BTreeMap::new(),
+                    name,
+                    source_pid: None,
+                    story: story.id.clone(),
+                    tags: Vec::new(),
+                    text: String::new(),
+                };
+
+                story.passages.insert(passage.clone());
+                passage_deltas.push(PassageDelta {
+                    after: Some(IndexedPassage {
+                        index: story.passages.len() - 1,
+                        value: passage,
+                    }),
+                    before: None,
+                    passage_id: id,
+                });
+            }
+
+            (story_shell_without_passages(story), passage_deltas)
         };
         let delta = ProjectDelta {
             stories: vec![StoryDelta::Update {
-                after: story_shell.clone(),
-                before: story_shell,
-                passages: vec![PassageDelta {
-                    after: Some(IndexedPassage {
-                        index: passage_index,
-                        value: after,
-                    }),
-                    before: Some(IndexedPassage {
-                        index: passage_index,
-                        value: before,
-                    }),
-                    passage_id: passage_id.clone(),
-                }],
+                after: after_shell,
+                before: before_shell,
+                passages: passage_deltas,
                 story_id: story_id.clone(),
             }],
             ..ProjectDelta::default()
@@ -3212,6 +3317,7 @@ impl ProjectSession {
         self.sync_fingerprints(&delta);
         self.update_session_caches(&delta);
         self.clear_redo();
+        let mut patches = delta.patches(true);
         if record_history {
             self.push_undo(Transaction {
                 after_state_id: self.current_state_id,
@@ -3223,14 +3329,6 @@ impl ProjectSession {
                 label: "Update Passage Text".into(),
             });
         }
-        let mut patches = vec![Patch::PassageUpdated {
-            changes: PassagePatch {
-                text: Some(text),
-                ..PassagePatch::default()
-            },
-            passage_id: passage_id.as_ref().to_owned(),
-            story_id: story_id.as_ref().to_owned(),
-        }];
 
         push_dirty_patch(&mut patches, dirty_before, self.dirty);
         Ok(PatchBatch {
@@ -9046,6 +9144,89 @@ fn next_passage_id(story: &Story) -> String {
     }
 }
 
+fn standard_link_names(text: &str) -> Vec<String> {
+    parse_standard_links(
+        text,
+        LinkParseOptions {
+            internal_only: false,
+        },
+    )
+    .into_iter()
+    .map(|link| link.target)
+    .collect()
+}
+
+fn passage_is_untouched(passage: &Passage) -> bool {
+    let layout = passage.layout.unwrap_or_default();
+
+    passage.text.is_empty()
+        && passage.tags.is_empty()
+        && layout.width == 100.0
+        && layout.height == 100.0
+}
+
+fn graph_rects_intersect(left: GraphPosition, right: GraphPosition) -> bool {
+    !(right.left > left.left + left.width
+        || right.left + right.width < left.left
+        || right.top > left.top + left.height
+        || right.top + right.height < left.top)
+}
+
+fn linked_passage_layouts(
+    story: &Story,
+    source: &Passage,
+    count: usize,
+    ignored_passage_ids: &BTreeSet<PassageId>,
+) -> Vec<GraphPosition> {
+    if count == 0 {
+        return Vec::new();
+    }
+
+    let defaults = GraphPosition::default();
+    let source = source.layout.unwrap_or_default();
+    let gap = 25.0;
+    let total_width = count as f64 * defaults.width + count.saturating_sub(1) as f64 * gap;
+    let step = defaults.width + gap;
+    let mut block = GraphPosition {
+        height: defaults.height,
+        left: source.left + (source.width - total_width) / 2.0,
+        top: source.top + source.height + gap,
+        width: total_width,
+    };
+    let intersects_existing = |candidate: GraphPosition| {
+        story
+            .passages
+            .iter()
+            .filter(|passage| !ignored_passage_ids.contains(&passage.id))
+            .any(|passage| graph_rects_intersect(passage.layout.unwrap_or_default(), candidate))
+    };
+
+    while intersects_existing(block) {
+        block.left += step;
+
+        if !intersects_existing(block) {
+            break;
+        }
+
+        block.left -= step * 2.0;
+
+        if !intersects_existing(block) {
+            break;
+        }
+
+        block.left += step;
+        block.top += defaults.height + gap;
+    }
+
+    (0..count)
+        .map(|index| GraphPosition {
+            left: block.left + index as f64 * step,
+            top: block.top,
+            ..defaults
+        })
+        .collect()
+}
+
 fn push_dirty_patch(patches: &mut Vec<Patch>, before: bool, after: bool) {
     if before != after {
         patches.push(Patch::DirtyStateChanged { dirty: after });
@@ -11017,6 +11198,129 @@ mod tests {
             .expect("updated passage document");
         assert_eq!(updated.text, "updated");
         assert!(updated.revision > initial.revision);
+    }
+
+    #[test]
+    fn passage_text_updates_create_and_clean_up_linked_passages_atomically() {
+        let mut session = session();
+        let created = session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "[[Next]] [[New One]] [[Label->New Two]]".into(),
+            })
+            .expect("linked passages should be created");
+
+        assert_eq!(session.project.stories[0].passages.len(), 5);
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("New One")
+                .is_some()
+        );
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("New Two")
+                .is_some()
+        );
+        assert_eq!(
+            created
+                .patches
+                .iter()
+                .filter(|patch| matches!(patch, Patch::PassageCreated { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(session.undo_stack.len(), 1);
+
+        let removed = session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "[[Next]]".into(),
+            })
+            .expect("untouched linked passages should be removed");
+
+        assert_eq!(session.project.stories[0].passages.len(), 3);
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("New One")
+                .is_none()
+        );
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("New Two")
+                .is_none()
+        );
+        assert_eq!(
+            removed
+                .patches
+                .iter()
+                .filter(|patch| matches!(patch, Patch::PassageDeleted { .. }))
+                .count(),
+            2
+        );
+
+        session.undo().expect("cleanup should be undoable");
+        assert_eq!(session.project.stories[0].passages.len(), 5);
+        assert_eq!(
+            session.project.stories[0]
+                .passage_by_id(&PassageId::new("a"))
+                .expect("source passage")
+                .text,
+            "[[Next]] [[New One]] [[Label->New Two]]"
+        );
+    }
+
+    #[test]
+    fn linked_passage_cleanup_preserves_passages_the_author_touched_or_relinked() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "[[Next]] [[Keep Tagged]] [[Keep Linked]]".into(),
+            })
+            .expect("linked passages should be created");
+        let tagged_id = session.project.stories[0]
+            .passage_by_name("Keep Tagged")
+            .expect("tagged target")
+            .id
+            .as_ref()
+            .to_owned();
+
+        session
+            .apply(StoryCommand::SetPassageTags {
+                passage_id: tagged_id,
+                story_id: "story-1".into(),
+                tags: vec!["kept".into()],
+            })
+            .expect("target should be tagged");
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "c".into(),
+                story_id: "story-1".into(),
+                text: "[[Keep Linked]]".into(),
+            })
+            .expect("second backlink should be created");
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "a".into(),
+                story_id: "story-1".into(),
+                text: "[[Next]]".into(),
+            })
+            .expect("source links should be removed");
+
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("Keep Tagged")
+                .is_some()
+        );
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("Keep Linked")
+                .is_some()
+        );
     }
 
     #[test]

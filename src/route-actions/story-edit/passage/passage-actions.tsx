@@ -36,13 +36,8 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 			throw new Error('Passage is unset');
 		}
 
-		// Don't create newly linked passages here because the update action will
-		// try to recreate the passage as it's been renamed--it sees new links in
-		// existing passages, updates them, but does not see that the passage name
-		// has been updated since that hasn't happened yet.
-
 		coreProjectHost.applyStoryCommand(
-			renamePassageCommand(story.id, passage.id, name, false)
+			renamePassageCommand(story.id, passage.id, name, true)
 		);
 	}
 
