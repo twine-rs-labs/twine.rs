@@ -85,9 +85,7 @@ describe('bundled editor integration fixtures', () => {
 
 			expect(hydrated.properties.source).toBe(source);
 			expect(hydrated.properties).toBe(raw);
-			expect(hydrated.diagnostic?.code).toBe(
-				'legacy-harlowe-editor-unsupported'
-			);
+			expect(hydrated.diagnostic?.code).toBe('legacy-harlowe-editor-skipped');
 			expect(defineMode).not.toHaveBeenCalled();
 		} finally {
 			(window as any).CodeMirror = originalCodeMirror;

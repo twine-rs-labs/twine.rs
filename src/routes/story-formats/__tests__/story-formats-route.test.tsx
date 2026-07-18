@@ -104,7 +104,7 @@ describe('<StoryFormatsRoute>', () => {
 		);
 	});
 
-	it('shows the Harlowe generic editor compatibility fallback', () => {
+	it('shows the exact bundled Harlowe native CM6 integration', () => {
 		const format = fakeLoadedStoryFormat(
 			{
 				name: 'Harlowe',
@@ -122,8 +122,10 @@ describe('<StoryFormatsRoute>', () => {
 		);
 
 		expect(
-			screen.getByText('Generic CM6 editor; legacy format toolbar unavailable')
+			screen.getByText('Native CM6 editor integration (harlowe-3.3.9)')
 		).toBeInTheDocument();
+		expect(screen.getAllByText('Autocomplete')).not.toHaveLength(0);
+		expect(screen.getAllByText('Supported').length).toBeGreaterThan(0);
 	});
 
 	it('surfaces a content-free runtime editor diagnostic', () => {

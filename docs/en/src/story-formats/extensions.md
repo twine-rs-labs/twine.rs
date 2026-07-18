@@ -13,10 +13,14 @@ commands, and toolbar are supported through this adapter. Extensions that use
 CodeMirror internals, arbitrary toolbar DOM, overlays, marks, custom events, or
 the old passage-dialog DOM are not run.
 
-Harlowe's legacy editor extension needs unsupported CodeMirror 5 internals, so
-Harlowe passages use the generic CodeMirror 6 syntax, completion, and link
-diagnostics instead. This affects only the editor; play, test, proof, and
-published story output continue to use the installed Harlowe runtime unchanged.
+Harlowe's legacy editor extension needs unsupported CodeMirror 5 internals and
+is never run. The exact bundled Harlowe 3.3.9 format instead uses a native
+CodeMirror 6 integration with Harlowe syntax coloring, completion, coding help,
+proofreading, scoped find and replace, preferences, keyboard commands, and its
+authoring toolbar. Other Harlowe versions and user-added builds use the generic
+editor unless they have a separately registered native integration. This
+affects only the editor; play, test, proof, and published story output continue
+to use the installed Harlowe runtime unchanged.
 
 The Formats screen shows the editor compatibility status for each installed
 format. If an extension calls unsupported APIs or fails while adapting,

@@ -15,6 +15,18 @@ export type IntegrationPreference = 'manual' | 'off';
 export type CodeEditorThemePreference =
 	'twine' | 'one-dark' | 'solarized-light' | 'solarized-dark' | 'high-contrast';
 
+export interface StoryFormatEditorPreferences {
+	codeUsesCodeFont: boolean;
+	codingTooltips: boolean;
+	completionsForKeywords: boolean;
+	completionsForMacros: boolean;
+}
+
+export type StoryFormatEditorPreferencesByDialect = Record<
+	string,
+	StoryFormatEditorPreferences
+>;
+
 export type PrefsAction =
 	| {type: 'init'; state: Partial<PrefsState>}
 	| {
@@ -27,7 +39,8 @@ export type PrefsAction =
 				| string[]
 				| {name: string; version: string}
 				| {name: string; version: string}[]
-				| Record<string, Color>;
+				| Record<string, Color>
+				| StoryFormatEditorPreferencesByDialect;
 	  }
 	| {type: 'repair'; allFormats: StoryFormat[]};
 
@@ -179,6 +192,10 @@ export interface PrefsState {
 	 * formats shown when setting it on a story.
 	 */
 	storyFormatListFilter: 'current' | 'all' | 'user';
+	/**
+	 * Native editor preferences keyed by exact dialect provider ID.
+	 */
+	storyFormatEditorPreferences: StoryFormatEditorPreferencesByDialect;
 	/**
 	 * How the story list should be sorted.
 	 */

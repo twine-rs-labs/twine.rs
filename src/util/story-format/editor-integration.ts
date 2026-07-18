@@ -1,4 +1,3 @@
-import type {Extension} from '@codemirror/state';
 import type {StoryFormat} from '../../store/story-formats';
 import {formatEditorExtensions} from './editor-extensions';
 import {isBundledUnsupportedHarloweFormat} from './hydrate-properties';
@@ -6,6 +5,10 @@ import {
 	createLegacyStreamModeAdapterRecipe,
 	LegacyStreamModeAdapterRecipe
 } from './legacy-editor/legacy-stream-mode';
+import type {
+	NativeEditorDialect,
+	NativeEditorProviderLoader
+} from './native-editor/types';
 
 export type GenericEditorFallbackReason =
 	| 'extensions-disabled'
@@ -14,6 +17,7 @@ export type GenericEditorFallbackReason =
 	| 'format-not-loaded'
 	| 'harlowe-legacy-incompatible'
 	| 'hydrate-error'
+	| 'native-editor-error'
 	| 'no-compatible-extension'
 	| 'no-editor-extension'
 	| 'unsupported-extension';
@@ -27,8 +31,10 @@ export interface GenericEditorFallback {
 }
 
 export interface NativeEditorIntegration {
-	extensions: readonly Extension[];
+	dialect: NativeEditorDialect;
+	formatId: string;
 	key: string;
+	loadProvider: NativeEditorProviderLoader;
 	ownsSyntax: boolean;
 	type: 'native';
 }
@@ -141,6 +147,15 @@ export function resolveStoryFormatEditorIntegration(
 
 	const native = options.nativeResolver?.(format);
 
+	if (
+		format.editorIntegrationDiagnostic?.code === 'native-editor-runtime-error'
+	) {
+		return genericFallback(
+			'native-editor-error',
+			format.editorIntegrationDiagnostic.message
+		);
+	}
+
 	if (native) {
 		return native;
 	}
@@ -148,6 +163,8 @@ export function resolveStoryFormatEditorIntegration(
 	if (
 		format.editorIntegrationDiagnostic?.code ===
 			'legacy-harlowe-editor-unsupported' ||
+		format.editorIntegrationDiagnostic?.code ===
+			'legacy-harlowe-editor-skipped' ||
 		isBundledUnsupportedHarloweFormat(format)
 	) {
 		return genericFallback(

@@ -43,8 +43,14 @@ describe('resolveStoryFormatEditorIntegration()', () => {
 	it('chooses an app-recognized native integration before legacy adaptation', () => {
 		const format = fakeLoadedStoryFormat();
 		const native = {
-			extensions: [],
+			dialect: {
+				family: 'test',
+				id: 'test-1',
+				version: '1'
+			},
+			formatId: format.id,
 			key: 'native-test',
+			loadProvider: jest.fn(),
 			ownsSyntax: true,
 			type: 'native' as const
 		};

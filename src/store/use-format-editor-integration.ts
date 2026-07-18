@@ -1,6 +1,9 @@
 import * as React from 'react';
 import {getAppInfo} from '../util/app-info';
-import {resolveStoryFormatEditorIntegration} from '../util/story-format';
+import {
+	resolveNativeStoryFormatEditorIntegration,
+	resolveStoryFormatEditorIntegration
+} from '../util/story-format';
 import {formatEditorExtensionsDisabled, usePrefsContext} from './prefs';
 import {loadFormatProperties, useStoryFormatsContext} from './story-formats';
 
@@ -34,6 +37,7 @@ export function useFormatEditorIntegration(
 		() =>
 			resolveStoryFormatEditorIntegration(format, {
 				disabled,
+				nativeResolver: resolveNativeStoryFormatEditorIntegration,
 				twineVersion: getAppInfo().twineCompatibilityVersion
 			}),
 		[disabled, format]

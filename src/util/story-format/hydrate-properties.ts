@@ -4,8 +4,10 @@ export interface StoryFormatHydrationDiagnostic {
 	code:
 		| 'hydrate-error'
 		| 'legacy-editor-runtime-error'
-		| 'legacy-harlowe-editor-unsupported';
-	feature?: 'command' | 'mode' | 'toolbar';
+		| 'legacy-harlowe-editor-skipped'
+		| 'legacy-harlowe-editor-unsupported'
+		| 'native-editor-runtime-error';
+	feature?: 'command' | 'mode' | 'provider' | 'toolbar';
 	message: string;
 	unsupportedApi?: string;
 }
@@ -71,8 +73,9 @@ export function hydrateStoryFormatProperties(
 	) {
 		return {
 			diagnostic: {
-				code: 'legacy-harlowe-editor-unsupported',
-				message: 'Generic CM6 editor; legacy format toolbar unavailable',
+				code: 'legacy-harlowe-editor-skipped',
+				message:
+					'Legacy CM5 editor runtime skipped; native CM6 integration is available',
 				unsupportedApi: 'Harlowe CodeMirror 5 editor runtime'
 			},
 			properties

@@ -2,6 +2,45 @@ import {PrefsAction, PrefsState} from './prefs.types';
 import {defaults} from './defaults';
 import {formatWithNameAndVersion, newestFormatNamed} from '../story-formats';
 
+function repairStoryFormatEditorPreferences(
+	value: PrefsState['storyFormatEditorPreferences'],
+	fallback: PrefsState['storyFormatEditorPreferences']
+) {
+	const defaultDialect = fallback['harlowe-3.3.9'];
+	const result: PrefsState['storyFormatEditorPreferences'] = {};
+
+	for (const [dialect, preferences] of Object.entries(value)) {
+		if (!preferences || typeof preferences !== 'object') {
+			continue;
+		}
+
+		result[dialect] = {
+			codeUsesCodeFont:
+				typeof preferences.codeUsesCodeFont === 'boolean'
+					? preferences.codeUsesCodeFont
+					: defaultDialect.codeUsesCodeFont,
+			codingTooltips:
+				typeof preferences.codingTooltips === 'boolean'
+					? preferences.codingTooltips
+					: defaultDialect.codingTooltips,
+			completionsForKeywords:
+				typeof preferences.completionsForKeywords === 'boolean'
+					? preferences.completionsForKeywords
+					: defaultDialect.completionsForKeywords,
+			completionsForMacros:
+				typeof preferences.completionsForMacros === 'boolean'
+					? preferences.completionsForMacros
+					: defaultDialect.completionsForMacros
+		};
+	}
+
+	result['harlowe-3.3.9'] = {
+		...defaultDialect,
+		...result['harlowe-3.3.9']
+	};
+	return result;
+}
+
 const validPreferenceValues: Partial<Record<keyof PrefsState, string[]>> = {
 	cloudSaveIntegration: ['off', 'manual'],
 	codeEditorTheme: [
@@ -82,6 +121,20 @@ export const reducer: React.Reducer<PrefsState, PrefsAction> = (
 
 			const {proofingFormat, storyFormat} = state;
 			const {allFormats} = action;
+			const repairedEditorPreferences = repairStoryFormatEditorPreferences(
+				state.storyFormatEditorPreferences &&
+					typeof state.storyFormatEditorPreferences === 'object'
+					? state.storyFormatEditorPreferences
+					: defs.storyFormatEditorPreferences,
+				defs.storyFormatEditorPreferences
+			);
+
+			if (
+				JSON.stringify(repairedEditorPreferences) !==
+				JSON.stringify(state.storyFormatEditorPreferences)
+			) {
+				changes.storyFormatEditorPreferences = repairedEditorPreferences;
+			}
 
 			try {
 				formatWithNameAndVersion(

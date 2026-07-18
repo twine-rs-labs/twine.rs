@@ -44,6 +44,14 @@ export const defaults = (): PrefsState => ({
 	revisionControlIntegration: 'manual',
 	shareLinkMode: 'local-file',
 	hostingPublishIntegration: 'manual',
+	storyFormatEditorPreferences: {
+		'harlowe-3.3.9': {
+			codeUsesCodeFont: true,
+			codingTooltips: true,
+			completionsForKeywords: true,
+			completionsForMacros: true
+		}
+	},
 	storyFormatListFilter: 'current',
 	storyListSort: 'name',
 	storyListTagFilter: [],

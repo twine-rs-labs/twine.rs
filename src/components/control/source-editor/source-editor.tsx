@@ -28,7 +28,8 @@ import {
 	autocompletion,
 	closeBrackets,
 	closeBracketsKeymap,
-	CompletionContext
+	CompletionContext,
+	type CompletionSource
 } from '@codemirror/autocomplete';
 import {css} from '@codemirror/lang-css';
 import {html} from '@codemirror/lang-html';
@@ -131,6 +132,7 @@ export interface SourceEditorHandle {
 export interface SourceEditorProps {
 	autocompletePassageNames?: string[];
 	brokenLinkNames?: string[];
+	completionSources?: readonly CompletionSource[];
 	dynamicExtensions?: Extension[];
 	dynamicExtensionsKey?: string;
 	id: string;
@@ -146,6 +148,7 @@ export interface SourceEditorProps {
 	searchQuery?: string;
 	searchRequestKey?: number | string;
 	selfLinkName?: string;
+	useCodeFont?: boolean;
 	value: string;
 }
 
@@ -840,7 +843,10 @@ function baseExtensions(
 		),
 		compartments.autocomplete.of(
 			autocompletion({
-				override: [completionSource(props.autocompletePassageNames)]
+				override: [
+					completionSource(props.autocompletePassageNames),
+					...(props.completionSources ?? [])
+				]
 			})
 		),
 		compartments.twineDecorations.of(
@@ -1233,11 +1239,14 @@ export const SourceEditor = React.forwardRef<
 		view?.dispatch({
 			effects: compartments.autocomplete.reconfigure(
 				autocompletion({
-					override: [completionSource(props.autocompletePassageNames)]
+					override: [
+						completionSource(props.autocompletePassageNames),
+						...(props.completionSources ?? [])
+					]
 				})
 			)
 		});
-	}, [props.autocompletePassageNames]);
+	}, [props.autocompletePassageNames, props.completionSources]);
 
 	React.useEffect(() => {
 		const view = viewRef.current;
@@ -1341,6 +1350,10 @@ export const SourceEditor = React.forwardRef<
 		? prefs.codeEditorFontScale
 		: prefs.passageEditorFontScale;
 	const editorStyle = {
+		'--source-editor-code-font-family': prefs.codeEditorFontFamily.includes(' ')
+			? `"${prefs.codeEditorFontFamily}"`
+			: prefs.codeEditorFontFamily,
+		'--source-editor-code-font-size': `${13 * prefs.codeEditorFontScale}px`,
 		'--source-editor-font-family': fontFamily.includes(' ')
 			? `"${fontFamily}"`
 			: fontFamily,
@@ -1351,7 +1364,7 @@ export const SourceEditor = React.forwardRef<
 		<div
 			className={`source-editor${
 				prefs.editorCursorBlinks ? '' : ' source-editor--static-cursor'
-			}`}
+			}${props.useCodeFont ? ' source-editor--syntax-code-font' : ''}`}
 			style={editorStyle}
 		>
 			<label className="screen-reader-only" htmlFor={`${props.id}-content`}>

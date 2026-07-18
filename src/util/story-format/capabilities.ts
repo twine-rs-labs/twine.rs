@@ -2,7 +2,8 @@ import type {
 	StoryFormatCapabilityDeclarations,
 	StoryFormatDeclaredModule,
 	StoryFormatModuleSlot,
-	StoryFormatProperties
+	StoryFormatProperties,
+	StoryFormat
 } from '../../store/story-formats';
 import {
 	declaredStoryFormatModules,
@@ -10,6 +11,7 @@ import {
 	storyFormatModuleSlots,
 	type StoryFormatResolvedModule
 } from './modules';
+import {resolveNativeStoryFormatEditorIntegration} from './native-editor/registry';
 
 export type StoryFormatBundleInclusionPolicy =
 	'legacy-monolith' | 'declared-modules' | 'runtime-only';
@@ -265,5 +267,29 @@ export function storyFormatCapabilities(
 		resolvedModules,
 		statistics: declared(properties, 'statistics', false),
 		syntax: declared(properties, 'syntax', syntax)
+	};
+}
+
+export function storyFormatCapabilitiesForFormat(format: StoryFormat) {
+	if (format.loadState !== 'loaded') {
+		return undefined;
+	}
+
+	const capabilities = storyFormatCapabilities(format.properties);
+	const native = resolveNativeStoryFormatEditorIntegration(format);
+
+	if (!native) {
+		return capabilities;
+	}
+
+	return {
+		...capabilities,
+		autocomplete: true,
+		docs: true,
+		editorToolbarActions: true,
+		lazyLoadedModules: true,
+		menuItems: true,
+		parser: true,
+		syntax: true
 	};
 }

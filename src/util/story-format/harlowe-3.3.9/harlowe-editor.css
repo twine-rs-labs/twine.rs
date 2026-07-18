@@ -1,0 +1,466 @@
+.cm-harlowe-3-cursor:not(.cm-harlowe-3-verbatim):not(.cm-harlowe-3-text) {
+	border-bottom: 2px solid var(--color-text-faint, darkgray);
+}
+
+.cm-harlowe-3-variableOccurrence,
+.cm-harlowe-3-hookOccurrence {
+	background: hsla(159, 50%, 75%, 1) !important;
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-variableOccurrence,
+[data-app-theme='dark'] .cm-harlowe-3-hookOccurrence {
+	background: hsla(159, 75%, 25%, 1);
+}
+
+.cm-harlowe-3-hook {
+	background-color: hsla(40, 100%, 50%, 0.05);
+}
+
+.cm-harlowe-3-hook-2 {
+	background-color: hsla(40, 100%, 50%, 0.1);
+}
+
+.cm-harlowe-3-hook-3 {
+	background-color: hsla(40, 100%, 50%, 0.15);
+}
+
+.cm-harlowe-3-hook-4 {
+	background-color: hsla(40, 100%, 50%, 0.2);
+}
+
+.cm-harlowe-3-hook-5 {
+	background-color: hsla(40, 100%, 50%, 0.25);
+}
+
+.cm-harlowe-3-hook-6 {
+	background-color: hsla(40, 100%, 50%, 0.3);
+}
+
+.cm-harlowe-3-hook-7 {
+	background-color: hsla(40, 100%, 50%, 0.35);
+}
+
+.cm-harlowe-3-hook-8 {
+	background-color: hsla(40, 100%, 50%, 0.4);
+}
+
+.cm-harlowe-3-unclosedHook {
+	background-color: hsla(40, 100%, 50%, 0.05);
+	font-weight: bold;
+}
+
+.cm-harlowe-3-hook.cm-harlowe-3-root,
+[class*=' cm-harlowe-3-hook-'] {
+	font-weight: bold;
+}
+
+.cm-harlowe-3-error:not(.cm-harlowe-3-string) {
+	background-color: hsla(17, 100%, 50%, 0.5) !important;
+}
+
+[class*='cm-harlowe-3-macroName'] {
+	font-style: italic;
+}
+
+.cm-harlowe-3-macro,
+.cm-harlowe-3-macroName-any,
+.cm-harlowe-3-macroName-custommacro,
+.cm-harlowe-3-macroName-macro,
+.cm-harlowe-3-comma,
+.cm-harlowe-3-spread,
+.cm-harlowe-3-addition {
+	color: hsl(320, 80%, 30%);
+}
+
+.cm-harlowe-3-macro {
+	font-weight: bold;
+}
+
+.cm-harlowe-3-macroName-boolean,
+.cm-harlowe-3-boolean,
+.cm-harlowe-3-is,
+.cm-harlowe-3-and,
+.cm-harlowe-3-or,
+.cm-harlowe-3-not,
+.cm-harlowe-3-isNot,
+.cm-harlowe-3-contains,
+.cm-harlowe-3-doesNotContain,
+.cm-harlowe-3-isIn,
+.cm-harlowe-3-isA,
+.cm-harlowe-3-isNotA,
+.cm-harlowe-3-isNotIn,
+.cm-harlowe-3-matches,
+.cm-harlowe-3-doesNotMatch {
+	color: hsl(0, 0%, 30%);
+}
+
+.cm-harlowe-3-macroName-array {
+	color: hsl(0, 100%, 30%);
+}
+
+.cm-harlowe-3-macroName-dataset {
+	color: hsl(30, 100%, 40%);
+}
+
+.cm-harlowe-3-macroName-number,
+.cm-harlowe-3-number,
+.cm-harlowe-3-cssTime,
+.cm-harlowe-3-subtraction,
+.cm-harlowe-3-multiplication,
+.cm-harlowe-3-division {
+	color: hsl(30, 100%, 30%);
+}
+
+.cm-harlowe-3-macroName-datamap {
+	color: hsl(60, 100%, 30%);
+}
+
+.cm-harlowe-3-macroName-changer {
+	color: hsl(90, 100%, 30%);
+}
+
+.cm-harlowe-3-macroName-string,
+.cm-harlowe-3-string {
+	color: hsl(180, 100%, 30%);
+}
+
+.cm-harlowe-3-macroName-datatype,
+.cm-harlowe-3-datatype {
+	color: hsl(220, 100%, 30%);
+}
+
+.cm-harlowe-3-macroName-colour,
+.cm-harlowe-3-macroName-gradient,
+.cm-harlowe-3-colour {
+	color: hsl(280, 100%, 30%);
+}
+
+.cm-harlowe-3-macroName-command,
+.cm-harlowe-3-macroName-instant,
+.cm-harlowe-3-macroName-metadata,
+.cm-harlowe-3-twineLink {
+	color: hsl(240, 100%, 20%);
+}
+
+.cm-harlowe-3-variable,
+.cm-harlowe-3-passageString {
+	color: hsl(200, 100%, 30%);
+}
+
+.cm-harlowe-3-tempVariable {
+	color: hsl(200, 70%, 20%);
+}
+
+.cm-harlowe-3-hookName {
+	color: hsl(160, 100%, 30%);
+}
+
+.cm-harlowe-3-passageString {
+	text-decoration: underline;
+}
+
+.cm-harlowe-3-tagString {
+	color: hsl(200, 100%, 30%);
+	text-decoration: underline 1px dotted;
+}
+
+.cm-harlowe-3-bold,
+.cm-harlowe-3-strong {
+	font-weight: bold;
+}
+
+.cm-harlowe-3-italic,
+.cm-harlowe-3-em {
+	font-style: italic;
+}
+
+.cm-harlowe-3-sup {
+	font-size: 0.8em;
+	vertical-align: super;
+}
+
+.cm-harlowe-3-strike {
+	text-decoration: line-through;
+}
+
+.cm-harlowe-3-verbatim {
+	background-color: hsla(0, 0%, 50%, 0.1);
+	font-family: var(--source-editor-font-family);
+}
+
+.cm-harlowe-3-comment,
+.cm-harlowe-3-scriptStyleTag,
+.cm-harlowe-3-tag {
+	color: hsl(240, 34%, 25%);
+}
+
+.cm-harlowe-3-collapsed,
+.cm-harlowe-3-unclosedCollapsed {
+	background-color: hsla(220, 100%, 50%, 0.025);
+	color: hsl(201, 100%, 30%);
+	font-weight: bold;
+}
+
+.cm-harlowe-3-collapsed.cm-harlowe-3-hook {
+	background-color: hsla(220, 100%, 50%, 0.05);
+}
+
+.cm-harlowe-3-collapsed.cm-harlowe-3-hook-2 {
+	background-color: hsla(220, 100%, 50%, 0.1);
+}
+
+.cm-harlowe-3-collapsed.cm-harlowe-3-hook-3 {
+	background-color: hsla(220, 100%, 50%, 0.15);
+}
+
+.cm-harlowe-3-collapsed.cm-harlowe-3-hook-4 {
+	background-color: hsla(220, 100%, 50%, 0.2);
+}
+
+.cm-harlowe-3-collapsed.cm-harlowe-3-hook-5 {
+	background-color: hsla(220, 100%, 50%, 0.25);
+}
+
+.cm-harlowe-3-collapsed.cm-harlowe-3-hook-6 {
+	background-color: hsla(220, 100%, 50%, 0.3);
+}
+
+.cm-harlowe-3-collapsed.cm-harlowe-3-hook-7 {
+	background-color: hsla(220, 100%, 50%, 0.35);
+}
+
+.cm-harlowe-3-collapsed.cm-harlowe-3-hook-8 {
+	background-color: hsla(220, 100%, 50%, 0.4);
+}
+
+.cm-harlowe-3-heading {
+	font-weight: bold;
+}
+
+.cm-harlowe-3-hr {
+	background-image: linear-gradient(
+		0deg,
+		transparent,
+		transparent 45%,
+		hsl(0, 0%, 75%) 45%,
+		transparent 55%,
+		transparent
+	);
+}
+
+.cm-harlowe-3-align {
+	background-color: hsla(14, 99%, 87%, 0.1);
+	color: hsl(14, 99%, 37%);
+}
+
+.cm-harlowe-3-column {
+	background-color: hsla(204, 99%, 87%, 0.1);
+	color: hsl(204, 99%, 37%);
+}
+
+.cm-harlowe-3-escapedLine {
+	color: hsl(51, 100%, 30%);
+	font-weight: bold;
+}
+
+.cm-harlowe-3-identifier,
+.cm-harlowe-3-property,
+.cm-harlowe-3-belongingProperty,
+.cm-harlowe-3-itsProperty,
+.cm-harlowe-3-belongingItProperty,
+.cm-harlowe-3-belongingItOperator,
+.cm-harlowe-3-possessiveOperator,
+.cm-harlowe-3-belongingOperator {
+	color: hsl(200, 80%, 40%);
+}
+
+.cm-harlowe-3-where,
+.cm-harlowe-3-via,
+.cm-harlowe-3-with,
+.cm-harlowe-3-making,
+.cm-harlowe-3-each,
+.cm-harlowe-3-when {
+	color: hsl(120, 100%, 40%);
+	font-style: italic;
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-macro,
+[data-app-theme='dark'] .cm-harlowe-3-macroName-any,
+[data-app-theme='dark'] .cm-harlowe-3-macroName-custommacro,
+[data-app-theme='dark'] .cm-harlowe-3-macroName-macro {
+	color: hsl(320, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-macroName-boolean,
+[data-app-theme='dark'] .cm-harlowe-3-boolean,
+[data-app-theme='dark'] .cm-harlowe-3-is,
+[data-app-theme='dark'] .cm-harlowe-3-and,
+[data-app-theme='dark'] .cm-harlowe-3-or,
+[data-app-theme='dark'] .cm-harlowe-3-not,
+[data-app-theme='dark'] .cm-harlowe-3-isNot,
+[data-app-theme='dark'] .cm-harlowe-3-contains,
+[data-app-theme='dark'] .cm-harlowe-3-doesNotContain,
+[data-app-theme='dark'] .cm-harlowe-3-isIn,
+[data-app-theme='dark'] .cm-harlowe-3-isA,
+[data-app-theme='dark'] .cm-harlowe-3-isNotA,
+[data-app-theme='dark'] .cm-harlowe-3-isNotIn,
+[data-app-theme='dark'] .cm-harlowe-3-matches,
+[data-app-theme='dark'] .cm-harlowe-3-doesNotMatch {
+	color: hsl(0, 0%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-macroName-array {
+	color: hsl(0, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-macroName-dataset,
+[data-app-theme='dark'] .cm-harlowe-3-macroName-number,
+[data-app-theme='dark'] .cm-harlowe-3-number,
+[data-app-theme='dark'] .cm-harlowe-3-cssTime,
+[data-app-theme='dark'] .cm-harlowe-3-subtraction,
+[data-app-theme='dark'] .cm-harlowe-3-multiplication,
+[data-app-theme='dark'] .cm-harlowe-3-division {
+	color: hsl(30, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-macroName-datamap {
+	color: hsl(60, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-macroName-changer {
+	color: hsl(90, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-variable,
+[data-app-theme='dark'] .cm-harlowe-3-passageString,
+[data-app-theme='dark'] .cm-harlowe-3-tagString {
+	color: hsl(200, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-tempVariable {
+	color: hsl(200, 100%, 80%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-hookName {
+	color: hsl(160, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-string,
+[data-app-theme='dark'] .cm-harlowe-3-macroName-string {
+	color: hsl(180, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-macroName-datatype,
+[data-app-theme='dark'] .cm-harlowe-3-datatype {
+	color: hsl(220, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-macroName-colour,
+[data-app-theme='dark'] .cm-harlowe-3-macroName-gradient,
+[data-app-theme='dark'] .cm-harlowe-3-colour {
+	color: hsl(280, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-macroName-command,
+[data-app-theme='dark'] .cm-harlowe-3-macroName-instant,
+[data-app-theme='dark'] .cm-harlowe-3-macroName-metadata,
+[data-app-theme='dark'] .cm-harlowe-3-twineLink {
+	color: hsl(240, 100%, 80%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-comment,
+[data-app-theme='dark'] .cm-harlowe-3-scriptStyleTag,
+[data-app-theme='dark'] .cm-harlowe-3-tag {
+	color: hsl(240, 51%, 75%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-collapsed,
+[data-app-theme='dark'] .cm-harlowe-3-unclosedCollapsed {
+	color: hsl(201, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-hr {
+	background-image: linear-gradient(
+		0deg,
+		transparent,
+		transparent 45%,
+		hsl(0, 0%, 25%) 45%,
+		transparent 55%,
+		transparent
+	);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-align {
+	background-color: hsla(14, 100%, 13%, 0.1);
+	color: hsl(14, 100%, 63%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-column {
+	background-color: hsla(204, 100%, 13%, 0.1);
+	color: hsl(204, 100%, 63%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-escapedLine {
+	color: hsl(51, 100%, 70%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-identifier,
+[data-app-theme='dark'] .cm-harlowe-3-property,
+[data-app-theme='dark'] .cm-harlowe-3-belongingProperty,
+[data-app-theme='dark'] .cm-harlowe-3-itsProperty,
+[data-app-theme='dark'] .cm-harlowe-3-belongingItProperty,
+[data-app-theme='dark'] .cm-harlowe-3-belongingItOperator,
+[data-app-theme='dark'] .cm-harlowe-3-possessiveOperator,
+[data-app-theme='dark'] .cm-harlowe-3-belongingOperator {
+	color: hsl(200, 100%, 60%);
+}
+
+[data-app-theme='dark'] .cm-harlowe-3-where,
+[data-app-theme='dark'] .cm-harlowe-3-via,
+[data-app-theme='dark'] .cm-harlowe-3-with,
+[data-app-theme='dark'] .cm-harlowe-3-making,
+[data-app-theme='dark'] .cm-harlowe-3-each,
+[data-app-theme='dark'] .cm-harlowe-3-when {
+	color: hsl(120, 100%, 60%);
+}
+
+.cm-harlowe-3-findResult {
+	background-color: hsla(280, 100%, 70%, 0.4) !important;
+}
+
+.cm-harlowe-3-findResultCurrent {
+	background-color: hsla(320, 100%, 70%, 0.6) !important;
+}
+
+.cm-harlowe-3-proofreading
+	.cm-harlowe-3-root:not(.cm-harlowe-3-text):not(.cm-harlowe-3-string):not(
+		.cm-harlowe-3-verbatim
+	) {
+	opacity: 0.25;
+}
+
+.source-editor--syntax-code-font
+	.cm-harlowe-3-root:not(.cm-harlowe-3-text):not(.cm-harlowe-3-verbatim) {
+	font-family: var(--source-editor-code-font-family);
+	font-size: var(--source-editor-code-font-size);
+}
+
+.harlowe-native-tooltip {
+	background: var(--color-background, Canvas);
+	border: 1px solid var(--color-border, GrayText);
+	color: var(--color-text, CanvasText);
+	max-width: 24rem;
+	padding: 0.5rem;
+}
+
+.harlowe-native-tooltip-signature {
+	border-top: 1px solid var(--color-border, GrayText);
+	display: block;
+	font-family: var(--font-mono);
+	margin-top: 0.35rem;
+	padding-top: 0.35rem;
+}
+
+.harlowe-native-tooltip p {
+	margin: 0.5rem 0 0;
+}

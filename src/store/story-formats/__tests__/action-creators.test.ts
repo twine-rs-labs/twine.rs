@@ -287,8 +287,9 @@ describe('loadFormatProperties', () => {
 				).toBeUndefined();
 				expect(dispatch.mock.calls[1][0].props).toEqual({
 					editorIntegrationDiagnostic: {
-						code: 'legacy-harlowe-editor-unsupported',
-						message: 'Generic CM6 editor; legacy format toolbar unavailable',
+						code: 'legacy-harlowe-editor-skipped',
+						message:
+							'Legacy CM5 editor runtime skipped; native CM6 integration is available',
 						unsupportedApi: 'Harlowe CodeMirror 5 editor runtime'
 					},
 					loadState: 'loaded',

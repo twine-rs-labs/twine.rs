@@ -1,0 +1,380 @@
+.harlowe-native-toolbar {
+	background: var(--ink-2);
+	border-top: 1px solid var(--line-1);
+	flex: none;
+	overflow-x: auto;
+	padding: var(--sp-1) var(--sp-2);
+}
+
+.harlowe-native-toolbar .button-bar {
+	min-width: max-content;
+}
+
+.harlowe-native-panel {
+	background: var(--ink-2);
+	border-top: 1px solid var(--line-2);
+	flex: none;
+	max-height: min(55%, 34rem);
+	overflow: auto;
+	padding: var(--sp-2) var(--sp-3);
+}
+
+.harlowe-native-panel > header {
+	align-items: center;
+	display: flex;
+	justify-content: space-between;
+	margin-bottom: var(--sp-2);
+}
+
+.harlowe-native-panel-body {
+	display: grid;
+	gap: var(--sp-2);
+}
+
+.harlowe-native-panel-body textarea {
+	background: var(--ink-3);
+	border: 1px solid var(--line-2);
+	color: var(--tx-1);
+	display: block;
+	font: inherit;
+	min-height: 5rem;
+	width: 100%;
+}
+
+.harlowe-native-preview {
+	align-items: center;
+	background: #000;
+	border: 0;
+	box-sizing: border-box;
+	color: #fff;
+	display: flex;
+	font-family: Georgia, serif;
+	font-size: 1.25rem;
+	justify-content: center;
+	margin: 0 auto;
+	min-height: 4.5rem;
+	overflow: hidden;
+	padding: var(--sp-2);
+	position: sticky;
+	text-align: center;
+	top: 0;
+	width: min(100%, 34rem);
+	z-index: 1;
+}
+
+.harlowe-native-preview > span {
+	box-sizing: border-box;
+	display: inline-block;
+}
+
+.harlowe-native-preview textarea {
+	background: #000;
+	border: 2px solid #fff;
+	box-sizing: border-box;
+	color: #fff;
+	font-family: Georgia, serif;
+	resize: none;
+}
+
+.harlowe-native-columns-preview {
+	align-items: stretch;
+	gap: var(--sp-1);
+}
+
+.harlowe-native-columns-preview > span {
+	align-content: center;
+	background: #222;
+	min-width: 0;
+	padding: var(--sp-1);
+}
+
+.harlowe-native-preview--blink > span {
+	animation: harlowe-native-blink 1s step-end infinite;
+}
+
+.harlowe-native-preview--fade-in-out > span {
+	animation: harlowe-native-fade 2s ease-in-out infinite alternate;
+}
+
+.harlowe-native-preview--rumble > span {
+	animation: harlowe-native-rumble 0.12s linear infinite;
+}
+
+.harlowe-native-preview--shudder > span {
+	animation: harlowe-native-shudder 0.12s linear infinite;
+}
+
+.harlowe-native-preview--sway > span {
+	animation: harlowe-native-sway 2s ease-in-out infinite alternate;
+}
+
+.harlowe-native-preview--buoy > span {
+	animation: harlowe-native-buoy 5s linear infinite;
+}
+
+.harlowe-native-preview--fidget > span {
+	animation: harlowe-native-fidget 8s ease-in-out infinite;
+}
+
+.harlowe-native-transition-preview {
+	cursor: pointer;
+	gap: var(--sp-2);
+	width: min(100%, 34rem);
+}
+
+.harlowe-native-transition {
+	animation-fill-mode: both;
+	animation-iteration-count: 1;
+}
+
+.harlowe-native-transition--depart {
+	animation-direction: reverse;
+	position: absolute;
+}
+
+.harlowe-native-transition--instant,
+.harlowe-native-transition--default {
+	animation: none;
+}
+
+.harlowe-native-transition--dissolve {
+	animation-name: harlowe-native-transition-dissolve;
+}
+
+.harlowe-native-transition--blur {
+	animation-name: harlowe-native-transition-blur;
+}
+
+.harlowe-native-transition--rumble {
+	animation-name: harlowe-native-rumble;
+}
+
+.harlowe-native-transition--shudder {
+	animation-name: harlowe-native-shudder;
+}
+
+.harlowe-native-transition--pulse {
+	animation-name: harlowe-native-transition-pulse;
+}
+
+.harlowe-native-transition--zoom {
+	animation-name: harlowe-native-transition-zoom;
+}
+
+.harlowe-native-transition--flicker {
+	animation-name: harlowe-native-transition-flicker;
+}
+
+.harlowe-native-transition--slide-left,
+.harlowe-native-transition--fade-left {
+	animation-name: harlowe-native-transition-left;
+}
+
+.harlowe-native-transition--slide-right,
+.harlowe-native-transition--fade-right {
+	animation-name: harlowe-native-transition-right;
+}
+
+.harlowe-native-transition--slide-up,
+.harlowe-native-transition--fade-up {
+	animation-name: harlowe-native-transition-up;
+}
+
+.harlowe-native-transition--slide-down,
+.harlowe-native-transition--fade-down {
+	animation-name: harlowe-native-transition-down;
+}
+
+.harlowe-native-transition--fade-left,
+.harlowe-native-transition--fade-right,
+.harlowe-native-transition--fade-up,
+.harlowe-native-transition--fade-down {
+	animation-timing-function: ease;
+}
+
+@keyframes harlowe-native-blink {
+	50% {
+		opacity: 0;
+	}
+}
+
+@keyframes harlowe-native-fade {
+	to {
+		opacity: 0;
+	}
+}
+
+@keyframes harlowe-native-rumble {
+	25% {
+		transform: translate(-1px, 1px);
+	}
+
+	50% {
+		transform: translate(1px, -1px);
+	}
+
+	75% {
+		transform: translate(1px, 1px);
+	}
+}
+
+@keyframes harlowe-native-shudder {
+	25% {
+		transform: translateX(-2px);
+	}
+
+	75% {
+		transform: translateX(2px);
+	}
+}
+
+@keyframes harlowe-native-sway {
+	to {
+		transform: rotate(8deg);
+	}
+}
+
+@keyframes harlowe-native-buoy {
+	50% {
+		transform: translateY(-0.4em);
+	}
+}
+
+@keyframes harlowe-native-fidget {
+	25% {
+		transform: translate(-0.15em, 0.1em) rotate(-2deg);
+	}
+
+	50% {
+		transform: translate(0.1em, -0.12em) rotate(1deg);
+	}
+
+	75% {
+		transform: translate(0.12em, 0.12em) rotate(2deg);
+	}
+}
+
+@keyframes harlowe-native-transition-dissolve {
+	from {
+		opacity: 0;
+	}
+}
+
+@keyframes harlowe-native-transition-blur {
+	from {
+		filter: blur(0.5em);
+		opacity: 0;
+	}
+}
+
+@keyframes harlowe-native-transition-pulse {
+	from {
+		opacity: 0;
+		transform: scale(0.7);
+	}
+
+	60% {
+		transform: scale(1.1);
+	}
+}
+
+@keyframes harlowe-native-transition-zoom {
+	from {
+		opacity: 0;
+		transform: scale(0);
+	}
+}
+
+@keyframes harlowe-native-transition-flicker {
+	0%,
+	40%,
+	80% {
+		opacity: 0;
+	}
+
+	20%,
+	60%,
+	100% {
+		opacity: 1;
+	}
+}
+
+@keyframes harlowe-native-transition-left {
+	from {
+		opacity: 0;
+		transform: translateX(-100%);
+	}
+}
+
+@keyframes harlowe-native-transition-right {
+	from {
+		opacity: 0;
+		transform: translateX(100%);
+	}
+}
+
+@keyframes harlowe-native-transition-up {
+	from {
+		opacity: 0;
+		transform: translateY(-100%);
+	}
+}
+
+@keyframes harlowe-native-transition-down {
+	from {
+		opacity: 0;
+		transform: translateY(100%);
+	}
+}
+
+.harlowe-native-option-grid {
+	display: grid;
+	gap: var(--sp-1) var(--sp-3);
+	grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+}
+
+.harlowe-native-field-row {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--sp-2);
+}
+
+.harlowe-native-border-grid,
+.harlowe-native-columns-grid {
+	align-items: center;
+	display: grid;
+	gap: var(--sp-2);
+	grid-template-columns: minmax(5rem, auto) repeat(3, minmax(5rem, 1fr));
+}
+
+.harlowe-native-panel-actions {
+	display: flex;
+	gap: var(--sp-2);
+	justify-content: flex-end;
+	margin-top: var(--sp-2);
+}
+
+.harlowe-native-macro-help {
+	border: 1px solid var(--line-1);
+	padding: var(--sp-2);
+}
+
+.harlowe-native-macro-help p {
+	margin: var(--sp-2) 0;
+}
+
+.cm-harlowe-3-proofreading
+	[class*='cm-harlowe-3-']:not(.cm-harlowe-3-text):not(
+		.cm-harlowe-3-string
+	):not(.cm-harlowe-3-verbatim) {
+	opacity: 0.25;
+}
+
+.cm-harlowe-3-findResult {
+	background-color: hsla(280, 100%, 70%, 0.4);
+}
+
+.cm-harlowe-3-findResultCurrent {
+	background-color: hsla(320, 100%, 70%, 0.6);
+}

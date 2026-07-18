@@ -16,3 +16,5 @@ public/story-formats
 src/core/bindings
 src/core/wasm/pkg
 src/electron/main-process/native
+src/util/story-format/harlowe-3.3.9/harlowe-macros-vendor.js
+src/util/story-format/harlowe-3.3.9/harlowe-parser-vendor.js

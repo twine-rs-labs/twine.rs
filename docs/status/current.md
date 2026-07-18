@@ -37,8 +37,11 @@ phase is optimization and release validation, not another ownership migration.
   perf-only cache-build and touched-source attribution.
 - CodeMirror 6 on every active editing surface, with a bounded per-editor
   adapter for compatible Chapbook legacy modes, commands, and toolbar
-  descriptors. Harlowe and unsupported extensions fail closed to the generic
-  editor without changing story-format runtime source.
+  descriptors. The exact bundled Harlowe 3.3.9 format has a lazy native CM6
+  provider with its extracted parser, syntax coloring, completions, coding
+  help, proofreading, scoped find/replace, preferences, keyboard commands, and
+  format toolbar. Its legacy hydration is still rejected before execution, and
+  story-format runtime source remains unchanged.
 - Instrumented Chapbook performance fixtures prove zero adapter/index rebuilds
   across 22 warmed edit/undo/redo samples, zero long tasks across 20 complete
   input-to-paint windows, zero rebuilds at beginning/middle/end locations, and
@@ -81,6 +84,10 @@ The complete local 10k and 50k benchmark runs verify:
 - Preview/debug runtime inspection is not yet complete across all desktop
   surfaces.
 - Some inherited compatibility UI remains outside the primary workbench.
+- Native Harlowe editing is intentionally exact-version: bundled Harlowe 1.2.4
+  and 2.1.0, user-added Harlowe builds, and future Harlowe dialects use the
+  generic editor until a separately registered provider proves their syntax
+  and authoring behavior.
 - Packaged-app, cross-platform, and hosted-CI performance coverage remains
   incomplete.
 - The user manual is still predominantly inherited Twine documentation and
@@ -90,8 +97,6 @@ The complete local 10k and 50k benchmark runs verify:
 
 Only unfinished outcomes belong in the active roadmap:
 
-1. [`CodeMirror 6 migration`](../roadmap/codemirror-6-migration.md) — accept
-   and compare a clean same-revision Electron baseline.
-2. [`Performance optimization`](../roadmap/performance.md)
-3. [`Product-depth and legacy retirement`](../roadmap/product.md)
-4. [`Release validation`](../roadmap/release.md)
+1. [`Performance optimization`](../roadmap/performance.md)
+2. [`Product-depth and legacy retirement`](../roadmap/product.md)
+3. [`Release validation`](../roadmap/release.md)

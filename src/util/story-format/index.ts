@@ -4,4 +4,7 @@ export * from './editor-integration';
 export * from './hydrate-properties';
 export * from './fetch-properties';
 export * from './modules';
+export * from './native-editor/registry';
+export * from './native-editor/types';
+export * from './native-editor/use-native-editor-session';
 export * from './namespace';

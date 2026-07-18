@@ -73,18 +73,34 @@ current graph projection are the supported product paths.
 
 Story-format editor compatibility is similarly bounded. All editing surfaces
 use the app-owned CodeMirror 6 `SourceEditor` or an intentional native textarea.
-Compatible legacy stream modes, commands, and toolbar descriptors run through
-per-editor adapters with app-owned types; formats never receive a raw
-CodeMirror 6 view. Unsupported API access fails closed to generic syntax and is
-reported without passage content. Harlowe's DOM- and CodeMirror-5-coupled
-hydration is rejected before execution, while its serialized runtime source is
-left unchanged for play, test, proof, and publish.
+The resolver selects exactly one syntax owner: an exact app-owned native
+provider, a compatible bounded legacy adapter, or generic Twine syntax.
+Providers and adapters receive app-owned host interfaces rather than a raw
+CodeMirror 6 view. Unsupported API access or provider failure falls back to
+generic syntax and is reported without passage content.
+
+The exact bundled Harlowe 3.3.9 identity resolves to a lazy native provider.
+Each editor creates and disposes its own controller/session, while parser and
+macro metadata are immutable dialect-local assets. The provider uses only the
+pure lexer, markup parser, and static macro metadata extracted from that exact
+bundle; this presentation state is not an authority for persistence, graph
+projection, core diagnostics, builds, or publishing. Harlowe's DOM- and
+CodeMirror-5-coupled hydration is still rejected before execution, and its
+serialized runtime source is unchanged for play, test, proof, and publish.
+Harlowe 1.2.4, 2.1.0, user-added builds, and future dialects do not inherit
+3.3.9 behavior by name or semver: each needs its own exact provider
+registration or uses the generic editor.
 
 CodeMirror retains each `StreamLanguage` node type for the renderer lifetime.
 The resolver therefore caches one immutable language recipe per hydrated format
 identity, while each editor installs a facet-scoped disposable runtime. Editor
 teardown clears that runtime's document service, format mode, and diagnostic
 callback so the shared language cannot retain passage or React state.
+
+Native providers follow the same lifetime boundary. Only their immutable
+integration descriptor and lazily imported module are shared; selections,
+find state, proofreading state, preferences, and failure containment belong to
+the individual editor session.
 
 `npm run check:no-codemirror5` prevents the removed CodeMirror 5 runtime and
 React wrapper from returning to production source.

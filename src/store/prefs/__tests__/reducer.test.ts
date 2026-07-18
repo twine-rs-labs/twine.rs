@@ -81,6 +81,39 @@ describe('Pref reducer', () => {
 				})
 			).toEqual(expect.objectContaining({donateShown: defs.donateShown})));
 
+		it('repairs dialect-scoped native editor preferences field by field', () => {
+			const result = reducer(
+				{
+					...defs,
+					storyFormatEditorPreferences: {
+						'future-harlowe': {
+							codeUsesCodeFont: false,
+							codingTooltips: 'bad',
+							completionsForKeywords: false,
+							completionsForMacros: true
+						},
+						'harlowe-3.3.9': {
+							codeUsesCodeFont: false
+						}
+					}
+				} as any,
+				{allFormats, type: 'repair'}
+			);
+
+			expect(result.storyFormatEditorPreferences).toEqual({
+				'future-harlowe': {
+					codeUsesCodeFont: false,
+					codingTooltips: true,
+					completionsForKeywords: false,
+					completionsForMacros: true
+				},
+				'harlowe-3.3.9': {
+					...defs.storyFormatEditorPreferences['harlowe-3.3.9'],
+					codeUsesCodeFont: false
+				}
+			});
+		});
+
 		it.each([NaN, Infinity])('replaces a %d with a number', value => {
 			const result = reducer({...defs, firstRunTime: value} as any, {
 				allFormats,

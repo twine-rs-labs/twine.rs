@@ -7,13 +7,30 @@ Source of truth: CodeMirror 6 editor host and bounded legacy adapter implementat
 Scope: editor migration and bounded compatibility with documented CodeMirror 5
 story-format extensions
 
+## Post-completion native Harlowe update
+
+The separate native follow-up named by this completed migration is now
+implemented for the exact bundled Harlowe 3.3.9 identity. It lazy-loads an
+app-owned CM6 provider with the format's extracted parser and macro metadata,
+syntax coloring, completions, cursor coding help, proofreading, scoped
+find/replace, preferences, keyboard commands, and format toolbar. It does not
+run Harlowe's CM5/DOM hydration or change runtime/publish source.
+
+The resolver now selects an exact native provider first, then the bounded
+legacy adapter, then generic CM6. Harlowe 1.2.4, 2.1.0, user-added Harlowe
+builds, and future dialects remain generic unless separately registered. The
+remaining fallback language and matrices in this document describe the
+original migration's acceptance boundary and historical evidence, not the
+current capability of bundled Harlowe 3.3.9.
+
 ## Implementation status
 
 Phases 1–7 are implemented. Every active editor now uses CodeMirror 6 or an
 intentional textarea; Chapbook 1.2.3 and 2.3.1 run through the bounded,
-per-editor stream-mode/facade/toolbar adapter; Harlowe is rejected before its
-legacy editor hydration executes; and the CodeMirror 5 packages and production
-imports are removed.
+per-editor stream-mode/facade/toolbar adapter; Harlowe's legacy hydration is
+rejected before it executes; and the CodeMirror 5 packages and production
+imports are removed. Bundled Harlowe 3.3.9 now takes the native path described
+above.
 
 Phase 8 has reproducible default and Chapbook 2.3.1 Electron fixtures. The
 Chapbook fixture includes a 4,096-line variable section and content-free
@@ -120,8 +137,9 @@ A native Harlowe CodeMirror 6 integration is a separate follow-up tier.
   resolve through the bounded per-view mode, command-facade, and React-toolbar
   adapter. Runtime failures disable only the failing editor integration and
   attach a content-free diagnostic to the installed format.
-- Bundled Harlowe 3.3.9 is rejected before its legacy editor hydration runs and
-  retains generic CodeMirror 6 editing.
+- Bundled Harlowe 3.3.9 is rejected before its legacy editor hydration runs,
+  then resolves the exact app-owned native provider. Other Harlowe identities
+  retain generic CodeMirror 6 editing.
 - Story imports retain only format name and version. The installed
   `format.js` is authoritative for editor integration.
 - `codemirror`, `react-codemirror2`, `@types/codemirror`, `CodeArea`, and the
@@ -134,7 +152,8 @@ A native Harlowe CodeMirror 6 integration is a separate follow-up tier.
 
 For a loaded story format, resolve exactly one editing path:
 
-1. A future/native app-recognized CodeMirror 6 integration, when present.
+1. An exact app-recognized native CodeMirror 6 integration, currently bundled
+   Harlowe 3.3.9.
 2. A legacy CodeMirror 5 extension accepted by the bounded adapter.
 3. Generic CodeMirror 6 Twine editing.
 
@@ -142,8 +161,8 @@ Never stack native, adapted, and generic format syntax. Generic link
 completion and broken-link diagnostics may remain as orthogonal extensions,
 but format-specific tokenization must have a single owner.
 
-The native branch is a resolver seam in this tier, not a public API promise.
-Before third-party native extensions are accepted, define a separately
+The native branch is app-owned and exact-identity-scoped, not a public API
+promise. Before third-party native extensions are accepted, define a separately
 versioned host API rather than exposing unversioned CodeMirror package objects.
 
 ### Supported legacy mode surface

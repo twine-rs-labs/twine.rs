@@ -24,8 +24,9 @@ import {
 	hydrateStoryFormatProperties,
 	inspectStoryFormatPublishSafety,
 	isBundledUnsupportedHarloweFormat,
+	resolveNativeStoryFormatEditorIntegration,
 	resolveStoryFormatEditorIntegration,
-	storyFormatCapabilities
+	storyFormatCapabilitiesForFormat
 } from '../../util/story-format';
 import './story-formats-route.css';
 
@@ -147,9 +148,7 @@ function filterCount(formats: StoryFormat[], filter: FormatFilter) {
 }
 
 function loadedCapabilities(format: StoryFormat) {
-	return format.loadState === 'loaded'
-		? storyFormatCapabilities(format.properties)
-		: undefined;
+	return storyFormatCapabilitiesForFormat(format);
 }
 
 function loadedSafety(format: StoryFormat) {
@@ -261,6 +260,7 @@ export const StoryFormatsRoute: React.FC = () => {
 	const selectedEditorIntegration = selectedFormat
 		? resolveStoryFormatEditorIntegration(selectedFormat, {
 				disabled: editorExtensionsDisabled,
+				nativeResolver: resolveNativeStoryFormatEditorIntegration,
 				twineVersion: getAppInfo().twineCompatibilityVersion
 			})
 		: undefined;
@@ -649,26 +649,33 @@ export const StoryFormatsRoute: React.FC = () => {
 							<div className="story-formats-route__row">
 								<TablerIcon
 									icon={
-										selectedFormat.editorIntegrationDiagnostic
-											? 'alert-triangle'
-											: selectedEditorIntegration?.type === 'adapted-legacy'
-												? 'circle-check'
-												: 'info-circle'
+										selectedEditorIntegration?.type === 'native'
+											? 'circle-check'
+											: selectedFormat.editorIntegrationDiagnostic
+												? 'alert-triangle'
+												: selectedEditorIntegration?.type === 'adapted-legacy'
+													? 'circle-check'
+													: 'info-circle'
 									}
 								/>
 								<span className="story-formats-route__row-label">
-									{selectedFormat.editorIntegrationDiagnostic?.message ??
-										(selectedEditorIntegration?.type === 'adapted-legacy'
-											? 'Adapted legacy editor integration'
-											: selectedEditorIntegration?.type === 'native'
-												? 'Native CM6 editor integration'
-												: selectedEditorIntegration?.message)}
+									{selectedEditorIntegration?.type === 'native'
+										? `Native CM6 editor integration (${selectedEditorIntegration.dialect.id})`
+										: (selectedFormat.editorIntegrationDiagnostic?.message ??
+											(selectedEditorIntegration?.type === 'adapted-legacy'
+												? 'Adapted legacy editor integration'
+												: selectedEditorIntegration?.message))}
 								</span>
-								{selectedFormat.editorIntegrationDiagnostic?.unsupportedApi && (
-									<span className="story-formats-route__row-value">
-										{selectedFormat.editorIntegrationDiagnostic.unsupportedApi}
-									</span>
-								)}
+								{selectedEditorIntegration?.type !== 'native' &&
+									selectedFormat.editorIntegrationDiagnostic
+										?.unsupportedApi && (
+										<span className="story-formats-route__row-value">
+											{
+												selectedFormat.editorIntegrationDiagnostic
+													.unsupportedApi
+											}
+										</span>
+									)}
 							</div>
 
 							<div className="story-formats-route__section-title">

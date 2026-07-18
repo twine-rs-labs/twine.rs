@@ -334,6 +334,36 @@ describe('<SourceEditor>', () => {
 		expect(handle.isAlive()).toBe(false);
 	});
 
+	it('scopes the format code-font preference to dialect syntax', async () => {
+		const {container, rerender} = render(
+			<SourceEditor
+				id="dialect-font-editor"
+				label="Dialect font editor"
+				onChange={jest.fn()}
+				useCodeFont
+				value="prose (print: $value)"
+			/>
+		);
+
+		await waitFor(() =>
+			expect(container.querySelector('.source-editor')).toHaveClass(
+				'source-editor--syntax-code-font'
+			)
+		);
+
+		rerender(
+			<SourceEditor
+				id="dialect-font-editor"
+				label="Dialect font editor"
+				onChange={jest.fn()}
+				value="prose (print: $value)"
+			/>
+		);
+		expect(container.querySelector('.source-editor')).not.toHaveClass(
+			'source-editor--syntax-code-font'
+		);
+	});
+
 	it('exposes controlled snapshots, edits, selections, and commands', async () => {
 		const editor = React.createRef<SourceEditorHandle>();
 		const onDocumentChange = jest.fn();

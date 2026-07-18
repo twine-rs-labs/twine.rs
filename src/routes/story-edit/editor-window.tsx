@@ -23,6 +23,7 @@ import {
 import type {CoreStoryIndex, WorkbenchSelection} from '../../core';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import {Passage, Story, storyPassageTags} from '../../store/stories';
+import {defaults, usePrefsContext} from '../../store/prefs';
 import {useStoryFormatsContext} from '../../store/story-formats';
 import {useFormatEditorIntegration} from '../../store/use-format-editor-integration';
 import {Color, colorString} from '../../util/color';
@@ -32,6 +33,7 @@ import {
 	createLegacyStreamDocumentService,
 	type LegacyStreamModeAdapter
 } from '../../util/story-format/legacy-editor/legacy-stream-mode';
+import {useNativeEditorSession} from '../../util/story-format';
 import type {EditorWindowSpec} from './editor-window-spec';
 import {StoryFormatToolbar} from './story-format-toolbar';
 
@@ -233,6 +235,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	} = props;
 	const {t} = useTranslation();
 	const coreProjectHost = useCoreProjectHost();
+	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const {dispatch: storyFormatsDispatch} = useStoryFormatsContext();
 	const formatIntegration = useFormatEditorIntegration(
 		story.storyFormat,
@@ -482,6 +485,45 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		readyBufferId === buffer.id &&
 		buffer.language === 'twine' &&
 		formatIntegration.type === 'adapted-legacy';
+	const nativeIntegrationApplies =
+		passageDocumentSettled &&
+		readyBufferId === buffer.id &&
+		buffer.language === 'twine' &&
+		formatIntegration.type === 'native';
+	const nativeEditorSession = useNativeEditorSession(
+		nativeIntegrationApplies && formatIntegration.type === 'native'
+			? formatIntegration
+			: undefined,
+		{
+			passageNames,
+			preferences:
+				prefs.storyFormatEditorPreferences[
+					formatIntegration.type === 'native'
+						? formatIntegration.dialect.id
+						: 'harlowe-3.3.9'
+				] ?? defaults().storyFormatEditorPreferences['harlowe-3.3.9'],
+			tagNames: passageTags
+		}
+	);
+
+	React.useEffect(() => {
+		if (formatIntegration.type !== 'native' || !nativeEditorSession.error) {
+			return;
+		}
+
+		storyFormatsDispatch({
+			id: formatIntegration.formatId,
+			props: {
+				editorIntegrationDiagnostic: {
+					code: 'native-editor-runtime-error',
+					feature: 'provider',
+					message:
+						'Native CM6 editor integration failed; using the generic CM6 editor'
+				}
+			},
+			type: 'update'
+		});
+	}, [formatIntegration, nativeEditorSession.error, storyFormatsDispatch]);
 	const legacyCodeMirror =
 		formatIntegration.type === 'adapted-legacy'
 			? formatIntegration.codeMirror
@@ -690,6 +732,18 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 									? `Legacy editor ${feature} disabled after an unsupported format API call`
 									: `Legacy editor ${feature} disabled: ${error.message}`,
 								unsupportedApi: apiName
+							}
+						},
+						type: 'update'
+					});
+				} else if (formatIntegration.type === 'native') {
+					storyFormatsDispatch({
+						id: formatIntegration.formatId,
+						props: {
+							editorIntegrationDiagnostic: {
+								code: 'native-editor-runtime-error',
+								feature,
+								message: `Native CM6 editor ${feature} disabled; using the generic CM6 editor`
 							}
 						},
 						type: 'update'
@@ -914,11 +968,24 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 					<SourceEditor
 						autocompletePassageNames={passageNames}
 						brokenLinkNames={spec.kind === 'passage' ? brokenLinks : undefined}
+						completionSources={nativeEditorSession.session?.completionSources}
 						dynamicExtensions={
-							adaptedMode ? [adaptedMode.extension] : undefined
+							nativeEditorSession.session
+								? [...nativeEditorSession.session.extensions]
+								: adaptedMode
+									? [adaptedMode.extension]
+									: undefined
 						}
 						dynamicExtensionsKey={`${buffer.id}:${formatIntegration.key}:${delimiterGeneration}:${
-							adapterFailure ? 'failed' : adaptedMode ? 'active' : 'inactive'
+							nativeEditorSession.error
+								? 'native-failed'
+								: nativeEditorSession.session
+									? nativeEditorSession.session.key
+									: adapterFailure
+										? 'failed'
+										: adaptedMode
+											? 'active'
+											: 'inactive'
 						}`}
 						id={`story-editor-window-${buffer.id}`}
 						key={buffer.id}
@@ -932,7 +999,9 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 						}}
 						placeholderText={t('dialogs.passageEdit.passageTextPlaceholder')}
 						ref={handleEditorRef}
-						replaceGenericTwineSyntax={!!adaptedMode}
+						replaceGenericTwineSyntax={
+							nativeEditorSession.session?.ownsSyntax ?? !!adaptedMode
+						}
 						revealPosition={
 							revealRequest?.position !== undefined
 								? {
@@ -944,6 +1013,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 						searchQuery={searchRequest?.query}
 						searchRequestKey={combinedSearchRequestKey}
 						selfLinkName={spec.kind === 'passage' ? passage?.name : undefined}
+						useCodeFont={nativeEditorSession.session?.useCodeFont}
 						value={localText}
 					/>
 				</div>
@@ -956,6 +1026,30 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 						editor={editor}
 						integration={formatIntegration}
 						onFailure={reportIntegrationFailure}
+					/>
+				)}
+
+			{editor &&
+				nativeEditorSession.session?.Toolbar &&
+				formatIntegration.type === 'native' && (
+					<nativeEditorSession.session.Toolbar
+						controller={nativeEditorSession.session.controller}
+						editor={editor}
+						onChangePreferences={preferences =>
+							prefsDispatch({
+								name: 'storyFormatEditorPreferences',
+								type: 'update',
+								value: {
+									...prefs.storyFormatEditorPreferences,
+									[formatIntegration.dialect.id]: preferences
+								}
+							})
+						}
+						preferences={
+							prefs.storyFormatEditorPreferences[
+								formatIntegration.dialect.id
+							] ?? defaults().storyFormatEditorPreferences['harlowe-3.3.9']
+						}
 					/>
 				)}
 
