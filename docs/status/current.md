@@ -48,9 +48,10 @@ phase is optimization and release validation, not another ownership migration.
   descriptor, and facade objects to zero after forced GC. The checked-in bundle
   gate is 66,575 gzip bytes (11.52%) smaller than the CM5 reference, with no
   known CM5 runtime marker in emitted JavaScript or CSS. Generic and adapted
-  Electron evaluations pass at 29.4 ms and 22.6 ms edit-paint p95,
-  respectively; the 16.6 ms target remains report-only, and a clean Electron 43
-  baseline is still needed before claiming a matched 15% regression comparison.
+  clean matched-baseline evaluations pass at 11.1 ms and 22.6 ms edit-paint
+  p95, respectively. The adapted 16.6 ms target remains report-only. Separate
+  default and Chapbook Electron 43 baselines accepted at commit `0951f942` pass
+  the enforced 15%/5 ms regression comparison with zero blocking failures.
 
 ## Proven structural properties
 

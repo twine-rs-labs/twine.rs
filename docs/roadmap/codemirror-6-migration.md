@@ -1,6 +1,6 @@
 # CodeMirror 6 Migration and Legacy Story-Format Adapter
 
-Status: implementation complete; clean-baseline validation pending
+Status: complete
 Owner: repository maintainers
 Last verified: 2026-07-18
 Source of truth: CodeMirror 6 editor host and bounded legacy adapter implementation
@@ -25,9 +25,11 @@ performs exactly one bounded adapter and index rebuild.
 The input-to-paint Long Tasks window starts before editor input and covers
 every one of the 20 warmed samples. Generic and adapted runs both record zero
 Long Tasks API entries above 50 ms. Their `edit.paintMs` p95 values are 29.4 ms
-generic and 22.6 ms adapted. Both values remain above the report-only 16.6 ms
-target; because that target is not enforced in `benchmarks/budgets.json`, both
-repository evaluations pass.
+generic and 22.6 ms adapted in the final dirty-worktree diagnostic pair. The
+clean matched-baseline comparison runs record 11.1 ms generic and 22.6 ms
+adapted. The adapted value remains above the report-only 16.6 ms target; because
+that target is not enforced in `benchmarks/budgets.json`, both repository
+evaluations pass.
 
 The four-editor lifecycle workload edits every passage, exercises selection-
 sensitive Chapbook toolbar state, verifies independent focus, and observes the
@@ -41,11 +43,12 @@ and callback from CodeMirror's process-lived language registry.
 The compressed production editor assets pass the checked-in bundle gate at
 511,453 gzip bytes, 66,575 bytes (11.52%) below the recorded CodeMirror 5
 reference, with no known CodeMirror 5 runtime marker in the emitted JavaScript
-or CSS. The implementation worktree has no matching accepted Electron 43
-baseline, so no 15% regression comparison is claimed. The code and all other
-functional, memory, bundle, and enforced latency gates are complete; a clean
-same-revision baseline comparison remains the final release-validation step
-before this roadmap item can be marked complete.
+or CSS. Clean all-phase Electron 43 baselines for the default Harlowe fallback
+and adapted Chapbook fixtures were accepted at commit `0951f942` under machine
+fingerprint `3101761a8a63fab1`. Follow-up same-revision runs matched their
+variant-specific baselines and passed the enforced 15%/5 ms regression guard
+with zero blocking failures. All functional, memory, bundle, build, and
+enforced latency gates are complete.
 
 ## Outcome
 
