@@ -1,33 +1,64 @@
 # Publishing a Story
 
-Publishing a story creates an HTML file that can opened in a web browser.
+Open _Build & Export_ from the workspace rail, then use its _Export_ view. The
+screen checks the current story format, diagnostics, and assets before
+preparing output.
 
-You can publish a story from both the _Story Library_ and _Story Map_ screens.
+## Choosing an Export Format
 
-- In the Story Library screen, select the story, then choose _Publish to File_
-  from the _Build_ top toolbar tab.
-- In the Story Map screen, choose _Publish to File_ from the _Build_ top toolbar
-  tab.
+- _Playable HTML_ creates the story-format runtime and story data needed to play
+  in a web browser.
+- _Twee Source_ creates readable interchange source with story and passage
+  metadata. It doesn't include the runtime or asset files.
+- _JSON_ exports structured story data for tools and version control. It can be
+  pretty-printed for readable diffs.
+- _Archive (.zip)_ contains playable HTML, Twee, JSON, a package manifest, and
+  an asset copy plan. The copy plan describes project assets; the archive does
+  not currently include their binary file contents.
 
-Twine will then ask you to choose a file name and location to save your
-published file. The file name you choose doesn't affect the name of your story
-in its published form. In other words, if you publish a story named "My Best
-Story" in your library to a file named `my-worst-story.html`, the story will
-still show its title as "My Best Story" in a web browser. If you'd like to
-change the name of your story in its published form, [rename
-it](../editing-stories/renaming.html) before publishing.
+Choose the format and its options, then choose _Export_ followed by the format
+name. Your browser or desktop environment will ask where to save the generated
+file.
 
-Some versions of the Safari web browser may instead open a browser tab with an
-address that begins with `blob://`. If this happens, choose _Save As_ from
-Safari's _File_ menu to save your story to a file.
+The output filename doesn't change the title inside the story. To change that
+title, [rename the story](../story-library/renaming.md) before exporting.
+
+## HTML Options and Assets
+
+_Classic Twine compatibility_ omits twine.rs graph metadata so another Twine
+tool can read the exported HTML more easily. Leave it off when preserving
+twine.rs graph data matters more than classic interchange.
+
+The Build screen also displays an _Inline all assets_ option and automatically
+turns it off for large asset plans. This control is not yet connected to
+package generation. Don't rely on the current HTML export to contain asset
+binaries. Keep external files at the same relative paths used by the story, or
+upload them with the HTML.
+
+Missing assets appear as warnings and are skipped. Story error diagnostics are
+shown for review, but warnings don't block export. A story-format
+publish-safety error does prevent HTML and archive builds. Choose _Fix in
+Diagnostics_ when the Build screen offers it.
+
+## Inspecting a Build
+
+Choose _Inspect output_ to open a read-only drawer. _Source_ summarizes the
+story, passages, links, assets, diagnostics, and a Twee preview. _HTML_ reports
+the prepared files, size, story-data blocks, and whether twine.rs graph metadata
+is present. You can copy the inspection text.
+
+The _Build output_ section records actions and diagnostics from the current
+screen. It can be cleared without affecting the project or exported files.
+
+The _Publish online..._ button currently prepares a publish-target package and
+records it in Build output. It doesn't upload to a hosting service. Export a
+file and upload it yourself.
 
 ## Now That I Have a Published File, What Do I Do?
 
-The short answer is that you can publish your story anywhere an HTML file can be
-published. You could send this directly to people using email or publish it to a
-web site. Some cloud file hosting services might allow you to publish your file
-in a web-accessible form, but many limit this functionality so that a story can
-only be downloaded by viewers, not directly played in a brwoser.
+You can publish your story anywhere an HTML file can be hosted. You could send
+it directly to other people or upload it to a website. Some cloud file hosting
+services only offer downloads and won't play an HTML story directly.
 
 Two services that offer Twine-specific hosting are
 [Borogove](https://borogove.app) and [Itch.io](https://itch.io). Itch is more of

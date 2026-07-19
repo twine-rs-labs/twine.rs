@@ -1,8 +1,7 @@
 # Removing a Story Format
 
-To remove a story format, click the _Delete_ button below its name. If you don't
-see a _Delete_ button, you've selected a format that is built-in, or is
-currently your default or proofing story format.
+On the [_Story Formats_ screen](viewing.md), select a user-added format and
+choose _Remove Format_. Built-in formats do not expose this action.
 
 If a story uses a story format you've removed, you'll need to [change it to
 another format](../editing-stories/changing-story-format.md). Twine will also

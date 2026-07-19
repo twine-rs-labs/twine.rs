@@ -40,11 +40,11 @@ displayed first when someone begins playing it.[^start]
 The collection of stories stored in Twine is called the _story library_, or just
 _library_ for short.
 
-If you're using browser Twine, the library is stored invisibly in your browser's
-storage. However, if you're using app Twine, you'll find your library in a
-folder named _Twine_ in your documents folder. Or use the _Show Story Library_
-menu item in the _View_ menu of Twine's main menu bar (not the top toolbar).
-[This location can be changed](../story-library/location.md).
+In the web app, the library is stored in the current browser. In the desktop
+app, stories are normally stored in visible `.twine.rs` project folders. Open
+_Settings_ to see the active story-library folder, reveal it in the system file
+manager, or set the default parent directory for new projects. See
+[Project Storage and Folders](../story-library/location.md).
 
 Your library belongs to just you, regardless of whether you're using app or
 browser Twine. You can't share it directly with other people, but you can
@@ -52,9 +52,8 @@ browser Twine. You can't share it directly with other people, but you can
 stories](../story-library/exporting.md), and [archive your entire
 library](../story-library/exporting.md).
 
-There is no limit on the number of stories in your library. You're only limited
-by the storage capacity of where your stories are saved. In browser Twine, this
-varies by the browser you are using, but 5 megabytes of storage is typical.
+There is no fixed limit on the number of stories in your library. You're limited
+by the storage available to the desktop folder or browser profile you use.
 
 ## Story Formats
 
@@ -120,6 +119,7 @@ here](https://github.com/iftechfoundation/twine-specs/blob/master/twee-3-specifi
 You don't need to use Twee to build a story with Twine, but Twine can export
 stories to Twee format for use with other tools.
 
-[^start]: In Twine version 1, this passage had to be called "Start" (including
+[^start]:
+    In Twine version 1, this passage had to be called "Start" (including
     the capital S). Current versions of Twine allow setting the start passage to
     any one in a story, regardless of name.

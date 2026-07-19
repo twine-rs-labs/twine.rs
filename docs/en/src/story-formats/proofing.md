@@ -1,8 +1,10 @@
 # Changing the Proofing Format
 
-To change the proofing format, use the _Use As Proofing Format_ button below it.
-A "Used for Proofing" sticker will appear on the card to confirm the change. If
-the _Use As Proofing Format_ button is disabled, the format you've selected is
-already the proofing format, or the format you've selected is not a proofing
-format. (In that case, you probably want to [set it as your default
-format](default.md) instead.)
+On the [_Story Formats_ screen](viewing.md), select a format and choose _Use for
+Proofing_. Its card receives a _Proofing_ badge and the button becomes disabled.
+You can also choose the proofing format from the _Story Formats_ panel in
+[Settings](../customizing/preferences.md).
+
+Proofing formats are intended to present story source for review instead of
+normal play. If a regular format is selected here, its own capabilities still
+determine what the proof build can provide.

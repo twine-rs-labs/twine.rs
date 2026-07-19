@@ -1,62 +1,61 @@
-# Getting Around in Twine
+# Getting Around in twine.rs
 
-Some parts of Twine's interface are present no matter what you're doing in
-Twine.
+twine.rs uses one application shell for the story library, workbench, build
+tools, formats, and settings. The shell has three main navigation areas: the
+application header, the workspace rail, and route-specific action tabs.
 
-## The Top Toolbar
+## The Application Header
 
-There's a toolbar that sits at the top of the screen no matter where you are in
-Twine. It's split into labelled tabs. The active tab has a blue border beneath
-the label.
+The header shows breadcrumbs for the current story and screen. When the current
+screen provides action groups, a segmented control chooses which group is
+shown in the action row below the header.
 
-In general, when you're using Twine, you'll select items below the top toolbar,
-then use buttons in the toolbar to perform an action on them.
+The right side of the header can contain:
 
-## The Back Button
+- pinned controls supplied by the current screen;
+- a _Help_ button when that screen has contextual documentation; and
+- the _Command_ button, which opens the command palette.
 
-In most parts of Twine, there is a _Back_ button nestled in one corner of the
-top toolbar. It's blue to help it stand out. This button works like a back
-button in a web browser. If you've navigated between different screens in Twine,
-it will take you back to the screen you were last in.
+The command palette searches application, navigation, build, toolbar, and story
+commands. Disabled commands remain unavailable until their required story or
+selection exists.
 
-The _Back_ button isn't present in the [Story Library screen](../story-library)
-because it's Twine's equivalent of a home page.
+## The Workspace Rail
 
-## The Help Button
+The vertical workspace rail is the primary way to move between screens:
 
-You'll find a _Help_ button on the opposite side of where the _Back_ button
-resides. This opens this guide in your web browser.
+- _Stories_ opens the story library.
+- _Workbench_ opens the current story in Text, Graph, or Split mode.
+- _Contents_ shows the current story's passage outline.
+- _Assets_ manages project assets.
+- _Play_ launches the current story.
+- _Build & Export_ opens build and export workflows.
+- _Diagnostics_ shows project diagnostics.
+- _Story Formats_ manages installed formats and editor compatibility.
+- _Settings_ opens application and platform settings.
+- _New Project_ starts the project-creation workflow.
 
-## The Twine Toolbar Tab
+Story-dependent destinations are disabled until a story is selected or open.
+The highlighted rail item indicates the active screen. Use _Stories_ to return
+to the library; there is no separate application Back button.
 
-No matter where you are in Twine, there will be a tab at the end of the top
-toolbar labeled _Twine_. This tab contains actions related to Twine itself.
+## Route Action Tabs
 
-- _Preferences_ opens the [Preferences dialog](../preferences), where you can
-  customize how Twine works.
-- _Story Formats_ takes you to the [Story Formats](../story-formats) screen,
-  where you can manage story formats installed in your version of Twine.
-- _About Twine_ opens a dialog showing the version of Twine you're using and a
-  list of people who have contributed to Twine.
-- _Report a Bug_ takes you to Twine's source code repository, where you can
-  report a bug or suggest an improvement to the application.
+Screens register only the action tabs that apply to their current context. For
+example, the workbench can expose story, passage, view, and build actions. A
+selected story or passage may enable additional controls in the active tab.
 
-## Dialogs
+The same registered actions are available to the command palette, so workflows
+do not depend on pointer access to the toolbar.
 
-Certain actions in Twine will open dialog boxes along one side of the screen
-with more detail about a particular action. For example, editing a passage will
-open a dialog box with the passage text.
+## The Workbench and Editor Dock
 
-Dialog boxes have a few controls in their title bar:
+The workbench provides Text, Graph, and Split views. Opening passages adds
+buffers to the editor dock instead of opening one passage dialog per passage.
+Buffers can be focused, reordered, tiled, stacked, or closed while retaining
+their own selections and undo histories.
 
-- An x button in their corner that closes the dialog.
-- A chevron (›) button on the opposite side that collapses the dialog so that
-  only its title bar is visible.
-- Some dialogs have a maximize button beside their close button which allows a
-  dialog to fill the available space. To restore a maximized dialog's original
-  size, use the maximize button again. Only one dialog can be maximized at a
-  time.
-
-You can have as many dialogs open as you have room onscreen for. Right now, the
-order of dialogs can't be changed, nor can their position onscreen be changed.
-The width of dialogs can be changed in [preferences](../preferences).
+Some focused tasks—such as confirmations, story details, and about
+information—still use dialogs. Dialog width is configurable in
+[Settings](../customizing/preferences.md), but workbench editor layout is
+controlled by the dock and view mode instead.

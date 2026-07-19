@@ -1,77 +1,106 @@
-# Setting Preferences
+# Settings
 
-To customize Twine's preferences, choose _Preferences_ from the _Twine_ top
-toolbar tab. This tab is available throughout Twine. A dialog will appear that
-lets you change settings. These changes will take effect as soon as you make
-them, and Twine will remember them between sessions.
+Open _Settings_ from the workspace rail or choose _Preferences_ from an
+available application action toolbar. Settings are shown as a full screen, not
+a dialog. Changes take effect immediately and are remembered between sessions.
 
-## Changing Twine's Language
+Some settings depend on the native desktop bridge. They remain visible in the
+web app so that the capability is discoverable, but are disabled when the
+current platform cannot provide it.
 
-To change the language Twine's user interface, select it from the _Language_
-menu in the preferences dialog.
+## General
 
-## Changing Twine's Theme
+The _General_ panel controls:
 
-To change Twine's theme, select an option from the _Theme_ menu. The _Dark_ and
-_Light_ settings cause Twine to always use that theme, while the _System_ choice
-uses the theme that matches your system's theme setting, if Twine can determine
-it. If Twine can't determine whether your system is using a dark or light theme,
-it will default to a light theme.
+- _Theme_: follow the system theme or always use the light or dark theme.
+- _Language_: choose the language used by the application.
+- _Story list_: choose the default story-library sort order.
+- _Format list_: choose the default filter used when viewing story formats.
 
-## Changing Dialogs
+## Workspace and Modes
 
-The _Dialog Width_ menu controls the width of dialogs. The placement of dialogs
-onscreen (e.g. switching them from the right side of the window) cannot be
-changed.
+The _Workspace_ panel shows the active story-library folder. In the desktop app
+you can choose another library, restore the default, or reveal it in the system
+file manager. _Project default_ sets the default location for project-folder
+work.
 
-## Changing Tag Display
+The _Modes_ panel chooses Auto, Text, Graph, or Split as the initial workbench
+mode. Twine remembers the active mode and editor dock independently for each
+project.
 
-The _Show Passage Tags As_ menu controls how tags appear in the story map.
+## Graph
 
-- When the _Color_ option is active, passages with colored tags will have a
-  small stripe of that color at their top. Tags that do not have colors assigned
-  will not show a stripe.
+The _Graph_ panel controls:
 
-- When the _Name_ option is active, then passages will show all tags you've
-  assigned to them, regardless of whether you've given them a color. Twine will
-  show as many tags as possible on the passage without overlapping the name of
-  the passage. If there are too many for the space available, Twine won't show
-  all of them.
+- the default passage-card size;
+- whether a generated layout offers an action to save it;
+- whether right-clicking empty graph space creates a passage; and
+- whether passage cards show tag colors or tag names.
 
-This preference doesn't change anything about how tags are displayed in title
-bar of passage edit dialogs.
+Grid and layout choices that belong to an individual story are stored with that
+story rather than as application-wide settings.
 
-## Changing Edit Dialogs
+## Editors
 
-The _Blinking Cursor in Editors_ checkbox controls whether the cursor blinks in
-[passage edit dialogs](../editing-stories/editing-passages.md), the [story
-JavaScript edit dialog](../editing-stories/js-and-css.md), and the [story
-stylesheet edit dialog](../editing-stories/js-and-css.md). This preference only
-controls the cursor in the large text fields of these dialogs. Twine uses your
-system setting for cursor blinking in one-line text fields.
+The _Editors_ panel controls whether editor cursors blink, the passage and code
+editor fonts and scales, and the code-editor color theme.
 
-The _Use Enhanced Editors_ checkbox controls whether Twine uses an enhanced
-editor control in edit dialogs. Unfortunately, this control can cause problems
-for assistive technology like screen readers, so disabling this may help in that
-case. Disabling this has a few side effects:
+Twine always uses CodeMirror 6 for its editing surfaces; the former global _Use
+Enhanced Editors_ preference no longer exists. Story-format-specific editor
+integrations can instead be enabled or disabled individually on the
+[_Story Formats_ screen](../story-formats/extensions.md). Disabling an
+integration keeps the generic editor and its core editing controls while
+omitting the format's syntax mode, commands, and toolbar.
 
-- The _Blinking Cursor in Editors_ checkbox will become disabled, and whether
-  the cursor blinks in editors will use use your system setting.
-- Some toolbar buttons in dialogs will be hidden, because they use functionality
-  present in the enhanced editor control.
-- Story format toolbars will not be shown in passage editing dialogs, because
-  they also use functionality in the enhanced editor control
+Passage font settings affect passage prose. Code font settings affect
+JavaScript, CSS, and dialect syntax configured to use the code font. These
+settings change the authoring interface only; they do not change the appearance
+of a published story.
 
-You can change the font and size used in passage edit dialogs and the stylesheet
-and JavaScript edit dialogs using the controls below the _Blinking Cursor in
-Editors_ checkbox. (The _Code Editor_ preferences apply to both the stylesheet
-and JavaScript edit dialogs.)
+## Accessibility and Keyboard
 
-- The _System_ font setting uses the same font that your computer uses in the
-  rest of its user interface.
-- The _Monospaced_ font setting uses common monospace fonts across operating
-  systems.
-- The _Custom_ font setting allows you to specify any font that's installed in
-  your computer. You _must_ spell this font name exactly right, including any
-  spaces or other symbols in the font name. Capitalization doesn't matter when
-  setting a custom font.
+The _Accessibility_ panel provides reduced-motion, high-contrast, and
+keyboard-only editing preferences, along with editor-focus behavior. Focus rings
+remain visible so keyboard focus is not lost.
+
+The _Keyboard_ panel selects the shortcut profile used by supported navigation
+and build actions. The command palette remains available from the _Command_
+button in the application header.
+
+## Storage and Backups
+
+The _Storage_ panel sets the default asset folder and reports the active storage
+backend. Native desktop builds also allow you to choose whether preview assets
+are linked or copied and how long preview caches are retained.
+
+The _Backups_ panel configures native backup cadence, retention, and reminders.
+It can also start a backup, record that backups were reviewed, or reveal the
+backup folder. These controls are disabled when the native desktop bridge is
+not available.
+
+## Story Formats
+
+The _Story Formats_ panel chooses the default format for new stories and the
+default proofing format. It also reports how many format-specific editor
+integrations are disabled. Use the full
+[_Story Formats_ screen](../story-formats/viewing.md) to add, remove, inspect,
+reload, or enable and disable an individual format.
+
+## Integrations and Sharing
+
+The _Integrations_ panel contains the external-editor command where supported
+and preferences for cloud save, revision control, and hosting hooks. The
+_Sharing_ panel controls story-link behavior and shows which integration hooks
+are active.
+
+These settings expose integration policy; an option does not imply that an
+external service has been configured.
+
+## Platform and About
+
+Native builds use the _Platform_ panel for fullscreen persistence and external
+link handling. The remaining rows report the active runtime and platform
+capabilities.
+
+The _About_ panel shows the application name and version. It also contains the
+dialog-width preference used by the remaining dialog-based workflows.

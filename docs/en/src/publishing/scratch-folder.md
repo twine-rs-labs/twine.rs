@@ -2,17 +2,23 @@
 
 This page only applies to app Twine.
 
-When you choose to test, play, or proof a Twine story, app Twine creates a file
-and opens it in your web browser. This file is created in your _scratch folder_.
-By default, this is a folder named `Scratch` inside your Twine folder.
+When you test, play, or proof a story, the desktop app creates temporary HTML
+in its _scratch folder_ and opens it with your system browser. Referenced
+project assets are prepared beside the HTML so relative paths can work.
 
-When you quit app Twine, it cleans up your scratch folder, deleting files that
-are more than three days old. (This delay is so that you can continue to view
-your work after quitting Twine, and in an emergency, [potentially recover your
-work](../troubleshooting/backups.md).) However, you can delete files in the
-scratch folder on your own. Files in the scratch folder are only meant to be
-used for viewing your work in a browser. Twine will never put anything in the
-scratch folder that isn't meant to be short-lived.
+By default, Twine links project asset folders into the scratch folder when the
+platform supports it and copies the files as a fallback. Open
+[Settings](../customizing/preferences.md) and use _Preview assets_ to always
+copy asset files instead.
 
-Twine's Scratch folder behavior can customized using [command-line
-switches](../customizing/command-line.md).
+At startup and shutdown, Twine removes temporary HTML older than the configured
+_Cache cleanup_ age. The default is three days. You can choose a retention
+period from one to thirty days in Settings.
+
+Scratch files are temporary preview output, not project backups. You can delete
+them without deleting the project, and you should not use them as the canonical
+copy of your story. See [Backups](../troubleshooting/backups.md) for recovery
+options.
+
+The scratch location, retention in minutes, and asset strategy can also be
+customized using [command-line switches](../customizing/command-line.md).

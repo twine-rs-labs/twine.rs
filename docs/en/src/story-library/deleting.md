@@ -1,13 +1,13 @@
 # Deleting Stories
 
-To delete a story, select it and choose _Delete_ from the _Story_ top toolbar
-tab.
+Use _Delete_ on a project row or card in the _Projects_ screen. Twine asks for
+confirmation before removing it.
 
-**In browser Twine, deletion is permanent.** You may want to [archive your
-story](exporting.md) before deleting it.
+**Deleting a browser-local project or a library-only duplicate is permanent.**
+You may want to [export a library archive](exporting.md) first.
 
-In app Twine, deleted story files are moved to your trash can or recycling bin
-on macOS and Windows. (On Linux, Twine does its best to move the story to the
-trash, but what exactly it does depends on your desktop environment). If you
-change your mind about deleting a story, you can take it out of the trash or
-recycling bin and [re-import the story file](creating.md).
+In the desktop app, deleting a file-backed project moves its validated
+`.twine.rs` folder to the operating system trash. If the folder contains more
+than one imported story, all stories associated with that folder are removed
+from the library. Restore the folder from the trash and
+[open it again](creating.md) if you change your mind.

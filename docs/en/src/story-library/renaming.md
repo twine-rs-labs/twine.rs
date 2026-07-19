@@ -1,7 +1,8 @@
 # Renaming Stories
 
-To rename a story, select it and choose _Rename_ from the _Story_ top toolbar
-tab. Twine will prevent you from choosing the same name as another story in your
-library.
+Open the story in the workbench and choose the _Story_ action tab in the
+application header. Choose _Rename_, enter the new name, and save it. Story
+names must be nonempty and must not collide with another library filename.
 
-You can also rename a story [while editing it](../editing-stories/renaming.md).
+Renaming changes the story title used in Twine and in published output. It does
+not rename an existing `.twine.rs` project folder on disk.

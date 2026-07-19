@@ -98,6 +98,17 @@ to do this, or it isn't able to read the files in this folder, it will show a
 dialog box where you can choose to either use the default folder instead, or to
 quit the app.
 
+## Opening Project Folders
+
+Add one or more `.twine.rs` project-folder paths after any switches to open
+them when Twine starts. Put a path in quotation marks when it contains spaces.
+
+For example:
+
+```
+/Applications/Twine.app/Contents/MacOS/Twine "/Users/Jane/My Story.twine.rs"
+```
+
 ## Scratch Folder Switches
 
 You can use a different location as your scratch folder, or change the length of
@@ -127,3 +138,12 @@ folder, in minutes. Twine considers the last time the file was modified, not
 when it was created, when deciding whether to keep the file. To have Twine
 delete all files from the scratch folder every time you quit it, set
 <code>&#x2011;&#x2011;scratchFileCleanupAge=0</code>.
+
+### <code>--scratchAssetStrategy=_[link or copy]_</code>
+
+Example: <code>&#x2011;&#x2011;scratchAssetStrategy=copy</code>
+
+This chooses how project assets are prepared for play, test, and proof output.
+`link` links suitable project folders and copies files when linking isn't
+available. `copy` always copies the planned asset files into the scratch
+folder.

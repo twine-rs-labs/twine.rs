@@ -2,7 +2,7 @@
 
 Status: active
 Owner: product and frontend maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-19
 Source of truth: unfinished primary-product behavior
 
 ## Outcomes
@@ -27,8 +27,8 @@ Source of truth: unfinished primary-product behavior
 
 ### User documentation
 
-- Replace inherited Twine screen instructions with twine.rs launcher,
-  project-folder, workbench, conflict-review, asset, and build workflows.
+- Audit remaining inherited editing, troubleshooting, installation, and
+  compatibility chapters for obsolete screen instructions.
 - Separate general Twine/story-format concepts from application-specific
   instructions.
 - Publish twine.rs release notes independently of the upstream Twine history.

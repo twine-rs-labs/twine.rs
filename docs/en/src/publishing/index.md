@@ -1,5 +1,15 @@
 # Publishing Your Work
 
-Although it is possible to play a story from inside Twine, most of the time
-you'll want to publish it in a standalone form. This section describes how to
-prepare a story so that it can be shared with a broader audience.
+The application distinguishes temporary previews from files you save:
+
+- _Play_ opens the story as a reader will see it.
+- _Test_ opens a debug build, optionally from a selected passage.
+- _Proof_ uses a proofing format for review and copyediting.
+- _Build & Export_ saves playable HTML, Twee, JSON, or a zip build archive.
+
+Open _Build & Export_ from the workspace rail for the complete workflow. The
+workbench's _Build_ action tab and command palette also provide quick play,
+test, proof, HTML-export, and Twee-export actions.
+
+Before sharing a story, review the Build screen's diagnostics, story-format
+publish-safety result, and missing-asset warnings.

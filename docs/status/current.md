@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-07-18
+Last verified: 2026-07-19
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -90,8 +90,9 @@ The complete local 10k and 50k benchmark runs verify:
   and authoring behavior.
 - Packaged-app, cross-platform, and hosted-CI performance coverage remains
   incomplete.
-- The user manual is still predominantly inherited Twine documentation and
-  requires a twine.rs-specific rewrite.
+- The user manual still contains inherited Twine task and compatibility
+  chapters. Current launcher, project-folder, conflict-review, workbench,
+  asset, build, Settings, and Story Formats workflows are documented.
 
 ## Active work
 

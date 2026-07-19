@@ -11,9 +11,10 @@ precise, the text you enter will be rendered by the story format when your story
 is played. For instance, you might enter code into your passage to set variables
 or conditionally display some text.
 
-The font and size of the text can be customized in [Twine's
-preferences](../preferences). This doesn't change what the passage looks like
-when played; it just lets you make the text editor more comfortable to use.
+The font and size of the text can be customized in
+[Settings](../customizing/preferences.md). This doesn't change what the passage
+looks like when played; it just lets you make the text editor more comfortable
+to use.
 
 Story formats can extend Twine to add syntax formatting to the passage text
 editor. For example, links might appear in a blue color. You'll need to consult

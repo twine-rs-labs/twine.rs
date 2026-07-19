@@ -1,8 +1,10 @@
 # Renaming a Story
 
-To rename a story from the _Story Map_ screen, choose _Rename_ from the _Story_
-top toolbar. The only restriction on story names is that they must be unique
-among your library.
+Open the story in the workbench and choose the _Story_ action tab in the
+application header. Choose _Rename_, enter the new name, and save it. Names
+must be nonempty and must not collide with another story filename in the
+library.
 
-You can also rename a story [in the _Story Library_
-screen](../story-library/renaming.md).
+The story's title changes in the launcher and in later published output. An
+existing `.twine.rs` project-folder name doesn't change. See
+[Renaming Stories](../story-library/renaming.md) for the storage distinction.

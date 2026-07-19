@@ -4,8 +4,8 @@ Story formats can extend Twine by adding:
 
 - References between passages, which appear as dotted lines connecting passages
   in the Story Map screen
-- A toolbar in passage edit dialogs
-- Syntax coloring in passage edit dialogs
+- A toolbar in passage editors
+- Syntax coloring in passage editors
 
 twine.rs uses CodeMirror 6 for editing. It can adapt the documented, stream-mode
 subset of older CodeMirror 5 story-format extensions. Chapbook's syntax mode,

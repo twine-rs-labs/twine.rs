@@ -19,12 +19,13 @@ viewport widths.
 
 ## Testing a Story From the Beginning
 
-You can test a story from its start passage from either the Story Library or
-Story Map screen.
+Open a story and choose _Test_ from the workbench's _Build_ action tab, or run
+_Test Story_ from the command palette. Testing starts at the story's configured
+start passage.
 
-- In the Story Library screen, select the story, then choose _Test_ from the
-  _Build_ top toolbar tab.
-- In the Story Map screen, choose _Test_ from the _Build_ top toolbar tab.
+The _Build & Export_ screen's _Preview_ view contains _Play_ and _Proof_.
+Testing remains available from the workbench, command palette, and
+passage-specific actions because it is an authoring and debugging workflow.
 
 ## Testing a Story From a Specific Passage
 
@@ -47,3 +48,5 @@ context:
   start passage in test mode.
 - In a browser preview window, choose _Test Current_ after the runtime reports a
   current passage to relaunch from the passage currently being inspected.
+
+Testing from another passage doesn't change the story's saved start passage.

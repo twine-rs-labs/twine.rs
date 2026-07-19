@@ -22,7 +22,7 @@ should check your story format's documentation to find out how they work. You
 can also [disable story format extensions](../story-formats/extensions.md) to
 prevent these lines from being drawn.
 
-When you create a new link while writing in the passage edit dialog, Twine will
+When you create a new link while writing in a passage editor, Twine will
 automatically create a passage for you with the correct name after a short
 delay, if it doesn't already exist in your story.
 

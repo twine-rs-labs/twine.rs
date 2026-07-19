@@ -1,23 +1,33 @@
 # Viewing Story Formats
 
-To view a list of story formats installed in your version of Twine, choose
-_Story Formats_ from the _Twine_ top toolbar tab. By default, the Story Formats
-dialog will show you the newest version of every story format you have
-installed. Each item represents a single format that's installed. This list
-shows both regular story formats and proofing ones together, and is sorted
-alphabetically by name.
+Open _Story Formats_ from the workspace rail or from an available application
+action toolbar. Formats are managed on a full screen with three areas:
 
-Story formats that come installed with Twine have a sticker on them labeled
-"Built In." The [default story format](default.md) has a sticker on it labeled
-"Used as Default," and the format that's used for proofing stories has a "Used
-for Proofing" sticker. These formats also have a blue background in the list to
-make them easier to locate.
+- filters on the left;
+- installed format cards in the center; and
+- details and actions for the selected format on the right.
 
-If Twine isn't able to load a story format, it will show an error symbol on its
-card with a short explanation of the error it encountered.
+The _All_, _Current_, _User-added_, _Development_, and _Failed_ filters show a
+count and limit the center list. _Current_ shows the newest installed version of
+each format.
 
-The dialog has a button that allows you to choose what formats are shown:
+Each card shows the format name and version, whether it is built in or
+user-added, and badges for the default and proofing formats. Once the manifest
+loads, capability badges summarize supported parser, exporter, diagnostics,
+editor, development, and publishing features. Loading and failed manifests have
+explicit status icons.
 
-- _Current Story Formats_ shows only the newest version of each story format.
-- _User-Added Story Formats_ shows only formats you have added.
-- _All Story Formats_ shows all formats installed, including older versions of formats.
+Selecting a card shows:
+
+- format author, description, website, and license information when supplied;
+- declared capabilities;
+- native, adapted, generic, or failed editor-integration status;
+- publish-safety results; and
+- development-module and reload status.
+
+The actions below the details can reload the format, check a declared
+development server, make the format the default, use it for proofing, enable or
+disable its editor integration, or remove it when it is user-added.
+
+The URL field above the list adds a remote format. Native desktop builds also
+show a _From File_ button for adding a local format.

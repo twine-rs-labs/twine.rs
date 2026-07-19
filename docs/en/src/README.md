@@ -2,7 +2,11 @@
 
 > **Documentation scope:** this mdBook is predominantly the upstream Twine
 > manual retained for compatibility and general authoring concepts. It is not
-> yet an authoritative guide to the twine.rs project-folder workbench. See the
+> yet an authoritative guide to every twine.rs workflow. The application shell,
+> project launcher, project-folder and conflict workflow, passage editor,
+> assets, Build & Export, Settings, and Story Formats chapters describe the
+> current interface. Other inherited task chapters and the upstream release
+> notes are still being separated from twine.rs-specific documentation. See the
 > [twine.rs documentation map](../../README.md) and
 > [user-documentation status](../../user/README.md).
 
@@ -50,7 +54,7 @@ done with Twine--but you might be better-served using a different tool.
   [Inform](http://inform7.com) or [Bitsy](http://www.bitsy.org), for example,
   might be better fits for these.
 
-See [Limitations](../limitations/index.md) for more details on some of the above and some possible ways
+See [Limitations](limitations/index.md) for more details on some of the above and some possible ways
 to work around these issues.
 
 ## See Also...

@@ -44,7 +44,7 @@ passages](./editing-passages.md).
 
 Passages will show [tags you've assigned to them](tagging.md) in two different
 ways, depending on what [the preference you've
-selected](../customizing/preferences.html):
+selected](../customizing/preferences.md):
 
 - If you choose to show tags as colors (which is the default setting), then
   passages with those tags will have a small stripe of that color at their top.
@@ -60,14 +60,13 @@ selected](../customizing/preferences.html):
 
 The story's start passage is drawn in the map with a green rocket icon connected
 to it.[^rocket] To change this, select a different passage and choose _Start
-Story Here_ from the _Passage_ top toolbar tab. This button is also present in a
-passage edit dialog.
+Story Here_ from the _Passage_ top toolbar tab.
 
 ## Broken Links
 
 If there is a link in a passage that Twine can't find a passage for, it will
 instead show a red line ending in a 'no entry' symbol. [Edit the
-passage](editing.md) to correct the problem.
+passage](editing-passages.md) to correct the problem.
 
 ## References
 

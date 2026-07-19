@@ -6,28 +6,22 @@ Archiving your library saves all stories in it to a single file. You can use an
 archive as a way to back up your work, or to move your library between computers
 or different web browsers.
 
-To create an archive, choose the _Archive_ button under the _Library_ top
-toolbar tab. You'll be asked where you'd like to save this file, and by default
-its name contains the date and time when you created the archive.
+To create an archive, choose _Export Library Archive_ on the _Projects_ screen.
+The downloaded HTML archive has a date and time in its default filename. Import
+that file to restore its stories.
+
+Library archives preserve the stories that Twine can represent in its library.
+For a full-fidelity copy of a desktop project, back up its
+[project folder](location.md), including its `assets/` and `.twine/`
+directories.
 
 ## Exporting a Story
 
-To export a single story, select it and choose _Publish to File_ from the
-_Build_ top toolbar tab. You'll be asked where to save this file.
+Open a story and choose _Build & Export_ from the workspace rail. The _Export_
+view can save playable HTML, Twee source, JSON, or a zip build archive.
 
-This file can be either opened directly in a web browser to play your story, or
-[imported into Twine](creating.md).
+For a quick HTML or Twee export, open the _Build_ action tab in the workbench or
+use the corresponding command in the command palette.
 
-The other buttons under the _Build_ tab work the same as they do in the [Story
-Map Screen](../editing-stories).
-
-## Exporting a Story To Twee
-
-You can also export a story to [Twee
-format](../getting-started/basic-concepts.html#twee). Select it and choose
-_Export as Twee_ from the _Build_ top toolbar tab. You'll be asked where to save
-this file.
-
-Twine creates Twee files with a `.twee` file suffix. Your system may not know
-how to handle them by default, but they are openable in any plain text editor,
-like Notepad on Windows or TextEdit on macOS.
+See [Publishing Your Work](../publishing/index.md) for the differences between
+previewing, source export, playable HTML, and build archives.

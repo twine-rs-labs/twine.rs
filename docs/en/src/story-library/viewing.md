@@ -1,39 +1,37 @@
 # Viewing Stories
 
-Most of the Story Library screen is taken up by a list of the stories in your
-library. There will be a card for every story in your library, with a small
-visual preview of its structure[^preview-color], how many passages it has, and
-when it was last changed.
+Most of the _Projects_ screen is taken up by the stories in your library. Use
+the _Table_ and _Cards_ control above the library to change its layout.
 
-To select a story, click or tap on it. You can only select one story at a time.
-Once selected, you can take action on the story using the top toolbar.
+Table view shows each project's format, passage and word counts, error and
+broken-link health, and last modification time. Card view shows the same
+project health with a small structural preview.
+
+Click or tap a project to select it. Hold Command on macOS or Control on other
+platforms to add or remove a project from the selection. Double-click a project
+or use its _Open_ button to enter the workbench.
 
 ## Sorting Stories
 
-By default, Twine will sort your library by story name, so that a story named
-"Aardvark Revenge" will appear before "Zebra Brigade." You can instead have it
-sort your stories so that the most recently-edited ones appear first by choosing
-_Sort By_ under the _View_ top toolbar tab, then _Last Updated_. Choosing _Name_
-under the same button will change back to sorting by name.
+The _Sort projects_ control above the library sorts by _Name_ or _Last
+modified_. _Recently edited_ in the left rail selects the latter without
+changing the current search.
+
+Use _Search projects_ to search names, IFIDs, story formats, format versions,
+and story tags.
 
 ## Filtering Stories By Tag
 
 You can [tag stories](tagging.md) to organize related ones together. Once you've
-tagged a story, you can filter the Story Library screen to show only stories
-with certain tags.
+tagged a story, its tags appear in the left rail. Select one or more tags to
+show projects containing any selected tag. Choose _All projects_ to clear the
+tag filter.
 
-To do this, choose _Show Tags_ under the _View_ top toolbar tab. Choosing a
-particular tag will cause only stories with that tag to be shown. You can select
-multiple tags from the _Show Tags_ button. In that case, Twine will show any
-story that has a checked tag name in the list.
+If a search and the selected tags are both active, a project must satisfy the
+search and at least one selected tag to remain visible.
 
-To go back to showing all stories in your library, choose _Show All Stories_
-from the _Show Tags_ button.
+## Project Health
 
-If the _Show Tags_ button is disabled, that's because you haven't tagged any
-stories yet.
-
-[^preview-color]: The color of your story preview is more-or-less randomly
-    governed by your story's name. There isn't a significance to the
-    colors--they're just there to help you find a particular story faster, and
-    to look pretty.
+Health badges report story errors and broken links. These counts are
+calculated after the launcher has been idle briefly. Open the project and
+choose _Diagnostics_ from the workspace rail to inspect individual problems.
