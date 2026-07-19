@@ -676,6 +676,14 @@ impl Default for StoragePolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectSourceLayout {
+    #[default]
+    PassageFiles,
+    SingleTwee,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectManifest {
@@ -687,6 +695,8 @@ pub struct ProjectManifest {
     pub schema_version: u32,
     #[serde(default)]
     pub storage: StoragePolicy,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_layouts: BTreeMap<StoryId, ProjectSourceLayout>,
 }
 
 impl Default for ProjectManifest {
@@ -696,6 +706,24 @@ impl Default for ProjectManifest {
             name: String::new(),
             schema_version: default_schema_version(),
             storage: StoragePolicy::default(),
+            source_layouts: BTreeMap::new(),
+        }
+    }
+}
+
+impl ProjectManifest {
+    pub fn source_layout_for(&self, story_id: &StoryId) -> ProjectSourceLayout {
+        self.source_layouts
+            .get(story_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn set_source_layout(&mut self, story_id: StoryId, layout: ProjectSourceLayout) {
+        if layout == ProjectSourceLayout::default() {
+            self.source_layouts.remove(&story_id);
+        } else {
+            self.source_layouts.insert(story_id, layout);
         }
     }
 }
@@ -748,6 +776,42 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_source_layout_defaults_to_passage_files() {
+        let manifest = ProjectManifest::default();
+        let story_id = StoryId::new("story-1");
+
+        assert_eq!(
+            manifest.source_layout_for(&story_id),
+            ProjectSourceLayout::PassageFiles
+        );
+    }
+
+    #[test]
+    fn project_manifest_tracks_only_non_default_source_layouts() {
+        let mut manifest = ProjectManifest::default();
+        let story_id = StoryId::new("story-1");
+
+        manifest.set_source_layout(story_id.clone(), ProjectSourceLayout::SingleTwee);
+        assert_eq!(
+            manifest.source_layout_for(&story_id),
+            ProjectSourceLayout::SingleTwee
+        );
+        assert_eq!(
+            serde_json::to_value(&manifest)
+                .expect("manifest should serialize")
+                .pointer("/sourceLayouts/story-1"),
+            Some(&Value::String("single-twee".into()))
+        );
+
+        manifest.set_source_layout(story_id.clone(), ProjectSourceLayout::PassageFiles);
+        assert_eq!(
+            manifest.source_layout_for(&story_id),
+            ProjectSourceLayout::PassageFiles
+        );
+        assert!(!manifest.source_layouts.contains_key(&story_id));
+    }
 
     #[test]
     fn deserializes_story_json_shape() {

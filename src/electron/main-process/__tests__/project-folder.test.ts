@@ -205,6 +205,112 @@ describe('project-folder native bridge', () => {
 			'mock-story-library/Projects/moon-castle.twine.rs/.twine/project.json',
 			{overwrite: true}
 		);
+		const manifest = String(
+			writeFileMock.mock.calls.find(([path]) =>
+				String(path).endsWith('/twine.toml')
+			)?.[1]
+		);
+
+		expect(manifest).not.toContain('source_layout');
+		expect(manifest).toMatch(
+			/file = "passages\/moon-castle\/0001-[^"]+\.twee"/
+		);
+	});
+
+	it('creates one complete Twee source with scripts and styles kept separate', async () => {
+		const original = fakeStory(2);
+		const story = {
+			...original,
+			id: 'story-id',
+			name: 'Moon Castle',
+			passages: original.passages.map((passage, index) => ({
+				...passage,
+				id: `passage-${index + 1}`,
+				name: index === 0 ? 'Start' : 'Second',
+				story: 'story-id',
+				text: index === 0 ? 'first body' : 'second body'
+			})),
+			script: 'window.aggregateScript = true;',
+			stylesheet: '.aggregate-style { color: red; }'
+		};
+
+		await createProjectFolder(story, undefined, 'single-twee');
+
+		const aggregateWrite = writeFileMock.mock.calls.find(([path]) =>
+			String(path).endsWith('/story.twee')
+		);
+		const aggregateSource = String(aggregateWrite?.[1]);
+		const manifest = String(
+			writeFileMock.mock.calls.find(([path]) =>
+				String(path).endsWith('/twine.toml')
+			)?.[1]
+		);
+
+		expect(aggregateWrite).toEqual([
+			expect.stringMatching(
+				/(?:^|\/)mock-story-library\/Projects\/moon-castle\.twine\.rs\/story\.twee$/
+			),
+			expect.any(String),
+			'utf8'
+		]);
+		expect(aggregateSource).toContain(':: StoryTitle\nMoon Castle');
+		expect(aggregateSource).toContain(':: StoryData');
+		expect(aggregateSource).toContain(':: Start');
+		expect(aggregateSource).toContain('first body');
+		expect(aggregateSource).toContain(':: Second');
+		expect(aggregateSource).toContain('second body');
+		expect(aggregateSource).not.toContain(story.script);
+		expect(aggregateSource).not.toContain(story.stylesheet);
+		expect(writeFileMock).toHaveBeenCalledWith(
+			'mock-story-library/Projects/moon-castle.twine.rs/scripts/moon-castle.js',
+			story.script,
+			'utf8'
+		);
+		expect(writeFileMock).toHaveBeenCalledWith(
+			'mock-story-library/Projects/moon-castle.twine.rs/styles/moon-castle.css',
+			story.stylesheet,
+			'utf8'
+		);
+		expect(manifest).toContain('source_layout = "single-twee"');
+		expect(manifest).toContain('source = "story.twee"');
+		expect(manifest).not.toContain('file = ');
+		expect(saveNativeProjectFolderMock).toHaveBeenCalledWith(
+			'mock-story-library/Projects/moon-castle.twine.rs',
+			story,
+			'single-twee'
+		);
+	});
+
+	it('matches Rust path slugs and four-digit passage numbering', async () => {
+		const original = fakeStory(1);
+		const story = {
+			...original,
+			id: 'Story.ID',
+			name: 'Untitled',
+			passages: [
+				{
+					...original.passages[0],
+					name: 'A_B.C',
+					story: 'Story.ID'
+				}
+			]
+		};
+
+		const result = await createProjectFolder(story);
+
+		expect(result.rootPath).toBe(
+			'mock-story-library/Projects/story-id.twine.rs'
+		);
+		expect(writeFileMock).toHaveBeenCalledWith(
+			'mock-story-library/Projects/story-id.twine.rs/passages/story-id/0001-a-b-c.twee',
+			story.passages[0].text,
+			'utf8'
+		);
+		expect(writeFileMock).toHaveBeenCalledWith(
+			'mock-story-library/Projects/story-id.twine.rs/scripts/story-id.js',
+			story.script,
+			'utf8'
+		);
 	});
 
 	it('saves an existing native project folder in place', async () => {
@@ -246,6 +352,97 @@ describe('project-folder native bridge', () => {
 		);
 	});
 
+	it('reopens and retains a single-Twee layout on later full saves', async () => {
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Moon Castle"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Moon Castle"',
+			'script = "scripts/moon-castle.js"',
+			'source_layout = "single-twee"',
+			'source = "story.twee"',
+			'start_passage = "passage-1"',
+			'stylesheet = "styles/moon-castle.css"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "Start"',
+			'[[stories.passages]]',
+			'id = "passage-2"',
+			'name = "Second"',
+			'tags = ["visited"]'
+		].join('\n');
+		const aggregateSource = [
+			':: StoryTitle',
+			'Moon Castle',
+			'',
+			':: StoryData',
+			'{"ifid":"STORY-ID","format":"Chapbook","format-version":"2.1.0","start":"Start","zoom":1}',
+			'',
+			':: Start',
+			'first body',
+			'',
+			':: Second [visited]',
+			'second body'
+		].join('\n');
+
+		readFileMock.mockImplementation(async path => {
+			const normalized = String(path);
+
+			if (normalized.endsWith('twine.toml')) {
+				return manifestSource;
+			}
+			if (normalized.endsWith('story.twee')) {
+				return aggregateSource;
+			}
+			if (normalized.endsWith('moon-castle.js')) {
+				return 'window.script = true;';
+			}
+			if (normalized.endsWith('moon-castle.css')) {
+				return '.story { color: red; }';
+			}
+			return '';
+		});
+
+		const opened = await openProjectFolder('/native/moon-castle.twine.rs');
+
+		expect(opened?.stories[0].passages).toEqual([
+			expect.objectContaining({
+				id: 'passage-1',
+				name: 'Start',
+				text: 'first body'
+			}),
+			expect.objectContaining({
+				id: 'passage-2',
+				name: 'Second',
+				tags: ['visited'],
+				text: 'second body'
+			})
+		]);
+		await saveProjectFolder('/native/moon-castle.twine.rs', opened!.stories[0]);
+
+		expect(saveNativeProjectFolderMock).toHaveBeenLastCalledWith(
+			'/native/moon-castle.twine.rs',
+			opened!.stories[0],
+			'single-twee'
+		);
+		expect(writeFileMock).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs/story.twee',
+			expect.stringContaining(':: StoryData'),
+			'utf8'
+		);
+		const savedManifest = String(
+			writeFileMock.mock.calls.find(
+				([path]) => String(path) === '/native/moon-castle.twine.rs/twine.toml'
+			)?.[1]
+		);
+
+		expect(savedManifest).toContain('source_layout = "single-twee"');
+		expect(savedManifest).toContain('source = "story.twee"');
+		expect(savedManifest).not.toContain('file = ');
+	});
+
 	it('uses the native project saver when it is available', async () => {
 		const story = {
 			...fakeStory(1),
@@ -270,7 +467,8 @@ describe('project-folder native bridge', () => {
 		});
 		expect(saveNativeProjectFolderMock).toHaveBeenCalledWith(
 			'/native/moon-castle.twine.rs',
-			story
+			story,
+			'passage-files'
 		);
 		expect(writeFileMock).not.toHaveBeenCalled();
 		expect(moveMock).not.toHaveBeenCalled();
@@ -377,6 +575,313 @@ describe('project-folder native bridge', () => {
 				String(call[0]).endsWith('twine.toml')
 			).length
 		).toBe(manifestReadsBeforeSave);
+	});
+
+	it('incrementally rewrites one aggregate source while preserving other passages', async () => {
+		const original = fakeStory(2);
+		const compactStory = {
+			...original,
+			id: 'story-id',
+			name: 'Story',
+			passages: [
+				{
+					...original.passages[0],
+					id: 'passage-1',
+					name: 'Start',
+					story: 'story-id',
+					text: 'updated first'
+				}
+			],
+			script: 'window.separate = true;',
+			startPassage: 'passage-1',
+			stylesheet: '.separate { color: blue; }'
+		};
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'script = "scripts/story.js"',
+			'source_layout = "single-twee"',
+			'source = "story.twee"',
+			'start_passage = "passage-1"',
+			'stylesheet = "styles/story.css"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "Start"',
+			'[[stories.passages]]',
+			'id = "passage-2"',
+			'name = "Second"'
+		].join('\n');
+		const aggregateSource = [
+			'This preamble belongs to another tool.',
+			'',
+			':: StoryTitle',
+			'Story',
+			'',
+			':: StoryData',
+			'{"ifid":"STORY-ID","format":"Chapbook","format-version":"2.1.0","start":"Start","zoom":1,"tool":{"keep":true}}',
+			'',
+			':: Start {"position":"0,0","size":"100,100","source-pid":"original","tool":"keep"}',
+			'old first',
+			'',
+			':: Second',
+			'preserved second',
+			'',
+			':: Tool Notes [tool] {"tool":"keep"}',
+			'custom section',
+			'',
+			':: Legacy Script [script]',
+			'window.legacy = true;'
+		].join('\n');
+		const files = [
+			{
+				fingerprint: '1:0',
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 0
+			},
+			{
+				fingerprint: '1:0',
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'story.twee',
+				sizeBytes: 0
+			}
+		];
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).endsWith('story.twee')
+					? aggregateSource
+					: ''
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockReturnValue(files);
+
+		await startProjectSession('/native/project.twine.rs', undefined, [
+			'story-id'
+		]);
+		await saveProjectFolder('/native/project.twine.rs', compactStory, {
+			documentUpdates: [
+				{
+					passageId: 'passage-1',
+					storyId: 'story-id',
+					text: 'updated first',
+					type: 'passageText'
+				}
+			],
+			hints: [
+				{passageId: 'passage-1', storyId: 'story-id', type: 'passageText'}
+			],
+			incrementalOnly: true
+		});
+
+		const aggregateWrite = writeFileMock.mock.calls.find(([path]) =>
+			/^\/native\/project\.twine\.rs\/story\.twee\..+\.tmp$/.test(String(path))
+		);
+		const aggregateSave = String(aggregateWrite?.[1]);
+
+		expect(aggregateSave).toContain(':: StoryTitle\nStory');
+		expect(aggregateSave).toContain(':: StoryData');
+		expect(aggregateSave).toContain('updated first');
+		expect(aggregateSave).toContain('preserved second');
+		expect(aggregateSave).toContain('This preamble belongs to another tool.');
+		expect(aggregateSave).toContain('"tool": {');
+		expect(aggregateSave).toContain('"keep": true');
+		expect(aggregateSave).toContain('"source-pid":"original"');
+		expect(aggregateSave).toContain(':: Tool Notes [tool] {"tool":"keep"}');
+		expect(aggregateSave).toContain('custom section');
+		expect(aggregateSave).toContain(':: Legacy Script [script]');
+		expect(aggregateSave).toContain('window.legacy = true;');
+		expect(aggregateSave).not.toContain(compactStory.script);
+		expect(aggregateSave).not.toContain(compactStory.stylesheet);
+		expect(moveMock).toHaveBeenCalledWith(
+			expect.stringMatching(
+				/^\/native\/project\.twine\.rs\/story\.twee\..+\.tmp$/
+			),
+			'/native/project.twine.rs/story.twee',
+			{overwrite: true}
+		);
+		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
+
+		statMock.mockResolvedValue({
+			isDirectory: () => false,
+			isFile: () => true,
+			mtime: new Date('2026-06-21T16:00:01.000Z'),
+			mtimeMs: 2,
+			size: 0
+		});
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', compactStory, {
+				documentUpdates: [
+					{
+						passageId: 'passage-1',
+						storyId: 'story-id',
+						text: 'updated again',
+						type: 'passageText'
+					}
+				],
+				hints: [
+					{
+						passageId: 'passage-1',
+						storyId: 'story-id',
+						type: 'passageText'
+					}
+				],
+				incrementalOnly: true
+			})
+		).rejects.toThrow(
+			'story.twee changed outside twine.rs; refusing to overwrite it.'
+		);
+	});
+
+	it('keeps a custom aggregate source path when incrementally saving metadata', async () => {
+		const original = fakeStory(1);
+		const story = {
+			...original,
+			id: 'story-id',
+			name: 'Story',
+			passages: [
+				{
+					...original.passages[0],
+					id: 'passage-1',
+					name: 'Renamed Start',
+					story: 'story-id',
+					tags: ['new-tag'],
+					text: 'body'
+				}
+			],
+			startPassage: 'passage-1'
+		};
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'tool_mode = "preserve-me"',
+			'[tooling]',
+			'owner = "external"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'script = "custom/scripts/main.js"',
+			'source_layout = "single-twee"',
+			'source = "sources/main.twee"',
+			'start_passage = "passage-1"',
+			'stylesheet = "custom/styles/main.css"',
+			'tool_story_key = "preserve-me"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "Start" # passage label',
+			'tags = [',
+			'  "old-tag",',
+			'] # managed tags',
+			'tool_passage_key = "preserve-me"',
+			'notes = """',
+			'[stories.not-a-real-table]',
+			'"""',
+			'[stories.tooling]',
+			'enabled = true'
+		].join('\n');
+		const aggregateSource = [
+			':: StoryTitle',
+			'Story',
+			'',
+			':: StoryData',
+			'{"ifid":"STORY-ID","start":"Start"}',
+			'',
+			':: Start',
+			'body'
+		].join('\n');
+		const files = [
+			{
+				fingerprint: '1:0',
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 0
+			},
+			{
+				fingerprint: '1:0',
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'sources/main.twee',
+				sizeBytes: 0
+			}
+		];
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).endsWith('sources/main.twee')
+					? aggregateSource
+					: ''
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockReturnValue(files);
+
+		await startProjectSession('/native/project.twine.rs', undefined, [
+			'story-id'
+		]);
+		await saveProjectFolder('/native/project.twine.rs', story, {
+			hints: [
+				{
+					passageId: 'passage-1',
+					storyId: 'story-id',
+					type: 'passageMetadata'
+				}
+			],
+			incrementalOnly: true
+		});
+
+		const manifestWrite = writeFileMock.mock.calls.find(([path]) =>
+			/^\/native\/project\.twine\.rs\/twine\.toml\..+\.tmp$/.test(String(path))
+		);
+
+		expect(String(manifestWrite?.[1])).toContain(
+			'source = "sources/main.twee"'
+		);
+		expect(String(manifestWrite?.[1])).toContain(
+			'script = "custom/scripts/main.js"'
+		);
+		expect(String(manifestWrite?.[1])).toContain(
+			'stylesheet = "custom/styles/main.css"'
+		);
+		expect(String(manifestWrite?.[1])).toContain(
+			'name = "Renamed Start" # passage label'
+		);
+		expect(String(manifestWrite?.[1])).toContain(
+			'tags = ["new-tag"] # managed tags'
+		);
+		expect(String(manifestWrite?.[1])).not.toContain('"old-tag"');
+		expect(String(manifestWrite?.[1])).toContain(
+			'notes = """\n[stories.not-a-real-table]\n"""'
+		);
+		expect(String(manifestWrite?.[1])).toContain(
+			'tool_passage_key = "preserve-me"'
+		);
+		expect(String(manifestWrite?.[1])).toContain('[stories.tooling]');
+		expect(String(manifestWrite?.[1])).toContain('tool_mode = "preserve-me"');
+		expect(
+			writeFileMock.mock.calls.some(([path]) =>
+				/^\/native\/project\.twine\.rs\/sources\/main\.twee\..+\.tmp$/.test(
+					String(path)
+				)
+			)
+		).toBe(true);
+		expect(
+			writeFileMock.mock.calls.some(([path]) =>
+				String(path).includes('/story.twee.')
+			)
+		).toBe(false);
 	});
 
 	it('incrementally saves passage names without reallocating source paths', async () => {
@@ -792,6 +1297,113 @@ describe('project-folder native bridge', () => {
 		}
 	});
 
+	it('reconstructs a one-passage custom aggregate source from a native receipt', async () => {
+		const original = fakeStory(1);
+		const story = {
+			...original,
+			id: 'story-id',
+			name: 'Story',
+			passages: [
+				{
+					...original.passages[0],
+					id: 'passage-1',
+					name: 'Start',
+					story: 'story-id',
+					text: 'updated'
+				}
+			],
+			startPassage: 'passage-1'
+		};
+		const rootPath = '/native/custom-source.twine.rs';
+		const aggregateSource = [
+			':: StoryTitle',
+			'Story',
+			'',
+			':: StoryData',
+			`{"ifid":"${story.ifid}","start":"Start"}`,
+			'',
+			':: Start',
+			'old'
+		].join('\n');
+		const baselineReceipt = {
+			assets: [],
+			completedAt: '2026-06-21T16:00:01.000Z',
+			files: [
+				{
+					fingerprint: '1:0',
+					kind: 'manifest' as const,
+					modifiedAt: '2026-06-21T16:00:00.000Z',
+					mtimeMs: 1,
+					path: 'twine.toml',
+					sizeBytes: 0
+				},
+				{
+					fingerprint: '1:0',
+					kind: 'passage' as const,
+					modifiedAt: '2026-06-21T16:00:00.000Z',
+					mtimeMs: 1,
+					path: 'sources/only.twee',
+					sizeBytes: 0,
+					storyId: 'story-id'
+				}
+			],
+			id: 'load-custom',
+			layoutDataJson: '{}',
+			rootPath,
+			schemaVersion: 1,
+			startedAt: '2026-06-21T16:00:00.000Z',
+			storyIds: ['story-id']
+		};
+
+		loadNativeProjectFolderMock.mockReturnValue({
+			baselineReceipt,
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: ['story-id']
+		});
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('sources/only.twee') ? aggregateSource : ''
+		);
+
+		try {
+			await openProjectFolder(rootPath);
+			await saveProjectFolder(rootPath, story, {
+				documentUpdates: [
+					{
+						passageId: 'passage-1',
+						storyId: 'story-id',
+						text: 'updated',
+						type: 'passageText'
+					}
+				],
+				hints: [
+					{
+						passageId: 'passage-1',
+						storyId: 'story-id',
+						type: 'passageText'
+					}
+				],
+				incrementalOnly: true
+			});
+
+			expect(
+				writeFileMock.mock.calls.some(([path]) =>
+					/^\/native\/custom-source\.twine\.rs\/sources\/only\.twee\..+\.tmp$/.test(
+						String(path)
+					)
+				)
+			).toBe(true);
+			expect(
+				writeFileMock.mock.calls.some(([path]) =>
+					String(path).includes('/passages/')
+				)
+			).toBe(false);
+		} finally {
+			stopProjectSession(rootPath);
+		}
+	});
+
 	it('keeps project loading native-only when legacy fallback is disabled', async () => {
 		const previousFallback = process.env.TWINE_LEGACY_PROJECT_FALLBACK;
 
@@ -1019,6 +1631,58 @@ describe('project-folder native bridge', () => {
 				String(path).endsWith('/assets')
 			)
 		).toHaveLength(2);
+	});
+
+	it('scans a declared aggregate source outside the passages directory', async () => {
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'name = "Story"',
+			'source_layout = "single-twee"',
+			'source = "story.twee"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"'
+		].join('\n');
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : ''
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockReturnValue(undefined);
+		statMock.mockImplementation(async path => {
+			const normalized = String(path);
+
+			if (
+				normalized.endsWith('/twine.toml') ||
+				normalized.endsWith('/story.twee')
+			) {
+				return {
+					isDirectory: () => false,
+					isFile: () => true,
+					mtime: new Date('2026-06-21T16:00:00.000Z'),
+					mtimeMs: 1,
+					size: 42
+				};
+			}
+			throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+		});
+
+		await startProjectSession('/native/project.twine.rs', undefined, [
+			'story-id'
+		]);
+		const snapshot = await projectSessionSnapshot('/native/project.twine.rs', [
+			'story-id'
+		]);
+
+		expect(snapshot.files).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({kind: 'manifest', path: 'twine.toml'}),
+				expect.objectContaining({kind: 'passage', path: 'story.twee'})
+			])
+		);
 	});
 
 	it('opens a native project folder from manifest source files when present', async () => {
@@ -1997,6 +2661,686 @@ describe('project-folder native bridge', () => {
 			expect(loadNativeProjectFolderMock).not.toHaveBeenCalled();
 		} finally {
 			stopProjectSession('/native/project.twine.rs');
+			jest.useRealTimers();
+		}
+	});
+
+	it('maps one aggregate source watcher change to every owned passage', async () => {
+		jest.useFakeTimers();
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'source_layout = "single-twee"',
+			'source = "story.twee"',
+			'start_passage = "passage-1"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "Start"',
+			'[[stories.passages]]',
+			'id = "passage-2"',
+			'name = "Second"'
+		].join('\n');
+		const aggregateSource = [
+			':: StoryTitle',
+			'Story',
+			'',
+			':: StoryData',
+			'{"ifid":"STORY-ID","start":"Start"}',
+			'',
+			':: Start',
+			'changed first',
+			'',
+			':: Second [fresh]',
+			'changed second'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const aggregateFile = {
+			fingerprint: '1:100',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'story.twee',
+			sizeBytes: 100
+		};
+		const changedAggregateFile = {
+			...aggregateFile,
+			fingerprint: '2:120',
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 2,
+			sizeBytes: 120
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).endsWith('story.twee')
+					? aggregateSource
+					: ''
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([manifestFile, aggregateFile])
+			.mockReturnValueOnce([manifestFile, changedAggregateFile]);
+
+		try {
+			await startProjectSession('/native/project.twine.rs', listener, [
+				'story-id'
+			]);
+			await jest.advanceTimersByTimeAsync(1250);
+
+			const changes = listener.mock.calls[0][0].delta.changes;
+
+			expect(changes).toEqual([
+				expect.objectContaining({
+					changes: expect.objectContaining({
+						name: 'Start',
+						text: 'changed first'
+					}),
+					passage_id: 'passage-1',
+					story_id: 'story-id',
+					type: 'updatePassage'
+				}),
+				expect.objectContaining({
+					changes: expect.objectContaining({
+						name: 'Second',
+						tags: ['fresh'],
+						text: 'changed second'
+					}),
+					passage_id: 'passage-2',
+					story_id: 'story-id',
+					type: 'updatePassage'
+				})
+			]);
+			expect(readFileMock).toHaveBeenCalledWith(
+				'/native/project.twine.rs/story.twee',
+				'utf8'
+			);
+		} finally {
+			stopProjectSession('/native/project.twine.rs');
+			jest.useRealTimers();
+		}
+	});
+
+	it('applies watched StoryTitle and StoryData metadata changes', async () => {
+		jest.useFakeTimers();
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "OLD-IFID"',
+			'name = "Old Story"',
+			'source_layout = "single-twee"',
+			'source = "story.twee"',
+			'start_passage = "passage-1"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "Start"',
+			'[[stories.passages]]',
+			'id = "passage-2"',
+			'name = "Second"'
+		].join('\n');
+		let aggregateSource = [
+			':: StoryTitle',
+			'Old Story',
+			'',
+			':: StoryData',
+			'{"ifid":"OLD-IFID","format":"Harlowe","format-version":"3.3.9","start":"Start","tag-colors":{"old":"red"},"zoom":1}',
+			'',
+			':: Start',
+			'first',
+			'',
+			':: Second',
+			'second'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const aggregateFile = {
+			fingerprint: '1:100',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'story.twee',
+			sizeBytes: 100
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).endsWith('story.twee')
+					? aggregateSource
+					: ''
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([manifestFile, aggregateFile])
+			.mockReturnValueOnce([
+				manifestFile,
+				{...aggregateFile, fingerprint: '2:140', mtimeMs: 2}
+			]);
+
+		try {
+			await startProjectSession('/native/project.twine.rs', listener, [
+				'story-id'
+			]);
+			aggregateSource = [
+				':: StoryTitle',
+				'New Story',
+				'',
+				':: StoryData',
+				'{"ifid":"NEW-IFID","format":"Chapbook","format-version":"2.3.1","start":"Second","tag-colors":{"new":"#123456"},"zoom":1.5,"tool":"preserved"}',
+				'',
+				':: Start',
+				'first',
+				'',
+				':: Second',
+				'second'
+			].join('\n');
+			await jest.advanceTimersByTimeAsync(1250);
+
+			expect(listener.mock.calls[0][0].delta.changes).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						changes: expect.objectContaining({
+							ifid: 'NEW-IFID',
+							name: 'New Story',
+							storyFormat: 'Chapbook',
+							storyFormatVersion: '2.3.1',
+							tagColors: {new: '#123456'},
+							zoom: 1.5
+						}),
+						story_id: 'story-id',
+						type: 'updateStoryMetadata'
+					}),
+					expect.objectContaining({
+						passage_id: 'passage-2',
+						story_id: 'story-id',
+						type: 'updateStoryStartPassage'
+					})
+				])
+			);
+		} finally {
+			stopProjectSession('/native/project.twine.rs');
+			jest.useRealTimers();
+		}
+	});
+
+	it('applies Rust defaults when watched story metadata is removed or invalid', async () => {
+		jest.useFakeTimers();
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "MANIFEST-IFID"',
+			'name = "Manifest Story"',
+			'source_layout = "single-twee"',
+			'source = "story.twee"',
+			'start_passage = "passage-2"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "First"',
+			'[[stories.passages]]',
+			'id = "passage-2"',
+			'name = "Second"'
+		].join('\n');
+		let aggregateSource = [
+			':: StoryTitle',
+			'Source Story',
+			'',
+			':: StoryData',
+			'{"ifid":"SOURCE-IFID","format":"Chapbook","format-version":"2.3.1","start":"First","tag-colors":{"old":"red"},"zoom":1.5}',
+			'',
+			':: First',
+			'first',
+			'',
+			':: Second',
+			'second'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const aggregateFile = {
+			fingerprint: '1:100',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'story.twee',
+			sizeBytes: 100
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).endsWith('story.twee')
+					? aggregateSource
+					: ''
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([manifestFile, aggregateFile])
+			.mockReturnValueOnce([
+				manifestFile,
+				{...aggregateFile, fingerprint: '2:140', mtimeMs: 2}
+			]);
+
+		try {
+			await startProjectSession('/native/project.twine.rs', listener, [
+				'story-id'
+			]);
+			aggregateSource = [
+				':: StoryData',
+				'{"ifid":42,"format":false,"format-version":null,"tag-colors":[],"zoom":"wide"}',
+				'',
+				':: First',
+				'first',
+				'',
+				':: Second',
+				'second'
+			].join('\n');
+			await jest.advanceTimersByTimeAsync(1250);
+
+			expect(listener.mock.calls[0][0].delta.changes).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						changes: expect.objectContaining({
+							ifid: expect.stringMatching(
+								/^[A-F0-9]{8}-[A-F0-9]{4}-4[A-F0-9]{3}-8[A-F0-9]{3}-[A-F0-9]{12}$/
+							),
+							name: 'Manifest Story',
+							storyFormat: '',
+							storyFormatVersion: '',
+							tagColors: {},
+							zoom: 1
+						}),
+						story_id: 'story-id',
+						type: 'updateStoryMetadata'
+					}),
+					expect.objectContaining({
+						passage_id: 'passage-2',
+						story_id: 'story-id',
+						type: 'updateStoryStartPassage'
+					})
+				])
+			);
+		} finally {
+			stopProjectSession('/native/project.twine.rs');
+			jest.useRealTimers();
+		}
+	});
+
+	it('reconciles aggregate passage renames, additions, and deletions', async () => {
+		jest.useFakeTimers();
+		let manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'source_layout = "single-twee"',
+			'source = "story.twee"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "Start"',
+			'[[stories.passages]]',
+			'id = "passage-2"',
+			'name = "Second"'
+		].join('\n');
+		const storySource = (sections: string[]) =>
+			[
+				':: StoryTitle',
+				'Story',
+				'',
+				':: StoryData',
+				'{"ifid":"STORY-ID"}',
+				'',
+				...sections
+			].join('\n');
+		let aggregateSource = storySource([
+			':: Start',
+			'start body',
+			'',
+			':: Second',
+			'second body'
+		]);
+		let aggregateVersion = 1;
+		let manifestVersion = 1;
+		let pendingManifestSource: string | undefined;
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const aggregateFile = {
+			fingerprint: '1:100',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'story.twee',
+			sizeBytes: 100
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).endsWith('story.twee')
+					? aggregateSource
+					: ''
+		);
+		writeFileMock.mockImplementation(async (path, source) => {
+			if (
+				/^\/native\/project\.twine\.rs\/twine\.toml\..+\.tmp$/.test(
+					String(path)
+				)
+			) {
+				pendingManifestSource = String(source);
+			}
+		});
+		moveMock.mockImplementation(async (_source, destination) => {
+			if (
+				String(destination) === '/native/project.twine.rs/twine.toml' &&
+				pendingManifestSource !== undefined
+			) {
+				manifestSource = pendingManifestSource;
+				pendingManifestSource = undefined;
+				manifestVersion++;
+			}
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockImplementation(() => [
+			{
+				...manifestFile,
+				fingerprint: `${manifestVersion}:100`,
+				mtimeMs: manifestVersion
+			},
+			{
+				...aggregateFile,
+				fingerprint: `${aggregateVersion}:120`,
+				mtimeMs: aggregateVersion
+			}
+		]);
+
+		try {
+			await startProjectSession('/native/project.twine.rs', listener, [
+				'story-id'
+			]);
+			aggregateSource = storySource([
+				':: Start Renamed',
+				'renamed body',
+				'',
+				':: Second',
+				'second body',
+				'',
+				':: Added',
+				'added body'
+			]);
+			aggregateVersion = 2;
+			await jest.advanceTimersByTimeAsync(1250);
+			const firstDelta = listener.mock.calls[0][0];
+			const firstChanges = firstDelta.delta.changes;
+			const added = firstChanges.find(
+				(change: {type: string}) => change.type === 'upsertPassage'
+			);
+
+			expect(firstChanges).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						changes: expect.objectContaining({name: 'Start Renamed'}),
+						passage_id: 'passage-1',
+						type: 'updatePassage'
+					}),
+					expect.objectContaining({
+						passage: expect.objectContaining({
+							name: 'Added',
+							text: 'added body'
+						}),
+						type: 'upsertPassage'
+					})
+				])
+			);
+			expect(added.passage.id).toMatch(/^passage-.+-[a-f0-9]{16}$/);
+
+			aggregateSource = storySource([
+				':: Second',
+				'second body',
+				'',
+				':: Added',
+				'added body'
+			]);
+			aggregateVersion = 3;
+			await resolveProjectSessionConflicts(
+				'/native/project.twine.rs',
+				'acceptDisk',
+				[],
+				firstDelta.id
+			);
+			expect(manifestSource).not.toContain(`id = "${added.passage.id}"`);
+			await jest.advanceTimersByTimeAsync(1);
+
+			expect(listener.mock.calls[1][0].delta.changes).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						passage_id: 'passage-1',
+						story_id: 'story-id',
+						type: 'deletePassage'
+					}),
+					expect.objectContaining({
+						passage_id: added.passage.id,
+						type: 'updatePassage'
+					})
+				])
+			);
+			await resolveProjectSessionConflicts(
+				'/native/project.twine.rs',
+				'acceptDisk',
+				[],
+				listener.mock.calls[1][0].id
+			);
+			expect(manifestSource).toContain(`id = "${added.passage.id}"`);
+			stopProjectSession('/native/project.twine.rs');
+			const reopened = await openProjectFolder('/native/project.twine.rs');
+			const reopenedAdded = reopened?.stories[0].passages.find(
+				passage => passage.name === 'Added'
+			);
+
+			expect(reopenedAdded?.id).toBe(added.passage.id);
+		} finally {
+			stopProjectSession('/native/project.twine.rs');
+			jest.useRealTimers();
+		}
+	});
+
+	it('does not persist a stale ID when an unaccepted passage is replaced', async () => {
+		jest.useFakeTimers();
+		let manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'source_layout = "single-twee"',
+			'source = "story.twee"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "Start"'
+		].join('\n');
+		const storySource = (secondName?: string) =>
+			[
+				':: StoryTitle',
+				'Story',
+				'',
+				':: StoryData',
+				'{"ifid":"STORY-ID"}',
+				'',
+				':: Start',
+				'start body',
+				...(secondName ? ['', `:: ${secondName}`, 'second body'] : [])
+			].join('\n');
+		let aggregateSource = storySource();
+		let aggregateVersion = 1;
+		let manifestVersion = 1;
+		let pendingManifestSource: string | undefined;
+		let replaceAggregateDuringManifestWrite = false;
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const aggregateFile = {
+			fingerprint: '1:100',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'story.twee',
+			sizeBytes: 100
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).endsWith('story.twee')
+					? aggregateSource
+					: ''
+		);
+		writeFileMock.mockImplementation(async (path, source) => {
+			if (
+				/^\/native\/race\.twine\.rs\/twine\.toml\..+\.tmp$/.test(String(path))
+			) {
+				pendingManifestSource = String(source);
+			}
+		});
+		moveMock.mockImplementation(async (_source, destination) => {
+			if (
+				String(destination) === '/native/race.twine.rs/twine.toml' &&
+				pendingManifestSource !== undefined
+			) {
+				const writtenManifest = pendingManifestSource;
+
+				manifestSource = writtenManifest;
+				pendingManifestSource = undefined;
+				manifestVersion++;
+				if (
+					replaceAggregateDuringManifestWrite &&
+					aggregateVersion === 2 &&
+					(writtenManifest.match(/\[\[stories\.passages\]\]/g)?.length ?? 0) > 1
+				) {
+					replaceAggregateDuringManifestWrite = false;
+					aggregateSource = storySource('Replacement');
+					aggregateVersion = 3;
+				}
+			}
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockImplementation(() => [
+			{
+				...manifestFile,
+				fingerprint: `${manifestVersion}:100`,
+				mtimeMs: manifestVersion
+			},
+			{
+				...aggregateFile,
+				fingerprint: `${aggregateVersion}:120`,
+				mtimeMs: aggregateVersion
+			}
+		]);
+
+		try {
+			await startProjectSession('/native/race.twine.rs', listener, [
+				'story-id'
+			]);
+			aggregateSource = storySource('Added');
+			aggregateVersion = 2;
+			await jest.advanceTimersByTimeAsync(1250);
+			const firstDelta = listener.mock.calls[0][0];
+			const staleAddition = firstDelta.delta.changes.find(
+				(change: {type: string}) => change.type === 'upsertPassage'
+			);
+
+			replaceAggregateDuringManifestWrite = true;
+			await resolveProjectSessionConflicts(
+				'/native/race.twine.rs',
+				'acceptDisk',
+				[],
+				firstDelta.id
+			);
+			expect(manifestSource).not.toContain(
+				`id = "${staleAddition.passage.id}"`
+			);
+			expect(
+				moveMock.mock.calls.filter(
+					([, destination]) =>
+						String(destination) === '/native/race.twine.rs/twine.toml'
+				)
+			).toHaveLength(2);
+			await jest.advanceTimersByTimeAsync(1);
+
+			const secondDelta = listener.mock.calls[1][0];
+			const replacement = secondDelta.delta.changes.find(
+				(change: {passage?: {name?: string}; type: string}) =>
+					change.type === 'upsertPassage' &&
+					change.passage?.name === 'Replacement'
+			);
+
+			expect(secondDelta.delta.changes).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						passage_id: staleAddition.passage.id,
+						type: 'deletePassage'
+					}),
+					expect.objectContaining({
+						passage: expect.objectContaining({name: 'Replacement'}),
+						type: 'upsertPassage'
+					})
+				])
+			);
+			expect(replacement.passage.id).not.toBe(staleAddition.passage.id);
+			await resolveProjectSessionConflicts(
+				'/native/race.twine.rs',
+				'acceptDisk',
+				[],
+				secondDelta.id
+			);
+			expect(manifestSource).not.toContain(
+				`id = "${staleAddition.passage.id}"`
+			);
+			expect(manifestSource).toContain(`id = "${replacement.passage.id}"`);
+		} finally {
+			stopProjectSession('/native/race.twine.rs');
 			jest.useRealTimers();
 		}
 	});

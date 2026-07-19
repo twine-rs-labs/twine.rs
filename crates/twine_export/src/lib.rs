@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
 use twine_model::{Passage, PassageId, Story};
-use twine_parse::{escape_for_twee_header, escape_for_twee_text};
+use twine_parse::{escape_for_twee_header, escape_for_twee_text, passages_from_twee};
 
 #[derive(Debug, Error)]
 pub enum ExportError {
@@ -76,6 +76,286 @@ pub fn passage_to_twee(passage: &Passage) -> Result<String, ExportError> {
         ":: {escaped_name}{tags}{metadata}\n{}\n",
         escape_for_twee_text(&passage.text)
     ))
+}
+
+/// Updates a standard Twee story source while retaining original bytes for
+/// modeled sections whose contents have not changed.
+///
+/// `previous_passage_names` identifies sections written by the prior save.
+/// Unmatched prior modeled sections are removed, while unrelated custom
+/// sections that were not in the prior manifest are retained.
+pub fn merge_story_into_twee(
+    existing_source: &str,
+    story: &Story,
+    previous_passage_names: &[String],
+) -> Result<String, ExportError> {
+    let ranges = twee_section_ranges(existing_source);
+
+    if ranges.is_empty() {
+        return story_source_to_twee(story);
+    }
+
+    let source_story_id = twine_model::StoryId::new("source");
+    let existing_passages = ranges
+        .iter()
+        .map(|(start, end)| {
+            passages_from_twee(&existing_source[*start..*end], &source_story_id)
+                .ok()
+                .and_then(|mut passages| passages.pop())
+        })
+        .collect::<Vec<_>>();
+    let mut passage_used = vec![false; story.passages.len()];
+    let mut previous_used = vec![false; previous_passage_names.len()];
+    let mut saw_story_title = false;
+    let mut saw_story_data = false;
+
+    let mut output = String::with_capacity(existing_source.len());
+    let first_start = ranges[0].0;
+
+    output.push_str(&existing_source[..first_start]);
+    if !existing_passages
+        .iter()
+        .flatten()
+        .any(|passage| passage.name == "StoryTitle")
+    {
+        append_twee_section(&mut output, &story_title_to_twee(story));
+    }
+    if !existing_passages
+        .iter()
+        .flatten()
+        .any(|passage| passage.name == "StoryData")
+    {
+        append_twee_section(&mut output, &story_data_to_twee(story)?);
+    }
+
+    for (section_index, (start, end)) in ranges.iter().copied().enumerate() {
+        let raw = &existing_source[start..end];
+        let Some(existing) = existing_passages[section_index].as_ref() else {
+            output.push_str(raw);
+            continue;
+        };
+
+        if existing.name == "StoryTitle" && !saw_story_title {
+            saw_story_title = true;
+            if existing.text.trim() == story.name {
+                output.push_str(raw);
+            } else {
+                let mut title = existing.clone();
+
+                title.text = story.name.clone();
+                rewrite_twee_section(&mut output, raw, &passage_to_twee(&title)?);
+            }
+            continue;
+        }
+
+        if existing.name == "StoryData" && !saw_story_data {
+            saw_story_data = true;
+            let expected = merged_story_data(existing, story);
+            let unchanged =
+                serde_json::from_str::<Value>(&existing.text).is_ok_and(|value| value == expected);
+
+            if unchanged {
+                output.push_str(raw);
+            } else {
+                rewrite_twee_section(&mut output, raw, &story_data_value_to_twee(&expected)?);
+            }
+            continue;
+        }
+
+        if existing
+            .tags
+            .iter()
+            .any(|tag| tag == "script" || tag == "stylesheet")
+        {
+            output.push_str(raw);
+            continue;
+        }
+
+        let previous_index = previous_passage_names
+            .iter()
+            .enumerate()
+            .find(|(index, name)| !previous_used[*index] && **name == existing.name)
+            .map(|(index, _)| index);
+
+        let Some(previous_index) = previous_index else {
+            let current_index = story
+                .passages
+                .iter()
+                .enumerate()
+                .find(|(index, passage)| !passage_used[*index] && passage.name == existing.name)
+                .map(|(index, _)| index);
+
+            if let Some(current_index) = current_index {
+                passage_used[current_index] = true;
+                let passage = &story.passages[current_index];
+
+                if twee_passage_contents_equal(existing, passage) {
+                    output.push_str(raw);
+                } else {
+                    rewrite_twee_section(
+                        &mut output,
+                        raw,
+                        &passage_to_twee_preserving_unknown(existing, passage)?,
+                    );
+                }
+            } else {
+                output.push_str(raw);
+            }
+            continue;
+        };
+        previous_used[previous_index] = true;
+
+        let passage_index = story
+            .passages
+            .iter()
+            .enumerate()
+            .find(|(index, passage)| !passage_used[*index] && passage.name == existing.name)
+            .map(|(index, _)| index)
+            .or_else(|| {
+                story
+                    .passages
+                    .get_at(previous_index)
+                    .filter(|_| !passage_used[previous_index])
+                    .map(|_| previous_index)
+            });
+        let Some(passage_index) = passage_index else {
+            continue;
+        };
+        passage_used[passage_index] = true;
+        let passage = &story.passages[passage_index];
+
+        if twee_passage_contents_equal(existing, passage) {
+            output.push_str(raw);
+        } else {
+            rewrite_twee_section(
+                &mut output,
+                raw,
+                &passage_to_twee_preserving_unknown(existing, passage)?,
+            );
+        }
+    }
+
+    for (index, passage) in story.passages.iter().enumerate() {
+        if passage_used[index] {
+            continue;
+        }
+        append_twee_section(&mut output, &passage_to_twee(passage)?);
+    }
+
+    Ok(output)
+}
+
+pub fn story_source_to_twee(story: &Story) -> Result<String, ExportError> {
+    let mut output = String::new();
+
+    output.push_str(&story_title_to_twee(story));
+    output.push_str("\n\n");
+    output.push_str(&story_data_to_twee(story)?);
+    for passage in &story.passages {
+        append_twee_section(&mut output, &passage_to_twee(passage)?);
+    }
+
+    Ok(output)
+}
+
+fn story_title_to_twee(story: &Story) -> String {
+    format!(":: StoryTitle\n{}\n", escape_for_twee_text(&story.name))
+}
+
+fn story_data_to_twee(story: &Story) -> Result<String, ExportError> {
+    story_data_value_to_twee(&story_data_for_twee(story, false))
+}
+
+fn story_data_value_to_twee(story_data: &Value) -> Result<String, ExportError> {
+    Ok(format!(
+        ":: StoryData\n{}\n",
+        serde_json::to_string_pretty(story_data)?
+    ))
+}
+
+fn merged_story_data(existing: &Passage, story: &Story) -> Value {
+    let mut expected = story_data_for_twee(story, false);
+
+    if let (Value::Object(expected), Ok(Value::Object(existing))) =
+        (&mut expected, serde_json::from_str::<Value>(&existing.text))
+    {
+        for (key, value) in existing {
+            expected.entry(key).or_insert(value);
+        }
+    }
+
+    expected
+}
+
+fn passage_to_twee_preserving_unknown(
+    existing: &Passage,
+    passage: &Passage,
+) -> Result<String, ExportError> {
+    let mut passage = passage.clone();
+
+    if passage.layout.is_none() {
+        passage.layout = existing.layout;
+    }
+    for (key, value) in &existing.metadata {
+        passage
+            .metadata
+            .entry(key.clone())
+            .or_insert_with(|| value.clone());
+    }
+
+    passage_to_twee(&passage)
+}
+
+fn append_twee_section(output: &mut String, section: &str) {
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    if !output.trim_end().is_empty() {
+        output.push_str("\n\n");
+    }
+    output.push_str(section);
+}
+
+fn rewrite_twee_section(output: &mut String, raw: &str, rewritten: &str) {
+    let trailing_start = raw.trim_end_matches(char::is_whitespace).len();
+    let trailing = &raw[trailing_start..];
+
+    output.push_str(rewritten.trim_end_matches(char::is_whitespace));
+    output.push_str(if trailing.is_empty() { "\n" } else { trailing });
+}
+
+fn twee_passage_contents_equal(left: &Passage, right: &Passage) -> bool {
+    left.layout == right.layout
+        && left.metadata == right.metadata
+        && left.name == right.name
+        && left.tags == right.tags
+        && left.text == right.text
+}
+
+fn twee_section_ranges(source: &str) -> Vec<(usize, usize)> {
+    let mut starts = Vec::new();
+    let mut offset = 0;
+
+    for line in source.split_inclusive('\n') {
+        if line.starts_with("::") {
+            starts.push(offset);
+        }
+        offset += line.len();
+    }
+    if offset < source.len() && source[offset..].starts_with("::") {
+        starts.push(offset);
+    }
+
+    starts
+        .iter()
+        .enumerate()
+        .map(|(index, start)| {
+            (
+                *start,
+                starts.get(index + 1).copied().unwrap_or(source.len()),
+            )
+        })
+        .collect()
 }
 
 pub fn story_to_twee(story: &Story) -> Result<String, ExportError> {
@@ -537,6 +817,43 @@ mod tests {
         assert!(output.contains(r#""unknown":true"#));
         assert!(output.contains(":: StoryScript [script]\nalert(1)"));
         assert!(output.contains(":: StoryStylesheet [stylesheet]\nbody {}"));
+    }
+
+    #[test]
+    fn aggregate_story_merge_preserves_unrelated_sections_and_removes_deleted_passages() {
+        let mut story = story();
+        let story_data =
+            serde_json::to_string(&story_data_for_twee(&story, false)).expect("story data");
+        let start = story
+            .passages
+            .get_mut(&PassageId::new("passage-1"))
+            .expect("start passage");
+
+        start.name = "Beginning".into();
+        start.text = "Changed body".into();
+        story.name = "Renamed Example".into();
+        story.metadata.clear();
+        let existing = format!(
+            "preamble\n:: StoryTitle {{\"owner\":\"external\"}}\nExample\n\n:: StoryData\n{story_data}\n\n\
+             :: Start [hub] {{\"unknown\":true}}\nOld body\n\n\
+             :: Tool Notes {{\"owner\":\"external\"}}\nKeep exactly  \n\n\
+             :: Legacy Script [script]\nwindow.external = true;\n\n\
+             :: Deleted\nRemove me\n"
+        );
+        let output = merge_story_into_twee(&existing, &story, &["Start".into(), "Deleted".into()])
+            .expect("aggregate source should merge");
+
+        assert!(output.contains(":: StoryTitle {\"owner\":\"external\"}\nRenamed Example"));
+        assert!(output.contains(r#""start": "Beginning""#));
+        assert!(output.contains(r#""extra": 1"#));
+        assert!(output.contains(":: Beginning [hub] {"));
+        assert!(output.contains(r#""unknown":true"#));
+        assert!(output.contains("Changed body"));
+        assert!(output.contains(":: Tool Notes {\"owner\":\"external\"}\nKeep exactly  "));
+        assert!(output.contains(":: Legacy Script [script]\nwindow.external = true;"));
+        assert!(!output.contains(":: Deleted"));
+        assert!(!output.contains(":: Start [hub]"));
+        assert!(!output.contains("Old body"));
     }
 
     #[test]

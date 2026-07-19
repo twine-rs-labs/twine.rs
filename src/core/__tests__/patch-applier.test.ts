@@ -58,6 +58,7 @@ describe('applyProjectPatchBatch', () => {
 			},
 			{
 				changes: {
+					ifid: null,
 					name: 'Story From Rust',
 					snapToGrid: null,
 					storyFormat: null,

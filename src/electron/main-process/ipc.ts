@@ -58,7 +58,8 @@ import {
 import {nativeHydrationMemoryDiagnostics} from './native';
 import type {
 	NativeCommandLineOpenResult,
-	NativePlatformSettingsUpdate
+	NativePlatformSettingsUpdate,
+	ProjectSourceLayout
 } from '../shared';
 import {
 	mainPerformanceHarnessSnapshot,
@@ -318,8 +319,12 @@ export function initIpc() {
 
 	ipcMain.handle(
 		'create-project-folder',
-		async (_event, story: StoryWithDocuments, preferredParent?: string) =>
-			createProjectFolder(story, preferredParent)
+		async (
+			_event,
+			story: StoryWithDocuments,
+			preferredParent?: string,
+			sourceLayout?: ProjectSourceLayout
+		) => createProjectFolder(story, preferredParent, sourceLayout)
 	);
 
 	ipcMain.handle('get-story-library-folder', async () =>

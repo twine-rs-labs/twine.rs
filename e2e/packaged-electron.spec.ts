@@ -123,6 +123,11 @@ async function waitForSavedText(projectRoot: string, expected: string) {
 	await expect
 		.poll(
 			async () => {
+				try {
+					return await readFile(path.join(projectRoot, 'story.twee'), 'utf8');
+				} catch {
+					// Passage-file projects keep their editable prose below passages/.
+				}
 				const passagesRoot = path.join(projectRoot, 'passages');
 				const files = await readdir(passagesRoot, {recursive: true});
 				const passageFile = files.find(file => file.endsWith('.twee'));
@@ -195,6 +200,8 @@ test('packaged app creates, saves, routes, opens dialogs, and reopens a project'
 
 		const projectRoot = await projectRootFromRenderer(page);
 		await access(path.join(projectRoot, 'twine.toml'));
+		expect(await readdir(projectRoot)).toContain('passages');
+		expect(await readdir(projectRoot)).not.toContain('story.twee');
 		await replaceEditorText(page, 'Packaged save survived the native bridge.');
 		await waitForSavedText(
 			projectRoot,
@@ -220,9 +227,35 @@ test('packaged app creates, saves, routes, opens dialogs, and reopens a project'
 		await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
 
 		await tabWithText(page, 'Story').click();
-		await page.getByRole('button', {name: 'Find and Replace'}).click();
+		await page.getByLabel('Find and Replace', {exact: true}).click();
 		const searchDialog = page.getByRole('dialog', {name: 'Find and Replace'});
 		await expect(searchDialog).toBeVisible();
+
+		await page.keyboard.press('Escape');
+		await page.getByTitle('New Project').click();
+		await page.getByLabel('Project name').fill('Packaged Single Source');
+		await page
+			.locator('label')
+			.filter({hasText: 'Source layout'})
+			.getByRole('tab')
+			.filter({hasText: /^Single$/})
+			.click();
+		await tabWithText(page, 'Text').click();
+		await page.getByRole('button', {name: 'Create Project'}).click();
+		await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
+
+		const singleProjectRoot = await projectRootFromRenderer(page);
+		await access(path.join(singleProjectRoot, 'twine.toml'));
+		expect(await readdir(singleProjectRoot)).toContain('story.twee');
+		expect(await readdir(singleProjectRoot)).not.toContain('passages');
+		await replaceEditorText(
+			page,
+			'Single-file save survived the native bridge.'
+		);
+		await waitForSavedText(
+			singleProjectRoot,
+			'Single-file save survived the native bridge.'
+		);
 
 		await app.close();
 		running = undefined;

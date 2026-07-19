@@ -21,6 +21,13 @@ Choose:
 Choosing _Later_ does not merge or discard the difference. If the folder
 remains different, Twine may ask again after a later scan.
 
+When an external edit adds a passage to a Single-layout source, accepting the
+disk change records a stable passage identity in `twine.toml`. If the source
+changes again while the first change is waiting for acceptance, Twine rescans
+before recording that identity. A replacement passage is assigned its own
+identity instead of inheriting the pending passage's identity, and a follow-up
+change notice may appear.
+
 ## Recovery Changes
 
 Some changes can't be represented as a safe incremental update. For example,

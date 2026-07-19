@@ -60,6 +60,19 @@ pub fn story_from_twee(source: &str) -> Result<Story, ParseError> {
     story_from_twee_named(source, "Untitled Story")
 }
 
+/// Parses every Twee section as a passage for project layouts where story
+/// metadata, scripts, and styles live in separate files.
+///
+/// Unlike [`story_from_twee`], this does not give special meaning to sections
+/// named `StoryTitle` or `StoryData`, or to script and stylesheet tags.
+pub fn passages_from_twee(source: &str, story_id: &StoryId) -> Result<Vec<Passage>, ParseError> {
+    split_twee_sections(source)
+        .into_iter()
+        .enumerate()
+        .map(|(index, section)| passage_from_twee_section(&section, story_id, index))
+        .collect()
+}
+
 pub fn story_from_twee_named(source: &str, fallback_name: &str) -> Result<Story, ParseError> {
     let story_id = StoryId::new(stable_id("story", fallback_name, 0));
     let mut story = Story {

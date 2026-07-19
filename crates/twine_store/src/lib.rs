@@ -13,11 +13,13 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
+use twine_export::merge_story_into_twee;
 use twine_graph::GraphIndex;
 use twine_model::{
-    GraphLayout, LibraryMetadata, Passage, PassageId, Project, ProjectManifest, StoragePolicy,
-    Story, StoryId,
+    GraphLayout, LibraryMetadata, Passage, PassageId, Project, ProjectManifest,
+    ProjectSourceLayout, StoragePolicy, Story, StoryId,
 };
+use twine_parse::story_from_twee_named;
 
 const MANIFEST_FILE: &str = "twine.toml";
 const GRAPH_CACHE_DIR: &str = ".twine/cache/graph";
@@ -81,6 +83,12 @@ pub enum StoreError {
 
     #[error("TOML encode error: {0}")]
     TomlEncode(#[from] toml::ser::Error),
+
+    #[error("Twee parse error: {0}")]
+    TweeParse(#[from] twine_parse::ParseError),
+
+    #[error("Twee export error: {0}")]
+    TweeExport(#[from] twine_export::ExportError),
 }
 
 pub trait StoryStore {
@@ -421,7 +429,7 @@ pub fn save_project_path(
     }
 
     let started = Instant::now();
-    write_project_to_dir(&temp_root, project, options)?;
+    write_project_to_dir(&temp_root, project, options, Some(root))?;
     timings.write_temp_project_us = elapsed_us(started);
     let started = Instant::now();
     copy_existing_assets(root, &temp_root)?;
@@ -491,9 +499,14 @@ fn write_project_to_dir(
     root: &Path,
     project: &Project,
     options: &SaveOptions,
+    previous_root: Option<&Path>,
 ) -> Result<(), StoreError> {
     fs::create_dir_all(root)?;
-    fs::create_dir_all(root.join("passages"))?;
+    if project.stories.iter().any(|story| {
+        project.manifest.source_layout_for(&story.id) == ProjectSourceLayout::PassageFiles
+    }) {
+        fs::create_dir_all(root.join("passages"))?;
+    }
     fs::create_dir_all(root.join("scripts"))?;
     fs::create_dir_all(root.join("styles"))?;
     fs::create_dir_all(root.join("assets"))?;
@@ -503,34 +516,103 @@ fn write_project_to_dir(
         fs::create_dir_all(root.join(GRAPH_CACHE_DIR))?;
     }
 
+    let previous_project_file = previous_root.and_then(read_existing_project_file);
     let mut project_file = ProjectFile::from_project(project);
+    let single_story_count = project
+        .stories
+        .iter()
+        .filter(|story| {
+            project.manifest.source_layout_for(&story.id) == ProjectSourceLayout::SingleTwee
+        })
+        .count();
+    let mut used_single_sources = BTreeSet::new();
 
     for story in &project.stories {
         let story_slug = unique_component(&story.name, story.id.as_ref());
         let script_path = PathBuf::from("scripts").join(format!("{story_slug}.js"));
         let stylesheet_path = PathBuf::from("styles").join(format!("{story_slug}.css"));
+        let source_layout = project.manifest.source_layout_for(&story.id);
 
         fs::write(root.join(&script_path), &story.script)?;
         fs::write(root.join(&stylesheet_path), &story.stylesheet)?;
 
-        let story_dir = PathBuf::from("passages").join(&story_slug);
+        let previous_story_file = previous_project_file.as_ref().and_then(|project_file| {
+            project_file
+                .stories
+                .iter()
+                .find(|candidate| candidate.id == story.id)
+        });
+        let (source, passage_files) = match source_layout {
+            ProjectSourceLayout::PassageFiles => {
+                let story_dir = PathBuf::from("passages").join(&story_slug);
 
-        fs::create_dir_all(root.join(&story_dir))?;
+                fs::create_dir_all(root.join(&story_dir))?;
 
-        let mut used_files = BTreeSet::new();
-        let passage_files = story
-            .passages
-            .iter()
-            .enumerate()
-            .map(|(index, passage)| {
-                let file = unique_passage_file(index, passage, &mut used_files);
-                let relative = story_dir.join(file);
+                let mut used_files = BTreeSet::new();
+                let passage_files = story
+                    .passages
+                    .iter()
+                    .enumerate()
+                    .map(|(index, passage)| {
+                        let file = unique_passage_file(index, passage, &mut used_files);
+                        let relative = story_dir.join(file);
 
-                fs::write(root.join(&relative), &passage.text)?;
+                        fs::write(root.join(&relative), &passage.text)?;
 
-                Ok(PassageFile::from_passage(passage, relative))
-            })
-            .collect::<Result<Vec<_>, StoreError>>()?;
+                        Ok(PassageFile::from_passage(passage, relative))
+                    })
+                    .collect::<Result<Vec<_>, StoreError>>()?;
+
+                (String::new(), passage_files)
+            }
+            ProjectSourceLayout::SingleTwee => {
+                let preferred_source = previous_story_file
+                    .filter(|story_file| {
+                        story_file.source_layout == ProjectSourceLayout::SingleTwee
+                            && !story_file.source.is_empty()
+                    })
+                    .map(|story_file| PathBuf::from(&story_file.source))
+                    .unwrap_or_else(|| {
+                        if single_story_count == 1 {
+                            PathBuf::from("story.twee")
+                        } else {
+                            PathBuf::from(format!("{story_slug}.twee"))
+                        }
+                    });
+                let source_path =
+                    unique_source_path(preferred_source, &story_slug, &mut used_single_sources)?;
+                let existing_source = previous_root
+                    .and_then(|previous_root| {
+                        fs::read_to_string(previous_root.join(&source_path)).ok()
+                    })
+                    .unwrap_or_default();
+                let previous_passage_names = previous_story_file
+                    .map(|story_file| {
+                        story_file
+                            .passages
+                            .iter()
+                            .map(|passage| passage.name.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let source =
+                    merge_story_into_twee(&existing_source, story, &previous_passage_names)?;
+
+                if let Some(parent) = root.join(&source_path).parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(root.join(&source_path), source)?;
+
+                (
+                    path_string(&source_path),
+                    story
+                        .passages
+                        .iter()
+                        .map(|passage| PassageFile::from_passage(passage, PathBuf::new()))
+                        .collect(),
+                )
+            }
+        };
 
         if let Some(story_file) = project_file
             .stories
@@ -539,6 +621,7 @@ fn write_project_to_dir(
         {
             story_file.script = path_string(&script_path);
             story_file.stylesheet = path_string(&stylesheet_path);
+            story_file.source = source;
             story_file.passages = passage_files;
         }
 
@@ -583,6 +666,33 @@ fn write_project_to_dir(
     }
 
     Ok(())
+}
+
+fn read_existing_project_file(root: &Path) -> Option<ProjectFile> {
+    fs::read_to_string(root.join(MANIFEST_FILE))
+        .ok()
+        .and_then(|source| toml::from_str(&source).ok())
+}
+
+fn unique_source_path(
+    preferred: PathBuf,
+    story_slug: &str,
+    used: &mut BTreeSet<PathBuf>,
+) -> Result<PathBuf, StoreError> {
+    safe_project_relative_path(&path_string(&preferred))?;
+    if used.insert(preferred.clone()) {
+        return Ok(preferred);
+    }
+
+    let mut suffix = 2;
+    loop {
+        let candidate = PathBuf::from(format!("{story_slug}-{suffix}.twee"));
+
+        if used.insert(candidate.clone()) {
+            return Ok(candidate);
+        }
+        suffix += 1;
+    }
 }
 
 fn copy_existing_assets(source_root: &Path, target_root: &Path) -> Result<(), StoreError> {
@@ -657,7 +767,13 @@ impl ProjectFile {
             name: project.manifest.name.clone(),
             schema_version: project.manifest.schema_version,
             storage: project.manifest.storage.clone(),
-            stories: project.stories.iter().map(StoryFile::from_story).collect(),
+            stories: project
+                .stories
+                .iter()
+                .map(|story| {
+                    StoryFile::from_story(story, project.manifest.source_layout_for(&story.id))
+                })
+                .collect(),
         }
     }
 
@@ -676,9 +792,20 @@ impl ProjectFile {
             storage,
             stories: story_files,
         } = self;
+        let source_layouts = story_files
+            .iter()
+            .filter(|story| story.source_layout != ProjectSourceLayout::PassageFiles)
+            .map(|story| (story.id.clone(), story.source_layout))
+            .collect();
         let source_count = story_files
             .iter()
-            .map(|story| story.passages.len() + 2)
+            .map(|story| {
+                if story.source_layout == ProjectSourceLayout::SingleTwee {
+                    3
+                } else {
+                    story.passages.len() + 2
+                }
+            })
             .sum::<usize>();
         let parallel = options.loads_full_content() && source_count >= PARALLEL_SOURCE_THRESHOLD;
         let load_layout = || -> Result<_, StoreError> {
@@ -750,6 +877,7 @@ impl ProjectFile {
                 app_version,
                 name,
                 schema_version,
+                source_layouts,
                 storage,
             },
             stories,
@@ -828,6 +956,10 @@ struct StoryFile {
     passages: Vec<PassageFile>,
     #[serde(default)]
     script: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    source: String,
+    #[serde(default, skip_serializing_if = "is_passage_files_layout")]
+    source_layout: ProjectSourceLayout,
     #[serde(default = "default_true")]
     snap_to_grid: bool,
     #[serde(default)]
@@ -850,12 +982,16 @@ fn default_true() -> bool {
     true
 }
 
+fn is_passage_files_layout(layout: &ProjectSourceLayout) -> bool {
+    *layout == ProjectSourceLayout::PassageFiles
+}
+
 fn default_zoom() -> f64 {
     1.0
 }
 
 impl StoryFile {
-    fn from_story(story: &Story) -> Self {
+    fn from_story(story: &Story, source_layout: ProjectSourceLayout) -> Self {
         Self {
             color: story.color.clone(),
             custom_attributes: story.custom_attributes.clone(),
@@ -867,6 +1003,8 @@ impl StoryFile {
             name: story.name.clone(),
             passages: Vec::new(),
             script: String::new(),
+            source: String::new(),
+            source_layout,
             snap_to_grid: story.snap_to_grid,
             start_passage: story.start_passage.clone(),
             story_format: story.story_format.clone(),
@@ -888,7 +1026,16 @@ impl StoryFile {
 
         for relative in std::iter::once(self.script.as_str())
             .chain(std::iter::once(self.stylesheet.as_str()))
-            .chain(self.passages.iter().map(|passage| passage.file.as_str()))
+            .chain(
+                (self.source_layout == ProjectSourceLayout::SingleTwee)
+                    .then_some(self.source.as_str()),
+            )
+            .chain(
+                (self.source_layout == ProjectSourceLayout::PassageFiles)
+                    .then_some(self.passages.iter().map(|passage| passage.file.as_str()))
+                    .into_iter()
+                    .flatten(),
+            )
             .filter(|relative| !relative.is_empty())
         {
             safe_project_relative_path(relative)?;
@@ -946,31 +1093,59 @@ impl StoryFile {
         };
 
         let passage_count = self.passages.len();
-        let parallel = options.loads_full_content() && passage_count >= PARALLEL_SOURCE_THRESHOLD;
+        let parallel = self.source_layout == ProjectSourceLayout::PassageFiles
+            && options.loads_full_content()
+            && passage_count >= PARALLEL_SOURCE_THRESHOLD;
         let passage_sources_started = Instant::now();
-        let passage_results = if parallel {
-            project_load_pool().install(|| {
-                self.passages
-                    .into_par_iter()
+        let (passages, passage_files) = match self.source_layout {
+            ProjectSourceLayout::PassageFiles if parallel => {
+                let passage_results = project_load_pool().install(|| {
+                    self.passages
+                        .into_par_iter()
+                        .map(|passage| passage.into_passage(root, &story.id, options))
+                        .collect::<Vec<_>>()
+                });
+
+                collect_loaded_passages(passage_results)?
+            }
+            ProjectSourceLayout::PassageFiles => {
+                let passage_results = self
+                    .passages
+                    .into_iter()
                     .map(|passage| passage.into_passage(root, &story.id, options))
-                    .collect::<Vec<_>>()
-            })
-        } else {
-            self.passages
-                .into_iter()
-                .map(|passage| passage.into_passage(root, &story.id, options))
-                .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+
+                collect_loaded_passages(passage_results)?
+            }
+            ProjectSourceLayout::SingleTwee if options.loads_full_content() => {
+                let mut source_files = Vec::with_capacity(1);
+                let source = read_project_file(
+                    root,
+                    &self.source,
+                    "passage",
+                    Some(story.id.as_ref()),
+                    None,
+                    &mut source_files,
+                )?
+                .unwrap_or_default();
+                let parsed_story = story_from_twee_named(&source, &story.name)?;
+
+                (
+                    apply_single_twee_story(&mut story, self.passages, parsed_story),
+                    source_files,
+                )
+            }
+            ProjectSourceLayout::SingleTwee => (
+                self.passages
+                    .into_iter()
+                    .map(|passage| passage.into_shell_passage(&story.id))
+                    .collect(),
+                Vec::new(),
+            ),
         };
-        let mut passages = Vec::with_capacity(passage_results.len());
-        let mut passage_source_count = 0;
+        let passage_source_count = passage_files.len();
 
-        for result in passage_results {
-            let loaded = result?;
-
-            passage_source_count += loaded.files.len();
-            files.extend(loaded.files);
-            passages.push(loaded.passage);
-        }
+        files.extend(passage_files);
         let passage_source_us = if options.loads_full_content() {
             elapsed_us(passage_sources_started)
         } else {
@@ -1003,7 +1178,7 @@ impl StoryFile {
 struct PassageFile {
     #[serde(default)]
     custom_attributes: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     file: String,
     #[serde(default)]
     id: PassageId,
@@ -1064,11 +1239,112 @@ impl PassageFile {
 
         Ok(LoadedPassage { files, passage })
     }
+
+    fn into_shell_passage(self, story_id: &StoryId) -> Passage {
+        Passage {
+            custom_attributes: self.custom_attributes,
+            id: self.id,
+            layout: None,
+            metadata: metadata_from_json(self.metadata_json),
+            name: self.name,
+            source_pid: self.source_pid,
+            story: story_id.clone(),
+            tags: self.tags,
+            text: String::new(),
+        }
+    }
 }
 
 struct LoadedPassage {
     files: Vec<LoadedProjectFile>,
     passage: Passage,
+}
+
+fn collect_loaded_passages(
+    passage_results: Vec<Result<LoadedPassage, StoreError>>,
+) -> Result<(Vec<Passage>, Vec<LoadedProjectFile>), StoreError> {
+    let mut passages = Vec::with_capacity(passage_results.len());
+    let mut files = Vec::with_capacity(passage_results.len());
+
+    for result in passage_results {
+        let loaded = result?;
+
+        files.extend(loaded.files);
+        passages.push(loaded.passage);
+    }
+
+    Ok((passages, files))
+}
+
+fn apply_single_twee_story(
+    story: &mut Story,
+    manifest_passages: Vec<PassageFile>,
+    parsed_story: Story,
+) -> Vec<Passage> {
+    let parsed_start_name = parsed_story
+        .passage_by_id(&parsed_story.start_passage)
+        .map(|passage| passage.name.clone());
+    let Story {
+        ifid,
+        metadata,
+        name,
+        passages,
+        story_format,
+        story_format_version,
+        tag_colors,
+        zoom,
+        ..
+    } = parsed_story;
+    let mut parsed_passages = passages.iter().cloned().collect::<Vec<_>>();
+    let mut manifest_passages = manifest_passages.into_iter().map(Some).collect::<Vec<_>>();
+
+    story.ifid = ifid;
+    story.metadata.extend(metadata);
+    story.name = name;
+    story.story_format = story_format;
+    story.story_format_version = story_format_version;
+    story.tag_colors = tag_colors;
+    story.zoom = zoom;
+
+    for (index, passage) in parsed_passages.iter_mut().enumerate() {
+        passage.story = story.id.clone();
+        let mapping_index = manifest_passages
+            .iter()
+            .position(|mapping| {
+                mapping
+                    .as_ref()
+                    .is_some_and(|mapping| mapping.name == passage.name)
+            })
+            .or_else(|| {
+                manifest_passages
+                    .get(index)
+                    .is_some_and(Option::is_some)
+                    .then_some(index)
+            });
+        let Some(mapping_index) = mapping_index else {
+            continue;
+        };
+        let mapping = manifest_passages[mapping_index]
+            .take()
+            .expect("matched passage mapping should exist");
+        let mut metadata = metadata_from_json(mapping.metadata_json);
+
+        metadata.extend(std::mem::take(&mut passage.metadata));
+        passage.custom_attributes = mapping.custom_attributes;
+        passage.id = mapping.id;
+        passage.metadata = metadata;
+        passage.source_pid = mapping.source_pid;
+    }
+
+    if let Some(start_name) = parsed_start_name
+        && let Some(start) = parsed_passages
+            .iter()
+            .find(|passage| passage.name == start_name)
+    {
+        story.start_passage = start.id.clone();
+    }
+
+    parsed_passages
 }
 
 fn metadata_to_json(metadata: &BTreeMap<String, Value>) -> Option<String> {
@@ -1487,6 +1763,229 @@ mod tests {
         assert!(!clean_report.dirty);
 
         fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn writes_exact_source_files_for_both_project_layouts() {
+        let passage_root = temp_path("passage-layout-files");
+        let single_root = temp_path("single-layout-files");
+        let mut source_story = story();
+
+        source_story
+            .passages
+            .get_mut(&PassageId::new("passage-1"))
+            .expect("start passage")
+            .layout = None;
+        let passage_project = Project::from_story(source_story.clone());
+        let mut single_project = Project::from_story(source_story);
+
+        single_project
+            .manifest
+            .set_source_layout(StoryId::new("story-1"), ProjectSourceLayout::SingleTwee);
+        let options = SaveOptions {
+            create_backup: false,
+            max_backups: 0,
+            write_generated_indexes: false,
+        };
+
+        save_project_path(&passage_root, &passage_project, &options)
+            .expect("passage-files project should save");
+        save_project_path(&single_root, &single_project, &options)
+            .expect("single-twee project should save");
+
+        assert_eq!(
+            collect_files(&passage_root).expect("passage file set"),
+            BTreeSet::from([
+                PathBuf::from("passages/example/0001-start.twee"),
+                PathBuf::from("scripts/example.js"),
+                PathBuf::from("styles/example.css"),
+                PathBuf::from("twine.toml"),
+            ])
+        );
+        assert_eq!(
+            collect_files(&single_root).expect("single file set"),
+            BTreeSet::from([
+                PathBuf::from("scripts/example.js"),
+                PathBuf::from("story.twee"),
+                PathBuf::from("styles/example.css"),
+                PathBuf::from("twine.toml"),
+            ])
+        );
+        assert!(!single_root.join("passages").exists());
+
+        let passage_manifest =
+            fs::read_to_string(passage_root.join("twine.toml")).expect("passage manifest");
+        let single_manifest =
+            fs::read_to_string(single_root.join("twine.toml")).expect("single manifest");
+
+        assert!(!passage_manifest.contains("source_layout = "));
+        assert!(!passage_manifest.contains("\nsource = "));
+        assert!(single_manifest.contains("source_layout = \"single-twee\""));
+        assert!(single_manifest.contains("source = \"story.twee\""));
+
+        fs::remove_dir_all(passage_root).expect("passage project cleanup");
+        fs::remove_dir_all(single_root).expect("single project cleanup");
+    }
+
+    #[test]
+    fn single_twee_roundtrips_standard_story_and_retains_layout_on_resave() {
+        let root = temp_path("single-roundtrip");
+        let original = story();
+        let original_passage_id = original.passages[0].id.clone();
+        let mut project = Project::from_story(original.clone());
+
+        project
+            .manifest
+            .set_source_layout(original.id.clone(), ProjectSourceLayout::SingleTwee);
+        save_project_path(&root, &project, &SaveOptions::default())
+            .expect("single-twee project should save");
+        let source = fs::read_to_string(root.join("story.twee")).expect("aggregate source");
+
+        assert!(source.contains(":: StoryTitle\nExample"));
+        assert!(source.contains(":: StoryData\n"));
+        assert!(source.contains(r#""ifid": "IFID""#));
+        assert!(source.contains(r#""format": "Harlowe""#));
+        assert!(source.contains(r#""format-version": "3.3.9""#));
+        assert!(source.contains(r#""start": "Start""#));
+        assert!(!source.contains("alert(1)"));
+        assert!(!source.contains("body {}"));
+
+        let mut loaded = load_project_path(&root).expect("single-twee project should load");
+
+        assert_eq!(
+            loaded.manifest.source_layout_for(&original.id),
+            ProjectSourceLayout::SingleTwee
+        );
+        assert_eq!(loaded.stories[0].passages[0].id, original_passage_id);
+        assert_eq!(loaded.stories[0].passages[0].story, original.id);
+        assert_eq!(loaded.stories[0].script, original.script);
+        assert_eq!(loaded.stories[0].stylesheet, original.stylesheet);
+        loaded.stories[0]
+            .passages
+            .get_mut(&original_passage_id)
+            .expect("loaded start passage")
+            .text = "Changed after load".into();
+
+        save_project_path(&root, &loaded, &SaveOptions::default())
+            .expect("loaded project should resave");
+        let manifest = fs::read_to_string(root.join("twine.toml")).expect("manifest");
+
+        assert!(manifest.contains("source_layout = \"single-twee\""));
+        assert!(manifest.contains("source = \"story.twee\""));
+        assert!(!root.join("passages").exists());
+        assert!(
+            fs::read_to_string(root.join("story.twee"))
+                .expect("resaved source")
+                .contains("Changed after load")
+        );
+
+        fs::remove_dir_all(root).expect("single project cleanup");
+    }
+
+    #[test]
+    fn single_twee_preserves_custom_sections_and_stabilizes_external_passage_ids() {
+        let root = temp_path("single-preservation");
+        let mut project = Project::from_story(story());
+
+        project
+            .manifest
+            .set_source_layout(StoryId::new("story-1"), ProjectSourceLayout::SingleTwee);
+        save_project_path(&root, &project, &SaveOptions::default())
+            .expect("single-twee project should save");
+
+        let mut source = fs::read_to_string(root.join("story.twee")).expect("aggregate source");
+
+        source.push_str(
+            "\n\n:: External Notes {\"tool\":{\"version\":7}}\nKeep  spacing exactly  \n\
+             \n:: External Script [script]\nwindow.external = true;\n\
+             \n:: Added Externally [external] {\"reviewed\":true}\nNew passage\n",
+        );
+        fs::write(root.join("story.twee"), source).expect("external edit should write");
+
+        let mut loaded = load_project_path(&root).expect("externally edited source should load");
+        let added_id = loaded.stories[0]
+            .passages
+            .iter()
+            .find(|passage| passage.name == "Added Externally")
+            .expect("external passage should load")
+            .id
+            .clone();
+
+        assert_eq!(
+            loaded.stories[0]
+                .passages
+                .iter()
+                .find(|passage| passage.name == "Added Externally")
+                .expect("external passage")
+                .story,
+            StoryId::new("story-1")
+        );
+        loaded.stories[0]
+            .passages
+            .get_mut(&PassageId::new("passage-1"))
+            .expect("start passage")
+            .text = "Changed modeled body".into();
+        save_project_path(&root, &loaded, &SaveOptions::default())
+            .expect("externally edited project should resave");
+        let resaved = fs::read_to_string(root.join("story.twee")).expect("resaved source");
+
+        assert!(
+            resaved
+                .contains(":: External Notes {\"tool\":{\"version\":7}}\nKeep  spacing exactly  ")
+        );
+        assert!(resaved.contains(":: External Script [script]\nwindow.external = true;"));
+        assert!(
+            resaved.contains(":: Added Externally [external] {\"reviewed\":true}\nNew passage")
+        );
+
+        let reloaded = load_project_path(&root).expect("resaved project should reload");
+        let reloaded_added = reloaded.stories[0]
+            .passages
+            .iter()
+            .find(|passage| passage.name == "Added Externally")
+            .expect("external passage should remain");
+
+        assert_eq!(reloaded_added.id, added_id);
+        assert_eq!(reloaded_added.metadata["reviewed"], Value::Bool(true));
+
+        fs::remove_dir_all(root).expect("single project cleanup");
+    }
+
+    #[test]
+    fn legacy_manifest_defaults_to_passage_files() {
+        let root = temp_path("legacy-layout-default");
+
+        fs::create_dir_all(root.join("passages/example"))
+            .expect("legacy passage directory should create");
+        fs::write(root.join("passages/example/start.twee"), "Legacy body")
+            .expect("legacy passage should write");
+        fs::write(
+            root.join("twine.toml"),
+            r#"
+name = "Legacy"
+
+[[stories]]
+id = "story-1"
+name = "Example"
+start_passage = "passage-1"
+
+[[stories.passages]]
+id = "passage-1"
+name = "Start"
+file = "passages/example/start.twee"
+"#,
+        )
+        .expect("legacy manifest should write");
+
+        let loaded = load_project_path(&root).expect("legacy project should load");
+
+        assert_eq!(
+            loaded.manifest.source_layout_for(&StoryId::new("story-1")),
+            ProjectSourceLayout::PassageFiles
+        );
+        assert_eq!(loaded.stories[0].passages[0].text, "Legacy body");
+
+        fs::remove_dir_all(root).expect("legacy project cleanup");
     }
 
     #[test]

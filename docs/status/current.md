@@ -17,6 +17,13 @@ phase is optimization and release validation, not another ownership migration.
 ## Implemented foundations
 
 - Directory-backed project folders and browser-local projects.
+- Functional per-story source layouts for desktop projects: the recommended
+  Multi layout stores one file per passage, while Single stores standard
+  `StoryTitle`, `StoryData`, and passage sections in `story.twee`. Both keep
+  scripts and styles separate, retain their layout across saves, and participate
+  in external-change watching and conflict review. Targeted saves preserve
+  unmodeled aggregate and manifest content, and accepted external additions
+  retain stable identities across restarts.
 - Shared Rust `ProjectSession`s in one WASM worker client.
 - Rust-owned commands, patch batches, undo/redo, dirty state, revisions, and
   incremental analysis caches.

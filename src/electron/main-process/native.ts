@@ -4,6 +4,7 @@ import {join, resolve} from 'path';
 import {performance} from 'perf_hooks';
 import type {CoreAssetInventoryEntry} from '../../core';
 import type {StoryWithDocuments as Story} from '../../store/stories';
+import type {ProjectSourceLayout} from '../shared';
 import type {
 	NativeProjectFileEntry,
 	NativeProjectFolderResult,
@@ -46,7 +47,11 @@ interface NativeProjectAddon {
 	): string;
 	projectFileManifestJson(rootPath: string, assetsJson?: string): string;
 	rememberProjectFolderJson(indexPath: string, projectJson: string): string;
-	saveProjectFolderJson(rootPath: string, storyJson: string): string;
+	saveProjectFolderJson(
+		rootPath: string,
+		storyJson: string,
+		sourceLayout?: ProjectSourceLayout
+	): string;
 }
 
 interface NativeHealthReport {
@@ -332,10 +337,14 @@ export function finishNativeProjectFolderHydration(hydrationId: string) {
 	loadAddon()?.finishProjectFolderHydration?.(hydrationId);
 }
 
-export function saveNativeProjectFolder(rootPath: string, story: Story) {
+export function saveNativeProjectFolder(
+	rootPath: string,
+	story: Story,
+	sourceLayout?: ProjectSourceLayout
+) {
 	return reviveProjectFolderResult(
 		callNative<NativeProjectFolderResult>('project save', addon =>
-			addon.saveProjectFolderJson(rootPath, JSON.stringify(story))
+			addon.saveProjectFolderJson(rootPath, JSON.stringify(story), sourceLayout)
 		)
 	);
 }

@@ -19,9 +19,28 @@ Choose _Create Project_ to create the initial passage and open the workbench.
 The desktop app also creates a visible `.twine.rs`
 [project folder](location.md). The web app creates a browser-local project.
 
-The source-layout control is currently a starter-project preview. Desktop
-project folders are persisted using the canonical passage-per-file layout under
-`passages/`.
+In the desktop app, the source-layout choice controls how the story is stored:
+
+- _Multi_ is the default and recommended layout. Each passage has its own file
+  under `passages/<story-slug>/` (the first is
+  `0001-<passage-slug>.twee`), while the story script and stylesheet use
+  `scripts/<story-slug>.js` and `styles/<story-slug>.css`. This layout keeps
+  passage edits separate, which usually makes source control diffs and merge
+  conflicts easier to manage.
+- _Single_ stores the story metadata and all passages together in `story.twee`.
+  This layout is convenient when you want the story's Twee source in one file,
+  but unrelated passage edits share that file and can be harder to merge. The
+  script and stylesheet remain separate files under `scripts/` and `styles/`.
+
+The desktop app remembers the selected layout for later saves. Both layouts
+create the same blank start passage; choosing a storage layout does not change
+the story's initial content. In the web app, new projects remain browser-local
+instead of creating either on-disk layout.
+
+The choice applies when the project is first created. Reopening or saving the
+project later does not convert it to the other layout. Automatic conversion is
+not currently offered. To change layouts, make a backup, create a new project
+using the layout you want, and move or import the story content into it.
 
 ## Copying a Story
 

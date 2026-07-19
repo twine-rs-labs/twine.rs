@@ -1133,6 +1133,8 @@ pub struct PassagePatch {
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct StoryMetadataPatch {
     #[serde(default)]
+    pub ifid: Option<String>,
+    #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub snap_to_grid: Option<bool>,
@@ -1150,7 +1152,8 @@ pub struct StoryMetadataPatch {
 
 impl StoryMetadataPatch {
     fn is_empty(&self) -> bool {
-        self.name.is_none()
+        self.ifid.is_none()
+            && self.name.is_none()
             && self.snap_to_grid.is_none()
             && self.story_format.is_none()
             && self.story_format_version.is_none()
@@ -2801,6 +2804,9 @@ fn external_change_field_patterns(change: &CoreExternalChange) -> Vec<String> {
             let prefix = format!("story:{story_id}");
             let mut fields = Vec::new();
 
+            if changes.ifid.is_some() {
+                fields.push(format!("{prefix}:ifid"));
+            }
             if changes.name.is_some() {
                 fields.push(format!("{prefix}:name"));
             }
@@ -4126,6 +4132,10 @@ impl ProjectSession {
                     self.story(story_id)?;
                     let prefix = format!("story:{story_id}");
 
+                    if let Some(value) = &changes.ifid {
+                        plan.candidate_fingerprints
+                            .insert(format!("{prefix}:ifid"), fingerprint(value));
+                    }
                     if let Some(value) = &changes.name {
                         plan.candidate_fingerprints
                             .insert(format!("{prefix}:name"), fingerprint(value));
@@ -4621,6 +4631,9 @@ impl ProjectSession {
                 CoreExternalChange::UpdateStoryMetadata { changes, story_id } => {
                     let story = self.story_mut(story_id)?;
 
+                    if let Some(value) = &changes.ifid {
+                        story.ifid.clone_from(value);
+                    }
                     if let Some(value) = &changes.name {
                         story.name.clone_from(value);
                     }
@@ -5073,6 +5086,9 @@ impl ProjectSession {
             CoreExternalChange::UpdateStoryMetadata { changes, story_id } => {
                 let story = self.story_mut(&story_id)?;
 
+                if let Some(value) = changes.ifid {
+                    story.ifid = value;
+                }
                 if let Some(name) = changes.name {
                     story.name = name;
                 }
@@ -8842,6 +8858,7 @@ fn passage_patch_is_empty(patch: &PassagePatch) -> bool {
 
 fn story_metadata_diff_patch(before: &Story, after: &Story) -> StoryMetadataPatch {
     StoryMetadataPatch {
+        ifid: (before.ifid != after.ifid).then(|| after.ifid.clone()),
         name: (before.name != after.name).then(|| after.name.clone()),
         snap_to_grid: (before.snap_to_grid != after.snap_to_grid).then_some(after.snap_to_grid),
         story_format: (before.story_format != after.story_format)
@@ -11880,6 +11897,7 @@ mod tests {
             .collect::<Vec<_>>()
             .into();
         large_story.start_passage = PassageId::new("passage-00000");
+        let original_ifid = large_story.ifid.clone();
         let original_name = large_story.name.clone();
         let original_start = large_story.start_passage.clone();
         let mut session = ProjectSession::new(Project {
@@ -11925,6 +11943,7 @@ mod tests {
                 },
                 CoreExternalChange::UpdateStoryMetadata {
                     changes: StoryMetadataPatch {
+                        ifid: Some("DISK-IFID".into()),
                         name: Some("Disk Story".into()),
                         zoom: Some(1.5),
                         ..StoryMetadataPatch::default()
@@ -11997,6 +12016,7 @@ mod tests {
 
         session.undo().expect("undo compact external batch");
         assert!(session.dirty());
+        assert_eq!(session.story("story-1").unwrap().ifid, original_ifid);
         assert_eq!(session.story("story-1").unwrap().name, original_name);
         assert_eq!(
             session.story("story-1").unwrap().start_passage,
@@ -12005,6 +12025,7 @@ mod tests {
         assert!(session.project.layout.metadata.get("source").is_none());
         session.redo().expect("redo compact external batch");
         assert!(!session.dirty());
+        assert_eq!(session.story("story-1").unwrap().ifid, "DISK-IFID");
         assert_eq!(session.story("story-1").unwrap().name, "Disk Story");
         assert_eq!(
             session.project.layout.metadata.get("source"),

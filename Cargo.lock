@@ -921,6 +921,7 @@ dependencies = [
  "serde",
  "serde_json",
  "time",
+ "toml",
  "twine_model",
  "twine_store",
  "zip",
@@ -954,8 +955,10 @@ dependencies = [
  "sha2",
  "thiserror",
  "toml",
+ "twine_export",
  "twine_graph",
  "twine_model",
+ "twine_parse",
 ]
 
 [[package]]

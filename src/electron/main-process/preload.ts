@@ -9,7 +9,7 @@
 
 import {contextBridge, ipcRenderer, webUtils} from 'electron';
 import {Story} from '../../store/stories/stories.types';
-import type {TwineElectronWindow} from '../shared';
+import type {ProjectSourceLayout, TwineElectronWindow} from '../shared';
 
 function jsonp(
 	url: string,
@@ -101,8 +101,17 @@ const bridge = {
 	copyProjectImportAssets(importId: string, rootPath: string) {
 		return ipcRenderer.invoke('copy-project-import-assets', importId, rootPath);
 	},
-	createProjectFolder(story: Story, preferredParent?: string) {
-		return ipcRenderer.invoke('create-project-folder', story, preferredParent);
+	createProjectFolder(
+		story: Story,
+		preferredParent?: string,
+		sourceLayout?: ProjectSourceLayout
+	) {
+		return ipcRenderer.invoke(
+			'create-project-folder',
+			story,
+			preferredParent,
+			sourceLayout
+		);
 	},
 	deleteProjectAsset(rootPath: string, path: string) {
 		return ipcRenderer.invoke('delete-project-asset', rootPath, path);

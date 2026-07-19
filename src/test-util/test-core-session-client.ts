@@ -30,6 +30,7 @@ function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
 
 function emptyMetadataPatch(): StoryMetadataPatch {
 	return {
+		ifid: null,
 		name: null,
 		snapToGrid: null,
 		storyFormat: null,

@@ -664,6 +664,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 			return batch([
 				{
 					changes: {
+						ifid: null,
 						name: command.type === 'renameStory' ? command.name : null,
 						snapToGrid:
 							command.type === 'setStorySnapToGrid' ? command.enabled : null,

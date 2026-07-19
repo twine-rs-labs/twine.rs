@@ -401,12 +401,18 @@ describe('initIpc()', () => {
 		await discardImport[1]({}, 'import-1');
 		expect(discardProjectImportMock).toHaveBeenCalledWith('import-1');
 		expect(await chooseLibrary[1]()).toBe('/mock/library');
-		expect(await createProject[1]({}, story, '/mock/root')).toEqual({
+		expect(
+			await createProject[1]({}, story, '/mock/root', 'single-twee')
+		).toEqual({
 			rootPath: '/mock/project',
 			stories: [],
 			storyIds: []
 		});
-		expect(createProjectFolderMock).toHaveBeenCalledWith(story, '/mock/root');
+		expect(createProjectFolderMock).toHaveBeenCalledWith(
+			story,
+			'/mock/root',
+			'single-twee'
+		);
 		expect(await getLibrary[1]()).toBe('/mock/library');
 		expect(await resetLibrary[1]()).toBe('/mock/default-library');
 		expect(resetStoryDirectoryPathMock).toHaveBeenCalledTimes(1);

@@ -246,6 +246,7 @@ function storyMetadataPatchToProps(
 	changes: StoryMetadataPatch
 ): Partial<Story> {
 	return {
+		...(changes.ifid !== null ? {ifid: changes.ifid} : {}),
 		...(changes.name !== null ? {name: changes.name} : {}),
 		...(changes.snapToGrid !== null ? {snapToGrid: changes.snapToGrid} : {}),
 		...(changes.storyFormat !== null ? {storyFormat: changes.storyFormat} : {}),

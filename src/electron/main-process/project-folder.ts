@@ -34,10 +34,18 @@ import {
 	PassageWithText as Passage,
 	StoryWithDocuments as Story
 } from '../../store/stories';
+import {
+	escapeForTweeHeader,
+	escapeForTweeText,
+	passageFromTwee,
+	storyFromTwee,
+	storyToTwee
+} from '../../util/twee';
 import type {
 	ProjectFolderSaveHint,
 	ProjectFolderSaveOptions
 } from '../../store/persistence/project-folder-save-hints';
+import type {ProjectSourceLayout} from '../shared';
 import {
 	diffNativeProjectFileManifest,
 	beginNativeProjectFolderHydration,
@@ -289,7 +297,7 @@ interface NativeProjectDescriptor {
 		string,
 		{
 			kind: 'passage' | 'script' | 'stylesheet';
-			passageId?: string;
+			passageIds?: string[];
 			storyId: string;
 		}
 	>;
@@ -302,6 +310,10 @@ interface ProjectSessionCandidate {
 	deliveryState: 'awaitingResolution' | 'deferred';
 	delta: NativeProjectSessionDelta;
 	descriptor: NativeProjectDescriptor;
+	passageMappingsToPersist?: Array<{
+		passage: ParsedProjectPassage;
+		storyId: string;
+	}>;
 }
 
 interface ProjectSessionResolutionRecord {
@@ -312,6 +324,7 @@ interface ProjectSessionResolutionRecord {
 type ProjectSessionListener = (delta: NativeProjectSessionDelta) => void;
 
 interface ProjectSessionState {
+	aggregateExactNamePassageIds?: Set<string>;
 	awaitingBaselineReceipt?: boolean;
 	baselineReceiptWaiters?: Array<() => void>;
 	baseline?: NativeProjectSessionSnapshot;
@@ -369,14 +382,19 @@ interface ParsedProjectStory {
 	ifid?: string;
 	id?: string;
 	last_update?: string;
+	manifest_name?: string;
+	manifest_start_passage?: string;
 	name?: string;
 	passages: ParsedProjectPassage[];
 	script?: string;
 	snap_to_grid?: boolean;
+	source?: string;
+	source_layout?: ProjectSourceLayout;
 	start_passage?: string;
 	story_format?: string;
 	story_format_version?: string;
 	stylesheet?: string;
+	tag_colors?: Record<string, string>;
 	tags?: string[];
 	zoom?: number;
 }
@@ -522,14 +540,26 @@ function warnBestEffortProjectMaintenance(operation: string, error: unknown) {
 }
 
 function pathSlug(value: string) {
-	return (
-		value
-			.trim()
-			.toLowerCase()
-			.replace(/[^a-z0-9._-]+/g, '-')
-			.replace(/^-+|-+$/g, '')
-			.slice(0, 80) || 'untitled-story'
-	);
+	let slug = '';
+
+	for (const character of value) {
+		if (/[A-Za-z0-9]/.test(character)) {
+			slug += character.toLowerCase();
+		} else if (!slug.endsWith('-')) {
+			slug += '-';
+		}
+		if (slug.length >= 64) {
+			break;
+		}
+	}
+
+	return slug.replace(/^-+|-+$/g, '') || 'item';
+}
+
+function storyPathSlug(story: Pick<Story, 'id' | 'name'>) {
+	const slug = pathSlug(story.name);
+
+	return slug === 'untitled' || slug === 'item' ? pathSlug(story.id) : slug;
 }
 
 function projectSessionKey(rootPath: string) {
@@ -645,6 +675,8 @@ function parseProjectToml(source: string): ParsedProjectStory[] {
 
 	for (const story of stories) {
 		story.tags = coerceStringArray(story.tags);
+		story.source_layout =
+			story.source_layout === 'single-twee' ? 'single-twee' : 'passage-files';
 		story.passages = story.passages.map(passage => ({
 			...passage,
 			tags: coerceStringArray(passage.tags)
@@ -652,6 +684,646 @@ function parseProjectToml(source: string): ParsedProjectStory[] {
 	}
 
 	return stories.filter(story => story.id || story.name);
+}
+
+function sourceLayoutForStory(story: ParsedProjectStory): ProjectSourceLayout {
+	return story.source_layout === 'single-twee'
+		? 'single-twee'
+		: 'passage-files';
+}
+
+function storyPassagesToTwee(
+	story: Story,
+	textUpdates: Map<string, string> = new Map()
+) {
+	return `${storyToTwee({
+		...story,
+		passages: story.passages.map(passage => ({
+			...passage,
+			text: textUpdates.get(passage.id) ?? passage.text
+		})),
+		script: '',
+		stylesheet: ''
+	})}\n`;
+}
+
+type AggregateSourcePassage = ReturnType<
+	typeof storyFromTwee
+>['passages'][number];
+
+interface AggregateStoryMetadata {
+	ifid: string;
+	name: string;
+	startPassageName?: string;
+	storyFormat: string;
+	storyFormatVersion: string;
+	tagColors: Record<string, string>;
+	zoom: number;
+}
+
+interface RawTweeSection {
+	end: number;
+	passage?: Omit<Passage, 'story'>;
+	raw: string;
+	start: number;
+}
+
+function rawTweeSections(source: string): RawTweeSection[] {
+	const starts = [...source.matchAll(/^::/gm)].map(match => match.index ?? 0);
+
+	return starts.map((start, index) => {
+		const end = starts[index + 1] ?? source.length;
+		const raw = source.slice(start, end);
+		let passage: Omit<Passage, 'story'> | undefined;
+
+		try {
+			passage = passageFromTwee(raw);
+		} catch {
+			// Keep malformed or tool-owned sections byte-for-byte.
+		}
+
+		return {end, passage, raw, start};
+	});
+}
+
+function storyDataObject(section: RawTweeSection | undefined) {
+	if (!section?.passage) {
+		return undefined;
+	}
+
+	try {
+		const parsed = JSON.parse(section.passage.text);
+
+		return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function rustStableIfid(source: string) {
+	const first = rustStableHash(source);
+	const second = rustStableHash(`ifid:${source}`);
+	const hexadecimal = (value: bigint, width: number) =>
+		value.toString(16).toUpperCase().padStart(width, '0');
+
+	return [
+		hexadecimal(first >> BigInt(32), 8),
+		hexadecimal((first >> BigInt(16)) & BigInt('0xffff'), 4),
+		`4${hexadecimal(first & BigInt('0x0fff'), 3)}`,
+		`8${hexadecimal((second >> BigInt(48)) & BigInt('0x0fff'), 3)}`,
+		hexadecimal(second & BigInt('0x0000ffffffffffff'), 12)
+	].join('-');
+}
+
+function aggregateStoryDocument(
+	source: string,
+	fallbackName = 'Untitled Story'
+) {
+	const sections = rawTweeSections(source);
+	const parsedStory = storyFromTwee(
+		sections[0] ? source.slice(sections[0].start) : ':: StoryData\n{}'
+	);
+	const title = sections.find(
+		section => section.passage?.name === 'StoryTitle'
+	);
+	const data = storyDataObject(
+		sections.find(section => section.passage?.name === 'StoryData')
+	);
+	const titleText = title?.passage?.text.trim();
+	const metadata: AggregateStoryMetadata = {
+		ifid:
+			typeof data?.ifid === 'string'
+				? parsedStory.ifid
+				: rustStableIfid(source),
+		name: titleText ? parsedStory.name : fallbackName,
+		storyFormat:
+			typeof data?.format === 'string' ? parsedStory.storyFormat : '',
+		storyFormatVersion:
+			typeof data?.['format-version'] === 'string'
+				? parsedStory.storyFormatVersion
+				: '',
+		tagColors: {},
+		zoom: 1
+	};
+
+	if (typeof data?.start === 'string') {
+		metadata.startPassageName = data.start;
+	}
+	if (
+		data?.['tag-colors'] &&
+		typeof data['tag-colors'] === 'object' &&
+		!Array.isArray(data['tag-colors'])
+	) {
+		metadata.tagColors = parsedStory.tagColors;
+	}
+	if (typeof data?.zoom === 'number') {
+		metadata.zoom = parsedStory.zoom;
+	}
+
+	return {metadata, parsedStory, sections};
+}
+
+function renderedPassageSection(passage: Passage, existingRaw?: string) {
+	const headerLine = existingRaw?.split(/\r?\n/, 1)[0] ?? '';
+	const rawMetadata = /^::\s*(.*?(?:\\\s)?)\s*(\[.*?\])?\s*(\{.*\})?\s*$/.exec(
+		headerLine
+	)?.[3];
+	let metadata: Record<string, unknown> = {};
+
+	if (rawMetadata) {
+		try {
+			const parsed = JSON.parse(rawMetadata);
+
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+				metadata = parsed;
+			}
+		} catch {
+			// A malformed header is rewritten with canonical modeled metadata.
+		}
+	}
+	metadata.position = `${passage.left},${passage.top}`;
+	metadata.size = `${passage.width},${passage.height}`;
+	const name = escapeForTweeHeader(passage.name)
+		.replace(/^\s+/g, match => '\\ '.repeat(match.length))
+		.replace(/\s+$/g, match => '\\ '.repeat(match.length));
+	const tags =
+		passage.tags.length > 0
+			? ` [${passage.tags.map(escapeForTweeHeader).join(' ')}]`
+			: '';
+
+	return `:: ${name}${tags} ${JSON.stringify(metadata)}\n${escapeForTweeText(
+		passage.text
+	)}\n`;
+}
+
+function rewriteTweeSection(raw: string, rewritten: string) {
+	const trailing = raw.match(/\s*$/)?.[0] ?? '';
+
+	return `${rewritten.trimEnd()}${trailing || '\n'}`;
+}
+
+function appendTweeSection(source: string, section: string) {
+	const prefix = source.trimEnd();
+
+	return `${prefix}${prefix ? '\n\n' : ''}${section.trimEnd()}\n`;
+}
+
+function renderedStoryDataSection(
+	story: Story,
+	existing: RawTweeSection | undefined
+) {
+	const data = {...(storyDataObject(existing) ?? {})};
+	const start = story.passages.find(
+		passage => passage.id === story.startPassage
+	)?.name;
+
+	data.ifid = story.ifid;
+	data.format = story.storyFormat;
+	data['format-version'] = story.storyFormatVersion;
+	data.start = start;
+	data.zoom = story.zoom;
+	if (Object.keys(story.tagColors).length > 0) {
+		data['tag-colors'] = story.tagColors;
+	} else {
+		delete data['tag-colors'];
+	}
+
+	return `:: StoryData\n${JSON.stringify(data, null, 2)}\n`;
+}
+
+function aggregatePassageContentsEqual(
+	existing: Omit<Passage, 'story'>,
+	passage: Passage
+) {
+	return (
+		existing.name === passage.name &&
+		JSON.stringify(existing.tags) === JSON.stringify(passage.tags) &&
+		existing.text === passage.text &&
+		existing.left === passage.left &&
+		existing.top === passage.top &&
+		existing.width === passage.width &&
+		existing.height === passage.height
+	);
+}
+
+function mergeStoryTweeSource(
+	existingSource: string,
+	story: Story,
+	previousPassageNames: string[]
+) {
+	const document = aggregateStoryDocument(existingSource);
+
+	if (document.sections.length === 0) {
+		return storyPassagesToTwee(story);
+	}
+
+	const usedPassages = new Set<number>();
+	const usedPrevious = new Set<number>();
+	let sawTitle = false;
+	let sawData = false;
+	let output = existingSource.slice(0, document.sections[0].start);
+
+	for (const section of document.sections) {
+		const existing = section.passage;
+
+		if (!existing) {
+			output += section.raw;
+			continue;
+		}
+		if (existing.name === 'StoryTitle' && !sawTitle) {
+			sawTitle = true;
+			output +=
+				existing.text.trim() === story.name
+					? section.raw
+					: rewriteTweeSection(
+							section.raw,
+							`:: StoryTitle\n${escapeForTweeText(story.name)}\n`
+						);
+			continue;
+		}
+		if (existing.name === 'StoryData' && !sawData) {
+			sawData = true;
+			const rewritten = renderedStoryDataSection(story, section);
+			const currentData = storyDataObject(section);
+			const nextData = storyDataObject({
+				...section,
+				passage: passageFromTwee(rewritten),
+				raw: rewritten
+			});
+
+			output +=
+				JSON.stringify(currentData) === JSON.stringify(nextData)
+					? section.raw
+					: rewriteTweeSection(section.raw, rewritten);
+			continue;
+		}
+		if (
+			existing.tags.includes('script') ||
+			existing.tags.includes('stylesheet')
+		) {
+			output += section.raw;
+			continue;
+		}
+
+		const previousIndex = previousPassageNames.findIndex(
+			(name, index) => !usedPrevious.has(index) && name === existing.name
+		);
+		let passageIndex = story.passages.findIndex(
+			(passage, index) =>
+				!usedPassages.has(index) && passage.name === existing.name
+		);
+
+		if (previousIndex !== -1) {
+			usedPrevious.add(previousIndex);
+			if (passageIndex === -1 && story.passages[previousIndex]) {
+				passageIndex = previousIndex;
+			}
+			if (passageIndex === -1 || usedPassages.has(passageIndex)) {
+				continue;
+			}
+		} else if (passageIndex === -1) {
+			output += section.raw;
+			continue;
+		}
+
+		usedPassages.add(passageIndex);
+		const passage = story.passages[passageIndex];
+
+		output += aggregatePassageContentsEqual(existing, passage)
+			? section.raw
+			: rewriteTweeSection(
+					section.raw,
+					renderedPassageSection(passage, section.raw)
+				);
+	}
+
+	if (!sawTitle) {
+		output = appendTweeSection(
+			output,
+			`:: StoryTitle\n${escapeForTweeText(story.name)}\n`
+		);
+	}
+	if (!sawData) {
+		output = appendTweeSection(
+			output,
+			renderedStoryDataSection(story, undefined)
+		);
+	}
+	for (const [index, passage] of story.passages.entries()) {
+		if (!usedPassages.has(index)) {
+			output = appendTweeSection(output, renderedPassageSection(passage));
+		}
+	}
+
+	return output;
+}
+
+function rustStableHash(value: string) {
+	let hash = BigInt('14695981039346656037');
+
+	for (const byte of Buffer.from(value)) {
+		hash ^= BigInt(byte);
+		hash = BigInt.asUintN(64, hash * BigInt('1099511628211'));
+	}
+
+	return hash;
+}
+
+function rustStableSlug(value: string) {
+	let slug = '';
+
+	for (const character of value) {
+		if (/^[a-z0-9]$/i.test(character)) {
+			slug += character.toLowerCase();
+		} else if (!slug.endsWith('-')) {
+			slug += '-';
+		}
+		if (slug.length >= 40) {
+			break;
+		}
+	}
+
+	return slug.replace(/^-+|-+$/g, '') || 'item';
+}
+
+function rustStableId(prefix: string, seed: string, index: number) {
+	const hash = rustStableHash(`${prefix}:${seed}:${index}`)
+		.toString(16)
+		.padStart(8, '0');
+
+	return `${prefix}-${rustStableSlug(seed)}-${hash}`;
+}
+
+function deterministicAggregatePassageId(
+	storyName: string,
+	name: string,
+	sourceIndex: number
+) {
+	const parsedStoryId = rustStableId('story', storyName, 0);
+
+	return rustStableId('passage', `${parsedStoryId}:${name}`, sourceIndex);
+}
+
+function reconcileSingleTweePassages(
+	story: ParsedProjectStory,
+	sourcePassages: AggregateSourcePassage[],
+	exactNameOnlyIds: ReadonlySet<string> = new Set()
+) {
+	const unmatchedMappings = new Set(story.passages);
+	const unmatchedSources = new Set(sourcePassages);
+	const byId = new Map<string, AggregateSourcePassage>();
+	const mappedBySource = new Map<
+		AggregateSourcePassage,
+		AggregateSourcePassage
+	>();
+
+	for (const sourcePassage of sourcePassages) {
+		const mapping = story.passages.find(
+			passage =>
+				unmatchedMappings.has(passage) && passage.name === sourcePassage.name
+		);
+
+		if (!mapping) {
+			continue;
+		}
+		unmatchedMappings.delete(mapping);
+		unmatchedSources.delete(sourcePassage);
+		const mapped = {
+			...sourcePassage,
+			id: mapping.id as string,
+			story: story.id as string
+		};
+
+		byId.set(mapping.id as string, mapped);
+		mappedBySource.set(sourcePassage, mapped);
+	}
+
+	const remainingMappings = [...unmatchedMappings].filter(
+		mapping => !exactNameOnlyIds.has(mapping.id as string)
+	);
+	const remainingSources = [...unmatchedSources];
+	const fallbackCount = Math.min(
+		remainingMappings.length,
+		remainingSources.length
+	);
+
+	for (let index = 0; index < fallbackCount; index++) {
+		const mapping = remainingMappings[index];
+		const sourcePassage = remainingSources[index];
+
+		unmatchedMappings.delete(mapping);
+		unmatchedSources.delete(sourcePassage);
+		const mapped = {
+			...sourcePassage,
+			id: mapping.id as string,
+			story: story.id as string
+		};
+
+		byId.set(mapping.id as string, mapped);
+		mappedBySource.set(sourcePassage, mapped);
+	}
+
+	const added = [...unmatchedSources].map(sourcePassage => {
+		const mapped = {
+			...sourcePassage,
+			id: deterministicAggregatePassageId(
+				story.name ?? 'Untitled Story',
+				sourcePassage.name,
+				sourcePassages.indexOf(sourcePassage)
+			),
+			story: story.id as string
+		};
+
+		mappedBySource.set(sourcePassage, mapped);
+		return mapped;
+	});
+
+	return {
+		added,
+		byId,
+		missingIds: [...unmatchedMappings].map(passage => passage.id as string),
+		passages: sourcePassages.map(
+			sourcePassage => mappedBySource.get(sourcePassage) ?? sourcePassage
+		)
+	};
+}
+
+async function readSingleTweeState(
+	rootPath: string,
+	story: ParsedProjectStory,
+	exactNameOnlyIds: ReadonlySet<string> = new Set()
+) {
+	const path = safeProjectFilePath(rootPath, story.source);
+	const source = path ? ((await readTextIfPresent(path)) ?? '') : '';
+	const document = aggregateStoryDocument(
+		source,
+		story.manifest_name ?? story.name ?? 'Untitled Story'
+	);
+
+	return {
+		...reconcileSingleTweePassages(
+			story,
+			document.parsedStory.passages,
+			exactNameOnlyIds
+		),
+		metadata: document.metadata,
+		source
+	};
+}
+
+async function readSingleTweePassages(
+	rootPath: string,
+	story: ParsedProjectStory
+) {
+	const state = await readSingleTweeState(rootPath, story);
+
+	if (state.missingIds.length > 0) {
+		throw Object.assign(
+			new Error(
+				`Aggregate Twee source for "${story.name ?? story.id}" contains ${
+					state.passages.length
+				} passages and is missing ${state.missingIds.length} manifest mapping(s).`
+			),
+			{recoveryReason: 'projectIdentity'}
+		);
+	}
+
+	return story.passages.map(passage => state.byId.get(passage.id as string));
+}
+
+function storyWithSingleTweeState(
+	story: ParsedProjectStory,
+	state: Awaited<ReturnType<typeof readSingleTweeState>>,
+	includeAddedPassages = true
+): ParsedProjectStory {
+	const existingById = descriptorPassageMap(story);
+	const metadata = state.metadata;
+	const passages = state.passages
+		.filter(
+			sourcePassage =>
+				includeAddedPassages || existingById.has(sourcePassage.id)
+		)
+		.map(sourcePassage => ({
+			...existingById.get(sourcePassage.id),
+			id: sourcePassage.id,
+			name: sourcePassage.name,
+			tags: sourcePassage.tags
+		}));
+	const startPassage = metadata.startPassageName
+		? state.passages.find(passage => passage.name === metadata.startPassageName)
+				?.id
+		: (story.manifest_start_passage ?? story.start_passage);
+
+	return {
+		...story,
+		ifid: metadata.ifid,
+		manifest_name: story.manifest_name ?? story.name,
+		manifest_start_passage: story.manifest_start_passage ?? story.start_passage,
+		name: metadata.name,
+		story_format: metadata.storyFormat,
+		story_format_version: metadata.storyFormatVersion,
+		tag_colors: metadata.tagColors,
+		zoom: metadata.zoom,
+		...(startPassage !== undefined ? {start_passage: startPassage} : {}),
+		passages
+	};
+}
+
+function singleTweeMetadataExternalChanges(
+	before: ParsedProjectStory,
+	after: ParsedProjectStory
+): CoreExternalChange[] {
+	const storyId = before.id as string;
+	const metadata = emptyStoryMetadataPatch();
+
+	if (before.ifid !== after.ifid) {
+		metadata.ifid = after.ifid ?? '';
+	}
+	if (before.name !== after.name) {
+		metadata.name = after.name ?? 'Untitled Story';
+	}
+	if (before.story_format !== after.story_format) {
+		metadata.storyFormat = after.story_format ?? '';
+	}
+	if (before.story_format_version !== after.story_format_version) {
+		metadata.storyFormatVersion = after.story_format_version ?? '';
+	}
+	if (
+		JSON.stringify(before.tag_colors ?? {}) !==
+		JSON.stringify(after.tag_colors ?? {})
+	) {
+		metadata.tagColors = after.tag_colors ?? {};
+	}
+	if (before.zoom !== after.zoom) {
+		metadata.zoom = after.zoom ?? 1;
+	}
+
+	const changes: CoreExternalChange[] = [];
+
+	if (Object.values(metadata).some(value => value !== null)) {
+		changes.push({
+			changes: metadata,
+			story_id: storyId,
+			type: 'updateStoryMetadata'
+		});
+	}
+	const previousStart =
+		before.start_passage ?? (before.passages[0]?.id as string) ?? '';
+	const nextStart =
+		after.start_passage ?? (after.passages[0]?.id as string) ?? '';
+
+	if (previousStart !== nextStart) {
+		changes.push({
+			passage_id: nextStart,
+			story_id: storyId,
+			type: 'updateStoryStartPassage'
+		});
+	}
+
+	return changes;
+}
+
+async function completeSingleTweeStory(
+	rootPath: string,
+	story: Story,
+	descriptorStory: ParsedProjectStory,
+	textUpdates: Map<string, string>
+): Promise<Story> {
+	const sourcePassages = await readSingleTweePassages(
+		rootPath,
+		descriptorStory
+	);
+	const incomingPassages = new Map(
+		story.passages.map(passage => [passage.id, passage] as const)
+	);
+	const passages = descriptorStory.passages.map((mapping, index) => {
+		const passageId = mapping.id as string;
+		const sourcePassage = sourcePassages[index];
+		const incoming = incomingPassages.get(passageId);
+
+		if (!sourcePassage) {
+			throw new Error(
+				`Aggregate Twee source is missing passage "${mapping.name ?? passageId}".`
+			);
+		}
+
+		return {
+			...sourcePassage,
+			height: incoming?.height ?? sourcePassage.height,
+			id: passageId,
+			left: incoming?.left ?? sourcePassage.left,
+			name: incoming?.name ?? sourcePassage.name,
+			story: story.id,
+			tags: incoming?.tags ?? sourcePassage.tags,
+			text: textUpdates.get(passageId) ?? sourcePassage.text,
+			top: incoming?.top ?? sourcePassage.top,
+			width: incoming?.width ?? sourcePassage.width
+		};
+	});
+
+	return {...story, passages};
 }
 
 async function readTextIfPresent(path: string) {
@@ -767,7 +1439,20 @@ async function readProjectDescriptor(
 		projectHeaderValue(source, 'schema_version') ?? 1
 	);
 	const name = String(projectHeaderValue(source, 'name') ?? '');
-	const stories = parseProjectToml(source);
+	const parsedStories = parseProjectToml(source);
+	const stories: ParsedProjectStory[] = [];
+
+	for (const story of parsedStories) {
+		stories.push(
+			sourceLayoutForStory(story) === 'single-twee'
+				? storyWithSingleTweeState(
+						story,
+						await readSingleTweeState(rootPath, story),
+						false
+					)
+				: story
+		);
+	}
 
 	if (schemaVersion !== 1) {
 		throw Object.assign(
@@ -779,7 +1464,9 @@ async function readProjectDescriptor(
 		stories.some(
 			story =>
 				!story.id ||
-				story.passages.some(passage => !passage.id || !passage.file)
+				(sourceLayoutForStory(story) === 'single-twee'
+					? !story.source || story.passages.some(passage => !passage.id)
+					: story.passages.some(passage => !passage.id || !passage.file))
 		)
 	) {
 		throw Object.assign(
@@ -818,17 +1505,24 @@ async function readDescriptorPassage(
 	rootPath: string,
 	storyId: string,
 	passage: ParsedProjectPassage,
-	layout?: NativeProjectDescriptor['layout'][string]
+	layout?: NativeProjectDescriptor['layout'][string],
+	sourcePassage?: AggregateSourcePassage
 ) {
-	const path = safeProjectFilePath(rootPath, passage.file);
-	const text = path ? ((await readTextIfPresent(path)) ?? '') : '';
+	const path = sourcePassage
+		? undefined
+		: safeProjectFilePath(rootPath, passage.file);
+	const text = sourcePassage
+		? sourcePassage.text
+		: path
+			? ((await readTextIfPresent(path)) ?? '')
+			: '';
 
 	return {
 		id: passage.id as string,
 		layout: layout ?? null,
-		name: passage.name ?? 'Untitled Passage',
+		name: sourcePassage?.name ?? passage.name ?? 'Untitled Passage',
 		storyId,
-		tags: passage.tags ?? [],
+		tags: sourcePassage?.tags ?? passage.tags ?? [],
 		text
 	};
 }
@@ -841,18 +1535,23 @@ async function readDescriptorStory(
 	const storyId = story.id as string;
 	const scriptPath = safeProjectFilePath(rootPath, story.script);
 	const stylesheetPath = safeProjectFilePath(rootPath, story.stylesheet);
+	const aggregatePassages =
+		sourceLayoutForStory(story) === 'single-twee'
+			? await readSingleTweePassages(rootPath, story)
+			: undefined;
 
 	return {
 		id: storyId,
 		ifid: story.ifid ?? storyId.toUpperCase(),
 		name: story.name ?? 'Untitled Story',
 		passages: await Promise.all(
-			story.passages.map(passage =>
+			story.passages.map((passage, index) =>
 				readDescriptorPassage(
 					rootPath,
 					storyId,
 					passage,
-					descriptor.layout[passage.id as string]
+					descriptor.layout[passage.id as string],
+					aggregatePassages?.[index]
 				)
 			)
 		),
@@ -865,7 +1564,7 @@ async function readDescriptorStory(
 		stylesheet: stylesheetPath
 			? ((await readTextIfPresent(stylesheetPath)) ?? '')
 			: '',
-		tagColors: {},
+		tagColors: story.tag_colors ?? {},
 		tags: story.tags ?? [],
 		zoom: story.zoom ?? 1
 	};
@@ -876,7 +1575,7 @@ function descriptorPathMap(descriptor: NativeProjectDescriptor) {
 		string,
 		{
 			kind: 'passage' | 'script' | 'stylesheet';
-			passageId?: string;
+			passageIds?: string[];
 			storyId: string;
 		}
 	>();
@@ -893,13 +1592,32 @@ function descriptorPathMap(descriptor: NativeProjectDescriptor) {
 				storyId
 			});
 		}
-		for (const passage of story.passages) {
-			if (passage.file) {
-				paths.set(passage.file.replace(/\\/g, '/'), {
-					kind: 'passage',
-					passageId: passage.id as string,
-					storyId
-				});
+		if (sourceLayoutForStory(story) === 'single-twee' && story.source) {
+			paths.set(story.source.replace(/\\/g, '/'), {
+				kind: 'passage',
+				passageIds: story.passages.map(passage => passage.id as string),
+				storyId
+			});
+		} else {
+			for (const passage of story.passages) {
+				if (!passage.file) {
+					continue;
+				}
+				const projectPath = passage.file.replace(/\\/g, '/');
+				const existing = paths.get(projectPath);
+
+				if (existing?.kind === 'passage') {
+					existing.passageIds = [
+						...(existing.passageIds ?? []),
+						passage.id as string
+					];
+				} else {
+					paths.set(projectPath, {
+						kind: 'passage',
+						passageIds: [passage.id as string],
+						storyId
+					});
+				}
 			}
 		}
 	}
@@ -931,14 +1649,17 @@ function descriptorFromStories(stories: Story[]): NativeProjectDescriptor {
 			id: story.id,
 			name: story.name,
 			passages: story.passages.map(passage => ({
+				file: '',
 				id: passage.id,
 				name: passage.name,
 				tags: passage.tags
 			})),
+			source_layout: 'passage-files',
 			snap_to_grid: story.snapToGrid,
 			start_passage: story.startPassage,
 			story_format: story.storyFormat,
 			story_format_version: story.storyFormatVersion,
+			tag_colors: story.tagColors,
 			tags: story.tags,
 			zoom: story.zoom
 		}))
@@ -966,17 +1687,38 @@ function descriptorFromBaselineReceipt(
 	}
 	for (const story of descriptor.stories) {
 		const sources = sourcesByStory.get(story.id as string) ?? [];
+		const passageSources = sources.filter(source => source.kind === 'passage');
 		const passagePaths = new Map(
-			sources
-				.filter(source => source.kind === 'passage' && source.passageId)
+			passageSources
+				.filter(source => source.passageId)
 				.map(source => [source.passageId as string, source.path] as const)
+		);
+		const aggregatePath =
+			new Set(passageSources.map(source => source.path)).size === 1
+				? passageSources[0]?.path
+				: undefined;
+		const aggregateSource = passageSources.some(
+			source => source.passageId === undefined
 		);
 
 		story.script = sources.find(source => source.kind === 'script')?.path ?? '';
 		story.stylesheet =
 			sources.find(source => source.kind === 'stylesheet')?.path ?? '';
-		for (const passage of story.passages) {
-			passage.file = passagePaths.get(passage.id as string) ?? '';
+		if (
+			aggregatePath &&
+			(aggregateSource ||
+				story.passages.length > 1 ||
+				aggregatePath === 'story.twee')
+		) {
+			story.source = aggregatePath;
+			story.source_layout = 'single-twee';
+			for (const passage of story.passages) {
+				delete passage.file;
+			}
+		} else {
+			for (const passage of story.passages) {
+				passage.file = passagePaths.get(passage.id as string) ?? '';
+			}
 		}
 	}
 	descriptor.layoutDataJson = canonicalJsonString(
@@ -1471,17 +2213,22 @@ function projectRootForStory(story: Story, preferredParent?: string) {
 	const parent = preferredParent?.trim()
 		? preferredParent.trim()
 		: join(getStoryDirectoryPath(), 'Projects');
-	const folderName = `${pathSlug(story.name)}.twine.rs`;
+	const folderName = `${storyPathSlug(story)}.twine.rs`;
 
 	return basename(parent) === folderName ? parent : join(parent, folderName);
 }
 
 function passageFileName(index: number, passageName: string) {
-	return `${String(index + 1).padStart(3, '0')}-${pathSlug(passageName)}.twee`;
+	return `${String(index + 1).padStart(4, '0')}-${pathSlug(passageName)}.twee`;
 }
 
-function projectToml(story: Story, passageFiles: string[]) {
-	const storySlug = pathSlug(story.name);
+function projectToml(
+	story: Story,
+	passageFiles: string[],
+	sourceLayout: ProjectSourceLayout = 'passage-files',
+	aggregateSource = 'story.twee'
+) {
+	const storySlug = storyPathSlug(story);
 	const lastUpdate =
 		story.lastUpdate instanceof Date
 			? story.lastUpdate
@@ -1505,6 +2252,12 @@ function projectToml(story: Story, passageFiles: string[]) {
 		`name = ${tomlString(story.name)}`,
 		`script = ${tomlString(`scripts/${storySlug}.js`)}`,
 		`snap_to_grid = ${story.snapToGrid ? 'true' : 'false'}`,
+		...(sourceLayout === 'single-twee'
+			? [
+					'source_layout = "single-twee"',
+					`source = ${tomlString(aggregateSource)}`
+				]
+			: []),
 		`start_passage = ${tomlString(story.startPassage)}`,
 		`story_format = ${tomlString(story.storyFormat)}`,
 		`story_format_version = ${tomlString(story.storyFormatVersion)}`,
@@ -1519,13 +2272,495 @@ function projectToml(story: Story, passageFiles: string[]) {
 			'[[stories.passages]]',
 			`id = ${tomlString(passage.id)}`,
 			`name = ${tomlString(passage.name)}`,
-			`file = ${tomlString(passageFiles[index])}`,
+			...(sourceLayout === 'passage-files'
+				? [`file = ${tomlString(passageFiles[index])}`]
+				: []),
 			`tags = ${tomlStringArray(passage.tags)}`,
 			''
 		);
 	}
 
 	return `${lines.join('\n')}\n`;
+}
+
+interface TomlTableHeader {
+	array: boolean;
+	name: string;
+	start: number;
+}
+
+interface TomlLexicalState {
+	curlyDepth: number;
+	squareDepth: number;
+	string:
+		'basic' | 'literal' | 'multiline-basic' | 'multiline-literal' | undefined;
+}
+
+function cleanTomlLexicalState(): TomlLexicalState {
+	return {curlyDepth: 0, squareDepth: 0, string: undefined};
+}
+
+function tomlStateIsTopLevel(state: TomlLexicalState) {
+	return (
+		state.string === undefined &&
+		state.curlyDepth === 0 &&
+		state.squareDepth === 0
+	);
+}
+
+function scanTomlText(source: string, state: TomlLexicalState) {
+	for (let index = 0; index < source.length; index++) {
+		const character = source[index];
+
+		if (state.string === 'multiline-basic') {
+			if (source.startsWith('"""', index)) {
+				state.string = undefined;
+				index += 2;
+			} else if (character === '\\') {
+				index++;
+			}
+			continue;
+		}
+		if (state.string === 'multiline-literal') {
+			if (source.startsWith("'''", index)) {
+				state.string = undefined;
+				index += 2;
+			}
+			continue;
+		}
+		if (state.string === 'basic') {
+			if (character === '\\') {
+				index++;
+			} else if (character === '"') {
+				state.string = undefined;
+			}
+			continue;
+		}
+		if (state.string === 'literal') {
+			if (character === "'") {
+				state.string = undefined;
+			}
+			continue;
+		}
+		if (character === '#') {
+			return;
+		}
+		if (source.startsWith('"""', index)) {
+			state.string = 'multiline-basic';
+			index += 2;
+		} else if (source.startsWith("'''", index)) {
+			state.string = 'multiline-literal';
+			index += 2;
+		} else if (character === '"') {
+			state.string = 'basic';
+		} else if (character === "'") {
+			state.string = 'literal';
+		} else if (character === '[') {
+			state.squareDepth++;
+		} else if (character === ']') {
+			state.squareDepth = Math.max(0, state.squareDepth - 1);
+		} else if (character === '{') {
+			state.curlyDepth++;
+		} else if (character === '}') {
+			state.curlyDepth = Math.max(0, state.curlyDepth - 1);
+		}
+	}
+}
+
+function tomlTableHeaders(source: string): TomlTableHeader[] {
+	const headers: TomlTableHeader[] = [];
+	const state = cleanTomlLexicalState();
+	let offset = 0;
+
+	for (const line of source.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g) ?? []) {
+		if (!line) {
+			continue;
+		}
+		const content = line.replace(/\r?\n$|\r$/, '');
+		const match = tomlStateIsTopLevel(state)
+			? /^[ \t]*(\[\[?)([^\]\r\n]+)(\]\]?)[ \t]*(?:#.*)?$/.exec(content)
+			: undefined;
+
+		if (match && match[1].length === match[3].length) {
+			headers.push({
+				array: match[1] === '[[',
+				name: match[2].trim(),
+				start: offset
+			});
+		} else {
+			scanTomlText(content, state);
+		}
+		offset += line.length;
+	}
+
+	return headers;
+}
+
+function tomlValueSpan(source: string, start: number) {
+	const state = cleanTomlLexicalState();
+	let topLevelComment = -1;
+
+	for (let index = start; index < source.length; index++) {
+		const character = source[index];
+
+		if (
+			(character === '\n' || character === '\r') &&
+			tomlStateIsTopLevel(state)
+		) {
+			return {comment: topLevelComment, end: index};
+		}
+		if (state.string === 'multiline-basic') {
+			if (source.startsWith('"""', index)) {
+				state.string = undefined;
+				index += 2;
+			} else if (character === '\\') {
+				index++;
+			}
+			continue;
+		}
+		if (state.string === 'multiline-literal') {
+			if (source.startsWith("'''", index)) {
+				state.string = undefined;
+				index += 2;
+			}
+			continue;
+		}
+		if (state.string === 'basic') {
+			if (character === '\\') {
+				index++;
+			} else if (character === '"') {
+				state.string = undefined;
+			}
+			continue;
+		}
+		if (state.string === 'literal') {
+			if (character === "'") {
+				state.string = undefined;
+			}
+			continue;
+		}
+		if (character === '#') {
+			if (tomlStateIsTopLevel(state) && topLevelComment === -1) {
+				topLevelComment = index;
+			}
+			const newline = source.slice(index).search(/\r|\n/);
+
+			if (newline === -1) {
+				return {comment: topLevelComment, end: source.length};
+			}
+			index += newline - 1;
+			continue;
+		}
+		if (source.startsWith('"""', index)) {
+			state.string = 'multiline-basic';
+			index += 2;
+		} else if (source.startsWith("'''", index)) {
+			state.string = 'multiline-literal';
+			index += 2;
+		} else if (character === '"') {
+			state.string = 'basic';
+		} else if (character === "'") {
+			state.string = 'literal';
+		} else if (character === '[') {
+			state.squareDepth++;
+		} else if (character === ']') {
+			state.squareDepth = Math.max(0, state.squareDepth - 1);
+		} else if (character === '{') {
+			state.curlyDepth++;
+		} else if (character === '}') {
+			state.curlyDepth = Math.max(0, state.curlyDepth - 1);
+		}
+	}
+
+	return {comment: topLevelComment, end: source.length};
+}
+
+function tomlDirectAssignment(table: string, key: string) {
+	const state = cleanTomlLexicalState();
+	const pattern = new RegExp(`^[ \\t]*${escapeRegExp(key)}[ \\t]*=[ \\t]*`);
+	let offset = 0;
+
+	for (const line of table.match(/[^\r\n]*(?:\r\n|\r|\n|$)/g) ?? []) {
+		if (!line) {
+			continue;
+		}
+		const content = line.replace(/\r?\n$|\r$/, '');
+		const match = tomlStateIsTopLevel(state)
+			? pattern.exec(content)
+			: undefined;
+
+		if (match) {
+			const start = offset + match[0].length;
+
+			return {start, ...tomlValueSpan(table, start)};
+		}
+		scanTomlText(content, state);
+		offset += line.length;
+	}
+
+	return undefined;
+}
+
+function tomlDirectValue(table: string, key: string) {
+	const assignment = tomlDirectAssignment(table, key);
+
+	if (!assignment) {
+		return undefined;
+	}
+
+	return parseTomlValue(
+		stripTomlComment(table.slice(assignment.start, assignment.end))
+	);
+}
+
+function rewriteTomlDirectValue(table: string, key: string, value: string) {
+	const assignment = tomlDirectAssignment(table, key);
+
+	if (assignment) {
+		const raw = table.slice(assignment.start, assignment.end);
+		const relativeComment =
+			assignment.comment === -1 ? -1 : assignment.comment - assignment.start;
+		let suffix = '';
+
+		if (relativeComment >= 0) {
+			const beforeComment = raw.slice(0, relativeComment);
+
+			suffix = `${beforeComment.match(/[ \t]*$/)?.[0] ?? ''}${raw.slice(
+				relativeComment
+			)}`;
+		}
+
+		return `${table.slice(0, assignment.start)}${value}${suffix}${table.slice(
+			assignment.end
+		)}`;
+	}
+
+	const newline = table.includes('\r\n') ? '\r\n' : '\n';
+	const trailing = table.match(/(?:\r?\n[ \t]*)+$/)?.[0] ?? '';
+	const body = trailing ? table.slice(0, -trailing.length) : table;
+
+	return `${body}${newline}${key} = ${value}${trailing || newline}`;
+}
+
+function mergePassageMetadataIntoManifest(
+	source: string,
+	storyId: string,
+	passages: Passage[]
+) {
+	const headers = tomlTableHeaders(source);
+	const storyHeaders = headers.filter(
+		header => header.array && header.name === 'stories'
+	);
+	const storyIndex = storyHeaders.findIndex((header, index) => {
+		const nextStoryStart = storyHeaders[index + 1]?.start ?? source.length;
+		const nextTableStart =
+			headers.find(
+				candidate =>
+					candidate.start > header.start && candidate.start < nextStoryStart
+			)?.start ?? nextStoryStart;
+
+		return (
+			tomlDirectValue(source.slice(header.start, nextTableStart), 'id') ===
+			storyId
+		);
+	});
+
+	if (storyIndex === -1) {
+		return undefined;
+	}
+
+	const storyStart = storyHeaders[storyIndex].start;
+	const storyEnd = storyHeaders[storyIndex + 1]?.start ?? source.length;
+	const storyTables = headers.filter(
+		header => header.start >= storyStart && header.start < storyEnd
+	);
+	const passageTables = storyTables.filter(
+		header => header.array && header.name === 'stories.passages'
+	);
+	const replacements: Array<{end: number; start: number; text: string}> = [];
+
+	for (const passage of passages) {
+		const tableIndex = passageTables.findIndex(header => {
+			const end =
+				storyTables.find(candidate => candidate.start > header.start)?.start ??
+				storyEnd;
+
+			return (
+				tomlDirectValue(source.slice(header.start, end), 'id') === passage.id
+			);
+		});
+
+		if (tableIndex === -1) {
+			return undefined;
+		}
+		const start = passageTables[tableIndex].start;
+		const end =
+			storyTables.find(candidate => candidate.start > start)?.start ?? storyEnd;
+		let table = source.slice(start, end);
+
+		table = rewriteTomlDirectValue(table, 'name', tomlString(passage.name));
+		table = rewriteTomlDirectValue(
+			table,
+			'tags',
+			tomlStringArray(passage.tags)
+		);
+		replacements.push({end, start, text: table});
+	}
+
+	return replacements
+		.sort((left, right) => right.start - left.start)
+		.reduce(
+			(result, replacement) =>
+				`${result.slice(0, replacement.start)}${replacement.text}${result.slice(
+					replacement.end
+				)}`,
+			source
+		);
+}
+
+function appendPassageMappingToManifest(
+	source: string,
+	storyId: string,
+	passage: ParsedProjectPassage
+) {
+	if (!passage.id) {
+		return source;
+	}
+	const headers = tomlTableHeaders(source);
+	const storyHeaders = headers.filter(
+		header => header.array && header.name === 'stories'
+	);
+	const storyHeaderIndex = storyHeaders.findIndex((header, index) => {
+		const end = storyHeaders[index + 1]?.start ?? source.length;
+		const firstNestedTable =
+			headers.find(
+				candidate => candidate.start > header.start && candidate.start < end
+			)?.start ?? end;
+
+		return (
+			tomlDirectValue(source.slice(header.start, firstNestedTable), 'id') ===
+			storyId
+		);
+	});
+
+	if (storyHeaderIndex === -1) {
+		throw new Error(`Story "${storyId}" is missing from twine.toml.`);
+	}
+
+	const storyStart = storyHeaders[storyHeaderIndex].start;
+	const insertion = storyHeaders[storyHeaderIndex + 1]?.start ?? source.length;
+	const storyTables = headers.filter(
+		header => header.start >= storyStart && header.start < insertion
+	);
+	const alreadyMapped = storyTables
+		.filter(header => header.array && header.name === 'stories.passages')
+		.some(header => {
+			const end =
+				storyTables.find(candidate => candidate.start > header.start)?.start ??
+				insertion;
+
+			return (
+				tomlDirectValue(source.slice(header.start, end), 'id') === passage.id
+			);
+		});
+
+	if (alreadyMapped) {
+		return source;
+	}
+
+	const before = source.slice(0, insertion).trimEnd();
+	const after = source.slice(insertion).replace(/^\s*/, '');
+	const block = [
+		'[[stories.passages]]',
+		`id = ${tomlString(passage.id)}`,
+		`name = ${tomlString(passage.name ?? 'Untitled Passage')}`,
+		`tags = ${tomlStringArray(passage.tags ?? [])}`
+	].join('\n');
+
+	return `${before}\n\n${block}\n${after ? `\n${after}` : ''}`;
+}
+
+async function persistAggregatePassageMappings(
+	rootPath: string,
+	mappings: NonNullable<ProjectSessionCandidate['passageMappingsToPersist']>
+) {
+	const path = join(rootPath, 'twine.toml');
+	const existing = await readTextIfPresent(path);
+
+	if (!existing) {
+		throw new Error('Project manifest not found while persisting passage IDs.');
+	}
+	const updated = mappings.reduce(
+		(source, mapping) =>
+			appendPassageMappingToManifest(source, mapping.storyId, mapping.passage),
+		existing
+	);
+
+	if (updated !== existing) {
+		await atomicWriteText(path, updated);
+	}
+
+	return {existing, updated};
+}
+
+function aggregatePassageMappingSourcePaths(
+	candidate: ProjectSessionCandidate
+) {
+	const mappings = candidate.passageMappingsToPersist ?? [];
+	const stories = descriptorStoryMap(candidate.descriptor);
+	const sourcePaths = new Set(
+		mappings.flatMap(mapping => {
+			const story = stories.get(mapping.storyId);
+			const source =
+				story && sourceLayoutForStory(story) === 'single-twee'
+					? story.source?.replace(/\\/g, '/')
+					: undefined;
+
+			return source ? [source] : [];
+		})
+	);
+
+	if (
+		sourcePaths.size === 0 ||
+		mappings.some(mapping => !stories.get(mapping.storyId)?.source)
+	) {
+		return undefined;
+	}
+
+	return sourcePaths;
+}
+
+function aggregatePassageMappingsMatchFiles(
+	candidate: ProjectSessionCandidate,
+	currentFiles: NativeProjectFileEntry[]
+) {
+	const sourcePaths = aggregatePassageMappingSourcePaths(candidate);
+
+	if (!sourcePaths) {
+		return false;
+	}
+	const expectedByPath = new Map(
+		candidate.baseline.files.map(file => [file.path, file] as const)
+	);
+	const currentByPath = new Map(
+		currentFiles.map(file => [file.path, file] as const)
+	);
+
+	return [...sourcePaths].every(
+		path =>
+			expectedByPath.get(path)?.fingerprint ===
+			currentByPath.get(path)?.fingerprint
+	);
+}
+
+async function aggregatePassageMappingsAreCurrent(
+	rootPath: string,
+	candidate: ProjectSessionCandidate
+) {
+	return aggregatePassageMappingsMatchFiles(
+		candidate,
+		await projectFileManifest(rootPath, candidate.baseline.assets)
+	);
 }
 
 function graphLayout(story: Story) {
@@ -1775,8 +3010,14 @@ async function scanProjectFiles(
 	kind: NativeProjectFileKind,
 	files: NativeProjectFileEntry[]
 ) {
-	const absolutePath = join(rootPath, projectPath);
+	const absolutePath = safeProjectFilePath(rootPath, projectPath);
 	let fileStats: Awaited<ReturnType<typeof stat>>;
+
+	if (!absolutePath) {
+		throw Object.assign(new Error(`Unsafe project path: ${projectPath}`), {
+			recoveryReason: 'unsafePath'
+		});
+	}
 
 	try {
 		fileStats = await stat(absolutePath);
@@ -1861,13 +3102,24 @@ async function projectFileManifest(
 	}
 
 	const files: NativeProjectFileEntry[] = [];
+	const manifestSource = await readTextIfPresent(join(rootPath, 'twine.toml'));
+	const aggregateSources = manifestSource
+		? parseProjectToml(manifestSource).flatMap(story =>
+				sourceLayoutForStory(story) === 'single-twee' && story.source
+					? [story.source.replace(/\\/g, '/')]
+					: []
+			)
+		: [];
 	const scans = [
 		scanProjectFiles(rootPath, 'twine.toml', 'manifest', files),
 		scanProjectFiles(rootPath, '.twine/project.json', 'metadata', files),
 		scanProjectFiles(rootPath, '.twine/graph.json', 'graph', files),
 		scanProjectFiles(rootPath, 'passages', 'passage', files),
 		scanProjectFiles(rootPath, 'scripts', 'script', files),
-		scanProjectFiles(rootPath, 'styles', 'stylesheet', files)
+		scanProjectFiles(rootPath, 'styles', 'stylesheet', files),
+		...aggregateSources.map(source =>
+			scanProjectFiles(rootPath, source, 'passage', files)
+		)
 	];
 
 	if (assets) {
@@ -1905,6 +3157,9 @@ function projectFileKindForPath(
 	if (path === 'passages' || path.startsWith('passages/')) {
 		return 'passage';
 	}
+	if (path === 'story.twee') {
+		return 'passage';
+	}
 	if (path === 'scripts' || path.startsWith('scripts/')) {
 		return 'script';
 	}
@@ -1924,10 +3179,23 @@ async function projectFileManifestForHints(
 	hints: string[]
 ) {
 	const files = new Map(baseline.map(file => [file.path, file] as const));
+	let descriptor: NativeProjectDescriptor | undefined;
 
 	for (const hint of hints) {
 		const normalized = hint.replace(/^\.\/+/, '').replace(/\\/g, '/');
-		const kind = projectFileKindForPath(normalized);
+		let kind =
+			projectFileKindForPath(normalized) ?? files.get(normalized)?.kind;
+
+		if (!kind) {
+			descriptor ??= await readProjectDescriptor(rootPath).catch(
+				() => undefined
+			);
+			const mapping = descriptor?.paths.get(normalized);
+
+			if (mapping) {
+				kind = mapping.kind;
+			}
+		}
 
 		if (!kind) {
 			continue;
@@ -2055,7 +3323,15 @@ async function storiesFromProjectManifest(
 	);
 	const stories: Story[] = [];
 
-	for (const [storyIndex, parsed] of parsedStories.entries()) {
+	for (const [storyIndex, parsedManifest] of parsedStories.entries()) {
+		const parsed =
+			options.loadPassageText !== false &&
+			sourceLayoutForStory(parsedManifest) === 'single-twee'
+				? storyWithSingleTweeState(
+						parsedManifest,
+						await readSingleTweeState(rootPath, parsedManifest)
+					)
+				: parsedManifest;
 		const metadataStory =
 			(parsed.id ? metadataById.get(parsed.id) : undefined) ??
 			metadataStories[storyIndex];
@@ -2087,17 +3363,26 @@ async function storiesFromProjectManifest(
 				)
 				.map(passage => [passage.id, passage])
 		);
+		const aggregatePassages =
+			options.loadPassageText !== false &&
+			sourceLayoutForStory(parsed) === 'single-twee'
+				? await readSingleTweePassages(rootPath, parsed)
+				: undefined;
 		const passages = await Promise.all(
 			parsed.passages.map(async (passage, passageIndex) => {
 				const passageId =
 					passage.id ?? `${storyId}-passage-${String(passageIndex + 1)}`;
 				const metadataPassage = metadataPassages.get(passageId);
-				const passagePath = safeProjectFilePath(rootPath, passage.file);
+				const sourcePassage = aggregatePassages?.[passageIndex];
+				const passagePath = sourcePassage
+					? undefined
+					: safeProjectFilePath(rootPath, passage.file);
 				const layout = graphLayoutForPassage(graph, passageId);
 				const text =
 					options.loadPassageText === false
 						? ''
-						: ((passagePath
+						: (sourcePassage?.text ??
+							(passagePath
 								? await readTextIfPresent(passagePath)
 								: undefined) ??
 							metadataPassage?.text ??
@@ -2112,12 +3397,14 @@ async function storiesFromProjectManifest(
 					id: passageId,
 					left: numberOrFallback(layout.left, metadataPassage?.left ?? 0),
 					name:
+						sourcePassage?.name ??
 						passage.name ??
 						metadataPassage?.name ??
 						`Passage ${passageIndex + 1}`,
 					selected: metadataPassage?.selected ?? false,
 					story: storyId,
-					tags: passage.tags ?? metadataPassage?.tags ?? [],
+					tags:
+						sourcePassage?.tags ?? passage.tags ?? metadataPassage?.tags ?? [],
 					text,
 					top: numberOrFallback(layout.top, metadataPassage?.top ?? 0),
 					width: numberOrFallback(layout.width, metadataPassage?.width ?? 100)
@@ -2153,7 +3440,7 @@ async function storiesFromProjectManifest(
 				metadataStory?.storyFormatVersion ?? ''
 			),
 			stylesheet,
-			tagColors: metadataStory?.tagColors ?? {},
+			tagColors: parsed.tag_colors ?? metadataStory?.tagColors ?? {},
 			tags: parsed.tags ?? metadataStory?.tags ?? [],
 			zoom: numberOrFallback(parsed.zoom, metadataStory?.zoom ?? 1)
 		});
@@ -2326,6 +3613,7 @@ async function readProjectSessionSnapshot(
 
 function emptyStoryMetadataPatch(): StoryMetadataPatch {
 	return {
+		ifid: null,
 		name: null,
 		snapToGrid: null,
 		storyFormat: null,
@@ -2372,15 +3660,11 @@ async function manifestExternalChanges(
 			});
 			continue;
 		}
-		if (previous.ifid !== story.ifid) {
-			throw Object.assign(
-				new Error(`Story identity changed for "${storyId}".`),
-				{recoveryReason: 'projectIdentity'}
-			);
-		}
-
 		const metadata = emptyStoryMetadataPatch();
 
+		if (previous.ifid !== story.ifid) {
+			metadata.ifid = story.ifid ?? '';
+		}
 		if (previous.name !== story.name) {
 			metadata.name = story.name ?? 'Untitled Story';
 		}
@@ -2397,6 +3681,12 @@ async function manifestExternalChanges(
 			JSON.stringify(previous.tags ?? []) !== JSON.stringify(story.tags ?? [])
 		) {
 			metadata.tags = story.tags ?? [];
+		}
+		if (
+			JSON.stringify(previous.tag_colors ?? {}) !==
+			JSON.stringify(story.tag_colors ?? {})
+		) {
+			metadata.tagColors = story.tag_colors ?? {};
 		}
 		if (previous.zoom !== story.zoom) {
 			metadata.zoom = story.zoom ?? 1;
@@ -2423,6 +3713,10 @@ async function manifestExternalChanges(
 
 		const previousPassages = descriptorPassageMap(previous);
 		const passages = descriptorPassageMap(story);
+		const aggregatePassages =
+			sourceLayoutForStory(story) === 'single-twee'
+				? await readSingleTweePassages(rootPath, story)
+				: undefined;
 
 		for (const passageId of previousPassages.keys()) {
 			if (!passages.has(passageId)) {
@@ -2433,8 +3727,10 @@ async function manifestExternalChanges(
 				});
 			}
 		}
-		for (const [passageId, passage] of passages) {
+		for (const [passageIndex, passage] of story.passages.entries()) {
+			const passageId = passage.id as string;
 			const previousPassage = previousPassages.get(passageId);
+			const sourcePassage = aggregatePassages?.[passageIndex];
 
 			if (!previousPassage) {
 				changes.push({
@@ -2442,7 +3738,8 @@ async function manifestExternalChanges(
 						rootPath,
 						storyId,
 						passage,
-						after.layout[passageId]
+						after.layout[passageId],
+						sourcePassage
 					),
 					story_id: storyId,
 					type: 'upsertPassage'
@@ -2451,21 +3748,32 @@ async function manifestExternalChanges(
 			}
 			const passageChanges = emptyPassagePatch();
 
-			if (previousPassage.name !== passage.name) {
-				passageChanges.name = passage.name ?? 'Untitled Passage';
+			if (
+				previousPassage.name !== passage.name ||
+				(sourcePassage && sourcePassage.name !== previousPassage.name)
+			) {
+				passageChanges.name =
+					sourcePassage?.name ?? passage.name ?? 'Untitled Passage';
 			}
 			if (
 				JSON.stringify(previousPassage.tags ?? []) !==
-				JSON.stringify(passage.tags ?? [])
+					JSON.stringify(passage.tags ?? []) ||
+				(sourcePassage &&
+					JSON.stringify(sourcePassage.tags) !==
+						JSON.stringify(previousPassage.tags ?? []))
 			) {
-				passageChanges.tags = passage.tags ?? [];
+				passageChanges.tags = sourcePassage?.tags ?? passage.tags ?? [];
 			}
-			if (previousPassage.file !== passage.file) {
+			if (
+				previousPassage.file !== passage.file ||
+				previous.source !== story.source ||
+				sourceLayoutForStory(previous) !== sourceLayoutForStory(story)
+			) {
 				const path = safeProjectFilePath(rootPath, passage.file);
 
-				passageChanges.text = path
-					? ((await readTextIfPresent(path)) ?? '')
-					: '';
+				passageChanges.text =
+					sourcePassage?.text ??
+					(path ? ((await readTextIfPresent(path)) ?? '') : '');
 			}
 			if (Object.values(passageChanges).some(value => value !== null)) {
 				changes.push({
@@ -2638,6 +3946,9 @@ async function readProjectSessionDelta(
 
 	let descriptor = session.descriptor!;
 	const changes: CoreExternalChange[] = [];
+	const passageMappingsToPersist: NonNullable<
+		ProjectSessionCandidate['passageMappingsToPersist']
+	> = [];
 	const changedPaths = fileChanges.map(change => change.path);
 	let contentFilesRead = 0;
 
@@ -2669,19 +3980,117 @@ async function readProjectSessionDelta(
 		for (const fileChange of fileChanges) {
 			const mapping = pathMap.get(fileChange.path);
 
-			if (mapping?.kind === 'passage' && mapping.passageId) {
+			if (mapping?.kind === 'passage' && mapping.passageIds?.length) {
 				const path = safeProjectFilePath(session.rootPath, fileChange.path);
 
 				contentFilesRead++;
-				changes.push({
-					changes: {
-						...emptyPassagePatch(),
-						text: path ? ((await readTextIfPresent(path)) ?? '') : ''
-					},
-					passage_id: mapping.passageId,
-					story_id: mapping.storyId,
-					type: 'updatePassage'
-				});
+				const mappedStory = descriptorStoryMap(descriptor).get(mapping.storyId);
+				const aggregateState =
+					mappedStory && sourceLayoutForStory(mappedStory) === 'single-twee'
+						? await readSingleTweeState(
+								session.rootPath,
+								mappedStory,
+								session.aggregateExactNamePassageIds
+							)
+						: undefined;
+				const text =
+					aggregateState === undefined
+						? path
+							? ((await readTextIfPresent(path)) ?? '')
+							: ''
+						: undefined;
+
+				for (const passageId of mapping.passageIds) {
+					const sourcePassage = aggregateState?.byId.get(passageId);
+
+					if (aggregateState && !sourcePassage) {
+						changes.push({
+							passage_id: passageId,
+							story_id: mapping.storyId,
+							type: 'deletePassage'
+						});
+						continue;
+					}
+					changes.push({
+						changes: {
+							...emptyPassagePatch(),
+							name: sourcePassage?.name ?? null,
+							tags: sourcePassage?.tags ?? null,
+							text: sourcePassage?.text ?? text ?? ''
+						},
+						passage_id: passageId,
+						story_id: mapping.storyId,
+						type: 'updatePassage'
+					});
+				}
+				for (const sourcePassage of aggregateState?.added ?? []) {
+					changes.push({
+						passage: {
+							id: sourcePassage.id,
+							layout: {
+								height: sourcePassage.height,
+								left: sourcePassage.left,
+								top: sourcePassage.top,
+								width: sourcePassage.width
+							},
+							name: sourcePassage.name,
+							storyId: mapping.storyId,
+							tags: sourcePassage.tags,
+							text: sourcePassage.text
+						},
+						story_id: mapping.storyId,
+						type: 'upsertPassage'
+					});
+					passageMappingsToPersist.push({
+						passage: {
+							id: sourcePassage.id,
+							name: sourcePassage.name,
+							tags: sourcePassage.tags
+						},
+						storyId: mapping.storyId
+					});
+				}
+				for (const passageId of session.aggregateExactNamePassageIds ?? []) {
+					const sourcePassage = aggregateState?.byId.get(passageId);
+
+					if (
+						!sourcePassage ||
+						passageMappingsToPersist.some(
+							persisted =>
+								persisted.storyId === mapping.storyId &&
+								persisted.passage.id === passageId
+						)
+					) {
+						continue;
+					}
+					passageMappingsToPersist.push({
+						passage: {
+							id: passageId,
+							name: sourcePassage.name,
+							tags: sourcePassage.tags
+						},
+						storyId: mapping.storyId
+					});
+				}
+				if (mappedStory && aggregateState) {
+					const nextStory = storyWithSingleTweeState(
+						mappedStory,
+						aggregateState
+					);
+
+					changes.push(
+						...singleTweeMetadataExternalChanges(mappedStory, nextStory)
+					);
+					const nextDescriptor = {
+						...descriptor,
+						stories: descriptor.stories.map(story =>
+							story.id === mappedStory.id ? nextStory : story
+						)
+					};
+
+					nextDescriptor.paths = descriptorPathMap(nextDescriptor);
+					descriptor = nextDescriptor;
+				}
 			} else if (mapping?.kind === 'script') {
 				const path = safeProjectFilePath(session.rootPath, fileChange.path);
 
@@ -2777,7 +4186,8 @@ async function readProjectSessionDelta(
 			},
 			deliveryState: 'awaitingResolution' as const,
 			delta,
-			descriptor
+			descriptor,
+			...(passageMappingsToPersist.length > 0 ? {passageMappingsToPersist} : {})
 		};
 
 		recordWatcherTraceEvent({
@@ -3144,11 +4554,16 @@ async function refreshProjectSessionBaseline(
 
 export async function createProjectFolder(
 	story: Story,
-	preferredParent?: string
+	preferredParent?: string,
+	sourceLayout: ProjectSourceLayout = 'passage-files'
 ): Promise<NativeProjectFolderResult> {
 	const rootPath = projectRootForStory(story, preferredParent);
 
-	const writtenProject = await writeProjectFolder(rootPath, story);
+	const writtenProject = await writeProjectFolder(
+		rootPath,
+		story,
+		sourceLayout
+	);
 	await refreshProjectSessionBaseline(rootPath, [story.id]);
 
 	const result = writtenProject ?? {
@@ -3326,6 +4741,8 @@ async function writeProjectFolderIncremental(
 				: []
 		)
 	);
+	const sourceLayout = sourceLayoutForStory(descriptorStory);
+	let singleTweeDirty = false;
 	let updatedLayout: NativeProjectDescriptor['layout'] | undefined;
 	const touched: Array<
 		| {
@@ -3359,7 +4776,19 @@ async function writeProjectFolderIncremental(
 		const descriptorPassage = descriptorPassages.get(hint.passageId);
 		const storyPassage = storyPassages.get(hint.passageId);
 
-		if (!descriptorPassage?.file || !storyPassage) {
+		if (!descriptorPassage || !storyPassage) {
+			touched.push(undefined);
+			continue;
+		}
+		if (sourceLayout === 'single-twee') {
+			if (!descriptorStory.source) {
+				touched.push(undefined);
+			} else {
+				singleTweeDirty = true;
+			}
+			continue;
+		}
+		if (!descriptorPassage.file) {
 			touched.push(undefined);
 			continue;
 		}
@@ -3415,6 +4844,7 @@ async function writeProjectFolderIncremental(
 		}
 
 		updatedLayout = nextLayout;
+		singleTweeDirty ||= sourceLayout === 'single-twee';
 		touched.push({
 			absolutePath: join(rootPath, '.twine', 'graph.json'),
 			kind: 'graph',
@@ -3422,19 +4852,72 @@ async function writeProjectFolderIncremental(
 			text: JSON.stringify({...layoutData, passages: nextLayout}, null, 2)
 		});
 	}
-	if (hints.some(hint => hint.type === 'passageMetadata')) {
-		const passageFiles = story.passages.map(passage =>
-			descriptorPassages.get(passage.id)?.file?.replace(/\\/g, '/')
-		);
+	const passageMetadataHints = hints.filter(
+		(hint): hint is Extract<ProjectFolderSaveHint, {type: 'passageMetadata'}> =>
+			hint.type === 'passageMetadata'
+	);
 
-		if (passageFiles.some(path => !path)) {
+	if (passageMetadataHints.length > 0) {
+		const manifestPath = join(rootPath, 'twine.toml');
+		const manifestSource = await readTextIfPresent(manifestPath);
+		const passageIds = new Set(
+			passageMetadataHints.map(hint => hint.passageId)
+		);
+		const changedPassages = [...passageIds].flatMap(passageId => {
+			const passage = storyPassages.get(passageId);
+
+			return passage ? [passage] : [];
+		});
+		const updatedManifest =
+			manifestSource && changedPassages.length === passageIds.size
+				? mergePassageMetadataIntoManifest(
+						manifestSource,
+						story.id,
+						changedPassages
+					)
+				: undefined;
+
+		if (!updatedManifest) {
 			return undefined;
 		}
+		singleTweeDirty ||= sourceLayout === 'single-twee';
 		touched.push({
-			absolutePath: join(rootPath, 'twine.toml'),
+			absolutePath: manifestPath,
 			kind: 'manifest',
 			projectPath: 'twine.toml',
-			text: projectToml(story, passageFiles as string[])
+			text: updatedManifest
+		});
+	}
+	if (singleTweeDirty) {
+		const projectPath = descriptorStory.source?.replace(/\\/g, '/');
+
+		if (!projectPath) {
+			return undefined;
+		}
+		const absolutePath = safeProjectFilePath(rootPath, projectPath);
+
+		if (!absolutePath) {
+			return undefined;
+		}
+		const completeStory = await completeSingleTweeStory(
+			rootPath,
+			story,
+			descriptorStory,
+			passageTextUpdates
+		);
+		const existingSource = (await readTextIfPresent(absolutePath)) ?? '';
+
+		touched.push({
+			absolutePath,
+			kind: 'passage',
+			projectPath,
+			text: mergeStoryTweeSource(
+				existingSource,
+				completeStory,
+				descriptorStory.passages.map(
+					passage => passage.name ?? 'Untitled Passage'
+				)
+			)
 		});
 	}
 
@@ -3444,7 +4927,18 @@ async function writeProjectFolderIncremental(
 		return undefined;
 	}
 
-	const concreteTouched = touched as Array<{
+	const concreteTouched = [
+		...new Map(
+			(
+				touched as Array<{
+					absolutePath: string;
+					kind: NativeProjectFileKind;
+					projectPath: string;
+					text: string;
+				}>
+			).map(entry => [entry.projectPath, entry] as const)
+		).values()
+	] as Array<{
 		absolutePath: string;
 		kind: NativeProjectFileKind;
 		projectPath: string;
@@ -3652,8 +5146,47 @@ export async function prepareProjectImport(
 	}
 }
 
-async function writeProjectFolder(rootPath: string, story: Story) {
-	const nativeResult = saveNativeProjectFolder(rootPath, story);
+async function sourceLayoutFromProjectManifest(
+	rootPath: string,
+	storyId: string
+): Promise<{
+	passageNames: string[];
+	sourceLayout: ProjectSourceLayout;
+	sourcePath?: string;
+}> {
+	const source = await readTextIfPresent(join(rootPath, 'twine.toml'));
+	const story = source
+		? parseProjectToml(source).find(candidate => candidate.id === storyId)
+		: undefined;
+
+	return {
+		passageNames: story?.passages.map(passage => passage.name ?? '') ?? [],
+		sourceLayout: story ? sourceLayoutForStory(story) : 'passage-files',
+		sourcePath: story?.source
+	};
+}
+
+async function writeProjectFolder(
+	rootPath: string,
+	story: Story,
+	sourceLayout?: ProjectSourceLayout
+) {
+	const existingSource = await sourceLayoutFromProjectManifest(
+		rootPath,
+		story.id
+	);
+	const effectiveSourceLayout = sourceLayout ?? existingSource.sourceLayout;
+	const aggregateSource =
+		sourceLayout === undefined &&
+		effectiveSourceLayout === 'single-twee' &&
+		existingSource.sourcePath
+			? existingSource.sourcePath.replace(/\\/g, '/')
+			: 'story.twee';
+	const nativeResult = saveNativeProjectFolder(
+		rootPath,
+		story,
+		effectiveSourceLayout
+	);
 
 	if (nativeResult) {
 		return nativeResult;
@@ -3663,24 +5196,51 @@ async function writeProjectFolder(rootPath: string, story: Story) {
 		requireNativeProjectBackend('Project folder saving');
 	}
 
-	const storySlug = pathSlug(story.name);
+	const storySlug = storyPathSlug(story);
 	const passageRoot = join(rootPath, 'passages', storySlug);
-	const passageFiles = story.passages.map(
-		(passage, index) =>
-			`passages/${storySlug}/${passageFileName(index, passage.name)}`
-	);
+	const passageFiles =
+		effectiveSourceLayout === 'single-twee'
+			? story.passages.map(() => aggregateSource)
+			: story.passages.map(
+					(passage, index) =>
+						`passages/${storySlug}/${passageFileName(index, passage.name)}`
+				);
 
-	await mkdirp(passageRoot);
+	if (effectiveSourceLayout === 'passage-files') {
+		await mkdirp(passageRoot);
+	}
 	await mkdirp(join(rootPath, 'scripts'));
 	await mkdirp(join(rootPath, 'styles'));
 	await mkdirp(join(rootPath, 'assets'));
 	await mkdirp(join(rootPath, '.twine'));
 
-	await Promise.all(
-		story.passages.map((passage, index) =>
-			writeFile(join(rootPath, passageFiles[index]), passage.text, 'utf8')
-		)
-	);
+	if (effectiveSourceLayout === 'single-twee') {
+		const aggregatePath = safeProjectFilePath(rootPath, aggregateSource);
+
+		if (!aggregatePath) {
+			throw new Error(`Unsafe aggregate Twee source path: ${aggregateSource}`);
+		}
+		await mkdirp(dirname(aggregatePath));
+		const existingAggregate = (await readTextIfPresent(aggregatePath)) ?? '';
+
+		await writeFile(
+			aggregatePath,
+			existingAggregate
+				? mergeStoryTweeSource(
+						existingAggregate,
+						story,
+						existingSource.passageNames
+					)
+				: storyPassagesToTwee(story),
+			'utf8'
+		);
+	} else {
+		await Promise.all(
+			story.passages.map((passage, index) =>
+				writeFile(join(rootPath, passageFiles[index]), passage.text, 'utf8')
+			)
+		);
+	}
 	await writeFile(
 		join(rootPath, 'scripts', `${storySlug}.js`),
 		story.script,
@@ -3703,7 +5263,7 @@ async function writeProjectFolder(rootPath: string, story: Story) {
 	});
 	await writeFile(
 		join(rootPath, 'twine.toml'),
-		projectToml(story, passageFiles),
+		projectToml(story, passageFiles, effectiveSourceLayout, aggregateSource),
 		'utf8'
 	);
 
@@ -4651,14 +6211,94 @@ export async function resolveProjectSessionConflicts(
 			stories.map(story => story.id),
 			{stories}
 		);
+		session.aggregateExactNamePassageIds = undefined;
 	} else if (resolution === 'acceptDisk' && session.pending) {
 		const candidate = session.pending;
+		let retainExactNamePassageIds = false;
 
 		if (candidate.delta.recovery) {
 			const baseline = await readProjectSessionSnapshot(rootPath);
 			const descriptor = await readProjectDescriptor(rootPath);
 
 			installAcceptedProjectBaseline(session, baseline, descriptor);
+		} else if (candidate.passageMappingsToPersist?.length) {
+			const passageMappingsToPersist = candidate.passageMappingsToPersist;
+			const deferMappings = (currentFiles?: NativeProjectFileEntry[]) => {
+				session.aggregateExactNamePassageIds = new Set([
+					...(session.aggregateExactNamePassageIds ?? []),
+					...passageMappingsToPersist.flatMap(mapping =>
+						mapping.passage.id ? [mapping.passage.id] : []
+					)
+				]);
+				retainExactNamePassageIds = true;
+				session.reconcileAfterResolution = true;
+				const currentManifest = currentFiles?.find(
+					file => file.path === 'twine.toml'
+				);
+				const files = currentManifest
+					? candidate.baseline.files
+							.filter(file => file.path !== 'twine.toml')
+							.concat(currentManifest)
+					: candidate.baseline.files;
+
+				installAcceptedProjectBaseline(
+					session,
+					{
+						...candidate.baseline,
+						changedPaths: [],
+						conflicts: [],
+						files
+					},
+					candidate.descriptor
+				);
+			};
+
+			if (!(await aggregatePassageMappingsAreCurrent(rootPath, candidate))) {
+				deferMappings();
+			} else {
+				const persisted = await persistAggregatePassageMappings(
+					rootPath,
+					passageMappingsToPersist
+				);
+				const currentFiles = await projectFileManifest(
+					rootPath,
+					candidate.baseline.assets
+				);
+
+				if (!aggregatePassageMappingsMatchFiles(candidate, currentFiles)) {
+					if (persisted.updated !== persisted.existing) {
+						const currentManifestSource = await readTextIfPresent(
+							join(rootPath, 'twine.toml')
+						);
+
+						if (currentManifestSource !== persisted.updated) {
+							throw new Error(
+								'twine.toml changed while passage IDs were being persisted.'
+							);
+						}
+						await atomicWriteText(
+							join(rootPath, 'twine.toml'),
+							persisted.existing
+						);
+					}
+					deferMappings(
+						await projectFileManifest(rootPath, candidate.baseline.assets)
+					);
+				} else {
+					const currentManifest = currentFiles.find(
+						file => file.path === 'twine.toml'
+					);
+					const files = candidate.baseline.files
+						.filter(file => file.path !== 'twine.toml')
+						.concat(currentManifest ? [currentManifest] : []);
+
+					installAcceptedProjectBaseline(
+						session,
+						{...candidate.baseline, files},
+						candidate.descriptor
+					);
+				}
+			}
 		} else {
 			installAcceptedProjectBaseline(
 				session,
@@ -4669,6 +6309,9 @@ export async function resolveProjectSessionConflicts(
 				},
 				candidate.descriptor
 			);
+		}
+		if (!retainExactNamePassageIds) {
+			session.aggregateExactNamePassageIds = undefined;
 		}
 		session.generation = candidate.delta.candidateGeneration;
 		session.pending = undefined;

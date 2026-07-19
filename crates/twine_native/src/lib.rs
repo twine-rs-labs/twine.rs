@@ -17,10 +17,10 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use twine_model::{GraphPosition, Passage, Project, StoragePolicy, Story};
+use twine_model::{GraphPosition, Passage, Project, ProjectSourceLayout, StoragePolicy, Story};
 use twine_store::{
-    LoadProjectOptions, LoadedProjectFile, SaveOptions, load_project_path_with_receipt,
-    save_project_path,
+    LoadProjectOptions, LoadedProjectFile, SaveOptions, load_project_path_with_options,
+    load_project_path_with_receipt, save_project_path,
 };
 
 const IMPORT_ASSET_EXTENSIONS: &[&str] = &[
@@ -574,8 +574,22 @@ pub fn finish_project_folder_hydration(hydration_id: String) -> NativeResult<()>
     Ok(())
 }
 
+fn parse_project_source_layout(source_layout: &str) -> NativeResult<ProjectSourceLayout> {
+    match source_layout {
+        "passage-files" => Ok(ProjectSourceLayout::PassageFiles),
+        "single-twee" => Ok(ProjectSourceLayout::SingleTwee),
+        _ => Err(native_error(format!(
+            "Unknown project source layout: {source_layout}"
+        ))),
+    }
+}
+
 #[napi(js_name = "saveProjectFolderJson")]
-pub fn save_project_folder_json(root_path: String, story_json: String) -> NativeResult<String> {
+pub fn save_project_folder_json(
+    root_path: String,
+    story_json: String,
+    source_layout: Option<String>,
+) -> NativeResult<String> {
     let total_started = Instant::now();
     let mut timings = NativeProjectSaveTimings::default();
     let root = PathBuf::from(&root_path);
@@ -592,6 +606,33 @@ pub fn save_project_folder_json(root_path: String, story_json: String) -> Native
         message: "Native twine.rs desktop project folder".into(),
         ..StoragePolicy::default()
     };
+    if root.join("twine.toml").exists() {
+        let existing = load_project_path_with_options(&root, LoadProjectOptions::shell())
+            .map_err(native_error)?;
+        if existing
+            .stories
+            .iter()
+            .any(|existing_story| existing_story.id == story.id)
+        {
+            let existing_layout = existing.manifest.source_layout_for(&story.id);
+
+            project
+                .manifest
+                .set_source_layout(story.id.clone(), existing_layout);
+        } else if let Some(source_layout) = source_layout.as_deref() {
+            let source_layout = parse_project_source_layout(source_layout)?;
+
+            project
+                .manifest
+                .set_source_layout(story.id.clone(), source_layout);
+        }
+    } else if let Some(source_layout) = source_layout.as_deref() {
+        let source_layout = parse_project_source_layout(source_layout)?;
+
+        project
+            .manifest
+            .set_source_layout(story.id.clone(), source_layout);
+    }
     timings.project_build_us = elapsed_us(started);
 
     let started = Instant::now();
@@ -1122,6 +1163,9 @@ fn project_file_manifest(
     scan_project_files(root, "passages", "passage", &mut files)?;
     scan_project_files(root, "scripts", "script", &mut files)?;
     scan_project_files(root, "styles", "stylesheet", &mut files)?;
+    for source in declared_single_twee_sources(root)? {
+        scan_project_files(root, &source, "passage", &mut files)?;
+    }
 
     if let Some(assets) = assets {
         files.extend(assets.iter().filter_map(asset_project_file_entry));
@@ -1130,7 +1174,57 @@ fn project_file_manifest(
     }
 
     files.sort_by(|left, right| left.path.cmp(&right.path));
+    files.dedup_by(|left, right| left.path == right.path);
     Ok(files)
+}
+
+#[derive(Deserialize)]
+struct NativeProjectSourceManifest {
+    #[serde(default)]
+    stories: Vec<NativeStorySourceManifest>,
+}
+
+#[derive(Deserialize)]
+struct NativeStorySourceManifest {
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    source_layout: ProjectSourceLayout,
+}
+
+fn declared_single_twee_sources(root: &Path) -> Result<Vec<String>, std::io::Error> {
+    let source = match fs::read_to_string(root.join("twine.toml")) {
+        Ok(source) => source,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let manifest = toml::from_str::<NativeProjectSourceManifest>(&source)
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+    let mut sources = Vec::new();
+
+    for story in manifest.stories {
+        if story.source_layout != ProjectSourceLayout::SingleTwee || story.source.is_empty() {
+            continue;
+        }
+        let path = Path::new(&story.source);
+        let safe = !path.is_absolute()
+            && path.components().all(|component| {
+                matches!(
+                    component,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            });
+
+        if !safe {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!("Unsafe aggregate Twee source path: {}", story.source),
+            ));
+        }
+        sources.push(story.source);
+    }
+
+    Ok(sources)
 }
 
 fn scan_project_files(
@@ -1877,7 +1971,7 @@ mod tests {
             "zoom": 1
         });
 
-        save_project_folder_json(root.to_string_lossy().into_owned(), story.to_string())
+        save_project_folder_json(root.to_string_lossy().into_owned(), story.to_string(), None)
             .expect("project should save");
 
         let sidecar = fs::read_to_string(root.join(".twine/project.json"))
@@ -1965,6 +2059,128 @@ mod tests {
         assert_eq!(released["textLengthBytes"], 0);
 
         fs::remove_dir_all(root).expect("project should be removed");
+    }
+
+    #[test]
+    fn native_save_selects_single_twee_on_creation_and_preserves_it() {
+        let root = temp_path("save-single-project");
+        let mut story = serde_json::json!({
+            "ifid": "IFID",
+            "id": "story-1",
+            "name": "Native Single",
+            "passages": [{
+                "id": "passage-1",
+                "name": "Start",
+                "story": "story-1",
+                "text": "Initial body"
+            }],
+            "script": "window.storyScript = true;",
+            "startPassage": "passage-1",
+            "storyFormat": "Harlowe",
+            "storyFormatVersion": "3.3.9",
+            "stylesheet": "body { color: black; }"
+        });
+
+        save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            story.to_string(),
+            Some("single-twee".into()),
+        )
+        .expect("single-twee native project should save");
+
+        assert!(root.join("story.twee").exists());
+        assert!(!root.join("passages").exists());
+        assert!(
+            fs::read_to_string(root.join("story.twee"))
+                .expect("aggregate source")
+                .contains(":: StoryData")
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("scripts/native-single.js")).expect("external script"),
+            "window.storyScript = true;"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("styles/native-single.css")).expect("external stylesheet"),
+            "body { color: black; }"
+        );
+
+        story["passages"][0]["text"] = serde_json::Value::String("Second body".into());
+        save_project_folder_json(root.to_string_lossy().into_owned(), story.to_string(), None)
+            .expect("subsequent native save should preserve layout");
+        let manifest = fs::read_to_string(root.join("twine.toml")).expect("manifest");
+
+        assert!(manifest.contains("source_layout = \"single-twee\""));
+        assert!(manifest.contains("source = \"story.twee\""));
+        assert!(!root.join("passages").exists());
+        assert!(
+            fs::read_to_string(root.join("story.twee"))
+                .expect("resaved source")
+                .contains("Second body")
+        );
+
+        let files = project_file_manifest(&root, None).expect("project file manifest");
+
+        assert!(
+            files
+                .iter()
+                .any(|file| file.path == "story.twee" && file.kind == "passage")
+        );
+
+        fs::remove_dir_all(root).expect("native single project should be removed");
+    }
+
+    #[test]
+    fn native_save_honors_explicit_layout_when_existing_folder_has_another_story() {
+        let root = temp_path("save-layout-name-collision");
+        let original = serde_json::json!({
+            "ifid": "OLD-IFID",
+            "id": "old-story",
+            "name": "Colliding Name",
+            "passages": [{
+                "id": "old-passage",
+                "name": "Start",
+                "story": "old-story",
+                "text": "Old body"
+            }],
+            "startPassage": "old-passage"
+        });
+
+        save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            original.to_string(),
+            Some("passage-files".into()),
+        )
+        .expect("initial passage-files project should save");
+
+        let replacement = serde_json::json!({
+            "ifid": "NEW-IFID",
+            "id": "new-story",
+            "name": "Colliding Name",
+            "passages": [{
+                "id": "new-passage",
+                "name": "Start",
+                "story": "new-story",
+                "text": "New body"
+            }],
+            "startPassage": "new-passage"
+        });
+
+        save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            replacement.to_string(),
+            Some("single-twee".into()),
+        )
+        .expect("explicit single layout should win for a new colliding story");
+
+        let manifest = fs::read_to_string(root.join("twine.toml")).expect("manifest");
+
+        assert!(manifest.contains("id = \"new-story\""));
+        assert!(manifest.contains("source_layout = \"single-twee\""));
+        assert!(manifest.contains("source = \"story.twee\""));
+        assert!(root.join("story.twee").exists());
+        assert!(!root.join("passages").exists());
+
+        fs::remove_dir_all(root).expect("collision project should be removed");
     }
 
     #[test]

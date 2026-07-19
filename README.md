@@ -11,7 +11,8 @@ projects, and test the native core that supports the editor.
 
 ## What's Implemented
 
-- Directory-backed project folders for stories, assets, metadata, and layout.
+- Directory-backed project folders with recommended passage-per-file and
+  single-Twee source layouts, plus visible assets, metadata, and graph layout.
 - Electron project sessions with file-backed save/load, disk change tracking,
   and conflict review.
 - A Rust model for stories, passages, IDs, geometry, project manifests, graph

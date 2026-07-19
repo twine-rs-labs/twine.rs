@@ -18,10 +18,16 @@ folders. Changing it does not move existing projects.
 A desktop project folder contains normal files and directories:
 
 - `twine.toml` describes the project and its stories;
-- `passages/` contains passage source files;
+- `passages/` contains one source file per passage in the recommended Multi
+  layout, while `story.twee` contains the story metadata and passage source in
+  a newly created Single-layout project;
 - `scripts/` and `styles/` contain story JavaScript and CSS;
 - `assets/` contains images, audio, video, and other project files; and
 - `.twine/` contains graph layout and application metadata.
+
+An existing Single-layout project may declare another aggregate-source path in
+`twine.toml`. Twine uses and preserves that declared path instead of moving the
+source to `story.twee`.
 
 The `.twine/` directory may be hidden by your file manager. Keep it when
 copying or backing up a project if you want to preserve graph and application
@@ -48,6 +54,17 @@ the folder under source control. Twine watches every open project folder.
 Nonconflicting changes are applied to the active project. If a disk edit and an
 in-app edit overlap, Twine asks you to
 [review the external change](conflicts.md).
+
+For a Single-layout project, watched `StoryTitle` and `StoryData` edits can
+change the story title, IFID, story format and version, start passage, tag
+colors, and zoom. Passage additions, deletions, names, tags, and text are also
+recognized.
+
+Ordinary saves update the parts of the aggregate source that Twine owns while
+preserving its preamble, unrelated sections, unknown `StoryData` properties,
+and unknown passage-header metadata. Tagged script and stylesheet sections are
+preserved for compatibility, but the active story JavaScript and CSS remain
+the separate files declared by `twine.toml`.
 
 Do not edit generated `.twine/` metadata concurrently in multiple tools unless
 you are prepared to choose which copy to keep.

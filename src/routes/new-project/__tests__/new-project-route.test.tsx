@@ -56,42 +56,144 @@ describe('<NewProjectRoute>', () => {
 		delete (window as any).twineElectron;
 	});
 
-	it('creates a native project folder and a story with a named start passage', async () => {
-		(window as any).twineElectron = {
-			createProjectFolder: jest.fn(async story => ({
+	it.each([
+		{
+			absentPreview: ['story.twee'],
+			layout: 'passage-files',
+			preview: [
+				'passages/',
+				'moon-castle-2026-bonus/',
+				'0001-opening-scene-1.twee',
+				'scripts/',
+				'moon-castle-2026-bonus.js',
+				'styles/',
+				'moon-castle-2026-bonus.css'
+			],
+			selection: 'Multi (Recommended)'
+		},
+		{
+			absentPreview: [
+				'passages/',
+				'moon-castle-2026-bonus/',
+				'0001-opening-scene-1.twee'
+			],
+			layout: 'single-twee',
+			preview: [
+				'story.twee',
+				'scripts/',
+				'moon-castle-2026-bonus.js',
+				'styles/',
+				'moon-castle-2026-bonus.css'
+			],
+			selection: 'Single'
+		}
+	])(
+		'creates a $layout project with matching preview and blank starter text',
+		async ({absentPreview, layout, preview, selection}) => {
+			const createProjectFolder = jest.fn(async story => ({
 				rootPath: `/native/${story.name}.twine.rs`,
 				stories: [story],
 				storyIds: [story.id]
-			})),
-			getStoryLibraryFolder: jest.fn(async () => '/native/library')
-		};
-		const {container} = renderComponent();
+			}));
+
+			(window as any).twineElectron = {
+				createProjectFolder,
+				getStoryLibraryFolder: jest.fn(async () => '/native/library')
+			};
+			const {container} = renderComponent();
+			const sourceLayoutButton = screen.getByText(selection).closest('button');
+
+			if (selection === 'Multi (Recommended)') {
+				expect(sourceLayoutButton).toHaveAttribute('aria-selected', 'true');
+			} else {
+				fireEvent.click(sourceLayoutButton!);
+			}
+
+			fireEvent.change(screen.getByLabelText('Project name'), {
+				target: {value: 'Moon.Castle_2026 + Bonus'}
+			});
+			fireEvent.change(screen.getByLabelText('Start passage'), {
+				target: {value: 'Opening.Scene_1'}
+			});
+
+			expect(
+				screen.getByText('moon-castle-2026-bonus.twine.rs/')
+			).toBeInTheDocument();
+			for (const label of preview) {
+				expect(screen.getByText(label)).toBeInTheDocument();
+			}
+			for (const label of absentPreview) {
+				expect(screen.queryByText(label)).not.toBeInTheDocument();
+			}
+
+			fireEvent.click(screen.getByRole('button', {name: /create project/i}));
+
+			await waitFor(() =>
+				expect(createProjectFolder).toHaveBeenCalledWith(
+					expect.objectContaining({
+						name: 'Moon.Castle_2026 + Bonus',
+						passages: [
+							expect.objectContaining({
+								name: 'Opening.Scene_1',
+								text: ''
+							})
+						]
+					}),
+					undefined,
+					layout
+				)
+			);
+			await waitFor(() =>
+				expect(screen.getByTestId('story-inspector-default')).toHaveAttribute(
+					'data-name',
+					'Moon.Castle_2026 + Bonus'
+				)
+			);
+			await waitFor(() =>
+				expect(
+					screen.getByTestId('location').getAttribute('data-pathname')
+				).toMatch(/^\/stories\//)
+			);
+			expect(
+				container.querySelector('[data-name="Opening.Scene_1"]')
+			).toBeInTheDocument();
+		}
+	);
+
+	it('previews canonical source slugs for long and reserved story names', () => {
+		renderComponent();
+		const longName = `___${'A'.repeat(80)}`;
+		const truncatedSlug = 'a'.repeat(63);
 
 		fireEvent.change(screen.getByLabelText('Project name'), {
-			target: {value: 'Moon Castle'}
+			target: {value: longName}
 		});
 		fireEvent.change(screen.getByLabelText('Start passage'), {
-			target: {value: 'Opening'}
+			target: {value: 'Élan___Passage'}
 		});
-		fireEvent.click(screen.getByRole('button', {name: /create project/i}));
 
-		await waitFor(() =>
-			expect(screen.getByTestId('story-inspector-default')).toHaveAttribute(
-				'data-name',
-				'Moon Castle'
+		expect(
+			screen.getByDisplayValue(
+				`~/Documents/Twine RS/Stories/${truncatedSlug}.twine.rs`
 			)
-		);
-		expect(
-			(window as any).twineElectron.createProjectFolder
-		).toHaveBeenCalled();
-		await waitFor(() =>
-			expect(
-				screen.getByTestId('location').getAttribute('data-pathname')
-			).toMatch(/^\/stories\//)
-		);
-		expect(
-			container.querySelector('[data-name="Opening"]')
 		).toBeInTheDocument();
+		expect(screen.getByText(`${truncatedSlug}/`)).toBeInTheDocument();
+		expect(screen.getByText(`${truncatedSlug}.js`)).toBeInTheDocument();
+		expect(screen.getByText('0001-lan-passage.twee')).toBeInTheDocument();
+
+		fireEvent.change(screen.getByLabelText('Project name'), {
+			target: {value: 'Item'}
+		});
+		const folderPath = (
+			screen.getByLabelText('Project folder') as HTMLInputElement
+		).value;
+		const reservedFallback = folderPath.match(
+			/\/([a-f0-9-]+)\.twine\.rs$/
+		)?.[1];
+
+		expect(reservedFallback).toBeDefined();
+		expect(screen.getByText(`${reservedFallback}/`)).toBeInTheDocument();
+		expect(screen.getByText(`${reservedFallback}.css`)).toBeInTheDocument();
 	});
 
 	it('renders the import workspace for /new-project/import', () => {

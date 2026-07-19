@@ -8,6 +8,8 @@ import type {CoreAssetInventoryEntry} from '../../core';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
 import type {StoryBuildAsset} from '../../util/build-package';
 
+export type ProjectSourceLayout = 'passage-files' | 'single-twee';
+
 export interface NativeProjectFileEntry {
 	fingerprint: string;
 	kind:
@@ -302,7 +304,8 @@ export interface TwineElectronWindow extends Window {
 		): Promise<NativeProjectAssetWriteResult[]>;
 		createProjectFolder(
 			story: Story,
-			preferredParent?: string
+			preferredParent?: string,
+			sourceLayout?: ProjectSourceLayout
 		): Promise<NativeProjectFolderResult>;
 		deleteProjectAsset(
 			rootPath: string,

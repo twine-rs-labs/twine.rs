@@ -25,6 +25,7 @@ import {
 } from '../../store/stories';
 import type {
 	NativeProjectImportSource,
+	ProjectSourceLayout,
 	TwineElectronWindow
 } from '../../electron/shared';
 import {saveProjectMetadata} from '../../store/project-metadata';
@@ -51,7 +52,6 @@ import {StoryEditMode} from '../story-edit/workspace-state';
 import './new-project-route.css';
 
 type NewProjectTab = 'create' | 'import';
-type SourceLayout = 'single' | 'multi';
 
 interface ImportQueue {
 	fileName: string;
@@ -82,38 +82,84 @@ function workspaceStorageKey(storyId: string) {
 	return `twine-story-edit-workspace-${storyId}`;
 }
 
-function projectSlug(name: string) {
-	const slug = name
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-|-$/g, '');
+function pathSlug(value: string) {
+	let slug = '';
 
-	return slug || 'untitled-story';
+	for (const character of value) {
+		if (/^[a-z0-9]$/i.test(character)) {
+			slug += character.toLowerCase();
+		} else if (!slug.endsWith('-')) {
+			slug += '-';
+		}
+
+		if (slug.length >= 64) {
+			break;
+		}
+	}
+
+	return slug.replace(/^-+|-+$/g, '') || 'item';
 }
 
-function projectFolder(name: string, parent?: string) {
+function projectSlug(name: string, storyId: string) {
+	const slug = pathSlug(name);
+
+	return slug === 'item' || slug === 'untitled' ? pathSlug(storyId) : slug;
+}
+
+function projectFolder(name: string, storyId: string, parent?: string) {
 	return `${
 		parent || '~/Documents/Twine RS/Stories'
-	}/${projectSlug(name)}.twine.rs`;
+	}/${projectSlug(name, storyId)}.twine.rs`;
 }
 
-function projectPreviewFiles(sourceLayout: SourceLayout, graphLayout: boolean) {
-	const passagePath =
-		sourceLayout === 'multi' ? ['passages/', 'start.twee'] : ['story.twee'];
+function projectPreviewFiles(
+	sourceLayout: ProjectSourceLayout,
+	graphLayout: boolean,
+	storyName: string,
+	startPassageName: string,
+	storyId: string
+) {
+	const storySlug = projectSlug(storyName, storyId);
+	const startSlug = pathSlug(startPassageName.trim() || 'Start');
 	const files = [
-		{depth: 0, icon: 'folder-open', label: 'project/', status: 'new'},
+		{
+			depth: 0,
+			icon: 'folder-open',
+			label: `${storySlug}.twine.rs/`,
+			status: 'new'
+		},
 		{depth: 1, icon: 'settings', label: 'twine.toml', status: 'new'},
-		...(sourceLayout === 'multi'
+		...(sourceLayout === 'passage-files'
 			? [
-					{depth: 1, icon: 'folder', label: passagePath[0], status: 'new'},
-					{depth: 2, icon: 'file-text', label: passagePath[1], status: 'new'}
+					{depth: 1, icon: 'folder', label: 'passages/', status: 'new'},
+					{
+						depth: 2,
+						icon: 'folder',
+						label: `${storySlug}/`,
+						status: 'new'
+					},
+					{
+						depth: 3,
+						icon: 'file-text',
+						label: `0001-${startSlug}.twee`,
+						status: 'new'
+					}
 				]
-			: [{depth: 1, icon: 'file-text', label: passagePath[0], status: 'new'}]),
+			: [{depth: 1, icon: 'file-text', label: 'story.twee', status: 'new'}]),
 		{depth: 1, icon: 'folder', label: 'scripts/', status: 'new'},
-		{depth: 2, icon: 'braces', label: 'story.js', status: 'new'},
+		{
+			depth: 2,
+			icon: 'braces',
+			label: `${storySlug}.js`,
+			status: 'new'
+		},
 		{depth: 1, icon: 'folder', label: 'styles/', status: 'new'},
-		{depth: 2, icon: 'file-code', label: 'story.css', status: 'new'},
+		{
+			depth: 2,
+			icon: 'file-code',
+			label: `${storySlug}.css`,
+			status: 'new'
+		},
 		{depth: 1, icon: 'folder', label: 'assets/', status: 'empty'},
 		...(graphLayout
 			? [
@@ -249,7 +295,8 @@ async function parseImportFile(file: File) {
 
 async function persistNativeProjectFolder(
 	story: StoryWithDocuments,
-	preferredParent?: string
+	preferredParent?: string,
+	sourceLayout?: ProjectSourceLayout
 ) {
 	const twineElectron = desktopBridge();
 
@@ -261,10 +308,13 @@ async function persistNativeProjectFolder(
 		return undefined;
 	}
 
-	const result = await twineElectron.createProjectFolder(
-		story,
-		preferredParent
-	);
+	const result = sourceLayout
+		? await twineElectron.createProjectFolder(
+				story,
+				preferredParent,
+				sourceLayout
+			)
+		: await twineElectron.createProjectFolder(story, preferredParent);
 
 	saveProjectMetadata(story.id, {
 		rootPath: result.rootPath,
@@ -290,13 +340,14 @@ export const NewProjectRoute: React.FC = () => {
 	const [tab, setTab] = React.useState<NewProjectTab>(
 		pathname.endsWith('/import') ? 'import' : 'create'
 	);
+	const [storyId] = React.useState(() => uuid());
 	const [projectName, setProjectName] = React.useState('Untitled Story');
 	const [startPassageName, setStartPassageName] = React.useState('Start');
 	const [format, setFormat] = React.useState(
 		formatKey(prefs.storyFormat.name, prefs.storyFormat.version)
 	);
 	const [sourceLayout, setSourceLayout] =
-		React.useState<SourceLayout>('single');
+		React.useState<ProjectSourceLayout>('passage-files');
 	const [initialMode, setInitialMode] = React.useState<StoryEditMode>('graph');
 	const [graphLayout, setGraphLayout] = React.useState(true);
 	const [storyLibraryFolder, setStoryLibraryFolder] = React.useState('');
@@ -319,8 +370,15 @@ export const NewProjectRoute: React.FC = () => {
 	);
 	const selectedFormat = React.useMemo(() => parseFormatKey(format), [format]);
 	const previewFiles = React.useMemo(
-		() => projectPreviewFiles(sourceLayout, graphLayout),
-		[graphLayout, sourceLayout]
+		() =>
+			projectPreviewFiles(
+				sourceLayout,
+				graphLayout,
+				projectName,
+				startPassageName,
+				storyId
+			),
+		[graphLayout, projectName, sourceLayout, startPassageName, storyId]
 	);
 	const projectParent = prefs.defaultProjectFolder || storyLibraryFolder;
 
@@ -394,7 +452,6 @@ export const NewProjectRoute: React.FC = () => {
 		setError(undefined);
 
 		const storyName = projectName.trim();
-		const storyId = uuid();
 		const passageName = startPassageName.trim() || 'Start';
 		const passageId = uuid();
 		const defaults = passageDefaults();
@@ -427,10 +484,7 @@ export const NewProjectRoute: React.FC = () => {
 						name: passageName,
 						selected: true,
 						story: storyId,
-						text:
-							sourceLayout === 'multi'
-								? `[[${passageName} Notes]]`
-								: defaults.text,
+						text: defaults.text,
 						top: graphLayout ? 88 : defaults.top,
 						width: graphLayout ? 180 : defaults.width
 					}
@@ -443,7 +497,8 @@ export const NewProjectRoute: React.FC = () => {
 
 			await persistNativeProjectFolder(
 				story,
-				prefs.defaultProjectFolder || undefined
+				prefs.defaultProjectFolder || undefined,
+				sourceLayout
 			);
 
 			dispatch(
@@ -761,7 +816,7 @@ export const NewProjectRoute: React.FC = () => {
 										label="Project folder"
 										mono
 										readOnly
-										value={projectFolder(projectName, projectParent)}
+										value={projectFolder(projectName, storyId, projectParent)}
 									/>
 									<Input
 										block
@@ -794,10 +849,20 @@ export const NewProjectRoute: React.FC = () => {
 									<label className="new-project-route__field-label">
 										<span>Source layout</span>
 										<SegmentedControl
-											onChange={value => setSourceLayout(value as SourceLayout)}
+											onChange={value =>
+												setSourceLayout(value as ProjectSourceLayout)
+											}
 											options={[
-												{icon: 'file-text', label: 'Single', value: 'single'},
-												{icon: 'files', label: 'Multi', value: 'multi'}
+												{
+													icon: 'files',
+													label: 'Multi (Recommended)',
+													value: 'passage-files'
+												},
+												{
+													icon: 'file-text',
+													label: 'Single',
+													value: 'single-twee'
+												}
 											]}
 											value={sourceLayout}
 										/>
@@ -842,7 +907,7 @@ export const NewProjectRoute: React.FC = () => {
 							pad
 						>
 							<div className="new-project-route__preview-path">
-								{projectFolder(projectName, projectParent)}
+								{projectFolder(projectName, storyId, projectParent)}
 							</div>
 							<ol className="new-project-route__file-tree">
 								{previewFiles.map((file, index) => (
