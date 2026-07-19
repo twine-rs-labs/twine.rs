@@ -1,8 +1,13 @@
-import {render, screen, waitFor} from '@testing-library/react';
-import {StateField} from '@codemirror/state';
+import {CompletionContext} from '@codemirror/autocomplete';
+import {EditorState, StateField} from '@codemirror/state';
 import {Decoration, EditorView, ViewPlugin} from '@codemirror/view';
+import {render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
-import {SourceEditor, type SourceEditorHandle} from '../source-editor';
+import {
+	passageCompletionSource,
+	SourceEditor,
+	type SourceEditorHandle
+} from '../source-editor';
 
 describe('<SourceEditor>', () => {
 	afterEach(() => {
@@ -67,6 +72,49 @@ describe('<SourceEditor>', () => {
 			])
 		);
 	});
+
+	it.each([
+		{
+			initialDocument: '[[Hal',
+			name: 'an unclosed link'
+		},
+		{
+			initialDocument: '[[Hal]]',
+			name: 'a link with CM6-generated closing brackets'
+		}
+	])(
+		'completes $name with the upstream closing suffix',
+		async ({initialDocument}) => {
+			const state = EditorState.create({
+				doc: initialDocument,
+				selection: {anchor: 5}
+			});
+			const view = new EditorView({state});
+			const result = await passageCompletionSource(['Hallway'])(
+				new CompletionContext(view.state, 5, true, view)
+			);
+
+			expect(result).not.toBeNull();
+			const completion = result!.options[0];
+
+			if (typeof completion.apply !== 'function') {
+				throw new TypeError('Passage completion must define an apply action');
+			}
+
+			completion.apply(
+				view,
+				completion,
+				result!.from,
+				view.state.selection.main.head
+			);
+			expect(view.state.doc.toString()).toBe('[[Hallway]] ');
+			expect(view.state.selection.main).toMatchObject({
+				anchor: 12,
+				head: 12
+			});
+			view.destroy();
+		}
+	);
 
 	it('does not echo a controlled value synchronization through onChange', async () => {
 		const onChange = jest.fn();

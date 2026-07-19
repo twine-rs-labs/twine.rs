@@ -199,8 +199,8 @@ commands that are triggered by buttons in the toolbar.
 
 - A format can only have one toolbar.
 - A toolbar can only use CodeMirror commands defined by the format. These
-  commands can consist of any code, however, which in turn may call other
-  CodeMirror commands or otherwise do whatever it likes.
+  commands are passed the bounded editor facade described below. The global
+  CodeMirror command registry is not exposed.
 
 In twine.rs, commands are scoped to the format and editor that owns them; they
 are never added to a global registry. They may use only `getDoc`, `getValue`,
@@ -274,6 +274,7 @@ The `toolbar` function receives two arguments from Twine:
   twine.rs provides the read-only bounded facade listed above rather than a raw
   CodeMirror instance. Accessing any other method or property makes the toolbar
   unavailable for that editor while generic editing continues.
+
 - `environment` is an object with information related to Twine itself:
 
   - `environment.appTheme` is either the string `dark` or `light`, depending on
@@ -304,8 +305,9 @@ It must follow these rules:
   will handle this for you.
 - Avoid changing the contents of the toolbar based on CodeMirror state. Instead,
   enable and disable items.
-- If you would like to use a built-in CodeMirror command in your toolbar, write
-  a custom command that calls `editor.execCommand()`.
+- `editor.execCommand()` is not part of twine.rs's bounded compatibility
+  facade. Implement toolbar behavior with the allowed document and selection
+  methods listed above.
 - The toolbar function must return an array of objects. The `type` property on
   the object describes what kind of item to display. This property is required
   on all items.

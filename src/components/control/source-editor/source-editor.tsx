@@ -28,6 +28,7 @@ import {
 	autocompletion,
 	closeBrackets,
 	closeBracketsKeymap,
+	type Completion,
 	CompletionContext,
 	type CompletionSource
 } from '@codemirror/autocomplete';
@@ -264,7 +265,7 @@ function selectionFromMemory(
 		: undefined;
 }
 
-function completionSource(passageNames: string[] = []) {
+export function passageCompletionSource(passageNames: string[] = []) {
 	return (context: CompletionContext) => {
 		const match = context.matchBefore(/(?:\[\[|->|<-|\|)[^\]\n\r]*$/);
 
@@ -277,7 +278,38 @@ function completionSource(passageNames: string[] = []) {
 
 		return {
 			from: context.pos - prefix.length,
-			options: passageNames.map(name => ({label: name, type: 'text'}))
+			options: passageNames.map(name => ({
+				apply(
+					view: EditorView,
+					_completion: Completion,
+					from: number,
+					to: number
+				) {
+					let replaceTo = to;
+
+					// CM6's close-brackets extension turns a typed `[[` into
+					// `[[]]`. Consume that generated pair when accepting a
+					// completion so the upstream `]] ` pick suffix is not doubled.
+					if (view.state.sliceDoc(to, to + 2) === ']]') {
+						replaceTo += 2;
+
+						if (view.state.sliceDoc(replaceTo, replaceTo + 1) === ' ') {
+							replaceTo++;
+						}
+					}
+
+					const insert = `${name}]] `;
+
+					view.dispatch({
+						changes: {from, insert, to: replaceTo},
+						scrollIntoView: true,
+						selection: {anchor: from + insert.length},
+						userEvent: 'input.complete'
+					});
+				},
+				label: name,
+				type: 'text'
+			}))
 		};
 	};
 }
@@ -844,7 +876,7 @@ function baseExtensions(
 		compartments.autocomplete.of(
 			autocompletion({
 				override: [
-					completionSource(props.autocompletePassageNames),
+					passageCompletionSource(props.autocompletePassageNames),
 					...(props.completionSources ?? [])
 				]
 			})
@@ -1240,7 +1272,7 @@ export const SourceEditor = React.forwardRef<
 			effects: compartments.autocomplete.reconfigure(
 				autocompletion({
 					override: [
-						completionSource(props.autocompletePassageNames),
+						passageCompletionSource(props.autocompletePassageNames),
 						...(props.completionSources ?? [])
 					]
 				})
