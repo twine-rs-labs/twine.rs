@@ -61,9 +61,12 @@ evidence, not a timing threshold.
 After the bounded no-media fast path was added, canonical 10k and 50k startup
 diagnostics each passed all 47 runtime invariants across three fresh processes.
 The 10k result had no blocking regression against its matching accepted
-reference; the 50k fixture has no accepted startup baseline. These focused
-startup reports remain diagnostic artifacts rather than replacement full-phase
-baselines.
+reference. A later clean all-phase 50k run at revision `eb090ab7` passed
+startup, edit, query, graph, and watcher with all 340 normalized invariants and
+was accepted for the Apple M4 fingerprint `3101761a8a63fab1`. Its tracked
+summary records the nonblocking target misses as well as the passing structural
+and runtime checks; acceptance establishes a matching regression reference, not
+a claim that every report-only target has been reached.
 
 Digest capture admits at most 100 paths and 25 MiB of encoded data in one
 aggregate asynchronous native task. Payload embedding remains capped at 25

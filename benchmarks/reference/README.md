@@ -12,13 +12,16 @@ directory.
 The current clean references are:
 
 - [10k clean baseline](./2026-07-16-apple-m4-10000.summary.json)
-- [50k clean baseline](./2026-07-16-apple-m4-50000.summary.json)
+- [50k clean baseline](./2026-07-21-apple-m4-50000.summary.json)
 
 Their complete source reports used one clean Git revision and passed the
 cross-phase revision and dirty-state assertions. The initial
 [10k historical snapshot](./2026-07-03-apple-m4-10000.summary.json) and
 [50k historical snapshot](./2026-07-03-apple-m4-50000.summary.json) remain for
 comparison; their dirty-worktree limitation is recorded inside each artifact.
+The previous clean
+[50k reference](./2026-07-16-apple-m4-50000.summary.json) also remains for
+comparison.
 
 Focused diagnostics can also preserve a small normalized decision record when
 the raw evidence is too large to track. The
