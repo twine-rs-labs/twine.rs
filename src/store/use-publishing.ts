@@ -21,6 +21,19 @@ import {
 } from './story-formats';
 import {StoryWithDocuments, storyWithId, useStoriesContext} from './stories';
 import {getAppInfo} from '../util/app-info';
+import {
+	externalAssetEmbeddingReport,
+	inlineReferencedAssets,
+	type AssetEmbeddingReport
+} from '../util/inline-assets';
+import {loadProjectMetadata} from './project-metadata';
+import type {TwineElectronWindow} from '../electron/shared';
+
+export const referencedMediaEmbeddingLimits = {
+	maxFileBytes: 25 * 1024 * 1024,
+	maxFileCount: 25,
+	maxTotalEncodedBytes: 25 * 1024 * 1024
+} as const;
 
 export type PublishStoryOptions = PublishOptions & {
 	buildTarget?: StoryHtmlBuildTarget;
@@ -156,6 +169,89 @@ export function usePublishing(): UsePublishingProps {
 			publishOptions?: Omit<BuildStoryPackageOptions, 'buildTarget'>
 		) => {
 			const story = await completeStoryForPublishing(storyId);
+			const assetInventory =
+				publishOptions?.assetInventory ??
+				(await assetInventoryForStory(storyId));
+			const assetMode = publishOptions?.assetMode ?? 'external';
+			let storyForBuild = story;
+			let assetEmbeddingReport: AssetEmbeddingReport =
+				externalAssetEmbeddingReport(assetInventory);
+
+			if (assetMode === 'inline-referenced') {
+				if (target !== 'export-html' && target !== 'publish') {
+					throw new Error(
+						'Referenced media embedding is available only for Playable HTML export.'
+					);
+				}
+
+				const metadata = loadProjectMetadata(storyId);
+				const rootPath =
+					metadata?.storageKind === 'electron-project-folder' &&
+					metadata.status === 'file-backed'
+						? metadata.rootPath
+						: undefined;
+				const bridge = (window as TwineElectronWindow).twineElectron;
+
+				if (!rootPath || !bridge?.readProjectAssetPayloads) {
+					throw new Error(
+						'Referenced media embedding requires a file-backed project in the desktop app.'
+					);
+				}
+
+				const referencedAssets = assetInventory.filter(
+					asset => asset.referenceCount > 0
+				);
+				const supportedAssets = referencedAssets.filter(asset =>
+					['image', 'audio', 'video'].includes(asset.kind)
+				);
+				const requestedAssets = supportedAssets.slice(
+					0,
+					referencedMediaEmbeddingLimits.maxFileCount
+				);
+				const localFailures = [
+					...referencedAssets
+						.filter(asset => !['image', 'audio', 'video'].includes(asset.kind))
+						.map(asset => ({
+							message: `Asset type "${asset.kind}" is not supported for media embedding.`,
+							path: asset.path,
+							reason: 'unsupported-type'
+						})),
+					...supportedAssets
+						.slice(referencedMediaEmbeddingLimits.maxFileCount)
+						.map(asset => ({
+							message: `Embedding would exceed the ${referencedMediaEmbeddingLimits.maxFileCount}-file limit.`,
+							path: asset.path,
+							reason: 'file-count-exceeded'
+						}))
+				];
+				const loaded = await bridge.readProjectAssetPayloads(
+					rootPath,
+					requestedAssets.map(asset => asset.path),
+					referencedMediaEmbeddingLimits
+				);
+				const transformed = inlineReferencedAssets({
+					assetInventory,
+					failures: [...localFailures, ...loaded.failures].map(failure => ({
+						path: failure.path,
+						reason: failure.message,
+						type:
+							failure.reason === 'unsupported-type'
+								? 'unsupported'
+								: 'unavailable'
+					})),
+					payloads: loaded.payloads,
+					policy: {
+						maxFileEncodedBytes: referencedMediaEmbeddingLimits.maxFileBytes,
+						maxFileCount: referencedMediaEmbeddingLimits.maxFileCount,
+						maxTotalEncodedBytes:
+							referencedMediaEmbeddingLimits.maxTotalEncodedBytes
+					},
+					story
+				});
+
+				storyForBuild = transformed.story;
+				assetEmbeddingReport = transformed.report;
+			}
 			const format = formatWithNameAndVersion(
 				formats,
 				story.storyFormat,
@@ -169,11 +265,11 @@ export function usePublishing(): UsePublishingProps {
 				throw new Error(`Couldn't load story format properties`);
 			}
 
-			return createStoryBuildPackage(story, getAppInfo(), {
+			return createStoryBuildPackage(storyForBuild, getAppInfo(), {
 				...publishOptions,
-				assetInventory:
-					publishOptions?.assetInventory ??
-					(await assetInventoryForStory(storyId)),
+				assetEmbeddingReport,
+				assetInventory,
+				assetMode,
 				formatProperties,
 				target
 			});

@@ -6,12 +6,16 @@ import {
 } from '../store/stories';
 import {AppInfo} from './app-info';
 import {i18n} from './i18n';
+import type {AssetMode} from './inline-assets';
 import {
 	storyGraphMetadata,
 	TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE
 } from './story-graph-metadata';
 
 export interface PublishOptions {
+	/** Controls whether authoritative local media references remain external. */
+	assetMode?: AssetMode;
+
 	/**
 	 * File-backed asset inventory from the core project host. When present, missing
 	 * referenced assets block publish/preview output.

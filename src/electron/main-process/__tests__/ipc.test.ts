@@ -37,6 +37,7 @@ import {
 	listProjectAssets,
 	openProjectFolder,
 	prepareProjectImport,
+	projectSessionAssetReadBaselines,
 	projectSessionSnapshot,
 	renameProjectAsset,
 	replaceProjectAsset,
@@ -45,8 +46,13 @@ import {
 	startProjectSession,
 	stopProjectSession
 } from '../project-folder';
+import {
+	nativeProjectAssetEmbeddingAvailable,
+	readNativeProjectAssetPayloads
+} from '../native';
 
 jest.mock('../json-file');
+jest.mock('../native');
 jest.mock('../command-line');
 jest.mock('../platform-settings');
 jest.mock('../prefs');
@@ -79,6 +85,8 @@ describe('initIpc()', () => {
 	const openProjectFolderMock = openProjectFolder as jest.Mock;
 	const prepareProjectImportMock = prepareProjectImport as jest.Mock;
 	const projectSessionSnapshotMock = projectSessionSnapshot as jest.Mock;
+	const projectSessionAssetReadBaselinesMock =
+		projectSessionAssetReadBaselines as jest.Mock;
 	const renameProjectAssetMock = renameProjectAsset as jest.Mock;
 	const replaceProjectAssetMock = replaceProjectAsset as jest.Mock;
 	const resolveProjectSessionConflictsMock =
@@ -101,6 +109,10 @@ describe('initIpc()', () => {
 	const saveJsonFileMock = saveJsonFile as jest.Mock;
 	const saveStoryHtmlMock = saveStoryHtml as jest.Mock;
 	const showItemInFolderMock = shell.showItemInFolder as jest.Mock;
+	const nativeProjectAssetEmbeddingAvailableMock =
+		nativeProjectAssetEmbeddingAvailable as jest.Mock;
+	const readNativeProjectAssetPayloadsMock =
+		readNativeProjectAssetPayloads as jest.Mock;
 
 	beforeEach(() => {
 		clipboardWriteTextMock.mockClear();
@@ -144,6 +156,15 @@ describe('initIpc()', () => {
 			stories: [],
 			storyIds: []
 		});
+		projectSessionAssetReadBaselinesMock.mockImplementation(
+			(_rootPath: string, paths: string[]) =>
+				paths.map(path => ({
+					expectedExists: true,
+					expectedModifiedAtMs: 1,
+					expectedSizeBytes: 100,
+					path
+				}))
+		);
 		renameProjectAssetMock.mockResolvedValue({
 			sourcePath: '/mock/project/assets/renamed.png',
 			targetPath: 'assets/renamed.png'
@@ -223,6 +244,13 @@ describe('initIpc()', () => {
 		revealStoryDirectoryMock.mockResolvedValue(undefined);
 		resetStoryDirectoryPathMock.mockResolvedValue('/mock/default-library');
 		saveStoryHtmlMock.mockResolvedValue(undefined);
+		nativeProjectAssetEmbeddingAvailableMock.mockReturnValue(true);
+		readNativeProjectAssetPayloadsMock.mockReturnValue({
+			failures: [],
+			payloads: [],
+			totalEncodedBytes: 0,
+			totalSourceBytes: 0
+		});
 		initIpc();
 	});
 
@@ -259,6 +287,12 @@ describe('initIpc()', () => {
 		);
 		const listAssets = handleMock.mock.calls.find(
 			call => call[0] === 'list-project-assets'
+		);
+		const embeddingCapability = handleMock.mock.calls.find(
+			call => call[0] === 'referenced-media-embedding-capability'
+		);
+		const readAssetPayloads = handleMock.mock.calls.find(
+			call => call[0] === 'read-project-asset-payloads'
 		);
 		const sessionSnapshot = handleMock.mock.calls.find(
 			call => call[0] === 'project-session-snapshot'
@@ -349,6 +383,42 @@ describe('initIpc()', () => {
 			expect.any(Function),
 			['mock-story']
 		);
+		expect(await embeddingCapability[1]()).toEqual(
+			expect.objectContaining({available: true, maxFileCount: 25})
+		);
+		const limits = {
+			maxFileBytes: 100,
+			maxFileCount: 2,
+			maxTotalEncodedBytes: 200
+		};
+		expect(
+			await readAssetPayloads[1](
+				{sender: {id: 7}},
+				'/mock/project',
+				['assets/asset.png'],
+				limits
+			)
+		).toEqual(expect.objectContaining({payloads: []}));
+		expect(readNativeProjectAssetPayloadsMock).toHaveBeenCalledWith(
+			'/mock/project',
+			[
+				{
+					expectedExists: true,
+					expectedModifiedAtMs: 1,
+					expectedSizeBytes: 100,
+					path: 'assets/asset.png'
+				}
+			],
+			limits
+		);
+		await expect(
+			readAssetPayloads[1](
+				{sender: {id: 99}},
+				'/mock/project',
+				['assets/asset.png'],
+				limits
+			)
+		).rejects.toThrow(/active project session/);
 		await stopSession[1]({sender: {id: 7}}, '/mock/project');
 		expect(stopProjectSessionMock).not.toHaveBeenCalled();
 		await stopSession[1]({sender: {id: 8}}, '/mock/project');

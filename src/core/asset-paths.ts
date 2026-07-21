@@ -1,8 +1,8 @@
 import type {CoreAssetReference} from './bindings/CoreAssetReference';
 import type {CoreAssetSnippet} from './bindings/CoreAssetSnippet';
 
-const assetReferenceRegex =
-	/([A-Za-z0-9_./~%:@?&=+-]+\.(png|jpe?g|gif|svg|webp|mp3|m4a|ogg|wav|mp4|webm|css|js))/gi;
+const literalAssetReferenceRegex =
+	/[^\s"'<>(),;=:#?]+\.(png|jpe?g|gif|svg|webp|mp3|m4a|ogg|wav|mp4|webm|css|js)(?:\?[^\s"'<>(),;#]*)?(?:#[^\s"'<>(),;]*)?/gi;
 const protocolRegex = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
 function lineNumberAt(source: string, start: number) {
@@ -86,18 +86,41 @@ export function assetSnippet(
 }
 
 export function localAssetReferencePath(path: string) {
-	const normalized = path.replace(/\\/g, '/').replace(/^(\.\/)+/, '');
+	const suffixStart = path.search(/[?#]/);
+	const sourcePath = (
+		suffixStart === -1 ? path : path.slice(0, suffixStart)
+	).trim();
+	let normalized: string;
 
-	if (protocolRegex.test(normalized) || normalized.startsWith('//')) {
+	try {
+		normalized = decodeURIComponent(sourcePath).replace(/\\/g, '/');
+	} catch {
 		return null;
 	}
 
+	while (normalized.startsWith('./')) {
+		normalized = normalized.slice(2);
+	}
+
+	if (
+		protocolRegex.test(normalized) ||
+		normalized.startsWith('//') ||
+		normalized.includes('\0')
+	) {
+		return null;
+	}
+
+	if (normalized.startsWith('/')) {
+		if (!normalized.slice(1).toLowerCase().startsWith('assets/')) {
+			return null;
+		}
+
+		normalized = normalized.slice(1);
+	}
+
 	const segments = normalized.split('/').filter(segment => segment.length > 0);
-	const assetsIndex = segments.findIndex(
-		segment => segment.toLowerCase() === 'assets'
-	);
 	const assetSegments =
-		assetsIndex === -1 ? segments : segments.slice(assetsIndex + 1);
+		segments[0]?.toLowerCase() === 'assets' ? segments.slice(1) : segments;
 
 	if (
 		assetSegments.length === 0 ||
@@ -113,7 +136,7 @@ export function normalizedAssetPath(path: string) {
 	return (
 		localAssetReferencePath(path) ??
 		path.replace(/\\/g, '/').replace(/^(\.\/)+/, '')
-	).toLowerCase();
+	);
 }
 
 export function projectAssetPath(path: string) {
@@ -126,32 +149,195 @@ export function assetReferencesInSource(
 	source: string,
 	passageId: string | null
 ): CoreAssetReference[] {
-	const assets: CoreAssetReference[] = [];
+	type Candidate = {context: string; end: number; start: number};
+	const candidates: Candidate[] = [];
+	const htmlAttribute =
+		/(?:^|[\s<])(srcset|src|href|poster)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+	const cssUrl = /\burl\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi;
 
 	for (
-		let match = assetReferenceRegex.exec(source);
+		let match = htmlAttribute.exec(source);
 		match;
-		match = assetReferenceRegex.exec(source)
+		match = htmlAttribute.exec(source)
 	) {
-		const path = localAssetReferencePath(match[0]);
+		const attribute = match[1].toLowerCase();
+		const value = match[2] ?? match[3] ?? '';
+		const valueStart = match.index + match[0].lastIndexOf(value);
 
-		if (!path) {
+		if (value.includes('\\')) {
 			continue;
 		}
 
-		assets.push({
-			end: match.index + match[0].length,
-			kind: assetKindForPath(path),
-			line: lineNumberAt(source, match.index),
-			passageId,
-			path,
-			sourceId,
-			sourceName,
-			start: match.index
-		});
+		if (attribute === 'srcset') {
+			if (/\b(?:data|blob):/i.test(value)) {
+				continue;
+			}
+			let segmentStart = 0;
+
+			for (const segment of value.split(',')) {
+				const leading = segment.length - segment.trimStart().length;
+				const token = segment
+					.trim()
+					.replace(/\s+\d+(?:\.\d+)?[wxh]\s*$/i, '')
+					.trimEnd();
+
+				if (token) {
+					const start = valueStart + segmentStart + leading;
+
+					candidates.push({
+						context: 'html-srcset',
+						end: start + token.length,
+						start
+					});
+				}
+
+				segmentStart += segment.length + 1;
+			}
+		} else {
+			const leading = value.length - value.trimStart().length;
+			const original = value.trim();
+			const start = valueStart + leading;
+
+			if (original) {
+				candidates.push({
+					context: `html-${attribute}`,
+					end: start + original.length,
+					start
+				});
+			}
+		}
 	}
 
-	return assets;
+	for (let match = cssUrl.exec(source); match; match = cssUrl.exec(source)) {
+		const value = match[1] ?? match[2] ?? match[3] ?? '';
+		const leading = value.length - value.trimStart().length;
+		const original = value.trim();
+		const start = match.index + match[0].lastIndexOf(value) + leading;
+
+		if (original && !value.includes('\\')) {
+			candidates.push({
+				context: 'css-url',
+				end: start + original.length,
+				start
+			});
+		}
+	}
+
+	const quotedSpans: Array<{end: number; start: number}> = [];
+	let quoteStart = 0;
+
+	while (quoteStart < source.length) {
+		const quote = source[quoteStart];
+
+		if (
+			(quote !== '"' && quote !== "'" && quote !== '`') ||
+			(quote === "'" &&
+				/[\p{L}\p{N}_]/u.test(source.slice(0, quoteStart).at(-1) ?? ''))
+		) {
+			quoteStart++;
+			continue;
+		}
+
+		const contentStart = quoteStart + 1;
+		let cursor = contentStart;
+		let safeStaticLiteral = true;
+
+		while (cursor < source.length && source[cursor] !== quote) {
+			if (source[cursor] === '\\') {
+				safeStaticLiteral = false;
+				cursor += 2;
+				continue;
+			}
+			if (
+				quote === '`' &&
+				source[cursor] === '$' &&
+				source[cursor + 1] === '{'
+			) {
+				safeStaticLiteral = false;
+			}
+			cursor++;
+		}
+
+		const contentEnd = Math.min(cursor, source.length);
+
+		quotedSpans.push({end: contentEnd, start: contentStart});
+		if (cursor >= source.length) {
+			break;
+		}
+
+		const value = source.slice(contentStart, contentEnd);
+		const leading = value.length - value.trimStart().length;
+		const original = value.trim();
+		const start = contentStart + leading;
+		const path = safeStaticLiteral ? localAssetReferencePath(original) : null;
+
+		if (
+			path &&
+			assetKindForPath(path) !== 'file' &&
+			!candidates.some(
+				candidate =>
+					start < candidate.end && start + original.length > candidate.start
+			)
+		) {
+			candidates.push({
+				context: 'literal',
+				end: start + original.length,
+				start
+			});
+		}
+		quoteStart = cursor + 1;
+	}
+
+	for (
+		let match = literalAssetReferenceRegex.exec(source);
+		match;
+		match = literalAssetReferenceRegex.exec(source)
+	) {
+		const start = match.index;
+		const end = start + match[0].length;
+
+		if (
+			!candidates.some(
+				candidate => start < candidate.end && end > candidate.start
+			) &&
+			!quotedSpans.some(span => start < span.end && end > span.start)
+		) {
+			candidates.push({context: 'literal', end, start});
+		}
+	}
+
+	return candidates
+		.sort((left, right) => left.start - right.start || left.end - right.end)
+		.flatMap(candidate => {
+			const original = source.slice(candidate.start, candidate.end);
+			const path = localAssetReferencePath(original);
+
+			if (!path || assetKindForPath(path) === 'file') {
+				return [];
+			}
+
+			const fragmentStart = original.indexOf('#');
+			const beforeFragment =
+				fragmentStart === -1 ? original : original.slice(0, fragmentStart);
+			const queryStart = beforeFragment.indexOf('?');
+
+			return [
+				{
+					context: candidate.context,
+					end: candidate.end,
+					fragment: fragmentStart === -1 ? null : original.slice(fragmentStart),
+					kind: assetKindForPath(path),
+					line: lineNumberAt(source, candidate.start),
+					original,
+					passageId,
+					path,
+					query: queryStart === -1 ? null : beforeFragment.slice(queryStart),
+					sourceId,
+					sourceName,
+					start: candidate.start
+				}
+			];
+		});
 }
 
 export function replaceAssetReferencesInSource(
@@ -160,8 +346,18 @@ export function replaceAssetReferencesInSource(
 	newPath: string
 ) {
 	const oldNormalized = normalizedAssetPath(oldPath);
+	let output = source;
 
-	return source.replace(assetReferenceRegex, match =>
-		normalizedAssetPath(match) === oldNormalized ? newPath : match
-	);
+	for (const reference of assetReferencesInSource('', '', source, null)
+		.filter(reference => normalizedAssetPath(reference.path) === oldNormalized)
+		.sort((left, right) => right.start - left.start)) {
+		output =
+			output.slice(0, reference.start) +
+			newPath +
+			(reference.query ?? '') +
+			(reference.fragment ?? '') +
+			output.slice(reference.end);
+	}
+
+	return output;
 }

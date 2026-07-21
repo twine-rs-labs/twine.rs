@@ -44,6 +44,7 @@ import {
 	listProjectAssets,
 	openProjectFolder,
 	prepareProjectImport,
+	projectSessionAssetReadBaselines,
 	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
 	readProjectFolderHydrationChunk,
@@ -55,9 +56,14 @@ import {
 	stopProjectSession,
 	unsubscribeProjectSession
 } from './project-folder';
-import {nativeHydrationMemoryDiagnostics} from './native';
+import {
+	nativeHydrationMemoryDiagnostics,
+	nativeProjectAssetEmbeddingAvailable,
+	readNativeProjectAssetPayloads
+} from './native';
 import type {
 	NativeCommandLineOpenResult,
+	NativeProjectAssetPayloadLimits,
 	NativePlatformSettingsUpdate,
 	ProjectSourceLayout
 } from '../shared';
@@ -168,6 +174,68 @@ export function initIpc() {
 		listProjectAssets(rootPath)
 	);
 
+	ipcMain.handle('referenced-media-embedding-capability', async () => {
+		const available = nativeProjectAssetEmbeddingAvailable();
+
+		return {
+			available,
+			maxFileBytes: 25 * 1024 * 1024,
+			maxFileCount: 25,
+			maxTotalEncodedBytes: 25 * 1024 * 1024,
+			...(available
+				? {}
+				: {reason: 'The native project media reader is unavailable.'})
+		};
+	});
+
+	ipcMain.handle(
+		'read-project-asset-payloads',
+		async (
+			event,
+			rootPath: string,
+			paths: string[],
+			limits: NativeProjectAssetPayloadLimits
+		) => {
+			if (
+				!projectSessionSubscriptions.has(
+					projectSessionSubscriptionKey(event.sender.id, rootPath)
+				)
+			) {
+				throw new Error(
+					"Referenced media can be read only from the renderer's active project session."
+				);
+			}
+			if (
+				!Array.isArray(paths) ||
+				paths.length > 100 ||
+				paths.some(
+					path =>
+						typeof path !== 'string' || Buffer.byteLength(path, 'utf8') > 4096
+				)
+			) {
+				throw new Error(
+					'Referenced media request exceeds the safe path limits.'
+				);
+			}
+			if (
+				!limits ||
+				![
+					limits.maxFileBytes,
+					limits.maxFileCount,
+					limits.maxTotalEncodedBytes
+				].every(value => Number.isInteger(value) && value >= 0)
+			) {
+				throw new Error('Referenced media request has invalid limits.');
+			}
+
+			return readNativeProjectAssetPayloads(
+				rootPath,
+				projectSessionAssetReadBaselines(rootPath, paths),
+				limits
+			);
+		}
+	);
+
 	ipcMain.handle('prepare-project-import', async (_event, sourcePath: string) =>
 		prepareProjectImport(sourcePath)
 	);
@@ -204,7 +272,12 @@ export function initIpc() {
 			projectSessionSubscriptions.set(subscriptionKey, cleanup);
 			event.sender.once('destroyed', cleanup);
 
-			return startProjectSession(rootPath, listener, storyIds);
+			try {
+				return await startProjectSession(rootPath, listener, storyIds);
+			} catch (error) {
+				cleanup();
+				throw error;
+			}
 		}
 	);
 

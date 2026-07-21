@@ -12,9 +12,11 @@ import {
 import {
 	diagnosticDismissalsChangedEvent,
 	diagnosticIdentity,
+	knownAssetInventoryScanCompleteForStory,
 	loadDismissedDiagnosticIds,
 	materializeStoryFromSession,
-	useCoreProjectHost
+	useCoreProjectHost,
+	useKnownAssetInventoryVersion
 } from '../../core';
 import type {
 	CoreAssetInventoryEntry,
@@ -36,9 +38,15 @@ import {
 	useStoriesContext
 } from '../../store/stories';
 import {
+	referencedMediaEmbeddingLimits,
 	type ProofingFormatSelection,
 	usePublishing
 } from '../../store/use-publishing';
+import {loadProjectMetadata} from '../../store/project-metadata';
+import type {
+	NativeReferencedMediaEmbeddingCapability,
+	TwineElectronWindow
+} from '../../electron/shared';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import type {
 	StoryBuildFile,
@@ -62,7 +70,9 @@ type NoteTone = 'ok' | 'warn' | 'error' | 'info';
 
 interface InlineAssetProfile {
 	count: number;
-	knownSizeBytes: number;
+	estimatedEncodedBytes: number;
+	scanComplete: boolean;
+	unknownSizeCount: number;
 }
 
 interface BuildReadModel {
@@ -96,14 +106,15 @@ interface BuildNote {
 }
 
 interface ExportFormatOptions {
+	htmlEmbedReferencedMedia: boolean;
 	htmlCompatibility: boolean;
-	htmlInlineAssets: boolean;
 	jsonPretty: boolean;
 }
 
 const exportFormats: ExportFormatDefinition[] = [
 	{
-		description: 'One self-contained file that plays in any browser.',
+		description:
+			'A playable browser file with optional desktop media embedding.',
 		format: 'html',
 		icon: 'world',
 		label: 'Playable HTML',
@@ -137,8 +148,9 @@ const publishBoundTargets: StoryBuildTarget[] = [
 	'export-html',
 	'package'
 ];
-const inlineAssetDefaultMaxCount = 25;
-const inlineAssetDefaultMaxSizeBytes = 25 * 1024 * 1024;
+const inlineAssetDefaultMaxCount = referencedMediaEmbeddingLimits.maxFileCount;
+const inlineAssetDefaultMaxSizeBytes =
+	referencedMediaEmbeddingLimits.maxTotalEncodedBytes;
 
 function storyForId(stories: Story[], storyId: string | undefined) {
 	return stories.find(story => story.id === storyId);
@@ -194,30 +206,82 @@ function bytesLabel(bytes: number) {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function inlineAssetProfile(storyIndex?: BuildReadModel): InlineAssetProfile {
+function embeddableMediaType(path: string) {
+	const extension = path.split(/[?#]/, 1)[0].split('.').pop()?.toLowerCase();
+
+	return {
+		png: 'image/png',
+		jpg: 'image/jpeg',
+		jpeg: 'image/jpeg',
+		gif: 'image/gif',
+		svg: 'image/svg+xml',
+		webp: 'image/webp',
+		mp3: 'audio/mpeg',
+		m4a: 'audio/mp4',
+		ogg: 'audio/ogg',
+		wav: 'audio/wav',
+		mp4: 'video/mp4',
+		webm: 'video/webm'
+	}[extension ?? ''];
+}
+
+function inlineAssetProfile(
+	storyIndex: BuildReadModel | undefined,
+	scanComplete: boolean
+): InlineAssetProfile {
 	const assets =
 		storyIndex?.assets.filter(
-			asset => asset.publish.copy && asset.exists !== false && !asset.missing
+			asset => asset.referenceCount > 0 && !!embeddableMediaType(asset.path)
 		) ?? [];
 
 	return {
 		count: assets.length,
-		knownSizeBytes: assets.reduce(
-			(total, asset) => total + (asset.sizeBytes ?? 0),
-			0
-		)
+		estimatedEncodedBytes: assets.reduce((total, asset) => {
+			if (asset.sizeBytes === null) {
+				return total;
+			}
+
+			const mediaType = embeddableMediaType(asset.path)!;
+			const referenceCount = Math.max(
+				asset.references.length,
+				asset.referenceCount
+			);
+
+			return (
+				total +
+				referenceCount *
+					(`data:${mediaType};base64,`.length +
+						4 * Math.ceil(asset.sizeBytes / 3))
+			);
+		}, 0),
+		scanComplete,
+		unknownSizeCount: assets.filter(asset => asset.sizeBytes === null).length
 	};
 }
 
 function shouldInlineAssetsByDefault(profile: InlineAssetProfile) {
 	return (
+		profile.scanComplete &&
+		profile.unknownSizeCount === 0 &&
 		profile.count <= inlineAssetDefaultMaxCount &&
-		profile.knownSizeBytes <= inlineAssetDefaultMaxSizeBytes
+		profile.estimatedEncodedBytes <= inlineAssetDefaultMaxSizeBytes
 	);
 }
 
 function inlineAssetDefaultReason(profile: InlineAssetProfile) {
 	const reasons = [];
+
+	if (!profile.scanComplete) {
+		reasons.push('asset scanning is not complete');
+	}
+
+	if (profile.unknownSizeCount > 0) {
+		reasons.push(
+			`${profile.unknownSizeCount} referenced asset${
+				profile.unknownSizeCount === 1 ? '' : 's'
+			} with unknown size`
+		);
+	}
 
 	if (profile.count > inlineAssetDefaultMaxCount) {
 		reasons.push(
@@ -225,9 +289,9 @@ function inlineAssetDefaultReason(profile: InlineAssetProfile) {
 		);
 	}
 
-	if (profile.knownSizeBytes > inlineAssetDefaultMaxSizeBytes) {
+	if (profile.estimatedEncodedBytes > inlineAssetDefaultMaxSizeBytes) {
 		reasons.push(
-			`${bytesLabel(profile.knownSizeBytes)} of known asset data (limit ${bytesLabel(
+			`${bytesLabel(profile.estimatedEncodedBytes)} estimated encoded media (limit ${bytesLabel(
 				inlineAssetDefaultMaxSizeBytes
 			)})`
 		);
@@ -363,10 +427,19 @@ function htmlInspection(build?: StoryBuildPackage) {
 	return [
 		`generated ${build.report.generatedAt}`,
 		`target ${build.report.target}`,
-		`size ${bytesLabel(build.html.length)}`,
+		`size ${bytesLabel(
+			build.files.find(file => file.kind === 'html')?.sizeBytes ?? 0
+		)}`,
 		`story data blocks ${storyDataCount}`,
 		`passage data blocks ${passageCount}`,
 		`twine.rs graph data ${hasStoryDataGraph ? 'present' : 'omitted'}`,
+		`asset mode ${build.report.assetMode}`,
+		`embedded assets ${build.report.inlinedAssetCount}`,
+		`embedded references ${build.report.inlinedReferenceCount}`,
+		`embedded source bytes ${build.report.inlinedSourceBytes}`,
+		`embedded encoded bytes ${build.report.inlinedEncodedBytes}`,
+		`external assets ${build.report.externalAssetCount}`,
+		`embedding complete ${build.report.assetInliningComplete ? 'yes' : 'no'}`,
 		'',
 		'outputs',
 		...build.files.map(
@@ -382,6 +455,7 @@ export const BuildRoute: React.FC = () => {
 	const {stories} = useStoriesContext();
 	const story = storyForId(stories, storyId);
 	const coreProjectHost = useCoreProjectHost();
+	const assetInventoryVersion = useKnownAssetInventoryVersion();
 	const {formats} = useStoryFormatsContext();
 	const {proofStoryPackage, publishStoryPackage} = usePublishing();
 	const {playStory, proofStory} = useStoryLaunch();
@@ -389,12 +463,15 @@ export const BuildRoute: React.FC = () => {
 	const [exportFormat, setExportFormat] = React.useState<ExportFormat>('html');
 	const [formatOptions, setFormatOptions] = React.useState<ExportFormatOptions>(
 		{
-			htmlInlineAssets: true,
+			htmlEmbedReferencedMedia: false,
 			htmlCompatibility: false,
 			jsonPretty: true
 		}
 	);
-	const [inlineAssetsTouched, setInlineAssetsTouched] = React.useState(false);
+	const [embedMediaTouched, setEmbedMediaTouched] = React.useState(false);
+	const [embeddingCapability, setEmbeddingCapability] = React.useState<
+		NativeReferencedMediaEmbeddingCapability | undefined
+	>();
 	const [proofingFormatValue, setProofingFormatValue] = React.useState('');
 	const [busyAction, setBusyAction] = React.useState<string>();
 	const [error, setError] = React.useState<string>();
@@ -443,14 +520,67 @@ export const BuildRoute: React.FC = () => {
 		() => proofingFormatFromValue(proofingFormatValue, story),
 		[proofingFormatValue, story]
 	);
+	const projectMetadata = story ? loadProjectMetadata(story.id) : undefined;
+	const fileBackedProject =
+		projectMetadata?.storageKind === 'electron-project-folder' &&
+		projectMetadata.status === 'file-backed' &&
+		!!projectMetadata.rootPath;
+	const embeddingAvailable =
+		fileBackedProject && embeddingCapability?.available === true;
+	const scanComplete = story
+		? knownAssetInventoryScanCompleteForStory(story.id)
+		: false;
 	const assetProfile = React.useMemo(
-		() => inlineAssetProfile(storyIndex),
-		[storyIndex]
+		() => inlineAssetProfile(storyIndex, scanComplete),
+		[scanComplete, storyIndex]
 	);
-	const inlineAssetsDefault = shouldInlineAssetsByDefault(assetProfile);
+	const inlineAssetsDefault =
+		embeddingAvailable && shouldInlineAssetsByDefault(assetProfile);
 	const inlineAssetsAutoDisabled =
 		exportFormat === 'html' && !inlineAssetsDefault;
 	const inlineAssetsAutoReason = inlineAssetDefaultReason(assetProfile);
+
+	React.useEffect(() => {
+		let active = true;
+		const bridge = (window as TwineElectronWindow).twineElectron;
+
+		setEmbeddingCapability(undefined);
+		if (!fileBackedProject || !bridge?.getReferencedMediaEmbeddingCapability) {
+			setEmbeddingCapability({
+				available: false,
+				maxFileBytes: referencedMediaEmbeddingLimits.maxFileBytes,
+				maxFileCount: referencedMediaEmbeddingLimits.maxFileCount,
+				maxTotalEncodedBytes:
+					referencedMediaEmbeddingLimits.maxTotalEncodedBytes,
+				reason: fileBackedProject
+					? 'The desktop media reader is unavailable.'
+					: 'Managed media embedding requires a file-backed desktop project.'
+			});
+			return () => {
+				active = false;
+			};
+		}
+
+		void bridge
+			.getReferencedMediaEmbeddingCapability()
+			.then(capability => active && setEmbeddingCapability(capability))
+			.catch(error => {
+				if (active) {
+					setEmbeddingCapability({
+						available: false,
+						maxFileBytes: referencedMediaEmbeddingLimits.maxFileBytes,
+						maxFileCount: referencedMediaEmbeddingLimits.maxFileCount,
+						maxTotalEncodedBytes:
+							referencedMediaEmbeddingLimits.maxTotalEncodedBytes,
+						reason: (error as Error).message
+					});
+				}
+			});
+
+		return () => {
+			active = false;
+		};
+	}, [fileBackedProject, story?.id]);
 
 	React.useEffect(() => {
 		let active = true;
@@ -505,7 +635,7 @@ export const BuildRoute: React.FC = () => {
 		return () => {
 			active = false;
 		};
-	}, [coreProjectHost, story]);
+	}, [assetInventoryVersion, coreProjectHost, story]);
 
 	React.useEffect(() => {
 		if (
@@ -541,26 +671,26 @@ export const BuildRoute: React.FC = () => {
 		activeTarget,
 		exportFormat,
 		formatOptions.htmlCompatibility,
-		formatOptions.htmlInlineAssets,
+		formatOptions.htmlEmbedReferencedMedia,
 		formatOptions.jsonPretty,
 		view
 	]);
 
 	React.useEffect(() => {
-		setInlineAssetsTouched(false);
+		setEmbedMediaTouched(false);
 	}, [story?.id]);
 
 	React.useEffect(() => {
-		if (inlineAssetsTouched) {
+		if (embedMediaTouched) {
 			return;
 		}
 
 		setFormatOptions(current =>
-			current.htmlInlineAssets === inlineAssetsDefault
+			current.htmlEmbedReferencedMedia === inlineAssetsDefault
 				? current
-				: {...current, htmlInlineAssets: inlineAssetsDefault}
+				: {...current, htmlEmbedReferencedMedia: inlineAssetsDefault}
 		);
-	}, [inlineAssetsDefault, inlineAssetsTouched]);
+	}, [embedMediaTouched, inlineAssetsDefault]);
 
 	const format = React.useMemo(() => {
 		if (!story) {
@@ -642,6 +772,12 @@ export const BuildRoute: React.FC = () => {
 
 			try {
 				const nextBuild = await publishStoryPackage(story.id, {
+					assetMode:
+						(target === 'export-html' || target === 'publish') &&
+						formatOptions.htmlEmbedReferencedMedia &&
+						embeddingAvailable
+							? 'inline-referenced'
+							: 'external',
 					buildTarget: target,
 					htmlCompatibility:
 						target === 'export-html' || target === 'publish'
@@ -653,6 +789,9 @@ export const BuildRoute: React.FC = () => {
 				setBuild(nextBuild);
 				appendLog(
 					`Prepared ${nextBuild.files.length} output file(s), ${nextBuild.assets.length} asset plan item(s).`
+				);
+				appendLog(
+					`Referenced media: ${nextBuild.report.inlinedAssetCount} embedded, ${nextBuild.report.externalAssetCount} external, ${nextBuild.report.unresolvedAssets.length} unresolved, ${nextBuild.report.unsupportedAssets.length} unsupported.`
 				);
 				if (nextBuild.report.diagnostics.length > 0) {
 					appendLog(
@@ -676,6 +815,8 @@ export const BuildRoute: React.FC = () => {
 			appendLog,
 			formatOptions.jsonPretty,
 			formatOptions.htmlCompatibility,
+			formatOptions.htmlEmbedReferencedMedia,
+			embeddingAvailable,
 			publishStoryPackage,
 			story
 		]
@@ -834,10 +975,10 @@ export const BuildRoute: React.FC = () => {
 		if (exportFormat === 'archive') {
 			notes.push({
 				detail:
-					'Includes HTML, Twee source, JSON, and a copy plan for project assets.',
+					'Includes HTML, Twee source, JSON, and an asset copy plan. Project asset bytes are not archived.',
 				icon: 'info-circle',
 				id: 'archive-contents',
-				title: 'Everything in one archive',
+				title: 'Project files and an asset plan',
 				tone: 'info'
 			});
 		}
@@ -853,17 +994,48 @@ export const BuildRoute: React.FC = () => {
 			});
 		}
 
-		if (exportFormat === 'html' && !formatOptions.htmlInlineAssets) {
+		if (exportFormat === 'html' && !embeddingAvailable) {
+			notes.push({
+				detail:
+					embeddingCapability?.reason ??
+					'Referenced media embedding requires the desktop app and a file-backed project.',
+				icon: 'info-circle',
+				id: 'asset-embedding-unavailable',
+				title: 'Managed media stays external',
+				tone: 'info'
+			});
+		} else if (
+			exportFormat === 'html' &&
+			!formatOptions.htmlEmbedReferencedMedia
+		) {
 			notes.push({
 				detail: inlineAssetsAutoDisabled
-					? `${inlineAssetsAutoReason}. Keeping assets external avoids a very large HTML file. You can turn this back on.`
-					: 'Referenced project assets stay in the asset copy plan instead of being embedded.',
+					? `${inlineAssetsAutoReason}. Referenced media stays external by default; you can explicitly enable embedding.`
+					: 'Referenced project media remains external to the exported HTML.',
 				icon: 'info-circle',
 				id: 'asset-copy-plan',
 				title: inlineAssetsAutoDisabled
-					? 'Inline assets off by default'
-					: 'Assets stay external',
+					? 'Media embedding off by default'
+					: 'Referenced media stays external',
 				tone: 'info'
+			});
+		}
+
+		if (
+			exportFormat === 'html' &&
+			build?.report.assetMode === 'inline-referenced' &&
+			build.report.assetInliningComplete
+		) {
+			notes.push({
+				detail: `${build.report.inlinedAssetCount} referenced asset${
+					build.report.inlinedAssetCount === 1 ? '' : 's'
+				} embedded across ${build.report.inlinedReferenceCount} source reference${
+					build.report.inlinedReferenceCount === 1 ? '' : 's'
+				}.`,
+				icon: 'circle-check',
+				id: 'asset-embedding-complete',
+				title: 'Referenced media embedded',
+				tone: 'ok'
 			});
 		}
 
@@ -916,8 +1088,11 @@ export const BuildRoute: React.FC = () => {
 		error,
 		errorDiagnostics.length,
 		exportFormat,
+		build,
+		embeddingAvailable,
+		embeddingCapability?.reason,
 		formatOptions.htmlCompatibility,
-		formatOptions.htmlInlineAssets,
+		formatOptions.htmlEmbedReferencedMedia,
 		navigate,
 		inlineAssetsAutoDisabled,
 		inlineAssetsAutoReason,
@@ -1118,21 +1293,36 @@ export const BuildRoute: React.FC = () => {
 											<div className="build-route__row">
 												<div className="build-route__row-left">
 													<div className="build-route__row-title">
-														Inline all assets
+														Embed referenced media
 													</div>
 													<div className="build-route__row-detail">
-														Embed images and media so the single file works
-														offline.
+														{embeddingAvailable
+															? `${assetProfile.count} candidate${
+																	assetProfile.count === 1 ? '' : 's'
+																} · ${bytesLabel(
+																	assetProfile.estimatedEncodedBytes
+																)} estimated encoded size.`
+															: (embeddingCapability?.reason ??
+																'Managed media embedding requires a file-backed desktop project.')}
 													</div>
 												</div>
-												<Switch
-													ariaLabel="Inline all assets"
-													checked={formatOptions.htmlInlineAssets}
-													onChange={checked => {
-														setInlineAssetsTouched(true);
-														updateFormatOption('htmlInlineAssets', checked);
-													}}
-												/>
+												{embeddingAvailable ? (
+													<Switch
+														ariaLabel="Embed referenced media"
+														checked={formatOptions.htmlEmbedReferencedMedia}
+														onChange={checked => {
+															setEmbedMediaTouched(true);
+															updateFormatOption(
+																'htmlEmbedReferencedMedia',
+																checked
+															);
+														}}
+													/>
+												) : (
+													<Badge icon="lock" tone="neutral">
+														Unavailable
+													</Badge>
+												)}
 											</div>
 											<div className="build-route__row">
 												<div className="build-route__row-left">

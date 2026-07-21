@@ -137,6 +137,9 @@ const bridge = {
 	getPlatformSettings() {
 		return ipcRenderer.invoke('get-platform-settings');
 	},
+	getReferencedMediaEmbeddingCapability() {
+		return ipcRenderer.invoke('referenced-media-embedding-capability');
+	},
 	loadPrefs() {
 		return ipcRenderer.invoke('load-prefs');
 	},
@@ -173,6 +176,22 @@ const bridge = {
 	},
 	listProjectAssets(rootPath: string) {
 		return ipcRenderer.invoke('list-project-assets', rootPath);
+	},
+	readProjectAssetPayloads(
+		rootPath: string,
+		paths: string[],
+		limits: {
+			maxFileBytes: number;
+			maxFileCount: number;
+			maxTotalEncodedBytes: number;
+		}
+	) {
+		return ipcRenderer.invoke(
+			'read-project-asset-payloads',
+			rootPath,
+			paths,
+			limits
+		);
 	},
 	jsonp(
 		url: string,

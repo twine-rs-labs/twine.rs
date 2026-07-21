@@ -220,6 +220,13 @@ export interface NativeProjectFileEntry {
 	sizeBytes: number;
 }
 
+export interface NativeProjectAssetReadBaseline {
+	expectedExists: boolean;
+	expectedModifiedAtMs?: number;
+	expectedSizeBytes?: number;
+	path: string;
+}
+
 export interface NativeProjectSessionConflict {
 	change: 'added' | 'modified' | 'removed';
 	current?: NativeProjectFileEntry;
@@ -5959,6 +5966,36 @@ export async function projectSessionSnapshot(
 
 	return readProjectSessionSnapshot(rootPath, session.baseline, {
 		storyIds: storyIds ?? session.baseline.storyIds
+	});
+}
+
+export function projectSessionAssetReadBaselines(
+	rootPath: string,
+	paths: string[]
+): NativeProjectAssetReadBaseline[] {
+	const session = projectSessions.get(projectSessionKey(rootPath));
+
+	if (!session?.baseline) {
+		throw new Error('Project assets cannot be read before indexing completes.');
+	}
+
+	const indexedAssets = new Map(
+		session.baseline.files
+			.filter(file => file.kind === 'asset')
+			.map(file => [normalizedAssetPath(file.path), file] as const)
+	);
+
+	return paths.map(path => {
+		const indexed = indexedAssets.get(normalizedAssetPath(path));
+
+		return indexed
+			? {
+					expectedExists: true,
+					expectedModifiedAtMs: indexed.mtimeMs,
+					expectedSizeBytes: indexed.sizeBytes,
+					path
+				}
+			: {expectedExists: false, path};
 	});
 }
 

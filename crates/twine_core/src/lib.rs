@@ -7,6 +7,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::Read,
     path::{Component, Path, PathBuf},
+    sync::OnceLock,
     time::UNIX_EPOCH,
 };
 use thiserror::Error;
@@ -369,12 +370,20 @@ pub struct CoreSymbol {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreAssetReference {
+    #[serde(default)]
+    pub context: String,
     pub end: usize,
+    #[serde(default)]
+    pub fragment: Option<String>,
     pub kind: String,
     pub line: usize,
     #[serde(default)]
+    pub original: String,
+    #[serde(default)]
     pub passage_id: Option<String>,
     pub path: String,
+    #[serde(default)]
+    pub query: Option<String>,
     pub source_id: String,
     pub source_name: String,
     pub start: usize,
@@ -9566,9 +9575,22 @@ fn replace_asset_references_in_source(
             continue;
         }
 
-        output.push_str(&source[cursor..reference.start]);
+        let Some(start) = utf16_offset_to_byte(source, reference.start) else {
+            continue;
+        };
+        let Some(end) = utf16_offset_to_byte(source, reference.end) else {
+            continue;
+        };
+
+        output.push_str(&source[cursor..start]);
         output.push_str(new_path);
-        cursor = reference.end;
+        if let Some(query) = &reference.query {
+            output.push_str(query);
+        }
+        if let Some(fragment) = &reference.fragment {
+            output.push_str(fragment);
+        }
+        cursor = end;
         changed = true;
     }
 
@@ -9933,39 +9955,312 @@ fn asset_references_in_source(
     source: &str,
     passage_id: Option<&str>,
 ) -> Vec<CoreAssetReference> {
-    let Ok(regex) = regex::RegexBuilder::new(
-        r#"(?x)
-        (?P<path>
-            [A-Za-z0-9_./~%:@?&=+\-]+
-            \.
-            (?P<ext>png|jpe?g|gif|svg|webp|mp3|m4a|ogg|wav|mp4|webm|css|js)
-        )
-    "#,
-    )
-    .case_insensitive(true)
-    .build() else {
-        return Vec::new();
-    };
+    #[derive(Clone, Debug)]
+    struct Candidate {
+        context: &'static str,
+        end: usize,
+        start: usize,
+    }
 
-    regex
-        .captures_iter(source)
-        .filter_map(|captures| {
-            let path = captures.name("path")?;
-            let extension = captures.name("ext")?.as_str();
-            let path_string = local_asset_reference_path(path.as_str())?;
+    fn quoted_value<'a>(captures: &'a regex::Captures<'a>) -> Option<regex::Match<'a>> {
+        captures.name("double").or_else(|| captures.name("single"))
+    }
 
-            Some(CoreAssetReference {
-                end: path.end(),
-                kind: asset_kind(extension).into(),
-                line: line_number_at(source, path.start()),
-                passage_id: passage_id.map(str::to_owned),
-                path: path_string,
-                source_id: source_id.to_owned(),
-                source_name: source_name.to_owned(),
-                start: path.start(),
-            })
+    fn trimmed_candidate(value: regex::Match<'_>, context: &'static str) -> Option<Candidate> {
+        if value.as_str().contains('\\') {
+            return None;
+        }
+        let leading = value.as_str().len() - value.as_str().trim_start().len();
+        let trimmed = value.as_str().trim();
+
+        (!trimmed.is_empty()).then_some(Candidate {
+            context,
+            start: value.start() + leading,
+            end: value.start() + leading + trimmed.len(),
         })
-        .collect()
+    }
+
+    fn srcset_candidates(value: regex::Match<'_>) -> Vec<Candidate> {
+        static DESCRIPTOR: OnceLock<regex::Regex> = OnceLock::new();
+        let descriptor = DESCRIPTOR.get_or_init(|| {
+            regex::RegexBuilder::new(r"(?i)\s+\d+(?:\.\d+)?[wxh]\s*$")
+                .build()
+                .expect("srcset descriptor regex should compile")
+        });
+        let mut candidates = Vec::new();
+        let mut segment_start = 0;
+
+        if value.as_str().contains('\\')
+            || value.as_str().to_ascii_lowercase().contains("data:")
+            || value.as_str().to_ascii_lowercase().contains("blob:")
+        {
+            return candidates;
+        }
+
+        for segment in value.as_str().split(',') {
+            let leading = segment.len() - segment.trim_start().len();
+            let mut token = segment.trim();
+
+            if let Some(suffix) = descriptor.find(token) {
+                token = token[..suffix.start()].trim_end();
+            }
+
+            if !token.is_empty() {
+                let start = value.start() + segment_start + leading;
+                candidates.push(Candidate {
+                    context: "html-srcset",
+                    start,
+                    end: start + token.len(),
+                });
+            }
+
+            segment_start += segment.len() + 1;
+        }
+
+        candidates
+    }
+
+    static HTML_ATTRIBUTES: OnceLock<regex::Regex> = OnceLock::new();
+    let html_attributes = HTML_ATTRIBUTES.get_or_init(|| {
+        regex::RegexBuilder::new(
+            r#"(?:^|[\s<])(?P<attribute>srcset|src|href|poster)\s*=\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)')"#,
+        )
+        .case_insensitive(true)
+        .build()
+        .expect("HTML asset attribute regex should compile")
+    });
+    let mut candidates = Vec::new();
+    for captures in html_attributes.captures_iter(source) {
+        let Some(attribute) = captures.name("attribute") else {
+            continue;
+        };
+        let Some(value) = quoted_value(&captures) else {
+            continue;
+        };
+
+        if attribute.as_str().eq_ignore_ascii_case("srcset") {
+            candidates.extend(srcset_candidates(value));
+        } else {
+            let context = if attribute.as_str().eq_ignore_ascii_case("src") {
+                "html-src"
+            } else if attribute.as_str().eq_ignore_ascii_case("href") {
+                "html-href"
+            } else {
+                "html-poster"
+            };
+
+            if let Some(candidate) = trimmed_candidate(value, context) {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    static CSS_URLS: OnceLock<regex::Regex> = OnceLock::new();
+    let css_urls = CSS_URLS.get_or_init(|| {
+        regex::RegexBuilder::new(
+            r#"\burl\(\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)'|(?P<unquoted>[^)]*?))\s*\)"#,
+        )
+        .case_insensitive(true)
+        .build()
+        .expect("CSS asset URL regex should compile")
+    });
+    for captures in css_urls.captures_iter(source) {
+        let value = quoted_value(&captures).or_else(|| captures.name("unquoted"));
+
+        if let Some(candidate) = value.and_then(|value| trimmed_candidate(value, "css-url")) {
+            candidates.push(candidate);
+        }
+    }
+
+    // Keep every quoted or template span out of the fallback matcher. Escaped
+    // and interpolated strings are not safe source ranges unless a format-aware
+    // parser proves their runtime URL, so they deliberately remain external.
+    let mut quoted_spans = Vec::new();
+    let bytes = source.as_bytes();
+    let mut quote_start = 0;
+    while quote_start < bytes.len() {
+        let quote = bytes[quote_start];
+        if !matches!(quote, b'\'' | b'"' | b'`')
+            || (quote == b'\''
+                && source[..quote_start]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|character| character.is_alphanumeric() || character == '_'))
+        {
+            quote_start += 1;
+            continue;
+        }
+
+        let content_start = quote_start + 1;
+        let mut cursor = content_start;
+        let mut safe_static_literal = true;
+        let mut closed = false;
+        while cursor < bytes.len() {
+            if bytes[cursor] == b'\\' {
+                safe_static_literal = false;
+                cursor = (cursor + 2).min(bytes.len());
+                continue;
+            }
+            if quote == b'`' && bytes[cursor] == b'$' && bytes.get(cursor + 1) == Some(&b'{') {
+                safe_static_literal = false;
+            }
+            if bytes[cursor] == quote {
+                quoted_spans.push((content_start, cursor));
+                closed = true;
+                break;
+            }
+            cursor += 1;
+        }
+
+        if !closed {
+            quoted_spans.push((content_start, bytes.len()));
+            break;
+        }
+
+        let value = &source[content_start..cursor];
+        let leading = value.len() - value.trim_start().len();
+        let trimmed = value.trim();
+        let candidate = Candidate {
+            context: "literal",
+            start: content_start + leading,
+            end: content_start + leading + trimmed.len(),
+        };
+        if candidates
+            .iter()
+            .any(|existing| candidate.start < existing.end && candidate.end > existing.start)
+        {
+            quote_start = cursor + 1;
+            continue;
+        }
+        let supported = safe_static_literal
+            && !trimmed.is_empty()
+            && parsed_local_asset_reference(trimmed)
+                .and_then(|(path, _, _)| {
+                    Path::new(&path)
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .and_then(reference_asset_kind)
+                })
+                .is_some();
+
+        if supported {
+            candidates.push(candidate);
+        }
+        quote_start = cursor + 1;
+    }
+
+    // Preserve the literal detection used by passages and Story JavaScript.
+    // Structured candidates above deliberately take precedence so quoted URLs
+    // can contain spaces and srcset descriptors can be excluded from ranges.
+    static LITERALS: OnceLock<regex::Regex> = OnceLock::new();
+    let literals = LITERALS.get_or_init(|| {
+        regex::RegexBuilder::new(
+            r#"(?P<path>[^\s\"'<>(),;=:#?]+\.(?:png|jpe?g|gif|svg|webp|mp3|m4a|ogg|wav|mp4|webm|css|js)(?:\?[^\s\"'<>(),;#]*)?(?:#[^\s\"'<>(),;]*)?)"#,
+        )
+        .case_insensitive(true)
+        .build()
+        .expect("asset literal regex should compile")
+    });
+    for path in literals
+        .captures_iter(source)
+        .filter_map(|captures| captures.name("path"))
+    {
+        if candidates
+            .iter()
+            .any(|candidate| path.start() < candidate.end && path.end() > candidate.start)
+            || quoted_spans
+                .iter()
+                .any(|(start, end)| path.start() < *end && path.end() > *start)
+        {
+            continue;
+        }
+
+        candidates.push(Candidate {
+            context: "literal",
+            start: path.start(),
+            end: path.end(),
+        });
+    }
+
+    candidates.sort_by_key(|candidate| (candidate.start, candidate.end));
+    let mut references = Vec::new();
+
+    for candidate in candidates {
+        let original = &source[candidate.start..candidate.end];
+        let Some((path, query, fragment)) = parsed_local_asset_reference(original) else {
+            continue;
+        };
+        let Some(extension) = Path::new(&path)
+            .extension()
+            .and_then(|value| value.to_str())
+        else {
+            continue;
+        };
+        let Some(kind) = reference_asset_kind(extension) else {
+            continue;
+        };
+
+        references.push(CoreAssetReference {
+            context: candidate.context.into(),
+            end: utf16_offset_at(source, candidate.end),
+            fragment,
+            kind: kind.into(),
+            line: line_number_at(source, candidate.start),
+            original: original.into(),
+            passage_id: passage_id.map(str::to_owned),
+            path,
+            query,
+            source_id: source_id.to_owned(),
+            source_name: source_name.to_owned(),
+            start: utf16_offset_at(source, candidate.start),
+        });
+    }
+
+    references
+}
+
+fn reference_asset_kind(extension: &str) -> Option<&'static str> {
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "svg"
+            | "webp"
+            | "mp3"
+            | "m4a"
+            | "ogg"
+            | "wav"
+            | "mp4"
+            | "webm"
+            | "css"
+            | "js"
+    )
+    .then_some(asset_kind(extension))
+}
+
+fn utf16_offset_at(source: &str, byte_offset: usize) -> usize {
+    source[..byte_offset].encode_utf16().count()
+}
+
+fn utf16_offset_to_byte(source: &str, offset: usize) -> Option<usize> {
+    if offset == 0 {
+        return Some(0);
+    }
+
+    let mut utf16_offset = 0;
+    for (byte_offset, character) in source.char_indices() {
+        if utf16_offset == offset {
+            return Some(byte_offset);
+        }
+        utf16_offset += character.len_utf16();
+        if utf16_offset > offset {
+            return None;
+        }
+    }
+
+    (utf16_offset == offset).then_some(source.len())
 }
 
 fn asset_kind(extension: &str) -> &'static str {
@@ -9988,17 +10283,36 @@ fn asset_kind_for_path(path: &str) -> String {
 fn normalized_asset_path(path: &str) -> String {
     local_asset_reference_path(path)
         .unwrap_or_else(|| path.replace('\\', "/").trim_start_matches("./").into())
-        .to_ascii_lowercase()
 }
 
 fn local_asset_reference_path(path: &str) -> Option<String> {
-    let mut normalized = path.replace('\\', "/");
+    parsed_local_asset_reference(path).map(|(path, _, _)| path)
+}
+
+fn parsed_local_asset_reference(path: &str) -> Option<(String, Option<String>, Option<String>)> {
+    let (path, query, fragment) = asset_reference_parts(path.trim());
+    let mut normalized = percent_decode_path(path)?.replace('\\', "/");
 
     while let Some(stripped) = normalized.strip_prefix("./") {
         normalized = stripped.into();
     }
 
-    if has_url_scheme(&normalized) || normalized.starts_with("//") {
+    if has_url_scheme(&normalized) || normalized.starts_with("//") || normalized.contains('\0') {
+        return None;
+    }
+
+    if normalized.starts_with('/') {
+        if normalized
+            .get(1..)
+            .is_some_and(|path| path.to_ascii_lowercase().starts_with("assets/"))
+        {
+            normalized.remove(0);
+        } else {
+            return None;
+        }
+    }
+
+    if normalized.split('/').any(str::is_empty) {
         return None;
     }
 
@@ -10006,11 +10320,14 @@ fn local_asset_reference_path(path: &str) -> Option<String> {
         .split('/')
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
-    let asset_segments = segments
-        .iter()
-        .position(|segment| segment.eq_ignore_ascii_case("assets"))
-        .map(|index| &segments[index + 1..])
-        .unwrap_or(segments.as_slice());
+    let asset_segments = if segments
+        .first()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("assets"))
+    {
+        &segments[1..]
+    } else {
+        segments.as_slice()
+    };
 
     if asset_segments.is_empty()
         || asset_segments
@@ -10020,7 +10337,50 @@ fn local_asset_reference_path(path: &str) -> Option<String> {
         return None;
     }
 
-    Some(format!("assets/{}", asset_segments.join("/")))
+    Some((
+        format!("assets/{}", asset_segments.join("/")),
+        query.map(str::to_owned),
+        fragment.map(str::to_owned),
+    ))
+}
+
+fn asset_reference_parts(path: &str) -> (&str, Option<&str>, Option<&str>) {
+    let fragment_start = path.find('#').unwrap_or(path.len());
+    let before_fragment = &path[..fragment_start];
+    let query_start = before_fragment.find('?').unwrap_or(before_fragment.len());
+    let query = (query_start < before_fragment.len()).then_some(&before_fragment[query_start..]);
+    let fragment = (fragment_start < path.len()).then_some(&path[fragment_start..]);
+
+    (&before_fragment[..query_start], query, fragment)
+}
+
+fn percent_decode_path(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = bytes.get(index + 1).and_then(|byte| hex_value(*byte))?;
+            let low = bytes.get(index + 2).and_then(|byte| hex_value(*byte))?;
+            decoded.push(high * 16 + low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn has_url_scheme(path: &str) -> bool {
@@ -13747,8 +14107,165 @@ mod tests {
 
         assert!(!asset_paths.iter().any(|path| path.starts_with("https://")));
         assert!(asset_paths.contains(&"assets/local.png"));
-        assert!(asset_paths.contains(&"assets/icon.svg"));
+        assert!(!asset_paths.contains(&"assets/icon.svg"));
         assert!(asset_paths.contains(&"assets/poster.jpg"));
+    }
+
+    #[test]
+    fn asset_references_include_context_suffixes_canonical_paths_and_utf16_ranges() {
+        let source = concat!(
+            "😀 <img src=\" /assets/Hero image.png?v=1#face \" ",
+            "poster='./assets/video poster.webp'>\n",
+            "<source srcset=\"./assets/small%20cat.webp 1x, assets/猫.webp?density=2 2x\">\n",
+            ".hero { background: url('assets/background image.svg#icon'); }\n",
+            "setupAudio(\"assets/sound.ogg?cache=yes\");\n",
+            "(audio: \"assets/spoken intro.m4a\")",
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(references.len(), 7);
+        assert_eq!(references[0].context, "html-src");
+        assert_eq!(references[0].path, "assets/Hero image.png");
+        assert_eq!(references[0].original, "/assets/Hero image.png?v=1#face");
+        assert_eq!(references[0].query.as_deref(), Some("?v=1"));
+        assert_eq!(references[0].fragment.as_deref(), Some("#face"));
+        assert_eq!(references[0].passage_id.as_deref(), Some("a"));
+        assert_eq!(references[0].source_id, "passage-a");
+        assert_eq!(references[0].source_name, "Start");
+
+        let start = utf16_offset_to_byte(source, references[0].start).expect("valid start");
+        let end = utf16_offset_to_byte(source, references[0].end).expect("valid end");
+        assert_eq!(&source[start..end], references[0].original);
+        assert_eq!(
+            references[0].start,
+            "😀 <img src=\" ".encode_utf16().count()
+        );
+
+        assert_eq!(references[1].context, "html-poster");
+        assert_eq!(references[1].path, "assets/video poster.webp");
+        assert_eq!(references[2].context, "html-srcset");
+        assert_eq!(references[2].path, "assets/small cat.webp");
+        assert_eq!(references[3].context, "html-srcset");
+        assert_eq!(references[3].path, "assets/猫.webp");
+        assert_eq!(references[4].context, "css-url");
+        assert_eq!(references[4].path, "assets/background image.svg");
+        assert_eq!(references[4].fragment.as_deref(), Some("#icon"));
+        assert_eq!(references[5].context, "literal");
+        assert_eq!(references[5].path, "assets/sound.ogg");
+        assert_eq!(references[6].context, "literal");
+        assert_eq!(references[6].path, "assets/spoken intro.m4a");
+    }
+
+    #[test]
+    fn asset_reference_discovery_rejects_external_and_unsafe_urls() {
+        let source = concat!(
+            r#"<img src="https://example.com/assets/remote.png">"#,
+            r#"<img src="data:image/png;base64,AAAA">"#,
+            r#"<img src="blob:https://example.com/id">"#,
+            r#"<img src="../assets/traversal.png">"#,
+            r#"<img src="assets/%2e%2e/encoded.png">"#,
+            r#"<img src="/outside.png">"#,
+            r#"<img src="assets/unsupported.txt">"#,
+        );
+
+        assert!(asset_references_in_source("", "", source, None).is_empty());
+    }
+
+    #[test]
+    fn asset_reference_discovery_leaves_escaped_and_dynamic_literals_unchanged() {
+        let source = concat!(
+            r#"const escaped = "assets/a.png?label=\"hero\"";"#,
+            "\n",
+            r#"const dynamic = `assets/${name}.png`;"#,
+        );
+
+        assert!(
+            asset_references_in_source("story:script", "Story JavaScript", source, None).is_empty()
+        );
+        assert_eq!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/a.png"),
+                "assets/replaced.png",
+            ),
+            source
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_handles_prose_and_rejects_ambiguous_structured_values() {
+        let prose = "café's image is here: assets/hero.png";
+        let references = asset_references_in_source("passage-a", "Start", prose, Some("a"));
+
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].original, "assets/hero.png");
+
+        for source in [
+            r#".x { background: url("assets/a.svg?label=\"hero\""); }"#,
+            r#"<img srcset="data:image/svg+xml,assets/foo.png 1x">"#,
+        ] {
+            assert!(asset_references_in_source("passage-a", "Start", source, Some("a")).is_empty());
+            assert_eq!(
+                replace_asset_references_in_source(
+                    source,
+                    &normalized_asset_path("assets/a.svg"),
+                    "assets/replaced.svg",
+                ),
+                source
+            );
+        }
+    }
+
+    #[test]
+    fn asset_reference_discovery_keeps_repeated_and_overlapping_names_exact() {
+        let source = concat!(
+            r#"<link href="assets/theme.css"> "#,
+            r#"assets/icon.png assets/icon.png assets/icon-large.png"#,
+        );
+        let references =
+            asset_references_in_source("story:script", "Story JavaScript", source, None);
+
+        assert_eq!(references.len(), 4);
+        assert_eq!(references[0].context, "html-href");
+        assert_eq!(references[0].path, "assets/theme.css");
+        assert_eq!(references[1].original, "assets/icon.png");
+        assert_eq!(references[2].original, "assets/icon.png");
+        assert_eq!(references[3].original, "assets/icon-large.png");
+
+        for reference in references {
+            let start = utf16_offset_to_byte(source, reference.start).expect("valid start");
+            let end = utf16_offset_to_byte(source, reference.end).expect("valid end");
+            assert_eq!(&source[start..end], reference.original);
+        }
+    }
+
+    #[test]
+    fn asset_inventory_keeps_case_distinct_project_paths_separate() {
+        let references = asset_references_in_source(
+            "passage-a",
+            "Start",
+            r#"<img src="assets/Foo.png"><img src="assets/foo.png">"#,
+            Some("a"),
+        );
+        let inventory = asset_inventory_from_references(&references, Vec::new(), true);
+
+        assert_eq!(inventory.len(), 2);
+        assert!(inventory.iter().any(|asset| asset.path == "assets/Foo.png"));
+        assert!(inventory.iter().any(|asset| asset.path == "assets/foo.png"));
+    }
+
+    #[test]
+    fn asset_rename_uses_utf16_ranges_and_preserves_url_suffixes() {
+        let source = "😀 <img src=\"assets/old%20name.png?v=7#preview\">";
+
+        assert_eq!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/old name.png"),
+                "assets/new name.png",
+            ),
+            "😀 <img src=\"assets/new name.png?v=7#preview\">"
+        );
     }
 
     #[test]

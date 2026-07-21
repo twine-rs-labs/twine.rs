@@ -2,6 +2,11 @@ import type {CoreAssetInventoryEntry} from '../core/bindings/CoreAssetInventoryE
 import type {StoryFormatProperties} from '../store/story-formats';
 import type {StoryWithDocuments as Story} from '../store/stories';
 import type {AppInfo} from './app-info';
+import {
+	externalAssetEmbeddingReport,
+	type AssetEmbeddingReport,
+	type AssetMode
+} from './inline-assets';
 import type {PublishOptions} from './publish';
 import {publishStoryWithFormat} from './publish';
 import {storyToTwee} from './twee';
@@ -67,17 +72,26 @@ export interface StoryBuildDiagnostic {
 
 export interface StoryBuildReport {
 	assetCount: number;
+	assetInliningComplete: boolean;
+	assetMode: AssetMode;
 	capabilities: StoryFormatCapabilityManifest;
-	copiedAssetCount: number;
 	diagnostics: StoryBuildDiagnostic[];
+	externalAssetCount: number;
 	fidelity: StoryBuildFidelityReport;
 	generatedAt: string;
+	inlinedAssetCount: number;
+	inlinedEncodedBytes: number;
+	inlinedReferenceCount: number;
+	inlinedSourceBytes: number;
 	missingAssets: string[];
 	outputCount: number;
 	outputs: StoryBuildOutput[];
 	publishSafe: boolean;
 	safetyIssues: StoryFormatPublishSafetyIssue[];
 	target: StoryBuildTarget;
+	unresolvedAssets: AssetEmbeddingReport['unresolvedAssets'];
+	unsupportedAssets: AssetEmbeddingReport['unsupportedAssets'];
+	availableAssetSourceCount: number;
 }
 
 export interface StoryBuildPackage {
@@ -88,6 +102,7 @@ export interface StoryBuildPackage {
 }
 
 export interface StoryBuildPackageOptions extends PublishOptions {
+	assetEmbeddingReport?: AssetEmbeddingReport;
 	formatProperties: StoryFormatProperties;
 	htmlCompatibility?: boolean;
 	jsonPretty?: boolean;
@@ -237,7 +252,9 @@ function publishOptionsForTarget(
 
 function targetFidelity(
 	target: StoryBuildTarget,
-	htmlCompatibility = false
+	htmlCompatibility = false,
+	assetMode: AssetMode = 'external',
+	assetEmbeddingReport?: AssetEmbeddingReport
 ): StoryBuildFidelityReport {
 	const includesProjectGraph =
 		target === 'package' ||
@@ -276,7 +293,7 @@ function targetFidelity(
 		case 'package':
 			return {
 				omits: [
-					'asset file bytes when no file-backed source path is available'
+					'project asset file bytes; the archive contains an asset copy plan only'
 				],
 				preserves: [
 					'HTML, JSON, Twee, and archive descriptor outputs',
@@ -289,7 +306,11 @@ function targetFidelity(
 		default:
 			return {
 				omits: [
-					'asset binaries, except through the asset copy plan',
+					...(assetMode === 'inline-referenced'
+						? assetEmbeddingReport?.assetInliningComplete
+							? []
+							: ['media bytes for unresolved or unsupported references']
+						: ['referenced project media bytes remain external']),
 					...(includesProjectGraph
 						? []
 						: ['twine.rs StoryData graph metadata carrier']),
@@ -300,6 +321,9 @@ function targetFidelity(
 					'standard Twine story data',
 					'passage text, tags, and positions',
 					'story IFID, format, start passage, tag colors, JavaScript, and CSS',
+					...(assetMode === 'inline-referenced'
+						? ['supported statically referenced project media as data URLs']
+						: []),
 					...(includesProjectGraph
 						? ['twine.rs StoryData graph metadata carrier']
 						: [])
@@ -323,7 +347,8 @@ function buildDiagnostics(
 	target: StoryBuildTarget,
 	safetyIssues: StoryFormatPublishSafetyIssue[],
 	missingAssets: string[],
-	assets: StoryBuildAsset[]
+	assets: StoryBuildAsset[],
+	assetEmbeddingReport: AssetEmbeddingReport
 ): StoryBuildDiagnostic[] {
 	const diagnostics: StoryBuildDiagnostic[] = [];
 
@@ -342,6 +367,26 @@ function buildDiagnostics(
 			code: 'missing-asset',
 			message: `Referenced asset "${path}" cannot be copied into this build.`,
 			outputPath: path,
+			severity: 'warning',
+			target
+		});
+	}
+
+	for (const issue of assetEmbeddingReport.unresolvedAssets) {
+		diagnostics.push({
+			code: 'asset-embedding-unresolved',
+			message: `Referenced asset "${issue.path}" was not embedded: ${issue.reason}`,
+			outputPath: issue.path,
+			severity: 'warning',
+			target
+		});
+	}
+
+	for (const issue of assetEmbeddingReport.unsupportedAssets) {
+		diagnostics.push({
+			code: 'asset-embedding-unsupported',
+			message: `Referenced asset "${issue.path}" is not supported for embedding: ${issue.reason}`,
+			outputPath: issue.path,
 			severity: 'warning',
 			target
 		});
@@ -702,6 +747,8 @@ export function createStoryBuildPackage(
 	options: StoryBuildPackageOptions
 ): StoryBuildPackage {
 	const {
+		assetEmbeddingReport: providedAssetEmbeddingReport,
+		assetMode = 'external',
 		formatProperties,
 		htmlCompatibility = false,
 		jsonPretty = true,
@@ -711,9 +758,22 @@ export function createStoryBuildPackage(
 	const safety = inspectStoryFormatPublishSafety(formatProperties);
 	const generatedAt = new Date().toISOString();
 
+	if (
+		assetMode === 'inline-referenced' &&
+		target !== 'export-html' &&
+		target !== 'publish'
+	) {
+		throw new Error(
+			'Referenced media embedding is supported only for Playable HTML export.'
+		);
+	}
+
 	assertPublishSafety(target, safety.issues);
 
 	const assets = buildAssetCopyPlan(publishOptions.assetInventory);
+	const assetEmbeddingReport =
+		providedAssetEmbeddingReport ??
+		externalAssetEmbeddingReport(publishOptions.assetInventory);
 	const renderPublishOptions = {
 		...publishOptions,
 		assetInventory: publishOptions.assetInventory?.filter(
@@ -736,12 +796,18 @@ export function createStoryBuildPackage(
 	const missingAssets = (publishOptions.assetInventory ?? [])
 		.filter(asset => asset.missing)
 		.map(asset => asset.path);
-	const fidelity = targetFidelity(target, htmlCompatibility);
+	const fidelity = targetFidelity(
+		target,
+		htmlCompatibility,
+		assetMode,
+		assetEmbeddingReport
+	);
 	const buildReportDiagnostics = buildDiagnostics(
 		target,
 		safety.issues,
 		missingAssets,
-		assets
+		assets,
+		assetEmbeddingReport
 	);
 
 	return {
@@ -750,17 +816,27 @@ export function createStoryBuildPackage(
 		html,
 		report: {
 			assetCount: publishOptions.assetInventory?.length ?? 0,
+			assetInliningComplete: assetEmbeddingReport.assetInliningComplete,
+			assetMode,
+			availableAssetSourceCount: assets.filter(asset => !!asset.sourcePath)
+				.length,
 			capabilities,
-			copiedAssetCount: assets.filter(asset => !!asset.sourcePath).length,
 			diagnostics: buildReportDiagnostics,
+			externalAssetCount: assetEmbeddingReport.externalAssetCount,
 			fidelity,
 			generatedAt,
+			inlinedAssetCount: assetEmbeddingReport.inlinedAssetCount,
+			inlinedEncodedBytes: assetEmbeddingReport.inlinedEncodedBytes,
+			inlinedReferenceCount: assetEmbeddingReport.inlinedReferenceCount,
+			inlinedSourceBytes: assetEmbeddingReport.inlinedSourceBytes,
 			missingAssets,
 			outputCount: files.length,
 			outputs: reportOutputs(files),
 			publishSafe: safety.publishSafe,
 			safetyIssues: safety.issues,
-			target
+			target,
+			unresolvedAssets: assetEmbeddingReport.unresolvedAssets,
+			unsupportedAssets: assetEmbeddingReport.unsupportedAssets
 		}
 	};
 }

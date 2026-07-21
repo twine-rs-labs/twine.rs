@@ -331,11 +331,47 @@ describe('storyToCoreIndex', () => {
 
 		expect(assetPaths).not.toContain('https://cdn.example.com/cover.png');
 		expect(assetPaths).toEqual(
-			expect.arrayContaining([
-				'assets/local.png',
-				'assets/icon.svg',
-				'assets/poster.jpg'
-			])
+			expect.arrayContaining(['assets/local.png', 'assets/poster.jpg'])
+		);
+		expect(assetPaths).not.toContain('assets/icon.svg');
+	});
+
+	it('does not index escaped or interpolated JavaScript asset strings', () => {
+		const story = fakeStory(1);
+
+		story.script = [
+			'const escaped = "assets/a.png?label=\\"hero\\"";',
+			'const dynamic = `assets/${name}.png`;'
+		].join('\n');
+
+		expect(storyToCoreIndex(story).assets).toEqual([]);
+	});
+
+	it('keeps prose references while rejecting ambiguous CSS and srcset values', () => {
+		const story = fakeStory(1);
+
+		story.passages[0].text = [
+			"café's image is here: assets/hero.png",
+			'.x { background: url("assets/a.svg?label=\\"hero\\""); }',
+			'<img srcset="data:image/svg+xml,assets/foo.png 1x">'
+		].join('\n');
+
+		expect(storyToCoreIndex(story).assets).toEqual([
+			expect.objectContaining({original: 'assets/hero.png'})
+		]);
+	});
+
+	it('keeps case-distinct project asset paths separate', () => {
+		const story = fakeStory(1);
+
+		story.passages[0].text =
+			'<img src="assets/Foo.png"><img src="assets/foo.png">';
+
+		const paths = storyToCoreIndex(story).assetInventory.map(asset => asset.path);
+
+		expect(paths).toHaveLength(2);
+		expect(paths).toEqual(
+			expect.arrayContaining(['assets/Foo.png', 'assets/foo.png'])
 		);
 	});
 

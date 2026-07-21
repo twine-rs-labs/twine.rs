@@ -243,6 +243,41 @@ export interface NativeProjectAssetWriteResult {
 	targetPath: string;
 }
 
+export interface NativeReferencedMediaEmbeddingCapability {
+	available: boolean;
+	maxFileBytes: number;
+	maxFileCount: number;
+	maxTotalEncodedBytes: number;
+	reason?: string;
+}
+
+export interface NativeProjectAssetPayload {
+	bytes: ArrayBuffer | Uint8Array;
+	encodedSizeBytes: number;
+	mediaType: string;
+	path: string;
+	sizeBytes: number;
+}
+
+export interface NativeProjectAssetPayloadFailure {
+	message: string;
+	path: string;
+	reason: string;
+}
+
+export interface NativeProjectAssetPayloadBatch {
+	failures: NativeProjectAssetPayloadFailure[];
+	payloads: NativeProjectAssetPayload[];
+	totalEncodedBytes: number;
+	totalSourceBytes: number;
+}
+
+export interface NativeProjectAssetPayloadLimits {
+	maxFileBytes: number;
+	maxFileCount: number;
+	maxTotalEncodedBytes: number;
+}
+
 export interface NativeProjectImportAsset {
 	originalPath: string;
 	sourcePath: string;
@@ -322,6 +357,7 @@ export interface TwineElectronWindow extends Window {
 		filePathForFile(file: File): string;
 		getStoryLibraryFolder(): Promise<string>;
 		getPlatformSettings(): Promise<NativePlatformSettings>;
+		getReferencedMediaEmbeddingCapability(): Promise<NativeReferencedMediaEmbeddingCapability>;
 		hydrateProjectFolder(
 			rootPath: string,
 			storyIds?: string[]
@@ -340,6 +376,11 @@ export interface TwineElectronWindow extends Window {
 		loadStories(): Promise<ElectronLoadedStoryEntry[]>;
 		loadStoryFormats(): Promise<any>;
 		listProjectAssets(rootPath: string): Promise<CoreAssetInventoryEntry[]>;
+		readProjectAssetPayloads(
+			rootPath: string,
+			paths: string[],
+			limits: NativeProjectAssetPayloadLimits
+		): Promise<NativeProjectAssetPayloadBatch>;
 		jsonp(
 			url: string,
 			options: {name?: string; timeout?: number},

@@ -66,3 +66,18 @@ Play, test, and proof actions in the desktop app prepare project assets beside
 their temporary HTML so relative URLs work in the preview. The
 [Build & Export](../publishing/publishing.md) screen reports missing assets and
 the copy plan for published output.
+
+For desktop Playable HTML export, _Embed referenced media_ can place supported
+statically referenced images, audio, and video into the HTML as data URLs. It
+supports PNG, JPEG, GIF, SVG, WebP, MP3, M4A, OGG, WAV, MP4, and WebM. Encoding
+increases output size, so the Build screen estimates the expanded size and
+defaults the option off for incomplete scans, unknown sizes, more than 25
+candidate files, or more than 25 MiB of encoded media.
+
+The build report identifies indexed media that remained external because it
+was missing, unreadable, changed after indexing, unsupported, exceeded a
+limit, or used a URL fragment. Unsafe, ambiguous, dynamic, remote, and escaped
+source expressions are not indexed as managed project-media references, remain
+unchanged, and are outside the report's completeness boundary. The browser app
+does not offer embedding because it does not own persistent binary contents or
+permission to read the corresponding desktop files.

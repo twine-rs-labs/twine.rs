@@ -12,6 +12,8 @@ import {
 	TestRoute
 } from '../../../test-util';
 import {saveFile} from '../../../util/save-file';
+import {saveProjectMetadata} from '../../../store/project-metadata';
+import type {TwineElectronWindow} from '../../../electron/shared';
 import {BuildRoute} from '../build-route';
 
 const mockPlayStory = jest.fn();
@@ -60,7 +62,7 @@ function exportableAsset(
 }
 
 describe('<BuildRoute>', () => {
-	function renderComponent() {
+	function renderComponent(openingText = 'Look north.') {
 		const format = fakeLoadedStoryFormat(
 			{id: 'format-id', name: 'Chapbook', version: '2.1.0'},
 			{
@@ -78,7 +80,7 @@ describe('<BuildRoute>', () => {
 				id: `passage-${index}`,
 				name: index === 0 ? 'Opening' : 'Atrium',
 				story: 'story-id',
-				text: index === 0 ? 'Look north.' : 'A vaulted room.'
+				text: index === 0 ? openingText : 'A vaulted room.'
 			})),
 			selected: true,
 			startPassage: 'passage-0',
@@ -110,6 +112,7 @@ describe('<BuildRoute>', () => {
 		jest.clearAllMocks();
 		window.localStorage.clear();
 		replaceKnownAssetInventoryForStory('story-id', []);
+		delete (window as TwineElectronWindow).twineElectron;
 	});
 
 	it('collapses the old target list into Export and Preview flows', async () => {
@@ -124,7 +127,11 @@ describe('<BuildRoute>', () => {
 		expect(screen.getByText('Twee Source')).toBeInTheDocument();
 		expect(screen.getByText('JSON')).toBeInTheDocument();
 		expect(screen.getByText('Archive (.zip)')).toBeInTheDocument();
-		expect(screen.getByText('Inline all assets')).toBeInTheDocument();
+		expect(screen.getByText('Embed referenced media')).toBeInTheDocument();
+		expect(screen.getByText('Unavailable')).toBeInTheDocument();
+		expect(
+			screen.queryByLabelText('Embed referenced media')
+		).not.toBeInTheDocument();
 		expect(screen.getByText('Classic Twine compatibility')).toBeInTheDocument();
 		expect(
 			screen.getByRole('button', {name: 'Prepare publish package'})
@@ -141,7 +148,20 @@ describe('<BuildRoute>', () => {
 		).not.toBeInTheDocument();
 	});
 
-	it('turns off inline assets by default for heavy asset plans', async () => {
+	it('turns off referenced-media embedding by default for heavy plans', async () => {
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {
+			getReferencedMediaEmbeddingCapability: jest.fn().mockResolvedValue({
+				available: true,
+				maxFileBytes: 25 * 1024 * 1024,
+				maxFileCount: 25,
+				maxTotalEncodedBytes: 25 * 1024 * 1024
+			})
+		};
 		replaceKnownAssetInventoryForStory(
 			'story-id',
 			Array.from({length: 26}, (_, index) =>
@@ -153,15 +173,15 @@ describe('<BuildRoute>', () => {
 
 		await waitFor(() =>
 			expect(
-				screen.getByText('Inline assets off by default')
+				screen.getByText('Media embedding off by default')
 			).toBeInTheDocument()
 		);
-		expect(screen.getByLabelText('Inline all assets')).not.toBeChecked();
+		expect(screen.getByLabelText('Embed referenced media')).not.toBeChecked();
 		expect(screen.getByText(/26 exportable assets/)).toBeInTheDocument();
 
-		fireEvent.click(screen.getByLabelText('Inline all assets'));
+		fireEvent.click(screen.getByLabelText('Embed referenced media'));
 
-		expect(screen.getByLabelText('Inline all assets')).toBeChecked();
+		expect(screen.getByLabelText('Embed referenced media')).toBeChecked();
 	});
 
 	it('exports the selected file format', async () => {
@@ -177,6 +197,60 @@ describe('<BuildRoute>', () => {
 			)
 		);
 		expect(screen.getByText('Saved Moon Castle.html.')).toBeInTheDocument();
+	});
+
+	it('passes desktop embedding through to prepared HTML and reporting', async () => {
+		const path = 'assets/cover.png';
+
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		const readProjectAssetPayloads = jest.fn().mockResolvedValue({
+			failures: [],
+			payloads: [
+				{
+					bytes: new Uint8Array([0, 1, 255]),
+					encodedSizeBytes: 4,
+					mediaType: 'image/png',
+					path,
+					sizeBytes: 3
+				}
+			],
+			totalEncodedBytes: 4,
+			totalSourceBytes: 3
+		});
+		(window as any).twineElectron = {
+			getReferencedMediaEmbeddingCapability: jest.fn().mockResolvedValue({
+				available: true,
+				maxFileBytes: 25 * 1024 * 1024,
+				maxFileCount: 25,
+				maxTotalEncodedBytes: 25 * 1024 * 1024
+			}),
+			readProjectAssetPayloads
+		};
+		replaceKnownAssetInventoryForStory('story-id', [exportableAsset(path, 3)]);
+		renderComponent(`<img src="${path}">`);
+
+		await waitFor(() =>
+			expect(screen.getByLabelText('Embed referenced media')).toBeChecked()
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'Export Playable HTML'}));
+
+		await waitFor(() =>
+			expect(saveFile).toHaveBeenCalledWith(
+				expect.stringContaining('data:image/png;base64,AAH/'),
+				'Moon Castle.html',
+				'text/html;charset=utf-8'
+			)
+		);
+		expect(readProjectAssetPayloads).toHaveBeenCalledWith(
+			'/project/moon-castle.twine.rs',
+			[path],
+			expect.objectContaining({maxFileCount: 25})
+		);
+		expect(screen.getByText(/1 embedded, 0 external/)).toBeInTheDocument();
 	});
 
 	it('frames source-only formats as info and hides publish packaging', async () => {

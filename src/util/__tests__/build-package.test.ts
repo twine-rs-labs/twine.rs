@@ -7,6 +7,7 @@ import {
 	filePathFromFileUrl,
 	safeBuildAssetOutputPath
 } from '../build-package';
+import {inlineReferencedAssets} from '../inline-assets';
 import {
 	fakeAppInfo,
 	fakeStory,
@@ -15,6 +16,7 @@ import {
 } from '../../test-util';
 import type {CoreAssetInventoryEntry} from '../../core/bindings/CoreAssetInventoryEntry';
 import type {StoryFormatProperties} from '../../store/story-formats';
+import {assetReferencesInSource} from '../../core/asset-paths';
 
 function bundledFormatProperties(path: string): StoryFormatProperties {
 	let properties: StoryFormatProperties | undefined;
@@ -252,13 +254,191 @@ describe('M6 build package', () => {
 		expect(result.report).toEqual(
 			expect.objectContaining({
 				assetCount: 1,
-				copiedAssetCount: 1,
+				assetMode: 'external',
+				availableAssetSourceCount: 1,
+				externalAssetCount: 1,
 				outputCount: 1,
 				publishSafe: true,
 				target: 'play'
 			})
 		);
 	});
+
+	it('reports prepared referenced-media embedding in playable HTML', () => {
+		const story = fakeStory();
+		const path = 'assets/cover.png';
+		const passage = story.passages[0];
+
+		passage.text = `<img src="${path}">`;
+		const inventory = asset({
+			path,
+			normalizedPath: path,
+			previewUrl: null,
+			thumbnailUrl: null,
+			references: [
+				{
+					context: 'html-src',
+					end: 10 + path.length,
+					fragment: null,
+					kind: 'image',
+					line: 1,
+					original: path,
+					passageId: passage.id,
+					path,
+					query: null,
+					sourceId: passage.id,
+					sourceName: passage.name,
+					start: 10
+				}
+			]
+		});
+		const transformed = inlineReferencedAssets({
+			assetInventory: [inventory],
+			payloads: [
+				{bytes: new Uint8Array([0, 1, 255]), mediaType: 'image/png', path}
+			],
+			story
+		});
+		const result = createStoryBuildPackage(transformed.story, fakeAppInfo(), {
+			assetEmbeddingReport: transformed.report,
+			assetInventory: [inventory],
+			assetMode: 'inline-referenced',
+			formatProperties: fakeStoryFormatProperties(),
+			target: 'export-html'
+		});
+
+		expect(result.html).toContain('data:image/png;base64,AAH/');
+		expect(result.report).toEqual(
+			expect.objectContaining({
+				assetInliningComplete: true,
+				assetMode: 'inline-referenced',
+				externalAssetCount: 0,
+				inlinedAssetCount: 1,
+				inlinedEncodedBytes: 26,
+				inlinedSourceBytes: 3
+			})
+		);
+		expect(result.report.fidelity.preserves).toContain(
+			'supported statically referenced project media as data URLs'
+		);
+		expect(story.passages[0].text).toContain(path);
+	});
+
+	it.each([
+		['Chapbook', '2.3.1', 'chapbook-2.3.1'],
+		['Harlowe', '3.3.9', 'harlowe-3.3.9'],
+		['Snowman', '2.1.1', 'snowman-2.1.1'],
+		['SugarCube', '2.37.3', 'sugarcube-2.37.3']
+	])(
+		'embeds the format-neutral referenced-media fixture in bundled %s',
+		(name, version, fixture) => {
+			const story = fakeStory();
+			const passage = story.passages[0];
+
+			story.storyFormat = name;
+			story.storyFormatVersion = version;
+			passage.text = [
+				'<img src="assets/cover image.png">',
+				'<audio src="assets/theme.ogg"></audio>',
+				'<video poster="assets/poster.webp"></video>',
+				'<img src="assets/cover image.png">'
+			].join('');
+			story.script = 'window.media = "assets/clip.webm";';
+			story.stylesheet = 'body { background: url("assets/background.svg"); }';
+			const original = {
+				passage: passage.text,
+				script: story.script,
+				stylesheet: story.stylesheet
+			};
+			const references = [
+				...assetReferencesInSource(
+					passage.id,
+					passage.name,
+					passage.text,
+					passage.id
+				),
+				...assetReferencesInSource(
+					`${story.id}:script`,
+					'Story JavaScript',
+					story.script,
+					null
+				),
+				...assetReferencesInSource(
+					`${story.id}:stylesheet`,
+					'Story Stylesheet',
+					story.stylesheet,
+					null
+				)
+			];
+			const referencesByPath = new Map<string, typeof references>();
+
+			for (const reference of references) {
+				referencesByPath.set(reference.path, [
+					...(referencesByPath.get(reference.path) ?? []),
+					reference
+				]);
+			}
+
+			const inventory = Array.from(
+				referencesByPath,
+				([path, assetReferences]) =>
+					asset({
+						kind: path.endsWith('.ogg')
+							? 'audio'
+							: path.endsWith('.webm')
+								? 'video'
+								: 'image',
+						normalizedPath: path.toLowerCase(),
+						path,
+						previewUrl: null,
+						publish: {
+							copy: true,
+							outputPath: path,
+							reason: 'Referenced media'
+						},
+						referenceCount: assetReferences.length,
+						references: assetReferences,
+						sizeBytes: 3,
+						thumbnailUrl: null
+					})
+			);
+			const mediaType = (path: string) =>
+				path.endsWith('.png')
+					? 'image/png'
+					: path.endsWith('.svg')
+						? 'image/svg+xml'
+						: path.endsWith('.webp')
+							? 'image/webp'
+							: path.endsWith('.ogg')
+								? 'audio/ogg'
+								: 'video/webm';
+			const transformed = inlineReferencedAssets({
+				assetInventory: inventory,
+				payloads: inventory.map(({path}) => ({
+					bytes: new Uint8Array([0, 1, 255]),
+					mediaType: mediaType(path),
+					path
+				})),
+				story
+			});
+			const result = createStoryBuildPackage(transformed.story, fakeAppInfo(), {
+				assetEmbeddingReport: transformed.report,
+				assetInventory: inventory,
+				assetMode: 'inline-referenced',
+				formatProperties: bundledFormatProperties(fixture),
+				target: 'export-html'
+			});
+
+			expect(result.report.assetInliningComplete).toBe(true);
+			expect(result.report.inlinedAssetCount).toBe(5);
+			expect(result.report.inlinedReferenceCount).toBe(6);
+			expect(result.html).toContain('data:image/png;base64,AAH/');
+			expect(result.html).not.toContain('assets/');
+			expect(passage.text).toBe(original.passage);
+			expect(story.script).toBe(original.script);
+			expect(story.stylesheet).toBe(original.stylesheet);
+		}
+	);
 
 	it('builds JSON export packages without rendering story format HTML', () => {
 		const story = fakeStory();
@@ -342,6 +522,9 @@ describe('M6 build package', () => {
 			'twee'
 		]);
 		expect(result.report.diagnostics).toEqual([]);
+		expect(result.report.fidelity.omits).toContain(
+			'project asset file bytes; the archive contains an asset copy plan only'
+		);
 	});
 
 	it('promotes package asset-source gaps into build diagnostics', () => {

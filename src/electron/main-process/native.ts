@@ -4,8 +4,13 @@ import {join, resolve} from 'path';
 import {performance} from 'perf_hooks';
 import type {CoreAssetInventoryEntry} from '../../core';
 import type {StoryWithDocuments as Story} from '../../store/stories';
-import type {ProjectSourceLayout} from '../shared';
 import type {
+	NativeProjectAssetPayloadBatch,
+	NativeProjectAssetPayloadLimits,
+	ProjectSourceLayout
+} from '../shared';
+import type {
+	NativeProjectAssetReadBaseline,
 	NativeProjectFileEntry,
 	NativeProjectFolderResult,
 	NativeProjectHydrationChunk,
@@ -13,6 +18,14 @@ import type {
 	NativeProjectImportSource,
 	NativeProjectSessionConflict
 } from './project-folder';
+
+interface NativeAddonProjectAssetPayloadBatch extends NativeProjectAssetPayloadBatch {
+	payloads: Array<
+		NativeProjectAssetPayloadBatch['payloads'][number] & {
+			modifiedAtMs: number;
+		}
+	>;
+}
 
 interface NativeProjectAddon {
 	beginProjectFolderHydrationJson(
@@ -45,6 +58,15 @@ interface NativeProjectAddon {
 		cursor: number,
 		limit: number
 	): string;
+	readProjectAssetPayloads?(
+		rootPath: string,
+		requests: Array<
+			NativeProjectAssetReadBaseline & {enforceBaseline: boolean}
+		>,
+		maxFileBytes: number,
+		maxFileCount: number,
+		maxTotalEncodedBytes: number
+	): NativeAddonProjectAssetPayloadBatch;
 	projectFileManifestJson(rootPath: string, assetsJson?: string): string;
 	rememberProjectFolderJson(indexPath: string, projectJson: string): string;
 	saveProjectFolderJson(
@@ -241,6 +263,43 @@ export function nativeHydrationMemoryDiagnostics() {
 
 export function nativeProjectAvailable() {
 	return nativeProjectHealth()?.ok === true;
+}
+
+export function nativeProjectAssetEmbeddingAvailable() {
+	return typeof loadAddon()?.readProjectAssetPayloads === 'function';
+}
+
+export function readNativeProjectAssetPayloads(
+	rootPath: string,
+	baselines: NativeProjectAssetReadBaseline[],
+	limits: NativeProjectAssetPayloadLimits
+) {
+	const reader = loadAddon()?.readProjectAssetPayloads;
+
+	if (!reader) {
+		throw new Error(
+			'The native referenced-media embedding reader is unavailable.'
+		);
+	}
+
+	const result = reader(
+		rootPath,
+		baselines.map(baseline => ({...baseline, enforceBaseline: true})),
+		limits.maxFileBytes,
+		limits.maxFileCount,
+		limits.maxTotalEncodedBytes
+	);
+
+	return {
+		...result,
+		payloads: result.payloads.map(payload => ({
+			bytes: payload.bytes,
+			encodedSizeBytes: payload.encodedSizeBytes,
+			mediaType: payload.mediaType,
+			path: payload.path,
+			sizeBytes: payload.sizeBytes
+		}))
+	} satisfies NativeProjectAssetPayloadBatch;
 }
 
 export function loadNativeProjectFolder(

@@ -1,14 +1,16 @@
 #![doc = "Native Node/Electron bridge for project-folder I/O and inventory scans."]
 
+use napi::{Status, bindgen_prelude::Buffer};
 use napi_derive::napi;
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io,
     io::ErrorKind,
+    io::Read,
     path::{Path, PathBuf},
     sync::{
         Mutex, OnceLock,
@@ -31,6 +33,10 @@ const OBVIOUS_IMPORT_ASSET_DIRECTORIES: &[&str] = &[
     "asset", "assets", "audio", "font", "fonts", "image", "images", "img", "media", "music",
     "picture", "pictures", "sound", "sounds", "video", "videos",
 ];
+const NATIVE_ASSET_MAX_FILE_COUNT: u32 = 25;
+const NATIVE_ASSET_MAX_ENCODED_BYTES: u32 = 25 * 1024 * 1024;
+const NATIVE_ASSET_MAX_REQUEST_COUNT: usize = 100;
+const NATIVE_ASSET_MAX_PATH_BYTES: usize = 4096;
 
 type NativeResult<T> = napi::Result<T>;
 
@@ -337,12 +343,48 @@ struct NativeProjectImportSource {
     source_path: String,
 }
 
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct NativeProjectAssetReadRequest {
+    pub enforce_baseline: bool,
+    pub expected_exists: bool,
+    pub expected_modified_at_ms: Option<f64>,
+    pub expected_size_bytes: Option<f64>,
+    pub path: String,
+}
+
+#[napi(object)]
+pub struct NativeProjectAssetPayload {
+    pub bytes: Buffer,
+    pub encoded_size_bytes: u32,
+    pub media_type: String,
+    pub modified_at_ms: f64,
+    pub path: String,
+    pub size_bytes: u32,
+}
+
+#[napi(object)]
+pub struct NativeProjectAssetPayloadFailure {
+    pub message: String,
+    pub path: String,
+    pub reason: String,
+}
+
+#[napi(object)]
+pub struct NativeProjectAssetPayloadBatch {
+    pub failures: Vec<NativeProjectAssetPayloadFailure>,
+    pub payloads: Vec<NativeProjectAssetPayload>,
+    pub total_encoded_bytes: u32,
+    pub total_source_bytes: u32,
+}
+
 #[napi(js_name = "healthJson")]
 pub fn health_json() -> String {
     json_string(&HealthReport {
         features: vec![
             "project-load",
             "asset-scan",
+            "asset-payload-reader",
             "file-manifest",
             "manifest-diff",
             "html-import-assets",
@@ -742,6 +784,529 @@ pub fn list_project_assets_json(root_path: String) -> NativeResult<String> {
     let assets = list_project_assets(Path::new(&root_path)).map_err(native_error)?;
 
     json_string(&assets).map_err(native_error)
+}
+
+/// Reads only supported media below a project's canonical `assets/` root.
+/// The byte limits apply to eventual base64-encoded sizes, and native hard
+/// ceilings constrain encoded bytes and unique path count regardless of the
+/// caller's requested limits.
+#[napi(js_name = "readProjectAssetPayloads")]
+pub fn read_project_asset_payloads(
+    root_path: String,
+    requests: Vec<NativeProjectAssetReadRequest>,
+    max_file_encoded_bytes: u32,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+) -> NativeResult<NativeProjectAssetPayloadBatch> {
+    read_project_asset_payload_requests_impl(
+        Path::new(&root_path),
+        requests,
+        max_file_encoded_bytes,
+        max_file_count,
+        max_total_encoded_bytes,
+    )
+    .map_err(|message| napi::Error::new(Status::InvalidArg, message))
+}
+
+#[cfg(test)]
+fn read_project_asset_payloads_impl(
+    root: &Path,
+    paths: Vec<String>,
+    max_file_encoded_bytes: u32,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+) -> Result<NativeProjectAssetPayloadBatch, String> {
+    read_project_asset_payload_requests_impl(
+        root,
+        paths
+            .into_iter()
+            .map(|path| NativeProjectAssetReadRequest {
+                enforce_baseline: false,
+                expected_exists: false,
+                expected_modified_at_ms: None,
+                expected_size_bytes: None,
+                path,
+            })
+            .collect(),
+        max_file_encoded_bytes,
+        max_file_count,
+        max_total_encoded_bytes,
+    )
+}
+
+fn read_project_asset_payload_requests_impl(
+    root: &Path,
+    requests: Vec<NativeProjectAssetReadRequest>,
+    max_file_encoded_bytes: u32,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+) -> Result<NativeProjectAssetPayloadBatch, String> {
+    if requests.len() > NATIVE_ASSET_MAX_REQUEST_COUNT {
+        return Err(format!(
+            "Asset request count exceeds the native limit {NATIVE_ASSET_MAX_REQUEST_COUNT}."
+        ));
+    }
+    if requests
+        .iter()
+        .any(|request| request.path.len() > NATIVE_ASSET_MAX_PATH_BYTES)
+    {
+        return Err(format!(
+            "Asset request path exceeds the native limit {NATIVE_ASSET_MAX_PATH_BYTES} bytes."
+        ));
+    }
+
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("Project root could not be resolved: {error}"))?;
+    if !canonical_root.is_dir() {
+        return Err("Project root must be a directory.".into());
+    }
+
+    validate_native_project_manifest(&canonical_root)?;
+
+    let assets_path = canonical_root.join("assets");
+    let canonical_assets = match assets_path.canonicalize() {
+        Ok(path) if path.is_dir() && path.starts_with(&canonical_root) => Some(path),
+        Ok(path) if !path.starts_with(&canonical_root) => {
+            return Err("Project assets root resolves outside the project root.".into());
+        }
+        Ok(_) => return Err("Project assets root must be a directory.".into()),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "Project assets root could not be resolved: {error}"
+            ));
+        }
+    };
+    let mut seen = BTreeSet::new();
+    let mut payloads = Vec::new();
+    let mut failures = Vec::new();
+    let mut total_encoded_bytes = 0_u64;
+    let mut total_source_bytes = 0_u64;
+    let max_file_encoded_bytes = max_file_encoded_bytes.min(NATIVE_ASSET_MAX_ENCODED_BYTES);
+    let max_file_count = max_file_count.min(NATIVE_ASSET_MAX_FILE_COUNT);
+    let max_total_encoded_bytes = max_total_encoded_bytes.min(NATIVE_ASSET_MAX_ENCODED_BYTES);
+    let mut requested_file_count = 0_u32;
+
+    for request in requests {
+        let path = request.path;
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+
+        let Some(relative_asset_path) = canonical_asset_request_path(&path) else {
+            failures.push(asset_payload_failure(
+                path,
+                "invalid-path",
+                "Asset path must be a canonical assets/... project-relative path.",
+            ));
+            continue;
+        };
+        let Some(media_type) = supported_asset_media_type(&path) else {
+            failures.push(asset_payload_failure(
+                path,
+                "unsupported-type",
+                "Asset file type is not supported for media embedding.",
+            ));
+            continue;
+        };
+        requested_file_count = requested_file_count.saturating_add(1);
+        if requested_file_count > max_file_count {
+            failures.push(asset_payload_failure(
+                path,
+                "file-count-exceeded",
+                format!("Asset request exceeds the file-count limit {max_file_count}."),
+            ));
+            continue;
+        }
+        let Some(canonical_assets) = canonical_assets.as_ref() else {
+            failures.push(asset_payload_failure(
+                path,
+                if request.expected_exists {
+                    "changed-since-index"
+                } else {
+                    "missing"
+                },
+                if request.expected_exists {
+                    "Indexed asset disappeared before it could be read."
+                } else {
+                    "Project assets directory does not exist."
+                },
+            ));
+            continue;
+        };
+        let candidate = canonical_assets.join(relative_asset_path);
+        let resolved = match candidate.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                failures.push(asset_payload_failure(
+                    path,
+                    if request.expected_exists {
+                        "changed-since-index"
+                    } else {
+                        "missing"
+                    },
+                    if request.expected_exists {
+                        "Indexed asset disappeared before it could be read."
+                    } else {
+                        "Asset does not exist."
+                    },
+                ));
+                continue;
+            }
+            Err(error) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "unreadable",
+                    format!("Asset could not be resolved: {error}"),
+                ));
+                continue;
+            }
+        };
+
+        if resolved == *canonical_assets || !resolved.starts_with(canonical_assets) {
+            failures.push(asset_payload_failure(
+                path,
+                "symlink-escape",
+                "Asset resolves outside the project assets root.",
+            ));
+            continue;
+        }
+
+        let before = match fs::metadata(&resolved) {
+            Ok(metadata) if metadata.is_file() => metadata,
+            Ok(_) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "not-file",
+                    "Asset path is not a regular file.",
+                ));
+                continue;
+            }
+            Err(error) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    if error.kind() == ErrorKind::NotFound && request.expected_exists {
+                        "changed-since-index"
+                    } else if error.kind() == ErrorKind::NotFound {
+                        "missing"
+                    } else {
+                        "unreadable"
+                    },
+                    format!("Asset metadata could not be read: {error}"),
+                ));
+                continue;
+            }
+        };
+        if !request.expected_exists
+            && (request.expected_size_bytes.is_some() || request.expected_modified_at_ms.is_some())
+        {
+            return Err("Invalid asset baseline expectation.".into());
+        }
+        if request.enforce_baseline
+            && request.expected_exists
+            && (request.expected_size_bytes.is_none() || request.expected_modified_at_ms.is_none())
+        {
+            return Err("Indexed asset baseline is incomplete.".into());
+        }
+        if request.enforce_baseline && !request.expected_exists {
+            failures.push(asset_payload_failure(
+                path,
+                "changed-since-index",
+                "Asset appeared after project indexing.",
+            ));
+            continue;
+        } else if request.enforce_baseline {
+            let observed_modified_at_ms =
+                system_time_to_ms(before.modified().unwrap_or(UNIX_EPOCH));
+            let size_changed = request
+                .expected_size_bytes
+                .is_some_and(|expected| expected != before.len() as f64);
+            let modified_changed = request
+                .expected_modified_at_ms
+                .is_some_and(|expected| expected.trunc() != observed_modified_at_ms.trunc());
+
+            if size_changed || modified_changed {
+                failures.push(asset_payload_failure(
+                    path,
+                    "changed-since-index",
+                    "Asset size or modification time changed after project indexing.",
+                ));
+                continue;
+            }
+        }
+        let Some(observed_encoded_size) = encoded_size_bytes(before.len()) else {
+            failures.push(asset_payload_failure(
+                path,
+                "file-too-large",
+                "Asset size cannot be represented safely.",
+            ));
+            continue;
+        };
+
+        if observed_encoded_size > u64::from(max_file_encoded_bytes) {
+            failures.push(asset_payload_failure(
+                path,
+                "file-too-large",
+                format!(
+                    "Encoded asset size {observed_encoded_size} exceeds the per-file limit {max_file_encoded_bytes}."
+                ),
+            ));
+            continue;
+        }
+        if total_encoded_bytes.saturating_add(observed_encoded_size)
+            > u64::from(max_total_encoded_bytes)
+        {
+            failures.push(asset_payload_failure(
+                path,
+                "total-limit-exceeded",
+                format!("Encoded asset would exceed the total limit {max_total_encoded_bytes}."),
+            ));
+            continue;
+        }
+
+        let mut file = match File::open(&resolved) {
+            Ok(file) => file,
+            Err(error) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    if error.kind() == ErrorKind::NotFound {
+                        "missing"
+                    } else {
+                        "unreadable"
+                    },
+                    format!("Asset could not be opened: {error}"),
+                ));
+                continue;
+            }
+        };
+        let remaining_total =
+            u64::from(max_total_encoded_bytes).saturating_sub(total_encoded_bytes);
+        let raw_read_limit = raw_bytes_for_encoded_limit(u64::from(max_file_encoded_bytes))
+            .min(raw_bytes_for_encoded_limit(remaining_total));
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(before.len().min(raw_read_limit)).unwrap_or_default(),
+        );
+        let read_result = file
+            .by_ref()
+            .take(raw_read_limit.saturating_add(1))
+            .read_to_end(&mut bytes);
+
+        if let Err(error) = read_result {
+            failures.push(asset_payload_failure(
+                path,
+                "unreadable",
+                format!("Asset could not be read: {error}"),
+            ));
+            continue;
+        }
+        let Some(encoded_size) = encoded_size_bytes(bytes.len() as u64) else {
+            failures.push(asset_payload_failure(
+                path,
+                "file-too-large",
+                "Asset size cannot be represented safely.",
+            ));
+            continue;
+        };
+        if encoded_size > u64::from(max_file_encoded_bytes) {
+            failures.push(asset_payload_failure(
+                path,
+                "file-too-large",
+                "Asset grew beyond the per-file encoded-size limit while it was read.",
+            ));
+            continue;
+        }
+        if total_encoded_bytes.saturating_add(encoded_size) > u64::from(max_total_encoded_bytes) {
+            failures.push(asset_payload_failure(
+                path,
+                "total-limit-exceeded",
+                "Asset grew beyond the total encoded-size limit while it was read.",
+            ));
+            continue;
+        }
+
+        match candidate.canonicalize() {
+            Ok(current) if current == resolved => {}
+            Ok(current) if !current.starts_with(canonical_assets) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "symlink-escape",
+                    "Asset resolved outside the project assets root while it was read.",
+                ));
+                continue;
+            }
+            Ok(_) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "changed",
+                    "Asset path changed while it was being read.",
+                ));
+                continue;
+            }
+            Err(error) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "changed",
+                    format!("Asset path disappeared while it was read: {error}"),
+                ));
+                continue;
+            }
+        }
+
+        let after = match file.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "changed",
+                    format!("Asset metadata changed while it was read: {error}"),
+                ));
+                continue;
+            }
+        };
+        if bytes.len() as u64 != before.len() || file_metadata_changed(&before, &after) {
+            failures.push(asset_payload_failure(
+                path,
+                "changed",
+                "Asset changed while it was being read.",
+            ));
+            continue;
+        }
+
+        let Ok(size_bytes) = u32::try_from(bytes.len()) else {
+            failures.push(asset_payload_failure(
+                path,
+                "file-too-large",
+                "Asset source size is too large to return.",
+            ));
+            continue;
+        };
+        let encoded_size_bytes = encoded_size as u32;
+        total_source_bytes += u64::from(size_bytes);
+        total_encoded_bytes += encoded_size;
+        payloads.push(NativeProjectAssetPayload {
+            bytes: bytes.into(),
+            encoded_size_bytes,
+            media_type: media_type.into(),
+            modified_at_ms: system_time_to_ms(after.modified().unwrap_or(UNIX_EPOCH)),
+            path,
+            size_bytes,
+        });
+    }
+
+    Ok(NativeProjectAssetPayloadBatch {
+        failures,
+        payloads,
+        total_encoded_bytes: total_encoded_bytes as u32,
+        total_source_bytes: total_source_bytes as u32,
+    })
+}
+
+fn validate_native_project_manifest(canonical_root: &Path) -> Result<(), String> {
+    let manifest_path = canonical_root.join("twine.toml");
+    let metadata = manifest_path
+        .symlink_metadata()
+        .map_err(|error| format!("Project root must contain a regular twine.toml: {error}"))?;
+
+    if !metadata.file_type().is_file() {
+        return Err("Project root must contain a regular twine.toml.".into());
+    }
+
+    let canonical_manifest = manifest_path
+        .canonicalize()
+        .map_err(|error| format!("Project manifest could not be resolved: {error}"))?;
+    if canonical_manifest.parent() != Some(canonical_root) {
+        return Err("Project manifest must remain directly below the project root.".into());
+    }
+
+    Ok(())
+}
+
+fn canonical_asset_request_path(path: &str) -> Option<PathBuf> {
+    if path.contains('\\') || path.contains('\0') {
+        return None;
+    }
+    let relative_path = path.strip_prefix("assets/")?;
+    if relative_path.is_empty()
+        || relative_path
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return None;
+    }
+    let mut relative = PathBuf::new();
+
+    for component in Path::new(relative_path).components() {
+        match component {
+            std::path::Component::Normal(value) => relative.push(value),
+            _ => return None,
+        }
+    }
+
+    (!relative.as_os_str().is_empty() && relative.file_name().is_some()).then_some(relative)
+}
+
+fn supported_asset_media_type(path: &str) -> Option<&'static str> {
+    let extension = Path::new(path)
+        .extension()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+
+    match extension.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "svg" => Some("image/svg+xml"),
+        "webp" => Some("image/webp"),
+        "mp3" => Some("audio/mpeg"),
+        "m4a" => Some("audio/mp4"),
+        "ogg" => Some("audio/ogg"),
+        "wav" => Some("audio/wav"),
+        "mp4" => Some("video/mp4"),
+        "webm" => Some("video/webm"),
+        _ => None,
+    }
+}
+
+fn encoded_size_bytes(source_size: u64) -> Option<u64> {
+    source_size.checked_add(2)?.checked_div(3)?.checked_mul(4)
+}
+
+fn raw_bytes_for_encoded_limit(encoded_limit: u64) -> u64 {
+    encoded_limit / 4 * 3
+}
+
+fn file_metadata_changed(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    before.len() != after.len()
+        || matches!(
+            (before.modified(), after.modified()),
+            (Ok(before), Ok(after)) if before != after
+        )
+        || file_identity_changed(before, after)
+}
+
+#[cfg(unix)]
+fn file_identity_changed(before: &fs::Metadata, after: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    before.dev() != after.dev() || before.ino() != after.ino()
+}
+
+#[cfg(not(unix))]
+fn file_identity_changed(_before: &fs::Metadata, _after: &fs::Metadata) -> bool {
+    false
+}
+
+fn asset_payload_failure(
+    path: String,
+    reason: impl Into<String>,
+    message: impl Into<String>,
+) -> NativeProjectAssetPayloadFailure {
+    NativeProjectAssetPayloadFailure {
+        message: message.into(),
+        path,
+        reason: reason.into(),
+    }
 }
 
 #[napi(js_name = "projectFileManifestJson")]
@@ -1694,9 +2259,7 @@ fn percent_encode_file_path(path: &str) -> String {
 }
 
 fn normalized_asset_path(path: &str) -> String {
-    path.replace('\\', "/")
-        .trim_start_matches("./")
-        .to_lowercase()
+    path.replace('\\', "/").trim_start_matches("./").into()
 }
 
 fn system_time_to_iso(time: SystemTime) -> String {
@@ -1924,6 +2487,292 @@ mod tests {
         assert_eq!(asset_kind_for_path("assets/theme.css"), "stylesheet");
         assert_eq!(asset_kind_for_path("assets/click.wav"), "audio");
         assert_eq!(asset_kind_for_path("assets/readme.txt"), "file");
+    }
+
+    #[test]
+    fn project_asset_payload_reader_returns_buffers_mime_types_and_deduplicates_paths() {
+        let root = temp_path("asset-payloads");
+        let asset = root.join("assets/nested/猫 image.png");
+        let audio = root.join("assets/sound.mp3");
+
+        fs::create_dir_all(asset.parent().expect("asset parent")).expect("asset directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&asset, [1_u8, 2, 3]).expect("image payload");
+        fs::write(&audio, [4_u8, 5, 6, 7]).expect("audio payload");
+
+        let batch = read_project_asset_payloads_impl(
+            &root,
+            vec![
+                "assets/nested/猫 image.png".into(),
+                "assets/nested/猫 image.png".into(),
+                "assets/sound.mp3".into(),
+            ],
+            16,
+            25,
+            4,
+        )
+        .expect("payload batch");
+
+        assert_eq!(batch.payloads.len(), 1);
+        assert_eq!(batch.payloads[0].path, "assets/nested/猫 image.png");
+        assert_eq!(batch.payloads[0].media_type, "image/png");
+        assert_eq!(batch.payloads[0].bytes.as_ref(), &[1, 2, 3]);
+        assert_eq!(batch.payloads[0].size_bytes, 3);
+        assert_eq!(batch.payloads[0].encoded_size_bytes, 4);
+        assert_eq!(batch.total_source_bytes, 3);
+        assert_eq!(batch.total_encoded_bytes, 4);
+        assert_eq!(batch.failures.len(), 1);
+        assert_eq!(batch.failures[0].path, "assets/sound.mp3");
+        assert_eq!(batch.failures[0].reason, "total-limit-exceeded");
+
+        fs::remove_dir_all(root).expect("payload project cleanup");
+    }
+
+    #[test]
+    fn project_asset_payload_reader_reports_invalid_missing_directory_unsupported_and_oversized() {
+        let root = temp_path("asset-payload-failures");
+
+        fs::create_dir_all(root.join("assets/folder.png")).expect("asset directories");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(root.join("assets/readme.txt"), b"text").expect("unsupported asset");
+        fs::write(root.join("assets/large.webp"), b"1234").expect("oversized asset");
+
+        let batch = read_project_asset_payloads_impl(
+            &root,
+            vec![
+                "/assets/absolute.png".into(),
+                "assets/../outside.png".into(),
+                "assets//not-canonical.png".into(),
+                "assets/missing.png".into(),
+                "assets/folder.png".into(),
+                "assets/readme.txt".into(),
+                "assets/large.webp".into(),
+            ],
+            4,
+            25,
+            100,
+        )
+        .expect("failure batch");
+        let reasons = batch
+            .failures
+            .iter()
+            .map(|failure| (failure.path.as_str(), failure.reason.as_str()))
+            .collect::<BTreeMap<_, _>>();
+
+        assert!(batch.payloads.is_empty());
+        assert_eq!(reasons["/assets/absolute.png"], "invalid-path");
+        assert_eq!(reasons["assets/../outside.png"], "invalid-path");
+        assert_eq!(reasons["assets//not-canonical.png"], "invalid-path");
+        assert_eq!(reasons["assets/missing.png"], "missing");
+        assert_eq!(reasons["assets/folder.png"], "not-file");
+        assert_eq!(reasons["assets/readme.txt"], "unsupported-type");
+        assert_eq!(reasons["assets/large.webp"], "file-too-large");
+
+        fs::remove_dir_all(root).expect("failure project cleanup");
+    }
+
+    #[test]
+    fn project_asset_payload_reader_requires_manifest_and_enforces_file_count() {
+        let root = temp_path("asset-payload-file-count");
+
+        fs::create_dir_all(root.join("assets")).expect("assets directory");
+        assert!(
+            read_project_asset_payloads_impl(&root, vec!["assets/a.png".into()], 100, 25, 100,)
+                .is_err()
+        );
+
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(root.join("assets/a.png"), b"a").expect("first asset");
+        fs::write(root.join("assets/b.png"), b"b").expect("second asset");
+        let batch = read_project_asset_payloads_impl(
+            &root,
+            vec![
+                "assets/a.png".into(),
+                "assets/a.png".into(),
+                "assets/b.png".into(),
+            ],
+            100,
+            1,
+            100,
+        )
+        .expect("file-count batch");
+
+        assert_eq!(batch.payloads.len(), 1);
+        assert_eq!(batch.payloads[0].path, "assets/a.png");
+        assert_eq!(batch.failures.len(), 1);
+        assert_eq!(batch.failures[0].path, "assets/b.png");
+        assert_eq!(batch.failures[0].reason, "file-count-exceeded");
+
+        fs::remove_dir_all(root).expect("file-count project cleanup");
+    }
+
+    #[test]
+    fn unsupported_requests_do_not_consume_supported_file_quota() {
+        let root = temp_path("asset-payload-supported-quota");
+
+        fs::create_dir_all(root.join("assets")).expect("assets directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(root.join("assets/valid.svg"), b"<svg/>").expect("valid asset");
+        let mut paths = (0..25)
+            .map(|index| format!("assets/unsupported-{index}.css"))
+            .collect::<Vec<_>>();
+        paths.push("assets/valid.svg".into());
+
+        let batch = read_project_asset_payloads_impl(&root, paths, 100, 1, 100)
+            .expect("supported quota batch");
+
+        assert_eq!(batch.payloads.len(), 1);
+        assert_eq!(batch.payloads[0].path, "assets/valid.svg");
+        assert_eq!(
+            batch
+                .failures
+                .iter()
+                .filter(|failure| failure.reason == "unsupported-type")
+                .count(),
+            25
+        );
+        assert!(
+            batch
+                .failures
+                .iter()
+                .all(|failure| failure.reason != "file-count-exceeded")
+        );
+
+        fs::remove_dir_all(root).expect("supported quota project cleanup");
+    }
+
+    #[test]
+    fn project_asset_payload_reader_rejects_changed_index_baseline_and_unbounded_requests() {
+        let root = temp_path("asset-payload-index-baseline");
+        let asset_path = root.join("assets/a.png");
+
+        fs::create_dir_all(asset_path.parent().expect("asset parent")).expect("assets directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&asset_path, b"new bytes").expect("asset payload");
+        let metadata = fs::metadata(&asset_path).expect("asset metadata");
+        let changed = read_project_asset_payload_requests_impl(
+            &root,
+            vec![NativeProjectAssetReadRequest {
+                enforce_baseline: true,
+                expected_exists: true,
+                expected_modified_at_ms: Some(system_time_to_ms(
+                    metadata.modified().unwrap_or(UNIX_EPOCH),
+                )),
+                expected_size_bytes: Some(3.0),
+                path: "assets/a.png".into(),
+            }],
+            100,
+            25,
+            100,
+        )
+        .expect("changed baseline batch");
+
+        assert!(changed.payloads.is_empty());
+        assert_eq!(changed.failures[0].reason, "changed-since-index");
+
+        let unbounded = (0..=NATIVE_ASSET_MAX_REQUEST_COUNT)
+            .map(|index| NativeProjectAssetReadRequest {
+                enforce_baseline: true,
+                expected_exists: false,
+                expected_modified_at_ms: None,
+                expected_size_bytes: None,
+                path: format!("assets/{index}.png"),
+            })
+            .collect();
+
+        assert!(read_project_asset_payload_requests_impl(&root, unbounded, 100, 25, 100).is_err());
+
+        fs::remove_dir_all(root).expect("baseline project cleanup");
+    }
+
+    #[test]
+    fn project_asset_payload_reader_applies_hard_encoded_size_and_count_ceilings() {
+        let root = temp_path("asset-payload-hard-limits");
+
+        fs::create_dir_all(root.join("assets")).expect("assets directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        let large = File::create(root.join("assets/large.mp4")).expect("large asset");
+        large
+            .set_len(raw_bytes_for_encoded_limit(u64::from(NATIVE_ASSET_MAX_ENCODED_BYTES)) + 1)
+            .expect("sparse large asset");
+        let mut paths = vec!["assets/large.mp4".into()];
+        paths.extend((1..=25).map(|index| format!("assets/missing-{index}.png")));
+
+        let batch = read_project_asset_payloads_impl(&root, paths, u32::MAX, u32::MAX, u32::MAX)
+            .expect("hard-limit batch");
+
+        assert!(batch.payloads.is_empty());
+        assert_eq!(batch.failures[0].reason, "file-too-large");
+        assert_eq!(batch.failures.last().unwrap().reason, "file-count-exceeded");
+        assert_eq!(batch.failures.len(), 26);
+
+        fs::remove_dir_all(root).expect("hard-limit project cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_asset_payload_reader_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_path("asset-payload-symlink");
+        let outside = temp_path("asset-payload-outside");
+
+        fs::create_dir_all(root.join("assets")).expect("assets directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&outside, b"outside").expect("outside payload");
+        symlink(&outside, root.join("assets/escape.png")).expect("asset symlink");
+
+        let batch =
+            read_project_asset_payloads_impl(&root, vec!["assets/escape.png".into()], 100, 25, 100)
+                .expect("symlink batch");
+
+        assert!(batch.payloads.is_empty());
+        assert_eq!(batch.failures.len(), 1);
+        assert_eq!(batch.failures[0].reason, "symlink-escape");
+
+        fs::remove_dir_all(root).expect("symlink project cleanup");
+        fs::remove_file(outside).expect("outside payload cleanup");
+    }
+
+    #[test]
+    fn supported_project_asset_media_types_are_exact() {
+        assert_eq!(
+            supported_asset_media_type("assets/a.png"),
+            Some("image/png")
+        );
+        assert_eq!(
+            supported_asset_media_type("assets/a.JPEG"),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            supported_asset_media_type("assets/a.svg"),
+            Some("image/svg+xml")
+        );
+        assert_eq!(
+            supported_asset_media_type("assets/a.mp3"),
+            Some("audio/mpeg")
+        );
+        assert_eq!(
+            supported_asset_media_type("assets/a.m4a"),
+            Some("audio/mp4")
+        );
+        assert_eq!(
+            supported_asset_media_type("assets/a.ogg"),
+            Some("audio/ogg")
+        );
+        assert_eq!(
+            supported_asset_media_type("assets/a.wav"),
+            Some("audio/wav")
+        );
+        assert_eq!(
+            supported_asset_media_type("assets/a.mp4"),
+            Some("video/mp4")
+        );
+        assert_eq!(
+            supported_asset_media_type("assets/a.webm"),
+            Some("video/webm")
+        );
+        assert_eq!(supported_asset_media_type("assets/a.css"), None);
     }
 
     #[test]

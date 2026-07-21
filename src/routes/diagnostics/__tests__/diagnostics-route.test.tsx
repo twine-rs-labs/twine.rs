@@ -140,11 +140,15 @@ function missingAsset(path: string): CoreAssetInventoryEntry {
 		referenceCount: 1,
 		references: [
 			{
+				context: 'css-url',
 				end: path.length,
+				fragment: null,
 				kind: 'stylesheet',
 				line: 1,
+				original: path,
 				passageId: null,
 				path,
+				query: null,
 				sourceId: 'stylesheet',
 				sourceName: 'Story Stylesheet',
 				start: 0

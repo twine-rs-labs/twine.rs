@@ -2,7 +2,7 @@
 
 Status: current product specification
 Owner: product/UI maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-21
 Source of truth: target screen behavior and vocabulary
 
 This specification describes the mode-native UI: Text, Graph, and Split
@@ -889,6 +889,7 @@ Reference docs:
 | External editor workflow         | Strong. `Open in External Editor`, detect changes, merge or reload, preserve cursor/source spans.                                                    | Weak. Browser can copy text or download files. Direct external editor integration is not reliable.                                                                                      |
 | Git/version control              | Strong. Detect Git repo, branch, dirty files, diffs, commits, ignores, external changes.                                                             | Usually unavailable unless integrated with a remote service or user imports/exports project archives.                                                                                   |
 | Asset folders                    | Strong. Assets live in `assets/`; app can import, rename, preview, detect missing/unused assets, and package output.                                 | Possible inside browser storage, but real file paths are constrained. Asset import/export needs explicit user actions or File System Access permission.                                 |
+| Referenced-media HTML embedding  | File-backed Playable HTML can embed supported statically indexed local image, audio, and video references with exact build reporting.                | Unavailable until browser mode owns persistent binary contents and read permissions; project-relative source text alone is insufficient.                                                |
 | Backups                          | Strong. Scheduled local backups, backup folder, retention policy, restore UI, archive/export.                                                        | Manual or browser-storage backups. Can prompt `Download Backup` or sync through a web account if a backend exists.                                                                      |
 | Build output                     | Strong. Write HTML/Twee/JSON/package outputs to chosen directory, reveal output, run local preview server if needed.                                 | Generate downloads or in-browser previews. Persistent output folders only with permission-capable browsers.                                                                             |
 | Play/test runtime                | Strong. Embedded preview, local files, local server, runtime logs, open source at current passage.                                                   | In-browser preview works well. Some file/asset loading may need blob URLs, service worker, or packaged paths.                                                                           |
@@ -1201,6 +1202,29 @@ Asset panel:
 - Find unused
 
 Graph cards can show asset badges, but assets should live in `assets/`.
+
+## Published Asset Embedding
+
+Desktop Playable HTML export offers **Embed referenced media** for file-backed
+projects. This is an export transformation: canonical project assets remain
+ordinary files under `assets/`, and project source continues to use
+project-relative paths.
+
+The first supported contract embeds statically discovered local image, audio,
+and video references from passages, Story JavaScript, and Story Stylesheet.
+Unused files, remote URLs, dynamic JavaScript paths, external scripts, external
+stylesheets, and recursively discovered dependencies remain external. The
+build report must identify every embedded, unavailable, missing, unsupported,
+or unresolved reference. The UI may report that supported referenced media was
+embedded, but must not turn that bounded result into a universal
+“self-contained” or “works offline” guarantee.
+
+Browser mode must not offer this desktop capability until it owns persistent
+binary asset contents through a browser-safe storage and permission model. A
+project-relative source string alone does not grant a browser access to the
+corresponding file. A complete embedding report covers the supported static
+reference contract; it is not a guarantee that arbitrary dynamic JavaScript or
+network behavior works offline.
 
 ## Performance Requirements
 

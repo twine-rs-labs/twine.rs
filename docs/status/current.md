@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-07-19
+Last verified: 2026-07-21
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -76,6 +76,11 @@ The complete local 10k and 50k benchmark runs verify:
 - asset-only watcher changes enter review without parsing stories;
 - no watcher recovery reload in normal scenarios;
 - fixture immutability, isolated user data, and run-root cleanup.
+- Desktop Playable HTML export can embed supported statically referenced
+  project media through the constrained native project reader. The Build screen
+  reports actual embedded, external, unresolved, and unsupported media. Browser
+  embedding remains unavailable, and Package export still contains an asset
+  plan rather than project asset bytes.
 
 ## Current limitations
 

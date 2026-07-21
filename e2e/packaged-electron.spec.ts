@@ -1,8 +1,21 @@
 import {expect, test} from '@playwright/test';
-import {_electron as electron, ElectronApplication, Page} from 'playwright';
-import {access, mkdir, mkdtemp, readFile, readdir} from 'node:fs/promises';
+import {
+	_electron as electron,
+	chromium,
+	ElectronApplication,
+	Page
+} from 'playwright';
+import {
+	access,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	writeFile
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 
 type DialogState = {
 	calls: Array<{properties?: string[]; title?: string}>;
@@ -120,7 +133,7 @@ async function replaceEditorText(page: Page, text: string) {
 		process.platform === 'darwin' ? 'Meta+A' : 'Control+A'
 	);
 	await page.keyboard.insertText(text);
-	await expect(editor).toContainText(text);
+	await expect(editor).toContainText(text.replace(/\r?\n/g, ''));
 	await page.keyboard.press('Tab');
 }
 
@@ -162,6 +175,102 @@ async function waitForSavedText(projectRoot: string, expected: string) {
 			{timeout: 30_000}
 		)
 		.toContain(expected);
+}
+
+function silentWav() {
+	const sampleRate = 8000;
+	const samples = Buffer.alloc(sampleRate / 10, 128);
+	const result = Buffer.alloc(44 + samples.length);
+
+	result.write('RIFF', 0);
+	result.writeUInt32LE(result.length - 8, 4);
+	result.write('WAVEfmt ', 8);
+	result.writeUInt32LE(16, 16);
+	result.writeUInt16LE(1, 20);
+	result.writeUInt16LE(1, 22);
+	result.writeUInt32LE(sampleRate, 24);
+	result.writeUInt32LE(sampleRate, 28);
+	result.writeUInt16LE(1, 32);
+	result.writeUInt16LE(8, 34);
+	result.write('data', 36);
+	result.writeUInt32LE(samples.length, 40);
+	samples.copy(result, 44);
+	return result;
+}
+
+const tinyPng = Buffer.from(
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEAQH/2E5nWQAAAABJRU5ErkJggg==',
+	'base64'
+);
+
+const mediaSource = [
+	'<p id="offline-marker">Offline referenced media is ready.</p>',
+	'<img id="hero-media" src="assets/hero.png">',
+	'<img id="repeated-media" src="./assets/hero.png?cache=1">',
+	'<audio id="audio-media" src="assets/tone.wav" controls></audio>',
+	'<video id="poster-media" poster="/assets/poster.png" controls></video>',
+	'<div id="css-media" style="width: 4px; height: 4px; background-image: url(\'assets/back%20drop.png\')"></div>'
+].join('\n');
+
+async function savedProjectSource(projectRoot: string) {
+	try {
+		return await readFile(path.join(projectRoot, 'story.twee'), 'utf8');
+	} catch {
+		const passagesRoot = path.join(projectRoot, 'passages');
+		const files = await readdir(passagesRoot, {recursive: true});
+		const passageFile = files.find(file => file.endsWith('.twee'));
+
+		if (!passageFile) {
+			throw new Error('No saved passage source was found.');
+		}
+
+		return readFile(path.join(passagesRoot, passageFile), 'utf8');
+	}
+}
+
+async function importReferencedMedia(page: Page, projectRoot: string) {
+	const stagingRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-media-staging-')
+	);
+	const fixtures = new Map<string, Buffer>([
+		['back drop.png', tinyPng],
+		['hero.png', tinyPng],
+		['poster.png', tinyPng],
+		['tone.wav', silentWav()]
+	]);
+
+	await Promise.all(
+		[...fixtures].map(([name, bytes]) =>
+			writeFile(path.join(stagingRoot, name), bytes)
+		)
+	);
+	for (const name of fixtures.keys()) {
+		await page.evaluate(
+			async ({rootPath, sourcePath}) => {
+				const bridge = (
+					window as typeof window & {
+						twineElectron?: {
+							copyAssetToProject(
+								rootPath: string,
+								sourcePath: string
+							): Promise<{effectToken?: string}>;
+							discardProjectAssetEffect(token: string): Promise<void>;
+						};
+					}
+				).twineElectron;
+				const result = await bridge?.copyAssetToProject(rootPath, sourcePath);
+
+				if (!result) {
+					throw new Error('Desktop asset bridge is unavailable.');
+				}
+				if (result.effectToken) {
+					await bridge?.discardProjectAssetEffect(result.effectToken);
+				}
+			},
+			{rootPath: projectRoot, sourcePath: path.join(stagingRoot, name)}
+		);
+	}
+	return fixtures;
 }
 
 async function installOpenDialogResponses(
@@ -319,6 +428,145 @@ test('packaged app creates, saves, routes, opens dialogs, and reopens a project'
 			{properties: ['openDirectory'], title: 'Open Project Folder'},
 			{properties: ['openDirectory'], title: 'Open Project Folder'}
 		]);
+	} finally {
+		await running?.app.close();
+	}
+});
+
+test('packaged desktop embeds referenced media for every bundled format family', async () => {
+	const executablePath = await packagedExecutable();
+	const profileRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-media-')
+	);
+	const cleanOutputRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-media-output-')
+	);
+	const formats = [
+		'Chapbook 2.3.1',
+		'Harlowe 3.3.9',
+		'Snowman 2.1.1',
+		'SugarCube 2.37.3'
+	];
+	let running: {app: ElectronApplication; page: Page} | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, profileRoot);
+		const {page} = running;
+
+		for (const format of formats) {
+			await page.getByTitle('New Project').click();
+			await expect(page).toHaveURL(/#\/new-project$/);
+			await page.getByLabel('Project name').fill(`Media ${format}`);
+			await page
+				.locator('label')
+				.filter({hasText: 'Story format'})
+				.getByRole('combobox')
+				.selectOption({label: format});
+			await tabWithText(page, 'Text').click();
+			await page.getByRole('button', {name: 'Create Project'}).click();
+			await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
+			await expect(sourceEditor(page)).toBeVisible();
+
+			const projectRoot = await projectRootFromRenderer(page);
+			const originalAssets = await importReferencedMedia(page, projectRoot);
+
+			await replaceEditorText(page, mediaSource);
+			await waitForSavedText(projectRoot, 'Offline referenced media is ready.');
+			await page.getByTitle('Build & Export').click();
+			await expect(page).toHaveURL(/#\/stories\/[^/]+\/build$/);
+			const embedSwitch = page.getByLabel('Embed referenced media');
+
+			await embedSwitch.locator('..').click();
+			await expect(embedSwitch).toBeChecked({timeout: 30_000});
+
+			const cleanFormatRoot = path.join(
+				cleanOutputRoot,
+				format.replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+			);
+			const outputPath = path.join(cleanFormatRoot, 'story.html');
+
+			await mkdir(cleanFormatRoot, {recursive: true});
+			await running.app.evaluate(({session}, savePath) => {
+				session.defaultSession.once('will-download', (_event, item) => {
+					item.setSavePath(savePath);
+				});
+			}, outputPath);
+			await page.getByRole('button', {name: 'Export Playable HTML'}).click();
+			await expect
+				.poll(
+					async () => {
+						try {
+							return (await readFile(outputPath)).byteLength;
+						} catch {
+							return 0;
+						}
+					},
+					{timeout: 30_000}
+				)
+				.toBeGreaterThan(0);
+			await expect(page.getByText(/4 embedded, 0 external/)).toBeVisible();
+			await expect(page.getByText('Referenced media embedded')).toBeVisible();
+
+			const html = await readFile(outputPath, 'utf8');
+
+			expect(html).toContain('data:image/png;base64,');
+			expect(html).toContain('data:audio/wav;base64,');
+			for (const original of [
+				'assets/hero.png',
+				'assets/tone.wav',
+				'assets/poster.png',
+				'assets/back%20drop.png'
+			]) {
+				expect(html).not.toContain(original);
+			}
+			expect(await readdir(cleanFormatRoot)).toEqual(['story.html']);
+
+			const browser = await chromium.launch();
+			const offlinePage = await browser.newPage();
+
+			await offlinePage.route(/^https?:\/\//, route => route.abort());
+			await offlinePage.goto(pathToFileURL(outputPath).href);
+			await expect(offlinePage.locator('#offline-marker')).toContainText(
+				'Offline referenced media is ready.'
+			);
+			await expect
+				.poll(() =>
+					offlinePage
+						.locator('#hero-media')
+						.evaluate((image: HTMLImageElement) =>
+							Boolean(image.complete && image.naturalWidth)
+						)
+				)
+				.toBe(true);
+			await expect
+				.poll(() =>
+					offlinePage
+						.locator('#audio-media')
+						.evaluate((audio: HTMLAudioElement) => audio.readyState > 0)
+				)
+				.toBe(true);
+			expect(
+				await offlinePage.locator('#poster-media').getAttribute('poster')
+			).toMatch(/^data:image\/png;base64,/);
+			expect(
+				await offlinePage
+					.locator('#css-media')
+					.evaluate(element => getComputedStyle(element).backgroundImage)
+			).toContain('data:image/png;base64,');
+			await browser.close();
+
+			const persistedSource = await savedProjectSource(projectRoot);
+
+			expect(persistedSource).toContain('assets/hero.png');
+			expect(persistedSource).toContain('assets/back%20drop.png');
+			for (const [name, expectedBytes] of originalAssets) {
+				expect(
+					(await readFile(path.join(projectRoot, 'assets', name))).equals(
+						expectedBytes
+					)
+				).toBe(true);
+			}
+		}
 	} finally {
 		await running?.app.close();
 	}
