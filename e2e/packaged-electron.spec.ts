@@ -51,14 +51,18 @@ async function packagedExecutable() {
 function isolatedEnvironment(root: string) {
 	return {
 		...process.env,
-		APPDATA: path.join(root, 'AppData', 'Roaming'),
-		HOME: root,
-		LOCALAPPDATA: path.join(root, 'AppData', 'Local'),
+		...(process.platform === 'win32'
+			? {}
+			: {
+					APPDATA: path.join(root, 'AppData', 'Roaming'),
+					HOME: root,
+					LOCALAPPDATA: path.join(root, 'AppData', 'Local'),
+					USERPROFILE: root,
+					XDG_CACHE_HOME: path.join(root, '.cache'),
+					XDG_CONFIG_HOME: path.join(root, '.config')
+				}),
 		TWINE_PERF: '1',
-		TWINE_PERF_USER_DATA: path.join(root, 'user-data'),
-		USERPROFILE: root,
-		XDG_CACHE_HOME: path.join(root, '.cache'),
-		XDG_CONFIG_HOME: path.join(root, '.config')
+		TWINE_PERF_USER_DATA: path.join(root, 'user-data')
 	};
 }
 
