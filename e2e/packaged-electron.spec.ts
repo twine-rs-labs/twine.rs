@@ -1,6 +1,6 @@
 import {expect, test} from '@playwright/test';
 import {_electron as electron, ElectronApplication, Page} from 'playwright';
-import {access, mkdtemp, readFile, readdir} from 'node:fs/promises';
+import {access, mkdir, mkdtemp, readFile, readdir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -62,13 +62,32 @@ function isolatedEnvironment(root: string) {
 	};
 }
 
+async function prepareIsolatedEnvironment(root: string) {
+	await Promise.all(
+		[
+			path.join('AppData', 'Local'),
+			path.join('AppData', 'Roaming'),
+			'.cache',
+			'.config',
+			'backups',
+			'library',
+			'scratch',
+			path.join('user-data', 'session')
+		].map(directory => mkdir(path.join(root, directory), {recursive: true}))
+	);
+}
+
 async function launchPackagedApp(executablePath: string, profileRoot: string) {
+	await prepareIsolatedEnvironment(profileRoot);
 	const app = await electron.launch({
 		args: [
 			`--storyLibraryFolderPath=${path.join(profileRoot, 'library')}`,
 			`--backupFolderPath=${path.join(profileRoot, 'backups')}`,
 			`--scratchFolderPath=${path.join(profileRoot, 'scratch')}`,
-			'--backupCadenceMinutes=10080'
+			'--backupCadenceMinutes=10080',
+			...(process.platform === 'win32'
+				? ['--disableHardwareAcceleration=true']
+				: [])
 		],
 		env: isolatedEnvironment(profileRoot),
 		executablePath
