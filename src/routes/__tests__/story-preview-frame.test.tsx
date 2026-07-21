@@ -1,4 +1,4 @@
-import {act, fireEvent, render, screen} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {
 	instrumentPreviewHtml,
@@ -19,7 +19,14 @@ function sessionIdFromFrame(title: string) {
 	return match[1];
 }
 
-function postBridgeMessage(sessionId: string, data: Record<string, unknown>) {
+function postBridgeMessage(
+	title: string,
+	sessionId: string,
+	data: Record<string, unknown>,
+	source: MessageEventSource | null = (
+		screen.getByTitle(title) as HTMLIFrameElement
+	).contentWindow
+) {
 	act(() => {
 		window.dispatchEvent(
 			new MessageEvent('message', {
@@ -28,7 +35,8 @@ function postBridgeMessage(sessionId: string, data: Record<string, unknown>) {
 					sessionId,
 					time: 10,
 					...data
-				}
+				},
+				source
 			})
 		);
 	});
@@ -51,6 +59,66 @@ describe('instrumentPreviewHtml()', () => {
 });
 
 describe('<StoryPreviewFrame>', () => {
+	it('isolates story code from the application origin', () => {
+		render(
+			<StoryPreviewFrame
+				html="<html><body><script>parent.twineElectron?.loadStories()</script></body></html>"
+				missingStoryMessage="Missing story"
+				storyExists
+				title="Isolated preview"
+			/>
+		);
+
+		const frame = screen.getByTitle('Isolated preview');
+
+		expect(frame).toHaveAttribute(
+			'sandbox',
+			'allow-downloads allow-forms allow-modals allow-popups allow-scripts'
+		);
+		expect(frame.getAttribute('sandbox')).not.toContain('allow-same-origin');
+	});
+
+	it('uses a storage-capable isolated origin for desktop previews', async () => {
+		const registerStoryPreview = jest
+			.fn()
+			.mockResolvedValue(
+				'twine-preview://6b5df370-33a7-42c5-8ee9-c4b06470ff40/index.html'
+			);
+		const releaseStoryPreview = jest.fn().mockResolvedValue(undefined);
+
+		(window as any).twineElectron = {
+			registerStoryPreview,
+			releaseStoryPreview
+		};
+		const {unmount} = render(
+			<StoryPreviewFrame
+				html="<html><body><script>localStorage.setItem('ready', 'yes')</script></body></html>"
+				missingStoryMessage="Missing story"
+				storyExists
+				title="Desktop preview"
+			/>
+		);
+		const frame = await screen.findByTitle('Desktop preview');
+
+		expect(registerStoryPreview).toHaveBeenCalledWith(
+			expect.stringContaining("localStorage.setItem('ready', 'yes')")
+		);
+		expect(frame).toHaveAttribute(
+			'src',
+			'twine-preview://6b5df370-33a7-42c5-8ee9-c4b06470ff40/index.html'
+		);
+		expect(frame).not.toHaveAttribute('srcdoc');
+		expect(frame.getAttribute('sandbox')).toContain('allow-same-origin');
+
+		unmount();
+		await waitFor(() =>
+			expect(releaseStoryPreview).toHaveBeenCalledWith(
+				'twine-preview://6b5df370-33a7-42c5-8ee9-c4b06470ff40/index.html'
+			)
+		);
+		delete (window as any).twineElectron;
+	});
+
 	it('surfaces runtime passage state and routes actions to that passage', () => {
 		const start = fakePassage({id: 'start', name: 'Start'});
 		const lighthouse = fakePassage({id: 'lighthouse', name: 'Lighthouse'});
@@ -81,7 +149,7 @@ describe('<StoryPreviewFrame>', () => {
 
 		const sessionId = sessionIdFromFrame('Runtime preview');
 
-		postBridgeMessage(sessionId, {
+		postBridgeMessage('Runtime preview', sessionId, {
 			currentPassage: {name: 'Lighthouse', source: 'runtime'},
 			type: 'state',
 			viewport: {height: 700, width: 390}
@@ -111,7 +179,7 @@ describe('<StoryPreviewFrame>', () => {
 
 		const sessionId = sessionIdFromFrame('Log preview');
 
-		postBridgeMessage(sessionId, {
+		postBridgeMessage('Log preview', sessionId, {
 			args: ['hello', 'runtime'],
 			level: 'warn',
 			type: 'console'
@@ -119,5 +187,26 @@ describe('<StoryPreviewFrame>', () => {
 
 		expect(screen.getByText('1 logs')).toBeInTheDocument();
 		expect(screen.getByText('hello runtime')).toBeInTheDocument();
+	});
+
+	it('ignores bridge messages from outside the preview frame', () => {
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				storyExists
+				title="Source checked preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Source checked preview');
+
+		postBridgeMessage(
+			'Source checked preview',
+			sessionId,
+			{args: ['forged'], level: 'warn', type: 'console'},
+			window
+		);
+
+		expect(screen.getByText('0 logs')).toBeInTheDocument();
 	});
 });

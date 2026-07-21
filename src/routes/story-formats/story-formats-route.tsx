@@ -55,6 +55,22 @@ function initials(format: StoryFormat) {
 		.toUpperCase();
 }
 
+function safeFormatWebsite(value: string | undefined) {
+	if (!value) {
+		return undefined;
+	}
+
+	try {
+		const url = new URL(value);
+
+		return url.protocol === 'https:' || url.protocol === 'http:'
+			? url.toString()
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 // Renders a format's real icon once its manifest is hydrated, with explicit
 // loading and failed-load states (W7.1) and a graceful initials fallback when
 // the format has no image or the image itself fails to load.
@@ -250,6 +266,10 @@ export const StoryFormatsRoute: React.FC = () => {
 		selectedFormat?.loadState === 'loaded'
 			? (selectedFormat.properties.twineRs?.modules ?? [])
 			: [];
+	const selectedWebsite =
+		selectedFormat?.loadState === 'loaded'
+			? safeFormatWebsite(selectedFormat.properties.url)
+			: undefined;
 	const editorExtensionsDisabled = selectedFormat
 		? prefs.disabledStoryFormatEditorExtensions.some(
 				disabled =>
@@ -595,21 +615,16 @@ export const StoryFormatsRoute: React.FC = () => {
 											</div>
 										)}
 										{selectedFormat.properties.description && (
-											// Format descriptions are authored HTML in the manifest
-											// (matching the legacy details renderer).
-											<div
-												className="story-formats-route__about-desc"
-												dangerouslySetInnerHTML={{
-													__html: selectedFormat.properties.description
-												}}
-											/>
+											<div className="story-formats-route__about-desc">
+												{selectedFormat.properties.description}
+											</div>
 										)}
 										{(selectedFormat.properties.url ||
 											selectedFormat.properties.license) && (
 											<div className="story-formats-route__about-links">
-												{selectedFormat.properties.url && (
+												{selectedWebsite && (
 													<a
-														href={selectedFormat.properties.url}
+														href={selectedWebsite}
 														target="_blank"
 														rel="noreferrer"
 													>

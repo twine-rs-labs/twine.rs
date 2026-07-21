@@ -85,6 +85,11 @@ interface NativeProjectAddon {
 		maxFileCount: number,
 		maxTotalEncodedBytes: number
 	): Promise<NativeProjectAssetDigestBatch>;
+	createProjectFolderJson(
+		rootPath: string,
+		storyJson: string,
+		sourceLayout?: ProjectSourceLayout
+	): string;
 	projectFileManifestJson(rootPath: string, assetsJson?: string): string;
 	rememberProjectFolderJson(indexPath: string, projectJson: string): string;
 	saveProjectFolderJson(
@@ -226,6 +231,40 @@ function callNative<T>(
 		}`;
 		console.warn(diagnostic);
 		return undefined;
+	}
+}
+
+/**
+ * Returns undefined only when the native addon is unavailable. Once the addon
+ * accepts a call, validation and operational failures must propagate so a
+ * compatibility writer cannot bypass a native security decision.
+ */
+function callNativeStrict<T>(
+	label: string,
+	callback: (addon: NativeProjectAddon) => string
+) {
+	const loaded = loadAddon();
+
+	if (!loaded) {
+		return undefined;
+	}
+
+	try {
+		const result = parseNativeJson<T>(label, callback(loaded));
+
+		if (result === undefined) {
+			throw new Error(
+				diagnostic ?? `Native project backend returned invalid ${label}.`
+			);
+		}
+
+		return result;
+	} catch (error) {
+		diagnostic = `Native project backend ${label} failed: ${
+			(error as Error).message
+		}`;
+		warnDiagnostic();
+		throw error;
 	}
 }
 
@@ -496,8 +535,24 @@ export function saveNativeProjectFolder(
 	sourceLayout?: ProjectSourceLayout
 ) {
 	return reviveProjectFolderResult(
-		callNative<NativeProjectFolderResult>('project save', addon =>
+		callNativeStrict<NativeProjectFolderResult>('project save', addon =>
 			addon.saveProjectFolderJson(rootPath, JSON.stringify(story), sourceLayout)
+		)
+	);
+}
+
+export function createNativeProjectFolder(
+	rootPath: string,
+	story: Story,
+	sourceLayout?: ProjectSourceLayout
+) {
+	return reviveProjectFolderResult(
+		callNativeStrict<NativeProjectFolderResult>('project create', addon =>
+			addon.createProjectFolderJson(
+				rootPath,
+				JSON.stringify(story),
+				sourceLayout
+			)
 		)
 	);
 }

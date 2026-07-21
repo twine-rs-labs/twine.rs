@@ -53,22 +53,16 @@ export const StoryFormatItemDetails: React.FC<StoryFormatItemDetailsProps> = ({
 	return (
 		<div className="story-format-details">
 			{format.properties.author && (
-				<p
-					className="story-format-author"
-					dangerouslySetInnerHTML={{
-						__html: t('components.storyFormatItem.author', {
-							author: format.properties.author
-						})
-					}}
-				/>
+				<p className="story-format-author">
+					{t('components.storyFormatItem.author', {
+						author: format.properties.author
+					})}
+				</p>
 			)}
 			{format.properties.description && (
-				<div
-					className="story-format-description"
-					dangerouslySetInnerHTML={{
-						__html: format.properties.description
-					}}
-				/>
+				<div className="story-format-description">
+					{format.properties.description}
+				</div>
 			)}
 			{format.properties.license && (
 				<p className="story-format-license">

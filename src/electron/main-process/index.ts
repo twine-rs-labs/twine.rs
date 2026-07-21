@@ -15,9 +15,12 @@ import {
 	performanceHarnessUserDataPath,
 	recordMainLaunchPhase
 } from './performance-harness';
+import {registerStoryPreviewScheme} from './story-preview-protocol';
 
 const nativeAppName = 'Twine RS';
 const nativeUserDataName = 'twine-rs';
+
+registerStoryPreviewScheme();
 
 recordMainLaunchPhase('main-module');
 app.setName(nativeAppName);

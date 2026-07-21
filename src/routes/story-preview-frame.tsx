@@ -15,6 +15,7 @@ import type {
 	StoryPreviewRuntimeState,
 	StoryPreviewViewportPreset
 } from './story-preview-debug';
+import type {TwineElectronWindow} from '../electron/shared';
 import './story-preview-frame.css';
 
 export interface StoryPreviewFrameProps {
@@ -65,6 +66,11 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		});
 	const [viewportPreset, setViewportPreset] =
 		React.useState<StoryPreviewViewportPreset>('fit');
+	const previewFrame = React.useRef<HTMLIFrameElement>(null);
+	const [desktopPreviewUrl, setDesktopPreviewUrl] = React.useState<string>();
+	const [desktopPreviewError, setDesktopPreviewError] =
+		React.useState<string>();
+	const desktopBridge = (window as TwineElectronWindow).twineElectron;
 	const bridgeSessionId = React.useMemo(
 		() => `preview-${Date.now()}-${Math.random().toString(36).slice(2)}`,
 		[html]
@@ -78,6 +84,10 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	const currentPassageId = currentPassage?.id;
 	const latestLog = runtimeLogs[0];
 	const runtimeViewport = runtimeState.viewport;
+	const usesDesktopPreviewOrigin = !!desktopBridge?.registerStoryPreview;
+	const previewReady = usesDesktopPreviewOrigin
+		? !!desktopPreviewUrl
+		: !!instrumentedHtml;
 
 	React.useEffect(() => {
 		setRuntimeLogs([]);
@@ -85,10 +95,57 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	}, [html, reloadKey]);
 
 	React.useEffect(() => {
+		let disposed = false;
+		let registeredUrl: string | undefined;
+
+		setDesktopPreviewUrl(undefined);
+		setDesktopPreviewError(undefined);
+
+		if (!instrumentedHtml || !desktopBridge?.registerStoryPreview) {
+			return;
+		}
+
+		void desktopBridge
+			.registerStoryPreview(instrumentedHtml)
+			.then(url => {
+				registeredUrl = url;
+
+				if (disposed) {
+					void desktopBridge.releaseStoryPreview?.(url).catch(() => undefined);
+				} else {
+					setDesktopPreviewUrl(url);
+				}
+			})
+			.catch(registrationError => {
+				if (!disposed) {
+					setDesktopPreviewError(
+						registrationError instanceof Error
+							? registrationError.message
+							: 'Could not register the story preview.'
+					);
+				}
+			});
+
+		return () => {
+			disposed = true;
+
+			if (registeredUrl) {
+				void desktopBridge
+					.releaseStoryPreview?.(registeredUrl)
+					.catch(() => undefined);
+			}
+		};
+	}, [desktopBridge, instrumentedHtml]);
+
+	React.useEffect(() => {
 		function handleMessage(event: MessageEvent) {
 			const {data} = event;
 
-			if (!isBridgeMessage(data) || data.sessionId !== bridgeSessionId) {
+			if (
+				event.source !== previewFrame.current?.contentWindow ||
+				!isBridgeMessage(data) ||
+				data.sessionId !== bridgeSessionId
+			) {
 				return;
 			}
 
@@ -127,6 +184,9 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 
 	if (error) {
 		return <ErrorMessage>{error.message}</ErrorMessage>;
+	}
+	if (desktopPreviewError) {
+		return <ErrorMessage>{desktopPreviewError}</ErrorMessage>;
 	}
 
 	if (!storyExists) {
@@ -266,7 +326,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 					/>
 				</div>
 			)}
-			{html ? (
+			{html && previewReady ? (
 				<div
 					className="story-preview-route__frame-shell"
 					data-viewport={viewportPreset}
@@ -274,7 +334,15 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 					<iframe
 						className="story-preview-route__frame"
 						key={`${bridgeSessionId}:${reloadKey}`}
-						srcDoc={instrumentedHtml}
+						ref={previewFrame}
+						sandbox={
+							usesDesktopPreviewOrigin
+								? 'allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts'
+								: 'allow-downloads allow-forms allow-modals allow-popups allow-scripts'
+						}
+						{...(usesDesktopPreviewOrigin
+							? {src: desktopPreviewUrl}
+							: {srcDoc: instrumentedHtml})}
 						title={title}
 					/>
 				</div>

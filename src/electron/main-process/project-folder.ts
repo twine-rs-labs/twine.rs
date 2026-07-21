@@ -8,6 +8,7 @@ import extractZip from 'extract-zip';
 import {
 	copy,
 	mkdtemp,
+	mkdir,
 	mkdirp,
 	move,
 	readFile,
@@ -17,7 +18,15 @@ import {
 	stat,
 	writeFile
 } from 'fs-extra';
-import {basename, dirname, extname, join, relative, resolve} from 'path';
+import {
+	basename,
+	dirname,
+	extname,
+	isAbsolute,
+	join,
+	relative,
+	resolve
+} from 'path';
 import {performance} from 'perf_hooks';
 import type {CoreAssetInventoryEntry} from '../../core';
 import type {CoreExternalChange} from '../../core/bindings/CoreExternalChange';
@@ -52,6 +61,7 @@ import type {ProjectSourceLayout} from '../shared';
 import {
 	diffNativeProjectFileManifest,
 	beginNativeProjectFolderHydration,
+	createNativeProjectFolder,
 	captureNativeProjectAssetDigests,
 	finishNativeProjectFolderHydration,
 	findNativeTwineHtmlFiles,
@@ -5011,7 +5021,8 @@ export async function createProjectFolder(
 	const writtenProject = await writeProjectFolder(
 		rootPath,
 		story,
-		sourceLayout
+		sourceLayout,
+		true
 	);
 	await refreshProjectSessionBaseline(rootPath, [story.id]);
 
@@ -5031,6 +5042,21 @@ export async function saveProjectFolder(
 	story: Story,
 	options: ProjectFolderSaveOptions = {}
 ): Promise<NativeProjectFolderResult> {
+	if (typeof rootPath !== 'string' || !isAbsolute(rootPath)) {
+		throw new Error('Project saves require an absolute project folder path.');
+	}
+
+	const [rootStats, manifestStats] = await Promise.all([
+		stat(rootPath),
+		stat(join(rootPath, 'twine.toml'))
+	]);
+
+	if (!rootStats.isDirectory() || !manifestStats.isFile()) {
+		throw new Error(
+			'Project saves require an existing project folder with twine.toml.'
+		);
+	}
+
 	const incrementalProject = await writeProjectFolderIncremental(
 		rootPath,
 		story,
@@ -5664,7 +5690,8 @@ async function sourceLayoutFromProjectManifest(
 async function writeProjectFolder(
 	rootPath: string,
 	story: Story,
-	sourceLayout?: ProjectSourceLayout
+	sourceLayout?: ProjectSourceLayout,
+	create = false
 ) {
 	const existingSource = await sourceLayoutFromProjectManifest(
 		rootPath,
@@ -5677,11 +5704,9 @@ async function writeProjectFolder(
 		existingSource.sourcePath
 			? existingSource.sourcePath.replace(/\\/g, '/')
 			: 'story.twee';
-	const nativeResult = saveNativeProjectFolder(
-		rootPath,
-		story,
-		effectiveSourceLayout
-	);
+	const nativeResult = create
+		? createNativeProjectFolder(rootPath, story, effectiveSourceLayout)
+		: saveNativeProjectFolder(rootPath, story, effectiveSourceLayout);
 
 	if (nativeResult) {
 		return nativeResult;
@@ -5689,6 +5714,29 @@ async function writeProjectFolder(
 
 	if (!legacyProjectFallbackEnabled()) {
 		requireNativeProjectBackend('Project folder saving');
+	}
+
+	if (!create) {
+		// The native addon being unavailable is the only condition where the
+		// compatibility writer may run. Validate the complete manifest before any
+		// fallback write so a lookalike directory cannot be treated as a project.
+		await readProjectDescriptor(rootPath);
+	} else {
+		// Reserve the final path atomically. A preflight existence check would
+		// leave a window where another process could create the target before the
+		// compatibility writer begins mutating it.
+		await mkdirp(dirname(rootPath));
+		try {
+			await mkdir(rootPath);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+				throw new Error(
+					'A new project cannot replace an existing filesystem entry.'
+				);
+			}
+
+			throw error;
+		}
 	}
 
 	const storySlug = storyPathSlug(story);

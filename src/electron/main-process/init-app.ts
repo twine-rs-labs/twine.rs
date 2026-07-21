@@ -22,6 +22,7 @@ import {
 	performanceHarnessEnabled,
 	recordMainLaunchPhase
 } from './performance-harness';
+import {initStoryPreviewProtocol} from './story-preview-protocol';
 
 let mainWindow: BrowserWindow | null;
 
@@ -36,9 +37,12 @@ async function createWindow() {
 		show: false,
 		title: 'Twine RS',
 		webPreferences: {
-			contextIsolation: false,
+			contextIsolation: true,
+			nodeIntegration: false,
+			nodeIntegrationInSubFrames: false,
 			preload: path.resolve(__dirname, './preload.js'),
-			sandbox: true
+			sandbox: true,
+			webSecurity: true
 		}
 	});
 	if (fullscreenPersistenceEnabled()) {
@@ -111,6 +115,7 @@ export async function initApp() {
 			backupCadenceMs()
 		);
 		initIpc();
+		initStoryPreviewProtocol();
 		initMenuBar();
 		app.on('will-quit', async () => {
 			await cleanScratchDirectory();

@@ -44,6 +44,27 @@ export const ipcMain = {
 	on: jest.fn()
 };
 
+export const contextBridge = {
+	exposeInMainWorld: jest.fn()
+};
+
+export const ipcRenderer = {
+	invoke: jest.fn(),
+	on: jest.fn(),
+	once: jest.fn(),
+	removeListener: jest.fn(),
+	send: jest.fn()
+};
+
+export const net = {
+	fetch: jest.fn()
+};
+
+export const protocol = {
+	handle: jest.fn(),
+	registerSchemesAsPrivileged: jest.fn()
+};
+
 export const nativeImage = {
 	createFromPath: jest.fn(() => ({
 		getSize: jest.fn(() => ({height: 480, width: 640}))

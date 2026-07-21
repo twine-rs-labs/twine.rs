@@ -75,4 +75,21 @@ describe('<StoryFormatItemDetails>', () => {
 
 		expect(await axe(container)).toHaveNoViolations();
 	});
+
+	it('renders manifest metadata as text instead of executable HTML', () => {
+		const format = fakeLoadedStoryFormat();
+
+		if (format.loadState !== 'loaded') {
+			throw new Error('Expected a loaded format fixture.');
+		}
+		format.properties.author = '<img src=x onerror=alert(1)>';
+		format.properties.description = '<script>globalThis.pwned = true</script>';
+		const {container} = renderComponent({format});
+
+		expect(container.querySelector('script')).toBeNull();
+		expect(container.querySelector('img')).toBeNull();
+		expect(container).toHaveTextContent(
+			'<script>globalThis.pwned = true</script>'
+		);
+	});
 });

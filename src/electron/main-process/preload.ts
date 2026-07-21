@@ -1,75 +1,47 @@
-// Exposes a limited set of Electron modules to a renderer process. Because the
-// renderer processes load remote content (e.g. story formats), they must be
-// isolated.
-//
-// For now, we cannot use context isolation here because of jsonp. For jsonp
-// loading to work, it expects a global property to be set--but because it
-// crosses a context boundary, that global is in the wrong place. For now, we
-// place a privileged jsonp function into renderer context.
+// Exposes a limited set of Electron modules to the bundled renderer. Story
+// format source is fetched and parsed in the main process and is never loaded
+// as a page script in this privileged renderer.
 
 import {contextBridge, ipcRenderer, webUtils} from 'electron';
 import {Story} from '../../store/stories/stories.types';
 import type {ProjectSourceLayout, TwineElectronWindow} from '../shared';
 
-function jsonp(
-	url: string,
-	options: {name?: string; param?: string; timeout?: number},
-	callback: (error: Error | null, data?: any) => void
-) {
-	const callbackName = options.name ?? `__twineJsonp${Date.now()}`;
-	const callbackParam = options.param ?? 'callback';
-	const target = document.getElementsByTagName('script')[0] || document.head;
-	const script = document.createElement('script');
-	let timer: number | undefined;
-	let settled = false;
+const projectCapabilityField = '__twineProjectCapability';
+const projectCapabilities = new Map<string, string>();
 
-	function cleanup() {
-		if (script.parentNode) {
-			script.parentNode.removeChild(script);
-		}
-
-		delete (window as any)[callbackName];
-
-		if (timer) {
-			window.clearTimeout(timer);
-		}
+function rememberProjectCapability<T>(project: T): T {
+	if (!project || typeof project !== 'object') {
+		return project;
 	}
 
-	// Single settlement path so a load error, the JSONP callback, and the
-	// timeout can't double-invoke the caller.
-	function settle(error: Error | null, data?: any) {
-		if (settled) {
-			return;
-		}
+	const value = project as T & {
+		rootPath?: unknown;
+		[projectCapabilityField]?: unknown;
+	};
 
-		settled = true;
-		cleanup();
-		callback(error, data);
+	if (
+		typeof value.rootPath === 'string' &&
+		typeof value[projectCapabilityField] === 'string'
+	) {
+		projectCapabilities.set(value.rootPath, value[projectCapabilityField]);
+		delete value[projectCapabilityField];
 	}
 
-	(window as any)[callbackName] = (data: any) => settle(null, data);
+	return project;
+}
 
-	// Without this, a missing format.js (a common file:// packaging failure) only
-	// surfaces after the timeout with a vague "Timeout" — report it immediately.
-	script.onerror = () =>
-		settle(new Error(`Could not load story format from ${url}`));
+function projectCapability(rootPath: string) {
+	const capability = projectCapabilities.get(rootPath);
 
-	if (options.timeout) {
-		timer = window.setTimeout(
-			() => settle(new Error('Timeout')),
-			options.timeout
-		);
+	if (!capability) {
+		throw new Error('This project folder was not granted by the main process.');
 	}
 
-	url += `${url.includes('?') ? '&' : '?'}${callbackParam}=${encodeURIComponent(
-		callbackName
-	)}`;
-	url = url.replace('?&', '?');
+	return capability;
+}
 
-	script.src = url;
-	target.parentNode!.insertBefore(script, target);
-
-	return cleanup;
+async function invokeProjectResult(channel: string, ...args: unknown[]) {
+	return rememberProjectCapability(await ipcRenderer.invoke(channel, ...args));
 }
 
 const bridge = {
@@ -83,13 +55,24 @@ const bridge = {
 		return ipcRenderer.invoke('choose-story-library-folder');
 	},
 	consumeCommandLineOpenRequests() {
-		return ipcRenderer.invoke('consume-command-line-open-requests');
+		return ipcRenderer
+			.invoke('consume-command-line-open-requests')
+			.then(result => {
+				result.openedProjects = result.openedProjects.map(
+					rememberProjectCapability
+				);
+				return result;
+			});
 	},
 	copyText(text: string) {
 		ipcRenderer.send('copy-text', text);
 	},
 	copyAssetToProject(rootPath: string, sourcePath: string) {
-		return ipcRenderer.invoke('copy-asset-to-project', rootPath, sourcePath);
+		return ipcRenderer.invoke(
+			'copy-asset-to-project',
+			projectCapability(rootPath),
+			sourcePath
+		);
 	},
 	applyProjectAssetEffect(effectToken: string, direction: 'redo' | 'undo') {
 		return ipcRenderer.invoke(
@@ -99,14 +82,18 @@ const bridge = {
 		);
 	},
 	copyProjectImportAssets(importId: string, rootPath: string) {
-		return ipcRenderer.invoke('copy-project-import-assets', importId, rootPath);
+		return ipcRenderer.invoke(
+			'copy-project-import-assets',
+			importId,
+			projectCapability(rootPath)
+		);
 	},
 	createProjectFolder(
 		story: Story,
 		preferredParent?: string,
 		sourceLayout?: ProjectSourceLayout
 	) {
-		return ipcRenderer.invoke(
+		return invokeProjectResult(
 			'create-project-folder',
 			story,
 			preferredParent,
@@ -114,13 +101,22 @@ const bridge = {
 		);
 	},
 	deleteProjectAsset(rootPath: string, path: string) {
-		return ipcRenderer.invoke('delete-project-asset', rootPath, path);
+		return ipcRenderer.invoke(
+			'delete-project-asset',
+			projectCapability(rootPath),
+			path
+		);
 	},
 	discardProjectAssetEffect(effectToken: string) {
 		return ipcRenderer.invoke('discard-project-asset-effect', effectToken);
 	},
 	deleteProjectFolder(rootPath: string) {
-		return ipcRenderer.invoke('delete-project-folder', rootPath);
+		return ipcRenderer
+			.invoke('delete-project-folder', projectCapability(rootPath))
+			.then(result => {
+				projectCapabilities.delete(rootPath);
+				return result;
+			});
 	},
 	discardProjectImport(importId: string) {
 		return ipcRenderer.invoke('discard-project-import', importId);
@@ -144,18 +140,33 @@ const bridge = {
 		return ipcRenderer.invoke('load-prefs');
 	},
 	loadStories() {
-		return ipcRenderer.invoke('load-stories');
+		return ipcRenderer
+			.invoke('load-stories')
+			.then(stories => stories.map(rememberProjectCapability));
 	},
 	loadStoryFormats() {
 		return ipcRenderer.invoke('load-story-formats');
 	},
+	loadStoryFormatProperties(url: string, timeout?: number) {
+		return ipcRenderer.invoke('load-story-format-properties', url, timeout);
+	},
+	registerStoryPreview(html: string) {
+		return ipcRenderer.invoke('register-story-preview', html);
+	},
+	releaseStoryPreview(url: string) {
+		return ipcRenderer.invoke('release-story-preview', url);
+	},
 	hydrateProjectFolder(rootPath: string, storyIds?: string[]) {
-		return ipcRenderer.invoke('hydrate-project-folder', rootPath, storyIds);
+		return invokeProjectResult(
+			'hydrate-project-folder',
+			projectCapability(rootPath),
+			storyIds
+		);
 	},
 	beginProjectFolderHydration(rootPath: string, storyIds?: string[]) {
-		return ipcRenderer.invoke(
+		return invokeProjectResult(
 			'begin-project-folder-hydration',
-			rootPath,
+			projectCapability(rootPath),
 			storyIds
 		);
 	},
@@ -175,7 +186,10 @@ const bridge = {
 		return ipcRenderer.invoke('finish-project-folder-hydration', hydrationId);
 	},
 	listProjectAssets(rootPath: string) {
-		return ipcRenderer.invoke('list-project-assets', rootPath);
+		return ipcRenderer.invoke(
+			'list-project-assets',
+			projectCapability(rootPath)
+		);
 	},
 	readProjectAssetPayloads(
 		rootPath: string,
@@ -188,17 +202,10 @@ const bridge = {
 	) {
 		return ipcRenderer.invoke(
 			'read-project-asset-payloads',
-			rootPath,
+			projectCapability(rootPath),
 			paths,
 			limits
 		);
-	},
-	jsonp(
-		url: string,
-		options: {name?: string; timeout?: number},
-		callback: any
-	) {
-		return jsonp(url, options, callback);
 	},
 	onceStoryRenamed(callback: () => void): void {
 		ipcRenderer.once('story-renamed', callback);
@@ -210,13 +217,17 @@ const bridge = {
 		ipcRenderer.send('open-with-scratch-package', data, filename, assets);
 	},
 	openProjectFolder(options?: {loadPassageText?: boolean}) {
-		return ipcRenderer.invoke('open-project-folder', options);
+		return invokeProjectResult('open-project-folder', options);
 	},
 	prepareProjectImport(sourcePath: string) {
 		return ipcRenderer.invoke('prepare-project-import', sourcePath);
 	},
 	projectSessionSnapshot(rootPath: string, storyIds?: string[]) {
-		return ipcRenderer.invoke('project-session-snapshot', rootPath, storyIds);
+		return ipcRenderer.invoke(
+			'project-session-snapshot',
+			projectCapability(rootPath),
+			storyIds
+		);
 	},
 	revealStoryLibraryFolder() {
 		return ipcRenderer.invoke('reveal-story-library-folder');
@@ -233,7 +244,7 @@ const bridge = {
 	renameProjectAsset(rootPath: string, oldPath: string, newPath: string) {
 		return ipcRenderer.invoke(
 			'rename-project-asset',
-			rootPath,
+			projectCapability(rootPath),
 			oldPath,
 			newPath
 		);
@@ -244,7 +255,7 @@ const bridge = {
 	replaceProjectAsset(rootPath: string, path: string, sourcePath: string) {
 		return ipcRenderer.invoke(
 			'replace-project-asset',
-			rootPath,
+			projectCapability(rootPath),
 			path,
 			sourcePath
 		);
@@ -257,7 +268,7 @@ const bridge = {
 	) {
 		return ipcRenderer.invoke(
 			'resolve-project-session-conflicts',
-			rootPath,
+			projectCapability(rootPath),
 			resolution,
 			stories,
 			deltaId
@@ -273,7 +284,12 @@ const bridge = {
 			NonNullable<TwineElectronWindow['twineElectron']>['saveProjectFolder']
 		>[2]
 	) {
-		return ipcRenderer.invoke('save-project-folder', rootPath, story, options);
+		return invokeProjectResult(
+			'save-project-folder',
+			projectCapability(rootPath),
+			story,
+			options
+		);
 	},
 	runStoryLibraryBackup() {
 		return ipcRenderer.invoke('run-story-library-backup');
@@ -282,10 +298,17 @@ const bridge = {
 		ipcRenderer.send('save-story-html', story, data);
 	},
 	startProjectSession(rootPath: string, storyIds?: string[]) {
-		return ipcRenderer.invoke('start-project-session', rootPath, storyIds);
+		return ipcRenderer.invoke(
+			'start-project-session',
+			projectCapability(rootPath),
+			storyIds
+		);
 	},
 	stopProjectSession(rootPath: string) {
-		return ipcRenderer.invoke('stop-project-session', rootPath);
+		return ipcRenderer.invoke(
+			'stop-project-session',
+			projectCapability(rootPath)
+		);
 	},
 	updatePlatformSettings(settings: unknown) {
 		return ipcRenderer.invoke('update-platform-settings', settings);
@@ -311,14 +334,17 @@ async function rendererNativeMemorySnapshot() {
 	};
 }
 
-if ((process as any).contextIsolated) {
+// Electron defines isMainFrame in preload contexts. Keep the test/legacy
+// undefined case compatible, but never expose app capabilities to preview or
+// other child frames even if Electron loads this preload there.
+const exposeAppBridge = process.isMainFrame !== false;
+
+if (exposeAppBridge) {
 	contextBridge.exposeInMainWorld('twineElectron', bridge);
-} else {
-	(window as any).twineElectron = bridge;
 }
 
-if (process.env.TWINE_PERF === '1') {
-	(window as any).twinePerformanceNative = {
+if (exposeAppBridge && process.env.TWINE_PERF === '1') {
+	contextBridge.exposeInMainWorld('twinePerformanceNative', {
 		async checkpoint(name: string, renderer: Record<string, number>) {
 			const nativeMemory = await rendererNativeMemorySnapshot();
 
@@ -345,5 +371,5 @@ if (process.env.TWINE_PERF === '1') {
 
 			return {...main, rendererNativeMemory};
 		}
-	};
+	});
 }

@@ -40,20 +40,27 @@ describe('fetchStoryFormatProperties', () => {
 		);
 	});
 
-	it('uses twineElectron.jsonp() in an Electron context', async () => {
+	it('uses the non-executing main-process loader in an Electron context', async () => {
 		const electronWindow = window as TwineElectronWindow;
+		const loadStoryFormatProperties = jest.fn().mockResolvedValue({
+			name: 'Safe Format',
+			source: '<html></html>',
+			version: '1.0.0'
+		});
 
 		(electronWindow.twineElectron as any) = {
-			jsonp: jest.fn((url: string, props: any, callback?: any) => {
-				callback(null, {});
-				return () => {};
-			})
+			loadStoryFormatProperties
 		};
 		await fetchStoryFormatProperties('mock-format-url');
-		expect((electronWindow.twineElectron as any).jsonp).not.toHaveBeenCalled();
+		expect(loadStoryFormatProperties).not.toHaveBeenCalled();
 		(isElectronRenderer as jest.Mock).mockReturnValue(true);
-		await fetchStoryFormatProperties('mock-format-url');
-		expect((electronWindow.twineElectron as any).jsonp).toHaveBeenCalled();
+		expect(await fetchStoryFormatProperties('mock-format-url')).toEqual(
+			expect.objectContaining({name: 'Safe Format'})
+		);
+		expect(loadStoryFormatProperties).toHaveBeenCalledWith(
+			'mock-format-url',
+			2000
+		);
 	});
 
 	it('only makes one request at a time', async () => {

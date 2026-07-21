@@ -6,6 +6,7 @@ import {setImmediate} from 'timers';
 import {
 	copy,
 	mkdtemp,
+	mkdir,
 	mkdirp,
 	move,
 	readFile,
@@ -49,6 +50,7 @@ import {
 import {
 	beginNativeProjectFolderHydration,
 	captureNativeProjectAssetDigests,
+	createNativeProjectFolder,
 	diffNativeProjectFileManifest,
 	findNativeTwineHtmlFiles,
 	finishNativeProjectFolderHydration,
@@ -75,6 +77,7 @@ jest.mock('fs-extra');
 jest.mock('../native', () => ({
 	beginNativeProjectFolderHydration: jest.fn(),
 	captureNativeProjectAssetDigests: jest.fn(),
+	createNativeProjectFolder: jest.fn(),
 	diffNativeProjectFileManifest: jest.fn(),
 	findNativeTwineHtmlFiles: jest.fn(),
 	finishNativeProjectFolderHydration: jest.fn(),
@@ -108,6 +111,7 @@ jest.mock('../story-directory', () => ({
 
 describe('project-folder native bridge', () => {
 	const mkdirpMock = mkdirp as jest.Mock;
+	const mkdirMock = mkdir as jest.Mock;
 	const mkdtempMock = mkdtemp as jest.Mock;
 	const copyMock = copy as jest.Mock;
 	const extractZipMock = extractZip as jest.Mock;
@@ -126,6 +130,7 @@ describe('project-folder native bridge', () => {
 		beginNativeProjectFolderHydration as jest.Mock;
 	const captureNativeProjectAssetDigestsMock =
 		captureNativeProjectAssetDigests as jest.Mock;
+	const createNativeProjectFolderMock = createNativeProjectFolder as jest.Mock;
 	const finishNativeProjectFolderHydrationMock =
 		finishNativeProjectFolderHydration as jest.Mock;
 	const findNativeTwineHtmlFilesMock = findNativeTwineHtmlFiles as jest.Mock;
@@ -158,6 +163,7 @@ describe('project-folder native bridge', () => {
 		mkdtempMock.mockResolvedValue('/tmp/twine-import-abc');
 		moveMock.mockResolvedValue(undefined);
 		removeMock.mockResolvedValue(undefined);
+		mkdirMock.mockResolvedValue(undefined);
 		mkdirpMock.mockResolvedValue(undefined);
 		readFileMock.mockResolvedValue('');
 		readJsonMock.mockResolvedValue({});
@@ -180,6 +186,7 @@ describe('project-folder native bridge', () => {
 			failures: [],
 			totalSourceBytes: 0
 		});
+		createNativeProjectFolderMock.mockReturnValue(undefined);
 		nativeProjectDiagnosticMock.mockReturnValue(
 			'Native project backend was not built.'
 		);
@@ -316,7 +323,7 @@ describe('project-folder native bridge', () => {
 		expect(manifest).toContain('source_layout = "single-twee"');
 		expect(manifest).toContain('source = "story.twee"');
 		expect(manifest).not.toContain('file = ');
-		expect(saveNativeProjectFolderMock).toHaveBeenCalledWith(
+		expect(createNativeProjectFolderMock).toHaveBeenCalledWith(
 			'mock-story-library/Projects/moon-castle.twine.rs',
 			story,
 			'single-twee'
@@ -361,6 +368,19 @@ describe('project-folder native bridge', () => {
 			id: 'story-id',
 			name: 'Moon Castle'
 		};
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? [
+						'schema_version = 1',
+						'[[stories]]',
+						'id = "story-id"',
+						'name = "Moon Castle"',
+						'[[stories.passages]]',
+						`id = "${story.passages[0].id}"`,
+						'file = "passages/moon-castle/0001-start.twee"'
+					].join('\n')
+				: ''
+		);
 
 		const result = await saveProjectFolder(
 			'/native/moon-castle.twine.rs',
@@ -514,6 +534,60 @@ describe('project-folder native bridge', () => {
 		);
 		expect(writeFileMock).not.toHaveBeenCalled();
 		expect(moveMock).not.toHaveBeenCalled();
+	});
+
+	it('does not fall back after native save validation fails', async () => {
+		const story = fakeStory(1);
+
+		saveNativeProjectFolderMock.mockImplementation(() => {
+			throw new Error('native rejected the project root');
+		});
+
+		await expect(
+			saveProjectFolder('/native/moon-castle.twine.rs', story)
+		).rejects.toThrow('native rejected the project root');
+		expect(writeFileMock).not.toHaveBeenCalled();
+		expect(mkdirpMock).not.toHaveBeenCalled();
+	});
+
+	it('does not fall back after native create validation fails', async () => {
+		const story = {...fakeStory(1), name: 'Rejected Create'};
+
+		createNativeProjectFolderMock.mockImplementation(() => {
+			throw new Error('native rejected the create target');
+		});
+
+		await expect(createProjectFolder(story)).rejects.toThrow(
+			'native rejected the create target'
+		);
+		expect(writeFileMock).not.toHaveBeenCalled();
+		expect(mkdirpMock).not.toHaveBeenCalled();
+	});
+
+	it('validates the project manifest before using the save fallback', async () => {
+		const story = fakeStory(1);
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? 'schema_version = 99' : ''
+		);
+
+		await expect(
+			saveProjectFolder('/native/moon-castle.twine.rs', story)
+		).rejects.toThrow('Project schema 99');
+		expect(writeFileMock).not.toHaveBeenCalled();
+		expect(mkdirpMock).not.toHaveBeenCalled();
+	});
+
+	it('atomically refuses to create over an existing path in the fallback', async () => {
+		mkdirMock.mockRejectedValue(
+			Object.assign(new Error('already exists'), {code: 'EEXIST'})
+		);
+
+		await expect(createProjectFolder(fakeStory(1))).rejects.toThrow(
+			'cannot replace an existing filesystem entry'
+		);
+		expect(createNativeProjectFolderMock).toHaveBeenCalled();
+		expect(writeFileMock).not.toHaveBeenCalled();
 	});
 
 	it('incrementally saves a passage text edit through the active project session', async () => {
@@ -819,13 +893,13 @@ describe('project-folder native bridge', () => {
 		);
 		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
 
-		statMock.mockResolvedValue({
-			isDirectory: () => false,
-			isFile: () => true,
+		statMock.mockImplementation(async path => ({
+			isDirectory: () => String(path) === '/native/project.twine.rs',
+			isFile: () => String(path) !== '/native/project.twine.rs',
 			mtime: new Date('2026-06-21T16:00:01.000Z'),
 			mtimeMs: 2,
 			size: 0
-		});
+		}));
 		await expect(
 			saveProjectFolder('/native/project.twine.rs', compactStory, {
 				documentUpdates: [
@@ -1230,12 +1304,13 @@ describe('project-folder native bridge', () => {
 			graphFile()
 		]);
 		statMock.mockImplementation(async path => {
+			const root = String(path) === '/native/project.twine.rs';
 			const graph = String(path).endsWith('.twine/graph.json');
 			const mtimeMs = graph && graphWritten ? 2 : 1;
 
 			return {
-				isDirectory: () => false,
-				isFile: () => true,
+				isDirectory: () => root,
+				isFile: () => !root,
 				mtime: new Date('2026-06-21T16:00:00.000Z'),
 				mtimeMs,
 				size: 0
@@ -1345,13 +1420,13 @@ describe('project-folder native bridge', () => {
 				sizeBytes: 0
 			}
 		]);
-		statMock.mockResolvedValue({
-			isDirectory: () => false,
-			isFile: () => true,
+		statMock.mockImplementation(async path => ({
+			isDirectory: () => String(path) === '/native/project.twine.rs',
+			isFile: () => String(path) !== '/native/project.twine.rs',
 			mtime: new Date('2026-06-21T16:00:00.000Z'),
 			mtimeMs: 2,
 			size: 0
-		});
+		}));
 
 		await startProjectSession('/native/project.twine.rs', undefined, [
 			'story-id'

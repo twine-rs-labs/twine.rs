@@ -1,4 +1,10 @@
-import {app, clipboard, dialog, ipcMain, shell} from 'electron';
+import {
+	app,
+	clipboard,
+	dialog,
+	ipcMain as electronIpcMain,
+	shell
+} from 'electron';
 import debounce from 'lodash/debounce';
 import type {DebouncedFunc} from 'lodash';
 import {consumeCommandLineOpenPaths} from './command-line';
@@ -10,7 +16,21 @@ import {
 	renameStory,
 	saveStoryHtml
 } from './story-file';
-import {addLocalStoryFormat, loadStoryFormats} from './story-formats';
+import {
+	addLocalStoryFormat,
+	loadStoryFormatProperties,
+	loadStoryFormats
+} from './story-formats';
+import {trustedIpcRegistrar} from './ipc-security';
+import {
+	grantProjectCapability,
+	resolveProjectCapability,
+	revokeProjectCapability
+} from './project-capabilities';
+import {
+	registerStoryPreview,
+	releaseStoryPreview
+} from './story-preview-protocol';
 import {loadPrefs} from './prefs';
 import {openWithScratchFile, openWithScratchPackage} from './scratch-file';
 import {Story, StoryWithDocuments} from '../../store/stories/stories.types';
@@ -73,6 +93,8 @@ import {
 	performanceHarnessEnabled,
 	resetMainPerformanceHarness
 } from './performance-harness';
+
+const ipcMain = trustedIpcRegistrar(electronIpcMain);
 
 function nativePlatformSettings() {
 	return {
@@ -156,22 +178,28 @@ export function initIpc() {
 
 	ipcMain.handle(
 		'copy-asset-to-project',
-		async (_event, rootPath: string, sourcePath: string) =>
-			copyAssetToProject(rootPath, sourcePath)
+		async (event, capability: string, sourcePath: string) =>
+			copyAssetToProject(
+				resolveProjectCapability(event, capability),
+				sourcePath
+			)
 	);
 
 	ipcMain.handle(
 		'copy-project-import-assets',
-		async (_event, importId: string, rootPath: string) =>
-			copyProjectImportAssets(importId, rootPath)
+		async (event, importId: string, capability: string) =>
+			copyProjectImportAssets(
+				importId,
+				resolveProjectCapability(event, capability)
+			)
 	);
 
 	ipcMain.handle('discard-project-import', async (_event, importId: string) =>
 		discardProjectImport(importId)
 	);
 
-	ipcMain.handle('list-project-assets', async (_event, rootPath: string) =>
-		listProjectAssets(rootPath)
+	ipcMain.handle('list-project-assets', async (event, capability: string) =>
+		listProjectAssets(resolveProjectCapability(event, capability))
 	);
 
 	ipcMain.handle('referenced-media-embedding-capability', async () => {
@@ -192,10 +220,12 @@ export function initIpc() {
 		'read-project-asset-payloads',
 		async (
 			event,
-			rootPath: string,
+			capability: string,
 			paths: string[],
 			limits: NativeProjectAssetPayloadLimits
 		) => {
+			const rootPath = resolveProjectCapability(event, capability);
+
 			if (
 				!projectSessionSubscriptions.has(
 					projectSessionSubscriptionKey(event.sender.id, rootPath)
@@ -242,13 +272,18 @@ export function initIpc() {
 
 	ipcMain.handle(
 		'project-session-snapshot',
-		async (_event, rootPath: string, storyIds?: string[]) =>
-			projectSessionSnapshot(rootPath, storyIds)
+		async (event, capability: string, storyIds?: string[]) =>
+			projectSessionSnapshot(
+				resolveProjectCapability(event, capability),
+				storyIds
+			)
 	);
 
 	ipcMain.handle(
 		'start-project-session',
-		async (event, rootPath: string, storyIds?: string[]) => {
+		async (event, capability: string, storyIds?: string[]) => {
+			const rootPath = resolveProjectCapability(event, capability);
+
 			stopProjectSessionSubscription(event.sender.id, rootPath);
 
 			const listener = (
@@ -281,7 +316,9 @@ export function initIpc() {
 		}
 	);
 
-	ipcMain.handle('stop-project-session', async (event, rootPath: string) => {
+	ipcMain.handle('stop-project-session', async (event, capability: string) => {
+		const rootPath = resolveProjectCapability(event, capability);
+
 		if (!stopProjectSessionSubscription(event.sender.id, rootPath)) {
 			stopProjectSession(rootPath);
 		}
@@ -290,33 +327,44 @@ export function initIpc() {
 	ipcMain.handle(
 		'resolve-project-session-conflicts',
 		async (
-			_event,
-			rootPath: string,
+			event,
+			capability: string,
 			resolution: Parameters<typeof resolveProjectSessionConflicts>[1],
 			stories?: StoryWithDocuments[],
 			deltaId?: string
-		) =>
-			deltaId
+		) => {
+			const rootPath = resolveProjectCapability(event, capability);
+
+			return deltaId
 				? resolveProjectSessionConflicts(rootPath, resolution, stories, deltaId)
-				: resolveProjectSessionConflicts(rootPath, resolution, stories)
+				: resolveProjectSessionConflicts(rootPath, resolution, stories);
+		}
 	);
 
 	ipcMain.handle(
 		'rename-project-asset',
-		async (_event, rootPath: string, oldPath: string, newPath: string) =>
-			renameProjectAsset(rootPath, oldPath, newPath)
+		async (event, capability: string, oldPath: string, newPath: string) =>
+			renameProjectAsset(
+				resolveProjectCapability(event, capability),
+				oldPath,
+				newPath
+			)
 	);
 
 	ipcMain.handle(
 		'replace-project-asset',
-		async (_event, rootPath: string, path: string, sourcePath: string) =>
-			replaceProjectAsset(rootPath, path, sourcePath)
+		async (event, capability: string, path: string, sourcePath: string) =>
+			replaceProjectAsset(
+				resolveProjectCapability(event, capability),
+				path,
+				sourcePath
+			)
 	);
 
 	ipcMain.handle(
 		'delete-project-asset',
-		async (_event, rootPath: string, path: string) =>
-			deleteProjectAsset(rootPath, path)
+		async (event, capability: string, path: string) =>
+			deleteProjectAsset(resolveProjectCapability(event, capability), path)
 	);
 
 	ipcMain.handle(
@@ -331,9 +379,13 @@ export function initIpc() {
 			discardProjectAssetEffect(effectToken)
 	);
 
-	ipcMain.handle('delete-project-folder', async (_event, rootPath: string) =>
-		deleteProjectFolder(rootPath)
-	);
+	ipcMain.handle('delete-project-folder', async (event, capability: string) => {
+		const rootPath = resolveProjectCapability(event, capability);
+		const result = await deleteProjectFolder(rootPath);
+
+		revokeProjectCapability(event, capability);
+		return result;
+	});
 
 	ipcMain.handle('choose-story-library-folder', async () => {
 		return (await chooseStoryDirectoryPath()) ?? getStoryDirectoryPath();
@@ -343,7 +395,7 @@ export function initIpc() {
 		return resetStoryDirectoryPath();
 	});
 
-	ipcMain.handle('consume-command-line-open-requests', async () => {
+	ipcMain.handle('consume-command-line-open-requests', async event => {
 		const openedProjects: NativeCommandLineOpenResult['openedProjects'] = [];
 		const unsupportedPaths: NativeCommandLineOpenResult['unsupportedPaths'] =
 			[];
@@ -356,7 +408,7 @@ export function initIpc() {
 				});
 
 				if (result) {
-					openedProjects.push(result);
+					openedProjects.push(grantProjectCapability(event, result));
 				}
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code === 'ENOTDIR') {
@@ -393,11 +445,15 @@ export function initIpc() {
 	ipcMain.handle(
 		'create-project-folder',
 		async (
-			_event,
+			event,
 			story: StoryWithDocuments,
 			preferredParent?: string,
 			sourceLayout?: ProjectSourceLayout
-		) => createProjectFolder(story, preferredParent, sourceLayout)
+		) =>
+			grantProjectCapability(
+				event,
+				await createProjectFolder(story, preferredParent, sourceLayout)
+			)
 	);
 
 	ipcMain.handle('get-story-library-folder', async () =>
@@ -406,19 +462,34 @@ export function initIpc() {
 
 	ipcMain.handle(
 		'open-project-folder',
-		async (_event, options?: Parameters<typeof openProjectFolder>[1]) =>
-			openProjectFolder(undefined, options)
+		async (event, options?: Parameters<typeof openProjectFolder>[1]) => {
+			const project = await openProjectFolder(undefined, options);
+
+			return project ? grantProjectCapability(event, project) : undefined;
+		}
 	);
 
 	ipcMain.handle(
 		'hydrate-project-folder',
-		async (_event, rootPath: string, storyIds?: string[]) =>
-			hydrateProjectFolder(rootPath, storyIds)
+		async (event, capability: string, storyIds?: string[]) =>
+			grantProjectCapability(
+				event,
+				await hydrateProjectFolder(
+					resolveProjectCapability(event, capability),
+					storyIds
+				)
+			)
 	);
 	ipcMain.handle(
 		'begin-project-folder-hydration',
-		async (_event, rootPath: string, storyIds?: string[]) =>
-			beginProjectFolderHydration(rootPath, storyIds)
+		async (event, capability: string, storyIds?: string[]) =>
+			grantProjectCapability(
+				event,
+				await beginProjectFolderHydration(
+					resolveProjectCapability(event, capability),
+					storyIds
+				)
+			)
 	);
 	ipcMain.handle(
 		'read-project-folder-hydration-chunk',
@@ -434,11 +505,19 @@ export function initIpc() {
 	ipcMain.handle(
 		'save-project-folder',
 		async (
-			_event,
-			rootPath: string,
+			event,
+			capability: string,
 			story: StoryWithDocuments,
 			options?: Parameters<typeof saveProjectFolder>[2]
-		) => saveProjectFolder(rootPath, story, options)
+		) =>
+			grantProjectCapability(
+				event,
+				await saveProjectFolder(
+					resolveProjectCapability(event, capability),
+					story,
+					options
+				)
+			)
 	);
 
 	ipcMain.handle('reveal-story-library-folder', async () => {
@@ -473,9 +552,11 @@ export function initIpc() {
 		}
 	});
 
-	ipcMain.handle('load-stories', async () => {
+	ipcMain.handle('load-stories', async event => {
 		try {
-			return await loadStories();
+			return (await loadStories()).map(story =>
+				'rootPath' in story ? grantProjectCapability(event, story) : story
+			);
 		} catch (error) {
 			console.warn(`Could not load stories, returning empty array: ${error}`);
 			return [];
@@ -492,6 +573,19 @@ export function initIpc() {
 			return [];
 		}
 	});
+
+	ipcMain.handle(
+		'load-story-format-properties',
+		async (_event, url: string, timeout?: number) =>
+			loadStoryFormatProperties(url, timeout)
+	);
+
+	ipcMain.handle('register-story-preview', async (_event, html: string) =>
+		registerStoryPreview(html)
+	);
+	ipcMain.handle('release-story-preview', async (_event, url: string) =>
+		releaseStoryPreview(url)
+	);
 
 	ipcMain.handle('add-local-story-format', async () => addLocalStoryFormat());
 

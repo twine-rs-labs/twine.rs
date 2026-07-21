@@ -13,17 +13,20 @@ export async function fetchStoryFormatProperties(
 	url: string,
 	timeout = 2000
 ): Promise<StoryFormatProperties> {
-	const jsonpProvider =
-		isElectronRenderer() && (window as TwineElectronWindow).twineElectron?.jsonp
-			? (window as TwineElectronWindow).twineElectron!.jsonp
-			: jsonp;
+	const electronLoader = isElectronRenderer()
+		? (window as TwineElectronWindow).twineElectron?.loadStoryFormatProperties
+		: undefined;
+
+	if (electronLoader) {
+		return electronLoader(url, timeout);
+	}
 
 	return new Promise(
 		(resolve, reject) =>
 			(requestQueue = requestQueue.then(
 				() =>
 					new Promise(resolveQueue => {
-						jsonpProvider(url, {timeout, name: 'storyFormat'}, (err, data) => {
+						jsonp(url, {timeout, name: 'storyFormat'}, (err, data) => {
 							if (err) {
 								reject(err);
 							} else {

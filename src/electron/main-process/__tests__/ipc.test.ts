@@ -12,7 +12,7 @@ import {
 } from '../story-file';
 import {Story} from '../../../store/stories';
 import {fakePendingStoryFormat, fakePrefs, fakeStory} from '../../../test-util';
-import {loadStoryFormats} from '../story-formats';
+import {loadStoryFormatProperties, loadStoryFormats} from '../story-formats';
 import {
 	backupStoryDirectory,
 	chooseStoryDirectoryPath,
@@ -50,6 +50,10 @@ import {
 	nativeProjectAssetEmbeddingAvailable,
 	readNativeProjectAssetPayloads
 } from '../native';
+import {
+	grantProjectCapability,
+	projectCapabilityField
+} from '../project-capabilities';
 
 jest.mock('../json-file');
 jest.mock('../native');
@@ -68,6 +72,7 @@ describe('initIpc()', () => {
 	const handleMock = ipcMain.handle as jest.Mock;
 	const loadStoriesMock = loadStories as jest.Mock;
 	const loadStoryFormatsMock = loadStoryFormats as jest.Mock;
+	const loadStoryFormatPropertiesMock = loadStoryFormatProperties as jest.Mock;
 	const chooseAssetFileMock = chooseAssetFile as jest.Mock;
 	const copyAssetToProjectMock = copyAssetToProject as jest.Mock;
 	const copyProjectImportAssetsMock = copyProjectImportAssets as jest.Mock;
@@ -365,19 +370,27 @@ describe('initIpc()', () => {
 		expect(projectSessionSnapshotMock).toHaveBeenCalledWith('/mock/project', [
 			'mock-story'
 		]);
+		const sender7 = {
+			id: 7,
+			isDestroyed: () => false,
+			once: jest.fn(),
+			send: jest.fn()
+		};
+		const sender8 = {id: 8};
+		const sender99 = {id: 99};
+		const capabilityFor = (sender: object) =>
+			(
+				grantProjectCapability(
+					{sender},
+					{rootPath: '/mock/project', stories: [], storyIds: []}
+				) as Record<string, unknown>
+			)[projectCapabilityField] as string;
+		const capability7 = capabilityFor(sender7);
+		const capability8 = capabilityFor(sender8);
+		const capability99 = capabilityFor(sender99);
+
 		expect(
-			await startSession[1](
-				{
-					sender: {
-						id: 7,
-						isDestroyed: () => false,
-						once: jest.fn(),
-						send: jest.fn()
-					}
-				},
-				'/mock/project',
-				['mock-story']
-			)
+			await startSession[1]({sender: sender7}, capability7, ['mock-story'])
 		).toEqual(expect.objectContaining({rootPath: '/mock/project'}));
 		expect(startProjectSessionMock).toHaveBeenCalledWith(
 			'/mock/project',
@@ -394,8 +407,8 @@ describe('initIpc()', () => {
 		};
 		expect(
 			await readAssetPayloads[1](
-				{sender: {id: 7}},
-				'/mock/project',
+				{sender: sender7},
+				capability7,
 				['assets/asset.png'],
 				limits
 			)
@@ -418,8 +431,8 @@ describe('initIpc()', () => {
 
 		await expect(
 			readAssetPayloads[1](
-				{sender: {id: 7}},
-				'/mock/project',
+				{sender: sender7},
+				capability7,
 				Array.from({length: 26}, (_, index) => `assets/${index}.png`),
 				limits
 			)
@@ -432,23 +445,23 @@ describe('initIpc()', () => {
 		);
 		await expect(
 			readAssetPayloads[1](
-				{sender: {id: 7}},
-				'/mock/project',
+				{sender: sender7},
+				capability7,
 				['assets/asset.png'],
 				limits
 			)
 		).rejects.toThrow('Native asset reader failed.');
 		await expect(
 			readAssetPayloads[1](
-				{sender: {id: 99}},
-				'/mock/project',
+				{sender: sender99},
+				capability99,
 				['assets/asset.png'],
 				limits
 			)
 		).rejects.toThrow(/active project session/);
-		await stopSession[1]({sender: {id: 7}}, '/mock/project');
+		await stopSession[1]({sender: sender7}, capability7);
 		expect(stopProjectSessionMock).not.toHaveBeenCalled();
-		await stopSession[1]({sender: {id: 8}}, '/mock/project');
+		await stopSession[1]({sender: sender8}, capability8);
 		expect(stopProjectSessionMock).toHaveBeenCalledWith('/mock/project');
 		expect(
 			await resolveSession[1]({}, '/mock/project', 'keepApp', [story])
@@ -738,6 +751,27 @@ describe('initIpc()', () => {
 			expect(listener).not.toBeUndefined();
 			expect(await listener[1]()).toEqual([]);
 		});
+	});
+
+	it('loads story format properties through the main-process parser', async () => {
+		const properties = {
+			name: 'Safe Format',
+			source: '<html></html>',
+			version: '1.0.0'
+		};
+
+		loadStoryFormatPropertiesMock.mockResolvedValue(properties);
+		const listener = handleMock.mock.calls.find(
+			call => call[0] === 'load-story-format-properties'
+		);
+
+		await expect(
+			listener[1]({}, 'https://formats.example/format.js', 3000)
+		).resolves.toBe(properties);
+		expect(loadStoryFormatPropertiesMock).toHaveBeenCalledWith(
+			'https://formats.example/format.js',
+			3000
+		);
 	});
 
 	it('adds a listener for open-with-scratch-file events that calls openWithScratchFile()', async () => {

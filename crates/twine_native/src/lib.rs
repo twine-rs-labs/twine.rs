@@ -664,9 +664,58 @@ pub fn save_project_folder_json(
     story_json: String,
     source_layout: Option<String>,
 ) -> NativeResult<String> {
+    save_project_folder_json_inner(root_path, story_json, source_layout, false)
+}
+
+#[napi(js_name = "createProjectFolderJson")]
+pub fn create_project_folder_json(
+    root_path: String,
+    story_json: String,
+    source_layout: Option<String>,
+) -> NativeResult<String> {
+    save_project_folder_json_inner(root_path, story_json, source_layout, true)
+}
+
+fn reserve_new_project_root(root: &Path) -> NativeResult<()> {
+    if let Some(parent) = root.parent() {
+        fs::create_dir_all(parent).map_err(native_error)?;
+    }
+
+    match fs::create_dir(root) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Err(native_error(
+            "A new project cannot replace an existing filesystem entry.",
+        )),
+        Err(error) => Err(native_error(error)),
+    }
+}
+
+fn save_project_folder_json_inner(
+    root_path: String,
+    story_json: String,
+    source_layout: Option<String>,
+    allow_create: bool,
+) -> NativeResult<String> {
     let total_started = Instant::now();
     let mut timings = NativeProjectSaveTimings::default();
-    let root = PathBuf::from(&root_path);
+    let requested_root = PathBuf::from(&root_path);
+
+    if !requested_root.is_absolute() {
+        return Err(native_error("Project roots must be absolute paths."));
+    }
+
+    let root = if allow_create {
+        requested_root
+    } else {
+        if !requested_root.is_dir() || !requested_root.join("twine.toml").is_file() {
+            return Err(native_error(
+                "Project saves require an existing project folder with twine.toml.",
+            ));
+        }
+
+        fs::canonicalize(&requested_root).map_err(native_error)?
+    };
+    let root_path = root.to_string_lossy().into_owned();
     let started = Instant::now();
     let story_value =
         serde_json::from_str::<serde_json::Value>(&story_json).map_err(native_error)?;
@@ -680,7 +729,7 @@ pub fn save_project_folder_json(
         message: "Native twine.rs desktop project folder".into(),
         ..StoragePolicy::default()
     };
-    if root.join("twine.toml").exists() {
+    if !allow_create && root.join("twine.toml").exists() {
         let existing = load_project_path_with_options(&root, LoadProjectOptions::shell())
             .map_err(native_error)?;
         if existing
@@ -708,6 +757,12 @@ pub fn save_project_folder_json(
             .set_source_layout(story.id.clone(), source_layout);
     }
     timings.project_build_us = elapsed_us(started);
+
+    if allow_create {
+        // The create itself is the exclusivity check. This closes the race
+        // between checking the target and handing it to the project writer.
+        reserve_new_project_root(&root)?;
+    }
 
     let started = Instant::now();
     let save_report = save_project_path(
@@ -2804,6 +2859,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
     use std::io::Write;
+    use std::sync::{Arc, Barrier};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path(label: &str) -> PathBuf {
@@ -3559,6 +3615,64 @@ mod tests {
     }
 
     #[test]
+    fn save_rejects_non_project_directories_without_modifying_them() {
+        let root = temp_path("reject-non-project-save");
+
+        fs::create_dir_all(&root).expect("test directory should be created");
+        fs::write(root.join("keep.txt"), "untouched").expect("sentinel should be written");
+
+        let error =
+            save_project_folder_json(root.to_string_lossy().into_owned(), "{}".into(), None)
+                .expect_err("an ordinary directory must not be accepted as a project");
+
+        assert!(error.reason.contains("existing project folder"));
+        assert_eq!(
+            fs::read_to_string(root.join("keep.txt")).expect("sentinel should remain"),
+            "untouched"
+        );
+        fs::remove_dir_all(root).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn create_rejects_an_existing_filesystem_entry() {
+        let root = temp_path("reject-existing-project-create");
+
+        fs::create_dir_all(&root).expect("test directory should be created");
+
+        let error = reserve_new_project_root(&root)
+            .expect_err("project creation must not replace an existing directory");
+
+        assert!(error.reason.contains("cannot replace"));
+        assert!(root.is_dir());
+        fs::remove_dir_all(root).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn concurrent_project_root_reservations_have_one_winner() {
+        let root = Arc::new(temp_path("concurrent-project-create"));
+        let barrier = Arc::new(Barrier::new(2));
+        let attempts = (0..2)
+            .map(|_| {
+                let root = Arc::clone(&root);
+                let barrier = Arc::clone(&barrier);
+
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    reserve_new_project_root(&root).is_ok()
+                })
+            })
+            .collect::<Vec<_>>();
+        let successes = attempts
+            .into_iter()
+            .map(|attempt| usize::from(attempt.join().expect("reservation thread should finish")))
+            .sum::<usize>();
+
+        assert_eq!(successes, 1);
+        assert!(root.is_dir());
+        fs::remove_dir_all(root.as_ref()).expect("test directory should be removed");
+    }
+
+    #[test]
     fn saves_project_folder_and_slim_renderer_sidecar() {
         let root = temp_path("save-project");
         let story = serde_json::json!({
@@ -3591,7 +3705,7 @@ mod tests {
             "zoom": 1
         });
 
-        save_project_folder_json(root.to_string_lossy().into_owned(), story.to_string(), None)
+        create_project_folder_json(root.to_string_lossy().into_owned(), story.to_string(), None)
             .expect("project should save");
 
         let sidecar = fs::read_to_string(root.join(".twine/project.json"))
@@ -3701,7 +3815,7 @@ mod tests {
             "stylesheet": "body { color: black; }"
         });
 
-        save_project_folder_json(
+        create_project_folder_json(
             root.to_string_lossy().into_owned(),
             story.to_string(),
             Some("single-twee".into()),
@@ -3765,7 +3879,7 @@ mod tests {
             "startPassage": "old-passage"
         });
 
-        save_project_folder_json(
+        create_project_folder_json(
             root.to_string_lossy().into_owned(),
             original.to_string(),
             Some("passage-files".into()),

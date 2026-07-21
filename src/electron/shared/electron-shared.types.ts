@@ -7,6 +7,7 @@ import type {ProjectFolderSaveOptions} from '../../store/persistence/project-fol
 import type {CoreAssetInventoryEntry} from '../../core';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
 import type {StoryBuildAsset} from '../../util/build-package';
+import type {StoryFormatProperties} from '../../store/story-formats';
 
 export type ProjectSourceLayout = 'passage-files' | 'single-twee';
 
@@ -375,17 +376,18 @@ export interface TwineElectronWindow extends Window {
 		loadPrefs(): Promise<any>;
 		loadStories(): Promise<ElectronLoadedStoryEntry[]>;
 		loadStoryFormats(): Promise<any>;
+		loadStoryFormatProperties(
+			url: string,
+			timeout?: number
+		): Promise<StoryFormatProperties>;
+		registerStoryPreview(html: string): Promise<string>;
+		releaseStoryPreview(url: string): Promise<void>;
 		listProjectAssets(rootPath: string): Promise<CoreAssetInventoryEntry[]>;
 		readProjectAssetPayloads(
 			rootPath: string,
 			paths: string[],
 			limits: NativeProjectAssetPayloadLimits
 		): Promise<NativeProjectAssetPayloadBatch>;
-		jsonp(
-			url: string,
-			options: {name?: string; timeout?: number},
-			callback: (error: Error | null, data?: any) => void
-		): () => void;
 		onceStoryRenamed(callback: () => void): void;
 		openWithScratchFile(data: string, filename: string): void;
 		openWithScratchPackage(
