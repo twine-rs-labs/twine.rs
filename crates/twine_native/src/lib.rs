@@ -2816,6 +2816,55 @@ mod tests {
         ))
     }
 
+    #[cfg(windows)]
+    #[derive(Default)]
+    struct WindowsJunctionFixture {
+        directories: Vec<PathBuf>,
+        junctions: Vec<PathBuf>,
+    }
+
+    #[cfg(windows)]
+    impl WindowsJunctionFixture {
+        fn track_directory(&mut self, path: PathBuf) -> PathBuf {
+            self.directories.push(path.clone());
+            path
+        }
+
+        fn create_junction(&mut self, junction: &Path, target: &Path) {
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/j"])
+                .arg(junction)
+                .arg(target)
+                .output()
+                .expect("cmd.exe should create a directory junction");
+            assert!(
+                output.status.success(),
+                "mklink /J failed for {} -> {}: stdout={} stderr={}",
+                junction.display(),
+                target.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            self.junctions.push(junction.to_path_buf());
+            assert_eq!(
+                fs::canonicalize(junction).expect("junction should resolve"),
+                fs::canonicalize(target).expect("junction target should resolve")
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for WindowsJunctionFixture {
+        fn drop(&mut self) {
+            for junction in self.junctions.iter().rev() {
+                let _ = fs::remove_dir(junction);
+            }
+            for directory in self.directories.iter().rev() {
+                let _ = fs::remove_dir_all(directory);
+            }
+        }
+    }
+
     #[test]
     fn asset_kind_matches_typescript_mapping() {
         assert_eq!(asset_kind_for_path("assets/cover.png"), "image");
@@ -3228,6 +3277,143 @@ mod tests {
         fs::remove_file(&root).expect("replacement symlink cleanup");
         fs::remove_dir_all(displaced).expect("displaced project cleanup");
         fs::remove_dir_all(outside).expect("outside cleanup");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_project_asset_reader_rejects_intermediate_directory_junction() {
+        let mut fixture = WindowsJunctionFixture::default();
+        let root = fixture.track_directory(temp_path("asset-payload-intermediate-junction"));
+        let outside =
+            fixture.track_directory(temp_path("asset-payload-intermediate-junction-outside"));
+        let outside_asset = outside.join("escape.png");
+
+        fs::create_dir_all(root.join("assets")).expect("assets directory");
+        fs::create_dir_all(&outside).expect("outside directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&outside_asset, b"outside").expect("outside payload");
+        fixture.create_junction(&root.join("assets/nested"), &outside);
+
+        let payload_batch = read_project_asset_payloads_impl(
+            &root,
+            vec!["assets/nested/escape.png".into()],
+            100,
+            25,
+            100,
+        )
+        .expect("intermediate junction payload batch");
+        assert!(payload_batch.payloads.is_empty());
+        assert_eq!(payload_batch.failures.len(), 1);
+        assert_eq!(payload_batch.failures[0].reason, "symlink-escape");
+
+        let metadata = fs::metadata(&outside_asset).expect("outside payload metadata");
+        let digest_batch = capture_project_asset_digests_impl(
+            &root,
+            vec![NativeProjectAssetDigestRequest {
+                expected_modified_at_ms: system_time_to_ms(
+                    metadata.modified().expect("outside payload mtime"),
+                ),
+                expected_size_bytes: metadata.len() as f64,
+                path: "assets/nested/escape.png".into(),
+            }],
+            25,
+            100,
+        )
+        .expect("intermediate junction digest batch");
+        assert!(digest_batch.digests.is_empty());
+        assert_eq!(digest_batch.failures.len(), 1);
+        assert_eq!(digest_batch.failures[0].reason, "symlink-escape");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_project_asset_reader_rejects_assets_root_directory_junction() {
+        let mut fixture = WindowsJunctionFixture::default();
+        let root = fixture.track_directory(temp_path("asset-root-junction"));
+        let outside = fixture.track_directory(temp_path("asset-root-junction-outside"));
+        let outside_asset = outside.join("escape.png");
+
+        fs::create_dir_all(&root).expect("project directory");
+        fs::create_dir_all(&outside).expect("outside directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&outside_asset, b"outside").expect("outside payload");
+        fixture.create_junction(&root.join("assets"), &outside);
+
+        assert!(
+            read_project_asset_payloads_impl(
+                &root,
+                vec!["assets/escape.png".into()],
+                100,
+                25,
+                100,
+            )
+            .is_err()
+        );
+
+        let metadata = fs::metadata(&outside_asset).expect("outside payload metadata");
+        assert!(
+            capture_project_asset_digests_impl(
+                &root,
+                vec![NativeProjectAssetDigestRequest {
+                    expected_modified_at_ms: system_time_to_ms(
+                        metadata.modified().expect("outside payload mtime"),
+                    ),
+                    expected_size_bytes: metadata.len() as f64,
+                    path: "assets/escape.png".into(),
+                }],
+                25,
+                100,
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_retained_assets_capability_rejects_namespace_swap() {
+        let mut fixture = WindowsJunctionFixture::default();
+        let root = fixture.track_directory(temp_path("asset-capability-junction-swap"));
+        let outside = fixture.track_directory(temp_path("asset-capability-junction-swap-outside"));
+
+        fs::create_dir_all(root.join("assets/nested")).expect("assets directory");
+        fs::create_dir_all(&outside).expect("outside directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(root.join("assets/nested/safe.png"), b"trusted").expect("trusted payload");
+        fs::write(outside.join("safe.png"), b"outside").expect("outside payload");
+        let assets = open_project_assets_dir(&root)
+            .expect("assets capability")
+            .expect("assets directory");
+
+        fs::rename(root.join("assets/nested"), root.join("assets/nested-old"))
+            .expect("swap nested assets directory");
+        fixture.create_junction(&root.join("assets/nested"), &outside);
+        let result = open_project_asset_file(&assets, Path::new("nested/safe.png"));
+
+        assert!(result.is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_project_root_swap_after_canonicalization_fails_closed() {
+        let mut fixture = WindowsJunctionFixture::default();
+        let root = fixture.track_directory(temp_path("project-root-canonical-junction-swap"));
+        let displaced = fixture.track_directory(root.with_extension("displaced"));
+        let outside =
+            fixture.track_directory(temp_path("project-root-canonical-junction-swap-outside"));
+
+        fs::create_dir_all(root.join("assets")).expect("project assets");
+        fs::create_dir_all(outside.join("assets")).expect("outside assets");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(root.join("assets/safe.png"), b"trusted").expect("trusted payload");
+        fs::write(outside.join("twine.toml"), "version = 1\n").expect("outside manifest");
+        fs::write(outside.join("assets/safe.png"), b"outside").expect("outside payload");
+
+        let result = open_project_assets_dir_after_canonicalize(&root, |_| {
+            fs::rename(&root, &displaced).expect("displace canonical project root");
+            fixture.create_junction(&root, &outside);
+        });
+
+        assert!(result.is_err());
     }
 
     #[test]

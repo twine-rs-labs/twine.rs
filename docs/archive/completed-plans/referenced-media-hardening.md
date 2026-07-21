@@ -38,6 +38,11 @@ bytes.
 - Deterministic Unix tests cover leaf and intermediate symlinks, replacement of
   the project root after canonicalization, and namespace replacement after a
   trusted directory handle is retained.
+- Deterministic Windows tests cover intermediate and `assets/`-root junctions,
+  replacement of the project root after canonicalization, and namespace
+  replacement after a trusted directory handle is retained. Packaged Windows
+  CI also exercises the shipped preload and native addon against a verified
+  directory junction and requires an exact `symlink-escape` result.
 - Native tests cover same-size rewrites with restored modification times,
   missing digests, and unchanged file/count/encoded-byte ceilings.
 - Electron-main tests cover per-story ordering, bounded and incomplete source
@@ -68,8 +73,10 @@ backpressure withholds new authority without failing an already completed save,
 and per-session refresh epochs prevent older work from restoring stale digest
 or baseline state.
 
-## Residual release gate
+## Windows release gate
 
 The capability crates implement Unix no-follow flags and Windows reparse-point
-handling through one API. Unix behavior is exercised locally; packaged Windows
-CI remains the runtime gate for junction and reparse-point behavior.
+handling through one API. The Windows packaged-smoke job runs the native test
+suite and the packaged Electron junction test without allowing either step to
+fail, so junction, reparse-point, retained-capability, and root-swap behavior is
+now enforced on pull requests and pushes to `main`.

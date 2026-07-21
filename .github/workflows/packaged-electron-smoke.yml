@@ -32,6 +32,9 @@ jobs:
         run: npm run build:electron-app:ci
         env:
           NODE_ENV: production
+      - name: Test Windows native referenced-media hardening
+        if: runner.os == 'Windows'
+        run: cargo test -p twine_native
       - name: Package native unpacked app
         run: npm run package:electron:dir
         env:

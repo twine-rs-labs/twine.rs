@@ -11,6 +11,10 @@ import {
 	mkdtemp,
 	readFile,
 	readdir,
+	realpath,
+	rm,
+	rmdir,
+	symlink,
 	writeFile
 } from 'node:fs/promises';
 import os from 'node:os';
@@ -569,5 +573,112 @@ test('packaged desktop embeds referenced media for every bundled format family',
 		}
 	} finally {
 		await running?.app.close();
+	}
+});
+
+test('packaged Windows preload rejects referenced media through a directory junction', async () => {
+	test.skip(
+		process.platform !== 'win32',
+		'Windows directory junction hardening is Windows-specific.'
+	);
+
+	const executablePath = await packagedExecutable();
+	const profileRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-junction-')
+	);
+	const outsideRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-junction-outside-')
+	);
+	let junctionPath: string | undefined;
+	let running: {app: ElectronApplication; page: Page} | undefined;
+
+	try {
+		await writeFile(
+			path.join(outsideRoot, 'outside.png'),
+			Buffer.from('outside')
+		);
+		running = await launchPackagedApp(executablePath, profileRoot);
+		const {page} = running;
+
+		await page.getByTitle('New Project').click();
+		await expect(page).toHaveURL(/#\/new-project$/);
+		await page.getByLabel('Project name').fill('Junction Gate');
+		await tabWithText(page, 'Text').click();
+		await page.getByRole('button', {name: 'Create Project'}).click();
+		await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
+		await expect(sourceEditor(page)).toBeVisible();
+
+		const projectRoot = await projectRootFromRenderer(page);
+		const referencedPath = 'assets/escape/outside.png';
+
+		await mkdir(path.join(projectRoot, 'assets'), {recursive: true});
+		junctionPath = path.join(projectRoot, 'assets', 'escape');
+		await symlink(outsideRoot, junctionPath, 'junction');
+		expect(await realpath(junctionPath)).toBe(await realpath(outsideRoot));
+
+		const batch = await page.evaluate(
+			async ({rootPath, assetPath}) => {
+				const bridge = (
+					window as typeof window & {
+						twineElectron?: {
+							readProjectAssetPayloads(
+								rootPath: string,
+								paths: string[],
+								limits: {
+									maxFileBytes: number;
+									maxFileCount: number;
+									maxTotalEncodedBytes: number;
+								}
+							): Promise<{
+								failures: Array<{path: string; reason: string}>;
+								payloads: Array<{
+									bytes: ArrayBuffer | Uint8Array;
+									path: string;
+								}>;
+							}>;
+						};
+					}
+				).twineElectron;
+
+				if (!bridge) {
+					throw new Error('Desktop asset bridge is unavailable.');
+				}
+				const result = await bridge.readProjectAssetPayloads(
+					rootPath,
+					[assetPath],
+					{
+						maxFileBytes: 1024,
+						maxFileCount: 1,
+						maxTotalEncodedBytes: 1024
+					}
+				);
+
+				return {
+					failures: result.failures,
+					payloads: result.payloads.map(payload => ({
+						bytes: Array.from(new Uint8Array(payload.bytes)),
+						path: payload.path
+					}))
+				};
+			},
+			{assetPath: referencedPath, rootPath: projectRoot}
+		);
+
+		expect(batch.payloads).toEqual([]);
+		expect(batch.failures).toHaveLength(1);
+		expect(batch.failures[0]).toMatchObject({
+			path: referencedPath,
+			reason: 'symlink-escape'
+		});
+	} finally {
+		await running?.app.close();
+		if (junctionPath) {
+			await rmdir(junctionPath).catch(() => undefined);
+		}
+		await Promise.all(
+			[profileRoot, outsideRoot].map(root =>
+				rm(root, {force: true, recursive: true})
+			)
+		);
 	}
 });
