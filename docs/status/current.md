@@ -81,6 +81,11 @@ The complete local 10k and 50k benchmark runs verify:
   reports actual embedded, external, unresolved, and unsupported media. Browser
   embedding remains unavailable, and Package export still contains an asset
   plan rather than project asset bytes.
+- Referenced-media validation and bounded file reads run as a single-flight
+  asynchronous native task, keeping Electron's main event loop available while
+  preventing concurrent batches from saturating the shared worker pool.
+  Active-session authorization, trusted index baselines, stable ordering, and
+  the native 25-file/25 MiB ceilings remain unchanged.
 
 ## Current limitations
 

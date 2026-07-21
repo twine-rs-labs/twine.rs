@@ -66,7 +66,7 @@ interface NativeProjectAddon {
 		maxFileBytes: number,
 		maxFileCount: number,
 		maxTotalEncodedBytes: number
-	): NativeAddonProjectAssetPayloadBatch;
+	): Promise<NativeAddonProjectAssetPayloadBatch>;
 	projectFileManifestJson(rootPath: string, assetsJson?: string): string;
 	rememberProjectFolderJson(indexPath: string, projectJson: string): string;
 	saveProjectFolderJson(
@@ -92,6 +92,7 @@ const nativeRequire = createRequire(__filename);
 let addon: NativeProjectAddon | undefined;
 let addonLoadAttempted = false;
 let diagnostic: string | undefined;
+let projectAssetPayloadReadInProgress = false;
 
 function warnDiagnostic() {
 	if (diagnostic && process.env.NODE_ENV !== 'test') {
@@ -269,7 +270,7 @@ export function nativeProjectAssetEmbeddingAvailable() {
 	return typeof loadAddon()?.readProjectAssetPayloads === 'function';
 }
 
-export function readNativeProjectAssetPayloads(
+export async function readNativeProjectAssetPayloads(
 	rootPath: string,
 	baselines: NativeProjectAssetReadBaseline[],
 	limits: NativeProjectAssetPayloadLimits
@@ -281,25 +282,33 @@ export function readNativeProjectAssetPayloads(
 			'The native referenced-media embedding reader is unavailable.'
 		);
 	}
+	if (projectAssetPayloadReadInProgress) {
+		throw new Error('A referenced-media payload read is already in progress.');
+	}
 
-	const result = reader(
-		rootPath,
-		baselines.map(baseline => ({...baseline, enforceBaseline: true})),
-		limits.maxFileBytes,
-		limits.maxFileCount,
-		limits.maxTotalEncodedBytes
-	);
+	projectAssetPayloadReadInProgress = true;
+	try {
+		const result = await reader(
+			rootPath,
+			baselines.map(baseline => ({...baseline, enforceBaseline: true})),
+			limits.maxFileBytes,
+			limits.maxFileCount,
+			limits.maxTotalEncodedBytes
+		);
 
-	return {
-		...result,
-		payloads: result.payloads.map(payload => ({
-			bytes: payload.bytes,
-			encodedSizeBytes: payload.encodedSizeBytes,
-			mediaType: payload.mediaType,
-			path: payload.path,
-			sizeBytes: payload.sizeBytes
-		}))
-	} satisfies NativeProjectAssetPayloadBatch;
+		return {
+			...result,
+			payloads: result.payloads.map(payload => ({
+				bytes: payload.bytes,
+				encodedSizeBytes: payload.encodedSizeBytes,
+				mediaType: payload.mediaType,
+				path: payload.path,
+				sizeBytes: payload.sizeBytes
+			}))
+		} satisfies NativeProjectAssetPayloadBatch;
+	} finally {
+		projectAssetPayloadReadInProgress = false;
+	}
 }
 
 export function loadNativeProjectFolder(

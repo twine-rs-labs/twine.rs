@@ -245,7 +245,7 @@ describe('initIpc()', () => {
 		resetStoryDirectoryPathMock.mockResolvedValue('/mock/default-library');
 		saveStoryHtmlMock.mockResolvedValue(undefined);
 		nativeProjectAssetEmbeddingAvailableMock.mockReturnValue(true);
-		readNativeProjectAssetPayloadsMock.mockReturnValue({
+		readNativeProjectAssetPayloadsMock.mockResolvedValue({
 			failures: [],
 			payloads: [],
 			totalEncodedBytes: 0,
@@ -411,6 +411,17 @@ describe('initIpc()', () => {
 			],
 			limits
 		);
+		readNativeProjectAssetPayloadsMock.mockRejectedValueOnce(
+			new Error('Native asset reader failed.')
+		);
+		await expect(
+			readAssetPayloads[1](
+				{sender: {id: 7}},
+				'/mock/project',
+				['assets/asset.png'],
+				limits
+			)
+		).rejects.toThrow('Native asset reader failed.');
 		await expect(
 			readAssetPayloads[1](
 				{sender: {id: 99}},

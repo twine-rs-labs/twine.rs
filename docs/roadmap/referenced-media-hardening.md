@@ -14,25 +14,7 @@ export workflow.
 
 ## Work order
 
-### 1. Move payload reads off Electron's main thread — P2
-
-The native reader currently performs its bounded file reads synchronously.
-Fast local storage should keep the pause short, but a permitted batch on slow,
-cloud-backed, or network storage can make the desktop shell temporarily
-unresponsive.
-
-- Measure event-loop delay for representative 1 MiB and 25 MiB batches on local
-  and deliberately throttled storage before choosing the implementation.
-- Move the existing native operation to an asynchronous N-API task while
-  preserving active-session authorization, trusted index baselines, stable
-  result ordering, structured per-path failures, and native hard limits.
-- Keep payload encoding in the renderer and do not add a TypeScript filesystem
-  fallback.
-
-Exit signal: an explicit 25 MiB export does not create a main-process long task,
-and the current native, IPC, build, and packaged acceptance tests still pass.
-
-### 2. Use race-free, no-follow file opening — P2 security hardening
+### 1. Use race-free, no-follow file opening — P2 security hardening
 
 The reader canonicalizes and contains each path before `File::open()`, then
 revalidates path and file metadata after reading. A malicious local process with
@@ -48,6 +30,22 @@ symlink-swap race between path validation and opening.
 
 Exit signal: deterministic symlink/reparse-point swap tests cannot make the
 reader open bytes outside the canonical `assets/` tree.
+
+### 2. Persist the asynchronous addon contract check — P3
+
+The focused near-limit diagnostic proves that the native addon returns a
+Promise and leaves Electron's main loop available while the bounded read runs,
+but that diagnostic currently lives outside the tracked test suite. Normal Jest
+tests intentionally do not depend on a prebuilt native addon.
+
+- Add a post-`build:native` smoke test that calls the real addon directly.
+- Assert that the call returns a Promise without throwing synchronously and
+  that an invalid root rejects that Promise.
+- Avoid timing thresholds; responsiveness measurements remain diagnostic
+  evidence because storage and worker-pool scheduling vary by machine.
+
+Exit signal: the build pipeline fails if the addon regresses to a synchronous
+return value or synchronous validation error.
 
 ### 3. Add content-digest index validation — P3
 
@@ -67,8 +65,7 @@ reported as changed, without materially regressing normal project indexing.
 
 ## Priority rule
 
-Implement the asynchronous reader first because it addresses the most likely
-user-visible problem and can add the timing evidence needed for the other work.
-Advance no-follow opening ahead of it only if the release threat model expands
-to actively hostile project directories. Content digests remain last unless
+Advance no-follow opening if the release threat model expands to actively
+hostile project directories. Add the asynchronous addon smoke check when native
+build-pipeline coverage is next extended. Content digests remain last unless
 reproducible or adversarial asset integrity becomes a product requirement.

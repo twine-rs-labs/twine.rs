@@ -1,6 +1,9 @@
 #![doc = "Native Node/Electron bridge for project-folder I/O and inventory scans."]
 
-use napi::{Status, bindgen_prelude::Buffer};
+use napi::{
+    Env, Status, Task,
+    bindgen_prelude::{AsyncTask, Buffer},
+};
 use napi_derive::napi;
 use rayon::prelude::*;
 use regex::Regex;
@@ -797,15 +800,42 @@ pub fn read_project_asset_payloads(
     max_file_encoded_bytes: u32,
     max_file_count: u32,
     max_total_encoded_bytes: u32,
-) -> NativeResult<NativeProjectAssetPayloadBatch> {
-    read_project_asset_payload_requests_impl(
-        Path::new(&root_path),
+) -> AsyncTask<ReadProjectAssetPayloadsTask> {
+    AsyncTask::new(ReadProjectAssetPayloadsTask {
+        root_path,
         requests,
         max_file_encoded_bytes,
         max_file_count,
         max_total_encoded_bytes,
-    )
-    .map_err(|message| napi::Error::new(Status::InvalidArg, message))
+    })
+}
+
+pub struct ReadProjectAssetPayloadsTask {
+    root_path: String,
+    requests: Vec<NativeProjectAssetReadRequest>,
+    max_file_encoded_bytes: u32,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+}
+
+impl Task for ReadProjectAssetPayloadsTask {
+    type Output = NativeProjectAssetPayloadBatch;
+    type JsValue = NativeProjectAssetPayloadBatch;
+
+    fn compute(&mut self) -> NativeResult<Self::Output> {
+        read_project_asset_payload_requests_impl(
+            Path::new(&self.root_path),
+            std::mem::take(&mut self.requests),
+            self.max_file_encoded_bytes,
+            self.max_file_count,
+            self.max_total_encoded_bytes,
+        )
+        .map_err(|message| napi::Error::new(Status::InvalidArg, message))
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> NativeResult<Self::JsValue> {
+        Ok(output)
+    }
 }
 
 #[cfg(test)]
