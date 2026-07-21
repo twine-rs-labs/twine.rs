@@ -2948,7 +2948,10 @@ mod tests {
         assert_eq!(reasons["assets/../outside.png"], "invalid-path");
         assert_eq!(reasons["assets//not-canonical.png"], "invalid-path");
         assert_eq!(reasons["assets/missing.png"], "missing");
+        #[cfg(not(windows))]
         assert_eq!(reasons["assets/folder.png"], "not-file");
+        #[cfg(windows)]
+        assert_eq!(reasons["assets/folder.png"], "unreadable");
         assert_eq!(reasons["assets/readme.txt"], "unsupported-type");
         assert_eq!(reasons["assets/large.webp"], "file-too-large");
 
@@ -3292,7 +3295,7 @@ mod tests {
         fs::create_dir_all(&outside).expect("outside directory");
         fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
         fs::write(&outside_asset, b"outside").expect("outside payload");
-        fixture.create_junction(&root.join("assets/nested"), &outside);
+        fixture.create_junction(&root.join("assets").join("nested"), &outside);
 
         let payload_batch = read_project_asset_payloads_impl(
             &root,
@@ -3386,7 +3389,7 @@ mod tests {
 
         fs::rename(root.join("assets/nested"), root.join("assets/nested-old"))
             .expect("swap nested assets directory");
-        fixture.create_junction(&root.join("assets/nested"), &outside);
+        fixture.create_junction(&root.join("assets").join("nested"), &outside);
         let result = open_project_asset_file(&assets, Path::new("nested/safe.png"));
 
         assert!(result.is_err());
@@ -3444,7 +3447,9 @@ mod tests {
         );
 
         fs::write(&asset, b"xyz").expect("rewritten payload");
-        File::open(&asset)
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&asset)
             .expect("rewritten file")
             .set_times(fs::FileTimes::new().set_modified(initial_mtime))
             .expect("restore mtime");
