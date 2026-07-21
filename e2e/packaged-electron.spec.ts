@@ -235,12 +235,12 @@ test('packaged app creates, saves, routes, opens dialogs, and reopens a project'
 		await modeControls
 			.getByRole('tab')
 			.filter({hasText: /^Graph$/})
-			.click();
+			.press('Enter');
 		await expect(page.getByLabel('Story graph')).toBeVisible();
 		await modeControls
 			.getByRole('tab')
 			.filter({hasText: /^Text$/})
-			.click();
+			.press('Enter');
 		await expect(sourceEditor(page)).toBeVisible();
 
 		await page.getByTitle('Contents').click();
