@@ -704,14 +704,14 @@ export const BuildRoute: React.FC = () => {
 		}
 	}, [prepareExportBuild]);
 
-	const publishOnline = React.useCallback(async () => {
+	const preparePublishPackage = React.useCallback(async () => {
 		try {
 			await prepareExportBuild(
 				'publish-online',
 				exportFormat === 'html' ? 'publish' : activeTarget,
-				'Publish online'
+				'Prepare publish package'
 			);
-			appendLog('Online publishing package prepared.');
+			appendLog('Publish package prepared.');
 		} catch {
 			// prepareExportBuild already recorded the error.
 		}
@@ -1291,10 +1291,10 @@ export const BuildRoute: React.FC = () => {
 									<Button
 										icon="cloud-upload"
 										loading={busyAction === 'publish-online'}
-										onClick={publishOnline}
+										onClick={preparePublishPackage}
 										variant="ghost"
 									>
-										Publish online...
+										Prepare publish package
 									</Button>
 								)}
 							</footer>

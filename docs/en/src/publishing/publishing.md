@@ -50,9 +50,9 @@ is present. You can copy the inspection text.
 The _Build output_ section records actions and diagnostics from the current
 screen. It can be cleared without affecting the project or exported files.
 
-The _Publish online..._ button currently prepares a publish-target package and
-records it in Build output. It doesn't upload to a hosting service. Export a
-file and upload it yourself.
+The _Prepare publish package_ button prepares the story using the publish target
+and records the result in Build output. It doesn't upload to a hosting service.
+Export a file and upload it yourself.
 
 ## Now That I Have a Published File, What Do I Do?
 

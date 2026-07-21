@@ -69,9 +69,9 @@ rows for the active format.
 
 - **Export** is the single primary button; its label names the format
   (`Export Playable HTML`).
-- **Publish online…** appears only for non-source formats, as a *secondary*
-  action — it is "export, then upload", not a peer target. Keep
-  `publishStoryPackage` underneath; just present it as a follow-on.
+- **Prepare publish package** appears only for non-source formats, as a
+  *secondary* action. It prepares the publish-target build but does not claim to
+  upload it. Keep `publishStoryPackage` underneath; present it as a follow-on.
 - Source-only formats (Twee/JSON) hide Publish entirely.
 
 ---

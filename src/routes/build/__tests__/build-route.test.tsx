@@ -126,6 +126,9 @@ describe('<BuildRoute>', () => {
 		expect(screen.getByText('Archive (.zip)')).toBeInTheDocument();
 		expect(screen.getByText('Inline all assets')).toBeInTheDocument();
 		expect(screen.getByText('Classic Twine compatibility')).toBeInTheDocument();
+		expect(
+			screen.getByRole('button', {name: 'Prepare publish package'})
+		).toBeInTheDocument();
 		expect(screen.queryByText('Build output')).not.toBeInTheDocument();
 		expect(
 			screen.queryByRole('button', {name: /Compatibility Export/})
@@ -176,7 +179,7 @@ describe('<BuildRoute>', () => {
 		expect(screen.getByText('Saved Moon Castle.html.')).toBeInTheDocument();
 	});
 
-	it('frames source-only formats as info and hides publish', async () => {
+	it('frames source-only formats as info and hides publish packaging', async () => {
 		renderComponent();
 
 		fireEvent.click(screen.getByRole('button', {name: /Twee Source/}));
@@ -184,7 +187,7 @@ describe('<BuildRoute>', () => {
 		expect(screen.getByText('Source-only format')).toBeInTheDocument();
 		expect(screen.getByText('Ready to export')).toBeInTheDocument();
 		expect(
-			screen.queryByRole('button', {name: /Publish online/})
+			screen.queryByRole('button', {name: /Prepare publish package/})
 		).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole('button', {name: 'Export Twee Source'}));
