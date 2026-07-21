@@ -27,6 +27,18 @@ interface NativeAddonProjectAssetPayloadBatch extends NativeProjectAssetPayloadB
 	>;
 }
 
+export interface NativeProjectAssetDigestRequest {
+	expectedModifiedAtMs: number;
+	expectedSizeBytes: number;
+	path: string;
+}
+
+export interface NativeProjectAssetDigestBatch {
+	digests: Array<{contentDigest: string; path: string}>;
+	failures: NativeProjectAssetPayloadBatch['failures'];
+	totalSourceBytes: number;
+}
+
 interface NativeProjectAddon {
 	beginProjectFolderHydrationJson(
 		rootPath: string,
@@ -67,6 +79,12 @@ interface NativeProjectAddon {
 		maxFileCount: number,
 		maxTotalEncodedBytes: number
 	): Promise<NativeAddonProjectAssetPayloadBatch>;
+	captureProjectAssetDigests?(
+		rootPath: string,
+		requests: NativeProjectAssetDigestRequest[],
+		maxFileCount: number,
+		maxTotalEncodedBytes: number
+	): Promise<NativeProjectAssetDigestBatch>;
 	projectFileManifestJson(rootPath: string, assetsJson?: string): string;
 	rememberProjectFolderJson(indexPath: string, projectJson: string): string;
 	saveProjectFolderJson(
@@ -92,7 +110,22 @@ const nativeRequire = createRequire(__filename);
 let addon: NativeProjectAddon | undefined;
 let addonLoadAttempted = false;
 let diagnostic: string | undefined;
-let projectAssetPayloadReadInProgress = false;
+let nativeAssetReadActive = false;
+let queuedNativeAssetRead: (() => void) | undefined;
+const nativeAssetDigestMaxFileCount = 100;
+const nativeAssetMaxTotalEncodedBytes = 25 * 1024 * 1024;
+export const nativeAssetReadBusyCode = 'NATIVE_ASSET_READER_BUSY';
+const nativeAssetReadBusyMessage =
+	'The referenced-media native reader is busy.';
+
+export function nativeAssetReadBusy(error: unknown) {
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		'code' in error &&
+		error.code === nativeAssetReadBusyCode
+	);
+}
 
 function warnDiagnostic() {
 	if (diagnostic && process.env.NODE_ENV !== 'test') {
@@ -270,6 +303,65 @@ export function nativeProjectAssetEmbeddingAvailable() {
 	return typeof loadAddon()?.readProjectAssetPayloads === 'function';
 }
 
+export function nativeProjectAssetDigestCaptureAvailable() {
+	return typeof loadAddon()?.captureProjectAssetDigests === 'function';
+}
+
+function enqueueNativeAssetRead<T>(operation: () => Promise<T> | T) {
+	if (nativeAssetReadActive && queuedNativeAssetRead) {
+		return Promise.reject(
+			Object.assign(new Error(nativeAssetReadBusyMessage), {
+				code: nativeAssetReadBusyCode
+			})
+		);
+	}
+	return new Promise<T>((resolvePromise, rejectPromise) => {
+		const run = () => {
+			nativeAssetReadActive = true;
+			Promise.resolve()
+				.then(operation)
+				.then(resolvePromise, rejectPromise)
+				.finally(() => {
+					const next = queuedNativeAssetRead;
+
+					queuedNativeAssetRead = undefined;
+					if (next) {
+						next();
+					} else {
+						nativeAssetReadActive = false;
+					}
+				});
+		};
+
+		if (nativeAssetReadActive) {
+			queuedNativeAssetRead = run;
+		} else {
+			run();
+		}
+	});
+}
+
+export async function captureNativeProjectAssetDigests(
+	rootPath: string,
+	requests: NativeProjectAssetDigestRequest[]
+) {
+	const capture = loadAddon()?.captureProjectAssetDigests;
+
+	if (!capture) {
+		throw new Error(
+			'The native referenced-media digest reader is unavailable.'
+		);
+	}
+	return enqueueNativeAssetRead(() =>
+		capture(
+			rootPath,
+			requests,
+			nativeAssetDigestMaxFileCount,
+			nativeAssetMaxTotalEncodedBytes
+		)
+	);
+}
+
 export async function readNativeProjectAssetPayloads(
 	rootPath: string,
 	baselines: NativeProjectAssetReadBaseline[],
@@ -282,12 +374,7 @@ export async function readNativeProjectAssetPayloads(
 			'The native referenced-media embedding reader is unavailable.'
 		);
 	}
-	if (projectAssetPayloadReadInProgress) {
-		throw new Error('A referenced-media payload read is already in progress.');
-	}
-
-	projectAssetPayloadReadInProgress = true;
-	try {
+	return enqueueNativeAssetRead(async () => {
 		const result = await reader(
 			rootPath,
 			baselines.map(baseline => ({...baseline, enforceBaseline: true})),
@@ -306,9 +393,7 @@ export async function readNativeProjectAssetPayloads(
 				sizeBytes: payload.sizeBytes
 			}))
 		} satisfies NativeProjectAssetPayloadBatch;
-	} finally {
-		projectAssetPayloadReadInProgress = false;
-	}
+	});
 }
 
 export function loadNativeProjectFolder(

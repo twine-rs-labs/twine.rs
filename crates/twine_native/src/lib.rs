@@ -1,5 +1,10 @@
 #![doc = "Native Node/Electron bridge for project-folder I/O and inventory scans."]
 
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::{
+    ambient_authority,
+    fs::{Dir, OpenOptions},
+};
 use napi::{
     Env, Status, Task,
     bindgen_prelude::{AsyncTask, Buffer},
@@ -8,6 +13,7 @@ use napi_derive::napi;
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
@@ -38,7 +44,8 @@ const OBVIOUS_IMPORT_ASSET_DIRECTORIES: &[&str] = &[
 ];
 const NATIVE_ASSET_MAX_FILE_COUNT: u32 = 25;
 const NATIVE_ASSET_MAX_ENCODED_BYTES: u32 = 25 * 1024 * 1024;
-const NATIVE_ASSET_MAX_REQUEST_COUNT: usize = 100;
+const NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT: usize = 25;
+const NATIVE_ASSET_DIGEST_MAX_REQUEST_COUNT: usize = 100;
 const NATIVE_ASSET_MAX_PATH_BYTES: usize = 4096;
 
 type NativeResult<T> = napi::Result<T>;
@@ -353,7 +360,29 @@ pub struct NativeProjectAssetReadRequest {
     pub expected_exists: bool,
     pub expected_modified_at_ms: Option<f64>,
     pub expected_size_bytes: Option<f64>,
+    pub expected_content_digest: Option<String>,
     pub path: String,
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct NativeProjectAssetDigestRequest {
+    pub expected_modified_at_ms: f64,
+    pub expected_size_bytes: f64,
+    pub path: String,
+}
+
+#[napi(object)]
+pub struct NativeProjectAssetDigest {
+    pub content_digest: String,
+    pub path: String,
+}
+
+#[napi(object)]
+pub struct NativeProjectAssetDigestBatch {
+    pub digests: Vec<NativeProjectAssetDigest>,
+    pub failures: Vec<NativeProjectAssetPayloadFailure>,
+    pub total_source_bytes: u32,
 }
 
 #[napi(object)]
@@ -818,6 +847,47 @@ pub struct ReadProjectAssetPayloadsTask {
     max_total_encoded_bytes: u32,
 }
 
+#[napi(js_name = "captureProjectAssetDigests")]
+pub fn capture_project_asset_digests(
+    root_path: String,
+    requests: Vec<NativeProjectAssetDigestRequest>,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+) -> AsyncTask<CaptureProjectAssetDigestsTask> {
+    AsyncTask::new(CaptureProjectAssetDigestsTask {
+        root_path,
+        requests,
+        max_file_count,
+        max_total_encoded_bytes,
+    })
+}
+
+pub struct CaptureProjectAssetDigestsTask {
+    root_path: String,
+    requests: Vec<NativeProjectAssetDigestRequest>,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+}
+
+impl Task for CaptureProjectAssetDigestsTask {
+    type Output = NativeProjectAssetDigestBatch;
+    type JsValue = NativeProjectAssetDigestBatch;
+
+    fn compute(&mut self) -> NativeResult<Self::Output> {
+        capture_project_asset_digests_impl(
+            Path::new(&self.root_path),
+            std::mem::take(&mut self.requests),
+            self.max_file_count,
+            self.max_total_encoded_bytes,
+        )
+        .map_err(|message| napi::Error::new(Status::InvalidArg, message))
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> NativeResult<Self::JsValue> {
+        Ok(output)
+    }
+}
+
 impl Task for ReadProjectAssetPayloadsTask {
     type Output = NativeProjectAssetPayloadBatch;
     type JsValue = NativeProjectAssetPayloadBatch;
@@ -855,6 +925,7 @@ fn read_project_asset_payloads_impl(
                 expected_exists: false,
                 expected_modified_at_ms: None,
                 expected_size_bytes: None,
+                expected_content_digest: None,
                 path,
             })
             .collect(),
@@ -871,9 +942,9 @@ fn read_project_asset_payload_requests_impl(
     max_file_count: u32,
     max_total_encoded_bytes: u32,
 ) -> Result<NativeProjectAssetPayloadBatch, String> {
-    if requests.len() > NATIVE_ASSET_MAX_REQUEST_COUNT {
+    if requests.len() > NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT {
         return Err(format!(
-            "Asset request count exceeds the native limit {NATIVE_ASSET_MAX_REQUEST_COUNT}."
+            "Asset request count exceeds the native limit {NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT}."
         ));
     }
     if requests
@@ -885,29 +956,7 @@ fn read_project_asset_payload_requests_impl(
         ));
     }
 
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|error| format!("Project root could not be resolved: {error}"))?;
-    if !canonical_root.is_dir() {
-        return Err("Project root must be a directory.".into());
-    }
-
-    validate_native_project_manifest(&canonical_root)?;
-
-    let assets_path = canonical_root.join("assets");
-    let canonical_assets = match assets_path.canonicalize() {
-        Ok(path) if path.is_dir() && path.starts_with(&canonical_root) => Some(path),
-        Ok(path) if !path.starts_with(&canonical_root) => {
-            return Err("Project assets root resolves outside the project root.".into());
-        }
-        Ok(_) => return Err("Project assets root must be a directory.".into()),
-        Err(error) if error.kind() == ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(format!(
-                "Project assets root could not be resolved: {error}"
-            ));
-        }
-    };
+    let assets_dir = open_project_assets_dir(root)?;
     let mut seen = BTreeSet::new();
     let mut payloads = Vec::new();
     let mut failures = Vec::new();
@@ -949,7 +998,7 @@ fn read_project_asset_payload_requests_impl(
             ));
             continue;
         }
-        let Some(canonical_assets) = canonical_assets.as_ref() else {
+        let Some(assets_dir) = assets_dir.as_ref() else {
             failures.push(asset_payload_failure(
                 path,
                 if request.expected_exists {
@@ -965,9 +1014,8 @@ fn read_project_asset_payload_requests_impl(
             ));
             continue;
         };
-        let candidate = canonical_assets.join(relative_asset_path);
-        let resolved = match candidate.canonicalize() {
-            Ok(path) => path,
+        let mut file = match open_project_asset_file(assets_dir, &relative_asset_path) {
+            Ok(file) => file,
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 failures.push(asset_payload_failure(
                     path,
@@ -985,25 +1033,20 @@ fn read_project_asset_payload_requests_impl(
                 continue;
             }
             Err(error) => {
+                let reason = if error.kind() == ErrorKind::PermissionDenied {
+                    "unreadable"
+                } else {
+                    "symlink-escape"
+                };
                 failures.push(asset_payload_failure(
                     path,
-                    "unreadable",
-                    format!("Asset could not be resolved: {error}"),
+                    reason,
+                    format!("Asset could not be opened without following links: {error}"),
                 ));
                 continue;
             }
         };
-
-        if resolved == *canonical_assets || !resolved.starts_with(canonical_assets) {
-            failures.push(asset_payload_failure(
-                path,
-                "symlink-escape",
-                "Asset resolves outside the project assets root.",
-            ));
-            continue;
-        }
-
-        let before = match fs::metadata(&resolved) {
+        let before = match file.metadata() {
             Ok(metadata) if metadata.is_file() => metadata,
             Ok(_) => {
                 failures.push(asset_payload_failure(
@@ -1095,21 +1138,6 @@ fn read_project_asset_payload_requests_impl(
             continue;
         }
 
-        let mut file = match File::open(&resolved) {
-            Ok(file) => file,
-            Err(error) => {
-                failures.push(asset_payload_failure(
-                    path,
-                    if error.kind() == ErrorKind::NotFound {
-                        "missing"
-                    } else {
-                        "unreadable"
-                    },
-                    format!("Asset could not be opened: {error}"),
-                ));
-                continue;
-            }
-        };
         let remaining_total =
             u64::from(max_total_encoded_bytes).saturating_sub(total_encoded_bytes);
         let raw_read_limit = raw_bytes_for_encoded_limit(u64::from(max_file_encoded_bytes))
@@ -1155,34 +1183,6 @@ fn read_project_asset_payload_requests_impl(
             continue;
         }
 
-        match candidate.canonicalize() {
-            Ok(current) if current == resolved => {}
-            Ok(current) if !current.starts_with(canonical_assets) => {
-                failures.push(asset_payload_failure(
-                    path,
-                    "symlink-escape",
-                    "Asset resolved outside the project assets root while it was read.",
-                ));
-                continue;
-            }
-            Ok(_) => {
-                failures.push(asset_payload_failure(
-                    path,
-                    "changed",
-                    "Asset path changed while it was being read.",
-                ));
-                continue;
-            }
-            Err(error) => {
-                failures.push(asset_payload_failure(
-                    path,
-                    "changed",
-                    format!("Asset path disappeared while it was read: {error}"),
-                ));
-                continue;
-            }
-        }
-
         let after = match file.metadata() {
             Ok(metadata) => metadata,
             Err(error) => {
@@ -1201,6 +1201,34 @@ fn read_project_asset_payload_requests_impl(
                 "Asset changed while it was being read.",
             ));
             continue;
+        }
+        if request.enforce_baseline {
+            let digest_is_valid = request
+                .expected_content_digest
+                .as_ref()
+                .is_some_and(|digest| {
+                    digest.len() == 64
+                        && digest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                });
+            if !digest_is_valid {
+                failures.push(asset_payload_failure(
+                    path,
+                    "changed-since-index",
+                    "A trusted content digest was not captured for this indexed asset.",
+                ));
+                continue;
+            }
+            let observed_digest = format!("{:x}", Sha256::digest(&bytes));
+            if request.expected_content_digest.as_deref() != Some(observed_digest.as_str()) {
+                failures.push(asset_payload_failure(
+                    path,
+                    "changed-since-index",
+                    "Asset content changed after project indexing.",
+                ));
+                continue;
+            }
         }
 
         let Ok(size_bytes) = u32::try_from(bytes.len()) else {
@@ -1232,24 +1260,301 @@ fn read_project_asset_payload_requests_impl(
     })
 }
 
-fn validate_native_project_manifest(canonical_root: &Path) -> Result<(), String> {
-    let manifest_path = canonical_root.join("twine.toml");
-    let metadata = manifest_path
-        .symlink_metadata()
-        .map_err(|error| format!("Project root must contain a regular twine.toml: {error}"))?;
+fn capture_project_asset_digests_impl(
+    root: &Path,
+    requests: Vec<NativeProjectAssetDigestRequest>,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+) -> Result<NativeProjectAssetDigestBatch, String> {
+    if requests.len() > NATIVE_ASSET_DIGEST_MAX_REQUEST_COUNT {
+        return Err(format!(
+            "Asset digest request count exceeds the native limit {NATIVE_ASSET_DIGEST_MAX_REQUEST_COUNT}."
+        ));
+    }
+    if requests
+        .iter()
+        .any(|request| request.path.len() > NATIVE_ASSET_MAX_PATH_BYTES)
+    {
+        return Err(format!(
+            "Asset digest path exceeds the native limit {NATIVE_ASSET_MAX_PATH_BYTES} bytes."
+        ));
+    }
 
-    if !metadata.file_type().is_file() {
+    let assets_dir = open_project_assets_dir(root)?;
+    let max_file_count = max_file_count.min(NATIVE_ASSET_DIGEST_MAX_REQUEST_COUNT as u32);
+    let max_total_encoded_bytes = max_total_encoded_bytes.min(NATIVE_ASSET_MAX_ENCODED_BYTES);
+    let mut seen = BTreeSet::new();
+    let mut digests = Vec::new();
+    let mut failures = Vec::new();
+    let mut total_source_bytes = 0_u64;
+    let mut total_encoded_bytes = 0_u64;
+    let mut requested_file_count = 0_u32;
+
+    for request in requests {
+        let path = request.path;
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let Some(relative_path) = canonical_asset_request_path(&path) else {
+            failures.push(asset_payload_failure(
+                path,
+                "invalid-path",
+                "Asset path must be a canonical assets/... project-relative path.",
+            ));
+            continue;
+        };
+        if supported_asset_media_type(&path).is_none() {
+            failures.push(asset_payload_failure(
+                path,
+                "unsupported-type",
+                "Asset file type is not supported for media embedding.",
+            ));
+            continue;
+        }
+        requested_file_count = requested_file_count.saturating_add(1);
+        if requested_file_count > max_file_count {
+            failures.push(asset_payload_failure(
+                path,
+                "file-count-exceeded",
+                format!("Asset digest request exceeds the file-count limit {max_file_count}."),
+            ));
+            continue;
+        }
+        let Some(assets_dir) = assets_dir.as_ref() else {
+            failures.push(asset_payload_failure(
+                path,
+                "changed-since-index",
+                "Indexed asset disappeared before its digest could be captured.",
+            ));
+            continue;
+        };
+        let mut file = match open_project_asset_file(assets_dir, &relative_path) {
+            Ok(file) => file,
+            Err(error) => {
+                let reason = match error.kind() {
+                    ErrorKind::NotFound => "changed-since-index",
+                    ErrorKind::PermissionDenied => "unreadable",
+                    _ => "symlink-escape",
+                };
+                failures.push(asset_payload_failure(
+                    path,
+                    reason,
+                    format!("Asset could not be opened safely for digest capture: {error}"),
+                ));
+                continue;
+            }
+        };
+        let before = match file.metadata() {
+            Ok(metadata) if metadata.is_file() => metadata,
+            Ok(_) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "not-file",
+                    "Asset is not a regular file.",
+                ));
+                continue;
+            }
+            Err(error) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "unreadable",
+                    format!("Asset metadata could not be read: {error}"),
+                ));
+                continue;
+            }
+        };
+        let observed_modified_at_ms = system_time_to_ms(before.modified().unwrap_or(UNIX_EPOCH));
+        if request.expected_size_bytes != before.len() as f64
+            || request.expected_modified_at_ms.trunc() != observed_modified_at_ms.trunc()
+        {
+            failures.push(asset_payload_failure(
+                path,
+                "changed-since-index",
+                "Asset size or modification time changed before digest capture.",
+            ));
+            continue;
+        }
+        let Some(encoded_size) = encoded_size_bytes(before.len()) else {
+            failures.push(asset_payload_failure(
+                path,
+                "file-too-large",
+                "Asset size cannot be represented safely.",
+            ));
+            continue;
+        };
+        if encoded_size > u64::from(max_total_encoded_bytes) {
+            failures.push(asset_payload_failure(
+                path,
+                "file-too-large",
+                "Asset exceeds the digest encoded-size limit.",
+            ));
+            continue;
+        }
+        if total_encoded_bytes.saturating_add(encoded_size) > u64::from(max_total_encoded_bytes) {
+            failures.push(asset_payload_failure(
+                path,
+                "total-limit-exceeded",
+                "Asset would exceed the digest encoded-size limit.",
+            ));
+            continue;
+        }
+
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut read_bytes = 0_u64;
+        let read_result = (|| -> io::Result<()> {
+            loop {
+                let count = file.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                read_bytes = read_bytes.saturating_add(count as u64);
+                if read_bytes > before.len() {
+                    return Err(io::Error::other("asset grew beyond the digest byte limit"));
+                }
+                hasher.update(&buffer[..count]);
+            }
+            Ok(())
+        })();
+        if let Err(error) = read_result {
+            failures.push(asset_payload_failure(
+                path,
+                "unreadable",
+                format!("Asset could not be hashed: {error}"),
+            ));
+            continue;
+        }
+        let after = match file.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "changed",
+                    format!("Asset metadata changed during digest capture: {error}"),
+                ));
+                continue;
+            }
+        };
+        if read_bytes != before.len() || file_metadata_changed(&before, &after) {
+            failures.push(asset_payload_failure(
+                path,
+                "changed",
+                "Asset changed during digest capture.",
+            ));
+            continue;
+        }
+        total_source_bytes += read_bytes;
+        total_encoded_bytes += encoded_size;
+        digests.push(NativeProjectAssetDigest {
+            content_digest: format!("{:x}", hasher.finalize()),
+            path,
+        });
+    }
+
+    Ok(NativeProjectAssetDigestBatch {
+        digests,
+        failures,
+        total_source_bytes: total_source_bytes as u32,
+    })
+}
+
+fn open_project_assets_dir(root: &Path) -> Result<Option<Dir>, String> {
+    open_project_assets_dir_after_canonicalize(root, |_| {})
+}
+
+fn open_project_assets_dir_after_canonicalize<F>(
+    root: &Path,
+    after_canonicalize: F,
+) -> Result<Option<Dir>, String>
+where
+    F: FnOnce(&Path),
+{
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("Project root could not be resolved: {error}"))?;
+    after_canonicalize(&canonical_root);
+    let project_dir = open_canonical_directory_nofollow(&canonical_root)
+        .map_err(|error| format!("Project root must be a directory: {error}"))?;
+    validate_native_project_manifest(&project_dir)?;
+
+    match project_dir.open_dir_nofollow("assets") {
+        Ok(dir) => Ok(Some(dir)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "Project assets root must be a regular directory and may not be a link: {error}"
+        )),
+    }
+}
+
+fn open_canonical_directory_nofollow(canonical_path: &Path) -> io::Result<Dir> {
+    if !canonical_path.is_absolute() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "canonical directory path must be absolute",
+        ));
+    }
+    let anchor = canonical_path
+        .ancestors()
+        .last()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "directory path has no anchor"))?;
+    let mut directory = Dir::open_ambient_dir(anchor, ambient_authority())?;
+    let relative = canonical_path
+        .strip_prefix(anchor)
+        .map_err(|_| io::Error::new(ErrorKind::InvalidInput, "invalid directory anchor"))?;
+
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "canonical directory contains an invalid component",
+            ));
+        };
+        directory = directory.open_dir_nofollow(name)?;
+    }
+
+    Ok(directory)
+}
+
+fn validate_native_project_manifest(project_dir: &Dir) -> Result<(), String> {
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let manifest = project_dir
+        .open_with("twine.toml", &options)
+        .map_err(|error| format!("Project root must contain a regular twine.toml: {error}"))?;
+    let metadata = manifest
+        .metadata()
+        .map_err(|error| format!("Project manifest metadata could not be read: {error}"))?;
+    if !metadata.is_file() {
         return Err("Project root must contain a regular twine.toml.".into());
     }
+    Ok(())
+}
 
-    let canonical_manifest = manifest_path
-        .canonicalize()
-        .map_err(|error| format!("Project manifest could not be resolved: {error}"))?;
-    if canonical_manifest.parent() != Some(canonical_root) {
-        return Err("Project manifest must remain directly below the project root.".into());
+fn open_project_asset_file(assets_dir: &Dir, relative_path: &Path) -> io::Result<File> {
+    let components = relative_path.components().collect::<Vec<_>>();
+    let mut parent = assets_dir.try_clone()?;
+
+    for component in &components[..components.len().saturating_sub(1)] {
+        let std::path::Component::Normal(name) = component else {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "invalid asset path",
+            ));
+        };
+        parent = parent.open_dir_nofollow(name)?;
     }
 
-    Ok(())
+    let Some(std::path::Component::Normal(file_name)) = components.last() else {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "invalid asset path",
+        ));
+    };
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    parent
+        .open_with(file_name, &options)
+        .map(|file| file.into_std())
 }
 
 fn canonical_asset_request_path(path: &str) -> Option<PathBuf> {
@@ -2643,7 +2948,7 @@ mod tests {
         fs::create_dir_all(root.join("assets")).expect("assets directory");
         fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
         fs::write(root.join("assets/valid.svg"), b"<svg/>").expect("valid asset");
-        let mut paths = (0..25)
+        let mut paths = (0..24)
             .map(|index| format!("assets/unsupported-{index}.css"))
             .collect::<Vec<_>>();
         paths.push("assets/valid.svg".into());
@@ -2659,7 +2964,7 @@ mod tests {
                 .iter()
                 .filter(|failure| failure.reason == "unsupported-type")
                 .count(),
-            25
+            24
         );
         assert!(
             batch
@@ -2689,6 +2994,7 @@ mod tests {
                     metadata.modified().unwrap_or(UNIX_EPOCH),
                 )),
                 expected_size_bytes: Some(3.0),
+                expected_content_digest: Some("0".repeat(64)),
                 path: "assets/a.png".into(),
             }],
             100,
@@ -2700,12 +3006,13 @@ mod tests {
         assert!(changed.payloads.is_empty());
         assert_eq!(changed.failures[0].reason, "changed-since-index");
 
-        let unbounded = (0..=NATIVE_ASSET_MAX_REQUEST_COUNT)
+        let unbounded = (0..=NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT)
             .map(|index| NativeProjectAssetReadRequest {
                 enforce_baseline: true,
                 expected_exists: false,
                 expected_modified_at_ms: None,
                 expected_size_bytes: None,
+                expected_content_digest: None,
                 path: format!("assets/{index}.png"),
             })
             .collect();
@@ -2726,17 +3033,79 @@ mod tests {
             .set_len(raw_bytes_for_encoded_limit(u64::from(NATIVE_ASSET_MAX_ENCODED_BYTES)) + 1)
             .expect("sparse large asset");
         let mut paths = vec!["assets/large.mp4".into()];
-        paths.extend((1..=25).map(|index| format!("assets/missing-{index}.png")));
+        paths.extend((1..=24).map(|index| format!("assets/missing-{index}.png")));
 
         let batch = read_project_asset_payloads_impl(&root, paths, u32::MAX, u32::MAX, u32::MAX)
             .expect("hard-limit batch");
 
         assert!(batch.payloads.is_empty());
         assert_eq!(batch.failures[0].reason, "file-too-large");
-        assert_eq!(batch.failures.last().unwrap().reason, "file-count-exceeded");
-        assert_eq!(batch.failures.len(), 26);
+        assert_eq!(batch.failures.len(), 25);
 
         fs::remove_dir_all(root).expect("hard-limit project cleanup");
+    }
+
+    #[test]
+    fn digest_capture_accepts_one_hundred_requests_while_payloads_remain_capped_at_twenty_five() {
+        let root = temp_path("asset-digest-request-limit");
+
+        fs::create_dir_all(root.join("assets")).expect("assets directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        let mut digest_requests = Vec::new();
+        for index in 0..NATIVE_ASSET_DIGEST_MAX_REQUEST_COUNT {
+            let path = format!("assets/{index}.png");
+            let absolute_path = root.join(&path);
+            fs::write(&absolute_path, [index as u8]).expect("tiny digest asset");
+            let metadata = fs::metadata(&absolute_path).expect("tiny digest metadata");
+
+            digest_requests.push(NativeProjectAssetDigestRequest {
+                expected_modified_at_ms: system_time_to_ms(
+                    metadata.modified().expect("tiny digest mtime"),
+                ),
+                expected_size_bytes: 1.0,
+                path,
+            });
+        }
+        let digest_batch = capture_project_asset_digests_impl(
+            &root,
+            digest_requests,
+            u32::MAX,
+            NATIVE_ASSET_MAX_ENCODED_BYTES,
+        )
+        .expect("one hundred digest requests should be admitted");
+
+        assert!(digest_batch.failures.is_empty());
+        assert_eq!(
+            digest_batch.digests.len(),
+            NATIVE_ASSET_DIGEST_MAX_REQUEST_COUNT
+        );
+        assert_eq!(
+            digest_batch.total_source_bytes,
+            NATIVE_ASSET_DIGEST_MAX_REQUEST_COUNT as u32
+        );
+
+        let payload_requests = (0..=NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT)
+            .map(|index| NativeProjectAssetReadRequest {
+                enforce_baseline: false,
+                expected_exists: false,
+                expected_modified_at_ms: None,
+                expected_size_bytes: None,
+                expected_content_digest: None,
+                path: format!("assets/{index}.png"),
+            })
+            .collect();
+
+        assert!(
+            read_project_asset_payload_requests_impl(
+                &root,
+                payload_requests,
+                u32::MAX,
+                u32::MAX,
+                NATIVE_ASSET_MAX_ENCODED_BYTES,
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(root).expect("digest request-limit project cleanup");
     }
 
     #[cfg(unix)]
@@ -2760,8 +3129,189 @@ mod tests {
         assert_eq!(batch.failures.len(), 1);
         assert_eq!(batch.failures[0].reason, "symlink-escape");
 
+        let digest_batch = capture_project_asset_digests_impl(
+            &root,
+            vec![NativeProjectAssetDigestRequest {
+                expected_modified_at_ms: 0.0,
+                expected_size_bytes: 7.0,
+                path: "assets/escape.png".into(),
+            }],
+            25,
+            100,
+        )
+        .expect("digest symlink batch");
+        assert!(digest_batch.digests.is_empty());
+        assert_eq!(digest_batch.failures[0].reason, "symlink-escape");
+
         fs::remove_dir_all(root).expect("symlink project cleanup");
         fs::remove_file(outside).expect("outside payload cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_asset_payload_reader_rejects_intermediate_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_path("asset-payload-intermediate-symlink");
+        let outside = temp_path("asset-payload-intermediate-outside");
+        fs::create_dir_all(root.join("assets")).expect("assets directory");
+        fs::create_dir_all(&outside).expect("outside directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(outside.join("escape.png"), b"outside").expect("outside payload");
+        symlink(&outside, root.join("assets/nested")).expect("intermediate symlink");
+
+        let batch = read_project_asset_payloads_impl(
+            &root,
+            vec!["assets/nested/escape.png".into()],
+            100,
+            25,
+            100,
+        )
+        .expect("intermediate symlink batch");
+
+        assert!(batch.payloads.is_empty());
+        assert_eq!(batch.failures[0].reason, "symlink-escape");
+        fs::remove_dir_all(root).expect("project cleanup");
+        fs::remove_dir_all(outside).expect("outside cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opened_assets_capability_survives_namespace_swap_without_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_path("asset-capability-swap");
+        let outside = temp_path("asset-capability-swap-outside");
+        fs::create_dir_all(root.join("assets/nested")).expect("assets directory");
+        fs::create_dir_all(outside.join("nested")).expect("outside directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(root.join("assets/nested/safe.png"), b"trusted").expect("trusted payload");
+        fs::write(outside.join("nested/safe.png"), b"outside").expect("outside payload");
+        let assets = open_project_assets_dir(&root)
+            .expect("assets capability")
+            .expect("assets directory");
+
+        fs::rename(root.join("assets"), root.join("assets-old")).expect("swap assets root");
+        symlink(&outside, root.join("assets")).expect("replacement symlink");
+        let mut file = open_project_asset_file(&assets, Path::new("nested/safe.png"))
+            .expect("open through retained capability");
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).expect("read trusted payload");
+
+        assert_eq!(bytes, b"trusted");
+        fs::remove_file(root.join("assets")).expect("replacement cleanup");
+        fs::remove_dir_all(root).expect("project cleanup");
+        fs::remove_dir_all(outside).expect("outside cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_root_swap_after_canonicalization_cannot_open_outside_assets() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_path("project-root-canonical-swap");
+        let displaced = root.with_extension("displaced");
+        let outside = temp_path("project-root-canonical-swap-outside");
+        fs::create_dir_all(root.join("assets")).expect("project assets");
+        fs::create_dir_all(outside.join("assets")).expect("outside assets");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(root.join("assets/safe.png"), b"trusted").expect("trusted payload");
+        fs::write(outside.join("twine.toml"), "version = 1\n").expect("outside manifest");
+        fs::write(outside.join("assets/safe.png"), b"outside").expect("outside payload");
+
+        let result = open_project_assets_dir_after_canonicalize(&root, |_| {
+            fs::rename(&root, &displaced).expect("displace canonical project root");
+            symlink(&outside, &root).expect("replace project root with symlink");
+        });
+
+        assert!(result.is_err());
+        fs::remove_file(&root).expect("replacement symlink cleanup");
+        fs::remove_dir_all(displaced).expect("displaced project cleanup");
+        fs::remove_dir_all(outside).expect("outside cleanup");
+    }
+
+    #[test]
+    fn project_asset_digest_rejects_same_size_rewrite_with_restored_mtime() {
+        let root = temp_path("asset-digest-rewrite");
+        let asset = root.join("assets/a.png");
+        fs::create_dir_all(asset.parent().expect("asset parent")).expect("assets directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&asset, b"abc").expect("initial payload");
+        let initial_metadata = fs::metadata(&asset).expect("initial metadata");
+        let initial_mtime = initial_metadata.modified().expect("initial mtime");
+        let expected_modified_at_ms = system_time_to_ms(initial_mtime);
+        let digest_batch = capture_project_asset_digests_impl(
+            &root,
+            vec![NativeProjectAssetDigestRequest {
+                expected_modified_at_ms,
+                expected_size_bytes: 3.0,
+                path: "assets/a.png".into(),
+            }],
+            25,
+            100,
+        )
+        .expect("digest batch");
+        assert!(digest_batch.failures.is_empty());
+        assert_eq!(
+            digest_batch.digests[0].content_digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+
+        fs::write(&asset, b"xyz").expect("rewritten payload");
+        File::open(&asset)
+            .expect("rewritten file")
+            .set_times(fs::FileTimes::new().set_modified(initial_mtime))
+            .expect("restore mtime");
+        let payload_batch = read_project_asset_payload_requests_impl(
+            &root,
+            vec![NativeProjectAssetReadRequest {
+                enforce_baseline: true,
+                expected_exists: true,
+                expected_modified_at_ms: Some(expected_modified_at_ms),
+                expected_size_bytes: Some(3.0),
+                expected_content_digest: Some(digest_batch.digests[0].content_digest.clone()),
+                path: "assets/a.png".into(),
+            }],
+            100,
+            25,
+            100,
+        )
+        .expect("payload batch");
+
+        assert!(payload_batch.payloads.is_empty());
+        assert_eq!(payload_batch.failures[0].reason, "changed-since-index");
+        fs::remove_dir_all(root).expect("project cleanup");
+    }
+
+    #[test]
+    fn project_asset_payload_reader_fails_closed_without_digest() {
+        let root = temp_path("asset-missing-digest");
+        let asset = root.join("assets/a.png");
+        fs::create_dir_all(asset.parent().expect("asset parent")).expect("assets directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&asset, b"abc").expect("asset payload");
+        let metadata = fs::metadata(&asset).expect("metadata");
+        let batch = read_project_asset_payload_requests_impl(
+            &root,
+            vec![NativeProjectAssetReadRequest {
+                enforce_baseline: true,
+                expected_exists: true,
+                expected_modified_at_ms: Some(system_time_to_ms(
+                    metadata.modified().unwrap_or(UNIX_EPOCH),
+                )),
+                expected_size_bytes: Some(3.0),
+                expected_content_digest: None,
+                path: "assets/a.png".into(),
+            }],
+            100,
+            25,
+            100,
+        )
+        .expect("missing digest batch");
+
+        assert!(batch.payloads.is_empty());
+        assert_eq!(batch.failures[0].reason, "changed-since-index");
+        fs::remove_dir_all(root).expect("project cleanup");
     }
 
     #[test]

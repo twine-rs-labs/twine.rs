@@ -24,8 +24,6 @@ Source of truth: unfinished primary-product behavior
   asset contents and permissions.
 - Keep Package asset inclusion, multi-file output, and online publishing
   separate from the desktop embedding scope.
-- Track bounded-reader follow-ups in
-  [Referenced-media reader hardening](./referenced-media-hardening.md).
 
 ### Legacy UI retirement
 

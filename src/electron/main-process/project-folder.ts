@@ -1,6 +1,7 @@
 import {FSWatcher, watch} from 'fs';
 import {createHash} from 'crypto';
 import {tmpdir} from 'os';
+import {setImmediate} from 'timers';
 import {dialog, shell} from 'electron';
 import {v4 as uuid} from '@lukeed/uuid';
 import extractZip from 'extract-zip';
@@ -26,6 +27,8 @@ import type {StoryMetadataPatch} from '../../core/bindings/StoryMetadataPatch';
 import {
 	assetKindForPath,
 	assetSnippet,
+	boundedReferencedMediaPathsInSource,
+	compareAssetPaths,
 	fileUrlForPath,
 	localAssetReferencePath,
 	normalizedAssetPath
@@ -49,10 +52,13 @@ import type {ProjectSourceLayout} from '../shared';
 import {
 	diffNativeProjectFileManifest,
 	beginNativeProjectFolderHydration,
+	captureNativeProjectAssetDigests,
 	finishNativeProjectFolderHydration,
 	findNativeTwineHtmlFiles,
 	listNativeProjectAssets,
 	loadNativeProjectFolder,
+	nativeAssetReadBusy,
+	nativeProjectAssetDigestCaptureAvailable,
 	nativeProjectFileManifest,
 	nativeProjectDiagnostic,
 	prepareNativeHtmlImport,
@@ -221,6 +227,7 @@ export interface NativeProjectFileEntry {
 }
 
 export interface NativeProjectAssetReadBaseline {
+	expectedContentDigest?: string;
 	expectedExists: boolean;
 	expectedModifiedAtMs?: number;
 	expectedSizeBytes?: number;
@@ -336,6 +343,17 @@ interface ProjectSessionState {
 	baselineReceiptWaiters?: Array<() => void>;
 	baseline?: NativeProjectSessionSnapshot;
 	baselineFileIndex?: Map<string, number>;
+	assetContentDigests?: Map<
+		string,
+		{contentDigest: string; mtimeMs: number; sizeBytes: number}
+	>;
+	assetDigestStories?: Map<
+		string,
+		{paths: string[]; status: 'ready'} | {reason: string; status: 'unknown'}
+	>;
+	assetDigestRefreshEpoch?: number;
+	assetDigestRefreshSettledEpoch?: number;
+	assetDigestRefreshWaiters?: Set<() => void>;
 	debounceTimer?: ReturnType<typeof setTimeout>;
 	descriptor?: NativeProjectDescriptor;
 	generation: number;
@@ -4413,16 +4431,417 @@ function assertCurrentProjectSession(
 	}
 }
 
-function installAcceptedProjectBaseline(
+const projectAssetDigestCandidateLimit = 25;
+const projectAssetDigestSessionPathLimit = 100;
+const projectAssetDigestStoryLimit = 100;
+const projectAssetDigestScanSliceMs = 8;
+type ProjectAssetDigestStoryState =
+	{paths: string[]; status: 'ready'} | {reason: string; status: 'unknown'};
+type ProjectAssetDigestScanBudget = {sliceStartedAt: number};
+
+function addBoundedAssetDigestPath(
+	paths: string[],
+	path: string,
+	limit: number
+) {
+	let lower = 0;
+	let upper = paths.length;
+
+	while (lower < upper) {
+		const middle = Math.floor((lower + upper) / 2);
+		const comparison = compareAssetPaths(paths[middle], path);
+
+		if (comparison < 0) {
+			lower = middle + 1;
+		} else {
+			upper = middle;
+		}
+	}
+	if (paths[lower] === path || lower >= limit) {
+		return;
+	}
+	paths.splice(lower, 0, path);
+	if (paths.length > limit) {
+		paths.pop();
+	}
+}
+
+function beginProjectAssetDigestRefresh(session: ProjectSessionState) {
+	assertCurrentProjectSession(session.rootPath, session);
+	const refreshEpoch = (session.assetDigestRefreshEpoch ?? 0) + 1;
+
+	session.assetDigestRefreshEpoch = refreshEpoch;
+	return refreshEpoch;
+}
+
+function settleProjectAssetDigestRefresh(
+	session: ProjectSessionState,
+	refreshEpoch: number
+) {
+	session.assetDigestRefreshSettledEpoch = Math.max(
+		session.assetDigestRefreshSettledEpoch ?? 0,
+		refreshEpoch
+	);
+	for (const resolveWaiter of session.assetDigestRefreshWaiters ?? []) {
+		resolveWaiter();
+	}
+	session.assetDigestRefreshWaiters?.clear();
+}
+
+async function waitForProjectAssetDigestRefresh(
+	session: ProjectSessionState,
+	refreshEpoch: number
+) {
+	while (
+		!session.baseline &&
+		(session.assetDigestRefreshSettledEpoch ?? 0) < refreshEpoch
+	) {
+		await new Promise<void>(resolveWaiter => {
+			session.assetDigestRefreshWaiters ??= new Set();
+			session.assetDigestRefreshWaiters.add(resolveWaiter);
+		});
+		assertCurrentProjectSession(session.rootPath, session);
+	}
+}
+
+async function yieldProjectAssetDigestScanIfNeeded(
+	session: ProjectSessionState,
+	budget: ProjectAssetDigestScanBudget,
+	refreshEpoch: number
+) {
+	assertCurrentProjectSession(session.rootPath, session);
+	if (session.assetDigestRefreshEpoch !== refreshEpoch) {
+		return false;
+	}
+	if (
+		performance.now() - budget.sliceStartedAt <
+		projectAssetDigestScanSliceMs
+	) {
+		return true;
+	}
+	await new Promise<void>(resolveYield => setImmediate(resolveYield));
+	assertCurrentProjectSession(session.rootPath, session);
+	if (session.assetDigestRefreshEpoch !== refreshEpoch) {
+		return false;
+	}
+	budget.sliceStartedAt = performance.now();
+	return true;
+}
+
+async function trustedStoryAssetDigestState(
+	session: ProjectSessionState,
+	story: Story,
+	budget: ProjectAssetDigestScanBudget,
+	refreshEpoch: number
+): Promise<ProjectAssetDigestStoryState | undefined> {
+	const paths: string[] = [];
+	const addSource = async (source: string) => {
+		assertCurrentProjectSession(session.rootPath, session);
+		if (session.assetDigestRefreshEpoch !== refreshEpoch) {
+			return undefined;
+		}
+		const scanned = boundedReferencedMediaPathsInSource(source);
+		if (
+			!(await yieldProjectAssetDigestScanIfNeeded(
+				session,
+				budget,
+				refreshEpoch
+			))
+		) {
+			return undefined;
+		}
+
+		if (!scanned.complete) {
+			return false;
+		}
+		for (const path of scanned.paths) {
+			addBoundedAssetDigestPath(paths, path, projectAssetDigestCandidateLimit);
+		}
+		return true;
+	};
+
+	for (const passage of story.passages) {
+		const added = await addSource(passage.text);
+
+		if (added === undefined) {
+			return undefined;
+		}
+		if (!added) {
+			return {reason: 'source-scan-incomplete', status: 'unknown'};
+		}
+	}
+	const scriptAdded = await addSource(story.script);
+	if (scriptAdded === undefined) {
+		return undefined;
+	}
+	const stylesheetAdded = await addSource(story.stylesheet);
+	if (stylesheetAdded === undefined) {
+		return undefined;
+	}
+	if (!scriptAdded || !stylesheetAdded) {
+		return {reason: 'source-scan-incomplete', status: 'unknown'};
+	}
+	return {
+		paths,
+		status: 'ready'
+	};
+}
+
+function updatedStoryAssetDigestState(
+	previous: ProjectAssetDigestStoryState | undefined,
+	edits: Array<{nextSource: string; previousSource?: string}>
+): ProjectAssetDigestStoryState {
+	if (!previous || previous.status !== 'ready') {
+		return {reason: 'prior-authority-unknown', status: 'unknown'};
+	}
+	const paths = new Set(previous.paths);
+
+	for (const edit of edits) {
+		if (edit.previousSource === undefined) {
+			return {reason: 'previous-source-unavailable', status: 'unknown'};
+		}
+		const before = boundedReferencedMediaPathsInSource(edit.previousSource);
+		const after = boundedReferencedMediaPathsInSource(edit.nextSource);
+
+		if (!before.complete || !after.complete) {
+			return {reason: 'source-scan-incomplete', status: 'unknown'};
+		}
+		const afterPaths = new Set(after.paths);
+		if (
+			previous.paths.some(
+				path => before.paths.includes(path) && !afterPaths.has(path)
+			)
+		) {
+			return {reason: 'selected-path-removed', status: 'unknown'};
+		}
+		for (const path of after.paths) {
+			paths.add(path);
+		}
+	}
+	return {
+		paths: [...paths]
+			.sort(compareAssetPaths)
+			.slice(0, projectAssetDigestCandidateLimit),
+		status: 'ready'
+	};
+}
+
+async function refreshProjectSessionAssetDigests(
 	session: ProjectSessionState,
 	baseline: NativeProjectSessionSnapshot,
-	descriptor: NativeProjectDescriptor
+	stories: Story[],
+	options: {
+		forceRecapture?: boolean;
+		refreshEpoch?: number;
+		replaceAllStories?: boolean;
+		storyUpdates?: Map<string, ProjectAssetDigestStoryState>;
+	} = {}
 ) {
-	session.baseline = {...baseline, stories: []};
-	session.baselineFileIndex = new Map(
-		baseline.files.map((file, index) => [file.path, index] as const)
+	assertCurrentProjectSession(session.rootPath, session);
+	const refreshEpoch =
+		options.refreshEpoch ?? beginProjectAssetDigestRefresh(session);
+	if (session.assetDigestRefreshEpoch !== refreshEpoch) {
+		return false;
+	}
+	const indexedAssets = new Map(
+		baseline.files
+			.filter(file => file.kind === 'asset')
+			.map(file => [normalizedAssetPath(file.path), file] as const)
 	);
-	session.descriptor = descriptor;
+	const previous =
+		session.assetContentDigests ??
+		new Map<
+			string,
+			{contentDigest: string; mtimeMs: number; sizeBytes: number}
+		>();
+	const storyStates = options.replaceAllStories
+		? new Map<string, ProjectAssetDigestStoryState>()
+		: new Map(session.assetDigestStories ?? []);
+	const scanBudget = {sliceStartedAt: performance.now()};
+	for (const story of stories) {
+		if (
+			storyStates.has(story.id) ||
+			storyStates.size < projectAssetDigestStoryLimit
+		) {
+			const state = await trustedStoryAssetDigestState(
+				session,
+				story,
+				scanBudget,
+				refreshEpoch
+			);
+
+			if (!state) {
+				return false;
+			}
+			storyStates.set(story.id, state);
+		}
+	}
+	for (const [storyId, state] of options.storyUpdates ?? []) {
+		if (
+			storyStates.has(storyId) ||
+			storyStates.size < projectAssetDigestStoryLimit
+		) {
+			storyStates.set(storyId, state);
+		}
+	}
+	const boundedAuthorizedPaths: string[] = [];
+	for (const [storyId, state] of storyStates) {
+		if (state.status === 'ready') {
+			const newPaths = state.paths.filter(
+				path => !boundedAuthorizedPaths.includes(path)
+			);
+
+			if (
+				boundedAuthorizedPaths.length + newPaths.length >
+				projectAssetDigestSessionPathLimit
+			) {
+				storyStates.set(storyId, {
+					reason: 'session-path-limit',
+					status: 'unknown'
+				});
+				continue;
+			}
+			for (const path of newPaths) {
+				addBoundedAssetDigestPath(
+					boundedAuthorizedPaths,
+					path,
+					projectAssetDigestSessionPathLimit
+				);
+			}
+		}
+	}
+	const next = new Map<
+		string,
+		{contentDigest: string; mtimeMs: number; sizeBytes: number}
+	>();
+
+	for (const path of boundedAuthorizedPaths) {
+		const indexed = indexedAssets.get(path);
+		if (!indexed) {
+			continue;
+		}
+		const retained = previous.get(path);
+
+		if (
+			!options.forceRecapture &&
+			retained?.mtimeMs === indexed.mtimeMs &&
+			retained.sizeBytes === indexed.sizeBytes
+		) {
+			next.set(path, retained);
+		}
+	}
+
+	const requests = boundedAuthorizedPaths.flatMap(path => {
+		const indexed = indexedAssets.get(path);
+
+		return indexed && !next.has(path)
+			? [
+					{
+						expectedModifiedAtMs: indexed.mtimeMs,
+						expectedSizeBytes: indexed.sizeBytes,
+						path
+					}
+				]
+			: [];
+	});
+	if (requests.length > 0 && nativeProjectAssetDigestCaptureAvailable()) {
+		assertCurrentProjectSession(session.rootPath, session);
+		if (session.assetDigestRefreshEpoch !== refreshEpoch) {
+			return false;
+		}
+		let result:
+			Awaited<ReturnType<typeof captureNativeProjectAssetDigests>> | undefined;
+
+		try {
+			result = await captureNativeProjectAssetDigests(
+				baseline.rootPath,
+				requests
+			);
+		} catch (error) {
+			if (!nativeAssetReadBusy(error)) {
+				throw error;
+			}
+		}
+		assertCurrentProjectSession(session.rootPath, session);
+		if (session.assetDigestRefreshEpoch !== refreshEpoch) {
+			return false;
+		}
+		const captured = new Map(
+			(result?.digests ?? []).map(
+				digest => [digest.path, digest.contentDigest] as const
+			)
+		);
+
+		for (const request of requests) {
+			const contentDigest = captured.get(request.path);
+
+			if (contentDigest) {
+				next.set(request.path, {
+					contentDigest,
+					mtimeMs: request.expectedModifiedAtMs,
+					sizeBytes: request.expectedSizeBytes
+				});
+			}
+		}
+	}
+
+	assertCurrentProjectSession(session.rootPath, session);
+	if (session.assetDigestRefreshEpoch !== refreshEpoch) {
+		return false;
+	}
+	session.assetDigestStories = storyStates;
+	session.assetContentDigests = next;
+	return true;
+}
+
+async function installAcceptedProjectBaseline(
+	session: ProjectSessionState,
+	baseline: NativeProjectSessionSnapshot,
+	descriptor: NativeProjectDescriptor,
+	trustedStories: Story[] = baseline.stories,
+	options: {
+		forceAssetDigestRecapture?: boolean;
+		refreshEpoch?: number;
+		replaceAllAssetDigestStories?: boolean;
+	} = {}
+) {
+	const refreshEpoch =
+		options.refreshEpoch ?? beginProjectAssetDigestRefresh(session);
+	try {
+		if (session.assetDigestRefreshEpoch !== refreshEpoch) {
+			return false;
+		}
+		const digestStories =
+			trustedStories.length > 0 || !nativeProjectAssetDigestCaptureAvailable()
+				? trustedStories
+				: await readProjectStories(session.rootPath, {loadPassageText: true});
+
+		const refreshed = await refreshProjectSessionAssetDigests(
+			session,
+			baseline,
+			digestStories,
+			{
+				forceRecapture: options.forceAssetDigestRecapture,
+				refreshEpoch,
+				replaceAllStories: options.replaceAllAssetDigestStories ?? true
+			}
+		);
+		if (!refreshed) {
+			return false;
+		}
+		assertCurrentProjectSession(session.rootPath, session);
+		if (session.assetDigestRefreshEpoch !== refreshEpoch) {
+			return false;
+		}
+		session.baseline = {...baseline, stories: []};
+		session.baselineFileIndex = new Map(
+			baseline.files.map((file, index) => [file.path, index] as const)
+		);
+		session.descriptor = descriptor;
+		return true;
+	} finally {
+		settleProjectAssetDigestRefresh(session, refreshEpoch);
+	}
 }
 
 function beginProjectSessionBaselineCapture(rootPath: string) {
@@ -4492,7 +4911,15 @@ async function adoptProjectSessionBaselineReceipt(
 			projectFolder.stories,
 			receipt
 		);
-		installAcceptedProjectBaseline(session, baseline, descriptor);
+		const installed = await installAcceptedProjectBaseline(
+			session,
+			baseline,
+			descriptor,
+			projectFolder.stories
+		);
+		if (!installed) {
+			return true;
+		}
 		session.pending = undefined;
 		const catchupStarted = performance.now();
 		if (session.pathHints.size > 0 || session.watcherAvailable === false) {
@@ -4543,19 +4970,34 @@ async function refreshProjectSessionBaseline(
 	if (!session) {
 		return;
 	}
+	const refreshEpoch = beginProjectAssetDigestRefresh(session);
 
-	const baseline = await readProjectSessionSnapshot(rootPath, undefined, {
-		...hints,
-		storyIds: storyIds ?? session.baseline?.storyIds
-	});
-	const descriptor = await readProjectDescriptor(rootPath).catch(() =>
-		descriptorFromStories(hints.stories ?? baseline.stories)
-	);
-	installAcceptedProjectBaseline(session, baseline, descriptor);
-	session.generation++;
-	session.pending = undefined;
-	if (session.watcher || session.watcherAvailable !== undefined) {
-		installProjectSessionWatcher(session);
+	try {
+		const baseline = await readProjectSessionSnapshot(rootPath, undefined, {
+			...hints,
+			storyIds: storyIds ?? session.baseline?.storyIds
+		});
+		const descriptor = await readProjectDescriptor(rootPath).catch(() =>
+			descriptorFromStories(hints.stories ?? baseline.stories)
+		);
+		const trustedDigestStories = hints.stories ?? baseline.stories;
+		const installed = await installAcceptedProjectBaseline(
+			session,
+			baseline,
+			descriptor,
+			trustedDigestStories,
+			{refreshEpoch, replaceAllAssetDigestStories: false}
+		);
+		if (!installed) {
+			return;
+		}
+		session.generation++;
+		session.pending = undefined;
+		if (session.watcher || session.watcherAvailable !== undefined) {
+			installProjectSessionWatcher(session);
+		}
+	} finally {
+		settleProjectAssetDigestRefresh(session, refreshEpoch);
 	}
 }
 
@@ -4612,7 +5054,9 @@ export async function saveProjectFolder(
 	const baselineStarted = performance.now();
 
 	if (!incrementalProject) {
-		await refreshProjectSessionBaseline(rootPath, [story.id]);
+		await refreshProjectSessionBaseline(rootPath, [story.id], {
+			stories: [story]
+		});
 	}
 	const baselineRefreshUs = Math.max(
 		0,
@@ -4958,6 +5402,7 @@ async function writeProjectFolderIncremental(
 		);
 	session.baselineFileIndex = baselineFileIndex;
 	const conflictStarted = performance.now();
+	const previousAssetSources = new Map<string, string>();
 
 	for (const entry of concreteTouched) {
 		const baselineIndex = baselineFileIndex.get(entry.projectPath);
@@ -4978,6 +5423,16 @@ async function writeProjectFolderIncremental(
 			throw new Error(
 				`${entry.projectPath} changed outside twine.rs; refusing to overwrite it.`
 			);
+		}
+		if (
+			['passage', 'script', 'stylesheet'].includes(entry.kind) &&
+			currentFile.sizeBytes <= 1024 * 1024
+		) {
+			const previousSource = await readTextIfPresent(entry.absolutePath);
+
+			if (previousSource !== undefined) {
+				previousAssetSources.set(entry.projectPath, previousSource);
+			}
 		}
 	}
 	timings.conflictCheckUs = Math.round(
@@ -5024,6 +5479,39 @@ async function writeProjectFolderIncremental(
 		session.descriptor = await readProjectDescriptor(rootPath);
 	} else if (updatedLayout) {
 		session.descriptor = {...descriptor, layout: updatedLayout};
+	}
+	const storyUpdates = new Map<string, ProjectAssetDigestStoryState>();
+	if (hints.some(hint => hint.type === 'passageMetadata')) {
+		storyUpdates.set(story.id, {
+			reason: 'structural-change-requires-full-authority',
+			status: 'unknown'
+		});
+	} else {
+		const sourceEdits = concreteTouched.flatMap(entry =>
+			['passage', 'script', 'stylesheet'].includes(entry.kind)
+				? [
+						{
+							nextSource: entry.text,
+							previousSource: previousAssetSources.get(entry.projectPath)
+						}
+					]
+				: []
+		);
+
+		if (sourceEdits.length > 0) {
+			storyUpdates.set(
+				story.id,
+				updatedStoryAssetDigestState(
+					session.assetDigestStories?.get(story.id),
+					sourceEdits
+				)
+			);
+		}
+	}
+	if (storyUpdates.size > 0) {
+		await refreshProjectSessionAssetDigests(session, session.baseline, [], {
+			storyUpdates
+		});
 	}
 	session.generation++;
 	session.pending = undefined;
@@ -5946,22 +6434,72 @@ export async function deleteProjectFolder(rootPath: string) {
 	forgetProjectFolder(absoluteRootPath);
 }
 
+async function ensureInitialProjectSessionBaseline(
+	session: ProjectSessionState,
+	storyIds?: string[],
+	reservedRefreshEpoch?: number
+) {
+	while (!session.baseline) {
+		const refreshEpoch =
+			reservedRefreshEpoch ?? beginProjectAssetDigestRefresh(session);
+		reservedRefreshEpoch = undefined;
+
+		try {
+			const candidate = await readProjectSessionSnapshot(
+				session.rootPath,
+				undefined,
+				{storyIds}
+			);
+			assertCurrentProjectSession(session.rootPath, session);
+			if (session.assetDigestRefreshEpoch === refreshEpoch) {
+				const descriptor = await readProjectDescriptor(session.rootPath).catch(
+					() => descriptorFromStories(candidate.stories)
+				);
+				assertCurrentProjectSession(session.rootPath, session);
+				if (
+					await installAcceptedProjectBaseline(
+						session,
+						candidate,
+						descriptor,
+						candidate.stories,
+						{refreshEpoch}
+					)
+				) {
+					return candidate;
+				}
+			}
+		} finally {
+			settleProjectAssetDigestRefresh(session, refreshEpoch);
+		}
+		assertCurrentProjectSession(session.rootPath, session);
+		const winningEpoch = session.assetDigestRefreshEpoch ?? refreshEpoch;
+
+		await waitForProjectAssetDigestRefresh(session, winningEpoch);
+	}
+	return session.baseline;
+}
+
 export async function projectSessionSnapshot(
 	rootPath: string,
 	storyIds?: string[]
 ) {
 	const session = ensureProjectSession(rootPath);
+	const initialRefreshEpoch = session.baseline
+		? undefined
+		: beginProjectAssetDigestRefresh(session);
 	await waitForProjectSessionBaselineCapture(session);
 	if (!session.baseline) {
-		const baseline = await readProjectSessionSnapshot(rootPath, undefined, {
-			storyIds
-		});
-		const descriptor = await readProjectDescriptor(rootPath).catch(() =>
-			descriptorFromStories(baseline.stories)
+		const baseline = await ensureInitialProjectSessionBaseline(
+			session,
+			storyIds,
+			initialRefreshEpoch
 		);
-		installAcceptedProjectBaseline(session, baseline, descriptor);
+
 		session.receiptPerformance = undefined;
 		return baseline;
+	}
+	if (initialRefreshEpoch !== undefined) {
+		settleProjectAssetDigestRefresh(session, initialRefreshEpoch);
 	}
 
 	return readProjectSessionSnapshot(rootPath, session.baseline, {
@@ -5979,17 +6517,25 @@ export function projectSessionAssetReadBaselines(
 		throw new Error('Project assets cannot be read before indexing completes.');
 	}
 
-	const indexedAssets = new Map(
-		session.baseline.files
-			.filter(file => file.kind === 'asset')
-			.map(file => [normalizedAssetPath(file.path), file] as const)
-	);
+	const baselineFileIndex = session.baselineFileIndex;
 
 	return paths.map(path => {
-		const indexed = indexedAssets.get(normalizedAssetPath(path));
+		const normalizedPath = normalizedAssetPath(path);
+		const indexedPosition = baselineFileIndex?.get(normalizedPath);
+		const candidate =
+			indexedPosition === undefined
+				? undefined
+				: session.baseline?.files[indexedPosition];
+		const indexed = candidate?.kind === 'asset' ? candidate : undefined;
+		const digest = session.assetContentDigests?.get(normalizedPath);
 
 		return indexed
 			? {
+					expectedContentDigest:
+						digest?.mtimeMs === indexed.mtimeMs &&
+						digest.sizeBytes === indexed.sizeBytes
+							? digest.contentDigest
+							: undefined,
 					expectedExists: true,
 					expectedModifiedAtMs: indexed.mtimeMs,
 					expectedSizeBytes: indexed.sizeBytes,
@@ -6006,6 +6552,9 @@ export async function startProjectSession(
 ) {
 	const baselineStarted = performance.now();
 	const session = ensureProjectSession(rootPath);
+	const initialRefreshEpoch = session.baseline
+		? undefined
+		: beginProjectAssetDigestRefresh(session);
 
 	if (listener) {
 		session.listeners.add(listener);
@@ -6014,15 +6563,19 @@ export async function startProjectSession(
 	await waitForProjectSessionBaselineCapture(session);
 	assertCurrentProjectSession(rootPath, session);
 	if (!session.baseline) {
-		const baseline = await readProjectSessionSnapshot(rootPath, undefined, {
-			storyIds
-		});
-		assertCurrentProjectSession(rootPath, session);
-		const descriptor = await readProjectDescriptor(rootPath).catch(() =>
-			descriptorFromStories(baseline.stories)
+		await ensureInitialProjectSessionBaseline(
+			session,
+			storyIds,
+			initialRefreshEpoch
 		);
 		assertCurrentProjectSession(rootPath, session);
-		installAcceptedProjectBaseline(session, baseline, descriptor);
+	} else if (initialRefreshEpoch !== undefined) {
+		settleProjectAssetDigestRefresh(session, initialRefreshEpoch);
+	}
+	if (!session.baseline) {
+		throw new Error(
+			'Project session baseline initialization did not complete.'
+		);
 	}
 
 	if (!session.watcher) {
@@ -6108,6 +6661,10 @@ export function stopProjectSession(rootPath: string) {
 			finishProjectFolderHydration(project.hydrationId);
 		}
 	});
+	for (const resolveWaiter of session.assetDigestRefreshWaiters ?? []) {
+		resolveWaiter();
+	}
+	session.assetDigestRefreshWaiters?.clear();
 	finishProjectSessionBaselineCapture(session);
 	projectSessions.delete(key);
 }
@@ -6120,12 +6677,37 @@ export function projectSessionMemoryDiagnostics() {
 	let baselineFileCount = 0;
 	let baselineFileStringBytes = 0;
 	let baselinePassageCount = 0;
+	let assetDigestCount = 0;
+	let assetDigestStringBytes = 0;
+	let assetDigestStoryCount = 0;
+	let assetDigestReadyStoryCount = 0;
+	let assetDigestCandidatePathCount = 0;
+	let assetDigestCandidatePathStringBytes = 0;
+	let assetDigestStoryIdStringBytes = 0;
+	let assetDigestUnknownReasonStringBytes = 0;
 	let candidateCount = 0;
 	let descriptorPathCount = 0;
 	let descriptorPathStringBytes = 0;
 	let resolvedCandidateCount = 0;
 
 	for (const session of projectSessions.values()) {
+		assetDigestCount += session.assetContentDigests?.size ?? 0;
+		for (const [path, digest] of session.assetContentDigests ?? []) {
+			assetDigestStringBytes += (path.length + digest.contentDigest.length) * 2;
+		}
+		assetDigestStoryCount += session.assetDigestStories?.size ?? 0;
+		for (const [storyId, state] of session.assetDigestStories ?? []) {
+			assetDigestStoryIdStringBytes += storyId.length * 2;
+			if (state.status !== 'ready') {
+				assetDigestUnknownReasonStringBytes += state.reason.length * 2;
+				continue;
+			}
+			assetDigestReadyStoryCount++;
+			assetDigestCandidatePathCount += state.paths.length;
+			for (const path of state.paths) {
+				assetDigestCandidatePathStringBytes += path.length * 2;
+			}
+		}
 		baselineFileCount += session.baseline?.files.length ?? 0;
 		baselinePassageCount +=
 			session.baseline?.stories.reduce(
@@ -6145,6 +6727,14 @@ export function projectSessionMemoryDiagnostics() {
 	}
 
 	return {
+		assetDigestCandidatePathCount,
+		assetDigestCandidatePathStringBytes,
+		assetDigestCount,
+		assetDigestReadyStoryCount,
+		assetDigestStoryIdStringBytes,
+		assetDigestStoryCount,
+		assetDigestStringBytes,
+		assetDigestUnknownReasonStringBytes,
 		baselineFileCount,
 		baselineFileStringBytes,
 		baselinePassageCount,
@@ -6251,16 +6841,25 @@ export async function resolveProjectSessionConflicts(
 		session.aggregateExactNamePassageIds = undefined;
 	} else if (resolution === 'acceptDisk' && session.pending) {
 		const candidate = session.pending;
+		const trustedDiskStories = await readProjectStories(rootPath, {
+			loadPassageText: true
+		});
 		let retainExactNamePassageIds = false;
 
 		if (candidate.delta.recovery) {
 			const baseline = await readProjectSessionSnapshot(rootPath);
 			const descriptor = await readProjectDescriptor(rootPath);
 
-			installAcceptedProjectBaseline(session, baseline, descriptor);
+			await installAcceptedProjectBaseline(
+				session,
+				baseline,
+				descriptor,
+				trustedDiskStories,
+				{forceAssetDigestRecapture: true}
+			);
 		} else if (candidate.passageMappingsToPersist?.length) {
 			const passageMappingsToPersist = candidate.passageMappingsToPersist;
-			const deferMappings = (currentFiles?: NativeProjectFileEntry[]) => {
+			const deferMappings = async (currentFiles?: NativeProjectFileEntry[]) => {
 				session.aggregateExactNamePassageIds = new Set([
 					...(session.aggregateExactNamePassageIds ?? []),
 					...passageMappingsToPersist.flatMap(mapping =>
@@ -6278,7 +6877,7 @@ export async function resolveProjectSessionConflicts(
 							.concat(currentManifest)
 					: candidate.baseline.files;
 
-				installAcceptedProjectBaseline(
+				await installAcceptedProjectBaseline(
 					session,
 					{
 						...candidate.baseline,
@@ -6286,12 +6885,14 @@ export async function resolveProjectSessionConflicts(
 						conflicts: [],
 						files
 					},
-					candidate.descriptor
+					candidate.descriptor,
+					trustedDiskStories,
+					{forceAssetDigestRecapture: true}
 				);
 			};
 
 			if (!(await aggregatePassageMappingsAreCurrent(rootPath, candidate))) {
-				deferMappings();
+				await deferMappings();
 			} else {
 				const persisted = await persistAggregatePassageMappings(
 					rootPath,
@@ -6318,7 +6919,7 @@ export async function resolveProjectSessionConflicts(
 							persisted.existing
 						);
 					}
-					deferMappings(
+					await deferMappings(
 						await projectFileManifest(rootPath, candidate.baseline.assets)
 					);
 				} else {
@@ -6329,22 +6930,26 @@ export async function resolveProjectSessionConflicts(
 						.filter(file => file.path !== 'twine.toml')
 						.concat(currentManifest ? [currentManifest] : []);
 
-					installAcceptedProjectBaseline(
+					await installAcceptedProjectBaseline(
 						session,
 						{...candidate.baseline, files},
-						candidate.descriptor
+						candidate.descriptor,
+						trustedDiskStories,
+						{forceAssetDigestRecapture: true}
 					);
 				}
 			}
 		} else {
-			installAcceptedProjectBaseline(
+			await installAcceptedProjectBaseline(
 				session,
 				{
 					...candidate.baseline,
 					changedPaths: [],
 					conflicts: []
 				},
-				candidate.descriptor
+				candidate.descriptor,
+				trustedDiskStories,
+				{forceAssetDigestRecapture: true}
 			);
 		}
 		if (!retainExactNamePassageIds) {

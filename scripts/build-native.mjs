@@ -82,4 +82,8 @@ function run(command, args, options = {}) {
 await mkdir(nativeOutDir, {recursive: true});
 await run(cargo, ['build', '-p', 'twine_native', '--release']);
 await copyFile(nativeSource, nativeOut);
+await run(process.execPath, [
+	path.join('scripts', 'check-native-asset-reader-abi.mjs'),
+	nativeOut
+]);
 console.log(`build-native: wrote ${nativeOut}`);

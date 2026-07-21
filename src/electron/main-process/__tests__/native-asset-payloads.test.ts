@@ -38,8 +38,9 @@ function deferred<T>() {
 	return {promise, reject, resolve};
 }
 
-async function loadAdapter(reader: jest.Mock) {
+async function loadAdapter(reader: jest.Mock, digestCapture?: jest.Mock) {
 	const nativeRequire = jest.fn().mockReturnValue({
+		captureProjectAssetDigests: digestCapture,
 		readProjectAssetPayloads: reader
 	});
 
@@ -61,7 +62,7 @@ describe('readNativeProjectAssetPayloads()', () => {
 		delete process.env.TWINE_NATIVE;
 	});
 
-	it('rejects a concurrent read and releases admission after success', async () => {
+	it('queues a concurrent read and releases admission after success', async () => {
 		const firstRead = deferred<typeof batch>();
 		const reader = jest
 			.fn()
@@ -74,11 +75,12 @@ describe('readNativeProjectAssetPayloads()', () => {
 			limits
 		);
 
-		await expect(
-			readNativeProjectAssetPayloads('/mock/project', baselines, limits)
-		).rejects.toThrow(
-			'A referenced-media payload read is already in progress.'
+		const secondResult = readNativeProjectAssetPayloads(
+			'/mock/project',
+			baselines,
+			limits
 		);
+		await Promise.resolve();
 		expect(reader).toHaveBeenCalledTimes(1);
 
 		firstRead.resolve(batch);
@@ -94,9 +96,9 @@ describe('readNativeProjectAssetPayloads()', () => {
 				}
 			]
 		});
-		await expect(
-			readNativeProjectAssetPayloads('/mock/project', baselines, limits)
-		).resolves.toEqual(expect.objectContaining({totalSourceBytes: 3}));
+		await expect(secondResult).resolves.toEqual(
+			expect.objectContaining({totalSourceBytes: 3})
+		);
 		expect(reader).toHaveBeenCalledTimes(2);
 	});
 
@@ -135,5 +137,126 @@ describe('readNativeProjectAssetPayloads()', () => {
 		await expect(
 			readNativeProjectAssetPayloads('/mock/project', baselines, limits)
 		).resolves.toEqual(expect.objectContaining({payloads: expect.any(Array)}));
+	});
+});
+
+describe('captureNativeProjectAssetDigests()', () => {
+	beforeEach(() => {
+		process.env.TWINE_NATIVE = 'force';
+	});
+
+	afterEach(() => {
+		delete process.env.TWINE_NATIVE;
+	});
+
+	it('uses native hard embedding limits and propagates structured failures', async () => {
+		const capture = jest.fn().mockResolvedValue({
+			digests: [],
+			failures: [{message: 'changed', path: 'assets/a.png', reason: 'changed'}],
+			totalSourceBytes: 0
+		});
+		const {captureNativeProjectAssetDigests} = await loadAdapter(
+			jest.fn(),
+			capture
+		);
+		const requests = [
+			{
+				expectedModifiedAtMs: 1,
+				expectedSizeBytes: 3,
+				path: 'assets/a.png'
+			}
+		];
+
+		await expect(
+			captureNativeProjectAssetDigests('/mock/project', requests)
+		).resolves.toEqual(
+			expect.objectContaining({failures: [expect.any(Object)]})
+		);
+		expect(capture).toHaveBeenCalledWith(
+			'/mock/project',
+			requests,
+			100,
+			25 * 1024 * 1024
+		);
+	});
+
+	it('admits one queued read, rejects a third as busy, and recovers', async () => {
+		const digestBatch = {digests: [], failures: [], totalSourceBytes: 0};
+		const firstCapture = deferred<typeof digestBatch>();
+		const capture = jest
+			.fn()
+			.mockReturnValueOnce(firstCapture.promise)
+			.mockResolvedValueOnce(digestBatch);
+		const reader = jest.fn().mockResolvedValue(batch);
+		const {
+			captureNativeProjectAssetDigests,
+			nativeAssetReadBusy,
+			nativeAssetReadBusyCode,
+			readNativeProjectAssetPayloads
+		} = await loadAdapter(reader, capture);
+		const request = [
+			{
+				expectedModifiedAtMs: 1,
+				expectedSizeBytes: 3,
+				path: 'assets/a.png'
+			}
+		];
+		const first = captureNativeProjectAssetDigests('/mock/project', request);
+		const second = captureNativeProjectAssetDigests('/mock/project', request);
+		const payload = readNativeProjectAssetPayloads(
+			'/mock/project',
+			baselines,
+			limits
+		);
+
+		await Promise.resolve();
+		expect(capture).toHaveBeenCalledTimes(1);
+		expect(reader).not.toHaveBeenCalled();
+		await expect(payload).rejects.toThrow(
+			'The referenced-media native reader is busy.'
+		);
+		await expect(payload).rejects.toMatchObject({
+			code: nativeAssetReadBusyCode
+		});
+		await payload.catch(error => expect(nativeAssetReadBusy(error)).toBe(true));
+		firstCapture.resolve(digestBatch);
+		await expect(first).resolves.toEqual(digestBatch);
+		await expect(second).resolves.toEqual(digestBatch);
+		expect(capture).toHaveBeenCalledTimes(2);
+		await expect(
+			readNativeProjectAssetPayloads('/mock/project', baselines, limits)
+		).resolves.toEqual(expect.objectContaining({totalSourceBytes: 3}));
+		expect(reader).toHaveBeenCalledTimes(1);
+	});
+
+	it('releases admission after queued work rejects', async () => {
+		const digestBatch = {digests: [], failures: [], totalSourceBytes: 0};
+		const firstCapture = deferred<typeof digestBatch>();
+		const capture = jest
+			.fn()
+			.mockReturnValueOnce(firstCapture.promise)
+			.mockRejectedValueOnce(new Error('Queued capture failed.'))
+			.mockResolvedValueOnce(digestBatch);
+		const {captureNativeProjectAssetDigests} = await loadAdapter(
+			jest.fn(),
+			capture
+		);
+		const requests = [
+			{
+				expectedModifiedAtMs: 1,
+				expectedSizeBytes: 3,
+				path: 'assets/a.png'
+			}
+		];
+		const first = captureNativeProjectAssetDigests('/mock/project', requests);
+		const queued = captureNativeProjectAssetDigests('/mock/project', requests);
+
+		firstCapture.resolve(digestBatch);
+		await expect(first).resolves.toEqual(digestBatch);
+		await expect(queued).rejects.toThrow('Queued capture failed.');
+		await expect(
+			captureNativeProjectAssetDigests('/mock/project', requests)
+		).resolves.toEqual(digestBatch);
+		expect(capture).toHaveBeenCalledTimes(3);
 	});
 });

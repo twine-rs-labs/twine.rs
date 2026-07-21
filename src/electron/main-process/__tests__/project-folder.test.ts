@@ -1,6 +1,8 @@
 import {dialog, shell} from 'electron';
 import {createHash} from 'crypto';
 import {FSWatcher, watch} from 'fs';
+import {performance} from 'perf_hooks';
+import {setImmediate} from 'timers';
 import {
 	copy,
 	mkdtemp,
@@ -14,6 +16,7 @@ import {
 	writeFile
 } from 'fs-extra';
 import extractZip from 'extract-zip';
+import * as assetPaths from '../../../core/asset-paths';
 import {fakeStory} from '../../../test-util';
 import {
 	chooseAssetFile,
@@ -32,6 +35,8 @@ import {
 	listProjectAssets,
 	openProjectFolder,
 	prepareProjectImport,
+	projectSessionAssetReadBaselines,
+	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
 	readProjectFolderHydrationChunk,
 	renameProjectAsset,
@@ -43,6 +48,7 @@ import {
 } from '../project-folder';
 import {
 	beginNativeProjectFolderHydration,
+	captureNativeProjectAssetDigests,
 	diffNativeProjectFileManifest,
 	findNativeTwineHtmlFiles,
 	finishNativeProjectFolderHydration,
@@ -50,6 +56,8 @@ import {
 	listNativeProjectAssets,
 	listRememberedNativeProjectFolders,
 	loadNativeProjectFolder,
+	nativeAssetReadBusy,
+	nativeProjectAssetDigestCaptureAvailable,
 	nativeProjectDiagnostic,
 	nativeProjectFileManifest,
 	prepareNativeHtmlImport,
@@ -58,6 +66,7 @@ import {
 	rememberNativeProjectFolder,
 	saveNativeProjectFolder
 } from '../native';
+import {performanceHarnessEnabled} from '../performance-harness';
 
 jest.mock('electron');
 jest.mock('extract-zip', () => jest.fn());
@@ -65,6 +74,7 @@ jest.mock('fs', () => ({...jest.requireActual('fs'), watch: jest.fn()}));
 jest.mock('fs-extra');
 jest.mock('../native', () => ({
 	beginNativeProjectFolderHydration: jest.fn(),
+	captureNativeProjectAssetDigests: jest.fn(),
 	diffNativeProjectFileManifest: jest.fn(),
 	findNativeTwineHtmlFiles: jest.fn(),
 	finishNativeProjectFolderHydration: jest.fn(),
@@ -72,6 +82,14 @@ jest.mock('../native', () => ({
 	listNativeProjectAssets: jest.fn(),
 	listRememberedNativeProjectFolders: jest.fn(),
 	loadNativeProjectFolder: jest.fn(),
+	nativeAssetReadBusy: jest.fn(
+		(error: unknown) =>
+			typeof error === 'object' &&
+			error !== null &&
+			'code' in error &&
+			error.code === 'NATIVE_ASSET_READER_BUSY'
+	),
+	nativeProjectAssetDigestCaptureAvailable: jest.fn(() => false),
 	nativeProjectDiagnostic: jest.fn(),
 	nativeProjectFileManifest: jest.fn(),
 	prepareNativeHtmlImport: jest.fn(),
@@ -79,6 +97,10 @@ jest.mock('../native', () => ({
 	readNativeProjectFolderHydrationChunk: jest.fn(),
 	rememberNativeProjectFolder: jest.fn(),
 	saveNativeProjectFolder: jest.fn()
+}));
+jest.mock('../performance-harness', () => ({
+	...jest.requireActual('../performance-harness'),
+	performanceHarnessEnabled: jest.fn(() => false)
 }));
 jest.mock('../story-directory', () => ({
 	getStoryDirectoryPath: () => 'mock-story-library'
@@ -102,6 +124,8 @@ describe('project-folder native bridge', () => {
 		diffNativeProjectFileManifest as jest.Mock;
 	const beginNativeProjectFolderHydrationMock =
 		beginNativeProjectFolderHydration as jest.Mock;
+	const captureNativeProjectAssetDigestsMock =
+		captureNativeProjectAssetDigests as jest.Mock;
 	const finishNativeProjectFolderHydrationMock =
 		finishNativeProjectFolderHydration as jest.Mock;
 	const findNativeTwineHtmlFilesMock = findNativeTwineHtmlFiles as jest.Mock;
@@ -110,8 +134,12 @@ describe('project-folder native bridge', () => {
 	const listRememberedNativeProjectFoldersMock =
 		listRememberedNativeProjectFolders as jest.Mock;
 	const loadNativeProjectFolderMock = loadNativeProjectFolder as jest.Mock;
+	const nativeProjectAssetDigestCaptureAvailableMock =
+		nativeProjectAssetDigestCaptureAvailable as jest.Mock;
+	const nativeAssetReadBusyMock = nativeAssetReadBusy as jest.Mock;
 	const nativeProjectDiagnosticMock = nativeProjectDiagnostic as jest.Mock;
 	const nativeProjectFileManifestMock = nativeProjectFileManifest as jest.Mock;
+	const performanceHarnessEnabledMock = performanceHarnessEnabled as jest.Mock;
 	const prepareNativeHtmlImportMock = prepareNativeHtmlImport as jest.Mock;
 	const prepareNativeProjectImportMock =
 		prepareNativeProjectImport as jest.Mock;
@@ -123,6 +151,7 @@ describe('project-folder native bridge', () => {
 
 	beforeEach(() => {
 		jest.clearAllMocks();
+		performanceHarnessEnabledMock.mockReturnValue(false);
 		writeFileMock.mockResolvedValue(undefined);
 		copyMock.mockResolvedValue(undefined);
 		extractZipMock.mockResolvedValue(undefined);
@@ -138,6 +167,19 @@ describe('project-folder native bridge', () => {
 		listNativeProjectAssetsMock.mockReturnValue(undefined);
 		listRememberedNativeProjectFoldersMock.mockReturnValue([]);
 		loadNativeProjectFolderMock.mockReturnValue(undefined);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(false);
+		nativeAssetReadBusyMock.mockImplementation(
+			(error: unknown) =>
+				typeof error === 'object' &&
+				error !== null &&
+				'code' in error &&
+				error.code === 'NATIVE_ASSET_READER_BUSY'
+		);
+		captureNativeProjectAssetDigestsMock.mockResolvedValue({
+			digests: [],
+			failures: [],
+			totalSourceBytes: 0
+		});
 		nativeProjectDiagnosticMock.mockReturnValue(
 			'Native project backend was not built.'
 		);
@@ -475,6 +517,7 @@ describe('project-folder native bridge', () => {
 	});
 
 	it('incrementally saves a passage text edit through the active project session', async () => {
+		let passageSource = '<img src="assets/old.png">';
 		const story = {
 			...fakeStory(1),
 			id: 'story-id',
@@ -484,7 +527,7 @@ describe('project-folder native bridge', () => {
 					...fakeStory(1).passages[0],
 					id: 'passage-id',
 					name: 'Start',
-					text: 'from disk'
+					text: passageSource
 				}
 			]
 		};
@@ -517,12 +560,37 @@ describe('project-folder native bridge', () => {
 			path: 'passages/story/001-start.twee',
 			sizeBytes: 0
 		};
+		const assetFiles = ['assets/new.png', 'assets/old.png'].map(path => ({
+			fingerprint: '1:3',
+			kind: 'asset' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path,
+			sizeBytes: 3
+		}));
 
 		readFileMock.mockImplementation(async path =>
-			String(path).endsWith('twine.toml') ? manifestSource : 'from disk'
+			String(path).endsWith('twine.toml') ? manifestSource : passageSource
 		);
 		listNativeProjectAssetsMock.mockReturnValue([]);
-		nativeProjectFileManifestMock.mockReturnValue([manifestFile, passageFile]);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		captureNativeProjectAssetDigestsMock.mockImplementation(
+			async (_rootPath, requests) => ({
+				digests: requests.map((request: {path: string}) => ({
+					contentDigest: request.path.includes('new')
+						? 'a'.repeat(64)
+						: 'b'.repeat(64),
+					path: request.path
+				})),
+				failures: [],
+				totalSourceBytes: requests.length * 3
+			})
+		);
+		nativeProjectFileManifestMock.mockReturnValue([
+			manifestFile,
+			passageFile,
+			...assetFiles
+		]);
 
 		await startProjectSession('/native/project.twine.rs', undefined, [
 			'story-id'
@@ -535,7 +603,7 @@ describe('project-folder native bridge', () => {
 				{
 					passageId: 'passage-id',
 					storyId: 'story-id',
-					text: 'updated text',
+					text: '<img src="assets/old.png"><img src="assets/new.png">',
 					type: 'passageText'
 				}
 			],
@@ -550,7 +618,7 @@ describe('project-folder native bridge', () => {
 			expect.stringMatching(
 				/^\/native\/project\.twine\.rs\/passages\/story\/001-start\.twee\..+\.tmp$/
 			),
-			'updated text',
+			'<img src="assets/old.png"><img src="assets/new.png">',
 			'utf8'
 		);
 		expect(moveMock).toHaveBeenCalledWith(
@@ -575,6 +643,46 @@ describe('project-folder native bridge', () => {
 				String(call[0]).endsWith('twine.toml')
 			).length
 		).toBe(manifestReadsBeforeSave);
+		expect(captureNativeProjectAssetDigestsMock).toHaveBeenNthCalledWith(
+			2,
+			'/native/project.twine.rs',
+			[
+				{
+					expectedModifiedAtMs: 1,
+					expectedSizeBytes: 3,
+					path: 'assets/new.png'
+				}
+			]
+		);
+		expect(
+			projectSessionAssetReadBaselines('/native/project.twine.rs', [
+				'assets/new.png',
+				'assets/old.png'
+			]).map(baseline => baseline.expectedContentDigest)
+		).toEqual(['a'.repeat(64), 'b'.repeat(64)]);
+
+		passageSource = '<img src="assets/old.png"><img src="assets/new.png">';
+		await saveProjectFolder('/native/project.twine.rs', story, {
+			documentUpdates: [
+				{
+					passageId: 'passage-id',
+					storyId: 'story-id',
+					text: '<img src="assets/new.png">',
+					type: 'passageText'
+				}
+			],
+			hints: [
+				{passageId: 'passage-id', storyId: 'story-id', type: 'passageText'}
+			]
+		});
+
+		expect(captureNativeProjectAssetDigestsMock).toHaveBeenCalledTimes(2);
+		expect(
+			projectSessionAssetReadBaselines('/native/project.twine.rs', [
+				'assets/new.png',
+				'assets/old.png'
+			]).map(baseline => baseline.expectedContentDigest)
+		).toEqual([undefined, undefined]);
 	});
 
 	it('incrementally rewrites one aggregate source while preserving other passages', async () => {
@@ -885,6 +993,8 @@ describe('project-folder native bridge', () => {
 	});
 
 	it('incrementally saves passage names without reallocating source paths', async () => {
+		let firstPassageSource = '<img src="assets/one.png">';
+		const secondPassageSource = '<img src="assets/two.png">';
 		const story = {
 			...fakeStory(1),
 			id: 'story-id',
@@ -909,7 +1019,16 @@ describe('project-folder native bridge', () => {
 			'[[stories.passages]]',
 			'id = "passage-id"',
 			'name = "Start"',
-			'file = "passages/story/001-start.twee"'
+			'file = "passages/story/001-start.twee"',
+			'[[stories]]',
+			'id = "story-two"',
+			'ifid = "STORY-TWO"',
+			'name = "Story Two"',
+			'start_passage = "passage-two"',
+			'[[stories.passages]]',
+			'id = "passage-two"',
+			'name = "Second"',
+			'file = "passages/story-two/001-second.twee"'
 		].join('\n');
 		const files = [
 			{
@@ -927,22 +1046,63 @@ describe('project-folder native bridge', () => {
 				mtimeMs: 1,
 				path: 'passages/story/001-start.twee',
 				sizeBytes: 0
-			}
+			},
+			{
+				fingerprint: '1:0',
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'passages/story-two/001-second.twee',
+				sizeBytes: 0
+			},
+			...['assets/one.png', 'assets/three.png', 'assets/two.png'].map(path => ({
+				fingerprint: '1:3',
+				kind: 'asset' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path,
+				sizeBytes: 3
+			}))
 		];
 
 		readFileMock.mockImplementation(async path =>
-			String(path).endsWith('twine.toml') ? manifestSource : ''
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).includes('story-two')
+					? secondPassageSource
+					: firstPassageSource
 		);
 		writeFileMock.mockImplementation(async (path, source) => {
-			if (String(path).includes('/twine.toml.')) {
+			if (
+				String(path).includes('/twine.toml.') ||
+				String(path).endsWith('/twine.toml')
+			) {
 				manifestSource = String(source);
+			} else if (String(path).includes('/passages/story/')) {
+				firstPassageSource = String(source);
 			}
 		});
 		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		captureNativeProjectAssetDigestsMock.mockImplementation(
+			async (_rootPath, requests) => ({
+				digests: requests.map((request: {path: string}) => ({
+					contentDigest: request.path.includes('two')
+						? '2'.repeat(64)
+						: request.path.includes('three')
+							? '3'.repeat(64)
+							: '1'.repeat(64),
+					path: request.path
+				})),
+				failures: [],
+				totalSourceBytes: requests.length * 3
+			})
+		);
 		nativeProjectFileManifestMock.mockReturnValue(files);
 
 		await startProjectSession('/native/project.twine.rs', undefined, [
-			'story-id'
+			'story-id',
+			'story-two'
 		]);
 		await saveProjectFolder('/native/project.twine.rs', story, {
 			hints: [
@@ -957,6 +1117,49 @@ describe('project-folder native bridge', () => {
 		expect(manifestSource).toContain('name = "Renamed"');
 		expect(manifestSource).toContain('file = "passages/story/001-start.twee"');
 		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
+		expect(
+			projectSessionAssetReadBaselines('/native/project.twine.rs', [
+				'assets/two.png'
+			])
+		).toEqual([
+			{
+				expectedContentDigest: '2'.repeat(64),
+				expectedExists: true,
+				expectedModifiedAtMs: 1,
+				expectedSizeBytes: 3,
+				path: 'assets/two.png'
+			}
+		]);
+		expect(
+			projectSessionAssetReadBaselines('/native/project.twine.rs', [
+				'assets/one.png'
+			])[0].expectedContentDigest
+		).toBeUndefined();
+
+		const passageReadsBeforeFullSave = readFileMock.mock.calls.filter(
+			([path]) => String(path).includes('/passages/')
+		).length;
+		story.passages[0].text = '<img src="assets/three.png">';
+		captureNativeProjectAssetDigestsMock.mockRejectedValueOnce(
+			Object.assign(new Error('busy'), {code: 'NATIVE_ASSET_READER_BUSY'})
+		);
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story)
+		).resolves.toEqual(expect.objectContaining({stories: [story]}));
+
+		expect(firstPassageSource).toBe('<img src="assets/three.png">');
+		expect(
+			readFileMock.mock.calls.filter(([path]) =>
+				String(path).includes('/passages/')
+			).length
+		).toBe(passageReadsBeforeFullSave);
+		expect(
+			projectSessionAssetReadBaselines('/native/project.twine.rs', [
+				'assets/one.png',
+				'assets/three.png',
+				'assets/two.png'
+			]).map(baseline => baseline.expectedContentDigest)
+		).toEqual([undefined, undefined, '2'.repeat(64)]);
 	});
 
 	it('incrementally saves moved passage layout and patches the session baseline', async () => {
@@ -1291,6 +1494,932 @@ describe('project-folder native bridge', () => {
 				expect.objectContaining({generation: 1, storyIds: [story.id]})
 			);
 			expect(nativeProjectFileManifestMock).not.toHaveBeenCalled();
+		} finally {
+			stopProjectSession(rootPath);
+			realFs.rmSync(rootPath, {force: true, recursive: true});
+		}
+	});
+
+	it('time-slices trusted story digest scanning and waits before session start', async () => {
+		const rootPath = '/native/time-sliced-digest.twine.rs';
+		const passageCount = 300;
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			...Array.from({length: passageCount}, (_, index) => [
+				'[[stories.passages]]',
+				`id = "passage-${index}"`,
+				`name = "Passage ${index}"`,
+				`file = "passages/${index}.twee"`
+			]).flat()
+		].join('\n');
+		const files = [
+			{
+				fingerprint: '1:1',
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			...Array.from({length: passageCount}, (_, index) => ({
+				fingerprint: '1:8',
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: `passages/${index}.twee`,
+				sizeBytes: 8
+			}))
+		];
+		let now = 0;
+		const performanceNowSpy = jest
+			.spyOn(performance, 'now')
+			.mockImplementation(() => (now += 9));
+		let eventLoopTurnObserved = false;
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : 'no media'
+		);
+		nativeProjectFileManifestMock.mockReturnValue(files);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		setImmediate(() => {
+			eventLoopTurnObserved = true;
+		});
+
+		try {
+			await startProjectSession(rootPath, undefined, ['story-id']);
+			expect(eventLoopTurnObserved).toBe(true);
+		} finally {
+			stopProjectSession(rootPath);
+			performanceNowSpy.mockRestore();
+		}
+	});
+
+	it('starts fail-closed when native digest admission is busy', async () => {
+		const rootPath = '/native/busy-digest-start.twine.rs';
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/start.twee"'
+		].join('\n');
+		const assetPath = 'assets/a.png';
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: `<img src="${assetPath}">`
+		);
+		nativeProjectFileManifestMock.mockReturnValue([
+			{
+				fingerprint: '1:1',
+				kind: 'manifest',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			{
+				fingerprint: '1:1',
+				kind: 'passage',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'passages/start.twee',
+				sizeBytes: 1
+			},
+			{
+				fingerprint: '1:3',
+				kind: 'asset',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: assetPath,
+				sizeBytes: 3
+			}
+		]);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		captureNativeProjectAssetDigestsMock.mockRejectedValue(
+			Object.assign(new Error('busy'), {code: 'NATIVE_ASSET_READER_BUSY'})
+		);
+
+		try {
+			await expect(
+				startProjectSession(rootPath, undefined, ['story-id'])
+			).resolves.toEqual(expect.objectContaining({storyIds: ['story-id']}));
+			expect(
+				projectSessionAssetReadBaselines(rootPath, [assetPath])[0]
+					.expectedContentDigest
+			).toBeUndefined();
+		} finally {
+			stopProjectSession(rootPath);
+		}
+	});
+
+	it('does not publish an initial baseline superseded in the digest commit microtask gap', async () => {
+		const rootPath = '/native/superseded-initial-baseline.twine.rs';
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/start.twee"'
+		].join('\n');
+		const oldPath = 'assets/old.png';
+		const newPath = 'assets/new.png';
+		const filesAt = (mtimeMs: number) => [
+			{
+				fingerprint: `${mtimeMs}:1`,
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			{
+				fingerprint: `${mtimeMs}:1`,
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path: 'passages/start.twee',
+				sizeBytes: 1
+			},
+			...[oldPath, newPath].map(path => ({
+				fingerprint: `${mtimeMs}:3`,
+				kind: 'asset' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path,
+				sizeBytes: 3
+			}))
+		];
+		const oldDigest = 'a'.repeat(64);
+		const newDigest = 'b'.repeat(64);
+		let passageSource = `<img src="${oldPath}">`;
+		let secondStart: ReturnType<typeof startProjectSession> | undefined;
+		let gapError: unknown;
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : passageSource
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce(filesAt(1))
+			.mockReturnValue(filesAt(2));
+		watchMock.mockReturnValue({close: jest.fn()});
+		captureNativeProjectAssetDigestsMock
+			.mockImplementationOnce(() => ({
+				then(resolveCapture: (capture: unknown) => void) {
+					queueMicrotask(() => {
+						passageSource = `<img src="${newPath}">`;
+						secondStart = startProjectSession(rootPath, undefined, [
+							'story-id'
+						]);
+						queueMicrotask(() => {
+							try {
+								projectSessionAssetReadBaselines(rootPath, [oldPath]);
+							} catch (error) {
+								gapError = error;
+							}
+						});
+					});
+					resolveCapture({
+						digests: [{contentDigest: oldDigest, path: oldPath}],
+						failures: [],
+						totalSourceBytes: 3
+					});
+				}
+			}))
+			.mockResolvedValueOnce({
+				digests: [{contentDigest: newDigest, path: newPath}],
+				failures: [],
+				totalSourceBytes: 3
+			});
+
+		try {
+			const firstStart = startProjectSession(rootPath, undefined, ['story-id']);
+
+			await expect(firstStart).resolves.toEqual(
+				expect.objectContaining({storyIds: ['story-id']})
+			);
+			await expect(secondStart).resolves.toEqual(
+				expect.objectContaining({storyIds: ['story-id']})
+			);
+			expect(gapError).toEqual(
+				expect.objectContaining({
+					message: 'Project assets cannot be read before indexing completes.'
+				})
+			);
+			expect(
+				projectSessionAssetReadBaselines(rootPath, [newPath, oldPath])
+			).toEqual([
+				{
+					expectedContentDigest: newDigest,
+					expectedExists: true,
+					expectedModifiedAtMs: 2,
+					expectedSizeBytes: 3,
+					path: newPath
+				},
+				{
+					expectedContentDigest: undefined,
+					expectedExists: true,
+					expectedModifiedAtMs: 2,
+					expectedSizeBytes: 3,
+					path: oldPath
+				}
+			]);
+		} finally {
+			stopProjectSession(rootPath);
+		}
+	});
+
+	it('wakes an initial baseline waiter when a newer pre-scan refresh rejects', async () => {
+		const rootPath = '/native/rejected-newer-initial-refresh.twine.rs';
+		const story = {...fakeStory(1), id: 'story-id', name: 'Story'};
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/start.twee"'
+		].join('\n');
+		const oldPath = 'assets/old.png';
+		const retryPath = 'assets/retry.png';
+		const filesAt = (mtimeMs: number) => [
+			{
+				fingerprint: `${mtimeMs}:1`,
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			{
+				fingerprint: `${mtimeMs}:1`,
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path: 'passages/start.twee',
+				sizeBytes: 1
+			},
+			...[oldPath, retryPath].map(path => ({
+				fingerprint: `${mtimeMs}:3`,
+				kind: 'asset' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path,
+				sizeBytes: 3
+			}))
+		];
+		const oldDigest = 'a'.repeat(64);
+		const retryDigest = 'c'.repeat(64);
+		let passageSource = `<img src="${oldPath}">`;
+		let resolveOldCapture!: (capture: {
+			digests: Array<{contentDigest: string; path: string}>;
+			failures: never[];
+			totalSourceBytes: number;
+		}) => void;
+		let rejectNewerSnapshot!: (error: Error) => void;
+		let markOldCaptureStarted!: () => void;
+		let markNewerSnapshotStarted!: () => void;
+		const oldCaptureStarted = new Promise<void>(resolveStarted => {
+			markOldCaptureStarted = resolveStarted;
+		});
+		const newerSnapshotStarted = new Promise<void>(resolveStarted => {
+			markNewerSnapshotStarted = resolveStarted;
+		});
+		const oldCapture = new Promise<{
+			digests: Array<{contentDigest: string; path: string}>;
+			failures: never[];
+			totalSourceBytes: number;
+		}>(resolveCapture => {
+			resolveOldCapture = resolveCapture;
+		});
+		const rejectedManifest = new Promise<never>((_resolve, rejectSnapshot) => {
+			rejectNewerSnapshot = rejectSnapshot;
+		});
+
+		story.passages = story.passages.map(passage => ({
+			...passage,
+			id: 'passage-id',
+			story: 'story-id',
+			text: `<img src="${retryPath}">`
+		}));
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : passageSource
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce(filesAt(1))
+			.mockImplementationOnce(() => {
+				markNewerSnapshotStarted();
+				return rejectedManifest;
+			})
+			.mockReturnValue(filesAt(3));
+		captureNativeProjectAssetDigestsMock
+			.mockImplementationOnce(() => {
+				markOldCaptureStarted();
+				return oldCapture;
+			})
+			.mockResolvedValue({
+				digests: [{contentDigest: retryDigest, path: retryPath}],
+				failures: [],
+				totalSourceBytes: 3
+			});
+		saveNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		watchMock.mockReturnValue({close: jest.fn()});
+
+		try {
+			const initialStart = startProjectSession(rootPath, undefined, [story.id]);
+
+			await oldCaptureStarted;
+			const newerSave = saveProjectFolder(rootPath, story);
+
+			await newerSnapshotStarted;
+			passageSource = `<img src="${retryPath}">`;
+			resolveOldCapture({
+				digests: [{contentDigest: oldDigest, path: oldPath}],
+				failures: [],
+				totalSourceBytes: 3
+			});
+			expect(() =>
+				projectSessionAssetReadBaselines(rootPath, [oldPath])
+			).toThrow('Project assets cannot be read before indexing completes.');
+			expect(watchMock).not.toHaveBeenCalled();
+			await new Promise<void>(resolveRejection =>
+				setImmediate(() => {
+					rejectNewerSnapshot(new Error('newer snapshot failed'));
+					resolveRejection();
+				})
+			);
+
+			await expect(newerSave).rejects.toThrow('newer snapshot failed');
+			await expect(initialStart).resolves.toEqual(
+				expect.objectContaining({storyIds: [story.id]})
+			);
+			expect(
+				projectSessionAssetReadBaselines(rootPath, [retryPath, oldPath])
+			).toEqual([
+				{
+					expectedContentDigest: retryDigest,
+					expectedExists: true,
+					expectedModifiedAtMs: 3,
+					expectedSizeBytes: 3,
+					path: retryPath
+				},
+				{
+					expectedContentDigest: undefined,
+					expectedExists: true,
+					expectedModifiedAtMs: 3,
+					expectedSizeBytes: 3,
+					path: oldPath
+				}
+			]);
+		} finally {
+			stopProjectSession(rootPath);
+		}
+	});
+
+	it('stops time-sliced trusted story scanning when the session is canceled', async () => {
+		const rootPath = '/native/canceled-digest-scan.twine.rs';
+		const passageCount = 300;
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			...Array.from({length: passageCount}, (_, index) => [
+				'[[stories.passages]]',
+				`id = "passage-${index}"`,
+				`name = "Passage ${index}"`,
+				`file = "passages/${index}.twee"`
+			]).flat()
+		].join('\n');
+		const files = [
+			{
+				fingerprint: '1:1',
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			...Array.from({length: passageCount}, (_, index) => ({
+				fingerprint: '1:8',
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: `passages/${index}.twee`,
+				sizeBytes: 8
+			}))
+		];
+		let now = 0;
+		const performanceNowSpy = jest
+			.spyOn(performance, 'now')
+			.mockImplementation(() => (now += 9));
+		const scanSpy = jest.spyOn(
+			assetPaths,
+			'boundedReferencedMediaPathsInSource'
+		);
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : 'no media'
+		);
+		nativeProjectFileManifestMock.mockReturnValue(files);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+
+		try {
+			const start = startProjectSession(rootPath, undefined, ['story-id']);
+
+			setImmediate(() => stopProjectSession(rootPath));
+			await expect(start).rejects.toMatchObject({
+				code: 'PROJECT_SESSION_START_CANCELED'
+			});
+			expect(scanSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			stopProjectSession(rootPath);
+			scanSpy.mockRestore();
+			performanceNowSpy.mockRestore();
+		}
+	});
+
+	it('lets a newer digest refresh supersede an older yielded full save', async () => {
+		const rootPath = '/native/superseded-digest-save.twine.rs';
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/start.twee"'
+		].join('\n');
+		const assetPaths = [
+			'assets/initial.png',
+			'assets/newer.png',
+			'assets/older.png'
+		];
+		const filesAt = (mtimeMs: number) => [
+			{
+				fingerprint: `${mtimeMs}:1`,
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			{
+				fingerprint: `${mtimeMs}:1`,
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path: 'passages/start.twee',
+				sizeBytes: 1
+			},
+			...assetPaths.map(path => ({
+				fingerprint: `${mtimeMs}:3`,
+				kind: 'asset' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path,
+				sizeBytes: 3
+			}))
+		];
+		const olderStory = {...fakeStory(300), id: 'story-id', name: 'Story'};
+		olderStory.passages = olderStory.passages.map((passage, index) => ({
+			...passage,
+			id: `older-${index}`,
+			story: 'story-id',
+			text: index === 0 ? '<img src="assets/older.png">' : 'no media'
+		}));
+		const newerStory = {...fakeStory(1), id: 'story-id', name: 'Story'};
+		newerStory.passages = newerStory.passages.map(passage => ({
+			...passage,
+			story: 'story-id',
+			text: '<img src="assets/newer.png">'
+		}));
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: '<img src="assets/initial.png">'
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		nativeProjectFileManifestMock.mockReturnValueOnce(filesAt(1));
+		await startProjectSession(rootPath, undefined, ['story-id']);
+		captureNativeProjectAssetDigestsMock.mockClear();
+		captureNativeProjectAssetDigestsMock.mockImplementation(
+			async (_rootPath, requests) => ({
+				digests: requests.map((request: {path: string}) => ({
+					contentDigest: 'a'.repeat(64),
+					path: request.path
+				})),
+				failures: [],
+				totalSourceBytes: requests.length * 3
+			})
+		);
+		saveNativeProjectFolderMock.mockImplementation(
+			(_rootPath: string, savedStory: typeof olderStory) => ({
+				passageTextLoaded: true,
+				rootPath,
+				stories: [savedStory],
+				storyIds: [savedStory.id]
+			})
+		);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce(filesAt(2))
+			.mockReturnValueOnce(filesAt(3));
+		let now = 0;
+		const performanceNowSpy = jest
+			.spyOn(performance, 'now')
+			.mockImplementation(() => (now += 9));
+
+		try {
+			const olderSave = saveProjectFolder(rootPath, olderStory);
+			let newerSave!: Promise<Awaited<ReturnType<typeof saveProjectFolder>>>;
+
+			await new Promise<void>(resolveLaunch =>
+				setImmediate(() => {
+					newerSave = saveProjectFolder(rootPath, newerStory);
+					resolveLaunch();
+				})
+			);
+			await expect(Promise.all([olderSave, newerSave])).resolves.toHaveLength(
+				2
+			);
+			expect(captureNativeProjectAssetDigestsMock).toHaveBeenCalledTimes(1);
+			expect(captureNativeProjectAssetDigestsMock).toHaveBeenCalledWith(
+				rootPath,
+				[
+					{
+						expectedModifiedAtMs: 3,
+						expectedSizeBytes: 3,
+						path: 'assets/newer.png'
+					}
+				]
+			);
+			expect(
+				projectSessionAssetReadBaselines(rootPath, [
+					'assets/newer.png',
+					'assets/older.png'
+				])
+			).toEqual([
+				{
+					expectedContentDigest: 'a'.repeat(64),
+					expectedExists: true,
+					expectedModifiedAtMs: 3,
+					expectedSizeBytes: 3,
+					path: 'assets/newer.png'
+				},
+				{
+					expectedContentDigest: undefined,
+					expectedExists: true,
+					expectedModifiedAtMs: 3,
+					expectedSizeBytes: 3,
+					path: 'assets/older.png'
+				}
+			]);
+		} finally {
+			stopProjectSession(rootPath);
+			performanceNowSpy.mockRestore();
+		}
+	});
+
+	it('retains at most one hundred trusted story digest states', async () => {
+		performanceHarnessEnabledMock.mockReturnValue(true);
+		const realFs = jest.requireActual<typeof import('fs')>('fs');
+		const rootPath = `/tmp/twine-story-digest-limit-${Date.now()}.twine.rs`;
+		const sharedPath = 'assets/shared.png';
+		const stories = Array.from({length: 101}, (_, index) => {
+			const id = `story-${String(index).padStart(3, '0')}`;
+			const story = {...fakeStory(1), id};
+
+			story.passages = story.passages.map(passage => ({
+				...passage,
+				story: id,
+				text: `<img src="${sharedPath}">`
+			}));
+			return story;
+		});
+		const files = [
+			{
+				fingerprint: '1:1',
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			{
+				fingerprint: '1:3',
+				kind: 'asset' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: sharedPath,
+				sizeBytes: 3
+			}
+		];
+		const receipt = {
+			assets: [],
+			completedAt: '2026-06-21T16:00:01.000Z',
+			files,
+			id: 'story-limit',
+			layoutDataJson: '{}',
+			rootPath,
+			schemaVersion: 1,
+			startedAt: '2026-06-21T16:00:00.000Z',
+			storyIds: stories.map(story => story.id)
+		};
+
+		realFs.mkdirSync(rootPath, {recursive: true});
+		watchMock.mockReturnValue({close: jest.fn()});
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		captureNativeProjectAssetDigestsMock.mockResolvedValue({
+			digests: [{contentDigest: 'a'.repeat(64), path: sharedPath}],
+			failures: [],
+			totalSourceBytes: 3
+		});
+		loadNativeProjectFolderMock
+			.mockReturnValueOnce({
+				passageTextLoaded: false,
+				rootPath,
+				stories,
+				storyIds: stories.map(story => story.id)
+			})
+			.mockReturnValueOnce({
+				baselineReceipt: receipt,
+				passageTextLoaded: true,
+				rootPath,
+				stories,
+				storyIds: stories.map(story => story.id)
+			});
+
+		try {
+			await openProjectFolder(rootPath, {loadPassageText: false});
+			await hydrateProjectFolder(
+				rootPath,
+				stories.map(story => story.id)
+			);
+			await startProjectSession(
+				rootPath,
+				undefined,
+				stories.map(story => story.id)
+			);
+
+			expect(projectSessionMemoryDiagnostics()).toEqual(
+				expect.objectContaining({
+					assetDigestCandidatePathCount: 100,
+					assetDigestCandidatePathStringBytes: sharedPath.length * 2 * 100,
+					assetDigestCount: 1,
+					assetDigestReadyStoryCount: 100,
+					assetDigestStoryIdStringBytes: stories
+						.slice(0, 100)
+						.reduce((total, story) => total + story.id.length * 2, 0),
+					assetDigestStoryCount: 100,
+					assetDigestUnknownReasonStringBytes: 0
+				})
+			);
+		} finally {
+			stopProjectSession(rootPath);
+			realFs.rmSync(rootPath, {force: true, recursive: true});
+		}
+	});
+
+	it('captures one bounded digest batch and rejects a whole story beyond the session ceiling', async () => {
+		performanceHarnessEnabledMock.mockReturnValue(true);
+		const story = fakeStory(1);
+		const secondStory = {...fakeStory(1), id: 'second-story'};
+		const remainingStories = Array.from({length: 3}, (_, storyIndex) => {
+			const candidate = {
+				...fakeStory(1),
+				id: `story-${storyIndex + 3}`
+			};
+
+			candidate.passages[0].text = Array.from(
+				{length: 25},
+				(_, pathIndex) =>
+					`<img src="assets/story-${storyIndex + 3}-${String(pathIndex).padStart(2, '0')}.png">`
+			).join('');
+			return candidate;
+		});
+		const stories = [story, secondStory, ...remainingStories];
+		const realFs = jest.requireActual<typeof import('fs')>('fs');
+		const rootPath = `/tmp/twine-digest-${Date.now()}.twine.rs`;
+		const mediaPaths = Array.from(
+			{length: 30},
+			(_, index) => `assets/media-${String(index).padStart(2, '0')}.png`
+		);
+		const expectedPaths = mediaPaths
+			.slice()
+			.sort((left, right) => left.localeCompare(right))
+			.slice(0, 25);
+		const secondMediaPaths = Array.from(
+			{length: 30},
+			(_, index) => `assets/other-${String(index).padStart(2, '0')}.png`
+		);
+		const secondExpectedPaths = secondMediaPaths.slice(0, 25);
+		const remainingPaths = remainingStories.map((_, storyIndex) =>
+			Array.from(
+				{length: 25},
+				(_, pathIndex) =>
+					`assets/story-${storyIndex + 3}-${String(pathIndex).padStart(2, '0')}.png`
+			)
+		);
+		const admittedPaths = [
+			...expectedPaths,
+			...secondExpectedPaths,
+			...remainingPaths[0],
+			...remainingPaths[1]
+		];
+		story.passages[0].text = [
+			'<link href="assets/style.css">',
+			...mediaPaths
+				.slice()
+				.reverse()
+				.map(path => `<img src="${path}">`)
+		].join('');
+		secondStory.passages[0].text = secondMediaPaths
+			.slice()
+			.reverse()
+			.map(path => `<img src="${path}">`)
+			.join('');
+		const files = [
+			{
+				fingerprint: '1:42',
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 42
+			},
+			...[
+				'assets/style.css',
+				...mediaPaths,
+				...secondMediaPaths,
+				...remainingPaths.flat()
+			].map(path => ({
+				fingerprint: '2:3',
+				kind: 'asset' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 2,
+				path,
+				sizeBytes: 3
+			}))
+		];
+		const baselineReceipt = {
+			assets: [],
+			completedAt: '2026-06-21T16:00:01.000Z',
+			files,
+			id: 'load-digest',
+			layoutDataJson: '{}',
+			rootPath,
+			schemaVersion: 1,
+			startedAt: '2026-06-21T16:00:00.000Z',
+			storyIds: stories.map(story => story.id)
+		};
+		realFs.mkdirSync(rootPath, {recursive: true});
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		captureNativeProjectAssetDigestsMock.mockImplementation(
+			async (_rootPath, requests) => ({
+				digests: requests
+					.filter(
+						(request: {path: string}) => request.path !== 'assets/other-24.png'
+					)
+					.map((request: {path: string}) => ({
+						contentDigest: 'a'.repeat(64),
+						path: request.path
+					})),
+				failures: requests.some(
+					(request: {path: string}) => request.path === 'assets/other-24.png'
+				)
+					? [
+							{
+								message: 'too large',
+								path: 'assets/other-24.png',
+								reason: 'file-too-large'
+							}
+						]
+					: [],
+				totalSourceBytes: requests.length * 3
+			})
+		);
+		loadNativeProjectFolderMock
+			.mockReturnValueOnce({
+				passageTextLoaded: false,
+				rootPath,
+				stories,
+				storyIds: stories.map(story => story.id)
+			})
+			.mockReturnValueOnce({
+				baselineReceipt,
+				passageTextLoaded: true,
+				rootPath,
+				stories,
+				storyIds: stories.map(story => story.id)
+			});
+
+		try {
+			await openProjectFolder(rootPath, {loadPassageText: false});
+			await hydrateProjectFolder(
+				rootPath,
+				stories.map(story => story.id)
+			);
+			await startProjectSession(
+				rootPath,
+				undefined,
+				stories.map(story => story.id)
+			);
+
+			expect(captureNativeProjectAssetDigestsMock).toHaveBeenCalledTimes(1);
+			expect(captureNativeProjectAssetDigestsMock).toHaveBeenCalledWith(
+				rootPath,
+				admittedPaths.map(path => ({
+					expectedModifiedAtMs: 2,
+					expectedSizeBytes: 3,
+					path
+				}))
+			);
+			expect(projectSessionAssetReadBaselines(rootPath, expectedPaths)).toEqual(
+				expectedPaths.map(path => ({
+					expectedContentDigest: 'a'.repeat(64),
+					expectedExists: true,
+					expectedModifiedAtMs: 2,
+					expectedSizeBytes: 3,
+					path
+				}))
+			);
+			expect(
+				projectSessionAssetReadBaselines(rootPath, secondExpectedPaths)
+			).toEqual(
+				secondExpectedPaths.map(path => ({
+					expectedContentDigest:
+						path === 'assets/other-24.png' ? undefined : 'a'.repeat(64),
+					expectedExists: true,
+					expectedModifiedAtMs: 2,
+					expectedSizeBytes: 3,
+					path
+				}))
+			);
+			expect(
+				projectSessionAssetReadBaselines(rootPath, ['assets/style.css'])[0]
+					.expectedContentDigest
+			).toBeUndefined();
+			expect(
+				projectSessionAssetReadBaselines(rootPath, remainingPaths[2]).every(
+					baseline => baseline.expectedContentDigest === undefined
+				)
+			).toBe(true);
+			expect(projectSessionMemoryDiagnostics()).toEqual(
+				expect.objectContaining({
+					assetDigestCandidatePathCount: 100,
+					assetDigestCandidatePathStringBytes: admittedPaths.reduce(
+						(total, path) => total + path.length * 2,
+						0
+					),
+					assetDigestCount: 99,
+					assetDigestReadyStoryCount: 4,
+					assetDigestStoryIdStringBytes: stories.reduce(
+						(total, story) => total + story.id.length * 2,
+						0
+					),
+					assetDigestStoryCount: 5,
+					assetDigestStringBytes: admittedPaths
+						.filter(path => path !== 'assets/other-24.png')
+						.reduce((total, path) => total + (path.length + 64) * 2, 0),
+					assetDigestUnknownReasonStringBytes: 'session-path-limit'.length * 2
+				})
+			);
 		} finally {
 			stopProjectSession(rootPath);
 			realFs.rmSync(rootPath, {force: true, recursive: true});
@@ -2582,7 +3711,100 @@ describe('project-folder native bridge', () => {
 		}
 	});
 
-	it('emits a generation-bound passage delta without loading the full project', async () => {
+	it('does not install watcher resources when canceled during digest capture', async () => {
+		const rootPath = '/native/digest-cancel.twine.rs';
+		let resolveDigestCapture!: (value: {
+			digests: Array<{contentDigest: string; path: string}>;
+			failures: [];
+			totalSourceBytes: number;
+		}) => void;
+		const digestCapture = new Promise<{
+			digests: Array<{contentDigest: string; path: string}>;
+			failures: [];
+			totalSourceBytes: number;
+		}>(resolvePromise => {
+			resolveDigestCapture = resolvePromise;
+		});
+		const setIntervalSpy = jest.spyOn(global, 'setInterval');
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/start.twee"'
+		].join('\n');
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: '<img src="assets/a.png">'
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		captureNativeProjectAssetDigestsMock.mockReturnValue(digestCapture);
+		nativeProjectFileManifestMock.mockReturnValue([
+			{
+				fingerprint: '1:1',
+				kind: 'manifest',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			{
+				fingerprint: '1:1',
+				kind: 'passage',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'passages/start.twee',
+				sizeBytes: 1
+			},
+			{
+				fingerprint: '1:3',
+				kind: 'asset',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'assets/a.png',
+				sizeBytes: 3
+			}
+		]);
+
+		try {
+			const start = startProjectSession(rootPath, jest.fn(), ['story-id']);
+
+			for (
+				let attempts = 0;
+				attempts < 100 &&
+				captureNativeProjectAssetDigestsMock.mock.calls.length === 0;
+				attempts++
+			) {
+				await Promise.resolve();
+			}
+			expect(captureNativeProjectAssetDigestsMock).toHaveBeenCalled();
+			stopProjectSession(rootPath);
+			resolveDigestCapture({
+				digests: [{contentDigest: 'a'.repeat(64), path: 'assets/a.png'}],
+				failures: [],
+				totalSourceBytes: 3
+			});
+
+			await expect(start).rejects.toMatchObject({
+				code: 'PROJECT_SESSION_START_CANCELED'
+			});
+			expect(captureNativeProjectAssetDigestsMock).toHaveBeenCalledTimes(1);
+			expect(watchMock).not.toHaveBeenCalled();
+			expect(setIntervalSpy).not.toHaveBeenCalled();
+		} finally {
+			stopProjectSession(rootPath);
+			setIntervalSpy.mockRestore();
+		}
+	});
+
+	it('forces accepted-disk digest recapture when asset metadata is unchanged', async () => {
 		jest.useFakeTimers();
 		const manifestSource = [
 			'schema_version = 1',
@@ -2620,15 +3842,36 @@ describe('project-folder native bridge', () => {
 			mtimeMs: 2,
 			sizeBytes: 9
 		};
+		const assetFiles = ['assets/after.png', 'assets/before.png'].map(path => ({
+			fingerprint: '1:3',
+			kind: 'asset' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path,
+			sizeBytes: 3
+		}));
 		const listener = jest.fn();
+		let passageSource = '<img src="assets/before.png"> old';
+		let digestCaptureCount = 0;
 
 		readFileMock.mockImplementation(async path =>
-			String(path).endsWith('twine.toml') ? manifestSource : 'from disk'
+			String(path).endsWith('twine.toml') ? manifestSource : passageSource
 		);
 		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		captureNativeProjectAssetDigestsMock.mockImplementation(
+			async (_rootPath, requests) => ({
+				digests: requests.map((request: {path: string}) => ({
+					contentDigest: (++digestCaptureCount === 1 ? 'b' : 'a').repeat(64),
+					path: request.path
+				})),
+				failures: [],
+				totalSourceBytes: requests.length * 3
+			})
+		);
 		nativeProjectFileManifestMock
-			.mockReturnValueOnce([manifestFile, passageFile])
-			.mockReturnValueOnce([manifestFile, changedPassageFile]);
+			.mockReturnValueOnce([manifestFile, passageFile, ...assetFiles])
+			.mockReturnValueOnce([manifestFile, changedPassageFile, ...assetFiles]);
 
 		try {
 			const start = await startProjectSession(
@@ -2640,6 +3883,17 @@ describe('project-folder native bridge', () => {
 			expect(start).toEqual(
 				expect.objectContaining({generation: 1, storyIds: ['story-id']})
 			);
+			expect(captureNativeProjectAssetDigestsMock).toHaveBeenLastCalledWith(
+				'/native/project.twine.rs',
+				[
+					{
+						expectedModifiedAtMs: 1,
+						expectedSizeBytes: 3,
+						path: 'assets/before.png'
+					}
+				]
+			);
+			passageSource = '<img src="assets/before.png"> new';
 			await jest.advanceTimersByTimeAsync(1250);
 
 			expect(listener).toHaveBeenCalledWith(
@@ -2658,7 +3912,35 @@ describe('project-folder native bridge', () => {
 					})
 				})
 			);
-			expect(loadNativeProjectFolderMock).not.toHaveBeenCalled();
+			await resolveProjectSessionConflicts(
+				'/native/project.twine.rs',
+				'acceptDisk',
+				[],
+				listener.mock.calls[0][0].id
+			);
+			expect(captureNativeProjectAssetDigestsMock).toHaveBeenLastCalledWith(
+				'/native/project.twine.rs',
+				[
+					{
+						expectedModifiedAtMs: 1,
+						expectedSizeBytes: 3,
+						path: 'assets/before.png'
+					}
+				]
+			);
+			expect(
+				projectSessionAssetReadBaselines('/native/project.twine.rs', [
+					'assets/before.png'
+				])
+			).toEqual([
+				{
+					expectedContentDigest: 'a'.repeat(64),
+					expectedExists: true,
+					expectedModifiedAtMs: 1,
+					expectedSizeBytes: 3,
+					path: 'assets/before.png'
+				}
+			]);
 		} finally {
 			stopProjectSession('/native/project.twine.rs');
 			jest.useRealTimers();

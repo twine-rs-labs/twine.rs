@@ -2,7 +2,7 @@
 
 Status: active
 Owner: repository maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-21
 Source of truth: unfinished repository outcomes
 
 This directory contains only unfinished work. Completed implementation plans

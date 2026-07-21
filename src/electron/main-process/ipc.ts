@@ -207,7 +207,7 @@ export function initIpc() {
 			}
 			if (
 				!Array.isArray(paths) ||
-				paths.length > 100 ||
+				paths.length > 25 ||
 				paths.some(
 					path =>
 						typeof path !== 'string' || Buffer.byteLength(path, 'utf8') > 4096

@@ -21,6 +21,8 @@ version = "0.1.4"
 
 [workspace.dependencies]
 anyhow = "1"
+cap-fs-ext = "4.0.2"
+cap-std = "4.0.2"
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"

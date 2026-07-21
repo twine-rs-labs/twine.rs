@@ -17,6 +17,7 @@ import {
 	assetKindForPath,
 	assetReferencesInSource,
 	assetSnippet,
+	compareAssetPaths,
 	normalizedAssetPath
 } from './asset-paths';
 import {
@@ -606,7 +607,7 @@ function assetInventoryFromReferences(
 	}
 
 	return Array.from(inventory.values()).sort((left, right) =>
-		left.path.localeCompare(right.path)
+		compareAssetPaths(left.path, right.path)
 	);
 }
 

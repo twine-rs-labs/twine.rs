@@ -159,6 +159,7 @@ describe('initIpc()', () => {
 		projectSessionAssetReadBaselinesMock.mockImplementation(
 			(_rootPath: string, paths: string[]) =>
 				paths.map(path => ({
+					expectedContentDigest: 'a'.repeat(64),
 					expectedExists: true,
 					expectedModifiedAtMs: 1,
 					expectedSizeBytes: 100,
@@ -403,6 +404,7 @@ describe('initIpc()', () => {
 			'/mock/project',
 			[
 				{
+					expectedContentDigest: 'a'.repeat(64),
 					expectedExists: true,
 					expectedModifiedAtMs: 1,
 					expectedSizeBytes: 100,
@@ -410,6 +412,20 @@ describe('initIpc()', () => {
 				}
 			],
 			limits
+		);
+		const baselineCallCount =
+			projectSessionAssetReadBaselinesMock.mock.calls.length;
+
+		await expect(
+			readAssetPayloads[1](
+				{sender: {id: 7}},
+				'/mock/project',
+				Array.from({length: 26}, (_, index) => `assets/${index}.png`),
+				limits
+			)
+		).rejects.toThrow('Referenced media request exceeds the safe path limits.');
+		expect(projectSessionAssetReadBaselinesMock).toHaveBeenCalledTimes(
+			baselineCallCount
 		);
 		readNativeProjectAssetPayloadsMock.mockRejectedValueOnce(
 			new Error('Native asset reader failed.')

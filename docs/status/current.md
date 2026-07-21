@@ -81,11 +81,22 @@ The complete local 10k and 50k benchmark runs verify:
   reports actual embedded, external, unresolved, and unsupported media. Browser
   embedding remains unavailable, and Package export still contains an asset
   plan rather than project asset bytes.
-- Referenced-media validation and bounded file reads run as a single-flight
-  asynchronous native task, keeping Electron's main event loop available while
-  preventing concurrent batches from saturating the shared worker pool.
-  Active-session authorization, trusted index baselines, stable ordering, and
-  the native 25-file/25 MiB ceilings remain unchanged.
+- Referenced-media validation and bounded file reads run as asynchronous native
+  tasks, keeping Electron's main event loop available. Admission permits one
+  active and one queued native read; a third request fails with backpressure
+  before it reaches the shared worker pool.
+  Component-wise handle-relative no-follow opens prevent link-swap escapes, and
+  private per-story SHA-256 baselines detect same-size rewrites even when a file
+  modification time is restored. Candidate authority is bounded to the first 25
+  paths per story, 100 stories, 100 unique paths per session, and 4 KiB per
+  normalized path; incomplete or structurally ambiguous source changes fail
+  closed. Initial and full trusted scans use a no-media fast path, yield on a
+  bounded main-loop budget, and cannot commit after a newer refresh supersedes
+  them. Busy digest admission withholds new authority without turning a
+  completed save into an error. Active-session authorization, deterministic
+  ordering, and the native 25-file/25 MiB per-build ceilings remain unchanged.
+  The native build also loads the real addon and checks the Promise ABI for
+  both digest capture and payload reads.
 
 ## Current limitations
 
