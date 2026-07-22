@@ -564,6 +564,58 @@ describe('project-folder native bridge', () => {
 		expect(mkdirpMock).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		['punctuation', 'A:B', 'A?B'],
+		['case', 'Case:Collision', 'CASE?COLLISION'],
+		['truncation', `${'a'.repeat(64)}-one`, `${'a'.repeat(64)}-two`]
+	])(
+		'propagates native %s slug collisions without using the fallback',
+		async (_collision, firstName, secondName) => {
+			const firstStory = {...fakeStory(1), id: 'first-story', name: firstName};
+			const secondStory = {
+				...fakeStory(1),
+				id: 'second-story',
+				name: secondName
+			};
+			const rejection = new Error(
+				'A new project cannot replace an existing filesystem entry.'
+			);
+			let firstRootPath = '';
+
+			createNativeProjectFolderMock
+				.mockImplementationOnce((rootPath: string) => {
+					firstRootPath = rootPath;
+
+					return {
+						passageTextLoaded: true,
+						rootPath,
+						stories: [firstStory],
+						storyIds: [firstStory.id]
+					};
+				})
+				.mockImplementationOnce(() => {
+					throw rejection;
+				});
+
+			await createProjectFolder(firstStory);
+			writeFileMock.mockClear();
+			mkdirpMock.mockClear();
+
+			await expect(createProjectFolder(secondStory)).rejects.toBe(rejection);
+
+			expect(createNativeProjectFolderMock).toHaveBeenCalledTimes(2);
+			expect(createNativeProjectFolderMock.mock.calls[0][0]).toBe(
+				firstRootPath
+			);
+			expect(createNativeProjectFolderMock.mock.calls[1][0]).toBe(
+				firstRootPath
+			);
+			expect(writeFileMock).not.toHaveBeenCalled();
+			expect(mkdirpMock).not.toHaveBeenCalled();
+			stopProjectSession(firstRootPath);
+		}
+	);
+
 	it('validates the project manifest before using the save fallback', async () => {
 		const story = fakeStory(1);
 

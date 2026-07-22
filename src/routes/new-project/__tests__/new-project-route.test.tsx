@@ -196,6 +196,41 @@ describe('<NewProjectRoute>', () => {
 		expect(screen.getByText(`${reservedFallback}.css`)).toBeInTheDocument();
 	});
 
+	it('shows disk-only slug collisions without creating or navigating', async () => {
+		const errorMessage =
+			'A new project cannot replace an existing filesystem entry.';
+		const createProjectFolder = jest.fn(async () => {
+			throw new Error(errorMessage);
+		});
+
+		(window as any).twineElectron = {
+			createProjectFolder,
+			getStoryLibraryFolder: jest.fn(async () => '/native/library')
+		};
+		renderComponent();
+
+		fireEvent.change(screen.getByLabelText('Project name'), {
+			target: {value: 'A?B'}
+		});
+		fireEvent.click(screen.getByRole('button', {name: /create project/i}));
+
+		await waitFor(() =>
+			expect(createProjectFolder).toHaveBeenCalledWith(
+				expect.objectContaining({name: 'A?B'}),
+				undefined,
+				'passage-files'
+			)
+		);
+		expect(await screen.findByText(errorMessage)).toBeInTheDocument();
+		expect(screen.getByTestId('location')).toHaveAttribute(
+			'data-pathname',
+			'/new-project'
+		);
+		expect(
+			screen.queryByTestId('story-inspector-default')
+		).not.toBeInTheDocument();
+	});
+
 	it('renders the import workspace for /new-project/import', () => {
 		renderComponent('/new-project/import');
 

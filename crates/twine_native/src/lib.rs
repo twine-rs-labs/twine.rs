@@ -3648,6 +3648,115 @@ mod tests {
     }
 
     #[test]
+    fn create_rejects_replacing_a_populated_project_without_modifying_it() {
+        let root = temp_path("reject-populated-project-create");
+        let first_story = serde_json::json!({
+            "ifid": "FIRST-IFID",
+            "id": "first-story",
+            "lastUpdate": "2026-01-01T00:00:00.000Z",
+            "name": "First Story",
+            "passages": [{
+                "height": 100,
+                "highlighted": false,
+                "id": "first-passage",
+                "left": 25,
+                "name": "Start",
+                "selected": true,
+                "story": "first-story",
+                "tags": [],
+                "text": "Original passage text",
+                "top": 25,
+                "width": 100
+            }],
+            "script": "",
+            "selected": true,
+            "snapToGrid": true,
+            "startPassage": "first-passage",
+            "storyFormat": "Harlowe",
+            "storyFormatVersion": "3.3.9",
+            "stylesheet": "",
+            "tags": [],
+            "tagColors": {},
+            "zoom": 1
+        });
+        let second_story = serde_json::json!({
+            "ifid": "SECOND-IFID",
+            "id": "second-story",
+            "lastUpdate": "2026-01-02T00:00:00.000Z",
+            "name": "Second Story",
+            "passages": [{
+                "height": 100,
+                "highlighted": false,
+                "id": "second-passage",
+                "left": 25,
+                "name": "Replacement",
+                "selected": true,
+                "story": "second-story",
+                "tags": [],
+                "text": "Replacement passage text",
+                "top": 25,
+                "width": 100
+            }],
+            "script": "",
+            "selected": true,
+            "snapToGrid": true,
+            "startPassage": "second-passage",
+            "storyFormat": "Harlowe",
+            "storyFormatVersion": "3.3.9",
+            "stylesheet": "",
+            "tags": [],
+            "tagColors": {},
+            "zoom": 1
+        });
+
+        create_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            first_story.to_string(),
+            None,
+        )
+        .expect("first project should be created");
+
+        let manifest_path = root.join("twine.toml");
+        let passage_path = root.join("passages/first-story/0001-start.twee");
+        let sidecar_path = root.join(".twine/project.json");
+        let sentinel_path = root.join("unmanaged-sentinel.txt");
+        let original_manifest = fs::read(&manifest_path).expect("manifest should be readable");
+        let original_passage = fs::read(&passage_path).expect("passage should be readable");
+        let original_sidecar = fs::read(&sidecar_path).expect("sidecar should be readable");
+        fs::write(&sentinel_path, b"unmanaged and untouched").expect("sentinel should be written");
+
+        let error = create_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            second_story.to_string(),
+            None,
+        )
+        .expect_err("second project must not replace the first");
+
+        assert!(error.reason.contains("cannot replace"));
+        assert_eq!(
+            fs::read(&manifest_path).expect("manifest should remain readable"),
+            original_manifest
+        );
+        assert_eq!(
+            fs::read(&passage_path).expect("passage should remain readable"),
+            original_passage
+        );
+        assert_eq!(
+            fs::read(&sidecar_path).expect("sidecar should remain readable"),
+            original_sidecar
+        );
+        assert_eq!(
+            fs::read(&sentinel_path).expect("sentinel should remain readable"),
+            b"unmanaged and untouched"
+        );
+        assert!(!root.join("passages/second-story").exists());
+        assert!(!String::from_utf8_lossy(&original_manifest).contains("second-story"));
+        assert!(!String::from_utf8_lossy(&original_sidecar).contains("second-story"));
+
+        fs::remove_dir_all(root).expect("test directory should be removed");
+    }
+
+    #[test]
     fn concurrent_project_root_reservations_have_one_winner() {
         let root = Arc::new(temp_path("concurrent-project-create"));
         let barrier = Arc::new(Barrier::new(2));
