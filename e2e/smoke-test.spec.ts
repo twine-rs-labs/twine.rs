@@ -85,15 +85,30 @@ async function persistedPassageBodies(page: Page) {
 	return page.evaluate(() => {
 		const ids = (key: string) =>
 			(window.localStorage.getItem(key) ?? '').split(',').filter(Boolean);
-		const passages = ids('twine-passages').map(id =>
-			JSON.parse(window.localStorage.getItem(`twine-passages-${id}`) ?? '{}')
-		) as Array<{story?: string; text?: unknown}>;
+		const serializedManifest = window.localStorage.getItem(
+			'twine-story-storage-manifest'
+		);
+		const manifest = serializedManifest
+			? (JSON.parse(serializedManifest) as {
+					passages: Array<{key: string}>;
+					stories: Array<{id: string; key: string}>;
+				})
+			: undefined;
+		const passages = (manifest?.passages.map(({key}) =>
+			JSON.parse(window.localStorage.getItem(key) ?? '{}')
+		) ??
+			ids('twine-passages').map(id =>
+				JSON.parse(window.localStorage.getItem(`twine-passages-${id}`) ?? '{}')
+			)) as Array<{story?: string; text?: unknown}>;
+		const stories =
+			manifest?.stories.map(({id, key}) => ({id, key})) ??
+			ids('twine-stories').map(id => ({id, key: `twine-stories-${id}`}));
 
 		return Object.fromEntries(
-			ids('twine-stories').map(id => {
-				const story = JSON.parse(
-					window.localStorage.getItem(`twine-stories-${id}`) ?? '{}'
-				) as {name?: string};
+			stories.map(({id, key}) => {
+				const story = JSON.parse(window.localStorage.getItem(key) ?? '{}') as {
+					name?: string;
+				};
 
 				return [
 					story.name ?? id,
@@ -151,6 +166,49 @@ test('persists embedded source-editor passage edits', async ({page}) => {
 	await expect(sourceEditor(page)).toContainText(
 		'Smoke text survives a reload.'
 	);
+});
+
+test('keeps colliding passage IDs scoped to their projects', async ({page}) => {
+	await createProject(page, 'Passage collision first');
+	await page.getByRole('button', {name: 'New', exact: true}).click();
+	await page.getByTitle('Stories').click();
+	await expectPersistedPassageBodies(page, {
+		'Passage collision first': ['', '']
+	});
+
+	await createProject(page, 'Passage collision second');
+	await page.getByRole('button', {name: 'New', exact: true}).click();
+	await page.getByTitle('Stories').click();
+
+	const collisions = await page.evaluate(() => {
+		const manifest = JSON.parse(
+			window.localStorage.getItem('twine-story-storage-manifest') ?? '{}'
+		) as {passages?: Array<{id: string; storyId: string}>};
+		const storyIdsByPassage = new Map<string, Set<string>>();
+
+		for (const passage of manifest.passages ?? []) {
+			const storyIds = storyIdsByPassage.get(passage.id) ?? new Set<string>();
+
+			storyIds.add(passage.storyId);
+			storyIdsByPassage.set(passage.id, storyIds);
+		}
+
+		return [...storyIdsByPassage.entries()]
+			.filter(([, storyIds]) => storyIds.size > 1)
+			.map(([passageId]) => passageId);
+	});
+
+	expect(collisions.length).toBeGreaterThan(0);
+	await expectPersistedPassageBodies(page, {
+		'Passage collision first': ['', ''],
+		'Passage collision second': ['', '']
+	});
+
+	await page.reload();
+	await expectPersistedPassageBodies(page, {
+		'Passage collision first': ['', ''],
+		'Passage collision second': ['', '']
+	});
 });
 
 test('keeps hydrated passage bodies when selecting another project and reloading', async ({

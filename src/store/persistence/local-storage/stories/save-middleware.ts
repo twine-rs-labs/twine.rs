@@ -18,42 +18,52 @@ import {
 	savePassage,
 	saveStory
 } from './save';
+import {createStoredPassageTextReader, readStoredPassageTexts} from './storage';
 
 let lastState: StoriesState;
 
 function passageForCorePersistence(
 	passage: ReturnType<typeof passageWithId>,
-	documentText: string | undefined
+	documentText: string | undefined,
+	readStoredText: (storyId: string, passageId: string) => string | undefined,
+	storedTexts?: ReadonlyMap<string, string>
 ) {
 	if (documentText !== undefined) {
 		return {...passage, text: documentText};
 	}
-	const serialized = window.localStorage.getItem(
-		`twine-passages-${passage.id}`
-	);
-	if (serialized) {
-		try {
-			const stored = JSON.parse(serialized) as {text?: unknown};
+	const storedText = storedTexts
+		? storedTexts.get(passage.id)
+		: readStoredText(passage.story, passage.id);
 
-			if (typeof stored.text === 'string') {
-				return {...passage, text: stored.text};
-			}
-		} catch {
-			// The existing loader reports corrupt records. Preserve the current
-			// in-memory fallback here rather than blocking an otherwise valid save.
-		}
+	if (typeof storedText === 'string') {
+		return {...passage, text: storedText};
 	}
 	return passage;
 }
 
-function passagesForPersistence(story: ReturnType<typeof storyWithId>) {
+function passagesForPersistence(
+	story: ReturnType<typeof storyWithId>,
+	readStoredText: (storyId: string, passageId: string) => string | undefined
+) {
 	const registeredStory = bootstrapStory(story.id);
 	const registeredText = new Map(
 		registeredStory?.passages.map(passage => [passage.id, passage.text]) ?? []
 	);
+	const registeredStoryIsComplete = story.passages.every(passage =>
+		registeredText.has(passage.id)
+	);
+	const storedTexts =
+		registeredStory && registeredStoryIsComplete
+			? new Map<string, string>()
+			: readStoredPassageTexts(story.id);
 
 	return story.passages.map(passage =>
-		passageForCorePersistence(passage, registeredText.get(passage.id))
+		passageForCorePersistence(
+			passage,
+			registeredText.get(passage.id),
+			readStoredText,
+			storedTexts
+		)
 	);
 }
 
@@ -64,6 +74,13 @@ function passagesForPersistence(story: ReturnType<typeof storyWithId>) {
 export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 	let atomicBatch = false;
 	let persisted = false;
+	let storedTextReader: ReturnType<
+		typeof createStoredPassageTextReader
+	> | null = null;
+	const readStoredText = (storyId: string, passageId: string) => {
+		storedTextReader ??= createStoredPassageTextReader();
+		return storedTextReader(storyId, passageId);
+	};
 
 	switch (action.type) {
 		case 'applyCorePatchBatch': {
@@ -127,7 +144,7 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 					}
 
 					for (const passage of previous.passages) {
-						deletePassageById(transaction, passage.id);
+						deletePassageById(transaction, previous.id, passage.id);
 					}
 					deleteStory(transaction, previous);
 					persisted = true;
@@ -163,13 +180,14 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 							transaction,
 							passageForCorePersistence(
 								passage,
-								update?.type === 'passageText' ? update.text : undefined
+								update?.type === 'passageText' ? update.text : undefined,
+								readStoredText
 							)
 						);
 					}
 					for (const passage of previous?.passages ?? []) {
 						if (!story.passages.some(current => current.id === passage.id)) {
-							deletePassageById(transaction, passage.id);
+							deletePassageById(transaction, storyId, passage.id);
 						}
 					}
 					persisted = true;
@@ -231,7 +249,7 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 			doUpdateTransaction(transaction => {
 				saveStory(transaction, story);
 
-				for (const passage of passagesForPersistence(story)) {
+				for (const passage of passagesForPersistence(story, readStoredText)) {
 					savePassage(transaction, passage);
 				}
 			});
@@ -248,7 +266,7 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 
 			doUpdateTransaction(transaction => {
 				saveStory(transaction, story);
-				deletePassageById(transaction, action.passageId);
+				deletePassageById(transaction, story.id, action.passageId);
 			});
 			persisted = true;
 			break;
@@ -263,7 +281,7 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 				saveStory(transaction, story);
 
 				for (const passageId of action.passageIds) {
-					deletePassageById(transaction, passageId);
+					deletePassageById(transaction, story.id, passageId);
 				}
 			});
 			persisted = true;
@@ -280,7 +298,7 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 				// We have to delete all passages, then the story itself.
 
 				for (const passage of story.passages) {
-					deletePassageById(transaction, passage.id);
+					deletePassageById(transaction, story.id, passage.id);
 				}
 
 				deleteStory(transaction, story);
@@ -298,7 +316,7 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 					saveStory(transaction, story);
 					savePassage(
 						transaction,
-						passageForCorePersistence(passage, undefined)
+						passageForCorePersistence(passage, undefined, readStoredText)
 					);
 				});
 				persisted = true;
@@ -324,7 +342,8 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 						transaction,
 						passageForCorePersistence(
 							passageWithId(state, action.storyId, passageId),
-							undefined
+							undefined,
+							readStoredText
 						)
 					);
 				}
@@ -350,12 +369,12 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 
 					for (const passage of lastStory.passages) {
 						if (!action.props.passages.some(({id}) => id === passage.id)) {
-							deletePassageById(transaction, passage.id);
+							deletePassageById(transaction, story.id, passage.id);
 						}
 					}
 				}
 
-				passagesForPersistence(story).forEach(passage =>
+				passagesForPersistence(story, readStoredText).forEach(passage =>
 					savePassage(transaction, passage)
 				);
 			});

@@ -4,17 +4,24 @@ import {
 	deleteStory,
 	doUpdateTransaction,
 	savePassage,
-	saveStory
+	saveStory,
+	StorageTransaction
 } from '../save';
 import {StoriesState} from '../../../../stories/stories.types';
 import {fakeStory} from '../../../../../test-util';
 import {
 	clearBootstrapStories,
 	metadataStory,
+	registerBootstrapStories,
 	registerStoryDocuments
 } from '../../../../../core/bootstrap-stories';
+import {storageManifestKey} from '../storage';
 
 jest.mock('../save');
+
+function storageTransaction(): StorageTransaction {
+	return {passageChanges: new Map(), storyChanges: new Map()};
+}
 
 describe('stories local storage save middleware', () => {
 	let state: StoriesState;
@@ -67,7 +74,7 @@ describe('stories local storage save middleware', () => {
 	});
 
 	it('persists a core document update without reading stale React text', () => {
-		const transaction = {passageIds: '', storyIds: ''};
+		const transaction = storageTransaction();
 		const passage = state[0].passages[0];
 
 		saveMiddleware(state, {
@@ -92,13 +99,14 @@ describe('stories local storage save middleware', () => {
 	});
 
 	it('preserves the stored body during a metadata-only core update', () => {
-		const transaction = {passageIds: '', storyIds: ''};
+		const transaction = storageTransaction();
 		const passage = state[0].passages[0];
 
 		window.localStorage.setItem(
 			`twine-passages-${passage.id}`,
 			JSON.stringify({...passage, text: 'stored session body'})
 		);
+		window.localStorage.setItem('twine-passages', passage.id);
 		saveMiddleware(state, {
 			actions: [
 				{
@@ -120,7 +128,7 @@ describe('stories local storage save middleware', () => {
 
 	describe('when a createPassage action is received', () => {
 		it('saves the story using a transaction', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			expect(
 				saveMiddleware(state, {
@@ -169,7 +177,7 @@ describe('stories local storage save middleware', () => {
 		beforeEach(() => (state = [fakeStory(2)]));
 
 		it('saves the story using a transaction', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'createPassages',
@@ -189,7 +197,7 @@ describe('stories local storage save middleware', () => {
 		});
 
 		it('throws an error if a passage created has no name', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'createPassages',
@@ -212,7 +220,7 @@ describe('stories local storage save middleware', () => {
 			).toThrow());
 
 		it("throws an error if the passage doesn't exist in state", () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'createPassages',
@@ -228,7 +236,7 @@ describe('stories local storage save middleware', () => {
 
 	describe('when a createStory action is received', () => {
 		it('saves the story using a transaction', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'createStory',
@@ -244,7 +252,7 @@ describe('stories local storage save middleware', () => {
 
 		it('saves registered bodies for a metadata-only story', () => {
 			const completeStory = fakeStory(2);
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			completeStory.passages[0].text = 'first imported body';
 			completeStory.passages[1].text = 'second imported body';
@@ -280,7 +288,7 @@ describe('stories local storage save middleware', () => {
 
 	describe('when a deletePassage action is received', () => {
 		it('saves the story using a transaction', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'deletePassage',
@@ -290,7 +298,7 @@ describe('stories local storage save middleware', () => {
 			expect(doUpdateTransactionMock).toHaveBeenCalledTimes(1);
 			doUpdateTransactionMock.mock.calls[0][0](transaction);
 			expect(deletePassageByIdMock.mock.calls).toEqual([
-				[transaction, state[0].passages[0].id]
+				[transaction, state[0].id, state[0].passages[0].id]
 			]);
 			expect(saveStoryMock.mock.calls).toEqual([[transaction, state[0]]]);
 		});
@@ -309,7 +317,7 @@ describe('stories local storage save middleware', () => {
 		beforeEach(() => (state = [fakeStory(2)]));
 
 		it('saves the story using a transaction', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'deletePassages',
@@ -319,8 +327,8 @@ describe('stories local storage save middleware', () => {
 			expect(doUpdateTransactionMock).toHaveBeenCalledTimes(1);
 			doUpdateTransactionMock.mock.calls[0][0](transaction);
 			expect(deletePassageByIdMock.mock.calls).toEqual([
-				[transaction, state[0].passages[0].id],
-				[transaction, state[0].passages[1].id]
+				[transaction, state[0].id, state[0].passages[0].id],
+				[transaction, state[0].id, state[0].passages[1].id]
 			]);
 			expect(saveStoryMock.mock.calls).toEqual([[transaction, state[0]]]);
 		});
@@ -343,7 +351,7 @@ describe('stories local storage save middleware', () => {
 		});
 
 		it('deletes the story using a transaction', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'deleteStory',
@@ -352,7 +360,7 @@ describe('stories local storage save middleware', () => {
 			expect(doUpdateTransactionMock).toHaveBeenCalledTimes(1);
 			doUpdateTransactionMock.mock.calls[0][0](transaction);
 			expect(deletePassageByIdMock.mock.calls).toEqual([
-				[transaction, state[0].passages[0].id]
+				[transaction, state[0].id, state[0].passages[0].id]
 			]);
 			expect(deleteStoryMock.mock.calls).toEqual([[transaction, state[0]]]);
 		});
@@ -368,7 +376,7 @@ describe('stories local storage save middleware', () => {
 
 	describe('when an updatePassage action is received', () => {
 		it('saves the story using a transaction', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'updatePassage',
@@ -382,6 +390,62 @@ describe('stories local storage save middleware', () => {
 				[transaction, state[0].passages[0]]
 			]);
 			expect(saveStoryMock.mock.calls).toEqual([[transaction, state[0]]]);
+		});
+
+		it('indexes the manifest once for a metadata-only passage batch', () => {
+			const transaction = storageTransaction();
+			const completeStory = fakeStory(100);
+			const passageUpdates = Object.fromEntries(
+				completeStory.passages.map(passage => [
+					passage.id,
+					{name: passage.name}
+				])
+			);
+
+			state = [metadataStory(completeStory)];
+			window.localStorage.setItem(
+				storageManifestKey,
+				JSON.stringify({
+					passages: completeStory.passages.map((passage, index) => ({
+						id: passage.id,
+						key: `passage-record-${index}`,
+						storyId: completeStory.id
+					})),
+					revision: 'test',
+					stories: [],
+					version: 2
+				})
+			);
+			completeStory.passages.forEach((passage, index) =>
+				window.localStorage.setItem(
+					`passage-record-${index}`,
+					JSON.stringify(passage)
+				)
+			);
+			const getItemSpy = jest.spyOn(Storage.prototype, 'getItem');
+			let manifestReads = 0;
+
+			try {
+				saveMiddleware(state, {
+					passageUpdates,
+					storyId: completeStory.id,
+					type: 'updatePassages'
+				});
+				doUpdateTransactionMock.mock.calls[0][0](transaction);
+				manifestReads = getItemSpy.mock.calls.filter(
+					([key]) => key === storageManifestKey
+				).length;
+			} finally {
+				getItemSpy.mockRestore();
+			}
+
+			expect(manifestReads).toBe(1);
+			expect(savePassageMock).toHaveBeenCalledTimes(100);
+			expect(
+				savePassageMock.mock.calls.every(
+					([, passage]) => typeof passage.text === 'string'
+				)
+			).toBe(true);
 		});
 
 		it('does nothing if the change is trivial', () => {
@@ -422,7 +486,7 @@ describe('stories local storage save middleware', () => {
 		beforeEach(() => (state = [fakeStory(2)]));
 
 		it('saves the story using a transaction', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'updatePassages',
@@ -469,7 +533,7 @@ describe('stories local storage save middleware', () => {
 			).toThrow());
 
 		it("throws an error if a passage doesn't exist in state", () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'updatePassages',
@@ -488,7 +552,7 @@ describe('stories local storage save middleware', () => {
 
 	describe('when an updateStory action is received', () => {
 		it('saves the story and child passages using a transaction', () => {
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			saveMiddleware(state, {
 				type: 'updateStory',
@@ -505,7 +569,7 @@ describe('stories local storage save middleware', () => {
 
 		it('deletes removed passages when the passages property is updated', () => {
 			const storyWithMultiplePassagesState = [fakeStory(2)];
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			// Need to run one action to set lastState.
 
@@ -527,7 +591,11 @@ describe('stories local storage save middleware', () => {
 				[transaction, storyWithMultiplePassagesState[0]]
 			]);
 			expect(deletePassageByIdMock.mock.calls).toEqual([
-				[transaction, storyWithMultiplePassagesState[0].passages[0].id]
+				[
+					transaction,
+					storyWithMultiplePassagesState[0].id,
+					storyWithMultiplePassagesState[0].passages[0].id
+				]
 			]);
 		});
 
@@ -546,7 +614,7 @@ describe('stories local storage save middleware', () => {
 
 		it('merges metadata updates with registered passage bodies', () => {
 			const completeStory = fakeStory(2);
-			const transaction = {passageIds: '', storyIds: ''};
+			const transaction = storageTransaction();
 
 			completeStory.passages[0].text = 'first replacement body';
 			completeStory.passages[1].text = 'second replacement body';
@@ -557,6 +625,37 @@ describe('stories local storage save middleware', () => {
 				type: 'updateStory',
 				props: {passages: state[0].passages},
 				storyId: state[0].id
+			});
+			doUpdateTransactionMock.mock.calls[0][0](transaction);
+
+			expect(savePassageMock.mock.calls).toEqual(
+				completeStory.passages.map(passage => [transaction, passage])
+			);
+		});
+
+		it('falls back to stored text when bootstrap documents are incomplete', () => {
+			const completeStory = fakeStory(2);
+			const transaction = storageTransaction();
+
+			completeStory.passages[0].text = 'bootstrap body';
+			completeStory.passages[1].text = 'durable storage body';
+			state = [metadataStory(completeStory)];
+			registerBootstrapStories([
+				{...completeStory, passages: [completeStory.passages[0]]}
+			]);
+			window.localStorage.setItem(
+				'twine-passages',
+				completeStory.passages[1].id
+			);
+			window.localStorage.setItem(
+				`twine-passages-${completeStory.passages[1].id}`,
+				JSON.stringify(completeStory.passages[1])
+			);
+
+			saveMiddleware(state, {
+				props: {passages: state[0].passages},
+				storyId: state[0].id,
+				type: 'updateStory'
 			});
 			doUpdateTransactionMock.mock.calls[0][0](transaction);
 

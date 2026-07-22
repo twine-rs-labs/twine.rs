@@ -2064,7 +2064,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				? stories.map(story => bootstrapStory(story.id) ?? story)
 				: stories.map(story =>
 						story.passages.some(passage => 'text' in passage)
-							? metadataStory(storiesWithDocuments([story])[0])
+							? metadataStory(story)
 							: story
 					);
 		for (const story of stories) {

@@ -46,7 +46,7 @@ export function bootstrapStoryPerformanceDiagnostics() {
 	};
 }
 
-export function metadataStory(story: StoryWithDocuments): Story {
+export function metadataStory(story: Story): Story {
 	return {
 		...story,
 		passages: story.passages.map(passage => {

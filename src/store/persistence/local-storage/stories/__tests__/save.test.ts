@@ -1,166 +1,241 @@
+import {StoryWithDocuments} from '../../../../stories/stories.types';
+import {fakeStory} from '../../../../../test-util';
+import {load} from '../load';
 import {
 	deletePassage,
 	deletePassageById,
 	deleteStory,
 	doUpdateTransaction,
 	savePassage,
-	saveStory,
-	StorageTransaction
+	saveStory
 } from '../save';
-import {Story} from '../../../../stories/stories.types';
-import {fakeStory} from '../../../../../test-util';
+import {readStorageManifest, storageManifestKey} from '../storage';
+
+function saveCompleteStory(story: StoryWithDocuments) {
+	doUpdateTransaction(transaction => {
+		saveStory(transaction, story);
+		story.passages.forEach(passage => savePassage(transaction, passage));
+	});
+}
+
+function storageSnapshot() {
+	return Object.fromEntries(
+		Object.keys(window.localStorage)
+			.sort()
+			.map(key => [key, window.localStorage.getItem(key)])
+	);
+}
 
 describe('stories local storage save', () => {
-	let story: Story;
-	let transaction: StorageTransaction;
+	let story: StoryWithDocuments;
 
 	beforeEach(() => {
 		window.localStorage.clear();
 		story = fakeStory(1);
-		transaction = {
-			passageIds: story.passages[0].id,
-			storyIds: story.id
-		};
-		window.localStorage.setItem(
-			`twine-passages-${story.passages[0].id}`,
-			JSON.stringify(story.passages[0])
+	});
+	afterAll(() => window.localStorage.clear());
+
+	it('commits a complete readable snapshot through one manifest', async () => {
+		saveCompleteStory(story);
+
+		const manifest = readStorageManifest();
+
+		expect(
+			JSON.parse(window.localStorage.getItem(storageManifestKey)!)
+		).toEqual(manifest);
+		expect(manifest.stories).toHaveLength(1);
+		expect(manifest.passages).toHaveLength(1);
+		expect(await load()).toEqual([story]);
+		expect(window.localStorage.getItem('twine-stories')).toBeNull();
+		expect(window.localStorage.getItem('twine-passages')).toBeNull();
+	});
+
+	it('keeps equal passage IDs in different stories independent', async () => {
+		const other = fakeStory(1);
+
+		other.passages[0].id = story.passages[0].id;
+		other.passages[0].story = other.id;
+		other.passages[0].text = 'other story body';
+		other.startPassage = other.passages[0].id;
+
+		doUpdateTransaction(transaction => {
+			for (const candidate of [story, other]) {
+				saveStory(transaction, candidate);
+				savePassage(transaction, candidate.passages[0]);
+			}
+		});
+
+		expect(readStorageManifest().passages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({id: story.passages[0].id, storyId: story.id}),
+				expect.objectContaining({id: story.passages[0].id, storyId: other.id})
+			])
 		);
+		expect(await load()).toEqual(expect.arrayContaining([story, other]));
+	});
+
+	it('deletes a passage by story and passage ID without touching a collision', async () => {
+		const other = fakeStory(1);
+
+		other.passages[0].id = story.passages[0].id;
+		other.passages[0].story = other.id;
+		saveCompleteStory(story);
+		saveCompleteStory(other);
+
+		doUpdateTransaction(transaction =>
+			deletePassageById(transaction, story.id, story.passages[0].id)
+		);
+
+		const loaded = await load();
+
+		expect(
+			loaded.find(candidate => candidate.id === story.id)?.passages
+		).toEqual([]);
+		expect(
+			loaded.find(candidate => candidate.id === other.id)?.passages
+		).toHaveLength(1);
+	});
+
+	it('leaves the prior revision intact when quota fails at every write boundary', async () => {
+		story = fakeStory(2);
+		saveCompleteStory(story);
+		const before = storageSnapshot();
+		const updated: StoryWithDocuments = {
+			...story,
+			name: 'Updated story',
+			passages: story.passages.map((passage, index) => ({
+				...passage,
+				text: `Updated passage ${index + 1}`
+			}))
+		};
+
+		for (const failureBoundary of [1, 2, 3, 4]) {
+			const originalSetItem = window.localStorage.setItem.bind(
+				window.localStorage
+			);
+			let writes = 0;
+			const quotaError = new DOMException(
+				'Storage quota exceeded',
+				'QuotaExceededError'
+			);
+			const setItemSpy = jest
+				.spyOn(Storage.prototype, 'setItem')
+				.mockImplementation((key, value) => {
+					writes += 1;
+					if (writes === failureBoundary) {
+						throw quotaError;
+					}
+					originalSetItem(key, value);
+				});
+
+			try {
+				expect(() => saveCompleteStory(updated)).toThrow(quotaError);
+			} finally {
+				setItemSpy.mockRestore();
+			}
+
+			expect(writes).toBe(failureBoundary);
+			expect(storageSnapshot()).toEqual(before);
+			expect(await load()).toEqual([story]);
+		}
+	});
+
+	it('preserves story and passage order when records are replaced', async () => {
+		const other = fakeStory(1);
+
+		story = fakeStory(2);
+		doUpdateTransaction(transaction => {
+			for (const candidate of [story, other]) {
+				saveStory(transaction, candidate);
+				candidate.passages.forEach(passage =>
+					savePassage(transaction, passage)
+				);
+			}
+		});
+
+		const firstPassage = {...story.passages[0], text: 'updated in place'};
+
+		doUpdateTransaction(transaction => {
+			saveStory(transaction, {...story, name: 'updated in place'});
+			savePassage(transaction, firstPassage);
+		});
+
+		expect(readStorageManifest().stories.map(({id}) => id)).toEqual([
+			story.id,
+			other.id
+		]);
+		expect(
+			readStorageManifest().passages.map(({id, storyId}) => [storyId, id])
+		).toEqual([
+			[story.id, story.passages[0].id],
+			[story.id, story.passages[1].id],
+			[other.id, other.passages[0].id]
+		]);
+	});
+
+	it('migrates legacy keys without losing unchanged passage records', async () => {
+		const passage = story.passages[0];
+		const updated = {...story, name: 'Migrated story'};
+
+		window.localStorage.setItem('twine-stories', story.id);
 		window.localStorage.setItem(
 			`twine-stories-${story.id}`,
 			JSON.stringify({...story, passages: undefined})
 		);
-	});
-	afterAll(() => window.localStorage.clear());
+		window.localStorage.setItem('twine-passages', passage.id);
+		window.localStorage.setItem(
+			`twine-passages-${passage.id}`,
+			JSON.stringify(passage)
+		);
 
-	describe('doUpdateTransaction()', () => {
-		it('passes a transaction object to the updater callback containing story and passage IDs in local storage', () => {
-			const updater = jest.fn();
+		doUpdateTransaction(transaction => saveStory(transaction, updated));
 
-			window.localStorage.setItem('twine-passages', 'a,b,c');
-			window.localStorage.setItem('twine-stories', 'd,e,f');
-			doUpdateTransaction(updater);
-			expect(updater.mock.calls).toEqual([
-				[{passageIds: 'a,b,c', storyIds: 'd,e,f'}]
-			]);
-		});
-
-		it("defaults story and passage ID lists to empty strings if they don't exist in local storage", () => {
-			const updater = jest.fn();
-
-			doUpdateTransaction(updater);
-			expect(updater.mock.calls).toEqual([[{passageIds: '', storyIds: ''}]]);
-		});
-
-		it('updates local storage story and passage IDs after the updater completes', () => {
-			doUpdateTransaction(transaction => {
-				transaction.passageIds = 'update1,update2';
-				transaction.storyIds = 'update3,update4';
-			});
-			expect(window.localStorage.getItem('twine-passages')).toBe(
-				'update1,update2'
-			);
-			expect(window.localStorage.getItem('twine-stories')).toBe(
-				'update3,update4'
-			);
-		});
+		expect(await load()).toEqual([updated]);
+		expect(window.localStorage.getItem(`twine-stories-${story.id}`)).toBeNull();
+		expect(
+			window.localStorage.getItem(`twine-passages-${passage.id}`)
+		).not.toBeNull();
 	});
 
-	describe('deletePassage()', () => {
-		beforeEach(() => deletePassage(transaction, story.passages[0]));
+	it('stages deletes until the transaction commits', async () => {
+		saveCompleteStory(story);
 
-		it('deletes the passage from local storage', () =>
-			expect(
-				window.localStorage.getItem(`twine-passages-${story.passages[0].id}`)
-			).toBeNull());
-
-		it('removes the passage ID from the transaction', () =>
-			expect(transaction.passageIds).toBe(''));
-	});
-
-	describe('deletePassageById()', () => {
-		beforeEach(() => deletePassageById(transaction, story.passages[0].id));
-
-		it('deletes the passage from local storage', () =>
-			expect(
-				window.localStorage.getItem(`twine-passages-${story.passages[0].id}`)
-			).toBeNull());
-
-		it('removes the passage ID from the transaction', () =>
-			expect(transaction.passageIds).toBe(''));
-	});
-
-	describe('deleteStory()', () => {
-		beforeEach(() => deleteStory(transaction, story));
-
-		it('deletes the passage from local storage', () =>
-			expect(
-				window.localStorage.getItem(`twine-stories-${story.id}`)
-			).toBeNull());
-
-		it('removes the story ID from the transaction', () =>
-			expect(transaction.storyIds).toBe(''));
-
-		it('takes no action related to child passages', () => {
-			expect(
-				window.localStorage.getItem(`twine-passages-${story.passages[0].id}`)
-			).not.toBeNull();
-			expect(transaction.passageIds).toBe(story.passages[0].id);
-		});
-	});
-
-	describe('saveStory()', () => {
-		beforeEach(() => {
-			transaction.passageIds = '';
-			transaction.storyIds = '';
-			window.localStorage.clear();
-			saveStory(transaction, story);
+		doUpdateTransaction(transaction => {
+			deletePassage(transaction, story.passages[0]);
+			deleteStory(transaction, story);
 		});
 
-		it('serializes the story to local storage', () =>
-			expect(
-				JSON.parse(window.localStorage.getItem(`twine-stories-${story.id}`)!)
-			).toEqual({
-				...story,
-				lastUpdate: expect.any(String),
-				passages: undefined
-			}));
-
-		it('adds the story ID to the transaction', () =>
-			expect(transaction.storyIds).toBe(story.id));
-
-		it('does not serialize passages to local storage', () =>
-			expect(
-				window.localStorage.getItem(`twine-passages-${story.passages[0].id}`)!
-			).toBeNull());
-
-		it('does not place passage IDs in the transaction', () =>
-			expect(transaction.passageIds).toBe(''));
+		expect(await load()).toEqual([]);
+		expect(readStorageManifest().stories).toEqual([]);
+		expect(readStorageManifest().passages).toEqual([]);
 	});
 
-	describe('savePassage()', () => {
-		beforeEach(() => {
-			transaction.passageIds = '';
-			transaction.storyIds = '';
-			window.localStorage.clear();
-			savePassage(transaction, story.passages[0]);
-		});
+	it('does not write when the updater throws', () => {
+		const error = new Error('invalid update');
 
-		it('serializes the passage to local storage', () =>
-			expect(
-				JSON.parse(
-					window.localStorage.getItem(`twine-passages-${story.passages[0].id}`)!
-				)
-			).toEqual(story.passages[0]));
+		expect(() =>
+			doUpdateTransaction(() => {
+				throw error;
+			})
+		).toThrow(error);
+		expect(storageSnapshot()).toEqual({});
+	});
 
-		it('adds the passage ID to the transaction', () =>
-			expect(transaction.passageIds).toBe(story.passages[0].id));
-
-		it('does not serialize the parent story to local storage', () =>
-			expect(
-				window.localStorage.getItem(`twine-stories-${story.id}`)!
-			).toBeNull());
-
-		it('does not place the parent story ID in the transaction', () =>
-			expect(transaction.storyIds).toBe(''));
+	it('rejects records without required identity', () => {
+		expect(() =>
+			doUpdateTransaction(transaction =>
+				saveStory(transaction, {...story, id: ''})
+			)
+		).toThrow('Story has no ID');
+		expect(() =>
+			doUpdateTransaction(transaction =>
+				savePassage(transaction, {...story.passages[0], id: ''})
+			)
+		).toThrow('Passage has no ID');
+		expect(() =>
+			doUpdateTransaction(transaction =>
+				savePassage(transaction, {...story.passages[0], story: ''})
+			)
+		).toThrow('Passage has no parent story ID');
 	});
 });

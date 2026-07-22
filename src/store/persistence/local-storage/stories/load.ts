@@ -1,26 +1,27 @@
 import {passageDefaults, storyDefaults} from '../../../stories/defaults';
 import {Passage, Story} from '../../../stories/stories.types';
+import {readStorageManifest} from './storage';
 
 /**
  * Parses initial state from local storage.
  */
 export async function load(): Promise<Story[]> {
 	const stories: Record<string, Story> = {};
-	const serializedStories = window.localStorage.getItem('twine-stories');
+	const manifest = readStorageManifest();
 
-	if (!serializedStories) {
+	if (manifest.stories.length === 0) {
 		return [];
 	}
 
 	// First, deserialize stories. We index them by ID so that we can quickly add
 	// passages to them as they are deserialized.
 
-	serializedStories.split(',').forEach(id => {
-		const serializedStory = window.localStorage.getItem(`twine-stories-${id}`);
+	manifest.stories.forEach(({id, key}) => {
+		const serializedStory = window.localStorage.getItem(key);
 
 		if (!serializedStory) {
 			console.warn(
-				`Story list contained ID ${id}, but twine-stories-${id} does not exist, skipping`
+				`Story manifest contained ID ${id}, but ${key} does not exist, skipping`
 			);
 			return;
 		}
@@ -55,17 +56,13 @@ export async function load(): Promise<Story[]> {
 
 	// Then create passages, adding them to their parent story.
 
-	const serializedPassages = window.localStorage.getItem('twine-passages');
-
-	if (serializedPassages) {
-		serializedPassages.split(',').forEach(id => {
-			const serializedPassage = window.localStorage.getItem(
-				`twine-passages-${id}`
-			);
+	if (manifest.passages.length > 0) {
+		manifest.passages.forEach(({id, key}) => {
+			const serializedPassage = window.localStorage.getItem(key);
 
 			if (!serializedPassage) {
 				console.warn(
-					`Passage list contained ID ${id}, but twine-passages-${id} does not exist, skipping`
+					`Passage manifest contained ID ${id}, but ${key} does not exist, skipping`
 				);
 				return;
 			}

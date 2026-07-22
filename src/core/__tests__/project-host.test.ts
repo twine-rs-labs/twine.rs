@@ -273,6 +273,34 @@ describe('StoreCoreProjectHost asset commands', () => {
 		).toBe(0);
 	});
 
+	it('accepts mixed document and metadata passages after initialization', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({text: 'Bootstrap body', wasmClient});
+		const metadataPassage = fakePassage({
+			id: 'new-passage',
+			story: context.story.id,
+			text: ''
+		});
+		Reflect.deleteProperty(metadataPassage, 'text');
+
+		await context.host.ensureSessionReady();
+
+		expect(() =>
+			context.host.update(
+				[
+					{
+						...context.story,
+						passages: [context.start, metadataPassage]
+					}
+				],
+				context.dispatch
+			)
+		).not.toThrow();
+		expect(
+			context.host.performanceDiagnostics().passageTextCharacterCount
+		).toBe(0);
+	});
+
 	it('retains bootstrap passage bodies when initialization fails so retry is safe', async () => {
 		const wasmClient = fakeWasmClient(async () => batch([]));
 
