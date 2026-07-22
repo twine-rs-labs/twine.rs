@@ -1,13 +1,16 @@
 #![doc = "Core Twine story, passage, project, and edit data types."]
 
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::{collections::BTreeMap, fmt, ops::Index};
 use thiserror::Error;
 
+pub const PROJECT_SCHEMA_VERSION: u32 = 2;
+
 fn default_schema_version() -> u32 {
-    1
+    PROJECT_SCHEMA_VERSION
 }
 
 fn default_true() -> bool {
@@ -597,6 +600,213 @@ pub struct GraphAnnotation {
     pub text: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PassageLayouts {
+    by_story: BTreeMap<StoryId, BTreeMap<PassageId, PassageLayout>>,
+    legacy: BTreeMap<PassageId, PassageLayout>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScopedPassageLayoutsWire {
+    schema: u32,
+    by_story: BTreeMap<StoryId, BTreeMap<PassageId, PassageLayout>>,
+    #[serde(default)]
+    legacy: BTreeMap<PassageId, PassageLayout>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PassageLayoutsWire {
+    Scoped(ScopedPassageLayoutsWire),
+    Legacy(BTreeMap<PassageId, PassageLayout>),
+}
+
+impl<'de> Deserialize<'de> for PassageLayouts {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match PassageLayoutsWire::deserialize(deserializer)? {
+            PassageLayoutsWire::Scoped(wire) => {
+                if wire.schema != 2 {
+                    return Err(D::Error::custom(format!(
+                        "unsupported passage layout schema {}",
+                        wire.schema
+                    )));
+                }
+
+                Self {
+                    by_story: wire.by_story,
+                    legacy: wire.legacy,
+                }
+            }
+            PassageLayoutsWire::Legacy(legacy) => Self {
+                by_story: BTreeMap::new(),
+                legacy,
+            },
+        })
+    }
+}
+
+impl Serialize for PassageLayouts {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire<'a> {
+            schema: u32,
+            by_story: &'a BTreeMap<StoryId, BTreeMap<PassageId, PassageLayout>>,
+            #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+            legacy: &'a BTreeMap<PassageId, PassageLayout>,
+        }
+
+        Wire {
+            schema: 2,
+            by_story: &self.by_story,
+            legacy: &self.legacy,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl PassageLayouts {
+    pub fn append(&mut self, other: Self) {
+        for (story_id, layouts) in other.by_story {
+            self.extend_story(story_id, layouts);
+        }
+        self.legacy.extend(other.legacy);
+    }
+
+    pub fn clear(&mut self) {
+        self.by_story.clear();
+        self.legacy.clear();
+    }
+
+    pub fn extend_story(
+        &mut self,
+        story_id: StoryId,
+        layouts: impl IntoIterator<Item = (PassageId, PassageLayout)>,
+    ) {
+        let mut layouts = layouts.into_iter().peekable();
+
+        if layouts.peek().is_some() {
+            self.by_story.entry(story_id).or_default().extend(layouts);
+        }
+    }
+
+    pub fn get(&self, story_id: &StoryId, passage_id: &PassageId) -> Option<&PassageLayout> {
+        self.by_story
+            .get(story_id)
+            .and_then(|layouts| layouts.get(passage_id))
+            .or_else(|| self.legacy.get(passage_id))
+    }
+
+    pub fn insert(
+        &mut self,
+        story_id: StoryId,
+        passage_id: PassageId,
+        layout: PassageLayout,
+    ) -> Option<PassageLayout> {
+        self.by_story
+            .entry(story_id)
+            .or_default()
+            .insert(passage_id, layout)
+    }
+
+    pub fn set_bounds(&mut self, story_id: StoryId, passage_id: PassageId, bounds: GraphPosition) {
+        self.by_story
+            .entry(story_id)
+            .or_default()
+            .entry(passage_id)
+            .or_default()
+            .bounds = bounds;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_story.values().all(BTreeMap::is_empty) && self.legacy.is_empty()
+    }
+
+    pub fn uses_scoped_schema(&self) -> bool {
+        !self.by_story.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&StoryId, &PassageId, &PassageLayout)> {
+        self.by_story.iter().flat_map(|(story_id, layouts)| {
+            layouts
+                .iter()
+                .map(move |(passage_id, layout)| (story_id, passage_id, layout))
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_story.values().map(BTreeMap::len).sum::<usize>() + self.legacy.len()
+    }
+
+    pub fn migrate_legacy(&mut self, stories: &[Story]) -> bool {
+        if self.legacy.is_empty() {
+            return false;
+        }
+
+        let legacy = std::mem::take(&mut self.legacy);
+
+        for story in stories {
+            for passage in &story.passages {
+                if let Some(layout) = legacy.get(&passage.id) {
+                    self.by_story
+                        .entry(story.id.clone())
+                        .or_default()
+                        .entry(passage.id.clone())
+                        .or_insert_with(|| layout.clone());
+                }
+            }
+        }
+
+        true
+    }
+
+    pub fn remove(&mut self, story_id: &StoryId, passage_id: &PassageId) -> Option<PassageLayout> {
+        let (removed, empty) = self
+            .by_story
+            .get_mut(story_id)
+            .map_or((None, false), |layouts| {
+                let removed = layouts.remove(passage_id);
+                (removed, layouts.is_empty())
+            });
+
+        if empty {
+            self.by_story.remove(story_id);
+        }
+
+        removed
+    }
+
+    pub fn remove_story(&mut self, story_id: &StoryId) {
+        self.by_story.remove(story_id);
+    }
+
+    pub fn retain_story(
+        &mut self,
+        story_id: &StoryId,
+        mut predicate: impl FnMut(&PassageId, &PassageLayout) -> bool,
+    ) {
+        let empty = self.by_story.get_mut(story_id).is_some_and(|layouts| {
+            layouts.retain(|passage_id, layout| predicate(passage_id, layout));
+            layouts.is_empty()
+        });
+
+        if empty {
+            self.by_story.remove(story_id);
+        }
+    }
+
+    pub fn story(&self, story_id: &StoryId) -> Option<&BTreeMap<PassageId, PassageLayout>> {
+        self.by_story.get(story_id)
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphLayout {
@@ -606,30 +816,33 @@ pub struct GraphLayout {
     pub groups: BTreeMap<String, GraphGroup>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, Value>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub passages: BTreeMap<PassageId, PassageLayout>,
+    #[serde(default, skip_serializing_if = "PassageLayouts::is_empty")]
+    pub passages: PassageLayouts,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub saved_layouts: BTreeMap<String, SavedLayout>,
 }
 
 impl GraphLayout {
     pub fn from_story_layout(story: &Story) -> Self {
-        Self {
-            passages: story
-                .passages
-                .iter()
-                .filter_map(|passage| {
-                    passage.layout.map(|bounds| {
-                        (
-                            passage.id.clone(),
-                            PassageLayout {
-                                bounds,
-                                ..PassageLayout::default()
-                            },
-                        )
-                    })
+        let mut passages = PassageLayouts::default();
+
+        passages.extend_story(
+            story.id.clone(),
+            story.passages.iter().filter_map(|passage| {
+                passage.layout.map(|bounds| {
+                    (
+                        passage.id.clone(),
+                        PassageLayout {
+                            bounds,
+                            ..PassageLayout::default()
+                        },
+                    )
                 })
-                .collect(),
+            }),
+        );
+
+        Self {
+            passages,
             ..Self::default()
         }
     }
@@ -640,7 +853,7 @@ impl GraphLayout {
 
     pub fn apply_to_story(&self, story: &mut Story) {
         for passage in &mut story.passages {
-            if let Some(layout) = self.passages.get(&passage.id) {
+            if let Some(layout) = self.passages.get(&story.id, &passage.id) {
                 passage.set_bounds(layout.bounds);
             }
         }
@@ -870,7 +1083,7 @@ mod tests {
         .expect("legacy flat graph layout should deserialize");
         let bounds = layout
             .passages
-            .get(&PassageId::new("passage-1"))
+            .get(&StoryId::new("story-1"), &PassageId::new("passage-1"))
             .expect("passage layout")
             .bounds;
 
@@ -885,12 +1098,17 @@ mod tests {
         let layout: GraphLayout = serde_json::from_str(
             r#"{
                 "passages": {
-                    "passage-1": {
-                        "bounds": {
-                            "height": 120,
-                            "left": 3250,
-                            "top": 10950,
-                            "width": 180
+                    "schema": 2,
+                    "byStory": {
+                        "story-1": {
+                            "passage-1": {
+                                "bounds": {
+                                    "height": 120,
+                                    "left": 3250,
+                                    "top": 10950,
+                                    "width": 180
+                                }
+                            }
                         }
                     }
                 }
@@ -899,7 +1117,7 @@ mod tests {
         .expect("canonical graph layout should deserialize");
         let bounds = layout
             .passages
-            .get(&PassageId::new("passage-1"))
+            .get(&StoryId::new("story-1"), &PassageId::new("passage-1"))
             .expect("passage layout")
             .bounds;
 
@@ -907,6 +1125,57 @@ mod tests {
         assert_eq!(bounds.top, 10950.0);
         assert_eq!(bounds.width, 180.0);
         assert_eq!(bounds.height, 120.0);
+    }
+
+    #[test]
+    fn migrates_legacy_layouts_to_every_matching_story() {
+        let mut layout: GraphLayout = serde_json::from_str(
+            r#"{
+                "passages": {
+                    "shared": {"left": 25},
+                    "deleted": {"left": 900}
+                }
+            }"#,
+        )
+        .expect("legacy graph layout should deserialize");
+        let stories: Vec<Story> = serde_json::from_str(
+            r#"[
+                {
+                    "id": "story-1",
+                    "passages": [{"id": "shared", "story": "story-1"}]
+                },
+                {
+                    "id": "story-2",
+                    "passages": [{"id": "shared", "story": "story-2"}]
+                }
+            ]"#,
+        )
+        .expect("stories should deserialize");
+
+        assert!(layout.passages.migrate_legacy(&stories));
+        assert_eq!(layout.passages.len(), 2);
+        assert_eq!(
+            layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("shared"))
+                .expect("first scoped layout")
+                .bounds
+                .left,
+            25.0
+        );
+        assert_eq!(
+            layout
+                .passages
+                .get(&StoryId::new("story-2"), &PassageId::new("shared"))
+                .expect("second scoped layout")
+                .bounds
+                .left,
+            25.0
+        );
+
+        let serialized = serde_json::to_value(&layout).expect("layout should serialize");
+        assert!(serialized["passages"]["byStory"]["story-1"]["shared"].is_object());
+        assert!(serialized["passages"].get("legacy").is_none());
     }
 
     #[test]

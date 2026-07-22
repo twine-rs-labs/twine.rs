@@ -28,7 +28,10 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use twine_model::{GraphPosition, Passage, Project, ProjectSourceLayout, StoragePolicy, Story};
+use twine_model::{
+    GraphPosition, PROJECT_SCHEMA_VERSION, Passage, Project, ProjectSourceLayout, StoragePolicy,
+    Story,
+};
 #[cfg(test)]
 use twine_store::save_project_path;
 use twine_store::{
@@ -755,31 +758,31 @@ fn save_project_folder_json_inner(
             .iter()
             .position(|existing_story| existing_story.id == story.id);
         let existing_layout = existing_index.map(|_| project.manifest.source_layout_for(&story.id));
-        let old_target_passage_ids = existing_index
-            .map(|index| {
-                project.stories[index]
-                    .passages
-                    .iter()
-                    .map(|passage| passage.id.clone())
-                    .collect::<BTreeSet<_>>()
-            })
-            .unwrap_or_default();
-        let sibling_passage_ids = project
-            .stories
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| Some(*index) != existing_index)
-            .flat_map(|(_, sibling)| sibling.passages.iter().map(|passage| passage.id.clone()))
-            .collect::<BTreeSet<_>>();
         let incoming_project = Project::from_story(story.clone());
+        let merged_layouts = incoming_project
+            .layout
+            .passages
+            .iter()
+            .map(|(_, passage_id, incoming)| {
+                let mut merged = project
+                    .layout
+                    .passages
+                    .get(&story.id, passage_id)
+                    .cloned()
+                    .unwrap_or_default();
 
-        project.layout.passages.retain(|passage_id, _| {
-            !old_target_passage_ids.contains(passage_id) || sibling_passage_ids.contains(passage_id)
-        });
+                merged.bounds = incoming.bounds;
+                (passage_id.clone(), merged)
+            })
+            .collect::<Vec<_>>();
+
+        project.layout.passages.remove_story(&story.id);
         project
             .layout
             .passages
-            .extend(incoming_project.layout.passages);
+            .extend_story(story.id.clone(), merged_layouts);
+        project.manifest.schema_version =
+            project.manifest.schema_version.max(PROJECT_SCHEMA_VERSION);
 
         if let Some(color) = &story.color {
             project
@@ -4435,7 +4438,7 @@ mod tests {
             "name": "Second Story",
             "passages": [{
                 "height": 130,
-                "id": "second-passage",
+                "id": "first-passage",
                 "left": 80,
                 "name": "Second Start",
                 "story": "second-story",
@@ -4444,7 +4447,7 @@ mod tests {
                 "width": 140
             }],
             "script": "window.secondSibling = true;",
-            "startPassage": "second-passage",
+            "startPassage": "first-passage",
             "stylesheet": ".second { color: green; }"
         });
         let first: Story =
@@ -4466,7 +4469,23 @@ mod tests {
         project
             .layout
             .passages
-            .extend(Project::from_story(second.clone()).layout.passages);
+            .append(Project::from_story(second.clone()).layout.passages);
+        let mut first_layout = project
+            .layout
+            .passages
+            .get(&first.id, &first.passages[0].id)
+            .cloned()
+            .expect("first story layout");
+
+        first_layout.group = Some("opening".into());
+        first_layout
+            .metadata
+            .insert("locked".into(), serde_json::json!(true));
+        project.layout.passages.insert(
+            first.id.clone(),
+            first.passages[0].id.clone(),
+            first_layout,
+        );
         project
             .layout
             .metadata
@@ -4505,7 +4524,7 @@ mod tests {
                 "name": "Second Story",
                 "passages": [{
                     "highlighted": true,
-                    "id": "second-passage",
+                    "id": "first-passage",
                     "selected": true,
                     "text": "must not persist"
                 }],
@@ -4598,12 +4617,35 @@ mod tests {
             "Preserve this project annotation"
         );
         assert_eq!(
-            loaded.layout.passages[&second.passages[0].id].bounds.left,
+            loaded
+                .layout
+                .passages
+                .get(&second.id, &second.passages[0].id)
+                .expect("second story layout")
+                .bounds
+                .left,
             80.0
         );
         assert_eq!(
-            loaded.layout.passages[&first.passages[0].id].bounds.left,
+            loaded
+                .layout
+                .passages
+                .get(&first.id, &first.passages[0].id)
+                .expect("first story layout")
+                .bounds
+                .left,
             200.0
+        );
+        let first_layout = loaded
+            .layout
+            .passages
+            .get(&first.id, &first.passages[0].id)
+            .expect("first story layout metadata");
+
+        assert_eq!(first_layout.group.as_deref(), Some("opening"));
+        assert_eq!(
+            first_layout.metadata.get("locked"),
+            Some(&serde_json::json!(true))
         );
         assert_eq!(
             fs::read_to_string(root.join("passages/first-story/0001-first-start-renamed.twee"))

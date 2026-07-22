@@ -390,6 +390,7 @@ fn project_from_snapshot(snapshot: ProjectSnapshot) -> Project {
         for passage in story.passages.iter() {
             if let Some(bounds) = passage.layout {
                 layout.passages.insert(
+                    story.id.clone(),
                     passage.id.clone(),
                     PassageLayout {
                         bounds,
@@ -460,7 +461,7 @@ mod tests {
         ProjectSnapshot {
             dirty: false,
             name: "Fixture Project".into(),
-            schema_version: 1,
+            schema_version: twine_model::PROJECT_SCHEMA_VERSION,
             stories: vec![StorySnapshot {
                 id: "story-1".into(),
                 ifid: "IFID".into(),

@@ -1487,7 +1487,7 @@ describe('project-folder native bridge', () => {
 				top: index === 0 ? 240 : passage.top
 			}))
 		};
-		const manifestSource = [
+		let manifestSource = [
 			'schema_version = 1',
 			'name = "Project"',
 			'[[stories]]',
@@ -1502,24 +1502,54 @@ describe('project-folder native bridge', () => {
 			'[[stories.passages]]',
 			'id = "passage-2"',
 			'name = "Second"',
-			'file = "passages/story/002-second.twee"'
+			'file = "passages/story/002-second.twee"',
+			'[[stories]]',
+			'id = "story-2"',
+			'ifid = "STORY-2"',
+			'name = "Story Two"',
+			'start_passage = "passage-1"',
+			'[[stories.passages]]',
+			'id = "passage-1"',
+			'name = "Other First"',
+			'file = "passages/story-two/001-first.twee"'
 		].join('\n');
-		const initialGraph = {
+		let graphSource = {
 			passages: {
-				'passage-1': {height: 100, left: 10, top: 20, width: 100},
-				'passage-2': {height: 110, left: 30, top: 40, width: 120}
+				byStory: {
+					'story-id': {
+						'passage-1': {
+							bounds: {height: 100, left: 10, top: 20, width: 100},
+							group: 'opening',
+							metadata: {locked: true}
+						},
+						'passage-2': {
+							bounds: {height: 110, left: 30, top: 40, width: 120},
+							metadata: {note: 'keep'}
+						}
+					},
+					'story-2': {
+						'passage-1': {
+							bounds: {height: 130, left: 800, top: 90, width: 140},
+							group: 'other-story'
+						}
+					}
+				},
+				schema: 2
 			},
 			viewport: {scale: 0.75}
 		};
 		let graphWritten = false;
-		const manifestFile = {
-			fingerprint: '1:0',
+		let manifestWritten = false;
+		let pendingGraphSource: typeof graphSource | undefined;
+		let pendingManifestSource: string | undefined;
+		const manifestFile = () => ({
+			fingerprint: manifestWritten ? '2:0' : '1:0',
 			kind: 'manifest' as const,
 			modifiedAt: '2026-06-21T16:00:00.000Z',
-			mtimeMs: 1,
+			mtimeMs: manifestWritten ? 2 : 1,
 			path: 'twine.toml',
 			sizeBytes: 0
-		};
+		});
 		const graphFile = () => ({
 			fingerprint: graphWritten ? '2:0' : '1:0',
 			kind: 'graph' as const,
@@ -1533,17 +1563,19 @@ describe('project-folder native bridge', () => {
 			String(path).endsWith('twine.toml') ? manifestSource : ''
 		);
 		readJsonMock.mockImplementation(async path =>
-			String(path).endsWith('.twine/graph.json') ? initialGraph : {}
+			String(path).endsWith('.twine/graph.json') ? graphSource : {}
 		);
 		listNativeProjectAssetsMock.mockReturnValue([]);
 		nativeProjectFileManifestMock.mockImplementation(() => [
-			manifestFile,
+			manifestFile(),
 			graphFile()
 		]);
 		statMock.mockImplementation(async path => {
 			const root = String(path) === '/native/project.twine.rs';
 			const graph = String(path).endsWith('.twine/graph.json');
-			const mtimeMs = graph && graphWritten ? 2 : 1;
+			const manifest = String(path).endsWith('twine.toml');
+			const mtimeMs =
+				(graph && graphWritten) || (manifest && manifestWritten) ? 2 : 1;
 
 			return {
 				isDirectory: () => root,
@@ -1553,14 +1585,28 @@ describe('project-folder native bridge', () => {
 				size: 0
 			};
 		});
+		writeFileMock.mockImplementation(async (path, text) => {
+			if (/\/twine\.toml\..+\.tmp$/.test(String(path))) {
+				pendingManifestSource = String(text);
+			}
+			if (/\/\.twine\/graph\.json\..+\.tmp$/.test(String(path))) {
+				pendingGraphSource = JSON.parse(String(text));
+			}
+		});
 		moveMock.mockImplementation(async (_source, target) => {
+			if (String(target).endsWith('twine.toml')) {
+				manifestWritten = true;
+				manifestSource = pendingManifestSource ?? manifestSource;
+			}
 			if (String(target).endsWith('.twine/graph.json')) {
 				graphWritten = true;
+				graphSource = pendingGraphSource ?? graphSource;
 			}
 		});
 
 		await startProjectSession('/native/project.twine.rs', undefined, [
-			'story-id'
+			'story-id',
+			'story-2'
 		]);
 		await saveProjectFolder('/native/project.twine.rs', story, {
 			hints: [
@@ -1581,24 +1627,55 @@ describe('project-folder native bridge', () => {
 
 		expect(savedGraph).toEqual({
 			passages: {
-				'passage-1': expect.objectContaining({left: 420, top: 240}),
-				'passage-2': initialGraph.passages['passage-2']
+				byStory: {
+					'story-id': {
+						'passage-1': {
+							bounds: expect.objectContaining({left: 420, top: 240}),
+							group: 'opening',
+							metadata: {locked: true}
+						},
+						'passage-2': {
+							bounds: {height: 110, left: 30, top: 40, width: 120},
+							metadata: {note: 'keep'}
+						}
+					},
+					'story-2': {
+						'passage-1': {
+							bounds: {height: 130, left: 800, top: 90, width: 140},
+							group: 'other-story'
+						}
+					}
+				},
+				schema: 2
 			},
 			viewport: {scale: 0.75}
 		});
 		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
+		const manifestWrite = writeFileMock.mock.calls.find(call =>
+			/^\/native\/project\.twine\.rs\/twine\.toml\..+\.tmp$/.test(
+				String(call[0])
+			)
+		);
+		expect(manifestWrite?.[1]).toContain('schema_version = 2');
 		expect(
 			writeFileMock.mock.calls.some(call =>
 				String(call[0]).includes('/.twine/project.json.')
 			)
 		).toBe(false);
 		expect(
-			writeFileMock.mock.calls.some(call =>
-				String(call[0]).endsWith('/twine.toml')
+			moveMock.mock.invocationCallOrder.find((_, index) =>
+				String(moveMock.mock.calls[index][1]).endsWith('twine.toml')
 			)
-		).toBe(false);
+		).toBeLessThan(
+			moveMock.mock.invocationCallOrder.find((_, index) =>
+				String(moveMock.mock.calls[index][1]).endsWith('.twine/graph.json')
+			) as number
+		);
 		await expect(
-			projectSessionSnapshot('/native/project.twine.rs', ['story-id'])
+			projectSessionSnapshot('/native/project.twine.rs', [
+				'story-id',
+				'story-2'
+			])
 		).resolves.toEqual(
 			expect.objectContaining({changedPaths: [], conflicts: []})
 		);
@@ -1618,7 +1695,7 @@ describe('project-folder native bridge', () => {
 			]
 		};
 		const manifestSource = [
-			'schema_version = 1',
+			'schema_version = 2',
 			'name = "Project"',
 			'[[stories]]',
 			'id = "story-id"',
@@ -1635,7 +1712,14 @@ describe('project-folder native bridge', () => {
 		);
 		readJsonMock.mockResolvedValue({
 			passages: {
-				'passage-id': {height: 100, left: 10, top: 20, width: 100}
+				byStory: {
+					'story-id': {
+						'passage-id': {
+							bounds: {height: 100, left: 10, top: 20, width: 100}
+						}
+					}
+				},
+				schema: 2
 			}
 		});
 		listNativeProjectAssetsMock.mockReturnValue([]);
@@ -4361,6 +4445,115 @@ describe('project-folder native bridge', () => {
 				'/native/project.twine.rs/story.twee',
 				'utf8'
 			);
+		} finally {
+			stopProjectSession('/native/project.twine.rs');
+			jest.useRealTimers();
+		}
+	});
+
+	it('maps scoped graph watcher changes for colliding passage IDs', async () => {
+		jest.useFakeTimers();
+		const manifestSource = [
+			'schema_version = 2',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-1"',
+			'name = "First"',
+			'[[stories.passages]]',
+			'id = "shared"',
+			'name = "First Start"',
+			'file = "passages/first/start.twee"',
+			'[[stories]]',
+			'id = "story-2"',
+			'name = "Second"',
+			'[[stories.passages]]',
+			'id = "shared"',
+			'name = "Second Start"',
+			'file = "passages/second/start.twee"'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const graphFile = {
+			fingerprint: '1:100',
+			kind: 'graph' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: '.twine/graph.json',
+			sizeBytes: 100
+		};
+		let graph = {
+			passages: {
+				byStory: {
+					'story-1': {
+						shared: {bounds: {height: 100, left: 10, top: 20, width: 100}}
+					},
+					'story-2': {
+						shared: {bounds: {height: 100, left: 800, top: 20, width: 100}}
+					}
+				},
+				schema: 2
+			}
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : ''
+		);
+		readJsonMock.mockImplementation(async path =>
+			String(path).endsWith('.twine/graph.json') ? graph : {}
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([manifestFile, graphFile])
+			.mockReturnValueOnce([
+				manifestFile,
+				{...graphFile, fingerprint: '2:100', mtimeMs: 2}
+			]);
+
+		try {
+			await startProjectSession('/native/project.twine.rs', listener, [
+				'story-1',
+				'story-2'
+			]);
+			graph = {
+				passages: {
+					byStory: {
+						'story-1': {
+							shared: {
+								bounds: {height: 100, left: 111, top: 20, width: 100}
+							}
+						},
+						'story-2': {
+							shared: {
+								bounds: {height: 100, left: 888, top: 20, width: 100}
+							}
+						}
+					},
+					schema: 2
+				}
+			};
+			await jest.advanceTimersByTimeAsync(1250);
+
+			expect(listener.mock.calls[0][0].delta.changes).toEqual([
+				{
+					layout: {height: 100, left: 111, top: 20, width: 100},
+					passage_id: 'shared',
+					story_id: 'story-1',
+					type: 'updatePassageLayout'
+				},
+				{
+					layout: {height: 100, left: 888, top: 20, width: 100},
+					passage_id: 'shared',
+					story_id: 'story-2',
+					type: 'updatePassageLayout'
+				}
+			]);
 		} finally {
 			stopProjectSession('/native/project.twine.rs');
 			jest.useRealTimers();

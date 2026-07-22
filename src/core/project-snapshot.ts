@@ -55,7 +55,7 @@ export function projectSnapshotFromStories(
 	return {
 		dirty: false,
 		name,
-		schemaVersion: 1,
+		schemaVersion: 2,
 		stories: stories.map(storyToSnapshot)
 	};
 }

@@ -426,7 +426,7 @@ fn project_from_stories(stories: Vec<Story>) -> Project {
         }
         layout
             .passages
-            .extend(GraphLayout::from_story_layout(story).passages);
+            .append(GraphLayout::from_story_layout(story).passages);
     }
 
     Project {

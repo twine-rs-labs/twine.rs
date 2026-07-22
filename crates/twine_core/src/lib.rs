@@ -18,8 +18,8 @@ use twine_graph::{
     LinkLayerOptions, passage_link_edges,
 };
 use twine_model::{
-    GraphLayout, GraphPosition, Passage, PassageId, PassageIndex, PassageLayout, Project, Story,
-    StoryId,
+    GraphLayout, GraphPosition, PROJECT_SCHEMA_VERSION, Passage, PassageId, PassageIndex,
+    PassageLayout, Project, Story, StoryId,
 };
 use twine_parse::{LinkParseOptions, parse_standard_links};
 use web_time::Instant;
@@ -1920,6 +1920,7 @@ struct ProjectLayoutPassageDelta {
     after: Option<PassageLayout>,
     before: Option<PassageLayout>,
     passage_id: PassageId,
+    story_id: StoryId,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1995,19 +1996,26 @@ impl ProjectDelta {
         let layout_passages = before
             .layout
             .passages
-            .keys()
-            .chain(after.layout.passages.keys())
-            .cloned()
+            .iter()
+            .map(|(story_id, passage_id, _)| (story_id.clone(), passage_id.clone()))
+            .chain(
+                after
+                    .layout
+                    .passages
+                    .iter()
+                    .map(|(story_id, passage_id, _)| (story_id.clone(), passage_id.clone())),
+            )
             .collect::<BTreeSet<_>>()
             .into_iter()
-            .filter_map(|passage_id| {
-                let before = before.layout.passages.get(&passage_id).cloned();
-                let after = after.layout.passages.get(&passage_id).cloned();
+            .filter_map(|(story_id, passage_id)| {
+                let before = before.layout.passages.get(&story_id, &passage_id).cloned();
+                let after = after.layout.passages.get(&story_id, &passage_id).cloned();
 
                 (before != after).then_some(ProjectLayoutPassageDelta {
                     after,
                     before,
                     passage_id,
+                    story_id,
                 })
             })
             .collect::<Vec<_>>();
@@ -2156,12 +2164,16 @@ impl ProjectDelta {
             };
 
             if let Some(value) = value {
+                project.layout.passages.insert(
+                    delta.story_id.clone(),
+                    delta.passage_id.clone(),
+                    value.clone(),
+                );
+            } else {
                 project
                     .layout
                     .passages
-                    .insert(delta.passage_id.clone(), value.clone());
-            } else {
-                project.layout.passages.remove(&delta.passage_id);
+                    .remove(&delta.story_id, &delta.passage_id);
             }
         }
 
@@ -2413,8 +2425,8 @@ fn project_layout_shell_without_passages(layout: &GraphLayout) -> GraphLayout {
         annotations: layout.annotations.clone(),
         groups: layout.groups.clone(),
         metadata: layout.metadata.clone(),
-        passages: BTreeMap::new(),
         saved_layouts: layout.saved_layouts.clone(),
+        ..GraphLayout::default()
     }
 }
 
@@ -2939,7 +2951,12 @@ pub struct ProjectSession {
 }
 
 impl ProjectSession {
-    pub fn new(project: Project) -> Self {
+    pub fn new(mut project: Project) -> Self {
+        project.layout.passages.migrate_legacy(&project.stories);
+        // PassageLayouts always serializes with the story-scoped schema, even
+        // before the first passage receives saved coordinates.
+        project.manifest.schema_version =
+            project.manifest.schema_version.max(PROJECT_SCHEMA_VERSION);
         let saved_fingerprints = project_fingerprints(&project);
 
         Self {
@@ -3586,7 +3603,7 @@ impl ProjectSession {
                         .project
                         .layout
                         .passages
-                        .get(passage_id)
+                        .get(&story_id, passage_id)
                         .map(|layout| layout.bounds)
                         != Some(*bounds)
                 {
@@ -3614,7 +3631,12 @@ impl ProjectSession {
             let bounds = *requested
                 .get(&passage_id)
                 .expect("validated move should retain its bounds");
-            let layout_before = self.project.layout.passages.get(&passage_id).cloned();
+            let layout_before = self
+                .project
+                .layout
+                .passages
+                .get(&story_id, &passage_id)
+                .cloned();
             let after = {
                 let passage = self
                     .story_mut(story_id.as_ref())?
@@ -3624,15 +3646,15 @@ impl ProjectSession {
                 passage.layout = Some(bounds);
                 passage.clone()
             };
-            let layout_after = PassageLayout {
-                bounds,
-                ..PassageLayout::default()
-            };
+            let mut layout_after = layout_before.clone().unwrap_or_default();
 
-            self.project
-                .layout
-                .passages
-                .insert(passage_id.clone(), layout_after.clone());
+            layout_after.bounds = bounds;
+
+            self.project.layout.passages.insert(
+                story_id.clone(),
+                passage_id.clone(),
+                layout_after.clone(),
+            );
             passage_deltas.push(PassageDelta {
                 after: Some(IndexedPassage {
                     index,
@@ -3648,6 +3670,7 @@ impl ProjectSession {
                 after: Some(layout_after),
                 before: layout_before,
                 passage_id: passage_id.clone(),
+                story_id: story_id.clone(),
             });
             patches.push(Patch::PassageUpdated {
                 changes: PassagePatch {
@@ -4499,7 +4522,7 @@ impl ProjectSession {
 
         let mut touched_story_ids = BTreeSet::<StoryId>::new();
         let mut touched_passage_ids = BTreeSet::<(StoryId, PassageId)>::new();
-        let mut touched_project_passage_layouts = BTreeSet::<PassageId>::new();
+        let mut touched_project_passage_layouts = BTreeSet::<(StoryId, PassageId)>::new();
         let mut renamed_story_ids = BTreeSet::<StoryId>::new();
 
         for change in &delta.changes {
@@ -4514,7 +4537,7 @@ impl ProjectSession {
                     touched_story_ids.insert(story_id.clone());
                     touched_passage_ids.insert((story_id.clone(), passage_id.clone()));
                     if changes.layout.is_some() {
-                        touched_project_passage_layouts.insert(passage_id);
+                        touched_project_passage_layouts.insert((story_id.clone(), passage_id));
                     }
                     if changes.name.is_some() {
                         renamed_story_ids.insert(story_id);
@@ -4526,8 +4549,10 @@ impl ProjectSession {
                     ..
                 } => {
                     let story_id = StoryId::new(story_id);
+                    let passage_id = PassageId::new(passage_id);
                     touched_story_ids.insert(story_id.clone());
-                    touched_passage_ids.insert((story_id, PassageId::new(passage_id)));
+                    touched_passage_ids.insert((story_id.clone(), passage_id.clone()));
+                    touched_project_passage_layouts.insert((story_id, passage_id));
                 }
                 CoreExternalChange::UpdateStoryMetadata { story_id, .. }
                 | CoreExternalChange::UpdateStoryScript { story_id, .. }
@@ -4570,10 +4595,14 @@ impl ProjectSession {
             .collect::<Result<BTreeMap<_, _>, CoreError>>()?;
         let before_project_passage_layouts = touched_project_passage_layouts
             .iter()
-            .map(|passage_id| {
+            .map(|(story_id, passage_id)| {
                 (
-                    passage_id.clone(),
-                    self.project.layout.passages.get(passage_id).cloned(),
+                    (story_id.clone(), passage_id.clone()),
+                    self.project
+                        .layout
+                        .passages
+                        .get(story_id, passage_id)
+                        .cloned(),
                 )
             })
             .collect::<BTreeMap<_, _>>();
@@ -4608,12 +4637,10 @@ impl ProjectSession {
                         }
                     }
                     if let Some(layout) = &changes.layout {
-                        self.project.layout.passages.insert(
+                        self.project.layout.passages.set_bounds(
+                            StoryId::new(story_id),
                             passage_id_model,
-                            PassageLayout {
-                                bounds: GraphPosition::from(layout.clone()),
-                                ..PassageLayout::default()
-                            },
+                            GraphPosition::from(layout.clone()),
                         );
                     }
                 }
@@ -4622,10 +4649,26 @@ impl ProjectSession {
                     passage_id,
                     story_id,
                 } => {
+                    let story_id_model = StoryId::new(story_id);
+                    let passage_id_model = PassageId::new(passage_id);
+                    let bounds = layout.clone().map(GraphPosition::from);
+
                     self.story_mut(story_id)?
-                        .passage_by_id_mut(&PassageId::new(passage_id))
+                        .passage_by_id_mut(&passage_id_model)
                         .expect("compact external passage was prevalidated")
-                        .layout = layout.clone().map(GraphPosition::from);
+                        .layout = bounds;
+                    if let Some(bounds) = bounds {
+                        self.project.layout.passages.set_bounds(
+                            story_id_model,
+                            passage_id_model,
+                            bounds,
+                        );
+                    } else {
+                        self.project
+                            .layout
+                            .passages
+                            .remove(&story_id_model, &passage_id_model);
+                    }
                 }
                 CoreExternalChange::UpdateProjectLayout { .. } => {
                     let layout = plan
@@ -4735,13 +4778,19 @@ impl ProjectSession {
         }
         let layout_passages = before_project_passage_layouts
             .into_iter()
-            .filter_map(|(passage_id, before)| {
-                let after = self.project.layout.passages.get(&passage_id).cloned();
+            .filter_map(|((story_id, passage_id), before)| {
+                let after = self
+                    .project
+                    .layout
+                    .passages
+                    .get(&story_id, &passage_id)
+                    .cloned();
 
                 (before != after).then_some(ProjectLayoutPassageDelta {
                     after,
                     before,
                     passage_id,
+                    story_id,
                 })
             })
             .collect::<Vec<_>>();
@@ -5037,10 +5086,23 @@ impl ProjectSession {
                 self.delete_story(&story_id)?;
             }
             CoreExternalChange::UpsertPassage { passage, story_id } => {
-                let story = self.story_mut(&story_id)?;
-                let passage = passage.into_passage(&story.id);
+                let story_id_model = self.story(&story_id)?.id.clone();
+                let passage = passage.into_passage(&story_id_model);
+                let passage_id = passage.id.clone();
+                let bounds = passage.layout;
 
-                story.passages.insert(passage);
+                self.story_mut(&story_id)?.passages.insert(passage);
+                if let Some(bounds) = bounds {
+                    self.project
+                        .layout
+                        .passages
+                        .set_bounds(story_id_model, passage_id, bounds);
+                } else {
+                    self.project
+                        .layout
+                        .passages
+                        .remove(&story_id_model, &passage_id);
+                }
             }
             CoreExternalChange::UpsertAsset { asset } => {
                 let normalized = asset.normalized_path.clone();
@@ -5075,13 +5137,28 @@ impl ProjectSession {
                 passage_id,
                 story_id,
             } => {
+                let story_id_model = StoryId::new(&story_id);
+                let passage_id_model = PassageId::new(&passage_id);
+                let bounds = layout.map(GraphPosition::from);
                 let story = self.story_mut(&story_id)?;
                 let passage = story
                     .passages
-                    .get_mut(&PassageId::new(passage_id.clone()))
+                    .get_mut(&passage_id_model)
                     .ok_or_else(|| CoreError::PassageNotFound(passage_id))?;
 
-                passage.layout = layout.map(GraphPosition::from);
+                passage.layout = bounds;
+                if let Some(bounds) = bounds {
+                    self.project.layout.passages.set_bounds(
+                        story_id_model,
+                        passage_id_model,
+                        bounds,
+                    );
+                } else {
+                    self.project
+                        .layout
+                        .passages
+                        .remove(&story_id_model, &passage_id_model);
+                }
             }
             CoreExternalChange::UpdateProjectLayout { layout_json } => {
                 let layout = serde_json::from_str::<twine_model::GraphLayout>(&layout_json)
@@ -6172,8 +6249,10 @@ impl ProjectSession {
         layout: Option<CoreRect>,
     ) -> Result<Vec<Patch>, CoreError> {
         let story = self.story_mut(&story_id)?;
+        let story_id_model = story.id.clone();
         let id = PassageId::new(id.unwrap_or_else(|| next_passage_id(story)));
         let name = name.unwrap_or_else(|| unique_passage_name(story, "Untitled Passage"));
+        let bounds = layout.map(GraphPosition::from);
 
         if story.passages.id_for_name(&name).is_some() {
             return Err(CoreError::DuplicatePassageName(name));
@@ -6182,7 +6261,7 @@ impl ProjectSession {
         let passage = Passage {
             custom_attributes: BTreeMap::new(),
             id: id.clone(),
-            layout: layout.map(GraphPosition::from),
+            layout: bounds,
             metadata: BTreeMap::new(),
             name,
             source_pid: None,
@@ -6194,6 +6273,13 @@ impl ProjectSession {
         story.passages.insert(passage.clone());
         if story.start_passage.as_ref().is_empty() {
             story.start_passage = id;
+        }
+
+        if let Some(bounds) = bounds {
+            self.project
+                .layout
+                .passages
+                .set_bounds(story_id_model, passage.id.clone(), bounds);
         }
 
         Ok(vec![Patch::PassageCreated {
@@ -6223,13 +6309,16 @@ impl ProjectSession {
 
         let story = story.into_story();
         let snapshot = StorySnapshot::from(&story);
+        let story_layout = GraphLayout::from_story_layout(&story).passages;
 
         self.project.stories.push(story);
+        self.project.layout.passages.append(story_layout);
         Ok(vec![Patch::StoryCreated { story: snapshot }])
     }
 
     fn delete_story(&mut self, story_id: &str) -> Result<Vec<Patch>, CoreError> {
         let initial_len = self.project.stories.len();
+        let story_id_model = StoryId::new(story_id);
 
         self.project
             .stories
@@ -6238,6 +6327,8 @@ impl ProjectSession {
         if self.project.stories.len() == initial_len {
             return Err(CoreError::StoryNotFound(story_id.to_owned()));
         }
+
+        self.project.layout.passages.remove_story(&story_id_model);
 
         Ok(vec![Patch::StoryDeleted {
             story_id: story_id.to_owned(),
@@ -6251,9 +6342,7 @@ impl ProjectSession {
     ) -> Result<Vec<Patch>, CoreError> {
         let story = story.into_story();
         let before = self.project.clone();
-        let target = self.story_mut(story_id)?;
-
-        *target = Story {
+        let replacement = Story {
             id: StoryId::new(story_id),
             passages: story
                 .passages
@@ -6266,6 +6355,14 @@ impl ProjectSession {
                 .collect(),
             ..story
         };
+        let replacement_layout = GraphLayout::from_story_layout(&replacement).passages;
+
+        *self.story_mut(story_id)? = replacement;
+        self.project
+            .layout
+            .passages
+            .remove_story(&StoryId::new(story_id));
+        self.project.layout.passages.append(replacement_layout);
 
         Ok(project_diff_patches(&before, &self.project))
     }
@@ -6305,6 +6402,15 @@ impl ProjectSession {
                 .first()
                 .map(|passage| passage.id.clone())
                 .unwrap_or_default();
+        }
+
+        let story_id_model = StoryId::new(story_id);
+
+        for passage_id in &ids {
+            self.project
+                .layout
+                .passages
+                .remove(&story_id_model, passage_id);
         }
 
         Ok(passage_ids
@@ -6361,12 +6467,10 @@ impl ProjectSession {
         let mut patches = Vec::new();
 
         for (passage_id, entry) in snapshot.passages {
-            self.project.layout.passages.insert(
+            self.project.layout.passages.set_bounds(
+                StoryId::new(story_id),
                 passage_id.clone(),
-                PassageLayout {
-                    bounds: entry.bounds,
-                    ..PassageLayout::default()
-                },
+                entry.bounds,
             );
 
             {
@@ -6422,13 +6526,10 @@ impl ProjectSession {
                 passage.layout = Some(bounds);
             }
 
-            self.project.layout.passages.insert(
-                passage_id,
-                PassageLayout {
-                    bounds,
-                    ..PassageLayout::default()
-                },
-            );
+            self.project
+                .layout
+                .passages
+                .set_bounds(StoryId::new(story_id), passage_id, bounds);
             patches.push(Patch::PassageUpdated {
                 changes: PassagePatch {
                     layout: Some(bounds.into()),
@@ -6535,14 +6636,26 @@ impl ProjectSession {
         story_id: &str,
         passages: Vec<PassageSnapshot>,
     ) -> Result<Vec<Patch>, CoreError> {
-        let story = self.story_mut(story_id)?;
-        let story_id_model = story.id.clone();
+        let story_id_model = self.story(story_id)?.id.clone();
         let mut patches = Vec::new();
 
         for passage in passages {
             let restored = passage.into_passage(&story_id_model);
+            let bounds = restored.layout;
 
-            story.passages.insert(restored.clone());
+            self.story_mut(story_id)?.passages.insert(restored.clone());
+            if let Some(bounds) = bounds {
+                self.project.layout.passages.set_bounds(
+                    story_id_model.clone(),
+                    restored.id.clone(),
+                    bounds,
+                );
+            } else {
+                self.project
+                    .layout
+                    .passages
+                    .remove(&story_id_model, &restored.id);
+            }
             patches.push(Patch::PassageCreated {
                 passage: PassageSnapshot::from(&restored),
                 story_id: story_id.to_owned(),
@@ -12260,11 +12373,30 @@ mod tests {
         let original_ifid = large_story.ifid.clone();
         let original_name = large_story.name.clone();
         let original_start = large_story.start_passage.clone();
-        let mut session = ProjectSession::new(Project {
+        let mut project = Project {
             layout: GraphLayout::from_story_layout(&large_story),
             stories: vec![large_story],
             ..Project::default()
-        });
+        };
+        for passage_id in ["passage-00001", "passage-00003"] {
+            let passage_id = PassageId::new(passage_id);
+            let mut layout = project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &passage_id)
+                .cloned()
+                .expect("fixture layout");
+
+            layout.group = Some("chapter-one".into());
+            layout
+                .metadata
+                .insert("locked".into(), serde_json::json!(true));
+            project
+                .layout
+                .passages
+                .insert(StoryId::new("story-1"), passage_id, layout);
+        }
+        let mut session = ProjectSession::new(project);
         let mut disk_layout = GraphLayout::default();
         disk_layout
             .metadata
@@ -12351,7 +12483,7 @@ mod tests {
         assert!(before.passages.is_empty());
         assert!(after.passages.is_empty());
         assert_eq!(passages.len(), 3);
-        assert_eq!(transaction.delta.layout_passages.len(), 1);
+        assert_eq!(transaction.delta.layout_passages.len(), 3);
         let project_layout = transaction
             .delta
             .project_layout
@@ -12373,6 +12505,50 @@ mod tests {
             session.project.layout.metadata.get("source"),
             Some(&serde_json::json!("disk"))
         );
+        assert_eq!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("passage-00001"))
+                .expect("updated external layout")
+                .bounds
+                .left,
+            900.0
+        );
+        assert!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("passage-00002"))
+                .is_none()
+        );
+        assert_eq!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("passage-00003"))
+                .expect("added external layout")
+                .bounds
+                .left,
+            1_200.0
+        );
+        for passage_id in ["passage-00001", "passage-00003"] {
+            let layout = session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new(passage_id))
+                .expect("moved external layout should retain metadata");
+
+            assert_eq!(layout.group.as_deref(), Some("chapter-one"));
+            assert_eq!(
+                layout.metadata.get("locked"),
+                Some(&serde_json::json!(true))
+            );
+        }
 
         session.undo().expect("undo compact external batch");
         assert!(session.dirty());
@@ -12383,6 +12559,17 @@ mod tests {
             original_start
         );
         assert!(session.project.layout.metadata.get("source").is_none());
+        assert_eq!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("passage-00002"))
+                .expect("removed layout should restore")
+                .bounds
+                .left,
+            2.0
+        );
         session.redo().expect("redo compact external batch");
         assert!(!session.dirty());
         assert_eq!(session.story("story-1").unwrap().ifid, "DISK-IFID");
@@ -12390,6 +12577,14 @@ mod tests {
         assert_eq!(
             session.project.layout.metadata.get("source"),
             Some(&serde_json::json!("disk"))
+        );
+        assert!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("passage-00002"))
+                .is_none()
         );
         let revision = session.revision();
         let duplicate = session
@@ -12602,6 +12797,219 @@ mod tests {
     }
 
     #[test]
+    fn passage_layouts_are_isolated_between_stories_with_matching_ids() {
+        let first = story();
+        let mut second = story();
+
+        second.id = StoryId::new("story-2");
+        second.name = "Second".into();
+        for passage in &mut second.passages {
+            passage.story = second.id.clone();
+            if let Some(layout) = &mut passage.layout {
+                layout.left += 1_000.0;
+            }
+        }
+
+        let mut project = Project::from_story(first);
+        project
+            .layout
+            .passages
+            .append(GraphLayout::from_story_layout(&second).passages);
+        project.stories.push(second);
+        for (story_id, group) in [("story-1", "first"), ("story-2", "second")] {
+            let story_id = StoryId::new(story_id);
+            let passage_id = PassageId::new("a");
+            let mut layout = project
+                .layout
+                .passages
+                .get(&story_id, &passage_id)
+                .cloned()
+                .expect("fixture layout");
+
+            layout.group = Some(group.into());
+            layout
+                .metadata
+                .insert("locked".into(), serde_json::json!(true));
+            project.layout.passages.insert(story_id, passage_id, layout);
+        }
+        let mut session = ProjectSession::new(project);
+
+        for (story_id, left) in [("story-1", 125.0), ("story-2", 825.0)] {
+            session
+                .apply(StoryCommand::MovePassages {
+                    story_id: story_id.into(),
+                    moves: vec![PassageMove {
+                        bounds: CoreRect {
+                            height: DEFAULT_CARD_HEIGHT,
+                            left,
+                            top: 75.0,
+                            width: DEFAULT_CARD_WIDTH,
+                        },
+                        passage_id: "a".into(),
+                    }],
+                })
+                .expect("story-scoped move should apply");
+        }
+
+        assert_eq!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("a"))
+                .expect("first story layout")
+                .bounds
+                .left,
+            125.0
+        );
+        assert_eq!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-2"), &PassageId::new("a"))
+                .expect("second story layout")
+                .bounds
+                .left,
+            825.0
+        );
+
+        for (story_id, left) in [("story-1", 125.0), ("story-2", 825.0)] {
+            let projection = session
+                .graph_projection(story_id, CoreGraphProjectionOptions::default())
+                .expect("story graph should project");
+            let passage = projection
+                .nodes
+                .iter()
+                .find(|node| node.id == "a")
+                .expect("matching passage should project");
+
+            assert_eq!(passage.bounds.left, left);
+            let saved = session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new(story_id), &PassageId::new("a"))
+                .expect("saved passage layout");
+
+            assert_eq!(
+                saved.group.as_deref(),
+                Some(if story_id == "story-1" {
+                    "first"
+                } else {
+                    "second"
+                })
+            );
+            assert_eq!(saved.metadata.get("locked"), Some(&serde_json::json!(true)));
+        }
+    }
+
+    #[test]
+    fn deleting_a_passage_removes_its_saved_layout_before_recreation() {
+        let mut session = session();
+
+        session
+            .apply(StoryCommand::MovePassages {
+                story_id: "story-1".into(),
+                moves: vec![PassageMove {
+                    bounds: CoreRect {
+                        height: DEFAULT_CARD_HEIGHT,
+                        left: 777.0,
+                        top: 222.0,
+                        width: DEFAULT_CARD_WIDTH,
+                    },
+                    passage_id: "a".into(),
+                }],
+            })
+            .expect("layout move should apply");
+        session
+            .apply(StoryCommand::DeletePassages {
+                passage_ids: vec!["a".into()],
+                story_id: "story-1".into(),
+            })
+            .expect("passage delete should apply");
+
+        assert!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("a"))
+                .is_none()
+        );
+
+        session
+            .apply(StoryCommand::CreatePassage {
+                id: Some("a".into()),
+                layout: None,
+                name: Some("Recreated".into()),
+                story_id: "story-1".into(),
+                tags: vec![],
+                text: String::new(),
+            })
+            .expect("passage recreation should apply");
+        let projection = session
+            .graph_projection("story-1", CoreGraphProjectionOptions::default())
+            .expect("recreated graph should project");
+        let recreated = projection
+            .nodes
+            .iter()
+            .find(|node| node.id == "a")
+            .expect("recreated passage should project");
+
+        assert_eq!(recreated.layout_source, CoreGraphLayoutSource::Generated);
+        assert_ne!(recreated.bounds.left, 777.0);
+    }
+
+    #[test]
+    fn replacing_a_story_rebuilds_its_scoped_layouts() {
+        let mut session = session();
+        let mut replacement = story();
+        let mut reused = replacement
+            .passage_by_id(&PassageId::new("a"))
+            .expect("replacement passage")
+            .clone();
+
+        reused.layout = None;
+        replacement.passages = vec![reused].into();
+        replacement.start_passage = PassageId::new("a");
+
+        session
+            .apply(StoryCommand::ReplaceStory {
+                story: StorySnapshot::from(&replacement),
+                story_id: "story-1".into(),
+            })
+            .expect("story replacement should apply");
+
+        assert!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("a"))
+                .is_none()
+        );
+        assert!(
+            session
+                .project
+                .layout
+                .passages
+                .get(&StoryId::new("story-1"), &PassageId::new("b"))
+                .is_none()
+        );
+        let projection = session
+            .graph_projection("story-1", CoreGraphProjectionOptions::default())
+            .expect("replacement graph should project");
+        let reused = projection
+            .nodes
+            .iter()
+            .find(|node| node.id == "a")
+            .expect("reused passage should project");
+
+        assert_eq!(reused.layout_source, CoreGraphLayoutSource::Generated);
+    }
+
+    #[test]
     fn story_analysis_reparses_only_changed_sources() {
         let mut session = session();
 
@@ -12792,7 +13200,7 @@ mod tests {
                 .project
                 .layout
                 .passages
-                .get(&PassageId::new("a"))
+                .get(&StoryId::new("story-1"), &PassageId::new("a"))
                 .expect("project layout")
                 .bounds
                 .left,

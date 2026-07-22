@@ -310,11 +310,19 @@ export interface NativeProjectSessionStart {
 	storyIds: string[];
 }
 
+type NativePassageBounds = {
+	height: number;
+	left: number;
+	top: number;
+	width: number;
+};
+
+type NativePassageLayout = Record<string, unknown> & {
+	bounds: NativePassageBounds;
+};
+
 interface NativeProjectDescriptor {
-	layout: Record<
-		string,
-		{height: number; left: number; top: number; width: number}
-	>;
+	layout: Record<string, Record<string, NativePassageLayout>>;
 	layoutDataJson: string;
 	name: string;
 	paths: Map<
@@ -459,6 +467,11 @@ type RendererProjectMetadataStory = Partial<
 };
 
 const projectSessions = new Map<string, ProjectSessionState>();
+const currentProjectSchemaVersion = 2;
+const supportedProjectSchemaVersions = new Set([
+	1,
+	currentProjectSchemaVersion
+]);
 const projectSessionStartCanceledCode = 'PROJECT_SESSION_START_CANCELED';
 const projectHydrations = new Map<
 	string,
@@ -1415,24 +1428,98 @@ function projectHeaderValue(source: string, key: string) {
 	return undefined;
 }
 
-async function readProjectLayout(rootPath: string) {
-	const graph = await readJsonIfPresent<
-		Record<string, unknown> & {
-			passages?: Record<
-				string,
-				Partial<Record<'height' | 'left' | 'top' | 'width', number>>
-			>;
-		}
-	>(join(rootPath, '.twine', 'graph.json'));
-	const layout: NativeProjectDescriptor['layout'] = {};
+function normalizedPassageLayout(
+	entry: unknown
+): NativePassageLayout | undefined {
+	if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+		return undefined;
+	}
+	const candidate = entry as Record<string, unknown>;
+	const bounds =
+		candidate.bounds &&
+		typeof candidate.bounds === 'object' &&
+		!Array.isArray(candidate.bounds)
+			? (candidate.bounds as Record<string, unknown>)
+			: candidate;
 
-	for (const [passageId, entry] of Object.entries(graph?.passages ?? {})) {
-		layout[passageId] = {
-			height: numberOrFallback(entry.height, 100),
-			left: numberOrFallback(entry.left, 0),
-			top: numberOrFallback(entry.top, 0),
-			width: numberOrFallback(entry.width, 100)
-		};
+	const normalized = {
+		height: numberOrFallback(bounds.height, 100),
+		left: numberOrFallback(bounds.left, 0),
+		top: numberOrFallback(bounds.top, 0),
+		width: numberOrFallback(bounds.width, 100)
+	};
+	const rest = {...candidate};
+
+	delete rest.height;
+	delete rest.left;
+	delete rest.top;
+	delete rest.width;
+
+	return {...rest, bounds: normalized};
+}
+
+async function readProjectLayout(
+	rootPath: string,
+	stories: ParsedProjectStory[]
+) {
+	const graph = await readJsonIfPresent<Record<string, unknown>>(
+		join(rootPath, '.twine', 'graph.json')
+	);
+	const layout: NativeProjectDescriptor['layout'] = {};
+	const passages = graph?.passages;
+
+	if (passages && typeof passages === 'object' && !Array.isArray(passages)) {
+		const passageData = passages as Record<string, unknown>;
+		const layoutSchema = passageData.schema;
+
+		if (layoutSchema !== undefined && layoutSchema !== 2) {
+			throw new Error(`Unsupported passage layout schema ${layoutSchema}.`);
+		}
+		const byStory = layoutSchema === 2 ? passageData.byStory : undefined;
+
+		if (layoutSchema === 2) {
+			if (!byStory || typeof byStory !== 'object' || Array.isArray(byStory)) {
+				throw new Error('Scoped passage layout data is malformed.');
+			}
+			for (const [storyId, storyLayouts] of Object.entries(byStory)) {
+				if (
+					!storyLayouts ||
+					typeof storyLayouts !== 'object' ||
+					Array.isArray(storyLayouts)
+				) {
+					continue;
+				}
+				const scopedLayouts: Record<string, NativePassageLayout> = {};
+
+				for (const [passageId, entry] of Object.entries(storyLayouts)) {
+					const bounds = normalizedPassageLayout(entry);
+
+					if (bounds) {
+						scopedLayouts[passageId] = bounds;
+					}
+				}
+				if (Object.keys(scopedLayouts).length > 0) {
+					layout[storyId] = scopedLayouts;
+				}
+			}
+		} else {
+			for (const story of stories) {
+				const storyId = story.id as string;
+				const scopedLayouts: Record<string, NativePassageLayout> = {};
+
+				for (const passage of story.passages) {
+					const passageId = passage.id as string;
+					const bounds = normalizedPassageLayout(passageData[passageId]);
+
+					if (bounds) {
+						scopedLayouts[passageId] = bounds;
+					}
+				}
+				if (Object.keys(scopedLayouts).length > 0) {
+					layout[storyId] = scopedLayouts;
+				}
+			}
+		}
 	}
 
 	const layoutData = {...(graph ?? {})};
@@ -1489,7 +1576,7 @@ async function readProjectDescriptor(
 		);
 	}
 
-	if (schemaVersion !== 1) {
+	if (!supportedProjectSchemaVersions.has(schemaVersion)) {
 		throw Object.assign(
 			new Error(`Project schema ${schemaVersion} requires a full reload.`),
 			{recoveryReason: 'schema'}
@@ -1510,7 +1597,7 @@ async function readProjectDescriptor(
 		);
 	}
 
-	const {layout, layoutDataJson} = await readProjectLayout(rootPath);
+	const {layout, layoutDataJson} = await readProjectLayout(rootPath, stories);
 	const descriptor: NativeProjectDescriptor = {
 		layout,
 		layoutDataJson,
@@ -1540,7 +1627,7 @@ async function readDescriptorPassage(
 	rootPath: string,
 	storyId: string,
 	passage: ParsedProjectPassage,
-	layout?: NativeProjectDescriptor['layout'][string],
+	layout?: NativePassageLayout,
 	sourcePassage?: AggregateSourcePassage
 ) {
 	const path = sourcePassage
@@ -1554,7 +1641,7 @@ async function readDescriptorPassage(
 
 	return {
 		id: passage.id as string,
-		layout: layout ?? null,
+		layout: layout?.bounds ?? null,
 		name: sourcePassage?.name ?? passage.name ?? 'Untitled Passage',
 		storyId,
 		tags: sourcePassage?.tags ?? passage.tags ?? [],
@@ -1585,7 +1672,7 @@ async function readDescriptorStory(
 					rootPath,
 					storyId,
 					passage,
-					descriptor.layout[passage.id as string],
+					descriptor.layout[storyId]?.[passage.id as string],
 					aggregatePassages?.[index]
 				)
 			)
@@ -1663,22 +1750,27 @@ function descriptorPathMap(descriptor: NativeProjectDescriptor) {
 function descriptorFromStories(stories: Story[]): NativeProjectDescriptor {
 	const descriptor: NativeProjectDescriptor = {
 		layout: Object.fromEntries(
-			stories.flatMap(story =>
-				story.passages.map(passage => [
-					passage.id,
-					{
-						height: passage.height,
-						left: passage.left,
-						top: passage.top,
-						width: passage.width
-					}
-				])
-			)
+			stories.map(story => [
+				story.id,
+				Object.fromEntries(
+					story.passages.map(passage => [
+						passage.id,
+						{
+							bounds: {
+								height: passage.height,
+								left: passage.left,
+								top: passage.top,
+								width: passage.width
+							}
+						}
+					])
+				)
+			])
 		),
 		layoutDataJson: '{}',
 		name: stories[0]?.name ?? '',
 		paths: new Map(),
-		schemaVersion: 1,
+		schemaVersion: currentProjectSchemaVersion,
 		stories: stories.map(story => ({
 			ifid: story.ifid,
 			id: story.id,
@@ -1759,6 +1851,7 @@ function descriptorFromBaselineReceipt(
 	descriptor.layoutDataJson = canonicalJsonString(
 		JSON.parse(receipt.layoutDataJson) as unknown
 	);
+	descriptor.schemaVersion = receipt.schemaVersion;
 	descriptor.paths = descriptorPathMap(descriptor);
 	return descriptor;
 }
@@ -2269,7 +2362,7 @@ function projectToml(
 			? story.lastUpdate
 			: new Date(story.lastUpdate);
 	const lines = [
-		'schema_version = 1',
+		`schema_version = ${currentProjectSchemaVersion}`,
 		'app_version = "twine.rs-desktop"',
 		`name = ${tomlString(story.name)}`,
 		'',
@@ -2575,6 +2668,16 @@ function rewriteTomlDirectValue(table: string, key: string, value: string) {
 	const body = trailing ? table.slice(0, -trailing.length) : table;
 
 	return `${body}${newline}${key} = ${value}${trailing || newline}`;
+}
+
+function rewriteProjectSchemaVersion(source: string, schemaVersion: number) {
+	const firstTable = tomlTableHeaders(source)[0]?.start ?? source.length;
+
+	return `${rewriteTomlDirectValue(
+		source.slice(0, firstTable),
+		'schema_version',
+		String(schemaVersion)
+	)}${source.slice(firstTable)}`;
 }
 
 function mergePassageMetadataIntoManifest(
@@ -3319,11 +3422,38 @@ function projectSessionConflicts(
 }
 
 function graphLayoutForPassage(
-	graph:
-		{passages?: Record<string, Partial<Record<string, number>>>} | undefined,
+	graph: {passages?: Record<string, unknown>} | undefined,
+	storyId: string,
 	passageId: string
-) {
-	return graph?.passages?.[passageId] ?? {};
+): Partial<NativePassageBounds> {
+	const passages = graph?.passages;
+
+	if (!passages) {
+		return {};
+	}
+	const schema = passages.schema;
+
+	if (schema !== undefined && schema !== 2) {
+		throw new Error(`Unsupported passage layout schema ${String(schema)}.`);
+	}
+	if (schema === 2) {
+		const byStory = passages.byStory;
+
+		if (!byStory || typeof byStory !== 'object' || Array.isArray(byStory)) {
+			throw new Error('Scoped passage layout data is malformed.');
+		}
+		const storyLayouts = (byStory as Record<string, unknown>)[storyId];
+		const entry =
+			storyLayouts &&
+			typeof storyLayouts === 'object' &&
+			!Array.isArray(storyLayouts)
+				? (storyLayouts as Record<string, unknown>)[passageId]
+				: undefined;
+
+		return normalizedPassageLayout(entry)?.bounds ?? {};
+	}
+
+	return normalizedPassageLayout(passages[passageId])?.bounds ?? {};
 }
 
 async function storiesFromProjectManifest(
@@ -3412,7 +3542,7 @@ async function storiesFromProjectManifest(
 				const passagePath = sourcePassage
 					? undefined
 					: safeProjectFilePath(rootPath, passage.file);
-				const layout = graphLayoutForPassage(graph, passageId);
+				const layout = graphLayoutForPassage(graph, storyId, passageId);
 				const text =
 					options.loadPassageText === false
 						? ''
@@ -3773,7 +3903,7 @@ async function manifestExternalChanges(
 						rootPath,
 						storyId,
 						passage,
-						after.layout[passageId],
+						after.layout[storyId]?.[passageId],
 						sourcePassage
 					),
 					story_id: storyId,
@@ -3847,33 +3977,47 @@ function layoutExternalChanges(
 	before: NativeProjectDescriptor,
 	after: NativeProjectDescriptor
 ): CoreExternalChange[] {
-	const passageStories = new Map<string, string>();
+	const passageIdsByStory = new Map(
+		after.stories.map(story => [
+			story.id as string,
+			new Set(story.passages.map(passage => passage.id as string))
+		])
+	);
+	const changes: CoreExternalChange[] = [];
+	const storyIds = new Set([
+		...Object.keys(before.layout),
+		...Object.keys(after.layout)
+	]);
 
-	for (const story of after.stories) {
-		for (const passage of story.passages) {
-			passageStories.set(passage.id as string, story.id as string);
+	for (const storyId of storyIds) {
+		const passageIds = passageIdsByStory.get(storyId);
+
+		if (!passageIds) {
+			continue;
+		}
+		for (const passageId of new Set([
+			...Object.keys(before.layout[storyId] ?? {}),
+			...Object.keys(after.layout[storyId] ?? {})
+		])) {
+			if (!passageIds.has(passageId)) {
+				continue;
+			}
+			const previous = before.layout[storyId]?.[passageId];
+			const next = after.layout[storyId]?.[passageId];
+
+			if (JSON.stringify(previous?.bounds) === JSON.stringify(next?.bounds)) {
+				continue;
+			}
+			changes.push({
+				layout: next?.bounds ?? null,
+				passage_id: passageId,
+				story_id: storyId,
+				type: 'updatePassageLayout'
+			});
 		}
 	}
 
-	return Array.from(
-		new Set([...Object.keys(before.layout), ...Object.keys(after.layout)])
-	).flatMap(passageId => {
-		const previous = before.layout[passageId];
-		const next = after.layout[passageId];
-		const storyId = passageStories.get(passageId);
-
-		if (!storyId || JSON.stringify(previous) === JSON.stringify(next)) {
-			return [];
-		}
-		return [
-			{
-				layout: next ?? null,
-				passage_id: passageId,
-				story_id: storyId,
-				type: 'updatePassageLayout' as const
-			}
-		];
-	});
+	return changes;
 }
 
 async function targetedAssetEntry(rootPath: string, projectPath: string) {
@@ -4148,7 +4292,10 @@ async function readProjectSessionDelta(
 		}
 
 		if (fileChanges.some(change => change.kind === 'graph')) {
-			const nextLayout = await readProjectLayout(session.rootPath);
+			const nextLayout = await readProjectLayout(
+				session.rootPath,
+				descriptor.stories
+			);
 			contentFilesRead++;
 			const nextDescriptor = {
 				...descriptor,
@@ -4902,7 +5049,10 @@ async function adoptProjectSessionBaselineReceipt(
 	}
 
 	try {
-		if (resolve(receipt.rootPath) !== rootPath || receipt.schemaVersion !== 1) {
+		if (
+			resolve(receipt.rootPath) !== rootPath ||
+			!supportedProjectSchemaVersions.has(receipt.schemaVersion)
+		) {
 			return false;
 		}
 
@@ -5225,6 +5375,8 @@ async function writeProjectFolderIncremental(
 	const sourceLayout = sourceLayoutForStory(descriptorStory);
 	let singleTweeDirty = false;
 	let updatedLayout: NativeProjectDescriptor['layout'] | undefined;
+	let updatedGraphText: string | undefined;
+	let updatedManifestText: string | undefined;
 	const touched: Array<
 		| {
 				absolutePath: string | undefined;
@@ -5287,9 +5439,31 @@ async function writeProjectFolderIncremental(
 	);
 
 	if (passageLayoutHints.length > 0) {
-		const nextLayout = {...descriptor.layout};
+		if (descriptor.schemaVersion < currentProjectSchemaVersion) {
+			const manifestSource = await readTextIfPresent(
+				join(rootPath, 'twine.toml')
+			);
+
+			if (!manifestSource) {
+				return undefined;
+			}
+			updatedManifestText = rewriteProjectSchemaVersion(
+				manifestSource,
+				currentProjectSchemaVersion
+			);
+		}
+		const nextLayout = Object.fromEntries(
+			Object.entries(descriptor.layout).map(([storyId, layouts]) => [
+				storyId,
+				{...layouts}
+			])
+		);
+		const storyLayout = {...(nextLayout[story.id] ?? {})};
 
 		for (const hint of passageLayoutHints) {
+			if (hint.storyId !== story.id) {
+				return undefined;
+			}
 			const descriptorPassage = descriptorPassages.get(hint.passageId);
 			const storyPassage = storyPassages.get(hint.passageId);
 
@@ -5306,8 +5480,12 @@ async function writeProjectFolderIncremental(
 			if (Object.values(bounds).some(value => !Number.isFinite(value))) {
 				return undefined;
 			}
-			nextLayout[hint.passageId] = bounds;
+			storyLayout[hint.passageId] = {
+				...(storyLayout[hint.passageId] ?? {}),
+				bounds
+			};
 		}
+		nextLayout[story.id] = storyLayout;
 
 		let layoutData: unknown;
 
@@ -5326,12 +5504,11 @@ async function writeProjectFolderIncremental(
 
 		updatedLayout = nextLayout;
 		singleTweeDirty ||= sourceLayout === 'single-twee';
-		touched.push({
-			absolutePath: join(rootPath, '.twine', 'graph.json'),
-			kind: 'graph',
-			projectPath: '.twine/graph.json',
-			text: JSON.stringify({...layoutData, passages: nextLayout}, null, 2)
-		});
+		updatedGraphText = JSON.stringify(
+			{...layoutData, passages: {byStory: nextLayout, schema: 2}},
+			null,
+			2
+		);
 	}
 	const passageMetadataHints = hints.filter(
 		(hint): hint is Extract<ProjectFolderSaveHint, {type: 'passageMetadata'}> =>
@@ -5340,7 +5517,8 @@ async function writeProjectFolderIncremental(
 
 	if (passageMetadataHints.length > 0) {
 		const manifestPath = join(rootPath, 'twine.toml');
-		const manifestSource = await readTextIfPresent(manifestPath);
+		const manifestSource =
+			updatedManifestText ?? (await readTextIfPresent(manifestPath));
 		const passageIds = new Set(
 			passageMetadataHints.map(hint => hint.passageId)
 		);
@@ -5349,7 +5527,7 @@ async function writeProjectFolderIncremental(
 
 			return passage ? [passage] : [];
 		});
-		const updatedManifest =
+		updatedManifestText =
 			manifestSource && changedPassages.length === passageIds.size
 				? mergePassageMetadataIntoManifest(
 						manifestSource,
@@ -5358,15 +5536,25 @@ async function writeProjectFolderIncremental(
 					)
 				: undefined;
 
-		if (!updatedManifest) {
+		if (!updatedManifestText) {
 			return undefined;
 		}
 		singleTweeDirty ||= sourceLayout === 'single-twee';
+	}
+	if (updatedManifestText !== undefined) {
 		touched.push({
-			absolutePath: manifestPath,
+			absolutePath: join(rootPath, 'twine.toml'),
 			kind: 'manifest',
 			projectPath: 'twine.toml',
-			text: updatedManifest
+			text: updatedManifestText
+		});
+	}
+	if (updatedGraphText !== undefined) {
+		touched.push({
+			absolutePath: join(rootPath, '.twine', 'graph.json'),
+			kind: 'graph',
+			projectPath: '.twine/graph.json',
+			text: updatedGraphText
 		});
 	}
 	if (singleTweeDirty) {

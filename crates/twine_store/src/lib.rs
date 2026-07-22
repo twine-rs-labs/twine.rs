@@ -16,8 +16,8 @@ use thiserror::Error;
 use twine_export::merge_story_into_twee;
 use twine_graph::GraphIndex;
 use twine_model::{
-    GraphLayout, LibraryMetadata, Passage, PassageId, Project, ProjectManifest,
-    ProjectSourceLayout, StoragePolicy, Story, StoryId,
+    GraphLayout, LibraryMetadata, PROJECT_SCHEMA_VERSION, Passage, PassageId, Project,
+    ProjectManifest, ProjectSourceLayout, StoragePolicy, Story, StoryId,
 };
 use twine_parse::story_from_twee_named;
 
@@ -1101,7 +1101,7 @@ impl ProjectFile {
             app_version: project.manifest.app_version.clone(),
             library: LibraryFile::from_library(&project.library),
             name: project.manifest.name.clone(),
-            schema_version: project.manifest.schema_version,
+            schema_version: project.manifest.schema_version.max(PROJECT_SCHEMA_VERSION),
             storage: project.manifest.storage.clone(),
             stories: project
                 .stories
@@ -1176,7 +1176,7 @@ impl ProjectFile {
         } else {
             (load_layout(), load_stories())
         };
-        let (layout, layout_files, graph_layout_us) = layout_result?;
+        let (mut layout, layout_files, graph_layout_us) = layout_result?;
         let loaded_stories = stories_result?;
 
         files.extend(layout_files);
@@ -1201,6 +1201,11 @@ impl ProjectFile {
             files.extend(loaded.files);
             stories.push(loaded.story);
         }
+
+        layout.passages.migrate_legacy(&stories);
+        // PassageLayouts always serializes with the story-scoped schema, even
+        // when it is empty, so the project manifest must gate older readers.
+        let schema_version = schema_version.max(PROJECT_SCHEMA_VERSION);
 
         for story in &mut stories {
             layout.apply_to_story(story);
@@ -2282,6 +2287,26 @@ mod tests {
     }
 
     #[test]
+    fn direct_save_promotes_manifest_before_writing_scoped_layouts() {
+        let root = temp_path("direct-save-schema-promotion");
+        let mut project = Project::from_story(story());
+
+        project.manifest.schema_version = 1;
+        save_project_path(&root, &project, &SaveOptions::default())
+            .expect("direct project save should succeed");
+        let manifest = fs::read_to_string(root.join(MANIFEST_FILE)).expect("manifest should read");
+        let graph: Value = serde_json::from_str(
+            &fs::read_to_string(root.join(GRAPH_LAYOUT_FILE)).expect("graph should read"),
+        )
+        .expect("graph should parse");
+
+        assert!(manifest.contains(&format!("schema_version = {PROJECT_SCHEMA_VERSION}")));
+        assert_eq!(graph["passages"]["schema"], 2);
+
+        fs::remove_dir_all(root).expect("direct-save fixture cleanup");
+    }
+
+    #[test]
     fn writes_exact_source_files_for_both_project_layouts() {
         let passage_root = temp_path("passage-layout-files");
         let single_root = temp_path("single-layout-files");
@@ -2502,6 +2527,98 @@ file = "passages/example/start.twee"
         assert_eq!(loaded.stories[0].passages[0].text, "Legacy body");
 
         fs::remove_dir_all(root).expect("legacy project cleanup");
+    }
+
+    #[test]
+    fn migrates_legacy_flat_layouts_for_colliding_passage_ids() {
+        let root = temp_path("legacy-scoped-layout");
+        let first = story();
+        let mut second = story();
+
+        second.id = StoryId::new("story-2");
+        second.name = "Second".into();
+        for passage in &mut second.passages {
+            passage.story = second.id.clone();
+            passage.name = "Second Start".into();
+        }
+
+        let mut project = Project::from_story(first.clone());
+        project
+            .layout
+            .passages
+            .append(GraphLayout::from_story_layout(&second).passages);
+        project.stories.push(second.clone());
+        project.manifest.schema_version = 1;
+        save_project_path(&root, &project, &SaveOptions::default())
+            .expect("two-story project should save");
+        fs::write(
+            root.join(GRAPH_LAYOUT_FILE),
+            r#"{
+                "passages": {
+                    "passage-1": {
+                        "bounds": {"height": 100, "left": 432, "top": 25, "width": 100}
+                    },
+                    "deleted-passage": {
+                        "bounds": {"height": 100, "left": 999, "top": 25, "width": 100}
+                    }
+                }
+            }"#,
+        )
+        .expect("legacy graph layout should write");
+
+        let loaded = load_project_path(&root).expect("legacy graph layout should migrate");
+
+        assert_eq!(loaded.manifest.schema_version, PROJECT_SCHEMA_VERSION);
+        assert_eq!(loaded.layout.passages.len(), 2);
+        for story_id in [&first.id, &second.id] {
+            assert_eq!(
+                loaded
+                    .layout
+                    .passages
+                    .get(story_id, &PassageId::new("passage-1"))
+                    .expect("matching legacy layout should be scoped")
+                    .bounds
+                    .left,
+                432.0
+            );
+        }
+
+        save_project_path(&root, &loaded, &SaveOptions::default())
+            .expect("migrated project should save");
+        let graph: Value = serde_json::from_str(
+            &fs::read_to_string(root.join(GRAPH_LAYOUT_FILE)).expect("migrated graph should read"),
+        )
+        .expect("migrated graph should parse");
+
+        assert!(graph["passages"]["byStory"]["story-1"]["passage-1"].is_object());
+        assert!(graph["passages"]["byStory"]["story-2"]["passage-1"].is_object());
+        assert!(graph["passages"].get("legacy").is_none());
+
+        fs::remove_dir_all(root).expect("legacy scoped project cleanup");
+    }
+
+    #[test]
+    fn upgrades_schema_before_an_empty_layout_uses_scoped_serialization() {
+        let root = temp_path("empty-scoped-layout");
+        let mut project = Project::from_story(story());
+
+        project.layout.passages.clear();
+        project.manifest.schema_version = 1;
+        save_project_path(&root, &project, &SaveOptions::default())
+            .expect("schema-one empty-layout fixture should save");
+
+        let loaded = load_project_path(&root).expect("empty layout project should load");
+
+        assert_eq!(loaded.manifest.schema_version, PROJECT_SCHEMA_VERSION);
+        assert!(loaded.layout.passages.is_empty());
+
+        save_project_path(&root, &loaded, &SaveOptions::default())
+            .expect("upgraded empty layout should save");
+        let manifest = fs::read_to_string(root.join(MANIFEST_FILE)).expect("manifest should read");
+
+        assert!(manifest.contains(&format!("schema_version = {PROJECT_SCHEMA_VERSION}")));
+
+        fs::remove_dir_all(root).expect("empty scoped project cleanup");
     }
 
     #[test]

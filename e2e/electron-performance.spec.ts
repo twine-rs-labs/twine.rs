@@ -4151,7 +4151,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				sampleCount:
 					phase === 'diagnostic' || phase === 'memory-detail' ? 1 : undefined,
 				samples,
-				schemaVersion: 1,
+				schemaVersion: 2,
 				smoke,
 				test: {
 					error: testInfo.error?.message,

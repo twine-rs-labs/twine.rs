@@ -251,7 +251,7 @@ export class TestCoreSessionClient {
 	private snapshot: ProjectSnapshot = {
 		dirty: false,
 		name: 'Test Project',
-		schemaVersion: 1,
+		schemaVersion: 2,
 		stories: []
 	};
 

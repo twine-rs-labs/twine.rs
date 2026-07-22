@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use twine_model::{GraphLayout, GraphPosition, Passage, PassageId, PassageLayout, Story};
+use twine_model::{GraphLayout, GraphPosition, Passage, PassageId, PassageLayout, Story, StoryId};
 use twine_parse::{LinkParseOptions, parse_standard_links};
 
 fn default_true() -> bool {
@@ -132,6 +132,7 @@ pub struct GraphIndex {
     passage_names: BTreeMap<String, PassageId>,
     self_links: Vec<PassageId>,
     stats: GraphStats,
+    story_id: StoryId,
     story_order: Vec<PassageId>,
     story_rank: BTreeMap<PassageId, usize>,
     #[serde(skip)]
@@ -174,6 +175,7 @@ impl GraphIndex {
                     .count(),
                 ..GraphStats::default()
             },
+            story_id: story.id.clone(),
             story_order,
             story_rank,
             last_incremental_parse_count: story.passage_count(),
@@ -729,7 +731,7 @@ impl GraphIndex {
         for passage in &story.passages {
             let saved_bounds = saved_layout
                 .passages
-                .get(&passage.id)
+                .get(&story.id, &passage.id)
                 .map(|layout| layout.bounds)
                 .or(passage.layout);
             let (bounds, source) = if let Some(bounds) = saved_bounds {
@@ -739,7 +741,7 @@ impl GraphIndex {
                 let generated =
                     generated.get_or_insert_with(|| self.generate_ephemeral_layout(options));
 
-                if let Some(layout) = generated.passages.get(&passage.id) {
+                if let Some(layout) = generated.passages.get(&story.id, &passage.id) {
                     generated_count += 1;
                     (layout.bounds, GraphLayoutSource::Generated)
                 } else {
@@ -803,6 +805,7 @@ impl GraphIndex {
                     let row = index % rows;
 
                     layout.passages.insert(
+                        self.story_id.clone(),
                         id,
                         PassageLayout {
                             bounds: GraphPosition {
@@ -1633,7 +1636,13 @@ mod tests {
         let graph = GraphIndex::from_story(&story);
         let layout = graph.generate_ephemeral_layout(&AutoLayoutOptions::default());
         let target_bounds = (0..target_count)
-            .map(|index| layout.passages[&PassageId::new(format!("target-{index}"))].bounds)
+            .map(|index| {
+                layout
+                    .passages
+                    .get(&story.id, &PassageId::new(format!("target-{index}")))
+                    .expect("generated target layout")
+                    .bounds
+            })
             .collect::<Vec<_>>();
         let target_lefts = target_bounds
             .iter()
