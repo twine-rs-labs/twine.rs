@@ -3,12 +3,14 @@ import {
 	commandLineHelpText,
 	commandLineOpenPaths,
 	consumeCommandLineOpenPaths,
-	queueCommandLineOpenPaths
+	queueCommandLineOpenPaths,
+	setCommandLineOpenRequestNotifier
 } from '../command-line';
 
 describe('command-line helpers', () => {
 	afterEach(() => {
 		consumeCommandLineOpenPaths();
+		setCommandLineOpenRequestNotifier(undefined);
 	});
 
 	it('detects help flags', () => {
@@ -63,5 +65,19 @@ describe('command-line helpers', () => {
 			'/tmp/two.twine.rs'
 		]);
 		expect(consumeCommandLineOpenPaths()).toEqual([]);
+	});
+
+	it('notifies the renderer when a new open request is queued after startup', () => {
+		const notify = jest.fn();
+
+		queueCommandLineOpenPaths(['/tmp/startup.twine.rs']);
+		setCommandLineOpenRequestNotifier(notify);
+		queueCommandLineOpenPaths(['/tmp/finder.twine.rs']);
+
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(consumeCommandLineOpenPaths()).toEqual([
+			'/tmp/startup.twine.rs',
+			'/tmp/finder.twine.rs'
+		]);
 	});
 });

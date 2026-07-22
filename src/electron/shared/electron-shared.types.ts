@@ -332,6 +332,7 @@ export interface TwineElectronWindow extends Window {
 		chooseAssetFile(defaultPath?: string): Promise<string | undefined>;
 		chooseStoryLibraryFolder(): Promise<string | undefined>;
 		consumeCommandLineOpenRequests(): Promise<NativeCommandLineOpenResult>;
+		onCommandLineOpenRequest(callback: () => void): () => void;
 		copyText(text: string): void;
 		copyAssetToProject(
 			rootPath: string,

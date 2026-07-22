@@ -23,6 +23,7 @@ import {
 } from './performance-harness';
 import {initStoryPreviewProtocol} from './story-preview-protocol';
 import {openExternalUrl} from './external-url';
+import {setCommandLineOpenRequestNotifier} from './command-line';
 
 let mainWindow: BrowserWindow | null;
 
@@ -44,6 +45,9 @@ async function createWindow() {
 			sandbox: true,
 			webSecurity: true
 		}
+	});
+	setCommandLineOpenRequestNotifier(() => {
+		mainWindow?.webContents.send('command-line-open-request');
 	});
 	if (fullscreenPersistenceEnabled()) {
 		mainWindow.on('enter-full-screen', () => {
@@ -82,7 +86,10 @@ async function createWindow() {
 			app.quit();
 		}
 	});
-	mainWindow.on('closed', () => (mainWindow = null));
+	mainWindow.on('closed', () => {
+		mainWindow = null;
+		setCommandLineOpenRequestNotifier(undefined);
+	});
 
 	// Load external links in the system browser.
 	const openNavigationExternally = (url: string) => {

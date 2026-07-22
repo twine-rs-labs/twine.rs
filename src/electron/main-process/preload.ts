@@ -75,6 +75,14 @@ const bridge = {
 				return result;
 			});
 	},
+	onCommandLineOpenRequest(callback: () => void) {
+		const listener = () => callback();
+
+		ipcRenderer.on('command-line-open-request', listener);
+
+		return () =>
+			ipcRenderer.removeListener('command-line-open-request', listener);
+	},
 	copyText(text: string) {
 		ipcRenderer.send('copy-text', text);
 	},

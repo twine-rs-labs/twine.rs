@@ -56,6 +56,10 @@ function openedResult(
 	};
 }
 
+function emptyResult(): NativeCommandLineOpenResult {
+	return {errors: [], openedProjects: [], unsupportedPaths: []};
+}
+
 const NavigationControls: React.FC = () => {
 	const navigate = useNavigate();
 
@@ -98,12 +102,21 @@ async function reject<T>(pending: Deferred<T>, reason: unknown) {
 describe('<CommandLineOpenSync>', () => {
 	let pending: Deferred<NativeCommandLineOpenResult>;
 	let consume: jest.Mock;
+	let notifyOpenRequest: (() => void) | undefined;
+	let onOpenRequest: jest.Mock;
+	let unsubscribeOpenRequest: jest.Mock;
 
 	beforeEach(() => {
 		pending = deferred();
 		consume = jest.fn(() => pending.promise);
+		unsubscribeOpenRequest = jest.fn();
+		onOpenRequest = jest.fn((callback: () => void) => {
+			notifyOpenRequest = callback;
+			return unsubscribeOpenRequest;
+		});
 		(window as TwineElectronWindow).twineElectron = {
-			consumeCommandLineOpenRequests: consume
+			consumeCommandLineOpenRequests: consume,
+			onCommandLineOpenRequest: onOpenRequest
 		} as unknown as TwineElectronWindow['twineElectron'];
 		window.localStorage.clear();
 	});
@@ -185,12 +198,62 @@ describe('<CommandLineOpenSync>', () => {
 		);
 	});
 
+	it('consumes and applies a macOS open request received after startup', async () => {
+		const dispatch = jest.fn();
+
+		render(app({dispatch, stories: []}));
+		await resolve(pending, emptyResult());
+		expect(consume).toHaveBeenCalledTimes(1);
+
+		pending = deferred();
+		act(() => notifyOpenRequest?.());
+		await waitFor(() => expect(consume).toHaveBeenCalledTimes(2));
+		await resolve(pending, openedResult());
+
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/stories/opened-story'
+			)
+		);
+		expect(dispatch).toHaveBeenCalledTimes(1);
+		expect(dispatch.mock.calls[0][0]).toEqual(
+			expect.objectContaining({
+				state: [expect.objectContaining({id: 'opened-story'})],
+				type: 'init'
+			})
+		);
+	});
+
+	it('drains an open request queued while the previous drain is pending', async () => {
+		const dispatch = jest.fn();
+		const startupPending = pending;
+
+		render(app({dispatch, stories: []}));
+		expect(consume).toHaveBeenCalledTimes(1);
+
+		pending = deferred();
+		act(() => notifyOpenRequest?.());
+		expect(consume).toHaveBeenCalledTimes(1);
+		await resolve(startupPending, emptyResult());
+		await waitFor(() => expect(consume).toHaveBeenCalledTimes(2));
+		await resolve(pending, openedResult());
+
+		await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+		expect(dispatch.mock.calls[0][0].state).toEqual([
+			expect.objectContaining({id: 'opened-story'})
+		]);
+	});
+
 	it('does not apply a pending command-line open after final unmount', async () => {
 		const dispatch = jest.fn();
 		const result = render(app({dispatch, stories: []}));
 
 		expect(consume).toHaveBeenCalledTimes(1);
 		result.unmount();
+		expect(unsubscribeOpenRequest).toHaveBeenCalledTimes(
+			onOpenRequest.mock.calls.length
+		);
 		await resolve(pending, openedResult());
 
 		expect(dispatch).not.toHaveBeenCalled();

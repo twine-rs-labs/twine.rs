@@ -3,6 +3,7 @@ import {initApp} from '../init-app';
 import {initIpc, storyWritesReadyForQuit} from '../ipc';
 import {initLocales} from '../locales';
 import {initMenuBar} from '../menu-bar';
+import {setCommandLineOpenRequestNotifier} from '../command-line';
 import {
 	backupStoryDirectory,
 	createStoryDirectory,
@@ -11,6 +12,7 @@ import {
 
 jest.mock('electron');
 jest.mock('../app-prefs');
+jest.mock('../command-line');
 jest.mock('../ipc');
 jest.mock('../locales');
 jest.mock('../menu-bar');
@@ -27,6 +29,8 @@ describe('initApp', () => {
 	const openExternalMock = shell.openExternal as jest.Mock;
 	const showErrorBoxMock = dialog.showErrorBox as jest.Mock;
 	const storyWritesReadyForQuitMock = storyWritesReadyForQuit as jest.Mock;
+	const setCommandLineOpenRequestNotifierMock =
+		setCommandLineOpenRequestNotifier as jest.Mock;
 
 	beforeEach(() => {
 		jest.spyOn(global, 'setInterval');
@@ -68,6 +72,39 @@ describe('initApp', () => {
 	it('initializes the menu bar', async () => {
 		await initApp();
 		expect(initMenuBarMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('pushes queued file-open notifications to the renderer after startup', async () => {
+		await initApp();
+		const window = (
+			BrowserWindow as unknown as {instances: BrowserWindow[]}
+		).instances.at(-1) as BrowserWindow & {
+			webContents: {send: jest.Mock};
+		};
+		const notify = setCommandLineOpenRequestNotifierMock.mock.calls.find(
+			([notifier]) => typeof notifier === 'function'
+		)?.[0] as () => void;
+
+		notify();
+
+		expect(window.webContents.send).toHaveBeenCalledWith(
+			'command-line-open-request'
+		);
+	});
+
+	it('stops file-open notifications when the main window closes', async () => {
+		const windowOn = jest.spyOn(BrowserWindow.prototype, 'on');
+
+		await initApp();
+		const closedListener = (windowOn.mock.calls as any[]).find(
+			([event]) => event === 'closed'
+		)?.[1] as () => void;
+
+		closedListener();
+
+		expect(setCommandLineOpenRequestNotifierMock).toHaveBeenLastCalledWith(
+			undefined
+		);
 	});
 
 	it('keeps the renderer alive until story writes allow window close', async () => {

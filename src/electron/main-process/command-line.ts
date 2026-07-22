@@ -2,6 +2,7 @@ import minimist from 'minimist';
 import {resolve} from 'path';
 
 const pendingOpenPaths = new Set<string>();
+let commandLineOpenRequestNotifier: (() => void) | undefined;
 
 const minimistOptions = {
 	alias: {h: 'help'},
@@ -59,11 +60,24 @@ export function commandLineOpenPaths(argv: string[], cwd = process.cwd()) {
 }
 
 export function queueCommandLineOpenPaths(paths: string[]) {
+	let queuedPath = false;
+
 	for (const path of paths) {
 		if (path.trim() !== '') {
 			pendingOpenPaths.add(resolve(path));
+			queuedPath = true;
 		}
 	}
+
+	if (queuedPath) {
+		commandLineOpenRequestNotifier?.();
+	}
+}
+
+export function setCommandLineOpenRequestNotifier(
+	notifier: (() => void) | undefined
+) {
+	commandLineOpenRequestNotifier = notifier;
 }
 
 export function consumeCommandLineOpenPaths() {

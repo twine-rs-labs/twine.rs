@@ -21,6 +21,7 @@ export class BrowserWindow {
 		BrowserWindow.instances.push(this);
 		(this as any).webContents = {
 			on: jest.fn(),
+			send: jest.fn(),
 			setWindowOpenHandler: jest.fn()
 		};
 	}
