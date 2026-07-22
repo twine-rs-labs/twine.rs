@@ -4751,7 +4751,11 @@ describe('project-folder native bridge', () => {
 			);
 
 			expect(start).toEqual(
-				expect.objectContaining({generation: 1, storyIds: ['story-id']})
+				expect.objectContaining({
+					generation: 1,
+					sessionInstanceId: expect.any(String),
+					storyIds: ['story-id']
+				})
 			);
 			expect(captureNativeProjectAssetDigestsMock).toHaveBeenLastCalledWith(
 				'/native/project.twine.rs',
@@ -4771,6 +4775,7 @@ describe('project-folder native bridge', () => {
 					baseGeneration: 1,
 					candidateGeneration: 2,
 					changedPaths: ['passages/story/001-start.twee'],
+					sessionInstanceId: start.sessionInstanceId,
 					delta: expect.objectContaining({
 						changes: [
 							expect.objectContaining({

@@ -78,4 +78,52 @@ describe('NativeProjectDeltaQueue', () => {
 		await Promise.resolve();
 		expect(onError).toHaveBeenCalledWith(error, delta);
 	});
+
+	it('aborts cleared work and waits for an in-flight drain to finish', async () => {
+		const first = deferred<'continue'>();
+		const processed: string[] = [];
+		let firstSignal: AbortSignal | undefined;
+		const queue = new NativeProjectDeltaQueue(async (delta, signal) => {
+			processed.push(delta.id);
+			if (delta.id === 'a') {
+				firstSignal = signal;
+				return first.promise;
+			}
+			return 'continue';
+		}, jest.fn());
+
+		queue.enqueue({id: 'a', rootPath: '/one'});
+		queue.enqueue({id: 'b', rootPath: '/one'});
+		await Promise.resolve();
+		const clearing = queue.clearRoot('/one');
+
+		expect(firstSignal?.aborted).toBe(true);
+		expect(processed).toEqual(['a']);
+		first.resolve('continue');
+		await clearing;
+		await Promise.resolve();
+		expect(processed).toEqual(['a']);
+	});
+
+	it('does not let a cleared drain overlap or delete a replacement queue', async () => {
+		const first = deferred<'continue'>();
+		const processed: string[] = [];
+		const queue = new NativeProjectDeltaQueue(async delta => {
+			processed.push(delta.id);
+			return delta.id === 'old' ? first.promise : 'continue';
+		}, jest.fn());
+
+		queue.enqueue({id: 'old', rootPath: '/one'});
+		await Promise.resolve();
+		const clearing = queue.clearRoot('/one');
+		queue.enqueue({id: 'old', rootPath: '/one'});
+		await Promise.resolve();
+		expect(processed).toEqual(['old']);
+
+		first.resolve('continue');
+		await clearing;
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(processed).toEqual(['old', 'old']);
+	});
 });

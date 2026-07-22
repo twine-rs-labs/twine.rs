@@ -647,6 +647,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	private ownsWasmClient: boolean;
 	private redoEffects: Array<string | undefined> = [];
 	private statusListeners = new Set<(status: CoreSessionStatus) => void>();
+	private transactionTokens = new WeakMap<PatchBatch, number>();
 	private undoEffects: Array<string | undefined> = [];
 	private pendingSessionPatchDispatches = 0;
 	private stories: StoriesState;
@@ -685,17 +686,67 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		command: StoryCommand,
 		options?: CoreCommandOptions
 	): Promise<PatchBatch | undefined> {
+		if (this.wasmClient.applySync && this.wasmClient.replaceProjectSync) {
+			const normalized = normalizeCommandOptions(options);
+			const revision = this.status.revision;
+
+			markPerformance('mutation-submit');
+			const batch = this.applyStoryCommandThroughSyncSession(
+				command,
+				normalized
+			);
+			if (
+				normalized.history === 'record' &&
+				this.status.revision !== revision
+			) {
+				this.transactionTokens.set(batch, Number(batch.transactionId));
+			}
+
+			markPerformance('mutation-patch-applied');
+			measurePerformance(
+				'mutation-round-trip',
+				'mutation-submit',
+				'mutation-patch-applied'
+			);
+			measurePerformanceAfterPaint('mutation-to-paint', 'mutation-submit');
+			recordPerformanceHarnessEvent('mutation-applied', {
+				command: command.type,
+				patches: batch?.patches.length ?? 0,
+				revision: this.status.revision
+			});
+			return batch;
+		}
+
+		return (await this.applyStoryCommandTracked(command, options)).batch;
+	}
+
+	async applyStoryCommandTracked(
+		command: StoryCommand,
+		options?: CoreCommandOptions
+	): Promise<{batch: PatchBatch | undefined; transactionId?: number}> {
 		const normalized = normalizeCommandOptions(options);
 		markPerformance('mutation-submit');
-		let batch: PatchBatch | undefined;
+		const applyTracked = async () => {
+			const revision = this.status.revision;
+			const batch =
+				this.wasmClient.applySync && this.wasmClient.replaceProjectSync
+					? this.applyStoryCommandThroughSyncSession(command, normalized)
+					: await this.applyStoryCommandThroughWasm(command, normalized);
 
-		if (this.wasmClient.applySync && this.wasmClient.replaceProjectSync) {
-			batch = this.applyStoryCommandThroughSyncSession(command, normalized);
-		} else {
-			batch = await this.enqueueMutation(() =>
-				this.applyStoryCommandThroughWasm(command, normalized)
-			);
-		}
+			return {
+				batch,
+				transactionId:
+					normalized.history === 'record' &&
+					this.status.revision !== revision &&
+					batch
+						? Number(batch.transactionId)
+						: undefined
+			};
+		};
+		const tracked =
+			this.wasmClient.applySync && this.wasmClient.replaceProjectSync
+				? await applyTracked()
+				: await this.enqueueMutation(applyTracked);
 
 		markPerformance('mutation-patch-applied');
 		measurePerformance(
@@ -706,10 +757,17 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		measurePerformanceAfterPaint('mutation-to-paint', 'mutation-submit');
 		recordPerformanceHarnessEvent('mutation-applied', {
 			command: command.type,
-			patches: batch?.patches.length ?? 0,
+			patches: tracked.batch?.patches.length ?? 0,
 			revision: this.status.revision
 		});
-		return batch;
+		if (tracked.batch && tracked.transactionId !== undefined) {
+			this.transactionTokens.set(tracked.batch, tracked.transactionId);
+		}
+		return tracked;
+	}
+
+	transactionTokenFor(batch: PatchBatch | undefined) {
+		return batch ? this.transactionTokens.get(batch) : undefined;
 	}
 
 	async ensureSessionReady() {
@@ -1131,6 +1189,18 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			revision: this.status.revision
 		});
 		return batch;
+	}
+
+	rollbackTransaction(transactionId: number) {
+		return this.enqueueMutation(async () => {
+			const revision = await this.ensureWasmProjectSession();
+
+			if (revision !== transactionId + 1 || this.status.revision !== revision) {
+				return false;
+			}
+
+			return !!(await this.undoThroughWasm());
+		});
 	}
 
 	private async undoThroughWasm() {
@@ -2118,6 +2188,61 @@ function commandStoryId(command: StoryCommand): string | undefined {
 
 const projectScopedCoreHosts = new Set<ProjectScopedCoreProjectHost>();
 
+type StoryTagRenameCommand = Extract<StoryCommand, {type: 'renameStoryTag'}>;
+
+export async function applyStoryTagRenameAcrossHosts(
+	hosts: Iterable<StoreCoreProjectHost>,
+	command: StoryTagRenameCommand,
+	options?: CoreCommandOptions
+) {
+	const completed: Array<{
+		host: StoreCoreProjectHost;
+		transactionId: number;
+	}> = [];
+	let lastBatch: PatchBatch | undefined;
+
+	try {
+		for (const host of hosts) {
+			lastBatch =
+				options === undefined
+					? await host.applyStoryCommand(command)
+					: await host.applyStoryCommand(command, options);
+			const transactionId = host.transactionTokenFor(lastBatch);
+
+			if (transactionId !== undefined) {
+				completed.push({host, transactionId});
+			}
+		}
+		return lastBatch;
+	} catch (error) {
+		const rollbackErrors: unknown[] = [];
+
+		for (const {host, transactionId} of completed.reverse()) {
+			try {
+				if (!(await host.rollbackTransaction(transactionId))) {
+					rollbackErrors.push(
+						new Error(
+							`Transaction ${transactionId} is no longer eligible for rollback.`
+						)
+					);
+				}
+			} catch (rollbackError) {
+				rollbackErrors.push(rollbackError);
+			}
+		}
+		if (rollbackErrors.length > 0) {
+			throw new AggregateError(
+				[error, ...rollbackErrors],
+				`Global story tag rename failed and ${rollbackErrors.length} project${
+					rollbackErrors.length === 1 ? '' : 's'
+				} could not be rolled back safely.`,
+				{cause: error}
+			);
+		}
+		throw error;
+	}
+}
+
 class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	private client = createWasmCoreWorkerClient();
 	private dispatch: UndoableDispatch;
@@ -2182,30 +2307,19 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	}
 
 	async applyStoryCommand(command: StoryCommand, options?: CoreCommandOptions) {
-		const applyToHost = (host: StoreCoreProjectHost) =>
-			options === undefined
-				? host.applyStoryCommand(command)
-				: host.applyStoryCommand(command, options);
-
 		if (command.type === 'renameStoryTag') {
-			const completed: StoreCoreProjectHost[] = [];
-			let lastBatch: PatchBatch | undefined;
-
-			try {
-				for (const host of this.hosts.values()) {
-					lastBatch = await applyToHost(host);
-					completed.push(host);
-				}
-				return lastBatch;
-			} catch (error) {
-				for (const host of completed.reverse()) {
-					await host.undo();
-				}
-				throw error;
-			}
+			return applyStoryTagRenameAcrossHosts(
+				this.hosts.values(),
+				command,
+				options
+			);
 		}
 
-		return applyToHost(this.requireHostForCommand(command));
+		const host = this.requireHostForCommand(command);
+
+		return options === undefined
+			? host.applyStoryCommand(command)
+			: host.applyStoryCommand(command, options);
 	}
 
 	async ensureSessionReady(storyId: string) {

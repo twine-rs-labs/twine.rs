@@ -302,6 +302,7 @@ export interface NativeProjectSessionDelta {
 	recovery?: NativeProjectSessionRecovery;
 	rootPath: string;
 	scannedAt: string;
+	sessionInstanceId: string;
 }
 
 export interface NativeProjectSessionPerformanceTrace {
@@ -325,6 +326,7 @@ export interface NativeProjectSessionStart {
 		receiptFileCount?: number;
 	};
 	rootPath: string;
+	sessionInstanceId: string;
 	storyIds: string[];
 }
 
@@ -416,6 +418,7 @@ interface ProjectSessionState {
 	};
 	rootPath: string;
 	scanning?: boolean;
+	sessionInstanceId: string;
 	watcher?: FSWatcher;
 	watcherAvailable?: boolean;
 }
@@ -4362,7 +4365,8 @@ function recoveryDelta(
 			reason: error.recoveryReason ?? 'invalidManifest'
 		},
 		rootPath: session.rootPath,
-		scannedAt: new Date().toISOString()
+		scannedAt: new Date().toISOString(),
+		sessionInstanceId: session.sessionInstanceId
 	};
 
 	recordWatcherTraceEvent({
@@ -4641,7 +4645,8 @@ async function readProjectSessionDelta(
 					}
 				: undefined,
 			rootPath: session.rootPath,
-			scannedAt: new Date().toISOString()
+			scannedAt: new Date().toISOString(),
+			sessionInstanceId: session.sessionInstanceId
 		};
 
 		const candidate = {
@@ -4858,7 +4863,8 @@ function ensureProjectSession(rootPath: string) {
 			listeners: new Set<ProjectSessionListener>(),
 			pathHints: new Set<string>(),
 			resolvedCandidates: new Map(),
-			rootPath
+			rootPath,
+			sessionInstanceId: uuid()
 		};
 		projectSessions.set(key, session);
 	}
@@ -7600,6 +7606,7 @@ export async function startProjectSession(
 				}
 			: undefined,
 		rootPath: baseline.rootPath,
+		sessionInstanceId: session.sessionInstanceId,
 		storyIds: baseline.storyIds
 	} satisfies NativeProjectSessionStart;
 }
@@ -7735,6 +7742,7 @@ function projectSessionStart(session: ProjectSessionState) {
 		assets: baseline.assets,
 		generation: session.generation,
 		rootPath: baseline.rootPath,
+		sessionInstanceId: session.sessionInstanceId,
 		storyIds: baseline.storyIds
 	} satisfies NativeProjectSessionStart;
 }

@@ -6,6 +6,7 @@ import {
 	movePassagesCommand,
 	PatchBatch,
 	queryGraphProjectionCommand,
+	renameStoryTagCommand,
 	renameStoryCommand,
 	replaceStoryCommand,
 	setStoryFormatCommand,
@@ -17,6 +18,7 @@ import {
 import {
 	knownAssetInventoryForStory,
 	replaceKnownAssetInventoryForStory,
+	applyStoryTagRenameAcrossHosts,
 	coreProjectHostPerformanceSnapshot,
 	CoreProjectHost,
 	CoreProjectHostProvider,
@@ -948,6 +950,129 @@ describe('StoreCoreProjectHost asset commands', () => {
 			expect.any(Object),
 			1
 		);
+	});
+
+	it('does not make a history-skipping command eligible for rollback', async () => {
+		const context = hostWithStory({
+			wasmClient: fakeWasmClient(async () => batch([]))
+		});
+
+		const tracked = await context.host.applyStoryCommandTracked(
+			renameStoryTagCommand('missing', 'new'),
+			{history: 'skip'}
+		);
+
+		expect(tracked.transactionId).toBeUndefined();
+	});
+
+	it('refuses transaction rollback after a queued unrelated mutation', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const tracked = await context.host.applyStoryCommandTracked(
+			renameStoryTagCommand('old', 'new')
+		);
+
+		expect(tracked.transactionId).toBe(1);
+		const unrelated = context.host.applyStoryCommand(
+			updatePassageTextCommand(context.story.id, context.start.id, 'unrelated')
+		);
+		const rollback = context.host.rollbackTransaction(tracked.transactionId!);
+
+		await unrelated;
+		await expect(rollback).resolves.toBe(false);
+		expect(wasmClient.undo).not.toHaveBeenCalled();
+	});
+});
+
+describe('global story tag rename', () => {
+	function renameHost(options: {
+		changed?: boolean;
+		error?: Error;
+		transactionId: number;
+	}) {
+		const batch = {
+			label: 'Rename Story Tag',
+			patches: [],
+			transactionId: BigInt(options.transactionId)
+		};
+		const applyStoryCommand = options.error
+			? jest.fn().mockRejectedValue(options.error)
+			: jest.fn().mockResolvedValue(batch);
+		const rollbackTransaction = jest.fn().mockResolvedValue(true);
+		const host = {
+			applyStoryCommand,
+			rollbackTransaction,
+			transactionTokenFor: () =>
+				options.changed ? options.transactionId : undefined
+		} as unknown as StoreCoreProjectHost;
+
+		return {applyStoryCommand, host, rollbackTransaction};
+	}
+
+	it('rolls back only hosts changed by the failed rename', async () => {
+		const unrelatedHistory = renameHost({transactionId: 7});
+		const renamed = renameHost({changed: true, transactionId: 3});
+		const failed = renameHost({
+			error: new Error('rename failed'),
+			transactionId: 2
+		});
+		const command = {
+			new_name: 'new',
+			old_name: 'old',
+			type: 'renameStoryTag' as const
+		};
+
+		await expect(
+			applyStoryTagRenameAcrossHosts(
+				[unrelatedHistory.host, renamed.host, failed.host],
+				command
+			)
+		).rejects.toThrow('rename failed');
+
+		expect(unrelatedHistory.rollbackTransaction).not.toHaveBeenCalled();
+		expect(renamed.rollbackTransaction).toHaveBeenCalledWith(3);
+		expect(failed.rollbackTransaction).not.toHaveBeenCalled();
+	});
+
+	it('reports when a changed host can no longer be rolled back safely', async () => {
+		const renamed = renameHost({changed: true, transactionId: 3});
+		const failed = renameHost({
+			error: new Error('rename failed'),
+			transactionId: 4
+		});
+
+		renamed.rollbackTransaction.mockResolvedValue(false);
+		await expect(
+			applyStoryTagRenameAcrossHosts([renamed.host, failed.host], {
+				new_name: 'new',
+				old_name: 'old',
+				type: 'renameStoryTag'
+			})
+		).rejects.toThrow(
+			'Global story tag rename failed and 1 project could not be rolled back safely.'
+		);
+	});
+
+	it('continues compensating hosts after one rollback rejects', async () => {
+		const first = renameHost({changed: true, transactionId: 2});
+		const second = renameHost({changed: true, transactionId: 3});
+		const failed = renameHost({
+			error: new Error('rename failed'),
+			transactionId: 4
+		});
+
+		second.rollbackTransaction.mockRejectedValue(new Error('undo failed'));
+		await expect(
+			applyStoryTagRenameAcrossHosts([first.host, second.host, failed.host], {
+				new_name: 'new',
+				old_name: 'old',
+				type: 'renameStoryTag'
+			})
+		).rejects.toThrow(
+			'Global story tag rename failed and 1 project could not be rolled back safely.'
+		);
+		expect(second.rollbackTransaction).toHaveBeenCalledWith(3);
+		expect(first.rollbackTransaction).toHaveBeenCalledWith(2);
 	});
 });
 

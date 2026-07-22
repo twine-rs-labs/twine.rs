@@ -70,6 +70,7 @@ export interface NativeProjectSessionDelta {
 	recovery?: NativeProjectSessionRecovery;
 	rootPath: string;
 	scannedAt: string;
+	sessionInstanceId: string;
 }
 
 export interface NativeProjectSessionPerformanceTrace {
@@ -93,6 +94,7 @@ export interface NativeProjectSessionStart {
 		receiptFileCount?: number;
 	};
 	rootPath: string;
+	sessionInstanceId: string;
 	storyIds: string[];
 }
 

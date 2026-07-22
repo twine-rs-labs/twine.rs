@@ -23,6 +23,7 @@ import './project-session-sync.css';
 interface PendingProjectReview {
 	conflicts: CoreExternalConflict[];
 	delta: NativeProjectSessionDelta;
+	order: number;
 	rootPath: string;
 }
 
@@ -77,8 +78,19 @@ export const ProjectSessionSync: React.FC = () => {
 	const coreProjectHost = useCoreProjectHost();
 	const twineElectron = (window as TwineElectronWindow).twineElectron;
 	const dismissedDeltas = React.useRef(new Set<string>());
-	const [pendingReview, setPendingReview] =
-		React.useState<PendingProjectReview>();
+	const nextReviewOrder = React.useRef(0);
+	const reviewOrderByDelta = React.useRef(new Map<string, number>());
+	const [pendingReviews, setPendingReviews] = React.useState<
+		PendingProjectReview[]
+	>([]);
+	const [unclassifiedReviewOrders, setUnclassifiedReviewOrders] =
+		React.useState<number[]>([]);
+	const firstPendingReview = pendingReviews[0];
+	const pendingReview =
+		firstPendingReview &&
+		!unclassifiedReviewOrders.some(order => order < firstPendingReview.order)
+			? firstPendingReview
+			: undefined;
 	const [busy, setBusy] = React.useState(false);
 	const [error, setError] = React.useState<string>();
 	const roots = React.useMemo(() => projectRootsForStories(stories), [stories]);
@@ -92,6 +104,61 @@ export const ProjectSessionSync: React.FC = () => {
 	);
 	const rootStoryIds = React.useRef(new Map<string, string[]>());
 	const rootStoriesRef = React.useRef(new Map<string, Story[]>());
+	const activeSessionInstances = React.useRef(new Map<string, string>());
+	const bufferedSessionDeltas = React.useRef(
+		new Map<string, NativeProjectSessionDelta[]>()
+	);
+	const startingSessionRoots = React.useRef(new Set<string>());
+
+	const rememberReviewOrder = React.useCallback(
+		(delta: NativeProjectSessionDelta) => {
+			let order = reviewOrderByDelta.current.get(delta.id);
+
+			if (order === undefined) {
+				order = nextReviewOrder.current++;
+				reviewOrderByDelta.current.set(delta.id, order);
+			}
+			return order;
+		},
+		[]
+	);
+	const queueReview = React.useCallback(
+		(review: Omit<PendingProjectReview, 'order'>) => {
+			const order = rememberReviewOrder(review.delta);
+
+			setPendingReviews(current => {
+				if (current.some(item => item.delta.id === review.delta.id)) {
+					return current;
+				}
+				return [...current, {...review, order}].sort(
+					(left, right) => left.order - right.order
+				);
+			});
+		},
+		[rememberReviewOrder]
+	);
+	const beginReviewClassification = React.useCallback(
+		(delta: NativeProjectSessionDelta) => {
+			const order = rememberReviewOrder(delta);
+
+			setUnclassifiedReviewOrders(current =>
+				current.includes(order) ? current : [...current, order]
+			);
+		},
+		[rememberReviewOrder]
+	);
+	const completeReviewClassification = React.useCallback(
+		(delta: NativeProjectSessionDelta) => {
+			const order = reviewOrderByDelta.current.get(delta.id);
+
+			if (order !== undefined) {
+				setUnclassifiedReviewOrders(current =>
+					current.filter(candidate => candidate !== order)
+				);
+			}
+		},
+		[]
+	);
 
 	React.useEffect(() => {
 		rootStoriesRef.current = roots;
@@ -150,7 +217,8 @@ export const ProjectSessionSync: React.FC = () => {
 	);
 
 	const processDelta = React.useCallback(
-		async (delta: NativeProjectSessionDelta) => {
+		async (delta: NativeProjectSessionDelta, signal: AbortSignal) => {
+			beginReviewClassification(delta);
 			recordPerformanceHarnessEvent('watcher-ingest-start', {
 				changedPaths: delta.changedPaths.length,
 				deltaId: delta.id,
@@ -162,23 +230,35 @@ export const ProjectSessionSync: React.FC = () => {
 			const targetStoryId = current[0]?.id;
 
 			if (!targetStoryId) {
+				completeReviewClassification(delta);
 				throw new Error(
 					`No active project session exists for "${delta.rootPath}".`
 				);
 			}
 			if (delta.recovery) {
+				if (signal.aborted) {
+					completeReviewClassification(delta);
+					return 'continue' as const;
+				}
 				recordPerformanceHarnessEvent('watcher-review-required', {
 					deltaId: delta.id,
 					recovery: true
 				});
-				setPendingReview({conflicts: [], delta, rootPath: delta.rootPath});
+				queueReview({conflicts: [], delta, rootPath: delta.rootPath});
+				completeReviewClassification(delta);
 				return 'pause' as const;
 			}
 
-			const result = await coreProjectHost.ingestExternalDelta(
-				targetStoryId,
-				delta.delta
-			);
+			const result = await coreProjectHost
+				.ingestExternalDelta(targetStoryId, delta.delta)
+				.catch(error => {
+					completeReviewClassification(delta);
+					throw error;
+				});
+			if (signal.aborted) {
+				completeReviewClassification(delta);
+				return 'continue' as const;
+			}
 
 			if (result.outcome === 'conflict') {
 				recordPerformanceHarnessEvent('watcher-review-required', {
@@ -186,26 +266,35 @@ export const ProjectSessionSync: React.FC = () => {
 					deltaId: delta.id,
 					recovery: false
 				});
-				setPendingReview({
+				queueReview({
 					conflicts: result.conflicts,
 					delta,
 					rootPath: delta.rootPath
 				});
+				completeReviewClassification(delta);
 				return 'pause' as const;
 			}
 
+			completeReviewClassification(delta);
 			await acknowledgeDelta(delta);
 			recordPerformanceHarnessEvent('watcher-ingest-applied', {
 				deltaId: delta.id,
 				outcome: result.outcome
 			});
 			dismissedDeltas.current.delete(delta.id);
-			setPendingReview(currentReview =>
-				currentReview?.rootPath === delta.rootPath ? undefined : currentReview
+			reviewOrderByDelta.current.delete(delta.id);
+			setPendingReviews(currentReviews =>
+				currentReviews.filter(review => review.delta.id !== delta.id)
 			);
 			return 'continue' as const;
 		},
-		[acknowledgeDelta, coreProjectHost]
+		[
+			acknowledgeDelta,
+			beginReviewClassification,
+			completeReviewClassification,
+			coreProjectHost,
+			queueReview
+		]
 	);
 
 	const processDeltaRef = React.useRef(processDelta);
@@ -213,11 +302,12 @@ export const ProjectSessionSync: React.FC = () => {
 		React.useRef<NativeProjectDeltaQueue<NativeProjectSessionDelta> | null>(
 			null
 		);
+	const sessionCleanupRef = React.useRef(new Map<string, Promise<void>>());
 
 	processDeltaRef.current = processDelta;
 	if (!deltaQueueRef.current) {
 		deltaQueueRef.current = new NativeProjectDeltaQueue(
-			delta => processDeltaRef.current(delta),
+			(delta, signal) => processDeltaRef.current(delta, signal),
 			changeError => setError(changeError.message)
 		);
 	}
@@ -240,16 +330,33 @@ export const ProjectSessionSync: React.FC = () => {
 		}
 
 		return twineElectron.onProjectSessionChanged(delta => {
-			if (!dismissedDeltas.current.has(delta.id)) {
-				recordPerformanceHarnessEvent('watcher-delta-observed', {
-					changedPaths: delta.changedPaths.length,
-					deltaId: delta.id,
-					entityChanges: delta.delta.changes.length,
-					nativeTrace: delta.performanceTrace,
-					recovery: !!delta.recovery
-				});
-				deltaQueueRef.current?.enqueue(delta);
+			if (dismissedDeltas.current.has(delta.id)) {
+				return;
 			}
+
+			const activeInstance = activeSessionInstances.current.get(delta.rootPath);
+
+			if (!activeInstance) {
+				if (startingSessionRoots.current.has(delta.rootPath)) {
+					bufferedSessionDeltas.current.set(delta.rootPath, [
+						...(bufferedSessionDeltas.current.get(delta.rootPath) ?? []),
+						delta
+					]);
+				}
+				return;
+			}
+			if (activeInstance !== delta.sessionInstanceId) {
+				return;
+			}
+
+			recordPerformanceHarnessEvent('watcher-delta-observed', {
+				changedPaths: delta.changedPaths.length,
+				deltaId: delta.id,
+				entityChanges: delta.delta.changes.length,
+				nativeTrace: delta.performanceTrace,
+				recovery: !!delta.recovery
+			});
+			deltaQueueRef.current?.enqueue(delta);
 		});
 	}, [twineElectron]);
 
@@ -260,37 +367,75 @@ export const ProjectSessionSync: React.FC = () => {
 
 		let canceled = false;
 		for (const rootPath of rootPaths) {
-			void twineElectron
-				.startProjectSession(rootPath, rootStoryIds.current.get(rootPath) ?? [])
-				.then(async start => {
-					if (canceled) {
-						return;
-					}
+			const previousCleanup = sessionCleanupRef.current.get(rootPath);
+			startingSessionRoots.current.add(rootPath);
 
-					recordPerformanceHarnessEvent('native-session-baseline-ready', {
-						...start.performanceTimings,
-						rootPath: start.rootPath
-					});
-					await synchronizeStartAssets(start);
-					// The native baseline is ready before the initial asset inventory has
-					// necessarily crossed the serialized core-session queue. Keep a
-					// separate readiness mark so performance scenarios do not inject an
-					// external edit into that initialization work.
-					markPerformance('session-initialization-complete');
-				})
-				.catch((startError: Error) => {
-					if (!canceled) {
-						setError(startError.message);
+			void (async () => {
+				if (previousCleanup) {
+					await previousCleanup;
+				}
+				if (canceled) {
+					return;
+				}
+				const start = await twineElectron.startProjectSession(
+					rootPath,
+					rootStoryIds.current.get(rootPath) ?? []
+				);
+				if (canceled) {
+					return;
+				}
+				activeSessionInstances.current.set(rootPath, start.sessionInstanceId);
+				startingSessionRoots.current.delete(rootPath);
+				const buffered = bufferedSessionDeltas.current.get(rootPath) ?? [];
+
+				bufferedSessionDeltas.current.delete(rootPath);
+				for (const delta of buffered) {
+					if (delta.sessionInstanceId === start.sessionInstanceId) {
+						deltaQueueRef.current?.enqueue(delta);
 					}
+				}
+
+				recordPerformanceHarnessEvent('native-session-baseline-ready', {
+					...start.performanceTimings,
+					rootPath: start.rootPath
 				});
+				await synchronizeStartAssets(start);
+				// The native baseline is ready before the initial asset inventory has
+				// necessarily crossed the serialized core-session queue. Keep a
+				// separate readiness mark so performance scenarios do not inject an
+				// external edit into that initialization work.
+				markPerformance('session-initialization-complete');
+			})().catch((startError: Error) => {
+				if (!canceled) {
+					startingSessionRoots.current.delete(rootPath);
+					bufferedSessionDeltas.current.delete(rootPath);
+					setError(startError.message);
+				}
+			});
 		}
 
 		return () => {
 			canceled = true;
+			setPendingReviews(current =>
+				current.filter(review => !rootPaths.includes(review.rootPath))
+			);
 
 			for (const rootPath of rootPaths) {
-				deltaQueueRef.current?.clearRoot(rootPath);
-				void twineElectron.stopProjectSession?.(rootPath);
+				activeSessionInstances.current.delete(rootPath);
+				startingSessionRoots.current.delete(rootPath);
+				bufferedSessionDeltas.current.delete(rootPath);
+				const drain = deltaQueueRef.current?.clearRoot(rootPath);
+				const stopResult = drain
+					? drain.then(() => twineElectron.stopProjectSession?.(rootPath))
+					: twineElectron.stopProjectSession?.(rootPath);
+				const cleanup = Promise.resolve(stopResult).then(() => undefined);
+
+				sessionCleanupRef.current.set(rootPath, cleanup);
+				void cleanup.finally(() => {
+					if (sessionCleanupRef.current.get(rootPath) === cleanup) {
+						sessionCleanupRef.current.delete(rootPath);
+					}
+				});
 			}
 		};
 	}, [rootPaths, synchronizeStartAssets, twineElectron]);
@@ -355,8 +500,11 @@ export const ProjectSessionSync: React.FC = () => {
 
 			await acknowledgeDelta(pendingReview.delta);
 			dismissedDeltas.current.delete(pendingReview.delta.id);
+			reviewOrderByDelta.current.delete(pendingReview.delta.id);
 			deltaQueueRef.current?.resume(pendingReview.rootPath);
-			setPendingReview(undefined);
+			setPendingReviews(current =>
+				current.filter(review => review.delta.id !== pendingReview.delta.id)
+			);
 		} catch (acceptError) {
 			setError((acceptError as Error).message);
 		} finally {
@@ -392,8 +540,11 @@ export const ProjectSessionSync: React.FC = () => {
 				);
 			}
 			dismissedDeltas.current.delete(pendingReview.delta.id);
+			reviewOrderByDelta.current.delete(pendingReview.delta.id);
 			deltaQueueRef.current?.resume(pendingReview.rootPath);
-			setPendingReview(undefined);
+			setPendingReviews(current =>
+				current.filter(review => review.delta.id !== pendingReview.delta.id)
+			);
 		} catch (keepError) {
 			setError((keepError as Error).message);
 		} finally {
@@ -416,8 +567,11 @@ export const ProjectSessionSync: React.FC = () => {
 				pendingReview.delta.id
 			);
 			dismissedDeltas.current.add(pendingReview.delta.id);
+			reviewOrderByDelta.current.delete(pendingReview.delta.id);
 			deltaQueueRef.current?.resume(pendingReview.rootPath);
-			setPendingReview(undefined);
+			setPendingReviews(current =>
+				current.filter(review => review.delta.id !== pendingReview.delta.id)
+			);
 		} catch (dismissError) {
 			setError((dismissError as Error).message);
 		} finally {
@@ -449,6 +603,9 @@ export const ProjectSessionSync: React.FC = () => {
 						: (pendingReview.delta.recovery?.message ??
 							'The disk copy differs from the app copy.')}
 				</p>
+			) : null}
+			{pendingReviews.length > 1 ? (
+				<p>{pendingReviews.length - 1} more project change queued.</p>
 			) : null}
 			{error ? <p className="project-session-sync__error">{error}</p> : null}
 			{pendingReview ? (
