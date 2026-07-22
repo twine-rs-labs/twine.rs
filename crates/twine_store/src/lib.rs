@@ -75,6 +75,22 @@ pub enum StoreError {
     #[error("project-relative path is unsafe: {0}")]
     UnsafeProjectPath(PathBuf),
 
+    #[error("unmanaged project file conflicts with an app-owned path: {0}")]
+    UnmanagedFileConflict(PathBuf),
+
+    #[error("unsupported unmanaged project entry: {0}")]
+    UnsupportedUnmanagedProjectEntry(PathBuf),
+
+    #[error(
+        "failed to install the prepared project at {root}: {install_error}; failed to restore the original project from {recovery_path}: {rollback_error}"
+    )]
+    ProjectInstallRollback {
+        root: PathBuf,
+        recovery_path: PathBuf,
+        install_error: std::io::Error,
+        rollback_error: std::io::Error,
+    },
+
     #[error("story not found: {0}")]
     StoryNotFound(StoryId),
 
@@ -444,7 +460,10 @@ pub fn save_project_path_with_prepared_sidecar(
     }
     timings.write_temp_project_us = elapsed_us(started);
     let started = Instant::now();
-    copy_existing_assets(root, &temp_root)?;
+    if let Err(error) = copy_unmanaged_project_files(root, &temp_root, prepared_sidecar.is_some()) {
+        let _ = fs::remove_dir_all(&temp_root);
+        return Err(error);
+    }
     timings.copy_assets_us = elapsed_us(started);
 
     let started = Instant::now();
@@ -470,26 +489,31 @@ pub fn save_project_path_with_prepared_sidecar(
         });
     }
 
-    let mut backup_path = None;
-    let retired_path = root.with_extension(format!("retired-{}", timestamp()));
+    let root_existed = root.exists();
+    let (displaced_path, keep_displaced) = if root_existed && options.create_backup {
+        let backup = backup_dir(root).join(timestamp());
+
+        fs::create_dir_all(backup.parent().expect("backup path should have parent"))?;
+        (backup, true)
+    } else {
+        (
+            root.with_extension(format!("retired-{}", timestamp())),
+            false,
+        )
+    };
     let started = Instant::now();
 
-    if root.exists() {
-        if options.create_backup {
-            let backup = backup_project(root)?;
-            backup_path = Some(backup);
-            prune_backups(root, options.max_backups)?;
-        } else {
-            fs::rename(root, &retired_path)?;
-        }
-    } else if let Some(parent) = root.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    install_prepared_project_root(
+        root,
+        &temp_root,
+        &displaced_path,
+        keep_displaced,
+        |source, target| fs::rename(source, target),
+    )?;
+    let backup_path = (root_existed && keep_displaced).then_some(displaced_path);
 
-    fs::rename(&temp_root, root)?;
-
-    if retired_path.exists() {
-        fs::remove_dir_all(retired_path)?;
+    if backup_path.is_some() {
+        prune_backups(root, options.max_backups)?;
     }
     timings.root_swap_us = elapsed_us(started);
     timings.total_us = elapsed_us(total_started);
@@ -708,36 +732,335 @@ fn unique_source_path(
     }
 }
 
-fn copy_existing_assets(source_root: &Path, target_root: &Path) -> Result<(), StoreError> {
-    let source_assets = source_root.join("assets");
-
-    if !source_assets.exists() {
+fn copy_unmanaged_project_files(
+    source_root: &Path,
+    target_root: &Path,
+    replaces_prepared_sidecar: bool,
+) -> Result<(), StoreError> {
+    if !source_root.exists() {
         return Ok(());
     }
 
-    copy_dir_contents(&source_assets, &target_root.join("assets"))
+    let existing_files = collect_files(source_root)?;
+    let existing_directories = collect_directories(source_root)?;
+    let ownership = existing_project_ownership(source_root, replaces_prepared_sidecar);
+
+    copy_unmanaged_directory_contents(
+        source_root,
+        source_root,
+        target_root,
+        &ownership,
+        &existing_files,
+        &existing_directories,
+    )
 }
 
-fn copy_dir_contents(source: &Path, target: &Path) -> Result<(), StoreError> {
-    fs::create_dir_all(target)?;
-
-    for entry in fs::read_dir(source)? {
+fn copy_unmanaged_directory_contents(
+    source_root: &Path,
+    source_directory: &Path,
+    target_root: &Path,
+    ownership: &ProjectOwnership,
+    existing_files: &BTreeSet<PathBuf>,
+    existing_directories: &BTreeSet<PathBuf>,
+) -> Result<(), StoreError> {
+    for entry in fs::read_dir(source_directory)? {
         let entry = entry?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
+        let source = entry.path();
+        let relative = source
+            .strip_prefix(source_root)
+            .expect("project entry should be under its root");
+        let target = target_root.join(relative);
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            copy_dir_contents(&source_path, &target_path)?;
-        } else if file_type.is_file() {
-            if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
+            let owned = project_directory_is_owned(relative, ownership, existing_directories);
+            let target_existed = match fs::symlink_metadata(&target) {
+                Ok(metadata) if metadata.file_type().is_dir() => true,
+                Ok(_)
+                    if owned
+                        && !directory_contains_unmanaged_entries(
+                            source_root,
+                            &source,
+                            ownership,
+                            existing_files,
+                            existing_directories,
+                        )? =>
+                {
+                    continue;
+                }
+                Ok(_) => return Err(StoreError::UnmanagedFileConflict(relative.to_path_buf())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+            };
 
-            fs::copy(&source_path, &target_path)?;
+            if !target_existed {
+                fs::create_dir_all(&target)?;
+            }
+            copy_unmanaged_directory_contents(
+                source_root,
+                &source,
+                target_root,
+                ownership,
+                existing_files,
+                existing_directories,
+            )?;
+
+            if owned && !target_existed && fs::read_dir(&target)?.next().transpose()?.is_none() {
+                fs::remove_dir(&target)?;
+            }
+            continue;
+        }
+
+        if project_file_is_owned(relative, ownership, existing_files, existing_directories) {
+            continue;
+        }
+        if !file_type.is_file() && !file_type.is_symlink() {
+            return Err(StoreError::UnsupportedUnmanagedProjectEntry(
+                relative.to_path_buf(),
+            ));
+        }
+
+        if fs::symlink_metadata(&target).is_ok() {
+            return Err(StoreError::UnmanagedFileConflict(relative.to_path_buf()));
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        copy_file_or_symlink(&source, &target)?;
+    }
+
+    Ok(())
+}
+
+fn directory_contains_unmanaged_entries(
+    source_root: &Path,
+    source_directory: &Path,
+    ownership: &ProjectOwnership,
+    existing_files: &BTreeSet<PathBuf>,
+    existing_directories: &BTreeSet<PathBuf>,
+) -> Result<bool, StoreError> {
+    for entry in fs::read_dir(source_directory)? {
+        let entry = entry?;
+        let source = entry.path();
+        let relative = source
+            .strip_prefix(source_root)
+            .expect("project entry should be under its root");
+        let file_type = entry.file_type()?;
+
+        if file_type.is_dir() {
+            if !project_directory_is_owned(relative, ownership, existing_directories)
+                || directory_contains_unmanaged_entries(
+                    source_root,
+                    &source,
+                    ownership,
+                    existing_files,
+                    existing_directories,
+                )?
+            {
+                return Ok(true);
+            }
+        } else if !project_file_is_owned(relative, ownership, existing_files, existing_directories)
+        {
+            return Ok(true);
         }
     }
 
+    Ok(false)
+}
+
+#[derive(Default)]
+struct ProjectOwnership {
+    directories: BTreeMap<String, Vec<PathBuf>>,
+    directory_paths: BTreeSet<PathBuf>,
+    files: BTreeMap<String, Vec<PathBuf>>,
+    file_paths: BTreeSet<PathBuf>,
+}
+
+impl ProjectOwnership {
+    fn add_directory(&mut self, path: PathBuf) {
+        if self.directory_paths.insert(path.clone()) {
+            self.directories
+                .entry(project_path_collision_key(&path))
+                .or_default()
+                .push(path);
+        }
+    }
+
+    fn add_file(&mut self, path: PathBuf) {
+        if self.file_paths.insert(path.clone()) {
+            self.files
+                .entry(project_path_collision_key(&path))
+                .or_default()
+                .push(path.clone());
+        }
+
+        let mut parent = path.parent();
+        while let Some(path) = parent.filter(|path| !path.as_os_str().is_empty()) {
+            self.add_directory(path.to_path_buf());
+            parent = path.parent();
+        }
+    }
+}
+
+fn existing_project_ownership(root: &Path, replaces_prepared_sidecar: bool) -> ProjectOwnership {
+    let mut ownership = ProjectOwnership::default();
+
+    for directory in ["passages", "scripts", "styles", "assets", ".twine"] {
+        ownership.add_directory(PathBuf::from(directory));
+    }
+    for file in [MANIFEST_FILE, GRAPH_LAYOUT_FILE, MANIFEST_CACHE_FILE] {
+        ownership.add_file(PathBuf::from(file));
+    }
+
+    if replaces_prepared_sidecar {
+        ownership.add_file(PathBuf::from(".twine/project.json"));
+    }
+
+    if let Some(project) = read_existing_project_file(root) {
+        for story in project.stories {
+            for relative in std::iter::once(story.script)
+                .chain(std::iter::once(story.stylesheet))
+                .chain(std::iter::once(story.source))
+                .chain(story.passages.into_iter().map(|passage| passage.file))
+                .filter(|relative| !relative.is_empty())
+            {
+                let relative = PathBuf::from(relative);
+
+                if safe_project_relative_path(&path_string(&relative)).is_ok() {
+                    ownership.add_file(relative);
+                }
+            }
+        }
+    }
+
+    ownership
+}
+
+fn project_file_is_owned(
+    relative: &Path,
+    ownership: &ProjectOwnership,
+    existing_files: &BTreeSet<PathBuf>,
+    existing_directories: &BTreeSet<PathBuf>,
+) -> bool {
+    if path_matches_owned_entry(
+        relative,
+        &ownership.file_paths,
+        &ownership.files,
+        existing_files,
+    ) {
+        return true;
+    }
+
+    path_matches_owned_prefix(
+        relative,
+        Path::new(GRAPH_CACHE_DIR),
+        existing_files
+            .iter()
+            .any(|existing| existing.starts_with(GRAPH_CACHE_DIR))
+            || existing_directories
+                .iter()
+                .any(|existing| existing.starts_with(GRAPH_CACHE_DIR)),
+    )
+}
+
+fn project_directory_is_owned(
+    relative: &Path,
+    ownership: &ProjectOwnership,
+    existing_directories: &BTreeSet<PathBuf>,
+) -> bool {
+    if path_matches_owned_entry(
+        relative,
+        &ownership.directory_paths,
+        &ownership.directories,
+        existing_directories,
+    ) {
+        return true;
+    }
+
+    path_matches_owned_prefix(
+        relative,
+        Path::new(GRAPH_CACHE_DIR),
+        existing_directories
+            .iter()
+            .any(|existing| existing.starts_with(GRAPH_CACHE_DIR)),
+    )
+}
+
+fn path_matches_owned_entry(
+    relative: &Path,
+    owned_paths: &BTreeSet<PathBuf>,
+    owned_by_key: &BTreeMap<String, Vec<PathBuf>>,
+    existing_paths: &BTreeSet<PathBuf>,
+) -> bool {
+    if owned_paths.contains(relative) {
+        return true;
+    }
+
+    owned_by_key
+        .get(&project_path_collision_key(relative))
+        .is_some_and(|candidates| {
+            !candidates
+                .iter()
+                .any(|candidate| existing_paths.contains(candidate))
+        })
+}
+
+fn path_matches_owned_prefix(
+    relative: &Path,
+    owned_prefix: &Path,
+    exact_prefix_exists: bool,
+) -> bool {
+    if relative.starts_with(owned_prefix) {
+        return true;
+    }
+
+    let relative_key = project_path_collision_key(relative);
+    let prefix_key = project_path_collision_key(owned_prefix);
+    let has_normalized_prefix = relative_key == prefix_key
+        || relative_key
+            .strip_prefix(&prefix_key)
+            .is_some_and(|suffix| suffix.starts_with('/'));
+
+    has_normalized_prefix && !exact_prefix_exists
+}
+
+#[cfg(unix)]
+fn copy_file_or_symlink(source: &Path, target: &Path) -> Result<(), StoreError> {
+    let file_type = fs::symlink_metadata(source)?.file_type();
+
+    if file_type.is_symlink() {
+        std::os::unix::fs::symlink(fs::read_link(source)?, target)?;
+    } else {
+        fs::copy(source, target)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn copy_file_or_symlink(source: &Path, target: &Path) -> Result<(), StoreError> {
+    let file_type = fs::symlink_metadata(source)?.file_type();
+
+    if file_type.is_symlink() {
+        let link_target = fs::read_link(source)?;
+        use std::os::windows::fs::FileTypeExt;
+
+        if file_type.is_symlink_dir() {
+            std::os::windows::fs::symlink_dir(link_target, target)?;
+        } else {
+            std::os::windows::fs::symlink_file(link_target, target)?;
+        }
+    } else {
+        fs::copy(source, target)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn copy_file_or_symlink(source: &Path, target: &Path) -> Result<(), StoreError> {
+    fs::copy(source, target)?;
     Ok(())
 }
 
@@ -1587,14 +1910,6 @@ fn temp_project_path(root: &Path) -> PathBuf {
     parent.join(format!(".{name}.save-{}", timestamp()))
 }
 
-fn backup_project(root: &Path) -> Result<PathBuf, StoreError> {
-    let backup = backup_dir(root).join(timestamp());
-
-    fs::create_dir_all(backup.parent().expect("backup path should have parent"))?;
-    fs::rename(root, &backup)?;
-    Ok(backup)
-}
-
 fn backup_dir(root: &Path) -> PathBuf {
     let parent = root.parent().unwrap_or_else(|| Path::new("."));
     let name = root
@@ -1603,6 +1918,47 @@ fn backup_dir(root: &Path) -> PathBuf {
         .unwrap_or_else(|| "twine-project".into());
 
     parent.join(format!(".{name}.backups"))
+}
+
+fn install_prepared_project_root<F>(
+    root: &Path,
+    prepared_root: &Path,
+    displaced_root: &Path,
+    keep_displaced: bool,
+    mut rename: F,
+) -> Result<(), StoreError>
+where
+    F: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    let root_existed = root.exists();
+
+    if root_existed {
+        rename(root, displaced_root)?;
+    } else if let Some(parent) = root.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    if let Err(install_error) = rename(prepared_root, root) {
+        if root_existed && let Err(rollback_error) = rename(displaced_root, root) {
+            return Err(StoreError::ProjectInstallRollback {
+                root: root.to_path_buf(),
+                recovery_path: displaced_root.to_path_buf(),
+                install_error,
+                rollback_error,
+            });
+        }
+
+        if prepared_root.exists() {
+            let _ = fs::remove_dir_all(prepared_root);
+        }
+        return Err(StoreError::Io(install_error));
+    }
+
+    if root_existed && !keep_displaced && displaced_root.exists() {
+        fs::remove_dir_all(displaced_root)?;
+    }
+
+    Ok(())
 }
 
 fn prune_backups(root: &Path, max_backups: usize) -> Result<(), StoreError> {
@@ -1647,6 +2003,39 @@ fn collect_files(root: &Path) -> Result<BTreeSet<PathBuf>, StoreError> {
     Ok(files)
 }
 
+fn collect_directories(root: &Path) -> Result<BTreeSet<PathBuf>, StoreError> {
+    let mut directories = BTreeSet::new();
+
+    if root.exists() {
+        collect_directories_inner(root, root, &mut directories)?;
+    }
+
+    Ok(directories)
+}
+
+fn collect_directories_inner(
+    root: &Path,
+    current: &Path,
+    directories: &mut BTreeSet<PathBuf>,
+) -> Result<(), StoreError> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+
+        if entry.file_type()?.is_dir() {
+            let path = entry.path();
+
+            directories.insert(
+                path.strip_prefix(root)
+                    .expect("collected directory should be under root")
+                    .to_path_buf(),
+            );
+            collect_directories_inner(root, &path, directories)?;
+        }
+    }
+
+    Ok(())
+}
+
 fn collect_files_inner(
     root: &Path,
     current: &Path,
@@ -1655,10 +2044,11 @@ fn collect_files_inner(
     for entry in fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
+        let file_type = entry.file_type()?;
 
-        if path.is_dir() {
+        if file_type.is_dir() {
             collect_files_inner(root, &path, files)?;
-        } else if path.is_file() {
+        } else if file_type.is_file() || file_type.is_symlink() {
             files.insert(
                 path.strip_prefix(root)
                     .expect("collected file should be under root")
@@ -1681,7 +2071,7 @@ fn file_sets_equal(
     }
 
     for file in left_files {
-        if fs::read(left_root.join(file))? != fs::read(right_root.join(file))? {
+        if !project_entries_equal(&left_root.join(file), &right_root.join(file))? {
             return Ok(false);
         }
     }
@@ -1700,8 +2090,10 @@ fn changed_files(
     for file in left_files.union(right_files) {
         let left = left_root.join(file);
         let right = right_root.join(file);
-        let is_changed = match (left.exists(), right.exists()) {
-            (true, true) => fs::read(&left)? != fs::read(&right)?,
+        let left_exists = fs::symlink_metadata(&left).is_ok();
+        let right_exists = fs::symlink_metadata(&right).is_ok();
+        let is_changed = match (left_exists, right_exists) {
+            (true, true) => !project_entries_equal(&left, &right)?,
             (false, false) => false,
             _ => true,
         };
@@ -1712,6 +2104,39 @@ fn changed_files(
     }
 
     Ok(changed.into_iter().collect())
+}
+
+fn project_entries_equal(left: &Path, right: &Path) -> Result<bool, StoreError> {
+    let left_type = fs::symlink_metadata(left)?.file_type();
+    let right_type = fs::symlink_metadata(right)?.file_type();
+
+    if left_type.is_dir() || right_type.is_dir() {
+        return Ok(left_type.is_dir() && right_type.is_dir());
+    }
+    if left_type.is_symlink() || right_type.is_symlink() {
+        return Ok(left_type.is_symlink()
+            && right_type.is_symlink()
+            && project_symlink_kinds_equal(&left_type, &right_type)
+            && fs::read_link(left)? == fs::read_link(right)?);
+    }
+    if !left_type.is_file() || !right_type.is_file() {
+        return Ok(false);
+    }
+
+    Ok(fs::read(left)? == fs::read(right)?)
+}
+
+#[cfg(windows)]
+fn project_symlink_kinds_equal(left: &fs::FileType, right: &fs::FileType) -> bool {
+    use std::os::windows::fs::FileTypeExt;
+
+    left.is_symlink_dir() == right.is_symlink_dir()
+        && left.is_symlink_file() == right.is_symlink_file()
+}
+
+#[cfg(not(windows))]
+fn project_symlink_kinds_equal(_left: &fs::FileType, _right: &fs::FileType) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -2291,6 +2716,374 @@ file = "passages/example/start.twee"
     }
 
     #[test]
+    fn project_save_preserves_unmanaged_root_and_nested_files() {
+        let root = temp_path("project-unmanaged-files");
+        let mut project = Project::from_story(story());
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        fs::create_dir_all(root.join(".git/hooks")).expect("nested metadata directory");
+        fs::write(root.join("README.md"), b"Project notes\n").expect("readme should write");
+        fs::write(root.join(".gitignore"), b"dist/\n").expect("gitignore should write");
+        fs::write(root.join("build.toml"), b"target = 'web'\n").expect("config should write");
+        fs::write(root.join(".git/config"), b"[core]\n\tbare = false\n")
+            .expect("nested metadata should write");
+        fs::write(root.join(".git/hooks/pre-commit"), b"#!/bin/sh\n").expect("hook should write");
+
+        project.stories[0].name = "Changed".into();
+        let report = save_project_path(
+            &root,
+            &project,
+            &SaveOptions {
+                create_backup: false,
+                max_backups: 0,
+                write_generated_indexes: true,
+            },
+        )
+        .expect("project should resave");
+
+        assert_eq!(
+            fs::read(root.join("README.md")).unwrap(),
+            b"Project notes\n"
+        );
+        assert_eq!(fs::read(root.join(".gitignore")).unwrap(), b"dist/\n");
+        assert_eq!(
+            fs::read(root.join("build.toml")).unwrap(),
+            b"target = 'web'\n"
+        );
+        assert_eq!(
+            fs::read(root.join(".git/config")).unwrap(),
+            b"[core]\n\tbare = false\n"
+        );
+        assert_eq!(
+            fs::read(root.join(".git/hooks/pre-commit")).unwrap(),
+            b"#!/bin/sh\n"
+        );
+        assert!(!report.changed_files.contains(&PathBuf::from("README.md")));
+        assert!(!report.changed_files.contains(&PathBuf::from(".gitignore")));
+        assert!(!report.changed_files.contains(&PathBuf::from("build.toml")));
+        assert!(!report.changed_files.contains(&PathBuf::from(".git/config")));
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn project_save_preserves_unmanaged_empty_directories() {
+        let root = temp_path("project-unmanaged-empty-directory");
+        let mut project = Project::from_story(story());
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        fs::create_dir_all(root.join("notes/drafts")).expect("empty directory should be created");
+
+        project.stories[0].script = "changed".into();
+        save_project_path(
+            &root,
+            &project,
+            &SaveOptions {
+                create_backup: false,
+                max_backups: 0,
+                write_generated_indexes: true,
+            },
+        )
+        .expect("project should resave");
+
+        assert!(root.join("notes/drafts").is_dir());
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_save_rejects_unmanaged_special_files_without_opening_them() {
+        use std::process::Command;
+
+        let root = temp_path("project-unmanaged-fifo");
+        let mut project = Project::from_story(story());
+        let fifo = root.join("external-events");
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        project.stories[0].script = "changed".into();
+        let result = save_project_path(&root, &project, &SaveOptions::default());
+
+        assert!(matches!(
+            result,
+            Err(StoreError::UnsupportedUnmanagedProjectEntry(path))
+                if path == PathBuf::from("external-events")
+        ));
+        assert!(fs::symlink_metadata(&fifo).is_ok());
+
+        fs::remove_file(fifo).expect("fifo should be removed");
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_save_replaces_an_owned_fifo_without_opening_it() {
+        use std::process::Command;
+
+        let root = temp_path("project-owned-fifo");
+        let mut project = Project::from_story(story());
+        let script = root.join("scripts/example.js");
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        fs::remove_file(&script).expect("owned script should be removed");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&script)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        project.stories[0].script = "changed".into();
+        save_project_path(
+            &root,
+            &project,
+            &SaveOptions {
+                create_backup: false,
+                max_backups: 0,
+                write_generated_indexes: true,
+            },
+        )
+        .expect("owned fifo should be replaced without opening it");
+
+        assert_eq!(fs::read_to_string(&script).unwrap(), "changed");
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn project_save_recognizes_case_only_changes_to_owned_paths() {
+        let root = temp_path("project-owned-path-case-change");
+        let mut project = Project::from_story(story());
+        let canonical = PathBuf::from("scripts/example.js");
+        let case_changed = PathBuf::from("scripts/EXAMPLE.js");
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        fs::rename(root.join(&canonical), root.join(&case_changed))
+            .expect("owned script should accept a case-only rename");
+
+        project.stories[0].script = "changed".into();
+        save_project_path(
+            &root,
+            &project,
+            &SaveOptions {
+                create_backup: false,
+                max_backups: 0,
+                write_generated_indexes: true,
+            },
+        )
+        .expect("case-only owned path change should not conflict");
+
+        let matching_scripts = collect_files(&root)
+            .expect("project files should collect")
+            .into_iter()
+            .filter(|path| {
+                project_path_collision_key(path) == project_path_collision_key(&canonical)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(matching_scripts.len(), 1);
+        assert_eq!(
+            fs::read_to_string(root.join(&canonical)).unwrap(),
+            "changed"
+        );
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn project_save_preserves_case_distinct_files_beside_an_empty_owned_cache() {
+        let root = temp_path("project-case-distinct-cache");
+        let mut project = Project::from_story(story());
+        let options = SaveOptions {
+            create_backup: false,
+            max_backups: 0,
+            write_generated_indexes: false,
+        };
+
+        save_project_path(&root, &project, &options).expect("project should save");
+        fs::create_dir_all(root.join(GRAPH_CACHE_DIR)).expect("owned cache should be created");
+        fs::create_dir_all(root.join(".TWINE/cache/graph"))
+            .expect("case-distinct directory should be created");
+        fs::write(root.join(".TWINE/cache/graph/notes"), b"unmanaged")
+            .expect("case-distinct file should write");
+
+        project.stories[0].script = "changed".into();
+        save_project_path(&root, &project, &options).expect("project should resave");
+
+        assert_eq!(
+            fs::read(root.join(".TWINE/cache/graph/notes")).unwrap(),
+            b"unmanaged"
+        );
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn project_save_removes_stale_app_owned_files() {
+        let root = temp_path("project-stale-owned-files");
+        let project = Project::from_story(story());
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        let source_path = PathBuf::from("passages/example/0001-start.twee");
+
+        assert!(root.join(&source_path).exists());
+
+        let empty_project = Project::default();
+        let report = save_project_path(
+            &root,
+            &empty_project,
+            &SaveOptions {
+                create_backup: false,
+                max_backups: 0,
+                write_generated_indexes: true,
+            },
+        )
+        .expect("empty project should replace the prior project");
+
+        assert!(!root.join(&source_path).exists());
+        assert!(report.changed_files.contains(&source_path));
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn project_save_allows_an_owned_directory_to_become_an_owned_file() {
+        let root = temp_path("project-owned-directory-transition");
+        let mut original_project = Project::from_story(story());
+
+        original_project
+            .manifest
+            .set_source_layout(StoryId::new("story-1"), ProjectSourceLayout::SingleTwee);
+        save_project_path(&root, &original_project, &SaveOptions::default())
+            .expect("single-source project should save");
+
+        let source = fs::read_to_string(root.join("story.twee")).expect("story source should read");
+        fs::remove_file(root.join("story.twee")).expect("flat source should be removed");
+        fs::create_dir(root.join("story.twee")).expect("owned source directory should be created");
+        fs::write(root.join("story.twee/old.twee"), source)
+            .expect("nested owned source should write");
+        let mut project_file = read_existing_project_file(&root).expect("manifest should parse");
+
+        project_file.stories[0].source = "story.twee/old.twee".into();
+        fs::write(
+            root.join(MANIFEST_FILE),
+            toml::to_string_pretty(&project_file).expect("manifest should encode"),
+        )
+        .expect("manifest should update");
+
+        let mut replacement_story = story();
+        replacement_story.id = StoryId::new("story-2");
+        replacement_story.ifid = "IFID-2".into();
+        replacement_story.name = "Replacement".into();
+        let mut replacement_project = Project::from_story(replacement_story);
+
+        replacement_project
+            .manifest
+            .set_source_layout(StoryId::new("story-2"), ProjectSourceLayout::SingleTwee);
+        save_project_path(
+            &root,
+            &replacement_project,
+            &SaveOptions {
+                create_backup: false,
+                max_backups: 0,
+                write_generated_indexes: true,
+            },
+        )
+        .expect("owned directory should transition to an owned file");
+
+        assert!(root.join("story.twee").is_file());
+        assert_eq!(
+            load_project_path(&root).unwrap().stories[0].id,
+            StoryId::new("story-2")
+        );
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn project_save_rejects_an_unmanaged_file_that_would_become_app_owned() {
+        let root = temp_path("project-unmanaged-conflict");
+        let mut project = Project::from_story(story());
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        fs::write(root.join("scripts/second.js"), b"externally managed")
+            .expect("unmanaged script should write");
+
+        let mut second_story = story();
+        second_story.id = StoryId::new("story-2");
+        second_story.ifid = "IFID-2".into();
+        second_story.name = "Second".into();
+        project.stories.push(second_story);
+        let result = save_project_path(&root, &project, &SaveOptions::default());
+
+        assert!(matches!(
+            result,
+            Err(StoreError::UnmanagedFileConflict(path))
+                if path == PathBuf::from("scripts/second.js")
+        ));
+        assert_eq!(
+            fs::read(root.join("scripts/second.js")).unwrap(),
+            b"externally managed"
+        );
+        assert_eq!(
+            load_project_path(&root)
+                .expect("original project should remain loadable")
+                .stories
+                .len(),
+            1
+        );
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+        let backups = backup_dir(&root);
+        if backups.exists() {
+            fs::remove_dir_all(backups).expect("backups should be removed");
+        }
+    }
+
+    #[test]
+    fn project_save_rejects_an_unmanaged_directory_that_would_become_a_file() {
+        let root = temp_path("project-unmanaged-directory-conflict");
+        let mut project = Project::from_story(story());
+
+        save_project_path(&root, &project, &SaveOptions::default()).expect("project should save");
+        fs::create_dir(root.join("scripts/second.js"))
+            .expect("unmanaged empty directory should be created");
+
+        let mut second_story = story();
+        second_story.id = StoryId::new("story-2");
+        second_story.ifid = "IFID-2".into();
+        second_story.name = "Second".into();
+        project.stories.push(second_story);
+        let result = save_project_path(&root, &project, &SaveOptions::default());
+
+        assert!(matches!(
+            result,
+            Err(StoreError::UnmanagedFileConflict(path))
+                if path == PathBuf::from("scripts/second.js")
+        ));
+        assert!(root.join("scripts/second.js").is_dir());
+        assert_eq!(
+            load_project_path(&root)
+                .expect("original project should remain loadable")
+                .stories
+                .len(),
+            1
+        );
+
+        fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
     fn story_owned_paths_separate_normalized_name_collisions_and_stay_stable() {
         let root = temp_path("story-path-collisions");
         let long_upper = format!("{}:One", "A".repeat(70));
@@ -2586,5 +3379,120 @@ file = "../outside.twee"
         if backups.exists() {
             fs::remove_dir_all(backups).expect("backups should be removed");
         }
+    }
+
+    #[test]
+    fn failed_prepared_root_install_restores_original_project() {
+        let root = temp_path("project-install-rollback");
+        let prepared_root = temp_path("project-install-rollback-prepared");
+        let retired_root = temp_path("project-install-rollback-retired");
+
+        fs::create_dir_all(&root).expect("original root should be created");
+        fs::write(root.join("marker"), b"original").expect("original marker should write");
+        fs::create_dir_all(&prepared_root).expect("prepared root should be created");
+        fs::write(prepared_root.join("marker"), b"prepared").expect("prepared marker should write");
+
+        let mut rename_count = 0;
+        let result = install_prepared_project_root(
+            &root,
+            &prepared_root,
+            &retired_root,
+            false,
+            |source, target| {
+                rename_count += 1;
+                if rename_count == 2 {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "injected prepared-root install failure",
+                    ))
+                } else {
+                    fs::rename(source, target)
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(StoreError::Io(_))));
+        assert_eq!(rename_count, 3);
+        assert_eq!(fs::read(root.join("marker")).unwrap(), b"original");
+        assert!(!prepared_root.exists());
+        assert!(!retired_root.exists());
+
+        fs::remove_dir_all(&root).expect("restored root should be removed");
+    }
+
+    #[test]
+    fn failed_install_and_rollback_retain_both_recovery_trees() {
+        let root = temp_path("project-double-failure");
+        let prepared_root = temp_path("project-double-failure-prepared");
+        let retired_root = temp_path("project-double-failure-retired");
+
+        fs::create_dir_all(&root).expect("original root should be created");
+        fs::write(root.join("marker"), b"original").expect("original marker should write");
+        fs::create_dir_all(&prepared_root).expect("prepared root should be created");
+        fs::write(prepared_root.join("marker"), b"prepared").expect("prepared marker should write");
+
+        let mut rename_count = 0;
+        let result = install_prepared_project_root(
+            &root,
+            &prepared_root,
+            &retired_root,
+            false,
+            |source, target| {
+                rename_count += 1;
+                if rename_count >= 2 {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "injected rename failure",
+                    ))
+                } else {
+                    fs::rename(source, target)
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(StoreError::ProjectInstallRollback {
+                recovery_path,
+                ..
+            }) if recovery_path == retired_root
+        ));
+        assert!(!root.exists());
+        assert_eq!(fs::read(retired_root.join("marker")).unwrap(), b"original");
+        assert_eq!(fs::read(prepared_root.join("marker")).unwrap(), b"prepared");
+
+        fs::remove_dir_all(&retired_root).expect("retired root should be removed");
+        fs::remove_dir_all(&prepared_root).expect("prepared root should be removed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_copy_preserves_dangling_directory_symlink_kind() {
+        use std::os::windows::fs::{FileTypeExt, symlink_dir, symlink_file};
+
+        let root = temp_path("project-windows-directory-symlink");
+        let source = root.join("source-link");
+        let copy = root.join("copied-link");
+        let wrong_kind = root.join("file-link");
+        let missing_target = root.join("missing-target");
+
+        fs::create_dir_all(&root).expect("test root should be created");
+        symlink_dir(&missing_target, &source).expect("directory symlink should be created");
+        copy_file_or_symlink(&source, &copy).expect("directory symlink should copy");
+        symlink_file(&missing_target, &wrong_kind).expect("file symlink should be created");
+
+        assert!(
+            fs::symlink_metadata(&copy)
+                .expect("copied link metadata")
+                .file_type()
+                .is_symlink_dir()
+        );
+        assert!(project_entries_equal(&source, &copy).unwrap());
+        assert!(!project_entries_equal(&source, &wrong_kind).unwrap());
+
+        fs::remove_file(&source).expect("source link should be removed");
+        fs::remove_file(&copy).expect("copied link should be removed");
+        fs::remove_file(&wrong_kind).expect("file link should be removed");
+        fs::remove_dir_all(&root).expect("test root should be removed");
     }
 }
