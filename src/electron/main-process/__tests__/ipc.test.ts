@@ -3,7 +3,13 @@ import {initIpc} from '../ipc';
 import {consumeCommandLineOpenPaths} from '../command-line';
 import {loadPrefs} from '../prefs';
 import {saveJsonFile} from '../json-file';
-import {openWithScratchFile, openWithScratchPackage} from '../scratch-file';
+import {
+	beginScratchPreviewShutdown,
+	cleanScratchDirectory,
+	openWithScratchFile,
+	openWithScratchPackage,
+	resumeScratchPreviewsAfterFailedShutdown
+} from '../scratch-file';
 import {
 	deleteStory,
 	loadStories,
@@ -112,6 +118,11 @@ describe('initIpc()', () => {
 	const onMock = ipcMain.on as jest.Mock;
 	const appOnMock = app.on as jest.Mock;
 	const appQuitMock = app.quit as jest.Mock;
+	const beginScratchPreviewShutdownMock =
+		beginScratchPreviewShutdown as jest.Mock;
+	const cleanScratchDirectoryMock = cleanScratchDirectory as jest.Mock;
+	const resumeScratchPreviewsAfterFailedShutdownMock =
+		resumeScratchPreviewsAfterFailedShutdown as jest.Mock;
 	const clipboardWriteTextMock = clipboard.writeText as jest.Mock;
 	const openWithScratchFileMock = openWithScratchFile as jest.Mock;
 	const openWithScratchPackageMock = openWithScratchPackage as jest.Mock;
@@ -1253,6 +1264,28 @@ describe('initIpc()', () => {
 			expect(appQuitMock).toHaveBeenCalledTimes(1);
 		});
 
+		it('waits for scratch preview cleanup before resuming quit', async () => {
+			let finishCleanup: () => void = () => {};
+			const cleanup = new Promise<void>(resolve => {
+				finishCleanup = resolve;
+			});
+
+			cleanScratchDirectoryMock.mockReturnValue(cleanup);
+			beforeQuitHandler({preventDefault: jest.fn()});
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(beginScratchPreviewShutdownMock).toHaveBeenCalledTimes(1);
+			expect(cleanScratchDirectoryMock).toHaveBeenCalledTimes(1);
+			expect(appQuitMock).not.toHaveBeenCalled();
+
+			finishCleanup();
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).toHaveBeenCalledTimes(1);
+		});
+
 		it.each(['delete-story', 'rename-story'])(
 			'waits for an acknowledged %s operation before resuming quit',
 			async channel => {
@@ -1334,6 +1367,10 @@ describe('initIpc()', () => {
 			}
 			expect(preventDefault).toHaveBeenCalledTimes(1);
 			expect(appQuitMock).not.toHaveBeenCalled();
+			expect(
+				resumeScratchPreviewsAfterFailedShutdownMock
+			).toHaveBeenCalledTimes(1);
+			expect(cleanScratchDirectoryMock).not.toHaveBeenCalled();
 			expect(showErrorBoxMock).toHaveBeenCalledWith(
 				'electron.errors.storySave',
 				'renderer save failed'

@@ -10,7 +10,6 @@ import {
 	lastWindowFullscreen,
 	linkHandlingMode
 } from './platform-settings';
-import {cleanScratchDirectory} from './scratch-file';
 import {
 	backupStoryDirectory,
 	createStoryDirectory,
@@ -129,9 +128,6 @@ export async function initApp() {
 		initIpc();
 		initStoryPreviewProtocol();
 		initMenuBar();
-		app.on('will-quit', async () => {
-			await cleanScratchDirectory();
-		});
 		await createWindow();
 		markMainPerformance('window-created');
 		recordMainLaunchPhase('window-created');

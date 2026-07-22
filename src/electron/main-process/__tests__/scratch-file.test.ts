@@ -1,11 +1,14 @@
-import {mkdirp, readdir, remove, stat, writeFile} from 'fs-extra';
+import {mkdir, mkdirp, readdir, remove, stat, writeFile} from 'fs-extra';
+import {basename, dirname, join, resolve} from 'path';
 import {
+	beginScratchPreviewShutdown,
 	cleanScratchDirectory,
-	maxRetainedScratchPreviews,
 	maxScratchPreviewAssetBytes,
 	maxScratchPreviewBytes,
+	maxScratchPreviewSessionBytes,
 	openWithScratchFile,
 	openWithScratchPackage,
+	resumeScratchPreviewsAfterFailedShutdown,
 	scratchDirectoryPath
 } from '../scratch-file';
 import {shell} from 'electron';
@@ -362,6 +365,7 @@ describe('openWithScratchFile', () => {
 });
 
 describe('openWithScratchPackage', () => {
+	const mkdirMock = mkdir as jest.Mock;
 	const mkdirpMock = mkdirp as jest.Mock;
 	const openMock = shell.openPath as jest.Mock;
 	const readdirMock = readdir as jest.Mock;
@@ -397,6 +401,44 @@ describe('openWithScratchPackage', () => {
 		);
 	});
 
+	it('isolates simultaneous projects with colliding and missing asset names', async () => {
+		await openWithScratchPackage('project-a', [
+			{bytes: new Uint8Array([1]), outputPath: 'assets/cover.png'},
+			{bytes: new Uint8Array([3]), outputPath: 'assets/only-a.png'}
+		]);
+		await openWithScratchPackage('project-b', [
+			{bytes: new Uint8Array([2]), outputPath: 'assets/cover.png'}
+		]);
+
+		const [projectAPath, projectBPath] = openMock.mock.calls.map(
+			([path]) => path
+		);
+		const projectARoot = dirname(projectAPath);
+		const projectBRoot = dirname(projectBPath);
+
+		expect(projectARoot).not.toBe(projectBRoot);
+		expect(writeFileMock).toHaveBeenCalledWith(
+			join(resolve(projectARoot), 'assets', 'cover.png'),
+			new Uint8Array([1]),
+			{flag: 'wx'}
+		);
+		expect(writeFileMock).toHaveBeenCalledWith(
+			join(resolve(projectARoot), 'assets', 'only-a.png'),
+			new Uint8Array([3]),
+			{flag: 'wx'}
+		);
+		expect(writeFileMock).toHaveBeenCalledWith(
+			join(resolve(projectBRoot), 'assets', 'cover.png'),
+			new Uint8Array([2]),
+			{flag: 'wx'}
+		);
+		expect(writeFileMock).not.toHaveBeenCalledWith(
+			join(resolve(projectBRoot), 'assets', 'only-a.png'),
+			expect.anything(),
+			expect.anything()
+		);
+	});
+
 	it('rejects unsafe asset output paths', async () => {
 		await expect(() =>
 			openWithScratchPackage('mock-data', [
@@ -419,25 +461,54 @@ describe('openWithScratchPackage', () => {
 		expect(writeFileMock).not.toHaveBeenCalled();
 	});
 
-	it('prunes the oldest preview directories to the retention limit', async () => {
-		const entries = Array.from(
-			{length: maxRetainedScratchPreviews},
-			(_, index) => ({
-				isDirectory: () => true,
-				name: `preview-00000000-0000-4000-8000-00000000000${index}`
-			})
-		);
-		readdirMock.mockResolvedValueOnce(entries);
-		statMock.mockImplementation(async path => ({
-			mtimeMs: Number(String(path).at(-1))
+	it('removes expired preview directories left by an earlier session', async () => {
+		const entries = Array.from({length: 3}, (_, index) => ({
+			isDirectory: () => true,
+			name: `preview-00000000-0000-4000-8000-00000000000${index}`
 		}));
+		readdirMock.mockResolvedValueOnce(entries);
+		statMock.mockResolvedValue({
+			mtimeMs: Date.now() - 1001 * 60 * 60 * 24 * 3
+		});
 
 		await openWithScratchPackage('mock-data');
 
-		expect(removeMock).toHaveBeenCalledTimes(1);
+		expect(removeMock).toHaveBeenCalledTimes(3);
 		expect(removeMock).toHaveBeenCalledWith(
 			expect.stringMatching(/preview-00000000-0000-4000-8000-000000000000$/)
 		);
+	});
+
+	it('preserves recent previews owned by another app session', async () => {
+		readdirMock.mockResolvedValueOnce([
+			{
+				isDirectory: () => true,
+				name: 'preview-00000000-0000-4000-8000-000000000000'
+			}
+		]);
+		statMock.mockResolvedValueOnce({mtimeMs: Date.now()});
+
+		await openWithScratchPackage('mock-data');
+
+		expect(removeMock).not.toHaveBeenCalled();
+	});
+
+	it('does not evict live previews when more than three are open', async () => {
+		for (let index = 0; index < 3; index++) {
+			await openWithScratchPackage(`project-${index}`);
+		}
+		const previewRoots = openMock.mock.calls.map(([path]) => dirname(path));
+
+		readdirMock.mockResolvedValueOnce(
+			previewRoots.map(root => ({
+				isDirectory: () => true,
+				name: basename(root)
+			}))
+		);
+		await openWithScratchPackage('project-3');
+
+		expect(openMock).toHaveBeenCalledTimes(4);
+		expect(removeMock).not.toHaveBeenCalled();
 	});
 
 	it('rejects if the operating system cannot open the package', async () => {
@@ -446,5 +517,95 @@ describe('openWithScratchPackage', () => {
 		await expect(openWithScratchPackage('mock-data')).rejects.toThrow(
 			'Preview launch failed.'
 		);
+		expect(removeMock).toHaveBeenCalledWith(
+			dirname(writeFileMock.mock.calls.at(-1)?.[0])
+		);
+	});
+
+	it('removes a partially written preview package', async () => {
+		const writeError = new Error('Asset write failed.');
+
+		writeFileMock.mockRejectedValueOnce(writeError);
+		await expect(
+			openWithScratchPackage('mock-data', [
+				{bytes: new Uint8Array([1]), outputPath: 'assets/cover.png'}
+			])
+		).rejects.toBe(writeError);
+		expect(removeMock).toHaveBeenCalledWith(mkdirMock.mock.calls[0][0]);
+	});
+
+	it('removes a successful preview package during session cleanup', async () => {
+		await openWithScratchPackage('mock-data');
+		const previewRoot = dirname(openMock.mock.calls[0][0]);
+
+		readdirMock.mockResolvedValueOnce([
+			{isDirectory: () => true, name: basename(previewRoot)}
+		]);
+		statMock.mockResolvedValueOnce({mtimeMs: Date.now()});
+		await cleanScratchDirectory();
+
+		expect(removeMock).toHaveBeenCalledWith(previewRoot);
+	});
+
+	it('rejects new previews after reaching the aggregate session quota', async () => {
+		const previewPartBytes = 49 * 1024 * 1024;
+		const bytes = new Uint8Array(1);
+		const byteLengthSpy = jest
+			.spyOn(Buffer, 'byteLength')
+			.mockReturnValue(previewPartBytes);
+
+		Object.defineProperty(bytes, 'byteLength', {value: previewPartBytes});
+		try {
+			for (let index = 0; index < 3; index++) {
+				await openWithScratchPackage(`large-${index}`, [
+					{bytes, outputPath: 'assets/large.bin'}
+				]);
+			}
+			await expect(
+				openWithScratchPackage('over-limit', [
+					{bytes, outputPath: 'assets/large.bin'}
+				])
+			).rejects.toThrow('session exceeds the safe byte limit');
+		} finally {
+			byteLengthSpy.mockRestore();
+		}
+		expect(openMock).toHaveBeenCalledTimes(3);
+		expect(maxScratchPreviewSessionBytes).toBe(300 * 1024 * 1024);
+	});
+
+	it('waits for an in-flight launch and rejects new launches during cleanup', async () => {
+		let finishOpen: (error: string) => void = () => {};
+		const opening = new Promise<string>(resolve => {
+			finishOpen = resolve;
+		});
+
+		openMock.mockReturnValue(opening);
+		const launch = openWithScratchPackage('in-flight');
+		for (let index = 0; index < 10; index++) {
+			await Promise.resolve();
+		}
+		const previewRoot = dirname(openMock.mock.calls[0][0]);
+
+		readdirMock.mockResolvedValueOnce([
+			{isDirectory: () => true, name: basename(previewRoot)}
+		]);
+		statMock.mockResolvedValueOnce({mtimeMs: Date.now()});
+		beginScratchPreviewShutdown();
+		const cleanup = cleanScratchDirectory();
+
+		await expect(openWithScratchPackage('too-late')).rejects.toThrow(
+			'app is quitting'
+		);
+		expect(removeMock).not.toHaveBeenCalled();
+
+		finishOpen('');
+		await launch;
+		await cleanup;
+		expect(removeMock).toHaveBeenCalledWith(previewRoot);
+
+		resumeScratchPreviewsAfterFailedShutdown();
+		openMock.mockResolvedValue('');
+		await openWithScratchPackage('retry-after-canceled-quit');
+		expect(openMock).toHaveBeenCalledTimes(2);
 	});
 });

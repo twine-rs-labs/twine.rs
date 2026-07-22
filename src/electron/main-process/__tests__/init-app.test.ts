@@ -8,7 +8,6 @@ import {
 	createStoryDirectory,
 	initStoryDirectory
 } from '../story-directory';
-import {cleanScratchDirectory} from '../scratch-file';
 
 jest.mock('electron');
 jest.mock('../app-prefs');
@@ -16,7 +15,6 @@ jest.mock('../ipc');
 jest.mock('../locales');
 jest.mock('../menu-bar');
 jest.mock('../story-directory');
-jest.mock('../scratch-file');
 
 describe('initApp', () => {
 	const initIpcMock = initIpc as jest.Mock;
@@ -24,9 +22,7 @@ describe('initApp', () => {
 	const initMenuBarMock = initMenuBar as jest.Mock;
 	const initStoryDirectoryMock = initStoryDirectory as jest.Mock;
 	const backupStoryDirectoryMock = backupStoryDirectory as jest.Mock;
-	const cleanScratchDirectoryMock = cleanScratchDirectory as jest.Mock;
 	const createStoryDirectoryMock = createStoryDirectory as jest.Mock;
-	const onMock = app.on as jest.Mock;
 	const quitMock = app.quit as jest.Mock;
 	const openExternalMock = shell.openExternal as jest.Mock;
 	const showErrorBoxMock = dialog.showErrorBox as jest.Mock;
@@ -62,17 +58,6 @@ describe('initApp', () => {
 		expect((global.setInterval as unknown as jest.Mock).mock.calls).toEqual([
 			[expect.any(Function), 1000 * 60 * 20]
 		]);
-	});
-
-	it('sets an event listener to clean the scratch directory when quitting', async () => {
-		await initApp();
-
-		const onQuit = onMock.mock.calls.find(([event]) => event === 'will-quit');
-
-		expect(onQuit).not.toBeUndefined();
-		expect(cleanScratchDirectoryMock).not.toHaveBeenCalled();
-		onQuit[1]();
-		expect(cleanScratchDirectoryMock).toHaveBeenCalledTimes(1);
 	});
 
 	it('initializes IPC', async () => {

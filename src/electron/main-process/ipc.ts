@@ -33,10 +33,13 @@ import {
 } from './story-preview-protocol';
 import {loadPrefs} from './prefs';
 import {
+	beginScratchPreviewShutdown,
+	cleanScratchDirectory,
 	maxScratchPreviewAssetBytes,
 	maxScratchPreviewAssetCount,
 	openWithScratchFile,
-	openWithScratchPackage
+	openWithScratchPackage,
+	resumeScratchPreviewsAfterFailedShutdown
 } from './scratch-file';
 import {Story, StoryWithDocuments} from '../../store/stories/stories.types';
 import {
@@ -941,7 +944,14 @@ export function initIpc() {
 			return;
 		}
 
-		storyWriteFlushBarrier = flushPendingStoryWrites();
+		beginScratchPreviewShutdown();
+		storyWriteFlushBarrier = flushPendingStoryWrites().then(async () => {
+			try {
+				await cleanScratchDirectory();
+			} catch (error) {
+				console.warn('Could not clean scratch previews before quit.', error);
+			}
+		});
 		void storyWriteFlushBarrier.then(
 			() => {
 				quitAfterStoryWriteFlush = true;
@@ -949,6 +959,7 @@ export function initIpc() {
 			},
 			error => {
 				storyWriteFlushBarrier = undefined;
+				resumeScratchPreviewsAfterFailedShutdown();
 				console.error(
 					'Could not flush pending story saves before quit.',
 					error

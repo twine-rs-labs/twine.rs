@@ -8,9 +8,13 @@ import {getAppPref} from './app-prefs';
 export const maxScratchPreviewBytes = 50 * 1024 * 1024;
 export const maxScratchPreviewAssetBytes = 50 * 1024 * 1024;
 export const maxScratchPreviewAssetCount = 1000;
-export const maxRetainedScratchPreviews = 3;
+export const maxScratchPreviewSessionBytes =
+	3 * (maxScratchPreviewBytes + maxScratchPreviewAssetBytes);
 const scratchPreviewDirectoryPattern = /^preview-[0-9a-f-]+$/;
+const scratchPreviewSessionPrefix = `preview-${randomUUID()}-`;
 let scratchPreviewQueue = Promise.resolve();
+let scratchPreviewShutdownStarted = false;
+const currentScratchPreviewRoots = new Map<string, number>();
 
 export interface ScratchFileAsset {
 	bytes: ArrayBuffer | Uint8Array;
@@ -33,42 +37,51 @@ export function scratchDirectoryPath() {
 			);
 }
 
-/**
- * Deletes all files in the scratch directory older than either 3 days, or a
- * number of minutes set in the `scratchFileCleanupAge` app preference.
- */
-export async function cleanScratchDirectory() {
-	console.log('Cleaning scratch directory');
-
-	// Coerce the app pref to an integer. If it was set via CLI argument, it may
-	// come in as a string.
+function scratchFileCleanupAgeMs() {
 	const agePref =
 		getAppPref('scratchFileCleanupAge') !== undefined
 			? parseInt((getAppPref('scratchFileCleanupAge') as object).toString())
 			: NaN;
 
 	// milliseconds -> seconds -> minutes -> hours -> days
-	const tooOld = 1000 * 60 * (isFinite(agePref) ? agePref : 60 * 24 * 3);
-	const now = Date.now();
-	const scratchFiles = (
-		await readdir(scratchDirectoryPath(), {withFileTypes: true})
-	).filter(
-		file =>
-			(!file.isDirectory() && /\.html$/.test(file.name)) ||
-			(file.isDirectory() && scratchPreviewDirectoryPattern.test(file.name))
-	);
+	return 1000 * 60 * (isFinite(agePref) ? agePref : 60 * 24 * 3);
+}
 
-	return Promise.all(
-		scratchFiles.map(async file => {
-			const scratchFile = join(scratchDirectoryPath(), file.name);
-			const stats = await stat(scratchFile);
+/**
+ * Deletes previews created during this application session and all other
+ * scratch files older than either 3 days, or a number of minutes set in the
+ * `scratchFileCleanupAge` app preference.
+ */
+export async function cleanScratchDirectory() {
+	return queueScratchPreview(async () => {
+		console.log('Cleaning scratch directory');
 
-			if (now - stats.mtimeMs > tooOld) {
-				console.log(`Deleting old scratch file ${scratchFile}`);
-				return await remove(scratchFile);
-			}
-		})
-	);
+		const tooOld = scratchFileCleanupAgeMs();
+		const now = Date.now();
+		const scratchFiles = (
+			await readdir(scratchDirectoryPath(), {withFileTypes: true})
+		).filter(
+			file =>
+				(!file.isDirectory() && /\.html$/.test(file.name)) ||
+				(file.isDirectory() && scratchPreviewDirectoryPattern.test(file.name))
+		);
+
+		return Promise.all(
+			scratchFiles.map(async file => {
+				const scratchFile = join(scratchDirectoryPath(), file.name);
+				const stats = await stat(scratchFile);
+
+				if (
+					currentScratchPreviewRoots.has(scratchFile) ||
+					now - stats.mtimeMs > tooOld
+				) {
+					console.log(`Deleting scratch preview ${scratchFile}`);
+					await remove(scratchFile);
+					currentScratchPreviewRoots.delete(scratchFile);
+				}
+			})
+		);
+	});
 }
 
 function assertSafeScratchPreviewData(data: string) {
@@ -80,17 +93,8 @@ function assertSafeScratchPreviewData(data: string) {
 	}
 }
 
-async function writeUniqueScratchFile(data: string) {
-	return queueScratchPreview(() => writeScratchPreview(data, []));
-}
-
 export async function openWithScratchFile(data: string) {
-	const scratchPath = await writeUniqueScratchFile(data);
-	const openError = await shell.openPath(scratchPath);
-
-	if (openError) {
-		throw new Error(openError);
-	}
+	return queueScratchPreviewLaunch(() => writeAndOpenScratchPreview(data, []));
 }
 
 function safeScratchAssetPath(root: string, outputPath: string) {
@@ -157,51 +161,88 @@ function validateScratchAssets(assets: ScratchFileAsset[]) {
 	}
 }
 
-async function pruneScratchPreviews(scratchRoot: string) {
+function scratchPreviewByteLength(data: string, assets: ScratchFileAsset[]) {
+	return (
+		Buffer.byteLength(data, 'utf8') +
+		assets.reduce((total, asset) => total + scratchAssetByteLength(asset), 0)
+	);
+}
+
+function currentScratchPreviewBytes() {
+	return [...currentScratchPreviewRoots.values()].reduce(
+		(total, bytes) => total + bytes,
+		0
+	);
+}
+
+async function removeExpiredScratchPreviews(scratchRoot: string) {
 	const entries = await Promise.resolve(
 		readdir(scratchRoot, {withFileTypes: true})
 	).catch(() => []);
 	const previews = (entries ?? []).filter(
 		entry =>
-			entry.isDirectory() && scratchPreviewDirectoryPattern.test(entry.name)
-	);
-	const dated = await Promise.all(
-		previews.map(async entry => ({
-			mtimeMs: (await stat(join(scratchRoot, entry.name))).mtimeMs,
-			path: join(scratchRoot, entry.name)
-		}))
+			entry.isDirectory() &&
+			scratchPreviewDirectoryPattern.test(entry.name) &&
+			!entry.name.startsWith(scratchPreviewSessionPrefix)
 	);
 
-	dated.sort((left, right) => left.mtimeMs - right.mtimeMs);
-	for (const preview of dated.slice(
-		0,
-		Math.max(0, dated.length - maxRetainedScratchPreviews + 1)
-	)) {
-		await remove(preview.path);
+	for (const preview of previews) {
+		const previewRoot = join(scratchRoot, preview.name);
+		const stats = await Promise.resolve(stat(previewRoot)).catch(() => null);
+
+		if (stats && Date.now() - stats.mtimeMs > scratchFileCleanupAgeMs()) {
+			await remove(previewRoot);
+		}
+	}
+}
+
+async function removeScratchPreviewRoot(previewRoot: string) {
+	try {
+		await remove(previewRoot);
+		currentScratchPreviewRoots.delete(previewRoot);
+	} catch (error) {
+		console.warn(`Could not remove scratch preview ${previewRoot}.`, error);
 	}
 }
 
 async function writeScratchPreview(data: string, assets: ScratchFileAsset[]) {
 	assertSafeScratchPreviewData(data);
 	validateScratchAssets(assets);
+	const previewBytes = scratchPreviewByteLength(data, assets);
+
+	if (
+		currentScratchPreviewBytes() + previewBytes >
+		maxScratchPreviewSessionBytes
+	) {
+		throw new Error('Scratch preview session exceeds the safe byte limit.');
+	}
 	const scratchRoot = scratchDirectoryPath();
 
 	await mkdirp(scratchRoot);
-	await pruneScratchPreviews(scratchRoot);
-	const previewRoot = join(scratchRoot, `preview-${randomUUID()}`);
+	await removeExpiredScratchPreviews(scratchRoot);
+	const previewRoot = join(
+		scratchRoot,
+		`${scratchPreviewSessionPrefix}${randomUUID()}`
+	);
 
 	// A new exclusive directory prevents stale links from becoming write targets.
 	await mkdir(previewRoot);
-	for (const asset of assets) {
-		const targetPath = safeScratchAssetPath(previewRoot, asset.outputPath);
+	currentScratchPreviewRoots.set(previewRoot, previewBytes);
+	try {
+		for (const asset of assets) {
+			const targetPath = safeScratchAssetPath(previewRoot, asset.outputPath);
 
-		await mkdirp(dirname(targetPath));
-		await writeFile(targetPath, new Uint8Array(asset.bytes), {flag: 'wx'});
+			await mkdirp(dirname(targetPath));
+			await writeFile(targetPath, new Uint8Array(asset.bytes), {flag: 'wx'});
+		}
+		const scratchPath = join(previewRoot, 'index.html');
+
+		await writeFile(scratchPath, data, {encoding: 'utf8', flag: 'wx'});
+		return scratchPath;
+	} catch (error) {
+		await removeScratchPreviewRoot(previewRoot);
+		throw error;
 	}
-	const scratchPath = join(previewRoot, 'index.html');
-
-	await writeFile(scratchPath, data, {encoding: 'utf8', flag: 'wx'});
-	return scratchPath;
 }
 
 function queueScratchPreview<T>(operation: () => Promise<T>) {
@@ -214,16 +255,42 @@ function queueScratchPreview<T>(operation: () => Promise<T>) {
 	return result;
 }
 
+function queueScratchPreviewLaunch<T>(operation: () => Promise<T>) {
+	if (scratchPreviewShutdownStarted) {
+		return Promise.reject(
+			new Error('Scratch previews cannot be opened while the app is quitting.')
+		);
+	}
+
+	return queueScratchPreview(operation);
+}
+
+async function writeAndOpenScratchPreview(
+	data: string,
+	assets: ScratchFileAsset[]
+) {
+	const scratchPath = await writeScratchPreview(data, assets);
+	const openError = await shell.openPath(scratchPath);
+
+	if (openError) {
+		await removeScratchPreviewRoot(dirname(scratchPath));
+		throw new Error(openError);
+	}
+}
+
+export function beginScratchPreviewShutdown() {
+	scratchPreviewShutdownStarted = true;
+}
+
+export function resumeScratchPreviewsAfterFailedShutdown() {
+	scratchPreviewShutdownStarted = false;
+}
+
 export async function openWithScratchPackage(
 	data: string,
 	assets: ScratchFileAsset[] = []
 ) {
-	const scratchPath = await queueScratchPreview(() =>
-		writeScratchPreview(data, assets)
+	return queueScratchPreviewLaunch(() =>
+		writeAndOpenScratchPreview(data, assets)
 	);
-	const openError = await shell.openPath(scratchPath);
-
-	if (openError) {
-		throw new Error(openError);
-	}
 }
