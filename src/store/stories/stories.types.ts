@@ -140,9 +140,16 @@ export interface RepairStoriesAction {
 	defaultFormat: StoryFormat;
 }
 
+export type CreateStoryPassageProps = Partial<PassageWithText> &
+	Pick<Passage, 'id'>;
+
+export interface CreateStoryProps extends Omit<Partial<Story>, 'passages'> {
+	passages?: CreateStoryPassageProps[];
+}
+
 export interface CreateStoryAction {
 	type: 'createStory';
-	props: Partial<Story>;
+	props: CreateStoryProps;
 }
 
 export interface UpdateStoryAction {

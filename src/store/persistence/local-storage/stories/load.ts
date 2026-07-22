@@ -86,7 +86,7 @@ export async function load(): Promise<Story[]> {
 				}
 
 				stories[passage.story].passages.push({
-					...passageDefaults,
+					...passageDefaults(),
 					...passage,
 
 					// Remove empty tags.

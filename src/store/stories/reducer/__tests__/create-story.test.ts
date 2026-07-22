@@ -1,5 +1,6 @@
 import {createStory} from '../create-story';
 import {fakeStory} from '../../../../test-util';
+import {passageDefaults} from '../../defaults';
 
 describe('Story reducer createStory action handler', () => {
 	it('adds a story to state', () => {
@@ -79,5 +80,24 @@ describe('Story reducer createStory action handler', () => {
 		result[0].passages.forEach(passage =>
 			expect(passage.story).toBe(result[0].id)
 		);
+	});
+
+	it('completes partial passages created with a story', () => {
+		const story = fakeStory(0);
+		const passageId = 'partial-passage';
+		const result = createStory([], {
+			...story,
+			passages: [{id: passageId, name: 'Kept name', text: 'Kept text'}]
+		});
+
+		expect(result[0].passages).toEqual([
+			{
+				...passageDefaults(),
+				id: passageId,
+				name: 'Kept name',
+				story: story.id,
+				text: 'Kept text'
+			}
+		]);
 	});
 });

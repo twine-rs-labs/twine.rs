@@ -65,6 +65,29 @@ describe('repairStory', () => {
 		});
 	});
 
+	it("sets the story's IFID if it is empty without changing its ID", () => {
+		const originalId = story.id;
+
+		story.ifid = '';
+		const result = repairStory(story, [story], allFormats, defaultFormat);
+
+		expect(result.id).toBe(originalId);
+		expect(result.ifid).toEqual(expect.any(String));
+		expect(result.ifid).not.toBe('');
+	});
+
+	it("preserves the story's IFID when repairing an empty ID", () => {
+		const originalIfid = story.ifid;
+
+		story.id = '';
+		story.passages = [];
+		const result = repairStory(story, [story], allFormats, defaultFormat);
+
+		expect(result.id).toEqual(expect.any(String));
+		expect(result.id).not.toBe('');
+		expect(result.ifid).toBe(originalIfid);
+	});
+
 	it('sets a default on a story property if it is undefined', () => {
 		(story as any).name = undefined;
 		expect(repairStory(story, [story], allFormats, defaultFormat)).toEqual({

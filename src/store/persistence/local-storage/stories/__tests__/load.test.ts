@@ -1,5 +1,6 @@
 import {load} from '../load';
 import {fakeStory} from '../../../../../test-util';
+import {i18n} from '../../../../../util/i18n';
 
 describe('stories local storage load', () => {
 	beforeEach(() => window.localStorage.clear());
@@ -33,5 +34,43 @@ describe('stories local storage load', () => {
 		expect(await load()).toEqual(state);
 	});
 
-	it.todo('applies defaults if the persisted data is missing properties');
+	it('migrates partial records with defaults before locale bootstrap completes', async () => {
+		const storyId = 'partial-story';
+		const passageId = 'partial-passage';
+		const translationSpy = jest.spyOn(i18n, 't');
+
+		window.localStorage.setItem('twine-stories', storyId);
+		window.localStorage.setItem(
+			`twine-stories-${storyId}`,
+			JSON.stringify({id: storyId})
+		);
+		window.localStorage.setItem('twine-passages', passageId);
+		window.localStorage.setItem(
+			`twine-passages-${passageId}`,
+			JSON.stringify({id: passageId, story: storyId})
+		);
+
+		const [story] = await load();
+
+		expect(translationSpy).not.toHaveBeenCalled();
+		expect(story).toMatchObject({
+			id: storyId,
+			name: 'Untitled Story',
+			passages: [
+				{
+					height: 100,
+					highlighted: false,
+					id: passageId,
+					left: 0,
+					name: 'Untitled Passage',
+					selected: false,
+					story: storyId,
+					tags: [],
+					text: '',
+					top: 0,
+					width: 100
+				}
+			]
+		});
+	});
 });

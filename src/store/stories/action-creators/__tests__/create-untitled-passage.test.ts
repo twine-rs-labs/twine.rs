@@ -2,12 +2,14 @@ import {createUntitledPassage} from '../create-untitled-passage';
 import {Story} from '../../stories.types';
 import {fakeStory} from '../../../../test-util';
 import {passageDefaults} from '../../defaults';
+import {i18n} from '../../../../util/i18n';
 
 describe('createUntitledPassage', () => {
 	const defs = passageDefaults();
 	let story: Story;
 
 	beforeEach(() => {
+		jest.spyOn(i18n, 't').mockReturnValue(defs.name);
 		story = fakeStory(2);
 		story.passages[0].name = 'mock-passage-1';
 		story.passages[1].name = 'mock-passage-2';
@@ -47,6 +49,20 @@ describe('createUntitledPassage', () => {
 			}),
 			storyId: story.id
 		});
+	});
+
+	it('uses the localized passage name at the explicit creation boundary', () => {
+		const localizedName = 'Passage traduit';
+
+		jest.mocked(i18n.t).mockReturnValue(localizedName);
+		expect(createUntitledPassage(story, 100, 100).props.name).toBe(
+			localizedName
+		);
+
+		story.passages[0].name = localizedName;
+		expect(createUntitledPassage(story, 100, 100).props.name).toBe(
+			`${localizedName} 1`
+		);
 	});
 
 	it('forces a passage onscreen', () => {

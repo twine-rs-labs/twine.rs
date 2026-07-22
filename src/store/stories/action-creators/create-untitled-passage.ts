@@ -1,6 +1,7 @@
 import {passageDefaults} from '../defaults';
 import {CreatePassageAction, Story} from '../stories.types';
 import {rectsIntersect} from '../../../util/geometry';
+import {i18n} from '../../../util/i18n';
 import {unusedName} from '../../../util/unused-name';
 
 /**
@@ -19,7 +20,7 @@ export function createUntitledPassage(
 
 	const defs = passageDefaults();
 	const passageName = unusedName(
-		defs.name,
+		i18n.t('store.passageDefaults.name'),
 		story.passages.map(passage => passage.name)
 	);
 

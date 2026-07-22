@@ -1,8 +1,8 @@
 import {v4 as uuid} from '@lukeed/uuid';
 import {passageDefaults, storyDefaults} from '../defaults';
-import {Story, StoriesState} from '../stories.types';
+import {CreateStoryProps, Story, StoriesState} from '../stories.types';
 
-export function createStory(state: StoriesState, storyProps: Partial<Story>) {
+export function createStory(state: StoriesState, storyProps: CreateStoryProps) {
 	if ('id' in storyProps && state.some(story => story.id === storyProps.id)) {
 		console.warn(
 			`There is already a story in state with ID "${storyProps.id}", taking no action`
@@ -20,6 +20,8 @@ export function createStory(state: StoriesState, storyProps: Partial<Story>) {
 		return state;
 	}
 
+	const {passages: passageProps = [], ...storyPropsWithoutPassages} =
+		storyProps;
 	const story: Story = {
 		id: uuid(),
 		...storyDefaults(),
@@ -28,14 +30,14 @@ export function createStory(state: StoriesState, storyProps: Partial<Story>) {
 		passages: [],
 		tags: [],
 		tagColors: {},
-		...storyProps
+		...storyPropsWithoutPassages
 	};
 
 	// If we are prepopulating the story with passages, make sure they have the
 	// correct ID linkage, and at least make sure basic properties are set.
 
-	story.passages = story.passages.map(passage => ({
-		...passageDefaults,
+	story.passages = passageProps.map(passage => ({
+		...passageDefaults(),
 		...passage,
 		story: story.id
 	}));

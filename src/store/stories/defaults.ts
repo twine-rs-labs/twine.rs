@@ -1,11 +1,13 @@
-import {i18n} from '../../util/i18n';
 import {PassageWithText, Story} from './stories.types';
+
+export const defaultPassageName = 'Untitled Passage';
+export const defaultStoryName = 'Untitled Story';
 
 export const passageDefaults = (): Omit<PassageWithText, 'id' | 'story'> => ({
 	height: 100,
 	highlighted: false,
 	left: 0,
-	name: i18n.t('store.passageDefaults.name'),
+	name: defaultPassageName,
 	selected: false,
 	tags: [],
 	text: '',
@@ -17,7 +19,7 @@ export const storyDefaults = (): Omit<Story, 'id'> => ({
 	ifid: '',
 	lastUpdate: new Date(),
 	passages: [],
-	name: i18n.t('store.storyDefaults.name'),
+	name: defaultStoryName,
 	script: '',
 	selected: false,
 	snapToGrid: true,

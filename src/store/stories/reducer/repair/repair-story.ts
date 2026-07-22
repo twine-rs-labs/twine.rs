@@ -111,7 +111,7 @@ export function repairStory<T extends Story>(
 
 	// Give the story an IFID if it has none.
 
-	if (typeof story.ifid !== 'string' || story.id === '') {
+	if (typeof story.ifid !== 'string' || story.ifid === '') {
 		const newIfid = uuid();
 
 		logRepair(story, 'ifid', newIfid, 'was bad type or empty string');
