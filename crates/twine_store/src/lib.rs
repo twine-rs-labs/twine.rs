@@ -416,6 +416,15 @@ pub fn save_project_path(
     project: &Project,
     options: &SaveOptions,
 ) -> Result<SaveReport, StoreError> {
+    save_project_path_with_prepared_sidecar(root, project, options, None)
+}
+
+pub fn save_project_path_with_prepared_sidecar(
+    root: impl AsRef<Path>,
+    project: &Project,
+    options: &SaveOptions,
+    prepared_sidecar: Option<&[u8]>,
+) -> Result<SaveReport, StoreError> {
     let total_started = Instant::now();
     let mut timings = SaveTimings::default();
     let root = root.as_ref();
@@ -430,6 +439,9 @@ pub fn save_project_path(
 
     let started = Instant::now();
     write_project_to_dir(&temp_root, project, options, Some(root))?;
+    if let Some(prepared_sidecar) = prepared_sidecar {
+        fs::write(temp_root.join(".twine/project.json"), prepared_sidecar)?;
+    }
     timings.write_temp_project_us = elapsed_us(started);
     let started = Instant::now();
     copy_existing_assets(root, &temp_root)?;
@@ -525,10 +537,11 @@ fn write_project_to_dir(
             project.manifest.source_layout_for(&story.id) == ProjectSourceLayout::SingleTwee
         })
         .count();
+    let story_components =
+        unique_story_components(&project.stories, previous_project_file.as_ref());
     let mut used_single_sources = BTreeSet::new();
 
-    for story in &project.stories {
-        let story_slug = unique_component(&story.name, story.id.as_ref());
+    for (story, story_slug) in project.stories.iter().zip(story_components) {
         let script_path = PathBuf::from("scripts").join(format!("{story_slug}.js"));
         let stylesheet_path = PathBuf::from("styles").join(format!("{story_slug}.css"));
         let source_layout = project.manifest.source_layout_for(&story.id);
@@ -677,10 +690,10 @@ fn read_existing_project_file(root: &Path) -> Option<ProjectFile> {
 fn unique_source_path(
     preferred: PathBuf,
     story_slug: &str,
-    used: &mut BTreeSet<PathBuf>,
+    used: &mut BTreeSet<String>,
 ) -> Result<PathBuf, StoreError> {
     safe_project_relative_path(&path_string(&preferred))?;
-    if used.insert(preferred.clone()) {
+    if used.insert(project_path_collision_key(&preferred)) {
         return Ok(preferred);
     }
 
@@ -688,7 +701,7 @@ fn unique_source_path(
     loop {
         let candidate = PathBuf::from(format!("{story_slug}-{suffix}.twee"));
 
-        if used.insert(candidate.clone()) {
+        if used.insert(project_path_collision_key(&candidate)) {
             return Ok(candidate);
         }
         suffix += 1;
@@ -1455,6 +1468,84 @@ fn unique_component(name: &str, id: &str) -> String {
     }
 }
 
+fn unique_story_components(
+    stories: &[Story],
+    previous_project_file: Option<&ProjectFile>,
+) -> Vec<String> {
+    let mut used = BTreeSet::new();
+    let mut components = stories
+        .iter()
+        .map(|story| {
+            previous_project_file
+                .and_then(|project_file| {
+                    project_file
+                        .stories
+                        .iter()
+                        .find(|candidate| candidate.id == story.id)
+                })
+                .and_then(existing_story_component)
+                .filter(|component| used.insert(component.to_ascii_lowercase()))
+        })
+        .collect::<Vec<_>>();
+
+    for (story, component) in stories.iter().zip(&mut components) {
+        if component.is_some() {
+            continue;
+        }
+
+        *component = Some({
+            let base = unique_component(&story.name, story.id.as_ref());
+
+            if used.insert(base.to_ascii_lowercase()) {
+                base
+            } else {
+                let digest = Sha256::digest(story.id.as_ref().as_bytes());
+                let suffix = digest[..6]
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                let max_base_len = 64usize.saturating_sub(suffix.len() + 1);
+                let shortened = base[..base.len().min(max_base_len)].trim_end_matches('-');
+                let collision_base = format!("{shortened}-{suffix}");
+                let mut candidate = collision_base.clone();
+                let mut sequence = 2;
+
+                loop {
+                    if used.insert(candidate.to_ascii_lowercase()) {
+                        break candidate;
+                    }
+
+                    candidate = format!("{collision_base}-{sequence}");
+                    sequence += 1;
+                }
+            }
+        });
+    }
+
+    components
+        .into_iter()
+        .map(|component| component.expect("every story component should be assigned"))
+        .collect()
+}
+
+fn existing_story_component(story: &StoryFile) -> Option<String> {
+    let path = Path::new(&story.script);
+
+    if path.parent() != Some(Path::new("scripts"))
+        || !path.extension()?.to_str()?.eq_ignore_ascii_case("js")
+    {
+        return None;
+    }
+
+    let component = path.file_stem()?.to_str()?;
+
+    (!component.is_empty()).then(|| component.to_owned())
+}
+
+fn project_path_collision_key(path: &Path) -> String {
+    path_string(path).to_ascii_lowercase()
+}
+
 fn slugify(value: &str) -> String {
     let mut slug = String::new();
 
@@ -2200,6 +2291,119 @@ file = "passages/example/start.twee"
     }
 
     #[test]
+    fn story_owned_paths_separate_normalized_name_collisions_and_stay_stable() {
+        let root = temp_path("story-path-collisions");
+        let long_upper = format!("{}:One", "A".repeat(70));
+        let long_lower = format!("{}?Two", "a".repeat(70));
+        let names = [
+            long_upper.clone(),
+            long_lower,
+            long_upper.clone(),
+            format!("{}!FOUR", "A".repeat(70)),
+        ];
+        let stories = names
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                serde_json::from_value::<Story>(serde_json::json!({
+                    "ifid": format!("IFID-{index}"),
+                    "id": format!("story-{index}"),
+                    "name": name,
+                    "passages": [{
+                        "id": format!("passage-{index}"),
+                        "name": "Same Passage Name",
+                        "story": format!("story-{index}"),
+                        "text": format!("body-{index}")
+                    }],
+                    "script": format!("script-{index}"),
+                    "startPassage": format!("passage-{index}"),
+                    "stylesheet": format!("style-{index}")
+                }))
+                .expect("collision story should deserialize")
+            })
+            .collect::<Vec<_>>();
+        let mut project = Project::from_story(stories[0].clone());
+
+        project.stories = stories;
+        project.library.sort_order = project
+            .stories
+            .iter()
+            .map(|story| story.id.clone())
+            .collect();
+        for story in project.stories.iter().skip(2) {
+            project
+                .manifest
+                .set_source_layout(story.id.clone(), ProjectSourceLayout::SingleTwee);
+        }
+
+        save_project_path(&root, &project, &SaveOptions::default())
+            .expect("colliding stories should save without overwrites");
+        let first_manifest: ProjectFile = toml::from_str(
+            &fs::read_to_string(root.join(MANIFEST_FILE)).expect("manifest should read"),
+        )
+        .expect("manifest should parse");
+        let script_paths = first_manifest
+            .stories
+            .iter()
+            .map(|story| story.script.clone())
+            .collect::<BTreeSet<_>>();
+        let stylesheet_paths = first_manifest
+            .stories
+            .iter()
+            .map(|story| story.stylesheet.clone())
+            .collect::<BTreeSet<_>>();
+        let passage_roots = first_manifest.stories[..2]
+            .iter()
+            .map(|story| {
+                Path::new(&story.passages[0].file)
+                    .parent()
+                    .expect("passage should have a parent")
+                    .to_path_buf()
+            })
+            .collect::<BTreeSet<_>>();
+        let single_sources = first_manifest.stories[2..]
+            .iter()
+            .map(|story| story.source.clone())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(script_paths.len(), 4);
+        assert_eq!(stylesheet_paths.len(), 4);
+        assert_eq!(passage_roots.len(), 2);
+        assert_eq!(single_sources.len(), 2);
+
+        let loaded = load_project_path(&root).expect("collision project should load");
+        for (index, story) in loaded.stories.iter().enumerate() {
+            assert_eq!(story.script, format!("script-{index}"));
+            assert_eq!(story.stylesheet, format!("style-{index}"));
+            assert_eq!(story.passages[0].text, format!("body-{index}"));
+        }
+
+        project.stories[0].name = "Renamed Without Collision".into();
+        save_project_path(&root, &project, &SaveOptions::default())
+            .expect("collision project should resave");
+        let second_manifest: ProjectFile = toml::from_str(
+            &fs::read_to_string(root.join(MANIFEST_FILE)).expect("resaved manifest should read"),
+        )
+        .expect("resaved manifest should parse");
+
+        for (before, after) in first_manifest.stories.iter().zip(&second_manifest.stories) {
+            assert_eq!(after.script, before.script);
+            assert_eq!(after.stylesheet, before.stylesheet);
+            if before.source_layout == ProjectSourceLayout::SingleTwee {
+                assert_eq!(after.source, before.source);
+            } else {
+                assert_eq!(after.passages[0].file, before.passages[0].file);
+            }
+        }
+
+        fs::remove_dir_all(&root).expect("collision project should be removed");
+        let backups = backup_dir(&root);
+        if backups.exists() {
+            fs::remove_dir_all(backups).expect("collision backups should be removed");
+        }
+    }
+
+    #[test]
     fn graph_annotations_are_sidecar_metadata() {
         let root = temp_path("graph-annotation-project");
         let story: Story = serde_json::from_str(
@@ -2278,6 +2482,75 @@ file = "../outside.twee"
         ));
 
         fs::remove_dir_all(&root).expect("project should be removed");
+    }
+
+    #[test]
+    fn prepared_sidecar_is_atomic_and_sidecar_only_changes_create_backups() {
+        let root = temp_path("prepared-sidecar-transaction");
+        let project = Project::from_story(story());
+        let initial_sidecar = br#"{"version":1,"stories":[{"id":"story-1","selected":false}]}
+"#;
+        let changed_sidecar = br#"{"version":1,"stories":[{"id":"story-1","selected":true}]}
+"#;
+
+        let initial = save_project_path_with_prepared_sidecar(
+            &root,
+            &project,
+            &SaveOptions {
+                create_backup: false,
+                max_backups: 0,
+                write_generated_indexes: true,
+            },
+            Some(initial_sidecar),
+        )
+        .expect("project and prepared sidecar should save together");
+
+        assert!(initial.dirty);
+        assert_eq!(
+            fs::read(root.join(".twine/project.json")).expect("initial sidecar should read"),
+            initial_sidecar
+        );
+
+        let changed = save_project_path_with_prepared_sidecar(
+            &root,
+            &project,
+            &SaveOptions {
+                create_backup: true,
+                max_backups: 2,
+                write_generated_indexes: true,
+            },
+            Some(changed_sidecar),
+        )
+        .expect("sidecar-only change should commit atomically");
+        let backup = changed
+            .backup_path
+            .as_ref()
+            .expect("sidecar-only change should create a backup");
+
+        assert!(changed.dirty);
+        assert!(
+            changed
+                .changed_files
+                .contains(&PathBuf::from(".twine/project.json"))
+        );
+        assert_eq!(
+            fs::read(root.join(".twine/project.json")).expect("changed sidecar should read"),
+            changed_sidecar
+        );
+        assert_eq!(
+            fs::read(backup.join(".twine/project.json")).expect("backup sidecar should read"),
+            initial_sidecar
+        );
+        assert_eq!(
+            fs::read(root.join(MANIFEST_FILE)).expect("current manifest should read"),
+            fs::read(backup.join(MANIFEST_FILE)).expect("backup manifest should read")
+        );
+
+        fs::remove_dir_all(&root).expect("prepared-sidecar project should be removed");
+        let backups = backup_dir(&root);
+        if backups.exists() {
+            fs::remove_dir_all(backups).expect("prepared-sidecar backups should be removed");
+        }
     }
 
     #[test]

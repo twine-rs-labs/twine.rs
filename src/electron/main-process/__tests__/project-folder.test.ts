@@ -536,6 +536,130 @@ describe('project-folder native bridge', () => {
 		expect(moveMock).not.toHaveBeenCalled();
 	});
 
+	it('preserves a complete multi-story native save result and session baseline', async () => {
+		const rootPath = '/native/project.twine.rs';
+		const firstOriginal = fakeStory(1);
+		const secondOriginal = fakeStory(1);
+		const firstStory = {
+			...firstOriginal,
+			id: 'story-one',
+			name: 'Story One',
+			passages: firstOriginal.passages.map(passage => ({
+				...passage,
+				id: 'passage-one',
+				story: 'story-one',
+				text: '<img src="assets/one.png">'
+			}))
+		};
+		const secondStory = {
+			...secondOriginal,
+			id: 'story-two',
+			name: 'Story Two',
+			passages: secondOriginal.passages.map(passage => ({
+				...passage,
+				id: 'passage-two',
+				story: 'story-two',
+				text: '<img src="assets/two.png">'
+			}))
+		};
+		const storyIds = [firstStory.id, secondStory.id];
+		const stories = [firstStory, secondStory];
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-one"',
+			'name = "Story One"',
+			'[[stories.passages]]',
+			'id = "passage-one"',
+			'name = "Start One"',
+			'file = "passages/story-one/0001-start-one.twee"',
+			'[[stories]]',
+			'id = "story-two"',
+			'name = "Story Two"',
+			'[[stories.passages]]',
+			'id = "passage-two"',
+			'name = "Start Two"',
+			'file = "passages/story-two/0001-start-two.twee"'
+		].join('\n');
+		const files = [
+			{
+				fingerprint: '1:1',
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			...['assets/one.png', 'assets/two.png'].map(path => ({
+				fingerprint: '1:3',
+				kind: 'asset' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path,
+				sizeBytes: 3
+			}))
+		];
+		const nativeResult = {
+			passageTextLoaded: true,
+			rootPath,
+			stories,
+			storyIds
+		};
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : ''
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockReturnValue(files);
+		await startProjectSession(rootPath, undefined, [firstStory.id]);
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		captureNativeProjectAssetDigestsMock.mockImplementation(
+			async (_rootPath, requests) => ({
+				digests: requests.map((request: {path: string}) => ({
+					contentDigest: request.path.includes('one')
+						? '1'.repeat(64)
+						: '2'.repeat(64),
+					path: request.path
+				})),
+				failures: [],
+				totalSourceBytes: requests.length * 3
+			})
+		);
+		saveNativeProjectFolderMock.mockReturnValue(nativeResult);
+
+		const result = await saveProjectFolder(rootPath, firstStory);
+		const snapshot = await projectSessionSnapshot(rootPath);
+
+		expect(result).toEqual(nativeResult);
+		expect(rememberNativeProjectFolderMock).toHaveBeenLastCalledWith(
+			'mock-story-library/.twine/native-projects.json',
+			nativeResult
+		);
+		expect(snapshot.storyIds).toEqual(storyIds);
+		expect(captureNativeProjectAssetDigestsMock).toHaveBeenCalledWith(
+			rootPath,
+			[
+				{
+					expectedModifiedAtMs: 1,
+					expectedSizeBytes: 3,
+					path: 'assets/one.png'
+				},
+				{
+					expectedModifiedAtMs: 1,
+					expectedSizeBytes: 3,
+					path: 'assets/two.png'
+				}
+			]
+		);
+		expect(
+			projectSessionAssetReadBaselines(rootPath, [
+				'assets/one.png',
+				'assets/two.png'
+			]).map(baseline => baseline.expectedContentDigest)
+		).toEqual(['1'.repeat(64), '2'.repeat(64)]);
+	});
+
 	it('does not fall back after native save validation fails', async () => {
 		const story = fakeStory(1);
 
@@ -627,6 +751,43 @@ describe('project-folder native bridge', () => {
 			saveProjectFolder('/native/moon-castle.twine.rs', story)
 		).rejects.toThrow('Project schema 99');
 		expect(writeFileMock).not.toHaveBeenCalled();
+		expect(mkdirpMock).not.toHaveBeenCalled();
+	});
+
+	it('refuses a legacy multi-story save before mutating the project', async () => {
+		const original = fakeStory(1);
+		const story = {...original, id: 'story-one', name: 'Story One'};
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-one"',
+			'name = "Story One"',
+			'[[stories.passages]]',
+			'id = "passage-one"',
+			'name = "Start One"',
+			'file = "passages/story-one/0001-start-one.twee"',
+			'[[stories]]',
+			'id = "story-two"',
+			'name = "Story Two"',
+			'[[stories.passages]]',
+			'id = "passage-two"',
+			'name = "Start Two"',
+			'file = "passages/story-two/0001-start-two.twee"'
+		].join('\n');
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : ''
+		);
+
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story)
+		).rejects.toThrow(
+			'Legacy project compatibility saving cannot safely update a multi-story project.'
+		);
+		expect(writeFileMock).not.toHaveBeenCalled();
+		expect(moveMock).not.toHaveBeenCalled();
+		expect(mkdirMock).not.toHaveBeenCalled();
 		expect(mkdirpMock).not.toHaveBeenCalled();
 	});
 
@@ -1134,6 +1295,18 @@ describe('project-folder native bridge', () => {
 				}
 			]
 		};
+		const secondOriginal = fakeStory(1);
+		const secondStory = {
+			...secondOriginal,
+			id: 'story-two',
+			name: 'Story Two',
+			passages: secondOriginal.passages.map(passage => ({
+				...passage,
+				id: 'passage-two',
+				story: 'story-two',
+				text: secondPassageSource
+			}))
+		};
 		let manifestSource = [
 			'schema_version = 1',
 			'name = "Project"',
@@ -1269,9 +1442,21 @@ describe('project-folder native bridge', () => {
 		captureNativeProjectAssetDigestsMock.mockRejectedValueOnce(
 			Object.assign(new Error('busy'), {code: 'NATIVE_ASSET_READER_BUSY'})
 		);
+		saveNativeProjectFolderMock.mockImplementation(() => {
+			firstPassageSource = story.passages[0].text;
+
+			return {
+				passageTextLoaded: true,
+				rootPath: '/native/project.twine.rs',
+				stories: [story, secondStory],
+				storyIds: [story.id, secondStory.id]
+			};
+		});
 		await expect(
 			saveProjectFolder('/native/project.twine.rs', story)
-		).resolves.toEqual(expect.objectContaining({stories: [story]}));
+		).resolves.toEqual(
+			expect.objectContaining({stories: [story, secondStory]})
+		);
 
 		expect(firstPassageSource).toBe('<img src="assets/three.png">');
 		expect(

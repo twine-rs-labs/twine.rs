@@ -29,9 +29,11 @@ use std::{
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use twine_model::{GraphPosition, Passage, Project, ProjectSourceLayout, StoragePolicy, Story};
+#[cfg(test)]
+use twine_store::save_project_path;
 use twine_store::{
     LoadProjectOptions, LoadedProjectFile, SaveOptions, load_project_path_with_options,
-    load_project_path_with_receipt, save_project_path,
+    load_project_path_with_receipt, save_project_path_with_prepared_sidecar,
 };
 
 const IMPORT_ASSET_EXTENSIONS: &[&str] = &[
@@ -47,6 +49,7 @@ const NATIVE_ASSET_MAX_ENCODED_BYTES: u32 = 25 * 1024 * 1024;
 const NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT: usize = 25;
 const NATIVE_ASSET_DIGEST_MAX_REQUEST_COUNT: usize = 100;
 const NATIVE_ASSET_MAX_PATH_BYTES: usize = 4096;
+const MAX_RENDERER_PROJECT_SIDECAR_BYTES: usize = 2 * 1024 * 1024;
 
 type NativeResult<T> = napi::Result<T>;
 
@@ -722,40 +725,103 @@ fn save_project_folder_json_inner(
     let story = serde_json::from_value::<Story>(story_value.clone()).map_err(native_error)?;
     timings.json_parse_us = elapsed_us(started);
     let started = Instant::now();
-    let mut project = Project::from_story(story.clone());
-
-    project.manifest.app_version = "twine.rs-desktop".into();
-    project.manifest.storage = StoragePolicy {
-        message: "Native twine.rs desktop project folder".into(),
-        ..StoragePolicy::default()
+    let incoming_metadata = renderer_project_metadata(story_value);
+    let existing_metadata = if allow_create {
+        Vec::new()
+    } else {
+        read_renderer_project_sidecar_stories(&root).map_err(native_error)?
     };
-    if !allow_create && root.join("twine.toml").exists() {
-        let existing = load_project_path_with_options(&root, LoadProjectOptions::shell())
+    let project = if allow_create {
+        let mut project = Project::from_story(story.clone());
+
+        project.manifest.app_version = "twine.rs-desktop".into();
+        project.manifest.storage = StoragePolicy {
+            message: "Native twine.rs desktop project folder".into(),
+            ..StoragePolicy::default()
+        };
+        if let Some(source_layout) = source_layout.as_deref() {
+            project.manifest.set_source_layout(
+                story.id.clone(),
+                parse_project_source_layout(source_layout)?,
+            );
+        }
+
+        project
+    } else {
+        let mut project = load_project_path_with_options(&root, LoadProjectOptions::full())
             .map_err(native_error)?;
-        if existing
+        let existing_index = project
             .stories
             .iter()
-            .any(|existing_story| existing_story.id == story.id)
-        {
-            let existing_layout = existing.manifest.source_layout_for(&story.id);
+            .position(|existing_story| existing_story.id == story.id);
+        let existing_layout = existing_index.map(|_| project.manifest.source_layout_for(&story.id));
+        let old_target_passage_ids = existing_index
+            .map(|index| {
+                project.stories[index]
+                    .passages
+                    .iter()
+                    .map(|passage| passage.id.clone())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        let sibling_passage_ids = project
+            .stories
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| Some(*index) != existing_index)
+            .flat_map(|(_, sibling)| sibling.passages.iter().map(|passage| passage.id.clone()))
+            .collect::<BTreeSet<_>>();
+        let incoming_project = Project::from_story(story.clone());
 
+        project.layout.passages.retain(|passage_id, _| {
+            !old_target_passage_ids.contains(passage_id) || sibling_passage_ids.contains(passage_id)
+        });
+        project
+            .layout
+            .passages
+            .extend(incoming_project.layout.passages);
+
+        if let Some(color) = &story.color {
+            project
+                .library
+                .colors
+                .insert(story.id.clone(), color.clone());
+        } else {
+            project.library.colors.remove(&story.id);
+        }
+
+        if let Some(index) = existing_index {
+            project.stories[index] = story.clone();
+        } else {
+            project.stories.push(story.clone());
+            if !project.library.sort_order.contains(&story.id) {
+                project.library.sort_order.push(story.id.clone());
+            }
+        }
+
+        if let Some(existing_layout) = existing_layout {
             project
                 .manifest
                 .set_source_layout(story.id.clone(), existing_layout);
         } else if let Some(source_layout) = source_layout.as_deref() {
-            let source_layout = parse_project_source_layout(source_layout)?;
-
-            project
-                .manifest
-                .set_source_layout(story.id.clone(), source_layout);
+            project.manifest.set_source_layout(
+                story.id.clone(),
+                parse_project_source_layout(source_layout)?,
+            );
         }
-    } else if let Some(source_layout) = source_layout.as_deref() {
-        let source_layout = parse_project_source_layout(source_layout)?;
 
         project
-            .manifest
-            .set_source_layout(story.id.clone(), source_layout);
-    }
+    };
+    let merged_metadata = merge_renderer_project_metadata(
+        &project,
+        story.id.as_ref(),
+        incoming_metadata,
+        existing_metadata,
+    );
+    let sidecar_started = Instant::now();
+    let prepared_sidecar =
+        renderer_project_sidecar_bytes(&merged_metadata).map_err(native_error)?;
+    timings.sidecar_us = elapsed_us(sidecar_started);
     timings.project_build_us = elapsed_us(started);
 
     if allow_create {
@@ -765,14 +831,15 @@ fn save_project_folder_json_inner(
     }
 
     let started = Instant::now();
-    let save_report = save_project_path(
+    let save_report = save_project_path_with_prepared_sidecar(
         &root,
         &project,
         &SaveOptions {
-            create_backup: false,
+            create_backup: !allow_create,
             max_backups: project.manifest.storage.max_backups,
             write_generated_indexes: true,
         },
+        Some(&prepared_sidecar),
     )
     .map_err(native_error)?;
     timings.save_project_path_us = elapsed_us(started);
@@ -783,10 +850,15 @@ fn save_project_folder_json_inner(
     timings.dirty_compare_us = save_report.timings.dirty_compare_us;
     timings.root_swap_us = save_report.timings.root_swap_us;
     timings.write_temp_project_us = save_report.timings.write_temp_project_us;
-    let started = Instant::now();
-    write_renderer_project_sidecar(&root, story_value).map_err(native_error)?;
-    timings.sidecar_us = elapsed_us(started);
     timings.total_us = elapsed_us(total_started);
+
+    let stories = project
+        .stories
+        .iter()
+        .zip(&merged_metadata)
+        .map(|(story, metadata)| NativeStory::from_story_and_metadata(story, metadata))
+        .collect::<Vec<_>>();
+    let story_ids = stories.iter().map(|story| story.id.clone()).collect();
 
     json_string(&NativeProjectFolderResult {
         baseline_receipt: None,
@@ -796,8 +868,8 @@ fn save_project_folder_json_inner(
         performance_timings: performance_timings(timings),
         root_path,
         story_sources_loaded: true,
-        stories: vec![NativeStory::from_story(&story)],
-        story_ids: vec![story.id.as_ref().to_owned()],
+        stories,
+        story_ids,
     })
     .map_err(native_error)
 }
@@ -1795,6 +1867,61 @@ impl NativeStory {
             zoom: story.zoom,
         }
     }
+
+    fn from_story_and_metadata(story: &Story, metadata: &serde_json::Value) -> Self {
+        let mut native = Self::from_story(story);
+
+        native.selected = metadata
+            .get("selected")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(native.selected);
+        let passage_metadata = metadata
+            .get("passages")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|passage| Some((passage.get("id")?.as_str()?, passage)))
+            .collect::<BTreeMap<_, _>>();
+
+        for passage in &mut native.passages {
+            let Some(metadata) = passage_metadata.get(passage.id.as_str()) else {
+                continue;
+            };
+            let use_metadata_layout = passage.left == 0.0
+                && passage.top == 0.0
+                && passage.width == 100.0
+                && passage.height == 100.0;
+
+            passage.highlighted = metadata
+                .get("highlighted")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(passage.highlighted);
+            passage.selected = metadata
+                .get("selected")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(passage.selected);
+            if use_metadata_layout {
+                passage.height = metadata
+                    .get("height")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(passage.height);
+                passage.left = metadata
+                    .get("left")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(passage.left);
+                passage.top = metadata
+                    .get("top")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(passage.top);
+                passage.width = metadata
+                    .get("width")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(passage.width);
+            }
+        }
+
+        native
+    }
 }
 
 impl NativePassage {
@@ -1951,31 +2078,95 @@ fn best_twine_html_file(
     candidates.into_iter().next()
 }
 
-fn write_renderer_project_sidecar(
+fn read_renderer_project_sidecar_stories(
     root: &Path,
-    story: serde_json::Value,
-) -> Result<(), NativeBoxError> {
-    let sidecar_dir = root.join(".twine");
-    let sidecar_path = sidecar_dir.join("project.json");
-    let temp_path = sidecar_dir.join(format!("project.json.{}.tmp", timestamp_nanos()));
+) -> Result<Vec<serde_json::Value>, NativeBoxError> {
+    let path = root.join(".twine/project.json");
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut source = Vec::new();
+
+    file.take((MAX_RENDERER_PROJECT_SIDECAR_BYTES + 1) as u64)
+        .read_to_end(&mut source)?;
+    if source.len() > MAX_RENDERER_PROJECT_SIDECAR_BYTES {
+        return Err(format!(
+            "Renderer project sidecar exceeds the {} byte limit: {}",
+            MAX_RENDERER_PROJECT_SIDECAR_BYTES,
+            path.display()
+        )
+        .into());
+    }
+
+    let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&source) else {
+        return Ok(Vec::new());
+    };
+
+    Ok(payload
+        .get("stories")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn merge_renderer_project_metadata(
+    project: &Project,
+    target_story_id: &str,
+    incoming: serde_json::Value,
+    existing: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let existing_by_id = existing
+        .into_iter()
+        .filter_map(|story| {
+            let id = story.get("id")?.as_str()?.to_owned();
+
+            Some((id, renderer_project_metadata(story)))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    project
+        .stories
+        .iter()
+        .map(|story| {
+            if story.id.as_ref() == target_story_id {
+                return incoming.clone();
+            }
+
+            existing_by_id
+                .get(story.id.as_ref())
+                .cloned()
+                .unwrap_or_else(|| {
+                    renderer_project_metadata(
+                        serde_json::to_value(NativeStory::from_story(story))
+                            .expect("native story metadata should serialize"),
+                    )
+                })
+        })
+        .collect()
+}
+
+fn renderer_project_sidecar_bytes(
+    stories: &[serde_json::Value],
+) -> Result<Vec<u8>, NativeBoxError> {
     let payload = serde_json::json!({
         "schema": "twine.rs/renderer-project",
         "version": 1,
-        "stories": [renderer_project_metadata(story)]
+        "stories": stories
     });
+    let mut source = serde_json::to_vec(&payload)?;
 
-    fs::create_dir_all(&sidecar_dir)?;
-    fs::write(
-        &temp_path,
-        format!("{}\n", serde_json::to_string(&payload)?),
-    )?;
-
-    if sidecar_path.exists() {
-        fs::remove_file(&sidecar_path)?;
+    source.push(b'\n');
+    if source.len() > MAX_RENDERER_PROJECT_SIDECAR_BYTES {
+        return Err(format!(
+            "Renderer project sidecar output exceeds the {} byte limit.",
+            MAX_RENDERER_PROJECT_SIDECAR_BYTES
+        )
+        .into());
     }
 
-    fs::rename(temp_path, sidecar_path)?;
-    Ok(())
+    Ok(source)
 }
 
 fn default_project_library_index() -> NativeProjectLibraryIndex {
@@ -2870,6 +3061,40 @@ mod tests {
                 .expect("system time should be after epoch")
                 .as_nanos()
         ))
+    }
+
+    fn project_backup_root(root: &Path) -> PathBuf {
+        root.parent().expect("project parent").join(format!(
+            ".{}.backups",
+            root.file_name()
+                .expect("project file name")
+                .to_string_lossy()
+        ))
+    }
+
+    fn validation_story(selected: bool, text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "ifid": "VALIDATION-IFID",
+            "id": "validation-story",
+            "lastUpdate": "2026-07-22T00:00:00Z",
+            "name": "Validation",
+            "passages": [{
+                "height": 100,
+                "highlighted": false,
+                "id": "validation-passage",
+                "left": 0,
+                "name": "Start",
+                "selected": selected,
+                "story": "validation-story",
+                "text": text,
+                "top": 0,
+                "width": 100
+            }],
+            "script": "validation script",
+            "selected": selected,
+            "startPassage": "validation-passage",
+            "stylesheet": "validation style"
+        })
     }
 
     #[cfg(windows)]
@@ -3905,6 +4130,213 @@ mod tests {
     }
 
     #[test]
+    fn renderer_sidecar_reader_handles_missing_malformed_oversize_and_io_errors() {
+        let root = temp_path("sidecar-reader-policy");
+        let sidecar_path = root.join(".twine/project.json");
+
+        fs::create_dir_all(root.join(".twine")).expect("sidecar directory should be created");
+        assert!(
+            read_renderer_project_sidecar_stories(&root)
+                .expect("missing sidecar should be empty")
+                .is_empty()
+        );
+
+        fs::write(&sidecar_path, "{ malformed").expect("malformed sidecar fixture should write");
+        assert!(
+            read_renderer_project_sidecar_stories(&root)
+                .expect("malformed sidecar should fall back")
+                .is_empty()
+        );
+
+        fs::write(&sidecar_path, r#"{"stories":{"not":"an array"}}"#)
+            .expect("invalid-shape sidecar fixture should write");
+        assert!(
+            read_renderer_project_sidecar_stories(&root)
+                .expect("invalid sidecar shape should fall back")
+                .is_empty()
+        );
+
+        fs::write(
+            &sidecar_path,
+            vec![b'x'; MAX_RENDERER_PROJECT_SIDECAR_BYTES + 1],
+        )
+        .expect("oversized sidecar fixture should write");
+        let oversized = read_renderer_project_sidecar_stories(&root)
+            .expect_err("oversized sidecar should be rejected");
+
+        assert!(oversized.to_string().contains("exceeds"));
+
+        fs::remove_file(&sidecar_path).expect("oversized sidecar should be removed");
+        fs::create_dir(&sidecar_path).expect("sidecar path directory should be created");
+        let io_error = read_renderer_project_sidecar_stories(&root)
+            .expect_err("sidecar read errors should propagate");
+
+        assert!(!io_error.to_string().is_empty());
+        fs::remove_dir_all(root).expect("sidecar reader fixture should be removed");
+    }
+
+    #[test]
+    fn native_sidecar_preflight_read_failures_leave_canonical_project_unchanged() {
+        let root = temp_path("sidecar-read-no-mutation");
+        let story = validation_story(false, "canonical body");
+
+        create_project_folder_json(root.to_string_lossy().into_owned(), story.to_string(), None)
+            .expect("validation project should be created");
+        let manifest_before = fs::read(root.join("twine.toml")).expect("manifest should read");
+        let passage_before = fs::read(root.join("passages/validation/0001-start.twee"))
+            .expect("passage should read");
+        let sidecar_path = root.join(".twine/project.json");
+        let oversized_sidecar = vec![b'x'; MAX_RENDERER_PROJECT_SIDECAR_BYTES + 1];
+
+        fs::write(&sidecar_path, &oversized_sidecar)
+            .expect("oversized sidecar fixture should write");
+        let mut changed_story = story.clone();
+        changed_story["passages"][0]["text"] = serde_json::json!("must not commit");
+        let oversized_error = save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            changed_story.to_string(),
+            None,
+        )
+        .expect_err("oversized existing sidecar should fail before save");
+
+        assert!(oversized_error.reason.contains("exceeds"));
+        assert_eq!(fs::read(root.join("twine.toml")).unwrap(), manifest_before);
+        assert_eq!(
+            fs::read(root.join("passages/validation/0001-start.twee")).unwrap(),
+            passage_before
+        );
+        assert_eq!(fs::read(&sidecar_path).unwrap(), oversized_sidecar);
+        assert!(!project_backup_root(&root).exists());
+
+        fs::remove_file(&sidecar_path).expect("oversized sidecar should be removed");
+        fs::create_dir(&sidecar_path).expect("sidecar path directory should be created");
+        let io_error = save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            changed_story.to_string(),
+            None,
+        )
+        .expect_err("existing sidecar I/O error should fail before save");
+
+        assert!(!io_error.reason.is_empty());
+        assert_eq!(fs::read(root.join("twine.toml")).unwrap(), manifest_before);
+        assert_eq!(
+            fs::read(root.join("passages/validation/0001-start.twee")).unwrap(),
+            passage_before
+        );
+        assert!(sidecar_path.is_dir());
+        assert!(!project_backup_root(&root).exists());
+
+        fs::remove_dir_all(root).expect("sidecar read failure project should be removed");
+    }
+
+    #[test]
+    fn native_rejects_oversized_serialized_sidecar_before_save_or_reservation() {
+        let root = temp_path("serialized-sidecar-no-mutation");
+        let create_root = temp_path("serialized-sidecar-no-reservation");
+        let story = validation_story(false, "canonical body");
+
+        create_project_folder_json(root.to_string_lossy().into_owned(), story.to_string(), None)
+            .expect("validation project should be created");
+        let manifest_before = fs::read(root.join("twine.toml")).expect("manifest should read");
+        let passage_before = fs::read(root.join("passages/validation/0001-start.twee"))
+            .expect("passage should read");
+        let sidecar_before =
+            fs::read(root.join(".twine/project.json")).expect("sidecar should read");
+        let mut oversized_story = story;
+
+        oversized_story["editorState"] =
+            serde_json::json!("x".repeat(MAX_RENDERER_PROJECT_SIDECAR_BYTES));
+        let save_error = save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            oversized_story.to_string(),
+            None,
+        )
+        .expect_err("oversized serialized sidecar should fail before save");
+
+        assert!(save_error.reason.contains("output exceeds"));
+        assert_eq!(fs::read(root.join("twine.toml")).unwrap(), manifest_before);
+        assert_eq!(
+            fs::read(root.join("passages/validation/0001-start.twee")).unwrap(),
+            passage_before
+        );
+        assert_eq!(
+            fs::read(root.join(".twine/project.json")).unwrap(),
+            sidecar_before
+        );
+        assert!(!project_backup_root(&root).exists());
+
+        let create_error = create_project_folder_json(
+            create_root.to_string_lossy().into_owned(),
+            oversized_story.to_string(),
+            None,
+        )
+        .expect_err("oversized output should fail before reserving create root");
+
+        assert!(create_error.reason.contains("output exceeds"));
+        assert!(!create_root.exists());
+
+        fs::remove_dir_all(root).expect("serialized-sidecar project should be removed");
+    }
+
+    #[test]
+    fn native_sidecar_only_change_is_backed_up_and_swapped_atomically() {
+        let root = temp_path("sidecar-only-transaction");
+        let initial_story = validation_story(false, "unchanged body");
+
+        create_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            initial_story.to_string(),
+            None,
+        )
+        .expect("sidecar-only project should be created");
+        let manifest_before = fs::read(root.join("twine.toml")).expect("manifest should read");
+        let mut changed_story = initial_story;
+
+        changed_story["selected"] = serde_json::json!(true);
+        changed_story["passages"][0]["selected"] = serde_json::json!(true);
+        save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            changed_story.to_string(),
+            None,
+        )
+        .expect("sidecar-only change should save");
+
+        let backup_root = project_backup_root(&root);
+        let backups = fs::read_dir(&backup_root)
+            .expect("sidecar-only backup directory should exist")
+            .map(|entry| entry.expect("backup entry").path())
+            .collect::<Vec<_>>();
+
+        assert_eq!(backups.len(), 1);
+        let current_sidecar: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join(".twine/project.json")).expect("current sidecar should read"),
+        )
+        .expect("current sidecar should parse");
+        let backup_sidecar: serde_json::Value = serde_json::from_slice(
+            &fs::read(backups[0].join(".twine/project.json")).expect("backup sidecar should read"),
+        )
+        .expect("backup sidecar should parse");
+
+        assert_eq!(current_sidecar["stories"][0]["selected"], true);
+        assert_eq!(
+            current_sidecar["stories"][0]["passages"][0]["selected"],
+            true
+        );
+        assert_eq!(backup_sidecar["stories"][0]["selected"], false);
+        assert_eq!(
+            fs::read(root.join("twine.toml")).expect("current manifest should read"),
+            manifest_before
+        );
+        assert_eq!(
+            fs::read(backups[0].join("twine.toml")).expect("backup manifest should read"),
+            manifest_before
+        );
+
+        fs::remove_dir_all(root).expect("sidecar-only project should be removed");
+        fs::remove_dir_all(backup_root).expect("sidecar-only backups should be removed");
+    }
+
+    #[test]
     fn native_save_selects_single_twee_on_creation_and_preserves_it() {
         let root = temp_path("save-single-project");
         let mut story = serde_json::json!({
@@ -3973,6 +4405,359 @@ mod tests {
     }
 
     #[test]
+    fn native_save_merges_target_and_preserves_sibling_project_metadata_and_backup() {
+        let root = temp_path("save-multi-story-merge");
+        let first_value = serde_json::json!({
+            "color": "red",
+            "ifid": "FIRST-IFID",
+            "id": "first-story",
+            "lastUpdate": "2026-01-01T00:00:00Z",
+            "name": "First Story",
+            "passages": [{
+                "height": 110,
+                "id": "first-passage",
+                "left": 20,
+                "name": "First Start",
+                "story": "first-story",
+                "text": "First original body",
+                "top": 30,
+                "width": 120
+            }],
+            "script": "window.firstOriginal = true;",
+            "startPassage": "first-passage",
+            "stylesheet": ".first { color: red; }"
+        });
+        let second_value = serde_json::json!({
+            "color": "green",
+            "ifid": "SECOND-IFID",
+            "id": "second-story",
+            "lastUpdate": "2026-01-02T00:00:00Z",
+            "name": "Second Story",
+            "passages": [{
+                "height": 130,
+                "id": "second-passage",
+                "left": 80,
+                "name": "Second Start",
+                "story": "second-story",
+                "text": "Second sibling body",
+                "top": 90,
+                "width": 140
+            }],
+            "script": "window.secondSibling = true;",
+            "startPassage": "second-passage",
+            "stylesheet": ".second { color: green; }"
+        });
+        let first: Story =
+            serde_json::from_value(first_value.clone()).expect("first story should deserialize");
+        let second: Story =
+            serde_json::from_value(second_value.clone()).expect("second story should deserialize");
+        let mut project = Project::from_story(first.clone());
+
+        project.stories.push(second.clone());
+        project.library.sort_order.push(second.id.clone());
+        project
+            .library
+            .colors
+            .insert(second.id.clone(), "green".into());
+        project
+            .library
+            .metadata
+            .insert("library-mode".into(), serde_json::json!("manual"));
+        project
+            .layout
+            .passages
+            .extend(Project::from_story(second.clone()).layout.passages);
+        project
+            .layout
+            .metadata
+            .insert("viewport".into(), serde_json::json!({"x": 17}));
+        project.layout.annotations.insert(
+            "note-1".into(),
+            twine_model::GraphAnnotation {
+                id: "note-1".into(),
+                text: "Preserve this project annotation".into(),
+                ..twine_model::GraphAnnotation::default()
+            },
+        );
+        project.manifest.app_version = "existing-app".into();
+        project.manifest.name = "Existing Project Name".into();
+        project.manifest.storage.max_backups = 3;
+        project.manifest.storage.message = "existing storage message".into();
+        project
+            .manifest
+            .set_source_layout(second.id.clone(), ProjectSourceLayout::SingleTwee);
+
+        save_project_path(
+            &root,
+            &project,
+            &SaveOptions {
+                create_backup: false,
+                max_backups: 0,
+                write_generated_indexes: true,
+            },
+        )
+        .expect("two-story fixture should save");
+        let sidecar_stories = vec![
+            renderer_project_metadata(first_value.clone()),
+            renderer_project_metadata(serde_json::json!({
+                "editorPane": "right",
+                "id": "second-story",
+                "name": "Second Story",
+                "passages": [{
+                    "highlighted": true,
+                    "id": "second-passage",
+                    "selected": true,
+                    "text": "must not persist"
+                }],
+                "selected": true
+            })),
+        ];
+        fs::write(
+            root.join(".twine/project.json"),
+            renderer_project_sidecar_bytes(&sidecar_stories)
+                .expect("initial sidecar should serialize"),
+        )
+        .expect("initial sidecar should save");
+
+        let incoming = serde_json::json!({
+            "color": "blue",
+            "ifid": "FIRST-IFID",
+            "id": "first-story",
+            "lastUpdate": "2026-07-22T00:00:00Z",
+            "name": "First Story Renamed",
+            "passages": [{
+                "height": 160,
+                "highlighted": true,
+                "id": "first-passage",
+                "left": 200,
+                "name": "First Start Renamed",
+                "selected": true,
+                "story": "first-story",
+                "text": "First updated body",
+                "top": 210,
+                "width": 170
+            }],
+            "script": "window.firstUpdated = true;",
+            "selected": true,
+            "startPassage": "first-passage",
+            "stylesheet": ".first { color: blue; }"
+        });
+        let result = save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            incoming.to_string(),
+            Some("single-twee".into()),
+        )
+        .expect("target story should merge into existing project");
+        let result: NativeProjectFolderResult =
+            serde_json::from_str(&result).expect("save result should parse");
+
+        assert_eq!(result.story_ids, ["first-story", "second-story"]);
+        assert_eq!(result.stories.len(), 2);
+        assert!(result.stories[0].selected);
+        assert!(result.stories[0].passages[0].selected);
+        assert!(result.stories[0].passages[0].highlighted);
+        assert!(result.stories[1].selected);
+        assert!(result.stories[1].passages[0].selected);
+        assert!(result.stories[1].passages[0].highlighted);
+        assert_eq!(result.stories[1].passages[0].text, "Second sibling body");
+
+        let loaded = load_project_path_with_options(&root, LoadProjectOptions::full())
+            .expect("merged project should load");
+
+        assert_eq!(loaded.stories.len(), 2);
+        assert_eq!(loaded.stories[0].name, "First Story Renamed");
+        assert_eq!(loaded.stories[0].passages[0].text, "First updated body");
+        assert_eq!(loaded.stories[0].script, "window.firstUpdated = true;");
+        assert_eq!(loaded.stories[0].stylesheet, ".first { color: blue; }");
+        assert_eq!(loaded.stories[1].name, "Second Story");
+        assert_eq!(loaded.stories[1].passages[0].text, "Second sibling body");
+        assert_eq!(loaded.stories[1].script, "window.secondSibling = true;");
+        assert_eq!(loaded.stories[1].stylesheet, ".second { color: green; }");
+        assert_eq!(loaded.manifest.name, "Existing Project Name");
+        assert_eq!(loaded.manifest.app_version, "existing-app");
+        assert_eq!(loaded.manifest.storage.max_backups, 3);
+        assert_eq!(loaded.manifest.storage.message, "existing storage message");
+        assert_eq!(
+            loaded.manifest.source_layout_for(&first.id),
+            ProjectSourceLayout::PassageFiles
+        );
+        assert_eq!(
+            loaded.manifest.source_layout_for(&second.id),
+            ProjectSourceLayout::SingleTwee
+        );
+        assert_eq!(
+            loaded.library.sort_order,
+            [first.id.clone(), second.id.clone()]
+        );
+        assert_eq!(loaded.library.colors[&first.id], "blue");
+        assert_eq!(loaded.library.colors[&second.id], "green");
+        assert_eq!(loaded.library.metadata["library-mode"], "manual");
+        assert_eq!(loaded.layout.metadata["viewport"]["x"], 17);
+        assert_eq!(
+            loaded.layout.annotations["note-1"].text,
+            "Preserve this project annotation"
+        );
+        assert_eq!(
+            loaded.layout.passages[&second.passages[0].id].bounds.left,
+            80.0
+        );
+        assert_eq!(
+            loaded.layout.passages[&first.passages[0].id].bounds.left,
+            200.0
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("passages/first-story/0001-first-start-renamed.twee"))
+                .expect("renamed target passage should use its existing story directory"),
+            "First updated body"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("story.twee"))
+                .expect("sibling single-twee source should remain")
+                .contains("Second sibling body"),
+            true
+        );
+
+        let sidecar: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join(".twine/project.json"))
+                .expect("merged sidecar should read"),
+        )
+        .expect("merged sidecar should parse");
+
+        assert_eq!(sidecar["stories"].as_array().map(Vec::len), Some(2));
+        assert_eq!(sidecar["stories"][0]["selected"], true);
+        assert_eq!(sidecar["stories"][0]["passages"][0]["highlighted"], true);
+        assert_eq!(sidecar["stories"][1]["editorPane"], "right");
+        assert_eq!(sidecar["stories"][1]["selected"], true);
+        assert!(sidecar["stories"][0]["passages"][0].get("text").is_none());
+        assert!(sidecar["stories"][1]["passages"][0].get("text").is_none());
+
+        let backup_root = root.parent().expect("project parent").join(format!(
+            ".{}.backups",
+            root.file_name()
+                .expect("project file name")
+                .to_string_lossy()
+        ));
+        let backups = fs::read_dir(&backup_root)
+            .expect("backup directory should exist")
+            .map(|entry| entry.expect("backup entry").path())
+            .collect::<Vec<_>>();
+
+        assert_eq!(backups.len(), 1);
+        assert!(
+            fs::read_to_string(backups[0].join("twine.toml"))
+                .expect("backup manifest should read")
+                .contains("name = \"First Story\"")
+        );
+        assert_eq!(
+            fs::read_to_string(backups[0].join("passages/first-story/0001-first-start.twee"))
+                .expect("backup target passage should read"),
+            "First original body"
+        );
+        assert_eq!(
+            fs::read_to_string(backups[0].join("scripts/second-story.js"))
+                .expect("backup sibling script should read"),
+            "window.secondSibling = true;"
+        );
+        assert!(
+            fs::read_to_string(backups[0].join(".twine/project.json"))
+                .expect("backup sidecar should read")
+                .contains("editorPane")
+        );
+
+        fs::remove_dir_all(root).expect("merged project should be removed");
+        fs::remove_dir_all(backup_root).expect("merged project backups should be removed");
+    }
+
+    #[test]
+    fn native_save_recovers_corrupt_sidecar_with_slim_model_fallbacks() {
+        let root = temp_path("save-corrupt-sidecar");
+        let first_value = serde_json::json!({
+            "ifid": "FIRST-IFID",
+            "id": "first-story",
+            "name": "First",
+            "passages": [{
+                "id": "first-passage",
+                "name": "Start",
+                "story": "first-story",
+                "text": "first original"
+            }],
+            "startPassage": "first-passage"
+        });
+        let second_value = serde_json::json!({
+            "ifid": "SECOND-IFID",
+            "id": "second-story",
+            "name": "Second",
+            "passages": [{
+                "id": "second-passage",
+                "name": "Start",
+                "story": "second-story",
+                "text": "second body"
+            }],
+            "script": "second script",
+            "startPassage": "second-passage",
+            "stylesheet": "second style"
+        });
+        let first: Story =
+            serde_json::from_value(first_value.clone()).expect("first story should deserialize");
+        let second: Story =
+            serde_json::from_value(second_value).expect("second story should deserialize");
+        let mut project = Project::from_story(first);
+
+        project.stories.push(second);
+        save_project_path(
+            &root,
+            &project,
+            &SaveOptions {
+                create_backup: false,
+                max_backups: 0,
+                write_generated_indexes: true,
+            },
+        )
+        .expect("corrupt-sidecar fixture should save");
+        fs::write(root.join(".twine/project.json"), "{ definitely not json")
+            .expect("sidecar should be corrupted");
+
+        let mut incoming = first_value;
+        incoming["passages"][0]["text"] = serde_json::json!("first updated");
+        save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            incoming.to_string(),
+            None,
+        )
+        .expect("corrupt metadata must not block canonical save");
+
+        let loaded = load_project_path_with_options(&root, LoadProjectOptions::full())
+            .expect("canonical project should remain readable");
+
+        assert_eq!(loaded.stories.len(), 2);
+        assert_eq!(loaded.stories[0].passages[0].text, "first updated");
+        assert_eq!(loaded.stories[1].passages[0].text, "second body");
+        assert_eq!(loaded.stories[1].script, "second script");
+        assert_eq!(loaded.stories[1].stylesheet, "second style");
+
+        let sidecar: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join(".twine/project.json"))
+                .expect("recovered sidecar should read"),
+        )
+        .expect("recovered sidecar should parse");
+
+        assert_eq!(sidecar["stories"].as_array().map(Vec::len), Some(2));
+        assert_eq!(sidecar["stories"][0]["id"], "first-story");
+        assert_eq!(sidecar["stories"][1]["id"], "second-story");
+        assert!(sidecar["stories"][0]["passages"][0].get("text").is_none());
+        assert!(sidecar["stories"][1]["passages"][0].get("text").is_none());
+
+        let backup_root = root.parent().expect("project parent").join(format!(
+            ".{}.backups",
+            root.file_name()
+                .expect("project file name")
+                .to_string_lossy()
+        ));
+        fs::remove_dir_all(root).expect("corrupt-sidecar project should be removed");
+        fs::remove_dir_all(backup_root).expect("corrupt-sidecar backups should be removed");
+    }
+
+    #[test]
     fn native_save_honors_explicit_layout_when_existing_folder_has_another_story() {
         let root = temp_path("save-layout-name-collision");
         let original = serde_json::json!({
@@ -4008,20 +4793,29 @@ mod tests {
             "startPassage": "new-passage"
         });
 
-        save_project_folder_json(
+        let result = save_project_folder_json(
             root.to_string_lossy().into_owned(),
             replacement.to_string(),
             Some("single-twee".into()),
         )
         .expect("explicit single layout should win for a new colliding story");
+        let result: NativeProjectFolderResult =
+            serde_json::from_str(&result).expect("save result should parse");
 
         let manifest = fs::read_to_string(root.join("twine.toml")).expect("manifest");
 
+        assert_eq!(result.story_ids, ["old-story", "new-story"]);
+        assert_eq!(result.stories.len(), 2);
+        assert!(manifest.contains("id = \"old-story\""));
         assert!(manifest.contains("id = \"new-story\""));
         assert!(manifest.contains("source_layout = \"single-twee\""));
         assert!(manifest.contains("source = \"story.twee\""));
         assert!(root.join("story.twee").exists());
-        assert!(!root.join("passages").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("passages/colliding-name/0001-start.twee"))
+                .expect("original passage should survive append"),
+            "Old body"
+        );
 
         fs::remove_dir_all(root).expect("collision project should be removed");
     }

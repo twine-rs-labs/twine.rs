@@ -5080,9 +5080,13 @@ export async function saveProjectFolder(
 	const baselineStarted = performance.now();
 
 	if (!incrementalProject) {
-		await refreshProjectSessionBaseline(rootPath, [story.id], {
-			stories: [story]
-		});
+		await refreshProjectSessionBaseline(
+			rootPath,
+			writtenProject?.storyIds ?? [story.id],
+			{
+				stories: writtenProject?.stories ?? [story]
+			}
+		);
 	}
 	const baselineRefreshUs = Math.max(
 		0,
@@ -5720,7 +5724,13 @@ async function writeProjectFolder(
 		// The native addon being unavailable is the only condition where the
 		// compatibility writer may run. Validate the complete manifest before any
 		// fallback write so a lookalike directory cannot be treated as a project.
-		await readProjectDescriptor(rootPath);
+		const descriptor = await readProjectDescriptor(rootPath);
+
+		if (descriptor.stories.length > 1) {
+			throw new Error(
+				'Legacy project compatibility saving cannot safely update a multi-story project.'
+			);
+		}
 	} else {
 		// Reserve the final path atomically. A preflight existence check would
 		// leave a window where another process could create the target before the

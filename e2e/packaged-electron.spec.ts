@@ -26,6 +26,32 @@ type DialogState = {
 	responses: Array<{canceled: boolean; filePaths: string[]}>;
 };
 
+type PackagedProjectStory = {
+	[key: string]: unknown;
+	id: string;
+	name: string;
+	passages: Array<{
+		[key: string]: unknown;
+		id: string;
+		text: string;
+	}>;
+	script: string;
+	stylesheet: string;
+};
+
+interface PackagedProjectWindow extends Window {
+	twineElectron?: {
+		hydrateProjectFolder(
+			rootPath: string,
+			storyIds?: string[]
+		): Promise<{stories: PackagedProjectStory[]; storyIds: string[]}>;
+		saveProjectFolder(
+			rootPath: string,
+			story: PackagedProjectStory
+		): Promise<{stories: PackagedProjectStory[]; storyIds: string[]}>;
+	};
+}
+
 function executableName() {
 	switch (process.platform) {
 		case 'darwin':
@@ -181,6 +207,27 @@ async function waitForSavedText(projectRoot: string, expected: string) {
 		.toContain(expected);
 }
 
+async function projectTextFiles(projectRoot: string) {
+	const entries = await readdir(projectRoot, {recursive: true});
+	const files = await Promise.all(
+		entries.map(async relativePath => {
+			try {
+				return {
+					relativePath,
+					source: await readFile(path.join(projectRoot, relativePath), 'utf8')
+				};
+			} catch {
+				// Recursive readdir also returns directories.
+				return undefined;
+			}
+		})
+	);
+
+	return files.filter(
+		(file): file is {relativePath: string; source: string} => !!file
+	);
+}
+
 function silentWav() {
 	const sampleRate = 8000;
 	const samples = Buffer.alloc(sampleRate / 10, 128);
@@ -309,8 +356,15 @@ async function openDialogCalls(app: ElectronApplication) {
 	});
 }
 
-test('packaged app creates, saves, routes, opens dialogs, and reopens a project', async () => {
+test('packaged app preserves sibling stories across full save, rename, and reopen', async () => {
 	const executablePath = await packagedExecutable();
+	const renamedStoryName = 'Packaged Sibling Renamed';
+	const siblingStoryId = 'packaged-sibling-story-id';
+	const siblingPassageId = 'packaged-sibling-passage-id';
+	const siblingStoryName = 'Packaged Sibling';
+	const siblingPassageText = 'Packaged sibling passage survived a full save.';
+	const siblingScript = 'window.packagedSiblingScript = "survived";';
+	const siblingStylesheet = '.packaged-sibling { color: rgb(12, 34, 56); }';
 	const createProfile = await mkdtemp(
 		path.join(os.tmpdir(), 'twine-rs-packaged-create-')
 	);
@@ -343,6 +397,340 @@ test('packaged app creates, saves, routes, opens dialogs, and reopens a project'
 			projectRoot,
 			'Packaged save survived the native bridge.'
 		);
+
+		const siblingSave = await page.evaluate(
+			async ({
+				passageId,
+				passageText,
+				rootPath,
+				script,
+				storyId,
+				storyName,
+				stylesheet
+			}) => {
+				const bridge = (window as PackagedProjectWindow).twineElectron;
+
+				if (!bridge) {
+					throw new Error('Desktop project bridge is unavailable.');
+				}
+				const hydrated = await bridge.hydrateProjectFolder(rootPath);
+				const originalStory = hydrated.stories[0];
+
+				if (!originalStory || hydrated.stories.length !== 1) {
+					throw new Error(
+						'Expected one story before adding the packaged sibling.'
+					);
+				}
+				const originalPassage = originalStory.passages[0];
+
+				if (!originalPassage) {
+					throw new Error(
+						'Expected the created story to have a start passage.'
+					);
+				}
+				const siblingStory = {
+					...originalStory,
+					id: storyId,
+					ifid: 'A1B2C3D4-E5F6-47A8-89B0-C1D2E3F4A5B6',
+					lastUpdate: new Date('2026-07-22T10:00:00.000Z'),
+					name: storyName,
+					passages: [
+						{
+							...originalPassage,
+							height: 140,
+							highlighted: true,
+							id: passageId,
+							left: 320,
+							name: 'Sibling Start',
+							selected: true,
+							story: storyId,
+							tags: ['packaged-regression'],
+							text: passageText,
+							top: 180,
+							width: 180
+						}
+					],
+					script,
+					selected: false,
+					startPassage: passageId,
+					stylesheet,
+					tagColors: {'packaged-regression': 'red'}
+				};
+				const saved = await bridge.saveProjectFolder(rootPath, siblingStory);
+
+				return {
+					originalStoryId: originalStory.id,
+					storyIds: saved.storyIds,
+					storyResultIds: saved.stories.map(story => story.id)
+				};
+			},
+			{
+				passageId: siblingPassageId,
+				passageText: siblingPassageText,
+				rootPath: projectRoot,
+				script: siblingScript,
+				storyId: siblingStoryId,
+				storyName: siblingStoryName,
+				stylesheet: siblingStylesheet
+			}
+		);
+		const originalStoryId = siblingSave.originalStoryId;
+
+		expect(siblingSave.storyIds).toHaveLength(2);
+		expect(siblingSave.storyIds).toEqual(
+			expect.arrayContaining([originalStoryId, siblingStoryId])
+		);
+		expect(siblingSave.storyResultIds).toEqual(
+			expect.arrayContaining([originalStoryId, siblingStoryId])
+		);
+		expect(siblingSave.storyResultIds).toHaveLength(2);
+
+		const renamedSave = await page.evaluate(
+			async ({name, rootPath, storyId}) => {
+				const bridge = (window as PackagedProjectWindow).twineElectron;
+
+				if (!bridge) {
+					throw new Error('Desktop project bridge is unavailable.');
+				}
+				const hydrated = await bridge.hydrateProjectFolder(rootPath);
+				const siblingStory = hydrated.stories.find(
+					story => story.id === storyId
+				);
+
+				if (!siblingStory) {
+					throw new Error('Canonical packaged sibling story is unavailable.');
+				}
+				const saved = await bridge.saveProjectFolder(rootPath, {
+					...siblingStory,
+					name
+				});
+
+				return {
+					stories: saved.stories.map(story => ({
+						id: story.id,
+						name: story.name
+					})),
+					storyIds: saved.storyIds
+				};
+			},
+			{name: renamedStoryName, rootPath: projectRoot, storyId: siblingStoryId}
+		);
+
+		expect(renamedSave.storyIds).toHaveLength(2);
+		expect(renamedSave.storyIds).toEqual(
+			expect.arrayContaining([originalStoryId, siblingStoryId])
+		);
+		expect(renamedSave.stories).toHaveLength(2);
+		expect(renamedSave.stories).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({id: originalStoryId, name: 'Packaged Smoke'}),
+				expect.objectContaining({
+					id: siblingStoryId,
+					name: renamedStoryName
+				})
+			])
+		);
+		await expect
+			.poll(
+				async () => readFile(path.join(projectRoot, 'twine.toml'), 'utf8'),
+				{
+					timeout: 30_000
+				}
+			)
+			.toContain(renamedStoryName);
+
+		const hydratedAfterRename = await page.evaluate(
+			async ({rootPath, storyIds}) => {
+				const bridge = (window as PackagedProjectWindow).twineElectron;
+
+				if (!bridge) {
+					throw new Error('Desktop project bridge is unavailable.');
+				}
+				const result = await bridge.hydrateProjectFolder(rootPath, storyIds);
+
+				return {
+					storyIds: result.storyIds,
+					stories: result.stories.map(story => ({
+						id: story.id,
+						name: story.name,
+						passages: story.passages.map(passage => ({
+							id: passage.id,
+							text: passage.text
+						})),
+						script: story.script,
+						stylesheet: story.stylesheet
+					}))
+				};
+			},
+			{rootPath: projectRoot, storyIds: [originalStoryId, siblingStoryId]}
+		);
+		const hydratedOriginal = hydratedAfterRename.stories.find(
+			story => story.id === originalStoryId
+		);
+		const hydratedSibling = hydratedAfterRename.stories.find(
+			story => story.id === siblingStoryId
+		);
+
+		expect(hydratedAfterRename.storyIds).toEqual(
+			expect.arrayContaining([originalStoryId, siblingStoryId])
+		);
+		expect(hydratedAfterRename.storyIds).toHaveLength(2);
+		expect(hydratedAfterRename.stories).toHaveLength(2);
+		expect(hydratedOriginal?.name).toBe('Packaged Smoke');
+		expect(hydratedOriginal?.passages).toHaveLength(1);
+		expect(hydratedOriginal?.passages[0]?.text).toContain(
+			'Packaged save survived the native bridge.'
+		);
+		expect(hydratedSibling).toEqual(
+			expect.objectContaining({
+				name: renamedStoryName,
+				passages: [
+					expect.objectContaining({
+						id: siblingPassageId,
+						text: siblingPassageText
+					})
+				],
+				script: siblingScript,
+				stylesheet: siblingStylesheet
+			})
+		);
+
+		const savedFiles = await projectTextFiles(projectRoot);
+		const manifest = savedFiles.find(
+			file => file.relativePath === 'twine.toml'
+		)?.source;
+		const rendererSidecar = JSON.parse(
+			savedFiles.find(file =>
+				file.relativePath.endsWith(path.join('.twine', 'project.json'))
+			)?.source ?? '{}'
+		) as {
+			stories?: Array<{
+				id?: string;
+				name?: string;
+				passages?: Array<{id?: string}>;
+			}>;
+		};
+
+		expect(manifest).toContain(`id = "${originalStoryId}"`);
+		expect(manifest).toContain(`id = "${siblingStoryId}"`);
+		expect(manifest).toContain('name = "Packaged Smoke"');
+		expect(manifest).toContain(`name = "${renamedStoryName}"`);
+		expect(
+			savedFiles.find(
+				file =>
+					file.relativePath.endsWith('.twee') &&
+					file.source.includes('Packaged save survived the native bridge.')
+			)
+		).toBeDefined();
+		expect(
+			savedFiles.find(
+				file =>
+					file.relativePath.endsWith('.twee') &&
+					file.source.includes(siblingPassageText)
+			)
+		).toBeDefined();
+		expect(
+			savedFiles.find(
+				file =>
+					file.relativePath.endsWith('.js') && file.source === siblingScript
+			)
+		).toBeDefined();
+		expect(
+			savedFiles.find(
+				file =>
+					file.relativePath.endsWith('.css') &&
+					file.source === siblingStylesheet
+			)
+		).toBeDefined();
+		expect(rendererSidecar.stories).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: originalStoryId,
+					name: 'Packaged Smoke'
+				}),
+				expect.objectContaining({
+					id: siblingStoryId,
+					name: renamedStoryName,
+					passages: [expect.objectContaining({id: siblingPassageId})]
+				})
+			])
+		);
+		expect(rendererSidecar.stories).toHaveLength(2);
+
+		const backupRoot = path.join(
+			path.dirname(projectRoot),
+			`.${path.basename(projectRoot)}.backups`
+		);
+
+		await expect
+			.poll(async () => readdir(backupRoot), {timeout: 30_000})
+			.not.toHaveLength(0);
+		const backupCandidates = await Promise.all(
+			(await readdir(backupRoot)).map(async name => ({
+				files: await projectTextFiles(path.join(backupRoot, name)),
+				name
+			}))
+		);
+		const preRenameBackup = backupCandidates.find(candidate => {
+			const source = candidate.files.find(
+				file => file.relativePath === 'twine.toml'
+			)?.source;
+
+			return (
+				source?.includes(`id = "${originalStoryId}"`) &&
+				source.includes(`id = "${siblingStoryId}"`) &&
+				source.includes('name = "Packaged Smoke"') &&
+				source.includes(`name = "${siblingStoryName}"`)
+			);
+		});
+
+		expect(preRenameBackup).toBeDefined();
+		expect(
+			preRenameBackup?.files.find(
+				file =>
+					file.relativePath.endsWith('.twee') &&
+					file.source.includes('Packaged save survived the native bridge.')
+			)
+		).toBeDefined();
+		expect(
+			preRenameBackup?.files.find(
+				file =>
+					file.relativePath.endsWith('.twee') &&
+					file.source.includes(siblingPassageText)
+			)
+		).toBeDefined();
+		expect(
+			preRenameBackup?.files.find(
+				file =>
+					file.relativePath.endsWith('.js') && file.source === siblingScript
+			)
+		).toBeDefined();
+		expect(
+			preRenameBackup?.files.find(
+				file =>
+					file.relativePath.endsWith('.css') &&
+					file.source === siblingStylesheet
+			)
+		).toBeDefined();
+		const backupSidecar = JSON.parse(
+			preRenameBackup?.files.find(file =>
+				file.relativePath.endsWith(path.join('.twine', 'project.json'))
+			)?.source ?? '{}'
+		) as {stories?: Array<{id?: string; name?: string}>};
+
+		expect(backupSidecar.stories).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: originalStoryId,
+					name: 'Packaged Smoke'
+				}),
+				expect.objectContaining({
+					id: siblingStoryId,
+					name: siblingStoryName
+				})
+			])
+		);
+		expect(backupSidecar.stories).toHaveLength(2);
 
 		const modeControls = page.getByRole('group', {name: 'Workspace Mode'});
 		await modeControls
@@ -414,6 +802,9 @@ test('packaged app creates, saves, routes, opens dialogs, and reopens a project'
 		await expect(
 			running.page.getByText('Packaged Smoke').first()
 		).toBeVisible();
+		await expect(
+			running.page.getByText(renamedStoryName).first()
+		).toBeVisible();
 		await running.page
 			.getByRole('button', {name: 'Open Packaged Smoke'})
 			.first()
@@ -427,6 +818,23 @@ test('packaged app creates, saves, routes, opens dialogs, and reopens a project'
 		await expect(sourceEditor(running.page)).toContainText(
 			'Packaged save survived the native bridge.'
 		);
+		await running.page.evaluate(() => {
+			window.location.hash = '#/';
+		});
+		await expect(running.page).toHaveURL(/#\/$/);
+		await running.page
+			.getByRole('button', {name: `Open ${renamedStoryName}`})
+			.first()
+			.click();
+		await expect(running.page).toHaveURL(
+			new RegExp(`#\\/stories\\/${siblingStoryId}$`)
+		);
+		await running.page
+			.getByRole('group', {name: 'Workspace Mode'})
+			.getByRole('tab')
+			.filter({hasText: /^Text$/})
+			.click();
+		await expect(sourceEditor(running.page)).toContainText(siblingPassageText);
 
 		expect(await openDialogCalls(running.app)).toEqual([
 			{properties: ['openDirectory'], title: 'Open Project Folder'},
