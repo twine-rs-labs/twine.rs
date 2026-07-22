@@ -1,5 +1,6 @@
 import {app, BrowserWindow, dialog, screen} from 'electron';
 import path from 'path';
+import {pathToFileURL} from 'url';
 import {initIpc, storyWritesReadyForQuit} from './ipc';
 import {initLocales} from './locales';
 import {initMenuBar} from './menu-bar';
@@ -24,12 +25,16 @@ import {
 import {initStoryPreviewProtocol} from './story-preview-protocol';
 import {openExternalUrl} from './external-url';
 import {setCommandLineOpenRequestNotifier} from './command-line';
+import {installPermissionPolicy} from './permission-policy';
 
 let mainWindow: BrowserWindow | null;
 
 async function createWindow() {
 	markMainPerformance('window-create-start');
 	const screenSize = screen.getPrimaryDisplay().workAreaSize;
+	const rendererUrl = pathToFileURL(
+		path.resolve(__dirname, '../../../../renderer/index.html')
+	).toString();
 
 	mainWindow = new BrowserWindow({
 		fullscreen: fullscreenPersistenceEnabled() && lastWindowFullscreen(),
@@ -46,6 +51,11 @@ async function createWindow() {
 			webSecurity: true
 		}
 	});
+	installPermissionPolicy(
+		mainWindow.webContents.session,
+		mainWindow.webContents,
+		rendererUrl
+	);
 	setCommandLineOpenRequestNotifier(() => {
 		mainWindow?.webContents.send('command-line-open-request');
 	});
@@ -58,12 +68,9 @@ async function createWindow() {
 		});
 	}
 
-	mainWindow.loadURL(
-		// Path is relative to this file in the electron-build/ directory that's
-		// created during `npm run build:electron-main`.
-		// app.isPackaged
-		`file://${path.resolve(__dirname, '../../../../renderer/index.html')}`
-	);
+	// Path is relative to this file in the electron-build/ directory that's
+	// created during `npm run build:electron-main`.
+	mainWindow.loadURL(rendererUrl);
 
 	mainWindow.once('ready-to-show', async () => {
 		markMainPerformance('window-ready-to-show');

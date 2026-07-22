@@ -2,10 +2,18 @@ import react from '@vitejs/plugin-react-swc';
 import browserslistToEsbuild from 'browserslist-to-esbuild';
 import {defineConfig} from 'vite';
 import checker from 'vite-plugin-checker';
-import {VitePWA} from 'vite-plugin-pwa';
+import {VitePWA, type VitePWAOptions} from 'vite-plugin-pwa';
 import packageJson from './package.json';
 
 const base = './';
+type ManifestTransform = NonNullable<
+	NonNullable<VitePWAOptions['workbox']>['manifestTransforms']
+>[number];
+const sortPrecacheManifest: ManifestTransform = manifestEntries => ({
+	manifest: [...manifestEntries].sort((left, right) =>
+		left.url < right.url ? -1 : left.url > right.url ? 1 : 0
+	)
+});
 
 export default defineConfig({
 	base,
@@ -34,6 +42,7 @@ export default defineConfig({
 		}),
 		react(),
 		VitePWA({
+			includeManifestIcons: false,
 			manifest: {
 				name: packageJson.productName,
 				short_name: packageJson.productName,
@@ -52,9 +61,12 @@ export default defineConfig({
 				]
 			},
 			registerType: 'autoUpdate',
-			includeAssets: ['locales/**', 'pwa/**', 'story-formats/**'],
 			workbox: {
-				globPatterns: ['**/*.{js,css,html,svg,woff,woff2}']
+				globPatterns: [
+					'**/*.{js,css,html,svg,woff,woff2,json,md,png}',
+					'**/LICENSE'
+				],
+				manifestTransforms: [sortPrecacheManifest]
 			}
 		})
 	],

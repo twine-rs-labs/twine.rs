@@ -9,7 +9,7 @@
 	"private": true,
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/klembot/twinejs"
+		"url": "https://github.com/twine-rs-labs/twine.rs"
 	},
 	"engines": {
 		"node": ">=24 <25",
@@ -123,6 +123,7 @@
 		"check:docs": "node scripts/check-documentation.mjs",
 		"check:core-boundaries": "node scripts/check-core-mutation-boundaries.mjs",
 		"check:no-codemirror5": "node scripts/check-no-codemirror5.mjs",
+		"check:web-reproducibility": "node scripts/check-web-reproducibility.mjs",
 		"dist": "run-s clean build:electron-release",
 		"e2e": "playwright test",
 		"e2e:electron:packaged": "playwright test --config playwright.packaged-electron.config.ts",

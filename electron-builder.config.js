@@ -47,6 +47,13 @@ module.exports = {
 	mac: {
 		artifactName: `${artifactProductName}-${pkg.version}-mac-\${arch}.\${ext}`,
 		category: 'public.app-category.developer-tools',
+		extendInfo: {
+			NSAudioCaptureUsageDescription: null,
+			NSBluetoothAlwaysUsageDescription: null,
+			NSBluetoothPeripheralUsageDescription: null,
+			NSCameraUsageDescription: null,
+			NSMicrophoneUsageDescription: null
+		},
 		forceCodeSigning: hasCompleteNotarizationEnv(process.env),
 		icon: `icons/app-${isPreview ? 'preview' : 'release'}.png`,
 		notarize: false,

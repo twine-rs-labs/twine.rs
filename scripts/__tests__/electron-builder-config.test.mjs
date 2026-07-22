@@ -125,6 +125,16 @@ test('desktop targets are architecture-specific and selected by the runner', () 
 	assert.doesNotMatch(config.mac.artifactName, /universal/);
 });
 
+test('macOS packages remove unsupported sensitive-device usage declarations', () => {
+	assert.deepEqual(config.mac.extendInfo, {
+		NSAudioCaptureUsageDescription: null,
+		NSBluetoothAlwaysUsageDescription: null,
+		NSBluetoothPeripheralUsageDescription: null,
+		NSCameraUsageDescription: null,
+		NSMicrophoneUsageDescription: null
+	});
+});
+
 test('complete notarization intent requires successful builder code signing', () => {
 	assert.equal(forceCodeSigningFor({}), false);
 	assert.equal(

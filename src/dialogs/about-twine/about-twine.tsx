@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {IconCode, IconHeart} from '@tabler/icons-react';
+import {IconCode, IconGitFork, IconHeart} from '@tabler/icons-react';
 import {ButtonBar} from '../../components/container/button-bar';
 import {DialogCard} from '../../components/container/dialog-card';
 import {IconLink} from '../../components/control/icon-link';
@@ -55,9 +55,14 @@ export const AboutTwineDialog: React.FC<DialogComponentProps> = props => {
 						variant="primary"
 					/>
 					<IconLink
-						href="https://github.com/klembot/twinejs"
+						href="https://github.com/twine-rs-labs/twine.rs"
 						icon={<IconCode />}
 						label={t('dialogs.aboutTwine.codeRepo')}
+					/>
+					<IconLink
+						href="https://github.com/klembot/twinejs"
+						icon={<IconGitFork />}
+						label={t('dialogs.aboutTwine.upstreamRepo')}
 					/>
 				</ButtonBar>
 			</div>

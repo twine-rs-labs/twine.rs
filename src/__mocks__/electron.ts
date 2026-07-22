@@ -19,9 +19,18 @@ export class BrowserWindow {
 
 	constructor() {
 		BrowserWindow.instances.push(this);
+		const session = {
+			on: jest.fn(),
+			setBluetoothPairingHandler: jest.fn(),
+			setDevicePermissionHandler: jest.fn(),
+			setDisplayMediaRequestHandler: jest.fn(),
+			setPermissionCheckHandler: jest.fn(),
+			setPermissionRequestHandler: jest.fn()
+		};
 		(this as any).webContents = {
 			on: jest.fn(),
 			send: jest.fn(),
+			session,
 			setWindowOpenHandler: jest.fn()
 		};
 	}

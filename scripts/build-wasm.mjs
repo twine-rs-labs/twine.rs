@@ -11,18 +11,10 @@ const rootDir = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	'..'
 );
-const rustupToolchain = path.join(
-	os.homedir(),
-	'.rustup',
-	'toolchains',
-	'stable-aarch64-apple-darwin'
-);
-const rustupCargo = path.join(rustupToolchain, 'bin', 'cargo');
-const rustupRustc = path.join(rustupToolchain, 'bin', 'rustc');
-const cargo =
-	process.env.CARGO ?? ((await exists(rustupCargo)) ? rustupCargo : 'cargo');
-const rustc =
-	process.env.RUSTC ?? ((await exists(rustupRustc)) ? rustupRustc : undefined);
+// Use the rustup proxy so rust-toolchain.toml selects the repository's pinned
+// compiler. A caller can still provide explicit binaries for controlled builds.
+const cargo = process.env.CARGO ?? 'cargo';
+const rustc = process.env.RUSTC;
 const wasmBindgen =
 	process.env.WASM_BINDGEN ??
 	((await exists(path.join(os.homedir(), '.cargo', 'bin', 'wasm-bindgen')))

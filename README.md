@@ -40,10 +40,10 @@ projects, and test the native core that supports the editor.
 
 ## Prerequisites
 
-- Node.js 20+
-- npm 10+
-- Rust stable toolchain with `cargo`, `rustfmt`, and `clippy`
-- Rust's `wasm32-unknown-unknown` target
+- Node.js 24.18.0 (also pinned in `.nvmrc` and CI)
+- npm 11+
+- `rustup`; `rust-toolchain.toml` pins Rust 1.96.0 with `rustfmt`, `clippy`,
+  and the `wasm32-unknown-unknown` target
 - `wasm-bindgen-cli` matching the version locked in `Cargo.lock` (currently
   0.2.125)
 - `mdbook` only if you build or serve the docs

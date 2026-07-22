@@ -24,10 +24,13 @@ describe('<AboutTwineDialog>', () => {
 		).toBe('https://twinery.org/donate');
 	});
 
-	it('displays a link to the code repo', () => {
+	it('distinguishes the Twine RS source repository from upstream TwineJS', () => {
 		renderComponent();
 		expect(
 			screen.getByText('dialogs.aboutTwine.codeRepo').getAttribute('href')
+		).toBe('https://github.com/twine-rs-labs/twine.rs');
+		expect(
+			screen.getByText('dialogs.aboutTwine.upstreamRepo').getAttribute('href')
 		).toBe('https://github.com/klembot/twinejs');
 	});
 
