@@ -3052,8 +3052,8 @@ impl ProjectSession {
             // field edits have one entity delta and never need a project clone.
             if changes.name.is_none() || !update_references {
                 return self.apply_passage_patch_incremental(
-                    &story_id,
-                    &passage_id,
+                    story_id,
+                    passage_id,
                     changes.clone(),
                     record_history,
                     "Update Passage",
@@ -3427,9 +3427,9 @@ impl ProjectSession {
                 applied.tags = Some(tags);
             }
             if let Some(layout) = changes.layout
-                && passage.layout.map(CoreRect::from) != Some(layout.clone())
+                && passage.layout.map(CoreRect::from) != Some(layout)
             {
-                passage.layout = Some(GraphPosition::from(layout.clone()));
+                passage.layout = Some(GraphPosition::from(layout));
                 applied.layout = Some(layout);
             }
             passage.clone()
@@ -3580,7 +3580,7 @@ impl ProjectSession {
             .map(|passage_move| {
                 (
                     PassageId::new(&passage_move.passage_id),
-                    GraphPosition::from(passage_move.bounds.clone()),
+                    GraphPosition::from(passage_move.bounds),
                 )
             })
             .collect::<BTreeMap<_, _>>();
@@ -4102,7 +4102,7 @@ impl ProjectSession {
                     if let Some(layout) = &changes.layout {
                         plan.candidate_fingerprints.insert(
                             format!("{prefix}:layout"),
-                            fingerprint(&Some(GraphPosition::from(layout.clone()))),
+                            fingerprint(&Some(GraphPosition::from(*layout))),
                         );
                     }
                     if let Some(name) = &changes.name {
@@ -4120,7 +4120,7 @@ impl ProjectSession {
                             .is_some_and(|existing_id| {
                                 planned_names
                                     .get(&(story_id.clone(), existing_id.as_ref().to_owned()))
-                                    .map_or(true, |planned_name| planned_name == name)
+                                    .is_none_or(|planned_name| planned_name == name)
                             });
                         if duplicate_planned || duplicate_existing {
                             return Err(CoreError::DuplicatePassageName(name.clone()));
@@ -4149,7 +4149,7 @@ impl ProjectSession {
                     }
                     plan.candidate_fingerprints.insert(
                         format!("passage:{story_id}:{passage_id}:layout"),
-                        fingerprint(&layout.clone().map(GraphPosition::from)),
+                        fingerprint(&(*layout).map(GraphPosition::from)),
                     );
                 }
                 CoreExternalChange::UpdateProjectLayout { layout_json } => {
@@ -4633,14 +4633,14 @@ impl ProjectSession {
                             passage.tags.clone_from(tags);
                         }
                         if let Some(layout) = &changes.layout {
-                            passage.layout = Some(GraphPosition::from(layout.clone()));
+                            passage.layout = Some(GraphPosition::from(*layout));
                         }
                     }
                     if let Some(layout) = &changes.layout {
                         self.project.layout.passages.set_bounds(
                             StoryId::new(story_id),
                             passage_id_model,
-                            GraphPosition::from(layout.clone()),
+                            GraphPosition::from(*layout),
                         );
                     }
                 }
@@ -4651,7 +4651,7 @@ impl ProjectSession {
                 } => {
                     let story_id_model = StoryId::new(story_id);
                     let passage_id_model = PassageId::new(passage_id);
-                    let bounds = layout.clone().map(GraphPosition::from);
+                    let bounds = (*layout).map(GraphPosition::from);
 
                     self.story_mut(story_id)?
                         .passage_by_id_mut(&passage_id_model)
@@ -5144,7 +5144,7 @@ impl ProjectSession {
                 let passage = story
                     .passages
                     .get_mut(&passage_id_model)
-                    .ok_or_else(|| CoreError::PassageNotFound(passage_id))?;
+                    .ok_or(CoreError::PassageNotFound(passage_id))?;
 
                 passage.layout = bounds;
                 if let Some(bounds) = bounds {
@@ -6939,6 +6939,7 @@ impl ProjectSession {
         }])
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn source_analysis(
         &mut self,
         story_id: &StoryId,
@@ -6953,13 +6954,12 @@ impl ProjectSession {
         let story_cache = self.analysis_cache.entry(story_id.clone()).or_default();
         let source_fingerprint = source_fingerprint(source);
 
-        if let Some(cached) = story_cache.get(source_id) {
-            if cached.name == name
-                && cached.source_fingerprint == source_fingerprint
-                && cached.tags == tags
-            {
-                return cached.clone();
-            }
+        if let Some(cached) = story_cache.get(source_id)
+            && cached.name == name
+            && cached.source_fingerprint == source_fingerprint
+            && cached.tags == tags
+        {
+            return cached.clone();
         }
 
         let analysis = SourceAnalysisCache {
@@ -7108,23 +7108,24 @@ impl ProjectSession {
             files.push(stylesheet_analysis.file.clone());
         }
 
-        if search_enabled && options.include_diagnostics {
-            if let Err(error) = &search_pattern {
-                diagnostics.push(CoreDiagnostic {
-                    code: "invalid-search-regex".into(),
-                    end: options.query.as_ref().map_or(0, String::len),
-                    line: 1,
-                    message: format!("Search regular expression is invalid: {error}"),
-                    passage_id: None,
-                    quick_fixes: vec![CoreQuickFix {
-                        command: "disable-regex-search".into(),
-                        title: "Turn off regular expressions".into(),
-                    }],
-                    severity: CoreDiagnosticSeverity::Error,
-                    source_id: metadata_source_id.clone(),
-                    start: 0,
-                });
-            }
+        if search_enabled
+            && options.include_diagnostics
+            && let Err(error) = &search_pattern
+        {
+            diagnostics.push(CoreDiagnostic {
+                code: "invalid-search-regex".into(),
+                end: options.query.as_ref().map_or(0, String::len),
+                line: 1,
+                message: format!("Search regular expression is invalid: {error}"),
+                passage_id: None,
+                quick_fixes: vec![CoreQuickFix {
+                    command: "disable-regex-search".into(),
+                    title: "Turn off regular expressions".into(),
+                }],
+                severity: CoreDiagnosticSeverity::Error,
+                source_id: metadata_source_id.clone(),
+                start: 0,
+            });
         }
 
         if search_enabled {
@@ -7972,7 +7973,7 @@ impl ProjectSession {
                 code: "duplicate-passage-name".into(),
                 end: passage_name.len(),
                 line: 1,
-                message: format!("Duplicate passage name \"{}\"", passage_name),
+                message: format!("Duplicate passage name \"{passage_name}\""),
                 passage_id: Some(passage_id.as_ref().to_owned()),
                 quick_fixes: vec![CoreQuickFix {
                     command: "rename-passage".into(),
@@ -9777,21 +9778,22 @@ fn search_hits_in_source(
         ));
     }
 
-    if hits.is_empty() && options.fuzzy {
-        if let Some((start, end, score)) = fuzzy_match(source, query, options.match_case) {
-            hits.push(search_hit(
-                options,
-                None,
-                source_id,
-                source_name,
-                source,
-                scope.clone(),
-                passage_id,
-                start,
-                end,
-                scope_rank(&scope) * 0.7 + score,
-            ));
-        }
+    if hits.is_empty()
+        && options.fuzzy
+        && let Some((start, end, score)) = fuzzy_match(source, query, options.match_case)
+    {
+        hits.push(search_hit(
+            options,
+            None,
+            source_id,
+            source_name,
+            source,
+            scope.clone(),
+            passage_id,
+            start,
+            end,
+            scope_rank(&scope) * 0.7 + score,
+        ));
     }
 
     hits
@@ -11428,33 +11430,33 @@ fn replace_link_content_target(content: &str, old_name: &str, new_name: &str) ->
         format!("][{setter}")
     };
 
-    if let Some((label, target)) = editable.rsplit_once("->") {
-        if target.trim() == old_name {
-            return format!(
-                "{label}->{}{}",
-                replace_preserving_padding(target, new_name),
-                setter
-            );
-        }
+    if let Some((label, target)) = editable.rsplit_once("->")
+        && target.trim() == old_name
+    {
+        return format!(
+            "{label}->{}{}",
+            replace_preserving_padding(target, new_name),
+            setter
+        );
     }
 
-    if let Some((target, label)) = editable.split_once("<-") {
-        if target.trim() == old_name {
-            return format!(
-                "{}<-{label}{setter}",
-                replace_preserving_padding(target, new_name)
-            );
-        }
+    if let Some((target, label)) = editable.split_once("<-")
+        && target.trim() == old_name
+    {
+        return format!(
+            "{}<-{label}{setter}",
+            replace_preserving_padding(target, new_name)
+        );
     }
 
-    if let Some((label, target)) = editable.rsplit_once('|') {
-        if target.trim() == old_name {
-            return format!(
-                "{label}|{}{}",
-                replace_preserving_padding(target, new_name),
-                setter
-            );
-        }
+    if let Some((label, target)) = editable.rsplit_once('|')
+        && target.trim() == old_name
+    {
+        return format!(
+            "{label}|{}{}",
+            replace_preserving_padding(target, new_name),
+            setter
+        );
     }
 
     if editable.trim() == old_name {
@@ -12586,7 +12588,7 @@ mod tests {
             session.story("story-1").unwrap().start_passage,
             original_start
         );
-        assert!(session.project.layout.metadata.get("source").is_none());
+        assert!(!session.project.layout.metadata.contains_key("source"));
         assert_eq!(
             session
                 .project

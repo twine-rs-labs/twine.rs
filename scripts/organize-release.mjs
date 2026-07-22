@@ -16,6 +16,7 @@ import {join} from 'node:path';
 const releaseDir = process.argv[2] || join(process.cwd(), 'release');
 const guideName = 'WHICH TO DOWNLOAD.md';
 const checksumsName = 'SHA256SUMS.txt';
+const artifactProductName = 'Twine-RS';
 
 const buckets = [
 	{
@@ -43,6 +44,55 @@ const builderMetadata = new Set([
 	guideName
 ]);
 
+function requiredArtifactMatrix(version) {
+	return [
+		{arch: 'x64', extension: 'exe', platform: 'win'},
+		{arch: 'x64', extension: 'dmg', platform: 'mac'},
+		{arch: 'arm64', extension: 'dmg', platform: 'mac'},
+		{arch: 'x64', extension: 'AppImage', platform: 'linux'},
+		{arch: 'x64', extension: 'zip', platform: 'linux'},
+		{arch: 'arm64', extension: 'AppImage', platform: 'linux'},
+		{arch: 'arm64', extension: 'zip', platform: 'linux'}
+	].map(requirement => ({
+		...requirement,
+		fileName: `${artifactProductName}-${version}-${requirement.platform}-${requirement.arch}.${requirement.extension}`,
+		label: `${requirement.platform}-${requirement.arch}.${requirement.extension}`
+	}));
+}
+
+function validateRequiredArtifacts(version) {
+	const files = safeReaddir(releaseDir).filter(name =>
+		safeStat(join(releaseDir, name))?.isFile()
+	);
+	const requirements = requiredArtifactMatrix(version);
+	const expectedNames = new Set(
+		requirements.map(requirement => requirement.fileName)
+	);
+	const problems = [];
+
+	for (const requirement of requirements) {
+		if (!files.includes(requirement.fileName)) {
+			problems.push(`missing ${requirement.label}: ${requirement.fileName}`);
+		}
+	}
+
+	const unexpected = files.filter(
+		name => !expectedNames.has(name) && !isBuilderMetadata(name)
+	);
+
+	if (unexpected.length > 0) {
+		problems.push(
+			`unexpected or duplicate artifact input: ${unexpected.join(', ')}`
+		);
+	}
+
+	if (problems.length > 0) {
+		throw new Error(
+			`required desktop artifact matrix is incomplete:\n- ${problems.join('\n- ')}`
+		);
+	}
+}
+
 function packageVersion() {
 	try {
 		const pkg = JSON.parse(
@@ -69,6 +119,14 @@ function isScratchDir(name, fullPath) {
 	}
 
 	return name === 'mac' && existsSync(join(fullPath, 'Twine RS.app'));
+}
+
+function isBuilderMetadata(name) {
+	return (
+		name.endsWith('.blockmap') ||
+		/^latest-.*\.ya?ml$/.test(name) ||
+		builderMetadata.has(name)
+	);
 }
 
 function removeBuilderScratchDirs() {
@@ -99,11 +157,7 @@ function bucketArtifacts() {
 			continue;
 		}
 
-		if (
-			name.endsWith('.blockmap') ||
-			/^latest-.*\.ya?ml$/.test(name) ||
-			builderMetadata.has(name)
-		) {
+		if (isBuilderMetadata(name)) {
 			rmSync(fullPath, {force: true});
 			dropped++;
 			continue;
@@ -329,20 +383,28 @@ function writeChecksums(downloads) {
 	writeFileSync(join(releaseDir, checksumsName), `${lines.join('\n')}\n`);
 }
 
-const removedDirs = removeBuilderScratchDirs();
-const {dropped, moved, perOs} = bucketArtifacts();
-const downloads = collectDownloads();
+const version = packageVersion();
 
-writeFileSync(
-	join(releaseDir, guideName),
-	releaseGuide(packageVersion(), downloads)
-);
-writeChecksums(downloads);
+try {
+	// Validate before deleting or moving anything so an incomplete matrix leaves
+	// the downloaded artifacts untouched for diagnosis or retry.
+	validateRequiredArtifacts(version);
 
-console.log(
-	`organize-release: ${moved} artifact(s) bucketed ` +
-		`(windows ${perOs.windows}, mac ${perOs.mac}, linux ${perOs.linux}), ` +
-		`${dropped} sidecar(s) removed, ${removedDirs} scratch dir(s) removed.`
-);
-console.log(`Guide written to release/${guideName}`);
-console.log('Downloads ready under release/{windows,mac,linux}/');
+	const removedDirs = removeBuilderScratchDirs();
+	const {dropped, moved, perOs} = bucketArtifacts();
+	const downloads = collectDownloads();
+
+	writeFileSync(join(releaseDir, guideName), releaseGuide(version, downloads));
+	writeChecksums(downloads);
+
+	console.log(
+		`organize-release: ${moved} artifact(s) bucketed ` +
+			`(windows ${perOs.windows}, mac ${perOs.mac}, linux ${perOs.linux}), ` +
+			`${dropped} sidecar(s) removed, ${removedDirs} scratch dir(s) removed.`
+	);
+	console.log(`Guide written to release/${guideName}`);
+	console.log('Downloads ready under release/{windows,mac,linux}/');
+} catch (error) {
+	console.error(`organize-release: ${error.message}`);
+	process.exitCode = 1;
+}

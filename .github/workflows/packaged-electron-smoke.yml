@@ -9,34 +9,48 @@ permissions:
   contents: read
 
 jobs:
-  packaged-smoke:
-    name: ${{ matrix.label }} packaged smoke
+  package-installable:
+    name: ${{ matrix.label }} installable smoke
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: Linux x64
+            platform: linux
             os: ubuntu-24.04
             arch: x64
+            artifacts: |
+              release/Twine-RS-*-linux-x64.AppImage
+              release/Twine-RS-*-linux-x64.zip
           - label: Linux ARM64
+            platform: linux
             os: ubuntu-24.04-arm
             arch: arm64
+            artifacts: |
+              release/Twine-RS-*-linux-arm64.AppImage
+              release/Twine-RS-*-linux-arm64.zip
           - label: macOS Intel
+            platform: mac
             os: macos-15-intel
             arch: x64
+            artifacts: release/Twine-RS-*-mac-x64.dmg
           - label: macOS ARM64
+            platform: mac
             os: macos-15
             arch: arm64
+            artifacts: release/Twine-RS-*-mac-arm64.dmg
           - label: Windows x64
+            platform: windows
             os: windows-2025
             arch: x64
+            artifacts: release/Twine-RS-*-win-x64.exe
 
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
       - name: Install Rust WASM tooling
         run: |
@@ -55,17 +69,96 @@ jobs:
           NODE_ENV: production
       - name: Test Windows native referenced-media hardening
         if: runner.os == 'Windows'
-        run: cargo test -p twine_native
-      - name: Package native unpacked app
-        run: npm run package:electron:dir -- --${{ matrix.arch }}
+        run: cargo test -p twine_native --locked
+      - name: Package installable artifacts
+        run: npm run package:electron:artifacts -- --${{ matrix.arch }}
         env:
           NODE_ENV: production
-      - name: Smoke packaged app on Windows
+      - name: Retain target artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Exercise Linux AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          app_image=$(ls release/Twine-RS-*-linux-${{ matrix.arch }}.AppImage)
+          chmod +x "$app_image"
+          APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "flushes a trailing"
+      - name: Extract and smoke Linux ZIP
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          extract_dir="$RUNNER_TEMP/twine-rs-linux-zip"
+          mkdir -p "$extract_dir"
+          unzip -q release/Twine-RS-*-linux-${{ matrix.arch }}.zip -d "$extract_dir"
+          TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged
+      - name: Mount and smoke macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mount_dir="$RUNNER_TEMP/twine-rs-dmg"
+          mkdir -p "$mount_dir"
+          hdiutil attach release/Twine-RS-*-mac-${{ matrix.arch }}.dmg -nobrowse -readonly -mountpoint "$mount_dir"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
+          hdiutil detach "$mount_dir"
+          trap - EXIT
+      - name: Install Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem release -Filter 'Twine-RS-*-win-x64.exe' | Select-Object -First 1
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'twine-rs-installed'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDirectory") -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "Installer exited with code $($process.ExitCode)."
+          }
+          $executable = Join-Path $installDirectory 'Twine RS.exe'
+          $uninstaller = Join-Path $installDirectory 'Uninstall Twine RS.exe'
+          if (!(Test-Path $executable) -or !(Test-Path $uninstaller)) {
+            throw 'The NSIS package did not install the expected application and uninstaller.'
+          }
+          "TWINE_E2E_EXECUTABLE=$executable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TWINE_E2E_UNINSTALLER=$uninstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Smoke installed Windows app
         if: runner.os == 'Windows'
         run: npm run e2e:electron:packaged
-      - name: Smoke packaged app on Linux
-        if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum npm run e2e:electron:packaged
-      - name: Smoke packaged app on macOS
-        if: runner.os == 'macOS'
-        run: npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
+      - name: Uninstall Windows package
+        if: always() && runner.os == 'Windows' && env.TWINE_E2E_UNINSTALLER != ''
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath $env:TWINE_E2E_UNINSTALLER -ArgumentList '/S' -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "Uninstaller exited with code $($process.ExitCode)."
+          }
+
+  assemble-release:
+    name: Validate complete desktop release
+    needs: package-installable
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Clear checked-in release samples
+        run: npm run release:clean
+      - name: Download every target artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: release
+          merge-multiple: true
+      - name: Validate and organize artifact matrix
+        run: npm run release:organize
+      - name: Retain complete organized release
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-complete
+          path: release
+          if-no-files-found: error
+          retention-days: 14

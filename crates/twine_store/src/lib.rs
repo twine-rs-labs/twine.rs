@@ -405,9 +405,9 @@ fn read_compiled_project_manifest(
     timings.manifest_cache_decode_us = elapsed_us(started);
     let miss_reason = if cache.format != MANIFEST_CACHE_FORMAT {
         Some("invalidCache")
-    } else if cache.version != MANIFEST_CACHE_VERSION {
-        Some("versionMismatch")
-    } else if cache.app_version != env!("CARGO_PKG_VERSION") {
+    } else if cache.version != MANIFEST_CACHE_VERSION
+        || cache.app_version != env!("CARGO_PKG_VERSION")
+    {
         Some("versionMismatch")
     } else if cache.project_schema_version != cache.project.schema_version {
         Some("schemaMismatch")
@@ -2932,7 +2932,7 @@ file = "passages/example/start.twee"
         assert!(matches!(
             result,
             Err(StoreError::UnsupportedUnmanagedProjectEntry(path))
-                if path == PathBuf::from("external-events")
+                if path == Path::new("external-events")
         ));
         assert!(fs::symlink_metadata(&fifo).is_ok());
 
@@ -3146,7 +3146,7 @@ file = "passages/example/start.twee"
         assert!(matches!(
             result,
             Err(StoreError::UnmanagedFileConflict(path))
-                if path == PathBuf::from("scripts/second.js")
+                if path == Path::new("scripts/second.js")
         ));
         assert_eq!(
             fs::read(root.join("scripts/second.js")).unwrap(),
@@ -3186,7 +3186,7 @@ file = "passages/example/start.twee"
         assert!(matches!(
             result,
             Err(StoreError::UnmanagedFileConflict(path))
-                if path == PathBuf::from("scripts/second.js")
+                if path == Path::new("scripts/second.js")
         ));
         assert!(root.join("scripts/second.js").is_dir());
         assert_eq!(
@@ -3388,7 +3388,7 @@ file = "../outside.twee"
 
         assert!(matches!(
             error,
-            StoreError::UnsafeProjectPath(path) if path == PathBuf::from("../outside.twee")
+            StoreError::UnsafeProjectPath(path) if path == Path::new("../outside.twee")
         ));
 
         fs::remove_dir_all(&root).expect("project should be removed");

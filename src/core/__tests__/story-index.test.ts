@@ -367,7 +367,9 @@ describe('storyToCoreIndex', () => {
 		story.passages[0].text =
 			'<img src="assets/Foo.png"><img src="assets/foo.png">';
 
-		const paths = storyToCoreIndex(story).assetInventory.map(asset => asset.path);
+		const paths = storyToCoreIndex(story).assetInventory.map(
+			asset => asset.path
+		);
 
 		expect(paths).toHaveLength(2);
 		expect(paths).toEqual(

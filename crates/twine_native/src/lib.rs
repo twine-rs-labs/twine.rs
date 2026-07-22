@@ -2459,8 +2459,7 @@ fn renderer_project_sidecar_bytes(
     source.push(b'\n');
     if source.len() > MAX_RENDERER_PROJECT_SIDECAR_BYTES {
         return Err(format!(
-            "Renderer project sidecar output exceeds the {} byte limit.",
-            MAX_RENDERER_PROJECT_SIDECAR_BYTES
+            "Renderer project sidecar output exceeds the {MAX_RENDERER_PROJECT_SIDECAR_BYTES} byte limit."
         )
         .into());
     }
@@ -5318,11 +5317,10 @@ mod tests {
                 .expect("renamed target passage should use its existing story directory"),
             "First updated body"
         );
-        assert_eq!(
+        assert!(
             fs::read_to_string(root.join("story.twee"))
                 .expect("sibling single-twee source should remain")
-                .contains("Second sibling body"),
-            true
+                .contains("Second sibling body")
         );
 
         let sidecar: serde_json::Value = serde_json::from_str(

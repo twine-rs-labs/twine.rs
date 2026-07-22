@@ -39,5 +39,9 @@ test('release packaging targets only the current runner platform', () => {
 		scripts['build:electron-bundle'],
 		/--linux|--mac|--windows/
 	);
-	assert.match(scripts['build:electron-bundle'], /electron-builder/);
+	assert.match(
+		scripts['build:electron-bundle'],
+		/npm run package:electron:artifacts/
+	);
+	assert.match(scripts['package:electron:artifacts'], /electron-builder/);
 });

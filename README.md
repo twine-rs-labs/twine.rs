@@ -101,8 +101,8 @@ cargo lint
 cargo test --workspace
 ```
 
-`npm test` runs Jest in watch mode. `npm run dist` creates the Electron release
-build.
+`npm test` runs Jest in watch mode. `npm run dist` creates installable Electron
+artifacts for the current host target.
 
 ### Desktop Release
 
@@ -113,15 +113,19 @@ npm run dist
 This command builds the web renderer, Electron main process, and desktop package
 for the current operating system and CPU architecture. Native addons are built
 and verified for that exact target before packaging. The packaged-app CI matrix
-builds and smokes unpacked apps on Linux x64 and ARM64, macOS Intel and ARM64,
-and Windows x64. Publishable installers must likewise be produced on a matching
-target runner; the local release command does not cross-package other targets.
+builds and exercises installable AppImage and ZIP packages on Linux x64 and
+ARM64, DMGs on macOS Intel and ARM64, and the NSIS installer on Windows x64.
+Publishable installers must likewise be produced on a matching target runner;
+the local release command does not cross-package other targets.
 
-Finished local downloads are organized under the matching `release/mac`,
-`release/windows`, or `release/linux` directory, with
-`release/WHICH TO DOWNLOAD.md` and `release/SHA256SUMS.txt` written alongside
-them. macOS downloads are architecture-specific; choose the file matching the
-Mac's CPU.
+Local artifacts remain directly under `release/` because one host cannot
+produce the complete supported matrix. CI retains every target's outputs and,
+after all five target jobs pass, validates and organizes the seven required
+downloads under `release/mac`, `release/windows`, and `release/linux`. Only
+that complete bundle receives `release/WHICH TO DOWNLOAD.md` and
+`release/SHA256SUMS.txt`; `npm run release:organize` fails without changing its
+inputs if any required artifact is missing or duplicated. macOS downloads are
+architecture-specific; choose the file matching the Mac's CPU.
 
 Twine RS uses its own release version from `package.json` and the Rust workspace
 version in `Cargo.toml`. `package.json` also keeps `twineCompatibilityVersion`

@@ -1082,11 +1082,12 @@ pub fn passage_link_edges(story: &Story, passage: &Passage) -> Vec<LinkEdge> {
     .collect()
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GraphDirection {
     Incoming,
     Outgoing,
+    #[default]
     Both,
 }
 
@@ -1277,12 +1278,6 @@ impl Default for GraphFocus {
             passage_ids: Vec::new(),
             radius: 1,
         }
-    }
-}
-
-impl Default for GraphDirection {
-    fn default() -> Self {
-        Self::Both
     }
 }
 

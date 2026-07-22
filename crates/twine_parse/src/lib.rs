@@ -284,16 +284,16 @@ fn parse_twee_header(header: &str) -> Result<(String, Vec<String>, MetadataMap),
     let mut tags = Vec::new();
     let rest_trimmed = rest.trim_end();
 
-    if rest_trimmed.ends_with(']') {
-        if let Some(index) = find_last_unescaped(rest_trimmed, '[') {
-            let raw_tags = &rest_trimmed[index + 1..rest_trimmed.len() - 1];
+    if rest_trimmed.ends_with(']')
+        && let Some(index) = find_last_unescaped(rest_trimmed, '[')
+    {
+        let raw_tags = &rest_trimmed[index + 1..rest_trimmed.len() - 1];
 
-            tags = raw_tags
-                .split_whitespace()
-                .map(unescape_for_twee_header)
-                .collect();
-            rest = rest_trimmed[..index].trim_end().to_owned();
-        }
+        tags = raw_tags
+            .split_whitespace()
+            .map(unescape_for_twee_header)
+            .collect();
+        rest = rest_trimmed[..index].trim_end().to_owned();
     }
 
     let name =
@@ -1089,17 +1089,17 @@ fn decode_html_entities(value: &str) -> String {
             "quot" => result.push('"'),
             "apos" | "#39" => result.push('\''),
             _ if entity.starts_with("#x") => {
-                if let Ok(value) = u32::from_str_radix(&entity[2..], 16) {
-                    if let Some(character) = char::from_u32(value) {
-                        result.push(character);
-                    }
+                if let Ok(value) = u32::from_str_radix(&entity[2..], 16)
+                    && let Some(character) = char::from_u32(value)
+                {
+                    result.push(character);
                 }
             }
             _ if entity.starts_with('#') => {
-                if let Ok(value) = entity[1..].parse::<u32>() {
-                    if let Some(character) = char::from_u32(value) {
-                        result.push(character);
-                    }
+                if let Ok(value) = entity[1..].parse::<u32>()
+                    && let Some(character) = char::from_u32(value)
+                {
+                    result.push(character);
                 }
             }
             _ => {
