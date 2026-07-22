@@ -1,10 +1,9 @@
 import {constants as fsConstants, FSWatcher, watch} from 'fs';
 import {lstat, open as openFile, opendir, realpath} from 'fs/promises';
-import {createHash} from 'crypto';
+import {createHash, randomUUID} from 'crypto';
 import {tmpdir} from 'os';
 import {setImmediate} from 'timers';
 import {dialog, shell} from 'electron';
-import {v4 as uuid} from '@lukeed/uuid';
 import extractZip from 'extract-zip';
 import {open as openZip} from 'yauzl';
 import type {Entry as ZipEntry} from 'yauzl';
@@ -1886,7 +1885,7 @@ function descriptorFromBaselineReceipt(
 }
 
 async function writeJsonAtomic(path: string, data: unknown) {
-	const tempPath = `${path}.${uuid()}.tmp`;
+	const tempPath = `${path}.${randomUUID()}.tmp`;
 
 	try {
 		await writeFile(tempPath, `${JSON.stringify(data)}\n`, 'utf8');
@@ -4391,7 +4390,7 @@ async function readProjectSessionDelta(
 	const startedAt = performance.now();
 	const scanStartedAtEpochMs = performanceEpochNow();
 	const watcherTrace = session.pendingWatcherTrace;
-	const deltaId = watcherTrace?.deltaId ?? uuid();
+	const deltaId = watcherTrace?.deltaId ?? randomUUID();
 	const baseline = session.baseline!;
 	const hints = [...session.pathHints];
 
@@ -4823,7 +4822,7 @@ function installProjectSessionWatcher(session: ProjectSessionState) {
 			(_eventType, filename) => {
 				if (!session.pendingWatcherTrace) {
 					session.pendingWatcherTrace = {
-						deltaId: uuid(),
+						deltaId: randomUUID(),
 						observedAtEpochMs: performanceEpochNow()
 					};
 					recordWatcherTraceEvent({
@@ -4864,7 +4863,7 @@ function ensureProjectSession(rootPath: string) {
 			pathHints: new Set<string>(),
 			resolvedCandidates: new Map(),
 			rootPath,
-			sessionInstanceId: uuid()
+			sessionInstanceId: randomUUID()
 		};
 		projectSessions.set(key, session);
 	}
@@ -5457,6 +5456,17 @@ async function refreshProjectSessionBaseline(
 	}
 }
 
+async function refreshProjectSessionBaselineAfterAssetMutation(
+	rootPath: string
+) {
+	await refreshProjectSessionBaseline(rootPath).catch(error =>
+		warnBestEffortProjectMaintenance(
+			'Project asset session baseline refresh',
+			error
+		)
+	);
+}
+
 export async function createProjectFolder(
 	story: Story,
 	preferredParent?: string,
@@ -5597,7 +5607,7 @@ function incrementalSaveHints(
 }
 
 async function atomicWriteText(path: string, text: string) {
-	const tempPath = `${path}.${uuid()}.tmp`;
+	const tempPath = `${path}.${randomUUID()}.tmp`;
 
 	try {
 		await mkdirp(dirname(path));
@@ -6316,7 +6326,7 @@ export async function prepareProjectImport(
 			cleanupPath = nativeCleanupPath;
 			const preparedImport: NativeProjectImportSource = {
 				...source,
-				id: uuid()
+				id: randomUUID()
 			};
 
 			preparedProjectImports.set(preparedImport.id, {
@@ -6359,7 +6369,7 @@ export async function prepareProjectImport(
 		if (nativePreparedImport) {
 			const preparedImport: NativeProjectImportSource = {
 				...nativePreparedImport,
-				id: uuid()
+				id: randomUUID()
 			};
 
 			preparedProjectImports.set(preparedImport.id, {
@@ -6385,7 +6395,7 @@ export async function prepareProjectImport(
 			assets,
 			htmlFilePath,
 			htmlSource,
-			id: uuid(),
+			id: randomUUID(),
 			sourceKind,
 			sourcePath: absoluteSourcePath
 		};
@@ -6688,7 +6698,7 @@ export async function beginProjectFolderHydration(
 		};
 	}
 	const hydratedProjectFolder = await hydrateProjectFolder(rootPath, storyIds);
-	const hydrationId = uuid();
+	const hydrationId = randomUUID();
 	const passages = hydratedProjectFolder.stories.flatMap(story =>
 		story.passages.map(passage => ({passage, storyId: story.id}))
 	);
@@ -6824,7 +6834,7 @@ export async function copyProjectImportAssets(
 			const target = safeProjectAssetPath(rootPath, asset.targetPath);
 			const temporaryPath = join(
 				dirname(target.absolutePath),
-				`.${basename(target.absolutePath)}.import-${uuid()}.tmp`
+				`.${basename(target.absolutePath)}.import-${randomUUID()}.tmp`
 			);
 			let sourceHandle: Awaited<ReturnType<typeof openFile>> | undefined;
 			let targetHandle: Awaited<ReturnType<typeof openFile>> | undefined;
@@ -7042,6 +7052,18 @@ async function readAssetEffectJournal(token: string) {
 	) as Promise<NativeAssetEffectJournal>;
 }
 
+function requireAssetEffectRoot(
+	journal: NativeAssetEffectJournal,
+	expectedRootPath?: string
+) {
+	if (
+		expectedRootPath &&
+		resolve(journal.rootPath) !== resolve(expectedRootPath)
+	) {
+		throw new Error('Asset effect does not belong to this project root.');
+	}
+}
+
 async function requireFingerprint(
 	path: string,
 	expected: string | undefined,
@@ -7060,7 +7082,7 @@ async function prepareAssetEffect(
 	journal: Omit<NativeAssetEffectJournal, 'token'>,
 	options: {backupPath?: string; forwardPath?: string} = {}
 ) {
-	const token = uuid();
+	const token = randomUUID();
 	const directory = assetEffectDirectory(token);
 	const prepared = {...journal, token};
 
@@ -7077,9 +7099,11 @@ async function prepareAssetEffect(
 
 export async function applyProjectAssetEffect(
 	effectToken: string,
-	direction: 'redo' | 'undo'
+	direction: 'redo' | 'undo',
+	expectedRootPath?: string
 ) {
 	const journal = await readAssetEffectJournal(effectToken);
+	requireAssetEffectRoot(journal, expectedRootPath);
 	const directory = assetEffectDirectory(effectToken);
 	const target = safeProjectAssetPath(journal.rootPath, journal.targetPath);
 	const oldAsset = journal.oldPath
@@ -7157,10 +7181,18 @@ export async function applyProjectAssetEffect(
 		});
 	}
 
-	await refreshProjectSessionBaseline(journal.rootPath);
+	await refreshProjectSessionBaselineAfterAssetMutation(journal.rootPath);
 }
 
-export async function discardProjectAssetEffect(effectToken: string) {
+export async function discardProjectAssetEffect(
+	effectToken: string,
+	expectedRootPath?: string
+) {
+	if (expectedRootPath) {
+		const journal = await readAssetEffectJournal(effectToken);
+
+		requireAssetEffectRoot(journal, expectedRootPath);
+	}
 	await remove(assetEffectDirectory(effectToken));
 }
 
@@ -7202,7 +7234,7 @@ export async function copyAssetToProject(
 		await discardProjectAssetEffect(journal.token);
 		throw error;
 	}
-	await refreshProjectSessionBaseline(rootPath);
+	await refreshProjectSessionBaselineAfterAssetMutation(rootPath);
 
 	return {
 		effectToken: journal.token,
@@ -7249,7 +7281,7 @@ export async function renameProjectAsset(
 		await discardProjectAssetEffect(journal.token);
 		throw error;
 	}
-	await refreshProjectSessionBaseline(rootPath);
+	await refreshProjectSessionBaselineAfterAssetMutation(rootPath);
 
 	return {
 		effectToken: journal.token,
@@ -7293,7 +7325,7 @@ export async function replaceProjectAsset(
 		await discardProjectAssetEffect(journal.token);
 		throw error;
 	}
-	await refreshProjectSessionBaseline(rootPath);
+	await refreshProjectSessionBaselineAfterAssetMutation(rootPath);
 
 	return {
 		effectToken: journal.token,
@@ -7333,7 +7365,7 @@ export async function deleteProjectAsset(
 		await discardProjectAssetEffect(journal.token);
 		throw error;
 	}
-	await refreshProjectSessionBaseline(rootPath);
+	await refreshProjectSessionBaselineAfterAssetMutation(rootPath);
 	return {
 		effectToken: journal.token,
 		sourcePath: asset.absolutePath,

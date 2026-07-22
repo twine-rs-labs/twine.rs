@@ -33,11 +33,14 @@ import {
 	updateNativeAppPlatformSettings
 } from '../platform-settings';
 import {
+	applyProjectAssetEffect,
 	chooseAssetFile,
+	cleanupStaleProjectAssetEffects,
 	copyProjectImportAssets,
 	copyAssetToProject,
 	createProjectFolder,
 	deleteProjectAsset,
+	discardProjectAssetEffect,
 	discardProjectImport,
 	hydrateProjectFolder,
 	listProjectAssets,
@@ -82,6 +85,9 @@ describe('initIpc()', () => {
 	const loadStoryFormatsMock = loadStoryFormats as jest.Mock;
 	const loadStoryFormatPropertiesMock = loadStoryFormatProperties as jest.Mock;
 	const chooseAssetFileMock = chooseAssetFile as jest.Mock;
+	const applyProjectAssetEffectMock = applyProjectAssetEffect as jest.Mock;
+	const cleanupStaleProjectAssetEffectsMock =
+		cleanupStaleProjectAssetEffects as jest.Mock;
 	const copyAssetToProjectMock = copyAssetToProject as jest.Mock;
 	const copyProjectImportAssetsMock = copyProjectImportAssets as jest.Mock;
 	const chooseStoryDirectoryPathMock = chooseStoryDirectoryPath as jest.Mock;
@@ -90,6 +96,7 @@ describe('initIpc()', () => {
 		consumeCommandLineOpenPaths as jest.Mock;
 	const createProjectFolderMock = createProjectFolder as jest.Mock;
 	const deleteProjectAssetMock = deleteProjectAsset as jest.Mock;
+	const discardProjectAssetEffectMock = discardProjectAssetEffect as jest.Mock;
 	const discardProjectImportMock = discardProjectImport as jest.Mock;
 	const getBackupDirectoryPathMock = getBackupDirectoryPath as jest.Mock;
 	const getStoryDirectoryPathMock = getStoryDirectoryPath as jest.Mock;
@@ -143,6 +150,8 @@ describe('initIpc()', () => {
 		showItemInFolderMock.mockClear();
 		openWithScratchPackageMock.mockClear();
 		chooseAssetFileMock.mockResolvedValue('/mock/asset.png');
+		applyProjectAssetEffectMock.mockResolvedValue(undefined);
+		cleanupStaleProjectAssetEffectsMock.mockResolvedValue(undefined);
 		copyAssetToProjectMock.mockResolvedValue({
 			sourcePath: '/mock/project/assets/asset.png',
 			targetPath: 'assets/asset.png'
@@ -161,6 +170,7 @@ describe('initIpc()', () => {
 		});
 		consumeCommandLineOpenPathsMock.mockReturnValue([]);
 		deleteProjectAssetMock.mockResolvedValue(undefined);
+		discardProjectAssetEffectMock.mockResolvedValue(undefined);
 		discardProjectImportMock.mockResolvedValue(undefined);
 		hydrateProjectFolderMock.mockResolvedValue({
 			rootPath: '/mock/project',
@@ -572,6 +582,128 @@ describe('initIpc()', () => {
 		);
 		await revealLibrary[1]();
 		expect(revealStoryDirectoryMock).toHaveBeenCalled();
+	});
+
+	it('binds and rotates asset effect capabilities at the IPC boundary', async () => {
+		const copyAsset = handleMock.mock.calls.find(
+			call => call[0] === 'copy-asset-to-project'
+		);
+		const applyEffect = handleMock.mock.calls.find(
+			call => call[0] === 'apply-project-asset-effect'
+		);
+		const discardEffect = handleMock.mock.calls.find(
+			call => call[0] === 'discard-project-asset-effect'
+		);
+		const renewEffects = handleMock.mock.calls.find(
+			call => call[0] === 'renew-project-asset-effects'
+		);
+		const owner = {id: 70, once: jest.fn()};
+		const stranger = {id: 71, once: jest.fn()};
+		const projectCapability = (
+			grantProjectCapability(
+				{sender: owner},
+				{rootPath: '/mock/project', stories: [], storyIds: []}
+			) as Record<string, unknown>
+		)[projectCapabilityField] as string;
+
+		copyAssetToProjectMock.mockResolvedValueOnce({
+			effectToken: 'private-journal-token',
+			sourcePath: '/mock/project/assets/asset.png',
+			targetPath: 'assets/asset.png'
+		});
+		const result = await copyAsset[1](
+			{sender: owner},
+			projectCapability,
+			'/mock/asset.png'
+		);
+
+		expect(result.effectToken).toEqual(expect.any(String));
+		expect(result.effectToken).not.toBe('private-journal-token');
+		await expect(
+			applyEffect[1]({sender: stranger}, result.effectToken, 'undo')
+		).rejects.toThrow('Unknown or expired');
+
+		const rotatedToken = await applyEffect[1](
+			{sender: owner},
+			result.effectToken,
+			'undo'
+		);
+
+		expect(rotatedToken).toEqual(expect.any(String));
+		expect(rotatedToken).not.toBe(result.effectToken);
+		expect(applyProjectAssetEffectMock).toHaveBeenCalledWith(
+			'private-journal-token',
+			'undo',
+			'/mock/project'
+		);
+		await expect(
+			applyEffect[1]({sender: owner}, result.effectToken, 'undo')
+		).rejects.toThrow('Unknown or expired');
+
+		await expect(
+			renewEffects[1]({sender: owner}, [rotatedToken])
+		).resolves.toEqual([]);
+		await discardEffect[1]({sender: owner}, rotatedToken);
+		expect(discardProjectAssetEffectMock).toHaveBeenCalledWith(
+			'private-journal-token',
+			'/mock/project'
+		);
+	});
+
+	it('reverts an asset mutation completed after its renderer session ends', async () => {
+		const copyAsset = handleMock.mock.calls.find(
+			call => call[0] === 'copy-asset-to-project'
+		);
+		const owner = {
+			id: 72,
+			on: jest.fn(),
+			once: jest.fn(),
+			removeListener: jest.fn()
+		};
+		const projectCapability = (
+			grantProjectCapability(
+				{sender: owner},
+				{rootPath: '/mock/project', stories: [], storyIds: []}
+			) as Record<string, unknown>
+		)[projectCapabilityField] as string;
+		let finishCopy!: (result: {
+			effectToken: string;
+			sourcePath: string;
+			targetPath: string;
+		}) => void;
+
+		copyAssetToProjectMock.mockReturnValueOnce(
+			new Promise(resolveCopy => {
+				finishCopy = resolveCopy;
+			})
+		);
+		const copying = copyAsset[1](
+			{sender: owner},
+			projectCapability,
+			'/mock/asset.png'
+		);
+
+		await Promise.resolve();
+		owner.on.mock.calls.find(call => call[0] === 'did-start-navigation')?.[1]({
+			isMainFrame: true,
+			isSameDocument: false
+		});
+		finishCopy({
+			effectToken: 'late-private-journal',
+			sourcePath: '/mock/project/assets/asset.png',
+			targetPath: 'assets/asset.png'
+		});
+
+		await expect(copying).rejects.toThrow('mutation was reverted');
+		expect(applyProjectAssetEffectMock).toHaveBeenCalledWith(
+			'late-private-journal',
+			'undo',
+			'/mock/project'
+		);
+		expect(discardProjectAssetEffectMock).toHaveBeenCalledWith(
+			'late-private-journal',
+			'/mock/project'
+		);
 	});
 
 	it('adds platform, backup, and command-line open handlers', async () => {

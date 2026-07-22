@@ -6021,6 +6021,81 @@ describe('project-folder native bridge', () => {
 		);
 	});
 
+	it('keeps a committed asset effect successful when baseline refresh fails', async () => {
+		const rootPath = '/native/refresh-failure.twine.rs';
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'name = "Story"',
+			'source_layout = "single-twee"',
+			'source = "story.twee"'
+		].join('\n');
+		const fingerprint = createHash('sha256')
+			.update('asset bytes')
+			.digest('hex');
+		let assetExists = true;
+
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockReturnValue([
+			{
+				fingerprint: '1:1',
+				kind: 'manifest',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 1
+			},
+			{
+				fingerprint: '1:1',
+				kind: 'passage',
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'story.twee',
+				sizeBytes: 1
+			}
+		]);
+		readFileMock.mockImplementation(async path => {
+			if (String(path).endsWith('twine.toml')) {
+				return manifestSource;
+			}
+			if (String(path).endsWith('assets/cover.png')) {
+				if (!assetExists) {
+					throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+				}
+				return 'asset bytes';
+			}
+			return '';
+		});
+
+		try {
+			await startProjectSession(rootPath, undefined, ['story-id']);
+			readJsonMock.mockResolvedValue({
+				afterFingerprint: fingerprint,
+				kind: 'import',
+				rootPath,
+				targetPath: 'assets/cover.png',
+				token: 'effect-refresh-failure'
+			});
+			removeMock.mockImplementation(async path => {
+				if (String(path).endsWith('assets/cover.png')) {
+					assetExists = false;
+				}
+			});
+			nativeProjectFileManifestMock.mockImplementation(() => {
+				throw new Error('baseline refresh failed');
+			});
+
+			await expect(
+				applyProjectAssetEffect('effect-refresh-failure', 'undo', rootPath)
+			).resolves.toBeUndefined();
+			expect(assetExists).toBe(false);
+		} finally {
+			stopProjectSession(rootPath);
+		}
+	});
+
 	it('stops asset undo when the journaled file was externally modified', async () => {
 		readJsonMock.mockResolvedValue({
 			afterFingerprint: 'expected',
@@ -6036,6 +6111,30 @@ describe('project-folder native bridge', () => {
 		);
 		expect(removeMock).not.toHaveBeenCalledWith(
 			'/native/project.twine.rs/assets/cover.png'
+		);
+	});
+
+	it('rejects asset journals bound to a different project root', async () => {
+		readJsonMock.mockResolvedValue({
+			afterFingerprint: 'expected',
+			kind: 'replace',
+			rootPath: '/native/other.twine.rs',
+			targetPath: 'assets/cover.png',
+			token: 'effect-other'
+		});
+
+		await expect(
+			applyProjectAssetEffect(
+				'effect-other',
+				'undo',
+				'/native/project.twine.rs'
+			)
+		).rejects.toThrow('does not belong to this project root');
+		await expect(
+			discardProjectAssetEffect('effect-other', '/native/project.twine.rs')
+		).rejects.toThrow('does not belong to this project root');
+		expect(removeMock).not.toHaveBeenCalledWith(
+			expect.stringContaining('effect-other')
 		);
 	});
 

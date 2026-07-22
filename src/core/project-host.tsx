@@ -1204,11 +1204,16 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	}
 
 	private async undoThroughWasm() {
-		const effectToken = this.undoEffects[this.undoEffects.length - 1];
+		let effectToken = this.undoEffects[this.undoEffects.length - 1];
 		let nativeApplied = false;
 
 		try {
-			await this.applyNativeEffect(effectToken, 'undo');
+			const rotatedToken = await this.applyNativeEffect(effectToken, 'undo');
+
+			if (effectToken && rotatedToken) {
+				this.replaceHistoryEffectToken(effectToken, rotatedToken);
+				effectToken = rotatedToken;
+			}
 			nativeApplied = !!effectToken;
 			const revision = await this.ensureWasmProjectSession();
 			const result = await this.wasmClient.undo(this.sessionId, revision);
@@ -1224,13 +1229,23 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				);
 				return result.batch;
 			}
-			await this.applyNativeEffect(effectToken, 'redo');
+			const restoredToken = await this.applyNativeEffect(effectToken, 'redo');
+
+			if (effectToken && restoredToken) {
+				this.replaceHistoryEffectToken(effectToken, restoredToken);
+				effectToken = restoredToken;
+			}
 			return undefined;
 		} catch (error) {
 			if (nativeApplied) {
-				await this.applyNativeEffect(effectToken, 'redo').catch(
-					() => undefined
-				);
+				const restoredToken = await this.applyNativeEffect(
+					effectToken,
+					'redo'
+				).catch(() => undefined);
+
+				if (restoredToken && effectToken) {
+					this.replaceHistoryEffectToken(effectToken, restoredToken);
+				}
 			}
 			console.error(`Rust project session undo failed: ${error}`);
 			throw error;
@@ -1254,11 +1269,16 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	}
 
 	private async redoThroughWasm() {
-		const effectToken = this.redoEffects[this.redoEffects.length - 1];
+		let effectToken = this.redoEffects[this.redoEffects.length - 1];
 		let nativeApplied = false;
 
 		try {
-			await this.applyNativeEffect(effectToken, 'redo');
+			const rotatedToken = await this.applyNativeEffect(effectToken, 'redo');
+
+			if (effectToken && rotatedToken) {
+				this.replaceHistoryEffectToken(effectToken, rotatedToken);
+				effectToken = rotatedToken;
+			}
 			nativeApplied = !!effectToken;
 			const revision = await this.ensureWasmProjectSession();
 			const result = await this.wasmClient.redo(this.sessionId, revision);
@@ -1274,13 +1294,23 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				);
 				return result.batch;
 			}
-			await this.applyNativeEffect(effectToken, 'undo');
+			const restoredToken = await this.applyNativeEffect(effectToken, 'undo');
+
+			if (effectToken && restoredToken) {
+				this.replaceHistoryEffectToken(effectToken, restoredToken);
+				effectToken = restoredToken;
+			}
 			return undefined;
 		} catch (error) {
 			if (nativeApplied) {
-				await this.applyNativeEffect(effectToken, 'undo').catch(
-					() => undefined
-				);
+				const restoredToken = await this.applyNativeEffect(
+					effectToken,
+					'undo'
+				).catch(() => undefined);
+
+				if (restoredToken && effectToken) {
+					this.replaceHistoryEffectToken(effectToken, restoredToken);
+				}
 			}
 			console.error(`Rust project session redo failed: ${error}`);
 			throw error;
@@ -1329,15 +1359,39 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		if (!bridge?.applyProjectAssetEffect) {
 			throw new Error('Native asset effect service is unavailable.');
 		}
-		await bridge.applyProjectAssetEffect(effectToken, direction);
+		return (
+			(await bridge.applyProjectAssetEffect(effectToken, direction)) ??
+			effectToken
+		);
+	}
+
+	private replaceHistoryEffectToken(current: string, replacement: string) {
+		for (const effects of [this.undoEffects, this.redoEffects]) {
+			const index = effects.lastIndexOf(current);
+
+			if (index !== -1) {
+				effects[index] = replacement;
+				return;
+			}
+		}
+	}
+
+	private discardNativeEffect(effectToken: string) {
+		const request = (
+			window as TwineElectronWindow
+		).twineElectron?.discardProjectAssetEffect?.(effectToken);
+
+		if (request) {
+			void request.catch(error =>
+				console.warn(`Could not discard native asset effect: ${error}`)
+			);
+		}
 	}
 
 	private recordHistoryEffect(effectToken: string | undefined) {
-		const bridge = (window as TwineElectronWindow).twineElectron;
-
 		for (const token of this.redoEffects) {
 			if (token) {
-				void bridge?.discardProjectAssetEffect?.(token);
+				this.discardNativeEffect(token);
 			}
 		}
 		this.redoEffects = [];
@@ -1346,7 +1400,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			const evicted = this.undoEffects.shift();
 
 			if (evicted) {
-				void bridge?.discardProjectAssetEffect?.(evicted);
+				this.discardNativeEffect(evicted);
 			}
 		}
 	}
@@ -1356,18 +1410,16 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			return;
 		}
 
-		await this.applyNativeEffect(effectToken, 'undo');
+		const discardToken = await this.applyNativeEffect(effectToken, 'undo');
 		await (
 			window as TwineElectronWindow
-		).twineElectron?.discardProjectAssetEffect?.(effectToken);
+		).twineElectron?.discardProjectAssetEffect?.(discardToken ?? effectToken);
 	}
 
 	disposeEffects() {
-		const bridge = (window as TwineElectronWindow).twineElectron;
-
 		for (const token of [...this.undoEffects, ...this.redoEffects]) {
 			if (token) {
-				void bridge?.discardProjectAssetEffect?.(token);
+				this.discardNativeEffect(token);
 			}
 		}
 		this.undoEffects = [];

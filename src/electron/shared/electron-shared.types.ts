@@ -354,7 +354,7 @@ export interface TwineElectronWindow extends Window {
 		applyProjectAssetEffect(
 			effectToken: string,
 			direction: 'redo' | 'undo'
-		): Promise<void>;
+		): Promise<string>;
 		discardProjectAssetEffect(effectToken: string): Promise<void>;
 		deleteProjectFolder(rootPath: string): Promise<void>;
 		discardProjectImport(importId: string): Promise<void>;

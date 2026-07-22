@@ -8,6 +8,8 @@ import type {ProjectSourceLayout, TwineElectronWindow} from '../shared';
 
 const projectCapabilityField = '__twineProjectCapability';
 const projectCapabilities = new Map<string, string>();
+const activeAssetEffectCapabilities = new Set<string>();
+const assetEffectRenewalIntervalMs = 60 * 60 * 1000;
 let legacyStoryWriteToken = 0;
 
 function rememberProjectCapability<T>(project: T): T {
@@ -44,6 +46,47 @@ function projectCapability(rootPath: string) {
 async function invokeProjectResult(channel: string, ...args: unknown[]) {
 	return rememberProjectCapability(await ipcRenderer.invoke(channel, ...args));
 }
+
+function rememberAssetEffectCapabilities<T>(result: T): T {
+	const results = Array.isArray(result) ? result : [result];
+
+	for (const item of results) {
+		if (
+			item &&
+			typeof item === 'object' &&
+			typeof (item as {effectToken?: unknown}).effectToken === 'string'
+		) {
+			activeAssetEffectCapabilities.add(
+				(item as {effectToken: string}).effectToken
+			);
+		}
+	}
+
+	return result;
+}
+
+async function invokeAssetEffectResult(channel: string, ...args: unknown[]) {
+	return rememberAssetEffectCapabilities(
+		await ipcRenderer.invoke(channel, ...args)
+	);
+}
+
+setInterval(() => {
+	if (activeAssetEffectCapabilities.size > 0) {
+		void ipcRenderer
+			.invoke('renew-project-asset-effects', [...activeAssetEffectCapabilities])
+			.then((rejectedCapabilities: unknown) => {
+				if (Array.isArray(rejectedCapabilities)) {
+					for (const capability of rejectedCapabilities) {
+						if (typeof capability === 'string') {
+							activeAssetEffectCapabilities.delete(capability);
+						}
+					}
+				}
+			})
+			.catch(() => undefined);
+	}
+}, assetEffectRenewalIntervalMs);
 
 const bridge = {
 	addLocalStoryFormat() {
@@ -87,21 +130,28 @@ const bridge = {
 		ipcRenderer.send('copy-text', text);
 	},
 	copyAssetToProject(rootPath: string, sourcePath: string) {
-		return ipcRenderer.invoke(
+		return invokeAssetEffectResult(
 			'copy-asset-to-project',
 			projectCapability(rootPath),
 			sourcePath
 		);
 	},
-	applyProjectAssetEffect(effectToken: string, direction: 'redo' | 'undo') {
-		return ipcRenderer.invoke(
+	async applyProjectAssetEffect(
+		effectToken: string,
+		direction: 'redo' | 'undo'
+	) {
+		const rotatedToken = await ipcRenderer.invoke(
 			'apply-project-asset-effect',
 			effectToken,
 			direction
 		);
+
+		activeAssetEffectCapabilities.delete(effectToken);
+		activeAssetEffectCapabilities.add(rotatedToken);
+		return rotatedToken;
 	},
 	copyProjectImportAssets(importId: string, rootPath: string) {
-		return ipcRenderer.invoke(
+		return invokeAssetEffectResult(
 			'copy-project-import-assets',
 			importId,
 			projectCapability(rootPath)
@@ -120,14 +170,15 @@ const bridge = {
 		);
 	},
 	deleteProjectAsset(rootPath: string, path: string) {
-		return ipcRenderer.invoke(
+		return invokeAssetEffectResult(
 			'delete-project-asset',
 			projectCapability(rootPath),
 			path
 		);
 	},
-	discardProjectAssetEffect(effectToken: string) {
-		return ipcRenderer.invoke('discard-project-asset-effect', effectToken);
+	async discardProjectAssetEffect(effectToken: string) {
+		await ipcRenderer.invoke('discard-project-asset-effect', effectToken);
+		activeAssetEffectCapabilities.delete(effectToken);
 	},
 	deleteProjectFolder(rootPath: string) {
 		return ipcRenderer
@@ -270,7 +321,7 @@ const bridge = {
 		ipcRenderer.send('reveal-path', path);
 	},
 	renameProjectAsset(rootPath: string, oldPath: string, newPath: string) {
-		return ipcRenderer.invoke(
+		return invokeAssetEffectResult(
 			'rename-project-asset',
 			projectCapability(rootPath),
 			oldPath,
@@ -281,7 +332,7 @@ const bridge = {
 		return ipcRenderer.invoke('rename-story', oldStory, newStory);
 	},
 	replaceProjectAsset(rootPath: string, path: string, sourcePath: string) {
-		return ipcRenderer.invoke(
+		return invokeAssetEffectResult(
 			'replace-project-asset',
 			projectCapability(rootPath),
 			path,

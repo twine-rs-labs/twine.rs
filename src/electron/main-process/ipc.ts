@@ -8,6 +8,7 @@ import {
 import debounce from 'lodash/debounce';
 import type {DebouncedFunc} from 'lodash';
 import {consumeCommandLineOpenPaths} from './command-line';
+import {createAssetEffectCapabilityRegistry} from './asset-effect-capabilities';
 import {i18n} from './locales';
 import {saveJsonFile} from './json-file';
 import {
@@ -93,6 +94,7 @@ import {
 } from './native';
 import type {
 	NativeCommandLineOpenResult,
+	NativeProjectAssetWriteResult,
 	NativeProjectAssetPayloadLimits,
 	NativePlatformSettingsUpdate,
 	ProjectSourceLayout
@@ -153,6 +155,36 @@ function nativePlatformSettings() {
 
 export function initIpc() {
 	quitAfterStoryWriteFlush = false;
+	const assetEffectCapabilities = createAssetEffectCapabilityRegistry({
+		cleanup: (journalToken, rootPath) =>
+			discardProjectAssetEffect(journalToken, rootPath)
+	});
+	const grantAssetEffect = async (
+		session: ReturnType<typeof assetEffectCapabilities.capture>,
+		rootPath: string,
+		result: NativeProjectAssetWriteResult | undefined
+	): Promise<NativeProjectAssetWriteResult | undefined> => {
+		if (!result?.effectToken) {
+			return result;
+		}
+		if (assetEffectCapabilities.isClosed(session)) {
+			await applyProjectAssetEffect(result.effectToken, 'undo', rootPath);
+			await discardProjectAssetEffect(result.effectToken, rootPath);
+			throw new Error(
+				'Asset mutation was reverted because its renderer session ended.'
+			);
+		}
+
+		return {
+			...result,
+			effectToken: assetEffectCapabilities.grant(
+				session,
+				result.effectToken,
+				rootPath
+			)
+		};
+	};
+
 	if (performanceHarnessEnabled()) {
 		ipcMain.handle('performance-harness-snapshot', async () => {
 			const processMemory = await process.getProcessMemoryInfo();
@@ -437,20 +469,26 @@ export function initIpc() {
 
 	ipcMain.handle(
 		'copy-asset-to-project',
-		async (event, capability: string, sourcePath: string) =>
-			copyAssetToProject(
-				resolveProjectCapability(event, capability),
-				sourcePath
-			)
+		async (event, capability: string, sourcePath: string) => {
+			const effectSession = assetEffectCapabilities.capture(event);
+			const rootPath = resolveProjectCapability(event, capability);
+			const result = await copyAssetToProject(rootPath, sourcePath);
+
+			return await grantAssetEffect(effectSession, rootPath, result);
+		}
 	);
 
 	ipcMain.handle(
 		'copy-project-import-assets',
-		async (event, importId: string, capability: string) =>
-			copyProjectImportAssets(
-				importId,
-				resolveProjectCapability(event, capability)
-			)
+		async (event, importId: string, capability: string) => {
+			const effectSession = assetEffectCapabilities.capture(event);
+			const rootPath = resolveProjectCapability(event, capability);
+			const results = await copyProjectImportAssets(importId, rootPath);
+
+			return await Promise.all(
+				results.map(result => grantAssetEffect(effectSession, rootPath, result))
+			);
+		}
 	);
 
 	ipcMain.handle('discard-project-import', async (_event, importId: string) =>
@@ -602,46 +640,71 @@ export function initIpc() {
 
 	ipcMain.handle(
 		'rename-project-asset',
-		async (event, capability: string, oldPath: string, newPath: string) =>
-			renameProjectAsset(
-				resolveProjectCapability(event, capability),
-				oldPath,
-				newPath
-			)
+		async (event, capability: string, oldPath: string, newPath: string) => {
+			const effectSession = assetEffectCapabilities.capture(event);
+			const rootPath = resolveProjectCapability(event, capability);
+			const result = await renameProjectAsset(rootPath, oldPath, newPath);
+
+			return await grantAssetEffect(effectSession, rootPath, result);
+		}
 	);
 
 	ipcMain.handle(
 		'replace-project-asset',
-		async (event, capability: string, path: string, sourcePath: string) =>
-			replaceProjectAsset(
-				resolveProjectCapability(event, capability),
-				path,
-				sourcePath
-			)
+		async (event, capability: string, path: string, sourcePath: string) => {
+			const effectSession = assetEffectCapabilities.capture(event);
+			const rootPath = resolveProjectCapability(event, capability);
+			const result = await replaceProjectAsset(rootPath, path, sourcePath);
+
+			return await grantAssetEffect(effectSession, rootPath, result);
+		}
 	);
 
 	ipcMain.handle(
 		'delete-project-asset',
-		async (event, capability: string, path: string) =>
-			deleteProjectAsset(resolveProjectCapability(event, capability), path)
+		async (event, capability: string, path: string) => {
+			const effectSession = assetEffectCapabilities.capture(event);
+			const rootPath = resolveProjectCapability(event, capability);
+			const result = await deleteProjectAsset(rootPath, path);
+
+			return await grantAssetEffect(effectSession, rootPath, result);
+		}
 	);
 
 	ipcMain.handle(
 		'apply-project-asset-effect',
-		async (_event, effectToken: string, direction: 'redo' | 'undo') =>
-			applyProjectAssetEffect(effectToken, direction)
+		async (event, effectToken: string, direction: 'redo' | 'undo') =>
+			assetEffectCapabilities.apply(
+				event,
+				effectToken,
+				direction,
+				(journalToken, rootPath, effectDirection) =>
+					applyProjectAssetEffect(journalToken, effectDirection, rootPath)
+			)
 	);
 
 	ipcMain.handle(
 		'discard-project-asset-effect',
-		async (_event, effectToken: string) =>
-			discardProjectAssetEffect(effectToken)
+		async (event, effectToken: string) =>
+			assetEffectCapabilities.discard(
+				event,
+				effectToken,
+				(journalToken, rootPath) =>
+					discardProjectAssetEffect(journalToken, rootPath)
+			)
+	);
+
+	ipcMain.handle(
+		'renew-project-asset-effects',
+		async (event, effectTokens: string[]) =>
+			assetEffectCapabilities.renew(event, effectTokens)
 	);
 
 	ipcMain.handle('delete-project-folder', async (event, capability: string) => {
 		const rootPath = resolveProjectCapability(event, capability);
 		const result = await deleteProjectFolder(rootPath);
 
+		assetEffectCapabilities.revokeRoot(event, rootPath);
 		revokeProjectCapability(event, capability);
 		return result;
 	});

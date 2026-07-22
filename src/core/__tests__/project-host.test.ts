@@ -629,7 +629,10 @@ describe('StoreCoreProjectHost asset commands', () => {
 	});
 
 	it('runs native asset effects before Rust undo and redo', async () => {
-		const applyProjectAssetEffect = jest.fn().mockResolvedValue(undefined);
+		const applyProjectAssetEffect = jest
+			.fn()
+			.mockResolvedValueOnce('effect-after-undo')
+			.mockResolvedValueOnce('effect-after-redo');
 		const wasmClient = fakeWasmClient(async () => batch([]));
 
 		wasmClient.undo.mockResolvedValue({
@@ -674,13 +677,15 @@ describe('StoreCoreProjectHost asset commands', () => {
 
 		expect(applyProjectAssetEffect.mock.calls).toEqual([
 			['effect-1', 'undo'],
-			['effect-1', 'redo']
+			['effect-after-undo', 'redo']
 		]);
 		delete (window as any).twineElectron;
 	});
 
 	it('rolls back a prepared native asset effect when Rust rejects it', async () => {
-		const applyProjectAssetEffect = jest.fn().mockResolvedValue(undefined);
+		const applyProjectAssetEffect = jest
+			.fn()
+			.mockResolvedValue('effect-after-rollback');
 		const discardProjectAssetEffect = jest.fn().mockResolvedValue(undefined);
 		const wasmClient = fakeWasmClient(async () => {
 			throw new Error('rejected');
@@ -706,7 +711,9 @@ describe('StoreCoreProjectHost asset commands', () => {
 		).rejects.toThrow('rejected');
 
 		expect(applyProjectAssetEffect).toHaveBeenCalledWith('effect-2', 'undo');
-		expect(discardProjectAssetEffect).toHaveBeenCalledWith('effect-2');
+		expect(discardProjectAssetEffect).toHaveBeenCalledWith(
+			'effect-after-rollback'
+		);
 		delete (window as any).twineElectron;
 	});
 
