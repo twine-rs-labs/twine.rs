@@ -6,6 +6,22 @@ import {openExternalUrl} from './external-url';
 
 const updateUrlEnvVar = 'TWINE_RS_UPDATE_URL';
 
+function redactedUrlForLog(value: string) {
+	let parsed: URL;
+
+	try {
+		parsed = new URL(value);
+	} catch {
+		return '[invalid URL]';
+	}
+
+	if (parsed.origin === 'null') {
+		return '[URL with opaque origin]';
+	}
+
+	return `${parsed.origin}${parsed.pathname === '/' ? '/' : '/[redacted]'}`;
+}
+
 interface VersionResponse {
 	/**
 	 * Build number, format yyyymmdd. Not used since 2.4.
@@ -35,14 +51,16 @@ export async function checkForUpdate() {
 		return;
 	}
 
-	console.log(`Checking for application update at ${checkUrl}`);
+	console.log(
+		`Checking for application update at ${redactedUrlForLog(checkUrl)}`
+	);
 
 	try {
 		const {url, version} = (await (
 			await globalThis.fetch(checkUrl)
 		).json()) as unknown as VersionResponse;
 
-		console.log(`Received version ${version}, url ${url}`);
+		console.log(`Received version ${version}, url ${redactedUrlForLog(url)}`);
 
 		if (gt(version, appVersion)) {
 			const {response} = await dialog.showMessageBox({

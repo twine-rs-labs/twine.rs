@@ -67,6 +67,61 @@ describe('checkForUpdate()', () => {
 				[expect.objectContaining({message: 'electron.updateCheck.upToDate'})]
 			]);
 		});
+
+		it('redacts credentials, paths, queries, and fragments from logs', async () => {
+			process.env.TWINE_RS_UPDATE_URL =
+				'https://check-user:check-password@Updates.Example:8443/?token=check-query-secret#check-fragment-secret';
+			fetchMock.mockResolvedValueOnce(
+				responseWithJson({
+					url: 'https://download-user:download-password@Downloads.Example:443/signed/private.pkg?sig=response-query-secret#response-fragment-secret',
+					version: '0.0.0'
+				})
+			);
+
+			await checkForUpdate();
+
+			expect(console.log).toHaveBeenCalledWith(
+				'Checking for application update at https://updates.example:8443/'
+			);
+			expect(console.log).toHaveBeenCalledWith(
+				'Received version 0.0.0, url https://downloads.example/[redacted]'
+			);
+			const loggedText = (console.log as jest.Mock).mock.calls
+				.flat()
+				.join('\n');
+			expect(loggedText).not.toMatch(
+				/check-user|check-password|check-query-secret|check-fragment-secret/
+			);
+			expect(loggedText).not.toMatch(
+				/download-user|download-password|response-query-secret|response-fragment-secret/
+			);
+			expect(loggedText).not.toContain('private.pkg');
+		});
+
+		it('does not echo malformed or opaque-origin URLs to logs', async () => {
+			process.env.TWINE_RS_UPDATE_URL =
+				'not a URL containing check-malformed-secret';
+			fetchMock.mockResolvedValueOnce(
+				responseWithJson({
+					url: 'data:text/plain,response-opaque-secret',
+					version: '0.0.0'
+				})
+			);
+
+			await checkForUpdate();
+
+			expect(console.log).toHaveBeenCalledWith(
+				'Checking for application update at [invalid URL]'
+			);
+			expect(console.log).toHaveBeenCalledWith(
+				'Received version 0.0.0, url [URL with opaque origin]'
+			);
+			const loggedText = (console.log as jest.Mock).mock.calls
+				.flat()
+				.join('\n');
+			expect(loggedText).not.toContain('check-malformed-secret');
+			expect(loggedText).not.toContain('response-opaque-secret');
+		});
 	});
 
 	describe('if the newest version is the same version as the current one', () => {
