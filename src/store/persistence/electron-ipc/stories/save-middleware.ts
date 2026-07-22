@@ -171,7 +171,14 @@ function queueSessionSave(
 	});
 }
 
-function isNativeProjectStory(storyId: string) {
+function isNativeProjectStory(
+	storyId: string,
+	storageKind?: 'electron-project-folder' | 'web-local'
+) {
+	if (storageKind) {
+		return storageKind === 'electron-project-folder';
+	}
+
 	const metadata = loadProjectMetadata(storyId);
 
 	return (
@@ -213,11 +220,14 @@ export function saveMiddleware(
 					'storyId' in action ? [action.storyId] : []
 				)
 			]);
-			const deletedStoryIds = new Set(
+			const deletedStories = new Map(
 				action.actions.flatMap(action =>
-					action.type === 'deleteStory' ? [action.storyId] : []
+					action.type === 'deleteStory'
+						? [[action.storyId, action.storageKind] as const]
+						: []
 				)
 			);
+			const deletedStoryIds = new Set(deletedStories.keys());
 			const hintsByStory = new Map(
 				(action.persistenceHints ?? []).map(hint => [
 					hint.storyId,
@@ -227,10 +237,10 @@ export function saveMiddleware(
 				])
 			);
 
-			for (const storyId of deletedStoryIds) {
+			for (const [storyId, storageKind] of deletedStories) {
 				const deleted = lastState?.find(story => story.id === storyId);
 
-				if (deleted) {
+				if (deleted && !isNativeProjectStory(storyId, storageKind)) {
 					saves.push({
 						storyId,
 						task: async () => {
@@ -329,6 +339,9 @@ export function saveMiddleware(
 		case 'deleteStory': {
 			// We have to look up the story in our saved last state to know what file
 			// to delete.
+			if (isNativeProjectStory(action.storyId, action.storageKind)) {
+				break;
+			}
 
 			const deletedStory = storyWithId(lastState, action.storyId);
 

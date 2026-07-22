@@ -2,6 +2,7 @@ import {render, renderHook, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {
 	CoreAssetInventoryEntry,
+	deleteStoryCommand,
 	movePassagesCommand,
 	PatchBatch,
 	queryGraphProjectionCommand,
@@ -26,6 +27,7 @@ import {reducer as storiesReducer} from '../../store/stories/reducer';
 import {StoriesContext, StoriesState} from '../../store/stories';
 import {StoriesActionOrThunk} from '../../store/stories';
 import {markProjectStoryHydration} from '../../store/project-hydration';
+import {saveProjectMetadata} from '../../store/project-metadata';
 import {fakePassage, fakeStory} from '../../test-util';
 import {createTestCoreSessionClient} from '../../test-util/test-core-session-client';
 
@@ -476,6 +478,39 @@ describe('StoreCoreProjectHost asset commands', () => {
 				type: 'applyCorePatchBatch'
 			}),
 			'undoChange.movePassage'
+		);
+	});
+
+	it('captures native storage kind on a story deletion patch', async () => {
+		const wasmClient = fakeWasmClient(async command =>
+			batch([
+				{
+					story_id: (command as any).story_id,
+					type: 'storyDeleted'
+				}
+			])
+		);
+		const context = hostWithStory({wasmClient});
+
+		saveProjectMetadata(context.story.id, {
+			rootPath: '/native/captured-delete.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		await context.host.applyStoryCommand(deleteStoryCommand(context.story.id));
+
+		expect(context.dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actions: [
+					{
+						storageKind: 'electron-project-folder',
+						storyId: context.story.id,
+						type: 'deleteStory'
+					}
+				],
+				type: 'applyCorePatchBatch'
+			}),
+			undefined
 		);
 	});
 

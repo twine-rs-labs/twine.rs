@@ -152,6 +152,7 @@ export interface UpdateStoryAction {
 }
 
 export interface DeleteStoryAction {
+	storageKind?: 'electron-project-folder' | 'web-local';
 	type: 'deleteStory';
 	storyId: string;
 }

@@ -99,6 +99,32 @@ describe('stories Electron IPC save middleware', () => {
 		expect(saveStoryMock).not.toHaveBeenCalled();
 	});
 
+	it('does not delete a coexisting legacy HTML story for a native project patch deletion', async () => {
+		const story = storiesState[0];
+
+		const result = saveMiddleware(
+			[],
+			{
+				actions: [
+					{
+						storageKind: 'electron-project-folder',
+						storyId: story.id,
+						type: 'deleteStory'
+					}
+				],
+				storyIds: [story.id],
+				type: 'applyCorePatchBatch'
+			},
+			formatsState
+		);
+
+		expect(typeof result).toBe('object');
+		if (typeof result === 'object') {
+			await result.completion;
+		}
+		expect(deleteStory).not.toHaveBeenCalled();
+	});
+
 	it('overlays session-owned document text only for persistence', async () => {
 		const story = storiesState[0];
 		const passage = story.passages[0];
@@ -381,6 +407,26 @@ describe('stories Electron IPC save middleware', () => {
 					formatsState
 				)
 			).toThrow());
+
+		it('does not surface a missing legacy file for a native project deletion', () => {
+			deleteStory.mockRejectedValueOnce(
+				Object.assign(new Error('missing legacy file'), {code: 'ENOENT'})
+			);
+			saveProjectMetadata(storiesState[0].id, {
+				rootPath: '/native/no-legacy-copy.twine.rs',
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+
+			expect(
+				saveMiddleware(
+					[],
+					{type: 'deleteStory', storyId: storiesState[0].id},
+					formatsState
+				)
+			).toBe(false);
+			expect(deleteStory).not.toHaveBeenCalled();
+		});
 
 		it('rejects the persistence completion when deletion fails', async () => {
 			const error = new Error('delete failed');

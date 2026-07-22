@@ -330,18 +330,28 @@ export const InnerStoryListRoute: React.FC = () => {
 					[
 						`Delete project "${story.name}"?`,
 						'',
-						`This will move project files from ${rootPath}.`,
-						'',
-						`It will remove ${projectStories.length} ${
+						'This will delete:',
+						`- Project folder: ${rootPath} (moved to the operating system trash)`,
+						`- Library ${
 							projectStories.length === 1 ? 'story' : 'stories'
-						} from this library. The project folder will be moved to the operating system trash.`
+						}: ${projectStories.map(story => `"${story.name}"`).join(', ')}`,
+						'',
+						'Legacy HTML story files, including same-named copies, will not be deleted.'
 					].join('\n')
 				)
 			: window.confirm(
 					[
 						`Delete story "${story.name}"?`,
 						'',
-						'This will remove it from this library. This cannot be undone.'
+						'This will delete:',
+						`- Library story: "${story.name}"`,
+						...(twineElectron?.deleteStory
+							? [
+									`- Legacy HTML file: ${storyFileName(
+										story
+									)} (moved to the operating system trash)`
+								]
+							: [])
 					].join('\n')
 				);
 
@@ -354,8 +364,10 @@ export const InnerStoryListRoute: React.FC = () => {
 		}
 
 		for (const projectStory of projectStories) {
+			await coreProjectHost.applyStoryCommand(
+				deleteStoryCommand(projectStory.id)
+			);
 			deleteProjectMetadata(projectStory.id);
-			coreProjectHost.applyStoryCommand(deleteStoryCommand(projectStory.id));
 		}
 	}
 

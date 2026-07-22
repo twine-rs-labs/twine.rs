@@ -173,14 +173,54 @@ describe('<StoryListRoute>', () => {
 			expect(deleteProjectFolder).toHaveBeenCalledWith(rootPath)
 		);
 		expect(confirmSpy).toHaveBeenCalledWith(
+			expect.stringContaining(`- Project folder: ${rootPath}`)
+		);
+		expect(confirmSpy).toHaveBeenCalledWith(
+			expect.stringContaining('- Library story: "Trigaea"')
+		);
+		expect(confirmSpy).toHaveBeenCalledWith(
 			expect.stringContaining(
-				'The project folder will be moved to the operating system trash.'
+				'Legacy HTML story files, including same-named copies, will not be deleted.'
 			)
 		);
 		await waitFor(() =>
 			expect(screen.queryByTestId('story-list-row')).not.toBeInTheDocument()
 		);
 		expect(loadProjectMetadata(story.id)).toBeUndefined();
+	});
+
+	it('keeps native storage metadata until the project story deletion is dispatched', async () => {
+		const story = fakeStory();
+		const rootPath = '/native/deferred-delete.twine.rs';
+		const deleteProjectFolder = jest.fn().mockResolvedValue(undefined);
+		let finishDeletion: () => void = () => {};
+		const applyStoryCommand = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.mockReturnValue(
+				new Promise(resolve => {
+					finishDeletion = () => resolve(undefined);
+				})
+			);
+
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {deleteProjectFolder};
+		jest.spyOn(window, 'confirm').mockReturnValue(true);
+
+		renderComponent({stories: [story]});
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: new RegExp(`delete story ${story.name}`, 'i')
+			})
+		);
+
+		await waitFor(() => expect(applyStoryCommand).toHaveBeenCalled());
+		expect(loadProjectMetadata(story.id)?.rootPath).toBe(rootPath);
+		finishDeletion();
+		await waitFor(() => expect(loadProjectMetadata(story.id)).toBeUndefined());
 	});
 
 	it('keeps a file-backed project folder if deletion is canceled', () => {
@@ -207,11 +247,43 @@ describe('<StoryListRoute>', () => {
 		expect(loadProjectMetadata(story.id)?.rootPath).toBe(rootPath);
 	});
 
+	it('enumerates every story removed with a multi-story project', () => {
+		const firstStory = fakeStory();
+		const secondStory = fakeStory();
+		const rootPath = '/native/story-collection.twine.rs';
+		const deleteProjectFolder = jest.fn().mockResolvedValue(undefined);
+		const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+
+		firstStory.name = 'First Story';
+		secondStory.name = 'Second Story';
+		for (const story of [firstStory, secondStory]) {
+			saveProjectMetadata(story.id, {
+				rootPath,
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+		}
+		(window as any).twineElectron = {deleteProjectFolder};
+
+		renderComponent({stories: [firstStory, secondStory]});
+		fireEvent.click(
+			screen.getByRole('button', {name: /delete story first story/i})
+		);
+
+		expect(confirmSpy).toHaveBeenCalledWith(
+			expect.stringContaining(
+				'- Library stories: "First Story", "Second Story"'
+			)
+		);
+		expect(deleteProjectFolder).not.toHaveBeenCalled();
+	});
+
 	it('deletes a non-project story from the library after confirming', async () => {
 		const story = fakeStory();
 		const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
 
 		story.name = 'Standalone Story';
+		(window as any).twineElectron = {deleteStory: jest.fn()};
 		renderComponent({stories: [story]});
 		fireEvent.click(
 			screen.getByRole('button', {name: /delete story standalone story/i})
@@ -219,6 +291,11 @@ describe('<StoryListRoute>', () => {
 
 		expect(confirmSpy).toHaveBeenCalledWith(
 			expect.stringContaining('Delete story "Standalone Story"?')
+		);
+		expect(confirmSpy).toHaveBeenCalledWith(
+			expect.stringContaining(
+				'- Legacy HTML file: Standalone Story.html (moved to the operating system trash)'
+			)
 		);
 		await waitFor(() =>
 			expect(screen.queryByTestId('story-list-row')).not.toBeInTheDocument()

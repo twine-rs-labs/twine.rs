@@ -1003,6 +1003,11 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			sessionOwnedDocumentsForStory: storyId =>
 				this.sessionOwnedDocumentStories.has(storyId)
 		});
+		for (const action of storyActions) {
+			if (action.type === 'deleteStory') {
+				action.storageKind = loadProjectMetadata(action.storyId)?.storageKind;
+			}
+		}
 		const patchedStoryIds = Array.from(
 			new Set(
 				batch.patches.flatMap(patch =>
