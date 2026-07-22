@@ -1,0 +1,173 @@
+{
+	"version": 1,
+	"formats": [
+		{
+			"directory": "chapbook-1.2.3",
+			"name": "Chapbook",
+			"version": "1.2.3",
+			"license": "MIT",
+			"source": "https://github.com/klembot/chapbook"
+		},
+		{
+			"directory": "chapbook-2.3.1",
+			"name": "Chapbook",
+			"version": "2.3.1",
+			"license": "MIT",
+			"source": "https://github.com/klembot/chapbook/tree/2.3.1"
+		},
+		{
+			"directory": "harlowe-1.2.4",
+			"name": "Harlowe",
+			"version": "1.2.4",
+			"license": "Zlib",
+			"source": "https://foss.heptapod.net/games/harlowe"
+		},
+		{
+			"directory": "harlowe-2.1.0",
+			"name": "Harlowe",
+			"version": "2.1.0",
+			"license": "Zlib",
+			"source": "https://foss.heptapod.net/games/harlowe"
+		},
+		{
+			"directory": "harlowe-3.3.9",
+			"name": "Harlowe",
+			"version": "3.3.9",
+			"license": "Zlib",
+			"source": "https://foss.heptapod.net/games/harlowe/-/tree/v3.3.9"
+		},
+		{
+			"directory": "paperthin-1.0.0",
+			"name": "Paperthin",
+			"version": "1.0.0",
+			"license": "Zlib",
+			"source": "https://github.com/klembot/paperthin"
+		},
+		{
+			"directory": "snowman-1.5.0",
+			"name": "Snowman",
+			"version": "1.5.0",
+			"license": "MIT",
+			"source": "https://github.com/videlais/snowman/tree/1.X"
+		},
+		{
+			"directory": "snowman-2.1.1",
+			"name": "Snowman",
+			"version": "2.1.1",
+			"license": "MIT",
+			"source": "https://github.com/videlais/snowman"
+		},
+		{
+			"directory": "sugarcube-1.0.35",
+			"name": "SugarCube",
+			"version": "1.0.35",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.31.0",
+			"name": "SugarCube",
+			"version": "2.31.0",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.31.1",
+			"name": "SugarCube",
+			"version": "2.31.1",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.32.0",
+			"name": "SugarCube",
+			"version": "2.32.0",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.33.0",
+			"name": "SugarCube",
+			"version": "2.33.0",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.33.1",
+			"name": "SugarCube",
+			"version": "2.33.1",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.33.2",
+			"name": "SugarCube",
+			"version": "2.33.2",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.33.3",
+			"name": "SugarCube",
+			"version": "2.33.3",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.33.4",
+			"name": "SugarCube",
+			"version": "2.33.4",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.34.0",
+			"name": "SugarCube",
+			"version": "2.34.0",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.34.1",
+			"name": "SugarCube",
+			"version": "2.34.1",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.35.0",
+			"name": "SugarCube",
+			"version": "2.35.0",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.36.0",
+			"name": "SugarCube",
+			"version": "2.36.0",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.36.1",
+			"name": "SugarCube",
+			"version": "2.36.1",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.37.0",
+			"name": "SugarCube",
+			"version": "2.37.0",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2"
+		},
+		{
+			"directory": "sugarcube-2.37.3",
+			"name": "SugarCube",
+			"version": "2.37.3",
+			"license": "BSD-2-Clause",
+			"source": "https://github.com/tmedwards/sugarcube-2/tree/v2.37.3"
+		}
+	]
+}

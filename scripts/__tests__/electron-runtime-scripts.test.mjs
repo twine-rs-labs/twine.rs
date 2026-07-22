@@ -41,6 +41,20 @@ test('every desktop and release build regenerates WASM before compiling the rend
 	assert.match(scripts['start:electron'], /clean build:wasm build:web/);
 });
 
+test('every packageable desktop build generates compliance artifacts', () => {
+	assert.equal(
+		scripts['build:compliance'],
+		'node scripts/generate-compliance.mjs'
+	);
+	for (const script of [
+		'build:electron',
+		'build:electron-app',
+		'build:electron-app:ci'
+	]) {
+		assert.match(scripts[script], /build:electron-main build:compliance$/);
+	}
+});
+
 test('release packaging targets only the current runner platform', () => {
 	assert.doesNotMatch(
 		scripts['build:electron-bundle'],

@@ -1,0 +1,15 @@
+{
+	"version": 1,
+	"components": {
+		"cargo:napi@3.9.3": "scripts/compliance-licenses/napi-rs-MIT.txt",
+		"cargo:napi-build@2.3.2": "scripts/compliance-licenses/napi-rs-MIT.txt",
+		"cargo:napi-derive@3.5.6": "scripts/compliance-licenses/napi-rs-MIT.txt",
+		"cargo:napi-derive-backend@5.0.4": "scripts/compliance-licenses/napi-rs-MIT.txt",
+		"cargo:napi-sys@3.2.2": "scripts/compliance-licenses/napi-rs-MIT.txt",
+		"cargo:ts-rs@10.1.0": "scripts/compliance-licenses/ts-rs-MIT.txt",
+		"cargo:ts-rs-macros@10.1.0": "scripts/compliance-licenses/ts-rs-MIT.txt",
+		"npm:html-parse-stringify@3.0.1": "scripts/compliance-licenses/html-parse-stringify-MIT.txt",
+		"npm:jsonp@0.2.1": "scripts/compliance-licenses/jsonp-MIT.txt",
+		"npm:segseg@1.0.0": "scripts/compliance-licenses/segseg-MIT.txt"
+	}
+}

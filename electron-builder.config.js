@@ -3,6 +3,9 @@ const {
 	hasCompleteNotarizationEnv
 } = require('./scripts/electron-builder-hooks.cjs');
 const {createNativePackagingHooks} = require('./scripts/native-artifact.cjs');
+const {
+	createCompliancePackagingHooks
+} = require('./scripts/compliance-artifacts.cjs');
 const pkg = require('./package.json');
 
 const isPreview =
@@ -14,14 +17,24 @@ const nativeHooks = createNativePackagingHooks({
 	productName,
 	rootDir: __dirname
 });
+const complianceHooks = createCompliancePackagingHooks({
+	productName,
+	rootDir: __dirname
+});
+
+function beforePack(context) {
+	complianceHooks.beforePack(context);
+	nativeHooks.beforePack(context);
+}
 
 async function afterPack(context) {
+	complianceHooks.afterPack(context);
 	nativeHooks.afterPack(context);
 	await macHooks.afterPack(context);
 }
 
 module.exports = {
-	beforePack: nativeHooks.beforePack,
+	beforePack,
 	afterPack,
 	afterSign: macHooks.afterSign,
 	appId: 'rs.twine.app',
@@ -34,7 +47,21 @@ module.exports = {
 		name: 'twine-rs',
 		productName
 	},
-	files: ['electron-build/**/*', 'node_modules/**/*'],
+	files: [
+		'electron-build/**/*',
+		'!electron-build/compliance{,/**/*}',
+		'node_modules/**/*',
+		'LICENSE',
+		{
+			from: 'electron-build/compliance',
+			to: '.',
+			filter: [
+				'THIRD_PARTY_NOTICES.md',
+				'sbom.cdx.json',
+				'LICENSES.chromium.html'
+			]
+		}
+	],
 	dmg: {
 		writeUpdateInfo: false
 	},

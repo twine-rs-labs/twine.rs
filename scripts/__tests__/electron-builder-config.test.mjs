@@ -117,6 +117,26 @@ test('electron-builder config exposes only schema properties', () => {
 	assert.equal(config.mac.notarize, false);
 });
 
+test('every packaged app includes root compliance artifacts', () => {
+	assert.equal(config.files.includes('LICENSE'), true);
+	assert.equal(
+		config.files.includes('!electron-build/compliance{,/**/*}'),
+		true
+	);
+	assert.deepEqual(
+		config.files.find(entry => typeof entry === 'object'),
+		{
+			filter: [
+				'THIRD_PARTY_NOTICES.md',
+				'sbom.cdx.json',
+				'LICENSES.chromium.html'
+			],
+			from: 'electron-build/compliance',
+			to: '.'
+		}
+	);
+});
+
 test('desktop targets are architecture-specific and selected by the runner', () => {
 	assert.deepEqual(config.linux.target, ['AppImage', 'zip']);
 	assert.equal(config.mac.target, 'dmg');

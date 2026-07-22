@@ -1,0 +1,29 @@
+{
+	"version": 1,
+	"assets": [
+		{
+			"name": "Hanken Grotesk",
+			"version": "bundled",
+			"license": "OFL-1.1",
+			"source": "https://github.com/marcologous/hanken-grotesk",
+			"file": "src/styles/design-system/fonts/HankenGrotesk-latin.woff2",
+			"licenseFile": "scripts/compliance-licenses/bundled-fonts-OFL-1.1.txt"
+		},
+		{
+			"name": "JetBrains Mono",
+			"version": "bundled",
+			"license": "OFL-1.1",
+			"source": "https://github.com/JetBrains/JetBrainsMono",
+			"file": "src/styles/design-system/fonts/JetBrainsMono-latin.woff2",
+			"licenseFile": "scripts/compliance-licenses/bundled-fonts-OFL-1.1.txt"
+		},
+		{
+			"name": "Space Grotesk",
+			"version": "bundled",
+			"license": "OFL-1.1",
+			"source": "https://github.com/floriankarsten/space-grotesk",
+			"file": "src/styles/design-system/fonts/SpaceGrotesk-latin.woff2",
+			"licenseFile": "scripts/compliance-licenses/bundled-fonts-OFL-1.1.txt"
+		}
+	]
+}
