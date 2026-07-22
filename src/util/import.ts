@@ -18,6 +18,15 @@ import {
 	parseStoryGraphHtmlAttribute,
 	TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE
 } from './story-graph-metadata';
+import {
+	assertHtmlImportWithinBudget,
+	assertImportTextSize,
+	maxImportStoryGraphMetadataBytes,
+	maxImportTagColors,
+	maxImportTagsPerPassage,
+	maxImportTotalTags,
+	maxImportTweeHeaderBytes
+} from './import-limits';
 
 /**
  * An imported story, which may contain incomplete or malformed data.
@@ -33,6 +42,10 @@ export interface ImportStoriesAsyncOptions {
 	 * while preventing one huge story from monopolizing the main thread.
 	 */
 	passageBatchSize?: number;
+}
+
+interface HtmlParseBudget {
+	tagCount: number;
 }
 
 /**
@@ -99,13 +112,92 @@ function parseDimensions(raw: any): [string, string] | undefined {
 		return undefined;
 	}
 
-	const bits = raw.split(',');
+	const separator = raw.indexOf(',');
 
-	if (bits.length === 2) {
-		return [bits[0], bits[1]];
+	if (separator !== -1 && raw.indexOf(',', separator + 1) === -1) {
+		return [raw.slice(0, separator), raw.slice(separator + 1)];
 	}
 
 	return undefined;
+}
+
+function parseTagAttribute(raw: string | null, budget: HtmlParseBudget) {
+	if (!raw) {
+		return [];
+	}
+
+	assertImportTextSize(raw, maxImportTweeHeaderBytes);
+	const tags: string[] = [];
+	let index = 0;
+
+	while (index < raw.length) {
+		while (index < raw.length && /\s/.test(raw[index])) {
+			index++;
+		}
+		const start = index;
+
+		while (index < raw.length && !/\s/.test(raw[index])) {
+			index++;
+		}
+		if (index === start) {
+			break;
+		}
+		if (tags.length >= maxImportTagsPerPassage) {
+			throw new Error(
+				`Import passage contains more than ${maxImportTagsPerPassage} tags.`
+			);
+		}
+		budget.tagCount++;
+		if (budget.tagCount > maxImportTotalTags) {
+			throw new Error(
+				`Import contains more than ${maxImportTotalTags.toLocaleString(
+					'en-US'
+				)} tags.`
+			);
+		}
+		tags.push(raw.slice(start, index));
+	}
+
+	return tags;
+}
+
+function storyGraphMetadataFromElement(storyEl: Element) {
+	const raw = storyEl.getAttribute(TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE);
+
+	if (raw) {
+		assertImportTextSize(raw, maxImportStoryGraphMetadataBytes);
+	}
+
+	return parseStoryGraphHtmlAttribute(raw);
+}
+
+function tagColorsFromElement(storyEl: Element) {
+	const colors: Record<string, string> = {};
+	const colorElements = query(storyEl, selectors.tagColors);
+
+	if (colorElements.length > maxImportTagColors) {
+		throw new Error(
+			`Import contains more than ${maxImportTagColors.toLocaleString(
+				'en-US'
+			)} tag colors.`
+		);
+	}
+
+	for (const element of colorElements) {
+		const tagName = element.getAttribute('name');
+		const color = element.getAttribute('color');
+
+		if (tagName !== null && color !== null) {
+			Object.defineProperty(colors, tagName, {
+				configurable: true,
+				enumerable: true,
+				value: color,
+				writable: true
+			});
+		}
+	}
+
+	return colors;
 }
 
 /**
@@ -114,7 +206,7 @@ function parseDimensions(raw: any): [string, string] | undefined {
  * malformed. This function does its best to reflect the contents of the
  * element.
  */
-function storyShellFromDom(storyEl: Element) {
+function storyShellFromDom(storyEl: Element, budget: HtmlParseBudget) {
 	const startPassagePid = storyEl.getAttribute('startnode');
 	const story: ImportedStory = {
 		ifid: storyEl.getAttribute('ifid') ?? uuid().toUpperCase(),
@@ -129,19 +221,9 @@ function storyShellFromDom(storyEl: Element) {
 		stylesheet: query(storyEl, selectors.stylesheet)
 			.map(el => el.textContent)
 			.join('\n'),
-		tags: storyEl.getAttribute('tags')
-			? storyEl.getAttribute('tags')!.split(/\s+/)
-			: [],
+		tags: parseTagAttribute(storyEl.getAttribute('tags'), budget),
 		zoom: parseFloat(storyEl.getAttribute('zoom') ?? '1'),
-		tagColors: query(storyEl, selectors.tagColors).reduce((result, el) => {
-			const tagName: string | null = el.getAttribute('name');
-
-			if (typeof tagName !== 'string') {
-				return result;
-			}
-
-			return {...result, [tagName]: el.getAttribute('color')};
-		}, {}),
+		tagColors: tagColorsFromElement(storyEl),
 		passages: []
 	};
 
@@ -152,7 +234,7 @@ function storyShellFromDom(storyEl: Element) {
 	};
 }
 
-function passageFromDom(passageEl: Element) {
+function passageFromDom(passageEl: Element, budget: HtmlParseBudget) {
 	const position = parseDimensions(passageEl.getAttribute('position'));
 	const size = parseDimensions(passageEl.getAttribute('size'));
 
@@ -162,9 +244,7 @@ function passageFromDom(passageEl: Element) {
 		top: position ? float(position[1]) : undefined,
 		width: size ? float(size[0]) : undefined,
 		height: size ? float(size[1]) : undefined,
-		tags: passageEl.getAttribute('tags')
-			? passageEl.getAttribute('tags')!.split(/\s+/)
-			: [],
+		tags: parseTagAttribute(passageEl.getAttribute('tags'), budget),
 		name: passageEl.getAttribute('name') ?? undefined,
 		text: passageEl.textContent ?? undefined
 	};
@@ -212,12 +292,15 @@ function inferMissingStoryFormat(story: ImportedStory): ImportedStory {
  * malformed. This function does its best to reflect the contents of the
  * element.
  */
-function domToObject(storyEl: Element): ImportedStory {
-	const {passageEls, startPassagePid, story} = storyShellFromDom(storyEl);
+function domToObject(storyEl: Element, budget: HtmlParseBudget): ImportedStory {
+	const {passageEls, startPassagePid, story} = storyShellFromDom(
+		storyEl,
+		budget
+	);
 	let startPassageId: string | undefined = undefined;
 
 	story.passages = passageEls.map(passageEl => {
-		const passage = passageFromDom(passageEl);
+		const passage = passageFromDom(passageEl, budget);
 
 		if (passageEl.getAttribute('pid') === startPassagePid) {
 			startPassageId = passage.id;
@@ -232,9 +315,13 @@ function domToObject(storyEl: Element): ImportedStory {
 
 async function domToObjectAsync(
 	storyEl: Element,
+	budget: HtmlParseBudget,
 	options: ImportStoriesAsyncOptions = {}
 ): Promise<ImportedStory> {
-	const {passageEls, startPassagePid, story} = storyShellFromDom(storyEl);
+	const {passageEls, startPassagePid, story} = storyShellFromDom(
+		storyEl,
+		budget
+	);
 	const passageBatchSize = Math.max(1, options.passageBatchSize ?? 250);
 	let startPassageId: string | undefined = undefined;
 
@@ -243,7 +330,7 @@ async function domToObjectAsync(
 
 		story.passages.push(
 			...batch.map(passageEl => {
-				const passage = passageFromDom(passageEl);
+				const passage = passageFromDom(passageEl, budget);
 
 				if (passageEl.getAttribute('pid') === startPassagePid) {
 					startPassageId = passage.id;
@@ -293,6 +380,12 @@ function finalizeImportedStory(
 	return story;
 }
 
+function topLevelStoryElements(root: Element) {
+	return query(root, selectors.storyData).filter(
+		storyEl => !storyEl.parentElement?.closest(selectors.storyData)
+	);
+}
+
 /**
  * Imports stories from HTML. If there are any missing attributes in the HTML,
  * defaults will be applied.
@@ -301,15 +394,15 @@ export function importStories(
 	html: string,
 	lastUpdateOverride?: Date
 ): Story[] {
+	assertHtmlImportWithinBudget(html);
 	const nodes = document.createElement('div');
+	const budget: HtmlParseBudget = {tagCount: 0};
 
 	nodes.innerHTML = html;
 
-	return query(nodes, selectors.storyData).map(storyEl => {
-		const importedStory = domToObject(storyEl);
-		const storyGraphMetadata = parseStoryGraphHtmlAttribute(
-			storyEl.getAttribute(TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE)
-		);
+	return topLevelStoryElements(nodes).map(storyEl => {
+		const importedStory = domToObject(storyEl, budget);
+		const storyGraphMetadata = storyGraphMetadataFromElement(storyEl);
 
 		return finalizeImportedStory(
 			importedStory,
@@ -329,19 +422,19 @@ export async function importStoriesAsync(
 	lastUpdateOverride?: Date,
 	options: ImportStoriesAsyncOptions = {}
 ): Promise<Story[]> {
+	assertHtmlImportWithinBudget(html);
 	await yieldToBrowser();
 
 	const nodes = document.createElement('div');
+	const budget: HtmlParseBudget = {tagCount: 0};
 
 	nodes.innerHTML = html;
 
 	const stories: Story[] = [];
 
-	for (const storyEl of query(nodes, selectors.storyData)) {
-		const storyGraphMetadata = parseStoryGraphHtmlAttribute(
-			storyEl.getAttribute(TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE)
-		);
-		const importedStory = await domToObjectAsync(storyEl, options);
+	for (const storyEl of topLevelStoryElements(nodes)) {
+		const storyGraphMetadata = storyGraphMetadataFromElement(storyEl);
+		const importedStory = await domToObjectAsync(storyEl, budget, options);
 
 		stories.push(
 			finalizeImportedStory(

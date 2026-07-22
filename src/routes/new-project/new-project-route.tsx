@@ -49,6 +49,11 @@ import {
 } from '../../util/performance';
 import {storyFromTwee} from '../../util/twee';
 import {
+	assertImportFileSize,
+	maxImportSourceBytes,
+	maxImportZipBytes
+} from '../../util/import-limits';
+import {
 	registerStoryDocuments,
 	replaceStoryCommand,
 	useCoreProjectHost
@@ -266,6 +271,11 @@ function safeRepairFormat(
 async function parseImportFile(file: File) {
 	const twineElectron = desktopBridge();
 	const sourcePath = nativeFilePath(file);
+
+	assertImportFileSize(
+		file.size,
+		/\.zip$/i.test(file.name) ? maxImportZipBytes : maxImportSourceBytes
+	);
 
 	if (sourcePath && canPrepareNativeImport(file)) {
 		if (twineElectron?.prepareProjectImport) {

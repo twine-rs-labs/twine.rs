@@ -16,6 +16,7 @@ import {
 	StoryInspector
 } from '../../../test-util';
 import {NewProjectRoute} from '../new-project-route';
+import {maxImportSourceBytes} from '../../../util/import-limits';
 
 const HistoryBackButton: React.FC = () => {
 	const navigate = useNavigate();
@@ -349,6 +350,29 @@ describe('<NewProjectRoute>', () => {
 				'/'
 			)
 		);
+	});
+
+	it('rejects oversized browser imports before reading or parsing them', async () => {
+		const prepareProjectImport = jest.fn();
+
+		(window as any).twineElectron = {
+			filePathForFile: jest.fn(() => '/imports/oversized.html'),
+			prepareProjectImport
+		};
+		const source = new File(['small'], 'oversized.html', {type: 'text/html'});
+
+		Object.defineProperty(source, 'size', {
+			value: maxImportSourceBytes + 1
+		});
+		renderComponent('/new-project/import');
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+
+		expect(
+			await screen.findByText('Import source exceeds the 50 MiB limit.')
+		).toBeInTheDocument();
+		expect(prepareProjectImport).not.toHaveBeenCalled();
 	});
 
 	it('repairs a SugarCube zip before writing the imported project folder', async () => {

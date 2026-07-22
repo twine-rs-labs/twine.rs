@@ -3,6 +3,7 @@ import {
 	StoryWithDocuments as Story
 } from '../../store/stories';
 import {fakePassage, fakeStory} from '../../test-util';
+import {maxImportTagColors} from '../import-limits';
 import {
 	passageFromTwee,
 	passageToTwee,
@@ -271,6 +272,31 @@ describe('passageFromTwee()', () => {
 	it('throws an error if given a passage with no name or text', () =>
 		expect(() => passageFromTwee('::')).toThrow());
 
+	it('parses long unmatched header delimiters in linear time', () => {
+		const name = '['.repeat(60_000);
+
+		expect(passageFromTwee(`:: ${name}`).name).toBe(name);
+	});
+
+	it('parses long header backslash runs in linear time', () => {
+		const slashes = '\\'.repeat(60_000);
+
+		expect(passageFromTwee(`:: name ${slashes}}`).name).toHaveLength(
+			'name '.length + slashes.length / 2 + 1
+		);
+	});
+
+	it('rejects oversized headers and passage tag counts', () => {
+		expect(() => passageFromTwee(`:: ${'x'.repeat(64 * 1024)}`)).toThrow(
+			'64 KiB limit'
+		);
+		expect(() =>
+			passageFromTwee(
+				`:: Passage [${Array.from({length: 257}, () => 'tag').join(' ')}]`
+			)
+		).toThrow('more than 256 tags');
+	});
+
 	it('converts a passage with no text properly', () =>
 		expect(passageFromTwee(':: No Text')).toEqual(
 			passageObject({
@@ -428,6 +454,21 @@ describe('storyFromTwee()', () => {
 		oldWarn.mockRestore();
 	});
 
+	it('combines many script passages within a linear time budget', () => {
+		const oldWarn = jest.spyOn(console, 'warn').mockReturnValue();
+		const passageCount = 20_000;
+		const source = Array.from(
+			{length: passageCount},
+			(_, index) => `:: script-${index} [script]\nline-${index}`
+		).join('\n');
+		const startedAt = performance.now();
+		const story = storyFromTwee(source);
+
+		expect(story.script.split('\n')).toHaveLength(passageCount);
+		expect(performance.now() - startedAt).toBeLessThan(2000);
+		oldWarn.mockRestore();
+	});
+
 	it("concatenates all stylesheet-tagged passages into the story's style property", () => {
 		const oldWarn = jest.spyOn(console, 'warn').mockReturnValue();
 
@@ -474,6 +515,32 @@ describe('storyFromTwee()', () => {
 				zoom: badData.zoom
 			})
 		);
+	});
+
+	it('rejects too many tag colors in StoryData', () => {
+		const tagColors = Object.fromEntries(
+			Array.from({length: maxImportTagColors + 1}, (_, index) => [
+				`tag-${index}`,
+				'red'
+			])
+		);
+
+		expect(() =>
+			storyFromTwee(
+				`:: StoryData\n${JSON.stringify({'tag-colors': tagColors})}`
+			)
+		).toThrow(`more than ${maxImportTagColors.toLocaleString('en-US')}`);
+	});
+
+	it('treats __proto__ as an own tag color instead of changing prototypes', () => {
+		const result = storyFromTwee(
+			':: StoryData\n{"tag-colors":{"__proto__":"red"}}'
+		);
+
+		expect(
+			Object.prototype.hasOwnProperty.call(result.tagColors, '__proto__')
+		).toBe(true);
+		expect(result.tagColors.__proto__).toBe('red');
 	});
 
 	it('arranges passages in a grid 10 passages wide if none have any position metadata set', () => {

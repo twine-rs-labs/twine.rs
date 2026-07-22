@@ -4,13 +4,15 @@ import {FileInput} from '../../components/control/file-input';
 import {StoryWithDocuments} from '../../store/stories';
 import {importStoriesAsync} from '../../util/import';
 import {storyFromTwee} from '../../util/twee';
+import {maxImportSourceBytes} from '../../util/import-limits';
 
 export interface FileChooserProps {
 	onChange: (file: File, stories: StoryWithDocuments[]) => void;
+	onError?: (error: Error) => void;
 }
 
 export const FileChooser: React.FC<FileChooserProps> = props => {
-	const {onChange} = props;
+	const {onChange, onError} = props;
 	const {t} = useTranslation();
 
 	async function handleChange(file: File, data: string) {
@@ -26,7 +28,9 @@ export const FileChooser: React.FC<FileChooserProps> = props => {
 			<p>
 				<FileInput
 					accept=".html,.twee,.tw"
+					maxBytes={maxImportSourceBytes}
 					onChange={handleChange}
+					onError={onError}
 					orientation="vertical"
 				>
 					{t('dialogs.storyImport.filePrompt')}

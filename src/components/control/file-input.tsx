@@ -1,5 +1,6 @@
 import classNames from 'classnames';
 import * as React from 'react';
+import {assertImportFileSize} from '../../util/import-limits';
 import './file-input.css';
 
 // See https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/file
@@ -7,13 +8,15 @@ import './file-input.css';
 export interface FileInputProps {
 	accept?: string;
 	children: React.ReactNode;
-	onChange: (file: File, data: string) => void;
+	maxBytes?: number;
+	onChange: (file: File, data: string) => Promise<void> | void;
 	onError?: (error: Error) => void;
 	orientation?: 'horizontal' | 'vertical';
 }
 
 export const FileInput: React.FC<FileInputProps> = props => {
-	const {children, onChange, onError, orientation, ...otherProps} = props;
+	const {children, maxBytes, onChange, onError, orientation, ...otherProps} =
+		props;
 	const className = classNames(
 		'file-input',
 		`orientation-${orientation ?? 'horizontal'}`
@@ -25,6 +28,18 @@ export const FileInput: React.FC<FileInputProps> = props => {
 		}
 
 		const file = changeEvent.target.files[0];
+
+		if (maxBytes !== undefined) {
+			try {
+				assertImportFileSize(file.size, maxBytes);
+			} catch (error) {
+				const importError = error as Error;
+
+				console.warn(importError);
+				onError?.(importError);
+				return;
+			}
+		}
 		const reader = new FileReader();
 
 		reader.addEventListener('loadend', () => {
@@ -35,7 +50,15 @@ export const FileInput: React.FC<FileInputProps> = props => {
 					onError(reader.error);
 				}
 			} else {
-				onChange(file, reader.result as string);
+				Promise.resolve(onChange(file, reader.result as string)).catch(
+					error => {
+						const importError =
+							error instanceof Error ? error : new Error(String(error));
+
+						console.warn(importError);
+						onError?.(importError);
+					}
+				);
 			}
 		});
 

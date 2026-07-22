@@ -20,7 +20,7 @@ import {
 	stopTrackingFile,
 	wasFileChangedExternally
 } from '../track-file-changes';
-import {openProjectFolder} from '../project-folder';
+import {openProjectFolder, readBoundedImportText} from '../project-folder';
 import {
 	forgetProjectFolder,
 	rememberedProjectFolders
@@ -33,7 +33,8 @@ jest.mock('../story-directory', () => ({
 	getStoryDirectoryPath: () => 'mock-story-directory'
 }));
 jest.mock('../project-folder', () => ({
-	openProjectFolder: jest.fn()
+	openProjectFolder: jest.fn(),
+	readBoundedImportText: jest.fn()
 }));
 jest.mock('../project-library-index', () => ({
 	forgetProjectFolder: jest.fn(),
@@ -101,6 +102,7 @@ describe('loadStories', () => {
 	const fileWasTouchedMock = fileWasTouched as jest.Mock;
 	const readdirMock = readdir as jest.Mock;
 	const readFileMock = readFile as jest.Mock;
+	const readBoundedImportTextMock = readBoundedImportText as jest.Mock;
 	const openProjectFolderMock = openProjectFolder as jest.Mock;
 	const forgetProjectFolderMock = forgetProjectFolder as jest.Mock;
 	const rememberedProjectFoldersMock = rememberedProjectFolders as jest.Mock;
@@ -133,6 +135,9 @@ describe('loadStories', () => {
 					throw new Error(`Asked to stat a non-mocked file: ${name}`);
 			}
 		});
+		readBoundedImportTextMock.mockImplementation((name: string) =>
+			readFileMock(name, 'utf8')
+		);
 		statMock.mockImplementation((name: string) => {
 			switch (name) {
 				case 'mock-story-directory/test-story-1.html':
@@ -614,6 +619,31 @@ describe('loadStories', () => {
 		});
 
 		await expect(loadStories()).rejects.toBe(mockError);
+	});
+
+	it('reads legacy stories through the bounded reader sequentially', async () => {
+		let activeReads = 0;
+		let maximumActiveReads = 0;
+
+		readBoundedImportTextMock.mockImplementation(async (name: string) => {
+			activeReads++;
+			maximumActiveReads = Math.max(maximumActiveReads, activeReads);
+			await Promise.resolve();
+			activeReads--;
+			return readFileMock(name, 'utf8');
+		});
+
+		await loadStories();
+
+		expect(maximumActiveReads).toBe(1);
+		expect(readBoundedImportTextMock).toHaveBeenNthCalledWith(
+			1,
+			'mock-story-directory/test-story-1.html'
+		);
+		expect(readBoundedImportTextMock).toHaveBeenNthCalledWith(
+			2,
+			'mock-story-directory/test-story-2.html'
+		);
 	});
 
 	it('does not resolve until all async file operations have finished', async () => {

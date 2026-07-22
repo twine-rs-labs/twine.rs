@@ -1,10 +1,13 @@
-import {FSWatcher, watch} from 'fs';
+import {constants as fsConstants, FSWatcher, watch} from 'fs';
+import {lstat, open as openFile, opendir, realpath} from 'fs/promises';
 import {createHash} from 'crypto';
 import {tmpdir} from 'os';
 import {setImmediate} from 'timers';
 import {dialog, shell} from 'electron';
 import {v4 as uuid} from '@lukeed/uuid';
 import extractZip from 'extract-zip';
+import {open as openZip} from 'yauzl';
+import type {Entry as ZipEntry} from 'yauzl';
 import {
 	copy,
 	mkdtemp,
@@ -25,7 +28,8 @@ import {
 	isAbsolute,
 	join,
 	relative,
-	resolve
+	resolve,
+	sep as pathSeparator
 } from 'path';
 import {performance} from 'perf_hooks';
 import type {CoreAssetInventoryEntry} from '../../core';
@@ -87,6 +91,20 @@ import {
 	recordWatcherPerformanceMetric,
 	recordWatcherTraceEvent
 } from './performance-harness';
+import {
+	assertImportFileSize,
+	maxImportAssets,
+	maxImportAssetPathComponentCharacters,
+	maxImportAssetScanDepth,
+	maxImportAssetScanEntries,
+	maxImportSourceBytes,
+	maxImportZipBytes,
+	maxImportZipCompressionRatio,
+	maxImportZipEntries,
+	maxImportZipEntryBytes,
+	maxImportZipExpandedBytes,
+	maxImportZipNestingDepth
+} from '../../util/import-limits';
 
 export interface NativeProjectFolderResult {
 	baselineReceipt?: NativeProjectBaselineReceipt;
@@ -480,7 +498,15 @@ const projectHydrations = new Map<
 const nativeProjectHydrations = new Set<string>();
 const preparedProjectImports = new Map<
 	string,
-	{assets: NativeProjectImportAsset[]; cleanupPath?: string}
+	{
+		assets: Array<
+			NativeProjectImportAsset & {
+				canonicalSourcePath: string;
+				expectedSizeBytes: number;
+			}
+		>;
+		cleanupPath?: string;
+	}
 >();
 const projectSessionFallbackPollMs = 1250;
 const projectSessionReconcileMs = 30_000;
@@ -1925,7 +1951,9 @@ function importAssetTargetPath(relativeSourcePath: string) {
 async function addImportAsset(
 	assets: Map<string, NativeProjectImportAsset>,
 	sourceRoot: string,
-	sourcePath: string
+	sourcePath: string,
+	sizeBytes: number,
+	budget: {totalBytes: number}
 ) {
 	const relativeSourcePath = normalizedRelativePath(sourceRoot, sourcePath);
 
@@ -1938,44 +1966,120 @@ async function addImportAsset(
 	}
 
 	const targetPath = importAssetTargetPath(relativeSourcePath);
+	const targetKey = targetPath.toLowerCase();
 
-	assets.set(targetPath.toLowerCase(), {
+	if (assets.has(targetKey)) {
+		return;
+	}
+	if (assets.size >= maxImportAssets) {
+		throw new Error(
+			`Project import contains more than ${maxImportAssets.toLocaleString(
+				'en-US'
+			)} assets.`
+		);
+	}
+	assertImportFileSize(sizeBytes, maxImportZipEntryBytes);
+	budget.totalBytes += sizeBytes;
+	if (budget.totalBytes > maxImportZipExpandedBytes) {
+		throw new Error(
+			`Project import assets exceed the ${zipLimitMebibytes(
+				maxImportZipExpandedBytes
+			)} MiB cumulative size limit.`
+		);
+	}
+
+	assets.set(targetKey, {
 		originalPath: relativeSourcePath,
 		sourcePath,
 		targetPath
 	});
 }
 
-async function scanImportAssetDirectory(
-	assets: Map<string, NativeProjectImportAsset>,
-	sourceRoot: string,
-	directory: string
+async function forEachImportAssetDirectoryEntry(
+	directory: string,
+	budget: {scannedEntries: number},
+	visit: (name: string) => Promise<void>
 ) {
-	let names: string[];
+	let handle: Awaited<ReturnType<typeof opendir>>;
 
 	try {
-		names = await readdir(directory);
+		handle = await opendir(directory);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
 			return;
 		}
-
 		throw error;
 	}
 
-	for (const name of names) {
+	try {
+		for await (const entry of handle) {
+			budget.scannedEntries++;
+			if (budget.scannedEntries > maxImportAssetScanEntries) {
+				throw new Error(
+					`Project import asset scan exceeds ${maxImportAssetScanEntries.toLocaleString(
+						'en-US'
+					)} entries.`
+				);
+			}
+			await visit(entry.name);
+		}
+	} finally {
+		await handle.close().catch(error => {
+			if ((error as NodeJS.ErrnoException).code !== 'ERR_DIR_CLOSED') {
+				throw error;
+			}
+		});
+	}
+}
+
+async function scanImportAssetDirectory(
+	assets: Map<string, NativeProjectImportAsset>,
+	sourceRoot: string,
+	canonicalSourceRoot: string,
+	directory: string,
+	depth: number,
+	budget: {scannedEntries: number; totalBytes: number}
+) {
+	if (depth > maxImportAssetScanDepth) {
+		throw new Error(
+			`Project import asset nesting exceeds ${maxImportAssetScanDepth} levels.`
+		);
+	}
+	await forEachImportAssetDirectoryEntry(directory, budget, async name => {
 		const absolutePath = join(directory, name);
-		const fileStats = await stat(absolutePath);
+		const fileStats = await lstat(absolutePath);
+
+		if (fileStats.isSymbolicLink()) {
+			return;
+		}
+		const canonicalPath = await realpath(absolutePath);
+
+		if (!isPathInside(canonicalSourceRoot, canonicalPath)) {
+			throw new Error('Project import asset escaped its source directory.');
+		}
 
 		if (fileStats.isDirectory()) {
-			await scanImportAssetDirectory(assets, sourceRoot, absolutePath);
-			continue;
+			await scanImportAssetDirectory(
+				assets,
+				sourceRoot,
+				canonicalSourceRoot,
+				absolutePath,
+				depth + 1,
+				budget
+			);
+			return;
 		}
 
 		if (fileStats.isFile()) {
-			await addImportAsset(assets, sourceRoot, absolutePath);
+			await addImportAsset(
+				assets,
+				sourceRoot,
+				absolutePath,
+				fileStats.size,
+				budget
+			);
 		}
-	}
+	});
 }
 
 function importAssetReferencePath(reference: string) {
@@ -1999,36 +2103,75 @@ function importAssetReferencePath(reference: string) {
 async function addReferencedImportAssets(
 	assets: Map<string, NativeProjectImportAsset>,
 	sourceRoot: string,
+	canonicalSourceRoot: string,
 	htmlSource: string
 ) {
-	for (
-		let match = importAssetReferenceRegex.exec(htmlSource);
-		match;
-		match = importAssetReferenceRegex.exec(htmlSource)
-	) {
-		const referencePath = importAssetReferencePath(match[1]);
+	let referenceCount = 0;
+	const budget = {totalBytes: 0};
 
-		if (!referencePath) {
-			continue;
+	for (const asset of assets.values()) {
+		const fileStats = await lstat(asset.sourcePath);
+
+		if (fileStats.isFile()) {
+			budget.totalBytes += fileStats.size;
 		}
+	}
 
-		const absolutePath = resolve(sourceRoot, referencePath);
-
-		if (!isPathInside(sourceRoot, absolutePath)) {
-			continue;
-		}
-
-		try {
-			const fileStats = await stat(absolutePath);
-
-			if (fileStats.isFile()) {
-				await addImportAsset(assets, sourceRoot, absolutePath);
+	importAssetReferenceRegex.lastIndex = 0;
+	try {
+		for (
+			let match = importAssetReferenceRegex.exec(htmlSource);
+			match;
+			match = importAssetReferenceRegex.exec(htmlSource)
+		) {
+			referenceCount++;
+			if (referenceCount > maxImportAssetScanEntries) {
+				throw new Error(
+					`Project import asset references exceed ${maxImportAssetScanEntries.toLocaleString(
+						'en-US'
+					)} entries.`
+				);
 			}
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-				throw error;
+			const referencePath = importAssetReferencePath(match[1]);
+
+			if (!referencePath) {
+				continue;
+			}
+
+			const absolutePath = resolve(sourceRoot, referencePath);
+
+			if (!isPathInside(sourceRoot, absolutePath)) {
+				continue;
+			}
+
+			try {
+				const fileStats = await lstat(absolutePath);
+
+				if (fileStats.isSymbolicLink()) {
+					continue;
+				}
+				const canonicalPath = await realpath(absolutePath);
+
+				if (
+					fileStats.isFile() &&
+					isPathInside(canonicalSourceRoot, canonicalPath)
+				) {
+					await addImportAsset(
+						assets,
+						sourceRoot,
+						absolutePath,
+						fileStats.size,
+						budget
+					);
+				}
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+					throw error;
+				}
 			}
 		}
+	} finally {
+		importAssetReferenceRegex.lastIndex = 0;
 	}
 }
 
@@ -2038,32 +2181,40 @@ async function discoverProjectImportAssets(
 	htmlSource: string
 ) {
 	const assets = new Map<string, NativeProjectImportAsset>();
+	const canonicalSourceRoot = await realpath(sourceRoot);
+	const budget = {scannedEntries: 0, totalBytes: 0};
 	const htmlBaseName = basename(htmlFilePath, extname(htmlFilePath));
-	let names: string[];
 
-	try {
-		names = await readdir(sourceRoot);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-			return [];
-		}
-
-		throw error;
-	}
-
-	for (const name of names) {
+	await forEachImportAssetDirectoryEntry(sourceRoot, budget, async name => {
 		const absolutePath = join(sourceRoot, name);
-		const fileStats = await stat(absolutePath);
+		const fileStats = await lstat(absolutePath);
 
 		if (
 			fileStats.isDirectory() &&
 			isObviousImportAssetDirectory(name, htmlBaseName)
 		) {
-			await scanImportAssetDirectory(assets, sourceRoot, absolutePath);
-		}
-	}
+			const canonicalPath = await realpath(absolutePath);
 
-	await addReferencedImportAssets(assets, sourceRoot, htmlSource);
+			if (!isPathInside(canonicalSourceRoot, canonicalPath)) {
+				throw new Error('Project import asset escaped its source directory.');
+			}
+			await scanImportAssetDirectory(
+				assets,
+				sourceRoot,
+				canonicalSourceRoot,
+				absolutePath,
+				1,
+				budget
+			);
+		}
+	});
+
+	await addReferencedImportAssets(
+		assets,
+		sourceRoot,
+		canonicalSourceRoot,
+		htmlSource
+	);
 
 	return [...assets.values()].sort((left, right) =>
 		left.targetPath.localeCompare(right.targetPath)
@@ -2100,17 +2251,153 @@ function rewriteProjectImportAssetReferences(
 	htmlSource: string,
 	assets: NativeProjectImportAsset[]
 ) {
-	return importAssetRewriteRoots(assets).reduce(
-		(source, {originalRoot, targetRoot}) =>
-			source.replace(
-				new RegExp(
-					`(^|[^A-Za-z0-9_./~%:-])(\\./)?${escapeRegExp(originalRoot)}/`,
-					'gi'
-				),
-				(_match, prefix: string) => `${prefix}${targetRoot}/`
-			),
-		htmlSource
-	);
+	const roots = importAssetRewriteRoots(assets);
+
+	if (roots.length === 0) {
+		return htmlSource;
+	}
+	type RootNode = {
+		children: Map<string, RootNode>;
+		targetRoot?: string;
+	};
+	const rootTrie: RootNode = {children: new Map()};
+
+	for (const {originalRoot, targetRoot} of roots) {
+		if (originalRoot.length > maxImportAssetPathComponentCharacters) {
+			continue;
+		}
+		let node = rootTrie;
+
+		for (let index = originalRoot.length - 1; index >= 0; index--) {
+			const character = originalRoot[index].toLowerCase();
+			let child = node.children.get(character);
+
+			if (!child) {
+				child = {children: new Map()};
+				node.children.set(character, child);
+			}
+			node = child;
+		}
+		node.targetRoot = targetRoot;
+	}
+	const rewritten: string[] = [];
+	let cursor = 0;
+	let unchangedStart = 0;
+	const isPathCharacterAt = (index: number) => {
+		if (index < 0) {
+			return false;
+		}
+		const code = htmlSource.charCodeAt(index);
+
+		return (
+			(code >= 48 && code <= 57) ||
+			(code >= 65 && code <= 90) ||
+			(code >= 97 && code <= 122) ||
+			code === 37 ||
+			code === 45 ||
+			code === 46 ||
+			code === 47 ||
+			code === 58 ||
+			code === 95 ||
+			code === 126
+		);
+	};
+
+	while ((cursor = htmlSource.indexOf('/', cursor)) !== -1) {
+		let node = rootTrie;
+		let rootStart = cursor - 1;
+		let matchedStart: number | undefined;
+		let matchedTarget: string | undefined;
+
+		for (
+			let scanned = 0;
+			rootStart >= 0 && scanned < maxImportAssetPathComponentCharacters;
+			rootStart--, scanned++
+		) {
+			const child = node.children.get(htmlSource[rootStart].toLowerCase());
+
+			if (!child) {
+				break;
+			}
+			node = child;
+			if (node.targetRoot) {
+				let replaceStart = rootStart;
+				let hasBoundary = !isPathCharacterAt(rootStart - 1);
+
+				if (
+					!hasBoundary &&
+					rootStart >= 2 &&
+					htmlSource[rootStart - 2] === '.' &&
+					htmlSource[rootStart - 1] === '/' &&
+					!isPathCharacterAt(rootStart - 3)
+				) {
+					replaceStart = rootStart - 2;
+					hasBoundary = true;
+				}
+				if (hasBoundary) {
+					matchedStart = replaceStart;
+					matchedTarget = node.targetRoot;
+				}
+			}
+		}
+
+		if (matchedStart !== undefined && matchedTarget !== undefined) {
+			rewritten.push(
+				htmlSource.slice(unchangedStart, matchedStart),
+				matchedTarget
+			);
+			unchangedStart = cursor;
+		}
+		cursor++;
+	}
+
+	if (rewritten.length === 0) {
+		return htmlSource;
+	}
+	rewritten.push(htmlSource.slice(unchangedStart));
+	return rewritten.join('');
+}
+
+async function preparedImportAssets(assets: NativeProjectImportAsset[]) {
+	if (assets.length > maxImportAssets) {
+		throw new Error(
+			`Project import contains more than ${maxImportAssets.toLocaleString(
+				'en-US'
+			)} assets.`
+		);
+	}
+
+	let totalBytes = 0;
+	const prepared: Array<
+		NativeProjectImportAsset & {
+			canonicalSourcePath: string;
+			expectedSizeBytes: number;
+		}
+	> = [];
+
+	for (const asset of assets) {
+		const fileStats = await lstat(asset.sourcePath);
+
+		if (fileStats.isSymbolicLink() || !fileStats.isFile()) {
+			throw new Error('Project import assets must be regular files.');
+		}
+		assertImportFileSize(fileStats.size, maxImportZipEntryBytes);
+		totalBytes += fileStats.size;
+		if (totalBytes > maxImportZipExpandedBytes) {
+			throw new Error(
+				`Project import assets exceed the ${zipLimitMebibytes(
+					maxImportZipExpandedBytes
+				)} MiB cumulative size limit.`
+			);
+		}
+		prepared.push({
+			...asset,
+			canonicalSourcePath: await realpath(asset.sourcePath),
+			expectedSizeBytes: fileStats.size
+		});
+	}
+
+	return prepared;
 }
 
 async function findTwineHtmlFiles(rootPath: string) {
@@ -2145,8 +2432,11 @@ async function findTwineHtmlFiles(rootPath: string) {
 			if (!fileStats.isFile() || !/\.html?$/i.test(name)) {
 				continue;
 			}
+			if (fileStats.size > maxImportSourceBytes) {
+				continue;
+			}
 
-			const source = await readFile(absolutePath, 'utf8');
+			const source = await readBoundedImportText(absolutePath);
 
 			if (/<tw-storydata[\s>]/i.test(source)) {
 				results.push(absolutePath);
@@ -5748,6 +6038,248 @@ async function writeProjectFolderIncremental(
 	};
 }
 
+interface ZipQuotaState {
+	compressedBytes: number;
+	entryCount: number;
+	expandedBytes: number;
+}
+
+function zipLimitMebibytes(bytes: number) {
+	return bytes / (1024 * 1024);
+}
+
+async function assertRegularImportFile(path: string, maxBytes: number) {
+	const metadata = await stat(path);
+
+	if (!metadata.isFile()) {
+		throw new Error('Project import source must be a regular file.');
+	}
+	assertImportFileSize(metadata.size, maxBytes);
+}
+
+export async function readBoundedImportText(path: string) {
+	const file = await openFile(path, 'r');
+
+	try {
+		const metadata = await file.stat();
+
+		if (!metadata.isFile()) {
+			throw new Error('Import HTML source must be a regular file.');
+		}
+		assertImportFileSize(metadata.size, maxImportSourceBytes);
+
+		const chunks: Buffer[] = [];
+		let totalBytes = 0;
+
+		while (totalBytes <= maxImportSourceBytes) {
+			const remainingWithSentinel = maxImportSourceBytes - totalBytes + 1;
+			const chunk = Buffer.allocUnsafe(
+				Math.min(64 * 1024, remainingWithSentinel)
+			);
+			const {bytesRead} = await file.read(chunk, 0, chunk.length, null);
+
+			if (bytesRead === 0) {
+				break;
+			}
+			totalBytes += bytesRead;
+			if (totalBytes > maxImportSourceBytes) {
+				throw new Error(
+					`Import source exceeds the ${zipLimitMebibytes(
+						maxImportSourceBytes
+					)} MiB limit.`
+				);
+			}
+			chunks.push(chunk.subarray(0, bytesRead));
+		}
+
+		return Buffer.concat(chunks, totalBytes).toString('utf8');
+	} finally {
+		await file.close();
+	}
+}
+
+function checkedZipSize(value: number, label: string) {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new Error(`Zip import has an invalid ${label}.`);
+	}
+
+	return value;
+}
+
+function inspectZipEntry(entry: ZipEntry, state: ZipQuotaState) {
+	state.entryCount++;
+	if (state.entryCount > maxImportZipEntries) {
+		throw new Error(
+			`Zip import contains more than ${maxImportZipEntries.toLocaleString(
+				'en-US'
+			)} entries.`
+		);
+	}
+
+	const nestingDepth = entry.fileName
+		.split(/[\\/]/)
+		.filter(component => component.length > 0).length;
+
+	if (nestingDepth > maxImportZipNestingDepth) {
+		throw new Error(
+			`Zip import entry nesting exceeds ${maxImportZipNestingDepth} levels.`
+		);
+	}
+
+	const unixFileType = (entry.externalFileAttributes >>> 16) & 0xf000;
+
+	if (unixFileType === 0xa000) {
+		throw new Error('Zip import may not contain symbolic links.');
+	}
+
+	const compressedBytes = checkedZipSize(
+		entry.compressedSize,
+		'entry compressed size'
+	);
+	const expandedBytes = checkedZipSize(
+		entry.uncompressedSize,
+		'entry expanded size'
+	);
+
+	if (expandedBytes > maxImportZipEntryBytes) {
+		throw new Error(
+			`Zip import entry exceeds the ${zipLimitMebibytes(
+				maxImportZipEntryBytes
+			)} MiB expanded-size limit.`
+		);
+	}
+
+	state.compressedBytes = checkedZipSize(
+		state.compressedBytes + compressedBytes,
+		'cumulative compressed size'
+	);
+	state.expandedBytes = checkedZipSize(
+		state.expandedBytes + expandedBytes,
+		'cumulative expanded size'
+	);
+	if (state.expandedBytes > maxImportZipExpandedBytes) {
+		throw new Error(
+			`Zip import exceeds the ${zipLimitMebibytes(
+				maxImportZipExpandedBytes
+			)} MiB cumulative expanded-size limit.`
+		);
+	}
+	if (
+		expandedBytes >
+			Math.max(1, compressedBytes) * maxImportZipCompressionRatio ||
+		state.expandedBytes >
+			Math.max(1, state.compressedBytes) * maxImportZipCompressionRatio
+	) {
+		throw new Error(
+			`Zip import exceeds the ${maxImportZipCompressionRatio}:1 compression-ratio limit.`
+		);
+	}
+}
+
+async function inspectZipImport(path: string) {
+	await new Promise<void>((resolveInspection, rejectInspection) => {
+		openZip(
+			path,
+			{lazyEntries: true, strictFileNames: true, validateEntrySizes: true},
+			(error, archive) => {
+				if (error) {
+					rejectInspection(error);
+					return;
+				}
+				if (!archive) {
+					rejectInspection(new Error('Zip import could not be opened.'));
+					return;
+				}
+
+				let settled = false;
+				const state: ZipQuotaState = {
+					compressedBytes: 0,
+					entryCount: 0,
+					expandedBytes: 0
+				};
+				const fail = (inspectionError: unknown) => {
+					if (settled) {
+						return;
+					}
+					settled = true;
+					archive.close();
+					rejectInspection(inspectionError);
+				};
+
+				if (archive.entryCount > maxImportZipEntries) {
+					fail(
+						new Error(
+							`Zip import contains more than ${maxImportZipEntries.toLocaleString(
+								'en-US'
+							)} entries.`
+						)
+					);
+					return;
+				}
+				if (archive.fileSize > maxImportZipBytes) {
+					fail(
+						new Error(
+							`Zip import exceeds the ${zipLimitMebibytes(
+								maxImportZipBytes
+							)} MiB compressed-size limit.`
+						)
+					);
+					return;
+				}
+
+				archive.on('error', fail);
+				archive.on('entry', entry => {
+					try {
+						inspectZipEntry(entry, state);
+						archive.readEntry();
+					} catch (entryError) {
+						fail(entryError);
+					}
+				});
+				archive.on('end', () => {
+					if (!settled) {
+						settled = true;
+						resolveInspection();
+					}
+				});
+				archive.readEntry();
+			}
+		);
+	});
+}
+
+async function extractZipImport(path: string, cleanupPath: string) {
+	await inspectZipImport(path);
+	await assertRegularImportFile(path, maxImportZipBytes);
+
+	const state: ZipQuotaState = {
+		compressedBytes: 0,
+		entryCount: 0,
+		expandedBytes: 0
+	};
+
+	await extractZip(path, {
+		dir: cleanupPath,
+		onEntry: (entry, archive) => {
+			if (archive.fileSize > maxImportZipBytes) {
+				throw new Error(
+					`Zip import exceeds the ${zipLimitMebibytes(
+						maxImportZipBytes
+					)} MiB compressed-size limit.`
+				);
+			}
+			if (archive.entryCount > maxImportZipEntries) {
+				throw new Error(
+					`Zip import contains more than ${maxImportZipEntries.toLocaleString(
+						'en-US'
+					)} entries.`
+				);
+			}
+			inspectZipEntry(entry, state);
+		}
+	});
+}
+
 export async function prepareProjectImport(
 	sourcePath: string
 ): Promise<NativeProjectImportSource> {
@@ -5765,18 +6297,24 @@ export async function prepareProjectImport(
 		);
 	}
 
+	await assertRegularImportFile(
+		absoluteSourcePath,
+		sourceKind === 'zip' ? maxImportZipBytes : maxImportSourceBytes
+	);
+
 	try {
 		const nativePreparedSource = prepareNativeProjectImport(absoluteSourcePath);
 
 		if (nativePreparedSource) {
 			const {cleanupPath: nativeCleanupPath, ...source} = nativePreparedSource;
+			cleanupPath = nativeCleanupPath;
 			const preparedImport: NativeProjectImportSource = {
 				...source,
 				id: uuid()
 			};
 
 			preparedProjectImports.set(preparedImport.id, {
-				assets: preparedImport.assets,
+				assets: await preparedImportAssets(preparedImport.assets),
 				cleanupPath: nativeCleanupPath
 			});
 
@@ -5787,7 +6325,7 @@ export async function prepareProjectImport(
 
 		if (sourceKind === 'zip') {
 			cleanupPath = await mkdtemp(join(tmpdir(), 'twine-import-'));
-			await extractZip(absoluteSourcePath, {dir: cleanupPath});
+			await extractZipImport(absoluteSourcePath, cleanupPath);
 
 			const htmlFiles =
 				findNativeTwineHtmlFiles(cleanupPath) ??
@@ -5804,6 +6342,8 @@ export async function prepareProjectImport(
 			);
 		}
 
+		await assertRegularImportFile(htmlFilePath, maxImportSourceBytes);
+
 		const nativePreparedImport = prepareNativeHtmlImport(
 			absoluteSourcePath,
 			htmlFilePath,
@@ -5817,14 +6357,14 @@ export async function prepareProjectImport(
 			};
 
 			preparedProjectImports.set(preparedImport.id, {
-				assets: preparedImport.assets,
+				assets: await preparedImportAssets(preparedImport.assets),
 				cleanupPath
 			});
 
 			return preparedImport;
 		}
 
-		const rawHtmlSource = await readFile(htmlFilePath, 'utf8');
+		const rawHtmlSource = await readBoundedImportText(htmlFilePath);
 		const sourceRoot = dirname(htmlFilePath);
 		const assets = await discoverProjectImportAssets(
 			sourceRoot,
@@ -5845,7 +6385,7 @@ export async function prepareProjectImport(
 		};
 
 		preparedProjectImports.set(preparedImport.id, {
-			assets,
+			assets: await preparedImportAssets(assets),
 			cleanupPath
 		});
 
@@ -6215,6 +6755,51 @@ export function finishProjectFolderHydration(hydrationId: string): void {
 	projectHydrations.delete(hydrationId);
 }
 
+async function ensureSafeProjectImportAssetDirectory(
+	rootPath: string,
+	directory: string
+) {
+	const relativeDirectory = relative(rootPath, directory);
+
+	if (
+		relativeDirectory === '..' ||
+		relativeDirectory.startsWith(`..${pathSeparator}`) ||
+		isAbsolute(relativeDirectory)
+	) {
+		throw new Error('Project import asset escaped its destination project.');
+	}
+
+	const canonicalRoot = await realpath(rootPath);
+	let current = rootPath;
+
+	for (const segment of relativeDirectory
+		.split(pathSeparator)
+		.filter(Boolean)) {
+		current = join(current, segment);
+
+		try {
+			await mkdir(current);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+				throw error;
+			}
+		}
+
+		const fileStats = await lstat(current);
+
+		if (fileStats.isSymbolicLink() || !fileStats.isDirectory()) {
+			throw new Error(
+				'Project import asset destination contains a symbolic link or non-directory.'
+			);
+		}
+		const canonicalDirectory = await realpath(current);
+
+		if (!isPathInside(canonicalRoot, canonicalDirectory)) {
+			throw new Error('Project import asset escaped its destination project.');
+		}
+	}
+}
+
 export async function copyProjectImportAssets(
 	importId: string,
 	rootPath: string
@@ -6226,16 +6811,128 @@ export async function copyProjectImportAssets(
 	}
 
 	const results: NativeProjectAssetWriteResult[] = [];
+	let totalBytes = 0;
 
-	for (const asset of preparedImport.assets) {
-		const target = safeProjectAssetPath(rootPath, asset.targetPath);
+	try {
+		for (const asset of preparedImport.assets) {
+			const target = safeProjectAssetPath(rootPath, asset.targetPath);
+			const temporaryPath = join(
+				dirname(target.absolutePath),
+				`.${basename(target.absolutePath)}.import-${uuid()}.tmp`
+			);
+			let sourceHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+			let targetHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+			let installed = false;
 
-		await mkdirp(dirname(target.absolutePath));
-		await copy(asset.sourcePath, target.absolutePath, {overwrite: true});
-		results.push({
-			sourcePath: target.absolutePath,
-			targetPath: target.projectPath
-		});
+			await ensureSafeProjectImportAssetDirectory(
+				rootPath,
+				dirname(target.absolutePath)
+			);
+
+			try {
+				if ((await realpath(asset.sourcePath)) !== asset.canonicalSourcePath) {
+					throw new Error('Project import asset changed after preparation.');
+				}
+				sourceHandle = await openFile(
+					asset.canonicalSourcePath,
+					fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
+				);
+				const sourceStats = await sourceHandle.stat();
+
+				if (
+					!sourceStats.isFile() ||
+					sourceStats.size !== asset.expectedSizeBytes
+				) {
+					throw new Error('Project import asset changed after preparation.');
+				}
+				assertImportFileSize(sourceStats.size, maxImportZipEntryBytes);
+				totalBytes += sourceStats.size;
+				if (totalBytes > maxImportZipExpandedBytes) {
+					throw new Error(
+						`Project import assets exceed the ${zipLimitMebibytes(
+							maxImportZipExpandedBytes
+						)} MiB cumulative size limit.`
+					);
+				}
+
+				targetHandle = await openFile(temporaryPath, 'wx');
+				const buffer = Buffer.allocUnsafe(64 * 1024);
+				let copiedBytes = 0;
+
+				while (copiedBytes < sourceStats.size) {
+					const requestedBytes = Math.min(
+						buffer.length,
+						sourceStats.size - copiedBytes
+					);
+					const {bytesRead} = await sourceHandle.read(
+						buffer,
+						0,
+						requestedBytes,
+						null
+					);
+
+					if (bytesRead === 0) {
+						throw new Error(
+							'Project import asset changed while it was copied.'
+						);
+					}
+
+					let writtenBytes = 0;
+
+					while (writtenBytes < bytesRead) {
+						const {bytesWritten} = await targetHandle.write(
+							buffer,
+							writtenBytes,
+							bytesRead - writtenBytes,
+							null
+						);
+
+						if (bytesWritten === 0) {
+							throw new Error('Project import asset could not be copied.');
+						}
+						writtenBytes += bytesWritten;
+					}
+					copiedBytes += bytesRead;
+				}
+
+				const sentinel = Buffer.allocUnsafe(1);
+				const {bytesRead: trailingBytes} = await sourceHandle.read(
+					sentinel,
+					0,
+					1,
+					null
+				);
+
+				if (trailingBytes !== 0) {
+					throw new Error('Project import asset changed while it was copied.');
+				}
+
+				await targetHandle.close();
+				targetHandle = undefined;
+				await ensureSafeProjectImportAssetDirectory(
+					rootPath,
+					dirname(target.absolutePath)
+				);
+				await move(temporaryPath, target.absolutePath, {overwrite: true});
+				installed = true;
+			} finally {
+				await sourceHandle?.close().catch(() => undefined);
+				await targetHandle?.close().catch(() => undefined);
+				if (!installed) {
+					await remove(temporaryPath).catch(() => undefined);
+				}
+			}
+			results.push({
+				sourcePath: target.absolutePath,
+				targetPath: target.projectPath
+			});
+		}
+	} catch (error) {
+		preparedProjectImports.delete(importId);
+		if (preparedImport.cleanupPath) {
+			await remove(preparedImport.cleanupPath).catch(() => undefined);
+		}
+		throw error;
 	}
 
 	const assets = await listProjectAssets(rootPath);

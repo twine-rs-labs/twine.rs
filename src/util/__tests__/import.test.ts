@@ -335,6 +335,33 @@ describe('importStories', () => {
 		);
 	});
 
+	it('rejects excessive HTML tag attributes without splitting them', async () => {
+		const tags = Array.from({length: 257}, (_, index) => `tag-${index}`).join(
+			' '
+		);
+		const source = `<tw-storydata name="Tagged"><tw-passagedata name="Start" tags="${tags}"></tw-passagedata></tw-storydata>`;
+
+		expect(() => importStories(source)).toThrow('more than 256 tags');
+		await expect(importStoriesAsync(source)).rejects.toThrow(
+			'more than 256 tags'
+		);
+	});
+
+	it('imports only outermost story elements from deeply nested malformed HTML', async () => {
+		const depth = 256;
+		const source = `${Array.from(
+			{length: depth},
+			(_, index) => `<tw-storydata name="Story ${index}">`
+		).join('')}${'</tw-storydata>'.repeat(depth)}`;
+
+		expect(importStories(source)).toEqual([
+			expect.objectContaining({name: 'Story 0'})
+		]);
+		await expect(importStoriesAsync(source)).resolves.toEqual([
+			expect.objectContaining({name: 'Story 0'})
+		]);
+	});
+
 	it('yields between large passage batches during async import', async () => {
 		const originalRequestIdleCallback = window.requestIdleCallback;
 		const idleSpy = jest.fn((callback: IdleRequestCallback) => {

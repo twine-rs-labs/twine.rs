@@ -1,16 +1,8 @@
 import {app, dialog, shell} from 'electron';
-import {
-	mkdtemp,
-	move,
-	readdir,
-	readFile,
-	rename,
-	stat,
-	writeFile
-} from 'fs-extra';
+import {mkdtemp, move, readdir, rename, stat, writeFile} from 'fs-extra';
 import {basename, join, resolve} from 'path';
 import {i18n} from './locales';
-import {openProjectFolder} from './project-folder';
+import {openProjectFolder, readBoundedImportText} from './project-folder';
 import {
 	forgetProjectFolder,
 	rememberedProjectFolders
@@ -27,6 +19,7 @@ import {
 	fileWasTouched,
 	wasFileChangedExternally
 } from './track-file-changes';
+import {cumulativeImportBytes} from '../../util/import-limits';
 
 export interface StoryFile extends ElectronLegacyStoryFile {}
 
@@ -221,6 +214,7 @@ export async function loadStories() {
 
 	await loadRememberedProjectStories(result);
 	const nativeProjectIfids = loadedNativeProjectIfids(result);
+	let legacySourceBytes = 0;
 
 	let files: string[];
 
@@ -234,29 +228,32 @@ export async function loadStories() {
 		throw error;
 	}
 
-	await Promise.all(
-		files
-			.filter(f => /\.html$/i.test(f))
-			.map(async f => {
-				const filePath = join(storyPath, f);
-				const stats = await stat(filePath);
+	for (const file of files.filter(file => /\.html$/i.test(file))) {
+		const filePath = join(storyPath, file);
+		const stats = await stat(filePath);
 
-				if (!stats.isDirectory()) {
-					const htmlSource = await readFile(filePath, 'utf8');
-					const ifid = storyDataIfid(htmlSource);
+		if (stats.isDirectory()) {
+			continue;
+		}
 
-					if (ifid && nativeProjectIfids.has(ifid)) {
-						return undefined;
-					}
+		const htmlSource = await readBoundedImportText(filePath);
+		const ifid = storyDataIfid(htmlSource);
 
-					result.push({
-						mtime: stats.mtime,
-						htmlSource
-					});
-					return fileWasTouched(filePath);
-				}
-			})
-	);
+		if (ifid && nativeProjectIfids.has(ifid)) {
+			continue;
+		}
+
+		legacySourceBytes = cumulativeImportBytes(
+			legacySourceBytes,
+			Buffer.byteLength(htmlSource, 'utf8')
+		);
+
+		result.push({
+			mtime: stats.mtime,
+			htmlSource
+		});
+		await fileWasTouched(filePath);
+	}
 
 	return result;
 }

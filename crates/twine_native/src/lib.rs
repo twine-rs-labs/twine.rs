@@ -56,6 +56,43 @@ const NATIVE_PREVIEW_ASSET_MAX_FILE_COUNT: u32 = 1000;
 const NATIVE_PREVIEW_ASSET_MAX_ENCODED_BYTES: u32 = 50 * 1024 * 1024;
 const NATIVE_PREVIEW_ASSET_MAX_REQUEST_COUNT: usize = 1000;
 const MAX_RENDERER_PROJECT_SIDECAR_BYTES: usize = 2 * 1024 * 1024;
+const MAX_IMPORT_SOURCE_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_IMPORT_ASSETS: usize = 1_000;
+const MAX_IMPORT_ASSET_SCAN_ENTRIES: usize = 10_000;
+const MAX_IMPORT_ASSET_SCAN_DEPTH: usize = 32;
+const MAX_IMPORT_ASSET_PATH_COMPONENT_CHARACTERS: usize = 255;
+
+#[derive(Clone, Copy)]
+struct ZipImportLimits {
+    max_archive_bytes: u64,
+    max_compression_ratio: u64,
+    max_entries: usize,
+    max_entry_bytes: u64,
+    max_expanded_bytes: u64,
+    max_nesting_depth: usize,
+}
+
+const ZIP_IMPORT_LIMITS: ZipImportLimits = ZipImportLimits {
+    max_archive_bytes: 100 * 1024 * 1024,
+    max_compression_ratio: 200,
+    max_entries: 10_000,
+    max_entry_bytes: 100 * 1024 * 1024,
+    max_expanded_bytes: 500 * 1024 * 1024,
+    max_nesting_depth: 32,
+};
+
+#[derive(Default)]
+struct ImportAssetBudget {
+    reference_matches: usize,
+    scanned_entries: usize,
+    total_bytes: u64,
+}
+
+#[derive(Default)]
+struct ImportAssetRewriteTrie {
+    children: BTreeMap<char, ImportAssetRewriteTrie>,
+    target_root: Option<String>,
+}
 
 type NativeResult<T> = napi::Result<T>;
 
@@ -2065,24 +2102,41 @@ type NativeBoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 fn prepare_zip_import(source_path: &Path) -> Result<NativeProjectImportSource, NativeBoxError> {
     let cleanup_path = std::env::temp_dir().join(format!("twine-import-{}", timestamp_nanos()));
 
-    fs::create_dir_all(&cleanup_path)?;
-    extract_zip_archive(source_path, &cleanup_path)?;
+    prepare_zip_import_at(source_path, cleanup_path, ZIP_IMPORT_LIMITS)
+}
 
-    let html_files = find_twine_html_files(&cleanup_path)?;
+fn prepare_zip_import_at(
+    source_path: &Path,
+    cleanup_path: PathBuf,
+    limits: ZipImportLimits,
+) -> Result<NativeProjectImportSource, NativeBoxError> {
+    fs::create_dir(&cleanup_path)?;
 
-    if html_files.is_empty() {
-        return Err("No Twine HTML story was found in the zip archive.".into());
+    let result = (|| {
+        extract_zip_archive_with_limits(source_path, &cleanup_path, limits)?;
+
+        let html_files = find_twine_html_files(&cleanup_path)?;
+
+        if html_files.is_empty() {
+            return Err("No Twine HTML story was found in the zip archive.".into());
+        }
+
+        let html_file_path = best_twine_html_file(&cleanup_path, source_path, &html_files)
+            .ok_or("No Twine HTML story was found in the zip archive.")?;
+
+        prepare_html_import(
+            source_path,
+            Path::new(&html_file_path),
+            "zip",
+            Some(cleanup_path.clone()),
+        )
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&cleanup_path);
     }
 
-    let html_file_path = best_twine_html_file(&cleanup_path, source_path, &html_files)
-        .ok_or("No Twine HTML story was found in the zip archive.")?;
-
-    prepare_html_import(
-        source_path,
-        Path::new(&html_file_path),
-        "zip",
-        Some(cleanup_path),
-    )
+    result
 }
 
 fn prepare_html_import(
@@ -2091,7 +2145,11 @@ fn prepare_html_import(
     source_kind: &str,
     cleanup_path: Option<PathBuf>,
 ) -> Result<NativeProjectImportSource, NativeBoxError> {
-    let html_source = fs::read_to_string(html_file_path)?;
+    let html_source = read_bounded_utf8_file(
+        html_file_path,
+        MAX_IMPORT_SOURCE_BYTES,
+        "Import HTML source",
+    )?;
     let source_root = html_file_path.parent().unwrap_or_else(|| Path::new("."));
     let assets = discover_project_import_assets(source_root, html_file_path, &html_source)?;
     let html_source = rewrite_project_import_asset_references(&html_source, &assets)?;
@@ -2106,15 +2164,97 @@ fn prepare_html_import(
     })
 }
 
-fn extract_zip_archive(source_path: &Path, target_root: &Path) -> Result<(), NativeBoxError> {
+fn extract_zip_archive_with_limits(
+    source_path: &Path,
+    target_root: &Path,
+    limits: ZipImportLimits,
+) -> Result<(), NativeBoxError> {
     let file = File::open(source_path)?;
+    let metadata = file.metadata()?;
+
+    if !metadata.is_file() {
+        return Err("Project import source must be a regular file.".into());
+    }
+    if metadata.len() > limits.max_archive_bytes {
+        return Err(format!(
+            "Zip import exceeds the {} MiB compressed-size limit.",
+            limits.max_archive_bytes / (1024 * 1024)
+        )
+        .into());
+    }
+
     let mut archive = zip::ZipArchive::new(file)?;
+
+    if archive.len() > limits.max_entries {
+        return Err(format!(
+            "Zip import contains more than {} entries.",
+            limits.max_entries
+        )
+        .into());
+    }
+
+    let mut declared_compressed_bytes = 0_u64;
+    let mut declared_expanded_bytes = 0_u64;
+    let mut written_expanded_bytes = 0_u64;
 
     for index in 0..archive.len() {
         let mut zipped_file = archive.by_index(index)?;
-        let Some(enclosed_name) = zipped_file.enclosed_name() else {
-            continue;
-        };
+        let enclosed_name = zipped_file
+            .enclosed_name()
+            .ok_or("Zip import contains an unsafe entry path.")?;
+        let nesting_depth = zipped_file
+            .name()
+            .split(['/', '\\'])
+            .filter(|component| !component.is_empty())
+            .count();
+
+        if nesting_depth > limits.max_nesting_depth {
+            return Err(format!(
+                "Zip import entry nesting exceeds {} levels.",
+                limits.max_nesting_depth
+            )
+            .into());
+        }
+
+        let compressed_bytes = zipped_file.compressed_size();
+        let expanded_bytes = zipped_file.size();
+
+        if expanded_bytes > limits.max_entry_bytes {
+            return Err(format!(
+                "Zip import entry exceeds the {} MiB expanded-size limit.",
+                limits.max_entry_bytes / (1024 * 1024)
+            )
+            .into());
+        }
+        declared_compressed_bytes = declared_compressed_bytes
+            .checked_add(compressed_bytes)
+            .ok_or("Zip import compressed-size total overflowed.")?;
+        declared_expanded_bytes = declared_expanded_bytes
+            .checked_add(expanded_bytes)
+            .ok_or("Zip import expanded-size total overflowed.")?;
+        if declared_expanded_bytes > limits.max_expanded_bytes {
+            return Err(format!(
+                "Zip import exceeds the {} MiB cumulative expanded-size limit.",
+                limits.max_expanded_bytes / (1024 * 1024)
+            )
+            .into());
+        }
+        if expanded_bytes
+            > compressed_bytes
+                .max(1)
+                .saturating_mul(limits.max_compression_ratio)
+            || declared_expanded_bytes
+                > declared_compressed_bytes
+                    .max(1)
+                    .saturating_mul(limits.max_compression_ratio)
+        {
+            return Err(format!(
+                "Zip import exceeds the {}:1 compression-ratio limit.",
+                limits.max_compression_ratio
+            )
+            .into());
+        }
+
         let target_path = target_root.join(enclosed_name);
 
         if zipped_file.is_dir() {
@@ -2127,11 +2267,59 @@ fn extract_zip_archive(source_path: &Path, target_root: &Path) -> Result<(), Nat
         }
 
         let mut output = File::create(&target_path)?;
+        let remaining_expanded_bytes = limits
+            .max_expanded_bytes
+            .saturating_sub(written_expanded_bytes);
+        let stream_limit = limits
+            .max_entry_bytes
+            .min(remaining_expanded_bytes)
+            .saturating_add(1);
+        let written = io::copy(&mut zipped_file.by_ref().take(stream_limit), &mut output)?;
 
-        io::copy(&mut zipped_file, &mut output)?;
+        if written != expanded_bytes {
+            return Err("Zip import entry did not match its declared expanded size.".into());
+        }
+        written_expanded_bytes = written_expanded_bytes
+            .checked_add(written)
+            .ok_or("Zip import expanded-size total overflowed.")?;
     }
 
     Ok(())
+}
+
+fn read_bounded_utf8_file(
+    path: &Path,
+    max_bytes: u64,
+    label: &str,
+) -> Result<String, NativeBoxError> {
+    let mut file = File::open(path)?;
+    let metadata = file.metadata()?;
+
+    if !metadata.is_file() {
+        return Err(format!("{label} must be a regular file.").into());
+    }
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{label} exceeds the {} MiB limit.",
+            max_bytes / (1024 * 1024)
+        )
+        .into());
+    }
+
+    let mut source = Vec::with_capacity(metadata.len().min(max_bytes) as usize);
+
+    file.by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut source)?;
+    if source.len() as u64 > max_bytes {
+        return Err(format!(
+            "{label} exceeds the {} MiB limit.",
+            max_bytes / (1024 * 1024)
+        )
+        .into());
+    }
+
+    String::from_utf8(source).map_err(Into::into)
 }
 
 fn best_twine_html_file(
@@ -2637,6 +2825,7 @@ fn discover_project_import_assets(
     html_source: &str,
 ) -> Result<Vec<NativeProjectImportAsset>, std::io::Error> {
     let mut assets = BTreeMap::new();
+    let mut budget = ImportAssetBudget::default();
     let html_base_name = html_file_path
         .file_stem()
         .map(|name| name.to_string_lossy().into_owned())
@@ -2648,6 +2837,12 @@ fn discover_project_import_assets(
 
     for entry in names {
         let entry = entry?;
+        budget.scanned_entries += 1;
+        if budget.scanned_entries > MAX_IMPORT_ASSET_SCAN_ENTRIES {
+            return Err(io::Error::other(format!(
+                "Project import asset scan exceeds {MAX_IMPORT_ASSET_SCAN_ENTRIES} entries."
+            )));
+        }
         let path = entry.path();
 
         if entry.file_type()?.is_dir()
@@ -2656,11 +2851,16 @@ fn discover_project_import_assets(
                 &html_base_name,
             )
         {
-            scan_import_asset_directory(&mut assets, source_root, &path)?;
+            if !is_path_inside(source_root, &path) {
+                return Err(io::Error::other(
+                    "Project import asset escaped its source directory.",
+                ));
+            }
+            scan_import_asset_directory(&mut assets, source_root, &path, 1, &mut budget)?;
         }
     }
 
-    add_referenced_import_assets(&mut assets, source_root, html_source)?;
+    add_referenced_import_assets(&mut assets, source_root, html_source, &mut budget)?;
 
     Ok(assets.into_values().collect())
 }
@@ -2669,16 +2869,37 @@ fn scan_import_asset_directory(
     assets: &mut BTreeMap<String, NativeProjectImportAsset>,
     source_root: &Path,
     directory: &Path,
+    depth: usize,
+    budget: &mut ImportAssetBudget,
 ) -> Result<(), std::io::Error> {
+    if depth > MAX_IMPORT_ASSET_SCAN_DEPTH {
+        return Err(io::Error::other(format!(
+            "Project import asset nesting exceeds {MAX_IMPORT_ASSET_SCAN_DEPTH} levels."
+        )));
+    }
+
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
+        budget.scanned_entries += 1;
+        if budget.scanned_entries > MAX_IMPORT_ASSET_SCAN_ENTRIES {
+            return Err(io::Error::other(format!(
+                "Project import asset scan exceeds {MAX_IMPORT_ASSET_SCAN_ENTRIES} entries."
+            )));
+        }
         let path = entry.path();
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            scan_import_asset_directory(assets, source_root, &path)?;
+            if !is_path_inside(source_root, &path) {
+                return Err(io::Error::other(
+                    "Project import asset escaped its source directory.",
+                ));
+            }
+            scan_import_asset_directory(assets, source_root, &path, depth + 1, budget)?;
         } else if file_type.is_file() {
-            add_import_asset(assets, source_root, &path);
+            let metadata = entry.metadata()?;
+
+            add_import_asset(assets, source_root, &path, metadata.len(), budget)?;
         }
     }
 
@@ -2689,6 +2910,7 @@ fn add_referenced_import_assets(
     assets: &mut BTreeMap<String, NativeProjectImportAsset>,
     source_root: &Path,
     html_source: &str,
+    budget: &mut ImportAssetBudget,
 ) -> Result<(), std::io::Error> {
     let regex = Regex::new(
         r"(?i)([A-Za-z0-9_./~%:@?&=+-]+\.(?:apng|avif|css|gif|jpe?g|js|m4a|mp3|mp4|oga|ogg|otf|png|svg|ttf|wav|webm|webp|woff2?))",
@@ -2696,6 +2918,12 @@ fn add_referenced_import_assets(
     .expect("import asset regex should compile");
 
     for capture in regex.captures_iter(html_source) {
+        budget.reference_matches += 1;
+        if budget.reference_matches > MAX_IMPORT_ASSET_SCAN_ENTRIES {
+            return Err(io::Error::other(format!(
+                "Project import asset references exceed {MAX_IMPORT_ASSET_SCAN_ENTRIES} entries."
+            )));
+        }
         let Some(reference) = capture.get(1) else {
             continue;
         };
@@ -2708,8 +2936,11 @@ fn add_referenced_import_assets(
             continue;
         }
 
-        match absolute_path.metadata() {
-            Ok(stats) if stats.is_file() => add_import_asset(assets, source_root, &absolute_path),
+        match absolute_path.symlink_metadata() {
+            Ok(stats) if stats.file_type().is_symlink() => {}
+            Ok(stats) if stats.is_file() && is_path_inside(source_root, &absolute_path) => {
+                add_import_asset(assets, source_root, &absolute_path, stats.len(), budget)?;
+            }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -2723,9 +2954,11 @@ fn add_import_asset(
     assets: &mut BTreeMap<String, NativeProjectImportAsset>,
     source_root: &Path,
     source_path: &Path,
-) {
+    size_bytes: u64,
+    budget: &mut ImportAssetBudget,
+) -> Result<(), std::io::Error> {
     let Ok(relative_source_path) = source_path.strip_prefix(source_root) else {
-        return;
+        return Ok(());
     };
     let relative_source_path = slash_path(relative_source_path);
 
@@ -2733,19 +2966,44 @@ fn add_import_asset(
         || relative_source_path.starts_with("..")
         || !is_import_asset_file(&relative_source_path)
     {
-        return;
+        return Ok(());
     }
 
     let target_path = import_asset_target_path(&relative_source_path);
+    let target_key = target_path.to_lowercase();
+
+    if assets.contains_key(&target_key) {
+        return Ok(());
+    }
+    if assets.len() >= MAX_IMPORT_ASSETS {
+        return Err(io::Error::other(format!(
+            "Project import contains more than {MAX_IMPORT_ASSETS} assets."
+        )));
+    }
+    if size_bytes > ZIP_IMPORT_LIMITS.max_entry_bytes {
+        return Err(io::Error::other(format!(
+            "Project import asset exceeds the {} MiB size limit.",
+            ZIP_IMPORT_LIMITS.max_entry_bytes / (1024 * 1024)
+        )));
+    }
+    budget.total_bytes = budget.total_bytes.saturating_add(size_bytes);
+    if budget.total_bytes > ZIP_IMPORT_LIMITS.max_expanded_bytes {
+        return Err(io::Error::other(format!(
+            "Project import assets exceed the {} MiB cumulative size limit.",
+            ZIP_IMPORT_LIMITS.max_expanded_bytes / (1024 * 1024)
+        )));
+    }
 
     assets.insert(
-        target_path.to_lowercase(),
+        target_key,
         NativeProjectImportAsset {
             original_path: relative_source_path,
             source_path: source_path.to_string_lossy().into_owned(),
             target_path,
         },
     );
+
+    Ok(())
 }
 
 fn rewrite_project_import_asset_references(
@@ -2776,29 +3034,90 @@ fn rewrite_project_import_asset_references(
         );
     }
 
-    let mut ordered_roots = roots.into_values().collect::<Vec<_>>();
+    if roots.is_empty() {
+        return Ok(html_source.to_owned());
+    }
+    let mut root_trie = ImportAssetRewriteTrie::default();
 
-    ordered_roots.sort_by(|left, right| right.0.len().cmp(&left.0.len()));
+    for (original_root, target_root) in roots.values() {
+        let mut node = &mut root_trie;
 
-    let mut source = html_source.to_owned();
+        if original_root.chars().count() > MAX_IMPORT_ASSET_PATH_COMPONENT_CHARACTERS {
+            continue;
+        }
 
-    for (original_root, target_root) in ordered_roots {
-        let regex = Regex::new(&format!(
-            r"(?i)(^|[^A-Za-z0-9_./~%:-])(\./)?{}/",
-            regex::escape(&original_root)
-        ))?;
+        for character in original_root.chars().rev() {
+            node = node
+                .children
+                .entry(character.to_lowercase().next().unwrap_or(character))
+                .or_default();
+        }
+        node.target_root = Some(target_root.clone());
+    }
+    let mut rewritten = String::with_capacity(html_source.len());
+    let mut cursor = 0;
+    let mut unchanged_start = 0;
 
-        source = regex
-            .replace_all(&source, |captures: &regex::Captures<'_>| {
-                format!(
-                    "{}{target_root}/",
-                    captures.get(1).map_or("", |value| value.as_str())
-                )
-            })
-            .into_owned();
+    while let Some(relative_slash) = html_source[cursor..].find('/') {
+        let slash = cursor + relative_slash;
+        let mut node = &root_trie;
+        let mut matched = None;
+
+        for (root_start, character) in html_source[..slash]
+            .char_indices()
+            .rev()
+            .take(MAX_IMPORT_ASSET_PATH_COMPONENT_CHARACTERS)
+        {
+            let Some(child) = node
+                .children
+                .get(&character.to_lowercase().next().unwrap_or(character))
+            else {
+                break;
+            };
+            node = child;
+
+            if let Some(target_root) = node.target_root.as_ref() {
+                let previous = html_source[..root_start].chars().next_back();
+                let mut replace_start = root_start;
+                let mut has_boundary = previous.is_none_or(|character| {
+                    !character.is_ascii_alphanumeric()
+                        && !matches!(character, '%' | '-' | '.' | '/' | ':' | '_' | '~')
+                });
+
+                if !has_boundary
+                    && root_start >= 2
+                    && html_source.as_bytes().get(root_start - 2..root_start) == Some(b"./")
+                {
+                    let relative_previous = html_source[..root_start - 2].chars().next_back();
+
+                    has_boundary = relative_previous.is_none_or(|character| {
+                        !character.is_ascii_alphanumeric()
+                            && !matches!(character, '%' | '-' | '.' | '/' | ':' | '_' | '~')
+                    });
+                    if has_boundary {
+                        replace_start = root_start - 2;
+                    }
+                }
+                if has_boundary {
+                    matched = Some((replace_start, target_root));
+                }
+            }
+        }
+
+        if let Some((root_start, target_root)) = matched {
+            rewritten.push_str(&html_source[unchanged_start..root_start]);
+            rewritten.push_str(target_root);
+            unchanged_start = slash;
+        }
+        cursor = slash + 1;
     }
 
-    Ok(source)
+    if unchanged_start == 0 {
+        return Ok(html_source.to_owned());
+    }
+    rewritten.push_str(&html_source[unchanged_start..]);
+
+    Ok(rewritten)
 }
 
 fn find_twine_html_files(root: &Path) -> Result<Vec<String>, std::io::Error> {
@@ -2837,10 +3156,22 @@ fn find_twine_html_files_inner(
             continue;
         }
 
-        let source = fs::read_to_string(&absolute_path)?;
+        let metadata = entry.metadata()?;
 
-        if source.to_lowercase().contains("<tw-storydata")
-            || source.to_lowercase().contains("<tw-storydata ")
+        if metadata.len() > MAX_IMPORT_SOURCE_BYTES {
+            continue;
+        }
+        let source = read_bounded_utf8_file(
+            &absolute_path,
+            MAX_IMPORT_SOURCE_BYTES,
+            "Import HTML candidate",
+        )
+        .map_err(io::Error::other)?;
+
+        if source
+            .as_bytes()
+            .windows(b"<tw-storydata".len())
+            .any(|window| window.eq_ignore_ascii_case(b"<tw-storydata"))
         {
             files.push(absolute_path.to_string_lossy().into_owned());
         }
@@ -3172,6 +3503,37 @@ mod tests {
                 .expect("system time should be after epoch")
                 .as_nanos()
         ))
+    }
+
+    fn write_test_zip(
+        path: &Path,
+        entries: &[(&str, &[u8])],
+        compression_method: zip::CompressionMethod,
+    ) {
+        let zip_file = File::create(path).expect("test zip should be created");
+        let mut zip = zip::ZipWriter::new(zip_file);
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(compression_method);
+
+        for (name, contents) in entries {
+            zip.start_file(*name, options)
+                .expect("test zip entry should start");
+            zip.write_all(contents)
+                .expect("test zip entry should be written");
+        }
+
+        zip.finish().expect("test zip should finish");
+    }
+
+    fn permissive_test_zip_limits() -> ZipImportLimits {
+        ZipImportLimits {
+            max_archive_bytes: 1024 * 1024,
+            max_compression_ratio: 1000,
+            max_entries: 10,
+            max_entry_bytes: 1024 * 1024,
+            max_expanded_bytes: 2 * 1024 * 1024,
+            max_nesting_depth: 10,
+        }
     }
 
     fn project_backup_root(root: &Path) -> PathBuf {
@@ -3998,6 +4360,152 @@ mod tests {
             import_asset_target_path("assets/cover.png"),
             "assets/cover.png"
         );
+    }
+
+    #[test]
+    fn import_asset_discovery_enforces_count_scan_depth_and_byte_quotas() {
+        let root = temp_path("import-asset-quotas");
+        let asset_directory = root.join("images");
+
+        fs::create_dir_all(&asset_directory).expect("asset directory should be created");
+        fs::write(asset_directory.join("cover.png"), b"x").expect("asset should be written");
+
+        let mut assets = BTreeMap::new();
+        let mut budget = ImportAssetBudget::default();
+
+        for index in 0..MAX_IMPORT_ASSETS {
+            add_import_asset(
+                &mut assets,
+                &root,
+                &root.join(format!("images/{index}.png")),
+                1,
+                &mut budget,
+            )
+            .expect("asset boundary should be accepted");
+        }
+        let count_error = add_import_asset(
+            &mut assets,
+            &root,
+            &root.join("images/overflow.png"),
+            1,
+            &mut budget,
+        )
+        .expect_err("asset count overflow should be rejected");
+
+        assert!(count_error.to_string().contains("more than 1000 assets"));
+
+        let mut scan_budget = ImportAssetBudget {
+            scanned_entries: MAX_IMPORT_ASSET_SCAN_ENTRIES,
+            ..ImportAssetBudget::default()
+        };
+        let scan_error = scan_import_asset_directory(
+            &mut BTreeMap::new(),
+            &root,
+            &asset_directory,
+            1,
+            &mut scan_budget,
+        )
+        .expect_err("asset scan overflow should be rejected");
+
+        assert!(scan_error.to_string().contains("scan exceeds"));
+
+        let depth_error = scan_import_asset_directory(
+            &mut BTreeMap::new(),
+            &root,
+            &asset_directory,
+            MAX_IMPORT_ASSET_SCAN_DEPTH + 1,
+            &mut ImportAssetBudget::default(),
+        )
+        .expect_err("asset nesting overflow should be rejected");
+
+        assert!(depth_error.to_string().contains("nesting exceeds"));
+
+        let entry_error = add_import_asset(
+            &mut BTreeMap::new(),
+            &root,
+            &root.join("images/large.png"),
+            ZIP_IMPORT_LIMITS.max_entry_bytes + 1,
+            &mut ImportAssetBudget::default(),
+        )
+        .expect_err("oversized asset should be rejected");
+
+        assert!(entry_error.to_string().contains("asset exceeds"));
+
+        let total_error = add_import_asset(
+            &mut BTreeMap::new(),
+            &root,
+            &root.join("images/total.png"),
+            1,
+            &mut ImportAssetBudget {
+                total_bytes: ZIP_IMPORT_LIMITS.max_expanded_bytes,
+                ..ImportAssetBudget::default()
+            },
+        )
+        .expect_err("cumulative asset overflow should be rejected");
+
+        assert!(total_error.to_string().contains("cumulative size limit"));
+        fs::remove_dir_all(root).expect("asset quota root should be removed");
+    }
+
+    #[test]
+    fn import_asset_rewrite_handles_spaced_roots_and_large_nonmatches_linearly() {
+        let long_root = format!("{}x", "a ".repeat(127));
+        let assets = vec![
+            NativeProjectImportAsset {
+                original_path: "Ä Files/cover.png".into(),
+                source_path: "/imports/Ä Files/cover.png".into(),
+                target_path: "assets/Ä Files/cover.png".into(),
+            },
+            NativeProjectImportAsset {
+                original_path: format!("{long_root}/cover.png"),
+                source_path: format!("/imports/{long_root}/cover.png"),
+                target_path: format!("assets/{long_root}/cover.png"),
+            },
+        ];
+        let rewritten =
+            rewrite_project_import_asset_references(r#"<img src="ä files/cover.png">"#, &assets)
+                .expect("spaced asset root should rewrite");
+
+        assert!(rewritten.contains(r#"src="assets/Ä Files/cover.png""#));
+
+        let component = format!("{}y/", "a ".repeat(127));
+        let adversarial = component.repeat((10_usize * 1024 * 1024).div_ceil(component.len()));
+        let started_at = Instant::now();
+
+        rewrite_project_import_asset_references(&adversarial, &assets)
+            .expect("large nonmatching components should remain bounded");
+        assert!(
+            started_at.elapsed().as_secs_f64() < 2.0,
+            "asset rewrite exceeded its linear-time budget: {:?}",
+            started_at.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn referenced_import_asset_discovery_skips_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_path("import-asset-symlink");
+        let outside = temp_path("import-asset-symlink-outside");
+
+        fs::create_dir_all(&root).expect("asset root should be created");
+        fs::write(&outside, b"outside").expect("outside file should be written");
+        symlink(&outside, root.join("escape.png")).expect("asset symlink should be created");
+
+        let mut assets = BTreeMap::new();
+
+        add_referenced_import_assets(
+            &mut assets,
+            &root,
+            r#"<img src="escape.png">"#,
+            &mut ImportAssetBudget::default(),
+        )
+        .expect("symlink reference should be skipped safely");
+        assert!(assets.is_empty());
+
+        fs::remove_dir_all(root).expect("asset root should be removed");
+        fs::remove_file(outside).expect("outside file should be removed");
     }
 
     #[test]
@@ -5082,6 +5590,179 @@ mod tests {
         assert_eq!(listed[0].root_path, "/projects/b.twine.rs");
 
         fs::remove_dir_all(root).expect("index root should be removed");
+    }
+
+    #[test]
+    fn bounded_html_reader_accepts_the_boundary_and_rejects_growth() {
+        let root = temp_path("bounded-html-import");
+        let html_path = root.join("story.html");
+
+        fs::create_dir_all(&root).expect("bounded-reader root should be created");
+        fs::write(&html_path, b"12345678").expect("boundary source should be written");
+
+        assert_eq!(
+            read_bounded_utf8_file(&html_path, 8, "Test import")
+                .expect("boundary source should be accepted"),
+            "12345678"
+        );
+
+        fs::write(&html_path, b"123456789").expect("oversized source should be written");
+        let error = read_bounded_utf8_file(&html_path, 8, "Test import")
+            .expect_err("oversized source should be rejected");
+
+        assert!(error.to_string().contains("exceeds"));
+        fs::remove_dir_all(root).expect("bounded-reader root should be removed");
+    }
+
+    #[test]
+    fn html_discovery_skips_oversized_nonselected_candidates() {
+        let root = temp_path("bounded-html-discovery");
+        let valid_path = root.join("story.html");
+        let oversized_path = root.join("decoy.html");
+
+        fs::create_dir_all(&root).expect("discovery root should be created");
+        fs::write(&valid_path, b"<tw-storydata name=\"Story\"></tw-storydata>")
+            .expect("valid candidate should be written");
+        File::create(&oversized_path)
+            .expect("oversized candidate should be created")
+            .set_len(MAX_IMPORT_SOURCE_BYTES + 1)
+            .expect("oversized candidate should be sparse");
+
+        let files = find_twine_html_files(&root).expect("discovery should remain bounded");
+
+        assert_eq!(files, vec![valid_path.to_string_lossy().into_owned()]);
+        fs::remove_dir_all(root).expect("discovery root should be removed");
+    }
+
+    #[test]
+    fn zip_extraction_enforces_size_count_depth_and_ratio_quotas() {
+        let root = temp_path("zip-import-quotas");
+        let zip_path = root.join("quota.zip");
+        let extract_path = root.join("extract");
+
+        fs::create_dir_all(&root).expect("quota root should be created");
+        write_test_zip(
+            &zip_path,
+            &[("a/b/story.html", b"1234"), ("asset.bin", b"5678")],
+            zip::CompressionMethod::Stored,
+        );
+        let archive_bytes = fs::metadata(&zip_path)
+            .expect("quota zip metadata should load")
+            .len();
+        let mut limits = permissive_test_zip_limits();
+
+        limits.max_archive_bytes = archive_bytes;
+        limits.max_entries = 2;
+        limits.max_entry_bytes = 4;
+        limits.max_expanded_bytes = 8;
+        limits.max_nesting_depth = 3;
+        limits.max_compression_ratio = 1;
+        extract_zip_archive_with_limits(&zip_path, &extract_path, limits)
+            .expect("exact quota boundaries should be accepted");
+        fs::remove_dir_all(&extract_path).expect("boundary extraction should be removed");
+
+        for (label, restrictive_limits, expected) in [
+            (
+                "archive",
+                ZipImportLimits {
+                    max_archive_bytes: archive_bytes - 1,
+                    ..limits
+                },
+                "compressed-size limit",
+            ),
+            (
+                "entries",
+                ZipImportLimits {
+                    max_entries: 1,
+                    ..limits
+                },
+                "more than 1 entries",
+            ),
+            (
+                "entry-size",
+                ZipImportLimits {
+                    max_entry_bytes: 3,
+                    ..limits
+                },
+                "entry exceeds",
+            ),
+            (
+                "expanded-total",
+                ZipImportLimits {
+                    max_expanded_bytes: 7,
+                    ..limits
+                },
+                "cumulative expanded-size limit",
+            ),
+            (
+                "depth",
+                ZipImportLimits {
+                    max_nesting_depth: 2,
+                    ..limits
+                },
+                "nesting exceeds 2",
+            ),
+        ] {
+            let error = extract_zip_archive_with_limits(
+                &zip_path,
+                &root.join(format!("extract-{label}")),
+                restrictive_limits,
+            )
+            .expect_err("restrictive quota should reject the archive");
+
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected {label} quota error: {error}"
+            );
+        }
+
+        let ratio_zip_path = root.join("ratio.zip");
+        let compressible = vec![b'x'; 4096];
+
+        write_test_zip(
+            &ratio_zip_path,
+            &[("story.html", compressible.as_slice())],
+            zip::CompressionMethod::Deflated,
+        );
+        let ratio_error = extract_zip_archive_with_limits(
+            &ratio_zip_path,
+            &root.join("extract-ratio"),
+            ZipImportLimits {
+                max_compression_ratio: 1,
+                ..permissive_test_zip_limits()
+            },
+        )
+        .expect_err("excessive compression ratio should be rejected");
+
+        assert!(ratio_error.to_string().contains("compression-ratio limit"));
+        fs::remove_dir_all(root).expect("quota root should be removed");
+    }
+
+    #[test]
+    fn failed_zip_preparation_removes_partial_extraction() {
+        let root = temp_path("zip-import-cleanup");
+        let zip_path = root.join("cleanup.zip");
+        let cleanup_path = root.join("partial");
+
+        fs::create_dir_all(&root).expect("cleanup root should be created");
+        write_test_zip(
+            &zip_path,
+            &[("story.html", b"12345")],
+            zip::CompressionMethod::Stored,
+        );
+        let error = prepare_zip_import_at(
+            &zip_path,
+            cleanup_path.clone(),
+            ZipImportLimits {
+                max_entry_bytes: 4,
+                ..permissive_test_zip_limits()
+            },
+        )
+        .expect_err("failed preparation should return its quota error");
+
+        assert!(error.to_string().contains("entry exceeds"));
+        assert!(!cleanup_path.exists());
+        fs::remove_dir_all(root).expect("cleanup root should be removed");
     }
 
     #[test]

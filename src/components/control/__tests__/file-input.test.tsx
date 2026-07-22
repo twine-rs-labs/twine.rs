@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {axe} from 'jest-axe';
 import {FileInput, FileInputProps} from '../file-input';
-import {render, screen} from '@testing-library/react';
+import {fireEvent, render, screen} from '@testing-library/react';
 
 describe('<FileInput>', () => {
 	function renderComponent(props?: Partial<FileInputProps>) {
@@ -26,6 +26,23 @@ describe('<FileInput>', () => {
 	it.todo(
 		'calls the onError prop when the input is changed and the file fails to be read'
 	);
+
+	it('rejects oversized files before reading them', () => {
+		const onChange = jest.fn();
+		const onError = jest.fn();
+		const file = new File(['small'], 'large.html', {type: 'text/html'});
+
+		Object.defineProperty(file, 'size', {value: 9});
+		renderComponent({maxBytes: 8, onChange, onError});
+		fireEvent.change(screen.getByLabelText('mock-label'), {
+			target: {files: [file]}
+		});
+
+		expect(onError).toHaveBeenCalledWith(
+			expect.objectContaining({message: expect.stringContaining('exceeds')})
+		);
+		expect(onChange).not.toHaveBeenCalled();
+	});
 
 	it('is accessible', async () => {
 		const {container} = renderComponent();

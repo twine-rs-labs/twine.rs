@@ -1,4 +1,5 @@
 import type {Passage, Story} from '../store/stories';
+import {maxImportStoryGraphEntries} from './import-limits';
 
 export const TWINE_RS_STORY_DATA_KEY = 'twine.rs';
 export const TWINE_RS_STORY_GRAPH_HTML_ATTRIBUTE = 'data-twine-rs-story-graph';
@@ -171,23 +172,31 @@ function passageBounds(entry: unknown) {
 	return undefined;
 }
 
-function passageMatchesMetadataEntry(passage: Passage, entry: unknown) {
-	if (!isRecord(entry)) {
-		return false;
-	}
-
-	return (
-		entry.id === passage.id ||
-		entry.passageId === passage.id ||
-		entry.name === passage.name
-	);
-}
-
 export function applyStoryGraphMetadataToStory(
 	story: Story,
 	metadata: unknown
 ) {
 	const entries = passageLayoutEntries(metadata);
+
+	if (entries.length > maxImportStoryGraphEntries) {
+		throw new Error(
+			`Story graph metadata contains more than ${maxImportStoryGraphEntries.toLocaleString(
+				'en-US'
+			)} passage entries.`
+		);
+	}
+
+	const passagesById = new Map<string, {index: number; passage: Passage}>();
+	const passagesByName = new Map<string, {index: number; passage: Passage}>();
+
+	story.passages.forEach((passage, index) => {
+		if (!passagesById.has(passage.id)) {
+			passagesById.set(passage.id, {index, passage});
+		}
+		if (!passagesByName.has(passage.name)) {
+			passagesByName.set(passage.name, {index, passage});
+		}
+	});
 
 	for (const entry of entries) {
 		const bounds = passageBounds(entry);
@@ -196,9 +205,27 @@ export function applyStoryGraphMetadataToStory(
 			continue;
 		}
 
-		const passage = story.passages.find(candidate =>
-			passageMatchesMetadataEntry(candidate, entry)
-		);
+		if (!isRecord(entry)) {
+			continue;
+		}
+		const candidates = [entry.id, entry.passageId]
+			.filter((value): value is string => typeof value === 'string')
+			.flatMap(value => {
+				const candidate = passagesById.get(value);
+
+				return candidate ? [candidate] : [];
+			});
+
+		if (typeof entry.name === 'string') {
+			const candidate = passagesByName.get(entry.name);
+
+			if (candidate) {
+				candidates.push(candidate);
+			}
+		}
+		const passage = candidates.sort(
+			(left, right) => left.index - right.index
+		)[0]?.passage;
 
 		if (passage) {
 			passage.left = bounds.left;

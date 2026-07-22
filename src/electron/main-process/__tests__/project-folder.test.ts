@@ -1,6 +1,7 @@
 import {dialog, shell} from 'electron';
 import {createHash} from 'crypto';
 import {FSWatcher, watch} from 'fs';
+import {lstat, open as openFile, opendir, realpath} from 'fs/promises';
 import {performance} from 'perf_hooks';
 import {setImmediate} from 'timers';
 import {
@@ -17,6 +18,8 @@ import {
 	writeFile
 } from 'fs-extra';
 import extractZip from 'extract-zip';
+import {EventEmitter} from 'events';
+import {open as openZip} from 'yauzl';
 import * as assetPaths from '../../../core/asset-paths';
 import {fakeStory} from '../../../test-util';
 import {
@@ -70,11 +73,22 @@ import {
 	saveNativeProjectFolder
 } from '../native';
 import {performanceHarnessEnabled} from '../performance-harness';
+import {
+	maxImportSourceBytes,
+	maxImportZipEntryBytes
+} from '../../../util/import-limits';
 
 jest.mock('electron');
 jest.mock('extract-zip', () => jest.fn());
 jest.mock('fs', () => ({...jest.requireActual('fs'), watch: jest.fn()}));
+jest.mock('fs/promises', () => ({
+	lstat: jest.fn(),
+	open: jest.fn(),
+	opendir: jest.fn(),
+	realpath: jest.fn()
+}));
 jest.mock('fs-extra');
+jest.mock('yauzl', () => ({open: jest.fn()}));
 jest.mock('../native', () => ({
 	beginNativeProjectFolderHydration: jest.fn(),
 	captureNativeProjectAssetDigests: jest.fn(),
@@ -115,11 +129,16 @@ describe('project-folder native bridge', () => {
 	const mkdirMock = mkdir as jest.Mock;
 	const mkdtempMock = mkdtemp as jest.Mock;
 	const copyMock = copy as jest.Mock;
+	const lstatMock = lstat as jest.Mock;
 	const extractZipMock = extractZip as jest.Mock;
+	const openFileMock = openFile as jest.Mock;
+	const opendirMock = opendir as jest.Mock;
+	const openZipMock = openZip as unknown as jest.Mock;
 	const moveMock = move as jest.Mock;
 	const readFileMock = readFile as jest.Mock;
 	const readJsonMock = readJson as jest.Mock;
 	const readdirMock = readdir as jest.Mock;
+	const realpathMock = realpath as jest.Mock;
 	const removeMock = remove as jest.Mock;
 	const showOpenDialogMock = dialog.showOpenDialog as jest.Mock;
 	const statMock = stat as jest.Mock;
@@ -155,12 +174,102 @@ describe('project-folder native bridge', () => {
 		rememberNativeProjectFolder as jest.Mock;
 	const saveNativeProjectFolderMock = saveNativeProjectFolder as jest.Mock;
 
+	function mockZipEntries(entries: any[], entryCount = entries.length) {
+		openZipMock.mockImplementation(
+			(_path, _options, callback: (error: null, archive: any) => void) => {
+				const archive = new EventEmitter() as EventEmitter & {
+					close: jest.Mock;
+					entryCount: number;
+					readEntry: jest.Mock;
+				};
+				let index = 0;
+
+				archive.close = jest.fn();
+				archive.entryCount = entryCount;
+				archive.readEntry = jest.fn(() =>
+					queueMicrotask(() => {
+						if (index < entries.length) {
+							archive.emit('entry', entries[index++]);
+						} else {
+							archive.emit('end');
+						}
+					})
+				);
+				callback(null, archive);
+			}
+		);
+	}
+
 	beforeEach(() => {
 		jest.clearAllMocks();
 		performanceHarnessEnabledMock.mockReturnValue(false);
 		writeFileMock.mockResolvedValue(undefined);
 		copyMock.mockResolvedValue(undefined);
 		extractZipMock.mockResolvedValue(undefined);
+		opendirMock.mockImplementation(async path => {
+			const names = await readdirMock(path);
+
+			return {
+				close: jest.fn(async () => undefined),
+				async *[Symbol.asyncIterator]() {
+					for (const name of names) {
+						yield {name};
+					}
+				}
+			};
+		});
+		openFileMock.mockImplementation(async (path, flags) => {
+			if (flags === 'wx') {
+				return {
+					close: jest.fn(async () => undefined),
+					write: jest.fn(async (_buffer, _offset, length) => ({
+						bytesWritten: length
+					}))
+				};
+			}
+			const value = await readFileMock(path, 'utf8');
+			const source = Buffer.isBuffer(value)
+				? value
+				: Buffer.from(String(value));
+			let offset = 0;
+
+			return {
+				close: jest.fn(async () => undefined),
+				read: jest.fn(
+					async (buffer: Buffer, bufferOffset = 0, length = buffer.length) => {
+						const bytesRead = source.copy(
+							buffer,
+							bufferOffset,
+							offset,
+							Math.min(source.length, offset + length)
+						);
+
+						offset += bytesRead;
+						return {buffer, bytesRead};
+					}
+				),
+				stat: jest.fn(async () => ({
+					isFile: () => true,
+					size: source.length
+				}))
+			};
+		});
+		openZipMock.mockImplementation(
+			(_path, _options, callback: (error: null, archive: any) => void) => {
+				const archive = new EventEmitter() as EventEmitter & {
+					close: jest.Mock;
+					entryCount: number;
+					readEntry: jest.Mock;
+				};
+
+				archive.close = jest.fn();
+				archive.entryCount = 0;
+				archive.readEntry = jest.fn(() =>
+					queueMicrotask(() => archive.emit('end'))
+				);
+				callback(null, archive);
+			}
+		);
 		mkdtempMock.mockResolvedValue('/tmp/twine-import-abc');
 		moveMock.mockResolvedValue(undefined);
 		removeMock.mockResolvedValue(undefined);
@@ -199,12 +308,17 @@ describe('project-folder native bridge', () => {
 		readdirMock.mockRejectedValue(
 			Object.assign(new Error('missing'), {code: 'ENOENT'})
 		);
+		realpathMock.mockImplementation(async path => String(path));
 		statMock.mockImplementation(async path => ({
 			isDirectory: () => String(path).endsWith('.twine.rs'),
 			isFile: () => !String(path).endsWith('.twine.rs'),
 			mtime: new Date('2026-06-21T16:00:00.000Z'),
 			mtimeMs: 1,
 			size: 0
+		}));
+		lstatMock.mockImplementation(async path => ({
+			...(await statMock(path)),
+			isSymbolicLink: () => false
 		}));
 		watchMock.mockImplementation(
 			jest.requireActual<typeof import('fs')>('fs').watch
@@ -3812,13 +3926,155 @@ describe('project-folder native bridge', () => {
 		expect(removeMock).toHaveBeenCalledWith('/tmp/twine-import-native');
 	});
 
+	it('cleans native zip data when prepared asset validation fails', async () => {
+		prepareNativeProjectImportMock.mockReturnValue({
+			assets: [
+				{
+					originalPath: 'images/cover.png',
+					sourcePath: '/tmp/twine-import-native/images/cover.png',
+					targetPath: 'assets/images/cover.png'
+				}
+			],
+			cleanupPath: '/tmp/twine-import-native',
+			htmlFilePath: '/tmp/twine-import-native/story.html',
+			htmlSource: '<tw-storydata></tw-storydata>',
+			sourceKind: 'zip',
+			sourcePath: '/downloads/story.zip'
+		});
+		lstatMock.mockResolvedValue({
+			isFile: () => false,
+			isSymbolicLink: () => true,
+			size: 0
+		});
+
+		await expect(prepareProjectImport('/downloads/story.zip')).rejects.toThrow(
+			'regular files'
+		);
+		expect(removeMock).toHaveBeenCalledWith('/tmp/twine-import-native');
+	});
+
+	it('rejects an oversized direct import before invoking either backend', async () => {
+		statMock.mockResolvedValue({
+			isFile: () => true,
+			size: maxImportSourceBytes + 1
+		});
+
+		await expect(
+			prepareProjectImport('/imports/oversized.html')
+		).rejects.toThrow('Import source exceeds the 50 MiB limit.');
+		expect(prepareNativeProjectImportMock).not.toHaveBeenCalled();
+		expect(prepareNativeHtmlImportMock).not.toHaveBeenCalled();
+		expect(openFileMock).not.toHaveBeenCalled();
+	});
+
+	it('cleans a partial zip import when preflight quotas reject an entry', async () => {
+		statMock.mockResolvedValue({isFile: () => true, size: 1024});
+		mockZipEntries([
+			{
+				compressedSize: 1024,
+				fileName: 'oversized.bin',
+				uncompressedSize: maxImportZipEntryBytes + 1
+			}
+		]);
+
+		await expect(
+			prepareProjectImport('/downloads/oversized.zip')
+		).rejects.toThrow('expanded-size limit');
+		expect(extractZipMock).not.toHaveBeenCalled();
+		expect(removeMock).toHaveBeenCalledWith('/tmp/twine-import-abc');
+	});
+
+	it('rejects zip symlinks before extraction and cleans temporary data', async () => {
+		statMock.mockResolvedValue({isFile: () => true, size: 1024});
+		mockZipEntries([
+			{
+				compressedSize: 8,
+				externalFileAttributes: 0xa000 << 16,
+				fileName: 'story.html',
+				uncompressedSize: 8
+			}
+		]);
+
+		await expect(
+			prepareProjectImport('/downloads/symlink.zip')
+		).rejects.toThrow('may not contain symbolic links');
+		expect(extractZipMock).not.toHaveBeenCalled();
+		expect(removeMock).toHaveBeenCalledWith('/tmp/twine-import-abc');
+	});
+
+	it('rechecks zip quotas during extraction and cleans race failures', async () => {
+		statMock.mockResolvedValue({isFile: () => true, size: 1024});
+		mockZipEntries([
+			{compressedSize: 5, fileName: 'story.html', uncompressedSize: 5}
+		]);
+		extractZipMock.mockImplementation(async (_path, options) => {
+			options.onEntry(
+				{
+					compressedSize: 1,
+					fileName: 'changed.html',
+					uncompressedSize: maxImportZipEntryBytes + 1
+				},
+				{entryCount: 1}
+			);
+		});
+
+		await expect(
+			prepareProjectImport('/downloads/changed.zip')
+		).rejects.toThrow('expanded-size limit');
+		expect(removeMock).toHaveBeenCalledWith('/tmp/twine-import-abc');
+	});
+
+	it('rejects an oversized extracted HTML file before either HTML reader', async () => {
+		findNativeTwineHtmlFilesMock.mockReturnValue([
+			'/tmp/twine-import-abc/story.html'
+		]);
+		statMock.mockImplementation(async path => ({
+			isFile: () => true,
+			size: path.endsWith('.zip') ? 1024 : maxImportSourceBytes + 1
+		}));
+
+		await expect(
+			prepareProjectImport('/downloads/oversized-html.zip')
+		).rejects.toThrow('Import source exceeds the 50 MiB limit.');
+		expect(prepareNativeHtmlImportMock).not.toHaveBeenCalled();
+		expect(openFileMock).not.toHaveBeenCalled();
+		expect(removeMock).toHaveBeenCalledWith('/tmp/twine-import-abc');
+	});
+
+	it('skips oversized nonselected HTML candidates during zip discovery', async () => {
+		readFileMock.mockResolvedValue(
+			'<tw-storydata name="Story"></tw-storydata>'
+		);
+		readdirMock.mockImplementation(async path =>
+			path === '/tmp/twine-import-abc' ? ['decoy.html', 'story.html'] : []
+		);
+		statMock.mockImplementation(async path => ({
+			isDirectory: () => false,
+			isFile: () => true,
+			mtime: new Date('2026-06-21T16:00:00.000Z'),
+			mtimeMs: 1,
+			size: path.endsWith('decoy.html') ? maxImportSourceBytes + 1 : 1024
+		}));
+
+		const prepared = await prepareProjectImport('/downloads/story.zip');
+
+		expect(prepared.htmlFilePath).toBe('/tmp/twine-import-abc/story.html');
+		expect(
+			openFileMock.mock.calls.some(([path]) => path.endsWith('decoy.html'))
+		).toBe(false);
+	});
+
 	it('prepares an HTML import by rewriting sibling media paths and copying assets', async () => {
-		readFileMock.mockResolvedValue(`
+		const htmlSource = `
 			<tw-storydata name="Transylvania" hidden>
 				<style role="stylesheet">body { background-image: url("images/cover.png"); }</style>
 				<tw-passagedata pid="1" name="Start">Play audio/theme.mp3</tw-passagedata>
 			</tw-storydata>
-		`);
+		`;
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('.html') ? htmlSource : Buffer.alloc(2048)
+		);
 		readdirMock.mockImplementation(async path => {
 			if (path === '/imports') {
 				return ['Transylvania.html', 'images', 'audio'];
@@ -3836,7 +4092,12 @@ describe('project-folder native bridge', () => {
 		});
 		statMock.mockImplementation(async path => ({
 			isDirectory: () =>
-				path === '/imports/images' || path === '/imports/audio',
+				path === '/imports/images' ||
+				path === '/imports/audio' ||
+				path === '/native/project.twine.rs' ||
+				path === '/native/project.twine.rs/assets' ||
+				path === '/native/project.twine.rs/assets/audio' ||
+				path === '/native/project.twine.rs/assets/images',
 			isFile: () =>
 				path.endsWith('.html') ||
 				path.endsWith('.png') ||
@@ -3878,17 +4139,211 @@ describe('project-folder native bridge', () => {
 				targetPath: 'assets/images/cover.png'
 			}
 		]);
-		expect(copyMock).toHaveBeenCalledWith(
-			'/imports/audio/theme.mp3',
+		expect(moveMock).toHaveBeenCalledWith(
+			expect.stringMatching(
+				/^\/native\/project\.twine\.rs\/assets\/audio\/\.theme\.mp3\.import-.+\.tmp$/
+			),
 			'/native/project.twine.rs/assets/audio/theme.mp3',
 			{overwrite: true}
 		);
-		expect(copyMock).toHaveBeenCalledWith(
-			'/imports/images/cover.png',
+		expect(moveMock).toHaveBeenCalledWith(
+			expect.stringMatching(
+				/^\/native\/project\.twine\.rs\/assets\/images\/\.cover\.png\.import-.+\.tmp$/
+			),
 			'/native/project.twine.rs/assets/images/cover.png',
 			{overwrite: true}
 		);
+		expect(copyMock).not.toHaveBeenCalled();
 		expect(readdirMock).toHaveBeenCalledWith('/native/project.twine.rs/assets');
+	});
+
+	it('rewrites an obvious asset root containing spaces in one pass', async () => {
+		const htmlSource =
+			'<tw-storydata><img src="transylvania files/cover.png"></tw-storydata>';
+
+		readFileMock.mockResolvedValue(htmlSource);
+		readdirMock.mockImplementation(async path => {
+			if (path === '/imports') {
+				return ['Transylvania.html', 'Transylvania Files'];
+			}
+			if (path === '/imports/Transylvania Files') {
+				return ['cover.png'];
+			}
+			return [];
+		});
+		statMock.mockImplementation(async path => ({
+			isDirectory: () => path === '/imports/Transylvania Files',
+			isFile: () => !String(path).endsWith('Transylvania Files'),
+			mtime: new Date('2026-06-21T16:00:00.000Z'),
+			mtimeMs: 1,
+			size: String(path).endsWith('.png') ? 1 : Buffer.byteLength(htmlSource)
+		}));
+
+		const preparedImport = await prepareProjectImport(
+			'/imports/Transylvania.html'
+		);
+
+		expect(preparedImport.htmlSource).toContain(
+			'src="assets/Transylvania Files/cover.png"'
+		);
+	});
+
+	it('keeps whitespace-heavy nonmatching asset roots within a linear time budget', async () => {
+		const htmlBaseName = `${'a '.repeat(120)}x`;
+		const assetRoot = `${htmlBaseName}-files`;
+		const component = `${'a '.repeat(120)}y-files/`;
+		const adversarialSource = component.repeat(
+			Math.ceil((10 * 1024 * 1024) / component.length)
+		);
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('.html') ? adversarialSource : Buffer.from([1])
+		);
+		readdirMock.mockImplementation(async path => {
+			if (path === '/imports') {
+				return [`${htmlBaseName}.html`, assetRoot];
+			}
+			if (path === `/imports/${assetRoot}`) {
+				return ['cover.png'];
+			}
+			return [];
+		});
+		statMock.mockImplementation(async path => ({
+			isDirectory: () => path === `/imports/${assetRoot}`,
+			isFile: () => path !== `/imports/${assetRoot}`,
+			mtime: new Date('2026-06-21T16:00:00.000Z'),
+			mtimeMs: 1,
+			size: String(path).endsWith('.png')
+				? 1
+				: Buffer.byteLength(adversarialSource)
+		}));
+		const startedAt = performance.now();
+
+		await prepareProjectImport(`/imports/${htmlBaseName}.html`);
+
+		expect(performance.now() - startedAt).toBeLessThan(2000);
+	});
+
+	it('resets asset reference scanning after a quota rejection', async () => {
+		const rejectedSource = 'http://example.test/missing.png '.repeat(10_001);
+		const acceptedSource = '<img src="images/cover.png">';
+
+		readFileMock
+			.mockResolvedValueOnce(rejectedSource)
+			.mockResolvedValueOnce(acceptedSource);
+		readdirMock.mockResolvedValue([]);
+		statMock.mockImplementation(async path => ({
+			isDirectory: () => false,
+			isFile: () => true,
+			mtime: new Date('2026-06-21T16:00:00.000Z'),
+			mtimeMs: 1,
+			size: String(path).endsWith('cover.png') ? 1 : rejectedSource.length
+		}));
+
+		await expect(
+			prepareProjectImport('/imports/rejected.html')
+		).rejects.toThrow('asset references exceed');
+		const accepted = await prepareProjectImport('/imports/accepted.html');
+
+		expect(accepted.assets).toEqual([
+			{
+				originalPath: 'images/cover.png',
+				sourcePath: '/imports/images/cover.png',
+				targetPath: 'assets/images/cover.png'
+			}
+		]);
+	});
+
+	it('stops streaming a sibling asset directory at the scan quota', async () => {
+		let yieldedEntries = 0;
+		const close = jest.fn(async () => undefined);
+
+		opendirMock.mockResolvedValue({
+			close,
+			async *[Symbol.asyncIterator]() {
+				for (let index = 0; index <= 10_000; index++) {
+					yieldedEntries++;
+					yield {name: `entry-${index}`};
+				}
+			}
+		});
+		readFileMock.mockResolvedValue('<tw-storydata></tw-storydata>');
+
+		await expect(prepareProjectImport('/imports/story.html')).rejects.toThrow(
+			'asset scan exceeds'
+		);
+		expect(yieldedEntries).toBe(10_001);
+		expect(close).toHaveBeenCalled();
+	});
+
+	it('invalidates and cleans an import when an asset changes before copy', async () => {
+		prepareNativeProjectImportMock.mockReturnValue({
+			assets: [
+				{
+					originalPath: 'images/cover.png',
+					sourcePath: '/tmp/twine-import-native/images/cover.png',
+					targetPath: 'assets/images/cover.png'
+				}
+			],
+			cleanupPath: '/tmp/twine-import-native',
+			htmlFilePath: '/tmp/twine-import-native/story.html',
+			htmlSource: '<tw-storydata></tw-storydata>',
+			sourceKind: 'zip',
+			sourcePath: '/downloads/story.zip'
+		});
+		lstatMock.mockImplementation(async path => ({
+			isDirectory: () =>
+				path === '/native/project.twine.rs' ||
+				path === '/native/project.twine.rs/assets' ||
+				path === '/native/project.twine.rs/assets/images',
+			isFile: () => String(path).endsWith('.png'),
+			isSymbolicLink: () => false,
+			size: 1
+		}));
+
+		const prepared = await prepareProjectImport('/downloads/story.zip');
+
+		openFileMock.mockResolvedValue({
+			close: jest.fn(async () => undefined),
+			stat: jest.fn(async () => ({isFile: () => true, size: 2}))
+		});
+		await expect(
+			copyProjectImportAssets(prepared.id, '/native/project.twine.rs')
+		).rejects.toThrow('changed after preparation');
+		expect(removeMock).toHaveBeenCalledWith('/tmp/twine-import-native');
+		await expect(
+			copyProjectImportAssets(prepared.id, '/native/project.twine.rs')
+		).rejects.toThrow('No prepared project import');
+	});
+
+	it('rejects a symlinked project asset destination before opening a source', async () => {
+		prepareNativeHtmlImportMock.mockReturnValue({
+			assets: [
+				{
+					originalPath: 'images/cover.png',
+					sourcePath: '/imports/images/cover.png',
+					targetPath: 'assets/images/cover.png'
+				}
+			],
+			htmlFilePath: '/imports/story.html',
+			htmlSource: '<tw-storydata></tw-storydata>',
+			sourceKind: 'html',
+			sourcePath: '/imports/story.html'
+		});
+
+		const prepared = await prepareProjectImport('/imports/story.html');
+
+		lstatMock.mockImplementation(async path => ({
+			isDirectory: () => false,
+			isFile: () => false,
+			isSymbolicLink: () => path === '/native/project.twine.rs/assets',
+			size: 0
+		}));
+		openFileMock.mockClear();
+		await expect(
+			copyProjectImportAssets(prepared.id, '/native/project.twine.rs')
+		).rejects.toThrow('symbolic link');
+		expect(openFileMock).not.toHaveBeenCalled();
 	});
 
 	it('prepares a zip import by extracting it and cleaning up when discarded', async () => {
@@ -3910,7 +4365,10 @@ describe('project-folder native bridge', () => {
 		});
 		statMock.mockImplementation(async path => ({
 			isDirectory: () => path === '/tmp/twine-import-abc/images',
-			isFile: () => path.endsWith('.html') || path.endsWith('.png'),
+			isFile: () =>
+				path.endsWith('.html') ||
+				path.endsWith('.png') ||
+				path.endsWith('.zip'),
 			mtime: new Date('2026-06-21T16:00:00.000Z'),
 			mtimeMs: 1,
 			size: 2048
@@ -3922,9 +4380,9 @@ describe('project-folder native bridge', () => {
 
 		expect(extractZipMock).toHaveBeenCalledWith(
 			'/downloads/Archive Story.zip',
-			{
+			expect.objectContaining({
 				dir: '/tmp/twine-import-abc'
-			}
+			})
 		);
 		expect(preparedImport.sourceKind).toBe('zip');
 		expect(preparedImport.htmlFilePath).toBe(

@@ -107,7 +107,10 @@ export const StoryImportDialog: React.FC<StoryImportDialogProps> = props => {
 			headerLabel={t('dialogs.storyImport.title')}
 		>
 			<CardContent>
-				<FileChooser onChange={handleFileChange} />
+				<FileChooser
+					onChange={handleFileChange}
+					onError={error => setImportError(error.message)}
+				/>
 				{importError && <p role="alert">{importError}</p>}
 				{file && stories.length > 0 && (
 					<StoryChooser
