@@ -203,6 +203,7 @@ describe('resetStoryDirectoryPath()', () => {
 
 describe('chooseStoryDirectory()', () => {
 	const copyMock = copy as jest.Mock;
+	const readdirMock = readdir as jest.Mock;
 	const removeMock = remove as jest.Mock;
 	const showErrorBoxMock = dialog.showErrorBox as jest.Mock;
 	const showMessageBoxMock = dialog.showMessageBox as jest.Mock;
@@ -285,7 +286,9 @@ describe('chooseStoryDirectory()', () => {
 			);
 		});
 
-		it('does not move the existing library if the user chooses to use the destination as-is', async () => {
+		it('uses a nonempty destination as-is when the user chooses to use its stories', async () => {
+			readdirMock.mockResolvedValue(['existing-story.html']);
+
 			await chooseStoryDirectoryPath();
 			expect(copyMock).not.toHaveBeenCalled();
 			expect(removeMock).not.toHaveBeenCalled();
@@ -293,6 +296,53 @@ describe('chooseStoryDirectory()', () => {
 				'storyLibraryFolderPath',
 				'mock-new-path'
 			);
+		});
+
+		it('uses an empty destination when the user chooses to start empty', async () => {
+			showMessageBoxMock.mockResolvedValue({response: 2});
+			readdirMock.mockResolvedValue([]);
+
+			await expect(chooseStoryDirectoryPath()).resolves.toBe('mock-new-path');
+
+			expect(readdirMock).toHaveBeenCalledWith('mock-new-path');
+			expect(copyMock).not.toHaveBeenCalled();
+			expect(removeMock).not.toHaveBeenCalled();
+			expect(setAppPrefMock).toHaveBeenCalledWith(
+				'storyLibraryFolderPath',
+				'mock-new-path'
+			);
+			expect(showRelaunchDialogMock).toHaveBeenCalledTimes(1);
+		});
+
+		it('keeps the current library when the user tries to start empty in a nonempty destination', async () => {
+			showMessageBoxMock.mockResolvedValue({response: 2});
+			readdirMock.mockResolvedValue(['existing-story.html']);
+
+			await expect(chooseStoryDirectoryPath()).resolves.toBeUndefined();
+
+			expect(showErrorBoxMock).toHaveBeenCalledWith(
+				'Selected folder is not empty.',
+				'Choose an empty folder with no files or subfolders to start a new story library.'
+			);
+			expect(copyMock).not.toHaveBeenCalled();
+			expect(removeMock).not.toHaveBeenCalled();
+			expect(setAppPrefMock).not.toHaveBeenCalled();
+			expect(showRelaunchDialogMock).not.toHaveBeenCalled();
+			expect(getStoryDirectoryPath()).not.toBe('mock-new-path');
+		});
+
+		it('keeps the current library when an empty destination cannot be read', async () => {
+			showMessageBoxMock.mockResolvedValue({response: 2});
+			readdirMock.mockRejectedValue(new Error('permission denied'));
+
+			await expect(chooseStoryDirectoryPath()).resolves.toBeUndefined();
+
+			expect(showErrorBoxMock).toHaveBeenCalledWith(
+				'Story library folder cannot be used.',
+				'Twine could not read the selected folder. Choose a readable empty folder.'
+			);
+			expect(setAppPrefMock).not.toHaveBeenCalled();
+			expect(showRelaunchDialogMock).not.toHaveBeenCalled();
 		});
 
 		it('does nothing if the user cancels the choice dialog', async () => {

@@ -262,7 +262,7 @@ export async function chooseStoryDirectoryPath() {
 		cancelId: 3,
 		defaultId: 0,
 		detail:
-			'Moving copies the current story library to the selected folder, verifies the copy, and then removes the old folder.',
+			'Moving copies the current story library to the selected folder, verifies the copy, and then removes the old folder. Starting empty requires a folder with no files or subfolders.',
 		message: 'Change Story Library Folder',
 		type: 'question'
 	});
@@ -273,6 +273,26 @@ export async function chooseStoryDirectoryPath() {
 
 	if (response === 0) {
 		await moveStoryDirectory(destinationPath);
+	}
+
+	if (response === 2) {
+		try {
+			const destinationEntries = await readdir(destinationPath);
+
+			if (destinationEntries.length > 0) {
+				dialog.showErrorBox(
+					'Selected folder is not empty.',
+					'Choose an empty folder with no files or subfolders to start a new story library.'
+				);
+				return undefined;
+			}
+		} catch {
+			dialog.showErrorBox(
+				'Story library folder cannot be used.',
+				'Twine could not read the selected folder. Choose a readable empty folder.'
+			);
+			return undefined;
+		}
 	}
 
 	await setAppPref('storyLibraryFolderPath', destinationPath);
