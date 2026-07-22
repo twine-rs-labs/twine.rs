@@ -28,6 +28,10 @@ function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
 	return JSON.parse(JSON.stringify(snapshot));
 }
 
+function cloneStorySnapshot(story: StorySnapshot): StorySnapshot {
+	return JSON.parse(JSON.stringify(story));
+}
+
 function emptyMetadataPatch(): StoryMetadataPatch {
 	return {
 		ifid: null,
@@ -141,6 +145,103 @@ function passageSnapshot(
 		tags: options.tags,
 		text: options.text
 	};
+}
+
+function equalValue(left: unknown, right: unknown) {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function storyReplacementPatches(
+	before: StorySnapshot,
+	after: StorySnapshot
+): Patch[] {
+	const patches: Patch[] = [];
+	const beforePassages = new Map(
+		before.passages.map(passage => [passage.id, passage])
+	);
+	const afterPassages = new Map(
+		after.passages.map(passage => [passage.id, passage])
+	);
+
+	for (const passage of before.passages) {
+		const replacement = afterPassages.get(passage.id);
+
+		if (!replacement) {
+			patches.push({
+				passage_id: passage.id,
+				story_id: after.id,
+				type: 'passageDeleted'
+			});
+			continue;
+		}
+
+		const changes: PassagePatch = {
+			layout: equalValue(passage.layout, replacement.layout)
+				? null
+				: replacement.layout,
+			name: passage.name === replacement.name ? null : replacement.name,
+			tags: equalValue(passage.tags, replacement.tags)
+				? null
+				: replacement.tags,
+			text: passage.text === replacement.text ? null : replacement.text
+		};
+
+		if (Object.values(changes).some(value => value !== null)) {
+			patches.push(passagePatch(after.id, replacement, changes));
+		}
+	}
+
+	for (const passage of after.passages) {
+		if (!beforePassages.has(passage.id)) {
+			patches.push({passage, story_id: after.id, type: 'passageCreated'});
+		}
+	}
+
+	if (before.startPassageId !== after.startPassageId) {
+		patches.push({
+			passage_id: after.startPassageId,
+			story_id: after.id,
+			type: 'startPassageChanged'
+		});
+	}
+
+	const metadata: StoryMetadataPatch = {
+		ifid: before.ifid === after.ifid ? null : after.ifid,
+		name: before.name === after.name ? null : after.name,
+		snapToGrid:
+			before.snapToGrid === after.snapToGrid ? null : after.snapToGrid,
+		storyFormat:
+			before.storyFormat === after.storyFormat ? null : after.storyFormat,
+		storyFormatVersion:
+			before.storyFormatVersion === after.storyFormatVersion
+				? null
+				: after.storyFormatVersion,
+		tagColors: equalValue(before.tagColors, after.tagColors)
+			? null
+			: after.tagColors,
+		tags: equalValue(before.tags, after.tags) ? null : after.tags,
+		zoom: before.zoom === after.zoom ? null : after.zoom
+	};
+
+	if (Object.values(metadata).some(value => value !== null)) {
+		patches.push(metadataPatch(after.id, after, metadata));
+	}
+	if (before.script !== after.script) {
+		patches.push({
+			script: after.script,
+			story_id: after.id,
+			type: 'storyScriptUpdated'
+		});
+	}
+	if (before.stylesheet !== after.stylesheet) {
+		patches.push({
+			story_id: after.id,
+			stylesheet: after.stylesheet,
+			type: 'storyStylesheetUpdated'
+		});
+	}
+
+	return patches;
 }
 
 export class TestCoreSessionClient {
@@ -995,19 +1096,23 @@ export class TestCoreSessionClient {
 				const index = this.snapshot.stories.findIndex(
 					story => story.id === command.story_id
 				);
+				const before = this.snapshot.stories[index];
 
 				if (index === -1) {
-					this.snapshot.stories.push(command.story);
-				} else {
-					this.snapshot.stories[index] = command.story;
+					throw new Error(`Story not found: ${command.story_id}`);
 				}
 
-				return [
-					{
-						snapshot: this.snapshot,
-						type: 'projectSnapshotReplaced'
-					}
-				];
+				const replacement = cloneStorySnapshot({
+					...command.story,
+					id: command.story_id,
+					passages: command.story.passages.map(passage => ({
+						...passage,
+						storyId: command.story_id
+					}))
+				});
+
+				this.snapshot.stories[index] = replacement;
+				return storyReplacementPatches(before, replacement);
 			}
 
 			case 'restorePassages': {

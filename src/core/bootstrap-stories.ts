@@ -14,6 +14,12 @@ export function registerBootstrapStories(stories: StoryWithDocuments[]) {
 	}
 }
 
+/** Registers an explicit document transport and returns its metadata-only model. */
+export function registerStoryDocuments(story: StoryWithDocuments): Story {
+	registerBootstrapStories([story]);
+	return metadataStory(story);
+}
+
 export function bootstrapStory(storyId: string) {
 	return bootstrapStories.get(storyId);
 }

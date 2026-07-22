@@ -2,18 +2,20 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {Button, Checkbox} from '../../components/design-system';
 import {storyFileName} from '../../electron/shared';
-import {Story} from '../../store/stories';
+import {Story, StoryWithDocuments} from '../../store/stories';
 import './story-chooser.css';
 
 export interface StoryChooserProps {
 	existingStories: Story[];
-	onImport: (stories: Story[]) => void;
-	stories: Story[];
+	onImport: (stories: StoryWithDocuments[]) => void;
+	stories: StoryWithDocuments[];
 }
 
 export const StoryChooser: React.FC<StoryChooserProps> = props => {
 	const {existingStories, onImport, stories} = props;
-	const [selectedStories, setSelectedStories] = React.useState<Story[]>([]);
+	const [selectedStories, setSelectedStories] = React.useState<
+		StoryWithDocuments[]
+	>([]);
 	const {t} = useTranslation();
 
 	// Whenever either existing stories or stories to import changes, select all
@@ -32,7 +34,7 @@ export const StoryChooser: React.FC<StoryChooserProps> = props => {
 		setSelectedStories(stories.filter(story => !willReplaceExisting(story)));
 	}, [stories, willReplaceExisting]);
 
-	function handleChange(story: Story, selected: boolean) {
+	function handleChange(story: StoryWithDocuments, selected: boolean) {
 		if (selected) {
 			setSelectedStories(current => [...current, story]);
 		} else {

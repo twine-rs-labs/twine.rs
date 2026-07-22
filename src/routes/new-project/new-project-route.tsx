@@ -48,6 +48,11 @@ import {
 	scheduleIdleWork
 } from '../../util/performance';
 import {storyFromTwee} from '../../util/twee';
+import {
+	registerStoryDocuments,
+	replaceStoryCommand,
+	useCoreProjectHost
+} from '../../core';
 import {StoryEditMode} from '../story-edit/workspace-state';
 import './new-project-route.css';
 
@@ -336,6 +341,7 @@ export const NewProjectRoute: React.FC = () => {
 	const {prefs} = usePrefsContext();
 	const {formats} = useStoryFormatsContext();
 	const {dispatch, stories} = useStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const pathname = location.pathname ?? '';
 	const [tab, setTab] = React.useState<NewProjectTab>(
 		pathname.endsWith('/import') ? 'import' : 'create'
@@ -503,7 +509,7 @@ export const NewProjectRoute: React.FC = () => {
 
 			dispatch(
 				createStory(stories, prefs, {
-					...story
+					...registerStoryDocuments(story)
 				})
 			);
 
@@ -615,6 +621,11 @@ export const NewProjectRoute: React.FC = () => {
 		}
 
 		try {
+			const existingStoriesBySelection = selectedStories.map(story =>
+				stories.find(
+					existing => storyFileName(existing) === storyFileName(story)
+				)
+			);
 			const identityStories = selectedStories.map(storyWithImportIdentity);
 			const defaultRepairFormat = safeRepairFormat(formats, prefs.storyFormat);
 			const storiesToImport = defaultRepairFormat
@@ -653,7 +664,28 @@ export const NewProjectRoute: React.FC = () => {
 				preparedImportIds.current.delete(preparedImport.id);
 			}
 
-			dispatch(importStoriesAction(storiesToImport, stories));
+			const newDocumentStories: StoryWithDocuments[] = [];
+
+			for (const [index, story] of storiesToImport.entries()) {
+				const existingStory = existingStoriesBySelection[index];
+
+				if (existingStory) {
+					await coreProjectHost.applyStoryCommand(
+						replaceStoryCommand(existingStory.id, story)
+					);
+				} else {
+					newDocumentStories.push(story);
+				}
+			}
+
+			if (newDocumentStories.length > 0) {
+				dispatch(
+					importStoriesAction(
+						newDocumentStories.map(registerStoryDocuments),
+						stories
+					)
+				);
+			}
 			repairStories();
 			navigate('/');
 		} catch (error) {

@@ -1,12 +1,12 @@
 import {fireEvent, render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {Story} from '../../../store/stories';
+import {StoryWithDocuments} from '../../../store/stories';
 import {fakeStory} from '../../../test-util';
 import {StoryChooser, StoryChooserProps} from '../story-chooser';
 
 describe('StoryChooser', () => {
-	let stories: Story[];
+	let stories: StoryWithDocuments[];
 
 	function renderComponent(props?: Partial<StoryChooserProps>) {
 		return render(

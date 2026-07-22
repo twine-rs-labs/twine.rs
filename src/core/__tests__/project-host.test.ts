@@ -6,6 +6,7 @@ import {
 	PatchBatch,
 	queryGraphProjectionCommand,
 	renameStoryCommand,
+	replaceStoryCommand,
 	setStoryFormatCommand,
 	setStorySnapToGridCommand,
 	setStoryZoomCommand,
@@ -310,6 +311,50 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(
 			context.host.performanceDiagnostics().passageTextCharacterCount
 		).toBe(0);
+	});
+
+	it('replaces documents in an already-running core session', async () => {
+		const wasmClient = createTestCoreSessionClient();
+		const context = hostWithStory({text: 'Original body', wasmClient});
+
+		await context.host.ensureSessionReady();
+		await context.host.applyStoryCommand(
+			replaceStoryCommand(context.story.id, {
+				...context.story,
+				passages: [
+					{
+						...context.start,
+						id: 'imported-start',
+						story: context.story.id,
+						text: 'Imported replacement body'
+					}
+				],
+				startPassage: 'imported-start'
+			})
+		);
+
+		await expect(
+			context.host.queryPassageDocumentAsync(context.story.id, 'imported-start')
+		).resolves.toEqual(
+			expect.objectContaining({text: 'Imported replacement body'})
+		);
+		expect(context.stories[0].passages).toEqual([
+			expect.objectContaining({id: 'imported-start', text: ''})
+		]);
+		expect(context.dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				documentUpdates: [
+					{
+						passageId: 'imported-start',
+						storyId: context.story.id,
+						text: 'Imported replacement body',
+						type: 'passageText'
+					}
+				],
+				type: 'applyCorePatchBatch'
+			}),
+			undefined
+		);
 	});
 
 	it('sends commands to Rust and applies only returned passage patches', async () => {

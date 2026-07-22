@@ -6,7 +6,11 @@ import {
 	storyWithId,
 	storyWithName
 } from '../../../stories';
-import {isPersistablePassageChange} from '../../persistable-changes';
+import {
+	isPersistablePassageChange,
+	isPersistableStoryChange
+} from '../../persistable-changes';
+import {bootstrapStory} from '../../../../core/bootstrap-stories';
 import {
 	deletePassageById,
 	deleteStory,
@@ -40,6 +44,17 @@ function passageForCorePersistence(
 		}
 	}
 	return passage;
+}
+
+function passagesForPersistence(story: ReturnType<typeof storyWithId>) {
+	const registeredStory = bootstrapStory(story.id);
+	const registeredText = new Map(
+		registeredStory?.passages.map(passage => [passage.id, passage.text]) ?? []
+	);
+
+	return story.passages.map(passage =>
+		passageForCorePersistence(passage, registeredText.get(passage.id))
+	);
 }
 
 /**
@@ -216,7 +231,7 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 			doUpdateTransaction(transaction => {
 				saveStory(transaction, story);
 
-				for (const passage of story.passages) {
+				for (const passage of passagesForPersistence(story)) {
 					savePassage(transaction, passage);
 				}
 			});
@@ -281,7 +296,10 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 
 				doUpdateTransaction(transaction => {
 					saveStory(transaction, story);
-					savePassage(transaction, passage);
+					savePassage(
+						transaction,
+						passageForCorePersistence(passage, undefined)
+					);
 				});
 				persisted = true;
 				break;
@@ -304,7 +322,10 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 				for (const passageId of passageIds) {
 					savePassage(
 						transaction,
-						passageWithId(state, action.storyId, passageId)
+						passageForCorePersistence(
+							passageWithId(state, action.storyId, passageId),
+							undefined
+						)
 					);
 				}
 			});
@@ -313,6 +334,9 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 		}
 
 		case 'updateStory': {
+			if (!isPersistableStoryChange(action.props)) {
+				break;
+			}
 			const story = storyWithId(state, action.storyId);
 
 			doUpdateTransaction(transaction => {
@@ -331,7 +355,9 @@ export function saveMiddleware(state: StoriesState, action: StoriesAction) {
 					}
 				}
 
-				story.passages.forEach(passage => savePassage(transaction, passage));
+				passagesForPersistence(story).forEach(passage =>
+					savePassage(transaction, passage)
+				);
 			});
 			persisted = true;
 			break;

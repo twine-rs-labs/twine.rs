@@ -1,6 +1,18 @@
-import {fireEvent, render, screen, within} from '@testing-library/react';
+import {
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within
+} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
+import {
+	bootstrapStory,
+	bootstrapStoryPerformanceDiagnostics,
+	clearBootstrapStories,
+	CoreProjectHost
+} from '../../../core';
 import {Story} from '../../../store/stories';
 import {useStoriesRepair} from '../../../store/use-stories-repair';
 import {FakeStateProvider, fakeStory, StoryInspector} from '../../../test-util';
@@ -12,8 +24,13 @@ jest.mock('../story-chooser');
 
 describe('StoryImportDialog', () => {
 	const useStoriesRepairMock = useStoriesRepair as jest.Mock;
+	let applyStoryCommand: jest.Mock;
 
-	beforeEach(() => useStoriesRepairMock.mockReturnValue(jest.fn()));
+	beforeEach(() => {
+		applyStoryCommand = jest.fn().mockResolvedValue(undefined);
+		useStoriesRepairMock.mockReturnValue(jest.fn());
+	});
+	afterEach(clearBootstrapStories);
 
 	function renderComponent(
 		props?: Partial<StoryImportDialogProps>,
@@ -25,7 +42,10 @@ describe('StoryImportDialog', () => {
 		story.name = 'mock-story';
 
 		return render(
-			<FakeStateProvider stories={stories ?? [story]}>
+			<FakeStateProvider
+				coreProjectHost={{applyStoryCommand} as unknown as CoreProjectHost}
+				stories={stories ?? [story]}
+			>
 				<StoryImportDialog
 					collapsed={false}
 					onChangeCollapsed={jest.fn()}
@@ -86,6 +106,19 @@ describe('StoryImportDialog', () => {
 			));
 
 		it('closes', () => expect(onClose).toHaveBeenCalled());
+
+		it('registers the imported passage documents', () => {
+			const storyId = screen
+				.getByTestId('story-inspector-default')
+				.getAttribute('data-id');
+
+			expect(storyId).not.toBeNull();
+			expect(bootstrapStory(storyId!)).toEqual(
+				expect.objectContaining({
+					passages: [expect.objectContaining({text: 'mock imported body'})]
+				})
+			);
+		});
 	});
 
 	describe('when a file is selected that has no stories', () => {
@@ -104,6 +137,7 @@ describe('StoryImportDialog', () => {
 	});
 
 	describe('when stories are selected', () => {
+		let existingStory: Story;
 		let onClose: jest.Mock;
 		let repairStories: jest.Mock;
 
@@ -111,7 +145,9 @@ describe('StoryImportDialog', () => {
 			onClose = jest.fn();
 			repairStories = jest.fn();
 			useStoriesRepairMock.mockReturnValue(repairStories);
-			renderComponent({onClose});
+			existingStory = fakeStory();
+			existingStory.name = 'mock-story';
+			renderComponent({onClose}, [existingStory]);
 			fireEvent.click(screen.getByText('onChange'));
 			fireEvent.click(screen.getByText('onImport'));
 		});
@@ -122,10 +158,51 @@ describe('StoryImportDialog', () => {
 				'mock-story'
 			));
 
-		it('repairs all stories', () =>
-			expect(repairStories).toHaveBeenCalledTimes(1));
+		it('replaces the documents in the active core session', async () => {
+			await waitFor(() =>
+				expect(applyStoryCommand).toHaveBeenCalledWith(
+					expect.objectContaining({
+						story: expect.objectContaining({
+							id: existingStory.id,
+							passages: [
+								expect.objectContaining({
+									storyId: existingStory.id,
+									text: 'mock imported body'
+								})
+							]
+						}),
+						story_id: existingStory.id,
+						type: 'replaceStory'
+					})
+				)
+			);
+			expect(bootstrapStory(existingStory.id)).toBeUndefined();
+		});
 
-		it('closes', () => expect(onClose).toHaveBeenCalled());
+		it('repairs all stories', async () => {
+			await waitFor(() => expect(repairStories).toHaveBeenCalledTimes(1));
+		});
+
+		it('closes', async () => {
+			await waitFor(() => expect(onClose).toHaveBeenCalled());
+		});
+	});
+
+	it('does not register new documents when a later replacement fails', async () => {
+		const existingStory = fakeStory();
+		const onClose = jest.fn();
+
+		existingStory.name = 'mock-story';
+		applyStoryCommand.mockRejectedValue(new Error('replacement failed'));
+		renderComponent({onClose}, [existingStory]);
+		fireEvent.click(screen.getByText('onChange mixed'));
+		fireEvent.click(screen.getByText('onImport'));
+
+		await expect(screen.findByRole('alert')).resolves.toHaveTextContent(
+			'replacement failed'
+		);
+		expect(bootstrapStoryPerformanceDiagnostics().storyCount).toBe(0);
+		expect(onClose).not.toHaveBeenCalled();
 	});
 
 	it('is accessible', async () => {

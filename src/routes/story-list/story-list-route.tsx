@@ -18,6 +18,7 @@ import {
 } from '../../components/design-system';
 import {
 	deleteStoryCommand,
+	registerStoryDocuments,
 	setStoryTagsCommand,
 	useCoreProjectHost
 } from '../../core';
@@ -259,8 +260,12 @@ export const InnerStoryListRoute: React.FC = () => {
 
 	async function duplicateProject(story: Story) {
 		const completeStory = await materializeStory(story.id);
+		const duplicate = duplicateStory(completeStory, stories);
 
-		storiesDispatch(duplicateStory(completeStory, stories));
+		storiesDispatch({
+			...duplicate,
+			props: registerStoryDocuments(duplicate.props)
+		});
 	}
 
 	function addStoryTag(story: Story, name: string) {

@@ -3,6 +3,12 @@ import {axe} from 'jest-axe';
 import * as React from 'react';
 import {MemoryRouter, useNavigate} from 'react-router';
 import {
+	bootstrapStoryPerformanceDiagnostics,
+	clearBootstrapStories,
+	CoreProjectHost
+} from '../../../core';
+import {Story} from '../../../store/stories';
+import {
 	FakeStateProvider,
 	fakeLoadedStoryFormat,
 	fakeStory,
@@ -20,7 +26,8 @@ const HistoryBackButton: React.FC = () => {
 describe('<NewProjectRoute>', () => {
 	function renderComponent(
 		path = '/new-project',
-		initialEntries: string[] = [path]
+		initialEntries: string[] = [path],
+		options: {coreProjectHost?: CoreProjectHost; stories?: Story[]} = {}
 	) {
 		const harloweFormat = fakeLoadedStoryFormat(
 			{name: 'Harlowe', version: '3.3.9'},
@@ -37,8 +44,9 @@ describe('<NewProjectRoute>', () => {
 		const result = render(
 			<MemoryRouter initialEntries={initialEntries}>
 				<FakeStateProvider
+					coreProjectHost={options.coreProjectHost}
 					prefs={{storyFormat: {name: 'Harlowe', version: '3.3.9'}}}
-					stories={[]}
+					stories={options.stories ?? []}
 					storyFormats={[harloweFormat, sugarCubeFormat, sugarCubeLegacyFormat]}
 				>
 					<NewProjectRoute />
@@ -53,6 +61,7 @@ describe('<NewProjectRoute>', () => {
 	}
 
 	afterEach(() => {
+		clearBootstrapStories();
 		delete (window as any).twineElectron;
 	});
 
@@ -439,6 +448,52 @@ describe('<NewProjectRoute>', () => {
 				}),
 				undefined
 			)
+		);
+	});
+
+	it('does not register new documents when a mixed replacement fails', async () => {
+		const existingStory = fakeStory(1);
+		const applyStoryCommand = jest
+			.fn()
+			.mockRejectedValue(new Error('replacement failed'));
+
+		existingStory.name = 'Existing import target';
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				applyStoryCommand
+			} as unknown as CoreProjectHost,
+			stories: [existingStory]
+		});
+		const source = new File(
+			[
+				'<tw-storydata name="Fresh imported story" startnode="1" ifid="FRESH">',
+				'<tw-passagedata pid="1" name="Start">fresh body</tw-passagedata>',
+				'</tw-storydata>',
+				'<tw-storydata name="Existing import target" startnode="1" ifid="REPLACEMENT">',
+				'<tw-passagedata pid="1" name="Start">replacement body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'mixed.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		await screen.findByText('Fresh imported story');
+		const conflictRow = screen
+			.getByText('Existing import target', {exact: true})
+			.closest('tr');
+
+		fireEvent.click(conflictRow!.querySelector('input[type="checkbox"]')!);
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		expect(await screen.findByText('replacement failed')).toBeInTheDocument();
+		expect(applyStoryCommand).toHaveBeenCalled();
+		expect(bootstrapStoryPerformanceDiagnostics().storyCount).toBe(0);
+		expect(screen.getByTestId('location')).toHaveAttribute(
+			'data-pathname',
+			'/new-project/import'
 		);
 	});
 

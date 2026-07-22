@@ -155,26 +155,14 @@ export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 
 	React.useEffect(() => {
 		if (inited && formatsRepaired && prefsRepaired && storiesRepaired) {
-			if (
-				!passageBodiesSeparated ||
-				storiesState.some(story =>
-					story.passages.some(
-						passage =>
-							'text' in passage &&
-							typeof passage.text === 'string' &&
-							passage.text.length > 0
-					)
-				)
-			) {
+			if (!passageBodiesSeparated) {
 				const completeStories = storiesWithDocuments(storiesState);
 				registerBootstrapStories(completeStories);
 				storiesDispatch({
 					state: completeStories.map(metadataStory),
 					type: 'init'
 				});
-				if (!passageBodiesSeparated) {
-					setPassageBodiesSeparated(true);
-				}
+				setPassageBodiesSeparated(true);
 				return;
 			}
 

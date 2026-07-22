@@ -1,12 +1,12 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {FileInput} from '../../components/control/file-input';
-import {Story} from '../../store/stories';
+import {StoryWithDocuments} from '../../store/stories';
 import {importStoriesAsync} from '../../util/import';
 import {storyFromTwee} from '../../util/twee';
 
 export interface FileChooserProps {
-	onChange: (file: File, stories: Story[]) => void;
+	onChange: (file: File, stories: StoryWithDocuments[]) => void;
 }
 
 export const FileChooser: React.FC<FileChooserProps> = props => {

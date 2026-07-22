@@ -5,8 +5,17 @@ import {
 	DialogCard,
 	DialogCardProps
 } from '../../components/container/dialog-card';
+import {
+	registerStoryDocuments,
+	replaceStoryCommand,
+	useCoreProjectHost
+} from '../../core';
 import {storyFileName} from '../../electron/shared';
-import {importStories, Story, useStoriesContext} from '../../store/stories';
+import {
+	importStories,
+	StoryWithDocuments,
+	useStoriesContext
+} from '../../store/stories';
 import {useStoriesRepair} from '../../store/use-stories-repair';
 import {FileChooser} from './file-chooser';
 import {StoryChooser} from './story-chooser';
@@ -19,18 +28,61 @@ export const StoryImportDialog: React.FC<StoryImportDialogProps> = props => {
 	const {t} = useTranslation();
 	const repairStories = useStoriesRepair();
 	const {dispatch, stories: existingStories} = useStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
 	const [file, setFile] = React.useState<File>();
-	const [stories, setStories] = React.useState<Story[]>([]);
+	const [importError, setImportError] = React.useState<string>();
+	const [stories, setStories] = React.useState<StoryWithDocuments[]>([]);
 
-	function handleImport(stories: Story[]) {
-		dispatch(importStories(stories, existingStories));
-		repairStories();
-		onClose();
+	async function handleImport(stories: StoryWithDocuments[]) {
+		const newDocumentStories: StoryWithDocuments[] = [];
+
+		setImportError(undefined);
+
+		try {
+			for (const story of stories) {
+				const existingStory = existingStories.find(
+					existing => storyFileName(existing) === storyFileName(story)
+				);
+
+				if (!existingStory) {
+					newDocumentStories.push(story);
+					continue;
+				}
+
+				const documentStory = {
+					...story,
+					id: existingStory.id,
+					passages: story.passages.map(passage => ({
+						...passage,
+						story: existingStory.id
+					}))
+				};
+
+				await coreProjectHost.applyStoryCommand(
+					replaceStoryCommand(existingStory.id, documentStory)
+				);
+			}
+
+			if (newDocumentStories.length > 0) {
+				dispatch(
+					importStories(
+						newDocumentStories.map(registerStoryDocuments),
+						existingStories
+					)
+				);
+			}
+			repairStories();
+			onClose();
+		} catch (error) {
+			setImportError((error as Error).message);
+		}
 	}
 
-	function handleFileChange(file: File, stories: Story[]) {
+	function handleFileChange(file: File, stories: StoryWithDocuments[]) {
 		// If there are no conflicts in the stories, import them now. Otherwise, set
 		// them in state and let the user choose via <StoryChooser>.
+
+		setImportError(undefined);
 
 		if (
 			stories.length === 0 ||
@@ -43,7 +95,7 @@ export const StoryImportDialog: React.FC<StoryImportDialogProps> = props => {
 			setFile(file);
 			setStories(stories);
 		} else {
-			handleImport(stories);
+			void handleImport(stories);
 		}
 	}
 
@@ -56,6 +108,7 @@ export const StoryImportDialog: React.FC<StoryImportDialogProps> = props => {
 		>
 			<CardContent>
 				<FileChooser onChange={handleFileChange} />
+				{importError && <p role="alert">{importError}</p>}
 				{file && stories.length > 0 && (
 					<StoryChooser
 						existingStories={existingStories}

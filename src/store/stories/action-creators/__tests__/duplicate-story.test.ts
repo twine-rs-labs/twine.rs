@@ -1,9 +1,9 @@
 import {duplicateStory} from '../duplicate-story';
-import {Story} from '../../stories.types';
+import {StoryWithDocuments} from '../../stories.types';
 import {fakeStory} from '../../../../test-util';
 
 describe('duplicateStory action creator', () => {
-	let story: Story;
+	let story: StoryWithDocuments;
 
 	beforeEach(() => (story = fakeStory()));
 
@@ -65,6 +65,14 @@ describe('duplicateStory action creator', () => {
 		for (let i = 0; i < story.passages.length; i++) {
 			expect(result.props.passages![i].id).not.toBe(story.passages[i].id);
 		}
+	});
+
+	it('preserves passage documents in the duplicate transport', () => {
+		story.passages[0].text = 'duplicate this body';
+
+		expect(duplicateStory(story, [story]).props.passages[0].text).toBe(
+			'duplicate this body'
+		);
 	});
 
 	it("sets the duplicate's start passage correctly", () => {

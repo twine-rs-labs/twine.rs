@@ -8,6 +8,11 @@ import {
 } from '../save';
 import {StoriesState} from '../../../../stories/stories.types';
 import {fakeStory} from '../../../../../test-util';
+import {
+	clearBootstrapStories,
+	metadataStory,
+	registerStoryDocuments
+} from '../../../../../core/bootstrap-stories';
 
 jest.mock('../save');
 
@@ -25,6 +30,8 @@ describe('stories local storage save middleware', () => {
 		window.localStorage.clear();
 		warnSpy = jest.spyOn(console, 'warn').mockReturnValue();
 	});
+
+	afterEach(clearBootstrapStories);
 
 	it('takes no action when an init action is received', () => {
 		expect(saveMiddleware(state, {type: 'init', state: []})).toBe(false);
@@ -233,6 +240,25 @@ describe('stories local storage save middleware', () => {
 				[transaction, state[0].passages[0]]
 			]);
 			expect(saveStoryMock.mock.calls).toEqual([[transaction, state[0]]]);
+		});
+
+		it('saves registered bodies for a metadata-only story', () => {
+			const completeStory = fakeStory(2);
+			const transaction = {passageIds: '', storyIds: ''};
+
+			completeStory.passages[0].text = 'first imported body';
+			completeStory.passages[1].text = 'second imported body';
+			state = [registerStoryDocuments(completeStory)];
+
+			saveMiddleware(state, {
+				type: 'createStory',
+				props: state[0]
+			});
+			doUpdateTransactionMock.mock.calls[0][0](transaction);
+
+			expect(savePassageMock.mock.calls).toEqual(
+				completeStory.passages.map(passage => [transaction, passage])
+			);
 		});
 
 		it('throws an error if the story created has no name', () =>
@@ -503,6 +529,40 @@ describe('stories local storage save middleware', () => {
 			expect(deletePassageByIdMock.mock.calls).toEqual([
 				[transaction, storyWithMultiplePassagesState[0].passages[0].id]
 			]);
+		});
+
+		it('does nothing for a selection-only update', () => {
+			expect(
+				saveMiddleware(state, {
+					type: 'updateStory',
+					props: {selected: !state[0].selected},
+					storyId: state[0].id
+				})
+			).toBe(false);
+			expect(doUpdateTransactionMock).not.toHaveBeenCalled();
+			expect(savePassageMock).not.toHaveBeenCalled();
+			expect(saveStoryMock).not.toHaveBeenCalled();
+		});
+
+		it('merges metadata updates with registered passage bodies', () => {
+			const completeStory = fakeStory(2);
+			const transaction = {passageIds: '', storyIds: ''};
+
+			completeStory.passages[0].text = 'first replacement body';
+			completeStory.passages[1].text = 'second replacement body';
+			state = [metadataStory(completeStory)];
+			registerStoryDocuments(completeStory);
+
+			saveMiddleware(state, {
+				type: 'updateStory',
+				props: {passages: state[0].passages},
+				storyId: state[0].id
+			});
+			doUpdateTransactionMock.mock.calls[0][0](transaction);
+
+			expect(savePassageMock.mock.calls).toEqual(
+				completeStory.passages.map(passage => [transaction, passage])
+			);
 		});
 
 		it("throws an error if the story doesn't exist in state", () =>

@@ -1,14 +1,18 @@
 import {v4 as uuid} from '@lukeed/uuid';
-import {CreateStoryAction, Story} from '../stories.types';
+import {CreateStoryAction, Story, StoryWithDocuments} from '../stories.types';
 import {unusedName} from '../../../util/unused-name';
+
+export interface DuplicateStoryAction extends CreateStoryAction {
+	props: StoryWithDocuments;
+}
 
 /**
  * Creates a duplicate of an existing story.
  */
 export function duplicateStory(
-	story: Story,
+	story: StoryWithDocuments,
 	stories: Story[]
-): CreateStoryAction {
+): DuplicateStoryAction {
 	const id = uuid();
 	const duplicatedPassages = story.passages.map(passage => ({
 		...passage,
@@ -31,10 +35,10 @@ export function duplicateStory(
 			),
 			passages: duplicatedPassages,
 			startPassage: originalStartPassage
-				? duplicatedPassages.find(
+				? (duplicatedPassages.find(
 						({name}) => name === originalStartPassage.name
-					)?.id
-				: undefined
+					)?.id ?? '')
+				: ''
 		}
 	};
 }

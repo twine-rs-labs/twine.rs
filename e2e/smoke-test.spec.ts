@@ -48,6 +48,74 @@ async function setPassageText(page: Page, text: string) {
 	await page.waitForTimeout(450);
 }
 
+async function openStoryInTextMode(page: Page, name: string) {
+	await storyRow(page, name)
+		.getByRole('button', {name: `Open ${name}`})
+		.first()
+		.click();
+	await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
+	await page
+		.getByLabel('Workspace Mode')
+		.getByRole('tab', {name: 'Text'})
+		.click();
+	await expect(sourceEditor(page)).toBeVisible();
+}
+
+function importedStoryHtml(name: string, ifid: string, body: string) {
+	return [
+		`<tw-storydata name="${name}" startnode="1"`,
+		' creator="Twine" creator-version="2.12.0"',
+		' format="Harlowe" format-version="3.3.9"',
+		` ifid="${ifid}">`,
+		'<style role="stylesheet" id="twine-user-stylesheet" type="text/twine-css"></style>',
+		'<script role="script" id="twine-user-script" type="text/twine-javascript"></script>',
+		'<tw-passagedata pid="1" name="Start" tags="" position="100,100" size="100,100">',
+		body,
+		'</tw-passagedata></tw-storydata>'
+	].join('');
+}
+
+function storyRow(page: Page, name: string) {
+	return page
+		.getByTestId('story-list-row')
+		.filter({has: page.getByText(name, {exact: true})});
+}
+
+async function persistedPassageBodies(page: Page) {
+	return page.evaluate(() => {
+		const ids = (key: string) =>
+			(window.localStorage.getItem(key) ?? '').split(',').filter(Boolean);
+		const passages = ids('twine-passages').map(id =>
+			JSON.parse(window.localStorage.getItem(`twine-passages-${id}`) ?? '{}')
+		) as Array<{story?: string; text?: unknown}>;
+
+		return Object.fromEntries(
+			ids('twine-stories').map(id => {
+				const story = JSON.parse(
+					window.localStorage.getItem(`twine-stories-${id}`) ?? '{}'
+				) as {name?: string};
+
+				return [
+					story.name ?? id,
+					passages
+						.filter(passage => passage.story === id)
+						.map(passage =>
+							typeof passage.text === 'string' ? passage.text : null
+						)
+						.sort()
+				];
+			})
+		);
+	});
+}
+
+async function expectPersistedPassageBodies(
+	page: Page,
+	expected: Record<string, Array<string | null>>
+) {
+	await expect.poll(() => persistedPassageBodies(page)).toEqual(expected);
+}
+
 test.beforeEach(async ({page}) => {
 	await resetBrowserState(page);
 });
@@ -83,6 +151,155 @@ test('persists embedded source-editor passage edits', async ({page}) => {
 	await expect(sourceEditor(page)).toContainText(
 		'Smoke text survives a reload.'
 	);
+});
+
+test('keeps hydrated passage bodies when selecting another project and reloading', async ({
+	page
+}) => {
+	const firstBody = 'The first hydrated body survives project selection.';
+	const secondBody = 'The second hydrated body remains intact.';
+
+	await createProject(page, 'Hydrated selection first');
+	await setPassageText(page, firstBody);
+	await page.getByTitle('Stories').click();
+	await createProject(page, 'Hydrated selection second');
+	await setPassageText(page, secondBody);
+	await page.getByTitle('Stories').click();
+
+	// Reloading establishes the startup hydration/separation boundary before the
+	// selection-only update that previously overwrote passage records.
+	await page.reload();
+	await expect(storyRow(page, 'Hydrated selection first')).toBeVisible();
+	await storyRow(page, 'Hydrated selection first').click();
+	await page.reload();
+
+	await expectPersistedPassageBodies(page, {
+		'Hydrated selection first': [firstBody],
+		'Hydrated selection second': [secondBody]
+	});
+	await storyRow(page, 'Hydrated selection first')
+		.getByRole('button', {name: 'Open Hydrated selection first'})
+		.first()
+		.click();
+	await expect(sourceEditor(page)).toContainText(firstBody);
+});
+
+test('duplicates a nonempty project after hydration and persists both bodies', async ({
+	page
+}) => {
+	const body = 'A duplicate created after hydration keeps this complete body.';
+
+	await createProject(page, 'Hydrated duplicate source');
+	await setPassageText(page, body);
+	await page.getByTitle('Stories').click();
+	await page.reload();
+
+	await page
+		.getByRole('button', {
+			name: 'Duplicate story Hydrated duplicate source'
+		})
+		.click();
+	await expect(storyRow(page, 'Hydrated duplicate source 1')).toBeVisible();
+	await expectPersistedPassageBodies(page, {
+		'Hydrated duplicate source': [body],
+		'Hydrated duplicate source 1': [body]
+	});
+	await openStoryInTextMode(page, 'Hydrated duplicate source 1');
+	await expect(sourceEditor(page)).toContainText(body);
+	await page.getByTitle('Stories').click();
+
+	await page.reload();
+	await expect(storyRow(page, 'Hydrated duplicate source 1')).toBeVisible();
+	await expectPersistedPassageBodies(page, {
+		'Hydrated duplicate source': [body],
+		'Hydrated duplicate source 1': [body]
+	});
+});
+
+test('imports a nonempty project after hydration and persists every body', async ({
+	page
+}) => {
+	const existingBody = 'The already hydrated project keeps its body.';
+	const importedBody = 'The imported project body is registered and persisted.';
+	const importedHtml = importedStoryHtml(
+		'Imported after hydration',
+		'B0A505E2-8A2C-4B29-8610-FF3B144D19B1',
+		importedBody
+	);
+
+	await createProject(page, 'Hydrated import sentinel');
+	await setPassageText(page, existingBody);
+	await page.getByTitle('Stories').click();
+	await page.reload();
+	await page.getByRole('button', {name: 'Import', exact: true}).click();
+	await expect(page).toHaveURL(/#\/new-project\/import$/);
+
+	await page.getByLabel('Source file').setInputFiles({
+		buffer: Buffer.from(importedHtml),
+		mimeType: 'text/html',
+		name: 'imported-after-hydration.html'
+	});
+	await expect(
+		page.getByText('Imported after hydration', {exact: true})
+	).toBeVisible();
+	await page.getByRole('button', {name: 'Run Import'}).click();
+	await expect(page).toHaveURL(/#\/$/);
+	await expect(storyRow(page, 'Imported after hydration')).toBeVisible();
+	await expectPersistedPassageBodies(page, {
+		'Hydrated import sentinel': [existingBody],
+		'Imported after hydration': [importedBody]
+	});
+	await openStoryInTextMode(page, 'Imported after hydration');
+	await expect(sourceEditor(page)).toContainText(importedBody);
+	await page.getByTitle('Stories').click();
+
+	await page.reload();
+	await expect(storyRow(page, 'Imported after hydration')).toBeVisible();
+	await expectPersistedPassageBodies(page, {
+		'Hydrated import sentinel': [existingBody],
+		'Imported after hydration': [importedBody]
+	});
+});
+
+test('overwrites a hydrated project in the active session and persistence', async ({
+	page
+}) => {
+	const originalBody = 'The body before overwrite.';
+	const importedBody = 'The replacement body from the selected import.';
+	const storyName = 'Hydrated overwrite target';
+
+	await createProject(page, storyName);
+	await setPassageText(page, originalBody);
+	await page.getByTitle('Stories').click();
+	await page.reload();
+	await page.getByRole('button', {name: 'Import', exact: true}).click();
+	await page.getByLabel('Source file').setInputFiles({
+		buffer: Buffer.from(
+			importedStoryHtml(
+				storyName,
+				'FDE71DCF-8A9F-48B1-A814-F1EB20654CD5',
+				importedBody
+			)
+		),
+		mimeType: 'text/html',
+		name: 'hydrated-overwrite-target.html'
+	});
+
+	const reviewRow = page.locator('tbody tr').filter({hasText: storyName});
+
+	await expect(reviewRow.getByText('Replace', {exact: true})).toBeVisible();
+	await reviewRow.locator('label.tw-check').click();
+	await page.getByRole('button', {name: 'Run Import'}).click();
+	await expect(page).toHaveURL(/#\/$/);
+	await expectPersistedPassageBodies(page, {[storyName]: [importedBody]});
+
+	await openStoryInTextMode(page, storyName);
+	await expect(sourceEditor(page)).toContainText(importedBody);
+	await page.getByTitle('Stories').click();
+	await page.reload();
+	await expectPersistedPassageBodies(page, {[storyName]: [importedBody]});
+	await openStoryInTextMode(page, storyName);
+	await expect(sourceEditor(page)).toContainText(importedBody);
 });
 
 test('publishes the current project to a playable page', async ({

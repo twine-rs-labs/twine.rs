@@ -4,6 +4,7 @@ import {
 	clearBootstrapStories,
 	metadataStory,
 	registerBootstrapStories,
+	registerStoryDocuments,
 	releaseBootstrapStory
 } from '../bootstrap-stories';
 import {fakeStory} from '../../test-util';
@@ -22,6 +23,18 @@ describe('bootstrap stories', () => {
 		expect(metadata.passages.every(passage => !('text' in passage))).toBe(true);
 		expect(metadata.script).toBe(story.script);
 		expect(metadata.stylesheet).toBe(story.stylesheet);
+	});
+
+	it('registers an explicit document story while returning metadata only', () => {
+		const story = fakeStory(2);
+		story.passages[0].text = 'first registered body';
+		story.passages[1].text = 'second registered body';
+
+		const metadata = registerStoryDocuments(story);
+
+		expect(metadata).toEqual(metadataStory(story));
+		expect(metadata.passages.every(passage => !('text' in passage))).toBe(true);
+		expect(bootstrapStory(story.id)).toBe(story);
 	});
 
 	it('reports and releases retained bootstrap documents', () => {
