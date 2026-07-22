@@ -85,7 +85,11 @@ export async function openWithScratchFile(data: string, filename: string) {
 
 	await mkdirp(scratchDirectoryPath());
 	await writeFile(scratchPath, data, 'utf8');
-	shell.openPath(scratchPath);
+	const openError = await shell.openPath(scratchPath);
+
+	if (openError) {
+		throw new Error(openError);
+	}
 }
 
 function safeScratchAssetPath(root: string, outputPath: string) {
@@ -284,5 +288,9 @@ export async function openWithScratchPackage(
 	await mkdirp(scratchRoot);
 	await prepareScratchAssets(scratchRoot, assets);
 	await writeFile(scratchPath, data, 'utf8');
-	shell.openPath(scratchPath);
+	const openError = await shell.openPath(scratchPath);
+
+	if (openError) {
+		throw new Error(openError);
+	}
 }

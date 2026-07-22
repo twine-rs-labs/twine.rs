@@ -76,7 +76,7 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 					buildTarget: 'play'
 				});
 
-				twineElectronBridge.openWithScratchPackage(
+				await twineElectronBridge.openWithScratchPackage(
 					build.html,
 					`play-${storyId}.html`,
 					build.assets
@@ -92,7 +92,7 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 					proofingFormat
 				});
 
-				twineElectronBridge.openWithScratchPackage(
+				await twineElectronBridge.openWithScratchPackage(
 					build.html,
 					`proof-${storyId}.html`,
 					build.assets
@@ -112,7 +112,7 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 						: {startId: undefined})
 				});
 
-				twineElectronBridge.openWithScratchPackage(
+				await twineElectronBridge.openWithScratchPackage(
 					build.html,
 					`test-${storyId}.html`,
 					build.assets

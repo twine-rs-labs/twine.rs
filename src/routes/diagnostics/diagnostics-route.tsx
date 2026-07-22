@@ -18,6 +18,7 @@ import type {CoreDiagnosticSeverity} from '../../core/bindings/CoreDiagnosticSev
 import type {CoreDiagnosticsPage} from '../../core/bindings/CoreDiagnosticsPage';
 import {selectPassage, Story, useStoriesContext} from '../../store/stories';
 import {useStoryLaunch} from '../../store/use-story-launch';
+import {reportStoryLaunchError} from '../../store/report-story-launch-error';
 import {
 	sourceNavigationTargetFromSourceId,
 	sourceTarget
@@ -356,7 +357,9 @@ export const DiagnosticsRoute: React.FC = () => {
 
 	function testSelectedPassage() {
 		if (story && selectedPassage) {
-			void testStory(story.id, selectedPassage.id);
+			void Promise.resolve(testStory(story.id, selectedPassage.id)).catch(
+				reportStoryLaunchError
+			);
 		}
 	}
 

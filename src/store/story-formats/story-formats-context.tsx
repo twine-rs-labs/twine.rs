@@ -42,7 +42,16 @@ export const StoryFormatsContextProvider: React.FC<
 				const newState = reducer(state, action);
 
 				try {
-					storyFormats.saveMiddleware(newState, action);
+					const completion = storyFormats.saveMiddleware(newState, action);
+
+					if (completion) {
+						void completion.catch(error =>
+							reportError(
+								error as Error,
+								'store.errors.cantPersistStoryFormats'
+							)
+						);
+					}
 				} catch (error) {
 					reportError(error as Error, 'store.errors.cantPersistStoryFormats');
 				}

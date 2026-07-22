@@ -28,7 +28,7 @@ describe('saveStory()', () => {
 	beforeEach(() => {
 		formatsState = [fakeLoadedStoryFormat()];
 		saveProjectFolder = jest.fn(async () => undefined);
-		saveStoryHtml = jest.fn();
+		saveStoryHtml = jest.fn(async () => undefined);
 		story = fakeStory();
 		story.storyFormat = formatsState[0].name;
 		story.storyFormatVersion = formatsState[0].version;
@@ -81,6 +81,13 @@ describe('saveStory()', () => {
 				)
 			]
 		]);
+	});
+
+	it('rejects when the acknowledged legacy HTML save fails', async () => {
+		const error = new Error('disk full');
+
+		saveStoryHtml.mockRejectedValueOnce(error);
+		await expect(saveStory(story, formatsState)).rejects.toBe(error);
 	});
 
 	it('updates a remembered native project folder without saving legacy HTML', async () => {

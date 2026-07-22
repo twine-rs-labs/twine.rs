@@ -11,10 +11,11 @@ describe('prefs Electron IPC save middleware', () => {
 
 	beforeEach(() => {
 		prefs = fakePrefs();
+		saveJsonMock.mockResolvedValue(undefined);
 	});
 
-	it('calls saveJson() on a state when an update action is received', () => {
-		saveMiddleware(prefs, {type: 'update', name: 'locale', value: 'en'});
+	it('returns the save acknowledgement for an update action', async () => {
+		await saveMiddleware(prefs, {type: 'update', name: 'locale', value: 'en'});
 		expect(saveJsonMock.mock.calls).toEqual([['prefs.json', prefs]]);
 	});
 

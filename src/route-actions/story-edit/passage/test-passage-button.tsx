@@ -3,6 +3,7 @@ import {useTranslation} from 'react-i18next';
 import {IconButton} from '../../../components/design-system';
 import {Passage, Story} from '../../../store/stories';
 import {useStoryLaunch} from '../../../store/use-story-launch';
+import {reportStoryLaunchError} from '../../../store/report-story-launch-error';
 
 export interface TestPassageButtonProps {
 	passage?: Passage;
@@ -19,7 +20,11 @@ export const TestPassageButton: React.FC<TestPassageButtonProps> = props => {
 			disabled={!passage}
 			icon="tool"
 			label={t('routes.storyEdit.toolbar.testFromHere')}
-			onClick={() => testStory(story.id, passage?.id)}
+			onClick={() =>
+				Promise.resolve(testStory(story.id, passage?.id)).catch(
+					reportStoryLaunchError
+				)
+			}
 		/>
 	);
 };

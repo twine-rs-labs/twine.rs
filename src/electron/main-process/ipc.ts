@@ -95,6 +95,11 @@ import {
 } from './performance-harness';
 
 const ipcMain = trustedIpcRegistrar(electronIpcMain);
+let quitAfterStoryWriteFlush = false;
+
+export function storyWritesReadyForQuit() {
+	return quitAfterStoryWriteFlush;
+}
 
 function nativePlatformSettings() {
 	return {
@@ -105,6 +110,7 @@ function nativePlatformSettings() {
 }
 
 export function initIpc() {
+	quitAfterStoryWriteFlush = false;
 	if (performanceHarnessEnabled()) {
 		ipcMain.handle('performance-harness-snapshot', async () => {
 			const processMemory = await process.getProcessMemoryInfo();
@@ -147,11 +153,147 @@ export function initIpc() {
 
 	const storySavers: Record<
 		string,
-		DebouncedFunc<
-			(event: any, story: Story, storyHtml: string) => Promise<void>
-		>
+		{
+			flush: () => Promise<void>;
+			runAfterPendingSaves: (operation: () => Promise<void>) => Promise<void>;
+			save: (story: Story, storyHtml: string) => Promise<void>;
+		}
 	> = {};
+	const pendingStoryWriteRequests = new Set<Promise<void>>();
+	const storyWriteReservations = new Map<
+		string,
+		{reject: (error: Error) => void; resolve: () => void; senderId?: number}
+	>();
+	const reservationSenderCleanupRegistered = new Set<number>();
+	let storyWriteFlushBarrier: Promise<void> | undefined;
 	const projectSessionSubscriptions = new Map<string, () => void>();
+
+	function trackStoryWriteRequest(request: Promise<void>) {
+		const tracked = Promise.resolve(request);
+
+		pendingStoryWriteRequests.add(tracked);
+		void tracked.then(
+			() => pendingStoryWriteRequests.delete(tracked),
+			() => pendingStoryWriteRequests.delete(tracked)
+		);
+		return tracked;
+	}
+
+	function storyWriteReservationKey(token: string, senderId?: number) {
+		return `${senderId ?? 'unknown'}:${token}`;
+	}
+
+	function finishStoryWriteReservation(
+		token: string,
+		senderId?: number,
+		errorMessage?: string
+	) {
+		const reservationKey = storyWriteReservationKey(token, senderId);
+		const reservation = storyWriteReservations.get(reservationKey);
+
+		if (
+			!reservation ||
+			(reservation.senderId !== undefined &&
+				senderId !== undefined &&
+				reservation.senderId !== senderId)
+		) {
+			return;
+		}
+
+		storyWriteReservations.delete(reservationKey);
+		if (errorMessage !== undefined) {
+			reservation.reject(new Error(errorMessage));
+		} else {
+			reservation.resolve();
+		}
+	}
+
+	function failStoryWriteReservationsForSender(
+		senderId: number,
+		errorMessage: string
+	) {
+		for (const [pendingKey, pending] of storyWriteReservations) {
+			if (pending.senderId === senderId) {
+				storyWriteReservations.delete(pendingKey);
+				pending.reject(new Error(errorMessage));
+			}
+		}
+	}
+
+	function createStorySaver() {
+		interface PendingSave {
+			reject: (error: unknown) => void;
+			resolve: () => void;
+			story: Story;
+			storyHtml: string;
+		}
+
+		let pendingSaves: PendingSave[] = [];
+		let writeBarrier: Promise<void> | undefined;
+		const enqueueOperation = (operation: () => Promise<void>) => {
+			const result = writeBarrier
+				? writeBarrier.catch(() => undefined).then(operation)
+				: Promise.resolve(operation());
+
+			writeBarrier = result;
+			return result;
+		};
+		const savePending = async () => {
+			const saves = pendingSaves;
+
+			pendingSaves = [];
+			if (saves.length === 0) {
+				return;
+			}
+
+			const latest = saves[saves.length - 1];
+			const operation = enqueueOperation(() =>
+				saveStoryHtml(latest.story, latest.storyHtml)
+			);
+			try {
+				await operation;
+				saves.forEach(save => save.resolve());
+			} catch (error) {
+				saves.forEach(save => save.reject(error));
+			}
+		};
+		const debouncedSave: DebouncedFunc<() => Promise<void>> = debounce(
+			savePending,
+			1000,
+			{leading: true, trailing: true}
+		);
+
+		return {
+			async flush() {
+				await debouncedSave.flush();
+			},
+			runAfterPendingSaves(operation: () => Promise<void>) {
+				const flushed = Promise.resolve(debouncedSave.flush());
+
+				return enqueueOperation(async () => {
+					await flushed;
+					await operation();
+				});
+			},
+			save(story: Story, storyHtml: string) {
+				return new Promise<void>((resolve, reject) => {
+					pendingSaves.push({reject, resolve, story, storyHtml});
+					void debouncedSave();
+				});
+			}
+		};
+	}
+
+	async function flushPendingStoryWrites() {
+		while (pendingStoryWriteRequests.size > 0) {
+			const requests = [...pendingStoryWriteRequests];
+
+			await Promise.all(
+				Object.values(storySavers).map(storySaver => storySaver.flush())
+			);
+			await Promise.all(requests);
+		}
+	}
 
 	function projectSessionSubscriptionKey(senderId: number, rootPath: string) {
 		return `${senderId}:${rootPath}`;
@@ -169,6 +311,81 @@ export function initIpc() {
 	ipcMain.on('copy-text', (_event, text: string) => {
 		if (typeof text === 'string') {
 			clipboard.writeText(text);
+		}
+	});
+
+	ipcMain.on('begin-legacy-story-write', (event, token, storyId) => {
+		const senderId =
+			typeof event.sender?.id === 'number' ? event.sender.id : undefined;
+		const reservationKey =
+			typeof token === 'string'
+				? storyWriteReservationKey(token, senderId)
+				: '';
+
+		if (
+			typeof token !== 'string' ||
+			token === '' ||
+			typeof storyId !== 'string' ||
+			storyId === '' ||
+			storyWriteReservations.has(reservationKey)
+		) {
+			event.returnValue = false;
+			return;
+		}
+
+		let rejectReservation: (error: Error) => void = () => {};
+		let resolveReservation: () => void = () => {};
+		const reservation = new Promise<void>((resolve, reject) => {
+			rejectReservation = reject;
+			resolveReservation = resolve;
+		});
+
+		storyWriteReservations.set(reservationKey, {
+			reject: rejectReservation,
+			resolve: resolveReservation,
+			senderId
+		});
+		trackStoryWriteRequest(reservation);
+		if (
+			senderId !== undefined &&
+			!reservationSenderCleanupRegistered.has(senderId)
+		) {
+			reservationSenderCleanupRegistered.add(senderId);
+			event.sender?.once?.('destroyed', () => {
+				failStoryWriteReservationsForSender(
+					senderId,
+					'Pending story writes were interrupted because the renderer was destroyed.'
+				);
+				reservationSenderCleanupRegistered.delete(senderId);
+			});
+			event.sender?.on?.('render-process-gone', () => {
+				failStoryWriteReservationsForSender(
+					senderId,
+					'Pending story writes were interrupted because the renderer process stopped.'
+				);
+			});
+			event.sender?.on?.(
+				'did-start-navigation',
+				(navigation: {isMainFrame: boolean; isSameDocument: boolean}) => {
+					if (navigation.isMainFrame && !navigation.isSameDocument) {
+						failStoryWriteReservationsForSender(
+							senderId,
+							'Pending story writes were interrupted because the renderer page was replaced.'
+						);
+					}
+				}
+			);
+		}
+		event.returnValue = true;
+	});
+
+	ipcMain.on('finish-legacy-story-write', (event, token, errorMessage) => {
+		if (typeof token === 'string') {
+			finishStoryWriteReservation(
+				token,
+				event.sender?.id,
+				typeof errorMessage === 'string' ? errorMessage : undefined
+			);
 		}
 	});
 
@@ -528,17 +745,13 @@ export function initIpc() {
 		await revealBackupDirectory();
 	});
 
-	ipcMain.on('delete-story', async (event, story) => {
-		try {
-			await deleteStory(story);
-			event.sender.send('story-deleted', story);
-		} catch (error) {
-			dialog.showErrorBox(
-				i18n.t('electron.errors.storyDelete'),
-				(error as Error).message
-			);
-			throw error;
-		}
+	ipcMain.handle('delete-story', async (_event, story) => {
+		const storySaver = storySavers[story.id];
+		const deletion = storySaver
+			? storySaver.runAfterPendingSaves(() => deleteStory(story))
+			: deleteStory(story);
+
+		return trackStoryWriteRequest(deletion);
 	});
 
 	// These use handle() so that they can return data to the renderer process.
@@ -589,18 +802,16 @@ export function initIpc() {
 
 	ipcMain.handle('add-local-story-format', async () => addLocalStoryFormat());
 
-	ipcMain.on(
+	ipcMain.handle(
 		'open-with-scratch-file',
-		(event, data: string, filename: string) => {
-			openWithScratchFile(data, filename);
-		}
+		(_event, data: string, filename: string) =>
+			openWithScratchFile(data, filename)
 	);
 
-	ipcMain.on(
+	ipcMain.handle(
 		'open-with-scratch-package',
-		(event, data: string, filename: string, assets = []) => {
-			openWithScratchPackage(data, filename, assets);
-		}
+		(_event, data: string, filename: string, assets = []) =>
+			openWithScratchPackage(data, filename, assets)
 	);
 
 	ipcMain.on('reveal-path', (_event, path: string) => {
@@ -609,89 +820,59 @@ export function initIpc() {
 		}
 	});
 
-	// This doesn't use handle() because state reducers in the renderer process
-	// can't be be asynchronous--we have to send a signal back.
+	ipcMain.handle('rename-story', async (_event, oldStory, newStory) => {
+		const storySaver = storySavers[oldStory.id];
+		const rename = storySaver
+			? storySaver.runAfterPendingSaves(() => renameStory(oldStory, newStory))
+			: renameStory(oldStory, newStory);
 
-	ipcMain.on('rename-story', async (event, oldStory, newStory) => {
-		try {
-			await renameStory(oldStory, newStory);
-			event.sender.send('story-renamed', oldStory, newStory);
-		} catch (error) {
-			dialog.showErrorBox(
-				i18n.t('electron.errors.storyRename'),
-				(error as Error).message
-			);
-			throw error;
-		}
+		return trackStoryWriteRequest(rename);
 	});
 
-	ipcMain.on('save-json', async (event, filename: string, data: any) => {
-		try {
-			await saveJsonFile(filename, data);
-		} catch (error) {
-			dialog.showErrorBox(
-				i18n.t('electron.errors.jsonSave'),
-				(error as Error).message
-			);
-			throw error;
+	ipcMain.handle('save-json', async (_event, filename: string, data: any) =>
+		saveJsonFile(filename, data)
+	);
+
+	ipcMain.handle('save-story-html', async (_event, story, storyHtml) => {
+		if (typeof storyHtml !== 'string') {
+			throw new Error('Asked to save non-string as story HTML');
 		}
+
+		if (storyHtml.trim() === '') {
+			throw new Error('Asked to save empty string as story HTML');
+		}
+
+		storySavers[story.id] ??= createStorySaver();
+		return trackStoryWriteRequest(storySavers[story.id].save(story, storyHtml));
 	});
 
-	ipcMain.on('save-story-html', async (event, story, storyHtml) => {
-		try {
-			if (typeof storyHtml !== 'string') {
-				throw new Error('Asked to save non-string as story HTML');
-			}
+	app.on('before-quit', event => {
+		if (quitAfterStoryWriteFlush) {
+			return;
+		}
 
-			if (storyHtml.trim() === '') {
-				throw new Error('Asked to save empty string as story HTML');
-			}
+		event.preventDefault();
+		if (storyWriteFlushBarrier) {
+			return;
+		}
 
-			if (!storySavers[story.id]) {
-				storySavers[story.id] = debounce(
-					async (
-						saverEvent: any,
-						saverStory: Story,
-						saverStoryHtml: string
-					) => {
-						try {
-							await saveStoryHtml(saverStory, saverStoryHtml);
-							saverEvent.sender.send('story-html-saved', saverStory);
-						} catch (error) {
-							dialog.showErrorBox(
-								i18n.t('electron.errors.storySave'),
-								(error as Error).message
-							);
-							throw error;
-						}
-					},
-					1000,
-					{leading: true, trailing: true}
+		storyWriteFlushBarrier = flushPendingStoryWrites();
+		void storyWriteFlushBarrier.then(
+			() => {
+				quitAfterStoryWriteFlush = true;
+				app.quit();
+			},
+			error => {
+				storyWriteFlushBarrier = undefined;
+				console.error(
+					'Could not flush pending story saves before quit.',
+					error
+				);
+				dialog.showErrorBox(
+					i18n.t('electron.errors.storySave'),
+					(error as Error).message
 				);
 			}
-
-			storySavers[story.id](event, story, storyHtml);
-		} catch (error) {
-			dialog.showErrorBox(
-				i18n.t('electron.errors.storySave'),
-				(error as Error).message
-			);
-			throw error;
-		}
-	});
-
-	app.on('will-quit', async () => {
-		if (Object.keys(storySavers).length > 0) {
-			// Flush all pending story saves.
-
-			for (const storyId of Object.keys(storySavers)) {
-				console.log(`Flushing pending story saves for story ID ${storyId}`);
-				await storySavers[storyId].flush();
-			}
-
-			console.log('All pending story saves flushed successfully');
-		} else {
-			console.log('No pending story saves to flush');
-		}
+		);
 	});
 }

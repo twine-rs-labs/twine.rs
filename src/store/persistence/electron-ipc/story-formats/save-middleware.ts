@@ -17,7 +17,7 @@ export function saveMiddleware(
 		(action.type === 'update' && isPersistableStoryFormatChange(action.props));
 
 	if (shouldSave) {
-		saveJson(
+		return saveJson(
 			'story-formats.json',
 			state.map(format => ({
 				id: format.id,

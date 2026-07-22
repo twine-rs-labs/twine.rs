@@ -326,6 +326,7 @@ export interface TwineElectronWindow extends Window {
 	};
 	twineElectron?: {
 		addLocalStoryFormat(): Promise<NativeAddLocalStoryFormatResult | undefined>;
+		beginLegacyStoryWrite(storyId: string): string;
 		chooseAssetFile(defaultPath?: string): Promise<string | undefined>;
 		chooseStoryLibraryFolder(): Promise<string | undefined>;
 		consumeCommandLineOpenRequests(): Promise<NativeCommandLineOpenResult>;
@@ -354,7 +355,7 @@ export interface TwineElectronWindow extends Window {
 		discardProjectAssetEffect(effectToken: string): Promise<void>;
 		deleteProjectFolder(rootPath: string): Promise<void>;
 		discardProjectImport(importId: string): Promise<void>;
-		deleteStory(story: Story): void;
+		deleteStory(story: Story): Promise<void>;
 		filePathForFile(file: File): string;
 		getStoryLibraryFolder(): Promise<string>;
 		getPlatformSettings(): Promise<NativePlatformSettings>;
@@ -373,6 +374,7 @@ export interface TwineElectronWindow extends Window {
 			limit?: number
 		): Promise<NativeProjectHydrationChunk>;
 		finishProjectFolderHydration(hydrationId: string): Promise<void>;
+		finishLegacyStoryWrite(token: string, errorMessage?: string): void;
 		loadPrefs(): Promise<any>;
 		loadStories(): Promise<ElectronLoadedStoryEntry[]>;
 		loadStoryFormats(): Promise<any>;
@@ -388,13 +390,12 @@ export interface TwineElectronWindow extends Window {
 			paths: string[],
 			limits: NativeProjectAssetPayloadLimits
 		): Promise<NativeProjectAssetPayloadBatch>;
-		onceStoryRenamed(callback: () => void): void;
-		openWithScratchFile(data: string, filename: string): void;
+		openWithScratchFile(data: string, filename: string): Promise<void>;
 		openWithScratchPackage(
 			data: string,
 			filename: string,
 			assets: Pick<StoryBuildAsset, 'outputPath' | 'sourcePath'>[]
-		): void;
+		): Promise<void>;
 		onProjectSessionChanged(
 			callback: (delta: NativeProjectSessionDelta) => void
 		): () => void;
@@ -417,7 +418,7 @@ export interface TwineElectronWindow extends Window {
 			oldPath: string,
 			newPath: string
 		): Promise<NativeProjectAssetWriteResult>;
-		renameStory(oldStory: Story, newStory: Story): void;
+		renameStory(oldStory: Story, newStory: Story): Promise<void>;
 		replaceProjectAsset(
 			rootPath: string,
 			path: string,
@@ -434,8 +435,8 @@ export interface TwineElectronWindow extends Window {
 			story: Story,
 			options?: ProjectFolderSaveOptions
 		): Promise<NativeProjectFolderResult>;
-		saveStoryHtml(story: Story, data: string): void;
-		saveJson(filename: string, data: any): void;
+		saveStoryHtml(story: Story, data: string): Promise<void>;
+		saveJson(filename: string, data: any): Promise<void>;
 		runStoryLibraryBackup(): Promise<NativeBackupResult>;
 		startProjectSession(
 			rootPath: string,

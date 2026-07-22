@@ -312,6 +312,8 @@ describe('openWithScratchFile', () => {
 	const openMock = shell.openPath as jest.Mock;
 	const writeFileMock = writeFile as jest.Mock;
 
+	beforeEach(() => openMock.mockResolvedValue(''));
+
 	it("creates the scratch directory if it doesn't already exist", async () => {
 		await openWithScratchFile('mock-data', 'mock-filename');
 		expect(mkdirpMock.mock.calls).toEqual([[scratchDirectoryPath()]]);
@@ -342,6 +344,14 @@ describe('openWithScratchFile', () => {
 		expect(openMock).toHaveBeenCalledTimes(1);
 		expect(openMock.mock.calls[0]).toEqual([writeFileMock.mock.calls[0][0]]);
 	});
+
+	it('rejects if the operating system cannot open the file', async () => {
+		openMock.mockResolvedValueOnce('No application can open this file.');
+
+		await expect(
+			openWithScratchFile('mock-data', 'mock-filename')
+		).rejects.toThrow('No application can open this file.');
+	});
 });
 
 describe('openWithScratchPackage', () => {
@@ -353,6 +363,8 @@ describe('openWithScratchPackage', () => {
 	const openMock = shell.openPath as jest.Mock;
 	const removeMock = remove as jest.Mock;
 	const writeFileMock = writeFile as jest.Mock;
+
+	beforeEach(() => openMock.mockResolvedValue(''));
 
 	it('links project asset folders into the scratch directory before opening the HTML', async () => {
 		await openWithScratchPackage('mock-data', 'mock-filename.html', [
@@ -495,5 +507,13 @@ describe('openWithScratchPackage', () => {
 				{outputPath: '../cover.png', sourcePath: '/tmp/cover.png'}
 			])
 		).rejects.toThrow('Unsafe scratch asset path');
+	});
+
+	it('rejects if the operating system cannot open the package', async () => {
+		openMock.mockResolvedValueOnce('Preview launch failed.');
+
+		await expect(
+			openWithScratchPackage('mock-data', 'mock-filename.html')
+		).rejects.toThrow('Preview launch failed.');
 	});
 });

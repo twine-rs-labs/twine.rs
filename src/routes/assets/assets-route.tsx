@@ -1115,7 +1115,9 @@ export const AssetsRoute: React.FC = () => {
 		const target = firstUsagePassage(story, asset);
 
 		if (target) {
-			void testStory(story.id, target.id);
+			void Promise.resolve(testStory(story.id, target.id)).catch(error =>
+				setAssetError((error as Error).message)
+			);
 		}
 	}
 

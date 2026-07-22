@@ -33,6 +33,7 @@ import {
 } from '../../store/project-metadata';
 import {useProjectStoryHydration} from '../../store/project-hydration';
 import {useStoryLaunch} from '../../store/use-story-launch';
+import {reportStoryLaunchError} from '../../store/report-story-launch-error';
 import {
 	markPerformance,
 	markPerformanceAfterPaint,
@@ -823,7 +824,9 @@ export const ContentsRoute: React.FC = () => {
 
 	function testSelectedPassage() {
 		if (story && selectedPassage) {
-			void testStory(story.id, selectedPassage.id);
+			void Promise.resolve(testStory(story.id, selectedPassage.id)).catch(
+				reportStoryLaunchError
+			);
 		}
 	}
 

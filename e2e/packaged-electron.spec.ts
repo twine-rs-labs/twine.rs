@@ -41,6 +41,8 @@ type PackagedProjectStory = {
 
 interface PackagedProjectWindow extends Window {
 	twineElectron?: {
+		beginLegacyStoryWrite(storyId: string): string;
+		finishLegacyStoryWrite(token: string, errorMessage?: string): void;
 		hydrateProjectFolder(
 			rootPath: string,
 			storyIds?: string[]
@@ -49,6 +51,10 @@ interface PackagedProjectWindow extends Window {
 			rootPath: string,
 			story: PackagedProjectStory
 		): Promise<{stories: PackagedProjectStory[]; storyIds: string[]}>;
+		saveStoryHtml(
+			story: {id: string; name: string},
+			data: string
+		): Promise<void>;
 	};
 }
 
@@ -153,6 +159,62 @@ function sourceEditor(page: Page) {
 function tabWithText(page: Page, text: string) {
 	return page.getByRole('tab').filter({hasText: new RegExp(`^${text}$`)});
 }
+
+test('packaged desktop flushes a trailing legacy HTML save before exit', async () => {
+	const executablePath = await packagedExecutable();
+	const profileRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-shutdown-save-')
+	);
+	let running: {app: ElectronApplication; page: Page} | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, profileRoot);
+		const story = {id: 'shutdown-save-story', name: 'Shutdown Save'};
+
+		await running.page.evaluate(
+			async ({story}) => {
+				const bridge = (window as PackagedProjectWindow).twineElectron;
+
+				if (!bridge) {
+					throw new Error('Electron bridge is unavailable.');
+				}
+				await bridge.saveStoryHtml(story, 'first save');
+			},
+			{story}
+		);
+		await running.page.evaluate(
+			({story}) => {
+				const bridge = (window as PackagedProjectWindow).twineElectron;
+
+				if (!bridge) {
+					throw new Error('Electron bridge is unavailable.');
+				}
+				const reservation = bridge.beginLegacyStoryWrite(story.id);
+
+				window.setTimeout(() => {
+					void bridge.saveStoryHtml(story, 'trailing save').then(
+						() => bridge.finishLegacyStoryWrite(reservation),
+						error => bridge.finishLegacyStoryWrite(reservation, String(error))
+					);
+				}, 100);
+			},
+			{story}
+		);
+		const appClosed = running.app.waitForEvent('close');
+
+		await running.app.evaluate(({BrowserWindow}) => {
+			BrowserWindow.getAllWindows()[0]?.close();
+		});
+		await appClosed;
+		running = undefined;
+
+		await expect(
+			readFile(path.join(profileRoot, 'library', 'Shutdown Save.html'), 'utf8')
+		).resolves.toBe('trailing save');
+	} finally {
+		await running?.app.close();
+	}
+});
 
 async function replaceEditorText(page: Page, text: string) {
 	const editor = sourceEditor(page);

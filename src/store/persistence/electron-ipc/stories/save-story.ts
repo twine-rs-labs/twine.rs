@@ -179,5 +179,5 @@ export async function saveStory(
 		});
 	}
 
-	twineElectron.saveStoryHtml(completeStory, storyHtml);
+	await twineElectron.saveStoryHtml(completeStory, storyHtml);
 }

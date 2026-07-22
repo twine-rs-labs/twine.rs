@@ -25,7 +25,13 @@ export const PrefsContextProvider: React.FC<
 				const newState = reducer(state, action);
 
 				try {
-					prefs.saveMiddleware(newState, action);
+					const completion = prefs.saveMiddleware(newState, action);
+
+					if (completion) {
+						void completion.catch(error =>
+							reportError(error as Error, 'store.errors.cantPersistPrefs')
+						);
+					}
 				} catch (error) {
 					reportError(error as Error, 'store.errors.cantPersistPrefs');
 				}

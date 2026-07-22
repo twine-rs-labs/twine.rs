@@ -17,12 +17,13 @@ describe('story formats Electron IPC save middleware', () => {
 		}));
 	}
 
-	beforeEach(
-		() => (state = [fakeUnloadedStoryFormat(), fakeUnloadedStoryFormat()])
-	);
+	beforeEach(() => {
+		state = [fakeUnloadedStoryFormat(), fakeUnloadedStoryFormat()];
+		saveJsonMock.mockResolvedValue(undefined);
+	});
 
-	it('calls save() on a state when a create action is received', () => {
-		saveMiddleware(state, {type: 'create', props: state[1]});
+	it('returns the save acknowledgement for a create action', async () => {
+		await saveMiddleware(state, {type: 'create', props: state[1]});
 		expect(saveJsonMock.mock.calls).toEqual([
 			['story-formats.json', minusLoadStateAndSelected(state)]
 		]);

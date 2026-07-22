@@ -1,6 +1,6 @@
-import {app, dialog} from 'electron';
+import {app, BrowserWindow, dialog} from 'electron';
 import {initApp} from '../init-app';
-import {initIpc} from '../ipc';
+import {initIpc, storyWritesReadyForQuit} from '../ipc';
 import {initLocales} from '../locales';
 import {initMenuBar} from '../menu-bar';
 import {
@@ -29,8 +29,12 @@ describe('initApp', () => {
 	const onMock = app.on as jest.Mock;
 	const quitMock = app.quit as jest.Mock;
 	const showErrorBoxMock = dialog.showErrorBox as jest.Mock;
+	const storyWritesReadyForQuitMock = storyWritesReadyForQuit as jest.Mock;
 
-	beforeEach(() => jest.spyOn(global, 'setInterval'));
+	beforeEach(() => {
+		jest.spyOn(global, 'setInterval');
+		storyWritesReadyForQuitMock.mockReturnValue(false);
+	});
 
 	it('initializes locales', async () => {
 		await initApp();
@@ -78,6 +82,26 @@ describe('initApp', () => {
 	it('initializes the menu bar', async () => {
 		await initApp();
 		expect(initMenuBarMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps the renderer alive until story writes allow window close', async () => {
+		const windowOn = jest.spyOn(BrowserWindow.prototype, 'on');
+
+		await initApp();
+		const closeListener = (windowOn.mock.calls as any[]).find(
+			([event]) => event === 'close'
+		)?.[1] as (event: {preventDefault: () => void}) => void;
+		const pendingEvent = {preventDefault: jest.fn()};
+		const readyEvent = {preventDefault: jest.fn()};
+
+		closeListener(pendingEvent);
+		expect(pendingEvent.preventDefault).toHaveBeenCalledTimes(1);
+		expect(quitMock).toHaveBeenCalledTimes(1);
+
+		storyWritesReadyForQuitMock.mockReturnValue(true);
+		closeListener(readyEvent);
+		expect(readyEvent.preventDefault).not.toHaveBeenCalled();
+		expect(quitMock).toHaveBeenCalledTimes(1);
 	});
 
 	it.todo('creates the main window');

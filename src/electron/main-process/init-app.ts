@@ -1,6 +1,6 @@
 import {app, BrowserWindow, dialog, screen, shell} from 'electron';
 import path from 'path';
-import {initIpc} from './ipc';
+import {initIpc, storyWritesReadyForQuit} from './ipc';
 import {initLocales} from './locales';
 import {initMenuBar} from './menu-bar';
 import {setAppPref} from './app-prefs';
@@ -74,6 +74,12 @@ async function createWindow() {
 
 		if (!app.isPackaged && !performanceHarnessEnabled()) {
 			mainWindow!.webContents.openDevTools();
+		}
+	});
+	mainWindow.on('close', event => {
+		if (!storyWritesReadyForQuit()) {
+			event.preventDefault();
+			app.quit();
 		}
 	});
 	mainWindow.on('closed', () => (mainWindow = null));

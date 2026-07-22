@@ -53,7 +53,8 @@ export const ipcRenderer = {
 	on: jest.fn(),
 	once: jest.fn(),
 	removeListener: jest.fn(),
-	send: jest.fn()
+	send: jest.fn(),
+	sendSync: jest.fn()
 };
 
 export const net = {

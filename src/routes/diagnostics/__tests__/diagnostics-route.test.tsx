@@ -301,6 +301,29 @@ describe('<DiagnosticsRoute>', () => {
 		expect(mockTestStory).toHaveBeenCalledWith(story.id, story.passages[0].id);
 	});
 
+	it('reports failures when testing a selected diagnostic', async () => {
+		const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+		const consoleSpy = jest
+			.spyOn(console, 'error')
+			.mockImplementation(() => {});
+
+		try {
+			mockTestStory.mockRejectedValueOnce(new Error('Preview launch failed'));
+			renderComponent();
+			fireEvent.click(
+				await screen.findByRole('button', {name: 'Test From Here'})
+			);
+			await waitFor(() =>
+				expect(alertSpy).toHaveBeenCalledWith(
+					'Could not open story preview (Preview launch failed).'
+				)
+			);
+		} finally {
+			alertSpy.mockRestore();
+			consoleSpy.mockRestore();
+		}
+	});
+
 	it('reveals stylesheet diagnostics with a source target instead of a passage fallback', async () => {
 		const {story} = renderComponentWithLocation(story => {
 			story.id = 'stylesheet-diagnostic-story';

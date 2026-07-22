@@ -13,6 +13,7 @@ import {
 	useStoriesContext
 } from '../../store/stories';
 import {useStoryLaunch} from '../../store/use-story-launch';
+import {reportStoryLaunchError} from '../../store/report-story-launch-error';
 import {
 	EditorWindowSpec,
 	editorWindowId,
@@ -286,7 +287,9 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 	);
 	const handleTestPassage = React.useCallback(
 		(passage: Passage) => {
-			void testStory(story.id, passage.id);
+			void Promise.resolve(testStory(story.id, passage.id)).catch(
+				reportStoryLaunchError
+			);
 		},
 		[story.id, testStory]
 	);

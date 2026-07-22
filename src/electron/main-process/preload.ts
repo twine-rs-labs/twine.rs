@@ -8,6 +8,7 @@ import type {ProjectSourceLayout, TwineElectronWindow} from '../shared';
 
 const projectCapabilityField = '__twineProjectCapability';
 const projectCapabilities = new Map<string, string>();
+let legacyStoryWriteToken = 0;
 
 function rememberProjectCapability<T>(project: T): T {
 	if (!project || typeof project !== 'object') {
@@ -47,6 +48,16 @@ async function invokeProjectResult(channel: string, ...args: unknown[]) {
 const bridge = {
 	addLocalStoryFormat() {
 		return ipcRenderer.invoke('add-local-story-format');
+	},
+	beginLegacyStoryWrite(storyId: string) {
+		const token = `legacy-story-write-${++legacyStoryWriteToken}`;
+
+		if (
+			ipcRenderer.sendSync('begin-legacy-story-write', token, storyId) !== true
+		) {
+			throw new Error('Could not reserve a pending story write.');
+		}
+		return token;
 	},
 	chooseAssetFile(defaultPath?: string) {
 		return ipcRenderer.invoke('choose-asset-file', defaultPath);
@@ -122,7 +133,7 @@ const bridge = {
 		return ipcRenderer.invoke('discard-project-import', importId);
 	},
 	deleteStory(story: Story) {
-		ipcRenderer.send('delete-story', story);
+		return ipcRenderer.invoke('delete-story', story);
 	},
 	filePathForFile(file: File) {
 		return webUtils.getPathForFile(file);
@@ -185,6 +196,9 @@ const bridge = {
 	finishProjectFolderHydration(hydrationId: string) {
 		return ipcRenderer.invoke('finish-project-folder-hydration', hydrationId);
 	},
+	finishLegacyStoryWrite(token: string, errorMessage?: string) {
+		ipcRenderer.send('finish-legacy-story-write', token, errorMessage);
+	},
 	listProjectAssets(rootPath: string) {
 		return ipcRenderer.invoke(
 			'list-project-assets',
@@ -207,14 +221,16 @@ const bridge = {
 			limits
 		);
 	},
-	onceStoryRenamed(callback: () => void): void {
-		ipcRenderer.once('story-renamed', callback);
-	},
 	openWithScratchFile(data: string, filename: string) {
-		ipcRenderer.send('open-with-scratch-file', data, filename);
+		return ipcRenderer.invoke('open-with-scratch-file', data, filename);
 	},
 	openWithScratchPackage(data: string, filename: string, assets: unknown[]) {
-		ipcRenderer.send('open-with-scratch-package', data, filename, assets);
+		return ipcRenderer.invoke(
+			'open-with-scratch-package',
+			data,
+			filename,
+			assets
+		);
 	},
 	openProjectFolder(options?: {loadPassageText?: boolean}) {
 		return invokeProjectResult('open-project-folder', options);
@@ -250,7 +266,7 @@ const bridge = {
 		);
 	},
 	renameStory(oldStory: Story, newStory: Story) {
-		ipcRenderer.send('rename-story', oldStory, newStory);
+		return ipcRenderer.invoke('rename-story', oldStory, newStory);
 	},
 	replaceProjectAsset(rootPath: string, path: string, sourcePath: string) {
 		return ipcRenderer.invoke(
@@ -275,7 +291,7 @@ const bridge = {
 		);
 	},
 	saveJson(filename: string, data: any) {
-		ipcRenderer.send('save-json', filename, data);
+		return ipcRenderer.invoke('save-json', filename, data);
 	},
 	saveProjectFolder(
 		rootPath: string,
@@ -295,7 +311,7 @@ const bridge = {
 		return ipcRenderer.invoke('run-story-library-backup');
 	},
 	saveStoryHtml(story: Story, data: string) {
-		ipcRenderer.send('save-story-html', story, data);
+		return ipcRenderer.invoke('save-story-html', story, data);
 	},
 	startProjectSession(rootPath: string, storyIds?: string[]) {
 		return ipcRenderer.invoke(

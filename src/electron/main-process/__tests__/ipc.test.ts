@@ -1,4 +1,4 @@
-import {app, clipboard, ipcMain, shell} from 'electron';
+import {app, clipboard, dialog, ipcMain, shell} from 'electron';
 import {initIpc} from '../ipc';
 import {consumeCommandLineOpenPaths} from '../command-line';
 import {loadPrefs} from '../prefs';
@@ -107,12 +107,14 @@ describe('initIpc()', () => {
 	const resetStoryDirectoryPathMock = resetStoryDirectoryPath as jest.Mock;
 	const onMock = ipcMain.on as jest.Mock;
 	const appOnMock = app.on as jest.Mock;
+	const appQuitMock = app.quit as jest.Mock;
 	const clipboardWriteTextMock = clipboard.writeText as jest.Mock;
 	const openWithScratchFileMock = openWithScratchFile as jest.Mock;
 	const openWithScratchPackageMock = openWithScratchPackage as jest.Mock;
 	const renameStoryMock = renameStory as jest.Mock;
 	const saveJsonFileMock = saveJsonFile as jest.Mock;
 	const saveStoryHtmlMock = saveStoryHtml as jest.Mock;
+	const showErrorBoxMock = dialog.showErrorBox as jest.Mock;
 	const showItemInFolderMock = shell.showItemInFolder as jest.Mock;
 	const nativeProjectAssetEmbeddingAvailableMock =
 		nativeProjectAssetEmbeddingAvailable as jest.Mock;
@@ -626,45 +628,56 @@ describe('initIpc()', () => {
 		expect(revealBackupDirectoryMock).toHaveBeenCalled();
 	});
 
-	describe('the listener it adds for delete-story events', () => {
-		let listener: any[];
+	describe('the handler it adds for delete-story events', () => {
+		let handler: any[];
 		let story: Story;
 
 		beforeEach(() => {
-			listener = onMock.mock.calls.find(call => call[0] === 'delete-story');
+			handler = handleMock.mock.calls.find(call => call[0] === 'delete-story');
 			story = fakeStory();
 		});
 
 		it('calls deleteStory()', async () => {
-			expect(listener).not.toBeUndefined();
-			listener[1]({sender: {send: jest.fn()}}, story);
+			expect(handler).not.toBeUndefined();
+			await handler[1]({}, story);
 			expect(deleteStoryMock).toHaveBeenCalledWith(story);
 		});
 
-		it('sends back a story-deleted event', async () => {
-			const send = jest.fn();
+		it('rejects with delete failures so the renderer can report them', async () => {
+			const error = new Error('delete failed');
 
-			expect(listener).not.toBeUndefined();
-			await listener[1]({sender: {send}}, story, 'test-story-html');
-			expect(send.mock.calls).toEqual([['story-deleted', story]]);
+			deleteStoryMock.mockRejectedValueOnce(error);
+			await expect(handler[1]({}, story)).rejects.toBe(error);
 		});
 	});
 
-	it('adds a listener for open-with-scratch-package events that calls openWithScratchPackage()', async () => {
-		const listener = onMock.mock.calls.find(
+	it('adds a handler for open-with-scratch-package events that awaits openWithScratchPackage()', async () => {
+		const handler = handleMock.mock.calls.find(
 			call => call[0] === 'open-with-scratch-package'
 		);
 		const assets = [
 			{outputPath: 'assets/cover.png', sourcePath: '/tmp/cover.png'}
 		];
 
-		expect(listener).not.toBeUndefined();
-		listener[1]({}, 'test-file-contents', 'test-filename', assets);
+		expect(handler).not.toBeUndefined();
+		await handler[1]({}, 'test-file-contents', 'test-filename', assets);
 		expect(openWithScratchPackageMock).toHaveBeenCalledWith(
 			'test-file-contents',
 			'test-filename',
 			assets
 		);
+	});
+
+	it('rejects scratch-package failures through the acknowledged handler', async () => {
+		const error = new Error('scratch package failed');
+		const handler = handleMock.mock.calls.find(
+			call => call[0] === 'open-with-scratch-package'
+		);
+
+		openWithScratchPackageMock.mockRejectedValueOnce(error);
+		await expect(
+			handler[1]({}, 'test-file-contents', 'test-filename', [])
+		).rejects.toBe(error);
 	});
 
 	describe('the handler it adds for load-prefs events', () => {
@@ -774,26 +787,26 @@ describe('initIpc()', () => {
 		);
 	});
 
-	it('adds a listener for open-with-scratch-file events that calls openWithScratchFile()', async () => {
-		const listener = onMock.mock.calls.find(
+	it('adds a handler for open-with-scratch-file events that awaits openWithScratchFile()', async () => {
+		const handler = handleMock.mock.calls.find(
 			call => call[0] === 'open-with-scratch-file'
 		);
 
-		expect(listener).not.toBeUndefined();
-		listener[1]({}, 'test-file-contents', 'test-filename');
+		expect(handler).not.toBeUndefined();
+		await handler[1]({}, 'test-file-contents', 'test-filename');
 		expect(openWithScratchFileMock).toHaveBeenCalledWith(
 			'test-file-contents',
 			'test-filename'
 		);
 	});
 
-	describe('the listener it adds for rename-story events', () => {
-		let listener: any[];
+	describe('the handler it adds for rename-story events', () => {
+		let handler: any[];
 		let newStory: Story;
 		let oldStory: Story;
 
 		beforeEach(() => {
-			listener = onMock.mock.calls.find(call => call[0] === 'rename-story');
+			handler = handleMock.mock.calls.find(call => call[0] === 'rename-story');
 			oldStory = fakeStory();
 			newStory = {...oldStory, name: 'new-name'};
 		});
@@ -809,37 +822,128 @@ describe('initIpc()', () => {
 		});
 
 		it('calls renameStory()', async () => {
-			expect(listener).not.toBeUndefined();
-			listener[1]({sender: {send: jest.fn()}}, oldStory, newStory);
+			expect(handler).not.toBeUndefined();
+			await handler[1]({}, oldStory, newStory);
 			expect(renameStoryMock.mock.calls).toEqual([[oldStory, newStory]]);
 		});
 
-		it('sends back a story-renamed event', async () => {
-			const send = jest.fn();
+		it('rejects with rename failures so the renderer can report them', async () => {
+			const error = new Error('rename failed');
 
-			expect(listener).not.toBeUndefined();
-			await listener[1]({sender: {send}}, oldStory, newStory);
-			expect(send.mock.calls).toEqual([['story-renamed', oldStory, newStory]]);
+			renameStoryMock.mockRejectedValueOnce(error);
+			await expect(handler[1]({}, oldStory, newStory)).rejects.toBe(error);
 		});
 	});
 
-	it('adds a listener for save-json events that calls openWithTempFile()', async () => {
-		const listener = onMock.mock.calls.find(call => call[0] === 'save-json');
+	describe('legacy story write ordering', () => {
+		let deleteHandler: any[];
+		let renameHandler: any[];
+		let saveHandler: any[];
+		let story: Story;
+
+		beforeEach(() => {
+			jest.useFakeTimers();
+			deleteHandler = handleMock.mock.calls.find(
+				call => call[0] === 'delete-story'
+			);
+			renameHandler = handleMock.mock.calls.find(
+				call => call[0] === 'rename-story'
+			);
+			saveHandler = handleMock.mock.calls.find(
+				call => call[0] === 'save-story-html'
+			);
+			story = fakeStory();
+		});
+
+		afterEach(() => {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+		});
+
+		it('finishes leading and trailing saves before deleting the story', async () => {
+			const finishWrites: Array<() => void> = [];
+
+			saveStoryHtmlMock.mockImplementation(
+				() =>
+					new Promise<void>(resolve => {
+						finishWrites.push(resolve);
+					})
+			);
+			const leading = saveHandler[1]({}, story, 'leading');
+			const trailing = saveHandler[1]({}, story, 'trailing');
+			const deletion = deleteHandler[1]({}, story);
+
+			expect(saveStoryHtmlMock.mock.calls).toEqual([[story, 'leading']]);
+			expect(deleteStoryMock).not.toHaveBeenCalled();
+			finishWrites.shift()?.();
+			await leading;
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(saveStoryHtmlMock.mock.calls).toEqual([
+				[story, 'leading'],
+				[story, 'trailing']
+			]);
+			expect(deleteStoryMock).not.toHaveBeenCalled();
+			finishWrites.shift()?.();
+			await Promise.all([trailing, deletion]);
+			expect(deleteStoryMock).toHaveBeenCalledWith(story);
+		});
+
+		it('finishes a trailing old-name save before renaming the story', async () => {
+			const finishWrites: Array<() => void> = [];
+			const renamed = {...story, name: 'Renamed'};
+
+			saveStoryHtmlMock.mockImplementation(
+				() =>
+					new Promise<void>(resolve => {
+						finishWrites.push(resolve);
+					})
+			);
+			const leading = saveHandler[1]({}, story, 'leading');
+			const trailing = saveHandler[1]({}, story, 'trailing');
+			const rename = renameHandler[1]({}, story, renamed);
+
+			expect(renameStoryMock).not.toHaveBeenCalled();
+			finishWrites.shift()?.();
+			await leading;
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(renameStoryMock).not.toHaveBeenCalled();
+			finishWrites.shift()?.();
+			await Promise.all([trailing, rename]);
+			expect(renameStoryMock).toHaveBeenCalledWith(story, renamed);
+		});
+	});
+
+	it('adds an acknowledged handler for save-json events', async () => {
+		const handler = handleMock.mock.calls.find(call => call[0] === 'save-json');
 		const testData = {};
 
-		expect(listener).not.toBeUndefined();
-		listener[1]({}, 'test-filename', testData);
+		expect(handler).not.toBeUndefined();
+		await handler[1]({}, 'test-filename', testData);
 		expect(saveJsonFileMock).toHaveBeenCalledWith('test-filename', testData);
 	});
 
-	describe('the listener it adds for save-story-html events', () => {
-		let listener: any[];
+	it('rejects JSON save failures through the acknowledged handler', async () => {
+		const error = new Error('JSON save failed');
+		const handler = handleMock.mock.calls.find(call => call[0] === 'save-json');
+
+		saveJsonFileMock.mockRejectedValueOnce(error);
+		await expect(handler[1]({}, 'test-filename', {})).rejects.toBe(error);
+	});
+
+	describe('the handler it adds for save-story-html events', () => {
+		let handler: any[];
 		let story: Story;
 
 		beforeEach(() => {
 			jest.useFakeTimers();
 			jest.spyOn(console, 'log').mockReturnValue();
-			listener = onMock.mock.calls.find(call => call[0] === 'save-story-html');
+			handler = handleMock.mock.calls.find(
+				call => call[0] === 'save-story-html'
+			);
 			story = fakeStory();
 		});
 
@@ -849,18 +953,20 @@ describe('initIpc()', () => {
 		});
 
 		it('calls saveStoryHtml()', async () => {
-			expect(listener).not.toBeUndefined();
-			await listener[1]({sender: {send: jest.fn()}}, story, 'test-story-html');
+			expect(handler).not.toBeUndefined();
+			await handler[1]({}, story, 'test-story-html');
 			jest.advanceTimersByTime(1000);
 			expect(saveStoryHtmlMock).toHaveBeenCalledWith(story, 'test-story-html');
 		});
 
 		it('debounces calls to saveStoryHtml() for the same story ID with both leading and trailing calls', async () => {
-			saveStoryHtmlMock.mockImplementation(() => new Promise(() => {}));
-			listener[1]({sender: {send: jest.fn()}}, story, 'test-story-html-1');
-			listener[1]({sender: {send: jest.fn()}}, story, 'test-story-html-2');
-			listener[1]({sender: {send: jest.fn()}}, story, 'test-story-html-3');
+			const first = handler[1]({}, story, 'test-story-html-1');
+			const second = handler[1]({}, story, 'test-story-html-2');
+			const third = handler[1]({}, story, 'test-story-html-3');
+
+			await first;
 			jest.advanceTimersByTime(1000);
+			await Promise.all([second, third]);
 			expect(saveStoryHtmlMock.mock.calls).toEqual([
 				[story, 'test-story-html-1'],
 				[story, 'test-story-html-3']
@@ -874,10 +980,11 @@ describe('initIpc()', () => {
 			story1.id = 'mock-id-1';
 			story2.id = 'mock-id-2';
 
-			saveStoryHtmlMock.mockImplementation(() => new Promise(() => {}));
-			listener[1]({sender: {send: jest.fn()}}, story1, 'test-story-html-1');
-			listener[1]({sender: {send: jest.fn()}}, story2, 'test-story-html-2');
+			const first = handler[1]({}, story1, 'test-story-html-1');
+			const second = handler[1]({}, story2, 'test-story-html-2');
+
 			jest.advanceTimersByTime(1000);
+			await Promise.all([first, second]);
 			expect(saveStoryHtmlMock.mock.calls).toEqual([
 				[story1, 'test-story-html-1'],
 				[story2, 'test-story-html-2']
@@ -891,13 +998,17 @@ describe('initIpc()', () => {
 			story1.id = 'mock-id-1';
 			story2.id = 'mock-id-2';
 
-			saveStoryHtmlMock.mockImplementation(() => new Promise(() => {}));
-			listener[1]({sender: {send: jest.fn()}}, story1, 'test-story-html-1');
-			listener[1]({sender: {send: jest.fn()}}, story1, 'test-story-html-2');
-			listener[1]({sender: {send: jest.fn()}}, story2, 'test-story-html-3');
-			listener[1]({sender: {send: jest.fn()}}, story1, 'test-story-html-4');
-			listener[1]({sender: {send: jest.fn()}}, story2, 'test-story-html-5');
+			const saves = [
+				handler[1]({}, story1, 'test-story-html-1'),
+				handler[1]({}, story1, 'test-story-html-2'),
+				handler[1]({}, story2, 'test-story-html-3'),
+				handler[1]({}, story1, 'test-story-html-4'),
+				handler[1]({}, story2, 'test-story-html-5')
+			];
+
+			await Promise.all([saves[0], saves[2]]);
 			jest.advanceTimersByTime(1000);
+			await Promise.all(saves);
 			expect(saveStoryHtmlMock.mock.calls).toEqual([
 				[story1, 'test-story-html-1'],
 				[story2, 'test-story-html-3'],
@@ -906,52 +1017,61 @@ describe('initIpc()', () => {
 			]);
 		});
 
-		it('sends back a story-html-saved event', async () => {
-			const send = jest.fn();
+		it('acknowledges only after the HTML write finishes', async () => {
+			let finishSave: () => void = () => {};
+			const completed = jest.fn();
 
-			saveStoryHtmlMock.mockReturnValue(undefined);
-			expect(listener).not.toBeUndefined();
-			listener[1]({sender: {send}}, story, 'test-story-html');
-			jest.advanceTimersByTime(1000);
+			saveStoryHtmlMock.mockReturnValue(
+				new Promise<void>(resolve => {
+					finishSave = resolve;
+				})
+			);
+			expect(handler).not.toBeUndefined();
+			const acknowledgement = handler[1]({}, story, 'test-story-html');
+
+			void acknowledgement.then(completed);
 			await Promise.resolve();
-			expect(send.mock.calls).toEqual([['story-html-saved', story]]);
+			expect(completed).not.toHaveBeenCalled();
+			finishSave();
+			await acknowledgement;
+			expect(completed).toHaveBeenCalledTimes(1);
+		});
+
+		it('rejects the acknowledgement when the HTML write fails', async () => {
+			const error = new Error('HTML save failed');
+
+			saveStoryHtmlMock.mockRejectedValueOnce(error);
+			await expect(handler[1]({}, story, 'test-story-html')).rejects.toBe(
+				error
+			);
 		});
 
 		it('rejects if asked to save an empty string', async () => {
-			expect(listener).not.toBeUndefined();
-			await expect(
-				listener[1]({sender: {send: jest.fn()}}, story, '')
-			).rejects.toBeInstanceOf(Error);
+			expect(handler).not.toBeUndefined();
+			await expect(handler[1]({}, story, '')).rejects.toBeInstanceOf(Error);
 			expect(saveStoryHtmlMock).not.toHaveBeenCalled();
 		});
 
 		it('rejects if asked to save a non-string', async () => {
-			expect(listener).not.toBeUndefined();
-			await expect(
-				listener[1]({sender: {send: jest.fn()}}, story, null)
-			).rejects.toBeInstanceOf(Error);
+			expect(handler).not.toBeUndefined();
+			await expect(handler[1]({}, story, null)).rejects.toBeInstanceOf(Error);
+			expect(saveStoryHtmlMock).not.toHaveBeenCalled();
+			await expect(handler[1]({}, story, undefined)).rejects.toBeInstanceOf(
+				Error
+			);
+			expect(saveStoryHtmlMock).not.toHaveBeenCalled();
+			await expect(handler[1]({}, story, false)).rejects.toBeInstanceOf(Error);
 			expect(saveStoryHtmlMock).not.toHaveBeenCalled();
 			await expect(
-				listener[1]({sender: {send: jest.fn()}}, story, undefined)
-			).rejects.toBeInstanceOf(Error);
-			expect(saveStoryHtmlMock).not.toHaveBeenCalled();
-			await expect(
-				listener[1]({sender: {send: jest.fn()}}, story, false)
-			).rejects.toBeInstanceOf(Error);
-			expect(saveStoryHtmlMock).not.toHaveBeenCalled();
-			await expect(
-				listener[1](
-					{sender: {send: jest.fn()}},
-					story,
-					Promise.resolve('some html')
-				)
+				handler[1]({}, story, Promise.resolve('some html'))
 			).rejects.toBeInstanceOf(Error);
 			expect(saveStoryHtmlMock).not.toHaveBeenCalled();
 		});
 	});
 
-	describe('the handler it adds to the app will-quit event', () => {
-		let saveListeners: any[];
+	describe('the handler it adds to the app before-quit event', () => {
+		let beforeQuitHandler: (...args: any[]) => void;
+		let saveHandler: any[];
 		let quitListeners: any[];
 		let story: Story;
 		let story2: Story;
@@ -960,9 +1080,10 @@ describe('initIpc()', () => {
 			jest.useFakeTimers();
 			jest.spyOn(console, 'log').mockReturnValue();
 			quitListeners = appOnMock.mock.calls.find(
-				call => call[0] === 'will-quit'
+				call => call[0] === 'before-quit'
 			);
-			saveListeners = onMock.mock.calls.find(
+			beforeQuitHandler = quitListeners[1];
+			saveHandler = handleMock.mock.calls.find(
 				call => call[0] === 'save-story-html'
 			);
 			story = fakeStory();
@@ -974,14 +1095,11 @@ describe('initIpc()', () => {
 			jest.useRealTimers();
 		});
 
-		it('flushes all pending debounced story saves', async () => {
-			saveListeners[1]({sender: {send: jest.fn()}}, story, 'test-story-html-1');
-			saveListeners[1]({sender: {send: jest.fn()}}, story, 'test-story-html-2');
-			saveListeners[1](
-				{sender: {send: jest.fn()}},
-				story2,
-				'test-story-html-3'
-			);
+		it('prevents quit, flushes pending saves, and explicitly resumes quit', async () => {
+			const preventDefault = jest.fn();
+			const first = saveHandler[1]({}, story, 'test-story-html-1');
+			const trailing = saveHandler[1]({}, story, 'test-story-html-2');
+			const other = saveHandler[1]({}, story2, 'test-story-html-3');
 
 			// Leading calls.
 
@@ -990,32 +1108,242 @@ describe('initIpc()', () => {
 				[story2, 'test-story-html-3']
 			]);
 			saveStoryHtmlMock.mockClear();
-			await quitListeners[1]();
+			beforeQuitHandler({preventDefault});
 
-			// Trailing calls.
+			// Event emitters do not await listeners, so cancellation must happen
+			// synchronously and the barrier must resume quit itself.
 
+			expect(preventDefault).toHaveBeenCalledTimes(1);
+			expect(appQuitMock).not.toHaveBeenCalled();
+			await Promise.all([first, trailing, other]);
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
 			expect(saveStoryHtmlMock.mock.calls).toEqual([
 				[story, 'test-story-html-2']
 			]);
+			expect(appQuitMock).toHaveBeenCalledTimes(1);
 		});
 
-		it('does nothing if there are no debounced story saves pending', async () => {
-			saveListeners[1]({sender: {send: jest.fn()}}, story, 'test-story-html-1');
-			saveListeners[1]({sender: {send: jest.fn()}}, story, 'test-story-html-2');
-			saveListeners[1](
-				{sender: {send: jest.fn()}},
-				story2,
-				'test-story-html-3'
+		it('uses a single flush barrier when quit is requested repeatedly', async () => {
+			let finishSave: () => void = () => {};
+			const save = new Promise<void>(resolve => {
+				finishSave = resolve;
+			});
+			const firstEvent = {preventDefault: jest.fn()};
+			const secondEvent = {preventDefault: jest.fn()};
+
+			saveStoryHtmlMock.mockReturnValue(save);
+			const acknowledgement = saveHandler[1]({}, story, 'test-story-html');
+
+			beforeQuitHandler(firstEvent);
+			beforeQuitHandler(secondEvent);
+			expect(firstEvent.preventDefault).toHaveBeenCalledTimes(1);
+			expect(secondEvent.preventDefault).toHaveBeenCalledTimes(1);
+			expect(appQuitMock).not.toHaveBeenCalled();
+			finishSave();
+			await acknowledgement;
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).toHaveBeenCalledTimes(1);
+		});
+
+		it.each(['delete-story', 'rename-story'])(
+			'waits for an acknowledged %s operation before resuming quit',
+			async channel => {
+				let finishWrite: () => void = () => {};
+				const write = new Promise<void>(resolve => {
+					finishWrite = resolve;
+				});
+				const preventDefault = jest.fn();
+				const handler = handleMock.mock.calls.find(call => call[0] === channel);
+				const renamed = {...story, name: 'Renamed'};
+
+				if (channel === 'delete-story') {
+					deleteStoryMock.mockReturnValueOnce(write);
+				} else {
+					renameStoryMock.mockReturnValueOnce(write);
+				}
+				const acknowledgement =
+					channel === 'delete-story'
+						? handler[1]({}, story)
+						: handler[1]({}, story, renamed);
+
+				beforeQuitHandler({preventDefault});
+				expect(preventDefault).toHaveBeenCalledTimes(1);
+				expect(appQuitMock).not.toHaveBeenCalled();
+				finishWrite();
+				await acknowledgement;
+				for (let index = 0; index < 10; index++) {
+					await Promise.resolve();
+				}
+				expect(appQuitMock).toHaveBeenCalledTimes(1);
+			}
+		);
+
+		it('waits for renderer-reserved work that reaches main after quit begins', async () => {
+			const beginReservation = onMock.mock.calls.find(
+				call => call[0] === 'begin-legacy-story-write'
 			);
-			jest.advanceTimersByTime(1000);
-			expect(saveStoryHtmlMock.mock.calls).toEqual([
-				[story, 'test-story-html-1'],
-				[story2, 'test-story-html-3'],
-				[story, 'test-story-html-2']
-			]);
-			saveStoryHtmlMock.mockClear();
-			await quitListeners[1]();
-			expect(saveStoryHtmlMock).not.toHaveBeenCalled();
+			const finishReservation = onMock.mock.calls.find(
+				call => call[0] === 'finish-legacy-story-write'
+			);
+			const sender = {id: 7, once: jest.fn()};
+			const beginEvent = {sender};
+			const preventDefault = jest.fn();
+
+			beginReservation[1](beginEvent, 'reservation-1', story.id);
+			expect(beginEvent).toEqual(expect.objectContaining({returnValue: true}));
+			beforeQuitHandler({preventDefault});
+			expect(preventDefault).toHaveBeenCalledTimes(1);
+			expect(appQuitMock).not.toHaveBeenCalled();
+
+			await saveHandler[1]({}, story, 'reserved story html');
+			finishReservation[1]({sender}, 'reservation-1');
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(saveStoryHtmlMock).toHaveBeenCalledWith(
+				story,
+				'reserved story html'
+			);
+			expect(appQuitMock).toHaveBeenCalledTimes(1);
+		});
+
+		it('keeps the app open when renderer-reserved work fails during quit', async () => {
+			const beginReservation = onMock.mock.calls.find(
+				call => call[0] === 'begin-legacy-story-write'
+			);
+			const finishReservation = onMock.mock.calls.find(
+				call => call[0] === 'finish-legacy-story-write'
+			);
+			const sender = {id: 7, once: jest.fn()};
+			const preventDefault = jest.fn();
+
+			jest.spyOn(console, 'error').mockReturnValue();
+			beginReservation[1]({sender}, 'reservation-1', story.id);
+			beforeQuitHandler({preventDefault});
+			finishReservation[1]({sender}, 'reservation-1', 'renderer save failed');
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(preventDefault).toHaveBeenCalledTimes(1);
+			expect(appQuitMock).not.toHaveBeenCalled();
+			expect(showErrorBoxMock).toHaveBeenCalledWith(
+				'electron.errors.storySave',
+				'renderer save failed'
+			);
+		});
+
+		it('treats an empty renderer error message as a failed reservation', async () => {
+			const beginReservation = onMock.mock.calls.find(
+				call => call[0] === 'begin-legacy-story-write'
+			);
+			const finishReservation = onMock.mock.calls.find(
+				call => call[0] === 'finish-legacy-story-write'
+			);
+			const sender = {id: 7, once: jest.fn()};
+
+			jest.spyOn(console, 'error').mockReturnValue();
+			beginReservation[1]({sender}, 'reservation-1', story.id);
+			beforeQuitHandler({preventDefault: jest.fn()});
+			finishReservation[1]({sender}, 'reservation-1', '');
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).not.toHaveBeenCalled();
+			expect(showErrorBoxMock).toHaveBeenCalledWith(
+				'electron.errors.storySave',
+				''
+			);
+		});
+
+		it.each([
+			[
+				'render-process-gone',
+				(listener: (...args: any[]) => void) => listener(),
+				'renderer process stopped'
+			],
+			[
+				'did-start-navigation',
+				(listener: (...args: any[]) => void) =>
+					listener({isMainFrame: true, isSameDocument: false}),
+				'renderer page was replaced'
+			]
+		])(
+			'fails renderer reservations on %s so quit cannot hang',
+			async (channel, emit, expectedMessage) => {
+				const beginReservation = onMock.mock.calls.find(
+					call => call[0] === 'begin-legacy-story-write'
+				);
+				const sender = {id: 7, on: jest.fn(), once: jest.fn()};
+
+				jest.spyOn(console, 'error').mockReturnValue();
+				beginReservation[1]({sender}, 'reservation-1', story.id);
+				beforeQuitHandler({preventDefault: jest.fn()});
+				const cleanup = sender.on.mock.calls.find(
+					call => call[0] === channel
+				)?.[1];
+
+				emit(cleanup);
+				for (let index = 0; index < 10; index++) {
+					await Promise.resolve();
+				}
+				expect(appQuitMock).not.toHaveBeenCalled();
+				expect(showErrorBoxMock).toHaveBeenCalledWith(
+					'electron.errors.storySave',
+					expect.stringContaining(expectedMessage)
+				);
+			}
+		);
+
+		it('keeps reservations across same-document renderer navigation', async () => {
+			const beginReservation = onMock.mock.calls.find(
+				call => call[0] === 'begin-legacy-story-write'
+			);
+			const finishReservation = onMock.mock.calls.find(
+				call => call[0] === 'finish-legacy-story-write'
+			);
+			const sender = {id: 7, on: jest.fn(), once: jest.fn()};
+
+			beginReservation[1]({sender}, 'reservation-1', story.id);
+			beforeQuitHandler({preventDefault: jest.fn()});
+			const navigation = sender.on.mock.calls.find(
+				call => call[0] === 'did-start-navigation'
+			)?.[1];
+
+			navigation({isMainFrame: true, isSameDocument: true});
+			for (let index = 0; index < 5; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).not.toHaveBeenCalled();
+			finishReservation[1]({sender}, 'reservation-1');
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).toHaveBeenCalledTimes(1);
+		});
+
+		it('keeps the app open and reports a flush failure', async () => {
+			const error = new Error('disk full');
+			const preventDefault = jest.fn();
+
+			jest.spyOn(console, 'error').mockReturnValue();
+			saveStoryHtmlMock.mockRejectedValueOnce(error);
+			const acknowledgement = saveHandler[1]({}, story, 'test-story-html');
+
+			beforeQuitHandler({preventDefault});
+			await expect(acknowledgement).rejects.toBe(error);
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(preventDefault).toHaveBeenCalledTimes(1);
+			expect(appQuitMock).not.toHaveBeenCalled();
+			expect(showErrorBoxMock).toHaveBeenCalledWith(
+				'electron.errors.storySave',
+				'disk full'
+			);
 		});
 	});
 });
