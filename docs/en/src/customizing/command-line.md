@@ -143,7 +143,6 @@ delete all files from the scratch folder every time you quit it, set
 
 Example: <code>&#x2011;&#x2011;scratchAssetStrategy=copy</code>
 
-This chooses how project assets are prepared for play, test, and proof output.
-`link` links suitable project folders and copies files when linking isn't
-available. `copy` always copies the planned asset files into the scratch
-folder.
+This legacy setting is retained for preference compatibility. Project assets
+for play, test, and proof are now read through the secure project boundary and
+copied into a bounded preview directory; folder linking is no longer used.

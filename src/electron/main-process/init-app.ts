@@ -1,4 +1,4 @@
-import {app, BrowserWindow, dialog, screen, shell} from 'electron';
+import {app, BrowserWindow, dialog, screen} from 'electron';
 import path from 'path';
 import {initIpc, storyWritesReadyForQuit} from './ipc';
 import {initLocales} from './locales';
@@ -23,6 +23,7 @@ import {
 	recordMainLaunchPhase
 } from './performance-harness';
 import {initStoryPreviewProtocol} from './story-preview-protocol';
+import {openExternalUrl} from './external-url';
 
 let mainWindow: BrowserWindow | null;
 
@@ -85,17 +86,22 @@ async function createWindow() {
 	mainWindow.on('closed', () => (mainWindow = null));
 
 	// Load external links in the system browser.
+	const openNavigationExternally = (url: string) => {
+		void openExternalUrl(url).catch(error => {
+			console.warn('Blocked or failed to open an external link.', error);
+		});
+	};
 
 	mainWindow.webContents.on('will-navigate', (event, url) => {
 		if (linkHandlingMode() === 'system') {
-			shell.openExternal(url);
+			openNavigationExternally(url);
 		}
 
 		event.preventDefault();
 	});
 	mainWindow.webContents.setWindowOpenHandler(({url}) => {
 		if (linkHandlingMode() === 'system') {
-			shell.openExternal(url);
+			openNavigationExternally(url);
 		}
 
 		return {action: 'deny'};

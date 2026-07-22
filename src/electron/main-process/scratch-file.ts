@@ -1,33 +1,20 @@
 import {app, shell} from 'electron';
-import {
-	copy,
-	ensureSymlink,
-	lstat,
-	mkdirp,
-	readdir,
-	remove,
-	stat,
-	writeFile
-} from 'fs-extra';
+import {randomUUID} from 'crypto';
+import {mkdir, mkdirp, readdir, remove, stat, writeFile} from 'fs-extra';
 import {dirname, join, resolve, sep} from 'path';
 import {i18n} from './locales';
 import {getAppPref} from './app-prefs';
-import {scratchAssetStrategy} from './platform-settings';
+
+export const maxScratchPreviewBytes = 50 * 1024 * 1024;
+export const maxScratchPreviewAssetBytes = 50 * 1024 * 1024;
+export const maxScratchPreviewAssetCount = 1000;
+export const maxRetainedScratchPreviews = 3;
+const scratchPreviewDirectoryPattern = /^preview-[0-9a-f-]+$/;
+let scratchPreviewQueue = Promise.resolve();
 
 export interface ScratchFileAsset {
+	bytes: ArrayBuffer | Uint8Array;
 	outputPath: string;
-	sourcePath: string | null;
-}
-
-interface PlannedScratchAsset {
-	normalizedOutputPath: string;
-	sourcePath: string;
-	targetPath: string;
-}
-
-interface ScratchAssetGroup {
-	assets: PlannedScratchAsset[];
-	outputRoot: string;
 }
 
 /**
@@ -65,7 +52,11 @@ export async function cleanScratchDirectory() {
 	const now = Date.now();
 	const scratchFiles = (
 		await readdir(scratchDirectoryPath(), {withFileTypes: true})
-	).filter(file => !file.isDirectory() && /\.html$/.test(file.name));
+	).filter(
+		file =>
+			(!file.isDirectory() && /\.html$/.test(file.name)) ||
+			(file.isDirectory() && scratchPreviewDirectoryPattern.test(file.name))
+	);
 
 	return Promise.all(
 		scratchFiles.map(async file => {
@@ -80,11 +71,21 @@ export async function cleanScratchDirectory() {
 	);
 }
 
-export async function openWithScratchFile(data: string, filename: string) {
-	const scratchPath = join(scratchDirectoryPath(), filename);
+function assertSafeScratchPreviewData(data: string) {
+	if (
+		typeof data !== 'string' ||
+		Buffer.byteLength(data, 'utf8') > maxScratchPreviewBytes
+	) {
+		throw new Error('Scratch preview exceeds the safe payload limit.');
+	}
+}
 
-	await mkdirp(scratchDirectoryPath());
-	await writeFile(scratchPath, data, 'utf8');
+async function writeUniqueScratchFile(data: string) {
+	return queueScratchPreview(() => writeScratchPreview(data, []));
+}
+
+export async function openWithScratchFile(data: string) {
+	const scratchPath = await writeUniqueScratchFile(data);
 	const openError = await shell.openPath(scratchPath);
 
 	if (openError) {
@@ -127,167 +128,99 @@ function safeScratchAssetOutputPath(outputPath: string) {
 	return segments.join('/');
 }
 
-function comparablePath(path: string) {
-	const normalized = resolve(path).replace(/\\/g, '/');
-
-	return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+function scratchAssetByteLength(asset: ScratchFileAsset) {
+	return asset.bytes instanceof ArrayBuffer
+		? asset.bytes.byteLength
+		: asset.bytes.byteLength;
 }
 
-function samePath(left: string, right: string) {
-	return comparablePath(left) === comparablePath(right);
-}
-
-function sourceRootForOutputPath(sourcePath: string, outputPath: string) {
-	const normalizedSource = resolve(sourcePath).replace(/\\/g, '/');
-	const suffix = `/${outputPath}`;
-	const comparableSource =
-		process.platform === 'win32'
-			? normalizedSource.toLowerCase()
-			: normalizedSource;
-	const comparableSuffix =
-		process.platform === 'win32' ? suffix.toLowerCase() : suffix;
-
-	if (!comparableSource.endsWith(comparableSuffix)) {
-		return null;
+function validateScratchAssets(assets: ScratchFileAsset[]) {
+	if (assets.length > maxScratchPreviewAssetCount) {
+		throw new Error('Scratch preview asset count exceeds the safe limit.');
 	}
 
-	return normalizedSource.slice(0, normalizedSource.length - suffix.length);
-}
-
-function copyableScratchAssetGroups(
-	scratchRoot: string,
-	assets: ScratchFileAsset[]
-) {
-	const groups = new Map<string, ScratchAssetGroup>();
+	let totalBytes = 0;
+	const outputPaths = new Set<string>();
 
 	for (const asset of assets) {
-		if (!asset.sourcePath) {
-			continue;
-		}
-
 		const normalizedOutputPath = safeScratchAssetOutputPath(asset.outputPath);
-		const [outputRoot] = normalizedOutputPath.split('/');
-		const group = groups.get(outputRoot) ?? {assets: [], outputRoot};
 
-		group.assets.push({
-			normalizedOutputPath,
-			sourcePath: asset.sourcePath,
-			targetPath: safeScratchAssetPath(scratchRoot, normalizedOutputPath)
-		});
-		groups.set(outputRoot, group);
-	}
-
-	return [...groups.values()];
-}
-
-function linkSourceForGroup(scratchRoot: string, group: ScratchAssetGroup) {
-	let groupSourcePath: string | undefined;
-
-	for (const asset of group.assets) {
-		const sourceRoot = sourceRootForOutputPath(
-			asset.sourcePath,
-			asset.normalizedOutputPath
-		);
-
-		if (!sourceRoot) {
-			return null;
+		if (outputPaths.has(normalizedOutputPath)) {
+			throw new Error(`Duplicate scratch asset path "${asset.outputPath}".`);
 		}
+		outputPaths.add(normalizedOutputPath);
+		totalBytes += scratchAssetByteLength(asset);
 
-		const sourcePath = resolve(sourceRoot, group.outputRoot);
-
-		if (
-			samePath(sourcePath, safeScratchAssetPath(scratchRoot, group.outputRoot))
-		) {
-			return null;
+		if (totalBytes > maxScratchPreviewAssetBytes) {
+			throw new Error('Scratch preview assets exceed the safe byte limit.');
 		}
-
-		if (groupSourcePath && !samePath(groupSourcePath, sourcePath)) {
-			return null;
-		}
-
-		groupSourcePath = sourcePath;
-	}
-
-	return groupSourcePath ?? null;
-}
-
-async function removeScratchAssetLinkIfPresent(targetPath: string) {
-	const stats = await Promise.resolve(lstat(targetPath)).catch(() => null);
-
-	if (stats?.isSymbolicLink?.()) {
-		await remove(targetPath);
 	}
 }
 
-async function copyScratchAssetGroup(
-	scratchRoot: string,
-	group: ScratchAssetGroup
-) {
-	await removeScratchAssetLinkIfPresent(
-		safeScratchAssetPath(scratchRoot, group.outputRoot)
+async function pruneScratchPreviews(scratchRoot: string) {
+	const entries = await Promise.resolve(
+		readdir(scratchRoot, {withFileTypes: true})
+	).catch(() => []);
+	const previews = (entries ?? []).filter(
+		entry =>
+			entry.isDirectory() && scratchPreviewDirectoryPattern.test(entry.name)
+	);
+	const dated = await Promise.all(
+		previews.map(async entry => ({
+			mtimeMs: (await stat(join(scratchRoot, entry.name))).mtimeMs,
+			path: join(scratchRoot, entry.name)
+		}))
 	);
 
-	for (const asset of group.assets) {
-		await mkdirp(dirname(asset.targetPath));
-		await copy(asset.sourcePath, asset.targetPath);
+	dated.sort((left, right) => left.mtimeMs - right.mtimeMs);
+	for (const preview of dated.slice(
+		0,
+		Math.max(0, dated.length - maxRetainedScratchPreviews + 1)
+	)) {
+		await remove(preview.path);
 	}
 }
 
-async function linkScratchAssetGroup(
-	scratchRoot: string,
-	group: ScratchAssetGroup,
-	sourcePath: string
-) {
-	const targetPath = safeScratchAssetPath(scratchRoot, group.outputRoot);
+async function writeScratchPreview(data: string, assets: ScratchFileAsset[]) {
+	assertSafeScratchPreviewData(data);
+	validateScratchAssets(assets);
+	const scratchRoot = scratchDirectoryPath();
 
-	await remove(targetPath);
-	await mkdirp(dirname(targetPath));
-	await ensureSymlink(
-		sourcePath,
-		targetPath,
-		process.platform === 'win32' ? 'junction' : 'dir'
+	await mkdirp(scratchRoot);
+	await pruneScratchPreviews(scratchRoot);
+	const previewRoot = join(scratchRoot, `preview-${randomUUID()}`);
+
+	// A new exclusive directory prevents stale links from becoming write targets.
+	await mkdir(previewRoot);
+	for (const asset of assets) {
+		const targetPath = safeScratchAssetPath(previewRoot, asset.outputPath);
+
+		await mkdirp(dirname(targetPath));
+		await writeFile(targetPath, new Uint8Array(asset.bytes), {flag: 'wx'});
+	}
+	const scratchPath = join(previewRoot, 'index.html');
+
+	await writeFile(scratchPath, data, {encoding: 'utf8', flag: 'wx'});
+	return scratchPath;
+}
+
+function queueScratchPreview<T>(operation: () => Promise<T>) {
+	const result = scratchPreviewQueue.then(operation, operation);
+
+	scratchPreviewQueue = result.then(
+		() => undefined,
+		() => undefined
 	);
-}
-
-async function prepareScratchAssets(
-	scratchRoot: string,
-	assets: ScratchFileAsset[]
-) {
-	const groups = copyableScratchAssetGroups(scratchRoot, assets);
-	const useFolderLinks = scratchAssetStrategy() === 'link';
-
-	for (const group of groups) {
-		const sourcePath = useFolderLinks
-			? linkSourceForGroup(scratchRoot, group)
-			: null;
-
-		if (sourcePath) {
-			try {
-				await linkScratchAssetGroup(scratchRoot, group, sourcePath);
-				continue;
-			} catch (error) {
-				console.warn(
-					`Unable to link scratch asset folder "${group.outputRoot}", copying assets instead.`,
-					error
-				);
-			}
-		}
-
-		await copyScratchAssetGroup(scratchRoot, group);
-	}
+	return result;
 }
 
 export async function openWithScratchPackage(
 	data: string,
-	filename: string,
 	assets: ScratchFileAsset[] = []
 ) {
-	const scratchRoot = scratchDirectoryPath();
-	const scratchPath = join(scratchRoot, filename);
-
-	await mkdirp(scratchRoot);
-	await prepareScratchAssets(scratchRoot, assets);
-	await writeFile(scratchPath, data, 'utf8');
+	const scratchPath = await queueScratchPreview(() =>
+		writeScratchPreview(data, assets)
+	);
 	const openError = await shell.openPath(scratchPath);
 
 	if (openError) {

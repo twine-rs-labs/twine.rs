@@ -32,7 +32,12 @@ import {
 	releaseStoryPreview
 } from './story-preview-protocol';
 import {loadPrefs} from './prefs';
-import {openWithScratchFile, openWithScratchPackage} from './scratch-file';
+import {
+	maxScratchPreviewAssetBytes,
+	maxScratchPreviewAssetCount,
+	openWithScratchFile,
+	openWithScratchPackage
+} from './scratch-file';
 import {Story, StoryWithDocuments} from '../../store/stories/stories.types';
 import {
 	backupStoryDirectory,
@@ -65,6 +70,7 @@ import {
 	openProjectFolder,
 	prepareProjectImport,
 	projectSessionAssetReadBaselines,
+	projectSessionScratchAssets,
 	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
 	readProjectFolderHydrationChunk,
@@ -79,7 +85,8 @@ import {
 import {
 	nativeHydrationMemoryDiagnostics,
 	nativeProjectAssetEmbeddingAvailable,
-	readNativeProjectAssetPayloads
+	readNativeProjectAssetPayloads,
+	readNativeProjectPreviewAssetPayloads
 } from './native';
 import type {
 	NativeCommandLineOpenResult,
@@ -96,6 +103,38 @@ import {
 
 const ipcMain = trustedIpcRegistrar(electronIpcMain);
 let quitAfterStoryWriteFlush = false;
+const maxScratchAssetPathBytes = 4096;
+
+function validateScratchAssetRequests(value: unknown) {
+	if (!Array.isArray(value) || value.length > maxScratchPreviewAssetCount) {
+		throw new Error('Scratch preview asset request exceeds the safe limit.');
+	}
+
+	const assets: Array<{outputPath: string; path: string}> = [];
+
+	for (const asset of value) {
+		if (
+			!asset ||
+			typeof asset !== 'object' ||
+			typeof (asset as {outputPath?: unknown}).outputPath !== 'string' ||
+			typeof (asset as {path?: unknown}).path !== 'string'
+		) {
+			throw new Error('Scratch preview asset request is invalid.');
+		}
+		const {outputPath, path} = asset as {outputPath: string; path: string};
+
+		if (
+			[outputPath, path].some(
+				value => Buffer.byteLength(value, 'utf8') > maxScratchAssetPathBytes
+			)
+		) {
+			throw new Error('Scratch preview asset path exceeds the safe limit.');
+		}
+		assets.push({outputPath, path});
+	}
+
+	return assets;
+}
 
 export function storyWritesReadyForQuit() {
 	return quitAfterStoryWriteFlush;
@@ -802,16 +841,62 @@ export function initIpc() {
 
 	ipcMain.handle('add-local-story-format', async () => addLocalStoryFormat());
 
-	ipcMain.handle(
-		'open-with-scratch-file',
-		(_event, data: string, filename: string) =>
-			openWithScratchFile(data, filename)
+	ipcMain.handle('open-with-scratch-file', (_event, data: string) =>
+		openWithScratchFile(data)
 	);
 
 	ipcMain.handle(
 		'open-with-scratch-package',
-		(_event, data: string, filename: string, assets = []) =>
-			openWithScratchPackage(data, filename, assets)
+		async (event, data: string, capability: string | undefined, value = []) => {
+			const assets = validateScratchAssetRequests(value);
+
+			if (assets.length === 0) {
+				return openWithScratchPackage(data);
+			}
+			if (!capability) {
+				throw new Error(
+					'Project access is required to copy assets into a scratch preview.'
+				);
+			}
+
+			const rootPath = resolveProjectCapability(event, capability);
+			const trustedAssets = projectSessionScratchAssets(rootPath, assets);
+			const uniquePaths = [...new Set(trustedAssets.map(asset => asset.path))];
+			const payloadBatch = await readNativeProjectPreviewAssetPayloads(
+				rootPath,
+				projectSessionAssetReadBaselines(rootPath, uniquePaths),
+				{
+					maxFileBytes: maxScratchPreviewAssetBytes,
+					maxFileCount: maxScratchPreviewAssetCount,
+					maxTotalEncodedBytes: maxScratchPreviewAssetBytes
+				}
+			);
+
+			if (payloadBatch.failures.length > 0) {
+				throw new Error(
+					`Scratch preview assets could not be read safely: ${payloadBatch.failures
+						.map(failure => `${failure.path}: ${failure.message}`)
+						.join('; ')}`
+				);
+			}
+			const payloads = new Map(
+				payloadBatch.payloads.map(payload => [payload.path, payload] as const)
+			);
+
+			return openWithScratchPackage(
+				data,
+				trustedAssets.map(asset => {
+					const payload = payloads.get(asset.path);
+
+					if (!payload) {
+						throw new Error(
+							`Scratch preview asset "${asset.path}" was not returned by the safe reader.`
+						);
+					}
+					return {bytes: payload.bytes, outputPath: asset.outputPath};
+				})
+			);
+		}
 	);
 
 	ipcMain.on('reveal-path', (_event, path: string) => {

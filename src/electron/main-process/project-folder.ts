@@ -6763,7 +6763,11 @@ export function projectSessionAssetReadBaselines(
 		throw new Error('Project assets cannot be read before indexing completes.');
 	}
 
-	const baselineFileIndex = session.baselineFileIndex;
+	const baselineFileIndex =
+		session.baselineFileIndex ??
+		new Map(
+			session.baseline.files.map((file, index) => [file.path, index] as const)
+		);
 
 	return paths.map(path => {
 		const normalizedPath = normalizedAssetPath(path);
@@ -6788,6 +6792,41 @@ export function projectSessionAssetReadBaselines(
 					path
 				}
 			: {expectedExists: false, path};
+	});
+}
+
+export function projectSessionScratchAssets(
+	rootPath: string,
+	assets: Array<{outputPath: string; path: string}>
+) {
+	const session = projectSessions.get(projectSessionKey(rootPath));
+
+	if (!session?.baseline) {
+		throw new Error(
+			'Project assets cannot be previewed before indexing completes.'
+		);
+	}
+
+	const baselineFileIndex =
+		session.baselineFileIndex ??
+		new Map(
+			session.baseline.files.map((file, index) => [file.path, index] as const)
+		);
+
+	return assets.map(asset => {
+		const normalizedPath = localAssetReferencePath(asset.path);
+		const indexedPosition = normalizedPath
+			? baselineFileIndex?.get(normalizedPath)
+			: undefined;
+		const indexed =
+			indexedPosition === undefined
+				? undefined
+				: session.baseline?.files[indexedPosition];
+		if (indexed?.kind !== 'asset') {
+			throw new Error(`Project asset "${asset.path}" is not indexed.`);
+		}
+
+		return {outputPath: asset.outputPath, path: indexed.path};
 	});
 }
 

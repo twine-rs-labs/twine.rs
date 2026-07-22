@@ -17,7 +17,11 @@ describe('useStoryLaunch', () => {
 	beforeEach(() => {
 		window.localStorage.clear();
 		const assets = [
-			{outputPath: 'assets/cover.png', sourcePath: '/tmp/cover.png'}
+			{
+				outputPath: 'assets/cover.png',
+				path: 'assets/cover.png',
+				sourcePath: '/tmp/cover.png'
+			}
 		];
 		proofStoryPackageMock = jest.fn((storyId: string) =>
 			Promise.resolve({
@@ -101,8 +105,8 @@ describe('useStoryLaunch', () => {
 			expect(openWithScratchPackage.mock.calls).toEqual([
 				[
 					'mock-published-story-mock-story-id-{"buildTarget":"play"}',
-					'play-mock-story-id.html',
-					[{outputPath: 'assets/cover.png', sourcePath: '/tmp/cover.png'}]
+					undefined,
+					[]
 				]
 			]);
 		});
@@ -144,6 +148,16 @@ describe('useStoryLaunch', () => {
 				assetInventory: inventory,
 				buildTarget: 'play'
 			});
+			expect(openWithScratchPackage).toHaveBeenCalledWith(
+				expect.any(String),
+				'/native/project',
+				[
+					{
+						outputPath: 'assets/cover.png',
+						path: 'assets/cover.png'
+					}
+				]
+			);
 		});
 
 		it('throws an error when playing a story if the twineElectron global is not present', () => {
@@ -160,11 +174,7 @@ describe('useStoryLaunch', () => {
 			expect(openWithScratchPackage).not.toHaveBeenCalled();
 			await result.current.proofStory('mock-story-id');
 			expect(openWithScratchPackage.mock.calls).toEqual([
-				[
-					'mock-proofed-story-mock-story-id',
-					'proof-mock-story-id.html',
-					[{outputPath: 'assets/cover.png', sourcePath: '/tmp/cover.png'}]
-				]
+				['mock-proofed-story-mock-story-id', undefined, []]
 			]);
 		});
 
@@ -184,8 +194,8 @@ describe('useStoryLaunch', () => {
 			expect(openWithScratchPackage.mock.calls).toEqual([
 				[
 					'mock-published-story-mock-story-id-{"buildTarget":"test","formatOptions":"debug"}',
-					'test-mock-story-id.html',
-					[{outputPath: 'assets/cover.png', sourcePath: '/tmp/cover.png'}]
+					undefined,
+					[]
 				]
 			]);
 		});

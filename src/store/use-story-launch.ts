@@ -18,6 +18,17 @@ export interface UseStoryLaunchProps {
 
 type TwineElectronBridge = NonNullable<TwineElectronWindow['twineElectron']>;
 
+function scratchAssetRequests(
+	projectRoot: string | undefined,
+	assets: Array<{outputPath: string; path: string; sourcePath: string | null}>
+) {
+	return projectRoot
+		? assets
+				.filter(asset => asset.sourcePath !== null)
+				.map(({outputPath, path}) => ({outputPath, path}))
+		: [];
+}
+
 async function refreshedProjectAssets(
 	storyId: string,
 	twineElectron: TwineElectronBridge
@@ -28,7 +39,7 @@ async function refreshedProjectAssets(
 		!projectRoot ||
 		(!twineElectron.projectSessionSnapshot && !twineElectron.listProjectAssets)
 	) {
-		return undefined;
+		return {assetInventory: undefined, projectRoot: undefined};
 	}
 
 	let inventory: CoreAssetInventoryEntry[];
@@ -42,11 +53,11 @@ async function refreshedProjectAssets(
 			snapshot?.assets ?? (await twineElectron.listProjectAssets(projectRoot));
 	} catch (error) {
 		console.warn('Unable to refresh project assets before preview.', error);
-		return undefined;
+		return {assetInventory: undefined, projectRoot: undefined};
 	}
 
 	replaceKnownAssetInventoryForStory(storyId, inventory);
-	return inventory;
+	return {assetInventory: inventory, projectRoot};
 }
 
 /**
@@ -67,7 +78,7 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 		// These are async to match the type in the browser context.
 		return {
 			playStory: async storyId => {
-				const assetInventory = await refreshedProjectAssets(
+				const {assetInventory, projectRoot} = await refreshedProjectAssets(
 					storyId,
 					twineElectronBridge
 				);
@@ -78,12 +89,12 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 
 				await twineElectronBridge.openWithScratchPackage(
 					build.html,
-					`play-${storyId}.html`,
-					build.assets
+					projectRoot,
+					scratchAssetRequests(projectRoot, build.assets)
 				);
 			},
 			proofStory: async (storyId, proofingFormat) => {
-				const assetInventory = await refreshedProjectAssets(
+				const {assetInventory, projectRoot} = await refreshedProjectAssets(
 					storyId,
 					twineElectronBridge
 				);
@@ -94,12 +105,12 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 
 				await twineElectronBridge.openWithScratchPackage(
 					build.html,
-					`proof-${storyId}.html`,
-					build.assets
+					projectRoot,
+					scratchAssetRequests(projectRoot, build.assets)
 				);
 			},
 			testStory: async (storyId, startPassageId) => {
-				const assetInventory = await refreshedProjectAssets(
+				const {assetInventory, projectRoot} = await refreshedProjectAssets(
 					storyId,
 					twineElectronBridge
 				);
@@ -114,8 +125,8 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 
 				await twineElectronBridge.openWithScratchPackage(
 					build.html,
-					`test-${storyId}.html`,
-					build.assets
+					projectRoot,
+					scratchAssetRequests(projectRoot, build.assets)
 				);
 			}
 		};

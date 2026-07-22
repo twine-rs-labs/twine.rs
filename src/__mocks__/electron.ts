@@ -15,7 +15,10 @@ export const app = {
 };
 
 export class BrowserWindow {
+	static instances: BrowserWindow[] = [];
+
 	constructor() {
+		BrowserWindow.instances.push(this);
 		(this as any).webContents = {
 			on: jest.fn(),
 			setWindowOpenHandler: jest.fn()

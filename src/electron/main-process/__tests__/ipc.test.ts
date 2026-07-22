@@ -38,6 +38,7 @@ import {
 	openProjectFolder,
 	prepareProjectImport,
 	projectSessionAssetReadBaselines,
+	projectSessionScratchAssets,
 	projectSessionSnapshot,
 	renameProjectAsset,
 	replaceProjectAsset,
@@ -48,7 +49,8 @@ import {
 } from '../project-folder';
 import {
 	nativeProjectAssetEmbeddingAvailable,
-	readNativeProjectAssetPayloads
+	readNativeProjectAssetPayloads,
+	readNativeProjectPreviewAssetPayloads
 } from '../native';
 import {
 	grantProjectCapability,
@@ -92,6 +94,8 @@ describe('initIpc()', () => {
 	const projectSessionSnapshotMock = projectSessionSnapshot as jest.Mock;
 	const projectSessionAssetReadBaselinesMock =
 		projectSessionAssetReadBaselines as jest.Mock;
+	const projectSessionScratchAssetsMock =
+		projectSessionScratchAssets as jest.Mock;
 	const renameProjectAssetMock = renameProjectAsset as jest.Mock;
 	const replaceProjectAssetMock = replaceProjectAsset as jest.Mock;
 	const resolveProjectSessionConflictsMock =
@@ -120,6 +124,8 @@ describe('initIpc()', () => {
 		nativeProjectAssetEmbeddingAvailable as jest.Mock;
 	const readNativeProjectAssetPayloadsMock =
 		readNativeProjectAssetPayloads as jest.Mock;
+	const readNativeProjectPreviewAssetPayloadsMock =
+		readNativeProjectPreviewAssetPayloads as jest.Mock;
 
 	beforeEach(() => {
 		clipboardWriteTextMock.mockClear();
@@ -655,16 +661,41 @@ describe('initIpc()', () => {
 		const handler = handleMock.mock.calls.find(
 			call => call[0] === 'open-with-scratch-package'
 		);
-		const assets = [
-			{outputPath: 'assets/cover.png', sourcePath: '/tmp/cover.png'}
+		const assets = [{outputPath: 'assets/cover.png', path: 'assets/cover.png'}];
+		const trustedAssets = [
+			{outputPath: 'assets/cover.png', path: 'assets/cover.png'}
 		];
+		const baseline = {
+			expectedExists: true,
+			expectedModifiedAtMs: 1,
+			expectedSizeBytes: 3,
+			path: 'assets/cover.png'
+		};
+		const bytes = new Uint8Array([1, 2, 3]);
+
+		projectSessionScratchAssetsMock.mockReturnValueOnce(trustedAssets);
+		projectSessionAssetReadBaselinesMock.mockReturnValueOnce([baseline]);
+		readNativeProjectPreviewAssetPayloadsMock.mockResolvedValueOnce({
+			failures: [],
+			payloads: [{bytes, path: 'assets/cover.png', sizeBytes: 3}],
+			totalEncodedBytes: 4,
+			totalSourceBytes: 3
+		});
 
 		expect(handler).not.toBeUndefined();
-		await handler[1]({}, 'test-file-contents', 'test-filename', assets);
+		await handler[1]({}, 'test-file-contents', '/mock/project', assets);
+		expect(projectSessionScratchAssetsMock).toHaveBeenCalledWith(
+			'/mock/project',
+			assets
+		);
+		expect(readNativeProjectPreviewAssetPayloadsMock).toHaveBeenCalledWith(
+			'/mock/project',
+			[baseline],
+			expect.objectContaining({maxFileCount: 1000})
+		);
 		expect(openWithScratchPackageMock).toHaveBeenCalledWith(
 			'test-file-contents',
-			'test-filename',
-			assets
+			[{bytes, outputPath: 'assets/cover.png'}]
 		);
 	});
 
@@ -676,8 +707,84 @@ describe('initIpc()', () => {
 
 		openWithScratchPackageMock.mockRejectedValueOnce(error);
 		await expect(
-			handler[1]({}, 'test-file-contents', 'test-filename', [])
+			handler[1]({}, 'test-file-contents', undefined, [])
 		).rejects.toBe(error);
+	});
+
+	it('rejects scratch packages when the no-follow asset reader reports a failure', async () => {
+		const handler = handleMock.mock.calls.find(
+			call => call[0] === 'open-with-scratch-package'
+		);
+		const assets = [{outputPath: 'assets/cover.png', path: 'assets/cover.png'}];
+
+		projectSessionScratchAssetsMock.mockReturnValueOnce(assets);
+		projectSessionAssetReadBaselinesMock.mockReturnValueOnce([
+			{expectedExists: true, path: 'assets/cover.png'}
+		]);
+		readNativeProjectPreviewAssetPayloadsMock.mockResolvedValueOnce({
+			failures: [
+				{
+					message: 'Asset could not be opened without following links.',
+					path: 'assets/cover.png',
+					reason: 'symlink-escape'
+				}
+			],
+			payloads: [],
+			totalEncodedBytes: 0,
+			totalSourceBytes: 0
+		});
+
+		await expect(
+			handler[1]({}, 'test-file-contents', '/mock/project', assets)
+		).rejects.toThrow('could not be read safely');
+		expect(openWithScratchPackageMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects scratch-package asset copies without a project capability', async () => {
+		const handler = handleMock.mock.calls.find(
+			call => call[0] === 'open-with-scratch-package'
+		);
+
+		await expect(
+			handler[1]({}, 'test-file-contents', undefined, [
+				{outputPath: 'assets/cover.png', path: 'assets/cover.png'}
+			])
+		).rejects.toThrow('Project access is required');
+		expect(projectSessionScratchAssetsMock).not.toHaveBeenCalled();
+		expect(openWithScratchPackageMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects scratch-package asset source paths from the renderer', async () => {
+		const handler = handleMock.mock.calls.find(
+			call => call[0] === 'open-with-scratch-package'
+		);
+
+		await expect(
+			handler[1]({}, 'test-file-contents', '/mock/project', [
+				{
+					outputPath: 'assets/cover.png',
+					sourcePath: '/tmp/cover.png'
+				}
+			])
+		).rejects.toThrow('asset request is invalid');
+		expect(projectSessionScratchAssetsMock).not.toHaveBeenCalled();
+		expect(openWithScratchPackageMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects excessive scratch-package asset descriptors', async () => {
+		const handler = handleMock.mock.calls.find(
+			call => call[0] === 'open-with-scratch-package'
+		);
+		const assets = Array.from({length: 1001}, (_, index) => ({
+			outputPath: `assets/${index}.png`,
+			path: `assets/${index}.png`
+		}));
+
+		await expect(
+			handler[1]({}, 'test-file-contents', '/mock/project', assets)
+		).rejects.toThrow('exceeds the safe limit');
+		expect(projectSessionScratchAssetsMock).not.toHaveBeenCalled();
+		expect(openWithScratchPackageMock).not.toHaveBeenCalled();
 	});
 
 	describe('the handler it adds for load-prefs events', () => {
@@ -793,11 +900,8 @@ describe('initIpc()', () => {
 		);
 
 		expect(handler).not.toBeUndefined();
-		await handler[1]({}, 'test-file-contents', 'test-filename');
-		expect(openWithScratchFileMock).toHaveBeenCalledWith(
-			'test-file-contents',
-			'test-filename'
-		);
+		await handler[1]({}, 'test-file-contents');
+		expect(openWithScratchFileMock).toHaveBeenCalledWith('test-file-contents');
 	});
 
 	describe('the handler it adds for rename-story events', () => {

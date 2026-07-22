@@ -1,4 +1,4 @@
-import {app, BrowserWindow, dialog} from 'electron';
+import {app, BrowserWindow, dialog, shell} from 'electron';
 import {initApp} from '../init-app';
 import {initIpc, storyWritesReadyForQuit} from '../ipc';
 import {initLocales} from '../locales';
@@ -28,6 +28,7 @@ describe('initApp', () => {
 	const createStoryDirectoryMock = createStoryDirectory as jest.Mock;
 	const onMock = app.on as jest.Mock;
 	const quitMock = app.quit as jest.Mock;
+	const openExternalMock = shell.openExternal as jest.Mock;
 	const showErrorBoxMock = dialog.showErrorBox as jest.Mock;
 	const storyWritesReadyForQuitMock = storyWritesReadyForQuit as jest.Mock;
 
@@ -102,6 +103,35 @@ describe('initApp', () => {
 		closeListener(readyEvent);
 		expect(readyEvent.preventDefault).not.toHaveBeenCalled();
 		expect(quitMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('opens only safe external navigation in the system browser', async () => {
+		jest.spyOn(console, 'warn').mockReturnValue();
+		await initApp();
+		const window = (
+			BrowserWindow as unknown as {instances: BrowserWindow[]}
+		).instances.at(-1) as BrowserWindow & {
+			webContents: {
+				on: jest.Mock;
+				setWindowOpenHandler: jest.Mock;
+			};
+		};
+		const willNavigate = window.webContents.on.mock.calls.find(
+			([event]) => event === 'will-navigate'
+		)?.[1];
+		const openWindow = window.webContents.setWindowOpenHandler.mock.calls[0][0];
+		const blockedEvent = {preventDefault: jest.fn()};
+		const allowedEvent = {preventDefault: jest.fn()};
+
+		willNavigate(blockedEvent, 'file:///tmp/story.html');
+		openWindow({url: 'custom-handler://open'});
+		willNavigate(allowedEvent, 'https://example.com/help');
+		await Promise.resolve();
+
+		expect(blockedEvent.preventDefault).toHaveBeenCalledTimes(1);
+		expect(allowedEvent.preventDefault).toHaveBeenCalledTimes(1);
+		expect(openExternalMock).toHaveBeenCalledTimes(1);
+		expect(openExternalMock).toHaveBeenCalledWith('https://example.com/help');
 	});
 
 	it.todo('creates the main window');

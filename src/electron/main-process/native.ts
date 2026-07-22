@@ -79,6 +79,15 @@ interface NativeProjectAddon {
 		maxFileCount: number,
 		maxTotalEncodedBytes: number
 	): Promise<NativeAddonProjectAssetPayloadBatch>;
+	readProjectPreviewAssetPayloads?(
+		rootPath: string,
+		requests: Array<
+			NativeProjectAssetReadBaseline & {enforceBaseline: boolean}
+		>,
+		maxFileBytes: number,
+		maxFileCount: number,
+		maxTotalEncodedBytes: number
+	): Promise<NativeAddonProjectAssetPayloadBatch>;
 	captureProjectAssetDigests?(
 		rootPath: string,
 		requests: NativeProjectAssetDigestRequest[],
@@ -408,6 +417,38 @@ export async function readNativeProjectAssetPayloads(
 		throw new Error(
 			'The native referenced-media embedding reader is unavailable.'
 		);
+	}
+	return enqueueNativeAssetRead(async () => {
+		const result = await reader(
+			rootPath,
+			baselines.map(baseline => ({...baseline, enforceBaseline: true})),
+			limits.maxFileBytes,
+			limits.maxFileCount,
+			limits.maxTotalEncodedBytes
+		);
+
+		return {
+			...result,
+			payloads: result.payloads.map(payload => ({
+				bytes: payload.bytes,
+				encodedSizeBytes: payload.encodedSizeBytes,
+				mediaType: payload.mediaType,
+				path: payload.path,
+				sizeBytes: payload.sizeBytes
+			}))
+		} satisfies NativeProjectAssetPayloadBatch;
+	});
+}
+
+export async function readNativeProjectPreviewAssetPayloads(
+	rootPath: string,
+	baselines: NativeProjectAssetReadBaseline[],
+	limits: NativeProjectAssetPayloadLimits
+) {
+	const reader = loadAddon()?.readProjectPreviewAssetPayloads;
+
+	if (!reader) {
+		throw new Error('The native scratch-preview asset reader is unavailable.');
 	}
 	return enqueueNativeAssetRead(async () => {
 		const result = await reader(

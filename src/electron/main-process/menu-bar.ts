@@ -1,10 +1,4 @@
-import {
-	app,
-	BrowserWindow,
-	Menu,
-	shell,
-	MenuItemConstructorOptions
-} from 'electron';
+import {app, BrowserWindow, Menu, MenuItemConstructorOptions} from 'electron';
 import {
 	chooseStoryDirectoryPath,
 	revealStoryDirectory,
@@ -14,6 +8,7 @@ import {i18n} from './locales';
 import {checkForUpdate} from './check-for-update';
 import {toggleHardwareAcceleration} from './hardware-acceleration';
 import {getAppPref} from './app-prefs';
+import {openExternalUrl} from './external-url';
 
 export function initMenuBar() {
 	const template: MenuItemConstructorOptions[] = [
@@ -73,7 +68,11 @@ export function initMenuBar() {
 			submenu: [
 				{
 					label: i18n.t('electron.menuBar.twineHelp'),
-					click: () => shell.openExternal('https://twinery.org/2guide')
+					click: () => {
+						void openExternalUrl('https://twinery.org/2guide').catch(error => {
+							console.warn('Failed to open Twine Help.', error);
+						});
+					}
 				},
 				{type: 'separator'},
 				{

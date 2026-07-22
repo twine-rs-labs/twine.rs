@@ -127,8 +127,8 @@ const cacheCleanupOptions = [
 ];
 
 const scratchAssetStrategyOptions = [
-	{label: 'Link folders, copy fallback', value: 'link'},
-	{label: 'Copy asset files', value: 'copy'}
+	{label: 'Secure copy (legacy preference)', value: 'link'},
+	{label: 'Secure copy', value: 'copy'}
 ];
 
 const sharingModeOptions = [

@@ -1,7 +1,8 @@
-import {dialog, shell} from 'electron';
+import {dialog} from 'electron';
 import {version as appVersion} from '../../../package.json';
 import {gt} from 'semver';
 import {i18n} from './locales';
+import {openExternalUrl} from './external-url';
 
 const updateUrlEnvVar = 'TWINE_RS_UPDATE_URL';
 
@@ -55,7 +56,7 @@ export async function checkForUpdate() {
 			});
 
 			if (response === 0) {
-				shell.openExternal(url);
+				await openExternalUrl(url);
 			}
 		} else {
 			dialog.showMessageBox({

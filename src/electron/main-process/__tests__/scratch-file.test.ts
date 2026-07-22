@@ -1,15 +1,9 @@
-import {
-	copy,
-	ensureSymlink,
-	lstat,
-	mkdirp,
-	readdir,
-	remove,
-	stat,
-	writeFile
-} from 'fs-extra';
+import {mkdirp, readdir, remove, stat, writeFile} from 'fs-extra';
 import {
 	cleanScratchDirectory,
+	maxRetainedScratchPreviews,
+	maxScratchPreviewAssetBytes,
+	maxScratchPreviewBytes,
 	openWithScratchFile,
 	openWithScratchPackage,
 	scratchDirectoryPath
@@ -315,7 +309,7 @@ describe('openWithScratchFile', () => {
 	beforeEach(() => openMock.mockResolvedValue(''));
 
 	it("creates the scratch directory if it doesn't already exist", async () => {
-		await openWithScratchFile('mock-data', 'mock-filename');
+		await openWithScratchFile('mock-data');
 		expect(mkdirpMock.mock.calls).toEqual([[scratchDirectoryPath()]]);
 	});
 
@@ -323,24 +317,22 @@ describe('openWithScratchFile', () => {
 		const error = new Error();
 
 		mkdirpMock.mockRejectedValue(error);
-		await expect(() =>
-			openWithScratchFile('mock-data', 'mock-filename')
-		).rejects.toBe(error);
+		await expect(() => openWithScratchFile('mock-data')).rejects.toBe(error);
 	});
 
-	it('resolves after writing a file in the scratch directory', async () => {
-		await openWithScratchFile('mock-data', 'mock-filename');
-		expect(writeFileMock.mock.calls).toEqual([
-			[
-				'mock-electron-app-path-documents/mock-electron-app-name/electron.scratchDirectoryName/mock-filename',
-				'mock-data',
-				'utf8'
-			]
-		]);
+	it('creates an unpredictable HTML file exclusively in the scratch directory', async () => {
+		await openWithScratchFile('mock-data');
+		expect(writeFileMock).toHaveBeenCalledWith(
+			expect.stringMatching(
+				/mock-electron-app-path-documents\/mock-electron-app-name\/electron\.scratchDirectoryName\/preview-[0-9a-f-]+\/index\.html$/
+			),
+			'mock-data',
+			{encoding: 'utf8', flag: 'wx'}
+		);
 	});
 
 	it('opens the file once written to', async () => {
-		await openWithScratchFile('mock-data', 'mock-filename');
+		await openWithScratchFile('mock-data');
 		expect(openMock).toHaveBeenCalledTimes(1);
 		expect(openMock.mock.calls[0]).toEqual([writeFileMock.mock.calls[0][0]]);
 	});
@@ -348,172 +340,111 @@ describe('openWithScratchFile', () => {
 	it('rejects if the operating system cannot open the file', async () => {
 		openMock.mockResolvedValueOnce('No application can open this file.');
 
-		await expect(
-			openWithScratchFile('mock-data', 'mock-filename')
-		).rejects.toThrow('No application can open this file.');
+		await expect(openWithScratchFile('mock-data')).rejects.toThrow(
+			'No application can open this file.'
+		);
+	});
+
+	it('rejects oversized preview data before writing it', async () => {
+		const byteLengthSpy = jest
+			.spyOn(Buffer, 'byteLength')
+			.mockReturnValue(maxScratchPreviewBytes + 1);
+
+		try {
+			await expect(openWithScratchFile('oversized')).rejects.toThrow(
+				'safe payload limit'
+			);
+		} finally {
+			byteLengthSpy.mockRestore();
+		}
+		expect(writeFileMock).not.toHaveBeenCalled();
 	});
 });
 
 describe('openWithScratchPackage', () => {
-	const copyMock = copy as jest.Mock;
-	const ensureSymlinkMock = ensureSymlink as jest.Mock;
-	const getAppPrefMock = getAppPref as jest.Mock;
-	const lstatMock = lstat as jest.Mock;
 	const mkdirpMock = mkdirp as jest.Mock;
 	const openMock = shell.openPath as jest.Mock;
+	const readdirMock = readdir as jest.Mock;
 	const removeMock = remove as jest.Mock;
+	const statMock = stat as jest.Mock;
 	const writeFileMock = writeFile as jest.Mock;
 
-	beforeEach(() => openMock.mockResolvedValue(''));
+	beforeEach(() => {
+		openMock.mockResolvedValue('');
+		readdirMock.mockResolvedValue([]);
+	});
 
-	it('links project asset folders into the scratch directory before opening the HTML', async () => {
-		await openWithScratchPackage('mock-data', 'mock-filename.html', [
-			{
-				outputPath: 'assets/cover.png',
-				sourcePath: '/mock/project/assets/cover.png'
-			},
-			{
-				outputPath: 'assets/images/title.png',
-				sourcePath: '/mock/project/assets/images/title.png'
-			},
-			{outputPath: 'assets/remote.png', sourcePath: null}
+	it('writes bounded asset bytes into an isolated preview directory', async () => {
+		await openWithScratchPackage('mock-data', [
+			{bytes: new Uint8Array([1, 2, 3]), outputPath: 'assets/cover.png'}
 		]);
 
-		expect(removeMock.mock.calls).toContainEqual([
-			expect.stringMatching(
-				/mock-electron-app-path-documents\/mock-electron-app-name\/electron\.scratchDirectoryName\/assets$/
-			)
-		]);
-		expect(ensureSymlinkMock.mock.calls).toEqual([
-			[
-				'/mock/project/assets',
-				expect.stringMatching(
-					/mock-electron-app-path-documents\/mock-electron-app-name\/electron\.scratchDirectoryName\/assets$/
-				),
-				expect.any(String)
-			]
-		]);
-		expect(copyMock).not.toHaveBeenCalled();
+		expect(mkdirpMock).toHaveBeenCalledWith(
+			expect.stringMatching(/\/preview-[0-9a-f-]+\/assets$/)
+		);
 		expect(writeFileMock).toHaveBeenCalledWith(
-			'mock-electron-app-path-documents/mock-electron-app-name/electron.scratchDirectoryName/mock-filename.html',
-			'mock-data',
-			'utf8'
+			expect.stringMatching(/\/preview-[0-9a-f-]+\/assets\/cover\.png$/),
+			new Uint8Array([1, 2, 3]),
+			{flag: 'wx'}
 		);
-		expect(openMock.mock.calls[0]).toEqual([writeFileMock.mock.calls[0][0]]);
-	});
-
-	it('copies linkable assets when scratch asset strategy is copy', async () => {
-		getAppPrefMock.mockImplementation((name: AppPrefName) =>
-			name === 'scratchAssetStrategy' ? 'copy' : undefined
-		);
-
-		await openWithScratchPackage('mock-data', 'mock-filename.html', [
-			{
-				outputPath: 'assets/cover.png',
-				sourcePath: '/mock/project/assets/cover.png'
-			}
-		]);
-
-		expect(ensureSymlinkMock).not.toHaveBeenCalled();
-		expect(copyMock).toHaveBeenCalledWith(
-			'/mock/project/assets/cover.png',
-			expect.stringMatching(
-				/mock-electron-app-path-documents\/mock-electron-app-name\/electron\.scratchDirectoryName\/assets\/cover\.png$/
-			)
-		);
-	});
-
-	it('copies assets into the scratch directory when folder linking is not possible', async () => {
-		await openWithScratchPackage('mock-data', 'mock-filename.html', [
-			{outputPath: 'assets/cover.png', sourcePath: '/tmp/cover.png'},
-			{outputPath: 'assets/remote.png', sourcePath: null}
-		]);
-
-		expect(mkdirpMock.mock.calls).toContainEqual([
-			'mock-electron-app-path-documents/mock-electron-app-name/electron.scratchDirectoryName'
-		]);
-		expect(
-			mkdirpMock.mock.calls.some(call =>
-				call[0].endsWith(
-					'mock-electron-app-path-documents/mock-electron-app-name/electron.scratchDirectoryName/assets'
-				)
-			)
-		).toBe(true);
-		expect(copyMock.mock.calls).toEqual([
-			[
-				'/tmp/cover.png',
-				expect.stringMatching(
-					/mock-electron-app-path-documents\/mock-electron-app-name\/electron\.scratchDirectoryName\/assets\/cover\.png$/
-				)
-			]
-		]);
 		expect(writeFileMock).toHaveBeenCalledWith(
-			'mock-electron-app-path-documents/mock-electron-app-name/electron.scratchDirectoryName/mock-filename.html',
+			expect.stringMatching(/\/preview-[0-9a-f-]+\/index\.html$/),
 			'mock-data',
-			'utf8'
+			{encoding: 'utf8', flag: 'wx'}
 		);
-		expect(openMock.mock.calls[0]).toEqual([writeFileMock.mock.calls[0][0]]);
-	});
-
-	it('removes a stale scratch asset folder link before copying assets', async () => {
-		lstatMock.mockResolvedValueOnce({isSymbolicLink: () => true});
-
-		await openWithScratchPackage('mock-data', 'mock-filename.html', [
-			{outputPath: 'assets/cover.png', sourcePath: '/tmp/cover.png'}
-		]);
-
-		expect(removeMock.mock.calls).toContainEqual([
-			expect.stringMatching(
-				/mock-electron-app-path-documents\/mock-electron-app-name\/electron\.scratchDirectoryName\/assets$/
-			)
-		]);
-		expect(copyMock).toHaveBeenCalledWith(
-			'/tmp/cover.png',
-			expect.stringMatching(
-				/mock-electron-app-path-documents\/mock-electron-app-name\/electron\.scratchDirectoryName\/assets\/cover\.png$/
-			)
+		expect(openMock).toHaveBeenCalledWith(
+			expect.stringMatching(/\/preview-[0-9a-f-]+\/index\.html$/)
 		);
-	});
-
-	it('copies assets if folder linking fails', async () => {
-		ensureSymlinkMock.mockRejectedValueOnce(new Error('No symlink permission'));
-		const warnSpy = jest.spyOn(console, 'warn').mockReturnValue();
-
-		try {
-			await openWithScratchPackage('mock-data', 'mock-filename.html', [
-				{
-					outputPath: 'assets/cover.png',
-					sourcePath: '/mock/project/assets/cover.png'
-				}
-			]);
-		} finally {
-			warnSpy.mockRestore();
-		}
-
-		expect(ensureSymlinkMock).toHaveBeenCalled();
-		expect(copyMock.mock.calls).toEqual([
-			[
-				'/mock/project/assets/cover.png',
-				expect.stringMatching(
-					/mock-electron-app-path-documents\/mock-electron-app-name\/electron\.scratchDirectoryName\/assets\/cover\.png$/
-				)
-			]
-		]);
 	});
 
 	it('rejects unsafe asset output paths', async () => {
 		await expect(() =>
-			openWithScratchPackage('mock-data', 'mock-filename.html', [
-				{outputPath: '../cover.png', sourcePath: '/tmp/cover.png'}
+			openWithScratchPackage('mock-data', [
+				{bytes: new Uint8Array([1]), outputPath: '../cover.png'}
 			])
 		).rejects.toThrow('Unsafe scratch asset path');
+	});
+
+	it('rejects asset bytes above the per-preview quota', async () => {
+		const bytes = new Uint8Array(1);
+		Object.defineProperty(bytes, 'byteLength', {
+			value: maxScratchPreviewAssetBytes + 1
+		});
+
+		await expect(
+			openWithScratchPackage('mock-data', [
+				{bytes, outputPath: 'assets/cover.png'}
+			])
+		).rejects.toThrow('safe byte limit');
+		expect(writeFileMock).not.toHaveBeenCalled();
+	});
+
+	it('prunes the oldest preview directories to the retention limit', async () => {
+		const entries = Array.from(
+			{length: maxRetainedScratchPreviews},
+			(_, index) => ({
+				isDirectory: () => true,
+				name: `preview-00000000-0000-4000-8000-00000000000${index}`
+			})
+		);
+		readdirMock.mockResolvedValueOnce(entries);
+		statMock.mockImplementation(async path => ({
+			mtimeMs: Number(String(path).at(-1))
+		}));
+
+		await openWithScratchPackage('mock-data');
+
+		expect(removeMock).toHaveBeenCalledTimes(1);
+		expect(removeMock).toHaveBeenCalledWith(
+			expect.stringMatching(/preview-00000000-0000-4000-8000-000000000000$/)
+		);
 	});
 
 	it('rejects if the operating system cannot open the package', async () => {
 		openMock.mockResolvedValueOnce('Preview launch failed.');
 
-		await expect(
-			openWithScratchPackage('mock-data', 'mock-filename.html')
-		).rejects.toThrow('Preview launch failed.');
+		await expect(openWithScratchPackage('mock-data')).rejects.toThrow(
+			'Preview launch failed.'
+		);
 	});
 });

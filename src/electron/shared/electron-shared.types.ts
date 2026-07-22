@@ -390,11 +390,11 @@ export interface TwineElectronWindow extends Window {
 			paths: string[],
 			limits: NativeProjectAssetPayloadLimits
 		): Promise<NativeProjectAssetPayloadBatch>;
-		openWithScratchFile(data: string, filename: string): Promise<void>;
+		openWithScratchFile(data: string): Promise<void>;
 		openWithScratchPackage(
 			data: string,
-			filename: string,
-			assets: Pick<StoryBuildAsset, 'outputPath' | 'sourcePath'>[]
+			rootPath: string | undefined,
+			assets: Pick<StoryBuildAsset, 'outputPath' | 'path'>[]
 		): Promise<void>;
 		onProjectSessionChanged(
 			callback: (delta: NativeProjectSessionDelta) => void

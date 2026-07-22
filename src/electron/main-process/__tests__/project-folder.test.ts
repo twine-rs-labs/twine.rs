@@ -37,6 +37,7 @@ import {
 	openProjectFolder,
 	prepareProjectImport,
 	projectSessionAssetReadBaselines,
+	projectSessionScratchAssets,
 	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
 	readProjectFolderHydrationChunk,
@@ -658,6 +659,21 @@ describe('project-folder native bridge', () => {
 				'assets/two.png'
 			]).map(baseline => baseline.expectedContentDigest)
 		).toEqual(['1'.repeat(64), '2'.repeat(64)]);
+		expect(
+			projectSessionScratchAssets(rootPath, [
+				{outputPath: 'media/one.png', path: 'assets/one.png'}
+			])
+		).toEqual([
+			{
+				outputPath: 'media/one.png',
+				path: 'assets/one.png'
+			}
+		]);
+		expect(() =>
+			projectSessionScratchAssets(rootPath, [
+				{outputPath: 'stolen.txt', path: '/tmp/stolen.txt'}
+			])
+		).toThrow('is not indexed');
 	});
 
 	it('does not fall back after native save validation fails', async () => {

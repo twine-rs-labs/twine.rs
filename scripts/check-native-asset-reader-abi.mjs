@@ -23,6 +23,11 @@ assert.equal(
 	'function',
 	'The native addon must export captureProjectAssetDigests.'
 );
+assert.equal(
+	typeof addon.readProjectPreviewAssetPayloads,
+	'function',
+	'The native addon must export readProjectPreviewAssetPayloads.'
+);
 
 const missingProjectRoot = path.join(
 	os.tmpdir(),
@@ -54,10 +59,13 @@ async function assertPromiseRejection(exportName, invoke) {
 await assertPromiseRejection('readProjectAssetPayloads', () =>
 	addon.readProjectAssetPayloads(missingProjectRoot, [], 1, 1, 1)
 );
+await assertPromiseRejection('readProjectPreviewAssetPayloads', () =>
+	addon.readProjectPreviewAssetPayloads(missingProjectRoot, [], 1, 1, 1)
+);
 await assertPromiseRejection('captureProjectAssetDigests', () =>
 	addon.captureProjectAssetDigests(missingProjectRoot, [], 1, 1)
 );
 
 console.log(
-	'check-native-asset-reader-abi: payload and digest Promise rejection verified'
+	'check-native-asset-reader-abi: media, preview, and digest Promise rejection verified'
 );

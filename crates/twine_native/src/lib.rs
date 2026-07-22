@@ -52,6 +52,9 @@ const NATIVE_ASSET_MAX_ENCODED_BYTES: u32 = 25 * 1024 * 1024;
 const NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT: usize = 25;
 const NATIVE_ASSET_DIGEST_MAX_REQUEST_COUNT: usize = 100;
 const NATIVE_ASSET_MAX_PATH_BYTES: usize = 4096;
+const NATIVE_PREVIEW_ASSET_MAX_FILE_COUNT: u32 = 1000;
+const NATIVE_PREVIEW_ASSET_MAX_ENCODED_BYTES: u32 = 50 * 1024 * 1024;
+const NATIVE_PREVIEW_ASSET_MAX_REQUEST_COUNT: usize = 1000;
 const MAX_RENDERER_PROJECT_SIDECAR_BYTES: usize = 2 * 1024 * 1024;
 
 type NativeResult<T> = napi::Result<T>;
@@ -961,8 +964,37 @@ pub fn read_project_asset_payloads(
     max_total_encoded_bytes: u32,
 ) -> AsyncTask<ReadProjectAssetPayloadsTask> {
     AsyncTask::new(ReadProjectAssetPayloadsTask {
+        allow_any_file_type: false,
+        hard_max_encoded_bytes: NATIVE_ASSET_MAX_ENCODED_BYTES,
+        hard_max_file_count: NATIVE_ASSET_MAX_FILE_COUNT,
+        hard_max_request_count: NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT,
         root_path,
         requests,
+        require_content_digest: true,
+        max_file_encoded_bytes,
+        max_file_count,
+        max_total_encoded_bytes,
+    })
+}
+
+/// Reads bounded preview assets through the same anchored, no-follow project
+/// capability as media embedding, while permitting non-media support files.
+#[napi(js_name = "readProjectPreviewAssetPayloads")]
+pub fn read_project_preview_asset_payloads(
+    root_path: String,
+    requests: Vec<NativeProjectAssetReadRequest>,
+    max_file_encoded_bytes: u32,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+) -> AsyncTask<ReadProjectAssetPayloadsTask> {
+    AsyncTask::new(ReadProjectAssetPayloadsTask {
+        allow_any_file_type: true,
+        hard_max_encoded_bytes: NATIVE_PREVIEW_ASSET_MAX_ENCODED_BYTES,
+        hard_max_file_count: NATIVE_PREVIEW_ASSET_MAX_FILE_COUNT,
+        hard_max_request_count: NATIVE_PREVIEW_ASSET_MAX_REQUEST_COUNT,
+        root_path,
+        requests,
+        require_content_digest: false,
         max_file_encoded_bytes,
         max_file_count,
         max_total_encoded_bytes,
@@ -970,8 +1002,13 @@ pub fn read_project_asset_payloads(
 }
 
 pub struct ReadProjectAssetPayloadsTask {
+    allow_any_file_type: bool,
+    hard_max_encoded_bytes: u32,
+    hard_max_file_count: u32,
+    hard_max_request_count: usize,
     root_path: String,
     requests: Vec<NativeProjectAssetReadRequest>,
+    require_content_digest: bool,
     max_file_encoded_bytes: u32,
     max_file_count: u32,
     max_total_encoded_bytes: u32,
@@ -1023,12 +1060,17 @@ impl Task for ReadProjectAssetPayloadsTask {
     type JsValue = NativeProjectAssetPayloadBatch;
 
     fn compute(&mut self) -> NativeResult<Self::Output> {
-        read_project_asset_payload_requests_impl(
+        read_project_asset_payload_requests_with_policy(
             Path::new(&self.root_path),
             std::mem::take(&mut self.requests),
             self.max_file_encoded_bytes,
             self.max_file_count,
             self.max_total_encoded_bytes,
+            self.hard_max_request_count,
+            self.hard_max_file_count,
+            self.hard_max_encoded_bytes,
+            self.allow_any_file_type,
+            self.require_content_digest,
         )
         .map_err(|message| napi::Error::new(Status::InvalidArg, message))
     }
@@ -1065,6 +1107,39 @@ fn read_project_asset_payloads_impl(
     )
 }
 
+#[cfg(test)]
+fn read_project_preview_asset_payloads_impl(
+    root: &Path,
+    paths: Vec<String>,
+    max_file_encoded_bytes: u32,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+) -> Result<NativeProjectAssetPayloadBatch, String> {
+    read_project_asset_payload_requests_with_policy(
+        root,
+        paths
+            .into_iter()
+            .map(|path| NativeProjectAssetReadRequest {
+                enforce_baseline: false,
+                expected_exists: false,
+                expected_modified_at_ms: None,
+                expected_size_bytes: None,
+                expected_content_digest: None,
+                path,
+            })
+            .collect(),
+        max_file_encoded_bytes,
+        max_file_count,
+        max_total_encoded_bytes,
+        NATIVE_PREVIEW_ASSET_MAX_REQUEST_COUNT,
+        NATIVE_PREVIEW_ASSET_MAX_FILE_COUNT,
+        NATIVE_PREVIEW_ASSET_MAX_ENCODED_BYTES,
+        true,
+        false,
+    )
+}
+
+#[cfg(test)]
 fn read_project_asset_payload_requests_impl(
     root: &Path,
     requests: Vec<NativeProjectAssetReadRequest>,
@@ -1072,9 +1147,36 @@ fn read_project_asset_payload_requests_impl(
     max_file_count: u32,
     max_total_encoded_bytes: u32,
 ) -> Result<NativeProjectAssetPayloadBatch, String> {
-    if requests.len() > NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT {
+    read_project_asset_payload_requests_with_policy(
+        root,
+        requests,
+        max_file_encoded_bytes,
+        max_file_count,
+        max_total_encoded_bytes,
+        NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT,
+        NATIVE_ASSET_MAX_FILE_COUNT,
+        NATIVE_ASSET_MAX_ENCODED_BYTES,
+        false,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_project_asset_payload_requests_with_policy(
+    root: &Path,
+    requests: Vec<NativeProjectAssetReadRequest>,
+    max_file_encoded_bytes: u32,
+    max_file_count: u32,
+    max_total_encoded_bytes: u32,
+    hard_max_request_count: usize,
+    hard_max_file_count: u32,
+    hard_max_encoded_bytes: u32,
+    allow_any_file_type: bool,
+    require_content_digest: bool,
+) -> Result<NativeProjectAssetPayloadBatch, String> {
+    if requests.len() > hard_max_request_count {
         return Err(format!(
-            "Asset request count exceeds the native limit {NATIVE_ASSET_PAYLOAD_MAX_REQUEST_COUNT}."
+            "Asset request count exceeds the native limit {hard_max_request_count}."
         ));
     }
     if requests
@@ -1092,9 +1194,9 @@ fn read_project_asset_payload_requests_impl(
     let mut failures = Vec::new();
     let mut total_encoded_bytes = 0_u64;
     let mut total_source_bytes = 0_u64;
-    let max_file_encoded_bytes = max_file_encoded_bytes.min(NATIVE_ASSET_MAX_ENCODED_BYTES);
-    let max_file_count = max_file_count.min(NATIVE_ASSET_MAX_FILE_COUNT);
-    let max_total_encoded_bytes = max_total_encoded_bytes.min(NATIVE_ASSET_MAX_ENCODED_BYTES);
+    let max_file_encoded_bytes = max_file_encoded_bytes.min(hard_max_encoded_bytes);
+    let max_file_count = max_file_count.min(hard_max_file_count);
+    let max_total_encoded_bytes = max_total_encoded_bytes.min(hard_max_encoded_bytes);
     let mut requested_file_count = 0_u32;
 
     for request in requests {
@@ -1111,13 +1213,17 @@ fn read_project_asset_payload_requests_impl(
             ));
             continue;
         };
-        let Some(media_type) = supported_asset_media_type(&path) else {
-            failures.push(asset_payload_failure(
-                path,
-                "unsupported-type",
-                "Asset file type is not supported for media embedding.",
-            ));
-            continue;
+        let media_type = match supported_asset_media_type(&path) {
+            Some(media_type) => media_type,
+            None if allow_any_file_type => "application/octet-stream",
+            None => {
+                failures.push(asset_payload_failure(
+                    path,
+                    "unsupported-type",
+                    "Asset file type is not supported for media embedding.",
+                ));
+                continue;
+            }
         };
         requested_file_count = requested_file_count.saturating_add(1);
         if requested_file_count > max_file_count {
@@ -1342,7 +1448,7 @@ fn read_project_asset_payload_requests_impl(
                             .bytes()
                             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                 });
-            if !digest_is_valid {
+            if require_content_digest && !digest_is_valid {
                 failures.push(asset_payload_failure(
                     path,
                     "changed-since-index",
@@ -1350,8 +1456,10 @@ fn read_project_asset_payload_requests_impl(
                 ));
                 continue;
             }
-            let observed_digest = format!("{:x}", Sha256::digest(&bytes));
-            if request.expected_content_digest.as_deref() != Some(observed_digest.as_str()) {
+            let observed_digest = digest_is_valid.then(|| format!("{:x}", Sha256::digest(&bytes)));
+            if observed_digest.as_deref().is_some_and(|observed| {
+                request.expected_content_digest.as_deref() != Some(observed)
+            }) {
                 failures.push(asset_payload_failure(
                     path,
                     "changed-since-index",
@@ -3828,6 +3936,56 @@ mod tests {
             Some("video/webm")
         );
         assert_eq!(supported_asset_media_type("assets/a.css"), None);
+    }
+
+    #[test]
+    fn project_preview_asset_reader_accepts_bounded_non_media_files() {
+        let root = temp_path("preview-asset-support-file");
+        let asset = root.join("assets/style.css");
+
+        fs::create_dir_all(asset.parent().expect("asset parent")).expect("assets directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&asset, b"body {}").expect("preview asset");
+        let batch = read_project_preview_asset_payloads_impl(
+            &root,
+            vec!["assets/style.css".into()],
+            100,
+            25,
+            100,
+        )
+        .expect("preview payload batch");
+
+        assert!(batch.failures.is_empty());
+        assert_eq!(batch.payloads.len(), 1);
+        assert_eq!(batch.payloads[0].bytes.as_ref(), b"body {}");
+        fs::remove_dir_all(root).expect("project cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_preview_asset_reader_rejects_non_media_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_path("preview-asset-symlink");
+        let outside = temp_path("preview-asset-outside");
+
+        fs::create_dir_all(root.join("assets")).expect("assets directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&outside, b"outside").expect("outside payload");
+        symlink(&outside, root.join("assets/escape.css")).expect("asset symlink");
+        let batch = read_project_preview_asset_payloads_impl(
+            &root,
+            vec!["assets/escape.css".into()],
+            100,
+            25,
+            100,
+        )
+        .expect("preview symlink batch");
+
+        assert!(batch.payloads.is_empty());
+        assert_eq!(batch.failures[0].reason, "symlink-escape");
+        fs::remove_dir_all(root).expect("project cleanup");
+        fs::remove_file(outside).expect("outside cleanup");
     }
 
     #[test]

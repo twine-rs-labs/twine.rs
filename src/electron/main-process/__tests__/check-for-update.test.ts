@@ -87,7 +87,10 @@ describe('checkForUpdate()', () => {
 	describe('if the newest version is newer than the current one', () => {
 		beforeEach(() => {
 			fetchMock.mockResolvedValue(
-				responseWithJson({url: 'mock-url', version: '999.0.0'})
+				responseWithJson({
+					url: 'https://updates.example/download',
+					version: '999.0.0'
+				})
 			);
 		});
 
@@ -108,13 +111,30 @@ describe('checkForUpdate()', () => {
 		it('opens the download URL if the user clicks the Download button', async () => {
 			showMessageBoxMock.mockResolvedValue({response: 0});
 			await checkForUpdate();
-			expect(openExternalMock.mock.calls).toEqual([['mock-url']]);
+			expect(openExternalMock.mock.calls).toEqual([
+				['https://updates.example/download']
+			]);
 		});
 
 		it('takes no action if the user clicks Cancel', async () => {
 			showMessageBoxMock.mockResolvedValue({response: 1});
 			await checkForUpdate();
 			expect(openExternalMock).not.toHaveBeenCalled();
+		});
+
+		it('rejects an unsafe download URL from the update response', async () => {
+			fetchMock.mockResolvedValueOnce(
+				responseWithJson({url: 'file:///tmp/update.pkg', version: '999.0.0'})
+			);
+			showMessageBoxMock.mockResolvedValue({response: 0});
+
+			await checkForUpdate();
+
+			expect(openExternalMock).not.toHaveBeenCalled();
+			expect(showErrorBoxMock).toHaveBeenCalledWith(
+				'electron.updateCheck.error',
+				'Blocked unsafe external URL.'
+			);
 		});
 	});
 

@@ -221,14 +221,18 @@ const bridge = {
 			limits
 		);
 	},
-	openWithScratchFile(data: string, filename: string) {
-		return ipcRenderer.invoke('open-with-scratch-file', data, filename);
+	openWithScratchFile(data: string) {
+		return ipcRenderer.invoke('open-with-scratch-file', data);
 	},
-	openWithScratchPackage(data: string, filename: string, assets: unknown[]) {
+	openWithScratchPackage(
+		data: string,
+		rootPath: string | undefined,
+		assets: unknown[]
+	) {
 		return ipcRenderer.invoke(
 			'open-with-scratch-package',
 			data,
-			filename,
+			rootPath ? projectCapability(rootPath) : undefined,
 			assets
 		);
 	},
