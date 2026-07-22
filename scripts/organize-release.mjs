@@ -26,7 +26,7 @@ const buckets = [
 	{
 		dir: 'mac',
 		match: name => name.includes('-mac-'),
-		primary: name => name.endsWith('.dmg') && name.includes('-universal.')
+		primary: name => name.endsWith('.dmg')
 	},
 	{
 		dir: 'linux',
@@ -233,7 +233,7 @@ Twine RS ${version}
 
 Most desktop users should use the file directly inside their OS folder:
 
-${startHere || '- No downloads found yet. Run `npm run build:electron` first.'}
+${startHere || '- No downloads found yet. Run `npm run dist` first.'}
 
 Use an \`alternatives/\` folder only when the main download does not match the machine or the primary package format is inconvenient.
 

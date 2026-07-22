@@ -1,22 +1,21 @@
 #!/usr/bin/env node
 
-import {access, copyFile, mkdir} from 'node:fs/promises';
-import {constants} from 'node:fs';
+import {copyFile, mkdir} from 'node:fs/promises';
+import {createRequire} from 'node:module';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+
+const require = createRequire(import.meta.url);
+const {
+	assertNativeArtifact,
+	nativeArtifactPath
+} = require('./native-artifact.cjs');
 
 const rootDir = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	'..'
 );
-const source = path.join(
-	rootDir,
-	'src',
-	'electron',
-	'main-process',
-	'native',
-	'twine_native.node'
-);
+const source = nativeArtifactPath(rootDir, process.platform, process.arch);
 const target = path.join(
 	rootDir,
 	'electron-build',
@@ -28,22 +27,10 @@ const target = path.join(
 	'twine_native.node'
 );
 
-async function exists(filePath) {
-	try {
-		await access(filePath, constants.R_OK);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-if (!(await exists(source))) {
-	console.warn(
-		'copy-native: native addon is not built; Electron will use the TypeScript project fallback.'
-	);
-	process.exit(0);
-}
-
+assertNativeArtifact(source, {arch: process.arch, platform: process.platform});
 await mkdir(path.dirname(target), {recursive: true});
 await copyFile(source, target);
-console.log(`copy-native: copied ${source} to ${target}`);
+assertNativeArtifact(target, {arch: process.arch, platform: process.platform});
+console.log(
+	`copy-native: staged verified ${process.platform}-${process.arch} addon at ${target}`
+);

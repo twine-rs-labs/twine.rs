@@ -43,12 +43,17 @@ projects, and test the native core that supports the editor.
 - Node.js 20+
 - npm 10+
 - Rust stable toolchain with `cargo`, `rustfmt`, and `clippy`
+- Rust's `wasm32-unknown-unknown` target
+- `wasm-bindgen-cli` matching the version locked in `Cargo.lock` (currently
+  0.2.125)
 - `mdbook` only if you build or serve the docs
 
 ## Setup
 
 ```sh
 npm install
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.125 --locked
 cargo test --workspace
 ```
 
@@ -105,11 +110,18 @@ build.
 npm run dist
 ```
 
-This single command builds the web renderer, Electron main process, and all
-desktop packages for macOS, Windows, and Linux. Finished downloads are organized
-under `release/mac`, `release/windows`, and `release/linux`, with
+This command builds the web renderer, Electron main process, and desktop package
+for the current operating system and CPU architecture. Native addons are built
+and verified for that exact target before packaging. The packaged-app CI matrix
+builds and smokes unpacked apps on Linux x64 and ARM64, macOS Intel and ARM64,
+and Windows x64. Publishable installers must likewise be produced on a matching
+target runner; the local release command does not cross-package other targets.
+
+Finished local downloads are organized under the matching `release/mac`,
+`release/windows`, or `release/linux` directory, with
 `release/WHICH TO DOWNLOAD.md` and `release/SHA256SUMS.txt` written alongside
-them.
+them. macOS downloads are architecture-specific; choose the file matching the
+Mac's CPU.
 
 Twine RS uses its own release version from `package.json` and the Rust workspace
 version in `Cargo.toml`. `package.json` also keeps `twineCompatibilityVersion`

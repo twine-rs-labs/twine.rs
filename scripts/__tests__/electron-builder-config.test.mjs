@@ -117,6 +117,14 @@ test('electron-builder config exposes only schema properties', () => {
 	assert.equal(config.mac.notarize, false);
 });
 
+test('desktop targets are architecture-specific and selected by the runner', () => {
+	assert.deepEqual(config.linux.target, ['AppImage', 'zip']);
+	assert.equal(config.mac.target, 'dmg');
+	assert.equal(config.win.target, 'nsis');
+	assert.match(config.mac.artifactName, /mac-\$\{arch\}/);
+	assert.doesNotMatch(config.mac.artifactName, /universal/);
+});
+
 test('complete notarization intent requires successful builder code signing', () => {
 	assert.equal(forceCodeSigningFor({}), false);
 	assert.equal(

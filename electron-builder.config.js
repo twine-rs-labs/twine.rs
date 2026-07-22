@@ -2,17 +2,28 @@ const {
 	createMacBuildHooks,
 	hasCompleteNotarizationEnv
 } = require('./scripts/electron-builder-hooks.cjs');
+const {createNativePackagingHooks} = require('./scripts/native-artifact.cjs');
 const pkg = require('./package.json');
 
 const isPreview =
 	/alpha|beta|pre/.test(pkg.version) || process.env.FORCE_PREVIEW;
 const productName = 'Twine RS';
 const artifactProductName = 'Twine-RS';
-const {afterPack, afterSign} = createMacBuildHooks({productName});
+const macHooks = createMacBuildHooks({productName});
+const nativeHooks = createNativePackagingHooks({
+	productName,
+	rootDir: __dirname
+});
+
+async function afterPack(context) {
+	nativeHooks.afterPack(context);
+	await macHooks.afterPack(context);
+}
 
 module.exports = {
+	beforePack: nativeHooks.beforePack,
 	afterPack,
-	afterSign,
+	afterSign: macHooks.afterSign,
 	appId: 'rs.twine.app',
 	productName,
 	directories: {
@@ -31,18 +42,15 @@ module.exports = {
 		artifactName: `${artifactProductName}-${pkg.version}-linux-\${arch}.\${ext}`,
 		category: 'Development',
 		icon: `icons/app-${isPreview ? 'preview' : 'release'}.png`,
-		target: [
-			{arch: ['arm64', 'x64'], target: 'AppImage'},
-			{arch: ['arm64', 'x64'], target: 'zip'}
-		]
+		target: ['AppImage', 'zip']
 	},
 	mac: {
-		artifactName: `${artifactProductName}-${pkg.version}-mac-universal.\${ext}`,
+		artifactName: `${artifactProductName}-${pkg.version}-mac-\${arch}.\${ext}`,
 		category: 'public.app-category.developer-tools',
 		forceCodeSigning: hasCompleteNotarizationEnv(process.env),
 		icon: `icons/app-${isPreview ? 'preview' : 'release'}.png`,
 		notarize: false,
-		target: {arch: ['universal'], target: 'dmg'}
+		target: 'dmg'
 	},
 	nsis: {
 		oneClick: false,
@@ -51,6 +59,6 @@ module.exports = {
 	win: {
 		artifactName: `${artifactProductName}-${pkg.version}-win-\${arch}.\${ext}`,
 		icon: `icons/app-${isPreview ? 'preview' : 'release'}-no-padding.ico`,
-		target: {arch: ['x64'], target: 'nsis'}
+		target: 'nsis'
 	}
 };

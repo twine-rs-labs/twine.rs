@@ -154,10 +154,6 @@ function addonCandidates() {
 		join(__dirname, 'native', 'twine_native.node'),
 		resolve(
 			process.cwd(),
-			'src/electron/main-process/native/twine_native.node'
-		),
-		resolve(
-			process.cwd(),
 			'electron-build/main/src/electron/main-process/native/twine_native.node'
 		)
 	];
