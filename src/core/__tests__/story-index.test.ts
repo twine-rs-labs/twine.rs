@@ -402,6 +402,69 @@ describe('storyToCoreIndex', () => {
 		]);
 	});
 
+	it('uses JavaScript UTF-16 character counts and editor line semantics', () => {
+		const story = fakeStory(1);
+
+		story.passages[0].text = 'é😀\n';
+		const index = storyToCoreIndex(story);
+		const file = index.files.find(
+			file => file.passageId === story.passages[0].id
+		);
+		const contents = index.contents.find(
+			entry =>
+				entry.kind === 'passage' && entry.passageId === story.passages[0].id
+		);
+
+		expect(file).toMatchObject({characterCount: 4, lineCount: 2});
+		expect(contents).toMatchObject({count: 2, detail: '4 characters'});
+	});
+
+	it('uses UTF-16 ranges for exact and fuzzy Unicode search hits', () => {
+		const story = fakeStory(1);
+
+		story.passages[0].name = 'Start';
+		story.passages[0].text = '😀 café alpha';
+
+		const exact = storyToCoreIndex(story, {
+			includePassageNames: false,
+			query: 'alpha'
+		}).searchHits.find(hit => hit.scope === 'passageText');
+		const fuzzy = storyToCoreIndex(story, {
+			fuzzy: true,
+			includePassageNames: false,
+			query: 'cfa'
+		}).searchHits.find(hit => hit.scope === 'passageText');
+
+		expect(exact).toMatchObject({end: 13, matchText: 'alpha', start: 8});
+		expect(fuzzy).toMatchObject({end: 9, matchText: 'café a', start: 3});
+
+		story.passages[0].text = 'İxzt';
+		const expandingLowercase = storyToCoreIndex(story, {
+			fuzzy: true,
+			includePassageNames: false,
+			query: 'xt'
+		}).searchHits.find(hit => hit.scope === 'passageText');
+
+		expect(expandingLowercase).toMatchObject({
+			end: 4,
+			matchText: 'xzt',
+			start: 1
+		});
+
+		story.passages[0].text = 'ΟxΣ';
+		const contextualLowercase = storyToCoreIndex(story, {
+			fuzzy: true,
+			includePassageNames: false,
+			query: 'ΟΣ'
+		}).searchHits.find(hit => hit.scope === 'passageText');
+
+		expect(contextualLowercase).toMatchObject({
+			end: 3,
+			matchText: 'ΟxΣ',
+			start: 0
+		});
+	});
+
 	it('can fuzzy-rank a source when exact search does not match', () => {
 		const story = fakeStory(1);
 

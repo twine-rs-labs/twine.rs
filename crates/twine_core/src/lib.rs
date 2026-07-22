@@ -5644,13 +5644,13 @@ impl ProjectSession {
                 if let Some(before) = &passage.before {
                     cache.character_count = cache
                         .character_count
-                        .saturating_sub(before.value.text.len());
+                        .saturating_sub(utf16_len(&before.value.text));
                     cache.word_count = cache
                         .word_count
                         .saturating_sub(before.value.text.split_whitespace().count());
                 }
                 if let Some(after) = &passage.after {
-                    cache.character_count += after.value.text.len();
+                    cache.character_count += utf16_len(&after.value.text);
                     cache.word_count += after.value.text.split_whitespace().count();
                 }
             }
@@ -6965,7 +6965,7 @@ impl ProjectSession {
         let analysis = SourceAnalysisCache {
             assets: asset_references_in_source(source_id, name, source, passage_id),
             file: CoreSourceFile {
-                character_count: source.len(),
+                character_count: utf16_len(source),
                 id: source_id.to_owned(),
                 kind,
                 line_count: line_count(source),
@@ -7608,7 +7608,7 @@ impl ProjectSession {
                     character_count: story
                         .passages
                         .iter()
-                        .map(|passage| passage.text.len())
+                        .map(|passage| utf16_len(&passage.text))
                         .sum(),
                     contents,
                     diagnostic_entry_ids,
@@ -7986,11 +7986,11 @@ impl ProjectSession {
 
         Ok(CorePassageLocalFacts {
             asset_references: analysis.assets,
-            character_count: passage_text.len(),
+            character_count: utf16_len(&passage_text),
             diagnostics,
             excerpt: passage_text.chars().take(400).collect(),
             is_empty: passage_text.trim().is_empty(),
-            line_count: passage_text.lines().count().max(1),
+            line_count: line_count(&passage_text),
             links: edges.iter().map(core_passage_link_fact).collect(),
             passage_id: passage_id.as_ref().to_owned(),
             revision: self.revision().min(u32::MAX as u64) as u32,
@@ -9715,8 +9715,14 @@ fn replace_asset_references_in_source(
     output
 }
 
+/// Renderer-facing text metrics follow JavaScript and CodeMirror: characters
+/// are UTF-16 code units, and a trailing newline creates an empty editor line.
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
 fn line_count(text: &str) -> usize {
-    text.lines().count().max(1)
+    text.bytes().filter(|byte| *byte == b'\n').count() + 1
 }
 
 const MAX_SEARCH_HITS: usize = 500;
@@ -9827,7 +9833,7 @@ fn search_hit(
     CoreSearchHit {
         after,
         before,
-        end,
+        end: utf16_offset_at(source, end),
         excerpt: excerpt_around(source, start, end.saturating_sub(start)),
         line: line_number_at(source, start),
         match_text: source[start..end].to_owned(),
@@ -9837,7 +9843,7 @@ fn search_hit(
         scope,
         source_id: source_id.to_owned(),
         source_name: source_name.to_owned(),
-        start,
+        start: utf16_offset_at(source, start),
     }
 }
 
@@ -9878,35 +9884,51 @@ fn exact_rank_bonus(start: usize) -> f32 {
 }
 
 fn fuzzy_match(source: &str, query: &str, match_case: bool) -> Option<(usize, usize, f32)> {
-    let searchable = if match_case {
-        source.to_owned()
-    } else {
-        source.to_lowercase()
-    };
     let needle = if match_case {
-        query.to_owned()
+        query.chars().collect::<Vec<_>>()
     } else {
-        query.to_lowercase()
+        query.chars().flat_map(char::to_lowercase).collect()
     };
-    let mut needle_chars = needle.chars();
-    let mut current = needle_chars.next()?;
+    if needle.is_empty() {
+        return None;
+    }
+
+    let mut needle_index = 0;
     let mut start = None;
-    let mut end;
+    let mut end = 0usize;
     let mut matched = 0usize;
+    let mut consider = |character, original_start, original_end| {
+        if character != needle[needle_index] {
+            return None;
+        }
 
-    for (index, character) in searchable.char_indices() {
-        if character == current {
-            start.get_or_insert(index);
-            end = index + character.len_utf8();
-            matched += 1;
+        start.get_or_insert(original_start);
+        end = original_end;
+        matched += 1;
+        needle_index += 1;
 
-            if let Some(next) = needle_chars.next() {
-                current = next;
-            } else {
-                let span = end.saturating_sub(start.unwrap_or(0)).max(1);
-                let density = matched as f32 / span as f32;
+        if needle_index == needle.len() {
+            let span = end.saturating_sub(start.unwrap_or(0)).max(1);
+            let density = matched as f32 / span as f32;
 
-                return Some((start.unwrap_or(0), end, density));
+            Some((start.unwrap_or(0), end, density))
+        } else {
+            None
+        }
+    };
+
+    for (original_start, character) in source.char_indices() {
+        let original_end = original_start + character.len_utf8();
+
+        if match_case {
+            if let Some(result) = consider(character, original_start, original_end) {
+                return Some(result);
+            }
+        } else {
+            for normalized_character in character.to_lowercase() {
+                if let Some(result) = consider(normalized_character, original_start, original_end) {
+                    return Some(result);
+                }
             }
         }
     }
@@ -9953,8 +9975,14 @@ fn excerpt_around(source: &str, start: usize, length: usize) -> String {
         return excerpt.into();
     }
 
-    let window_start = start.saturating_sub(48).max(line_start);
-    let window_end = (start + length + 48).min(line_end);
+    let window_start = clamped_char_boundary(source, start.saturating_sub(48)).max(line_start);
+    let window_end = clamped_char_boundary(
+        source,
+        start
+            .saturating_add(length)
+            .saturating_add(48)
+            .min(line_end),
+    );
     let mut result = String::new();
 
     if window_start > line_start {
@@ -10772,7 +10800,7 @@ fn basic_source_contents_entry(
 ) -> CoreContentsEntry {
     CoreContentsEntry {
         count: line_count(source),
-        detail: Some(format!("{} characters", source.len())),
+        detail: Some(format!("{} characters", utf16_len(source))),
         id: format!("source:{source_id}"),
         kind,
         label: name.to_owned(),
@@ -13832,6 +13860,201 @@ mod tests {
         assert!(!page.search_hits.is_empty());
         assert_eq!(session.analysis_parse_count, baseline_parse_count);
         assert!(session.analysis_cache.is_empty());
+    }
+
+    #[test]
+    fn search_ranges_use_utf16_editor_offsets() {
+        let mut unicode_story = story();
+        unicode_story
+            .passages
+            .iter_mut()
+            .find(|passage| passage.id.as_ref() == "a")
+            .expect("start passage")
+            .text = "😀 café alpha".into();
+        let mut session = ProjectSession::new(Project {
+            stories: vec![unicode_story],
+            ..Project::default()
+        });
+        let exact = session
+            .search_page(
+                "story-1",
+                CoreSearchQuery {
+                    include_passage_names: false,
+                    include_script: false,
+                    include_stylesheet: false,
+                    query: "alpha".into(),
+                    replacement: Some("omega".into()),
+                    ..CoreSearchQuery::default()
+                },
+            )
+            .expect("exact search");
+        let exact_hit = exact
+            .search_hits
+            .iter()
+            .find(|hit| hit.passage_id.as_deref() == Some("a"))
+            .expect("exact passage hit");
+
+        assert_eq!(exact_hit.start, 8);
+        assert_eq!(exact_hit.end, 13);
+        assert_eq!(exact_hit.match_text, "alpha");
+        assert!(exact.replace_previews.iter().any(|preview| {
+            preview.passage_id.as_deref() == Some("a") && preview.start == 8 && preview.end == 13
+        }));
+
+        let fuzzy = session
+            .search_page(
+                "story-1",
+                CoreSearchQuery {
+                    fuzzy: true,
+                    include_passage_names: false,
+                    include_script: false,
+                    include_stylesheet: false,
+                    query: "cfa".into(),
+                    ..CoreSearchQuery::default()
+                },
+            )
+            .expect("fuzzy search");
+        let fuzzy_hit = fuzzy
+            .search_hits
+            .iter()
+            .find(|hit| hit.passage_id.as_deref() == Some("a"))
+            .expect("fuzzy passage hit");
+
+        assert_eq!(fuzzy_hit.start, 3);
+        assert_eq!(fuzzy_hit.end, 9);
+        assert_eq!(fuzzy_hit.match_text, "café a");
+
+        let mut expanding_story = story();
+        expanding_story
+            .passages
+            .iter_mut()
+            .find(|passage| passage.id.as_ref() == "a")
+            .expect("start passage")
+            .text = "İxzt".into();
+        let mut expanding_session = ProjectSession::new(Project {
+            stories: vec![expanding_story],
+            ..Project::default()
+        });
+        let expanding = expanding_session
+            .search_page(
+                "story-1",
+                CoreSearchQuery {
+                    fuzzy: true,
+                    include_passage_names: false,
+                    include_script: false,
+                    include_stylesheet: false,
+                    query: "xt".into(),
+                    ..CoreSearchQuery::default()
+                },
+            )
+            .expect("expanding lowercase search");
+        let expanding_hit = expanding
+            .search_hits
+            .iter()
+            .find(|hit| hit.passage_id.as_deref() == Some("a"))
+            .expect("expanding lowercase hit");
+
+        assert_eq!(expanding_hit.start, 1);
+        assert_eq!(expanding_hit.end, 4);
+        assert_eq!(expanding_hit.match_text, "xzt");
+
+        let mut long_story = story();
+        long_story
+            .passages
+            .iter_mut()
+            .find(|passage| passage.id.as_ref() == "a")
+            .expect("start passage")
+            .text = format!("é{}MATCH{}", "a".repeat(47), "b".repeat(100));
+        let mut long_session = ProjectSession::new(Project {
+            stories: vec![long_story],
+            ..Project::default()
+        });
+        let long_line = long_session
+            .search_page(
+                "story-1",
+                CoreSearchQuery {
+                    include_passage_names: false,
+                    include_script: false,
+                    include_stylesheet: false,
+                    query: "MATCH".into(),
+                    ..CoreSearchQuery::default()
+                },
+            )
+            .expect("long Unicode line search");
+        let long_line_hit = long_line
+            .search_hits
+            .iter()
+            .find(|hit| hit.passage_id.as_deref() == Some("a"))
+            .expect("long line hit");
+
+        assert_eq!(long_line_hit.start, 48);
+        assert_eq!(long_line_hit.end, 53);
+        assert!(long_line_hit.excerpt.contains("MATCH"));
+    }
+
+    #[test]
+    fn text_metrics_match_javascript_utf16_and_editor_lines() {
+        let mut story = story();
+        story
+            .passages
+            .iter_mut()
+            .find(|passage| passage.id.as_ref() == "b")
+            .expect("passage")
+            .text = "é😀\n".into();
+        let mut session = ProjectSession::new(Project {
+            stories: vec![story],
+            ..Project::default()
+        });
+        let contents = session
+            .contents_page(
+                "story-1",
+                CoreContentsQuery {
+                    filter: CoreContentsFilter::Passage,
+                    ..CoreContentsQuery::default()
+                },
+            )
+            .expect("contents page");
+        let entry = contents
+            .entries
+            .iter()
+            .find(|entry| entry.passage_id.as_deref() == Some("b"))
+            .expect("passage contents entry");
+
+        assert_eq!(entry.count, 2);
+        assert_eq!(entry.detail.as_deref(), Some("4 characters"));
+
+        let index = session
+            .story_index("story-1", CoreStoryIndexOptions::default())
+            .expect("story index");
+        let file = index
+            .files
+            .iter()
+            .find(|file| file.passage_id.as_deref() == Some("b"))
+            .expect("passage source file");
+
+        assert_eq!(file.character_count, 4);
+        assert_eq!(file.line_count, 2);
+
+        let facts = session
+            .passage_local_facts("story-1", "b")
+            .expect("passage facts");
+
+        assert_eq!(facts.character_count, 4);
+        assert_eq!(facts.line_count, 2);
+
+        let before = session.story_summary("story-1").expect("initial summary");
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                passage_id: "b".into(),
+                story_id: "story-1".into(),
+                text: "x".into(),
+            })
+            .expect("text edit");
+        let after = session.story_summary("story-1").expect("updated summary");
+
+        assert_eq!(after.character_count, before.character_count - 3);
+        assert_eq!(session.read_model_full_build_count, 1);
+        assert_eq!(session.read_model_incremental_update_count, 1);
     }
 
     #[test]

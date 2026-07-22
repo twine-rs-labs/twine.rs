@@ -141,25 +141,48 @@ function exactRankBonus(start: number) {
 	return 1 / (1 + start);
 }
 
+function fuzzyComparableCharacter(character: string, matchCase: boolean) {
+	return matchCase ? character : character.toLocaleLowerCase();
+}
+
 function fuzzyMatch(source: string, query: string, matchCase: boolean) {
-	const haystack = matchCase ? source : source.toLocaleLowerCase();
-	const needle = matchCase ? query : query.toLocaleLowerCase();
+	const needle = Array.from(query, character =>
+		fuzzyComparableCharacter(character, matchCase)
+	).join('');
 	let needleIndex = 0;
 	let start: number | undefined;
 	let end = 0;
 
-	for (let index = 0; index < haystack.length; index++) {
-		if (haystack[index] === needle[needleIndex]) {
-			start ??= index;
-			end = index + 1;
-			needleIndex++;
+	for (let index = 0; index < source.length;) {
+		const codePoint = source.codePointAt(index);
 
-			if (needleIndex === needle.length) {
-				const span = Math.max(end - start, 1);
+		if (codePoint === undefined) {
+			break;
+		}
 
-				return {end, score: needle.length / span, start};
+		const character = String.fromCodePoint(codePoint);
+		const originalEnd = index + character.length;
+		const searchable = fuzzyComparableCharacter(character, matchCase);
+
+		for (
+			let searchableIndex = 0;
+			searchableIndex < searchable.length;
+			searchableIndex++
+		) {
+			if (searchable[searchableIndex] === needle[needleIndex]) {
+				start ??= index;
+				end = originalEnd;
+				needleIndex++;
+
+				if (needleIndex === needle.length) {
+					const span = Math.max(end - start, 1);
+
+					return {end, score: needle.length / span, start};
+				}
 			}
 		}
+
+		index = originalEnd;
 	}
 }
 

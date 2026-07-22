@@ -357,6 +357,29 @@ describe('<StorySearchDialog>', () => {
 		expect(Number(query.get('offset'))).toBe(story.script.indexOf('mockFind'));
 	});
 
+	it('routes Unicode search results using UTF-16 editor offsets', async () => {
+		const story = fakeStory(1);
+
+		story.passages[0].text = '';
+		story.script = '😀 café const mockFind = true;';
+		renderComponent({find: 'mockFind'}, {stories: [story]});
+		fireEvent.click(
+			await screen.findByRole('button', {name: /Story JavaScript/})
+		);
+
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${story.id}`
+			)
+		);
+		const query = new URLSearchParams(
+			screen.getByTestId('location').getAttribute('data-search') ?? ''
+		);
+
+		expect(Number(query.get('offset'))).toBe(story.script.indexOf('mockFind'));
+	});
+
 	it('disables the replace button if there are no matches for the search', () => {
 		const story = fakeStory(1);
 
