@@ -160,13 +160,36 @@ function validatePackagingProfile(
 	}
 }
 
+function artifactFileArch({arch, extension, platform}) {
+	const normalizedArch = normalizeArch(arch);
+	const normalizedPlatform = normalizePlatform(platform);
+
+	// electron-builder follows the AppImage convention for Intel Linux while
+	// keeping Node's architecture spelling for ZIP archives.
+	if (
+		normalizedPlatform === 'linux' &&
+		normalizedArch === 'x64' &&
+		extension === 'AppImage'
+	) {
+		return 'x86_64';
+	}
+
+	return normalizedArch;
+}
+
 function artifactName({arch, extension, platform, profile, version}) {
+	const normalizedPlatform = normalizePlatform(platform);
 	const unsignedSuffix =
-		profile === profiles.unsigned && (platform === 'mac' || platform === 'win')
+		profile === profiles.unsigned &&
+		(normalizedPlatform === 'mac' || normalizedPlatform === 'win')
 			? '-unsigned'
 			: '';
 
-	return `Twine-RS-${version}-${platform}-${arch}${unsignedSuffix}.${extension}`;
+	return `Twine-RS-${version}-${normalizedPlatform}-${artifactFileArch({
+		arch,
+		extension,
+		platform: normalizedPlatform
+	})}${unsignedSuffix}.${extension}`;
 }
 
 function expectedArtifacts(version, platform, arch, profile) {

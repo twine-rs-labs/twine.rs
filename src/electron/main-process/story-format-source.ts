@@ -8,6 +8,27 @@
 import type {StoryFormatProperties} from '../../store/story-formats/story-formats.types';
 
 const storyFormatCall = /(?:window\.|this\.)?storyFormat\s*\(/;
+const setupProperty = /,\s*"setup"\s*:\s*function\b/g;
+
+function parseSerializableManifestPrefix(source: string, open: number) {
+	setupProperty.lastIndex = open;
+
+	for (
+		let match = setupProperty.exec(source);
+		match;
+		match = setupProperty.exec(source)
+	) {
+		try {
+			// Harlowe appends a legacy editor-only setup function after its JSON
+			// manifest fields. Parse only the validated JSON prefix so privileged
+			// Electron code never evaluates that function or anything after it.
+			return JSON.parse(`${source.slice(open, match.index)}}`);
+		} catch {
+			// A matching string inside a manifest value cannot form a valid JSON
+			// object prefix. Keep looking for the top-level setup property.
+		}
+	}
+}
 
 export function extractStoryFormatProperties(
 	source: string
@@ -64,16 +85,25 @@ export function extractStoryFormatProperties(
 		}
 	}
 
-	if (end === -1) {
-		throw new Error('This story format manifest is malformed.');
+	let properties: StoryFormatProperties | undefined;
+
+	if (end !== -1) {
+		try {
+			properties = JSON.parse(source.slice(open, end));
+		} catch {
+			// Some legacy formats append a non-JSON setup function. It is
+			// editor-only and is intentionally excluded below.
+		}
 	}
 
-	let properties: StoryFormatProperties;
+	properties ??= parseSerializableManifestPrefix(source, open);
 
-	try {
-		properties = JSON.parse(source.slice(open, end));
-	} catch (error) {
-		throw new Error('This story format manifest is not valid JSON.');
+	if (!properties) {
+		throw new Error(
+			end === -1
+				? 'This story format manifest is malformed.'
+				: 'This story format manifest is not valid JSON.'
+		);
 	}
 
 	if (

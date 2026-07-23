@@ -974,14 +974,28 @@ function validateBom(bom) {
 	}
 }
 
+function normalizeAsarEntry(entry) {
+	return entry.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function asarEntryRecord(entry) {
+	return {
+		extractPath: entry.replace(/^[\\/]+/, ''),
+		normalizedPath: normalizeAsarEntry(entry)
+	};
+}
+
 function npmPackageLocations(packageEntries) {
 	const pattern =
 		/^node_modules\/(?:@[^/]+\/[^/]+|[^/@][^/]*)(?:\/node_modules\/(?:@[^/]+\/[^/]+|[^/@][^/]*))*\/package\.json$/;
 	return packageEntries
-		.map(entry => entry.replace(/^\//, ''))
-		.filter(entry => pattern.test(entry))
-		.map(entry => entry.slice(0, -'/package.json'.length))
-		.sort();
+		.map(asarEntryRecord)
+		.filter(entry => pattern.test(entry.normalizedPath))
+		.map(entry => ({
+			...entry,
+			location: entry.normalizedPath.slice(0, -'/package.json'.length)
+		}))
+		.sort((left, right) => left.location.localeCompare(right.location));
 }
 
 function verifyNpmInventory({asarPath, bom, extractFile, packageEntries}) {
@@ -999,11 +1013,9 @@ function verifyNpmInventory({asarPath, bom, extractFile, packageEntries}) {
 
 	const actualLocations = npmPackageLocations(packageEntries);
 	const actual = new Map();
-	for (const location of actualLocations) {
+	for (const {extractPath} of actualLocations) {
 		const manifest = JSON.parse(
-			Buffer.from(extractFile(asarPath, `${location}/package.json`)).toString(
-				'utf8'
-			)
+			Buffer.from(extractFile(asarPath, extractPath)).toString('utf8')
 		);
 		const purl = npmPurl(manifest.name, manifest.version);
 		actual.set(purl, (actual.get(purl) ?? 0) + 1);
@@ -1032,11 +1044,13 @@ function verifyAssetInventory({asarPath, bom, extractFile, packageEntries}) {
 		.map(component => propertyValues(component, 'twine:asset-sha256')[0])
 		.sort();
 	const assetEntries = packageEntries
-		.map(entry => entry.replace(/^\//, ''))
-		.filter(entry => entry.endsWith('.woff2'))
-		.sort();
+		.map(asarEntryRecord)
+		.filter(entry => entry.normalizedPath.endsWith('.woff2'))
+		.sort((left, right) =>
+			left.normalizedPath.localeCompare(right.normalizedPath)
+		);
 	const actualHashes = assetEntries
-		.map(entry => sha256(extractFile(asarPath, entry)))
+		.map(entry => sha256(extractFile(asarPath, entry.extractPath)))
 		.sort();
 
 	if (

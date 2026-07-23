@@ -87,6 +87,13 @@ test('unsigned Windows and macOS filenames are visibly labeled', () => {
 			'Twine-RS-0.2.0-beta.1-linux-arm64.zip'
 		]
 	);
+	assert.deepEqual(
+		expectedArtifacts('0.2.0-beta.1', 'linux', 'x64', profiles.unsigned),
+		[
+			'Twine-RS-0.2.0-beta.1-linux-x86_64.AppImage',
+			'Twine-RS-0.2.0-beta.1-linux-x64.zip'
+		]
+	);
 });
 
 test('signed packaging fails closed on incomplete or unexpected credentials', () => {
@@ -323,7 +330,7 @@ test('target hook rejects extra architecture artifacts in one builder run', asyn
 		() =>
 			hook({
 				artifactPaths: [
-					'/tmp/Twine-RS-0.2.0-linux-x64.AppImage',
+					'/tmp/Twine-RS-0.2.0-linux-x86_64.AppImage',
 					'/tmp/Twine-RS-0.2.0-linux-x64.zip',
 					'/tmp/Twine-RS-0.2.0-linux-arm64.AppImage'
 				],

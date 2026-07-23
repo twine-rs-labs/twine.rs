@@ -966,9 +966,19 @@ test('packaged desktop embeds referenced media for every bundled format family',
 				});
 			}, outputPath);
 			await page.getByRole('button', {name: 'Export Playable HTML'}).click();
+			const buildError = page
+				.getByText('Last build failed')
+				.locator('..')
+				.locator('.build-route__note-detail');
 			await expect
 				.poll(
 					async () => {
+						if (await buildError.isVisible()) {
+							throw new Error(
+								`${format} export failed: ${await buildError.innerText()}`
+							);
+						}
+
 						try {
 							return (await readFile(outputPath)).byteLength;
 						} catch {

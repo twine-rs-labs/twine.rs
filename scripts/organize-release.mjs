@@ -540,7 +540,12 @@ function preferredDownload(files, predicate) {
 }
 
 function hasArchitecture(file, architecture) {
-	return new RegExp(`-${architecture}(?:-unsigned)?\\.`).test(file);
+	const fileArchitectures =
+		architecture === 'x64' ? ['x64', 'x86_64'] : [architecture];
+
+	return fileArchitectures.some(fileArchitecture =>
+		new RegExp(`-${fileArchitecture}(?:-unsigned)?\\.`).test(file)
+	);
 }
 
 function downloadList(files, platform) {

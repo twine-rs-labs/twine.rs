@@ -72,6 +72,9 @@ test('packaging CI exercises and retains every supported installable format', ()
 	assert.equal((source.match(/platform: mac/g) ?? []).length, 2);
 	assert.equal((source.match(/platform: windows/g) ?? []).length, 1);
 	assert.equal((source.match(/node-version: 24\.18\.0/g) ?? []).length, 2);
+	assert.match(source, /appimage_arch: x86_64/);
+	assert.match(source, /Twine-RS-\*-linux-x86_64\.AppImage/);
+	assert.match(source, /linux-\$\{\{ matrix\.appimage_arch \}\}\.AppImage/);
 });
 
 test('active workflows pin every action to an immutable revision', () => {

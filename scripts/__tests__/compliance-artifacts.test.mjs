@@ -269,6 +269,27 @@ test('generated notices and SBOM are deterministic and package-verifiable', asyn
 		'LICENSES.chromium.html'
 	]);
 	assert.equal(result.components, counts.total);
+	const windowsRequested = [];
+	assert.equal(
+		verifyPackagedCompliance({
+			asarPath: 'C:\\package\\resources\\app.asar',
+			expectedFiles,
+			extractFile: (_asarPath, fileName) => {
+				windowsRequested.push(fileName);
+				return (
+					expectedFiles[fileName] ??
+					packagedFiles.get(fileName.replaceAll('\\', '/'))
+				);
+			},
+			listPackage: () =>
+				packageEntries.map(entry => entry.replaceAll('/', '\\'))
+		}).components,
+		counts.total
+	);
+	assert.equal(
+		windowsRequested.some(fileName => fileName.startsWith('node_modules\\')),
+		true
+	);
 	assert.throws(
 		() =>
 			verifyPackagedCompliance({

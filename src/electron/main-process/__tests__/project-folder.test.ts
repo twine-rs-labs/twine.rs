@@ -200,6 +200,22 @@ describe('project-folder native bridge', () => {
 		);
 	}
 
+	async function advanceTimersUntilCalled(
+		mock: jest.Mock,
+		minimumCallCount: number,
+		milliseconds: number
+	) {
+		await jest.advanceTimersByTimeAsync(milliseconds);
+		for (
+			let attempts = 0;
+			attempts < 100 && mock.mock.calls.length < minimumCallCount;
+			attempts++
+		) {
+			await Promise.resolve();
+		}
+		expect(mock.mock.calls.length).toBeGreaterThanOrEqual(minimumCallCount);
+	}
+
 	beforeEach(() => {
 		jest.clearAllMocks();
 		performanceHarnessEnabledMock.mockReturnValue(false);
@@ -4768,7 +4784,7 @@ describe('project-folder native bridge', () => {
 				]
 			);
 			passageSource = '<img src="assets/before.png"> new';
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 
 			expect(listener).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -4895,7 +4911,7 @@ describe('project-folder native bridge', () => {
 			await startProjectSession('/native/project.twine.rs', listener, [
 				'story-id'
 			]);
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 
 			const changes = listener.mock.calls[0][0].delta.changes;
 
@@ -5017,7 +5033,7 @@ describe('project-folder native bridge', () => {
 					schema: 2
 				}
 			};
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 
 			expect(listener.mock.calls[0][0].delta.changes).toEqual([
 				{
@@ -5121,7 +5137,7 @@ describe('project-folder native bridge', () => {
 				':: Second',
 				'second'
 			].join('\n');
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 
 			expect(listener.mock.calls[0][0].delta.changes).toEqual(
 				expect.arrayContaining([
@@ -5229,7 +5245,7 @@ describe('project-folder native bridge', () => {
 				':: Second',
 				'second'
 			].join('\n');
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 
 			expect(listener.mock.calls[0][0].delta.changes).toEqual(
 				expect.arrayContaining([
@@ -5371,7 +5387,7 @@ describe('project-folder native bridge', () => {
 				'added body'
 			]);
 			aggregateVersion = 2;
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 			const firstDelta = listener.mock.calls[0][0];
 			const firstChanges = firstDelta.delta.changes;
 			const added = firstChanges.find(
@@ -5411,7 +5427,7 @@ describe('project-folder native bridge', () => {
 				firstDelta.id
 			);
 			expect(manifestSource).not.toContain(`id = "${added.passage.id}"`);
-			await jest.advanceTimersByTimeAsync(1);
+			await advanceTimersUntilCalled(listener, 2, 1);
 
 			expect(listener.mock.calls[1][0].delta.changes).toEqual(
 				expect.arrayContaining([
@@ -5551,7 +5567,7 @@ describe('project-folder native bridge', () => {
 			]);
 			aggregateSource = storySource('Added');
 			aggregateVersion = 2;
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 			const firstDelta = listener.mock.calls[0][0];
 			const staleAddition = firstDelta.delta.changes.find(
 				(change: {type: string}) => change.type === 'upsertPassage'
@@ -5573,7 +5589,7 @@ describe('project-folder native bridge', () => {
 						String(destination) === '/native/race.twine.rs/twine.toml'
 				)
 			).toHaveLength(2);
-			await jest.advanceTimersByTimeAsync(1);
+			await advanceTimersUntilCalled(listener, 2, 1);
 
 			const secondDelta = listener.mock.calls[1][0];
 			const replacement = secondDelta.delta.changes.find(
@@ -5671,7 +5687,7 @@ describe('project-folder native bridge', () => {
 			await startProjectSession('/native/leased.twine.rs', listener, [
 				'story-id'
 			]);
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 			const firstDelta = listener.mock.calls[0][0];
 
 			expect(firstDelta).toEqual(
@@ -5692,7 +5708,7 @@ describe('project-folder native bridge', () => {
 			);
 
 			expect(accepted.generation).toBe(2);
-			await jest.advanceTimersByTimeAsync(1);
+			await advanceTimersUntilCalled(listener, 2, 1);
 			expect(listener).toHaveBeenCalledTimes(2);
 			expect(listener.mock.calls[1][0]).toEqual(
 				expect.objectContaining({
@@ -5793,7 +5809,7 @@ describe('project-folder native bridge', () => {
 			await startProjectSession('/native/deferred.twine.rs', listener, [
 				'story-id'
 			]);
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 			const firstDelta = listener.mock.calls[0][0];
 
 			const dismissed = await resolveProjectSessionConflicts(
@@ -5807,7 +5823,7 @@ describe('project-folder native bridge', () => {
 			await jest.advanceTimersByTimeAsync(1250);
 			expect(listener).toHaveBeenCalledTimes(1);
 
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 2, 1250);
 			expect(listener).toHaveBeenCalledTimes(2);
 			expect(listener.mock.calls[1][0]).toEqual(
 				expect.objectContaining({
@@ -5826,7 +5842,7 @@ describe('project-folder native bridge', () => {
 			await jest.advanceTimersByTimeAsync(1250);
 			expect(listener).toHaveBeenCalledTimes(2);
 
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 3, 1250);
 			expect(listener).toHaveBeenCalledTimes(3);
 		} finally {
 			stopProjectSession('/native/deferred.twine.rs');
@@ -5901,7 +5917,7 @@ describe('project-folder native bridge', () => {
 				'story-id'
 			]);
 			readFileMock.mockClear();
-			await jest.advanceTimersByTimeAsync(1250);
+			await advanceTimersUntilCalled(listener, 1, 1250);
 
 			expect(listener).toHaveBeenCalledWith(
 				expect.objectContaining({
