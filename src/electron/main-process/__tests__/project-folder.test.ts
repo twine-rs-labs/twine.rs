@@ -416,6 +416,7 @@ describe('project-folder native bridge', () => {
 	afterEach(() => {
 		stopProjectSession('/native/project.twine.rs');
 		stopProjectSession('/native/moon-castle.twine.rs');
+		stopProjectSession('/native/leased.twine.rs');
 	});
 
 	it('creates a native project folder with manifest, source files, and metadata', async () => {
