@@ -25,12 +25,12 @@ describe('<CardButton>', () => {
 	}
 
 	it('renders the card if the open prop is true', async () => {
-		renderComponent({open: true});
+		await renderComponent({open: true});
 		expect(screen.getByText('mock-card-button-child')).toBeInTheDocument();
 	});
 
 	it('does not render the card if the open prop is false', async () => {
-		renderComponent({open: false});
+		await renderComponent({open: false});
 		expect(
 			screen.queryByText('mock-card-button-child')
 		).not.toBeInTheDocument();
@@ -39,7 +39,7 @@ describe('<CardButton>', () => {
 	it('calls onChangeOpen if the button is clicked when the card is not open', async () => {
 		const onChangeOpen = jest.fn();
 
-		renderComponent({onChangeOpen});
+		await renderComponent({onChangeOpen});
 		expect(onChangeOpen).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByText('mock-label'));
 		expect(onChangeOpen.mock.calls).toEqual([[true]]);
@@ -48,7 +48,7 @@ describe('<CardButton>', () => {
 	it('calls onChangeOpen if the button is clicked when the card is open', async () => {
 		const onChangeOpen = jest.fn();
 
-		renderComponent({onChangeOpen, open: true});
+		await renderComponent({onChangeOpen, open: true});
 		expect(onChangeOpen).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByText('mock-label'));
 		expect(onChangeOpen.mock.calls).toEqual([[false]]);
@@ -58,7 +58,7 @@ describe('<CardButton>', () => {
 		const onChangeOpen = jest.fn();
 		const onClick = jest.fn();
 
-		renderComponent({onChangeOpen, onClick});
+		await renderComponent({onChangeOpen, onClick});
 		expect(onChangeOpen).not.toHaveBeenCalled();
 		expect(onClick).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByText('mock-label'));
@@ -71,7 +71,7 @@ describe('<CardButton>', () => {
 	it.skip('calls onChangeOpen if the user clicks outside of the card while open', async () => {
 		const onChangeOpen = jest.fn();
 
-		renderComponent({onChangeOpen, open: true});
+		await renderComponent({onChangeOpen, open: true});
 		expect(onChangeOpen).not.toHaveBeenCalled();
 		fireEvent.click(document.body);
 		expect(onChangeOpen.mock.calls).toEqual([[false]]);
@@ -80,7 +80,7 @@ describe('<CardButton>', () => {
 	// This also works in isolation but not with other tests--unsure why.
 
 	it.skip('focuses the first text input in the card contents when open', async () => {
-		renderComponent(
+		await renderComponent(
 			{
 				open: true
 			},

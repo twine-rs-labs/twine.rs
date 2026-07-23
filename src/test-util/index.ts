@@ -6,3 +6,4 @@ export * from './story-format-editor-fixtures';
 export * from './story-inspector';
 export * from './location-inspector';
 export * from './test-route';
+export * from './wait-for-mock-promises';

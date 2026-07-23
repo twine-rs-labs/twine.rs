@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {axe} from 'jest-axe';
-import {act, fireEvent, render, screen} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {
 	Badge,
 	Button,
@@ -66,7 +66,7 @@ describe('design-system primitives', () => {
 		expect(button).toHaveClass('tw-iconbtn--solid');
 	});
 
-	it('shows icon button tooltips on focus', () => {
+	it('shows icon button tooltips on focus', async () => {
 		jest.useFakeTimers();
 		render(
 			<IconButton
@@ -80,6 +80,11 @@ describe('design-system primitives', () => {
 		act(() => {
 			jest.runAllTimers();
 		});
+		await waitFor(() =>
+			expect(screen.getByRole('tooltip', {hidden: true})).toHaveAttribute(
+				'data-popper-placement'
+			)
+		);
 
 		expect(screen.getByText('Go to Passage')).toBeInTheDocument();
 	});

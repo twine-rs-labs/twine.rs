@@ -1,12 +1,13 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {MemoryRouter} from 'react-router';
-import {CoreProjectHostProvider} from '../../../core';
+import {CoreProjectHostProvider, StoreCoreProjectHost} from '../../../core';
 import {publishStorySaveStatus} from '../../../store/persistence/save-status';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {markProjectStoryHydration} from '../../../store/project-hydration';
 import {StoriesContext, Story} from '../../../store/stories';
 import {fakeStory} from '../../../test-util/fakes';
+import {waitForMockPromises} from '../../../test-util';
 import {AppShell} from '../app-shell';
 import {useAppShellContext} from '../app-shell-context';
 
@@ -53,8 +54,12 @@ const MockRouteActions: React.FC = () => {
 	return null;
 };
 
-function renderShell(story: Story, route = `/stories/${story.id}`) {
-	return render(
+async function renderShell(story: Story, route = `/stories/${story.id}`) {
+	const queryWordCount = jest.spyOn(
+		StoreCoreProjectHost.prototype,
+		'queryStoryWordCountAsync'
+	);
+	const result = render(
 		<StoriesContext.Provider value={{dispatch: jest.fn(), stories: [story]}}>
 			<CoreProjectHostProvider>
 				<MemoryRouter initialEntries={[route]}>
@@ -65,6 +70,9 @@ function renderShell(story: Story, route = `/stories/${story.id}`) {
 			</CoreProjectHostProvider>
 		</StoriesContext.Provider>
 	);
+
+	await waitForMockPromises(queryWordCount);
+	return result;
 }
 
 function mockPlatform(platform: string) {
@@ -98,7 +106,7 @@ describe('AppShell', () => {
 	});
 
 	it('wraps route content with shell anatomy and command-bar slots', async () => {
-		renderShell(story);
+		await renderShell(story);
 
 		expect(screen.getByTestId('app-shell')).toBeInTheDocument();
 		expect(screen.getByLabelText('twine.rs')).toBeInTheDocument();
@@ -118,7 +126,10 @@ describe('AppShell', () => {
 		expect(await screen.findByText('5 words')).toBeInTheDocument();
 	});
 
-	it('shows shell story-opening progress while a file-backed story hydrates', () => {
+	it('shows shell story-opening progress while a file-backed story hydrates', async () => {
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryStoryWordCountAsync')
+			.mockResolvedValue(5);
 		saveProjectMetadata(story.id, {
 			rootPath: '/native/moon-castle.twine.rs',
 			status: 'file-backed',
@@ -129,7 +140,7 @@ describe('AppShell', () => {
 			rootPath: '/native/moon-castle.twine.rs'
 		});
 
-		renderShell(story);
+		await renderShell(story);
 
 		expect(
 			screen.getByRole('progressbar', {name: 'Opening story'})
@@ -137,9 +148,13 @@ describe('AppShell', () => {
 		expect(
 			screen.getByRole('button', {name: /Loading passage text/})
 		).toBeInTheDocument();
+		expect(await screen.findByText('5 words')).toBeInTheDocument();
 	});
 
-	it('does not show story-opening progress from the library route', () => {
+	it('does not show story-opening progress from the library route', async () => {
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryStoryWordCountAsync')
+			.mockResolvedValue(5);
 		saveProjectMetadata(story.id, {
 			rootPath: '/native/moon-castle.twine.rs',
 			status: 'file-backed',
@@ -150,7 +165,7 @@ describe('AppShell', () => {
 			rootPath: '/native/moon-castle.twine.rs'
 		});
 
-		renderShell(story, '/');
+		await renderShell(story, '/');
 
 		expect(
 			screen.queryByRole('progressbar', {name: 'Opening story'})
@@ -159,7 +174,7 @@ describe('AppShell', () => {
 	});
 
 	it('opens the global command palette and runs shell commands', async () => {
-		renderShell(story);
+		await renderShell(story);
 
 		fireEvent.keyDown(window, {key: 'k', metaKey: true});
 
@@ -173,7 +188,7 @@ describe('AppShell', () => {
 	});
 
 	it('opens the global command palette from the visible Command button', async () => {
-		renderShell(story);
+		await renderShell(story);
 
 		fireEvent.click(screen.getByRole('button', {name: 'Command'}));
 
@@ -184,7 +199,7 @@ describe('AppShell', () => {
 	});
 
 	it('runs accessible keyboard shortcuts for shell commands', async () => {
-		renderShell(story);
+		await renderShell(story);
 
 		fireEvent.keyDown(window, {key: 'Enter', metaKey: true});
 
@@ -192,7 +207,7 @@ describe('AppShell', () => {
 	});
 
 	it('navigates to the first-class Build surface from commands', async () => {
-		renderShell(story);
+		await renderShell(story);
 
 		fireEvent.keyDown(window, {key: 'k', metaKey: true});
 
@@ -210,8 +225,8 @@ describe('AppShell', () => {
 		expect(screen.getByTitle('Workbench')).not.toHaveAttribute('aria-current');
 	});
 
-	it('marks the Story Formats surface in shell navigation', () => {
-		renderShell(story, '/formats');
+	it('marks the Story Formats surface in shell navigation', async () => {
+		await renderShell(story, '/formats');
 
 		expect(screen.getByTitle('Story Formats')).toHaveAttribute(
 			'aria-current',
@@ -220,8 +235,8 @@ describe('AppShell', () => {
 		expect(screen.getByText('Story Formats')).toBeInTheDocument();
 	});
 
-	it('marks the Settings surface in shell navigation', () => {
-		renderShell(story, '/settings');
+	it('marks the Settings surface in shell navigation', async () => {
+		await renderShell(story, '/settings');
 
 		expect(screen.getByTitle('Settings')).toHaveAttribute(
 			'aria-current',
@@ -231,7 +246,7 @@ describe('AppShell', () => {
 	});
 
 	it('reports persistence errors in the status bar', async () => {
-		renderShell(story);
+		await renderShell(story);
 
 		act(() => {
 			publishStorySaveStatus({
@@ -246,5 +261,6 @@ describe('AppShell', () => {
 			'title',
 			'Disk is full'
 		);
+		expect(await screen.findByText('5 words')).toBeInTheDocument();
 	});
 });

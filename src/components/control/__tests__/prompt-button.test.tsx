@@ -1,5 +1,5 @@
 import {faker} from '@faker-js/faker';
-import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {PromptButton, PromptButtonProps} from '../prompt-button';
@@ -27,14 +27,22 @@ describe('<PromptButton>', () => {
 		return {valid: true};
 	}
 
+	async function openPrompt() {
+		fireEvent.click(screen.getByRole('button'));
+		await waitFor(() =>
+			expect(screen.getByRole('dialog')).toHaveAttribute(
+				'data-popper-placement'
+			)
+		);
+	}
+
 	it('displays the prompt, field, submit and cancel buttons when the button is clicked', async () => {
 		renderComponent({
 			cancelLabel: 'test-cancel',
 			prompt: 'test-prompt',
 			submitLabel: 'test-submit'
 		});
-		fireEvent.click(screen.getByRole('button'));
-		await act(() => Promise.resolve());
+		await openPrompt();
 		expect(
 			screen.getByRole('textbox', {name: 'test-prompt'})
 		).toBeInTheDocument();
@@ -52,13 +60,13 @@ describe('<PromptButton>', () => {
 			prompt: 'test-prompt',
 			submitLabel: 'test-submit'
 		});
-		fireEvent.click(screen.getByRole('button'));
-		await act(() => Promise.resolve());
+		await openPrompt();
 		fireEvent.click(screen.getByRole('button', {name: 'test-cancel'}));
-		await act(() => Promise.resolve());
-		expect(
-			screen.queryByRole('textbox', {name: 'test-prompt'})
-		).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('textbox', {name: 'test-prompt'})
+			).not.toBeInTheDocument()
+		);
 		expect(
 			screen.queryByRole('button', {name: 'test-cancel'})
 		).not.toBeInTheDocument();
@@ -76,10 +84,13 @@ describe('<PromptButton>', () => {
 			prompt: 'test-prompt',
 			submitLabel: 'test-submit'
 		});
-		fireEvent.click(screen.getByRole('button'));
-		await act(() => Promise.resolve());
+		await openPrompt();
 		fireEvent.click(screen.getByRole('button', {name: 'test-cancel'}));
-		await act(() => Promise.resolve());
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('button', {name: 'test-cancel'})
+			).not.toBeInTheDocument()
+		);
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
@@ -95,14 +106,17 @@ describe('<PromptButton>', () => {
 			submitLabel: 'test-submit'
 		});
 		expect(onSubmit).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole('button'));
-		await act(() => Promise.resolve());
+		await openPrompt();
 		expect(onSubmit).not.toHaveBeenCalled();
+		await waitFor(() =>
+			expect(screen.getByRole('button', {name: 'test-submit'})).toBeEnabled()
+		);
 		fireEvent.click(screen.getByRole('button', {name: 'test-submit'}));
-		await act(() => Promise.resolve());
-		expect(
-			screen.queryByRole('textbox', {name: 'test-prompt'})
-		).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('textbox', {name: 'test-prompt'})
+			).not.toBeInTheDocument()
+		);
 		expect(
 			screen.queryByRole('button', {name: 'test-cancel'})
 		).not.toBeInTheDocument();
@@ -116,8 +130,7 @@ describe('<PromptButton>', () => {
 		const onChange = jest.fn();
 
 		renderComponent({onChange, prompt: 'test-prompt', value: 'old'});
-		fireEvent.click(screen.getByRole('button'));
-		await act(() => Promise.resolve());
+		await openPrompt();
 		fireEvent.change(screen.getByRole('textbox', {name: 'test-prompt'}), {
 			target: {value: 'green'}
 		});
@@ -137,15 +150,11 @@ describe('<PromptButton>', () => {
 				submitLabel: 'test-submit',
 				value: 'bad'
 			});
-			fireEvent.click(screen.getByRole('button'));
+			await openPrompt();
 
 			if (validateOn === 'change') {
-				// The button won't disable itself right away if we're validating on submit.
-
 				await waitFor(() =>
-					expect(
-						screen.getByRole('button', {name: 'test-submit'})
-					).toBeDisabled()
+					expect(screen.getByText('mock-validation-error')).toBeInTheDocument()
 				);
 			}
 			fireEvent.submit(screen.getByRole('textbox', {name: 'test-prompt'}));
@@ -153,9 +162,9 @@ describe('<PromptButton>', () => {
 			if (validateOn === 'submit') {
 				// ... but should now be disabled if we're validating on submit.
 
-				expect(
-					screen.getByRole('button', {name: 'test-submit'})
-				).toBeDisabled();
+				await waitFor(() =>
+					expect(screen.getByText('mock-validation-error')).toBeInTheDocument()
+				);
 			}
 			expect(onSubmit).not.toHaveBeenCalled();
 		}

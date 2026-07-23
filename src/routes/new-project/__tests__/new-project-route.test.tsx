@@ -548,9 +548,11 @@ describe('<NewProjectRoute>', () => {
 				'Native Story'
 			)
 		);
-		expect(screen.getByTestId('location')).toHaveAttribute(
-			'data-pathname',
-			'/'
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/'
+			)
 		);
 	});
 

@@ -13,7 +13,8 @@ import {
 	FakeStateProvider,
 	FakeStateProviderProps,
 	fakeStory,
-	LocationInspector
+	LocationInspector,
+	waitForMockPromises
 } from '../../../test-util';
 import {InnerStoryListRoute} from '../story-list-route';
 
@@ -37,7 +38,10 @@ describe('<StoryListRoute>', () => {
 		jest.restoreAllMocks();
 	});
 
-	function renderComponent(contexts?: FakeStateProviderProps) {
+	async function renderComponent(contexts?: FakeStateProviderProps) {
+		const queryWordCount = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryStoryWordCountAsync')
+			.mockResolvedValue(0);
 		const result = render(
 			<MemoryRouter>
 				<FakeStateProvider {...contexts}>
@@ -47,11 +51,12 @@ describe('<StoryListRoute>', () => {
 			</MemoryRouter>
 		);
 
+		await waitForMockPromises(queryWordCount);
 		return result;
 	}
 
-	it('displays launcher actions', () => {
-		renderComponent();
+	it('displays launcher actions', async () => {
+		await renderComponent();
 
 		expect(
 			screen.getByRole('button', {name: /new project/i})
@@ -67,7 +72,7 @@ describe('<StoryListRoute>', () => {
 	});
 
 	it('navigates to the new project route', async () => {
-		renderComponent();
+		await renderComponent();
 
 		fireEvent.click(screen.getByRole('button', {name: /new project/i}));
 		await waitFor(() =>
@@ -78,13 +83,13 @@ describe('<StoryListRoute>', () => {
 		);
 	});
 
-	it('displays a warning for Safari users', () => {
-		renderComponent();
+	it('displays a warning for Safari users', async () => {
+		await renderComponent();
 		expect(screen.getByTestId('mock-safari-warning-card')).toBeInTheDocument();
 	});
 
-	it('displays story rows if there are stories in state', () => {
-		renderComponent({stories: [fakeStory()]});
+	it('displays story rows if there are stories in state', async () => {
+		await renderComponent({stories: [fakeStory()]});
 		expect(screen.getByTestId('story-list-row')).toBeInTheDocument();
 	});
 
@@ -92,7 +97,7 @@ describe('<StoryListRoute>', () => {
 		const story = fakeStory();
 
 		story.name = 'Duplicate Me';
-		renderComponent({stories: [story]});
+		await renderComponent({stories: [story]});
 		fireEvent.click(
 			screen.getByRole('button', {name: /duplicate story duplicate me/i})
 		);
@@ -109,7 +114,7 @@ describe('<StoryListRoute>', () => {
 			.mockResolvedValue(undefined);
 
 		story.tags = [];
-		renderComponent({stories: [story]});
+		await renderComponent({stories: [story]});
 		fireEvent.click(screen.getByRole('button', {name: 'common.tags'}));
 		fireEvent.change(
 			screen.getByRole('combobox', {
@@ -129,7 +134,7 @@ describe('<StoryListRoute>', () => {
 	});
 
 	it('exports a restorable archive of the complete library', async () => {
-		renderComponent({stories: [fakeStory()]});
+		await renderComponent({stories: [fakeStory()]});
 		fireEvent.click(
 			screen.getByRole('button', {name: /export library archive/i})
 		);
@@ -142,8 +147,8 @@ describe('<StoryListRoute>', () => {
 		expect(filename).toBe('store.archiveFilename');
 	});
 
-	it('opens global story tag management from the launcher', () => {
-		renderComponent({stories: [fakeStory()]});
+	it('opens global story tag management from the launcher', async () => {
+		await renderComponent({stories: [fakeStory()]});
 		fireEvent.click(screen.getByRole('button', {name: /story tags/i}));
 
 		expect(screen.getByText('dialogs.storyTags.title')).toBeInTheDocument();
@@ -164,7 +169,7 @@ describe('<StoryListRoute>', () => {
 		});
 		(window as any).twineElectron = {deleteProjectFolder};
 
-		renderComponent({stories: [story]});
+		await renderComponent({stories: [story]});
 		fireEvent.click(
 			screen.getByRole('button', {name: /delete story trigaea/i})
 		);
@@ -210,7 +215,7 @@ describe('<StoryListRoute>', () => {
 		(window as any).twineElectron = {deleteProjectFolder};
 		jest.spyOn(window, 'confirm').mockReturnValue(true);
 
-		renderComponent({stories: [story]});
+		await renderComponent({stories: [story]});
 		fireEvent.click(
 			screen.getByRole('button', {
 				name: new RegExp(`delete story ${story.name}`, 'i')
@@ -223,7 +228,7 @@ describe('<StoryListRoute>', () => {
 		await waitFor(() => expect(loadProjectMetadata(story.id)).toBeUndefined());
 	});
 
-	it('keeps a file-backed project folder if deletion is canceled', () => {
+	it('keeps a file-backed project folder if deletion is canceled', async () => {
 		const story = fakeStory();
 		const rootPath = '/native/moon-castle.twine.rs';
 		const deleteProjectFolder = jest.fn().mockResolvedValue(undefined);
@@ -237,7 +242,7 @@ describe('<StoryListRoute>', () => {
 		(window as any).twineElectron = {deleteProjectFolder};
 		jest.spyOn(window, 'confirm').mockReturnValue(false);
 
-		renderComponent({stories: [story]});
+		await renderComponent({stories: [story]});
 		fireEvent.click(
 			screen.getByRole('button', {name: /delete story moon castle/i})
 		);
@@ -247,7 +252,7 @@ describe('<StoryListRoute>', () => {
 		expect(loadProjectMetadata(story.id)?.rootPath).toBe(rootPath);
 	});
 
-	it('enumerates every story removed with a multi-story project', () => {
+	it('enumerates every story removed with a multi-story project', async () => {
 		const firstStory = fakeStory();
 		const secondStory = fakeStory();
 		const rootPath = '/native/story-collection.twine.rs';
@@ -265,7 +270,7 @@ describe('<StoryListRoute>', () => {
 		}
 		(window as any).twineElectron = {deleteProjectFolder};
 
-		renderComponent({stories: [firstStory, secondStory]});
+		await renderComponent({stories: [firstStory, secondStory]});
 		fireEvent.click(
 			screen.getByRole('button', {name: /delete story first story/i})
 		);
@@ -284,7 +289,7 @@ describe('<StoryListRoute>', () => {
 
 		story.name = 'Standalone Story';
 		(window as any).twineElectron = {deleteStory: jest.fn()};
-		renderComponent({stories: [story]});
+		await renderComponent({stories: [story]});
 		fireEvent.click(
 			screen.getByRole('button', {name: /delete story standalone story/i})
 		);
@@ -302,13 +307,13 @@ describe('<StoryListRoute>', () => {
 		);
 	});
 
-	it('displays an empty launcher state if there are no stories in state', () => {
-		renderComponent({stories: []});
+	it('displays an empty launcher state if there are no stories in state', async () => {
+		await renderComponent({stories: []});
 		expect(screen.queryByTestId('story-list-row')).not.toBeInTheDocument();
 		expect(screen.getByText('No projects yet')).toBeInTheDocument();
 	});
 
-	it('sorts stories by name if the user pref is set to that', () => {
+	it('sorts stories by name if the user pref is set to that', async () => {
 		const story1 = fakeStory();
 		const story2 = fakeStory();
 
@@ -316,7 +321,7 @@ describe('<StoryListRoute>', () => {
 		story1.lastUpdate = new Date('1/1/2000');
 		story2.name = 'b';
 		story2.lastUpdate = new Date('1/1/1999');
-		renderComponent({
+		await renderComponent({
 			prefs: {storyListSort: 'name'},
 			stories: [story2, story1]
 		});
@@ -328,7 +333,7 @@ describe('<StoryListRoute>', () => {
 		expect(rows[1].dataset.id).toBe(story2.id);
 	});
 
-	it('sorts stories by reverse chronological edit order if the user pref is set to that', () => {
+	it('sorts stories by reverse chronological edit order if the user pref is set to that', async () => {
 		const story1 = fakeStory();
 		const story2 = fakeStory();
 
@@ -336,7 +341,7 @@ describe('<StoryListRoute>', () => {
 		story1.lastUpdate = new Date('1/1/2000');
 		story2.name = 'a';
 		story2.lastUpdate = new Date('1/1/1999');
-		renderComponent({
+		await renderComponent({
 			prefs: {storyListSort: 'date'},
 			stories: [story2, story1]
 		});
@@ -348,28 +353,28 @@ describe('<StoryListRoute>', () => {
 		expect(rows[1].dataset.id).toBe(story2.id);
 	});
 
-	it('displays a donation prompt if useDonationCheck() says it should be shown', () => {
+	it('displays a donation prompt if useDonationCheck() says it should be shown', async () => {
 		useDonationCheckMock.mockReturnValue({
 			shouldShowDonationPrompt: () => true
 		});
 
-		renderComponent();
+		await renderComponent();
 		expect(screen.getByText('dialogs.appDonation.title')).toBeInTheDocument();
 	});
 
-	it('does not display a donation prompt if useDonationCheck() says it should not be shown', () => {
+	it('does not display a donation prompt if useDonationCheck() says it should not be shown', async () => {
 		useDonationCheckMock.mockReturnValue({
 			shouldShowDonationPrompt: () => false
 		});
 
-		renderComponent();
+		await renderComponent();
 		expect(
 			screen.queryByText('dialogs.appDonation.title')
 		).not.toBeInTheDocument();
 	});
 
 	it('is accessible', async () => {
-		const {container} = renderComponent();
+		const {container} = await renderComponent();
 
 		expect(await axe(container)).toHaveNoViolations();
 	});

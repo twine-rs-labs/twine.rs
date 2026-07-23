@@ -1,12 +1,14 @@
 import {fireEvent, render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
+import {StoreCoreProjectHost} from '../../../../core/project-host';
 import {useStoriesContext} from '../../../../store/stories';
 import {
 	fakeLoadedStoryFormat,
 	FakeStateProvider,
 	FakeStateProviderProps,
-	fakeStory
+	fakeStory,
+	waitForMockPromises
 } from '../../../../test-util';
 import {DetailsButton} from '../details-button';
 
@@ -25,14 +27,19 @@ describe('<DetailsButton>', () => {
 		);
 	}
 
-	it('opens the story details dialog when clicked', () => {
+	it('opens the story details dialog when clicked', async () => {
 		const story = fakeStory();
 		const format = fakeLoadedStoryFormat();
+		const queryStorySummary = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'queryStorySummaryAsync'
+		);
 
 		story.storyFormat = format.name;
 		story.storyFormatVersion = format.version;
 		renderComponent({stories: [story], storyFormats: [format]});
 		fireEvent.click(screen.getByRole('button', {name: 'common.details'}));
+		await waitForMockPromises(queryStorySummary);
 		expect(screen.getByText(story.name)).toBeInTheDocument();
 	});
 

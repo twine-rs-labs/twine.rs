@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {TagCardButton, TagCardButtonProps} from '../tag-card-button';
 import {axe} from 'jest-axe';
@@ -21,6 +21,15 @@ describe('<TagCardButton>', () => {
 		);
 	}
 
+	async function openCard(label: string) {
+		fireEvent.click(screen.getByRole('button', {name: label}));
+		await waitFor(() =>
+			expect(screen.getByRole('dialog')).toHaveAttribute(
+				'data-popper-placement'
+			)
+		);
+	}
+
 	it('has a Tags label if there are no tags', () => {
 		renderComponent();
 		expect(screen.getByRole('button', {name: 'common.tags'})).toBeVisible();
@@ -36,11 +45,11 @@ describe('<TagCardButton>', () => {
 	});
 
 	describe('When the card is opened', () => {
-		it('allows adding a new tag', () => {
+		it('allows adding a new tag', async () => {
 			const onAdd = jest.fn();
 
 			renderComponent({onAdd});
-			fireEvent.click(screen.getByRole('button', {name: 'common.tags'}));
+			await openCard('common.tags');
 			fireEvent.change(
 				screen.getByRole('combobox', {
 					name: 'components.tagCardButton.tagNameLabel'
@@ -52,16 +61,12 @@ describe('<TagCardButton>', () => {
 			expect(onAdd.mock.calls).toEqual([['new-tag']]);
 		});
 
-		it("sets autocompletions to all tags that haven't already been added", () => {
+		it("sets autocompletions to all tags that haven't already been added", async () => {
 			renderComponent({
 				allTags: ['one', 'two', 'three'],
 				tags: ['one', 'three']
 			});
-			fireEvent.click(
-				screen.getByRole('button', {
-					name: 'components.tagCardButton.tagsWithCount'
-				})
-			);
+			await openCard('components.tagCardButton.tagsWithCount');
 			expect(
 				(
 					screen
@@ -73,7 +78,7 @@ describe('<TagCardButton>', () => {
 
 		it('clears the text field after adding a tag', async () => {
 			renderComponent();
-			fireEvent.click(screen.getByRole('button', {name: 'common.tags'}));
+			await openCard('common.tags');
 			fireEvent.change(
 				screen.getByRole('combobox', {
 					name: 'components.tagCardButton.tagNameLabel'
@@ -90,7 +95,7 @@ describe('<TagCardButton>', () => {
 
 		it('clears the text field after closing the card', async () => {
 			renderComponent();
-			fireEvent.click(screen.getByRole('button', {name: 'common.tags'}));
+			await openCard('common.tags');
 			fireEvent.change(
 				screen.getByRole('combobox', {
 					name: 'components.tagCardButton.tagNameLabel'
@@ -98,7 +103,10 @@ describe('<TagCardButton>', () => {
 				{target: {value: 'new-tag'}}
 			);
 			fireEvent.click(screen.getByRole('button', {name: 'common.tags'}));
-			fireEvent.click(screen.getByRole('button', {name: 'common.tags'}));
+			await waitFor(() =>
+				expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+			);
+			await openCard('common.tags');
 			expect(
 				screen.getByRole('combobox', {
 					name: 'components.tagCardButton.tagNameLabel'
@@ -106,13 +114,9 @@ describe('<TagCardButton>', () => {
 			).toHaveValue('');
 		});
 
-		it('prevents adding a tag already present', () => {
+		it('prevents adding a tag already present', async () => {
 			renderComponent({tags: ['test']});
-			fireEvent.click(
-				screen.getByRole('button', {
-					name: 'components.tagCardButton.tagsWithCount'
-				})
-			);
+			await openCard('components.tagCardButton.tagsWithCount');
 			fireEvent.change(
 				screen.getByRole('combobox', {
 					name: 'components.tagCardButton.tagNameLabel'
@@ -122,13 +126,9 @@ describe('<TagCardButton>', () => {
 			expect(screen.getByRole('button', {name: 'common.add'})).toBeDisabled();
 		});
 
-		it('prevents adding an invalid tag', () => {
+		it('prevents adding an invalid tag', async () => {
 			renderComponent();
-			fireEvent.click(
-				screen.getByRole('button', {
-					name: 'common.tags'
-				})
-			);
+			await openCard('common.tags');
 			fireEvent.change(
 				screen.getByRole('combobox', {
 					name: 'components.tagCardButton.tagNameLabel'
@@ -147,9 +147,9 @@ describe('<TagCardButton>', () => {
 			expect(screen.getByRole('button', {name: 'common.add'})).toBeDisabled();
 		});
 
-		it('passes the id prop to the autocomplete input', () => {
+		it('passes the id prop to the autocomplete input', async () => {
 			renderComponent({id: 'custom-test-id'});
-			fireEvent.click(screen.getByRole('button', {name: 'common.tags'}));
+			await openCard('common.tags');
 			const input = screen.getByRole('combobox', {
 				name: 'components.tagCardButton.tagNameLabel'
 			});
@@ -157,41 +157,29 @@ describe('<TagCardButton>', () => {
 		});
 
 		describe('The tag list it shows', () => {
-			it('has one tag per tag in props', () => {
+			it('has one tag per tag in props', async () => {
 				renderComponent({tags: ['test1', 'test2']});
-				fireEvent.click(
-					screen.getByRole('button', {
-						name: 'components.tagCardButton.tagsWithCount'
-					})
-				);
+				await openCard('components.tagCardButton.tagsWithCount');
 				expect(screen.getByRole('button', {name: 'test1'})).toBeVisible();
 				expect(screen.getByRole('button', {name: 'test2'})).toBeVisible();
 			});
 
-			it('passes through color changes', () => {
+			it('passes through color changes', async () => {
 				const onChangeColor = jest.fn();
 
 				renderComponent({onChangeColor, tags: ['test']});
-				fireEvent.click(
-					screen.getByRole('button', {
-						name: 'components.tagCardButton.tagsWithCount'
-					})
-				);
+				await openCard('components.tagCardButton.tagsWithCount');
 				fireEvent.click(screen.getByRole('button', {name: 'test'}));
 				expect(onChangeColor).not.toHaveBeenCalled();
 				fireEvent.click(screen.getByRole('checkbox', {name: 'colors.red'}));
 				expect(onChangeColor.mock.calls).toEqual([['test', 'red']]);
 			});
 
-			it('passes through removals', () => {
+			it('passes through removals', async () => {
 				const onRemove = jest.fn();
 
 				renderComponent({onRemove, tags: ['test']});
-				fireEvent.click(
-					screen.getByRole('button', {
-						name: 'components.tagCardButton.tagsWithCount'
-					})
-				);
+				await openCard('components.tagCardButton.tagsWithCount');
 				fireEvent.click(screen.getByRole('button', {name: 'test'}));
 				expect(onRemove).not.toHaveBeenCalled();
 				fireEvent.click(screen.getByRole('button', {name: 'common.remove'}));

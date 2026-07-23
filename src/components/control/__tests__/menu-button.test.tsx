@@ -1,9 +1,9 @@
-import {fireEvent, render, screen} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {MenuButton} from '../menu-button';
 
 describe('<MenuButton>', () => {
-	it('opens its fixed-position menu and invokes an item', () => {
+	it('opens its fixed-position menu and invokes an item', async () => {
 		const onClick = jest.fn();
 
 		render(
@@ -15,7 +15,14 @@ describe('<MenuButton>', () => {
 		);
 
 		fireEvent.click(screen.getByRole('button', {name: 'Actions'}));
-		fireEvent.click(screen.getByRole('button', {name: 'Do the thing'}));
+		const item = screen.getByRole('button', {name: 'Do the thing'});
+
+		await waitFor(() =>
+			expect(item.closest('.menu-button-menu')).toHaveAttribute(
+				'data-popper-placement'
+			)
+		);
+		fireEvent.click(item);
 
 		expect(onClick).toHaveBeenCalledTimes(1);
 	});

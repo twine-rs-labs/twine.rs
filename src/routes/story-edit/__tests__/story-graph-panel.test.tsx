@@ -466,9 +466,10 @@ describe('<StoryGraphPanel>', () => {
 		await waitFor(() => expect(querySpy).toHaveBeenCalledTimes(1));
 	});
 
-	it('tests the selected passage from the graph toolbar', () => {
-		const {onTestPassage, start} = renderComponent();
+	it('tests the selected passage from the graph toolbar', async () => {
+		const {onTestPassage, result, start} = renderComponent();
 
+		await waitForNode(result.container, start.id);
 		fireEvent.click(screen.getByRole('button', {name: 'Test From Here'}));
 
 		expect(onTestPassage).toHaveBeenCalledWith(start);
@@ -624,12 +625,12 @@ describe('<StoryGraphPanel>', () => {
 		);
 	});
 
-	it('uses a bounded initial graph projection before viewport measurement', () => {
+	it('uses a bounded initial graph projection before viewport measurement', async () => {
 		const querySpy = jest.spyOn(
 			StoreCoreProjectHost.prototype,
 			'queryGraphProjectionAsync'
 		);
-		const {story} = renderComponent();
+		const {result, story} = renderComponent();
 
 		expect(querySpy).toHaveBeenCalledWith(
 			story.id,
@@ -642,6 +643,7 @@ describe('<StoryGraphPanel>', () => {
 				})
 			})
 		);
+		await waitForNode(result.container, 'start');
 	});
 
 	it('keeps the edge canvas backing store bounded at low zoom', async () => {
@@ -776,11 +778,13 @@ describe('<StoryGraphPanel>', () => {
 		rectSpy.mockRestore();
 	});
 
-	it('pans the world transform with a middle-button drag', () => {
+	it('pans the world transform with a middle-button drag', async () => {
 		const {result} = renderComponent();
 		const viewport = result.container.querySelector(
 			'.story-edit-graph-viewport'
 		) as HTMLElement;
+
+		await waitForNode(result.container, 'start');
 		const start = worldView(result.container);
 
 		// Middle-button (or Space / pan tool) pans; a plain left-drag marquees.
@@ -1051,7 +1055,7 @@ describe('<StoryGraphPanel>', () => {
 		);
 	});
 
-	it('does not create passages from right-click when the preference is disabled', () => {
+	it('does not create passages from right-click when the preference is disabled', async () => {
 		const {onCreate, result} = renderComponent(false, undefined, {
 			prefs: {graphRightClickCreatePassage: false}
 		});
@@ -1059,6 +1063,7 @@ describe('<StoryGraphPanel>', () => {
 			'.story-edit-graph-viewport'
 		) as HTMLElement;
 
+		await waitForNode(result.container, 'start');
 		fireEvent.contextMenu(viewport, {clientX: 220, clientY: 180});
 
 		expect(onCreate).not.toHaveBeenCalled();
@@ -1120,7 +1125,7 @@ describe('<StoryGraphPanel>', () => {
 		);
 	});
 
-	it('shows and toggles the story snap grid state from the graph toolbar', () => {
+	it('shows and toggles the story snap grid state from the graph toolbar', async () => {
 		const {result, story} = renderComponent(false, ({story}) => {
 			story.snapToGrid = true;
 		});
@@ -1136,6 +1141,7 @@ describe('<StoryGraphPanel>', () => {
 			graphLayer.style.getPropertyValue('--story-edit-snap-major-grid-size')
 		).toBe('125px');
 
+		await waitForNode(result.container, 'start');
 		fireEvent.click(screen.getByRole('button', {name: 'Snap to grid'}));
 
 		expect(applyStoryCommandSpy).toHaveBeenCalledWith({
@@ -1180,11 +1186,13 @@ describe('<StoryGraphPanel>', () => {
 		);
 	});
 
-	it('zooms the world toward the cursor on the wheel without scrolling', () => {
+	it('zooms the world toward the cursor on the wheel without scrolling', async () => {
 		const {result} = renderComponent();
 		const viewport = result.container.querySelector(
 			'.story-edit-graph-viewport'
 		) as HTMLElement;
+
+		await waitForNode(result.container, 'start');
 		const before = worldView(result.container);
 
 		fireEvent.wheel(viewport, {clientX: 120, clientY: 100, deltaY: -100});
@@ -1197,7 +1205,7 @@ describe('<StoryGraphPanel>', () => {
 		expect(viewport.scrollTop).toBe(0);
 	});
 
-	it('keeps the live zoom when the story prop refreshes before graph view persistence', () => {
+	it('keeps the live zoom when the story prop refreshes before graph view persistence', async () => {
 		const {story} = graphStory();
 		const storedGraphView = {k: 1, x: 80, y: 60};
 		const onCreate = jest.fn();
@@ -1246,6 +1254,7 @@ describe('<StoryGraphPanel>', () => {
 		};
 		const result = render(<TestComponent />);
 
+		await waitForNode(result.container, 'start');
 		fireEvent.click(screen.getByRole('button', {name: 'Zoom in'}));
 		const zoomed = worldView(result.container);
 
@@ -1367,9 +1376,10 @@ describe('<StoryGraphPanel>', () => {
 		);
 	});
 
-	it('does not render graph orientation controls', () => {
-		const {storiesDispatch} = renderComponent();
+	it('does not render graph orientation controls', async () => {
+		const {result, storiesDispatch} = renderComponent();
 
+		await waitForNode(result.container, 'start');
 		expect(
 			screen.queryByRole('button', {name: /Rotate view/})
 		).not.toBeInTheDocument();
@@ -1379,9 +1389,10 @@ describe('<StoryGraphPanel>', () => {
 		expect(storiesDispatch).not.toHaveBeenCalled();
 	});
 
-	it('saves generated layout through the core project host', () => {
-		const {story} = renderComponent(true);
+	it('saves generated layout through the core project host', async () => {
+		const {result, story} = renderComponent(true);
 
+		await waitForNode(result.container, 'start');
 		fireEvent.click(screen.getByRole('button', {name: /Save Layout/}));
 
 		expect(applyStoryCommandSpy).toHaveBeenCalledWith({

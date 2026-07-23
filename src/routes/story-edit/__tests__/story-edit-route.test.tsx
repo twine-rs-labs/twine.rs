@@ -5,6 +5,7 @@ import {axe} from 'jest-axe';
 import * as React from 'react';
 import {MemoryRouter, useNavigate} from 'react-router';
 import {AppShell} from '../../../components/app-shell';
+import {StoreCoreProjectHost} from '../../../core/project-host';
 import {Story} from '../../../store/stories';
 import {useStoryFormatsContext} from '../../../store/story-formats';
 import {
@@ -14,7 +15,8 @@ import {
 	fakeStory,
 	LocationInspector,
 	StoryInspector,
-	TestRoute
+	TestRoute,
+	waitForMockPromises
 } from '../../../test-util';
 import {InnerStoryEditRoute} from '../story-edit-route';
 
@@ -65,6 +67,10 @@ describe('<StoryEditRoute>', () => {
 		initialEntry?: (story: Story) => string | string[]
 	) {
 		const format = fakeLoadedStoryFormat();
+
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryStoryWordCountAsync')
+			.mockImplementation(() => new Promise<never>(() => {}));
 
 		format.name = story.storyFormat;
 		format.version = story.storyFormatVersion;
@@ -495,6 +501,13 @@ describe('<StoryEditRoute>', () => {
 				name: 'routes.storyEdit.workspace.textMode'
 			})
 		);
+		await waitFor(() =>
+			expect(
+				container.querySelector(
+					`[data-testid="story-editor-window-${story.passages[0].id}"] .cm-content`
+				)
+			).toHaveTextContent('Opening text.')
+		);
 		fireEvent.click(
 			screen.getByRole('button', {name: 'routes.storyEdit.toolbar.goTo'})
 		);
@@ -508,6 +521,11 @@ describe('<StoryEditRoute>', () => {
 	});
 
 	it('opens story find and replace from shell toolbar story actions', async () => {
+		const querySearchPage = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'querySearchPageAsync'
+		);
+
 		await renderComponent(fakeStory());
 
 		fireEvent.click(await screen.findByRole('tab', {name: 'common.story'}));
@@ -516,6 +534,7 @@ describe('<StoryEditRoute>', () => {
 				name: 'routes.storyEdit.toolbar.findAndReplace'
 			})
 		);
+		await waitForMockPromises(querySearchPage);
 
 		expect(screen.getByText('dialogs.storySearch.title')).toBeInTheDocument();
 	});
@@ -554,10 +573,16 @@ describe('<StoryEditRoute>', () => {
 	});
 
 	it('opens story details from shell toolbar story actions', async () => {
+		const queryStorySummary = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'queryStorySummaryAsync'
+		);
+
 		await renderComponent(fakeStory());
 
 		fireEvent.click(await screen.findByRole('tab', {name: 'common.story'}));
 		fireEvent.click(screen.getByRole('button', {name: 'common.details'}));
+		await waitForMockPromises(queryStorySummary);
 
 		expect(
 			screen.getByLabelText('dialogs.storyDetails.snapToGrid')

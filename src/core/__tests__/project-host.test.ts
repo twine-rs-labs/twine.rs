@@ -683,6 +683,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 	});
 
 	it('rolls back a prepared native asset effect when Rust rejects it', async () => {
+		const error = jest.spyOn(console, 'error').mockImplementation();
 		const applyProjectAssetEffect = jest
 			.fn()
 			.mockResolvedValue('effect-after-rollback');
@@ -713,6 +714,9 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(applyProjectAssetEffect).toHaveBeenCalledWith('effect-2', 'undo');
 		expect(discardProjectAssetEffect).toHaveBeenCalledWith(
 			'effect-after-rollback'
+		);
+		expect(error).toHaveBeenCalledWith(
+			'Rust project session command failed: Error: rejected'
 		);
 		delete (window as any).twineElectron;
 	});

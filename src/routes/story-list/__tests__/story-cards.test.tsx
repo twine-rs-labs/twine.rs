@@ -28,7 +28,7 @@ describe('<StoryCards>', () => {
 		useStoryLaunchMock.mockReturnValue({playStory, testStory});
 	});
 
-	async function renderComponent(
+	function renderComponent(
 		props?: Partial<StoryCardsProps>,
 		contexts?: FakeStateProviderProps
 	) {
@@ -53,7 +53,7 @@ describe('<StoryCards>', () => {
 	it('renders a card for every story in props', async () => {
 		const stories = [fakeStory(), fakeStory()];
 
-		await renderComponent({stories});
+		renderComponent({stories});
 		expect(
 			screen.getByTestId(`mock-story-card-${stories[0].id}`)
 		).toBeInTheDocument();
@@ -104,7 +104,7 @@ describe('<StoryCards>', () => {
 	it('navigates to /stories/:id when a story is edited', async () => {
 		const stories = [fakeStory()];
 
-		await renderComponent({stories});
+		renderComponent({stories});
 		fireEvent.click(screen.getByText('onEdit'));
 		await waitFor(() =>
 			expect(screen.getByTestId('location')).toHaveAttribute(
@@ -115,7 +115,7 @@ describe('<StoryCards>', () => {
 	});
 
 	it('is accessible', async () => {
-		const {container} = await renderComponent();
+		const {container} = renderComponent();
 
 		expect(await axe(container)).toHaveNoViolations();
 	});

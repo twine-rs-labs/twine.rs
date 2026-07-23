@@ -8,7 +8,8 @@ import {
 	FakeStateProviderProps,
 	fakeStory,
 	LocationInspector,
-	StoryInspector
+	StoryInspector,
+	waitForMockPromises
 } from '../../test-util';
 import {StorySearchDialog, StorySearchDialogProps} from '../story-search';
 import {StoreCoreProjectHost} from '../../core/project-host';
@@ -40,10 +41,14 @@ const TestStorySearchDialog = (props: Partial<StorySearchDialogProps>) => {
 };
 
 describe('<StorySearchDialog>', () => {
-	function renderComponent(
+	async function renderComponent(
 		props?: Partial<StorySearchDialogProps>,
 		context?: Partial<FakeStateProviderProps>
 	) {
+		const querySearchPage = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'querySearchPageAsync'
+		);
 		const result = render(
 			<FakeStateProvider {...context}>
 				<MemoryRouter>
@@ -54,6 +59,7 @@ describe('<StorySearchDialog>', () => {
 			</FakeStateProvider>
 		);
 
+		await waitForMockPromises(querySearchPage);
 		return result;
 	}
 
@@ -64,15 +70,15 @@ describe('<StorySearchDialog>', () => {
 		['Find', 'dialogs.storySearch.find', 'find'],
 		['Replace', 'dialogs.storySearch.replaceWith', 'replace']
 	])('%s field', (name, label, propName) => {
-		it(`sets its value with the ${propName} prop`, () => {
-			renderComponent({[propName]: 'test-value'});
+		it(`sets its value with the ${propName} prop`, async () => {
+			await renderComponent({[propName]: 'test-value'});
 			expect(screen.getByRole('textbox', {name: label})).toHaveValue(
 				'test-value'
 			);
 		});
 
-		it('supports multiline values', () => {
-			renderComponent({[propName]: 'first line\nsecond line'});
+		it('supports multiline values', async () => {
+			await renderComponent({[propName]: 'first line\nsecond line'});
 
 			const field = screen.getByRole('textbox', {name: label});
 
@@ -80,7 +86,7 @@ describe('<StorySearchDialog>', () => {
 			expect(field).toHaveValue('first line\nsecond line');
 		});
 
-		it('updates props on itself when the field is changed', () => {
+		it('updates props on itself when the field is changed', async () => {
 			const onChangeProps = jest.fn();
 			const story = fakeStory();
 			const existing = {
@@ -90,7 +96,7 @@ describe('<StorySearchDialog>', () => {
 				storyId: story.id
 			};
 
-			renderComponent({onChangeProps, ...existing}, {stories: [story]});
+			await renderComponent({onChangeProps, ...existing}, {stories: [story]});
 			fireEvent.change(screen.getByRole('textbox', {name: label}), {
 				target: {value: 'test-change'}
 			});
@@ -105,21 +111,21 @@ describe('<StorySearchDialog>', () => {
 		['Match Case', 'matchCase'],
 		['Use Regexes', 'useRegexes']
 	])('%s field', (name, label) => {
-		it(`is checked if the ${label} prop is true`, () => {
-			renderComponent({flags: {[label]: true}});
+		it(`is checked if the ${label} prop is true`, async () => {
+			await renderComponent({flags: {[label]: true}});
 			expect(
 				screen.getByRole('checkbox', {name: `dialogs.storySearch.${label}`})
 			).toBeChecked();
 		});
 
-		it(`is unchecked if the ${label} prop is false`, () => {
-			renderComponent({flags: {[label]: false}});
+		it(`is unchecked if the ${label} prop is false`, async () => {
+			await renderComponent({flags: {[label]: false}});
 			expect(
 				screen.getByRole('checkbox', {name: `dialogs.storySearch.${label}`})
 			).not.toBeChecked();
 		});
 
-		it('updates props on itself when checked', () => {
+		it('updates props on itself when checked', async () => {
 			const onChangeProps = jest.fn();
 			const story = fakeStory();
 			const existing = {
@@ -134,7 +140,7 @@ describe('<StorySearchDialog>', () => {
 				storyId: story.id
 			};
 
-			renderComponent({onChangeProps, ...existing}, {stories: [story]});
+			await renderComponent({onChangeProps, ...existing}, {stories: [story]});
 			fireEvent.click(
 				screen.getByRole('checkbox', {name: `dialogs.storySearch.${label}`})
 			);
@@ -143,7 +149,7 @@ describe('<StorySearchDialog>', () => {
 			]);
 		});
 
-		it('updates props on itself when unchecked', () => {
+		it('updates props on itself when unchecked', async () => {
 			const onChangeProps = jest.fn();
 			const story = fakeStory();
 			const existing = {
@@ -157,7 +163,7 @@ describe('<StorySearchDialog>', () => {
 				storyId: story.id
 			};
 
-			renderComponent({onChangeProps, ...existing}, {stories: [story]});
+			await renderComponent({onChangeProps, ...existing}, {stories: [story]});
 			fireEvent.click(
 				screen.getByRole('checkbox', {name: `dialogs.storySearch.${label}`})
 			);
@@ -173,7 +179,7 @@ describe('<StorySearchDialog>', () => {
 		story.passages[0].highlighted = true;
 		story.passages[1].highlighted = true;
 		story.passages[2].highlighted = true;
-		renderComponent({}, {stories: [story]});
+		await renderComponent({}, {stories: [story]});
 		await waitFor(() =>
 			expect(
 				screen.getByTestId(`passage-${story.passages[0].id}`).dataset
@@ -197,7 +203,7 @@ describe('<StorySearchDialog>', () => {
 		story.passages[1].text = 'bbb';
 		story.passages[2].highlighted = false;
 		story.passages[2].text = 'ccc';
-		renderComponent({find: 'aaa'}, {stories: [story]});
+		await renderComponent({find: 'aaa'}, {stories: [story]});
 		await waitFor(() =>
 			expect(
 				screen.getByTestId(`passage-${story.passages[0].id}`).dataset
@@ -217,7 +223,7 @@ describe('<StorySearchDialog>', () => {
 
 		story.passages[0].highlighted = false;
 		story.passages[0].text = 'aaa';
-		renderComponent({find: 'a'}, {stories: [story]});
+		await renderComponent({find: 'a'}, {stories: [story]});
 		expect(
 			screen.getByTestId(`passage-${story.passages[0].id}`).dataset.highlighted
 		).toBe('false');
@@ -235,7 +241,7 @@ describe('<StorySearchDialog>', () => {
 		story.passages[0].highlighted = true;
 		story.passages[0].name = 'aBC';
 		story.passages[0].text = '';
-		renderComponent(
+		await renderComponent(
 			{
 				find: 'aB.',
 				flags: {includePassageNames: false, matchCase: true, useRegexes: true}
@@ -254,7 +260,7 @@ describe('<StorySearchDialog>', () => {
 		const story = fakeStory();
 
 		story.passages[0].highlighted = true;
-		renderComponent({}, {stories: [story]});
+		await renderComponent({}, {stories: [story]});
 		fireEvent.click(screen.getByText('close'));
 
 		await waitFor(() =>
@@ -269,7 +275,7 @@ describe('<StorySearchDialog>', () => {
 		const story = fakeStory(1);
 
 		story.passages[0].text = 'aaa';
-		renderComponent({find: 'a'}, {stories: [story]});
+		await renderComponent({find: 'a'}, {stories: [story]});
 		expect(
 			await screen.findByText('dialogs.storySearch.matchCount')
 		).toBeInTheDocument();
@@ -278,8 +284,8 @@ describe('<StorySearchDialog>', () => {
 		).not.toBeInTheDocument();
 	});
 
-	it('shows ready guidance before a search has been entered', () => {
-		renderComponent();
+	it('shows ready guidance before a search has been entered', async () => {
+		await renderComponent();
 
 		expect(screen.getByText('dialogs.storySearch.ready')).toBeInTheDocument();
 	});
@@ -289,7 +295,10 @@ describe('<StorySearchDialog>', () => {
 
 		story.passages[0].name = 'aaa';
 		story.passages[0].text = 'bbb';
-		renderComponent({find: 'needle-that-is-not-present'}, {stories: [story]});
+		await renderComponent(
+			{find: 'needle-that-is-not-present'},
+			{stories: [story]}
+		);
 		expect(
 			await screen.findByText('dialogs.storySearch.noMatches')
 		).toBeInTheDocument();
@@ -306,7 +315,7 @@ describe('<StorySearchDialog>', () => {
 		);
 
 		story.passages[0].text = 'mock-find';
-		renderComponent(
+		await renderComponent(
 			{
 				find: 'mock-find',
 				flags: {includePassageNames: false, matchCase: true, useRegexes: true},
@@ -338,7 +347,7 @@ describe('<StorySearchDialog>', () => {
 
 		story.passages[0].text = '';
 		story.script = 'const mockFind = true;';
-		renderComponent({find: 'mockFind'}, {stories: [story]});
+		await renderComponent({find: 'mockFind'}, {stories: [story]});
 		fireEvent.click(
 			await screen.findByRole('button', {name: /Story JavaScript/})
 		);
@@ -362,7 +371,7 @@ describe('<StorySearchDialog>', () => {
 
 		story.passages[0].text = '';
 		story.script = '😀 café const mockFind = true;';
-		renderComponent({find: 'mockFind'}, {stories: [story]});
+		await renderComponent({find: 'mockFind'}, {stories: [story]});
 		fireEvent.click(
 			await screen.findByRole('button', {name: /Story JavaScript/})
 		);
@@ -380,11 +389,11 @@ describe('<StorySearchDialog>', () => {
 		expect(Number(query.get('offset'))).toBe(story.script.indexOf('mockFind'));
 	});
 
-	it('disables the replace button if there are no matches for the search', () => {
+	it('disables the replace button if there are no matches for the search', async () => {
 		const story = fakeStory(1);
 
 		story.passages[0].text = 'aaa';
-		renderComponent(
+		await renderComponent(
 			{find: 'mock-find', replace: 'mock-replace'},
 			{stories: [story]}
 		);
@@ -393,15 +402,15 @@ describe('<StorySearchDialog>', () => {
 		).toBeDisabled();
 	});
 
-	it('disables the replace button if the search is empty', () => {
-		renderComponent({find: '', replace: 'mock-replace'});
+	it('disables the replace button if the search is empty', async () => {
+		await renderComponent({find: '', replace: 'mock-replace'});
 		expect(
 			screen.getByRole('button', {name: 'dialogs.storySearch.replaceAll'})
 		).toBeDisabled();
 	});
 
-	it('keeps the fields in native tab order', () => {
-		renderComponent();
+	it('keeps the fields in native tab order', async () => {
+		await renderComponent();
 
 		const find = screen.getByRole('textbox', {
 			name: 'dialogs.storySearch.find'
@@ -422,7 +431,7 @@ describe('<StorySearchDialog>', () => {
 	});
 
 	it('is accessible', async () => {
-		const {container} = renderComponent();
+		const {container} = await renderComponent();
 
 		expect(await axe(container)).toHaveNoViolations();
 	});

@@ -9,14 +9,21 @@ import {
 } from '../story-stats';
 
 describe('<StoryDetailsDialogStats>', () => {
-	function renderComponent(props?: StoryDetailsDialogStatsProps) {
+	async function renderComponent(props?: StoryDetailsDialogStatsProps) {
 		const story = props?.story ?? fakeStory();
 
-		return render(
+		const result = render(
 			<FakeStateProvider stories={[story]}>
 				<StoryDetailsDialogStats story={story} />
 			</FakeStateProvider>
 		);
+
+		const characterCount = screen.getByText(
+			'dialogs.storyDetails.stats.characters'
+		).previousElementSibling;
+
+		await waitFor(() => expect(characterCount).not.toHaveTextContent('—'));
+		return result;
 	}
 
 	it('shows a character count for the story', async () => {
@@ -26,7 +33,7 @@ describe('<StoryDetailsDialogStats>', () => {
 
 		story.passages[0].text = text;
 		story.passages[1].text = text2;
-		renderComponent({story});
+		await renderComponent({story});
 
 		const row = screen.getByText(
 			'dialogs.storyDetails.stats.characters'
@@ -46,7 +53,7 @@ describe('<StoryDetailsDialogStats>', () => {
 
 		story.passages[0].text = text;
 		story.passages[1].text = text2;
-		renderComponent({story});
+		await renderComponent({story});
 
 		const row = screen.getByText('dialogs.storyDetails.stats.words').parentNode;
 
@@ -55,11 +62,11 @@ describe('<StoryDetailsDialogStats>', () => {
 		);
 	});
 
-	it('shows a passage count for the story', () => {
+	it('shows a passage count for the story', async () => {
 		const passageCount = Math.round(Math.random() * 100);
 		const story = fakeStory(passageCount);
 
-		renderComponent({story});
+		await renderComponent({story});
 
 		const row = screen.getByText(
 			'dialogs.storyDetails.stats.passages'
@@ -77,7 +84,7 @@ describe('<StoryDetailsDialogStats>', () => {
 		story.passages[0].text = '[[b]] [[b]]';
 		story.passages[1].name = 'b';
 		story.passages[1].text = '[[a]] [[a]] [[a]]';
-		renderComponent({story});
+		await renderComponent({story});
 
 		const row = screen.getByText('dialogs.storyDetails.stats.links').parentNode;
 
@@ -93,7 +100,7 @@ describe('<StoryDetailsDialogStats>', () => {
 		story.passages[0].text = '[[b]]';
 		story.passages[1].name = 'b';
 		story.passages[1].text = '[[a]] [[c]]';
-		renderComponent({story});
+		await renderComponent({story});
 
 		const row = screen.getByText(
 			'dialogs.storyDetails.stats.brokenLinks'
@@ -104,29 +111,29 @@ describe('<StoryDetailsDialogStats>', () => {
 		);
 	});
 
-	it('shows the time the story was last updated', () => {
-		renderComponent();
+	it('shows the time the story was last updated', async () => {
+		await renderComponent();
 		expect(
 			screen.getByText('dialogs.storyDetails.stats.lastUpdate')
 		).toBeInTheDocument();
 	});
 
-	it("shows the story's IFID", () => {
-		renderComponent();
+	it("shows the story's IFID", async () => {
+		await renderComponent();
 		expect(
 			screen.getByText('dialogs.storyDetails.stats.ifid')
 		).toBeInTheDocument();
 	});
 
-	it('shows a link that explains what an IFID is', () => {
-		renderComponent();
+	it('shows a link that explains what an IFID is', async () => {
+		await renderComponent();
 		expect(
 			screen.getByText('dialogs.storyDetails.stats.ifidExplanation')
 		).toHaveAttribute('href', 'https://ifdb.org/help-ifid');
 	});
 
 	it('is accessible', async () => {
-		const {container} = renderComponent();
+		const {container} = await renderComponent();
 
 		expect(await axe(container)).toHaveNoViolations();
 	});

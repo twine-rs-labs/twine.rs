@@ -1,8 +1,13 @@
-import {fireEvent, render, screen} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
+import {StoreCoreProjectHost} from '../../../../core/project-host';
 import {useStoriesContext} from '../../../../store/stories';
-import {FakeStateProvider, FakeStateProviderProps} from '../../../../test-util';
+import {
+	FakeStateProvider,
+	FakeStateProviderProps,
+	waitForMockPromises
+} from '../../../../test-util';
 import {PassageTagsButton} from '../passage-tags-button';
 
 const TestPassageTagsButton: React.FC = () => {
@@ -20,11 +25,18 @@ describe('<PassageTagsButton>', () => {
 		);
 	}
 
-	it('opens the passage tags dialog when clicked', () => {
+	it('opens the passage tags dialog when clicked', async () => {
+		const queryContentsPage = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'queryContentsPageAsync'
+		);
+
 		renderComponent();
 		fireEvent.click(
 			screen.getByRole('button', {name: 'routes.storyEdit.toolbar.passageTags'})
 		);
+		await waitFor(() => expect(queryContentsPage).toHaveBeenCalledTimes(2));
+		await waitForMockPromises(queryContentsPage);
 		expect(screen.getByText('dialogs.passageTags.title')).toBeInTheDocument();
 	});
 

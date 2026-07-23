@@ -30,6 +30,7 @@ describe('<FileInput>', () => {
 	it('rejects oversized files before reading them', () => {
 		const onChange = jest.fn();
 		const onError = jest.fn();
+		const warn = jest.spyOn(console, 'warn').mockImplementation();
 		const file = new File(['small'], 'large.html', {type: 'text/html'});
 
 		Object.defineProperty(file, 'size', {value: 9});
@@ -39,6 +40,9 @@ describe('<FileInput>', () => {
 		});
 
 		expect(onError).toHaveBeenCalledWith(
+			expect.objectContaining({message: expect.stringContaining('exceeds')})
+		);
+		expect(warn).toHaveBeenCalledWith(
 			expect.objectContaining({message: expect.stringContaining('exceeds')})
 		);
 		expect(onChange).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {StoryFormatsFilterButton} from '../story-formats-filter-button';
@@ -21,6 +21,14 @@ describe('<StoryFormatsFilterButton>', () => {
 		);
 	}
 
+	async function waitForMenuPosition(item: HTMLElement) {
+		await waitFor(() =>
+			expect(item.closest('.menu-button-menu')).toHaveAttribute(
+				'data-popper-placement'
+			)
+		);
+	}
+
 	describe.each(prefs)(
 		'When the current story format filter is %s',
 		storyFormatListFilter => {
@@ -33,28 +41,29 @@ describe('<StoryFormatsFilterButton>', () => {
 				).toBeInTheDocument();
 			});
 
-			it('checks the appropriate item in the menu', () => {
+			it('checks the appropriate item in the menu', async () => {
 				renderComponent({storyFormatListFilter});
 				fireEvent.click(
 					screen.getByRole('button', {
 						name: `dialogs.storyFormats.filterButton.${storyFormatListFilter}`
 					})
 				);
-				expect(
-					screen.getByRole('checkbox', {
-						name: `dialogs.storyFormats.filterButton.${storyFormatListFilter}`
-					})
-				).toBeChecked();
+				const item = screen.getByRole('checkbox', {
+					name: `dialogs.storyFormats.filterButton.${storyFormatListFilter}`
+				});
+
+				await waitForMenuPosition(item);
+				expect(item).toBeChecked();
 			});
 
-			it('unchecks all other items in the menu', () => {
-				expect.assertions(prefs.length - 1);
+			it('unchecks all other items in the menu', async () => {
 				renderComponent({storyFormatListFilter});
 				fireEvent.click(
 					screen.getByRole('button', {
 						name: `dialogs.storyFormats.filterButton.${storyFormatListFilter}`
 					})
 				);
+				await waitForMenuPosition(screen.getAllByRole('checkbox')[0]);
 
 				for (const pref of prefs.filter(
 					([item]) => item !== storyFormatListFilter
@@ -71,14 +80,15 @@ describe('<StoryFormatsFilterButton>', () => {
 
 	it.each(prefs)(
 		'Dispatches a preference update when the %s menu item is selected',
-		pref => {
+		async pref => {
 			renderComponent();
 			fireEvent.click(screen.getByRole('button'));
-			fireEvent.click(
-				screen.getByRole('checkbox', {
-					name: `dialogs.storyFormats.filterButton.${pref}`
-				})
-			);
+			const item = screen.getByRole('checkbox', {
+				name: `dialogs.storyFormats.filterButton.${pref}`
+			});
+
+			await waitForMenuPosition(item);
+			fireEvent.click(item);
 			expect(
 				screen.getByTestId('pref-inspector-storyFormatListFilter')
 			).toHaveTextContent(pref);

@@ -1,5 +1,6 @@
 import {render, screen} from '@testing-library/react';
 import * as React from 'react';
+import {StoreCoreProjectHost} from '../../core/project-host';
 import {Routes} from '..';
 import {PrefsContext, PrefsContextProps} from '../../store/prefs';
 import {FakeStateProvider, fakePrefs} from '../../test-util';
@@ -19,6 +20,9 @@ jest.mock('../story-test/story-test-route');
 
 describe('<Routes>', () => {
 	function renderAtRoute(route: string, context?: Partial<PrefsContextProps>) {
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryStoryWordCountAsync')
+			.mockImplementation(() => new Promise<never>(() => {}));
 		window.location.hash = route;
 		return render(
 			<FakeStateProvider>

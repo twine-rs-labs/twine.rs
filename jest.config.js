@@ -10,6 +10,7 @@ module.exports = {
 	},
 	preset: 'ts-jest/presets/js-with-ts',
 	resetMocks: true,
+	restoreMocks: true,
 	roots: ['<rootDir>/src'],
 	setupFilesAfterEnv: ['<rootDir>/src/setupTests.ts'],
 	testEnvironment: 'jest-environment-jsdom',

@@ -335,6 +335,8 @@ describe('loadStories', () => {
 	});
 
 	it('forgets missing remembered native project folders', async () => {
+		const warn = jest.spyOn(console, 'warn').mockImplementation();
+
 		rememberedProjectFoldersMock.mockReturnValue([
 			{
 				rootPath: '/native/missing.twine.rs',
@@ -350,6 +352,9 @@ describe('loadStories', () => {
 
 		expect(forgetProjectFolderMock).toHaveBeenCalledWith(
 			'/native/missing.twine.rs'
+		);
+		expect(warn).toHaveBeenCalledWith(
+			'Could not load remembered native project /native/missing.twine.rs: missing'
 		);
 	});
 
@@ -448,6 +453,7 @@ describe('loadStories', () => {
 	});
 
 	it('tries to recover missing remembered project folders from the current library before forgetting them', async () => {
+		const warn = jest.spyOn(console, 'warn').mockImplementation();
 		const story = fakeStory(1);
 
 		rememberedProjectFoldersMock.mockReturnValue([
@@ -528,6 +534,9 @@ describe('loadStories', () => {
 		]);
 		expect(forgetProjectFolderMock).toHaveBeenCalledWith(
 			'/old-library/Projects/moon-castle.twine.rs'
+		);
+		expect(warn).toHaveBeenCalledWith(
+			'Could not load remembered native project /old-library/Projects/moon-castle.twine.rs: missing'
 		);
 		expect(openProjectFolderMock.mock.invocationCallOrder[1]).toBeLessThan(
 			forgetProjectFolderMock.mock.invocationCallOrder[0]

@@ -73,10 +73,15 @@ describe('<BuildActions>', () => {
 			renderComponent({story});
 		});
 
-		it('displays a button to test the story', () => {
+		it('displays a button to test the story', async () => {
 			expect(testStory).not.toHaveBeenCalled();
 			fireEvent.click(button('routeActions.build.test'));
 			expect(testStory.mock.calls).toEqual([[story.id]]);
+			await waitFor(() =>
+				expect(button('routeActions.build.test')).not.toHaveAttribute(
+					'aria-busy'
+				)
+			);
 		});
 
 		it('displays the error if testing fails', async () => {
@@ -85,10 +90,15 @@ describe('<BuildActions>', () => {
 			expect(await screen.findByText('mock-test-error')).toBeInTheDocument();
 		});
 
-		it('displays a button to play the story', () => {
+		it('displays a button to play the story', async () => {
 			expect(playStory).not.toHaveBeenCalled();
 			fireEvent.click(button('routeActions.build.play'));
 			expect(playStory.mock.calls).toEqual([[story.id]]);
+			await waitFor(() =>
+				expect(button('routeActions.build.play')).not.toHaveAttribute(
+					'aria-busy'
+				)
+			);
 		});
 
 		it('displays the error if playing fails', async () => {
@@ -97,10 +107,15 @@ describe('<BuildActions>', () => {
 			expect(await screen.findByText('mock-play-error')).toBeInTheDocument();
 		});
 
-		it('displays a button to proof the story', () => {
+		it('displays a button to proof the story', async () => {
 			expect(proofStory).not.toHaveBeenCalled();
 			fireEvent.click(button('routeActions.build.proof'));
 			expect(proofStory.mock.calls).toEqual([[story.id]]);
+			await waitFor(() =>
+				expect(button('routeActions.build.proof')).not.toHaveAttribute(
+					'aria-busy'
+				)
+			);
 		});
 
 		it('displays the error if proofing fails', async () => {
@@ -109,12 +124,17 @@ describe('<BuildActions>', () => {
 			expect(await screen.findByText('mock-proof-error')).toBeInTheDocument();
 		});
 
-		it('displays a button to publish the story to a file', () => {
+		it('displays a button to publish the story to a file', async () => {
 			expect(publishStory).not.toHaveBeenCalled();
 			fireEvent.click(button('routeActions.build.publishToFile'));
 			expect(publishStory.mock.calls).toEqual([
 				[story.id, {buildTarget: 'publish'}]
 			]);
+			await waitFor(() =>
+				expect(button('routeActions.build.publishToFile')).not.toHaveAttribute(
+					'aria-busy'
+				)
+			);
 		});
 
 		it('displays the error if publishing fails', async () => {

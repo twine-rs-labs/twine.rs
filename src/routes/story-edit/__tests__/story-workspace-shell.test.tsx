@@ -16,7 +16,7 @@ import {
 import {markProjectStoryHydration} from '../../../store/project-hydration';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {StoriesContext} from '../../../store/stories';
-import {fakePassage, fakeStory} from '../../../test-util';
+import {fakePassage, fakeStory, waitForMockPromises} from '../../../test-util';
 import {StoryWorkspaceShell} from '../story-workspace-shell';
 import {StoryEditMode} from '../workspace-state';
 
@@ -76,17 +76,36 @@ function storyWithLinkedPassages() {
 	return {next, start, story};
 }
 
-function renderComponent(
+async function renderComponent(
 	mode: StoryEditMode,
 	props?: Partial<React.ComponentProps<typeof StoryWorkspaceShell>>,
 	context?: {
 		configureStory?: (
 			story: ReturnType<typeof storyWithLinkedPassages>['story']
 		) => void;
+		deferWorkspaceQueries?: boolean;
 		dialogsDispatch?: jest.Mock;
 		storyDispatch?: jest.Mock;
 	}
 ) {
+	const queryBacklinks = jest.spyOn(
+		StoreCoreProjectHost.prototype,
+		'queryBacklinksPageAsync'
+	);
+	const queryDockModel = jest.spyOn(
+		StoreCoreProjectHost.prototype,
+		'queryWorkbenchDockModelAsync'
+	);
+	const queryPassageFacts = jest.spyOn(
+		StoreCoreProjectHost.prototype,
+		'queryPassageLocalFactsAsync'
+	);
+
+	if (context?.deferWorkspaceQueries) {
+		queryBacklinks.mockImplementation(() => new Promise<never>(() => {}));
+		queryDockModel.mockImplementation(() => new Promise<never>(() => {}));
+		queryPassageFacts.mockImplementation(() => new Promise<never>(() => {}));
+	}
 	const {next, start, story} = storyWithLinkedPassages();
 	const onSelectPassage = jest.fn();
 	const onRevealPassageInGraph = jest.fn();
@@ -130,6 +149,15 @@ function renderComponent(
 		</MemoryRouter>
 	);
 
+	const waitForQueries = async () => {
+		await waitForMockPromises(queryBacklinks);
+		await waitForMockPromises(queryDockModel);
+		await waitForMockPromises(queryPassageFacts);
+	};
+
+	if (!screen.queryByRole('progressbar', {name: 'Opening story'})) {
+		await waitForQueries();
+	}
 	return {
 		dialogsDispatch,
 		next,
@@ -138,7 +166,8 @@ function renderComponent(
 		onSelectPassage,
 		start,
 		story,
-		storyDispatch
+		storyDispatch,
+		waitForQueries
 	};
 }
 
@@ -150,22 +179,22 @@ describe('<StoryWorkspaceShell>', () => {
 		delete (window as any).twineElectron;
 	});
 
-	it('renders only the editor dock in text mode', () => {
-		renderComponent('text');
+	it('renders only the editor dock in text mode', async () => {
+		await renderComponent('text');
 
 		expect(screen.getByTestId('editor-dock')).toBeInTheDocument();
 		expect(screen.queryByTestId('graph-panel')).not.toBeInTheDocument();
 	});
 
-	it('renders graph and editor dock in split mode', () => {
-		renderComponent('split');
+	it('renders graph and editor dock in split mode', async () => {
+		await renderComponent('split');
 
 		expect(screen.getByTestId('graph-panel')).toBeInTheDocument();
 		expect(screen.getByTestId('editor-dock')).toBeInTheDocument();
 	});
 
-	it('renders one editor window for every open buffer', () => {
-		const {next, start} = renderComponent('text', {
+	it('renders one editor window for every open buffer', async () => {
+		const {next, start} = await renderComponent('text', {
 			editorWindows: [
 				{kind: 'passage', passageId: 'start'},
 				{kind: 'passage', passageId: 'next'}
@@ -178,10 +207,10 @@ describe('<StoryWorkspaceShell>', () => {
 		expect(windows[1]).toHaveAttribute('data-selected-passage-id', next.id);
 	});
 
-	it('lets an individual editor window be closed', () => {
+	it('lets an individual editor window be closed', async () => {
 		const onCloseEditorWindow = jest.fn();
 
-		renderComponent('text', {
+		await renderComponent('text', {
 			editorWindows: [
 				{kind: 'passage', passageId: 'start'},
 				{kind: 'passage', passageId: 'next'}
@@ -189,47 +218,47 @@ describe('<StoryWorkspaceShell>', () => {
 			onCloseEditorWindow
 		});
 
-		screen.getByText('close-passage:start').click();
+		fireEvent.click(screen.getByText('close-passage:start'));
 		expect(onCloseEditorWindow).toHaveBeenCalledWith({
 			kind: 'passage',
 			passageId: 'start'
 		});
 	});
 
-	it('keeps dock collapse controls active in graph mode', () => {
+	it('keeps dock collapse controls active in graph mode', async () => {
 		const onChangeLeftDockCollapsed = jest.fn();
 		const onChangeRightDockCollapsed = jest.fn();
 
-		renderComponent('graph', {
+		await renderComponent('graph', {
 			onChangeLeftDockCollapsed,
 			onChangeRightDockCollapsed
 		});
 
-		within(
-			screen.getByRole('complementary', {
-				name: 'routes.storyEdit.workspace.leftDock'
-			})
-		)
-			.getByRole('button', {
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.leftDock'
+				})
+			).getByRole('button', {
 				name: 'routes.storyEdit.workspace.collapseDock'
 			})
-			.click();
-		within(
-			screen.getByRole('complementary', {
-				name: 'routes.storyEdit.workspace.rightDock'
-			})
-		)
-			.getByRole('button', {
+		);
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.rightDock'
+				})
+			).getByRole('button', {
 				name: 'routes.storyEdit.workspace.collapseDock'
 			})
-			.click();
+		);
 
 		expect(onChangeLeftDockCollapsed).toHaveBeenCalledWith(true);
 		expect(onChangeRightDockCollapsed).toHaveBeenCalledWith(true);
 	});
 
-	it('marks the active passage in the navigator', () => {
-		renderComponent('text');
+	it('marks the active passage in the navigator', async () => {
+		await renderComponent('text');
 
 		expect(
 			within(
@@ -240,8 +269,8 @@ describe('<StoryWorkspaceShell>', () => {
 		).toHaveAttribute('aria-current', 'true');
 	});
 
-	it('windows large passage navigator lists to viewport-sized row counts', () => {
-		renderComponent('text', undefined, {
+	it('windows large passage navigator lists to viewport-sized row counts', async () => {
+		await renderComponent('text', undefined, {
 			configureStory: story => {
 				story.passages = Array.from({length: 1000}, (_, index) =>
 					fakePassage({
@@ -266,7 +295,7 @@ describe('<StoryWorkspaceShell>', () => {
 	});
 
 	it('navigates to linked passages from the bottom drawer', async () => {
-		const {next, onSelectPassage} = renderComponent('text', {
+		const {next, onSelectPassage} = await renderComponent('text', {
 			bottomDrawerOpen: true
 		});
 
@@ -277,13 +306,13 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 		const nextButton = await drawer.findByRole('button', {name: 'Next'});
 
-		nextButton.click();
+		fireEvent.click(nextButton);
 		expect(onSelectPassage).toHaveBeenCalledWith(next);
 		expect(screen.getAllByText('Missing').length).toBeGreaterThan(0);
 	});
 
 	it('shows indexed contents and project intelligence in the docks', async () => {
-		renderComponent('text');
+		await renderComponent('text');
 
 		expect(
 			screen.getByText('routes.storyEdit.workspace.sourceFiles')
@@ -295,19 +324,19 @@ describe('<StoryWorkspaceShell>', () => {
 			screen.getAllByText('routes.storyEdit.workspace.assets').length
 		).toBeGreaterThan(0);
 
-		within(
-			screen.getByRole('complementary', {
-				name: 'routes.storyEdit.workspace.leftDock'
-			})
-		)
-			.getByRole('tab', {name: 'routes.storyEdit.workspace.contents'})
-			.click();
-
-		await waitFor(() =>
-			expect(screen.getAllByText('$score').length).toBeGreaterThan(0)
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.leftDock'
+				})
+			).getByRole('tab', {name: 'routes.storyEdit.workspace.contents'})
 		);
-		expect(screen.getAllByText('assets/cover.png').length).toBeGreaterThan(0);
-		expect(screen.getAllByText('broken-link').length).toBeGreaterThan(0);
+
+		await waitFor(() => {
+			expect(screen.getAllByText('$score').length).toBeGreaterThan(0);
+			expect(screen.getAllByText('assets/cover.png').length).toBeGreaterThan(0);
+			expect(screen.getAllByText('broken-link').length).toBeGreaterThan(0);
+		});
 	});
 
 	it('hydrates only the opened project-folder story on demand', async () => {
@@ -319,7 +348,8 @@ describe('<StoryWorkspaceShell>', () => {
 		}));
 
 		(window as any).twineElectron = {hydrateProjectFolder};
-		const {story} = renderComponent('graph', undefined, {
+		const {story} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
 			configureStory: currentStory => {
 				saveProjectMetadata(currentStory.id, {
 					rootPath: '/native/project.twine.rs',
@@ -376,7 +406,8 @@ describe('<StoryWorkspaceShell>', () => {
 				}))
 			}))
 		};
-		renderComponent('graph', undefined, {
+		await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
 			configureStory: currentStory => {
 				source.id = currentStory.id;
 				source.passages = source.passages.map(passage => ({
@@ -409,15 +440,15 @@ describe('<StoryWorkspaceShell>', () => {
 	});
 
 	it('opens indexed story sources from the contents navigator', async () => {
-		const {onOpenEditorWindow} = renderComponent('text');
+		const {onOpenEditorWindow} = await renderComponent('text');
 
-		within(
-			screen.getByRole('complementary', {
-				name: 'routes.storyEdit.workspace.leftDock'
-			})
-		)
-			.getByRole('tab', {name: 'routes.storyEdit.workspace.contents'})
-			.click();
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.leftDock'
+				})
+			).getByRole('tab', {name: 'routes.storyEdit.workspace.contents'})
+		);
 
 		const leftDock = screen.getByRole('complementary', {
 			name: 'routes.storyEdit.workspace.leftDock'
@@ -428,23 +459,23 @@ describe('<StoryWorkspaceShell>', () => {
 				within(leftDock).getByRole('button', {name: /Story JavaScript/})
 			).toBeInTheDocument()
 		);
-		within(leftDock)
-			.getByRole('button', {name: /Story JavaScript/})
-			.click();
+		fireEvent.click(
+			within(leftDock).getByRole('button', {name: /Story JavaScript/})
+		);
 
 		expect(onOpenEditorWindow).toHaveBeenCalledWith({kind: 'script'});
 	});
 
 	it('routes variable entries to story search from the contents navigator', async () => {
-		const {dialogsDispatch, story} = renderComponent('text');
+		const {dialogsDispatch, story} = await renderComponent('text');
 
-		within(
-			screen.getByRole('complementary', {
-				name: 'routes.storyEdit.workspace.leftDock'
-			})
-		)
-			.getByRole('tab', {name: 'routes.storyEdit.workspace.contents'})
-			.click();
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.leftDock'
+				})
+			).getByRole('tab', {name: 'routes.storyEdit.workspace.contents'})
+		);
 
 		const leftDock = screen.getByRole('complementary', {
 			name: 'routes.storyEdit.workspace.leftDock'
@@ -455,9 +486,7 @@ describe('<StoryWorkspaceShell>', () => {
 				within(leftDock).getByRole('button', {name: /\$score/})
 			).toBeInTheDocument()
 		);
-		within(leftDock)
-			.getByRole('button', {name: /\$score/})
-			.click();
+		fireEvent.click(within(leftDock).getByRole('button', {name: /\$score/}));
 
 		expect(dialogsDispatch).toHaveBeenCalledWith({
 			type: 'addDialog',
@@ -476,20 +505,21 @@ describe('<StoryWorkspaceShell>', () => {
 	});
 
 	it('routes asset manager insertion through the project host', async () => {
-		const {storyDispatch} = renderComponent('text');
+		const {storyDispatch, waitForQueries} = await renderComponent('text');
 
-		within(
-			screen.getByRole('complementary', {
-				name: 'routes.storyEdit.workspace.leftDock'
-			})
-		)
-			.getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
-			.click();
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.leftDock'
+				})
+			).getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
+		);
 
 		await waitFor(() =>
 			expect(screen.getByRole('button', {name: 'Insert'})).toBeInTheDocument()
 		);
-		screen.getByRole('button', {name: 'Insert'}).click();
+		fireEvent.click(screen.getByRole('button', {name: 'Insert'}));
+		await waitForQueries();
 
 		expect(storyDispatch).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -506,7 +536,7 @@ describe('<StoryWorkspaceShell>', () => {
 	});
 
 	it('keeps asset management in the full asset route', async () => {
-		renderComponent('text');
+		await renderComponent('text');
 
 		fireEvent.click(
 			within(
@@ -528,64 +558,71 @@ describe('<StoryWorkspaceShell>', () => {
 		const copyText = jest.fn();
 
 		(window as any).twineElectron = {copyText};
-		renderComponent('text');
+		const {waitForQueries} = await renderComponent('text');
 
-		within(
-			screen.getByRole('complementary', {
-				name: 'routes.storyEdit.workspace.leftDock'
-			})
-		)
-			.getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
-			.click();
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.leftDock'
+				})
+			).getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
+		);
 
 		await waitFor(() =>
 			expect(
 				screen.getByRole('button', {name: 'Copy Snippet'})
 			).toBeInTheDocument()
 		);
-		screen.getByRole('button', {name: 'Copy Snippet'}).click();
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Snippet'}));
+		await waitForQueries();
 		expect(copyText).toHaveBeenCalledWith(
 			'<img src="assets/cover.png" alt="">'
 		);
 	});
 
 	it('dispatches executable diagnostic quick fixes', async () => {
-		const {story, storyDispatch} = renderComponent('text', {
-			bottomDrawerOpen: true
-		});
+		const {story, storyDispatch, waitForQueries} = await renderComponent(
+			'text',
+			{
+				bottomDrawerOpen: true
+			}
+		);
 
 		await waitFor(() =>
 			expect(
 				screen.getByRole('button', {name: /Create "Missing"/})
 			).toBeInTheDocument()
 		);
-		screen.getByRole('button', {name: /Create "Missing"/}).click();
-		expect(storyDispatch).toHaveBeenCalledWith(
-			expect.objectContaining({
-				actions: [
-					{
-						type: 'createPassage',
-						props: expect.objectContaining({
-							name: 'Missing',
-							tags: []
-						}),
-						storyId: story.id
-					}
-				],
-				documentUpdates: [
-					expect.objectContaining({
-						storyId: story.id,
-						text: '',
-						type: 'passageText'
-					})
-				],
-				type: 'applyCorePatchBatch'
-			})
+		fireEvent.click(screen.getByRole('button', {name: /Create "Missing"/}));
+		await waitFor(() =>
+			expect(storyDispatch).toHaveBeenCalledWith(
+				expect.objectContaining({
+					actions: [
+						{
+							type: 'createPassage',
+							props: expect.objectContaining({
+								name: 'Missing',
+								tags: []
+							}),
+							storyId: story.id
+						}
+					],
+					documentUpdates: [
+						expect.objectContaining({
+							storyId: story.id,
+							text: '',
+							type: 'passageText'
+						})
+					],
+					type: 'applyCorePatchBatch'
+				})
+			)
 		);
+		await waitForQueries();
 	});
 
 	it('reveals diagnostics in the graph explicitly', async () => {
-		const {onRevealPassageInGraph, start} = renderComponent('text', {
+		const {onRevealPassageInGraph, start} = await renderComponent('text', {
 			bottomDrawerOpen: true
 		});
 
@@ -596,11 +633,11 @@ describe('<StoryWorkspaceShell>', () => {
 				})
 			).toBeInTheDocument()
 		);
-		screen
-			.getByRole('button', {
+		fireEvent.click(
+			screen.getByRole('button', {
 				name: 'routes.storyEdit.workspace.revealInGraph'
 			})
-			.click();
+		);
 
 		expect(onRevealPassageInGraph).toHaveBeenCalledWith(start);
 	});

@@ -374,6 +374,7 @@ describe('openWithScratchPackage', () => {
 	const writeFileMock = writeFile as jest.Mock;
 
 	beforeEach(() => {
+		jest.spyOn(console, 'log').mockImplementation();
 		openMock.mockResolvedValue('');
 		readdirMock.mockResolvedValue([]);
 	});
