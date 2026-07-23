@@ -40,7 +40,7 @@ function inspectWindowsArtifact(artifactPath, dependencies) {
 		'Thumbprint = $signature.SignerCertificate.Thumbprint',
 		'HasTimestamp = $null -ne $signature.TimeStamperCertificate',
 		'} | ConvertTo-Json -Compress'
-	].join('; ');
+	].join('\n');
 	const result = dependencies.spawnSync(
 		'powershell.exe',
 		['-NoProfile', '-NonInteractive', '-Command', script],

@@ -298,6 +298,11 @@ test('Windows signature inspection passes paths through the environment', () => 
 	assert.equal(invocation.args.at(-2), '-Command');
 	assert.equal(invocation.args.length, 4);
 	assert.equal(invocation.options.env.TWINE_ARTIFACT_PATH, artifactPath);
+	assert.match(
+		invocation.args.at(-1),
+		/\[PSCustomObject\]@\{\nStatus = \[string\]\$signature\.Status/
+	);
+	assert.doesNotMatch(invocation.args.at(-1), /@\{\s*;/);
 	assert.equal(inspection.signing, 'unsigned');
 });
 

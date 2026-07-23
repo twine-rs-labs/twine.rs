@@ -211,10 +211,31 @@ describe('project-folder native bridge', () => {
 			attempts < 100 && mock.mock.calls.length < minimumCallCount;
 			attempts++
 		) {
-			await Promise.resolve();
+			await new Promise<void>(resolve => setImmediate(resolve));
 		}
 		expect(mock.mock.calls.length).toBeGreaterThanOrEqual(minimumCallCount);
 	}
+
+	it('waits through immediate-yielded work while timers are faked', async () => {
+		jest.useFakeTimers();
+		const listener = jest.fn();
+		let remainingYields = 20;
+		const continueWork = () => {
+			if (remainingYields-- === 0) {
+				listener();
+				return;
+			}
+			setImmediate(continueWork);
+		};
+
+		setTimeout(continueWork, 1250);
+
+		try {
+			await advanceTimersUntilCalled(listener, 1, 1250);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
 
 	beforeEach(() => {
 		jest.clearAllMocks();
@@ -4783,8 +4804,17 @@ describe('project-folder native bridge', () => {
 					}
 				]
 			);
-			passageSource = '<img src="assets/before.png"> new';
-			await advanceTimersUntilCalled(listener, 1, 1250);
+			let now = 0;
+			const performanceNowSpy = jest
+				.spyOn(performance, 'now')
+				.mockImplementation(() => (now += 9));
+
+			try {
+				passageSource = '<img src="assets/before.png"> new';
+				await advanceTimersUntilCalled(listener, 1, 1250);
+			} finally {
+				performanceNowSpy.mockRestore();
+			}
 
 			expect(listener).toHaveBeenCalledWith(
 				expect.objectContaining({
