@@ -12,9 +12,13 @@ const repositoryRoot = resolve(
 	'../..'
 );
 
-test('Electron runtime installation is explicit before development and performance launches', () => {
+test('Electron runtime installation is explicit before tests, development, builds, and performance launches', () => {
 	assert.equal(scripts['electron:install'], 'install-electron');
 	assert.equal(scripts['prestart:electron'], 'npm run electron:install');
+	assert.match(
+		scripts['test:packaging'],
+		/^npm run electron:install && node --test scripts\/__tests__\/\*\.test\.mjs$/
+	);
 	assert.match(
 		scripts['perf:prepare'],
 		/^npm-run-all --serial electron:install build:electron-app /
@@ -48,9 +52,9 @@ test('every desktop and release build regenerates WASM before compiling the rend
 });
 
 test('every packageable desktop build generates compliance artifacts', () => {
-	assert.equal(
+	assert.match(
 		scripts['build:compliance'],
-		'node scripts/generate-compliance.mjs'
+		/^npm run electron:install && node scripts\/generate-compliance\.mjs$/
 	);
 	for (const script of [
 		'build:electron',
