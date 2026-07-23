@@ -43,5 +43,9 @@ jobs:
         run: cargo +${{ matrix.rust }} fmt --all -- --check
       - name: Rust Clippy
         run: cargo +${{ matrix.rust }} clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust publication policy
+        run: node --test scripts/rust-policy-tests/*.test.mjs
+        env:
+          TWINE_RS_CARGO_TOOLCHAIN: ${{ matrix.rust }}
       - name: Rust workspace tests
         run: cargo +${{ matrix.rust }} test --workspace --locked

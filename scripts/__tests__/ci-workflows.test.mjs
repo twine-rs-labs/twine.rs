@@ -39,6 +39,8 @@ test('quality CI enforces the JavaScript, documentation, and Rust contracts', ()
 		source,
 		/clippy --workspace --all-targets --locked -- -D warnings/
 	);
+	assert.match(source, /node --test scripts\/rust-policy-tests\/\*\.test\.mjs/);
+	assert.match(source, /TWINE_RS_CARGO_TOOLCHAIN: \$\{\{ matrix\.rust \}\}/);
 	assert.match(source, /test --workspace --locked/);
 	assert.match(source, /node-version: 24\.18\.0/);
 });
