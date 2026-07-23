@@ -3,7 +3,11 @@ import {createHash} from 'crypto';
 import {FSWatcher, watch} from 'fs';
 import {lstat, open as openFile, opendir, realpath} from 'fs/promises';
 import {performance} from 'perf_hooks';
-import {setImmediate} from 'timers';
+import {
+	clearTimeout as clearRealTimeout,
+	setImmediate,
+	setTimeout as setRealTimeout
+} from 'timers';
 import {
 	copy,
 	mkdtemp,
@@ -206,20 +210,38 @@ describe('project-folder native bridge', () => {
 		milliseconds: number
 	) {
 		await jest.advanceTimersByTimeAsync(milliseconds);
-		for (
-			let attempts = 0;
-			attempts < 100 && mock.mock.calls.length < minimumCallCount;
-			attempts++
-		) {
-			await new Promise<void>(resolve => setImmediate(resolve));
-		}
+		await new Promise<void>((resolve, reject) => {
+			let settled = false;
+			const timeout = setRealTimeout(() => {
+				settled = true;
+				reject(
+					new Error(
+						`Timed out waiting for ${minimumCallCount} mock call(s); received ${mock.mock.calls.length}.`
+					)
+				);
+			}, 2000);
+			const checkCallCount = () => {
+				if (settled) {
+					return;
+				}
+				if (mock.mock.calls.length >= minimumCallCount) {
+					settled = true;
+					clearRealTimeout(timeout);
+					resolve();
+					return;
+				}
+				setImmediate(checkCallCount);
+			};
+
+			checkCallCount();
+		});
 		expect(mock.mock.calls.length).toBeGreaterThanOrEqual(minimumCallCount);
 	}
 
 	it('waits through immediate-yielded work while timers are faked', async () => {
 		jest.useFakeTimers();
 		const listener = jest.fn();
-		let remainingYields = 20;
+		let remainingYields = 250;
 		const continueWork = () => {
 			if (remainingYields-- === 0) {
 				listener();

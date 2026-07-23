@@ -1,3 +1,4 @@
+const {Buffer} = require('node:buffer');
 const {createHash} = require('node:crypto');
 const {execFileSync, spawnSync} = require('node:child_process');
 const {
@@ -30,12 +31,86 @@ function commandOutput(file, args, dependencies) {
 	};
 }
 
+function hasEmbeddedWindowsSignature(artifactPath, dependencies) {
+	let artifact;
+
+	try {
+		artifact = (dependencies.readFileSync ?? readFileSync)(artifactPath);
+	} catch {
+		return undefined;
+	}
+
+	if (
+		!Buffer.isBuffer(artifact) ||
+		artifact.length < 64 ||
+		artifact[0] !== 0x4d ||
+		artifact[1] !== 0x5a
+	) {
+		return undefined;
+	}
+
+	const peOffset = artifact.readUInt32LE(0x3c);
+
+	if (
+		peOffset > artifact.length - 24 ||
+		artifact.readUInt32LE(peOffset) !== 0x00004550
+	) {
+		return undefined;
+	}
+
+	const optionalHeaderSize = artifact.readUInt16LE(peOffset + 20);
+	const optionalHeaderOffset = peOffset + 24;
+
+	if (
+		optionalHeaderSize < 2 ||
+		optionalHeaderOffset + optionalHeaderSize > artifact.length
+	) {
+		return undefined;
+	}
+
+	const optionalHeaderMagic = artifact.readUInt16LE(optionalHeaderOffset);
+	const dataDirectoryOffset =
+		optionalHeaderMagic === 0x10b
+			? optionalHeaderOffset + 96
+			: optionalHeaderMagic === 0x20b
+				? optionalHeaderOffset + 112
+				: undefined;
+
+	if (
+		dataDirectoryOffset === undefined ||
+		dataDirectoryOffset + 40 > optionalHeaderOffset + optionalHeaderSize
+	) {
+		return undefined;
+	}
+
+	if (artifact.readUInt32LE(dataDirectoryOffset - 4) < 5) {
+		return false;
+	}
+
+	const certificateTableOffset = artifact.readUInt32LE(
+		dataDirectoryOffset + 32
+	);
+	const certificateTableSize = artifact.readUInt32LE(dataDirectoryOffset + 36);
+
+	return certificateTableOffset !== 0 || certificateTableSize !== 0;
+}
+
 function inspectWindowsArtifact(artifactPath, dependencies) {
+	if (hasEmbeddedWindowsSignature(artifactPath, dependencies) === false) {
+		return {
+			notarization: 'not-applicable',
+			signing: 'unsigned',
+			signingScope: 'installer',
+			stapling: 'not-applicable'
+		};
+	}
+
 	const script = [
 		"$artifactPath = [Environment]::GetEnvironmentVariable('TWINE_ARTIFACT_PATH')",
 		'$signature = Get-AuthenticodeSignature -LiteralPath $artifactPath',
 		'[PSCustomObject]@{',
 		'Status = [string]$signature.Status',
+		'StatusMessage = [string]$signature.StatusMessage',
 		'Subject = $signature.SignerCertificate.Subject',
 		'Thumbprint = $signature.SignerCertificate.Thumbprint',
 		'HasTimestamp = $null -ne $signature.TimeStamperCertificate',
@@ -83,6 +158,7 @@ function inspectWindowsArtifact(artifactPath, dependencies) {
 			signing: 'invalid',
 			signingScope: 'installer',
 			signingStatus: signature.Status,
+			signingStatusMessage: signature.StatusMessage,
 			stapling: 'not-applicable'
 		};
 	}
@@ -249,6 +325,7 @@ function validateArtifactInspection(profile, platform, inspection, env) {
 					'signerSubject',
 					'signerThumbprint',
 					'signingStatus',
+					'signingStatusMessage',
 					'timestamped'
 				].some(field => inspection[field] !== undefined)) ||
 			(platform === 'mac' &&
@@ -256,7 +333,15 @@ function validateArtifactInspection(profile, platform, inspection, env) {
 					inspection.signerTeamId !== undefined))
 		) {
 			throw new Error(
-				`${platform} local artifacts contain signing identity fields that are incompatible with the local profile.`
+				`${platform} local artifacts contain signing identity fields that are incompatible with the local profile${
+					inspection.signingStatus
+						? ` (Authenticode status ${inspection.signingStatus}${
+								inspection.signingStatusMessage
+									? `: ${inspection.signingStatusMessage}`
+									: ''
+							})`
+						: ''
+				}.`
 			);
 		}
 
@@ -303,6 +388,7 @@ function validateArtifactInspection(profile, platform, inspection, env) {
 				'signerSubject',
 				'signerThumbprint',
 				'signingStatus',
+				'signingStatusMessage',
 				'timestamped'
 			].some(field => inspection[field] !== undefined)) ||
 			(platform === 'mac' &&

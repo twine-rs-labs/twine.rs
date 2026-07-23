@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {Buffer} from 'node:buffer';
 import {
 	mkdtempSync,
 	readFileSync,
@@ -33,6 +34,27 @@ function temporaryRoot() {
 
 	temporaryRoots.push(root);
 	return root;
+}
+
+function windowsPeFixture({
+	certificateTableOffset = 0,
+	certificateTableSize = 0
+} = {}) {
+	const fixture = Buffer.alloc(512);
+	const peOffset = 0x80;
+	const optionalHeaderOffset = peOffset + 24;
+	const dataDirectoryOffset = optionalHeaderOffset + 96;
+
+	fixture.write('MZ');
+	fixture.writeUInt32LE(peOffset, 0x3c);
+	fixture.writeUInt32LE(0x00004550, peOffset);
+	fixture.writeUInt16LE(224, peOffset + 20);
+	fixture.writeUInt16LE(0x10b, optionalHeaderOffset);
+	fixture.writeUInt32LE(16, optionalHeaderOffset + 92);
+	fixture.writeUInt32LE(certificateTableOffset, dataDirectoryOffset + 32);
+	fixture.writeUInt32LE(certificateTableSize, dataDirectoryOffset + 36);
+
+	return fixture;
 }
 
 afterEach(() => {
@@ -304,6 +326,55 @@ test('Windows signature inspection passes paths through the environment', () => 
 	);
 	assert.doesNotMatch(invocation.args.at(-1), /@\{\s*;/);
 	assert.equal(inspection.signing, 'unsigned');
+});
+
+test('Windows signature inspection recognizes an empty PE certificate table', () => {
+	let invokedPowerShell = false;
+	const inspection = inspectWindowsArtifact('unsigned.exe', {
+		readFileSync: () => windowsPeFixture(),
+		spawnSync() {
+			invokedPowerShell = true;
+		}
+	});
+
+	assert.equal(invokedPowerShell, false);
+	assert.deepEqual(inspection, {
+		notarization: 'not-applicable',
+		signing: 'unsigned',
+		signingScope: 'installer',
+		stapling: 'not-applicable'
+	});
+});
+
+test('Windows signature inspection validates a populated PE certificate table', () => {
+	const inspection = inspectWindowsArtifact('invalid.exe', {
+		readFileSync: () =>
+			windowsPeFixture({
+				certificateTableOffset: 384,
+				certificateTableSize: 128
+			}),
+		spawnSync() {
+			return {
+				status: 0,
+				stderr: '',
+				stdout: JSON.stringify({
+					Status: 'HashMismatch',
+					StatusMessage: 'The contents of the file have changed.'
+				})
+			};
+		}
+	});
+
+	assert.equal(inspection.signing, 'invalid');
+	assert.equal(inspection.signingStatus, 'HashMismatch');
+	assert.equal(
+		inspection.signingStatusMessage,
+		'The contents of the file have changed.'
+	);
+	assert.throws(
+		() => validateArtifactInspection(profiles.local, 'win', inspection, {}),
+		/Authenticode status HashMismatch: The contents of the file have changed/
+	);
 });
 
 test(
