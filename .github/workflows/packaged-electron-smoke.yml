@@ -20,31 +20,49 @@ jobs:
             platform: linux
             os: ubuntu-24.04
             arch: x64
+            artifact_dir: artifacts/local/linux-x64
             artifacts: |
-              release/Twine-RS-*-linux-x64.AppImage
-              release/Twine-RS-*-linux-x64.zip
+              artifacts/local/linux-x64/Twine-RS-*-linux-x64.AppImage
+              artifacts/local/linux-x64/Twine-RS-*-linux-x64.zip
+              artifacts/local/linux-x64/*.artifact-manifest.json
+              artifacts/local/linux-x64/LOCAL-TEST-ONLY.txt
           - label: Linux ARM64
             platform: linux
             os: ubuntu-24.04-arm
             arch: arm64
+            artifact_dir: artifacts/local/linux-arm64
             artifacts: |
-              release/Twine-RS-*-linux-arm64.AppImage
-              release/Twine-RS-*-linux-arm64.zip
+              artifacts/local/linux-arm64/Twine-RS-*-linux-arm64.AppImage
+              artifacts/local/linux-arm64/Twine-RS-*-linux-arm64.zip
+              artifacts/local/linux-arm64/*.artifact-manifest.json
+              artifacts/local/linux-arm64/LOCAL-TEST-ONLY.txt
           - label: macOS Intel
             platform: mac
             os: macos-15-intel
             arch: x64
-            artifacts: release/Twine-RS-*-mac-x64.dmg
+            artifact_dir: artifacts/local/mac-x64
+            artifacts: |
+              artifacts/local/mac-x64/Twine-RS-*-mac-x64.dmg
+              artifacts/local/mac-x64/*.artifact-manifest.json
+              artifacts/local/mac-x64/LOCAL-TEST-ONLY.txt
           - label: macOS ARM64
             platform: mac
             os: macos-15
             arch: arm64
-            artifacts: release/Twine-RS-*-mac-arm64.dmg
+            artifact_dir: artifacts/local/mac-arm64
+            artifacts: |
+              artifacts/local/mac-arm64/Twine-RS-*-mac-arm64.dmg
+              artifacts/local/mac-arm64/*.artifact-manifest.json
+              artifacts/local/mac-arm64/LOCAL-TEST-ONLY.txt
           - label: Windows x64
             platform: windows
             os: windows-2025
             arch: x64
-            artifacts: release/Twine-RS-*-win-x64.exe
+            artifact_dir: artifacts/local/win-x64
+            artifacts: |
+              artifacts/local/win-x64/Twine-RS-*-win-x64.exe
+              artifacts/local/win-x64/*.artifact-manifest.json
+              artifacts/local/win-x64/LOCAL-TEST-ONLY.txt
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -74,10 +92,11 @@ jobs:
         run: npm run package:electron:artifacts -- --${{ matrix.arch }}
         env:
           NODE_ENV: production
+          TWINE_RELEASE_PROFILE: local
       - name: Retain target artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          name: desktop-local-target-${{ matrix.platform }}-${{ matrix.arch }}
           path: ${{ matrix.artifacts }}
           if-no-files-found: error
           retention-days: 14
@@ -85,7 +104,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          app_image=$(ls release/Twine-RS-*-linux-${{ matrix.arch }}.AppImage)
+          app_image=$(ls "${{ matrix.artifact_dir }}"/Twine-RS-*-linux-${{ matrix.arch }}.AppImage)
           chmod +x "$app_image"
           APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "flushes a trailing"
       - name: Extract and smoke Linux ZIP
@@ -94,7 +113,7 @@ jobs:
         run: |
           extract_dir="$RUNNER_TEMP/twine-rs-linux-zip"
           mkdir -p "$extract_dir"
-          unzip -q release/Twine-RS-*-linux-${{ matrix.arch }}.zip -d "$extract_dir"
+          unzip -q "${{ matrix.artifact_dir }}"/Twine-RS-*-linux-${{ matrix.arch }}.zip -d "$extract_dir"
           TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged
       - name: Mount and smoke macOS DMG
         if: runner.os == 'macOS'
@@ -102,7 +121,7 @@ jobs:
         run: |
           mount_dir="$RUNNER_TEMP/twine-rs-dmg"
           mkdir -p "$mount_dir"
-          hdiutil attach release/Twine-RS-*-mac-${{ matrix.arch }}.dmg -nobrowse -readonly -mountpoint "$mount_dir"
+          hdiutil attach "${{ matrix.artifact_dir }}"/Twine-RS-*-mac-${{ matrix.arch }}.dmg -nobrowse -readonly -mountpoint "$mount_dir"
           trap 'hdiutil detach "$mount_dir"' EXIT
           TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
           hdiutil detach "$mount_dir"
@@ -111,7 +130,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $installer = Get-ChildItem release -Filter 'Twine-RS-*-win-x64.exe' | Select-Object -First 1
+          $installer = Get-ChildItem '${{ matrix.artifact_dir }}' -Filter 'Twine-RS-*-win-x64.exe' | Select-Object -First 1
           $installDirectory = Join-Path $env:RUNNER_TEMP 'twine-rs-installed'
           $process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDirectory") -PassThru -Wait
           if ($process.ExitCode -ne 0) {
@@ -136,8 +155,8 @@ jobs:
             throw "Uninstaller exited with code $($process.ExitCode)."
           }
 
-  assemble-release:
-    name: Validate complete desktop release
+  assemble-local-test-bundle:
+    name: Validate complete local desktop test bundle
     needs: package-installable
     runs-on: ubuntu-24.04
     steps:
@@ -150,15 +169,15 @@ jobs:
       - name: Download every target artifact
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          pattern: desktop-*
-          path: release
+          pattern: desktop-local-target-*
+          path: artifacts/incoming/local
           merge-multiple: true
-      - name: Validate and organize artifact matrix
-        run: npm run release:organize
-      - name: Retain complete organized release
+      - name: Validate and organize local test matrix
+        run: npm run release:assemble:local-test-bundle
+      - name: Retain clearly labeled local test bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-release-complete
-          path: release
+          name: desktop-local-test-bundle
+          path: artifacts/local-test-bundle
           if-no-files-found: error
           retention-days: 14

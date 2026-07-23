@@ -1,6 +1,7 @@
 const {execFileSync, spawnSync} = require('child_process');
 const {notarize} = require('@electron/notarize');
 const path = require('path');
+const {profiles} = require('./release-profile.cjs');
 
 const notarizationEnvKeys = [
 	'APPLE_APP_ID',
@@ -24,10 +25,6 @@ function missingNotarizationEnv(env) {
 	return notarizationEnvKeys.filter(key => !hasEnvValue(env, key));
 }
 
-function hasCompleteNotarizationEnv(env) {
-	return missingNotarizationEnv(env).length === 0;
-}
-
 function isMacBuild(context) {
 	if (context.electronPlatformName === 'mas') {
 		return false;
@@ -37,68 +34,6 @@ function isMacBuild(context) {
 		context.electronPlatformName === 'darwin' ||
 		context.packager?.platform?.name === 'mac'
 	);
-}
-
-function macSigningOptions(context) {
-	return (
-		context.packager?.platformSpecificBuildOptions ??
-		context.packager?.config?.mac ??
-		{}
-	);
-}
-
-function discoverSigningIdentity({spawnSync}) {
-	const result = spawnSync(
-		'/usr/bin/security',
-		['find-identity', '-v', '-p', 'codesigning'],
-		{encoding: 'utf8'}
-	);
-
-	if (result.error || result.status !== 0) {
-		return {
-			present: true,
-			reason: 'code-signing identity discovery could not be verified'
-		};
-	}
-
-	const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-
-	return {
-		present: /^\s*\d+\)\s+[0-9a-f]+\s+"[^"]+"/im.test(output),
-		reason: 'a code-signing identity is available in the keychain'
-	};
-}
-
-function realSigningIntent(context, dependencies) {
-	const {env} = dependencies;
-	const signingOptions = macSigningOptions(context);
-	const identity = signingOptions.identity;
-
-	if (
-		typeof identity === 'string' &&
-		identity.trim().length > 0 &&
-		identity.trim() !== '-'
-	) {
-		return {present: true, reason: 'mac.identity requests a real identity'};
-	}
-
-	if (hasEnvValue(env, 'CSC_LINK') || hasEnvValue(env, 'CSC_NAME')) {
-		return {present: true, reason: 'CSC_LINK or CSC_NAME is set'};
-	}
-
-	if (signingOptions.sign && signingOptions.sign !== false) {
-		return {present: true, reason: 'a custom macOS signing hook is configured'};
-	}
-
-	if (context.packager?.forceCodeSigning) {
-		return {present: true, reason: 'forceCodeSigning is enabled'};
-	}
-
-	if (env.CSC_IDENTITY_AUTO_DISCOVERY === 'false') {
-		return {present: false, reason: 'identity auto-discovery is disabled'};
-	}
-
-	return discoverSigningIdentity(dependencies);
 }
 
 function inspectMacSignature(appPath, {execFileSync, spawnSync}) {
@@ -128,19 +63,26 @@ function inspectMacSignature(appPath, {execFileSync, spawnSync}) {
 	}
 
 	const identifier = output.match(/^Identifier=(.+)$/im)?.[1]?.trim();
+	const authority = output.match(/^Authority=(.+)$/im)?.[1]?.trim();
+	const teamIdentifier = output.match(/^TeamIdentifier=(.+)$/im)?.[1]?.trim();
 
 	if (/^Authority=Developer ID Application:/im.test(output)) {
-		return {identifier, kind: 'developer-id'};
+		return {
+			authority,
+			identifier,
+			kind: 'developer-id',
+			teamIdentifier
+		};
 	}
 
-	return {identifier, kind: 'other'};
+	return {authority, identifier, kind: 'other', teamIdentifier};
 }
 
 function isUniversalMergeInput(context) {
 	return /-(?:arm64|x64)-temp$/.test(context.appOutDir);
 }
 
-function createMacBuildHooks({productName}) {
+function createMacBuildHooks({productName, profile = profiles.local}) {
 	function macAppPath(context) {
 		return path.join(
 			context.appOutDir,
@@ -154,21 +96,9 @@ function createMacBuildHooks({productName}) {
 		}
 
 		const appPath = macAppPath(context);
-		const missingEnv = missingNotarizationEnv(dependencies.env);
 
-		if (missingEnv.length === 0) {
-			dependencies.log(
-				'Complete notarization credentials are set; preserving the app for Developer ID signing.'
-			);
-			return;
-		}
-
-		const signingIntent = realSigningIntent(context, dependencies);
-
-		if (signingIntent.present) {
-			dependencies.log(
-				`Skipping local ad-hoc signing because ${signingIntent.reason}.`
-			);
+		if (profile === profiles.signed) {
+			dependencies.log('Preserving the app for required Developer ID signing.');
 			return;
 		}
 
@@ -179,7 +109,19 @@ function createMacBuildHooks({productName}) {
 			return;
 		}
 
-		if (inspectMacSignature(appPath, dependencies).kind !== 'unsigned') {
+		const signature = inspectMacSignature(appPath, dependencies);
+
+		if (
+			profile === profiles.unsigned &&
+			signature.kind !== 'unsigned' &&
+			signature.kind !== 'ad-hoc'
+		) {
+			throw new Error(
+				`distributable-unsigned refuses an existing ${signature.kind} macOS signature.`
+			);
+		}
+
+		if (signature.kind !== 'unsigned') {
 			dependencies.log(
 				'Mac app already has a valid signature; leaving it unchanged.'
 			);
@@ -203,15 +145,16 @@ function createMacBuildHooks({productName}) {
 			return;
 		}
 
+		if (profile !== profiles.signed) {
+			return;
+		}
+
 		const missingEnv = missingNotarizationEnv(dependencies.env);
 
 		if (missingEnv.length > 0) {
-			dependencies.log(
-				`${missingEnv.join(
-					', '
-				)} environment variable(s) are not set, skipping notarization.`
+			throw new Error(
+				`signed macOS packaging is missing ${missingEnv.join(', ')}.`
 			);
-			return;
 		}
 
 		const appPath = macAppPath(context);
@@ -231,6 +174,22 @@ function createMacBuildHooks({productName}) {
 			);
 		}
 
+		if (signature.teamIdentifier !== dependencies.env.APPLE_TEAM_ID) {
+			throw new Error(
+				`Refusing to notarize ${appPath}: signing team ${
+					signature.teamIdentifier ?? '<unknown>'
+				} does not match APPLE_TEAM_ID.`
+			);
+		}
+
+		if (signature.authority !== dependencies.env.CSC_NAME) {
+			throw new Error(
+				`Refusing to notarize ${appPath}: signing authority ${
+					signature.authority ?? '<unknown>'
+				} does not match CSC_NAME.`
+			);
+		}
+
 		dependencies.log('Notarizing Developer ID-signed Mac app...');
 		await dependencies.notarize({
 			appPath,
@@ -243,4 +202,4 @@ function createMacBuildHooks({productName}) {
 	return {afterPack, afterSign};
 }
 
-module.exports = {createMacBuildHooks, hasCompleteNotarizationEnv};
+module.exports = {createMacBuildHooks};

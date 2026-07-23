@@ -1,23 +1,45 @@
 #!/usr/bin/env node
-// Buckets electron-builder artifacts into release/{mac,windows,linux}/.
 import {createHash} from 'node:crypto';
 import {
-	existsSync,
+	copyFileSync,
 	mkdirSync,
-	readdirSync,
+	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync
 } from 'node:fs';
-import {join} from 'node:path';
+import {createRequire} from 'node:module';
+import {basename, dirname, join, resolve, sep} from 'node:path';
 
-const releaseDir = process.argv[2] || join(process.cwd(), 'release');
+const require = createRequire(import.meta.url);
+const {
+	isDistributionProfile,
+	isUpdaterMetadata,
+	localArtifactNotice,
+	localArtifactNoticeName,
+	profiles,
+	requiredArtifactMatrix,
+	targetManifestName,
+	validProfiles
+} = require('./release-profile.cjs');
+const {manifestSchemaVersion} = require('./artifact-profile-hooks.cjs');
+
 const guideName = 'WHICH TO DOWNLOAD.md';
 const checksumsName = 'SHA256SUMS.txt';
-const artifactProductName = 'Twine-RS';
-
+const aggregateManifestName = 'artifact-manifest.json';
+const localNoticeName = 'LOCAL-TEST-BUNDLE.txt';
+const baseArtifactFields = [
+	'fileName',
+	'sha256',
+	'size',
+	'notarization',
+	'signing',
+	'signingScope',
+	'stapling'
+];
 const buckets = [
 	{
 		dir: 'windows',
@@ -36,260 +58,566 @@ const buckets = [
 	}
 ];
 
-const builderMetadata = new Set([
-	'.DS_Store',
-	'builder-debug.yml',
-	'builder-effective-config.yaml',
-	checksumsName,
-	guideName
-]);
+function parseArgs(args) {
+	const options = {
+		localTestBundle: false,
+		output: undefined,
+		profile: undefined,
+		source: undefined
+	};
 
-function requiredArtifactMatrix(version) {
-	return [
-		{arch: 'x64', extension: 'exe', platform: 'win'},
-		{arch: 'x64', extension: 'dmg', platform: 'mac'},
-		{arch: 'arm64', extension: 'dmg', platform: 'mac'},
-		{arch: 'x64', extension: 'AppImage', platform: 'linux'},
-		{arch: 'x64', extension: 'zip', platform: 'linux'},
-		{arch: 'arm64', extension: 'AppImage', platform: 'linux'},
-		{arch: 'arm64', extension: 'zip', platform: 'linux'}
-	].map(requirement => ({
-		...requirement,
-		fileName: `${artifactProductName}-${version}-${requirement.platform}-${requirement.arch}.${requirement.extension}`,
-		label: `${requirement.platform}-${requirement.arch}.${requirement.extension}`
-	}));
-}
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
 
-function validateRequiredArtifacts(version) {
-	const files = safeReaddir(releaseDir).filter(name =>
-		safeStat(join(releaseDir, name))?.isFile()
-	);
-	const requirements = requiredArtifactMatrix(version);
-	const expectedNames = new Set(
-		requirements.map(requirement => requirement.fileName)
-	);
-	const problems = [];
+		if (arg === '--local-test-bundle') {
+			options.localTestBundle = true;
+			continue;
+		}
 
-	for (const requirement of requirements) {
-		if (!files.includes(requirement.fileName)) {
-			problems.push(`missing ${requirement.label}: ${requirement.fileName}`);
+		if (arg === '--profile' || arg === '--source' || arg === '--output') {
+			const value = args[++index];
+
+			if (!value) {
+				throw new Error(`${arg} requires a value.`);
+			}
+			options[arg.slice(2)] = value;
+			continue;
+		}
+
+		throw new Error(`Unknown argument "${arg}".`);
+	}
+
+	if (!validProfiles.has(options.profile)) {
+		throw new Error(
+			`--profile must explicitly name ${[...validProfiles].join(', ')}.`
+		);
+	}
+
+	if (options.profile === profiles.local && !options.localTestBundle) {
+		throw new Error(
+			'Distribution assembly rejects the local profile. Use --local-test-bundle only for CI test retention.'
+		);
+	}
+
+	if (options.profile !== profiles.local && options.localTestBundle) {
+		throw new Error('--local-test-bundle accepts only the local profile.');
+	}
+
+	if (
+		options.profile === profiles.unsigned &&
+		process.env.ALLOW_UNSIGNED_DISTRIBUTION !== '1'
+	) {
+		throw new Error(
+			'distributable-unsigned assembly requires ALLOW_UNSIGNED_DISTRIBUTION=1.'
+		);
+	}
+
+	if (options.profile === profiles.signed) {
+		const expectedIdentityKeys = [
+			'APPLE_APP_ID',
+			'APPLE_TEAM_ID',
+			'CSC_NAME',
+			'WINDOWS_SIGNER_SUBJECT',
+			'WINDOWS_SIGNER_SHA1'
+		];
+		const missing = expectedIdentityKeys.filter(
+			key =>
+				typeof process.env[key] !== 'string' ||
+				process.env[key].trim().length === 0
+		);
+
+		if (missing.length > 0) {
+			throw new Error(
+				`signed assembly is missing expected identity configuration: ${missing.join(
+					', '
+				)}.`
+			);
+		}
+
+		if (!/^[0-9a-f]{40}$/i.test(process.env.WINDOWS_SIGNER_SHA1.trim())) {
+			throw new Error(
+				'WINDOWS_SIGNER_SHA1 must be the expected 40-character certificate thumbprint.'
+			);
 		}
 	}
 
-	const unexpected = files.filter(
-		name => !expectedNames.has(name) && !isBuilderMetadata(name)
+	const defaultSource = join(
+		process.cwd(),
+		'artifacts',
+		'incoming',
+		options.profile
 	);
+	const defaultOutput = options.localTestBundle
+		? join(process.cwd(), 'artifacts', 'local-test-bundle')
+		: join(process.cwd(), 'artifacts', options.profile);
+	const source = resolve(options.source || defaultSource);
+	const output = resolve(options.output || defaultOutput);
+	const projectRoot = resolve(process.cwd());
 
-	if (unexpected.length > 0) {
-		problems.push(
-			`unexpected or duplicate artifact input: ${unexpected.join(', ')}`
-		);
+	if (
+		source === output ||
+		source.startsWith(`${output}${sep}`) ||
+		output.startsWith(`${source}${sep}`)
+	) {
+		throw new Error('Artifact source and output directories must not overlap.');
 	}
 
-	if (problems.length > 0) {
+	if (output === projectRoot || output === dirname(output)) {
 		throw new Error(
-			`required desktop artifact matrix is incomplete:\n- ${problems.join('\n- ')}`
+			'Artifact output must not be the project or filesystem root.'
 		);
 	}
+
+	return {
+		...options,
+		output,
+		source
+	};
 }
 
 function packageVersion() {
-	try {
-		const pkg = JSON.parse(
-			readFileSync(join(process.cwd(), 'package.json'), 'utf8')
-		);
-
-		return typeof pkg.version === 'string' ? pkg.version : 'VERSION';
-	} catch {
-		return 'VERSION';
-	}
-}
-
-function isScratchDir(name, fullPath) {
-	if (name.endsWith('-unpacked')) {
-		return true;
-	}
-
-	if (name === '.icon-icns') {
-		return true;
-	}
-
-	if (name.startsWith('mac-')) {
-		return true;
-	}
-
-	return name === 'mac' && existsSync(join(fullPath, 'Twine RS.app'));
-}
-
-function isBuilderMetadata(name) {
-	return (
-		name.endsWith('.blockmap') ||
-		/^latest-.*\.ya?ml$/.test(name) ||
-		builderMetadata.has(name)
+	const pkg = JSON.parse(
+		readFileSync(join(process.cwd(), 'package.json'), 'utf8')
 	);
-}
 
-function removeBuilderScratchDirs() {
-	let removed = 0;
-
-	for (const name of safeReaddir(releaseDir)) {
-		const fullPath = join(releaseDir, name);
-
-		if (safeStat(fullPath)?.isDirectory() && isScratchDir(name, fullPath)) {
-			rmSync(fullPath, {force: true, recursive: true});
-			removed++;
-		}
+	if (typeof pkg.version !== 'string') {
+		throw new Error('package.json does not contain a release version.');
 	}
 
-	return removed;
+	return pkg.version;
 }
 
-function bucketArtifacts() {
-	let dropped = 0;
-	let moved = 0;
-	const perOs = {linux: 0, mac: 0, windows: 0};
-
-	for (const name of safeReaddir(releaseDir)) {
-		const fullPath = join(releaseDir, name);
-		const stat = safeStat(fullPath);
-
-		if (!stat || stat.isDirectory()) {
-			continue;
-		}
-
-		if (isBuilderMetadata(name)) {
-			rmSync(fullPath, {force: true});
-			dropped++;
-			continue;
-		}
-
-		const bucket = buckets.find(candidate => candidate.match(name));
-
-		if (!bucket) {
-			rmSync(fullPath, {force: true});
-			dropped++;
-			continue;
-		}
-
-		const destDir = bucket.primary(name)
-			? join(releaseDir, bucket.dir)
-			: join(releaseDir, bucket.dir, 'alternatives');
-
-		mkdirSync(destDir, {recursive: true});
-		renameSync(fullPath, join(destDir, name));
-		perOs[bucket.dir]++;
-		moved++;
-	}
-
-	return {dropped, moved, perOs};
-}
-
-function safeReaddir(dir) {
+function safeFiles(directory) {
 	try {
-		return readdirSync(dir).sort();
+		return readdirSync(directory)
+			.filter(name => statSync(join(directory, name)).isFile())
+			.sort();
 	} catch {
-		console.error(`organize-release: no folder at ${dir}`);
-		process.exit(1);
+		throw new Error(`No artifact input directory exists at ${directory}.`);
 	}
 }
 
-function safeStat(path) {
-	try {
-		return statSync(path);
-	} catch {
-		return undefined;
-	}
+function sha256(filePath) {
+	return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
-function collectDownloads() {
-	const downloads = {};
-
-	for (const bucket of buckets) {
-		downloads[bucket.dir] = listDownloadFiles(bucket.dir);
-	}
-
-	return downloads;
-}
-
-function listDownloadFiles(dir) {
-	const files = [];
-	const root = join(releaseDir, dir);
-
-	for (const name of safeOptionalReaddir(root)) {
-		const fullPath = join(root, name);
-
-		if (safeStat(fullPath)?.isFile()) {
-			files.push(`${dir}/${name}`);
-		}
-	}
-
-	for (const name of safeOptionalReaddir(join(root, 'alternatives'))) {
-		const fullPath = join(root, 'alternatives', name);
-
-		if (safeStat(fullPath)?.isFile()) {
-			files.push(`${dir}/alternatives/${name}`);
-		}
-	}
-
-	return files;
-}
-
-function safeOptionalReaddir(dir) {
-	try {
-		return readdirSync(dir).sort();
-	} catch {
+function profileInspectionFields(profile, platform) {
+	if (platform === 'linux') {
 		return [];
 	}
+
+	if (platform === 'mac') {
+		return profile === profiles.signed
+			? ['authority', 'identifier', 'signerTeamId']
+			: ['identifier'];
+	}
+
+	return profile === profiles.signed
+		? ['signerSubject', 'signerThumbprint', 'timestamped']
+		: [];
+}
+
+function validateInspection(profile, platform, artifact, env) {
+	const allowed = new Set([
+		...baseArtifactFields,
+		...profileInspectionFields(profile, platform)
+	]);
+	const missing = baseArtifactFields.filter(
+		field => !Object.hasOwn(artifact, field)
+	);
+	const unexpected = Object.keys(artifact).filter(field => !allowed.has(field));
+
+	if (missing.length > 0 || unexpected.length > 0) {
+		throw new Error(
+			`${artifact.fileName ?? `${platform} artifact`} has an invalid inspection schema: ${[
+				...missing.map(field => `missing ${field}`),
+				...unexpected.map(field => `unexpected ${field}`)
+			].join(', ')}.`
+		);
+	}
+
+	if (platform === 'linux') {
+		if (
+			artifact.signing !== 'not-applicable' ||
+			artifact.signingScope !== 'not-applicable' ||
+			artifact.notarization !== 'not-applicable' ||
+			artifact.stapling !== 'not-applicable'
+		) {
+			throw new Error(
+				`${artifact.fileName} must record Linux native-platform signing, scope, notarization, and stapling as not-applicable.`
+			);
+		}
+		return;
+	}
+
+	if (profile === profiles.local) {
+		const validLocalState =
+			platform === 'win'
+				? artifact.signing === 'unsigned' &&
+					artifact.signingScope === 'installer' &&
+					artifact.notarization === 'not-applicable' &&
+					artifact.stapling === 'not-applicable'
+				: artifact.signing === 'ad-hoc' &&
+					artifact.signingScope === 'app-inside-dmg' &&
+					artifact.notarization === 'not-notarized' &&
+					artifact.stapling === 'not-stapled';
+
+		if (!validLocalState) {
+			throw new Error(
+				`${artifact.fileName} does not record the required local-only trust state.`
+			);
+		}
+		return;
+	}
+
+	if (
+		platform === 'win' &&
+		(artifact.signingScope !== 'installer' ||
+			artifact.notarization !== 'not-applicable' ||
+			artifact.stapling !== 'not-applicable')
+	) {
+		throw new Error(
+			`${artifact.fileName} must record installer signing scope with notarization and stapling as not-applicable.`
+		);
+	}
+
+	if (platform === 'mac' && artifact.signingScope !== 'app-inside-dmg') {
+		throw new Error(
+			`${artifact.fileName} must record signing scope as app-inside-dmg.`
+		);
+	}
+
+	if (profile === profiles.unsigned) {
+		const signing = platform === 'mac' ? 'ad-hoc' : 'unsigned';
+
+		if (artifact.signing !== signing) {
+			throw new Error(
+				`${artifact.fileName} must record signing as ${signing}.`
+			);
+		}
+
+		if (
+			platform === 'mac' &&
+			(artifact.notarization !== 'not-notarized' ||
+				artifact.stapling !== 'not-stapled')
+		) {
+			throw new Error(
+				`${artifact.fileName} must be unnotarized and unstapled.`
+			);
+		}
+		return;
+	}
+
+	if (
+		platform === 'win' &&
+		(artifact.signing !== 'authenticode' || artifact.timestamped !== true)
+	) {
+		throw new Error(
+			`${artifact.fileName} must record valid timestamped Authenticode signing.`
+		);
+	}
+
+	if (
+		platform === 'win' &&
+		(artifact.signerSubject !== env.WINDOWS_SIGNER_SUBJECT ||
+			artifact.signerThumbprint?.toUpperCase() !==
+				env.WINDOWS_SIGNER_SHA1.trim().toUpperCase())
+	) {
+		throw new Error(
+			`${artifact.fileName} does not match the expected Windows signing identity.`
+		);
+	}
+
+	if (
+		platform === 'mac' &&
+		(artifact.signing !== 'developer-id' ||
+			artifact.notarization !== 'notarized' ||
+			artifact.stapling !== 'stapled')
+	) {
+		throw new Error(
+			`${artifact.fileName} must record Developer ID signing, notarization, and stapling.`
+		);
+	}
+
+	if (
+		platform === 'mac' &&
+		(artifact.authority !== env.CSC_NAME ||
+			artifact.identifier !== env.APPLE_APP_ID ||
+			artifact.signerTeamId !== env.APPLE_TEAM_ID)
+	) {
+		throw new Error(
+			`${artifact.fileName} does not match the expected macOS signing identity.`
+		);
+	}
+}
+
+function targetRequirements(version, profile) {
+	return [
+		{arch: 'x64', platform: 'win'},
+		{arch: 'x64', platform: 'mac'},
+		{arch: 'arm64', platform: 'mac'},
+		{arch: 'x64', platform: 'linux'},
+		{arch: 'arm64', platform: 'linux'}
+	].map(target => ({
+		...target,
+		manifestName: targetManifestName(version, target.platform, target.arch),
+		artifacts: requiredArtifactMatrix(version, profile)
+			.filter(
+				artifact =>
+					artifact.platform === target.platform && artifact.arch === target.arch
+			)
+			.map(artifact => artifact.fileName)
+	}));
+}
+
+function validateInputs({profile, source}, version) {
+	const requirements = requiredArtifactMatrix(version, profile);
+	const targetManifests = targetRequirements(version, profile);
+	const expectedArtifacts = new Set(
+		requirements.map(requirement => requirement.fileName)
+	);
+	const expectedManifests = new Set(
+		targetManifests.map(target => target.manifestName)
+	);
+	const expectedInputs = new Set([
+		...expectedArtifacts,
+		...expectedManifests,
+		...(profile === profiles.local ? [localArtifactNoticeName] : [])
+	]);
+	const files = safeFiles(source);
+	const unexpected = files.filter(name => !expectedInputs.has(name));
+	const missing = [...expectedInputs].filter(name => !files.includes(name));
+
+	if (files.some(isUpdaterMetadata)) {
+		throw new Error('Updater metadata is forbidden in every artifact profile.');
+	}
+
+	if (missing.length > 0 || unexpected.length > 0) {
+		const problems = [
+			...missing.map(name => `missing ${name}`),
+			...unexpected.map(name => `unexpected input ${name}`)
+		];
+
+		throw new Error(
+			`required desktop artifact matrix is incomplete:\n- ${problems.join(
+				'\n- '
+			)}`
+		);
+	}
+
+	if (
+		profile === profiles.local &&
+		readFileSync(join(source, localArtifactNoticeName), 'utf8') !==
+			localArtifactNotice
+	) {
+		throw new Error(
+			'The local artifact transfer notice is missing or invalid.'
+		);
+	}
+
+	const manifests = [];
+	let sourceCommit;
+	let sourceTree;
+
+	for (const target of targetManifests) {
+		const manifestPath = join(source, target.manifestName);
+		let manifest;
+
+		try {
+			manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+		} catch {
+			throw new Error(`Invalid JSON in ${target.manifestName}.`);
+		}
+
+		if (
+			manifest.schemaVersion !== manifestSchemaVersion ||
+			manifest.profile !== profile ||
+			manifest.applicationVersion !== version ||
+			manifest.platform !== target.platform ||
+			manifest.architecture !== target.arch ||
+			!Array.isArray(manifest.artifacts)
+		) {
+			throw new Error(
+				`${target.manifestName} does not match the requested profile, version, or target.`
+			);
+		}
+
+		if (
+			typeof manifest.buildDate !== 'string' ||
+			!Number.isFinite(Date.parse(manifest.buildDate))
+		) {
+			throw new Error(
+				`${target.manifestName} does not record a valid build date.`
+			);
+		}
+
+		if (isDistributionProfile(profile) && manifest.sourceTree !== 'clean') {
+			throw new Error(
+				`${target.manifestName} does not record a clean source tree.`
+			);
+		}
+
+		if (!/^[0-9a-f]{40}$/i.test(manifest.sourceCommit)) {
+			throw new Error(
+				`${target.manifestName} does not record an exact source commit.`
+			);
+		}
+
+		sourceCommit ??= manifest.sourceCommit;
+		if (manifest.sourceCommit !== sourceCommit) {
+			throw new Error('Target manifests do not share one source commit.');
+		}
+		sourceTree ??= manifest.sourceTree;
+		if (manifest.sourceTree !== sourceTree) {
+			throw new Error('Target manifests do not share one source tree state.');
+		}
+
+		const manifestNames = manifest.artifacts
+			.map(artifact => artifact.fileName)
+			.sort();
+		const expectedNames = [...target.artifacts].sort();
+
+		if (
+			manifestNames.length !== expectedNames.length ||
+			expectedNames.some((name, index) => name !== manifestNames[index])
+		) {
+			throw new Error(
+				`${target.manifestName} does not declare the exact target artifacts.`
+			);
+		}
+
+		for (const artifact of manifest.artifacts) {
+			const artifactPath = join(source, artifact.fileName);
+
+			if (
+				!Number.isSafeInteger(artifact.size) ||
+				artifact.size < 0 ||
+				!/^[0-9a-f]{64}$/.test(artifact.sha256) ||
+				artifact.sha256 !== sha256(artifactPath) ||
+				artifact.size !== statSync(artifactPath).size
+			) {
+				throw new Error(
+					`${target.manifestName} does not match ${artifact.fileName}.`
+				);
+			}
+
+			validateInspection(profile, target.platform, artifact, process.env);
+		}
+
+		manifests.push({fileName: target.manifestName, manifest});
+	}
+
+	return {manifests, requirements, sourceCommit, sourceTree};
+}
+
+function destinationFor(name, root) {
+	const bucket = buckets.find(candidate => candidate.match(name));
+
+	if (!bucket) {
+		throw new Error(`No destination bucket exists for ${name}.`);
+	}
+
+	return bucket.primary(name)
+		? join(root, bucket.dir, name)
+		: join(root, bucket.dir, 'alternatives', name);
+}
+
+function downloadPaths(requirements) {
+	return requirements.map(requirement => {
+		const bucket = buckets.find(candidate =>
+			candidate.match(requirement.fileName)
+		);
+		const alternative = bucket.primary(requirement.fileName)
+			? ''
+			: 'alternatives/';
+
+		return `${bucket.dir}/${alternative}${requirement.fileName}`;
+	});
 }
 
 function preferredDownload(files, predicate) {
 	return files.find(predicate) ?? files[0] ?? null;
 }
 
-function releaseGuide(version, downloads) {
-	const windows = downloads.windows ?? [];
-	const mac = downloads.mac ?? [];
-	const linux = downloads.linux ?? [];
-	const preferredWindows = preferredDownload(
-		windows,
-		file => !file.includes('/alternatives/') && file.endsWith('.exe')
-	);
-	const preferredMac = preferredDownload(
-		mac,
-		file => !file.includes('/alternatives/') && file.endsWith('.dmg')
-	);
-	const preferredLinuxX64 = preferredDownload(
-		linux,
-		file =>
-			!file.includes('/alternatives/') &&
-			(file.includes('-x64.') || file.includes('-x86_64.')) &&
-			file.endsWith('.AppImage')
-	);
-	const preferredLinuxArm64 = preferredDownload(
-		linux,
-		file =>
-			!file.includes('/alternatives/') &&
-			file.includes('-arm64.') &&
-			file.endsWith('.AppImage')
-	);
-	const startHere = [
-		preferredWindows ? `- Windows: \`${preferredWindows}\`` : null,
-		preferredMac ? `- Mac: \`${preferredMac}\`` : null,
-		preferredLinuxX64 ? `- Linux x64: \`${preferredLinuxX64}\`` : null,
-		preferredLinuxArm64 ? `- Linux ARM64: \`${preferredLinuxArm64}\`` : null
-	]
-		.filter(Boolean)
+function hasArchitecture(file, architecture) {
+	return new RegExp(`-${architecture}(?:-unsigned)?\\.`).test(file);
+}
+
+function downloadList(files, platform) {
+	return files
+		.map(file => `- \`${file}\`: ${downloadNote(file, platform)}`)
 		.join('\n');
+}
+
+function downloadNote(file, platform) {
+	const name = basename(file);
+	const notes = [
+		file.includes('/alternatives/')
+			? 'alternative download'
+			: 'recommended first download'
+	];
+
+	if (platform === 'windows') {
+		notes.push('installer for 64-bit Windows');
+	} else if (platform === 'mac') {
+		notes.push(
+			hasArchitecture(name, 'arm64')
+				? 'Apple Silicon Mac build'
+				: 'Intel Mac build'
+		);
+		notes.push('open the DMG and drag the app to Applications');
+	} else {
+		notes.push(
+			hasArchitecture(name, 'arm64')
+				? '64-bit ARM Linux'
+				: '64-bit Intel/AMD Linux'
+		);
+		notes.push(
+			name.endsWith('.AppImage')
+				? 'mark executable if needed with `chmod +x`, then run it'
+				: 'unzip first; use this if AppImage does not work'
+		);
+	}
+
+	return `${notes.join('; ')}.`;
+}
+
+function releaseGuide(version, profile, requirements) {
+	const downloads = downloadPaths(requirements);
+	const windows = downloads.filter(file => file.startsWith('windows/'));
+	const mac = downloads.filter(file => file.startsWith('mac/'));
+	const linux = downloads.filter(file => file.startsWith('linux/'));
+	const startHere = [
+		`- Windows: \`${preferredDownload(windows, file => file.endsWith('.exe'))}\``,
+		`- Mac (Apple Silicon): \`${preferredDownload(mac, file =>
+			hasArchitecture(file, 'arm64')
+		)}\``,
+		`- Mac (Intel): \`${preferredDownload(mac, file =>
+			hasArchitecture(file, 'x64')
+		)}\``,
+		`- Linux x64: \`${preferredDownload(
+			linux,
+			file => hasArchitecture(file, 'x64') && file.endsWith('.AppImage')
+		)}\``,
+		`- Linux ARM64: \`${preferredDownload(
+			linux,
+			file => hasArchitecture(file, 'arm64') && file.endsWith('.AppImage')
+		)}\``
+	].join('\n');
+	const warning =
+		profile === profiles.unsigned
+			? `> **Unsigned distribution warning:** Windows will not show a verified publisher and SmartScreen may warn or block the installer. macOS will not recognize an Apple Developer ID publisher; these builds are ad-hoc signed, unnotarized, and may be blocked by Gatekeeper. Verify the SHA-256 checksum against \`${checksumsName}\` before running a download. A matching checksum confirms the downloaded bytes, not the identity of the publisher.\n\n`
+			: `This bundle enforces trusted native-platform signing where applicable: Windows uses Authenticode and macOS uses Developer ID signing plus notarization. Linux native-platform signing is recorded as not-applicable. Signing claims remain specific to each artifact.\n\n`;
 
 	return `# Which To Download
 
 Twine RS ${version}
 
-Most desktop users should use the file directly inside their OS folder:
+${warning}Most desktop users should use the file matching their operating system and CPU:
 
-${startHere || '- No downloads found yet. Run `npm run dist` first.'}
+${startHere}
 
-Use an \`alternatives/\` folder only when the main download does not match the machine or the primary package format is inconvenient.
+Use an \`alternatives/\` folder only when the primary package format is inconvenient.
 
 ## Windows
 
@@ -303,107 +631,147 @@ ${downloadList(mac, 'mac')}
 
 ${downloadList(linux, 'linux')}
 
-## Checksums
+## Checksums and provenance
 
-Use \`${checksumsName}\` to verify downloads.
+Use \`${checksumsName}\` to verify downloads. \`${aggregateManifestName}\` records the profile, source commit, and signing state bound to every artifact.
 `;
 }
 
-function downloadList(files, platform) {
-	if (files.length === 0) {
-		return 'No downloads generated for this platform.';
-	}
-
-	return files
-		.map(file => `- \`${file}\`: ${downloadNote(file, platform)}`)
-		.join('\n');
-}
-
-function downloadNote(file, platform) {
-	const name = file.split('/').pop() ?? file;
-	const notes = [];
-
-	notes.push(
-		file.includes('/alternatives/')
-			? 'alternative download'
-			: 'recommended first download'
+function assemble(options, version, validation) {
+	mkdirSync(dirname(options.output), {recursive: true});
+	const temporaryOutput = mkdtempSync(
+		join(dirname(options.output), '.twine-rs-artifact-assembly-')
 	);
 
-	if (platform === 'windows') {
-		if (name.endsWith('.exe')) {
-			notes.push('installer for 64-bit Windows');
-		}
-	} else if (platform === 'mac') {
-		if (name.includes('-universal.')) {
-			notes.push('universal Apple Silicon and Intel Mac build');
+	try {
+		const aggregateArtifacts = [];
+
+		for (const requirement of validation.requirements) {
+			const sourcePath = join(options.source, requirement.fileName);
+			const destination = destinationFor(requirement.fileName, temporaryOutput);
+			const targetManifest = validation.manifests.find(({manifest}) =>
+				manifest.artifacts.some(
+					artifact => artifact.fileName === requirement.fileName
+				)
+			)?.manifest;
+			const sourceEntry = targetManifest?.artifacts.find(
+				artifact => artifact.fileName === requirement.fileName
+			);
+
+			if (!targetManifest || !sourceEntry) {
+				throw new Error(
+					`Validated provenance is missing for ${requirement.fileName}.`
+				);
+			}
+			const trustState = Object.fromEntries(
+				[
+					'notarization',
+					'signing',
+					'signingScope',
+					'stapling',
+					...profileInspectionFields(options.profile, targetManifest.platform)
+				]
+					.filter(field => Object.hasOwn(sourceEntry, field))
+					.map(field => [field, sourceEntry[field]])
+			);
+
+			mkdirSync(dirname(destination), {recursive: true});
+			copyFileSync(sourcePath, destination);
+			aggregateArtifacts.push({
+				fileName: destination
+					.slice(temporaryOutput.length + 1)
+					.replaceAll('\\', '/'),
+				sha256: sha256(destination),
+				size: statSync(destination).size,
+				...trustState,
+				platform: targetManifest.platform,
+				architecture: targetManifest.architecture,
+				buildDate: targetManifest.buildDate
+			});
 		}
 
-		if (name.endsWith('.dmg')) {
-			notes.push(
-				'open the DMG, drag the app to Applications, then right-click Open the first time if macOS warns'
+		const provenanceDir = join(temporaryOutput, 'provenance');
+
+		mkdirSync(provenanceDir, {recursive: true});
+		for (const {fileName} of validation.manifests) {
+			copyFileSync(
+				join(options.source, fileName),
+				join(provenanceDir, fileName)
 			);
 		}
-	} else if (platform === 'linux') {
-		if (name.includes('-x64.')) {
-			notes.push('64-bit Intel/AMD Linux');
-		}
 
-		if (name.includes('-x86_64.')) {
-			notes.push('64-bit Intel/AMD Linux');
-		}
+		const checksumLines = aggregateArtifacts
+			.sort((left, right) => left.fileName.localeCompare(right.fileName))
+			.map(artifact => `${artifact.sha256}  ${artifact.fileName}`);
 
-		if (name.includes('-arm64.')) {
-			notes.push('64-bit ARM Linux');
-		}
+		writeFileSync(
+			join(temporaryOutput, checksumsName),
+			`${checksumLines.join('\n')}\n`
+		);
 
-		if (name.endsWith('.AppImage')) {
-			notes.push('mark executable if needed with `chmod +x`, then run it');
-		}
+		const aggregateManifest = {
+			schemaVersion: manifestSchemaVersion,
+			profile: options.profile,
+			applicationVersion: version,
+			sourceCommit: validation.sourceCommit,
+			sourceTree: validation.sourceTree,
+			buildDate: new Date().toISOString(),
+			assembledAt: new Date().toISOString(),
+			trustDefinition:
+				options.profile === profiles.signed
+					? 'trusted native-platform signing enforced where applicable; Windows and macOS signed; Linux not-applicable'
+					: options.profile === profiles.unsigned
+						? 'deliberately distributable without trusted Windows or macOS publisher signing'
+						: 'local CI test artifacts; not distributable',
+			artifacts: aggregateArtifacts,
+			targetManifests: validation.manifests.map(
+				({fileName}) => `provenance/${fileName}`
+			)
+		};
 
-		if (name.endsWith('.zip')) {
-			notes.push(
-				'unzip first; use this if AppImage does not work on your setup'
+		writeFileSync(
+			join(temporaryOutput, aggregateManifestName),
+			`${JSON.stringify(aggregateManifest, null, 2)}\n`
+		);
+
+		if (options.localTestBundle) {
+			writeFileSync(
+				join(temporaryOutput, localNoticeName),
+				[
+					'Twine RS local CI test bundle',
+					'',
+					'This bundle uses the local artifact profile.',
+					'It is retained only for install and runtime testing.',
+					'It must not enter release assembly or be distributed to recipients.',
+					''
+				].join('\n')
+			);
+		} else {
+			writeFileSync(
+				join(temporaryOutput, guideName),
+				releaseGuide(version, options.profile, validation.requirements)
 			);
 		}
+
+		rmSync(options.output, {force: true, recursive: true});
+		renameSync(temporaryOutput, options.output);
+	} catch (error) {
+		rmSync(temporaryOutput, {force: true, recursive: true});
+		throw error;
 	}
-
-	return `${notes.join('; ')}.`;
 }
-
-function writeChecksums(downloads) {
-	const files = Object.values(downloads).flat().sort();
-	const lines = files.map(file => {
-		const hash = createHash('sha256')
-			.update(readFileSync(join(releaseDir, file)))
-			.digest('hex');
-
-		return `${hash}  ${file}`;
-	});
-
-	writeFileSync(join(releaseDir, checksumsName), `${lines.join('\n')}\n`);
-}
-
-const version = packageVersion();
 
 try {
-	// Validate before deleting or moving anything so an incomplete matrix leaves
-	// the downloaded artifacts untouched for diagnosis or retry.
-	validateRequiredArtifacts(version);
+	const options = parseArgs(process.argv.slice(2));
+	const version = packageVersion();
+	const validation = validateInputs(options, version);
 
-	const removedDirs = removeBuilderScratchDirs();
-	const {dropped, moved, perOs} = bucketArtifacts();
-	const downloads = collectDownloads();
-
-	writeFileSync(join(releaseDir, guideName), releaseGuide(version, downloads));
-	writeChecksums(downloads);
-
+	assemble(options, version, validation);
 	console.log(
-		`organize-release: ${moved} artifact(s) bucketed ` +
-			`(windows ${perOs.windows}, mac ${perOs.mac}, linux ${perOs.linux}), ` +
-			`${dropped} sidecar(s) removed, ${removedDirs} scratch dir(s) removed.`
+		options.localTestBundle
+			? `organize-release: validated local test bundle at ${options.output}`
+			: `organize-release: validated ${options.profile} distribution at ${options.output}`
 	);
-	console.log(`Guide written to release/${guideName}`);
-	console.log('Downloads ready under release/{windows,mac,linux}/');
 } catch (error) {
 	console.error(`organize-release: ${error.message}`);
 	process.exitCode = 1;

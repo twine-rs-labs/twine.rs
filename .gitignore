@@ -1,6 +1,7 @@
 *.swp
 node_modules/*
 dist/*
+artifacts/*
 release/*
 *.DS_Store
 .idea

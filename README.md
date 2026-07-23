@@ -101,35 +101,80 @@ cargo lint
 cargo test --workspace
 ```
 
-`npm test` runs Jest in watch mode. `npm run dist` creates installable Electron
-artifacts for the current host target.
+`npm test` runs Jest in watch mode. `npm run dist` creates local-only
+installable Electron artifacts for the current host target.
 
 ### Desktop Release
 
 ```sh
 npm run dist
+ALLOW_UNSIGNED_DISTRIBUTION=1 npm run dist:distributable-unsigned
+npm run dist:signed
 ```
 
-This command builds the web renderer, Electron main process, and desktop package
-for the current operating system and CPU architecture. Native addons are built
-and verified for that exact target before packaging. The packaged-app CI matrix
-builds and exercises installable AppImage and ZIP packages on Linux x64 and
-ARM64, DMGs on macOS Intel and ARM64, and the NSIS installer on Windows x64.
-Publishable installers must likewise be produced on a matching target runner;
-the local release command does not cross-package other targets.
+The acknowledgement assignment above is for POSIX shells. In PowerShell, use:
 
-Local artifacts remain directly under `release/` because one host cannot
-produce the complete supported matrix. CI retains every target's outputs and,
-after all five target jobs pass, validates and organizes the seven required
-downloads under `release/mac`, `release/windows`, and `release/linux`. Only
-that complete bundle receives `release/WHICH TO DOWNLOAD.md` and
-`release/SHA256SUMS.txt`; `npm run release:organize` fails without changing its
-inputs if any required artifact is missing or duplicated. macOS downloads are
+```powershell
+$previousAcknowledgement = $env:ALLOW_UNSIGNED_DISTRIBUTION
+try {
+  $env:ALLOW_UNSIGNED_DISTRIBUTION = '1'
+  npm run dist:distributable-unsigned
+} finally {
+  $env:ALLOW_UNSIGNED_DISTRIBUTION = $previousAcknowledgement
+}
+```
+
+In `cmd.exe`, scope it to the command:
+
+```bat
+cmd /C "set ALLOW_UNSIGNED_DISTRIBUTION=1&& npm run dist:distributable-unsigned"
+```
+
+All three commands build only for the current operating system and CPU
+architecture. Native addons are built and verified for that exact target before
+packaging. The profiles are:
+
+- `local` is the default. It writes under `artifacts/local/<target>/`, may use
+  ad-hoc macOS signing, and cannot enter distribution assembly.
+- `distributable-unsigned` requires the explicit acknowledgement shown above.
+  Windows and macOS filenames contain `unsigned`; macOS apps are ad-hoc signed
+  and unnotarized. Validated target output remains under
+  `artifacts/staging/distributable-unsigned/<target>/` until the complete matrix
+  is assembled.
+- `signed` requires trusted native-platform signing where applicable. Windows
+  must have the expected timestamped Authenticode signer; macOS must have the
+  expected Developer ID Application identity, notarization, and stapled ticket.
+  Linux records native-platform signing as `not-applicable`. Missing or
+  unexpected signing credentials fail the target build.
+
+Every target runner inspects its native package and emits a manifest bound to
+the artifacts by filename, byte size, and SHA-256. Distribution assembly reads
+five target manifests for the seven supported downloads, requires one clean
+source commit, rejects updater metadata, and copies only validated artifacts
+into `artifacts/distributable-unsigned/` or `artifacts/signed/`. The generated
+download guide, aggregate manifest, checksums, and per-target provenance are
+part of the distribution unit and should accompany the artifacts through every
+distribution channel.
+
+The packaged-app CI matrix uses only the `local` profile. Every per-target
+transfer archive is named `desktop-local-target-<platform>-<architecture>` and
+contains `LOCAL-TEST-ONLY.txt`. After exercising
+AppImage and ZIP packages on Linux x64 and ARM64, DMGs on macOS Intel and ARM64,
+and the NSIS installer on Windows x64, it retains
+`desktop-local-test-bundle`. The bundle contains an explicit non-distribution
+notice and cannot satisfy either distribution assembly command.
+
+Automatic update metadata is disabled for every profile. macOS downloads are
 architecture-specific; choose the file matching the Mac's CPU.
 
 Twine RS uses its own release version from `package.json` and the Rust workspace
 version in `Cargo.toml`. `package.json` also keeps `twineCompatibilityVersion`
-for upstream Twine story-format editor-extension compatibility.
+for upstream Twine story-format editor-extension compatibility. Explicit valid
+SemVer prerelease versions are supported, for example:
+
+```sh
+npm run version:bump -- 0.2.0-beta.1
+```
 
 ## Fixtures and CLI
 

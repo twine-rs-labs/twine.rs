@@ -9,6 +9,8 @@ const packageLockPath = path.join(root, 'package-lock.json');
 const cargoTomlPath = path.join(root, 'Cargo.toml');
 const cargoLockPath = path.join(root, 'Cargo.lock');
 const bumpKinds = new Set(['major', 'minor', 'patch']);
+const semverPattern =
+	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const workspaceCrateNames = [
 	'twine_cli',
 	'twine_core',
@@ -24,13 +26,14 @@ const workspaceCrateNames = [
 
 function usage() {
 	return [
-		'Usage: npm run version:bump -- [patch|minor|major|x.y.z] [--dry-run]',
+		'Usage: npm run version:bump -- [patch|minor|major|semver] [--dry-run]',
 		'',
 		'Examples:',
 		'  npm run version:bump',
 		'  npm run version:bump -- minor',
 		'  npm run version:bump -- major',
-		'  npm run version:bump -- 1.2.3'
+		'  npm run version:bump -- 1.2.3',
+		'  npm run version:bump -- 1.3.0-beta.1'
 	].join('\n');
 }
 
@@ -45,18 +48,20 @@ function writeJson(filePath, value, dryRun) {
 }
 
 function parseVersion(version) {
-	const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+	const match = semverPattern.exec(version);
 
 	if (!match) {
 		throw new Error(
-			`Expected a plain semver version like 0.1.0, got ${version}`
+			`Expected a valid SemVer version like 0.1.0 or 0.2.0-beta.1, got ${version}`
 		);
 	}
 
 	return {
 		major: Number(match[1]),
 		minor: Number(match[2]),
-		patch: Number(match[3])
+		patch: Number(match[3]),
+		prerelease: match[4],
+		build: match[5]
 	};
 }
 
@@ -65,29 +70,35 @@ function formatVersion({major, minor, patch}) {
 }
 
 function bumpVersion(version, kind) {
-	const parsed = parseVersion(version);
-
 	switch (kind) {
-		case 'major':
+		case 'major': {
+			const parsed = parseVersion(version);
+
 			return formatVersion({major: parsed.major + 1, minor: 0, patch: 0});
-		case 'minor':
+		}
+		case 'minor': {
+			const parsed = parseVersion(version);
+
 			return formatVersion({
 				major: parsed.major,
 				minor: parsed.minor + 1,
 				patch: 0
 			});
-		case 'patch':
+		}
+		case 'patch': {
+			const parsed = parseVersion(version);
+
 			return formatVersion({
 				major: parsed.major,
 				minor: parsed.minor,
 				patch: parsed.patch + 1
 			});
-		default:
-			if (/^\d+\.\d+\.\d+$/.test(kind)) {
-				return kind;
-			}
+		}
+		default: {
+			parseVersion(kind);
 
-			throw new Error(`Unknown bump target "${kind}".\n\n${usage()}`);
+			return kind;
+		}
 	}
 }
 

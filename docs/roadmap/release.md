@@ -2,14 +2,15 @@
 
 Status: active
 Owner: release maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-23
 Source of truth: unfinished release and distribution validation
 
 ## Outcomes
 
 ### Packaged applications
 
-- Exercise signed or release-equivalent macOS, Windows, and Linux packages.
+- Exercise local, deliberately unsigned, and signed-profile packages according
+  to their declared native-platform trust state.
 - Verify project load/save/watch, asset journals, preview, updates, dialogs,
   backups, and cleanup from installed paths.
 - Add packaged-app smoke measurements without replacing the local unpackaged
@@ -26,8 +27,11 @@ Source of truth: unfinished release and distribution validation
 
 ### Distribution
 
-- Verify installer/update metadata, checksums, release notes, and recovery
-  behavior.
+- Retain the profile manifest, checksums, release notes, and recovery evidence
+  for every distributed artifact set; keep updater metadata disabled until a
+  separately approved signed update feed exists.
+- Preserve the accepted publisher-authenticity risk and prominent OS warning
+  documentation for intentionally unsigned Windows and macOS distributions.
 - Document supported operating systems and known limitations.
 - Confirm real user data is never touched by tests or benchmark runs.
 

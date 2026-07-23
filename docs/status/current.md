@@ -34,6 +34,9 @@ phase is optimization and release validation, not another ownership migration.
 - Text, graph, split, contents, diagnostics, assets, formats, build, settings,
   and preview routes.
 - Rust import/export, graph, storage, search, and CLI crates.
+- Segregated local, deliberately unsigned, and signed desktop artifact profiles
+  with target-native trust manifests, checksum-bound assembly, and a
+  non-distributable CI test bundle.
 - Deterministic 10k/50k release-mode Electron benchmark fixtures and local
   machine baselines.
 - Generated bounded Rust/WASM read-model contracts for summaries, cursor pages,

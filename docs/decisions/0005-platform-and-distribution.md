@@ -2,7 +2,7 @@
 
 Status: accepted
 Decision date: 2026-06-22
-Last verified: 2026-07-16
+Last verified: 2026-07-23
 
 This record closes the M7 platform/documentation slice for the current Electron
 desktop app path. It documents what the app supports now, what is intentionally
@@ -52,6 +52,9 @@ Current target:
 - Architecture: `x64`.
 - Install options: non-one-click installer with changeable installation
   directory.
+- Trusted releases require the configured Authenticode certificate, expected
+  subject and thumbprint, and a valid timestamp. Missing, invalid, or unexpected
+  identity details fail the signed profile.
 
 Decision:
 
@@ -64,7 +67,7 @@ Decision:
 
 Current target:
 
-- Linux zip artifacts for `x64` and `arm64`.
+- Linux AppImage and zip artifacts for `x64` and `arm64`.
 
 Decision:
 
@@ -75,19 +78,59 @@ Decision:
   declared without changing app architecture.
 - Launcher metadata should point at the desktop app, not the web fallback, and
   should preserve command-line project-folder opening.
+- Linux records native-platform signing and notarization as `not-applicable`.
+  Signing claims for the combined artifact set remain platform-specific.
+
+## Artifact Profiles and Publication Boundary
+
+Desktop packaging has three explicit profiles:
+
+- `local` is the default for development and CI. It may produce unsigned
+  Windows installers and ad-hoc-signed macOS apps. Its output is segregated
+  under `artifacts/local/`, is not recipient-facing, and is rejected by
+  distribution assembly.
+- `distributable-unsigned` is an intentional public or manual distribution
+  profile and requires `ALLOW_UNSIGNED_DISTRIBUTION=1`. Windows and macOS
+  filenames contain `unsigned`; macOS apps must be ad-hoc signed, unnotarized,
+  and unstapled. Unexpected trusted signing input or output is rejected.
+- `signed` enforces trusted native-platform signing where applicable. Windows
+  requires the expected timestamped Authenticode signer. macOS requires the
+  expected Developer ID Application identity and bundle/team identifiers,
+  notarization, and stapling. Linux records signing as `not-applicable`.
+
+Electron Builder writes local artifacts or profile-specific staging artifacts;
+its generic output is not a distribution directory. Each target-native job
+inspects its packages and writes a manifest containing the profile, version,
+exact source commit and tree state, build date, target, byte size, SHA-256, and
+observed signing/notarization state. Complete distribution assembly requires
+five matching clean-tree manifests for the seven supported artifacts, verifies
+the manifest hashes against the inputs, rejects updater metadata, and copies
+only validated files to `artifacts/distributable-unsigned/` or
+`artifacts/signed/`.
+
+CI packages with the `local` profile. Its per-target transfer artifacts use the
+`desktop-local-target-*` namespace and include `LOCAL-TEST-ONLY.txt`; the final
+aggregate is retained as `desktop-local-test-bundle` with a second
+non-distribution notice. Their local-profile manifests cannot enter either
+distribution assembly path.
+
+Unsigned distribution is permitted through GitHub Releases or any deliberate
+manual channel, including beta and stable versions. The warning guide,
+aggregate manifest, per-target provenance, and SHA-256 checksums travel with the
+artifacts. Checksums confirm that downloaded bytes match the published
+checksum; they do not independently authenticate the publisher if both are
+replaced.
 
 ## macOS Packaging and Updates
 
 Current target:
 
-- Universal macOS DMG.
-- Local builds are ad-hoc signed only when no real signing path or complete
-  notarization credential set is present; they remain unnotarized.
-- Release builds are notarized only after a valid Developer ID Application
-  signature is verified and all Apple notarization credentials are present.
-- A complete notarization credential set enables Electron Builder's
-  `forceCodeSigning` guard, so an unavailable or invalid release identity fails
-  packaging rather than silently producing an unsigned artifact.
+- Architecture-specific Intel and Apple Silicon DMGs.
+- Local and deliberately unsigned builds use ad-hoc app signing and remain
+  unnotarized.
+- Signed builds require an explicitly named Developer ID Application identity,
+  validate the bundle and team identifiers, notarize and staple the app, and
+  reverify those properties from the completed DMG.
 - Manual update check through the existing update-check action.
 
 Decision:
@@ -96,9 +139,9 @@ Decision:
   production channel. M7 records the strategy and keeps manual update checks
   visible rather than silently enabling a partial updater.
 - Ad-hoc signing is a local file-access identity fallback, not a substitute for
-  Developer ID signing or Gatekeeper notarization. Explicit signing config,
-  signing environment variables, auto-discovered keychain identities, and valid
-  existing signatures are preserved.
+  Developer ID signing or Gatekeeper notarization. Local and unsigned profiles
+  disable trusted-signing selection; the signed profile never falls back to
+  ad-hoc output.
 - Mac App Store distribution remains separate from the current DMG channel
   because it would require entitlement, sandbox, and review constraints that
   affect local folder access.

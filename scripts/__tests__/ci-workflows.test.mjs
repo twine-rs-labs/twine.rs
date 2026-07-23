@@ -54,10 +54,18 @@ test('packaging CI exercises and retains every supported installable format', ()
 		'Uninstall Windows package',
 		`actions/upload-artifact@${actionRevisions['actions/upload-artifact']}`,
 		`actions/download-artifact@${actionRevisions['actions/download-artifact']}`,
-		'npm run release:organize'
+		'npm run release:assemble:local-test-bundle',
+		'TWINE_RELEASE_PROFILE: local',
+		'desktop-local-test-bundle',
+		'name: desktop-local-target-',
+		'pattern: desktop-local-target-*',
+		'LOCAL-TEST-ONLY.txt',
+		'artifacts/local-test-bundle'
 	]) {
 		assert.match(source, new RegExp(marker));
 	}
+	assert.doesNotMatch(source, /desktop-release-complete/);
+	assert.doesNotMatch(source, /name: desktop-\$\{\{/);
 	assert.equal((source.match(/platform: linux/g) ?? []).length, 2);
 	assert.equal((source.match(/platform: mac/g) ?? []).length, 2);
 	assert.equal((source.match(/platform: windows/g) ?? []).length, 1);

@@ -37,7 +37,13 @@ test('every desktop and release build regenerates WASM before compiling the rend
 		/^npm-run-all --serial build:wasm /
 	);
 	assert.match(scripts['build:electron-release'], /build:electron /);
-	assert.match(scripts.dist, /build:electron-release/);
+	assert.match(scripts['dist:profile'], /build:electron-release/);
+	assert.match(scripts.dist, /run-release-profile\.mjs local/);
+	assert.match(
+		scripts['dist:distributable-unsigned'],
+		/run-release-profile\.mjs distributable-unsigned/
+	);
+	assert.match(scripts['dist:signed'], /run-release-profile\.mjs signed/);
 	assert.match(scripts['start:electron'], /clean build:wasm build:web/);
 });
 
