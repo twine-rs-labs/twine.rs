@@ -214,14 +214,19 @@ async function expectManagedStoryTransition(
 	context: string,
 	transition: () => Promise<void>
 ) {
-	try {
+	const expectNoManagedStoryErrors = async () => {
 		await expect(
 			preview.locator('.story-preview-route__latest-log[data-level="error"]')
 		).toHaveCount(0, {timeout: 2_000});
 		await expect(
 			storyFrame(preview).locator('error-handler.active')
 		).toHaveCount(0, {timeout: 2_000});
+	};
+
+	try {
+		await expectNoManagedStoryErrors();
 		await transition();
+		await expectNoManagedStoryErrors();
 	} catch (error) {
 		const [runtimeLogs, activeErrors] = await Promise.all([
 			preview
@@ -1221,7 +1226,11 @@ test('current passage resolves to a stable ID in every bundled format family', a
 			});
 
 			await expectManagedStoryTransition(preview, format, async () => {
-				await continueLink.click();
+				if (format.startsWith('Chapbook')) {
+					await continueLink.press('Enter');
+				} else {
+					await continueLink.click();
+				}
 				await expectRenderedText(preview, marker);
 				await expectCurrentPassage(preview, 'Next');
 			});

@@ -158,6 +158,14 @@ jobs:
           if ($process.ExitCode -ne 0) {
             throw "Uninstaller exited with code $($process.ExitCode)."
           }
+      - name: Retain Windows smoke diagnostics
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-smoke-diagnostics-${{ matrix.platform }}-${{ matrix.arch }}
+          path: output/playwright/packaged-electron
+          if-no-files-found: warn
+          retention-days: 14
 
   assemble-local-test-bundle:
     name: Validate complete local desktop test bundle

@@ -1,4 +1,4 @@
-import {expect, test} from '@playwright/test';
+import {expect, test, type TestInfo} from '@playwright/test';
 import {
 	_electron as electron,
 	chromium,
@@ -24,6 +24,12 @@ import {pathToFileURL} from 'node:url';
 type DialogState = {
 	calls: Array<{properties?: string[]; title?: string}>;
 	responses: Array<{canceled: boolean; filePaths: string[]}>;
+};
+
+type RunningPackagedApp = {
+	app: ElectronApplication;
+	mainProcessLogs: string[];
+	page: Page;
 };
 
 type PackagedProjectStory = {
@@ -145,7 +151,24 @@ async function prepareIsolatedEnvironment(root: string) {
 	);
 }
 
-async function launchPackagedApp(executablePath: string, profileRoot: string) {
+function appendMainProcessLog(
+	logs: string[],
+	channel: string,
+	message: string
+) {
+	for (const line of message.split(/\r?\n/).filter(Boolean)) {
+		logs.push(`${channel}: ${line}`);
+	}
+	if (logs.length > 500) {
+		logs.splice(0, logs.length - 500);
+	}
+}
+
+async function launchPackagedApp(
+	executablePath: string,
+	profileRoot: string,
+	sharedMainProcessLogs?: string[]
+): Promise<RunningPackagedApp> {
 	await prepareIsolatedEnvironment(profileRoot);
 	const app = await electron.launch({
 		args: [
@@ -160,11 +183,30 @@ async function launchPackagedApp(executablePath: string, profileRoot: string) {
 		env: isolatedEnvironment(profileRoot),
 		executablePath
 	});
+	const mainProcessLogs = sharedMainProcessLogs ?? [];
+
+	app.on('console', message =>
+		appendMainProcessLog(
+			mainProcessLogs,
+			`console ${message.type()}`,
+			message.text()
+		)
+	);
+	app
+		.process()
+		.stdout?.on('data', (chunk: Buffer | string) =>
+			appendMainProcessLog(mainProcessLogs, 'stdout', String(chunk))
+		);
+	app
+		.process()
+		.stderr?.on('data', (chunk: Buffer | string) =>
+			appendMainProcessLog(mainProcessLogs, 'stderr', String(chunk))
+		);
 	const page = await app.firstWindow();
 
 	await page.waitForLoadState('domcontentloaded');
 	await expect(page.getByLabel('twine.rs')).toBeVisible();
-	return {app, page};
+	return {app, mainProcessLogs, page};
 }
 
 function sourceEditor(page: Page) {
@@ -228,18 +270,34 @@ async function launcherProjectRows(page: Page) {
 
 async function launcherProjectRowForRoot(page: Page, rootPath: string) {
 	const canonicalRoot = await canonicalProjectRoot(rootPath);
-	const matchingRows = async () =>
-		(await launcherProjectRows(page)).filter(
-			entry => entry.canonicalRoot === canonicalRoot
-		);
+	let observedRows: Awaited<ReturnType<typeof launcherProjectRows>> = [];
 
-	await expect
-		.poll(async () => (await matchingRows()).length, {
-			message: `Expected exactly one launcher row for ${rootPath}`,
-			timeout: 30_000
-		})
-		.toBe(1);
-	const [match] = await matchingRows();
+	try {
+		await expect
+			.poll(
+				async () => {
+					observedRows = await launcherProjectRows(page);
+					return observedRows.filter(
+						entry => entry.canonicalRoot === canonicalRoot
+					).length;
+				},
+				{
+					message: `Expected exactly one launcher row for ${rootPath}`,
+					timeout: 30_000
+				}
+			)
+			.toBe(1);
+	} catch (error) {
+		observedRows = await launcherProjectRows(page).catch(() => observedRows);
+		throw new Error(
+			`${error instanceof Error ? error.message : String(error)}
+Expected canonical project root: ${canonicalRoot}
+Launcher rows: ${JSON.stringify(observedRows, null, 2)}`
+		);
+	}
+	const [match] = observedRows.filter(
+		entry => entry.canonicalRoot === canonicalRoot
+	);
 
 	if (!match?.storyId || !match.rootPath) {
 		throw new Error(
@@ -256,6 +314,127 @@ async function launcherProjectRowForRoot(page: Page, rootPath: string) {
 		),
 		storyId: match.storyId
 	};
+}
+
+async function projectLibraryIndexSnapshot(profileRoot: string) {
+	const libraryRoot = path.join(profileRoot, 'library');
+	const indexPath = path.join(libraryRoot, '.twine', 'native-projects.json');
+
+	try {
+		const source = await readFile(indexPath, 'utf8');
+		const index = JSON.parse(source) as {
+			projects?: Array<{
+				rootPath?: unknown;
+				storyIds?: unknown;
+				updatedAt?: unknown;
+			}>;
+			version?: unknown;
+		};
+		const projects = await Promise.all(
+			(index.projects ?? []).map(async project => {
+				const rootPath =
+					typeof project.rootPath === 'string'
+						? project.rootPath
+						: String(project.rootPath);
+				const absoluteRoot = path.isAbsolute(rootPath)
+					? rootPath
+					: path.resolve(libraryRoot, rootPath);
+
+				try {
+					return {
+						...project,
+						absoluteRoot,
+						canonicalRoot: await canonicalProjectRoot(absoluteRoot),
+						rootPath
+					};
+				} catch (error) {
+					return {
+						...project,
+						absoluteRoot,
+						canonicalRoot: undefined,
+						resolutionError:
+							error instanceof Error ? error.message : String(error),
+						rootPath
+					};
+				}
+			})
+		);
+
+		return {indexPath, projects, source, version: index.version};
+	} catch (error) {
+		return {
+			error: error instanceof Error ? error.message : String(error),
+			indexPath,
+			projects: []
+		};
+	}
+}
+
+async function expectProjectLibraryIndexRoots(
+	profileRoot: string,
+	expectedRoots: string[],
+	checkpoint: string
+) {
+	const expectedCanonicalRoots = (
+		await Promise.all(expectedRoots.map(canonicalProjectRoot))
+	).sort();
+	const snapshot = await projectLibraryIndexSnapshot(profileRoot);
+	const actualCanonicalRoots = snapshot.projects
+		.flatMap(project =>
+			typeof project.canonicalRoot === 'string' ? [project.canonicalRoot] : []
+		)
+		.sort();
+
+	expect(
+		actualCanonicalRoots,
+		`Project library index mismatch ${checkpoint}
+Expected canonical roots: ${JSON.stringify(expectedCanonicalRoots, null, 2)}
+Index snapshot: ${JSON.stringify(snapshot, null, 2)}`
+	).toEqual(expectedCanonicalRoots);
+}
+
+async function packagedProjectLibraryTree(profileRoot: string) {
+	const libraryRoot = path.join(profileRoot, 'library');
+
+	try {
+		return (await readdir(libraryRoot, {recursive: true})).map(String).sort();
+	} catch (error) {
+		return [
+			`Could not list ${libraryRoot}: ${
+				error instanceof Error ? error.message : String(error)
+			}`
+		];
+	}
+}
+
+async function attachDuplicateProjectDiagnostics(
+	testInfo: TestInfo,
+	profileRoot: string,
+	mainProcessLogs: string[],
+	running?: RunningPackagedApp
+) {
+	const [index, libraryTree, launcherRows] = await Promise.all([
+		projectLibraryIndexSnapshot(profileRoot),
+		packagedProjectLibraryTree(profileRoot),
+		running && !running.page.isClosed()
+			? launcherProjectRows(running.page).catch(error => [
+					{
+						error: error instanceof Error ? error.message : String(error)
+					}
+				])
+			: Promise.resolve([{error: 'No running launcher page.'}])
+	]);
+
+	await testInfo.attach('duplicate-project-diagnostics', {
+		body: Buffer.from(
+			JSON.stringify(
+				{index, launcherRows, libraryTree, mainProcessLogs},
+				null,
+				2
+			)
+		),
+		contentType: 'application/json'
+	});
 }
 
 test('packaged desktop flushes a trailing legacy HTML save before exit', async () => {
@@ -327,15 +506,20 @@ async function replaceEditorText(page: Page, text: string) {
 	await page.keyboard.press('Tab');
 }
 
-test('packaged desktop duplicates a project from the launcher and preserves it across restart and source deletion', async () => {
+test('packaged desktop duplicates a project from the launcher and preserves it across restart and source deletion', async ({}, testInfo) => {
 	const executablePath = await packagedExecutable();
 	const profileRoot = await mkdtemp(
 		path.join(os.tmpdir(), 'twine-rs-packaged-duplicate-')
 	);
-	let running: {app: ElectronApplication; page: Page} | undefined;
+	const mainProcessLogs: string[] = [];
+	let running: RunningPackagedApp | undefined;
 
 	try {
-		running = await launchPackagedApp(executablePath, profileRoot);
+		running = await launchPackagedApp(
+			executablePath,
+			profileRoot,
+			mainProcessLogs
+		);
 		const {page} = running;
 
 		await page.getByTitle('New Project').click();
@@ -344,6 +528,11 @@ test('packaged desktop duplicates a project from the launcher and preserves it a
 		await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
 
 		const sourceRoot = await projectRootFromRenderer(page);
+		await expectProjectLibraryIndexRoots(
+			profileRoot,
+			[sourceRoot],
+			'after source creation'
+		);
 		await writeFile(
 			path.join(sourceRoot, 'assets', 'cover.bin'),
 			Buffer.from('asset bytes')
@@ -382,6 +571,11 @@ test('packaged desktop duplicates a project from the launcher and preserves it a
 		}, duplicateStoryId);
 
 		expect(duplicateRoot).not.toBe(sourceRoot);
+		await expectProjectLibraryIndexRoots(
+			profileRoot,
+			[sourceRoot, duplicateRoot],
+			'after duplication'
+		);
 		await expect(
 			readFile(path.join(duplicateRoot, 'assets', 'cover.bin'))
 		).resolves.toEqual(Buffer.from('asset bytes'));
@@ -398,7 +592,16 @@ test('packaged desktop duplicates a project from the launcher and preserves it a
 
 		await running.app.close();
 		running = undefined;
-		running = await launchPackagedApp(executablePath, profileRoot);
+		await expectProjectLibraryIndexRoots(
+			profileRoot,
+			[sourceRoot, duplicateRoot],
+			'after application shutdown'
+		);
+		running = await launchPackagedApp(
+			executablePath,
+			profileRoot,
+			mainProcessLogs
+		);
 		const relaunchedPage = running.page;
 		const source = await launcherProjectRowForRoot(relaunchedPage, sourceRoot);
 		const duplicate = await launcherProjectRowForRoot(
@@ -459,6 +662,14 @@ test('packaged desktop duplicates a project from the launcher and preserves it a
 		await expect(
 			readFile(path.join(duplicateRoot, 'assets', 'cover.bin'))
 		).resolves.toEqual(Buffer.from('asset bytes'));
+	} catch (error) {
+		await attachDuplicateProjectDiagnostics(
+			testInfo,
+			profileRoot,
+			mainProcessLogs,
+			running
+		);
+		throw error;
 	} finally {
 		await running?.app.close();
 	}
