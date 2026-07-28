@@ -164,7 +164,7 @@ function canonicalFilesystemPath(filePath: string) {
 
 	while (true) {
 		try {
-			return resolve(realpathSync(existingPath), ...missingSegments);
+			return resolve(realpathSync.native(existingPath), ...missingSegments);
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
 			const parentPath = dirname(existingPath);

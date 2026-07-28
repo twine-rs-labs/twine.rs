@@ -151,6 +151,9 @@ describe('project library index', () => {
 		try {
 			mkdirSync(projectPath, {recursive: true});
 			symlinkSync(realLibraryPath, aliasLibraryPath, 'dir');
+			const canonicalProjectPath = realpathSync.native(projectPath);
+			const nativeRealpathSpy = jest.spyOn(realpathSync, 'native');
+
 			getStoryDirectoryPathMock.mockReturnValue(aliasLibraryPath);
 			listRememberedNativeProjectFoldersMock.mockReturnValue([
 				{
@@ -167,10 +170,11 @@ describe('project library index', () => {
 
 			expect(rememberedProjectFolders()).toEqual([
 				expect.objectContaining({
-					rootPath: realpathSync(projectPath),
+					rootPath: canonicalProjectPath,
 					storyIds: ['new-story-id']
 				})
 			]);
+			expect(nativeRealpathSpy).toHaveBeenCalledWith(aliasLibraryPath);
 			expect(forgetNativeProjectFolderMock).toHaveBeenCalledWith(
 				expect.any(String),
 				projectPath
@@ -195,7 +199,9 @@ describe('project library index', () => {
 				expect.any(String),
 				projectRelativePath
 			);
+			nativeRealpathSpy.mockRestore();
 		} finally {
+			jest.restoreAllMocks();
 			rmSync(parentPath, {force: true, recursive: true});
 		}
 	});
