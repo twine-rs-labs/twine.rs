@@ -366,6 +366,7 @@ interface NativeProjectDescriptor {
 
 interface ProjectSessionCandidate {
 	baseline: NativeProjectSessionSnapshot;
+	deliveredToListener?: boolean;
 	deliveryState: 'awaitingResolution' | 'deferred';
 	delta: NativeProjectSessionDelta;
 	descriptor: NativeProjectDescriptor;
@@ -407,6 +408,8 @@ interface ProjectSessionState {
 	>;
 	interval?: ReturnType<typeof setInterval>;
 	listeners: Set<ProjectSessionListener>;
+	localMutationDepth: number;
+	localMutationEpoch: number;
 	pathHints: Set<string>;
 	pending?: ProjectSessionCandidate;
 	pollAfterResolution?: boolean;
@@ -4743,6 +4746,7 @@ function notifyProjectSession(session: ProjectSessionState) {
 		});
 	}
 	for (const listener of session.listeners) {
+		pending.deliveredToListener = true;
 		listener(pending.delta);
 	}
 }
@@ -4759,10 +4763,43 @@ function projectSessionCandidateSignature(
 		: '';
 }
 
+function requestProjectSessionRescan(
+	session: ProjectSessionState,
+	reconcile = false
+) {
+	session.rescanRequested = true;
+	session.rescanReconcileRequested =
+		session.rescanReconcileRequested || reconcile;
+}
+
+function resumeProjectSessionRescan(session: ProjectSessionState) {
+	if (
+		!session.rescanRequested ||
+		session.scanning ||
+		session.localMutationDepth > 0
+	) {
+		return;
+	}
+	const reconcile = session.rescanReconcileRequested ?? false;
+
+	session.rescanRequested = false;
+	session.rescanReconcileRequested = false;
+	if (session.debounceTimer) {
+		clearTimeout(session.debounceTimer);
+		session.debounceTimer = undefined;
+	}
+	void pollProjectSession(session, reconcile);
+}
+
 async function pollProjectSession(
 	session: ProjectSessionState,
 	reconcile = false
 ) {
+	if (session.localMutationDepth > 0) {
+		requestProjectSessionRescan(session, true);
+		return;
+	}
+
 	if (session.pending?.deliveryState === 'awaitingResolution') {
 		session.pollAfterResolution = true;
 		session.reconcileAfterResolution =
@@ -4771,16 +4808,24 @@ async function pollProjectSession(
 	}
 
 	if (session.scanning) {
-		session.rescanRequested = true;
-		session.rescanReconcileRequested =
-			session.rescanReconcileRequested || reconcile;
+		requestProjectSessionRescan(session, reconcile);
 		return;
 	}
+
+	const mutationEpoch = session.localMutationEpoch;
 
 	session.scanning = true;
 
 	try {
 		const candidate = await readProjectSessionDelta(session, reconcile);
+
+		if (
+			session.localMutationEpoch !== mutationEpoch ||
+			session.localMutationDepth > 0
+		) {
+			requestProjectSessionRescan(session, true);
+			return;
+		}
 		const previousSignature = projectSessionCandidateSignature(session.pending);
 		const nextSignature = projectSessionCandidateSignature(candidate);
 
@@ -4794,14 +4839,7 @@ async function pollProjectSession(
 		}
 	} finally {
 		session.scanning = false;
-
-		if (session.rescanRequested) {
-			const nextReconcile = session.rescanReconcileRequested ?? false;
-
-			session.rescanRequested = false;
-			session.rescanReconcileRequested = false;
-			void pollProjectSession(session, nextReconcile);
-		}
+		resumeProjectSessionRescan(session);
 	}
 }
 
@@ -4868,6 +4906,8 @@ function ensureProjectSession(rootPath: string) {
 		session = {
 			generation: 1,
 			listeners: new Set<ProjectSessionListener>(),
+			localMutationDepth: 0,
+			localMutationEpoch: 0,
 			pathHints: new Set<string>(),
 			resolvedCandidates: new Map(),
 			rootPath,
@@ -5464,6 +5504,85 @@ async function refreshProjectSessionBaseline(
 	}
 }
 
+function reissueDeferredProjectSessionCandidate(session: ProjectSessionState) {
+	const pending = session.pending;
+
+	if (!pending || pending.deliveryState !== 'deferred') {
+		return;
+	}
+	const deltaId = randomUUID();
+	const deltaCreatedAtEpochMs = performanceEpochNow();
+
+	session.pending = {
+		...pending,
+		deliveredToListener: true,
+		deliveryState: 'awaitingResolution',
+		delta: {
+			...pending.delta,
+			delta: {...pending.delta.delta, id: deltaId},
+			id: deltaId,
+			performanceTrace: pending.delta.performanceTrace
+				? {
+						...pending.delta.performanceTrace,
+						deltaCreatedAtEpochMs,
+						nativeNotifiedAtEpochMs: undefined
+					}
+				: undefined
+		}
+	};
+	recordWatcherTraceEvent({
+		deltaId,
+		rootPath: session.rootPath,
+		stage: 'delta-created',
+		timeEpochMs: deltaCreatedAtEpochMs
+	});
+	notifyProjectSession(session);
+}
+
+function beginProjectSessionLocalMutation(rootPath: string) {
+	const session = projectSessions.get(projectSessionKey(rootPath));
+
+	if (!session) {
+		return undefined;
+	}
+	if (
+		session.localMutationDepth === 0 &&
+		session.pending?.deliveryState === 'deferred'
+	) {
+		reissueDeferredProjectSessionCandidate(session);
+		throw new Error(
+			'Project changes on disk must be resolved before saving this project.'
+		);
+	}
+	if (
+		session.localMutationDepth === 0 &&
+		session.pending?.deliveredToListener
+	) {
+		throw new Error(
+			'Project changes on disk must be resolved before saving this project.'
+		);
+	}
+	session.localMutationDepth++;
+	session.localMutationEpoch++;
+	return session;
+}
+
+function finishProjectSessionLocalMutation(
+	session: ProjectSessionState | undefined
+) {
+	if (
+		!session ||
+		projectSessions.get(projectSessionKey(session.rootPath)) !== session
+	) {
+		return;
+	}
+	session.localMutationDepth = Math.max(0, session.localMutationDepth - 1);
+	if (session.localMutationDepth > 0) {
+		return;
+	}
+	resumeProjectSessionRescan(session);
+}
+
 async function refreshProjectSessionBaselineAfterAssetMutation(
 	rootPath: string
 ) {
@@ -5653,61 +5772,68 @@ export async function saveProjectFolder(
 		);
 	}
 
-	const incrementalProject = await writeProjectFolderIncremental(
-		rootPath,
-		story,
-		options
-	);
-	if (!incrementalProject && options.incrementalOnly) {
-		throw new Error(
-			'Incremental document save could not be represented safely.'
-		);
-	}
-	const writtenProject =
-		incrementalProject ?? (await writeProjectFolder(rootPath, story));
+	const localMutation = beginProjectSessionLocalMutation(rootPath);
 
-	if (
-		!incrementalProject &&
-		options.hints?.length &&
-		writtenProject?.performanceTimings
-	) {
-		writtenProject.performanceTimings.fallbackReason = 'unsupported save hints';
-	}
-	const baselineStarted = performance.now();
-
-	if (!incrementalProject) {
-		await refreshProjectSessionBaseline(
+	try {
+		const incrementalProject = await writeProjectFolderIncremental(
 			rootPath,
-			writtenProject?.storyIds ?? [story.id],
-			{
-				stories: writtenProject?.stories ?? [story]
-			}
+			story,
+			options
 		);
-	}
-	const baselineRefreshUs = Math.max(
-		0,
-		Math.round((performance.now() - baselineStarted) * 1000)
-	);
+		if (!incrementalProject && options.incrementalOnly) {
+			throw new Error(
+				'Incremental document save could not be represented safely.'
+			);
+		}
+		const writtenProject =
+			incrementalProject ?? (await writeProjectFolder(rootPath, story));
 
-	if (performanceHarnessEnabled() && writtenProject?.performanceTimings) {
-		writtenProject.performanceTimings = {
-			...writtenProject.performanceTimings,
-			mode: writtenProject.performanceTimings.mode ?? 'full',
-			baselineRefreshUs
+		if (
+			!incrementalProject &&
+			options.hints?.length &&
+			writtenProject?.performanceTimings
+		) {
+			writtenProject.performanceTimings.fallbackReason =
+				'unsupported save hints';
+		}
+		const baselineStarted = performance.now();
+
+		if (!incrementalProject) {
+			await refreshProjectSessionBaseline(
+				rootPath,
+				writtenProject?.storyIds ?? [story.id],
+				{
+					stories: writtenProject?.stories ?? [story]
+				}
+			);
+		}
+		const baselineRefreshUs = Math.max(
+			0,
+			Math.round((performance.now() - baselineStarted) * 1000)
+		);
+
+		if (performanceHarnessEnabled() && writtenProject?.performanceTimings) {
+			writtenProject.performanceTimings = {
+				...writtenProject.performanceTimings,
+				mode: writtenProject.performanceTimings.mode ?? 'full',
+				baselineRefreshUs
+			};
+		}
+
+		const result = writtenProject ?? {
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
 		};
-	}
 
-	const result = writtenProject ?? {
-		passageTextLoaded: true,
-		rootPath,
-		stories: [story],
-		storyIds: [story.id]
-	};
-
-	if (!options.incrementalOnly) {
-		rememberProjectFolder(result);
+		if (!options.incrementalOnly) {
+			rememberProjectFolder(result);
+		}
+		return result;
+	} finally {
+		finishProjectSessionLocalMutation(localMutation);
 	}
-	return result;
 }
 
 function emptySaveTimings(

@@ -5100,6 +5100,202 @@ describe('project-folder native bridge', () => {
 		}
 	});
 
+	it('discards watcher scans crossed by a local full save and still reports later disk edits', async () => {
+		jest.useFakeTimers();
+		const rootPath = '/native/local-save-watcher-race.twine.rs';
+		const story = {
+			...fakeStory(1),
+			id: 'story-id',
+			name: 'Story',
+			passages: [
+				{
+					...fakeStory(1).passages[0],
+					id: 'passage-id',
+					name: 'Start',
+					story: 'story-id',
+					text: 'saved by app'
+				}
+			]
+		};
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'start_passage = "passage-id"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/001-start.twee"'
+		].join('\n');
+		const filesAt = (mtimeMs: number) => [
+			{
+				fingerprint: '1:100',
+				kind: 'manifest' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: 1,
+				path: 'twine.toml',
+				sizeBytes: 100
+			},
+			{
+				fingerprint: `${mtimeMs}:12`,
+				kind: 'passage' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs,
+				path: 'passages/story/001-start.twee',
+				sizeBytes: 12
+			}
+		];
+		let resolveStaleScan!: (files: ReturnType<typeof filesAt>) => void;
+		const staleScan = new Promise<ReturnType<typeof filesAt>>(resolve => {
+			resolveStaleScan = resolve;
+		});
+		const listener = jest.fn();
+		let passageSource = 'initial';
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : passageSource
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce(filesAt(1))
+			.mockReturnValueOnce(staleScan)
+			.mockReturnValueOnce(filesAt(2))
+			.mockReturnValueOnce(filesAt(2))
+			.mockReturnValueOnce(filesAt(3));
+		saveNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		watchMock.mockReturnValue({close: jest.fn()});
+
+		try {
+			await startProjectSession(rootPath, listener, [story.id]);
+			emitProjectWatcherChange();
+			await advanceTimersUntilCalled(nativeProjectFileManifestMock, 2, 150);
+
+			passageSource = story.passages[0].text;
+			await saveProjectFolder(rootPath, story);
+			resolveStaleScan(filesAt(99));
+			await advanceTimersUntilCalled(nativeProjectFileManifestMock, 4, 0);
+
+			expect(listener).not.toHaveBeenCalled();
+
+			passageSource = 'genuine external edit';
+			await advanceWatcherUntilCalled(listener, 1);
+			expect(listener).toHaveBeenCalledWith(
+				expect.objectContaining({
+					changedPaths: ['passages/story/001-start.twee'],
+					delta: expect.objectContaining({
+						changes: [
+							expect.objectContaining({
+								passage_id: 'passage-id',
+								story_id: 'story-id',
+								type: 'updatePassage'
+							})
+						]
+					})
+				})
+			);
+			expect(listener.mock.calls[0][0].recovery).toBeUndefined();
+		} finally {
+			stopProjectSession(rootPath);
+			jest.useRealTimers();
+		}
+	});
+
+	it('preserves delivered and deferred external changes instead of saving over them', async () => {
+		jest.useFakeTimers();
+		const rootPath = '/native/pending-external-change.twine.rs';
+		const story = {...fakeStory(1), id: 'story-id', name: 'Story'};
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/start.twee"'
+		].join('\n');
+		const manifestFile = {
+			fingerprint: '1:100',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 100
+		};
+		const passageFile = {
+			fingerprint: '1:4',
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			mtimeMs: 1,
+			path: 'passages/start.twee',
+			sizeBytes: 4
+		};
+		const changedPassageFile = {
+			...passageFile,
+			fingerprint: '2:9',
+			mtimeMs: 2,
+			sizeBytes: 9
+		};
+		const listener = jest.fn();
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : 'from disk'
+		);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([manifestFile, passageFile])
+			.mockReturnValueOnce([manifestFile, changedPassageFile]);
+		watchMock.mockReturnValue({close: jest.fn()});
+
+		try {
+			await startProjectSession(rootPath, listener, [story.id]);
+			await advanceWatcherUntilCalled(listener, 1);
+			const originalDelta = listener.mock.calls[0][0];
+
+			saveNativeProjectFolderMock.mockClear();
+
+			await expect(saveProjectFolder(rootPath, story)).rejects.toThrow(
+				'Project changes on disk must be resolved before saving'
+			);
+			await resolveProjectSessionConflicts(
+				rootPath,
+				'dismiss',
+				[],
+				originalDelta.id
+			);
+			await expect(saveProjectFolder(rootPath, story)).rejects.toThrow(
+				'Project changes on disk must be resolved before saving'
+			);
+			expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
+			expect(listener).toHaveBeenCalledTimes(2);
+			const reissuedDelta = listener.mock.calls[1][0];
+
+			expect(reissuedDelta.id).not.toBe(originalDelta.id);
+			expect(reissuedDelta.delta.id).toBe(reissuedDelta.id);
+			await expect(
+				resolveProjectSessionConflicts(
+					rootPath,
+					'acceptDisk',
+					[],
+					reissuedDelta.id
+				)
+			).resolves.toEqual(expect.objectContaining({generation: 2}));
+		} finally {
+			stopProjectSession(rootPath);
+			jest.useRealTimers();
+		}
+	});
+
 	it('maps one aggregate source watcher change to every owned passage', async () => {
 		jest.useFakeTimers();
 		const manifestSource = [

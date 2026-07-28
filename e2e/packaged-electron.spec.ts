@@ -3,7 +3,6 @@ import {
 	_electron as electron,
 	chromium,
 	ElectronApplication,
-	Locator,
 	Page
 } from 'playwright';
 import {
@@ -176,28 +175,87 @@ function tabWithText(page: Page, text: string) {
 	return page.getByRole('tab').filter({hasText: new RegExp(`^${text}$`)});
 }
 
-async function clickAfterDeferringProjectSessionReviews(
-	page: Page,
-	target: Locator
-) {
-	let lastClickError: unknown;
+function comparableProjectRoot(rootPath: string) {
+	const normalized = path.normalize(rootPath);
 
-	for (let attempt = 0; attempt < 4; attempt++) {
-		try {
-			await target.click({timeout: 5_000});
-			return;
-		} catch (error) {
-			lastClickError = error;
-			const later = page.getByRole('button', {name: 'Later', exact: true});
+	return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
 
-			if (!(await later.isVisible())) {
-				throw error;
+async function canonicalProjectRoot(rootPath: string) {
+	return comparableProjectRoot(await realpath(rootPath));
+}
+
+async function launcherProjectRows(page: Page) {
+	const rows = page.getByTestId('story-list-row');
+	const entries = await rows.evaluateAll(elements =>
+		elements.map((element, index) => {
+			const storyId = element.getAttribute('data-id');
+			const metadataSource = storyId
+				? window.localStorage.getItem(`twine-rs-project-metadata-${storyId}`)
+				: null;
+			let rootPath: string | undefined;
+
+			try {
+				const metadata = metadataSource
+					? JSON.parse(metadataSource)
+					: undefined;
+
+				if (typeof metadata?.rootPath === 'string') {
+					rootPath = metadata.rootPath;
+				}
+			} catch {
+				// Leave malformed metadata visible in the returned diagnostics.
 			}
-			await later.click();
-		}
+
+			return {
+				index,
+				rootPath,
+				storyId,
+				text: element.textContent?.trim() ?? ''
+			};
+		})
+	);
+
+	return Promise.all(
+		entries.map(async entry => ({
+			...entry,
+			canonicalRoot: entry.rootPath
+				? await canonicalProjectRoot(entry.rootPath).catch(() => undefined)
+				: undefined
+		}))
+	);
+}
+
+async function launcherProjectRowForRoot(page: Page, rootPath: string) {
+	const canonicalRoot = await canonicalProjectRoot(rootPath);
+	const matchingRows = async () =>
+		(await launcherProjectRows(page)).filter(
+			entry => entry.canonicalRoot === canonicalRoot
+		);
+
+	await expect
+		.poll(async () => (await matchingRows()).length, {
+			message: `Expected exactly one launcher row for ${rootPath}`,
+			timeout: 30_000
+		})
+		.toBe(1);
+	const [match] = await matchingRows();
+
+	if (!match?.storyId || !match.rootPath) {
+		throw new Error(
+			`Launcher row for ${rootPath} has incomplete identity metadata: ${JSON.stringify(
+				await launcherProjectRows(page)
+			)}`
+		);
 	}
 
-	throw lastClickError;
+	return {
+		rootPath: match.rootPath,
+		row: page.locator(
+			`[data-testid="story-list-row"][data-id="${match.storyId}"]`
+		),
+		storyId: match.storyId
+	};
 }
 
 test('packaged desktop flushes a trailing legacy HTML save before exit', async () => {
@@ -342,21 +400,53 @@ test('packaged desktop duplicates a project from the launcher and preserves it a
 		running = undefined;
 		running = await launchPackagedApp(executablePath, profileRoot);
 		const relaunchedPage = running.page;
-		const sourceRow = relaunchedPage.getByTestId('story-list-row').filter({
-			has: relaunchedPage.getByRole('button', {
-				name: 'Delete story Packaged Duplicate',
-				exact: true
-			})
-		});
-		const relaunchedDuplicateRow = relaunchedPage
-			.getByTestId('story-list-row')
-			.filter({
-				has: relaunchedPage.getByRole('button', {
-					name: 'Delete story Packaged Duplicate 1',
-					exact: true
-				})
-			});
+		const source = await launcherProjectRowForRoot(relaunchedPage, sourceRoot);
+		const duplicate = await launcherProjectRowForRoot(
+			relaunchedPage,
+			duplicateRoot
+		);
+		const relaunchedProjects = await relaunchedPage.evaluate(
+			async ({duplicateRoot, sourceRoot}) => {
+				const bridge = (window as PackagedProjectWindow).twineElectron;
 
+				if (!bridge) {
+					throw new Error('Desktop project bridge is unavailable.');
+				}
+				const [source, duplicate] = await Promise.all([
+					bridge.hydrateProjectFolder(sourceRoot),
+					bridge.hydrateProjectFolder(duplicateRoot)
+				]);
+				const identity = (project: typeof source) => ({
+					stories: project.stories.map(story => ({
+						id: story.id,
+						name: story.name
+					})),
+					storyIds: project.storyIds
+				});
+
+				return {
+					duplicate: identity(duplicate),
+					source: identity(source)
+				};
+			},
+			{duplicateRoot: duplicate.rootPath, sourceRoot: source.rootPath}
+		);
+
+		expect(relaunchedProjects).toEqual({
+			duplicate: {
+				stories: [{id: duplicateStoryId, name: 'Packaged Duplicate 1'}],
+				storyIds: [duplicateStoryId]
+			},
+			source: {
+				stories: [{id: sourceStoryId, name: 'Packaged Duplicate'}],
+				storyIds: [sourceStoryId]
+			}
+		});
+		const sourceRow = source.row;
+		const relaunchedDuplicateRow = duplicate.row;
+
+		expect(source.storyId).toBe(sourceStoryId);
+		expect(duplicate.storyId).toBe(duplicateStoryId);
 		await expect(sourceRow).toBeVisible();
 		await expect(relaunchedDuplicateRow).toBeVisible();
 		relaunchedPage.once('dialog', dialog => void dialog.accept());
@@ -972,10 +1062,7 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			.filter({hasText: /^Single$/})
 			.click();
 		await tabWithText(page, 'Text').click();
-		await clickAfterDeferringProjectSessionReviews(
-			page,
-			page.getByRole('button', {name: 'Create Project'})
-		);
+		await page.getByRole('button', {name: 'Create Project'}).click();
 		await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
 
 		const singleProjectRoot = await projectRootFromRenderer(page);

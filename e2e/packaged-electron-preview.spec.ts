@@ -209,6 +209,42 @@ function storyIframe(preview: Page) {
 	return preview.locator(activeStoryIframeSelector);
 }
 
+async function expectManagedStoryTransition(
+	preview: Page,
+	context: string,
+	transition: () => Promise<void>
+) {
+	try {
+		await expect(
+			preview.locator('.story-preview-route__latest-log[data-level="error"]')
+		).toHaveCount(0, {timeout: 2_000});
+		await expect(
+			storyFrame(preview).locator('error-handler.active')
+		).toHaveCount(0, {timeout: 2_000});
+		await transition();
+	} catch (error) {
+		const [runtimeLogs, activeErrors] = await Promise.all([
+			preview
+				.locator('.story-preview-route__latest-log')
+				.allTextContents()
+				.catch(() => []),
+			storyFrame(preview)
+				.locator('error-handler.active')
+				.allTextContents()
+				.catch(() => [])
+		]);
+
+		throw new Error(
+			`${error instanceof Error ? error.message : String(error)}
+Managed preview context: ${context}
+Runtime logs: ${runtimeLogs.length > 0 ? runtimeLogs.join(' | ') : '(none)'}
+Active format errors: ${
+				activeErrors.length > 0 ? activeErrors.join(' | ') : '(none)'
+			}`
+		);
+	}
+}
+
 async function previewOrigin(preview: Page) {
 	const src = await storyIframe(preview).getAttribute('src');
 
@@ -1184,13 +1220,11 @@ test('current passage resolves to a stable ID in every bundled format family', a
 				exact: true
 			});
 
-			if (format.startsWith('Chapbook')) {
-				await continueLink.press('Enter');
-			} else {
+			await expectManagedStoryTransition(preview, format, async () => {
 				await continueLink.click();
-			}
-			await expectRenderedText(preview, marker);
-			await expectCurrentPassage(preview, 'Next');
+				await expectRenderedText(preview, marker);
+				await expectCurrentPassage(preview, 'Next');
+			});
 			await preview.close();
 		}
 	} finally {
