@@ -143,6 +143,7 @@ delete all files from the scratch folder every time you quit it, set
 
 Example: <code>&#x2011;&#x2011;scratchAssetStrategy=copy</code>
 
-This legacy setting is retained for preference compatibility. Project assets
-for play, test, and proof are now read through the secure project boundary and
-copied into a bounded preview directory; folder linking is no longer used.
+This switch is deprecated and ignored. It remains accepted only so older
+launchers consume its value instead of mistaking it for a project-folder path.
+Project assets for Play, Test, and Proof are always copied into a bounded
+temporary package; folder linking is no longer used.

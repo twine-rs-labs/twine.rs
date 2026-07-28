@@ -13,4 +13,11 @@ story format or another loaded format as a fallback. You can set the
 application default in [Settings](../customizing/preferences.md) or from the
 [_Story Formats_ screen](../story-formats/proofing.md).
 
-Proof output is temporary. Use an exported file when you need a durable copy.
+Browser Twine opens proof output in an app-owned preview tab. The desktop app
+opens the selected proofing format in the same dedicated preview-window shell
+used by Play and Test. Its toolbar provides build health, runtime logs, viewport
+controls, reload, and Source or Graph navigation when the proofing runtime can
+identify a passage. Multiple proof windows can remain open independently.
+
+Proof output and its opaque desktop address are temporary. Use an exported file
+when you need a durable copy.

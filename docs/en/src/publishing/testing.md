@@ -6,16 +6,17 @@ additional information to help you debug problems. You should look at the
 documentation for the story format you're using for more information on what is
 available during testing mode.
 
-Testing a story in browser Twine opens an app-owned preview tab. Native desktop
-builds launch a scratch HTML package through the desktop bridge so local project
-assets are available alongside the story. You can test a story multiple times at
-once.
+Testing a story in browser Twine opens an app-owned preview tab. The desktop app
+opens a dedicated app-owned preview window and serves its temporary story and
+copied project assets from an opaque preview address. The preview does not have
+access to the editor's project or filesystem bridge. You can open multiple
+independent previews at once.
 
-Browser previews include a debug strip above the running story. It shows the
-story target, build health, current passage when the runtime can report it,
-runtime logs, and viewport size. You can reveal the current passage in Source or
-Graph, reload the preview, and switch between fit, desktop, tablet, and phone
-viewport widths.
+The preview toolbar shows the story target, build health, current passage when
+the runtime can report it, runtime logs, and viewport size. You can reveal the
+current passage in Source or Graph, reload the preview, and switch between fit,
+desktop, tablet, and phone viewport widths. Console messages, runtime errors,
+and unhandled promise rejections appear in the bounded runtime log.
 
 ## Testing a Story From the Beginning
 
@@ -44,9 +45,14 @@ context:
   the graph toolbar.
 - In search results, diagnostics, contents, or asset usage views, use the
   passage-specific test action for the selected result or first usage.
-- In a preview window, choose _Test From Start_ to relaunch the current preview's
-  start passage in test mode.
-- In a browser preview window, choose _Test Current_ after the runtime reports a
-  current passage to relaunch from the passage currently being inspected.
+- In a preview window, choose _Test From Start_ to rebuild the current story in
+  test mode at that preview generation's launch passage. For Play and an
+  ordinary Test this is the story's saved start; after Test From Here or Test
+  Current it is the passage that launched the current generation.
+- In a preview window, choose _Test Current_ after the runtime reports a current
+  passage to rebuild in test mode at the passage currently being inspected.
 
-Testing from another passage doesn't change the story's saved start passage.
+These preview-window commands incorporate editor changes made after the
+original preview opened and replace the content in that same window. A failed
+replacement leaves the previous preview available. Testing from another
+passage doesn't change the story's saved start passage.

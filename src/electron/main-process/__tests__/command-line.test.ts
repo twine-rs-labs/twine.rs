@@ -29,6 +29,9 @@ describe('command-line helpers', () => {
 		expect(commandLineHelpText()).toContain(
 			'--scratchAssetStrategy=<link|copy>'
 		);
+		expect(commandLineHelpText()).toContain(
+			'Deprecated compatibility option; ignored.'
+		);
 		expect(commandLineHelpText()).toContain('project-folder');
 	});
 
@@ -51,6 +54,12 @@ describe('command-line helpers', () => {
 		expect(
 			commandLineOpenPaths(
 				['--scratchAssetStrategy', 'copy', 'project.twine.rs'],
+				'/tmp/root'
+			)
+		).toEqual(['/tmp/root/project.twine.rs']);
+		expect(
+			commandLineOpenPaths(
+				['--scratchAssetStrategy=link', 'project.twine.rs'],
 				'/tmp/root'
 			)
 		).toEqual(['/tmp/root/project.twine.rs']);

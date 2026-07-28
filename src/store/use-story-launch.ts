@@ -1,24 +1,50 @@
+import * as React from 'react';
+import {v4 as uuid} from '@lukeed/uuid';
 import {usePublishing, type ProofingFormatSelection} from './use-publishing';
 import {isElectronRenderer} from '../util/is-electron';
-import {TwineElectronWindow} from '../electron/shared';
+import type {
+	NativeStoryPreviewLaunchRequest,
+	NativeStoryPreviewTarget,
+	TwineElectronWindow
+} from '../electron/shared';
 import {loadProjectMetadata} from './project-metadata';
 import {
 	replaceKnownAssetInventoryForStory,
 	type CoreAssetInventoryEntry
 } from '../core';
+import {
+	instrumentPreviewHtml,
+	storyPreviewPassages
+} from '../routes/story-preview-contract';
+import {usePrefsContext} from './prefs';
+import {useComputedTheme} from './prefs/use-computed-theme';
+import type {StoryBuildPackage} from '../util/build-package';
 
 export interface UseStoryLaunchProps {
 	playStory: (storyId: string) => Promise<void>;
+	playStoryWithBuild: (
+		storyId: string
+	) => Promise<StoryBuildPackage | undefined>;
 	proofStory: (
 		storyId: string,
 		proofingFormat?: ProofingFormatSelection
 	) => Promise<void>;
+	proofStoryWithBuild: (
+		storyId: string,
+		proofingFormat?: ProofingFormatSelection
+	) => Promise<StoryBuildPackage | undefined>;
 	testStory: (storyId: string, startPassageId?: string) => Promise<void>;
+}
+
+export interface PreparedNativeStoryPreview {
+	build: StoryBuildPackage;
+	projectRoot?: string;
+	request: NativeStoryPreviewLaunchRequest;
 }
 
 type TwineElectronBridge = NonNullable<TwineElectronWindow['twineElectron']>;
 
-function scratchAssetRequests(
+function previewAssetRequests(
 	projectRoot: string | undefined,
 	assets: Array<{outputPath: string; path: string; sourcePath: string | null}>
 ) {
@@ -35,11 +61,16 @@ async function refreshedProjectAssets(
 ) {
 	const projectRoot = loadProjectMetadata(storyId)?.rootPath;
 
-	if (
-		!projectRoot ||
-		(!twineElectron.projectSessionSnapshot && !twineElectron.listProjectAssets)
-	) {
+	if (!projectRoot) {
 		return {assetInventory: undefined, projectRoot: undefined};
+	}
+	if (
+		!twineElectron.projectSessionSnapshot &&
+		!twineElectron.listProjectAssets
+	) {
+		throw new Error(
+			'Project assets cannot be refreshed before opening this preview.'
+		);
 	}
 
 	let inventory: CoreAssetInventoryEntry[];
@@ -52,8 +83,9 @@ async function refreshedProjectAssets(
 		inventory =
 			snapshot?.assets ?? (await twineElectron.listProjectAssets(projectRoot));
 	} catch (error) {
-		console.warn('Unable to refresh project assets before preview.', error);
-		return {assetInventory: undefined, projectRoot: undefined};
+		throw new Error('Project assets could not be refreshed before preview.', {
+			cause: error
+		});
 	}
 
 	replaceKnownAssetInventoryForStory(storyId, inventory);
@@ -61,91 +93,189 @@ async function refreshedProjectAssets(
 }
 
 /**
+ * Prepares desktop Play/Test/Proof from one immutable live-session snapshot.
+ * The returned descriptor and passage map always describe the HTML that was
+ * built, rather than a later React render.
+ */
+export function useNativeStoryPreviewPreparation() {
+	const {buildStoryPreviewPackage} = usePublishing();
+	const computedTheme = useComputedTheme();
+	const {prefs} = usePrefsContext();
+	const appearanceRef = React.useRef({
+		highContrast: prefs.highContrast,
+		reducedMotion: prefs.reducedMotion,
+		theme: computedTheme
+	});
+
+	appearanceRef.current = {
+		highContrast: prefs.highContrast,
+		reducedMotion: prefs.reducedMotion,
+		theme: computedTheme
+	};
+
+	return React.useCallback(
+		async (
+			storyId: string,
+			target: NativeStoryPreviewTarget,
+			options: {
+				proofingFormat?: ProofingFormatSelection;
+				startPassageId?: string;
+			} = {}
+		): Promise<PreparedNativeStoryPreview> => {
+			const twineElectron = (window as TwineElectronWindow).twineElectron;
+
+			if (!twineElectron) {
+				throw new Error('Electron bridge is not present on window.');
+			}
+
+			const {assetInventory, projectRoot} = await refreshedProjectAssets(
+				storyId,
+				twineElectron
+			);
+			const preview = await buildStoryPreviewPackage(storyId, target, {
+				assetInventory,
+				...(target === 'proof'
+					? {proofingFormat: options.proofingFormat}
+					: undefined),
+				...(target === 'test'
+					? {
+							formatOptions: 'debug',
+							...(options.startPassageId
+								? {
+										startId: options.startPassageId,
+										startMode: 'afterStartup' as const
+									}
+								: {startId: undefined})
+						}
+					: undefined)
+			});
+			const bridgeSessionId = `preview-${uuid()}`;
+			const launchPassageId =
+				options.startPassageId ?? preview.story.startPassage;
+			const launchPassage = preview.story.passages.find(
+				passage => passage.id === launchPassageId
+			);
+			const htmlBytes = new Blob([preview.build.html]).size;
+
+			return {
+				build: preview.build,
+				projectRoot,
+				request: {
+					assets: previewAssetRequests(projectRoot, preview.build.assets),
+					descriptor: {
+						appearance: {...appearanceRef.current},
+						bridgeSessionId,
+						htmlBytes,
+						launchPassage: launchPassage
+							? {id: launchPassage.id, name: launchPassage.name}
+							: undefined,
+						passages: storyPreviewPassages(preview.story),
+						storyDataCount:
+							preview.build.html.match(/<tw-storydata\b/g)?.length ?? 0,
+						storyId: preview.story.id,
+						storyName: preview.story.name,
+						summary: preview.summary,
+						target
+					},
+					instrumentedHtml: instrumentPreviewHtml(
+						preview.build.html,
+						bridgeSessionId
+					)
+				}
+			};
+		},
+		[buildStoryPreviewPackage, appearanceRef]
+	);
+}
+
+/**
  * Provides functions to launch a story that include the correct handling for
  * both web and Electron contexts.
  */
 export function useStoryLaunch(): UseStoryLaunchProps {
-	const {proofStoryPackage, publishStoryPackage} = usePublishing();
+	const prepareNativePreview = useNativeStoryPreviewPreparation();
 
 	if (isElectronRenderer()) {
 		const {twineElectron} = window as TwineElectronWindow;
 
-		if (!twineElectron) {
-			throw new Error('Electron bridge is not present on window.');
+		if (!twineElectron?.openStoryPreview) {
+			throw new Error('Managed Electron story previews are unavailable.');
 		}
-		const twineElectronBridge = twineElectron;
 
-		// These are async to match the type in the browser context.
+		const playStoryWithBuild = async (storyId: string) => {
+			const prepared = await prepareNativePreview(storyId, 'play');
+
+			await twineElectron.openStoryPreview(
+				prepared.request,
+				prepared.projectRoot
+			);
+			return prepared.build;
+		};
+		const proofStoryWithBuild = async (
+			storyId: string,
+			proofingFormat?: ProofingFormatSelection
+		) => {
+			const prepared = await prepareNativePreview(storyId, 'proof', {
+				proofingFormat
+			});
+
+			await twineElectron.openStoryPreview(
+				prepared.request,
+				prepared.projectRoot
+			);
+			return prepared.build;
+		};
+
 		return {
 			playStory: async storyId => {
-				const {assetInventory, projectRoot} = await refreshedProjectAssets(
-					storyId,
-					twineElectronBridge
-				);
-				const build = await publishStoryPackage(storyId, {
-					assetInventory,
-					buildTarget: 'play'
-				});
-
-				await twineElectronBridge.openWithScratchPackage(
-					build.html,
-					projectRoot,
-					scratchAssetRequests(projectRoot, build.assets)
-				);
+				await playStoryWithBuild(storyId);
 			},
+			playStoryWithBuild,
 			proofStory: async (storyId, proofingFormat) => {
-				const {assetInventory, projectRoot} = await refreshedProjectAssets(
-					storyId,
-					twineElectronBridge
-				);
-				const build = await proofStoryPackage(storyId, {
-					assetInventory,
-					proofingFormat
-				});
-
-				await twineElectronBridge.openWithScratchPackage(
-					build.html,
-					projectRoot,
-					scratchAssetRequests(projectRoot, build.assets)
-				);
+				await proofStoryWithBuild(storyId, proofingFormat);
 			},
+			proofStoryWithBuild,
 			testStory: async (storyId, startPassageId) => {
-				const {assetInventory, projectRoot} = await refreshedProjectAssets(
-					storyId,
-					twineElectronBridge
-				);
-				const build = await publishStoryPackage(storyId, {
-					assetInventory,
-					buildTarget: 'test',
-					formatOptions: 'debug',
-					...(startPassageId
-						? {startId: startPassageId, startMode: 'afterStartup' as const}
-						: {startId: undefined})
+				const prepared = await prepareNativePreview(storyId, 'test', {
+					startPassageId
 				});
 
-				await twineElectronBridge.openWithScratchPackage(
-					build.html,
-					projectRoot,
-					scratchAssetRequests(projectRoot, build.assets)
+				await twineElectron.openStoryPreview(
+					prepared.request,
+					prepared.projectRoot
 				);
 			}
 		};
 	}
 
+	const playStoryWithBuild = async (storyId: string) => {
+		window.open(`#/stories/${storyId}/play`, '_blank');
+		return undefined;
+	};
+	const proofStoryWithBuild = async (
+		storyId: string,
+		proofingFormat?: ProofingFormatSelection
+	) => {
+		const query = proofingFormat
+			? `?${new URLSearchParams({
+					proofingFormatName: proofingFormat.name,
+					proofingFormatVersion: proofingFormat.version
+				}).toString()}`
+			: '';
+
+		window.open(`#/stories/${storyId}/proof${query}`, '_blank');
+		return undefined;
+	};
+
 	return {
 		playStory: async storyId => {
-			window.open(`#/stories/${storyId}/play`, '_blank');
+			await playStoryWithBuild(storyId);
 		},
+		playStoryWithBuild,
 		proofStory: async (storyId, proofingFormat) => {
-			const query = proofingFormat
-				? `?${new URLSearchParams({
-						proofingFormatName: proofingFormat.name,
-						proofingFormatVersion: proofingFormat.version
-					}).toString()}`
-				: '';
-
-			window.open(`#/stories/${storyId}/proof${query}`, '_blank');
+			await proofStoryWithBuild(storyId, proofingFormat);
 		},
+		proofStoryWithBuild,
 		testStory: async (storyId, startPassageId) => {
 			window.open(
 				startPassageId

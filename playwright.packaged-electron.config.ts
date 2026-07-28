@@ -9,7 +9,7 @@ const config: PlaywrightTestConfig = {
 	reporter: process.env.CI ? 'github' : 'line',
 	retries: process.env.CI ? 1 : 0,
 	testDir: './e2e',
-	testMatch: 'packaged-electron.spec.ts',
+	testMatch: ['packaged-electron.spec.ts', 'packaged-electron-preview.spec.ts'],
 	timeout: 3 * 60 * 1000,
 	workers: 1
 };

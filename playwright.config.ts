@@ -13,7 +13,11 @@ import {devices} from '@playwright/test';
 const config: PlaywrightTestConfig = {
 	testDir: './e2e',
 	/* Performance scenarios have their own config and required fixture inputs. */
-	testIgnore: ['electron-performance.spec.ts', 'packaged-electron.spec.ts'],
+	testIgnore: [
+		'electron-performance.spec.ts',
+		'packaged-electron.spec.ts',
+		'packaged-electron-preview.spec.ts'
+	],
 	/* Maximum time one test can run for. */
 	timeout: 30 * 1000,
 	expect: {

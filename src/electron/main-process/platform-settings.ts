@@ -1,8 +1,7 @@
 import type {
 	NativeLinkHandlingMode,
 	NativePlatformSettings,
-	NativePlatformSettingsUpdate,
-	NativeScratchAssetStrategy
+	NativePlatformSettingsUpdate
 } from '../shared';
 import {AppPrefName, getAppPref, setAppPref} from './app-prefs';
 
@@ -64,10 +63,6 @@ function stringPref(name: AppPrefName) {
 
 export function linkHandlingMode(): NativeLinkHandlingMode {
 	return getAppPref('linkHandlingMode') === 'block' ? 'block' : 'system';
-}
-
-export function scratchAssetStrategy(): NativeScratchAssetStrategy {
-	return getAppPref('scratchAssetStrategy') === 'copy' ? 'copy' : 'link';
 }
 
 export function backupCadenceMinutes() {
@@ -133,8 +128,7 @@ export function nativeAppPlatformSettings(): NativeAppPlatformSettings {
 		externalEditorCommand: stringPref('externalEditorCommand'),
 		fullscreenPersistence: fullscreenPersistenceEnabled(),
 		lastWindowFullscreen: lastWindowFullscreen(),
-		linkHandlingMode: linkHandlingMode(),
-		scratchAssetStrategy: scratchAssetStrategy()
+		linkHandlingMode: linkHandlingMode()
 	};
 }
 
@@ -214,15 +208,6 @@ export async function updateNativeAppPlatformSettings(
 			setAppPref(
 				'linkHandlingMode',
 				settings.linkHandlingMode === 'block' ? 'block' : 'system'
-			)
-		);
-	}
-
-	if (settings.scratchAssetStrategy !== undefined) {
-		updates.push(
-			setAppPref(
-				'scratchAssetStrategy',
-				settings.scratchAssetStrategy === 'copy' ? 'copy' : 'link'
 			)
 		);
 	}

@@ -2,11 +2,20 @@ import type {CoreDocumentPage} from './bindings/CoreDocumentPage';
 import type {CoreProjectHost} from './project-host';
 import type {Story, StoryWithDocuments} from '../store/stories';
 
-/** Materializes all source only for workflows that explicitly require it. */
-export async function materializeStoryFromSession(
+export interface MaterializedStorySnapshot {
+	revision: number;
+	story: StoryWithDocuments;
+}
+
+/**
+ * Materializes all source and retains the exact Core revision that supplied it.
+ * Callers which publish companion metadata should use this result rather than
+ * consulting a later React story value.
+ */
+export async function materializeStorySnapshotFromSession(
 	host: CoreProjectHost,
 	story: Story
-): Promise<StoryWithDocuments> {
+): Promise<MaterializedStorySnapshot> {
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		const expectedRevision = host.sessionStatus(story.id).revision;
 		const passageText = new Map<string, string>();
@@ -55,13 +64,16 @@ export async function materializeStoryFromSession(
 			}
 
 			return {
-				...story,
-				passages: story.passages.map(passage => ({
-					...passage,
-					text: passageText.get(passage.id)!
-				})),
-				script,
-				stylesheet
+				revision: expectedRevision,
+				story: {
+					...story,
+					passages: story.passages.map(passage => ({
+						...passage,
+						text: passageText.get(passage.id)!
+					})),
+					script,
+					stylesheet
+				}
 			};
 		} catch (error) {
 			if (attempt === 1) {
@@ -71,4 +83,12 @@ export async function materializeStoryFromSession(
 	}
 
 	throw new Error('Could not materialize story documents.');
+}
+
+/** Materializes all source only for workflows that explicitly require it. */
+export async function materializeStoryFromSession(
+	host: CoreProjectHost,
+	story: Story
+): Promise<StoryWithDocuments> {
+	return (await materializeStorySnapshotFromSession(host, story)).story;
 }

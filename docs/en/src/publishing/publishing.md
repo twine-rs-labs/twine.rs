@@ -23,6 +23,11 @@ file.
 The output filename doesn't change the title inside the story. To change that
 title, [rename the story](../story-library/renaming.md) before exporting.
 
+Play, Test, and Proof are previews, not exports. On desktop they use temporary
+copied assets and an opaque address owned by a Twine preview window. That
+address cannot be shared or used after its preview session ends; export a file
+when you need durable or distributable output.
+
 ## HTML Options and Assets
 
 _Classic Twine compatibility_ omits twine.rs graph metadata so another Twine

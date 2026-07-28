@@ -1,37 +1,134 @@
 import * as React from 'react';
-import {ErrorMessage} from '../components/error';
-import {Button, Badge, SegmentedControl} from '../components/design-system';
+import {Badge} from '../components/design-system/badge';
+import {Button} from '../components/design-system/button';
+import {SegmentedControl} from '../components/design-system/segmented-control';
+import {ErrorMessage} from '../components/error/error-message';
 import {
+	createStoryPreviewPassageLookup,
+	initialStoryPreviewRuntimeModel,
 	instrumentPreviewHtml,
-	isBridgeMessage,
-	resolveRuntimePassage,
+	normalizeStoryPreviewBridgeMessage,
+	reduceStoryPreviewRuntime,
 	runtimeLogTone,
 	runtimePassageLabel
 } from './story-preview-debug';
 import type {
 	StoryPreviewDebugMetric,
 	StoryPreviewPassageRef,
-	StoryPreviewRuntimeLogEntry,
-	StoryPreviewRuntimeState,
+	StoryPreviewPassageLookup,
+	StoryPreviewRuntimeModel,
 	StoryPreviewViewportPreset
 } from './story-preview-debug';
-import type {TwineElectronWindow} from '../electron/shared';
 import './story-preview-frame.css';
 
+export interface StoryPreviewSrcDocContentSource {
+	bridgeSessionId?: string;
+	html: string;
+	type: 'srcDoc';
+}
+
+export interface StoryPreviewUrlContentSource {
+	bridgeSessionId: string;
+	htmlBytes: number;
+	storyDataCount: number;
+	type: 'url';
+	url: string;
+}
+
+export type StoryPreviewContentSource =
+	StoryPreviewSrcDocContentSource | StoryPreviewUrlContentSource;
+
+const EMPTY_STORY_PREVIEW_PASSAGES: StoryPreviewPassageRef[] = [];
+
+export interface StoryPreviewContentHostProps {
+	bridgeSessionId: string;
+	contentSource: StoryPreviewContentSource;
+	frameRef: React.RefObject<HTMLIFrameElement | null>;
+	onLoad?: () => void;
+	reloadKey: number;
+	staging?: boolean;
+	title: string;
+	viewportPreset: StoryPreviewViewportPreset;
+}
+
+/**
+ * Hosts story code without owning runtime state or discovering a platform
+ * bridge. Desktop callers pass an already-authorized opaque URL.
+ */
+export const StoryPreviewContentHost: React.FC<
+	StoryPreviewContentHostProps
+> = ({
+	bridgeSessionId,
+	contentSource,
+	frameRef,
+	onLoad,
+	reloadKey,
+	staging = false,
+	title,
+	viewportPreset
+}) => {
+	const sourceHtml =
+		contentSource.type === 'srcDoc' ? contentSource.html : undefined;
+	const srcDoc = React.useMemo(
+		() =>
+			sourceHtml === undefined
+				? undefined
+				: instrumentPreviewHtml(sourceHtml, bridgeSessionId),
+		[bridgeSessionId, sourceHtml]
+	);
+
+	return (
+		<div
+			aria-hidden={staging || undefined}
+			className={`story-preview-route__frame-shell${
+				staging ? ' story-preview-route__frame-shell--staging' : ''
+			}`}
+			data-viewport={viewportPreset}
+		>
+			<iframe
+				className="story-preview-route__frame"
+				key={`${bridgeSessionId}:${reloadKey}`}
+				ref={frameRef}
+				onLoad={onLoad}
+				sandbox={
+					contentSource.type === 'url'
+						? 'allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts'
+						: 'allow-downloads allow-forms allow-modals allow-popups allow-scripts'
+				}
+				{...(contentSource.type === 'url'
+					? {src: contentSource.url}
+					: {srcDoc})}
+				title={title}
+			/>
+		</div>
+	);
+};
+
 export interface StoryPreviewFrameProps {
+	contentSource?: StoryPreviewContentSource;
 	debugMetrics?: StoryPreviewDebugMetric[];
 	error?: Error;
+	/**
+	 * Browser-route compatibility shorthand. New hosts should use the explicit
+	 * `contentSource` prop.
+	 */
 	html?: string;
 	missingStoryMessage: string;
+	onContentLoad?: () => void;
 	onRevealGraph?: (passageId?: string) => void;
 	onRevealSource?: (passageId?: string) => void;
+	onStagedContentLoad?: () => void;
 	onTestCurrentPassage?: (passageId: string) => void;
 	onTestFromStart?: () => void;
 	passages?: StoryPreviewPassageRef[];
+	stagedContentSource?: StoryPreviewUrlContentSource;
+	stagedPassages?: StoryPreviewPassageRef[];
+	stagedTitle?: string;
 	startPassageName?: string;
 	storyExists: boolean;
 	storyName?: string;
 	targetLabel?: string;
+	testCommandsBusy?: boolean;
 	title: string;
 }
 
@@ -39,154 +136,196 @@ function byteLength(source: string) {
 	return new Blob([source]).size;
 }
 
+function storyDataCount(source: string) {
+	return source.match(/<tw-storydata\b/g)?.length ?? 0;
+}
+
 export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	const {
+		contentSource: explicitContentSource,
 		debugMetrics = [],
 		error,
 		html,
 		missingStoryMessage,
+		onContentLoad,
 		onRevealGraph,
 		onRevealSource,
+		onStagedContentLoad,
 		onTestCurrentPassage,
 		onTestFromStart,
-		passages = [],
+		passages = EMPTY_STORY_PREVIEW_PASSAGES,
+		stagedContentSource,
+		stagedPassages = EMPTY_STORY_PREVIEW_PASSAGES,
+		stagedTitle,
 		startPassageName,
 		storyExists,
 		storyName,
 		targetLabel,
+		testCommandsBusy = false,
 		title
 	} = props;
+	const contentSource = React.useMemo<StoryPreviewContentSource | undefined>(
+		() =>
+			explicitContentSource ??
+			(html === undefined ? undefined : {html, type: 'srcDoc'}),
+		[explicitContentSource, html]
+	);
+	const sourceBridgeSessionId = contentSource?.bridgeSessionId;
+	const sourceIdentity =
+		contentSource?.type === 'url'
+			? contentSource.url
+			: contentSource?.type === 'srcDoc'
+				? contentSource.html
+				: undefined;
+	const bridgeSessionId = React.useMemo(
+		() =>
+			sourceBridgeSessionId ??
+			`preview-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		[sourceBridgeSessionId, sourceIdentity]
+	);
 	const [reloadKey, setReloadKey] = React.useState(0);
-	const [runtimeLogs, setRuntimeLogs] = React.useState<
-		StoryPreviewRuntimeLogEntry[]
-	>([]);
-	const [runtimeState, setRuntimeState] =
-		React.useState<StoryPreviewRuntimeState>({
-			status: html ? 'waiting' : 'idle'
-		});
+	const [messageListenerReady, setMessageListenerReady] = React.useState(false);
+	const [runtimeModel, dispatchRuntime] = React.useReducer(
+		reduceStoryPreviewRuntime,
+		!!contentSource,
+		initialStoryPreviewRuntimeModel
+	);
 	const [viewportPreset, setViewportPreset] =
 		React.useState<StoryPreviewViewportPreset>('fit');
 	const previewFrame = React.useRef<HTMLIFrameElement>(null);
-	const [desktopPreviewUrl, setDesktopPreviewUrl] = React.useState<string>();
-	const [desktopPreviewError, setDesktopPreviewError] =
-		React.useState<string>();
-	const desktopBridge = (window as TwineElectronWindow).twineElectron;
-	const bridgeSessionId = React.useMemo(
-		() => `preview-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-		[html]
+	const stagedPreviewFrame = React.useRef<HTMLIFrameElement>(null);
+	const passageLookup = React.useMemo(
+		() => createStoryPreviewPassageLookup(passages),
+		[passages]
 	);
-	const instrumentedHtml = React.useMemo(
-		() => (html ? instrumentPreviewHtml(html, bridgeSessionId) : undefined),
-		[bridgeSessionId, html]
+	const stagedPassageLookup = React.useMemo(
+		() => createStoryPreviewPassageLookup(stagedPassages),
+		[stagedPassages]
 	);
-	const storyDataCount = html?.match(/<tw-storydata\b/g)?.length ?? 0;
+	const bridgeSessionIdRef = React.useRef(bridgeSessionId);
+	const passageLookupRef = React.useRef(passageLookup);
+	const stagedRuntimeRef = React.useRef<
+		| {
+				bridgeSessionId: string;
+				model: StoryPreviewRuntimeModel;
+				passages: StoryPreviewPassageLookup;
+		  }
+		| undefined
+	>(undefined);
+
+	bridgeSessionIdRef.current = bridgeSessionId;
+	passageLookupRef.current = passageLookup;
+	if (stagedContentSource) {
+		if (
+			stagedRuntimeRef.current?.bridgeSessionId !==
+			stagedContentSource.bridgeSessionId
+		) {
+			stagedRuntimeRef.current = {
+				bridgeSessionId: stagedContentSource.bridgeSessionId,
+				model: initialStoryPreviewRuntimeModel(true),
+				passages: stagedPassageLookup
+			};
+		} else {
+			stagedRuntimeRef.current.passages = stagedPassageLookup;
+		}
+	}
+	const runtimeLogs = runtimeModel.logs;
+	const runtimeState = runtimeModel.runtime;
 	const currentPassage = runtimeState.currentPassage;
 	const currentPassageId = currentPassage?.id;
 	const latestLog = runtimeLogs[0];
 	const runtimeViewport = runtimeState.viewport;
-	const usesDesktopPreviewOrigin = !!desktopBridge?.registerStoryPreview;
-	const previewReady = usesDesktopPreviewOrigin
-		? !!desktopPreviewUrl
-		: !!instrumentedHtml;
+	const publishedMetadata = React.useMemo(() => {
+		if (contentSource?.type === 'url') {
+			return {
+				htmlBytes: contentSource.htmlBytes,
+				storyDataCount: contentSource.storyDataCount
+			};
+		}
 
-	React.useEffect(() => {
-		setRuntimeLogs([]);
-		setRuntimeState({status: html ? 'waiting' : 'idle'});
-	}, [html, reloadKey]);
+		if (contentSource?.type === 'srcDoc') {
+			return {
+				htmlBytes: byteLength(contentSource.html),
+				storyDataCount: storyDataCount(contentSource.html)
+			};
+		}
 
-	React.useEffect(() => {
-		let disposed = false;
-		let registeredUrl: string | undefined;
+		return undefined;
+	}, [contentSource]);
+	const publishedHtmlBytes = publishedMetadata?.htmlBytes;
+	const publishedStoryDataCount = publishedMetadata?.storyDataCount;
 
-		setDesktopPreviewUrl(undefined);
-		setDesktopPreviewError(undefined);
+	React.useLayoutEffect(() => {
+		const stagedRuntime = stagedRuntimeRef.current;
 
-		if (!instrumentedHtml || !desktopBridge?.registerStoryPreview) {
+		if (stagedRuntime && stagedRuntime.bridgeSessionId === bridgeSessionId) {
+			stagedRuntimeRef.current = undefined;
+			dispatchRuntime({model: stagedRuntime.model, type: 'replace'});
 			return;
 		}
 
-		void desktopBridge
-			.registerStoryPreview(instrumentedHtml)
-			.then(url => {
-				registeredUrl = url;
+		dispatchRuntime({hasContent: !!contentSource, type: 'reset'});
+	}, [bridgeSessionId, reloadKey, sourceIdentity]);
 
-				if (disposed) {
-					void desktopBridge.releaseStoryPreview?.(url).catch(() => undefined);
-				} else {
-					setDesktopPreviewUrl(url);
-				}
-			})
-			.catch(registrationError => {
-				if (!disposed) {
-					setDesktopPreviewError(
-						registrationError instanceof Error
-							? registrationError.message
-							: 'Could not register the story preview.'
-					);
-				}
-			});
+	React.useLayoutEffect(() => {
+		const stagedRuntime = stagedRuntimeRef.current;
 
-		return () => {
-			disposed = true;
-
-			if (registeredUrl) {
-				void desktopBridge
-					.releaseStoryPreview?.(registeredUrl)
-					.catch(() => undefined);
-			}
-		};
-	}, [desktopBridge, instrumentedHtml]);
+		if (
+			!stagedContentSource &&
+			stagedRuntime &&
+			stagedRuntime.bridgeSessionId !== bridgeSessionId
+		) {
+			stagedRuntimeRef.current = undefined;
+		}
+	}, [bridgeSessionId, stagedContentSource]);
 
 	React.useEffect(() => {
 		function handleMessage(event: MessageEvent) {
-			const {data} = event;
+			const message = normalizeStoryPreviewBridgeMessage(event.data);
 
-			if (
-				event.source !== previewFrame.current?.contentWindow ||
-				!isBridgeMessage(data) ||
-				data.sessionId !== bridgeSessionId
-			) {
+			if (!message) {
 				return;
 			}
 
-			if (data.type === 'state') {
-				setRuntimeState({
-					currentPassage: resolveRuntimePassage(data.currentPassage, passages),
-					lastSeenAt: data.time ?? Date.now(),
-					status: 'observed',
-					viewport: data.viewport
+			if (
+				event.source === previewFrame.current?.contentWindow &&
+				message.sessionId === bridgeSessionIdRef.current
+			) {
+				dispatchRuntime({
+					message,
+					now: Date.now(),
+					passages: passageLookupRef.current,
+					type: 'message'
 				});
 				return;
 			}
 
-			setRuntimeLogs(currentLogs => {
-				const message =
-					data.type === 'runtime-error'
-						? (data.message ?? 'Runtime error')
-						: (data.args?.join(' ') ?? '');
+			const stagedRuntime = stagedRuntimeRef.current;
 
-				return [
-					{
-						id: `${data.time ?? Date.now()}:${currentLogs.length}`,
-						level: data.level ?? 'error',
-						message,
-						time: data.time ?? Date.now()
-					},
-					...currentLogs
-				].slice(0, 12);
-			});
+			if (
+				stagedRuntime &&
+				event.source === stagedPreviewFrame.current?.contentWindow &&
+				message.sessionId === stagedRuntime.bridgeSessionId
+			) {
+				stagedRuntime.model = reduceStoryPreviewRuntime(stagedRuntime.model, {
+					message,
+					now: Date.now(),
+					passages: stagedRuntime.passages,
+					type: 'message'
+				});
+			}
 		}
 
 		window.addEventListener('message', handleMessage);
+		// Do not assign src/srcDoc until the listener exists. Story formats and
+		// user scripts can report synchronously while the frame is starting.
+		setMessageListenerReady(true);
 
 		return () => window.removeEventListener('message', handleMessage);
-	}, [bridgeSessionId, passages]);
+	}, []);
 
 	if (error) {
 		return <ErrorMessage>{error.message}</ErrorMessage>;
-	}
-	if (desktopPreviewError) {
-		return <ErrorMessage>{desktopPreviewError}</ErrorMessage>;
 	}
 
 	if (!storyExists) {
@@ -208,15 +347,17 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 							Start: {startPassageName}
 						</Badge>
 					)}
-					{html && (
-						<Badge
-							icon="database"
-							mono
-							tone={storyDataCount === 1 ? 'saved' : 'warn'}
-						>
-							{byteLength(html)} bytes · {storyDataCount} story data
-						</Badge>
-					)}
+					{publishedHtmlBytes !== undefined &&
+						publishedStoryDataCount !== undefined && (
+							<Badge
+								icon="database"
+								mono
+								tone={publishedStoryDataCount === 1 ? 'saved' : 'warn'}
+							>
+								{publishedHtmlBytes} bytes · {publishedStoryDataCount} story
+								data
+							</Badge>
+						)}
 					{debugMetrics.map(metric => (
 						<Badge
 							icon={metric.icon}
@@ -231,7 +372,9 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 				</div>
 				<div className="story-preview-route__debug-actions">
 					<Button
-						disabled={!currentPassageId || !onTestCurrentPassage}
+						disabled={
+							testCommandsBusy || !currentPassageId || !onTestCurrentPassage
+						}
 						icon="player-play"
 						onClick={() =>
 							currentPassageId && onTestCurrentPassage?.(currentPassageId)
@@ -242,7 +385,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 						Test Current
 					</Button>
 					<Button
-						disabled={!onTestFromStart}
+						disabled={testCommandsBusy || !onTestFromStart}
 						icon="tool"
 						onClick={onTestFromStart}
 						size="sm"
@@ -267,7 +410,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 						Graph
 					</Button>
 					<Button
-						disabled={!html}
+						disabled={!contentSource || !!stagedContentSource}
 						icon="refresh"
 						onClick={() => setReloadKey(current => current + 1)}
 						size="sm"
@@ -276,7 +419,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 					</Button>
 				</div>
 			</div>
-			{html && (
+			{contentSource && (
 				<div className="story-preview-route__runtime">
 					<div className="story-preview-route__runtime-main">
 						<Badge
@@ -326,26 +469,32 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 					/>
 				</div>
 			)}
-			{html && previewReady ? (
-				<div
-					className="story-preview-route__frame-shell"
-					data-viewport={viewportPreset}
-				>
-					<iframe
-						className="story-preview-route__frame"
-						key={`${bridgeSessionId}:${reloadKey}`}
-						ref={previewFrame}
-						sandbox={
-							usesDesktopPreviewOrigin
-								? 'allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts'
-								: 'allow-downloads allow-forms allow-modals allow-popups allow-scripts'
-						}
-						{...(usesDesktopPreviewOrigin
-							? {src: desktopPreviewUrl}
-							: {srcDoc: instrumentedHtml})}
+			{contentSource && messageListenerReady ? (
+				<>
+					<StoryPreviewContentHost
+						bridgeSessionId={bridgeSessionId}
+						contentSource={contentSource}
+						frameRef={previewFrame}
+						key={bridgeSessionId}
+						onLoad={onContentLoad}
+						reloadKey={reloadKey}
 						title={title}
+						viewportPreset={viewportPreset}
 					/>
-				</div>
+					{stagedContentSource && (
+						<StoryPreviewContentHost
+							bridgeSessionId={stagedContentSource.bridgeSessionId}
+							contentSource={stagedContentSource}
+							frameRef={stagedPreviewFrame}
+							key={stagedContentSource.bridgeSessionId}
+							onLoad={onStagedContentLoad}
+							reloadKey={reloadKey}
+							staging
+							title={stagedTitle ?? `${title} candidate`}
+							viewportPreset={viewportPreset}
+						/>
+					)}
+				</>
 			) : (
 				<div className="story-preview-route__loading" role="status">
 					Loading story...

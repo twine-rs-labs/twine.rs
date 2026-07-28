@@ -23,7 +23,9 @@ const mockTestStory = jest.fn();
 jest.mock('../../../store/use-story-launch', () => ({
 	useStoryLaunch: () => ({
 		playStory: mockPlayStory,
+		playStoryWithBuild: mockPlayStory,
 		proofStory: mockProofStory,
+		proofStoryWithBuild: mockProofStory,
 		testStory: mockTestStory
 	})
 }));

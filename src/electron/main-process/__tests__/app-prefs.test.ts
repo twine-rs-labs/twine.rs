@@ -65,6 +65,14 @@ describe('loadAppPrefs and getAppPrefs', () => {
 		expect(getAppPref('anUnrecognizedKey' as any)).toBeUndefined();
 	});
 
+	it('ignores the retired scratch asset strategy from files and arguments', () => {
+		mockJsonFile({scratchAssetStrategy: 'link'});
+		minimistMock.mockReturnValue({scratchAssetStrategy: 'copy'});
+		loadAppPrefs();
+
+		expect(getAppPref('scratchAssetStrategy' as any)).toBeUndefined();
+	});
+
 	it("doesn't throw an error if the app prefs file couldn't be loaded", () => {
 		minimistMock.mockReturnValue({
 			scratchFolderPath: 'mock-scratch-folder-path'

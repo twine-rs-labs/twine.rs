@@ -19,6 +19,7 @@ import {StoryListRoute} from './story-list';
 import {StoryPlayRoute} from './story-play';
 import {StoryProofRoute} from './story-proof';
 import {StoryTestRoute} from './story-test';
+import {StoryPreviewOwnerController} from './story-preview-owner-controller';
 
 const UnmatchedRoute: React.FC = () => {
 	const location = useLocation();
@@ -38,6 +39,7 @@ export const Routes: React.FC = () => {
 	return (
 		<HashRouter>
 			<CommandLineOpenSync />
+			<StoryPreviewOwnerController />
 			<AppShell>
 				<RouterRoutes>
 					<Route element={<StoryListRoute />} path="/" />

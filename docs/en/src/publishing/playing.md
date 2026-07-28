@@ -10,10 +10,13 @@ choose _Play_ in the workbench's _Build_ action tab, use the _Play_ button in
 the workspace rail, or run _Play Story_ from the command palette.
 
 Play starts at the story's configured start passage and doesn't include the
-browser test-debug strip. Use [Test](testing.md) when you need debugging tools
-or want to start at another passage.
+story format's test-mode features. The preview toolbar still reports build
+health and runtime messages, lets you reveal the current passage in Source or
+Graph, and offers viewport and reload controls. Use [Test](testing.md) when you
+need the story format's debugging mode or want to start at another passage.
 
-The address you see in your web browser while playing a game launched from Twine
-will only work for you and your computer. It will not work for other people. To
-share your story with other people, you will need to [publish
-it](publishing.md).
+Browser Twine opens the preview in an app-owned tab. The desktop app opens an
+app-owned preview window at a temporary, opaque address. You can keep multiple
+preview windows open independently, but their addresses and temporary content
+work only inside the current Twine session. To share your story, you will need
+to [publish it](publishing.md).

@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-07-21
+Last verified: 2026-07-27
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -33,6 +33,15 @@ phase is optimization and release validation, not another ownership migration.
   asset operations.
 - Text, graph, split, contents, diagnostics, assets, formats, build, settings,
   and preview routes.
+- Managed desktop Play, Test, and Proof windows with a dedicated renderer and
+  preload, preview-only IPC, copied scratch packages behind opaque
+  `twine-preview:` origins, in-place Test Current/Test From Start rebuilding,
+  owner-bound cleanup, and the shared browser debug surface for current
+  passage, console/runtime failures, viewport presets, reload, Source, and
+  Graph. Packaged acceptance covers Test From Here, Paperthin Proof, copied
+  assets and byte ranges, per-origin storage and window isolation, cleanup and
+  protocol lifetime, and current-passage identity across bundled Chapbook,
+  Harlowe, Snowman, and SugarCube.
 - Rust import/export, graph, storage, search, and CLI crates.
 - Segregated local, deliberately unsigned, and signed desktop artifact profiles
   with target-native trust manifests, checksum-bound assembly, and a
@@ -112,8 +121,6 @@ The complete local 10k and 50k benchmark runs verify:
   families still use scoped full indexes or broad session deltas. They are not
   part of the large-story default startup/edit/watcher path and remain targeted
   optimization work.
-- Preview/debug runtime inspection is not yet complete across all desktop
-  surfaces.
 - Some inherited compatibility UI remains outside the primary workbench.
 - Native Harlowe editing is intentionally exact-version: bundled Harlowe 1.2.4
   and 2.1.0, user-added Harlowe builds, and future Harlowe dialects use the

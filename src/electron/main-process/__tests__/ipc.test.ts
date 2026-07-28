@@ -6,8 +6,6 @@ import {saveJsonFile} from '../json-file';
 import {
 	beginScratchPreviewShutdown,
 	cleanScratchDirectory,
-	openWithScratchFile,
-	openWithScratchPackage,
 	resumeScratchPreviewsAfterFailedShutdown
 } from '../scratch-file';
 import {
@@ -65,6 +63,7 @@ import {
 	grantProjectCapability,
 	projectCapabilityField
 } from '../project-capabilities';
+import {storyPreviewWindowManager} from '../story-preview-window-manager';
 
 jest.mock('../json-file');
 jest.mock('../native');
@@ -131,8 +130,6 @@ describe('initIpc()', () => {
 	const resumeScratchPreviewsAfterFailedShutdownMock =
 		resumeScratchPreviewsAfterFailedShutdown as jest.Mock;
 	const clipboardWriteTextMock = clipboard.writeText as jest.Mock;
-	const openWithScratchFileMock = openWithScratchFile as jest.Mock;
-	const openWithScratchPackageMock = openWithScratchPackage as jest.Mock;
 	const renameStoryMock = renameStory as jest.Mock;
 	const saveJsonFileMock = saveJsonFile as jest.Mock;
 	const saveStoryHtmlMock = saveStoryHtml as jest.Mock;
@@ -148,7 +145,6 @@ describe('initIpc()', () => {
 	beforeEach(() => {
 		clipboardWriteTextMock.mockClear();
 		showItemInFolderMock.mockClear();
-		openWithScratchPackageMock.mockClear();
 		chooseAssetFileMock.mockResolvedValue('/mock/asset.png');
 		applyProjectAssetEffectMock.mockResolvedValue(undefined);
 		cleanupStaleProjectAssetEffectsMock.mockResolvedValue(undefined);
@@ -235,8 +231,7 @@ describe('initIpc()', () => {
 			externalEditorCommand: '',
 			fullscreenPersistence: true,
 			lastWindowFullscreen: false,
-			linkHandlingMode: 'system',
-			scratchAssetStrategy: 'link'
+			linkHandlingMode: 'system'
 		});
 		openProjectFolderMock.mockResolvedValue(undefined);
 		prepareProjectImportMock.mockResolvedValue({
@@ -272,8 +267,7 @@ describe('initIpc()', () => {
 			externalEditorCommand: '',
 			fullscreenPersistence: true,
 			lastWindowFullscreen: false,
-			linkHandlingMode: 'system',
-			scratchAssetStrategy: 'link'
+			linkHandlingMode: 'system'
 		});
 		revealBackupDirectoryMock.mockResolvedValue(undefined);
 		revealStoryDirectoryMock.mockResolvedValue(undefined);
@@ -800,14 +794,32 @@ describe('initIpc()', () => {
 		});
 	});
 
-	it('adds a handler for open-with-scratch-package events that awaits openWithScratchPackage()', async () => {
+	it('registers managed preview handlers without legacy preview IPC', () => {
+		const channels = handleMock.mock.calls.map(call => call[0]);
+
+		expect(channels).toEqual(
+			expect.arrayContaining([
+				'story-preview:open',
+				'story-preview:replace',
+				'story-preview:owner-command-result',
+				'story-preview:update-appearance'
+			])
+		);
+		expect(channels).not.toEqual(
+			expect.arrayContaining([
+				'register-story-preview',
+				'release-story-preview',
+				'open-with-scratch-file',
+				'open-with-scratch-package'
+			])
+		);
+	});
+
+	it('routes validated preview packages through the managed window session', async () => {
 		const handler = handleMock.mock.calls.find(
-			call => call[0] === 'open-with-scratch-package'
+			call => call[0] === 'story-preview:open'
 		);
 		const assets = [{outputPath: 'assets/cover.png', path: 'assets/cover.png'}];
-		const trustedAssets = [
-			{outputPath: 'assets/cover.png', path: 'assets/cover.png'}
-		];
 		const baseline = {
 			expectedExists: true,
 			expectedModifiedAtMs: 1,
@@ -815,119 +827,74 @@ describe('initIpc()', () => {
 			path: 'assets/cover.png'
 		};
 		const bytes = new Uint8Array([1, 2, 3]);
+		const descriptor = {
+			appearance: {
+				highContrast: false,
+				reducedMotion: false,
+				theme: 'light' as const
+			},
+			bridgeSessionId: 'bridge-session',
+			htmlBytes: 17,
+			passages: [],
+			storyDataCount: 0,
+			storyId: 'story',
+			storyName: 'Story',
+			target: 'play' as const
+		};
+		const managedDescriptor = {
+			...descriptor,
+			generation: 1,
+			sessionId: 'preview-session'
+		};
+		const openPreviewMock = jest
+			.spyOn(storyPreviewWindowManager, 'open')
+			.mockResolvedValueOnce({
+				descriptor: managedDescriptor,
+				url: 'twine-preview://00000000-0000-4000-8000-000000000000/index.html'
+			});
 
-		projectSessionScratchAssetsMock.mockReturnValueOnce(trustedAssets);
+		projectSessionScratchAssetsMock.mockReturnValueOnce(assets);
 		projectSessionAssetReadBaselinesMock.mockReturnValueOnce([baseline]);
 		readNativeProjectPreviewAssetPayloadsMock.mockResolvedValueOnce({
 			failures: [],
-			payloads: [{bytes, path: 'assets/cover.png', sizeBytes: 3}],
+			payloads: [
+				{
+					bytes,
+					mediaType: 'image/png',
+					path: 'assets/cover.png',
+					sizeBytes: 3
+				}
+			],
 			totalEncodedBytes: 4,
 			totalSourceBytes: 3
 		});
 
-		expect(handler).not.toBeUndefined();
-		await handler[1]({}, 'test-file-contents', '/mock/project', assets);
-		expect(projectSessionScratchAssetsMock).toHaveBeenCalledWith(
-			'/mock/project',
-			assets
-		);
-		expect(readNativeProjectPreviewAssetPayloadsMock).toHaveBeenCalledWith(
-			'/mock/project',
-			[baseline],
-			expect.objectContaining({maxFileCount: 1000})
-		);
-		expect(openWithScratchPackageMock).toHaveBeenCalledWith(
-			'test-file-contents',
-			[{bytes, outputPath: 'assets/cover.png'}]
-		);
-	});
-
-	it('rejects scratch-package failures through the acknowledged handler', async () => {
-		const error = new Error('scratch package failed');
-		const handler = handleMock.mock.calls.find(
-			call => call[0] === 'open-with-scratch-package'
-		);
-
-		openWithScratchPackageMock.mockRejectedValueOnce(error);
-		await expect(
-			handler[1]({}, 'test-file-contents', undefined, [])
-		).rejects.toBe(error);
-	});
-
-	it('rejects scratch packages when the no-follow asset reader reports a failure', async () => {
-		const handler = handleMock.mock.calls.find(
-			call => call[0] === 'open-with-scratch-package'
-		);
-		const assets = [{outputPath: 'assets/cover.png', path: 'assets/cover.png'}];
-
-		projectSessionScratchAssetsMock.mockReturnValueOnce(assets);
-		projectSessionAssetReadBaselinesMock.mockReturnValueOnce([
-			{expectedExists: true, path: 'assets/cover.png'}
-		]);
-		readNativeProjectPreviewAssetPayloadsMock.mockResolvedValueOnce({
-			failures: [
-				{
-					message: 'Asset could not be opened without following links.',
-					path: 'assets/cover.png',
-					reason: 'symlink-escape'
-				}
-			],
-			payloads: [],
-			totalEncodedBytes: 0,
-			totalSourceBytes: 0
-		});
-
-		await expect(
-			handler[1]({}, 'test-file-contents', '/mock/project', assets)
-		).rejects.toThrow('could not be read safely');
-		expect(openWithScratchPackageMock).not.toHaveBeenCalled();
-	});
-
-	it('rejects scratch-package asset copies without a project capability', async () => {
-		const handler = handleMock.mock.calls.find(
-			call => call[0] === 'open-with-scratch-package'
-		);
-
-		await expect(
-			handler[1]({}, 'test-file-contents', undefined, [
-				{outputPath: 'assets/cover.png', path: 'assets/cover.png'}
-			])
-		).rejects.toThrow('Project access is required');
-		expect(projectSessionScratchAssetsMock).not.toHaveBeenCalled();
-		expect(openWithScratchPackageMock).not.toHaveBeenCalled();
-	});
-
-	it('rejects scratch-package asset source paths from the renderer', async () => {
-		const handler = handleMock.mock.calls.find(
-			call => call[0] === 'open-with-scratch-package'
-		);
-
-		await expect(
-			handler[1]({}, 'test-file-contents', '/mock/project', [
-				{
-					outputPath: 'assets/cover.png',
-					sourcePath: '/tmp/cover.png'
-				}
-			])
-		).rejects.toThrow('asset request is invalid');
-		expect(projectSessionScratchAssetsMock).not.toHaveBeenCalled();
-		expect(openWithScratchPackageMock).not.toHaveBeenCalled();
-	});
-
-	it('rejects excessive scratch-package asset descriptors', async () => {
-		const handler = handleMock.mock.calls.find(
-			call => call[0] === 'open-with-scratch-package'
-		);
-		const assets = Array.from({length: 1001}, (_, index) => ({
-			outputPath: `assets/${index}.png`,
-			path: `assets/${index}.png`
-		}));
-
-		await expect(
-			handler[1]({}, 'test-file-contents', '/mock/project', assets)
-		).rejects.toThrow('exceeds the safe limit');
-		expect(projectSessionScratchAssetsMock).not.toHaveBeenCalled();
-		expect(openWithScratchPackageMock).not.toHaveBeenCalled();
+		try {
+			await expect(
+				handler[1](
+					{},
+					{
+						assets,
+						descriptor,
+						instrumentedHtml: '<html></html>'
+					},
+					'/mock/project'
+				)
+			).resolves.toEqual(managedDescriptor);
+			expect(openPreviewMock).toHaveBeenCalledWith(undefined, {
+				assets: [
+					{
+						bytes,
+						mediaType: 'image/png',
+						outputPath: 'assets/cover.png'
+					}
+				],
+				descriptor,
+				html: '<html></html>'
+			});
+		} finally {
+			openPreviewMock.mockRestore();
+		}
 	});
 
 	describe('the handler it adds for load-prefs events', () => {
@@ -1035,16 +1002,6 @@ describe('initIpc()', () => {
 			'https://formats.example/format.js',
 			3000
 		);
-	});
-
-	it('adds a handler for open-with-scratch-file events that awaits openWithScratchFile()', async () => {
-		const handler = handleMock.mock.calls.find(
-			call => call[0] === 'open-with-scratch-file'
-		);
-
-		expect(handler).not.toBeUndefined();
-		await handler[1]({}, 'test-file-contents');
-		expect(openWithScratchFileMock).toHaveBeenCalledWith('test-file-contents');
 	});
 
 	describe('the handler it adds for rename-story events', () => {

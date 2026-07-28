@@ -16,7 +16,6 @@ export type AppPrefName =
 	| 'lastWindowFullscreen'
 	| 'linkHandlingMode'
 	| 'disableHardwareAcceleration'
-	| 'scratchAssetStrategy'
 	| 'scratchFolderPath'
 	| 'scratchFileCleanupAge'
 	| 'storyLibraryFolderPath';
@@ -32,7 +31,6 @@ const prefNames: AppPrefName[] = [
 	'fullscreenPersistence',
 	'lastWindowFullscreen',
 	'linkHandlingMode',
-	'scratchAssetStrategy',
 	'scratchFolderPath',
 	'scratchFileCleanupAge',
 	'storyLibraryFolderPath'

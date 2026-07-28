@@ -10,16 +10,28 @@ import {
 	type StoryHtmlBuildTarget,
 	type StoryBuildTarget
 } from '../util/build-package';
-import {useCoreProjectHost} from '../core/project-host';
-import {materializeStoryFromSession} from '../core/materialize-story';
-import type {CoreAssetInventoryEntry, CoreAssetsPage} from '../core';
+import {type CoreProjectHost, useCoreProjectHost} from '../core/project-host';
+import {
+	materializeStoryFromSession,
+	materializeStorySnapshotFromSession
+} from '../core/materialize-story';
+import type {
+	CoreAssetInventoryEntry,
+	CoreAssetsPage,
+	CoreStorySummary
+} from '../core';
 import {usePrefsContext} from './prefs';
 import {
 	formatWithNameAndVersion,
 	loadFormatProperties,
 	useStoryFormatsContext
 } from './story-formats';
-import {StoryWithDocuments, storyWithId, useStoriesContext} from './stories';
+import {
+	type Story,
+	StoryWithDocuments,
+	storyWithId,
+	useStoriesContext
+} from './stories';
 import {getAppInfo} from '../util/app-info';
 import {
 	externalAssetEmbeddingReport,
@@ -57,6 +69,53 @@ export type ProofStoryPackageOptions =
 			proofingFormat?: ProofingFormatSelection;
 	  };
 
+export type BuildStoryPreviewPackageOptions = PublishOptions & {
+	assetInventory?: CoreAssetInventoryEntry[];
+	proofingFormat?: ProofingFormatSelection;
+};
+
+export interface StoryPreviewBuild {
+	build: StoryBuildPackage;
+	revision: number;
+	story: StoryWithDocuments;
+	summary: CoreStorySummary;
+}
+
+interface RevisionedStoryMetadata {
+	revision: number;
+	story: Story;
+}
+
+export async function materializeStoryPreviewSnapshot(
+	coreProjectHost: CoreProjectHost,
+	storyId: string,
+	currentMetadata: () => RevisionedStoryMetadata
+) {
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		const metadata = currentMetadata();
+		const snapshot = await materializeStorySnapshotFromSession(
+			coreProjectHost,
+			metadata.story
+		);
+		const summary = await coreProjectHost.queryStorySummaryAsync(storyId);
+		const latestMetadata = currentMetadata();
+
+		if (
+			snapshot.revision === metadata.revision &&
+			summary.revision === metadata.revision &&
+			coreProjectHost.sessionStatus(storyId).revision === metadata.revision &&
+			latestMetadata.revision === metadata.revision &&
+			latestMetadata.story === metadata.story
+		) {
+			return {...snapshot, summary};
+		}
+	}
+
+	throw new Error(
+		'The story changed while its preview metadata was being prepared.'
+	);
+}
+
 export interface UsePublishingProps {
 	materializeStory: (storyId: string) => Promise<StoryWithDocuments>;
 	buildStoryPackage: (
@@ -64,6 +123,11 @@ export interface UsePublishingProps {
 		target: StoryBuildTarget,
 		publishOptions?: Omit<BuildStoryPackageOptions, 'buildTarget'>
 	) => Promise<StoryBuildPackage>;
+	buildStoryPreviewPackage: (
+		storyId: string,
+		target: Extract<StoryBuildTarget, 'play' | 'proof' | 'test'>,
+		options?: BuildStoryPreviewPackageOptions
+	) => Promise<StoryPreviewBuild>;
 	proofStoryPackage: (
 		storyId: string,
 		options?: ProofStoryPackageOptions
@@ -97,6 +161,20 @@ export function usePublishing(): UsePublishingProps {
 	const {dispatch: storyFormatsDispatch, formats} = useStoryFormatsContext();
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
+	const previewMetadataRef = React.useRef<{
+		revisions: Map<string, number>;
+		stories: typeof stories;
+	}>({revisions: new Map(), stories});
+
+	previewMetadataRef.current = {
+		revisions: new Map(
+			stories.map(story => [
+				story.id,
+				coreProjectHost.sessionStatus(story.id).revision
+			])
+		),
+		stories
+	};
 
 	const assetInventoryForStory = React.useCallback(
 		async (storyId: string) => {
@@ -128,6 +206,24 @@ export function usePublishing(): UsePublishingProps {
 			return materializeStoryFromSession(coreProjectHost, story);
 		},
 		[coreProjectHost, stories]
+	);
+
+	const completeStorySnapshotForPreview = React.useCallback(
+		(storyId: string) =>
+			materializeStoryPreviewSnapshot(coreProjectHost, storyId, () => {
+				const metadataSnapshot = previewMetadataRef.current;
+				const sourceStory = storyWithId(metadataSnapshot.stories, storyId);
+				const metadataRevision = metadataSnapshot.revisions.get(storyId);
+
+				if (metadataRevision === undefined) {
+					throw new Error(
+						'The story preview metadata is not attached to a Core revision.'
+					);
+				}
+
+				return {revision: metadataRevision, story: sourceStory};
+			}),
+		[coreProjectHost]
 	);
 
 	const loadProofFormatProperties = React.useCallback(
@@ -282,9 +378,58 @@ export function usePublishing(): UsePublishingProps {
 		]
 	);
 
+	const buildStoryPreviewPackage = React.useCallback(
+		async (
+			storyId: string,
+			target: Extract<StoryBuildTarget, 'play' | 'proof' | 'test'>,
+			options: BuildStoryPreviewPackageOptions = {}
+		): Promise<StoryPreviewBuild> => {
+			const {assetInventory, proofingFormat, ...publishOptions} = options;
+			const snapshot = await completeStorySnapshotForPreview(storyId);
+			const inventory =
+				assetInventory ?? (await assetInventoryForStory(storyId));
+			const formatProperties =
+				target === 'proof'
+					? await loadProofFormatProperties(proofingFormat)
+					: await storyFormatsDispatch(
+							loadFormatProperties(
+								formatWithNameAndVersion(
+									formats,
+									snapshot.story.storyFormat,
+									snapshot.story.storyFormatVersion
+								)
+							)
+						);
+
+			if (!formatProperties) {
+				throw new Error(`Couldn't load story format properties`);
+			}
+
+			return {
+				build: createStoryBuildPackage(snapshot.story, getAppInfo(), {
+					...publishOptions,
+					assetInventory: inventory,
+					formatProperties,
+					target
+				}),
+				revision: snapshot.revision,
+				story: snapshot.story,
+				summary: snapshot.summary
+			};
+		},
+		[
+			assetInventoryForStory,
+			completeStorySnapshotForPreview,
+			formats,
+			loadProofFormatProperties,
+			storyFormatsDispatch
+		]
+	);
+
 	return {
 		materializeStory: completeStoryForPublishing,
 		buildStoryPackage,
+		buildStoryPreviewPackage,
 		publishArchive: React.useCallback(
 			async storyIds => {
 				const selected = storyIds

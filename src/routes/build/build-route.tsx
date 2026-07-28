@@ -458,7 +458,7 @@ export const BuildRoute: React.FC = () => {
 	const assetInventoryVersion = useKnownAssetInventoryVersion();
 	const {formats} = useStoryFormatsContext();
 	const {proofStoryPackage, publishStoryPackage} = usePublishing();
-	const {playStory, proofStory} = useStoryLaunch();
+	const {playStoryWithBuild, proofStoryWithBuild} = useStoryLaunch();
 	const [view, setView] = React.useState<BuildView>('export');
 	const [exportFormat, setExportFormat] = React.useState<ExportFormat>('html');
 	const [formatOptions, setFormatOptions] = React.useState<ExportFormatOptions>(
@@ -869,22 +869,27 @@ export const BuildRoute: React.FC = () => {
 
 			try {
 				if (action === 'proof') {
-					const nextBuild = await proofStoryPackage(story.id, {
-						proofingFormat: selectedProofingFormat
-					});
-
+					const launchedBuild = await proofStoryWithBuild(
+						story.id,
+						selectedProofingFormat
+					);
+					const nextBuild =
+						launchedBuild ??
+						(await proofStoryPackage(story.id, {
+							proofingFormat: selectedProofingFormat
+						}));
 					setBuild(nextBuild);
-					await proofStory(story.id, selectedProofingFormat);
 					appendLog('Opened Proof preview.');
 					return;
 				}
 
-				const nextBuild = await publishStoryPackage(story.id, {
-					buildTarget: action
-				});
-
+				const launchedBuild = await playStoryWithBuild(story.id);
+				const nextBuild =
+					launchedBuild ??
+					(await publishStoryPackage(story.id, {
+						buildTarget: action
+					}));
 				setBuild(nextBuild);
-				await playStory(story.id);
 				appendLog('Opened Play preview.');
 			} catch (error) {
 				const message = (error as Error).message;
@@ -897,8 +902,8 @@ export const BuildRoute: React.FC = () => {
 		},
 		[
 			appendLog,
-			playStory,
-			proofStory,
+			playStoryWithBuild,
+			proofStoryWithBuild,
 			proofStoryPackage,
 			publishStoryPackage,
 			selectedProofingFormat,

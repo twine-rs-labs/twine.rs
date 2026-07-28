@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react-swc';
 import browserslistToEsbuild from 'browserslist-to-esbuild';
+import path from 'node:path';
 import {defineConfig} from 'vite';
 import checker from 'vite-plugin-checker';
 import {VitePWA, type VitePWAOptions} from 'vite-plugin-pwa';
@@ -10,15 +11,47 @@ type ManifestTransform = NonNullable<
 	NonNullable<VitePWAOptions['workbox']>['manifestTransforms']
 >[number];
 const sortPrecacheManifest: ManifestTransform = manifestEntries => ({
-	manifest: [...manifestEntries].sort((left, right) =>
-		left.url < right.url ? -1 : left.url > right.url ? 1 : 0
-	)
+	manifest: manifestEntries
+		.filter(
+			entry =>
+				!/(?:^|\/)story-preview(?:-[^/]+)?\.(?:css|html|js)$/.test(entry.url)
+		)
+		.sort((left, right) =>
+			left.url < right.url ? -1 : left.url > right.url ? 1 : 0
+		)
 });
+
+const removePreviewPwaTags = {
+	apply: 'build' as const,
+	enforce: 'post' as const,
+	name: 'remove-desktop-preview-pwa-tags',
+	transformIndexHtml: {
+		order: 'post' as const,
+		handler(html: string, context: {path: string}) {
+			if (!context.path.endsWith('/story-preview.html')) {
+				return html;
+			}
+
+			return html
+				.replace(/<link rel="manifest" href="[^"]*manifest\.webmanifest">/g, '')
+				.replace(
+					/<script id="vite-plugin-pwa:register-sw"[^>]*><\/script>/g,
+					''
+				);
+		}
+	}
+};
 
 export default defineConfig({
 	base,
 	build: {
 		outDir: 'dist/web',
+		rollupOptions: {
+			input: {
+				index: path.resolve(import.meta.dirname, 'index.html'),
+				'story-preview': path.resolve(import.meta.dirname, 'story-preview.html')
+			}
+		},
 		target: browserslistToEsbuild(['>0.2%', 'not dead', 'not op_mini all'])
 	},
 	define: {
@@ -68,7 +101,8 @@ export default defineConfig({
 				],
 				manifestTransforms: [sortPrecacheManifest]
 			}
-		})
+		}),
+		removePreviewPwaTags
 	],
 	server: {
 		open: true

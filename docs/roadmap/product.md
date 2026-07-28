@@ -2,17 +2,17 @@
 
 Status: active
 Owner: product and frontend maintainers
-Last verified: 2026-07-21
+Last verified: 2026-07-27
 Source of truth: unfinished primary-product behavior
 
 ## Outcomes
 
 ### Preview and debug depth
 
-- Complete variable/state inspection, visited-passage history, runtime errors,
-  and story-format development hooks.
-- Bring desktop scratch-window behavior to parity with the app-owned preview
-  route.
+- Extend the shared browser and managed-desktop preview surface beyond its
+  shipped current-passage, console, runtime-error, and command contract with
+  variable/state inspection, visited-passage history, and story-format
+  development hooks.
 - Keep “test from here” behavior consistent across workbench, contents,
   diagnostics, search, and assets.
 

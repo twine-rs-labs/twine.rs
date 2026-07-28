@@ -23,6 +23,7 @@ import {
 	recordMainLaunchPhase
 } from './performance-harness';
 import {initStoryPreviewProtocol} from './story-preview-protocol';
+import {initStoryPreviewWindowManager} from './story-preview-window-manager';
 import {openExternalUrl} from './external-url';
 import {setCommandLineOpenRequestNotifier} from './command-line';
 import {installPermissionPolicy} from './permission-policy';
@@ -141,6 +142,7 @@ export async function initApp() {
 		);
 		initIpc();
 		initStoryPreviewProtocol();
+		initStoryPreviewWindowManager();
 		initMenuBar();
 		await createWindow();
 		markMainPerformance('window-created');

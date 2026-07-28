@@ -1,4 +1,4 @@
-import {app, shell} from 'electron';
+import {app} from 'electron';
 import {randomUUID} from 'crypto';
 import {mkdir, mkdirp, readdir, remove, stat, writeFile} from 'fs-extra';
 import {dirname, join, resolve, sep} from 'path';
@@ -18,7 +18,23 @@ const currentScratchPreviewRoots = new Map<string, number>();
 
 export interface ScratchFileAsset {
 	bytes: ArrayBuffer | Uint8Array;
+	mediaType?: string;
 	outputPath: string;
+}
+
+export interface StagedScratchPreviewFile {
+	bytes: Uint8Array;
+	mediaType?: string;
+	outputPath: string;
+	path: string;
+	sizeBytes: number;
+}
+
+export interface StagedScratchPreviewPackage {
+	files: StagedScratchPreviewFile[];
+	indexPath: string;
+	rootPath: string;
+	sizeBytes: number;
 }
 
 /**
@@ -93,10 +109,6 @@ function assertSafeScratchPreviewData(data: string) {
 	}
 }
 
-export async function openWithScratchFile(data: string) {
-	return queueScratchPreviewLaunch(() => writeAndOpenScratchPreview(data, []));
-}
-
 function safeScratchAssetPath(root: string, outputPath: string) {
 	const normalizedRoot = resolve(root);
 	const normalizedOutputPath = safeScratchAssetOutputPath(outputPath);
@@ -116,13 +128,14 @@ function hasUrlScheme(path: string) {
 	return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(path);
 }
 
-function safeScratchAssetOutputPath(outputPath: string) {
+export function safeScratchAssetOutputPath(outputPath: string) {
 	const normalized = outputPath.replace(/\\/g, '/').replace(/^(\.\/)+/, '');
 	const segments = normalized.split('/').filter(segment => segment.length > 0);
 
 	if (
 		normalized.startsWith('/') ||
 		hasUrlScheme(normalized) ||
+		normalized === 'index.html' ||
 		segments.length === 0 ||
 		segments.some(segment => segment === '.' || segment === '..')
 	) {
@@ -205,7 +218,10 @@ async function removeScratchPreviewRoot(previewRoot: string) {
 	}
 }
 
-async function writeScratchPreview(data: string, assets: ScratchFileAsset[]) {
+async function writeScratchPreview(
+	data: string,
+	assets: ScratchFileAsset[]
+): Promise<StagedScratchPreviewPackage> {
 	assertSafeScratchPreviewData(data);
 	validateScratchAssets(assets);
 	const previewBytes = scratchPreviewByteLength(data, assets);
@@ -229,16 +245,44 @@ async function writeScratchPreview(data: string, assets: ScratchFileAsset[]) {
 	await mkdir(previewRoot);
 	currentScratchPreviewRoots.set(previewRoot, previewBytes);
 	try {
+		const files: StagedScratchPreviewFile[] = [];
+
 		for (const asset of assets) {
-			const targetPath = safeScratchAssetPath(previewRoot, asset.outputPath);
+			const outputPath = safeScratchAssetOutputPath(asset.outputPath);
+			const targetPath = safeScratchAssetPath(previewRoot, outputPath);
+			const sizeBytes = scratchAssetByteLength(asset);
+			const bytes = new Uint8Array(asset.bytes).slice();
 
 			await mkdirp(dirname(targetPath));
-			await writeFile(targetPath, new Uint8Array(asset.bytes), {flag: 'wx'});
+			await writeFile(targetPath, bytes, {flag: 'wx'});
+			files.push({
+				bytes,
+				mediaType: asset.mediaType,
+				outputPath,
+				path: targetPath,
+				sizeBytes
+			});
 		}
 		const scratchPath = join(previewRoot, 'index.html');
+		const htmlBuffer = Buffer.from(data, 'utf8');
+		const htmlBytes = htmlBuffer.byteLength;
 
 		await writeFile(scratchPath, data, {encoding: 'utf8', flag: 'wx'});
-		return scratchPath;
+		return {
+			files: [
+				{
+					bytes: new Uint8Array(htmlBuffer),
+					mediaType: 'text/html; charset=utf-8',
+					outputPath: 'index.html',
+					path: scratchPath,
+					sizeBytes: htmlBytes
+				},
+				...files
+			],
+			indexPath: scratchPath,
+			rootPath: previewRoot,
+			sizeBytes: previewBytes
+		};
 	} catch (error) {
 		await removeScratchPreviewRoot(previewRoot);
 		throw error;
@@ -255,27 +299,14 @@ function queueScratchPreview<T>(operation: () => Promise<T>) {
 	return result;
 }
 
-function queueScratchPreviewLaunch<T>(operation: () => Promise<T>) {
+function queueScratchPreviewStage<T>(operation: () => Promise<T>) {
 	if (scratchPreviewShutdownStarted) {
 		return Promise.reject(
-			new Error('Scratch previews cannot be opened while the app is quitting.')
+			new Error('Scratch previews cannot be staged while the app is quitting.')
 		);
 	}
 
 	return queueScratchPreview(operation);
-}
-
-async function writeAndOpenScratchPreview(
-	data: string,
-	assets: ScratchFileAsset[]
-) {
-	const scratchPath = await writeScratchPreview(data, assets);
-	const openError = await shell.openPath(scratchPath);
-
-	if (openError) {
-		await removeScratchPreviewRoot(dirname(scratchPath));
-		throw new Error(openError);
-	}
 }
 
 export function beginScratchPreviewShutdown() {
@@ -286,11 +317,21 @@ export function resumeScratchPreviewsAfterFailedShutdown() {
 	scratchPreviewShutdownStarted = false;
 }
 
-export async function openWithScratchPackage(
+/** Stages an owned package without opening it in the system browser. */
+export async function stageScratchPreviewPackage(
 	data: string,
 	assets: ScratchFileAsset[] = []
 ) {
-	return queueScratchPreviewLaunch(() =>
-		writeAndOpenScratchPreview(data, assets)
-	);
+	return queueScratchPreviewStage(() => writeScratchPreview(data, assets));
+}
+
+/** Idempotently releases a staged package and its tracked byte budget. */
+export async function releaseScratchPreviewPackage(
+	stagedPackage: StagedScratchPreviewPackage
+) {
+	return queueScratchPreview(async () => {
+		if (currentScratchPreviewRoots.has(stagedPackage.rootPath)) {
+			await removeScratchPreviewRoot(stagedPackage.rootPath);
+		}
+	});
 }

@@ -1,6 +1,9 @@
 import {fakeStory} from '../../test-util';
 import type {CoreProjectHost} from '../project-host';
-import {materializeStoryFromSession} from '../materialize-story';
+import {
+	materializeStoryFromSession,
+	materializeStorySnapshotFromSession
+} from '../materialize-story';
 
 describe('materializeStoryFromSession()', () => {
 	it('combines metadata with a revision-consistent bounded document stream', async () => {
@@ -62,5 +65,30 @@ describe('materializeStoryFromSession()', () => {
 		await expect(materializeStoryFromSession(host, story)).rejects.toThrow(
 			'incomplete story'
 		);
+	});
+
+	it('returns the exact revision with a preview publishing snapshot', async () => {
+		const story = fakeStory(1);
+		const host = {
+			queryDocumentPageAsync: jest.fn(async () => ({
+				documents: [
+					{kind: 'passage', passageId: story.passages[0].id, text: 'live'}
+				],
+				nextCursor: null,
+				revision: 12,
+				storyId: story.id,
+				totalCount: 1
+			})),
+			sessionStatus: () => ({revision: 12})
+		} as unknown as CoreProjectHost;
+
+		await expect(
+			materializeStorySnapshotFromSession(host, story)
+		).resolves.toMatchObject({
+			revision: 12,
+			story: {
+				passages: [expect.objectContaining({text: 'live'})]
+			}
+		});
 	});
 });

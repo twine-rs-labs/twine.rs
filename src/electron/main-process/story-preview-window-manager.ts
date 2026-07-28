@@ -1,0 +1,1423 @@
+import {randomUUID} from 'crypto';
+import path from 'path';
+import {
+	app,
+	BrowserWindow,
+	ipcMain,
+	type BrowserWindowConstructorOptions,
+	type IpcMain,
+	type WebContents
+} from 'electron';
+import type {
+	NativeStoryPreviewAppearance,
+	NativeStoryPreviewAppearanceUpdate,
+	NativeStoryPreviewCommand,
+	NativeStoryPreviewCommandResult,
+	NativeStoryPreviewDescriptor,
+	NativeStoryPreviewDescriptorInput,
+	NativeStoryPreviewOwnerCommand,
+	NativeStoryPreviewReplacement,
+	NativeStoryPreviewReplacementResult
+} from '../shared/electron-shared.types';
+import {storyPreviewIpcChannels} from '../preview-ipc-channels';
+import {openExternalUrl, validatedExternalUrl} from './external-url';
+import {linkHandlingMode} from './platform-settings';
+import {
+	previewIpcRegistrar,
+	previewRendererEntryUrl
+} from './preview-ipc-security';
+import {
+	type ScratchFileAsset,
+	releaseScratchPreviewPackage,
+	stageScratchPreviewPackage
+} from './scratch-file';
+import {
+	registerStoryPreviewPackage,
+	releaseStoryPreviewPackage
+} from './story-preview-protocol';
+
+export const maxManagedStoryPreviewWindows = 32;
+export const storyPreviewReadyTimeoutMs = 15_000;
+export const storyPreviewReplacementTimeoutMs = 15_000;
+export const maxStoryPreviewDescriptorBytes = 64 * 1024 * 1024;
+export const maxStoryPreviewPassages = 100_000;
+
+const maxIdentifierLength = 256;
+const maxStoryNameLength = 1024;
+const previewWindowWidth = 1120;
+const previewWindowHeight = 800;
+const storySummaryCountFields = [
+	'assetCount',
+	'characterCount',
+	'diagnosticCount',
+	'errorCount',
+	'missingAssetCount',
+	'passageCount',
+	'revision',
+	'tagCount',
+	'warningCount',
+	'wordCount'
+] as const;
+const storySummaryGraphCountFields = [
+	'brokenLinks',
+	'emptyPassages',
+	'links',
+	'orphanPassages',
+	'passages',
+	'resolvedLinks',
+	'selfLinks',
+	'taggedPassages',
+	'unreachablePassages'
+] as const;
+const storyPreviewDescriptorFields = [
+	'appearance',
+	'bridgeSessionId',
+	'htmlBytes',
+	'launchPassage',
+	'passages',
+	'storyDataCount',
+	'storyId',
+	'storyName',
+	'summary',
+	'target'
+] as const;
+const storySummaryFields = [
+	...storySummaryCountFields,
+	'graph',
+	'storyId'
+] as const;
+
+export interface ManagedStoryPreviewBuild {
+	assets?: ScratchFileAsset[];
+	descriptor: NativeStoryPreviewDescriptorInput;
+	html: string;
+}
+
+export interface ManagedStoryPreviewLaunch {
+	descriptor: NativeStoryPreviewDescriptor;
+	url: string;
+}
+
+interface PreviewWindowLike {
+	destroy?(): void;
+	focus?(): void;
+	isDestroyed?(): boolean;
+	loadURL(url: string): Promise<void> | void;
+	once(event: string, listener: (...args: any[]) => void): unknown;
+	show?(): void;
+	webContents: WebContents;
+}
+
+interface Deferred<T> {
+	promise: Promise<T>;
+	reject(error: Error): void;
+	resolve(value: T): void;
+	settled(): boolean;
+}
+
+interface PreviewGeneration {
+	descriptor: NativeStoryPreviewDescriptor;
+	url: string;
+}
+
+interface PreviewCandidate extends PreviewGeneration {
+	completion: Deferred<ManagedStoryPreviewLaunch>;
+	timeout: ReturnType<typeof setTimeout>;
+}
+
+interface PreviewSession {
+	candidate?: PreviewCandidate;
+	closed: boolean;
+	current: PreviewGeneration;
+	id: string;
+	initialFrameLoaded: boolean;
+	owner: WebContents;
+	pendingCommands: Set<string>;
+	ready: Deferred<void>;
+	readyTimeout: ReturnType<typeof setTimeout>;
+	replacing: boolean;
+	shellReady: boolean;
+	window: PreviewWindowLike;
+}
+
+interface OwnerState {
+	appearance?: NativeStoryPreviewAppearance;
+	destroyed: () => void;
+	navigation: (...args: any[]) => void;
+	processGone: () => void;
+	sessions: Set<PreviewSession>;
+}
+
+interface PreviewIpcEvent {
+	sender: WebContents;
+}
+
+interface StoryPreviewWindowManagerDependencies {
+	createWindow(options: BrowserWindowConstructorOptions): PreviewWindowLike;
+	focusOwner(owner: WebContents): void;
+	linkMode(): 'block' | 'system';
+	openExternal(url: string): Promise<void>;
+	previewEntryUrl(): string;
+	randomId(): string;
+	registerPackage: typeof registerStoryPreviewPackage;
+	releasePackage: typeof releaseStoryPreviewPackage;
+	releaseStagedPackage: typeof releaseScratchPreviewPackage;
+	stagePackage: typeof stageScratchPreviewPackage;
+}
+
+export interface StoryPreviewWindowManagerOptions extends Partial<StoryPreviewWindowManagerDependencies> {
+	readyTimeoutMs?: number;
+	replacementTimeoutMs?: number;
+}
+
+function deferred<T>(): Deferred<T> {
+	let isSettled = false;
+	let rejectPromise!: (error: Error) => void;
+	let resolvePromise!: (value: T) => void;
+	const promise = new Promise<T>((resolve, reject) => {
+		rejectPromise = reject;
+		resolvePromise = resolve;
+	});
+
+	// Lifecycle events may reject a candidate just before its caller begins
+	// awaiting it. Keep that expected race from becoming an unhandled rejection.
+	void promise.catch(() => undefined);
+
+	return {
+		promise,
+		reject(error) {
+			if (!isSettled) {
+				isSettled = true;
+				rejectPromise(error);
+			}
+		},
+		resolve(value) {
+			if (!isSettled) {
+				isSettled = true;
+				resolvePromise(value);
+			}
+		},
+		settled() {
+			return isSettled;
+		}
+	};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return false;
+	}
+
+	const prototype = Object.getPrototypeOf(value);
+
+	return prototype === Object.prototype || prototype === null;
+}
+
+function isPlainSerializable(
+	value: unknown,
+	seen = new Set<object>()
+): boolean {
+	if (
+		value === null ||
+		value === undefined ||
+		typeof value === 'string' ||
+		typeof value === 'boolean'
+	) {
+		return true;
+	}
+	if (typeof value === 'number') {
+		return Number.isFinite(value);
+	}
+	if (typeof value !== 'object' || seen.has(value)) {
+		return false;
+	}
+
+	seen.add(value);
+	const valid = Array.isArray(value)
+		? value.every(item => isPlainSerializable(item, seen))
+		: isRecord(value) &&
+			Object.values(value).every(item => isPlainSerializable(item, seen));
+
+	seen.delete(value);
+	return valid;
+}
+
+function validString(
+	value: unknown,
+	maxLength = maxIdentifierLength
+): value is string {
+	return (
+		typeof value === 'string' && value.length > 0 && value.length <= maxLength
+	);
+}
+
+function validNonnegativeInteger(value: unknown) {
+	return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function hasOnlyFields(
+	value: Record<string, unknown>,
+	fields: readonly string[]
+) {
+	const allowedFields = new Set(fields);
+
+	return Object.keys(value).every(field => allowedFields.has(field));
+}
+
+function validAppearance(
+	value: unknown
+): value is NativeStoryPreviewAppearance {
+	return (
+		isRecord(value) &&
+		hasOnlyFields(value, ['highContrast', 'reducedMotion', 'theme']) &&
+		(value.theme === 'dark' || value.theme === 'light') &&
+		typeof value.highContrast === 'boolean' &&
+		typeof value.reducedMotion === 'boolean'
+	);
+}
+
+function validStorySummary(value: unknown, storyId: string) {
+	if (
+		!isRecord(value) ||
+		!hasOnlyFields(value, storySummaryFields) ||
+		value.storyId !== storyId ||
+		!isRecord(value.graph) ||
+		!hasOnlyFields(value.graph, storySummaryGraphCountFields)
+	) {
+		return false;
+	}
+	const graph = value.graph;
+
+	return (
+		storySummaryCountFields.every(field =>
+			validNonnegativeInteger(value[field])
+		) &&
+		storySummaryGraphCountFields.every(field =>
+			validNonnegativeInteger(graph[field])
+		)
+	);
+}
+
+function cloneAndValidateDescriptor(
+	input: NativeStoryPreviewDescriptorInput,
+	sessionId: string,
+	generation: number
+): NativeStoryPreviewDescriptor {
+	if (!isRecord(input)) {
+		throw new Error('Story preview descriptor is invalid.');
+	}
+
+	try {
+		if (!isPlainSerializable(input)) {
+			throw new Error();
+		}
+	} catch {
+		throw new Error('Story preview descriptor must be serializable.');
+	}
+
+	if (
+		!hasOnlyFields(input, storyPreviewDescriptorFields) ||
+		!validString(input.storyId) ||
+		!validString(input.storyName, maxStoryNameLength) ||
+		!validString(input.bridgeSessionId) ||
+		!validAppearance(input.appearance) ||
+		!['play', 'proof', 'test'].includes(input.target) ||
+		!validNonnegativeInteger(input.htmlBytes) ||
+		!validNonnegativeInteger(input.storyDataCount) ||
+		!Array.isArray(input.passages) ||
+		input.passages.length > maxStoryPreviewPassages ||
+		(input.summary !== undefined &&
+			!validStorySummary(input.summary, input.storyId))
+	) {
+		throw new Error(
+			'Story preview descriptor is invalid or exceeds its limit.'
+		);
+	}
+
+	const passageIds = new Set<string>();
+	const localIds = new Set<string>();
+
+	for (const passage of input.passages) {
+		if (
+			!isRecord(passage) ||
+			!hasOnlyFields(passage, ['id', 'localId', 'name']) ||
+			!validString(passage.id) ||
+			!validString(passage.localId) ||
+			!validString(passage.name, maxStoryNameLength) ||
+			passageIds.has(passage.id) ||
+			localIds.has(passage.localId)
+		) {
+			throw new Error('Story preview passage metadata is invalid.');
+		}
+		passageIds.add(passage.id);
+		localIds.add(passage.localId);
+	}
+
+	if (
+		input.launchPassage !== undefined &&
+		(!isRecord(input.launchPassage) ||
+			!hasOnlyFields(input.launchPassage, ['id', 'name']) ||
+			!validString(input.launchPassage.id) ||
+			!validString(input.launchPassage.name, maxStoryNameLength) ||
+			!passageIds.has(input.launchPassage.id))
+	) {
+		throw new Error('Story preview launch passage is invalid.');
+	}
+
+	const descriptor: NativeStoryPreviewDescriptor = {
+		appearance: {
+			highContrast: input.appearance.highContrast,
+			reducedMotion: input.appearance.reducedMotion,
+			theme: input.appearance.theme
+		},
+		bridgeSessionId: input.bridgeSessionId,
+		generation,
+		htmlBytes: input.htmlBytes,
+		...(input.launchPassage
+			? {
+					launchPassage: {
+						id: input.launchPassage.id,
+						name: input.launchPassage.name
+					}
+				}
+			: {}),
+		passages: input.passages.map(passage => ({
+			id: passage.id,
+			localId: passage.localId,
+			name: passage.name
+		})),
+		sessionId,
+		storyDataCount: input.storyDataCount,
+		storyId: input.storyId,
+		storyName: input.storyName,
+		...(input.summary
+			? {
+					summary: {
+						assetCount: input.summary.assetCount,
+						characterCount: input.summary.characterCount,
+						diagnosticCount: input.summary.diagnosticCount,
+						errorCount: input.summary.errorCount,
+						graph: {
+							brokenLinks: input.summary.graph.brokenLinks,
+							emptyPassages: input.summary.graph.emptyPassages,
+							links: input.summary.graph.links,
+							orphanPassages: input.summary.graph.orphanPassages,
+							passages: input.summary.graph.passages,
+							resolvedLinks: input.summary.graph.resolvedLinks,
+							selfLinks: input.summary.graph.selfLinks,
+							taggedPassages: input.summary.graph.taggedPassages,
+							unreachablePassages: input.summary.graph.unreachablePassages
+						},
+						missingAssetCount: input.summary.missingAssetCount,
+						passageCount: input.summary.passageCount,
+						revision: input.summary.revision,
+						storyId: input.summary.storyId,
+						tagCount: input.summary.tagCount,
+						warningCount: input.summary.warningCount,
+						wordCount: input.summary.wordCount
+					}
+				}
+			: {}),
+		target: input.target
+	};
+	let encoded: string;
+
+	try {
+		encoded = JSON.stringify(descriptor);
+	} catch {
+		throw new Error('Story preview descriptor must be serializable.');
+	}
+
+	if (Buffer.byteLength(encoded, 'utf8') > maxStoryPreviewDescriptorBytes) {
+		throw new Error('Story preview descriptor exceeds the safe byte limit.');
+	}
+
+	return descriptor;
+}
+
+function commandKey(
+	command: Pick<NativeStoryPreviewCommand, 'generation' | 'type'>
+) {
+	return `${command.generation}:${command.type}`;
+}
+
+function commandError(
+	command: Pick<NativeStoryPreviewCommand, 'generation' | 'type'>,
+	message: string
+): NativeStoryPreviewCommandResult {
+	return {
+		command: command.type,
+		generation: command.generation,
+		message,
+		operation: 'command',
+		status: 'error'
+	};
+}
+
+function validateCommand(
+	value: unknown,
+	session: PreviewSession
+): {
+	command: NativeStoryPreviewCommand;
+	passageId?: string;
+} {
+	if (
+		!isRecord(value) ||
+		!validNonnegativeInteger(value.generation) ||
+		!['revealGraph', 'revealSource', 'testCurrent', 'testFromStart'].includes(
+			value.type as string
+		)
+	) {
+		throw new Error('Story preview command is invalid.');
+	}
+
+	const generation = value.generation as number;
+	const type = value.type as NativeStoryPreviewCommand['type'];
+
+	if (generation !== session.current.descriptor.generation) {
+		throw new Error('Story preview command belongs to a stale generation.');
+	}
+
+	const knownPassages = new Set(
+		session.current.descriptor.passages.map(passage => passage.id)
+	);
+	let passageId: string | undefined;
+
+	if (type === 'testFromStart') {
+		if (value.passageId !== undefined) {
+			throw new Error('Test From Start does not accept a preview passage.');
+		}
+		passageId = session.current.descriptor.launchPassage?.id;
+		return {
+			command: {generation, type},
+			passageId
+		};
+	}
+
+	if (value.passageId !== undefined && !validString(value.passageId)) {
+		throw new Error('Story preview command passage is invalid.');
+	}
+	passageId =
+		(value.passageId as string | undefined) ??
+		session.current.descriptor.launchPassage?.id;
+
+	if (type === 'testCurrent' && !passageId) {
+		throw new Error('Test Current requires a known passage.');
+	}
+	if (passageId && !knownPassages.has(passageId)) {
+		throw new Error('Story preview command passage is unknown.');
+	}
+
+	return {
+		command:
+			type === 'testCurrent'
+				? {generation, passageId: passageId!, type}
+				: {generation, passageId, type},
+		passageId
+	};
+}
+
+function sameOrigin(left: string, right: string) {
+	try {
+		const leftUrl = new URL(left);
+		const rightUrl = new URL(right);
+
+		// Node's URL implementation reports "null" for custom-scheme origins.
+		// Compare the tuple explicitly so separate preview tokens never collapse
+		// into the same apparent origin.
+		return (
+			leftUrl.protocol === rightUrl.protocol &&
+			leftUrl.hostname === rightUrl.hostname &&
+			leftUrl.port === rightUrl.port &&
+			leftUrl.username === rightUrl.username &&
+			leftUrl.password === rightUrl.password
+		);
+	} catch {
+		return false;
+	}
+}
+
+function mainNavigationStarted(args: any[]) {
+	const details = args[0];
+
+	if (details && typeof details === 'object' && 'isMainFrame' in details) {
+		return details.isMainFrame === true && details.isSameDocument !== true;
+	}
+
+	// Deprecated Electron listener parameters:
+	// event, url, isInPlace, isMainFrame, ...
+	return args[3] === true && args[2] !== true;
+}
+
+export function createStoryPreviewWindowManager(
+	options: StoryPreviewWindowManagerOptions = {}
+) {
+	const dependencies: StoryPreviewWindowManagerDependencies = {
+		createWindow: config => new BrowserWindow(config),
+		focusOwner: owner => BrowserWindow.fromWebContents(owner)?.focus(),
+		linkMode: linkHandlingMode,
+		openExternal: openExternalUrl,
+		previewEntryUrl: previewRendererEntryUrl,
+		randomId: randomUUID,
+		registerPackage: registerStoryPreviewPackage,
+		releasePackage: releaseStoryPreviewPackage,
+		releaseStagedPackage: releaseScratchPreviewPackage,
+		stagePackage: stageScratchPreviewPackage,
+		...options
+	};
+	const readyTimeoutMs = options.readyTimeoutMs ?? storyPreviewReadyTimeoutMs;
+	const replacementTimeoutMs =
+		options.replacementTimeoutMs ?? storyPreviewReplacementTimeoutMs;
+	const sessionsById = new Map<string, PreviewSession>();
+	const sessionsByPreview = new Map<WebContents, PreviewSession>();
+	const owners = new Map<WebContents, OwnerState>();
+	let ipcInitialized = false;
+	let pendingLaunches = 0;
+	let shuttingDown = false;
+
+	function assertOwner(owner: WebContents, sessionId: string) {
+		const session = sessionsById.get(sessionId);
+
+		if (!session || session.closed || session.owner !== owner) {
+			throw new Error('Unknown or unowned story preview session.');
+		}
+
+		return session;
+	}
+
+	function sessionForPreview(event: PreviewIpcEvent) {
+		const session = sessionsByPreview.get(event.sender);
+
+		if (
+			!session ||
+			session.closed ||
+			session.window.webContents !== event.sender
+		) {
+			throw new Error('Unknown story preview renderer.');
+		}
+
+		return session;
+	}
+
+	function removeOwnerStateIfEmpty(owner: WebContents) {
+		const ownerState = owners.get(owner);
+
+		if (
+			!ownerState ||
+			ownerState.sessions.size > 0 ||
+			ownerState.appearance !== undefined
+		) {
+			return;
+		}
+
+		owner.removeListener('destroyed', ownerState.destroyed);
+		owner.removeListener('render-process-gone', ownerState.processGone);
+		owner.removeListener('did-start-navigation', ownerState.navigation);
+		owners.delete(owner);
+	}
+
+	async function releaseUrl(url: string) {
+		try {
+			await dependencies.releasePackage(url);
+		} catch (error) {
+			console.warn('Could not release a story preview package.', error);
+		}
+	}
+
+	async function closeSession(
+		session: PreviewSession,
+		destroyWindow: boolean,
+		reason = new Error('Story preview session closed.')
+	) {
+		if (session.closed) {
+			return;
+		}
+
+		session.closed = true;
+		clearTimeout(session.readyTimeout);
+		session.ready.reject(reason);
+		sessionsById.delete(session.id);
+		sessionsByPreview.delete(session.window.webContents);
+		const ownerState = owners.get(session.owner);
+
+		ownerState?.sessions.delete(session);
+		removeOwnerStateIfEmpty(session.owner);
+
+		const urls = [session.current.url];
+
+		if (session.candidate) {
+			clearTimeout(session.candidate.timeout);
+			session.candidate.completion.reject(reason);
+			urls.push(session.candidate.url);
+			session.candidate = undefined;
+		}
+
+		session.pendingCommands.clear();
+		if (
+			destroyWindow &&
+			!session.window.isDestroyed?.() &&
+			session.window.destroy
+		) {
+			try {
+				session.window.destroy();
+			} catch (error) {
+				console.warn('Could not destroy a story preview window.', error);
+			}
+		}
+		await Promise.all(urls.map(releaseUrl));
+	}
+
+	function closeOwnerSessions(owner: WebContents, reason: Error) {
+		const sessions = [...(owners.get(owner)?.sessions ?? [])];
+
+		for (const session of sessions) {
+			void closeSession(session, true, reason);
+		}
+	}
+
+	function clearOwner(owner: WebContents, reason: Error) {
+		const state = owners.get(owner);
+
+		if (!state) {
+			return;
+		}
+
+		state.appearance = undefined;
+		closeOwnerSessions(owner, reason);
+		removeOwnerStateIfEmpty(owner);
+	}
+
+	function ensureOwnerState(owner: WebContents) {
+		let state = owners.get(owner);
+
+		if (!state) {
+			const destroyed = () =>
+				clearOwner(
+					owner,
+					new Error('The owning editor renderer was destroyed.')
+				);
+			const processGone = () =>
+				clearOwner(owner, new Error('The owning editor crashed.'));
+			const navigation = (...args: any[]) => {
+				if (mainNavigationStarted(args)) {
+					clearOwner(owner, new Error('The owning editor renderer reloaded.'));
+				}
+			};
+
+			state = {
+				destroyed,
+				navigation,
+				processGone,
+				sessions: new Set()
+			};
+			owners.set(owner, state);
+			owner.once('destroyed', destroyed);
+			owner.on('render-process-gone', processGone);
+			owner.on('did-start-navigation', navigation);
+		}
+
+		return state;
+	}
+
+	function captureOwner(owner: WebContents, session: PreviewSession) {
+		ensureOwnerState(owner).sessions.add(session);
+	}
+
+	function mergeLatestOwnerAppearance(
+		owner: WebContents,
+		generation: PreviewGeneration
+	) {
+		const appearance = owners.get(owner)?.appearance;
+
+		if (appearance) {
+			generation.descriptor.appearance = {...appearance};
+		}
+	}
+
+	function maybeOpenExternal(url: string) {
+		if (dependencies.linkMode() !== 'system') {
+			return;
+		}
+
+		let externalUrl: string;
+
+		try {
+			externalUrl = validatedExternalUrl(url);
+		} catch {
+			return;
+		}
+
+		void dependencies.openExternal(externalUrl).catch(error => {
+			console.warn('Blocked or failed to open a preview link.', error);
+		});
+	}
+
+	function allowsPackageNavigation(session: PreviewSession, url: string) {
+		return (
+			sameOrigin(url, session.current.url) ||
+			(session.candidate ? sameOrigin(url, session.candidate.url) : false)
+		);
+	}
+
+	function installWindowPolicy(session: PreviewSession) {
+		const contents = session.window.webContents;
+
+		contents.on('will-attach-webview', event => event.preventDefault());
+		contents.on('will-frame-navigate', details => {
+			if (details.isMainFrame) {
+				if (details.url !== dependencies.previewEntryUrl()) {
+					details.preventDefault();
+					maybeOpenExternal(details.url);
+				}
+				return;
+			}
+
+			// Restrict only the direct app-owned story iframe. Descendant frames
+			// remain browser-compatible for HTTPS embeds.
+			if (details.frame?.parent === contents.mainFrame) {
+				if (!allowsPackageNavigation(session, details.url)) {
+					details.preventDefault();
+					maybeOpenExternal(details.url);
+				}
+			}
+		});
+		contents.setWindowOpenHandler(({url}) => {
+			maybeOpenExternal(url);
+			return {action: 'deny'};
+		});
+	}
+
+	function finishInitialReady(session: PreviewSession) {
+		if (
+			session.closed ||
+			session.ready.settled() ||
+			!session.shellReady ||
+			!session.initialFrameLoaded
+		) {
+			return;
+		}
+
+		clearTimeout(session.readyTimeout);
+		session.ready.resolve();
+		session.window.show?.();
+	}
+
+	function attachPreviewLifecycle(session: PreviewSession) {
+		session.window.once('closed', () => {
+			void closeSession(
+				session,
+				false,
+				new Error('Story preview window was closed.')
+			);
+		});
+		session.window.webContents.once('destroyed', () => {
+			void closeSession(
+				session,
+				false,
+				new Error('Story preview renderer was destroyed.')
+			);
+		});
+		session.window.webContents.on('render-process-gone', () => {
+			void closeSession(
+				session,
+				true,
+				new Error('Story preview renderer crashed.')
+			);
+		});
+		session.window.webContents.on(
+			'did-fail-load',
+			(_event, _errorCode, errorDescription, validatedURL, isMainFrame) => {
+				if (isMainFrame) {
+					void closeSession(
+						session,
+						true,
+						new Error(`Story preview shell failed to load: ${errorDescription}`)
+					);
+					return;
+				}
+				if (
+					session.candidate &&
+					sameOrigin(validatedURL, session.candidate.url)
+				) {
+					void rollbackCandidate(
+						session,
+						session.candidate,
+						new Error(
+							`Replacement story preview failed to load: ${errorDescription}`
+						)
+					);
+				} else if (
+					!session.ready.settled() &&
+					sameOrigin(validatedURL, session.current.url)
+				) {
+					void closeSession(
+						session,
+						true,
+						new Error(
+							`Initial story preview failed to load: ${errorDescription}`
+						)
+					);
+				}
+			}
+		);
+	}
+
+	async function rollbackCandidate(
+		session: PreviewSession,
+		candidate: PreviewCandidate,
+		error: Error
+	) {
+		if (session.candidate !== candidate) {
+			return;
+		}
+
+		clearTimeout(candidate.timeout);
+		session.candidate = undefined;
+		session.replacing = false;
+		candidate.completion.reject(error);
+		try {
+			session.window.webContents.send(storyPreviewIpcChannels.replacement, {
+				generation: candidate.descriptor.generation,
+				message: error.message,
+				operation: 'replacement',
+				status: 'error'
+			} satisfies NativeStoryPreviewReplacementResult);
+		} catch (notificationError) {
+			console.warn(
+				'Could not notify a story preview about replacement failure.',
+				notificationError
+			);
+		}
+		await releaseUrl(candidate.url);
+	}
+
+	async function commitCandidate(
+		session: PreviewSession,
+		candidate: PreviewCandidate
+	) {
+		if (session.closed || session.candidate !== candidate) {
+			return;
+		}
+
+		clearTimeout(candidate.timeout);
+		const previous = session.current;
+
+		mergeLatestOwnerAppearance(session.owner, candidate);
+		session.current = {
+			descriptor: candidate.descriptor,
+			url: candidate.url
+		};
+		session.candidate = undefined;
+		session.replacing = false;
+		await releaseUrl(previous.url);
+		candidate.completion.resolve({
+			descriptor: candidate.descriptor,
+			url: candidate.url
+		});
+	}
+
+	async function stageGeneration(
+		build: ManagedStoryPreviewBuild,
+		sessionId: string,
+		generation: number
+	): Promise<PreviewGeneration> {
+		const descriptor = cloneAndValidateDescriptor(
+			build.descriptor,
+			sessionId,
+			generation
+		);
+		const staged = await dependencies.stagePackage(
+			build.html,
+			build.assets ?? []
+		);
+		let url: string;
+
+		try {
+			url = dependencies.registerPackage(staged);
+		} catch (error) {
+			await dependencies.releaseStagedPackage(staged);
+			throw error;
+		}
+
+		return {descriptor, url};
+	}
+
+	async function open(
+		owner: WebContents,
+		build: ManagedStoryPreviewBuild
+	): Promise<ManagedStoryPreviewLaunch> {
+		if (shuttingDown) {
+			throw new Error('Story previews cannot open while the app is quitting.');
+		}
+		if (!owner || owner.isDestroyed()) {
+			throw new Error('Story preview requires a live owning editor.');
+		}
+		if (sessionsById.size + pendingLaunches >= maxManagedStoryPreviewWindows) {
+			throw new Error(
+				`No more than ${maxManagedStoryPreviewWindows} story preview windows may be open.`
+			);
+		}
+		pendingLaunches++;
+
+		let sessionId = dependencies.randomId();
+
+		while (sessionsById.has(sessionId)) {
+			sessionId = dependencies.randomId();
+		}
+
+		let initial: PreviewGeneration;
+
+		try {
+			initial = await stageGeneration(build, sessionId, 1);
+		} catch (error) {
+			pendingLaunches--;
+			throw error;
+		}
+		if (shuttingDown || owner.isDestroyed()) {
+			pendingLaunches--;
+			await releaseUrl(initial.url);
+			throw new Error(
+				shuttingDown
+					? 'Story previews cannot open while the app is quitting.'
+					: 'The owning editor closed while staging its story preview.'
+			);
+		}
+		mergeLatestOwnerAppearance(owner, initial);
+		let previewWindow: PreviewWindowLike;
+
+		try {
+			previewWindow = dependencies.createWindow({
+				height: previewWindowHeight,
+				show: false,
+				title: `${initial.descriptor.storyName} — Preview`,
+				webPreferences: {
+					contextIsolation: true,
+					nodeIntegration: false,
+					nodeIntegrationInSubFrames: false,
+					preload: path.resolve(__dirname, './preview-preload.js'),
+					sandbox: true,
+					webSecurity: true
+				},
+				width: previewWindowWidth
+			});
+		} catch (error) {
+			pendingLaunches--;
+			await releaseUrl(initial.url);
+			throw error;
+		}
+
+		mergeLatestOwnerAppearance(owner, initial);
+		const ready = deferred<void>();
+		const session: PreviewSession = {
+			closed: false,
+			current: initial,
+			id: sessionId,
+			initialFrameLoaded: false,
+			owner,
+			pendingCommands: new Set(),
+			ready,
+			readyTimeout: setTimeout(() => {
+				void closeSession(
+					session,
+					true,
+					new Error('Story preview shell did not become ready in time.')
+				);
+			}, readyTimeoutMs),
+			replacing: false,
+			shellReady: false,
+			window: previewWindow
+		};
+
+		session.readyTimeout.unref?.();
+		sessionsById.set(session.id, session);
+		sessionsByPreview.set(previewWindow.webContents, session);
+		pendingLaunches--;
+		captureOwner(owner, session);
+		installWindowPolicy(session);
+		attachPreviewLifecycle(session);
+
+		try {
+			await previewWindow.loadURL(dependencies.previewEntryUrl());
+			await ready.promise;
+			if (session.closed) {
+				throw new Error('Story preview closed before it became ready.');
+			}
+			return {
+				descriptor: session.current.descriptor,
+				url: session.current.url
+			};
+		} catch (error) {
+			await closeSession(
+				session,
+				true,
+				error instanceof Error ? error : new Error(String(error))
+			);
+			throw error;
+		}
+	}
+
+	async function replace(
+		owner: WebContents,
+		sessionId: string,
+		expectedGeneration: number,
+		build: ManagedStoryPreviewBuild
+	): Promise<ManagedStoryPreviewLaunch> {
+		const session = assertOwner(owner, sessionId);
+
+		if (
+			!Number.isSafeInteger(expectedGeneration) ||
+			expectedGeneration !== session.current.descriptor.generation
+		) {
+			throw new Error(
+				'Story preview replacement belongs to a stale generation.'
+			);
+		}
+		if (session.replacing) {
+			throw new Error('A story preview replacement is already pending.');
+		}
+
+		session.replacing = true;
+		const generation = expectedGeneration + 1;
+		let next: PreviewGeneration;
+
+		try {
+			next = await stageGeneration(build, session.id, generation);
+		} catch (error) {
+			session.replacing = false;
+			throw error;
+		}
+
+		if (session.closed) {
+			await releaseUrl(next.url);
+			throw new Error('Story preview closed while staging its replacement.');
+		}
+		mergeLatestOwnerAppearance(owner, next);
+
+		const completion = deferred<ManagedStoryPreviewLaunch>();
+		const candidate: PreviewCandidate = {
+			...next,
+			completion,
+			timeout: setTimeout(() => {
+				void rollbackCandidate(
+					session,
+					candidate,
+					new Error('Replacement story preview did not load in time.')
+				);
+			}, replacementTimeoutMs)
+		};
+
+		candidate.timeout.unref?.();
+		session.candidate = candidate;
+		try {
+			const replacement: NativeStoryPreviewReplacement = {
+				descriptor: next.descriptor,
+				generation,
+				url: next.url
+			};
+
+			session.window.webContents.send(storyPreviewIpcChannels.replacement, {
+				generation,
+				replacement,
+				status: 'success'
+			} satisfies NativeStoryPreviewReplacementResult);
+		} catch (error) {
+			await rollbackCandidate(
+				session,
+				candidate,
+				error instanceof Error ? error : new Error(String(error))
+			);
+		}
+
+		return completion.promise;
+	}
+
+	async function close(owner: WebContents, sessionId: string) {
+		return closeSession(assertOwner(owner, sessionId), true);
+	}
+
+	function initialState(event: PreviewIpcEvent) {
+		const session = sessionForPreview(event);
+
+		mergeLatestOwnerAppearance(session.owner, session.current);
+		return {
+			descriptor: session.current.descriptor,
+			url: session.current.url
+		};
+	}
+
+	function ready(event: PreviewIpcEvent, generation: unknown) {
+		const session = sessionForPreview(event);
+
+		if (
+			!Number.isSafeInteger(generation) ||
+			generation !== session.current.descriptor.generation
+		) {
+			throw new Error('Story preview readiness belongs to a stale generation.');
+		}
+
+		session.shellReady = true;
+		finishInitialReady(session);
+	}
+
+	async function frameLoaded(event: PreviewIpcEvent, generation: unknown) {
+		const session = sessionForPreview(event);
+
+		if (!Number.isSafeInteger(generation)) {
+			throw new Error('Story preview frame generation is invalid.');
+		}
+		if (generation === session.current.descriptor.generation) {
+			if (!session.ready.settled()) {
+				session.initialFrameLoaded = true;
+				finishInitialReady(session);
+			}
+			return;
+		}
+		if (session.candidate?.descriptor.generation !== generation) {
+			throw new Error('Story preview frame belongs to a stale generation.');
+		}
+
+		const candidate = session.candidate;
+
+		if (!candidate) {
+			throw new Error('Story preview frame has no pending replacement.');
+		}
+		await commitCandidate(session, candidate);
+	}
+
+	function command(
+		event: PreviewIpcEvent,
+		value: unknown
+	): NativeStoryPreviewCommandResult {
+		const session = sessionForPreview(event);
+		let validated: ReturnType<typeof validateCommand>;
+
+		try {
+			validated = validateCommand(value, session);
+		} catch (error) {
+			const candidate = isRecord(value)
+				? {
+						generation: Number.isSafeInteger(value.generation)
+							? (value.generation as number)
+							: session.current.descriptor.generation,
+						type: [
+							'revealGraph',
+							'revealSource',
+							'testCurrent',
+							'testFromStart'
+						].includes(value.type as string)
+							? (value.type as NativeStoryPreviewCommand['type'])
+							: 'revealSource'
+					}
+				: {
+						generation: session.current.descriptor.generation,
+						type: 'revealSource' as const
+					};
+
+			return commandError(
+				candidate,
+				error instanceof Error ? error.message : 'Story preview command failed.'
+			);
+		}
+
+		const key = commandKey(validated.command);
+
+		if (session.pendingCommands.has(key)) {
+			return commandError(
+				validated.command,
+				'This story preview command is already running.'
+			);
+		}
+
+		const envelope: NativeStoryPreviewOwnerCommand = {
+			command: validated.command,
+			passageId: validated.passageId,
+			sessionId: session.id,
+			storyId: session.current.descriptor.storyId
+		};
+
+		try {
+			if (
+				validated.command.type === 'revealGraph' ||
+				validated.command.type === 'revealSource'
+			) {
+				dependencies.focusOwner(session.owner);
+			}
+			session.pendingCommands.add(key);
+			session.owner.send(storyPreviewIpcChannels.ownerCommand, envelope);
+		} catch (error) {
+			session.pendingCommands.delete(key);
+			return commandError(
+				validated.command,
+				error instanceof Error ? error.message : 'Story preview command failed.'
+			);
+		}
+
+		return {
+			command: validated.command.type,
+			generation: validated.command.generation,
+			status: 'busy'
+		};
+	}
+
+	function completeCommand(
+		owner: WebContents,
+		sessionId: string,
+		value: unknown
+	) {
+		const session = assertOwner(owner, sessionId);
+
+		if (
+			!isRecord(value) ||
+			!validNonnegativeInteger(value.generation) ||
+			!['revealGraph', 'revealSource', 'testCurrent', 'testFromStart'].includes(
+				value.command as string
+			) ||
+			!['error', 'success'].includes(value.status as string)
+		) {
+			throw new Error('Story preview command result is invalid.');
+		}
+
+		const key = commandKey({
+			generation: value.generation as number,
+			type: value.command as NativeStoryPreviewCommand['type']
+		});
+
+		if (!session.pendingCommands.has(key)) {
+			throw new Error('Story preview command result is stale or unsolicited.');
+		}
+
+		let result: NativeStoryPreviewCommandResult;
+
+		if (value.status === 'error') {
+			if (!validString(value.message, 4096) || value.operation !== 'command') {
+				throw new Error('Story preview command error is invalid.');
+			}
+			result = {
+				command: value.command as NativeStoryPreviewCommand['type'],
+				generation: value.generation as number,
+				message: value.message,
+				operation: 'command',
+				status: 'error'
+			};
+		} else {
+			result = {
+				command: value.command as NativeStoryPreviewCommand['type'],
+				generation: value.generation as number,
+				status: 'success'
+			};
+		}
+
+		session.pendingCommands.delete(key);
+		session.window.webContents.send(
+			storyPreviewIpcChannels.commandResult,
+			result
+		);
+	}
+
+	function updateAppearance(
+		owner: WebContents,
+		appearance: NativeStoryPreviewAppearance
+	) {
+		if (!validAppearance(appearance)) {
+			throw new Error('Story preview appearance is invalid.');
+		}
+		if (!owner || owner.isDestroyed()) {
+			return 0;
+		}
+
+		const state = ensureOwnerState(owner);
+
+		state.appearance = {...appearance};
+		for (const session of state.sessions) {
+			const cloned = {...appearance};
+
+			session.current.descriptor.appearance = cloned;
+			const currentUpdate: NativeStoryPreviewAppearanceUpdate = {
+				appearance: cloned,
+				generation: session.current.descriptor.generation
+			};
+
+			session.window.webContents.send(
+				storyPreviewIpcChannels.appearance,
+				currentUpdate
+			);
+			if (session.candidate) {
+				session.candidate.descriptor.appearance = {...appearance};
+				session.window.webContents.send(storyPreviewIpcChannels.appearance, {
+					appearance: {...appearance},
+					generation: session.candidate.descriptor.generation
+				} satisfies NativeStoryPreviewAppearanceUpdate);
+			}
+		}
+
+		return state.sessions.size;
+	}
+
+	function registerPreviewIpc(ipc: Pick<IpcMain, 'handle' | 'on'>) {
+		if (ipcInitialized) {
+			return;
+		}
+
+		ipcInitialized = true;
+		const previewIpc = previewIpcRegistrar(ipc, dependencies.previewEntryUrl());
+
+		previewIpc.handle(storyPreviewIpcChannels.getInitialState, initialState);
+		previewIpc.on(storyPreviewIpcChannels.ready, ready);
+		previewIpc.handle(storyPreviewIpcChannels.frameLoaded, frameLoaded);
+		previewIpc.handle(storyPreviewIpcChannels.command, command);
+	}
+
+	async function shutdown() {
+		if (shuttingDown) {
+			return;
+		}
+
+		shuttingDown = true;
+		await Promise.all(
+			[...sessionsById.values()].map(session =>
+				closeSession(
+					session,
+					true,
+					new Error('The application is shutting down.')
+				)
+			)
+		);
+		for (const [owner, state] of owners) {
+			state.appearance = undefined;
+			removeOwnerStateIfEmpty(owner);
+		}
+	}
+
+	return {
+		close,
+		completeCommand,
+		get activeSessionCount() {
+			return sessionsById.size;
+		},
+		open,
+		registerPreviewIpc,
+		replace,
+		shutdown,
+		updateAppearance
+	};
+}
+
+export const storyPreviewWindowManager = createStoryPreviewWindowManager();
+let applicationManagerInitialized = false;
+
+/**
+ * Registers only preview-side IPC. Application launch/replace handlers should
+ * call `storyPreviewWindowManager` from their existing trusted IPC registrar.
+ */
+export function initStoryPreviewWindowManager() {
+	if (applicationManagerInitialized) {
+		return storyPreviewWindowManager;
+	}
+
+	applicationManagerInitialized = true;
+	storyPreviewWindowManager.registerPreviewIpc(ipcMain);
+	app.on('before-quit', () => {
+		void storyPreviewWindowManager.shutdown();
+	});
+	return storyPreviewWindowManager;
+}

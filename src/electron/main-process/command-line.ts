@@ -41,7 +41,7 @@ export function commandLineHelpText(appName = 'Twine RS') {
 		'  --backupFolderPath=<path>           Use a custom backup folder.',
 		'  --backupCadenceMinutes=<minutes>    Set scheduled backup cadence.',
 		'  --backupRetentionLimit=<count>      Set scheduled backup retention.',
-		'  --scratchAssetStrategy=<link|copy>  Legacy setting; previews copy safely.',
+		'  --scratchAssetStrategy=<link|copy>  Deprecated compatibility option; ignored.',
 		'  --scratchFolderPath=<path>          Use a custom preview/cache folder.',
 		'  --scratchFileCleanupAge=<minutes>   Set preview/cache cleanup age.',
 		'  --disableHardwareAcceleration       Disable hardware acceleration.',

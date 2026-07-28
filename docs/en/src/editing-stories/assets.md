@@ -62,10 +62,15 @@ the live inventory and recheck the story's asset paths immediately.
 
 ## Previewing and Publishing
 
-Play, test, and proof actions in the desktop app prepare project assets beside
-their temporary HTML so relative URLs work in the preview. The
-[Build & Export](../publishing/publishing.md) screen reports missing assets and
-the copy plan for published output.
+Play, test, and proof actions in the desktop app copy the build's referenced
+project assets into a bounded temporary package. Twine serves that exact package
+from an opaque preview origin so relative, root-relative, query-bearing, and
+percent-encoded asset URLs work without giving the story access to the project
+folder. Closing or replacing the preview releases the package; previewing never
+links the project asset directory or changes its files.
+
+The [Build & Export](../publishing/publishing.md) screen reports missing assets
+and the copy plan for published output.
 
 For desktop Playable HTML export, _Embed referenced media_ can place supported
 statically referenced images, audio, and video into the HTML as data URLs. It

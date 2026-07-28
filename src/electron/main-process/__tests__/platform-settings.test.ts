@@ -26,8 +26,7 @@ describe('platform settings', () => {
 			externalEditorCommand: '',
 			fullscreenPersistence: true,
 			lastWindowFullscreen: false,
-			linkHandlingMode: 'system',
-			scratchAssetStrategy: 'link'
+			linkHandlingMode: 'system'
 		});
 		expect(backupCadenceMs()).toBe(20 * 60 * 1000);
 	});
@@ -51,8 +50,6 @@ describe('platform settings', () => {
 					return 'block';
 				case 'externalEditorCommand':
 					return 'code --wait';
-				case 'scratchAssetStrategy':
-					return 'copy';
 				default:
 					return undefined;
 			}
@@ -67,8 +64,7 @@ describe('platform settings', () => {
 				externalEditorCommand: 'code --wait',
 				fullscreenPersistence: false,
 				lastWindowFullscreen: true,
-				linkHandlingMode: 'block',
-				scratchAssetStrategy: 'copy'
+				linkHandlingMode: 'block'
 			})
 		);
 	});
@@ -78,8 +74,7 @@ describe('platform settings', () => {
 			backupCadenceMinutes: 2,
 			cacheCleanupDays: 7,
 			externalEditorCommand: ' code --wait ',
-			linkHandlingMode: 'block',
-			scratchAssetStrategy: 'copy'
+			linkHandlingMode: 'block'
 		});
 
 		expect(setAppPrefMock).toHaveBeenCalledWith('backupCadenceMinutes', 5);
@@ -92,6 +87,9 @@ describe('platform settings', () => {
 			'code --wait'
 		);
 		expect(setAppPrefMock).toHaveBeenCalledWith('linkHandlingMode', 'block');
-		expect(setAppPrefMock).toHaveBeenCalledWith('scratchAssetStrategy', 'copy');
+		expect(setAppPrefMock).not.toHaveBeenCalledWith(
+			'scratchAssetStrategy',
+			expect.anything()
+		);
 	});
 });

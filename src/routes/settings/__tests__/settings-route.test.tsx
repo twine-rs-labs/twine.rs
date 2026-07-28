@@ -94,7 +94,6 @@ describe('<SettingsRoute>', () => {
 			fullscreenPersistence: true,
 			lastWindowFullscreen: false,
 			linkHandlingMode: 'system',
-			scratchAssetStrategy: settings.scratchAssetStrategy ?? 'link',
 			storyLibraryFolderPath: '/native/library'
 		}));
 
@@ -110,7 +109,6 @@ describe('<SettingsRoute>', () => {
 				fullscreenPersistence: true,
 				lastWindowFullscreen: false,
 				linkHandlingMode: 'system',
-				scratchAssetStrategy: 'link',
 				storyLibraryFolderPath: '/native/library'
 			})),
 			getStoryLibraryFolder: jest.fn(async () => '/native/library'),
@@ -127,7 +125,7 @@ describe('<SettingsRoute>', () => {
 		expect(
 			await screen.findByDisplayValue('/native/library')
 		).toBeInTheDocument();
-		expect(screen.getByLabelText('Preview assets')).toHaveValue('link');
+		expect(screen.queryByLabelText('Preview assets')).not.toBeInTheDocument();
 
 		fireEvent.change(screen.getByLabelText('Backup reminder'), {
 			target: {value: '14'}
@@ -136,16 +134,6 @@ describe('<SettingsRoute>', () => {
 		await waitFor(() =>
 			expect(updatePlatformSettings).toHaveBeenCalledWith({
 				backupReminderDays: 14
-			})
-		);
-
-		fireEvent.change(screen.getByLabelText('Preview assets'), {
-			target: {value: 'copy'}
-		});
-
-		await waitFor(() =>
-			expect(updatePlatformSettings).toHaveBeenCalledWith({
-				scratchAssetStrategy: 'copy'
 			})
 		);
 

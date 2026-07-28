@@ -28,18 +28,13 @@ import {
 	resolveProjectCapability,
 	revokeProjectCapability
 } from './project-capabilities';
-import {
-	registerStoryPreview,
-	releaseStoryPreview
-} from './story-preview-protocol';
 import {loadPrefs} from './prefs';
 import {
 	beginScratchPreviewShutdown,
 	cleanScratchDirectory,
 	maxScratchPreviewAssetBytes,
 	maxScratchPreviewAssetCount,
-	openWithScratchFile,
-	openWithScratchPackage,
+	maxScratchPreviewBytes,
 	resumeScratchPreviewsAfterFailedShutdown
 } from './scratch-file';
 import {Story, StoryWithDocuments} from '../../store/stories/stories.types';
@@ -97,6 +92,7 @@ import type {
 	NativeProjectAssetWriteResult,
 	NativeProjectAssetPayloadLimits,
 	NativePlatformSettingsUpdate,
+	NativeStoryPreviewLaunchRequest,
 	ProjectSourceLayout
 } from '../shared';
 import {
@@ -105,6 +101,7 @@ import {
 	performanceHarnessEnabled,
 	resetMainPerformanceHarness
 } from './performance-harness';
+import {storyPreviewWindowManager} from './story-preview-window-manager';
 
 const ipcMain = trustedIpcRegistrar(electronIpcMain);
 let quitAfterStoryWriteFlush = false;
@@ -139,6 +136,83 @@ function validateScratchAssetRequests(value: unknown) {
 	}
 
 	return assets;
+}
+
+async function managedStoryPreviewBuild(
+	event: Parameters<typeof resolveProjectCapability>[0],
+	request: NativeStoryPreviewLaunchRequest,
+	capability: string | undefined
+) {
+	if (
+		!request ||
+		typeof request !== 'object' ||
+		typeof request.instrumentedHtml !== 'string' ||
+		Buffer.byteLength(request.instrumentedHtml, 'utf8') >
+			maxScratchPreviewBytes ||
+		!request.descriptor ||
+		typeof request.descriptor !== 'object'
+	) {
+		throw new Error('Story preview launch request is invalid or too large.');
+	}
+
+	const assets = validateScratchAssetRequests(request.assets ?? []);
+
+	if (assets.length === 0) {
+		return {
+			descriptor: request.descriptor,
+			html: request.instrumentedHtml
+		};
+	}
+	if (!capability) {
+		throw new Error(
+			'Project access is required to copy assets into a story preview.'
+		);
+	}
+
+	const rootPath = resolveProjectCapability(event, capability);
+	const trustedAssets = projectSessionScratchAssets(rootPath, assets);
+	const uniquePaths = [...new Set(trustedAssets.map(asset => asset.path))];
+	const payloadBatch = await readNativeProjectPreviewAssetPayloads(
+		rootPath,
+		projectSessionAssetReadBaselines(rootPath, uniquePaths),
+		{
+			maxFileBytes: maxScratchPreviewAssetBytes,
+			maxFileCount: maxScratchPreviewAssetCount,
+			maxTotalEncodedBytes: maxScratchPreviewAssetBytes
+		}
+	);
+
+	if (payloadBatch.failures.length > 0) {
+		throw new Error(
+			`Story preview assets could not be read safely: ${payloadBatch.failures
+				.map(failure => `${failure.path}: ${failure.message}`)
+				.join('; ')}`
+		);
+	}
+
+	const payloads = new Map(
+		payloadBatch.payloads.map(payload => [payload.path, payload] as const)
+	);
+
+	return {
+		assets: trustedAssets.map(asset => {
+			const payload = payloads.get(asset.path);
+
+			if (!payload) {
+				throw new Error(
+					`Story preview asset "${asset.path}" was not returned by the safe reader.`
+				);
+			}
+
+			return {
+				bytes: payload.bytes,
+				mediaType: payload.mediaType,
+				outputPath: asset.outputPath
+			};
+		}),
+		descriptor: request.descriptor,
+		html: request.instrumentedHtml
+	};
 }
 
 export function storyWritesReadyForQuit() {
@@ -898,72 +972,44 @@ export function initIpc() {
 			loadStoryFormatProperties(url, timeout)
 	);
 
-	ipcMain.handle('register-story-preview', async (_event, html: string) =>
-		registerStoryPreview(html)
+	ipcMain.handle(
+		'story-preview:open',
+		async (event, request: NativeStoryPreviewLaunchRequest, capability) =>
+			(
+				await storyPreviewWindowManager.open(
+					event.sender,
+					await managedStoryPreviewBuild(event, request, capability)
+				)
+			).descriptor
 	);
-	ipcMain.handle('release-story-preview', async (_event, url: string) =>
-		releaseStoryPreview(url)
+	ipcMain.handle(
+		'story-preview:replace',
+		async (
+			event,
+			sessionId: string,
+			expectedGeneration: number,
+			request: NativeStoryPreviewLaunchRequest,
+			capability
+		) =>
+			(
+				await storyPreviewWindowManager.replace(
+					event.sender,
+					sessionId,
+					expectedGeneration,
+					await managedStoryPreviewBuild(event, request, capability)
+				)
+			).descriptor
+	);
+	ipcMain.handle(
+		'story-preview:owner-command-result',
+		async (event, sessionId: string, result) =>
+			storyPreviewWindowManager.completeCommand(event.sender, sessionId, result)
+	);
+	ipcMain.handle('story-preview:update-appearance', async (event, appearance) =>
+		storyPreviewWindowManager.updateAppearance(event.sender, appearance)
 	);
 
 	ipcMain.handle('add-local-story-format', async () => addLocalStoryFormat());
-
-	ipcMain.handle('open-with-scratch-file', (_event, data: string) =>
-		openWithScratchFile(data)
-	);
-
-	ipcMain.handle(
-		'open-with-scratch-package',
-		async (event, data: string, capability: string | undefined, value = []) => {
-			const assets = validateScratchAssetRequests(value);
-
-			if (assets.length === 0) {
-				return openWithScratchPackage(data);
-			}
-			if (!capability) {
-				throw new Error(
-					'Project access is required to copy assets into a scratch preview.'
-				);
-			}
-
-			const rootPath = resolveProjectCapability(event, capability);
-			const trustedAssets = projectSessionScratchAssets(rootPath, assets);
-			const uniquePaths = [...new Set(trustedAssets.map(asset => asset.path))];
-			const payloadBatch = await readNativeProjectPreviewAssetPayloads(
-				rootPath,
-				projectSessionAssetReadBaselines(rootPath, uniquePaths),
-				{
-					maxFileBytes: maxScratchPreviewAssetBytes,
-					maxFileCount: maxScratchPreviewAssetCount,
-					maxTotalEncodedBytes: maxScratchPreviewAssetBytes
-				}
-			);
-
-			if (payloadBatch.failures.length > 0) {
-				throw new Error(
-					`Scratch preview assets could not be read safely: ${payloadBatch.failures
-						.map(failure => `${failure.path}: ${failure.message}`)
-						.join('; ')}`
-				);
-			}
-			const payloads = new Map(
-				payloadBatch.payloads.map(payload => [payload.path, payload] as const)
-			);
-
-			return openWithScratchPackage(
-				data,
-				trustedAssets.map(asset => {
-					const payload = payloads.get(asset.path);
-
-					if (!payload) {
-						throw new Error(
-							`Scratch preview asset "${asset.path}" was not returned by the safe reader.`
-						);
-					}
-					return {bytes: payload.bytes, outputPath: asset.outputPath};
-				})
-			);
-		}
-	);
 
 	ipcMain.on('reveal-path', (_event, path: string) => {
 		if (typeof path === 'string' && path.trim() !== '') {

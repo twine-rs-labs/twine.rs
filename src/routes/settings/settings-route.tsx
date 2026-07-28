@@ -13,8 +13,7 @@ import type {TwineElectronWindow} from '../../electron/shared';
 import type {
 	NativeBackupResult,
 	NativePlatformSettings,
-	NativePlatformSettingsUpdate,
-	NativeScratchAssetStrategy
+	NativePlatformSettingsUpdate
 } from '../../electron/shared';
 import {useStoryFormatsContext} from '../../store/story-formats';
 import {setPref, usePrefsContext} from '../../store/prefs';
@@ -126,11 +125,6 @@ const cacheCleanupOptions = [
 	{label: '30 days', value: '30'}
 ];
 
-const scratchAssetStrategyOptions = [
-	{label: 'Secure copy (legacy preference)', value: 'link'},
-	{label: 'Secure copy', value: 'copy'}
-];
-
 const sharingModeOptions = [
 	{label: 'Off', value: 'off'},
 	{label: 'Local file', value: 'local-file'},
@@ -221,7 +215,6 @@ export const SettingsRoute: React.FC = () => {
 		fullscreenPersistence: true,
 		lastWindowFullscreen: false,
 		linkHandlingMode: 'system',
-		scratchAssetStrategy: 'link',
 		storyLibraryFolderPath: storyLibraryFolder || 'Native desktop default'
 	};
 
@@ -682,20 +675,6 @@ export const SettingsRoute: React.FC = () => {
 							label="Fallback API"
 							value="Filesystem"
 						/>
-						<div className="settings-route__field">
-							<span>Preview assets</span>
-							<Select
-								ariaLabel="Preview assets"
-								disabled={!platformControlsAvailable}
-								onChange={value =>
-									void updatePlatformSettings({
-										scratchAssetStrategy: value as NativeScratchAssetStrategy
-									})
-								}
-								options={scratchAssetStrategyOptions}
-								value={platformView.scratchAssetStrategy}
-							/>
-						</div>
 						<div className="settings-route__field">
 							<span>Cache cleanup</span>
 							<Select

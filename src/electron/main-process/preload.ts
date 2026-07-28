@@ -4,7 +4,14 @@
 
 import {contextBridge, ipcRenderer, webUtils} from 'electron';
 import {Story} from '../../store/stories/stories.types';
-import type {ProjectSourceLayout, TwineElectronWindow} from '../shared';
+import type {
+	NativeStoryPreviewAppearance,
+	NativeStoryPreviewCommandResult,
+	NativeStoryPreviewLaunchRequest,
+	NativeStoryPreviewOwnerCommand,
+	ProjectSourceLayout,
+	TwineElectronWindow
+} from '../shared';
 
 const projectCapabilityField = '__twineProjectCapability';
 const projectCapabilities = new Map<string, string>();
@@ -220,11 +227,54 @@ const bridge = {
 	loadStoryFormatProperties(url: string, timeout?: number) {
 		return ipcRenderer.invoke('load-story-format-properties', url, timeout);
 	},
-	registerStoryPreview(html: string) {
-		return ipcRenderer.invoke('register-story-preview', html);
+	onStoryPreviewCommand(
+		callback: (command: NativeStoryPreviewOwnerCommand) => void
+	) {
+		const listener = (
+			_event: Electron.IpcRendererEvent,
+			command: NativeStoryPreviewOwnerCommand
+		) => callback(command);
+
+		ipcRenderer.on('story-preview:owner-command', listener);
+		return () =>
+			ipcRenderer.removeListener('story-preview:owner-command', listener);
 	},
-	releaseStoryPreview(url: string) {
-		return ipcRenderer.invoke('release-story-preview', url);
+	openStoryPreview(
+		request: NativeStoryPreviewLaunchRequest,
+		projectRoot?: string
+	) {
+		return ipcRenderer.invoke(
+			'story-preview:open',
+			request,
+			projectRoot ? projectCapability(projectRoot) : undefined
+		);
+	},
+	replaceStoryPreview(
+		sessionId: string,
+		expectedGeneration: number,
+		request: NativeStoryPreviewLaunchRequest,
+		projectRoot?: string
+	) {
+		return ipcRenderer.invoke(
+			'story-preview:replace',
+			sessionId,
+			expectedGeneration,
+			request,
+			projectRoot ? projectCapability(projectRoot) : undefined
+		);
+	},
+	reportStoryPreviewCommandResult(
+		sessionId: string,
+		result: NativeStoryPreviewCommandResult
+	) {
+		return ipcRenderer.invoke(
+			'story-preview:owner-command-result',
+			sessionId,
+			result
+		);
+	},
+	updateStoryPreviewAppearance(appearance: NativeStoryPreviewAppearance) {
+		return ipcRenderer.invoke('story-preview:update-appearance', appearance);
 	},
 	hydrateProjectFolder(rootPath: string, storyIds?: string[]) {
 		return invokeProjectResult(
@@ -278,21 +328,6 @@ const bridge = {
 			projectCapability(rootPath),
 			paths,
 			limits
-		);
-	},
-	openWithScratchFile(data: string) {
-		return ipcRenderer.invoke('open-with-scratch-file', data);
-	},
-	openWithScratchPackage(
-		data: string,
-		rootPath: string | undefined,
-		assets: unknown[]
-	) {
-		return ipcRenderer.invoke(
-			'open-with-scratch-package',
-			data,
-			rootPath ? projectCapability(rootPath) : undefined,
-			assets
 		);
 	},
 	openProjectFolder(options?: {loadPassageText?: boolean}) {

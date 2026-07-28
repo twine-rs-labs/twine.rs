@@ -70,8 +70,9 @@ button in the application header.
 ## Storage and Backups
 
 The _Storage_ panel sets the default asset folder and reports the active storage
-backend. Native desktop builds also allow you to choose whether preview assets
-are linked or copied and how long preview caches are retained.
+backend. Native desktop builds also let you choose how long abandoned preview
+caches are retained. Desktop preview assets are always copied into an isolated
+temporary package; there is no link/copy preference.
 
 The _Backups_ panel configures native backup cadence, retention, and reminders.
 It can also start a backup, record that backups were reviewed, or reveal the

@@ -4,7 +4,7 @@ import {
 	StoryWithDocuments
 } from '../../store/stories/stories.types';
 import type {ProjectFolderSaveOptions} from '../../store/persistence/project-folder-save-hints';
-import type {CoreAssetInventoryEntry} from '../../core';
+import type {CoreAssetInventoryEntry, CoreStorySummary} from '../../core';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
 import type {StoryBuildAsset} from '../../util/build-package';
 import type {StoryFormatProperties} from '../../store/story-formats';
@@ -102,7 +102,114 @@ export type NativeProjectSessionResolution =
 	'acceptDisk' | 'dismiss' | 'keepApp';
 
 export type NativeLinkHandlingMode = 'block' | 'system';
-export type NativeScratchAssetStrategy = 'copy' | 'link';
+
+export type NativeStoryPreviewTarget = 'play' | 'proof' | 'test';
+
+export interface NativeStoryPreviewAppearance {
+	highContrast: boolean;
+	reducedMotion: boolean;
+	theme: 'dark' | 'light';
+}
+
+export interface NativeStoryPreviewPassageRef {
+	id: string;
+	localId: string;
+	name: string;
+}
+
+export interface NativeStoryPreviewDescriptor {
+	appearance: NativeStoryPreviewAppearance;
+	bridgeSessionId: string;
+	generation: number;
+	htmlBytes: number;
+	launchPassage?: {id: string; name: string};
+	passages: NativeStoryPreviewPassageRef[];
+	sessionId: string;
+	storyDataCount: number;
+	storyId: string;
+	storyName: string;
+	summary?: CoreStorySummary;
+	target: NativeStoryPreviewTarget;
+}
+
+export type NativeStoryPreviewDescriptorInput = Omit<
+	NativeStoryPreviewDescriptor,
+	'generation' | 'sessionId'
+>;
+
+export interface NativeStoryPreviewLaunchRequest {
+	assets?: Array<Pick<StoryBuildAsset, 'outputPath' | 'path'>>;
+	descriptor: NativeStoryPreviewDescriptorInput;
+	instrumentedHtml: string;
+}
+
+/**
+ * Commands emitted by the dedicated preview renderer. Main derives the preview
+ * session from the sender; callers cannot select a session ID.
+ */
+export type NativeStoryPreviewCommand =
+	| {
+			generation: number;
+			passageId?: string;
+			type: 'revealGraph' | 'revealSource';
+	  }
+	| {
+			generation: number;
+			type: 'testFromStart';
+	  }
+	| {
+			generation: number;
+			passageId: string;
+			type: 'testCurrent';
+	  };
+
+export interface NativeStoryPreviewOwnerCommand {
+	command: NativeStoryPreviewCommand;
+	/** Main-resolved passage, including the stored launch fallback. */
+	passageId?: string;
+	sessionId: string;
+	storyId: string;
+}
+
+export interface NativeStoryPreviewReplacement {
+	descriptor: NativeStoryPreviewDescriptor;
+	generation: number;
+	url: string;
+}
+
+export interface NativeStoryPreviewErrorResult {
+	generation: number;
+	message: string;
+	operation: 'command' | 'launch' | 'replacement';
+}
+
+export type NativeStoryPreviewCommandResult =
+	| {
+			command: NativeStoryPreviewCommand['type'];
+			generation: number;
+			status: 'busy' | 'success';
+	  }
+	| (NativeStoryPreviewErrorResult & {
+			command: NativeStoryPreviewCommand['type'];
+			operation: 'command';
+			status: 'error';
+	  });
+
+export type NativeStoryPreviewReplacementResult =
+	| {
+			generation: number;
+			replacement: NativeStoryPreviewReplacement;
+			status: 'success';
+	  }
+	| (NativeStoryPreviewErrorResult & {
+			operation: 'replacement';
+			status: 'error';
+	  });
+
+export interface NativeStoryPreviewAppearanceUpdate {
+	appearance: NativeStoryPreviewAppearance;
+	generation: number;
+}
 
 export interface NativeBackupResult {
 	backupDirectoryName: string;
@@ -122,7 +229,6 @@ export interface NativePlatformSettings {
 	fullscreenPersistence: boolean;
 	lastWindowFullscreen: boolean;
 	linkHandlingMode: NativeLinkHandlingMode;
-	scratchAssetStrategy: NativeScratchAssetStrategy;
 	storyLibraryFolderPath: string;
 }
 
@@ -136,7 +242,6 @@ export interface NativePlatformSettingsUpdate {
 	fullscreenPersistence?: boolean;
 	lastWindowFullscreen?: boolean;
 	linkHandlingMode?: NativeLinkHandlingMode;
-	scratchAssetStrategy?: NativeScratchAssetStrategy;
 }
 
 export interface NativeCommandLineOpenResult {
@@ -385,20 +490,32 @@ export interface TwineElectronWindow extends Window {
 			url: string,
 			timeout?: number
 		): Promise<StoryFormatProperties>;
-		registerStoryPreview(html: string): Promise<string>;
-		releaseStoryPreview(url: string): Promise<void>;
+		onStoryPreviewCommand(
+			callback: (command: NativeStoryPreviewOwnerCommand) => void
+		): () => void;
+		openStoryPreview(
+			request: NativeStoryPreviewLaunchRequest,
+			projectRoot?: string
+		): Promise<NativeStoryPreviewDescriptor>;
+		replaceStoryPreview(
+			sessionId: string,
+			expectedGeneration: number,
+			request: NativeStoryPreviewLaunchRequest,
+			projectRoot?: string
+		): Promise<NativeStoryPreviewDescriptor>;
+		reportStoryPreviewCommandResult(
+			sessionId: string,
+			result: NativeStoryPreviewCommandResult
+		): Promise<void>;
+		updateStoryPreviewAppearance(
+			appearance: NativeStoryPreviewAppearance
+		): Promise<void>;
 		listProjectAssets(rootPath: string): Promise<CoreAssetInventoryEntry[]>;
 		readProjectAssetPayloads(
 			rootPath: string,
 			paths: string[],
 			limits: NativeProjectAssetPayloadLimits
 		): Promise<NativeProjectAssetPayloadBatch>;
-		openWithScratchFile(data: string): Promise<void>;
-		openWithScratchPackage(
-			data: string,
-			rootPath: string | undefined,
-			assets: Pick<StoryBuildAsset, 'outputPath' | 'path'>[]
-		): Promise<void>;
 		onProjectSessionChanged(
 			callback: (delta: NativeProjectSessionDelta) => void
 		): () => void;

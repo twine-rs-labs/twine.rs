@@ -2,7 +2,7 @@
 
 Status: current
 Owner: architecture maintainers
-Last verified: 2026-07-21
+Last verified: 2026-07-27
 Source of truth: live Electron, React, WASM, and Rust integration
 
 `twine.rs` is a React/Electron editor backed by a shared Rust project model.
@@ -70,6 +70,7 @@ Electron owns native capabilities:
 - asset effect journals;
 - bounded referenced-media reads through no-follow directory capabilities and
   private, resource-capped per-story content-digest baselines;
+- isolated preview windows, opaque package origins, and preview-only IPC;
 - packaged desktop lifecycle.
 
 ## Major boundaries
@@ -80,6 +81,8 @@ Electron owns native capabilities:
   revision-safe saves, changed-path watcher deltas, conflicts, and assets.
 - [`frontend-boundaries.md`](./frontend-boundaries.md) defines permitted
   renderer state and mutation paths.
+- [`desktop-preview-sessions.md`](./desktop-preview-sessions.md) defines the
+  preview entry, package protocol, narrow IPC, and session lifecycle.
 - [`../decisions/`](../decisions/README.md) records the reasons behind the
   stable choices.
 
