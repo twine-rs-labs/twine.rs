@@ -478,13 +478,18 @@ export const InnerStoryListRoute: React.FC = () => {
 
 		if (canDeleteProjectFolder) {
 			await twineElectron.deleteProjectFolder(rootPath);
-		}
 
-		for (const projectStory of projectStories) {
-			await coreProjectHost.applyStoryCommand(
-				deleteStoryCommand(projectStory.id)
-			);
-			deleteProjectMetadata(projectStory.id);
+			for (const projectStory of projectStories) {
+				storiesDispatch({
+					storageKind: 'electron-project-folder',
+					storyId: projectStory.id,
+					type: 'deleteStory'
+				});
+				deleteProjectMetadata(projectStory.id);
+			}
+		} else {
+			await coreProjectHost.applyStoryCommand(deleteStoryCommand(story.id));
+			deleteProjectMetadata(story.id);
 		}
 	}
 

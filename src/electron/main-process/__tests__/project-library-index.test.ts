@@ -2,6 +2,7 @@ import {
 	existsSync,
 	mkdtempSync,
 	mkdirSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync
@@ -14,6 +15,7 @@ import {
 	rememberNativeProjectFolder,
 	rememberNativeProjectFolderStrict
 } from '../native';
+import {getStoryDirectoryPath} from '../story-directory';
 import {
 	forgetProjectFolder,
 	rememberedProjectFolders,
@@ -32,7 +34,7 @@ jest.mock('../native', () => ({
 	rememberNativeProjectFolderStrict: jest.fn()
 }));
 jest.mock('../story-directory', () => ({
-	getStoryDirectoryPath: () => 'mock-story-library'
+	getStoryDirectoryPath: jest.fn()
 }));
 
 describe('project library index', () => {
@@ -43,10 +45,12 @@ describe('project library index', () => {
 		rememberNativeProjectFolder as jest.Mock;
 	const rememberNativeProjectFolderStrictMock =
 		rememberNativeProjectFolderStrict as jest.Mock;
+	const getStoryDirectoryPathMock = getStoryDirectoryPath as jest.Mock;
 
 	beforeEach(() => {
 		jest.clearAllMocks();
 		listRememberedNativeProjectFoldersMock.mockReturnValue([]);
+		getStoryDirectoryPathMock.mockReturnValue('mock-story-library');
 	});
 
 	it('stores in-library project paths relative to the story library', () => {
@@ -130,6 +134,70 @@ describe('project library index', () => {
 				storyIds: ['new-story-id']
 			})
 		]);
+	});
+
+	it('deduplicates filesystem aliases and keeps them removable after deletion', () => {
+		if (process.platform === 'win32') {
+			return;
+		}
+
+		const parentPath = mkdtempSync(join(tmpdir(), 'twine-project-alias-'));
+		const realLibraryPath = join(parentPath, 'real-library');
+		const aliasLibraryPath = join(parentPath, 'alias-library');
+		const projectRelativePath = 'Projects/moon-castle.twine.rs';
+		const projectPath = join(realLibraryPath, projectRelativePath);
+		const aliasedProjectPath = join(aliasLibraryPath, projectRelativePath);
+
+		try {
+			mkdirSync(projectPath, {recursive: true});
+			symlinkSync(realLibraryPath, aliasLibraryPath, 'dir');
+			getStoryDirectoryPathMock.mockReturnValue(aliasLibraryPath);
+			listRememberedNativeProjectFoldersMock.mockReturnValue([
+				{
+					rootPath: projectPath,
+					storyIds: ['old-story-id'],
+					updatedAt: '2026-06-23T12:00:00.000Z'
+				},
+				{
+					rootPath: projectRelativePath,
+					storyIds: ['new-story-id'],
+					updatedAt: '2026-06-23T12:05:00.000Z'
+				}
+			]);
+
+			expect(rememberedProjectFolders()).toEqual([
+				expect.objectContaining({
+					rootPath: realpathSync(projectPath),
+					storyIds: ['new-story-id']
+				})
+			]);
+			expect(forgetNativeProjectFolderMock).toHaveBeenCalledWith(
+				expect.any(String),
+				projectPath
+			);
+			expect(forgetNativeProjectFolderMock).toHaveBeenCalledWith(
+				expect.any(String),
+				projectRelativePath
+			);
+			expect(rememberNativeProjectFolderMock).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({
+					rootPath: projectRelativePath,
+					storyIds: ['new-story-id']
+				})
+			);
+
+			forgetNativeProjectFolderMock.mockClear();
+			rmSync(projectPath, {force: true, recursive: true});
+			forgetProjectFolder(aliasedProjectPath);
+
+			expect(forgetNativeProjectFolderMock).toHaveBeenCalledWith(
+				expect.any(String),
+				projectRelativePath
+			);
+		} finally {
+			rmSync(parentPath, {force: true, recursive: true});
+		}
 	});
 
 	it('migrates existing absolute in-library project paths to relative paths', () => {

@@ -82,7 +82,9 @@ jobs:
         run: npx playwright install chromium
       - name: Install Playwright Chromium and dependencies on Linux
         if: runner.os == 'Linux'
-        run: npx playwright install --with-deps chromium
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get install --yes --no-install-recommends libglib2.0-bin
       - name: Build production Electron app
         run: npm run build:electron-app:ci
         env:

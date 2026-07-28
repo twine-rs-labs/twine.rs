@@ -430,10 +430,13 @@ const bridge = {
 		);
 	},
 	stopProjectSession(rootPath: string) {
-		return ipcRenderer.invoke(
-			'stop-project-session',
-			projectCapability(rootPath)
-		);
+		const capability = projectCapabilities.get(rootPath);
+
+		// Project deletion stops the native session and revokes its capability
+		// before React unmount cleanup runs. Treat that later stop as idempotent.
+		return capability
+			? ipcRenderer.invoke('stop-project-session', capability)
+			: Promise.resolve();
 	},
 	updatePlatformSettings(settings: unknown) {
 		return ipcRenderer.invoke('update-platform-settings', settings);

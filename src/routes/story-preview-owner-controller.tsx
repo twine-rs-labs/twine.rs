@@ -5,6 +5,7 @@ import type {
 	NativeStoryPreviewOwnerCommand,
 	TwineElectronWindow
 } from '../electron/shared';
+import {useCoreProjectHost} from '../core/project-host';
 import {usePrefsContext} from '../store/prefs';
 import {useComputedTheme} from '../store/prefs/use-computed-theme';
 import {useStoriesContext} from '../store/stories';
@@ -33,6 +34,29 @@ function revealUrl(
 	return `/stories/${encodeURIComponent(storyId)}?${query.toString()}`;
 }
 
+function usePreviewMetadataRevisionSync(
+	coreProjectHost: ReturnType<typeof useCoreProjectHost>,
+	stories: ReturnType<typeof useStoriesContext>['stories']
+) {
+	const subscribe = React.useCallback(
+		(listener: () => void) =>
+			coreProjectHost.subscribeToStatus(() => listener()),
+		[coreProjectHost]
+	);
+	const revisionSnapshot = React.useCallback(
+		() =>
+			JSON.stringify(
+				stories.map(story => [
+					story.id,
+					coreProjectHost.sessionStatus(story.id).revision
+				])
+			),
+		[coreProjectHost, stories]
+	);
+
+	React.useSyncExternalStore(subscribe, revisionSnapshot, revisionSnapshot);
+}
+
 /**
  * Executes managed-preview commands in the owning application renderer, where
  * the current project session and router already live. The preview window never
@@ -41,10 +65,13 @@ function revealUrl(
 export const StoryPreviewOwnerController: React.FC = () => {
 	const bridge = (window as TwineElectronWindow).twineElectron;
 	const navigate = useNavigate();
-	const preparePreview = useNativeStoryPreviewPreparation();
 	const {prefs} = usePrefsContext();
 	const computedTheme = useComputedTheme();
 	const {stories} = useStoriesContext();
+	const coreProjectHost = useCoreProjectHost();
+
+	usePreviewMetadataRevisionSync(coreProjectHost, stories);
+	const preparePreview = useNativeStoryPreviewPreparation();
 	const current = React.useRef({bridge, navigate, preparePreview, stories});
 
 	current.current = {bridge, navigate, preparePreview, stories};

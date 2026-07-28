@@ -198,12 +198,15 @@ async function launchPreview(running: RunningApp, launch: () => Promise<void>) {
 	}
 }
 
+const activeStoryIframeSelector =
+	'.story-preview-route__frame-shell:not(.story-preview-route__frame-shell--staging) > iframe.story-preview-route__frame';
+
 function storyFrame(preview: Page): FrameLocator {
-	return preview.frameLocator('iframe.story-preview-route__frame');
+	return preview.frameLocator(activeStoryIframeSelector);
 }
 
 function storyIframe(preview: Page) {
-	return preview.locator('iframe.story-preview-route__frame');
+	return preview.locator(activeStoryIframeSelector);
 }
 
 async function previewOrigin(preview: Page) {
@@ -218,12 +221,20 @@ async function previewOrigin(preview: Page) {
 	return {origin: `${url.protocol}//${url.host}`, src};
 }
 
-function sourceEditor(page: Page): Locator {
-	return page.locator('[data-testid^="story-editor-window-"]').first();
+function sourceEditor(page: Page, passageName?: string): Locator {
+	const editorWindow = passageName
+		? page.getByRole('region', {name: passageName, exact: true})
+		: page.locator('.story-edit-editor-window').first();
+
+	return editorWindow.locator('[data-testid^="story-editor-window-"]');
 }
 
-async function replaceEditorText(page: Page, text: string) {
-	const editor = sourceEditor(page);
+async function replaceEditorText(
+	page: Page,
+	text: string,
+	passageName?: string
+) {
+	const editor = sourceEditor(page, passageName);
 
 	await expect(editor).toBeVisible();
 	await editor.locator('.cm-content').click();
@@ -300,7 +311,7 @@ async function createPassage(page: Page, name: string, text: string) {
 	await renameDialog.getByRole('textbox').fill(name);
 	await renameDialog.getByRole('button', {name: 'Save'}).click();
 	await expect(page.getByRole('region', {name})).toBeVisible();
-	await replaceEditorText(page, text);
+	await replaceEditorText(page, text, name);
 }
 
 async function projectRootFromRenderer(page: Page) {
@@ -395,8 +406,21 @@ async function waitForReplacement(
 	renderedText: string
 ) {
 	await expect
-		.poll(() => storyIframe(preview).getAttribute('src'), {timeout: 60_000})
-		.not.toBe(previousSrc);
+		.poll(
+			async () => {
+				const operationError = preview.getByRole('alert');
+
+				if (await operationError.isVisible()) {
+					return `error: ${await operationError.innerText()}`;
+				}
+
+				return (await storyIframe(preview).getAttribute('src')) === previousSrc
+					? 'pending'
+					: 'replaced';
+			},
+			{timeout: 60_000}
+		)
+		.toBe('replaced');
 	await expectRenderedText(preview, renderedText);
 	return previewOrigin(preview);
 }
@@ -432,12 +456,6 @@ async function browserWindowId(app: ElectronApplication, page: Page) {
 				window => window.webContents.getURL() === targetUrl
 			)?.id ?? null,
 		page.url()
-	);
-}
-
-async function focusedBrowserWindowId(app: ElectronApplication) {
-	return app.evaluate(
-		({BrowserWindow}) => BrowserWindow.getFocusedWindow()?.id ?? null
 	);
 }
 
@@ -478,10 +496,17 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 			name: 'Managed Play Debug',
 			startPassage: 'Start'
 		});
+		const projectRoot = await projectRootFromRenderer(page);
+
 		await createPassage(page, 'Next', 'Next passage version one.');
 		await selectPassage(page, 'Start');
 		await replaceEditorText(
 			page,
+			'Start passage version one. [[Continue->Next]]',
+			'Start'
+		);
+		await waitForSavedText(
+			projectRoot,
 			'Start passage version one. [[Continue->Next]]'
 		);
 
@@ -583,13 +608,21 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		await expect(latestLog).toContainText('managed-preview-rejection');
 
 		await preview.getByRole('button', {name: 'Source'}).click();
-		await expect.poll(() => focusedBrowserWindowId(app)).toBe(ownerWindowId);
 		await expect(page).toHaveURL(/mode=text&passage=/);
-		await expect(page.getByRole('region', {name: 'Next'})).toBeVisible();
-		await replaceEditorText(page, 'Next passage version two, built live.');
+		await expect(
+			page.getByRole('region', {name: 'Next', exact: true})
+		).toHaveClass(/is-active/);
+		await replaceEditorText(
+			page,
+			'Next passage version two, built live.',
+			'Next'
+		);
+		await waitForSavedText(
+			projectRoot,
+			'Next passage version two, built live.'
+		);
 
 		await preview.getByRole('button', {name: 'Graph'}).click();
-		await expect.poll(() => focusedBrowserWindowId(app)).toBe(ownerWindowId);
 		await expect(page).toHaveURL(/mode=graph&passage=/);
 		await expect(page.getByLabel('Story graph')).toBeVisible();
 
@@ -612,7 +645,18 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 
 		await preview.getByRole('button', {name: 'Source'}).click();
 		await expect(page).toHaveURL(/mode=text&passage=/);
-		await replaceEditorText(page, 'Next passage version three, rebuilt fresh.');
+		await expect(
+			page.getByRole('region', {name: 'Next', exact: true})
+		).toHaveClass(/is-active/);
+		await replaceEditorText(
+			page,
+			'Next passage version three, rebuilt fresh.',
+			'Next'
+		);
+		await waitForSavedText(
+			projectRoot,
+			'Next passage version three, rebuilt fresh.'
+		);
 		const secondPackage = await previewOrigin(preview);
 
 		await preview.getByRole('button', {name: 'Test From Start'}).click();

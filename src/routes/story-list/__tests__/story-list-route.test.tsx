@@ -395,18 +395,20 @@ describe('<StoryListRoute>', () => {
 		expect(loadProjectMetadata(story.id)).toBeUndefined();
 	});
 
-	it('keeps native storage metadata until the project story deletion is dispatched', async () => {
+	it('removes a lazy project only after its folder deletion completes', async () => {
 		const story = fakeStory();
-		const rootPath = '/native/deferred-delete.twine.rs';
-		const deleteProjectFolder = jest.fn().mockResolvedValue(undefined);
-		let finishDeletion: () => void = () => {};
+		const rootPath = '/native/lazy-project.twine.rs';
+		let finishFolderDeletion: () => void = () => {};
+		const deleteProjectFolder = jest.fn(
+			() =>
+				new Promise<void>(resolve => {
+					finishFolderDeletion = resolve;
+				})
+		);
+		const storiesDispatch = jest.fn();
 		const applyStoryCommand = jest
 			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
-			.mockReturnValue(
-				new Promise(resolve => {
-					finishDeletion = () => resolve(undefined);
-				})
-			);
+			.mockReturnValue(new Promise(() => {}));
 
 		saveProjectMetadata(story.id, {
 			rootPath,
@@ -416,17 +418,32 @@ describe('<StoryListRoute>', () => {
 		(window as any).twineElectron = {deleteProjectFolder};
 		jest.spyOn(window, 'confirm').mockReturnValue(true);
 
-		await renderComponent({stories: [story]});
+		await renderComponent({
+			stories: [story],
+			storiesDispatchObserver: storiesDispatch
+		});
 		fireEvent.click(
 			screen.getByRole('button', {
 				name: new RegExp(`delete story ${story.name}`, 'i')
 			})
 		);
 
-		await waitFor(() => expect(applyStoryCommand).toHaveBeenCalled());
+		await waitFor(() =>
+			expect(deleteProjectFolder).toHaveBeenCalledWith(rootPath)
+		);
+		expect(screen.getByTestId('story-list-row')).toBeInTheDocument();
 		expect(loadProjectMetadata(story.id)?.rootPath).toBe(rootPath);
-		finishDeletion();
+		finishFolderDeletion();
+		await waitFor(() =>
+			expect(screen.queryByTestId('story-list-row')).not.toBeInTheDocument()
+		);
 		await waitFor(() => expect(loadProjectMetadata(story.id)).toBeUndefined());
+		expect(storiesDispatch).toHaveBeenCalledWith({
+			storageKind: 'electron-project-folder',
+			storyId: story.id,
+			type: 'deleteStory'
+		});
+		expect(applyStoryCommand).not.toHaveBeenCalled();
 	});
 
 	it('keeps a file-backed project folder if deletion is canceled', async () => {

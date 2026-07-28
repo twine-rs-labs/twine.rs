@@ -6,11 +6,13 @@ import {usePrefsContext} from '../../store/prefs';
 import {useComputedTheme} from '../../store/prefs/use-computed-theme';
 import {useStoriesContext} from '../../store/stories';
 import {useNativeStoryPreviewPreparation} from '../../store/use-story-launch';
+import {useCoreProjectHost} from '../../core/project-host';
 
 jest.mock('../../store/prefs');
 jest.mock('../../store/prefs/use-computed-theme');
 jest.mock('../../store/stories');
 jest.mock('../../store/use-story-launch');
+jest.mock('../../core/project-host');
 jest.mock('react-router', () => ({
 	...jest.requireActual('react-router'),
 	useNavigate: jest.fn()
@@ -23,8 +25,12 @@ describe('StoryPreviewOwnerController', () => {
 	const reportStoryPreviewCommandResult = jest.fn();
 	const updateStoryPreviewAppearance = jest.fn();
 	let commandListener: ((command: any) => void) | undefined;
+	let coreRevision = 1;
+	let statusListener: (() => void) | undefined;
 
 	beforeEach(() => {
+		coreRevision = 1;
+		statusListener = undefined;
 		(useNavigate as jest.Mock).mockReturnValue(navigate);
 		(usePrefsContext as jest.Mock).mockReturnValue({
 			prefs: {highContrast: true, reducedMotion: false}
@@ -44,6 +50,13 @@ describe('StoryPreviewOwnerController', () => {
 		(useNativeStoryPreviewPreparation as jest.Mock).mockReturnValue(
 			preparePreview
 		);
+		(useCoreProjectHost as jest.Mock).mockReturnValue({
+			sessionStatus: () => ({revision: coreRevision}),
+			subscribeToStatus: (listener: () => void) => {
+				statusListener = listener;
+				return jest.fn();
+			}
+		});
 		preparePreview.mockResolvedValue({
 			projectRoot: '/project',
 			request: {descriptor: {}, instrumentedHtml: '<html></html>'}
@@ -60,6 +73,17 @@ describe('StoryPreviewOwnerController', () => {
 			reportStoryPreviewCommandResult,
 			updateStoryPreviewAppearance
 		};
+	});
+
+	it('refreshes preview metadata when a document-only Core revision lands', () => {
+		render(<StoryPreviewOwnerController />);
+
+		expect(useNativeStoryPreviewPreparation).toHaveBeenCalledTimes(1);
+		act(() => {
+			coreRevision = 2;
+			statusListener?.();
+		});
+		expect(useNativeStoryPreviewPreparation).toHaveBeenCalledTimes(2);
 	});
 
 	it('broadcasts plain owner appearance without loading preview preferences', async () => {

@@ -5,10 +5,19 @@ import {
 	lstatSync,
 	openSync,
 	readSync,
+	realpathSync,
 	readdirSync,
 	rmSync
 } from 'fs';
-import {dirname, isAbsolute, join, relative, resolve, sep} from 'path';
+import {
+	basename,
+	dirname,
+	isAbsolute,
+	join,
+	relative,
+	resolve,
+	sep
+} from 'path';
 import type {NativeProjectFolderResult} from './project-folder';
 import {
 	forgetNativeProjectFolder,
@@ -162,21 +171,65 @@ function pathContainsPath(parentPath: string, childPath: string) {
 	);
 }
 
+function canonicalFilesystemPath(filePath: string) {
+	const resolvedPath = resolve(filePath);
+	const missingSegments: string[] = [];
+	let existingPath = resolvedPath;
+
+	while (true) {
+		try {
+			return resolve(realpathSync(existingPath), ...missingSegments);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			const parentPath = dirname(existingPath);
+
+			if (
+				(code !== 'ENOENT' && code !== 'ENOTDIR') ||
+				parentPath === existingPath
+			) {
+				return resolvedPath;
+			}
+
+			missingSegments.unshift(basename(existingPath));
+			existingPath = parentPath;
+		}
+	}
+}
+
+function resolvedStoryDirectoryPath() {
+	return canonicalFilesystemPath(getStoryDirectoryPath());
+}
+
 function storedProjectRootPath(rootPath: string) {
-	const storyDirectoryPath = getStoryDirectoryPath();
-	const resolvedRootPath = resolve(rootPath);
+	const storyDirectoryPath = resolvedStoryDirectoryPath();
+	const resolvedRootPath = resolvedProjectRootPath(rootPath);
 
 	if (pathContainsPath(storyDirectoryPath, resolvedRootPath)) {
-		return relative(resolve(storyDirectoryPath), resolvedRootPath) || '.';
+		return relative(storyDirectoryPath, resolvedRootPath) || '.';
 	}
 
 	return resolvedRootPath;
 }
 
 function resolvedProjectRootPath(rootPath: string) {
-	return isAbsolute(rootPath)
-		? resolve(rootPath)
-		: resolve(getStoryDirectoryPath(), rootPath);
+	if (isAbsolute(rootPath)) {
+		return canonicalFilesystemPath(rootPath);
+	}
+
+	const configuredStoryDirectoryPath = getStoryDirectoryPath();
+	const storyDirectoryPath = canonicalFilesystemPath(
+		configuredStoryDirectoryPath
+	);
+
+	if (!isAbsolute(configuredStoryDirectoryPath)) {
+		const cwdResolvedRootPath = canonicalFilesystemPath(rootPath);
+
+		if (pathContainsPath(storyDirectoryPath, cwdResolvedRootPath)) {
+			return cwdResolvedRootPath;
+		}
+	}
+
+	return canonicalFilesystemPath(resolve(storyDirectoryPath, rootPath));
 }
 
 function rememberedProjectMigrationRecord(
@@ -242,30 +295,42 @@ export function rememberedProjectFolders() {
 	const indexPath = projectLibraryIndexPath();
 	const projects = listRememberedNativeProjectFolders(indexPath) ?? [];
 	const migrationRecords = projects.map(rememberedProjectMigrationRecord);
-	const canonicalRecords = new Map<string, (typeof migrationRecords)[number]>();
+	const canonicalGroups = new Map<
+		string,
+		{
+			records: typeof migrationRecords;
+			selected: (typeof migrationRecords)[number];
+		}
+	>();
 
 	for (const record of migrationRecords) {
-		if (record.changed) {
-			forgetNativeProjectFolder(indexPath, record.originalRootPath);
-			rememberNativeProjectFolder(indexPath, {
-				passageTextLoaded: false,
-				rootPath: record.storedRootPath,
-				stories: [],
-				storyIds: record.project.storyIds
-			});
-		}
+		const key = resolve(record.project.rootPath);
+		const group = canonicalGroups.get(key);
 
-		canonicalRecords.set(
-			resolve(record.project.rootPath),
-			newestProjectRecord(
-				canonicalRecords.get(resolve(record.project.rootPath)),
-				record
-			)
-		);
+		canonicalGroups.set(key, {
+			records: [...(group?.records ?? []), record],
+			selected: newestProjectRecord(group?.selected, record)
+		});
 	}
 
-	const rememberedProjects = [...canonicalRecords.values()].map(
-		record => record.project
+	for (const {records, selected} of canonicalGroups.values()) {
+		if (records.length === 1 && !selected.changed) {
+			continue;
+		}
+
+		for (const record of records) {
+			forgetNativeProjectFolder(indexPath, record.originalRootPath);
+		}
+		rememberNativeProjectFolder(indexPath, {
+			passageTextLoaded: false,
+			rootPath: selected.storedRootPath,
+			stories: [],
+			storyIds: selected.project.storyIds
+		});
+	}
+
+	const rememberedProjects = [...canonicalGroups.values()].map(
+		({selected}) => selected.project
 	);
 
 	for (const parentPath of new Set(

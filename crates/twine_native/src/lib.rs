@@ -815,7 +815,14 @@ fn install_project_folder_no_replace_inner(
 
     match install_result {
         Ok(()) => Ok(true),
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::AlreadyExists | ErrorKind::DirectoryNotEmpty
+            ) =>
+        {
+            Ok(false)
+        }
         Err(error) => Err(native_error(error)),
     }
 }
