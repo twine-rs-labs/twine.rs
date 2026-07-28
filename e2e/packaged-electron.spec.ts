@@ -3,6 +3,7 @@ import {
 	_electron as electron,
 	chromium,
 	ElectronApplication,
+	Locator,
 	Page
 } from 'playwright';
 import {
@@ -175,6 +176,30 @@ function tabWithText(page: Page, text: string) {
 	return page.getByRole('tab').filter({hasText: new RegExp(`^${text}$`)});
 }
 
+async function clickAfterDeferringProjectSessionReviews(
+	page: Page,
+	target: Locator
+) {
+	let lastClickError: unknown;
+
+	for (let attempt = 0; attempt < 4; attempt++) {
+		try {
+			await target.click({timeout: 5_000});
+			return;
+		} catch (error) {
+			lastClickError = error;
+			const later = page.getByRole('button', {name: 'Later', exact: true});
+
+			if (!(await later.isVisible())) {
+				throw error;
+			}
+			await later.click();
+		}
+	}
+
+	throw lastClickError;
+}
+
 test('packaged desktop flushes a trailing legacy HTML save before exit', async () => {
 	const executablePath = await packagedExecutable();
 	const profileRoot = await mkdtemp(
@@ -317,12 +342,20 @@ test('packaged desktop duplicates a project from the launcher and preserves it a
 		running = undefined;
 		running = await launchPackagedApp(executablePath, profileRoot);
 		const relaunchedPage = running.page;
-		const sourceRow = relaunchedPage.locator(
-			`[data-testid="story-list-row"][data-id="${sourceStoryId}"]`
-		);
-		const relaunchedDuplicateRow = relaunchedPage.locator(
-			`[data-testid="story-list-row"][data-id="${duplicateStoryId}"]`
-		);
+		const sourceRow = relaunchedPage.getByTestId('story-list-row').filter({
+			has: relaunchedPage.getByRole('button', {
+				name: 'Delete story Packaged Duplicate',
+				exact: true
+			})
+		});
+		const relaunchedDuplicateRow = relaunchedPage
+			.getByTestId('story-list-row')
+			.filter({
+				has: relaunchedPage.getByRole('button', {
+					name: 'Delete story Packaged Duplicate 1',
+					exact: true
+				})
+			});
 
 		await expect(sourceRow).toBeVisible();
 		await expect(relaunchedDuplicateRow).toBeVisible();
@@ -939,7 +972,10 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			.filter({hasText: /^Single$/})
 			.click();
 		await tabWithText(page, 'Text').click();
-		await page.getByRole('button', {name: 'Create Project'}).click();
+		await clickAfterDeferringProjectSessionReviews(
+			page,
+			page.getByRole('button', {name: 'Create Project'})
+		);
 		await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
 
 		const singleProjectRoot = await projectRootFromRenderer(page);

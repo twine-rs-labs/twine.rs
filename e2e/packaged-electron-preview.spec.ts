@@ -1163,11 +1163,16 @@ test('current passage resolves to a stable ID in every bundled format family', a
 		for (const format of formats) {
 			const storyName = `Passage Detection ${format}`;
 			const marker = `Next passage marker for ${format}.`;
+			const startSource = linkSource(format);
 
 			await createProject(page, {format, name: storyName});
+			const projectRoot = await projectRootFromRenderer(page);
+
 			await createPassage(page, 'Next', marker);
+			await waitForSavedText(projectRoot, marker);
 			await selectPassage(page, 'Start');
-			await replaceEditorText(page, linkSource(format));
+			await replaceEditorText(page, startSource);
+			await waitForSavedText(projectRoot, startSource);
 			const preview = await launchPreview(running, () =>
 				page.getByTitle('Play').click()
 			);
@@ -1175,7 +1180,15 @@ test('current passage resolves to a stable ID in every bundled format family', a
 			await expect(preview.getByText('Play', {exact: true})).toBeVisible();
 			await expect(preview.getByText(storyName, {exact: true})).toBeVisible();
 			await expectCurrentPassage(preview, 'Start');
-			await storyFrame(preview).getByText('Continue', {exact: true}).click();
+			const continueLink = storyFrame(preview).getByText('Continue', {
+				exact: true
+			});
+
+			if (format.startsWith('Chapbook')) {
+				await continueLink.press('Enter');
+			} else {
+				await continueLink.click();
+			}
 			await expectRenderedText(preview, marker);
 			await expectCurrentPassage(preview, 'Next');
 			await preview.close();

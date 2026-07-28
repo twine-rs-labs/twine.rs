@@ -57,9 +57,7 @@ async function saveNativeProjectFolder(
 		);
 		const layoutOnlySave =
 			layoutHints.length > 0 && layoutHints.length === hints.length;
-		const metadataSave = hints.some(
-			hint => hint.type === 'passageMetadata'
-		);
+		const metadataSave = hints.some(hint => hint.type === 'passageMetadata');
 		const incrementalHints =
 			hints.length > 0 && hints.every(hint => hint.type !== 'full');
 		const useCompactIncrementalPayload =
