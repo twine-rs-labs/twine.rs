@@ -34,6 +34,7 @@ import {
 	copyProjectImportAssets,
 	copyAssetToProject,
 	createProjectFolder,
+	duplicateProjectFolder,
 	deleteProjectAsset,
 	deleteProjectFolder,
 	discardProjectAssetEffect,
@@ -63,6 +64,7 @@ import {
 	findNativeTwineHtmlFiles,
 	finishNativeProjectFolderHydration,
 	forgetNativeProjectFolder,
+	installNativeProjectFolderNoReplace,
 	listNativeProjectAssets,
 	listRememberedNativeProjectFolders,
 	loadNativeProjectFolder,
@@ -74,6 +76,8 @@ import {
 	prepareNativeProjectImport,
 	readNativeProjectFolderHydrationChunk,
 	rememberNativeProjectFolder,
+	rememberNativeProjectFolderStrict,
+	replaceNativeProjectFolderStories,
 	saveNativeProjectFolder
 } from '../native';
 import {performanceHarnessEnabled} from '../performance-harness';
@@ -101,6 +105,7 @@ jest.mock('../native', () => ({
 	findNativeTwineHtmlFiles: jest.fn(),
 	finishNativeProjectFolderHydration: jest.fn(),
 	forgetNativeProjectFolder: jest.fn(),
+	installNativeProjectFolderNoReplace: jest.fn(),
 	listNativeProjectAssets: jest.fn(),
 	listRememberedNativeProjectFolders: jest.fn(),
 	loadNativeProjectFolder: jest.fn(),
@@ -118,6 +123,8 @@ jest.mock('../native', () => ({
 	prepareNativeProjectImport: jest.fn(),
 	readNativeProjectFolderHydrationChunk: jest.fn(),
 	rememberNativeProjectFolder: jest.fn(),
+	rememberNativeProjectFolderStrict: jest.fn(),
+	replaceNativeProjectFolderStories: jest.fn(),
 	saveNativeProjectFolder: jest.fn()
 }));
 jest.mock('../performance-harness', () => ({
@@ -159,6 +166,8 @@ describe('project-folder native bridge', () => {
 		finishNativeProjectFolderHydration as jest.Mock;
 	const findNativeTwineHtmlFilesMock = findNativeTwineHtmlFiles as jest.Mock;
 	const forgetNativeProjectFolderMock = forgetNativeProjectFolder as jest.Mock;
+	const installNativeProjectFolderNoReplaceMock =
+		installNativeProjectFolderNoReplace as jest.Mock;
 	const listNativeProjectAssetsMock = listNativeProjectAssets as jest.Mock;
 	const listRememberedNativeProjectFoldersMock =
 		listRememberedNativeProjectFolders as jest.Mock;
@@ -176,6 +185,10 @@ describe('project-folder native bridge', () => {
 		readNativeProjectFolderHydrationChunk as jest.Mock;
 	const rememberNativeProjectFolderMock =
 		rememberNativeProjectFolder as jest.Mock;
+	const rememberNativeProjectFolderStrictMock =
+		rememberNativeProjectFolderStrict as jest.Mock;
+	const replaceNativeProjectFolderStoriesMock =
+		replaceNativeProjectFolderStories as jest.Mock;
 	const saveNativeProjectFolderMock = saveNativeProjectFolder as jest.Mock;
 
 	function mockZipEntries(entries: any[], entryCount = entries.length) {
@@ -368,6 +381,7 @@ describe('project-folder native bridge', () => {
 		diffNativeProjectFileManifestMock.mockReturnValue(undefined);
 		findNativeTwineHtmlFilesMock.mockReturnValue(undefined);
 		forgetNativeProjectFolderMock.mockReturnValue(undefined);
+		installNativeProjectFolderNoReplaceMock.mockReturnValue(true);
 		listNativeProjectAssetsMock.mockReturnValue(undefined);
 		listRememberedNativeProjectFoldersMock.mockReturnValue([]);
 		loadNativeProjectFolderMock.mockReturnValue(undefined);
@@ -391,7 +405,21 @@ describe('project-folder native bridge', () => {
 		nativeProjectFileManifestMock.mockReturnValue(undefined);
 		prepareNativeHtmlImportMock.mockReturnValue(undefined);
 		prepareNativeProjectImportMock.mockReturnValue(undefined);
-		rememberNativeProjectFolderMock.mockReturnValue(undefined);
+		rememberNativeProjectFolderMock.mockImplementation(
+			(_indexPath, project) => ({
+				rootPath: project.rootPath,
+				storyIds: project.storyIds,
+				updatedAt: '2026-07-28T12:00:00.000Z'
+			})
+		);
+		rememberNativeProjectFolderStrictMock.mockImplementation(
+			(_indexPath, project) => ({
+				rootPath: project.rootPath,
+				storyIds: project.storyIds,
+				updatedAt: '2026-07-28T12:00:00.000Z'
+			})
+		);
+		replaceNativeProjectFolderStoriesMock.mockReturnValue(undefined);
 		saveNativeProjectFolderMock.mockReturnValue(undefined);
 		readdirMock.mockRejectedValue(
 			Object.assign(new Error('missing'), {code: 'ENOENT'})
@@ -468,6 +496,158 @@ describe('project-folder native bridge', () => {
 		expect(manifest).toMatch(
 			/file = "passages\/moon-castle\/0001-[^"]+\.twee"/
 		);
+	});
+
+	it('duplicates a complete project folder through hidden staging into an atomic sibling', async () => {
+		const source = {
+			...fakeStory(1),
+			id: 'source-story',
+			name: 'Moon Castle'
+		};
+		const duplicate = {
+			...source,
+			id: 'duplicate-story',
+			ifid: 'duplicate-ifid',
+			name: 'Moon Castle 1',
+			passages: source.passages.map(passage => ({
+				...passage,
+				id: 'duplicate-passage',
+				story: 'duplicate-story'
+			})),
+			startPassage: 'duplicate-passage'
+		};
+		const passageIds = [
+			{
+				duplicatePassageId: 'duplicate-passage',
+				sourcePassageId: source.passages[0].id
+			}
+		];
+		const rootPath = '/native/moon-castle-1.twine.rs';
+		const stagingRootPath = '/native/.twine-rs-duplicate-test';
+		const nativeResult = {
+			passageTextLoaded: true,
+			rootPath: stagingRootPath,
+			stories: [duplicate],
+			storyIds: [duplicate.id]
+		};
+
+		mkdtempMock.mockResolvedValueOnce(stagingRootPath);
+		replaceNativeProjectFolderStoriesMock.mockReturnValue(nativeResult);
+
+		const result = await duplicateProjectFolder(
+			'/native/moon-castle.twine.rs',
+			[{passageIds, sourceStoryId: source.id, story: duplicate}]
+		);
+
+		expect(result).toEqual({...nativeResult, rootPath});
+		expect(mkdtempMock).toHaveBeenCalledWith('/native/.twine-rs-duplicate-');
+		expect(copyMock).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			stagingRootPath,
+			{
+				dereference: false,
+				errorOnExist: true,
+				overwrite: false,
+				preserveTimestamps: true
+			}
+		);
+		expect(replaceNativeProjectFolderStoriesMock).toHaveBeenCalledWith(
+			stagingRootPath,
+			[{passageIds, sourceStoryId: source.id, story: duplicate}]
+		);
+		expect(installNativeProjectFolderNoReplaceMock).toHaveBeenCalledWith(
+			stagingRootPath,
+			rootPath
+		);
+		expect(rememberNativeProjectFolderStrictMock).toHaveBeenCalledWith(
+			expect.stringContaining('native-projects.json'),
+			expect.objectContaining({
+				rootPath: expect.stringContaining('moon-castle-1.twine.rs'),
+				storyIds: [duplicate.id]
+			})
+		);
+		expect(removeMock).toHaveBeenCalledWith(
+			`${rootPath}/.twine-rs-project-duplicate-stage.json`
+		);
+		expect(removeMock).not.toHaveBeenCalledWith(rootPath);
+	});
+
+	it('cleans hidden duplicate staging if the copy cannot be prepared', async () => {
+		const story = {...fakeStory(1), name: 'Moon Castle 1'};
+		const copyError = new Error('disk full');
+		const stagingRootPath = '/native/.twine-rs-duplicate-test';
+
+		mkdtempMock.mockResolvedValueOnce(stagingRootPath);
+		copyMock.mockRejectedValueOnce(copyError);
+
+		await expect(
+			duplicateProjectFolder('/native/moon-castle.twine.rs', [
+				{
+					passageIds: story.passages.map(passage => ({
+						duplicatePassageId: passage.id,
+						sourcePassageId: passage.id
+					})),
+					sourceStoryId: 'source-story',
+					story
+				}
+			])
+		).rejects.toBe(copyError);
+		expect(removeMock).toHaveBeenCalledWith(stagingRootPath);
+		expect(replaceNativeProjectFolderStoriesMock).not.toHaveBeenCalled();
+	});
+
+	it('rolls back an installed duplicate if library registration fails', async () => {
+		const source = {
+			...fakeStory(1),
+			id: 'source-story',
+			name: 'Moon Castle'
+		};
+		const duplicate = {
+			...source,
+			id: 'duplicate-story',
+			ifid: 'duplicate-ifid',
+			name: 'Moon Castle 1',
+			passages: source.passages.map(passage => ({
+				...passage,
+				id: 'duplicate-passage',
+				story: 'duplicate-story'
+			})),
+			startPassage: 'duplicate-passage'
+		};
+		const rootPath = '/native/moon-castle-1.twine.rs';
+		const stagingRootPath = '/native/.twine-rs-duplicate-test';
+		const registrationError = new Error('project index is read-only');
+
+		mkdtempMock.mockResolvedValueOnce(stagingRootPath);
+		replaceNativeProjectFolderStoriesMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath: stagingRootPath,
+			stories: [duplicate],
+			storyIds: [duplicate.id]
+		});
+		rememberNativeProjectFolderStrictMock.mockImplementationOnce(() => {
+			throw registrationError;
+		});
+
+		await expect(
+			duplicateProjectFolder('/native/moon-castle.twine.rs', [
+				{
+					passageIds: [
+						{
+							duplicatePassageId: 'duplicate-passage',
+							sourcePassageId: source.passages[0].id
+						}
+					],
+					sourceStoryId: source.id,
+					story: duplicate
+				}
+			])
+		).rejects.toBe(registrationError);
+		expect(forgetNativeProjectFolderMock).toHaveBeenCalledWith(
+			expect.stringContaining('native-projects.json'),
+			rootPath
+		);
+		expect(removeMock).toHaveBeenCalledWith(rootPath);
 	});
 
 	it('creates one complete Twee source with scripts and styles kept separate', async () => {

@@ -58,6 +58,7 @@ import {
 	copyProjectImportAssets,
 	copyAssetToProject,
 	createProjectFolder,
+	duplicateProjectFolder,
 	deleteProjectAsset,
 	discardProjectAssetEffect,
 	deleteProjectFolder,
@@ -93,6 +94,7 @@ import type {
 	NativeProjectAssetPayloadLimits,
 	NativePlatformSettingsUpdate,
 	NativeStoryPreviewLaunchRequest,
+	ProjectStoryReplacement,
 	ProjectSourceLayout
 } from '../shared';
 import {
@@ -849,6 +851,22 @@ export function initIpc() {
 			grantProjectCapability(
 				event,
 				await createProjectFolder(story, preferredParent, sourceLayout)
+			)
+	);
+
+	ipcMain.handle(
+		'duplicate-project-folder',
+		async (
+			event,
+			capability: string,
+			replacements: ProjectStoryReplacement[]
+		) =>
+			grantProjectCapability(
+				event,
+				await duplicateProjectFolder(
+					resolveProjectCapability(event, capability),
+					replacements
+				)
 			)
 	);
 

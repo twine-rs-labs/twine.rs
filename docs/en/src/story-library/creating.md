@@ -42,11 +42,17 @@ project later does not convert it to the other layout. Automatic conversion is
 not currently offered. To change layouts, make a backup, create a new project
 using the layout you want, and move or import the story content into it.
 
-## Copying a Story
+## Duplicating a Project or Story
 
-To make a copy of an existing story, use _Duplicate_ on its project row or
-card. Twine creates another library entry with a unique name. In the desktop
-app, duplicating a story does not duplicate its existing project folder.
+Use _Duplicate Project_ on a file-backed desktop project to create an
+independent sibling `.twine.rs` folder. Twine copies every story and file in the
+folder, including assets and hidden `.twine/` metadata, then assigns new story,
+IFID, and passage identities to the copy. If a project folder contains multiple
+stories, they are duplicated together because they share the same assets and
+storage boundary.
+
+Browser-local stories use _Duplicate Story_ instead. This creates another
+browser library entry with a unique name; there is no project folder to copy.
 
 ## Importing Stories
 

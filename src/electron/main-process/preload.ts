@@ -9,6 +9,7 @@ import type {
 	NativeStoryPreviewCommandResult,
 	NativeStoryPreviewLaunchRequest,
 	NativeStoryPreviewOwnerCommand,
+	ProjectStoryReplacement,
 	ProjectSourceLayout,
 	TwineElectronWindow
 } from '../shared';
@@ -174,6 +175,16 @@ const bridge = {
 			story,
 			preferredParent,
 			sourceLayout
+		);
+	},
+	duplicateProjectFolder(
+		rootPath: string,
+		replacements: ProjectStoryReplacement[]
+	) {
+		return invokeProjectResult(
+			'duplicate-project-folder',
+			projectCapability(rootPath),
+			replacements
 		);
 	},
 	deleteProjectAsset(rootPath: string, path: string) {

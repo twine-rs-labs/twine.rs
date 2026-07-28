@@ -107,6 +107,207 @@ describe('<StoryListRoute>', () => {
 		);
 	});
 
+	it('duplicates a file-backed project folder and remembers its new root', async () => {
+		const story = fakeStory();
+		const sourceRoot = '/native/moon-castle.twine.rs';
+		const duplicateRoot = '/native/moon-castle-1.twine.rs';
+		const duplicateProjectFolder = jest.fn(
+			async (
+				_rootPath: string,
+				replacements: Array<{
+					passageIds: Array<{
+						duplicatePassageId: string;
+						sourcePassageId: string;
+					}>;
+					sourceStoryId: string;
+					story: ReturnType<typeof fakeStory>;
+				}>
+			) => ({
+				passageTextLoaded: true,
+				rootPath: duplicateRoot,
+				stories: replacements.map(({story}) => story),
+				storyIds: replacements.map(({story}) => story.id)
+			})
+		);
+
+		story.name = 'Moon Castle';
+		saveProjectMetadata(story.id, {
+			rootPath: sourceRoot,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {duplicateProjectFolder};
+
+		await renderComponent({stories: [story]});
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /duplicate project moon castle/i
+			})
+		);
+
+		await waitFor(() => expect(duplicateProjectFolder).toHaveBeenCalled());
+		const [calledRoot, replacements] = duplicateProjectFolder.mock.calls[0];
+		const duplicatedStory = replacements[0].story;
+
+		expect(calledRoot).toBe(sourceRoot);
+		expect(replacements[0].sourceStoryId).toBe(story.id);
+		expect(replacements[0].passageIds).toEqual(
+			story.passages.map((passage, index) => ({
+				duplicatePassageId: duplicatedStory.passages[index].id,
+				sourcePassageId: passage.id
+			}))
+		);
+		expect(duplicatedStory.id).not.toBe(story.id);
+		expect(duplicatedStory.ifid).not.toBe(story.ifid);
+		expect(loadProjectMetadata(duplicatedStory.id)?.rootPath).toBe(
+			duplicateRoot
+		);
+		await waitFor(() =>
+			expect(screen.getAllByTestId('story-list-row')).toHaveLength(2)
+		);
+	});
+
+	it('duplicates every story sharing a file-backed project root', async () => {
+		const firstStory = fakeStory();
+		const secondStory = fakeStory();
+		const sourceRoot = '/native/collection.twine.rs';
+		const duplicateProjectFolder = jest.fn(
+			async (
+				_rootPath: string,
+				replacements: Array<{
+					passageIds: Array<{
+						duplicatePassageId: string;
+						sourcePassageId: string;
+					}>;
+					sourceStoryId: string;
+					story: ReturnType<typeof fakeStory>;
+				}>
+			) => ({
+				passageTextLoaded: true,
+				rootPath: '/native/collection-copy.twine.rs',
+				stories: replacements.map(({story}) => story),
+				storyIds: replacements.map(({story}) => story.id)
+			})
+		);
+
+		firstStory.name = 'First Story';
+		secondStory.name = 'Second Story';
+		for (const projectStory of [firstStory, secondStory]) {
+			saveProjectMetadata(projectStory.id, {
+				rootPath: sourceRoot,
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+		}
+		(window as any).twineElectron = {duplicateProjectFolder};
+
+		await renderComponent({stories: [firstStory, secondStory]});
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /duplicate project first story/i
+			})
+		);
+
+		await waitFor(() => expect(duplicateProjectFolder).toHaveBeenCalled());
+		const replacements = duplicateProjectFolder.mock.calls[0][1];
+
+		expect(replacements.map(({sourceStoryId}: any) => sourceStoryId)).toEqual([
+			firstStory.id,
+			secondStory.id
+		]);
+		expect(new Set(replacements.map(({story}: any) => story.name)).size).toBe(
+			2
+		);
+		await waitFor(() =>
+			expect(screen.getAllByTestId('story-list-row')).toHaveLength(4)
+		);
+	});
+
+	it('hydrates a duplicated multi-story project in one non-persisting batch', async () => {
+		const firstStory = {...fakeStory(), name: 'First Story'};
+		const secondStory = {...fakeStory(), name: 'Second Story'};
+		const sourceRoot = '/native/collection.twine.rs';
+		const storiesDispatch = jest.fn();
+		const duplicateProjectFolder = jest.fn(
+			async (
+				_rootPath: string,
+				replacements: Array<{
+					sourceStoryId: string;
+					story: ReturnType<typeof fakeStory>;
+				}>
+			) => ({
+				passageTextLoaded: true,
+				rootPath: '/native/collection-copy.twine.rs',
+				stories: replacements.map(({story}) => story),
+				storyIds: replacements.map(({story}) => story.id)
+			})
+		);
+
+		for (const projectStory of [firstStory, secondStory]) {
+			saveProjectMetadata(projectStory.id, {
+				rootPath: sourceRoot,
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+		}
+		(window as any).twineElectron = {duplicateProjectFolder};
+
+		await renderComponent({
+			stories: [firstStory, secondStory],
+			storiesDispatchObserver: storiesDispatch
+		});
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /duplicate project first story/i
+			})
+		);
+		await waitFor(() =>
+			expect(storiesDispatch).toHaveBeenCalledWith(
+				expect.objectContaining({
+					actions: [
+						expect.objectContaining({type: 'createStory'}),
+						expect.objectContaining({type: 'createStory'})
+					],
+					persistence: 'skip',
+					type: 'applyCorePatchBatch'
+				})
+			)
+		);
+		expect(
+			storiesDispatch.mock.calls.filter(
+				([action]) => action.type === 'createStory'
+			)
+		).toHaveLength(0);
+	});
+
+	it('shows an error without adding a story when folder duplication fails', async () => {
+		const story = fakeStory();
+
+		story.name = 'Uncopyable';
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/uncopyable.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {
+			duplicateProjectFolder: jest
+				.fn()
+				.mockRejectedValue(new Error('Permission denied'))
+		};
+
+		await renderComponent({stories: [story]});
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /duplicate project uncopyable/i
+			})
+		);
+
+		expect(await screen.findByRole('alert')).toHaveTextContent(
+			'Could not duplicate project: Permission denied'
+		);
+		expect(screen.getAllByTestId('story-list-row')).toHaveLength(1);
+	});
+
 	it('assigns story tags from the launcher', async () => {
 		const story = fakeStory();
 		const applyStoryCommand = jest

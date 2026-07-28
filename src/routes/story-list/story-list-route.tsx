@@ -43,8 +43,10 @@ import {
 import {usePublishing} from '../../store/use-publishing';
 import {
 	deleteProjectMetadata,
-	loadProjectMetadata
+	loadProjectMetadata,
+	saveProjectMetadata
 } from '../../store/project-metadata';
+import {markProjectStoryHydration} from '../../store/project-hydration';
 import type {TwineElectronWindow} from '../../electron/shared';
 import {archiveFilename} from '../../util/publish';
 import {saveHtml} from '../../util/save-file';
@@ -190,6 +192,8 @@ export const InnerStoryListRoute: React.FC = () => {
 	const [query, setQuery] = React.useState('');
 	const [view, setView] = React.useState<LauncherView>('table');
 	const [archiveRunning, setArchiveRunning] = React.useState(false);
+	const [duplicatingKey, setDuplicatingKey] = React.useState<string>();
+	const [duplicateError, setDuplicateError] = React.useState<string>();
 	const selectedStories = React.useMemo(
 		() => stories.filter(story => story.selected),
 		[stories]
@@ -259,13 +263,126 @@ export const InnerStoryListRoute: React.FC = () => {
 	}
 
 	async function duplicateProject(story: Story) {
-		const completeStory = await materializeStory(story.id);
-		const duplicate = duplicateStory(completeStory, stories);
+		const rootPath = fileBackedProjectRoot(story);
+		const twineElectron = desktopBridge();
+		const key = rootPath ?? `story:${story.id}`;
 
-		storiesDispatch({
-			...duplicate,
-			props: registerStoryDocuments(duplicate.props)
-		});
+		if (duplicatingKey) {
+			return;
+		}
+
+		setDuplicateError(undefined);
+		setDuplicatingKey(key);
+		try {
+			if (!rootPath) {
+				const completeStory = await materializeStory(story.id);
+				const duplicate = duplicateStory(completeStory, stories);
+
+				storiesDispatch({
+					...duplicate,
+					props: registerStoryDocuments(duplicate.props)
+				});
+				return;
+			}
+			if (!twineElectron?.duplicateProjectFolder) {
+				throw new Error(
+					'The desktop project-folder duplication bridge is unavailable.'
+				);
+			}
+
+			const projectStories = stories.filter(
+				candidate => fileBackedProjectRoot(candidate) === rootPath
+			);
+			const completeStories = await Promise.all(
+				projectStories.map(projectStory => materializeStory(projectStory.id))
+			);
+			const reservedNames = [...stories];
+			const replacements = completeStories.map(sourceStory => {
+				const duplicate = duplicateStory(sourceStory, reservedNames).props;
+
+				reservedNames.push(duplicate);
+				return {
+					passageIds: sourceStory.passages.map((sourcePassage, index) => ({
+						duplicatePassageId: duplicate.passages[index].id,
+						sourcePassageId: sourcePassage.id
+					})),
+					sourceStoryId: sourceStory.id,
+					story: duplicate
+				};
+			});
+			const result = await twineElectron.duplicateProjectFolder(
+				rootPath,
+				replacements
+			);
+
+			try {
+				for (const duplicatedStory of result.stories) {
+					saveProjectMetadata(duplicatedStory.id, {
+						rootPath: result.rootPath,
+						status: 'file-backed',
+						storageKind: 'electron-project-folder'
+					});
+				}
+			} catch (error) {
+				for (const duplicatedStory of result.stories) {
+					deleteProjectMetadata(duplicatedStory.id);
+				}
+				try {
+					await twineElectron.deleteProjectFolder(result.rootPath);
+				} catch (cleanupError) {
+					throw new Error(
+						`${(error as Error).message}. The copied folder remains at ${
+							result.rootPath
+						}: ${(cleanupError as Error).message}`
+					);
+				}
+				throw error;
+			}
+
+			const hydratedStories = result.stories.map(duplicatedStory => {
+				markProjectStoryHydration(duplicatedStory.id, {
+					passageTextLoaded: result.passageTextLoaded !== false,
+					rootPath: result.rootPath
+				});
+				return registerStoryDocuments(duplicatedStory);
+			});
+
+			storiesDispatch({
+				actions: hydratedStories.map(story => ({
+					props: story,
+					type: 'createStory' as const
+				})),
+				persistence: 'skip',
+				storyIds: hydratedStories.map(story => story.id),
+				type: 'applyCorePatchBatch'
+			});
+		} catch (error) {
+			setDuplicateError(
+				`Could not duplicate ${
+					rootPath ? 'project' : 'story'
+				}: ${(error as Error).message}`
+			);
+		} finally {
+			setDuplicatingKey(undefined);
+		}
+	}
+
+	function duplicateAction(story: Story) {
+		const rootPath = fileBackedProjectRoot(story);
+		const fileBacked = !!rootPath;
+		const running = duplicatingKey === (rootPath ?? `story:${story.id}`);
+
+		return {
+			disabled: duplicatingKey !== undefined,
+			label: `${running ? 'Duplicating' : 'Duplicate'} ${
+				fileBacked ? 'project' : 'story'
+			} ${story.name}`,
+			text: running
+				? 'Duplicating…'
+				: fileBacked
+					? 'Duplicate Project'
+					: 'Duplicate Story'
+		};
 	}
 
 	function addStoryTag(story: Story, name: string) {
@@ -567,6 +684,11 @@ export const InnerStoryListRoute: React.FC = () => {
 					</div>
 				</header>
 				<SafariWarningCard />
+				{duplicateError && (
+					<p className="story-list-launcher__error" role="alert">
+						{duplicateError}
+					</p>
+				)}
 				<ClickAwayListener
 					ignoreSelector=".story-list-launcher__project"
 					onClickAway={() => storiesDispatch(deselectAllStories())}
@@ -656,7 +778,8 @@ export const InnerStoryListRoute: React.FC = () => {
 															Open
 														</Button>
 														<Button
-															aria-label={`Duplicate story ${story.name}`}
+															aria-label={duplicateAction(story).label}
+															disabled={duplicateAction(story).disabled}
 															icon="copy"
 															onClick={event =>
 																stopAndDuplicateStory(story, event)
@@ -664,7 +787,7 @@ export const InnerStoryListRoute: React.FC = () => {
 															size="sm"
 															variant="ghost"
 														>
-															Duplicate
+															{duplicateAction(story).text}
 														</Button>
 														{storyTagEditor(story)}
 														<Button
@@ -749,7 +872,8 @@ export const InnerStoryListRoute: React.FC = () => {
 												<div className="story-list-launcher__card-actions">
 													<span>{formatDate(story.lastUpdate)}</span>
 													<Button
-														aria-label={`Duplicate story ${story.name}`}
+														aria-label={duplicateAction(story).label}
+														disabled={duplicateAction(story).disabled}
 														icon="copy"
 														onClick={event =>
 															stopAndDuplicateStory(story, event)
@@ -757,7 +881,7 @@ export const InnerStoryListRoute: React.FC = () => {
 														size="sm"
 														variant="ghost"
 													>
-														Duplicate
+														{duplicateAction(story).text}
 													</Button>
 													{storyTagEditor(story)}
 													<Button

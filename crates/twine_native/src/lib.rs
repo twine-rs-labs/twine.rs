@@ -29,14 +29,15 @@ use std::{
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use twine_model::{
-    GraphPosition, PROJECT_SCHEMA_VERSION, Passage, Project, ProjectSourceLayout, StoragePolicy,
-    Story,
+    GraphPosition, PROJECT_SCHEMA_VERSION, Passage, PassageId, Project, ProjectSourceLayout,
+    StoragePolicy, Story, StoryId,
 };
 #[cfg(test)]
 use twine_store::save_project_path;
 use twine_store::{
     LoadProjectOptions, LoadedProjectFile, SaveOptions, load_project_path_with_options,
     load_project_path_with_receipt, save_project_path_with_prepared_sidecar,
+    save_project_path_with_prepared_sidecar_and_story_id_mapping,
 };
 
 const IMPORT_ASSET_EXTENSIONS: &[&str] = &[
@@ -280,6 +281,21 @@ struct NativeRememberedProjectFolder {
 struct NativeProjectLibraryIndex {
     version: u32,
     projects: Vec<NativeRememberedProjectFolder>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeProjectStoryReplacement {
+    passage_ids: Vec<NativeProjectPassageIdReplacement>,
+    source_story_id: String,
+    story: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeProjectPassageIdReplacement {
+    duplicate_passage_id: String,
+    source_passage_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -722,6 +738,88 @@ pub fn create_project_folder_json(
     save_project_folder_json_inner(root_path, story_json, source_layout, true)
 }
 
+#[napi(js_name = "replaceProjectFolderStoriesJson")]
+pub fn replace_project_folder_stories_json(
+    root_path: String,
+    replacements_json: String,
+) -> NativeResult<String> {
+    replace_project_folder_stories_json_inner(root_path, replacements_json)
+}
+
+#[napi(js_name = "installProjectFolderNoReplace")]
+pub fn install_project_folder_no_replace(
+    staging_root_path: String,
+    destination_root_path: String,
+) -> NativeResult<String> {
+    install_project_folder_no_replace_inner(staging_root_path, destination_root_path)
+        .map(|installed| installed.to_string())
+}
+
+fn install_project_folder_no_replace_inner(
+    staging_root_path: String,
+    destination_root_path: String,
+) -> NativeResult<bool> {
+    let staging_root = PathBuf::from(staging_root_path);
+    let destination_root = PathBuf::from(destination_root_path);
+
+    if !staging_root.is_absolute() || !destination_root.is_absolute() {
+        return Err(native_error(
+            "Project-folder installation requires absolute paths.",
+        ));
+    }
+    if !staging_root.is_dir() || !staging_root.join("twine.toml").is_file() {
+        return Err(native_error(
+            "Project-folder installation requires a complete staged project.",
+        ));
+    }
+    if destination_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_none_or(|name| !name.ends_with(".twine.rs"))
+    {
+        return Err(native_error(
+            "Project-folder installation requires a destination ending with .twine.rs.",
+        ));
+    }
+
+    let staging_parent = staging_root
+        .parent()
+        .ok_or_else(|| native_error("The staged project requires a parent folder."))?;
+    let destination_parent = destination_root
+        .parent()
+        .ok_or_else(|| native_error("The destination project requires a parent folder."))?;
+    if fs::canonicalize(staging_parent).map_err(native_error)?
+        != fs::canonicalize(destination_parent).map_err(native_error)?
+    {
+        return Err(native_error(
+            "The staged and destination project folders must be siblings.",
+        ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let install_result = rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        &staging_root,
+        rustix::fs::CWD,
+        &destination_root,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(io::Error::from);
+    #[cfg(target_os = "windows")]
+    let install_result = fs::rename(&staging_root, &destination_root);
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    let install_result = Err(io::Error::new(
+        ErrorKind::Unsupported,
+        "Atomic project-folder installation is unsupported on this platform.",
+    ));
+
+    match install_result {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(native_error(error)),
+    }
+}
+
 fn reserve_new_project_root(root: &Path) -> NativeResult<()> {
     if let Some(parent) = root.parent() {
         fs::create_dir_all(parent).map_err(native_error)?;
@@ -734,6 +832,356 @@ fn reserve_new_project_root(root: &Path) -> NativeResult<()> {
         )),
         Err(error) => Err(native_error(error)),
     }
+}
+
+fn replace_project_folder_stories_json_inner(
+    root_path: String,
+    replacements_json: String,
+) -> NativeResult<String> {
+    let requested_root = PathBuf::from(&root_path);
+
+    if !requested_root.is_absolute() {
+        return Err(native_error("Project roots must be absolute paths."));
+    }
+    if !requested_root.is_dir() || !requested_root.join("twine.toml").is_file() {
+        return Err(native_error(
+            "Project duplication requires an existing project folder with twine.toml.",
+        ));
+    }
+
+    let root = fs::canonicalize(&requested_root).map_err(native_error)?;
+    let root_path = root.to_string_lossy().into_owned();
+    let replacements =
+        serde_json::from_str::<Vec<NativeProjectStoryReplacement>>(&replacements_json)
+            .map_err(native_error)?;
+    let mut project =
+        load_project_path_with_options(&root, LoadProjectOptions::full()).map_err(native_error)?;
+
+    if replacements.len() != project.stories.len() {
+        return Err(native_error(format!(
+            "Project duplication requires replacements for all {} stories.",
+            project.stories.len()
+        )));
+    }
+
+    let existing_metadata = read_renderer_project_sidecar_stories(&root).map_err(native_error)?;
+    let metadata_by_id = existing_metadata
+        .into_iter()
+        .filter_map(|story| {
+            let id = story.get("id")?.as_str()?.to_owned();
+            Some((id, story))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut replacements_by_source = BTreeMap::new();
+    let mut new_story_ids = BTreeSet::new();
+    let mut new_ifids = BTreeSet::new();
+
+    for replacement in replacements {
+        if replacements_by_source
+            .insert(replacement.source_story_id.clone(), replacement)
+            .is_some()
+        {
+            return Err(native_error(
+                "Project duplication received a duplicate source story ID.",
+            ));
+        }
+    }
+
+    let original_stories = project.stories.clone();
+    let original_manifest_name = project.manifest.name.clone();
+    let original_story_ids = original_stories
+        .iter()
+        .map(|story| story.id.clone())
+        .collect::<BTreeSet<_>>();
+    let original_ifids = original_stories
+        .iter()
+        .map(|story| story.ifid.clone())
+        .collect::<BTreeSet<_>>();
+    let original_passage_ids = original_stories
+        .iter()
+        .flat_map(|story| story.passages.iter().map(|passage| passage.id.clone()))
+        .collect::<BTreeSet<_>>();
+    let mut story_id_mapping = BTreeMap::<StoryId, StoryId>::new();
+    let mut passage_id_mapping = BTreeMap::<PassageId, Vec<PassageId>>::new();
+    let mut new_passage_ids = BTreeSet::new();
+    let mut replacement_metadata = Vec::with_capacity(original_stories.len());
+    let mut duplicated_stories = Vec::with_capacity(original_stories.len());
+    let mut remapped_layouts = Vec::with_capacity(original_stories.len());
+
+    for original in &original_stories {
+        let Some(replacement) = replacements_by_source.remove(original.id.as_ref()) else {
+            return Err(native_error(format!(
+                "Project duplication is missing source story {}.",
+                original.id
+            )));
+        };
+        let passage_replacements = replacement.passage_ids;
+        let incoming_metadata = renderer_project_metadata(replacement.story.clone());
+        let mut duplicate =
+            serde_json::from_value::<Story>(replacement.story).map_err(native_error)?;
+
+        if duplicate.id.as_ref().is_empty()
+            || original_story_ids.contains(&duplicate.id)
+            || !new_story_ids.insert(duplicate.id.clone())
+            || duplicate.ifid.trim().is_empty()
+            || original_ifids.contains(&duplicate.ifid)
+            || !new_ifids.insert(duplicate.ifid.clone())
+        {
+            return Err(native_error(
+                "Duplicated stories require new, unique, nonempty story IDs and IFIDs.",
+            ));
+        }
+        if duplicate.passages.len() != original.passages.len() {
+            return Err(native_error(format!(
+                "Duplicated story {} must preserve the source passage count.",
+                original.id
+            )));
+        }
+        if passage_replacements.len() != original.passages.len() {
+            return Err(native_error(format!(
+                "Duplicated story {} requires a passage ID mapping for every source passage.",
+                original.id
+            )));
+        }
+
+        duplicate.color = original.color.clone();
+        duplicate.custom_attributes = original.custom_attributes.clone();
+        duplicate.format_options = original.format_options.clone();
+        duplicate.metadata = original.metadata.clone();
+
+        let duplicate_story_id = duplicate.id.clone();
+        let source_passage_ids = original
+            .passages
+            .iter()
+            .map(|passage| passage.id.as_ref())
+            .collect::<BTreeSet<_>>();
+        let incoming_duplicate_passage_ids = duplicate
+            .passages
+            .iter()
+            .map(|passage| passage.id.as_ref())
+            .collect::<BTreeSet<_>>();
+        let mut mapped_source_passage_ids = BTreeSet::new();
+        let mut mapped_duplicate_passage_ids = BTreeSet::new();
+        let mut source_to_duplicate_passage = BTreeMap::new();
+        let mut duplicate_to_source_passage = BTreeMap::new();
+
+        for passage_replacement in &passage_replacements {
+            if passage_replacement.source_passage_id.is_empty()
+                || passage_replacement.duplicate_passage_id.is_empty()
+                || !mapped_source_passage_ids.insert(passage_replacement.source_passage_id.as_str())
+                || !mapped_duplicate_passage_ids
+                    .insert(passage_replacement.duplicate_passage_id.as_str())
+            {
+                return Err(native_error(
+                    "Duplicated story passage mappings must be a nonempty bijection.",
+                ));
+            }
+            source_to_duplicate_passage.insert(
+                passage_replacement.source_passage_id.as_str(),
+                passage_replacement.duplicate_passage_id.as_str(),
+            );
+            duplicate_to_source_passage.insert(
+                passage_replacement.duplicate_passage_id.as_str(),
+                passage_replacement.source_passage_id.as_str(),
+            );
+        }
+        if mapped_source_passage_ids != source_passage_ids
+            || mapped_duplicate_passage_ids != incoming_duplicate_passage_ids
+        {
+            return Err(native_error(
+                "Duplicated story passage mappings must exactly cover the source and duplicate passages.",
+            ));
+        }
+
+        let mut story_layouts = Vec::with_capacity(original.passages.len());
+        let mut duplicate_passage_ids = BTreeSet::new();
+        for duplicate_passage in &mut duplicate.passages {
+            if duplicate_passage.id.as_ref().is_empty()
+                || original_passage_ids.contains(&duplicate_passage.id)
+                || !duplicate_passage_ids.insert(duplicate_passage.id.clone())
+                || !new_passage_ids.insert(duplicate_passage.id.clone())
+            {
+                return Err(native_error(
+                    "Duplicated passages require new, unique, nonempty passage IDs.",
+                ));
+            }
+            let source_passage_id = duplicate_to_source_passage
+                .get(duplicate_passage.id.as_ref())
+                .expect("validated passage mapping");
+            let source_passage = original
+                .passages
+                .iter()
+                .find(|passage| passage.id.as_ref() == *source_passage_id)
+                .expect("validated source passage mapping");
+            passage_id_mapping
+                .entry(source_passage.id.clone())
+                .or_default()
+                .push(duplicate_passage.id.clone());
+            if duplicate_passage.story != duplicate_story_id {
+                return Err(native_error(
+                    "Duplicated passage parent IDs must match the duplicated story ID.",
+                ));
+            }
+
+            duplicate_passage.custom_attributes = source_passage.custom_attributes.clone();
+            duplicate_passage.metadata = source_passage.metadata.clone();
+            duplicate_passage.source_pid = source_passage.source_pid.clone();
+
+            let mut layout = project
+                .layout
+                .passages
+                .get(&original.id, &source_passage.id)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(bounds) = duplicate_passage.layout {
+                layout.bounds = bounds;
+            }
+            story_layouts.push((duplicate_passage.id.clone(), layout));
+        }
+        let expected_start_passage = if original.start_passage.as_ref().is_empty() {
+            ""
+        } else {
+            source_to_duplicate_passage
+                .get(original.start_passage.as_ref())
+                .copied()
+                .ok_or_else(|| {
+                    native_error(
+                        "The source story start passage is absent from its passage ID mapping.",
+                    )
+                })?
+        };
+        if duplicate.start_passage.as_ref() != expected_start_passage {
+            return Err(native_error(
+                "Duplicated story start passage must match the mapped source start passage.",
+            ));
+        }
+
+        story_id_mapping.insert(duplicate.id.clone(), original.id.clone());
+        remapped_layouts.push((original.id.clone(), duplicate.id.clone(), story_layouts));
+        replacement_metadata.push(
+            metadata_by_id
+                .get(original.id.as_ref())
+                .map(|existing| merge_renderer_story_metadata(existing, &incoming_metadata))
+                .unwrap_or(incoming_metadata),
+        );
+        duplicated_stories.push(duplicate);
+    }
+
+    if !replacements_by_source.is_empty() {
+        return Err(native_error(
+            "Project duplication received an unknown source story ID.",
+        ));
+    }
+
+    for (source_story_id, duplicate_story_id, layouts) in remapped_layouts {
+        project.layout.passages.remove_story(&source_story_id);
+        project
+            .layout
+            .passages
+            .extend_story(duplicate_story_id, layouts);
+    }
+    for group in project.layout.groups.values_mut() {
+        group.passages = std::mem::take(&mut group.passages)
+            .into_iter()
+            .flat_map(|passage_id| {
+                passage_id_mapping
+                    .get(&passage_id)
+                    .cloned()
+                    .unwrap_or_else(|| vec![passage_id])
+            })
+            .collect();
+    }
+    for saved_layout in project.layout.saved_layouts.values_mut() {
+        saved_layout.passages = std::mem::take(&mut saved_layout.passages)
+            .into_iter()
+            .flat_map(|(passage_id, layout)| {
+                passage_id_mapping.get(&passage_id).map_or_else(
+                    || vec![(passage_id, layout.clone())],
+                    |duplicate_ids| {
+                        duplicate_ids
+                            .iter()
+                            .cloned()
+                            .map(|duplicate_id| (duplicate_id, layout.clone()))
+                            .collect()
+                    },
+                )
+            })
+            .collect();
+    }
+
+    let source_to_duplicate = story_id_mapping
+        .iter()
+        .map(|(duplicate, source)| (source.clone(), duplicate.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for story_id in &mut project.library.sort_order {
+        if let Some(duplicate_id) = source_to_duplicate.get(story_id) {
+            *story_id = duplicate_id.clone();
+        }
+    }
+    project.library.colors = std::mem::take(&mut project.library.colors)
+        .into_iter()
+        .map(|(story_id, color)| {
+            (
+                source_to_duplicate
+                    .get(&story_id)
+                    .cloned()
+                    .unwrap_or(story_id),
+                color,
+            )
+        })
+        .collect();
+    project.manifest.source_layouts = std::mem::take(&mut project.manifest.source_layouts)
+        .into_iter()
+        .map(|(story_id, layout)| {
+            (
+                source_to_duplicate
+                    .get(&story_id)
+                    .cloned()
+                    .unwrap_or(story_id),
+                layout,
+            )
+        })
+        .collect();
+    if original_stories.len() == 1 && original_manifest_name == original_stories[0].name {
+        project.manifest.name = duplicated_stories[0].name.clone();
+    }
+    project.stories = duplicated_stories;
+
+    let prepared_sidecar =
+        renderer_project_sidecar_bytes(&replacement_metadata).map_err(native_error)?;
+    save_project_path_with_prepared_sidecar_and_story_id_mapping(
+        &root,
+        &project,
+        &SaveOptions {
+            create_backup: false,
+            max_backups: project.manifest.storage.max_backups,
+            write_generated_indexes: true,
+        },
+        Some(&prepared_sidecar),
+        Some(&story_id_mapping),
+    )
+    .map_err(native_error)?;
+
+    let stories = project
+        .stories
+        .iter()
+        .zip(&replacement_metadata)
+        .map(|(story, metadata)| NativeStory::from_story_and_metadata(story, metadata))
+        .collect::<Vec<_>>();
+    let story_ids = stories.iter().map(|story| story.id.clone()).collect();
+
+    json_string(&NativeProjectFolderResult {
+        baseline_receipt: None,
+        graph_layout_loaded: true,
+        passage_text_loaded: true,
+        load_performance_timings: None,
+        performance_timings: None,
+        root_path,
+        story_sources_loaded: true,
+        stories,
+        story_ids,
+    })
+    .map_err(native_error)
 }
 
 fn save_project_folder_json_inner(
@@ -2527,6 +2975,21 @@ fn renderer_project_metadata(mut story: serde_json::Value) -> serde_json::Value 
     }
 
     story
+}
+
+fn merge_renderer_story_metadata(
+    existing: &serde_json::Value,
+    incoming: &serde_json::Value,
+) -> serde_json::Value {
+    let mut merged = existing.clone();
+
+    if let (Some(merged), Some(incoming)) = (merged.as_object_mut(), incoming.as_object()) {
+        merged.extend(incoming.clone());
+    } else {
+        merged = incoming.clone();
+    }
+
+    renderer_project_metadata(merged)
 }
 
 fn list_project_assets(root: &Path) -> Result<Vec<CoreAssetInventoryEntry>, std::io::Error> {
@@ -4672,6 +5135,417 @@ mod tests {
         assert_eq!(successes, 1);
         assert!(root.is_dir());
         fs::remove_dir_all(root.as_ref()).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn staged_project_install_is_atomic_and_never_overwrites() {
+        let parent = temp_path("staged-project-install");
+        let staging = parent.join(".twine-rs-duplicate-staging");
+        let occupied = parent.join("occupied.twine.rs");
+        let destination = parent.join("installed.twine.rs");
+
+        fs::create_dir_all(staging.join("assets")).expect("staging project");
+        fs::write(staging.join("twine.toml"), "schema_version = 1").expect("manifest");
+        fs::write(staging.join("assets/cover.bin"), b"asset bytes").expect("asset");
+        fs::create_dir_all(&occupied).expect("occupied destination");
+        fs::write(occupied.join("sentinel.txt"), "do not replace").expect("sentinel");
+
+        assert!(
+            !install_project_folder_no_replace_inner(
+                staging.to_string_lossy().into_owned(),
+                occupied.to_string_lossy().into_owned(),
+            )
+            .expect("collision should be reported")
+        );
+        assert!(staging.is_dir());
+        assert_eq!(
+            fs::read_to_string(occupied.join("sentinel.txt")).expect("sentinel"),
+            "do not replace"
+        );
+        assert!(
+            install_project_folder_no_replace_inner(
+                staging.to_string_lossy().into_owned(),
+                destination.to_string_lossy().into_owned(),
+            )
+            .expect("staged project should install")
+        );
+        assert!(!staging.exists());
+        assert_eq!(
+            fs::read(destination.join("assets/cover.bin")).expect("installed asset"),
+            b"asset bytes"
+        );
+
+        fs::remove_dir_all(parent).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn duplicated_project_replaces_identity_and_preserves_files_and_custom_source_path() {
+        let root = temp_path("duplicate-project-folder");
+        let original = serde_json::json!({
+            "ifid": "ORIGINAL-IFID",
+            "id": "original-story",
+            "name": "Original Story",
+            "passages": [{
+                "height": 120,
+                "id": "original-passage",
+                "left": 25,
+                "name": "Start",
+                "story": "original-story",
+                "tags": [],
+                "text": "Original passage text",
+                "top": 50,
+                "width": 140
+            }],
+            "script": "window.original = true;",
+            "startPassage": "original-passage",
+            "stylesheet": ".original {}"
+        });
+
+        create_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            original.to_string(),
+            Some("single-twee".into()),
+        )
+        .expect("source project should be created");
+
+        let manifest_path = root.join("twine.toml");
+        let manifest = fs::read_to_string(&manifest_path)
+            .expect("source manifest")
+            .replace(
+                "source = \"story.twee\"",
+                "source = \"narrative/main.twee\"",
+            );
+
+        fs::create_dir_all(root.join("narrative")).expect("custom source parent");
+        fs::rename(root.join("story.twee"), root.join("narrative/main.twee"))
+            .expect("custom source move");
+        fs::write(&manifest_path, manifest).expect("custom source manifest");
+        fs::write(root.join("assets/cover.bin"), b"asset bytes").expect("asset");
+        fs::write(root.join("notes.txt"), "unmanaged notes").expect("unmanaged file");
+
+        let duplicate = serde_json::json!({
+            "ifid": "DUPLICATE-IFID",
+            "id": "duplicate-story",
+            "name": "Original Story 1",
+            "passages": [{
+                "height": 125,
+                "id": "duplicate-passage",
+                "left": 30,
+                "name": "Start",
+                "story": "duplicate-story",
+                "tags": [],
+                "text": "Original passage text",
+                "top": 55,
+                "width": 145
+            }],
+            "script": "window.original = true;",
+            "startPassage": "duplicate-passage",
+            "stylesheet": ".original {}"
+        });
+        let result = replace_project_folder_stories_json(
+            root.to_string_lossy().into_owned(),
+            serde_json::json!([{
+                "passageIds": [{
+                    "duplicatePassageId": "duplicate-passage",
+                    "sourcePassageId": "original-passage"
+                }],
+                "sourceStoryId": "original-story",
+                "story": duplicate
+            }])
+            .to_string(),
+        )
+        .expect("project identities should be replaced");
+        let result: NativeProjectFolderResult =
+            serde_json::from_str(&result).expect("duplicate result");
+        let duplicated_manifest = fs::read_to_string(&manifest_path).expect("duplicate manifest");
+
+        assert_eq!(result.story_ids, ["duplicate-story"]);
+        assert!(duplicated_manifest.contains("id = \"duplicate-story\""));
+        assert!(!duplicated_manifest.contains("id = \"original-story\""));
+        assert!(duplicated_manifest.contains("source = \"narrative/main.twee\""));
+        assert!(root.join("narrative/main.twee").is_file());
+        assert_eq!(
+            fs::read(root.join("assets/cover.bin")).expect("copied asset"),
+            b"asset bytes"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("notes.txt")).expect("unmanaged file"),
+            "unmanaged notes"
+        );
+
+        fs::remove_dir_all(root).expect("duplicated project should be removed");
+    }
+
+    #[test]
+    fn duplicated_project_uses_explicit_passage_mapping_and_validates_start() {
+        let root = temp_path("duplicate-project-passage-mapping");
+        let original = serde_json::json!({
+            "ifid": "ORIGINAL-MAPPING-IFID",
+            "id": "original-mapping-story",
+            "name": "Original Mapping Story",
+            "passages": [
+                {
+                    "height": 111,
+                    "id": "source-a",
+                    "left": 10,
+                    "name": "A",
+                    "story": "original-mapping-story",
+                    "text": "A",
+                    "top": 20,
+                    "width": 121
+                },
+                {
+                    "height": 222,
+                    "id": "source-b",
+                    "left": 30,
+                    "name": "B",
+                    "story": "original-mapping-story",
+                    "text": "B",
+                    "top": 40,
+                    "width": 232
+                }
+            ],
+            "startPassage": "source-a"
+        });
+
+        create_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            original.to_string(),
+            Some("passage-files".into()),
+        )
+        .expect("source project should be created");
+
+        let replacement = |start_passage: &str| {
+            serde_json::json!([{
+                "passageIds": [
+                    {
+                        "duplicatePassageId": "duplicate-a",
+                        "sourcePassageId": "source-a"
+                    },
+                    {
+                        "duplicatePassageId": "duplicate-b",
+                        "sourcePassageId": "source-b"
+                    }
+                ],
+                "sourceStoryId": "original-mapping-story",
+                "story": {
+                    "ifid": "DUPLICATE-MAPPING-IFID",
+                    "id": "duplicate-mapping-story",
+                    "name": "Original Mapping Story 1",
+                    "passages": [
+                        {
+                            "id": "duplicate-b",
+                            "name": "B",
+                            "story": "duplicate-mapping-story",
+                            "text": "B"
+                        },
+                        {
+                            "id": "duplicate-a",
+                            "name": "A",
+                            "story": "duplicate-mapping-story",
+                            "text": "A"
+                        }
+                    ],
+                    "startPassage": start_passage
+                }
+            }])
+        };
+
+        let invalid_error = replace_project_folder_stories_json(
+            root.to_string_lossy().into_owned(),
+            replacement("duplicate-b").to_string(),
+        )
+        .expect_err("incorrect mapped start passage should be rejected");
+
+        assert!(
+            invalid_error
+                .reason
+                .contains("start passage must match the mapped source")
+        );
+
+        replace_project_folder_stories_json(
+            root.to_string_lossy().into_owned(),
+            replacement("duplicate-a").to_string(),
+        )
+        .expect("explicit passage mapping should permit reordered passages");
+        let duplicated =
+            load_project_path_with_options(&root, LoadProjectOptions::full()).expect("duplicate");
+        let story = &duplicated.stories[0];
+        let duplicate_a = story
+            .passages
+            .iter()
+            .find(|passage| passage.id.as_ref() == "duplicate-a")
+            .expect("duplicate A");
+        let duplicate_b = story
+            .passages
+            .iter()
+            .find(|passage| passage.id.as_ref() == "duplicate-b")
+            .expect("duplicate B");
+
+        assert_eq!(story.start_passage.as_ref(), "duplicate-a");
+        assert_eq!(
+            duplicated
+                .layout
+                .passages
+                .get(&story.id, &duplicate_a.id)
+                .expect("A layout")
+                .bounds
+                .height,
+            111.0
+        );
+        assert_eq!(
+            duplicated
+                .layout
+                .passages
+                .get(&story.id, &duplicate_b.id)
+                .expect("B layout")
+                .bounds
+                .height,
+            222.0
+        );
+
+        fs::remove_dir_all(root).expect("duplicated project should be removed");
+    }
+
+    #[test]
+    fn duplicated_multi_story_project_replaces_every_story_identity() {
+        let root = temp_path("duplicate-multi-story-project");
+        let story = |id: &str, ifid: &str, name: &str, passage_id: &str| {
+            serde_json::json!({
+                "ifid": ifid,
+                "id": id,
+                "name": name,
+                "passages": [{
+                    "id": passage_id,
+                    "name": "Start",
+                    "story": id,
+                    "text": format!("{name} body")
+                }],
+                "startPassage": passage_id
+            })
+        };
+        let first = story("first-story", "FIRST-IFID", "First", "shared-passage");
+        let second = story("second-story", "SECOND-IFID", "Second", "shared-passage");
+
+        create_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            first.to_string(),
+            Some("passage-files".into()),
+        )
+        .expect("first source story");
+        save_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            second.to_string(),
+            Some("single-twee".into()),
+        )
+        .expect("second source story");
+        fs::write(
+            root.join(".twine/graph.json"),
+            serde_json::json!({
+                "groups": {
+                    "shared-group": {
+                        "id": "shared-group",
+                        "name": "Shared Group",
+                        "passages": ["shared-passage"]
+                    }
+                },
+                "passages": {
+                    "schema": 2,
+                    "byStory": {
+                        "first-story": {
+                            "shared-passage": {
+                                "bounds": {"height": 100, "left": 10, "top": 20, "width": 120}
+                            }
+                        },
+                        "second-story": {
+                            "shared-passage": {
+                                "bounds": {"height": 110, "left": 30, "top": 40, "width": 130}
+                            }
+                        }
+                    }
+                },
+                "savedLayouts": {
+                    "shared-layout": {
+                        "id": "shared-layout",
+                        "name": "Shared Layout",
+                        "passages": {
+                            "shared-passage": {
+                                "bounds": {"height": 90, "left": 5, "top": 15, "width": 115}
+                            }
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("source graph metadata");
+
+        let first_duplicate = story(
+            "first-duplicate",
+            "FIRST-DUPLICATE-IFID",
+            "First 1",
+            "first-duplicate-passage",
+        );
+        let second_duplicate = story(
+            "second-duplicate",
+            "SECOND-DUPLICATE-IFID",
+            "Second 1",
+            "second-duplicate-passage",
+        );
+        let result = replace_project_folder_stories_json(
+            root.to_string_lossy().into_owned(),
+            serde_json::json!([
+                {
+                    "passageIds": [{
+                        "duplicatePassageId": "first-duplicate-passage",
+                        "sourcePassageId": "shared-passage"
+                    }],
+                    "sourceStoryId": "first-story",
+                    "story": first_duplicate
+                },
+                {
+                    "passageIds": [{
+                        "duplicatePassageId": "second-duplicate-passage",
+                        "sourcePassageId": "shared-passage"
+                    }],
+                    "sourceStoryId": "second-story",
+                    "story": second_duplicate
+                }
+            ])
+            .to_string(),
+        )
+        .expect("all project identities should be replaced");
+        let result: NativeProjectFolderResult =
+            serde_json::from_str(&result).expect("duplicate result");
+        let manifest = fs::read_to_string(root.join("twine.toml")).expect("manifest");
+        let graph: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join(".twine/graph.json")).expect("graph layout"),
+        )
+        .expect("graph JSON");
+
+        assert_eq!(result.story_ids, ["first-duplicate", "second-duplicate"]);
+        assert!(!manifest.contains("id = \"first-story\""));
+        assert!(!manifest.contains("id = \"second-story\""));
+        assert!(manifest.contains("id = \"first-duplicate\""));
+        assert!(manifest.contains("id = \"second-duplicate\""));
+        assert!(manifest.contains("source_layout = \"single-twee\""));
+        assert!(root.join("story.twee").is_file());
+        assert_eq!(
+            graph["groups"]["shared-group"]["passages"],
+            serde_json::json!(["first-duplicate-passage", "second-duplicate-passage"])
+        );
+        assert!(
+            graph["savedLayouts"]["shared-layout"]["passages"]
+                .get("first-duplicate-passage")
+                .is_some()
+        );
+        assert!(
+            graph["savedLayouts"]["shared-layout"]["passages"]
+                .get("second-duplicate-passage")
+                .is_some()
+        );
+
+        fs::remove_dir_all(root).expect("duplicated project should be removed");
     }
 
     #[test]

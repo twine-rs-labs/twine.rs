@@ -441,6 +441,22 @@ pub fn save_project_path_with_prepared_sidecar(
     options: &SaveOptions,
     prepared_sidecar: Option<&[u8]>,
 ) -> Result<SaveReport, StoreError> {
+    save_project_path_with_prepared_sidecar_and_story_id_mapping(
+        root,
+        project,
+        options,
+        prepared_sidecar,
+        None,
+    )
+}
+
+pub fn save_project_path_with_prepared_sidecar_and_story_id_mapping(
+    root: impl AsRef<Path>,
+    project: &Project,
+    options: &SaveOptions,
+    prepared_sidecar: Option<&[u8]>,
+    previous_story_ids: Option<&BTreeMap<StoryId, StoryId>>,
+) -> Result<SaveReport, StoreError> {
     let total_started = Instant::now();
     let mut timings = SaveTimings::default();
     let root = root.as_ref();
@@ -454,7 +470,7 @@ pub fn save_project_path_with_prepared_sidecar(
     }
 
     let started = Instant::now();
-    write_project_to_dir(&temp_root, project, options, Some(root))?;
+    write_project_to_dir(&temp_root, project, options, Some(root), previous_story_ids)?;
     if let Some(prepared_sidecar) = prepared_sidecar {
         fs::write(temp_root.join(".twine/project.json"), prepared_sidecar)?;
     }
@@ -536,6 +552,7 @@ fn write_project_to_dir(
     project: &Project,
     options: &SaveOptions,
     previous_root: Option<&Path>,
+    previous_story_ids: Option<&BTreeMap<StoryId, StoryId>>,
 ) -> Result<(), StoreError> {
     fs::create_dir_all(root)?;
     if project.stories.iter().any(|story| {
@@ -561,8 +578,11 @@ fn write_project_to_dir(
             project.manifest.source_layout_for(&story.id) == ProjectSourceLayout::SingleTwee
         })
         .count();
-    let story_components =
-        unique_story_components(&project.stories, previous_project_file.as_ref());
+    let story_components = unique_story_components(
+        &project.stories,
+        previous_project_file.as_ref(),
+        previous_story_ids,
+    );
     let mut used_single_sources = BTreeSet::new();
 
     for (story, story_slug) in project.stories.iter().zip(story_components) {
@@ -574,10 +594,14 @@ fn write_project_to_dir(
         fs::write(root.join(&stylesheet_path), &story.stylesheet)?;
 
         let previous_story_file = previous_project_file.as_ref().and_then(|project_file| {
+            let previous_story_id = previous_story_ids
+                .and_then(|ids| ids.get(&story.id))
+                .unwrap_or(&story.id);
+
             project_file
                 .stories
                 .iter()
-                .find(|candidate| candidate.id == story.id)
+                .find(|candidate| &candidate.id == previous_story_id)
         });
         let (source, passage_files) = match source_layout {
             ProjectSourceLayout::PassageFiles => {
@@ -1799,6 +1823,7 @@ fn unique_component(name: &str, id: &str) -> String {
 fn unique_story_components(
     stories: &[Story],
     previous_project_file: Option<&ProjectFile>,
+    previous_story_ids: Option<&BTreeMap<StoryId, StoryId>>,
 ) -> Vec<String> {
     let mut used = BTreeSet::new();
     let mut components = stories
@@ -1806,10 +1831,14 @@ fn unique_story_components(
         .map(|story| {
             previous_project_file
                 .and_then(|project_file| {
+                    let previous_story_id = previous_story_ids
+                        .and_then(|ids| ids.get(&story.id))
+                        .unwrap_or(&story.id);
+
                     project_file
                         .stories
                         .iter()
-                        .find(|candidate| candidate.id == story.id)
+                        .find(|candidate| &candidate.id == previous_story_id)
                 })
                 .and_then(existing_story_component)
                 .filter(|component| used.insert(component.to_ascii_lowercase()))

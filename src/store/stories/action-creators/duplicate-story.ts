@@ -19,7 +19,7 @@ export function duplicateStory(
 		id: uuid(),
 		story: id
 	}));
-	const originalStartPassage = story.passages.find(
+	const originalStartPassageIndex = story.passages.findIndex(
 		({id}) => id === story.startPassage
 	);
 
@@ -34,11 +34,10 @@ export function duplicateStory(
 				stories.map(story => story.name)
 			),
 			passages: duplicatedPassages,
-			startPassage: originalStartPassage
-				? (duplicatedPassages.find(
-						({name}) => name === originalStartPassage.name
-					)?.id ?? '')
-				: ''
+			startPassage:
+				originalStartPassageIndex >= 0
+					? (duplicatedPassages[originalStartPassageIndex]?.id ?? '')
+					: ''
 		}
 	};
 }

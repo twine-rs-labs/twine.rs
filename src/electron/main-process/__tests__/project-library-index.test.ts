@@ -1,18 +1,35 @@
 import {
+	existsSync,
+	mkdtempSync,
+	mkdirSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync
+} from 'fs';
+import {tmpdir} from 'os';
+import {join} from 'path';
+import {
 	forgetNativeProjectFolder,
 	listRememberedNativeProjectFolders,
-	rememberNativeProjectFolder
+	rememberNativeProjectFolder,
+	rememberNativeProjectFolderStrict
 } from '../native';
 import {
 	forgetProjectFolder,
 	rememberedProjectFolders,
-	rememberProjectFolder
+	rememberProjectFolder,
+	rememberProjectFolderStrict
 } from '../project-library-index';
+import {
+	duplicateStagingMarker,
+	duplicateStagingMarkerFilename
+} from '../project-duplication-staging';
 
 jest.mock('../native', () => ({
 	forgetNativeProjectFolder: jest.fn(),
 	listRememberedNativeProjectFolders: jest.fn(),
-	rememberNativeProjectFolder: jest.fn()
+	rememberNativeProjectFolder: jest.fn(),
+	rememberNativeProjectFolderStrict: jest.fn()
 }));
 jest.mock('../story-directory', () => ({
 	getStoryDirectoryPath: () => 'mock-story-library'
@@ -24,8 +41,11 @@ describe('project library index', () => {
 		listRememberedNativeProjectFolders as jest.Mock;
 	const rememberNativeProjectFolderMock =
 		rememberNativeProjectFolder as jest.Mock;
+	const rememberNativeProjectFolderStrictMock =
+		rememberNativeProjectFolderStrict as jest.Mock;
 
 	beforeEach(() => {
+		jest.clearAllMocks();
 		listRememberedNativeProjectFoldersMock.mockReturnValue([]);
 	});
 
@@ -38,6 +58,28 @@ describe('project library index', () => {
 		});
 
 		expect(rememberNativeProjectFolderMock).toHaveBeenCalledWith(
+			'mock-story-library/.twine/native-projects.json',
+			expect.objectContaining({
+				rootPath: 'Projects/moon-castle.twine.rs',
+				storyIds: ['story-id']
+			})
+		);
+	});
+
+	it('uses strict registration only when explicitly requested', () => {
+		const project = {
+			passageTextLoaded: false,
+			rootPath: 'mock-story-library/Projects/moon-castle.twine.rs',
+			stories: [],
+			storyIds: ['story-id']
+		};
+
+		rememberProjectFolder(project);
+		rememberProjectFolderStrict(project);
+
+		expect(rememberNativeProjectFolderMock).toHaveBeenCalledTimes(1);
+		expect(rememberNativeProjectFolderStrictMock).toHaveBeenCalledTimes(1);
+		expect(rememberNativeProjectFolderStrictMock).toHaveBeenCalledWith(
 			'mock-story-library/.twine/native-projects.json',
 			expect.objectContaining({
 				rootPath: 'Projects/moon-castle.twine.rs',
@@ -125,5 +167,84 @@ describe('project library index', () => {
 			'mock-story-library/.twine/native-projects.json',
 			'mock-story-library/Projects/moon-castle.twine.rs'
 		);
+	});
+
+	it('cleans old orphaned duplication staging folders on startup', () => {
+		const parentPath = mkdtempSync(join(tmpdir(), 'twine-project-library-'));
+		const projectPath = join(parentPath, 'remembered.twine.rs');
+		const stagingPath = join(parentPath, '.twine-rs-duplicate-orphan');
+		const savePath = join(
+			parentPath,
+			'..twine-rs-duplicate-orphan.save-123456'
+		);
+		const retiredPath = join(
+			parentPath,
+			'.twine-rs-duplicate-orphan.retired-123456'
+		);
+		const unmarkedPath = join(parentPath, '.twine-rs-duplicate-safety');
+		const activePath = join(parentPath, '.twine-rs-duplicate-active');
+		const oversizedPath = join(parentPath, '.twine-rs-duplicate-hugeXX');
+		const symlinkPath = join(parentPath, '.twine-rs-duplicate-linkXX');
+		const markerTarget = join(parentPath, 'marker-target.json');
+		const killSpy = jest.spyOn(process, 'kill').mockImplementation(pid => {
+			if (pid === process.pid) {
+				return true;
+			}
+			throw Object.assign(new Error('missing process'), {code: 'ESRCH'});
+		});
+
+		try {
+			mkdirSync(projectPath);
+			mkdirSync(stagingPath);
+			mkdirSync(savePath);
+			mkdirSync(retiredPath);
+			mkdirSync(unmarkedPath);
+			mkdirSync(activePath);
+			mkdirSync(oversizedPath);
+			mkdirSync(symlinkPath);
+
+			writeFileSync(
+				join(stagingPath, duplicateStagingMarkerFilename),
+				duplicateStagingMarker(Date.now() - 25 * 60 * 60 * 1000, 12345)
+			);
+			writeFileSync(
+				join(activePath, duplicateStagingMarkerFilename),
+				duplicateStagingMarker(Date.now() - 25 * 60 * 60 * 1000, process.pid)
+			);
+			writeFileSync(
+				join(oversizedPath, duplicateStagingMarkerFilename),
+				'x'.repeat(513)
+			);
+			writeFileSync(
+				markerTarget,
+				duplicateStagingMarker(Date.now() - 25 * 60 * 60 * 1000, 12345)
+			);
+			if (process.platform !== 'win32') {
+				symlinkSync(
+					markerTarget,
+					join(symlinkPath, duplicateStagingMarkerFilename)
+				);
+			}
+			listRememberedNativeProjectFoldersMock.mockReturnValue([
+				{
+					rootPath: projectPath,
+					storyIds: ['story-id'],
+					updatedAt: '2026-06-23T12:00:00.000Z'
+				}
+			]);
+
+			rememberedProjectFolders();
+
+			expect(existsSync(stagingPath)).toBe(false);
+			expect(existsSync(savePath)).toBe(false);
+			expect(existsSync(retiredPath)).toBe(false);
+			expect(existsSync(unmarkedPath)).toBe(true);
+			expect(existsSync(activePath)).toBe(true);
+			expect(existsSync(oversizedPath)).toBe(true);
+			expect(existsSync(symlinkPath)).toBe(true);
+		} finally {
+			killSpy.mockRestore();
+			rmSync(parentPath, {force: true, recursive: true});
+		}
 	});
 });

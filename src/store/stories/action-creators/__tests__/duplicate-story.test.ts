@@ -78,20 +78,10 @@ describe('duplicateStory action creator', () => {
 	it("sets the duplicate's start passage correctly", () => {
 		story = fakeStory(3);
 		story.startPassage = story.passages[2].id;
-
-		// It's OK if 0 or 1 have the same name, but we need to be sure that the
-		// third passage has a unique name.
-
-		expect(story.passages[2].name).not.toEqual(story.passages[0].name);
-		expect(story.passages[2].name).not.toEqual(story.passages[1].name);
-
-		const startPassageName = story.passages[2].name;
+		story.passages[0].name = 'Same Name';
+		story.passages[2].name = 'Same Name';
 		const result = duplicateStory(story, [story]);
-		const duplicatedStartPassage = result.props.passages?.find(
-			({name}) => name === startPassageName
-		);
 
-		expect(duplicatedStartPassage).not.toBeUndefined();
-		expect(result.props.startPassage).toBe(duplicatedStartPassage!.id);
+		expect(result.props.startPassage).toBe(result.props.passages[2].id);
 	});
 });

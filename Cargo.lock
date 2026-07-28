@@ -1052,6 +1052,7 @@ dependencies = [
  "napi-derive",
  "rayon",
  "regex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

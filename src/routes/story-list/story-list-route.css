@@ -155,6 +155,17 @@
 	min-width: 220px;
 }
 
+.story-list-launcher__error {
+	background: var(--sem-error-soft);
+	border: 1px solid color-mix(in oklab, var(--sem-error) 45%, transparent);
+	border-radius: var(--r-sm);
+	color: var(--sem-error);
+	font-family: var(--font-ui);
+	font-size: var(--fs-sm);
+	margin: 0;
+	padding: 9px 11px;
+}
+
 .story-list-launcher__panel {
 	flex: 1;
 	min-height: 0;

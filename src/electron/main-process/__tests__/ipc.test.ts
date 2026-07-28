@@ -37,6 +37,7 @@ import {
 	copyProjectImportAssets,
 	copyAssetToProject,
 	createProjectFolder,
+	duplicateProjectFolder,
 	deleteProjectAsset,
 	discardProjectAssetEffect,
 	discardProjectImport,
@@ -94,6 +95,7 @@ describe('initIpc()', () => {
 	const consumeCommandLineOpenPathsMock =
 		consumeCommandLineOpenPaths as jest.Mock;
 	const createProjectFolderMock = createProjectFolder as jest.Mock;
+	const duplicateProjectFolderMock = duplicateProjectFolder as jest.Mock;
 	const deleteProjectAssetMock = deleteProjectAsset as jest.Mock;
 	const discardProjectAssetEffectMock = discardProjectAssetEffect as jest.Mock;
 	const discardProjectImportMock = discardProjectImport as jest.Mock;
@@ -220,6 +222,11 @@ describe('initIpc()', () => {
 			stories: [],
 			storyIds: []
 		});
+		duplicateProjectFolderMock.mockResolvedValue({
+			rootPath: '/mock/project-copy',
+			stories: [],
+			storyIds: []
+		});
 		getBackupDirectoryPathMock.mockReturnValue('/mock/backups');
 		getStoryDirectoryPathMock.mockReturnValue('/mock/library');
 		nativeAppPlatformSettingsMock.mockReturnValue({
@@ -343,6 +350,9 @@ describe('initIpc()', () => {
 		);
 		const createProject = handleMock.mock.calls.find(
 			call => call[0] === 'create-project-folder'
+		);
+		const duplicateProject = handleMock.mock.calls.find(
+			call => call[0] === 'duplicate-project-folder'
 		);
 		const getLibrary = handleMock.mock.calls.find(
 			call => call[0] === 'get-story-library-folder'
@@ -573,6 +583,28 @@ describe('initIpc()', () => {
 			'/mock/project',
 			story,
 			undefined
+		);
+		const replacements = [
+			{
+				passageIds: story.passages.map(passage => ({
+					duplicatePassageId: passage.id,
+					sourcePassageId: passage.id
+				})),
+				sourceStoryId: story.id,
+				story
+			}
+		];
+
+		expect(
+			await duplicateProject[1]({}, '/mock/project', replacements)
+		).toEqual({
+			rootPath: '/mock/project-copy',
+			stories: [],
+			storyIds: []
+		});
+		expect(duplicateProjectFolderMock).toHaveBeenCalledWith(
+			'/mock/project',
+			replacements
 		);
 		await revealLibrary[1]();
 		expect(revealStoryDirectoryMock).toHaveBeenCalled();

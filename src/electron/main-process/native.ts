@@ -7,6 +7,7 @@ import type {StoryWithDocuments as Story} from '../../store/stories';
 import type {
 	NativeProjectAssetPayloadBatch,
 	NativeProjectAssetPayloadLimits,
+	ProjectStoryReplacement,
 	ProjectSourceLayout
 } from '../shared';
 import type {
@@ -101,6 +102,14 @@ interface NativeProjectAddon {
 	): string;
 	projectFileManifestJson(rootPath: string, assetsJson?: string): string;
 	rememberProjectFolderJson(indexPath: string, projectJson: string): string;
+	replaceProjectFolderStoriesJson(
+		rootPath: string,
+		replacementsJson: string
+	): string;
+	installProjectFolderNoReplace(
+		stagingRootPath: string,
+		destinationRootPath: string
+	): string;
 	saveProjectFolderJson(
 		rootPath: string,
 		storyJson: string,
@@ -594,11 +603,44 @@ export function createNativeProjectFolder(
 	);
 }
 
+export function replaceNativeProjectFolderStories(
+	rootPath: string,
+	replacements: ProjectStoryReplacement[]
+) {
+	return reviveProjectFolderResult(
+		callNativeStrict<NativeProjectFolderResult>('project duplication', addon =>
+			addon.replaceProjectFolderStoriesJson(
+				rootPath,
+				JSON.stringify(replacements)
+			)
+		)
+	);
+}
+
+export function installNativeProjectFolderNoReplace(
+	stagingRootPath: string,
+	destinationRootPath: string
+) {
+	return callNativeStrict<boolean>('project-folder installation', addon =>
+		addon.installProjectFolderNoReplace(stagingRootPath, destinationRootPath)
+	);
+}
+
 export function rememberNativeProjectFolder(
 	indexPath: string,
 	project: NativeProjectFolderResult
 ) {
 	return callNative<NativeRememberedProjectFolder>(
+		'project library remember',
+		addon => addon.rememberProjectFolderJson(indexPath, JSON.stringify(project))
+	);
+}
+
+export function rememberNativeProjectFolderStrict(
+	indexPath: string,
+	project: NativeProjectFolderResult
+) {
+	return callNativeStrict<NativeRememberedProjectFolder>(
 		'project library remember',
 		addon => addon.rememberProjectFolderJson(indexPath, JSON.stringify(project))
 	);

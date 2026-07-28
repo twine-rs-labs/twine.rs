@@ -43,6 +43,21 @@ interface PackagedProjectWindow extends Window {
 	twineElectron?: {
 		beginLegacyStoryWrite(storyId: string): string;
 		finishLegacyStoryWrite(token: string, errorMessage?: string): void;
+		duplicateProjectFolder(
+			rootPath: string,
+			replacements: Array<{
+				passageIds: Array<{
+					duplicatePassageId: string;
+					sourcePassageId: string;
+				}>;
+				sourceStoryId: string;
+				story: PackagedProjectStory;
+			}>
+		): Promise<{
+			rootPath: string;
+			stories: PackagedProjectStory[];
+			storyIds: string[];
+		}>;
 		hydrateProjectFolder(
 			rootPath: string,
 			storyIds?: string[]
@@ -228,6 +243,105 @@ async function replaceEditorText(page: Page, text: string) {
 	await expect(editor).toContainText(text.replace(/\r?\n/g, ''));
 	await page.keyboard.press('Tab');
 }
+
+test('packaged desktop duplicates a project from the launcher and preserves it across restart and source deletion', async () => {
+	const executablePath = await packagedExecutable();
+	const profileRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-duplicate-')
+	);
+	let running: {app: ElectronApplication; page: Page} | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, profileRoot);
+		const {page} = running;
+
+		await page.getByTitle('New Project').click();
+		await page.getByLabel('Project name').fill('Packaged Duplicate');
+		await page.getByRole('button', {name: 'Create Project'}).click();
+		await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
+
+		const sourceRoot = await projectRootFromRenderer(page);
+		await writeFile(
+			path.join(sourceRoot, 'assets', 'cover.bin'),
+			Buffer.from('asset bytes')
+		);
+		await writeFile(path.join(sourceRoot, 'notes.txt'), 'unmanaged notes');
+		const sourceStoryId = await page.evaluate(
+			() => window.location.hash.match(/^#\/stories\/([^/]+)/)?.[1]
+		);
+
+		expect(sourceStoryId).toBeTruthy();
+		await page.evaluate(() => {
+			window.location.hash = '#/';
+		});
+		await expect(page).toHaveURL(/#\/$/);
+		await page
+			.getByRole('button', {name: 'Duplicate project Packaged Duplicate'})
+			.click();
+		const duplicateRow = page
+			.getByTestId('story-list-row')
+			.filter({has: page.getByText('Packaged Duplicate 1', {exact: true})});
+
+		await expect(duplicateRow).toBeVisible();
+		const duplicateStoryId = await duplicateRow.getAttribute('data-id');
+
+		expect(duplicateStoryId).toBeTruthy();
+		const duplicateRoot = await page.evaluate(storyId => {
+			const metadata = JSON.parse(
+				window.localStorage.getItem(`twine-rs-project-metadata-${storyId}`) ??
+					'null'
+			);
+
+			if (!metadata?.rootPath) {
+				throw new Error('Duplicated project metadata was not persisted.');
+			}
+			return String(metadata.rootPath);
+		}, duplicateStoryId);
+
+		expect(duplicateRoot).not.toBe(sourceRoot);
+		await expect(
+			readFile(path.join(duplicateRoot, 'assets', 'cover.bin'))
+		).resolves.toEqual(Buffer.from('asset bytes'));
+		await expect(
+			readFile(path.join(duplicateRoot, 'notes.txt'), 'utf8')
+		).resolves.toBe('unmanaged notes');
+		const manifest = await readFile(
+			path.join(duplicateRoot, 'twine.toml'),
+			'utf8'
+		);
+
+		expect(manifest).toContain(`id = "${duplicateStoryId}"`);
+		expect(manifest).not.toContain(`id = "${sourceStoryId}"`);
+
+		await running.app.close();
+		running = undefined;
+		running = await launchPackagedApp(executablePath, profileRoot);
+		const relaunchedPage = running.page;
+		const sourceRow = relaunchedPage.getByTestId('story-list-row').filter({
+			has: relaunchedPage.getByText('Packaged Duplicate', {exact: true})
+		});
+		const relaunchedDuplicateRow = relaunchedPage
+			.getByTestId('story-list-row')
+			.filter({
+				has: relaunchedPage.getByText('Packaged Duplicate 1', {exact: true})
+			});
+
+		await expect(sourceRow).toBeVisible();
+		await expect(relaunchedDuplicateRow).toBeVisible();
+		relaunchedPage.once('dialog', dialog => void dialog.accept());
+		await sourceRow
+			.getByRole('button', {name: 'Delete story Packaged Duplicate'})
+			.click();
+		await expect(sourceRow).toHaveCount(0);
+		await expect(access(sourceRoot)).rejects.toThrow();
+		await expect(relaunchedDuplicateRow).toBeVisible();
+		await expect(
+			readFile(path.join(duplicateRoot, 'assets', 'cover.bin'))
+		).resolves.toEqual(Buffer.from('asset bytes'));
+	} finally {
+		await running?.app.close();
+	}
+});
 
 async function projectRootFromRenderer(page: Page) {
 	return page.evaluate(() => {

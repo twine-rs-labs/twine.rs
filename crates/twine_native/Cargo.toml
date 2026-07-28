@@ -16,6 +16,7 @@ napi = "3"
 napi-derive = "3"
 rayon.workspace = true
 regex.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

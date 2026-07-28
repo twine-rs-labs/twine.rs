@@ -9,7 +9,7 @@ import {
 import {DialogsContextProvider} from '../dialogs';
 import {PrefsContext, PrefsState} from '../store/prefs';
 import {reducer as prefsReducer} from '../store/prefs/reducer';
-import {StoriesContext, StoriesState} from '../store/stories';
+import {StoriesAction, StoriesContext, StoriesState} from '../store/stories';
 import {reducer as storiesReducer} from '../store/stories/reducer';
 import {StoryFormatsContext, StoryFormatsState} from '../store/story-formats';
 import {reducer as storyFormatsReducer} from '../store/story-formats/reducer';
@@ -20,6 +20,7 @@ export interface FakeStateProviderProps {
 	coreProjectHost?: CoreProjectHost;
 	prefs?: Partial<PrefsState>;
 	stories?: StoriesState;
+	storiesDispatchObserver?: (action: StoriesAction) => void;
 	storyFormats?: StoryFormatsState;
 }
 
@@ -34,8 +35,15 @@ export const FakeStateProvider: React.FC<FakeStateProviderProps> = props => {
 		...fakePrefs(),
 		...props.prefs
 	});
+	const observedStoriesReducer = React.useCallback(
+		(state: StoriesState, action: StoriesAction) => {
+			props.storiesDispatchObserver?.(action);
+			return storiesReducer(state, action);
+		},
+		[props.storiesDispatchObserver]
+	);
 	const [storiesState, storiesDispatch] = useThunkReducer(
-		storiesReducer,
+		observedStoriesReducer,
 		props.stories ?? [story]
 	);
 	const [storyFormatsState, storyFormatsDispatch] = useThunkReducer(

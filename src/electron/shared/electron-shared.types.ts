@@ -11,6 +11,15 @@ import type {StoryFormatProperties} from '../../store/story-formats';
 
 export type ProjectSourceLayout = 'passage-files' | 'single-twee';
 
+export interface ProjectStoryReplacement {
+	passageIds: Array<{
+		duplicatePassageId: string;
+		sourcePassageId: string;
+	}>;
+	sourceStoryId: string;
+	story: StoryWithDocuments;
+}
+
 export interface NativeProjectFileEntry {
 	fingerprint: string;
 	kind:
@@ -451,6 +460,10 @@ export interface TwineElectronWindow extends Window {
 			story: Story,
 			preferredParent?: string,
 			sourceLayout?: ProjectSourceLayout
+		): Promise<NativeProjectFolderResult>;
+		duplicateProjectFolder(
+			rootPath: string,
+			replacements: ProjectStoryReplacement[]
 		): Promise<NativeProjectFolderResult>;
 		deleteProjectAsset(
 			rootPath: string,

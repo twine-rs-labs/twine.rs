@@ -60,7 +60,7 @@ import type {
 	ProjectFolderSaveHint,
 	ProjectFolderSaveOptions
 } from '../../store/persistence/project-folder-save-hints';
-import type {ProjectSourceLayout} from '../shared';
+import type {ProjectSourceLayout, ProjectStoryReplacement} from '../shared';
 import {
 	diffNativeProjectFileManifest,
 	beginNativeProjectFolderHydration,
@@ -74,15 +74,23 @@ import {
 	nativeProjectAssetDigestCaptureAvailable,
 	nativeProjectFileManifest,
 	nativeProjectDiagnostic,
+	installNativeProjectFolderNoReplace,
 	prepareNativeHtmlImport,
 	prepareNativeProjectImport,
 	readNativeProjectFolderHydrationChunk,
+	replaceNativeProjectFolderStories,
 	saveNativeProjectFolder
 } from './native';
 import {
 	forgetProjectFolder,
-	rememberProjectFolder
+	rememberProjectFolder,
+	rememberProjectFolderStrict
 } from './project-library-index';
+import {
+	duplicateStagingMarker,
+	duplicateStagingMarkerFilename,
+	duplicateStagingPrefix
+} from './project-duplication-staging';
 import {getStoryDirectoryPath} from './story-directory';
 import {
 	performanceEpochNow,
@@ -5491,6 +5499,138 @@ export async function createProjectFolder(
 
 	rememberProjectFolder(result);
 	return result;
+}
+
+function duplicateProjectStagingPrefix(sourceRootPath: string) {
+	return join(dirname(sourceRootPath), duplicateStagingPrefix);
+}
+
+async function installDuplicateProjectRoot(
+	stagingRootPath: string,
+	sourceRootPath: string,
+	story: Story
+) {
+	const parent = dirname(sourceRootPath);
+	const baseName = storyPathSlug(story);
+
+	for (let sequence = 1; sequence < 10_000; sequence++) {
+		const rootPath = join(
+			parent,
+			`${baseName}${sequence === 1 ? '' : `-${sequence}`}.twine.rs`
+		);
+
+		if (resolve(rootPath) === resolve(sourceRootPath)) {
+			continue;
+		}
+
+		if (installNativeProjectFolderNoReplace(stagingRootPath, rootPath)) {
+			return rootPath;
+		}
+	}
+
+	throw new Error('Could not install a unique duplicate project folder.');
+}
+
+export async function duplicateProjectFolder(
+	sourceRootPath: string,
+	replacements: ProjectStoryReplacement[]
+): Promise<NativeProjectFolderResult> {
+	if (typeof sourceRootPath !== 'string' || !isAbsolute(sourceRootPath)) {
+		throw new Error(
+			'Project duplication requires an absolute project folder path.'
+		);
+	}
+	if (!basename(sourceRootPath).endsWith('.twine.rs')) {
+		throw new Error(
+			'Project duplication requires a folder ending with .twine.rs.'
+		);
+	}
+	if (replacements.length === 0) {
+		throw new Error('Project duplication requires at least one story.');
+	}
+
+	const [rootStats, manifestStats] = await Promise.all([
+		stat(sourceRootPath),
+		stat(join(sourceRootPath, 'twine.toml'))
+	]);
+
+	if (!rootStats.isDirectory() || !manifestStats.isFile()) {
+		throw new Error(
+			'Project duplication requires an existing project folder with twine.toml.'
+		);
+	}
+
+	const stagingRootPath = await mkdtemp(
+		duplicateProjectStagingPrefix(sourceRootPath)
+	);
+	let duplicateRootPath: string | undefined;
+
+	try {
+		await writeFile(
+			join(stagingRootPath, duplicateStagingMarkerFilename),
+			duplicateStagingMarker(),
+			{encoding: 'utf8', flag: 'wx'}
+		);
+		await copy(sourceRootPath, stagingRootPath, {
+			dereference: false,
+			errorOnExist: true,
+			overwrite: false,
+			preserveTimestamps: true
+		});
+		const result = replaceNativeProjectFolderStories(
+			stagingRootPath,
+			replacements
+		);
+
+		if (!result) {
+			requireNativeProjectBackend('Project folder duplication');
+		}
+
+		duplicateRootPath = await installDuplicateProjectRoot(
+			stagingRootPath,
+			sourceRootPath,
+			replacements[0].story
+		);
+		await remove(join(duplicateRootPath, duplicateStagingMarkerFilename));
+		const resultRootPath = duplicateRootPath;
+		await refreshProjectSessionBaseline(
+			resultRootPath,
+			result?.storyIds ?? replacements.map(({story}) => story.id),
+			{stories: result?.stories ?? replacements.map(({story}) => story)}
+		);
+
+		const duplicatedProject = result ?? {
+			passageTextLoaded: true,
+			rootPath: resultRootPath,
+			stories: replacements.map(({story}) => story),
+			storyIds: replacements.map(({story}) => story.id)
+		};
+		duplicatedProject.rootPath = resultRootPath;
+
+		if (!rememberProjectFolderStrict(duplicatedProject)) {
+			throw new Error(
+				'The duplicated project could not be registered in the project library.'
+			);
+		}
+		return duplicatedProject;
+	} catch (error) {
+		const cleanupRootPath = duplicateRootPath ?? stagingRootPath;
+
+		stopProjectSession(cleanupRootPath);
+		if (duplicateRootPath) {
+			forgetProjectFolder(cleanupRootPath);
+		}
+		try {
+			await remove(cleanupRootPath);
+		} catch (cleanupError) {
+			throw new Error(
+				`Project duplication failed and the partial folder could not be removed from ${cleanupRootPath}: ${
+					(cleanupError as Error).message
+				}. Original error: ${(error as Error).message}`
+			);
+		}
+		throw error;
+	}
 }
 
 export async function saveProjectFolder(
