@@ -9,16 +9,9 @@ import {
 	readdirSync,
 	rmSync
 } from 'fs';
-import {
-	basename,
-	dirname,
-	isAbsolute,
-	join,
-	relative,
-	resolve,
-	sep
-} from 'path';
+import {basename, dirname, isAbsolute, join, resolve} from 'path';
 import type {NativeProjectFolderResult} from './project-folder';
+import {filesystemPathComparer} from './filesystem-path-comparer';
 import {
 	forgetNativeProjectFolder,
 	listRememberedNativeProjectFolders,
@@ -161,14 +154,7 @@ export function projectLibraryIndexPath() {
 }
 
 function pathContainsPath(parentPath: string, childPath: string) {
-	const relativePath = relative(resolve(parentPath), resolve(childPath));
-
-	return (
-		relativePath === '' ||
-		(relativePath !== '..' &&
-			!relativePath.startsWith(`..${sep}`) &&
-			!isAbsolute(relativePath))
-	);
+	return filesystemPathComparer.contains(parentPath, childPath);
 }
 
 function canonicalFilesystemPath(filePath: string) {
@@ -205,7 +191,10 @@ function storedProjectRootPath(rootPath: string) {
 	const resolvedRootPath = resolvedProjectRootPath(rootPath);
 
 	if (pathContainsPath(storyDirectoryPath, resolvedRootPath)) {
-		return relative(storyDirectoryPath, resolvedRootPath) || '.';
+		return (
+			filesystemPathComparer.relative(storyDirectoryPath, resolvedRootPath) ||
+			'.'
+		);
 	}
 
 	return resolvedRootPath;
@@ -304,7 +293,7 @@ export function rememberedProjectFolders() {
 	>();
 
 	for (const record of migrationRecords) {
-		const key = resolve(record.project.rootPath);
+		const key = filesystemPathComparer.key(record.project.rootPath);
 		const group = canonicalGroups.get(key);
 
 		canonicalGroups.set(key, {

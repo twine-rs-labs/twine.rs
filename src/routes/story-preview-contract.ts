@@ -2,6 +2,54 @@ export const STORY_PREVIEW_BRIDGE_SOURCE = 'twine.rs.preview.bridge';
 
 export const STORY_PREVIEW_RUNTIME_LOG_LIMIT = 12;
 
+export const STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE = `
+(function () {
+	var originalStartViewTransition = document.startViewTransition;
+
+	if (typeof originalStartViewTransition !== 'function') {
+		return;
+	}
+
+	function nonfatalReadinessError(error) {
+		if (!error || typeof error !== 'object') {
+			return false;
+		}
+
+		return (
+			(error.name === 'AbortError' &&
+				error.message === 'Transition was skipped') ||
+			(error.name === 'InvalidStateError' &&
+				error.message ===
+					'Transition was aborted because of invalid state') ||
+			(error.name === 'TimeoutError' &&
+				error.message ===
+					'Transition was aborted because of timeout in DOM update')
+		);
+	}
+
+	document.startViewTransition = function () {
+		var transition = originalStartViewTransition.apply(document, arguments);
+
+		// ViewTransition.ready rejects when an animation cannot start even
+		// though the DOM update still completes. Observe that rejection so a
+		// format which ignores animation readiness does not turn a skipped
+		// enhancement into an unhandled runtime error.
+		if (
+			transition &&
+			transition.ready &&
+			typeof transition.ready.catch === 'function'
+		) {
+			transition.ready.catch(function (error) {
+				if (!nonfatalReadinessError(error)) {
+					throw error;
+				}
+			});
+		}
+
+		return transition;
+	};
+})();`;
+
 export const STORY_PREVIEW_BRIDGE_LIMITS = Object.freeze({
 	hashLength: 2048,
 	logArgumentCount: 16,
@@ -401,6 +449,7 @@ export function createStoryPreviewPassageLookup(
 function bridgeScript(sessionId: string) {
 	return `
 <script>
+${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 (function () {
 	var SOURCE = ${JSON.stringify(STORY_PREVIEW_BRIDGE_SOURCE)};
 	var SESSION = ${JSON.stringify(sessionId)};

@@ -3,6 +3,7 @@ import * as React from 'react';
 import {
 	instrumentPreviewHtml,
 	STORY_PREVIEW_BRIDGE_SOURCE,
+	STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE,
 	storyPreviewPassages
 } from '../story-preview-debug';
 import {StoryPreviewFrame} from '../story-preview-frame';
@@ -60,6 +61,37 @@ describe('instrumentPreviewHtml()', () => {
 		expect(result).toContain("sessionStorage.getItem('Saved Session')");
 		expect(result).toContain("'Harlowe session'");
 		expect(result).toContain('<body>Story</body>');
+	});
+
+	it('observes nonfatal view-transition readiness failures', () => {
+		const catchReady = jest.fn<void, [(error: unknown) => void]>();
+		const transition = {ready: {catch: catchReady}};
+		const startViewTransition = jest.fn<
+			typeof transition,
+			[update?: () => void]
+		>(() => transition);
+		const previewDocument = {startViewTransition};
+
+		Function(
+			'document',
+			STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE
+		)(previewDocument);
+		const update = jest.fn();
+
+		expect(previewDocument.startViewTransition(update)).toBe(transition);
+		expect(startViewTransition).toHaveBeenCalledWith(update);
+		expect(catchReady).toHaveBeenCalledWith(expect.any(Function));
+		const handleReadinessError = catchReady.mock.calls[0][0];
+
+		expect(
+			handleReadinessError({
+				message: 'Transition was aborted because of timeout in DOM update',
+				name: 'TimeoutError'
+			})
+		).toBe(undefined);
+		expect(() =>
+			handleReadinessError(new Error('story update failed'))
+		).toThrow('story update failed');
 	});
 });
 

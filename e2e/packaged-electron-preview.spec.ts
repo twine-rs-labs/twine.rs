@@ -1226,11 +1226,7 @@ test('current passage resolves to a stable ID in every bundled format family', a
 			});
 
 			await expectManagedStoryTransition(preview, format, async () => {
-				if (format.startsWith('Chapbook')) {
-					await continueLink.press('Enter');
-				} else {
-					await continueLink.click();
-				}
+				await continueLink.click();
 				await expectRenderedText(preview, marker);
 				await expectCurrentPassage(preview, 'Next');
 			});
