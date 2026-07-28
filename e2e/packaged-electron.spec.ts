@@ -317,14 +317,12 @@ test('packaged desktop duplicates a project from the launcher and preserves it a
 		running = undefined;
 		running = await launchPackagedApp(executablePath, profileRoot);
 		const relaunchedPage = running.page;
-		const sourceRow = relaunchedPage.getByTestId('story-list-row').filter({
-			has: relaunchedPage.getByText('Packaged Duplicate', {exact: true})
-		});
-		const relaunchedDuplicateRow = relaunchedPage
-			.getByTestId('story-list-row')
-			.filter({
-				has: relaunchedPage.getByText('Packaged Duplicate 1', {exact: true})
-			});
+		const sourceRow = relaunchedPage.locator(
+			`[data-testid="story-list-row"][data-id="${sourceStoryId}"]`
+		);
+		const relaunchedDuplicateRow = relaunchedPage.locator(
+			`[data-testid="story-list-row"][data-id="${duplicateStoryId}"]`
+		);
 
 		await expect(sourceRow).toBeVisible();
 		await expect(relaunchedDuplicateRow).toBeVisible();

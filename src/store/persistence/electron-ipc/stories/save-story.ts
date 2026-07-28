@@ -50,15 +50,21 @@ async function saveNativeProjectFolder(
 				{type: 'passageText'}
 			> => update.type === 'passageText'
 		);
-		const layoutHints = (options.hints ?? []).filter(
+		const hints = options.hints ?? [];
+		const layoutHints = hints.filter(
 			(hint): hint is Extract<ProjectFolderSaveHint, {type: 'passageLayout'}> =>
 				hint.type === 'passageLayout'
 		);
 		const layoutOnlySave =
-			layoutHints.length > 0 &&
-			layoutHints.length === (options.hints?.length ?? 0);
+			layoutHints.length > 0 && layoutHints.length === hints.length;
+		const metadataSave = hints.some(
+			hint => hint.type === 'passageMetadata'
+		);
+		const incrementalHints =
+			hints.length > 0 && hints.every(hint => hint.type !== 'full');
 		const useCompactIncrementalPayload =
-			documentUpdates.length > 0 || layoutOnlySave;
+			incrementalHints &&
+			(documentUpdates.length > 0 || layoutOnlySave || metadataSave);
 		const completeStory: Story | StoryWithDocuments =
 			useCompactIncrementalPayload
 				? story

@@ -86,6 +86,17 @@ interface RevisionedStoryMetadata {
 	story: Story;
 }
 
+export function currentStoryPreviewMetadata(
+	coreProjectHost: CoreProjectHost,
+	stories: Story[],
+	storyId: string
+): RevisionedStoryMetadata {
+	return {
+		revision: coreProjectHost.sessionStatus(storyId).revision,
+		story: storyWithId(stories, storyId)
+	};
+}
+
 export async function materializeStoryPreviewSnapshot(
 	coreProjectHost: CoreProjectHost,
 	storyId: string,
@@ -161,20 +172,9 @@ export function usePublishing(): UsePublishingProps {
 	const {dispatch: storyFormatsDispatch, formats} = useStoryFormatsContext();
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
-	const previewMetadataRef = React.useRef<{
-		revisions: Map<string, number>;
-		stories: typeof stories;
-	}>({revisions: new Map(), stories});
+	const previewMetadataRef = React.useRef(stories);
 
-	previewMetadataRef.current = {
-		revisions: new Map(
-			stories.map(story => [
-				story.id,
-				coreProjectHost.sessionStatus(story.id).revision
-			])
-		),
-		stories
-	};
+	previewMetadataRef.current = stories;
 
 	const assetInventoryForStory = React.useCallback(
 		async (storyId: string) => {
@@ -210,19 +210,13 @@ export function usePublishing(): UsePublishingProps {
 
 	const completeStorySnapshotForPreview = React.useCallback(
 		(storyId: string) =>
-			materializeStoryPreviewSnapshot(coreProjectHost, storyId, () => {
-				const metadataSnapshot = previewMetadataRef.current;
-				const sourceStory = storyWithId(metadataSnapshot.stories, storyId);
-				const metadataRevision = metadataSnapshot.revisions.get(storyId);
-
-				if (metadataRevision === undefined) {
-					throw new Error(
-						'The story preview metadata is not attached to a Core revision.'
-					);
-				}
-
-				return {revision: metadataRevision, story: sourceStory};
-			}),
+			materializeStoryPreviewSnapshot(coreProjectHost, storyId, () =>
+				currentStoryPreviewMetadata(
+					coreProjectHost,
+					previewMetadataRef.current,
+					storyId
+				)
+			),
 		[coreProjectHost]
 	);
 

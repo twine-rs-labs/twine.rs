@@ -2758,8 +2758,8 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			}
 
 			for (const story of sessionStories) {
-				registerStoryMaterializer(story.id, () =>
-					materializeStoryFromSession(host!, story)
+				registerStoryMaterializer(story.id, currentStory =>
+					materializeStoryFromSession(host!, currentStory)
 				);
 			}
 		}

@@ -53,7 +53,9 @@ describe('saveStory()', () => {
 		story = metadataStory;
 		story.storyFormat = formatsState[0].name;
 		story.storyFormatVersion = formatsState[0].version;
-		registerStoryMaterializer(story.id, async () => completeStory);
+		const materialize = jest.fn(async () => completeStory);
+
+		registerStoryMaterializer(story.id, materialize);
 		saveProjectMetadata(story.id, {
 			rootPath: '/native/moon-castle.twine.rs',
 			status: 'file-backed',
@@ -66,6 +68,7 @@ describe('saveStory()', () => {
 			'/native/moon-castle.twine.rs',
 			completeStory
 		);
+		expect(materialize).toHaveBeenCalledWith(story);
 	});
 
 	it('calls saveStoryHtml on the twineElectron global', async () => {
@@ -195,6 +198,36 @@ describe('saveStory()', () => {
 		);
 	});
 
+	it('uses a full save when document updates accompany a full-save hint', async () => {
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		const materialize = jest.fn(async () => story);
+		const passage = story.passages[0];
+
+		registerStoryMaterializer(story.id, materialize);
+		await saveStory(story, formatsState, {
+			documentUpdates: [
+				{
+					passageId: passage.id,
+					storyId: story.id,
+					text: passage.text,
+					type: 'passageText'
+				}
+			],
+			hints: [{reason: 'passageCreated', storyId: story.id, type: 'full'}]
+		});
+
+		expect(materialize).toHaveBeenCalledWith(story);
+		expect(saveProjectFolder).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			story,
+			expect.not.objectContaining({incrementalOnly: true})
+		);
+	});
+
 	it('uses a compact touched-passage payload for layout-only saves', async () => {
 		story = fakeStory(3);
 		saveProjectMetadata(story.id, {
@@ -234,6 +267,35 @@ describe('saveStory()', () => {
 				revision: 7,
 				sessionId: 'project:/native/moon-castle.twine.rs'
 			})
+		);
+	});
+
+	it('uses current passage metadata without materializing document bodies', async () => {
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		const renamed = {...story.passages[0], name: 'Renamed'};
+		const materialize = jest.fn(async () => story);
+
+		story = {...story, passages: [renamed, ...story.passages.slice(1)]};
+		registerStoryMaterializer(story.id, materialize);
+		await saveStory(story, formatsState, {
+			hints: [
+				{passageId: renamed.id, storyId: story.id, type: 'passageMetadata'}
+			]
+		});
+
+		expect(materialize).not.toHaveBeenCalled();
+		expect(saveProjectFolder).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			expect.objectContaining({
+				passages: expect.arrayContaining([
+					expect.objectContaining({id: renamed.id, name: 'Renamed'})
+				])
+			}),
+			expect.objectContaining({incrementalOnly: true})
 		);
 	});
 

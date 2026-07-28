@@ -6,7 +6,10 @@ import type {
 } from '../store/stories';
 
 const bootstrapStories = new Map<string, StoryWithDocuments>();
-const storyMaterializers = new Map<string, () => Promise<StoryWithDocuments>>();
+const storyMaterializers = new Map<
+	string,
+	(story: Story) => Promise<StoryWithDocuments>
+>();
 
 export function registerBootstrapStories(stories: StoryWithDocuments[]) {
 	for (const story of stories) {
@@ -64,7 +67,7 @@ export function clearBootstrapStories() {
 
 export function registerStoryMaterializer(
 	storyId: string,
-	materialize: () => Promise<StoryWithDocuments>
+	materialize: (story: Story) => Promise<StoryWithDocuments>
 ) {
 	storyMaterializers.set(storyId, materialize);
 }
@@ -84,7 +87,7 @@ function storyHasDocuments(story: Story): story is StoryWithDocuments {
 export async function materializeRegisteredStory(
 	story: Story
 ): Promise<StoryWithDocuments> {
-	const materialized = await storyMaterializers.get(story.id)?.();
+	const materialized = await storyMaterializers.get(story.id)?.(story);
 
 	if (materialized) {
 		return materialized;

@@ -1,6 +1,9 @@
 import type {CoreProjectHost} from '../../core/project-host';
 import {fakeStory} from '../../test-util';
-import {materializeStoryPreviewSnapshot} from '../use-publishing';
+import {
+	currentStoryPreviewMetadata,
+	materializeStoryPreviewSnapshot
+} from '../use-publishing';
 
 function storySummary(storyId: string, revision: number) {
 	return {
@@ -66,6 +69,46 @@ describe('materializeStoryPreviewSnapshot()', () => {
 			revision: 2,
 			story: {
 				name: 'Renamed',
+				passages: [expect.objectContaining({text: 'revision 2'})]
+			},
+			summary: {revision: 2}
+		});
+	});
+
+	it('reads a document-only Core revision without requiring new story metadata', async () => {
+		const story = fakeStory(1);
+		let revision = 1;
+		const host = {
+			queryDocumentPageAsync: jest.fn(async () => ({
+				documents: [
+					{
+						kind: 'passage',
+						passageId: story.passages[0].id,
+						text: `revision ${revision}`
+					}
+				],
+				nextCursor: null,
+				revision,
+				storyId: story.id,
+				totalCount: 1
+			})),
+			queryStorySummaryAsync: jest.fn(async () => {
+				if (revision === 1) {
+					revision = 2;
+				}
+
+				return storySummary(story.id, revision);
+			}),
+			sessionStatus: () => ({revision})
+		} as unknown as CoreProjectHost;
+
+		await expect(
+			materializeStoryPreviewSnapshot(host, story.id, () =>
+				currentStoryPreviewMetadata(host, [story], story.id)
+			)
+		).resolves.toMatchObject({
+			revision: 2,
+			story: {
 				passages: [expect.objectContaining({text: 'revision 2'})]
 			},
 			summary: {revision: 2}

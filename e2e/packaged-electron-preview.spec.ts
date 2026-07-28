@@ -292,7 +292,11 @@ async function selectPassage(page: Page, name: string) {
 }
 
 async function createPassage(page: Page, name: string, text: string) {
-	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
+	const passageTab = page.getByRole('tab', {name: 'Passage', exact: true});
+
+	if ((await passageTab.getAttribute('aria-selected')) !== 'true') {
+		await passageTab.click();
+	}
 	await page.getByRole('button', {name: 'New', exact: true}).click();
 	const untitledPassage = page
 		.getByRole('listitem')
