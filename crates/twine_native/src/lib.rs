@@ -3243,7 +3243,7 @@ fn native_project_file_entry(
 
     Ok(NativeProjectFileEntry {
         content_digest,
-        fingerprint: format!("{}:{}", mtime_ms.trunc() as u64, entry_stats.len()),
+        fingerprint: format!("{}:{}", system_time_to_millis(mtime), entry_stats.len()),
         kind: kind.to_owned(),
         modified_at: system_time_to_iso(mtime),
         mtime_ms,
@@ -3286,7 +3286,11 @@ fn native_project_file_entry_from_loaded(file: LoadedProjectFile) -> NativeProje
 
     NativeProjectFileEntry {
         content_digest: Some(file.content_digest),
-        fingerprint: format!("{}:{}", mtime_ms.trunc() as u64, file.size_bytes),
+        fingerprint: format!(
+            "{}:{}",
+            system_time_to_millis(file.modified_at),
+            file.size_bytes
+        ),
         kind: file.kind.to_owned(),
         modified_at: system_time_to_iso(file.modified_at),
         mtime_ms,
@@ -3299,10 +3303,11 @@ fn asset_project_file_entry(asset: &CoreAssetInventoryEntry) -> Option<NativePro
     let size = asset.size_bytes?;
     let modified_at = asset.modified_at.as_ref()?;
     let mtime_ms = parse_iso_to_ms(modified_at).unwrap_or(0.0);
+    let mtime_millis = parse_iso_to_millis(modified_at).unwrap_or_default();
 
     Some(NativeProjectFileEntry {
         content_digest: None,
-        fingerprint: format!("{}:{size}", mtime_ms.trunc() as u64),
+        fingerprint: format!("{mtime_millis}:{size}"),
         kind: "asset".into(),
         modified_at: modified_at.clone(),
         mtime_ms,
@@ -3871,6 +3876,12 @@ fn system_time_to_ms(time: SystemTime) -> f64 {
         .unwrap_or_default()
 }
 
+fn system_time_to_millis(time: SystemTime) -> u128 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
 fn timestamp_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3883,6 +3894,13 @@ fn parse_iso_to_ms(value: &str) -> Option<f64> {
         .ok()
         .and_then(|date| date.unix_timestamp_nanos().to_string().parse::<f64>().ok())
         .map(|nanos| nanos / 1_000_000.0)
+}
+
+fn parse_iso_to_millis(value: &str) -> Option<u128> {
+    OffsetDateTime::parse(value, &Rfc3339)
+        .ok()
+        .and_then(|date| u128::try_from(date.unix_timestamp_nanos()).ok())
+        .map(|nanos| nanos / 1_000_000)
 }
 
 fn now_iso() -> String {
@@ -4067,7 +4085,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::io::Write;
     use std::sync::{Arc, Barrier};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn temp_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -4077,6 +4095,21 @@ mod tests {
                 .expect("system time should be after epoch")
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn integer_milliseconds_do_not_round_up_at_submillisecond_boundaries() {
+        let expected_millis = 1_785_358_295_000;
+
+        for (nanoseconds, timestamp) in [
+            (999_809, "2026-07-29T20:51:35.000999809Z"),
+            (999_900, "2026-07-29T20:51:35.000999900Z"),
+        ] {
+            let time = UNIX_EPOCH + Duration::new(1_785_358_295, nanoseconds);
+
+            assert_eq!(system_time_to_millis(time), expected_millis);
+            assert_eq!(parse_iso_to_millis(timestamp), Some(expected_millis));
+        }
     }
 
     fn write_test_zip(

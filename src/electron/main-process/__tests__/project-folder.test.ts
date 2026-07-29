@@ -7,7 +7,8 @@ import {
 	open as openFile,
 	opendir,
 	realpath,
-	rename as renameFile
+	rename as renameFile,
+	stat as statFile
 } from 'fs/promises';
 import {performance} from 'perf_hooks';
 import {
@@ -55,6 +56,7 @@ import {
 	projectSessionScratchAssets,
 	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
+	projectFileFingerprint,
 	readProjectFolderHydrationChunk,
 	renameProjectAsset,
 	replaceProjectAsset,
@@ -102,7 +104,8 @@ jest.mock('fs/promises', () => ({
 	open: jest.fn(),
 	opendir: jest.fn(),
 	realpath: jest.fn(),
-	rename: jest.fn()
+	rename: jest.fn(),
+	stat: jest.fn()
 }));
 jest.mock('fs-extra');
 jest.mock('yauzl', () => ({open: jest.fn()}));
@@ -161,6 +164,7 @@ describe('project-folder native bridge', () => {
 	const readdirMock = readdir as jest.Mock;
 	const realpathMock = realpath as jest.Mock;
 	const renameFileMock = renameFile as jest.Mock;
+	const statFileMock = statFile as jest.Mock;
 	const removeMock = remove as jest.Mock;
 	const showOpenDialogMock = dialog.showOpenDialog as jest.Mock;
 	const statMock = stat as jest.Mock;
@@ -372,11 +376,24 @@ describe('project-folder native bridge', () => {
 					}
 				),
 				sync: jest.fn(async () => undefined),
-				stat: jest.fn(async () => ({
-					isFile: () => true,
-					mtimeMs: 1,
-					size: source.length
-				}))
+				stat: jest.fn(async options =>
+					options?.bigint
+						? {
+								dev: 1n,
+								ino: 1n,
+								isFile: (): boolean => true,
+								mtimeMs: 1n,
+								mtimeNs: 1_000_000n,
+								size: BigInt(source.length)
+							}
+						: {
+								dev: 1,
+								ino: 1,
+								isFile: (): boolean => true,
+								mtimeMs: 1,
+								size: source.length
+							}
+				)
 			};
 		});
 		openZipMock.mockImplementation(
@@ -469,6 +486,28 @@ describe('project-folder native bridge', () => {
 			mtimeMs: 1,
 			size: 0
 		}));
+		statFileMock.mockImplementation(async path => {
+			const stats = await statMock(path);
+			const mtimeMs =
+				typeof stats.mtimeMs === 'number'
+					? stats.mtimeMs
+					: stats.mtime instanceof Date
+						? stats.mtime.getTime()
+						: 0;
+			const mtimeNs =
+				typeof stats.mtimeNs === 'bigint'
+					? stats.mtimeNs
+					: BigInt(Math.trunc(mtimeMs * 1_000_000));
+
+			return {
+				...stats,
+				dev: BigInt(stats.dev ?? 1),
+				ino: BigInt(stats.ino ?? 1),
+				mtimeMs: mtimeNs / 1_000_000n,
+				mtimeNs,
+				size: BigInt(stats.size)
+			};
+		});
 		lstatMock.mockImplementation(async path => {
 			if (
 				String(path).endsWith('.twine/project-file-cas.json') ||
@@ -1296,7 +1335,16 @@ describe('project-folder native bridge', () => {
 		expect(writeFileMock).not.toHaveBeenCalled();
 	});
 
-	it('incrementally saves a passage text edit through the active project session', async () => {
+	it.each([1785358295000999809n, 1785358295000999900n])(
+		'uses integer milliseconds for boundary mtime %s',
+		mtimeNs => {
+			expect(projectFileFingerprint(mtimeNs, 5n)).toBe('1785358295000:5');
+		}
+	);
+
+	it('incrementally saves when floating mtimes round across a boundary', async () => {
+		const mtimeNs = 1785358295000999900n;
+		const roundedMtimeMs = 1785358295001;
 		let passageSource = '<img src="assets/old.png">';
 		const story = {
 			...fakeStory(1),
@@ -1334,10 +1382,13 @@ describe('project-folder native bridge', () => {
 		};
 		const passageFile = {
 			contentDigest: createHash('sha256').update(passageSource).digest('hex'),
-			fingerprint: `1:${Buffer.byteLength(passageSource)}`,
+			fingerprint: projectFileFingerprint(
+				mtimeNs,
+				BigInt(Buffer.byteLength(passageSource))
+			),
 			kind: 'passage' as const,
-			modifiedAt: '2026-06-21T16:00:00.000Z',
-			mtimeMs: 1,
+			modifiedAt: '2026-07-29T20:51:35.0009999Z',
+			mtimeMs: roundedMtimeMs,
 			path: 'passages/story/001-start.twee',
 			sizeBytes: Buffer.byteLength(passageSource)
 		};
@@ -1380,9 +1431,50 @@ describe('project-folder native bridge', () => {
 			return {
 				isDirectory: () => String(path) === '/native/project.twine.rs',
 				isFile: () => String(path) !== '/native/project.twine.rs',
-				mtime: new Date('2026-06-21T16:00:00.001Z'),
-				mtimeMs: 1,
+				mtime: new Date('2026-07-29T20:51:35.000Z'),
+				mtimeMs: roundedMtimeMs,
 				size: passage ? Buffer.byteLength(passageSource) : 0
+			};
+		});
+		const defaultOpenFile = openFileMock.getMockImplementation()!;
+		const defaultStatFile = statFileMock.getMockImplementation()!;
+
+		statFileMock.mockImplementation(async (path, options) => {
+			const stats = await defaultStatFile(path, options);
+
+			return String(path).includes('passages/story/001-start.twee')
+				? {
+						...stats,
+						mtimeMs: mtimeNs / 1_000_000n,
+						mtimeNs
+					}
+				: stats;
+		});
+
+		openFileMock.mockImplementation(async (path, flags) => {
+			const handle = await defaultOpenFile(path, flags);
+
+			if (
+				!String(path).endsWith('.baseline') ||
+				typeof handle.stat !== 'function'
+			) {
+				return handle;
+			}
+			const handleStat = handle.stat;
+
+			return {
+				...handle,
+				stat: jest.fn(async options => {
+					const stats = await handleStat(options);
+
+					return options?.bigint
+						? {
+								...stats,
+								mtimeMs: mtimeNs / 1_000_000n,
+								mtimeNs
+							}
+						: {...stats, mtimeMs: roundedMtimeMs};
+				})
 			};
 		});
 		listNativeProjectAssetsMock.mockReturnValue([]);
@@ -1408,6 +1500,7 @@ describe('project-folder native bridge', () => {
 		await startProjectSession('/native/project.twine.rs', undefined, [
 			'story-id'
 		]);
+		expect(Math.trunc(roundedMtimeMs)).toBe(Number(mtimeNs / 1_000_000n) + 1);
 		const manifestReadsBeforeSave = readFileMock.mock.calls.filter(call =>
 			String(call[0]).endsWith('twine.toml')
 		).length;
@@ -1550,6 +1643,7 @@ describe('project-folder native bridge', () => {
 			sizeBytes: Buffer.byteLength(originalSource)
 		};
 		let passageSource = originalSource;
+		const defaultOpenFile = openFileMock.getMockImplementation()!;
 
 		readFileMock.mockImplementation(async path =>
 			String(path).endsWith('twine.toml') ? manifestSource : passageSource
@@ -1618,6 +1712,46 @@ describe('project-folder native bridge', () => {
 		);
 		expect(passageSource).toBe(externalSource);
 		expect(moveMock).not.toHaveBeenCalled();
+
+		passageSource = originalSource;
+		writeFileMock.mockResolvedValue(undefined);
+		linkFileMock.mockClear();
+		linkFileMock.mockResolvedValue(undefined);
+		let verificationStatCalls = 0;
+
+		openFileMock.mockImplementation(async (path, flags) => {
+			const handle = await defaultOpenFile(path, flags);
+
+			if (
+				!String(path).endsWith('.baseline') ||
+				typeof handle.stat !== 'function'
+			) {
+				return handle;
+			}
+			const handleStat = handle.stat;
+
+			return {
+				...handle,
+				stat: jest.fn(async options => {
+					const stats = await handleStat(options);
+					const mtimeNs =
+						verificationStatCalls++ === 0 ? 1_000_000n : 2_000_000n;
+
+					return options?.bigint
+						? {...stats, mtimeMs: mtimeNs / 1_000_000n, mtimeNs}
+						: {...stats, mtimeMs: Number(mtimeNs) / 1_000_000};
+				})
+			};
+		});
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story, options)
+		).rejects.toThrow(
+			'passages/story/001-start.twee changed outside twine.rs; refusing to overwrite it.'
+		);
+		expect(verificationStatCalls).toBeGreaterThanOrEqual(2);
+		expect(passageSource).toBe(originalSource);
+		expect(moveMock).not.toHaveBeenCalled();
+		openFileMock.mockImplementation(defaultOpenFile);
 
 		passageSource = originalSource;
 		writeFileMock.mockResolvedValue(undefined);
@@ -1924,11 +2058,24 @@ describe('project-folder native bridge', () => {
 							return {buffer, bytesRead};
 						}
 					),
-					stat: jest.fn(async () => ({
-						isFile: () => true,
-						mtimeMs: 1,
-						size: bytes.length
-					})),
+					stat: jest.fn(async options =>
+						options?.bigint
+							? {
+									dev: 1n,
+									ino: 1n,
+									isFile: (): boolean => true,
+									mtimeMs: 1n,
+									mtimeNs: 1_000_000n,
+									size: BigInt(bytes.length)
+								}
+							: {
+									dev: 1,
+									ino: 1,
+									isFile: (): boolean => true,
+									mtimeMs: 1,
+									size: bytes.length
+								}
+					),
 					sync: jest.fn(async () => undefined)
 				};
 			});
@@ -3087,11 +3234,24 @@ describe('project-folder native bridge', () => {
 							return {buffer, bytesRead};
 						}
 					),
-					stat: jest.fn(async () => ({
-						isFile: () => true,
-						mtimeMs: 1,
-						size: bytes.length
-					})),
+					stat: jest.fn(async options =>
+						options?.bigint
+							? {
+									dev: 1n,
+									ino: 1n,
+									isFile: (): boolean => true,
+									mtimeMs: 1n,
+									mtimeNs: 1_000_000n,
+									size: BigInt(bytes.length)
+								}
+							: {
+									dev: 1,
+									ino: 1,
+									isFile: (): boolean => true,
+									mtimeMs: 1,
+									size: bytes.length
+								}
+					),
 					sync: jest.fn(async () => undefined)
 				};
 			});

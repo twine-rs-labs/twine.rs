@@ -1,11 +1,12 @@
-import {constants as fsConstants, FSWatcher, watch} from 'fs';
+import {constants as fsConstants, FSWatcher, type BigIntStats, watch} from 'fs';
 import {
 	link as linkFile,
 	lstat,
 	open as openFile,
 	opendir,
 	realpath,
-	rename as renameFile
+	rename as renameFile,
+	stat as statFile
 } from 'fs/promises';
 import {createHash, randomUUID} from 'crypto';
 import {tmpdir} from 'os';
@@ -3388,10 +3389,11 @@ function safeProjectAssetPath(rootPath: string, assetPath: string) {
 function projectAssetInventoryEntry(
 	projectPath: string,
 	absolutePath: string,
-	fileStats: Awaited<ReturnType<typeof stat>>
+	fileStats: BigIntStats
 ): CoreAssetInventoryEntry {
 	const kind = assetKindForPath(projectPath);
 	const previewUrl = fileUrlForPath(absolutePath);
+	const mtimeMs = fileStats.mtimeNs / BigInt(1_000_000);
 
 	return {
 		durationMs: null,
@@ -3399,7 +3401,7 @@ function projectAssetInventoryEntry(
 		height: null,
 		kind,
 		missing: false,
-		modifiedAt: fileStats.mtime.toISOString(),
+		modifiedAt: new Date(Number(mtimeMs)).toISOString(),
 		normalizedPath: normalizedAssetPath(projectPath),
 		path: projectPath,
 		previewUrl,
@@ -3410,7 +3412,7 @@ function projectAssetInventoryEntry(
 		},
 		referenceCount: 0,
 		references: [],
-		sizeBytes: fileStats.size,
+		sizeBytes: Number(fileStats.size),
 		snippet: assetSnippet(projectPath, kind),
 		thumbnailUrl: kind === 'image' ? previewUrl : null,
 		unused: true,
@@ -3437,7 +3439,7 @@ async function scanAssetDirectory(
 
 	for (const name of names) {
 		const absolutePath = join(directory, name);
-		const fileStats = await stat(absolutePath);
+		const fileStats = await statFile(absolutePath, {bigint: true});
 
 		if (fileStats.isDirectory()) {
 			await scanAssetDirectory(rootPath, absolutePath, assets);
@@ -3457,6 +3459,10 @@ async function scanAssetDirectory(
 	}
 }
 
+export function projectFileFingerprint(mtimeNs: bigint, sizeBytes: bigint) {
+	return `${mtimeNs / BigInt(1_000_000)}:${sizeBytes}`;
+}
+
 async function scanProjectFiles(
 	rootPath: string,
 	projectPath: string,
@@ -3464,7 +3470,7 @@ async function scanProjectFiles(
 	files: NativeProjectFileEntry[]
 ) {
 	const absolutePath = safeProjectFilePath(rootPath, projectPath);
-	let fileStats: Awaited<ReturnType<typeof stat>>;
+	let fileStats: Awaited<ReturnType<typeof statFile>>;
 
 	if (!absolutePath) {
 		throw Object.assign(new Error(`Unsafe project path: ${projectPath}`), {
@@ -3473,7 +3479,7 @@ async function scanProjectFiles(
 	}
 
 	try {
-		fileStats = await stat(absolutePath);
+		fileStats = await statFile(absolutePath, {bigint: true});
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
 			return;
@@ -3513,26 +3519,27 @@ async function scanProjectFiles(
 
 	if (kind !== 'asset') {
 		const content = await readFile(absolutePath);
-		const afterReadStats = await stat(absolutePath);
+		const afterReadStats = await statFile(absolutePath, {bigint: true});
 
 		if (
 			!afterReadStats.isFile() ||
 			afterReadStats.size !== fileStats.size ||
-			afterReadStats.mtimeMs !== fileStats.mtimeMs
+			afterReadStats.mtimeNs !== fileStats.mtimeNs
 		) {
 			throw new Error(`${projectPath} changed while it was being scanned.`);
 		}
 		contentDigest = createHash('sha256').update(content).digest('hex');
 	}
+	const sizeBytes = Number(fileStats.size);
 
 	files.push({
 		contentDigest,
-		fingerprint: `${Math.trunc(fileStats.mtimeMs)}:${fileStats.size}`,
+		fingerprint: projectFileFingerprint(fileStats.mtimeNs, fileStats.size),
 		kind,
 		modifiedAt: fileStats.mtime.toISOString(),
-		mtimeMs: fileStats.mtimeMs,
+		mtimeMs: Number(fileStats.mtimeNs) / 1_000_000,
 		path: projectPath.replace(/\\/g, '/'),
-		sizeBytes: fileStats.size
+		sizeBytes
 	});
 }
 
@@ -3547,7 +3554,7 @@ function assetProjectFileEntry(
 	const mtimeMs = Number.isFinite(parsedMtimeMs) ? parsedMtimeMs : 0;
 
 	return {
-		fingerprint: `${Math.trunc(mtimeMs)}:${asset.sizeBytes}`,
+		fingerprint: `${mtimeMs}:${asset.sizeBytes}`,
 		kind: 'asset',
 		modifiedAt: asset.modifiedAt,
 		mtimeMs,
@@ -4366,7 +4373,7 @@ async function targetedAssetEntry(rootPath: string, projectPath: string) {
 	const asset = safeProjectAssetPath(rootPath, projectPath);
 
 	try {
-		const fileStats = await stat(asset.absolutePath);
+		const fileStats = await statFile(asset.absolutePath, {bigint: true});
 
 		return fileStats.isFile()
 			? projectAssetInventoryEntry(
@@ -5954,12 +5961,16 @@ async function verifiedProjectFileHandle(
 			path,
 			fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
 		);
-		const before = await handle.stat();
+		const before = await handle.stat({bigint: true});
+		const beforeFingerprint = projectFileFingerprint(
+			before.mtimeNs,
+			before.size
+		);
 
 		if (
 			!before.isFile() ||
-			before.size !== expected.sizeBytes ||
-			before.mtimeMs !== expected.mtimeMs
+			before.size !== BigInt(expected.sizeBytes) ||
+			beforeFingerprint !== expected.fingerprint
 		) {
 			throw new Error('metadata changed');
 		}
@@ -5978,20 +5989,15 @@ async function verifiedProjectFileHandle(
 			offset += bytesRead;
 		}
 
-		const after = await handle.stat();
+		const after = await handle.stat({bigint: true});
 		const identityChanged =
-			(typeof before.dev === 'number' &&
-				typeof after.dev === 'number' &&
-				before.dev !== after.dev) ||
-			(typeof before.ino === 'number' &&
-				typeof after.ino === 'number' &&
-				before.ino !== after.ino);
+			before.dev !== after.dev || before.ino !== after.ino;
 
 		if (
 			after.size !== before.size ||
-			after.mtimeMs !== before.mtimeMs ||
+			after.mtimeNs !== before.mtimeNs ||
 			identityChanged ||
-			offset !== before.size ||
+			BigInt(offset) !== before.size ||
 			hasher.digest('hex') !== expected.contentDigest
 		) {
 			throw new Error('content changed');
