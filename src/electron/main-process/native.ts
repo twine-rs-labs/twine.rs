@@ -115,6 +115,12 @@ interface NativeProjectAddon {
 		storyJson: string,
 		sourceLayout?: ProjectSourceLayout
 	): string;
+	saveProjectFolderJsonGuarded?(
+		rootPath: string,
+		storyJson: string,
+		sourceLayout: ProjectSourceLayout | undefined,
+		expectedFilesJson: string
+	): string;
 }
 
 interface NativeHealthReport {
@@ -578,12 +584,31 @@ export function finishNativeProjectFolderHydration(hydrationId: string) {
 export function saveNativeProjectFolder(
 	rootPath: string,
 	story: Story,
-	sourceLayout?: ProjectSourceLayout
+	sourceLayout?: ProjectSourceLayout,
+	expectedFileBaseline?: NativeProjectFileEntry[]
 ) {
 	return reviveProjectFolderResult(
-		callNativeStrict<NativeProjectFolderResult>('project save', addon =>
-			addon.saveProjectFolderJson(rootPath, JSON.stringify(story), sourceLayout)
-		)
+		callNativeStrict<NativeProjectFolderResult>('project save', addon => {
+			if (expectedFileBaseline) {
+				if (!addon.saveProjectFolderJsonGuarded) {
+					throw new Error(
+						'The native project backend does not support conflict-checked full saves.'
+					);
+				}
+				return addon.saveProjectFolderJsonGuarded(
+					rootPath,
+					JSON.stringify(story),
+					sourceLayout,
+					JSON.stringify(expectedFileBaseline)
+				);
+			}
+
+			return addon.saveProjectFolderJson(
+				rootPath,
+				JSON.stringify(story),
+				sourceLayout
+			);
+		})
 	);
 }
 

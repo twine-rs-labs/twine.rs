@@ -35,8 +35,9 @@ use twine_model::{
 #[cfg(test)]
 use twine_store::save_project_path;
 use twine_store::{
-    LoadProjectOptions, LoadedProjectFile, SaveOptions, load_project_path_with_options,
+    LoadProjectOptions, LoadedProjectFile, SaveOptions, StoreError, load_project_path_with_options,
     load_project_path_with_receipt, save_project_path_with_prepared_sidecar,
+    save_project_path_with_prepared_sidecar_and_preinstall,
     save_project_path_with_prepared_sidecar_and_story_id_mapping,
 };
 
@@ -728,7 +729,32 @@ pub fn save_project_folder_json(
     story_json: String,
     source_layout: Option<String>,
 ) -> NativeResult<String> {
-    save_project_folder_json_inner(root_path, story_json, source_layout, false)
+    save_project_folder_json_inner(root_path, story_json, source_layout, false, None)
+}
+
+#[napi(js_name = "saveProjectFolderJsonGuarded")]
+pub fn save_project_folder_json_guarded(
+    root_path: String,
+    story_json: String,
+    source_layout: Option<String>,
+    expected_files_json: String,
+) -> NativeResult<String> {
+    let expected_files = serde_json::from_str::<Vec<NativeProjectFileEntry>>(&expected_files_json)
+        .map_err(native_error)?;
+
+    if expected_files.is_empty() {
+        return Err(native_error(
+            "Conflict-checked project saves require a non-empty file baseline.",
+        ));
+    }
+
+    save_project_folder_json_inner(
+        root_path,
+        story_json,
+        source_layout,
+        false,
+        Some(expected_files),
+    )
 }
 
 #[napi(js_name = "createProjectFolderJson")]
@@ -737,7 +763,7 @@ pub fn create_project_folder_json(
     story_json: String,
     source_layout: Option<String>,
 ) -> NativeResult<String> {
-    save_project_folder_json_inner(root_path, story_json, source_layout, true)
+    save_project_folder_json_inner(root_path, story_json, source_layout, true, None)
 }
 
 #[napi(js_name = "replaceProjectFolderStoriesJson")]
@@ -1198,6 +1224,7 @@ fn save_project_folder_json_inner(
     story_json: String,
     source_layout: Option<String>,
     allow_create: bool,
+    expected_files: Option<Vec<NativeProjectFileEntry>>,
 ) -> NativeResult<String> {
     let total_started = Instant::now();
     let mut timings = NativeProjectSaveTimings::default();
@@ -1331,16 +1358,27 @@ fn save_project_folder_json_inner(
     }
 
     let started = Instant::now();
-    let save_report = save_project_path_with_prepared_sidecar(
-        &root,
-        &project,
-        &SaveOptions {
-            create_backup: !allow_create,
-            max_backups: project.manifest.storage.max_backups,
-            write_generated_indexes: true,
-        },
-        Some(&prepared_sidecar),
-    )
+    let save_options = SaveOptions {
+        create_backup: !allow_create,
+        max_backups: project.manifest.storage.max_backups,
+        write_generated_indexes: true,
+    };
+    let save_report = if let Some(expected_files) = expected_files {
+        save_project_path_with_prepared_sidecar_and_preinstall(
+            &root,
+            &project,
+            &save_options,
+            Some(&prepared_sidecar),
+            |current_root| validate_project_file_baseline(current_root, &expected_files),
+        )
+    } else {
+        save_project_path_with_prepared_sidecar(
+            &root,
+            &project,
+            &save_options,
+            Some(&prepared_sidecar),
+        )
+    }
     .map_err(native_error)?;
     timings.save_project_path_us = elapsed_us(started);
     timings.changed_file_plan_us = save_report.timings.changed_file_plan_us;
@@ -3329,6 +3367,19 @@ fn project_session_conflicts(
 
     conflicts.sort_by(|left, right| left.path.cmp(&right.path));
     conflicts
+}
+
+fn validate_project_file_baseline(
+    root: &Path,
+    expected_files: &[NativeProjectFileEntry],
+) -> Result<(), StoreError> {
+    let current_files = project_file_manifest(root, None)?;
+
+    if let Some(conflict) = project_session_conflicts(expected_files, &current_files).first() {
+        return Err(StoreError::ProjectConflict(conflict.message.clone()));
+    }
+
+    Ok(())
 }
 
 fn project_file_entries_match(
@@ -5937,6 +5988,58 @@ mod tests {
 
         fs::remove_dir_all(root).expect("sidecar-only project should be removed");
         fs::remove_dir_all(backup_root).expect("sidecar-only backups should be removed");
+    }
+
+    #[test]
+    fn guarded_full_save_preserves_an_external_edit_after_incremental_fallback() {
+        let root = temp_path("guarded-full-save-conflict");
+        let original_story = validation_story(false, "Original body");
+
+        create_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            original_story.to_string(),
+            None,
+        )
+        .expect("guarded-save project should be created");
+
+        // This is the trusted baseline retained when incremental CAS reports
+        // that same-directory hard links are unavailable.
+        let expected_files =
+            project_file_manifest(&root, None).expect("project baseline should scan");
+        let mut app_story = original_story;
+
+        app_story["passages"][0]["text"] = serde_json::json!("App replacement");
+        let passage_path = root.join("passages/validation/0001-start.twee");
+
+        fs::write(&passage_path, "External edit")
+            .expect("external passage edit should be injected");
+
+        let error = save_project_folder_json_guarded(
+            root.to_string_lossy().into_owned(),
+            app_story.to_string(),
+            None,
+            serde_json::to_string(&expected_files).expect("baseline should serialize"),
+        )
+        .expect_err("guarded full save should reject the external edit");
+
+        assert!(
+            error
+                .reason
+                .contains("passages/validation/0001-start.twee changed outside twine.rs"),
+            "unexpected guarded-save error: {}",
+            error.reason
+        );
+        assert_eq!(
+            fs::read_to_string(&passage_path).expect("external edit should remain readable"),
+            "External edit"
+        );
+
+        fs::remove_dir_all(&root).expect("guarded-save project should be removed");
+        let backup_root = project_backup_root(&root);
+        if backup_root.exists() {
+            fs::remove_dir_all(backup_root)
+                .expect("empty guarded-save backup root should be removed");
+        }
     }
 
     #[test]

@@ -11,10 +11,30 @@ import {loadProjectMetadata} from '../../../project-metadata';
 import {recordPerformanceHarnessEvent} from '../../../../util/performance';
 import type {
 	ProjectFolderDocumentUpdate,
+	ProjectFolderExpectedFile,
 	ProjectFolderSaveHint,
 	ProjectFolderSaveOptions
 } from '../../project-folder-save-hints';
 import {materializeRegisteredStory} from '../../../../core/bootstrap-stories';
+
+function filesystemFallbackSaveOptions(
+	storyId: string,
+	options: ProjectFolderSaveOptions,
+	expectedFileBaseline: ProjectFolderExpectedFile[]
+): ProjectFolderSaveOptions {
+	return {
+		expectedFileBaseline,
+		hints: [
+			{
+				reason: 'filesystem requires full saves',
+				storyId,
+				type: 'full'
+			}
+		],
+		revision: options.revision,
+		sessionId: options.sessionId
+	};
+}
 
 async function saveNativeProjectFolder(
 	twineElectron: NonNullable<TwineElectronWindow['twineElectron']>,
@@ -98,7 +118,7 @@ async function saveNativeProjectFolder(
 			!!saveOptions.hints?.length ||
 			saveOptions.revision !== undefined ||
 			saveOptions.sessionId !== undefined;
-		const result = hasOptions
+		let result = hasOptions
 			? await twineElectron.saveProjectFolder(
 					projectMetadata.rootPath,
 					saveStory,
@@ -108,11 +128,25 @@ async function saveNativeProjectFolder(
 					projectMetadata.rootPath,
 					saveStory
 				);
+		if (result && 'saveFallback' in result) {
+			result = await twineElectron.saveProjectFolder(
+				projectMetadata.rootPath,
+				await materializeRegisteredStory(story),
+				filesystemFallbackSaveOptions(
+					story.id,
+					options,
+					result.expectedFileBaseline
+				)
+			);
+			if (result && 'saveFallback' in result) {
+				throw new Error('Full project save fallback could not be completed.');
+			}
+		}
 		recordPerformanceHarnessEvent('save-native-call-completed', {
 			rootPath: projectMetadata.rootPath,
 			storyId: story.id
 		});
-		if (result?.performanceTimings) {
+		if (result && 'performanceTimings' in result && result.performanceTimings) {
 			recordPerformanceHarnessEvent('save-native-timings', {
 				rootPath: projectMetadata.rootPath,
 				storyId: story.id,

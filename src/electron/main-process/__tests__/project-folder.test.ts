@@ -969,6 +969,51 @@ describe('project-folder native bridge', () => {
 		expect(moveMock).not.toHaveBeenCalled();
 	});
 
+	it('passes the retained file baseline to a guarded native full save', async () => {
+		const story = {
+			...fakeStory(1),
+			id: 'story-id',
+			name: 'Moon Castle'
+		};
+		const expectedFileBaseline = [
+			{
+				contentDigest: 'a'.repeat(64),
+				fingerprint: '1:12',
+				kind: 'passage' as const,
+				modifiedAt: '2026-07-29T12:00:00.000Z',
+				mtimeMs: 1,
+				path: 'passages/moon-castle/0001-start.twee',
+				sizeBytes: 12
+			}
+		];
+
+		saveNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath: '/native/moon-castle.twine.rs',
+			stories: [story],
+			storyIds: [story.id]
+		});
+
+		await saveProjectFolder('/native/moon-castle.twine.rs', story, {
+			expectedFileBaseline,
+			hints: [
+				{
+					reason: 'filesystem requires full saves',
+					storyId: story.id,
+					type: 'full'
+				}
+			]
+		});
+
+		expect(saveNativeProjectFolderMock).toHaveBeenCalledWith(
+			'/native/moon-castle.twine.rs',
+			story,
+			'passage-files',
+			expectedFileBaseline
+		);
+		expect(writeFileMock).not.toHaveBeenCalled();
+	});
+
 	it('preserves a complete multi-story native save result and session baseline', async () => {
 		const rootPath = '/native/project.twine.rs';
 		const firstOriginal = fakeStory(1);
@@ -1609,10 +1654,28 @@ describe('project-folder native bridge', () => {
 
 		await expect(
 			saveProjectFolder('/native/project.twine.rs', story, options)
-		).rejects.toThrow(
-			'Conflict-safe incremental saves are unavailable on this filesystem'
-		);
+		).rejects.toMatchObject({
+			code: 'PROJECT_FILE_CAS_UNAVAILABLE',
+			expectedFileBaseline: expect.arrayContaining([
+				expect.objectContaining({
+					contentDigest: passageFile.contentDigest,
+					path: passageFile.path
+				})
+			]),
+			message: expect.stringContaining(
+				'Conflict-safe incremental saves are unavailable on this filesystem'
+			)
+		});
 		expect(renameFileMock).not.toHaveBeenCalled();
+
+		linkFileMock.mockClear();
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story, options)
+		).rejects.toMatchObject({
+			code: 'PROJECT_FILE_CAS_UNAVAILABLE',
+			expectedFileBaseline: expect.any(Array)
+		});
+		expect(linkFileMock).not.toHaveBeenCalled();
 
 		stopProjectSession('/native/project.twine.rs');
 		nativeProjectFileManifestMock.mockReturnValue([

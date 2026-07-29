@@ -610,6 +610,38 @@ describe('initIpc()', () => {
 		expect(revealStoryDirectoryMock).toHaveBeenCalled();
 	});
 
+	it('requests a renderer full-save retry when incremental CAS is unavailable', async () => {
+		const saveProject = handleMock.mock.calls.find(
+			call => call[0] === 'save-project-folder'
+		);
+		const story = fakeStory();
+		const expectedFileBaseline = [
+			{
+				contentDigest: 'a'.repeat(64),
+				fingerprint: '1:12',
+				kind: 'passage',
+				modifiedAt: '2026-07-29T12:00:00.000Z',
+				mtimeMs: 1,
+				path: 'passages/story/0001-start.twee',
+				sizeBytes: 12
+			}
+		];
+		const error = Object.assign(new Error('hard links unsupported'), {
+			code: 'PROJECT_FILE_CAS_UNAVAILABLE',
+			expectedFileBaseline
+		});
+
+		saveProjectFolderMock.mockRejectedValueOnce(error);
+
+		await expect(
+			saveProject[1]({}, '/mock/project', story, {incrementalOnly: true})
+		).resolves.toEqual({
+			expectedFileBaseline,
+			rootPath: '/mock/project',
+			saveFallback: 'full-save-required'
+		});
+	});
+
 	it('binds and rotates asset effect capabilities at the IPC boundary', async () => {
 		const copyAsset = handleMock.mock.calls.find(
 			call => call[0] === 'copy-asset-to-project'

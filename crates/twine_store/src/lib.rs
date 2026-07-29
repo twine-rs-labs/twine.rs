@@ -81,6 +81,9 @@ pub enum StoreError {
     #[error("unsupported unmanaged project entry: {0}")]
     UnsupportedUnmanagedProjectEntry(PathBuf),
 
+    #[error("project changed before save: {0}")]
+    ProjectConflict(String),
+
     #[error(
         "failed to install the prepared project at {root}: {install_error}; failed to restore the original project from {recovery_path}: {rollback_error}"
     )]
@@ -88,6 +91,26 @@ pub enum StoreError {
         root: PathBuf,
         recovery_path: PathBuf,
         install_error: std::io::Error,
+        rollback_error: std::io::Error,
+    },
+
+    #[error(
+        "failed to validate the displaced project at {recovery_path}: {validation_error}; failed to restore it at {root}: {rollback_error}"
+    )]
+    ProjectValidationRollback {
+        root: PathBuf,
+        recovery_path: PathBuf,
+        validation_error: String,
+        rollback_error: std::io::Error,
+    },
+
+    #[error(
+        "the displaced project changed while installing its replacement: {validation_error}; failed to restore it from {recovery_path} to {root}: {rollback_error}"
+    )]
+    ProjectPostInstallValidationRollback {
+        root: PathBuf,
+        recovery_path: PathBuf,
+        validation_error: String,
         rollback_error: std::io::Error,
     },
 
@@ -442,12 +465,32 @@ pub fn save_project_path_with_prepared_sidecar(
     options: &SaveOptions,
     prepared_sidecar: Option<&[u8]>,
 ) -> Result<SaveReport, StoreError> {
-    save_project_path_with_prepared_sidecar_and_story_id_mapping(
+    save_project_path_with_prepared_sidecar_and_preinstall(
+        root,
+        project,
+        options,
+        prepared_sidecar,
+        |_| Ok(()),
+    )
+}
+
+pub fn save_project_path_with_prepared_sidecar_and_preinstall<F>(
+    root: impl AsRef<Path>,
+    project: &Project,
+    options: &SaveOptions,
+    prepared_sidecar: Option<&[u8]>,
+    preinstall: F,
+) -> Result<SaveReport, StoreError>
+where
+    F: Fn(&Path) -> Result<(), StoreError>,
+{
+    save_project_path_with_prepared_sidecar_and_story_id_mapping_and_preinstall(
         root,
         project,
         options,
         prepared_sidecar,
         None,
+        preinstall,
     )
 }
 
@@ -458,6 +501,27 @@ pub fn save_project_path_with_prepared_sidecar_and_story_id_mapping(
     prepared_sidecar: Option<&[u8]>,
     previous_story_ids: Option<&BTreeMap<StoryId, StoryId>>,
 ) -> Result<SaveReport, StoreError> {
+    save_project_path_with_prepared_sidecar_and_story_id_mapping_and_preinstall(
+        root,
+        project,
+        options,
+        prepared_sidecar,
+        previous_story_ids,
+        |_| Ok(()),
+    )
+}
+
+fn save_project_path_with_prepared_sidecar_and_story_id_mapping_and_preinstall<F>(
+    root: impl AsRef<Path>,
+    project: &Project,
+    options: &SaveOptions,
+    prepared_sidecar: Option<&[u8]>,
+    previous_story_ids: Option<&BTreeMap<StoryId, StoryId>>,
+    preinstall: F,
+) -> Result<SaveReport, StoreError>
+where
+    F: Fn(&Path) -> Result<(), StoreError>,
+{
     let total_started = Instant::now();
     let mut timings = SaveTimings::default();
     let root = root.as_ref();
@@ -520,12 +584,13 @@ pub fn save_project_path_with_prepared_sidecar_and_story_id_mapping(
     };
     let started = Instant::now();
 
-    install_prepared_project_root(
+    install_prepared_project_root_with_validation(
         root,
         &temp_root,
         &displaced_path,
         keep_displaced,
         |source, target| fs::rename(source, target),
+        preinstall,
     )?;
     let backup_path = (root_existed && keep_displaced).then_some(displaced_path);
 
@@ -1975,15 +2040,38 @@ fn backup_dir(root: &Path) -> PathBuf {
     parent.join(format!(".{name}.backups"))
 }
 
+#[cfg(test)]
 fn install_prepared_project_root<F>(
     root: &Path,
     prepared_root: &Path,
     displaced_root: &Path,
     keep_displaced: bool,
-    mut rename: F,
+    rename: F,
 ) -> Result<(), StoreError>
 where
     F: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    install_prepared_project_root_with_validation(
+        root,
+        prepared_root,
+        displaced_root,
+        keep_displaced,
+        rename,
+        |_| Ok(()),
+    )
+}
+
+fn install_prepared_project_root_with_validation<F, V>(
+    root: &Path,
+    prepared_root: &Path,
+    displaced_root: &Path,
+    keep_displaced: bool,
+    mut rename: F,
+    validate_displaced: V,
+) -> Result<(), StoreError>
+where
+    F: FnMut(&Path, &Path) -> std::io::Result<()>,
+    V: Fn(&Path) -> Result<(), StoreError>,
 {
     let root_existed = root.exists();
 
@@ -1991,6 +2079,21 @@ where
         rename(root, displaced_root)?;
     } else if let Some(parent) = root.parent() {
         fs::create_dir_all(parent)?;
+    }
+
+    if root_existed && let Err(validation_error) = validate_displaced(displaced_root) {
+        if let Err(rollback_error) = rename(displaced_root, root) {
+            return Err(StoreError::ProjectValidationRollback {
+                root: root.to_path_buf(),
+                recovery_path: displaced_root.to_path_buf(),
+                validation_error: validation_error.to_string(),
+                rollback_error,
+            });
+        }
+        if prepared_root.exists() {
+            let _ = fs::remove_dir_all(prepared_root);
+        }
+        return Err(validation_error);
     }
 
     if let Err(install_error) = rename(prepared_root, root) {
@@ -2007,6 +2110,29 @@ where
             let _ = fs::remove_dir_all(prepared_root);
         }
         return Err(StoreError::Io(install_error));
+    }
+
+    if root_existed && let Err(validation_error) = validate_displaced(displaced_root) {
+        if let Err(rollback_error) = rename(root, prepared_root) {
+            return Err(StoreError::ProjectPostInstallValidationRollback {
+                root: root.to_path_buf(),
+                recovery_path: displaced_root.to_path_buf(),
+                validation_error: validation_error.to_string(),
+                rollback_error,
+            });
+        }
+        if let Err(rollback_error) = rename(displaced_root, root) {
+            return Err(StoreError::ProjectPostInstallValidationRollback {
+                root: root.to_path_buf(),
+                recovery_path: displaced_root.to_path_buf(),
+                validation_error: validation_error.to_string(),
+                rollback_error,
+            });
+        }
+        if prepared_root.exists() {
+            let _ = fs::remove_dir_all(prepared_root);
+        }
+        return Err(validation_error);
     }
 
     if root_existed && !keep_displaced && displaced_root.exists() {
@@ -3585,6 +3711,83 @@ file = "../outside.twee"
         assert!(!retired_root.exists());
 
         fs::remove_dir_all(&root).expect("restored root should be removed");
+    }
+
+    #[test]
+    fn displaced_root_validation_rolls_back_before_installing() {
+        let root = temp_path("project-validation-rollback");
+        let prepared_root = temp_path("project-validation-rollback-prepared");
+        let retired_root = temp_path("project-validation-rollback-retired");
+
+        fs::create_dir_all(&root).expect("original root should be created");
+        fs::write(root.join("marker"), b"original").expect("original marker should write");
+        fs::create_dir_all(&prepared_root).expect("prepared root should be created");
+        fs::write(prepared_root.join("marker"), b"prepared").expect("prepared marker should write");
+
+        let result = install_prepared_project_root_with_validation(
+            &root,
+            &prepared_root,
+            &retired_root,
+            false,
+            |source, target| fs::rename(source, target),
+            |displaced| {
+                assert_eq!(displaced, retired_root);
+                assert!(!root.exists());
+                fs::write(displaced.join("marker"), b"external")
+                    .expect("external edit should reach the claimed root");
+                Err(StoreError::ProjectConflict("marker changed".into()))
+            },
+        );
+
+        assert!(matches!(result, Err(StoreError::ProjectConflict(_))));
+        assert_eq!(fs::read(root.join("marker")).unwrap(), b"external");
+        assert!(!prepared_root.exists());
+        assert!(!retired_root.exists());
+
+        fs::remove_dir_all(&root).expect("validated root should be removed");
+    }
+
+    #[test]
+    fn post_install_validation_restores_an_open_handle_edit() {
+        let root = temp_path("project-post-install-validation");
+        let prepared_root = temp_path("project-post-install-validation-prepared");
+        let retired_root = temp_path("project-post-install-validation-retired");
+
+        fs::create_dir_all(&root).expect("original root should be created");
+        fs::write(root.join("marker"), b"original").expect("original marker should write");
+        fs::create_dir_all(&prepared_root).expect("prepared root should be created");
+        fs::write(prepared_root.join("marker"), b"prepared").expect("prepared marker should write");
+
+        let mut rename_count = 0;
+        let result = install_prepared_project_root_with_validation(
+            &root,
+            &prepared_root,
+            &retired_root,
+            false,
+            |source, target| {
+                rename_count += 1;
+                if rename_count == 2 {
+                    fs::write(retired_root.join("marker"), b"external")
+                        .expect("open-handle edit should reach the displaced root");
+                }
+                fs::rename(source, target)
+            },
+            |displaced| {
+                if fs::read(displaced.join("marker"))? == b"original" {
+                    Ok(())
+                } else {
+                    Err(StoreError::ProjectConflict("marker changed".into()))
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(StoreError::ProjectConflict(_))));
+        assert_eq!(rename_count, 4);
+        assert_eq!(fs::read(root.join("marker")).unwrap(), b"external");
+        assert!(!prepared_root.exists());
+        assert!(!retired_root.exists());
+
+        fs::remove_dir_all(&root).expect("post-validation root should be removed");
     }
 
     #[test]

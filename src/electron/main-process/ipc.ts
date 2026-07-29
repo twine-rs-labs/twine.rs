@@ -923,15 +923,38 @@ export function initIpc() {
 			capability: string,
 			story: StoryWithDocuments,
 			options?: Parameters<typeof saveProjectFolder>[2]
-		) =>
-			grantProjectCapability(
-				event,
-				await saveProjectFolder(
-					resolveProjectCapability(event, capability),
-					story,
-					options
-				)
-			)
+		) => {
+			const rootPath = resolveProjectCapability(event, capability);
+
+			try {
+				return grantProjectCapability(
+					event,
+					await saveProjectFolder(rootPath, story, options)
+				);
+			} catch (error) {
+				const expectedFileBaseline = (
+					error as NodeJS.ErrnoException & {
+						expectedFileBaseline?: unknown;
+					}
+				).expectedFileBaseline;
+
+				if (
+					options?.incrementalOnly &&
+					(error as NodeJS.ErrnoException).code ===
+						'PROJECT_FILE_CAS_UNAVAILABLE' &&
+					Array.isArray(expectedFileBaseline) &&
+					expectedFileBaseline.length > 0
+				) {
+					return grantProjectCapability(event, {
+						expectedFileBaseline,
+						rootPath,
+						saveFallback: 'full-save-required' as const
+					});
+				}
+
+				throw error;
+			}
+		}
 	);
 
 	ipcMain.handle('reveal-story-library-folder', async () => {

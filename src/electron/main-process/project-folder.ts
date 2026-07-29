@@ -414,6 +414,7 @@ interface ProjectSessionState {
 	hydrationPromise?: Promise<
 		NativeProjectFolderResult & {hydrationId?: string}
 	>;
+	incrementalCasUnavailable?: boolean;
 	interval?: ReturnType<typeof setInterval>;
 	listeners: Set<ProjectSessionListener>;
 	localMutationDepth: number;
@@ -5814,18 +5815,49 @@ export async function saveProjectFolder(
 	const localMutation = beginProjectSessionLocalMutation(rootPath);
 
 	try {
-		const incrementalProject = await writeProjectFolderIncremental(
-			rootPath,
-			story,
-			options
-		);
+		let incrementalProject: NativeProjectFolderResult | undefined;
+
+		try {
+			if (localMutation?.incrementalCasUnavailable && options.incrementalOnly) {
+				throw projectFileCasUnavailableError();
+			}
+			incrementalProject = await writeProjectFolderIncremental(
+				rootPath,
+				story,
+				options
+			);
+		} catch (error) {
+			if (
+				(error as NodeJS.ErrnoException).code === 'PROJECT_FILE_CAS_UNAVAILABLE'
+			) {
+				if (localMutation) {
+					localMutation.incrementalCasUnavailable = true;
+				}
+				const expectedFileBaseline = localMutation?.baseline?.files.map(
+					file => ({...file})
+				);
+
+				if (expectedFileBaseline?.length) {
+					Object.assign(error as object, {expectedFileBaseline});
+				}
+			}
+
+			throw error;
+		}
 		if (!incrementalProject && options.incrementalOnly) {
 			throw new Error(
 				'Incremental document save could not be represented safely.'
 			);
 		}
 		const writtenProject =
-			incrementalProject ?? (await writeProjectFolder(rootPath, story));
+			incrementalProject ??
+			(await writeProjectFolder(
+				rootPath,
+				story,
+				undefined,
+				false,
+				options.expectedFileBaseline
+			));
 
 		if (
 			!incrementalProject &&
@@ -5999,6 +6031,18 @@ async function atomicWriteText(
 	}
 }
 
+function projectFileCasUnavailableError(cause?: unknown) {
+	return Object.assign(
+		new Error(
+			'Conflict-safe incremental saves are unavailable on this filesystem because it does not support same-directory hard links.'
+		),
+		{
+			cause,
+			code: 'PROJECT_FILE_CAS_UNAVAILABLE'
+		}
+	);
+}
+
 interface SingleProjectFileCasJournal {
 	claimPath: string;
 	expected: NativeProjectFileEntry;
@@ -6098,15 +6142,7 @@ async function compareAndSwapProjectFile(
 			await linkFile(tempPath, probePath);
 			await remove(probePath);
 		} catch (error) {
-			throw Object.assign(
-				new Error(
-					'Conflict-safe incremental saves are unavailable on this filesystem because it does not support same-directory hard links.'
-				),
-				{
-					cause: error,
-					code: 'PROJECT_FILE_CAS_UNAVAILABLE'
-				}
-			);
+			throw projectFileCasUnavailableError(error);
 		}
 
 		await writeProjectFileCasJournal(rootPath, {
@@ -6885,15 +6921,7 @@ async function compareAndSwapProjectFiles(
 				await remove(probePath);
 			} catch (error) {
 				await remove(probePath).catch(() => undefined);
-				throw Object.assign(
-					new Error(
-						'Conflict-safe incremental saves are unavailable on this filesystem because it does not support same-directory hard links.'
-					),
-					{
-						cause: error,
-						code: 'PROJECT_FILE_CAS_UNAVAILABLE'
-					}
-				);
+				throw projectFileCasUnavailableError(error);
 			}
 		}
 
@@ -7845,7 +7873,8 @@ async function writeProjectFolder(
 	rootPath: string,
 	story: Story,
 	sourceLayout?: ProjectSourceLayout,
-	create = false
+	create = false,
+	expectedFileBaseline?: NativeProjectFileEntry[]
 ) {
 	const existingSource = await sourceLayoutFromProjectManifest(
 		rootPath,
@@ -7860,10 +7889,22 @@ async function writeProjectFolder(
 			: 'story.twee';
 	const nativeResult = create
 		? createNativeProjectFolder(rootPath, story, effectiveSourceLayout)
-		: saveNativeProjectFolder(rootPath, story, effectiveSourceLayout);
+		: expectedFileBaseline
+			? saveNativeProjectFolder(
+					rootPath,
+					story,
+					effectiveSourceLayout,
+					expectedFileBaseline
+				)
+			: saveNativeProjectFolder(rootPath, story, effectiveSourceLayout);
 
 	if (nativeResult) {
 		return nativeResult;
+	}
+	if (expectedFileBaseline) {
+		throw new Error(
+			'Conflict-checked full saves require the native project backend.'
+		);
 	}
 
 	if (!legacyProjectFallbackEnabled()) {

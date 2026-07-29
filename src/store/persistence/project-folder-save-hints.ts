@@ -33,8 +33,26 @@ export type ProjectFolderDocumentUpdate =
 	  }
 	| {storyId: string; text: string; type: 'script' | 'stylesheet'};
 
+export interface ProjectFolderExpectedFile {
+	contentDigest?: string;
+	fingerprint: string;
+	kind:
+		| 'manifest'
+		| 'metadata'
+		| 'graph'
+		| 'passage'
+		| 'script'
+		| 'stylesheet'
+		| 'asset';
+	modifiedAt: string;
+	mtimeMs: number;
+	path: string;
+	sizeBytes: number;
+}
+
 export interface ProjectFolderSaveOptions {
 	documentUpdates?: ProjectFolderDocumentUpdate[];
+	expectedFileBaseline?: ProjectFolderExpectedFile[];
 	hints?: ProjectFolderSaveHint[];
 	incrementalOnly?: boolean;
 	revision?: number;

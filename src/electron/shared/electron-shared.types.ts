@@ -3,7 +3,10 @@ import {
 	Story,
 	StoryWithDocuments
 } from '../../store/stories/stories.types';
-import type {ProjectFolderSaveOptions} from '../../store/persistence/project-folder-save-hints';
+import type {
+	ProjectFolderExpectedFile,
+	ProjectFolderSaveOptions
+} from '../../store/persistence/project-folder-save-hints';
 import type {CoreAssetInventoryEntry, CoreStorySummary} from '../../core';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
 import type {StoryBuildAsset} from '../../util/build-package';
@@ -271,6 +274,15 @@ export interface NativeProjectFolderResult {
 	stories: StoryWithDocuments[];
 	storyIds: string[];
 }
+
+export interface NativeProjectFolderSaveFallback {
+	expectedFileBaseline: ProjectFolderExpectedFile[];
+	rootPath: string;
+	saveFallback: 'full-save-required';
+}
+
+export type NativeProjectFolderSaveResult =
+	NativeProjectFolderResult | NativeProjectFolderSaveFallback;
 
 export interface NativeProjectHydrationStart extends Omit<
 	NativeProjectFolderResult,
@@ -568,7 +580,7 @@ export interface TwineElectronWindow extends Window {
 			rootPath: string,
 			story: Story,
 			options?: ProjectFolderSaveOptions
-		): Promise<NativeProjectFolderResult>;
+		): Promise<NativeProjectFolderSaveResult>;
 		saveStoryHtml(story: Story, data: string): Promise<void>;
 		saveJson(filename: string, data: any): Promise<void>;
 		runStoryLibraryBackup(): Promise<NativeBackupResult>;

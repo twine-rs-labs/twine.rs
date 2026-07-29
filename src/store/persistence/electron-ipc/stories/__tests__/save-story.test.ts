@@ -177,6 +177,200 @@ describe('saveStory()', () => {
 		);
 	});
 
+	it('falls back to full saves when incremental CAS is unavailable', async () => {
+		const completeStory = fakeStory(2);
+		const metadataStory = {
+			...completeStory,
+			passages: completeStory.passages.map(passage => ({...passage, text: ''}))
+		};
+		const passage = metadataStory.passages[0];
+		const options = {
+			documentUpdates: [
+				{
+					passageId: passage.id,
+					storyId: metadataStory.id,
+					text: completeStory.passages[0].text,
+					type: 'passageText' as const
+				}
+			],
+			hints: [
+				{
+					passageId: passage.id,
+					storyId: metadataStory.id,
+					type: 'passageText' as const
+				}
+			],
+			revision: 3,
+			sessionId: 'project:/native/moon-castle.twine.rs'
+		};
+		const materialize = jest.fn(async () => completeStory);
+		const expectedFileBaseline = [
+			{
+				contentDigest: 'a'.repeat(64),
+				fingerprint: '1:12',
+				kind: 'passage' as const,
+				modifiedAt: '2026-07-29T12:00:00.000Z',
+				mtimeMs: 1,
+				path: 'passages/story/0001-start.twee',
+				sizeBytes: 12
+			}
+		];
+
+		story = metadataStory;
+		registerStoryMaterializer(story.id, materialize);
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		saveProjectFolder.mockResolvedValueOnce({
+			expectedFileBaseline,
+			rootPath: '/native/moon-castle.twine.rs',
+			saveFallback: 'full-save-required'
+		});
+
+		await saveStory(story, formatsState, options);
+
+		expect(saveProjectFolder).toHaveBeenNthCalledWith(
+			1,
+			'/native/moon-castle.twine.rs',
+			expect.objectContaining({
+				passages: [
+					expect.objectContaining({
+						id: passage.id,
+						text: completeStory.passages[0].text
+					})
+				]
+			}),
+			expect.objectContaining({incrementalOnly: true})
+		);
+		expect(saveProjectFolder).toHaveBeenNthCalledWith(
+			2,
+			'/native/moon-castle.twine.rs',
+			completeStory,
+			{
+				expectedFileBaseline,
+				hints: [
+					{
+						reason: 'filesystem requires full saves',
+						storyId: story.id,
+						type: 'full'
+					}
+				],
+				revision: 3,
+				sessionId: 'project:/native/moon-castle.twine.rs'
+			}
+		);
+
+		saveProjectFolder.mockClear();
+		const nextExpectedFileBaseline = [
+			{...expectedFileBaseline[0], contentDigest: 'b'.repeat(64)}
+		];
+		saveProjectFolder.mockResolvedValueOnce({
+			expectedFileBaseline: nextExpectedFileBaseline,
+			rootPath: '/native/moon-castle.twine.rs',
+			saveFallback: 'full-save-required'
+		});
+		await saveStory(story, formatsState, options);
+
+		expect(saveProjectFolder).toHaveBeenCalledTimes(2);
+		expect(saveProjectFolder).toHaveBeenNthCalledWith(
+			1,
+			'/native/moon-castle.twine.rs',
+			expect.any(Object),
+			expect.objectContaining({incrementalOnly: true})
+		);
+		expect(saveProjectFolder).toHaveBeenNthCalledWith(
+			2,
+			'/native/moon-castle.twine.rs',
+			completeStory,
+			expect.objectContaining({
+				expectedFileBaseline: nextExpectedFileBaseline,
+				hints: [
+					expect.objectContaining({
+						storyId: story.id,
+						type: 'full'
+					})
+				]
+			})
+		);
+		expect(materialize).toHaveBeenCalledTimes(2);
+	});
+
+	it('preserves an external edit injected after the full-save fallback signal', async () => {
+		const completeStory = fakeStory(1);
+		const passage = completeStory.passages[0];
+		const expectedFileBaseline = [
+			{
+				contentDigest: 'a'.repeat(64),
+				fingerprint: '1:13',
+				kind: 'passage' as const,
+				modifiedAt: '2026-07-29T12:00:00.000Z',
+				mtimeMs: 1,
+				path: 'passages/story/0001-start.twee',
+				sizeBytes: 13
+			}
+		];
+		let diskPassage = 'Original body';
+
+		story = {
+			...completeStory,
+			passages: completeStory.passages.map(candidate => ({
+				...candidate,
+				text: ''
+			}))
+		};
+		registerStoryMaterializer(story.id, async () => completeStory);
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		saveProjectFolder
+			.mockImplementationOnce(async () => {
+				const fallback = {
+					expectedFileBaseline,
+					rootPath: '/native/moon-castle.twine.rs',
+					saveFallback: 'full-save-required' as const
+				};
+
+				diskPassage = 'External edit';
+				return fallback;
+			})
+			.mockImplementationOnce(async (_rootPath, _savedStory, saveOptions) => {
+				expect(saveOptions?.expectedFileBaseline).toBe(expectedFileBaseline);
+				if (diskPassage !== 'Original body') {
+					throw new Error(
+						`${expectedFileBaseline[0].path} changed outside twine.rs.`
+					);
+				}
+			});
+
+		await expect(
+			saveStory(story, formatsState, {
+				documentUpdates: [
+					{
+						passageId: passage.id,
+						storyId: story.id,
+						text: passage.text,
+						type: 'passageText'
+					}
+				],
+				hints: [
+					{
+						passageId: passage.id,
+						storyId: story.id,
+						type: 'passageText'
+					}
+				]
+			})
+		).rejects.toThrow(
+			`${expectedFileBaseline[0].path} changed outside twine.rs.`
+		);
+		expect(diskPassage).toBe('External edit');
+		expect(saveProjectFolder).toHaveBeenCalledTimes(2);
+	});
+
 	it('uses the compact incremental path for session-owned source saves', async () => {
 		saveProjectMetadata(story.id, {
 			rootPath: '/native/moon-castle.twine.rs',
