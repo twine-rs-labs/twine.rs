@@ -3381,21 +3381,56 @@ fn validate_project_file_baseline(
     let current_files = project_file_manifest(root, None)?;
 
     if let Some(conflict) = project_session_conflicts(expected_files, &current_files).first() {
-        return Err(StoreError::ProjectConflict(conflict.message.clone()));
+        return Err(StoreError::ProjectConflict(format!(
+            "{} Verification diagnostics: {}.",
+            conflict.message,
+            project_file_conflict_diagnostics(conflict)
+        )));
     }
 
     Ok(())
+}
+
+fn project_file_entry_diagnostics(file: &NativeProjectFileEntry) -> serde_json::Value {
+    serde_json::json!({
+        "contentDigestPresent": file.content_digest.is_some(),
+        "fingerprint": file.fingerprint,
+        "mtimeMs": file.mtime_ms,
+        "sizeBytes": file.size_bytes,
+    })
+}
+
+fn project_file_conflict_diagnostics(conflict: &NativeProjectSessionConflict) -> String {
+    let content_digest_matches = match (&conflict.previous, &conflict.current) {
+        (Some(previous), Some(current)) => {
+            match (&previous.content_digest, &current.content_digest) {
+                (Some(previous), Some(current)) => Some(previous == current),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
+    serde_json::json!({
+        "contentDigestMatches": content_digest_matches,
+        "expected": conflict.previous.as_ref().map(project_file_entry_diagnostics),
+        "observed": conflict.current.as_ref().map(project_file_entry_diagnostics),
+        "stage": "native-baseline-compare",
+    })
+    .to_string()
 }
 
 fn project_file_entries_match(
     previous: &NativeProjectFileEntry,
     current: &NativeProjectFileEntry,
 ) -> bool {
-    previous.fingerprint == current.fingerprint
-        && previous
-            .content_digest
-            .as_ref()
-            .is_none_or(|digest| current.content_digest.as_ref() == Some(digest))
+    match (&previous.content_digest, &current.content_digest) {
+        (Some(previous_digest), Some(current_digest)) => {
+            previous.size_bytes == current.size_bytes && previous_digest == current_digest
+        }
+        (None, None) => previous.fingerprint == current.fingerprint,
+        _ => false,
+    }
 }
 
 fn discover_project_import_assets(
@@ -6062,6 +6097,13 @@ mod tests {
             "unexpected guarded-save error: {}",
             error.reason
         );
+        assert!(
+            error
+                .reason
+                .contains(r#""stage":"native-baseline-compare""#),
+            "guarded-save diagnostics should identify the native baseline stage: {}",
+            error.reason
+        );
         assert_eq!(
             fs::read_to_string(&passage_path).expect("external edit should remain readable"),
             "External edit"
@@ -6072,6 +6114,48 @@ mod tests {
         if backup_root.exists() {
             fs::remove_dir_all(backup_root)
                 .expect("empty guarded-save backup root should be removed");
+        }
+    }
+
+    #[test]
+    fn guarded_full_save_accepts_mtime_only_baseline_differences() {
+        let root = temp_path("guarded-full-save-mtime-only");
+        let original_story = validation_story(false, "Original body");
+
+        create_project_folder_json(
+            root.to_string_lossy().into_owned(),
+            original_story.to_string(),
+            None,
+        )
+        .expect("guarded-save project should be created");
+        let mut expected_files =
+            project_file_manifest(&root, None).expect("project baseline should scan");
+
+        for file in &mut expected_files {
+            file.fingerprint = format!("stale:{}", file.size_bytes);
+            file.mtime_ms += 1.0;
+        }
+        let mut app_story = original_story;
+
+        app_story["passages"][0]["text"] = serde_json::json!("App replacement");
+        save_project_folder_json_guarded(
+            root.to_string_lossy().into_owned(),
+            app_story.to_string(),
+            None,
+            serde_json::to_string(&expected_files).expect("baseline should serialize"),
+        )
+        .expect("mtime-only baseline differences should not block a guarded save");
+
+        assert!(
+            fs::read_to_string(root.join("passages/validation/0001-start.twee"))
+                .expect("saved passage should remain readable")
+                .contains("App replacement")
+        );
+
+        fs::remove_dir_all(&root).expect("guarded-save project should be removed");
+        let backup_root = project_backup_root(&root);
+        if backup_root.exists() {
+            fs::remove_dir_all(backup_root).expect("guarded-save backup root should be removed");
         }
     }
 
@@ -6934,6 +7018,72 @@ mod tests {
             changes,
             BTreeSet::from(["added".into(), "modified".into(), "removed".into()])
         );
+    }
+
+    #[test]
+    fn source_entries_match_by_size_and_digest_while_assets_use_fingerprints() {
+        let source = NativeProjectFileEntry {
+            content_digest: Some("a".repeat(64)),
+            fingerprint: "1:5".into(),
+            kind: "passage".into(),
+            modified_at: "2026-07-29T20:51:35.001Z".into(),
+            mtime_ms: 1.0,
+            path: "passages/story/start.twee".into(),
+            size_bytes: 5,
+        };
+        let asset = NativeProjectFileEntry {
+            content_digest: None,
+            fingerprint: "1:5".into(),
+            kind: "asset".into(),
+            modified_at: "2026-07-29T20:51:35.001Z".into(),
+            mtime_ms: 1.0,
+            path: "assets/image.png".into(),
+            size_bytes: 5,
+        };
+
+        assert!(project_file_entries_match(
+            &source,
+            &NativeProjectFileEntry {
+                fingerprint: "2:5".into(),
+                ..source.clone()
+            }
+        ));
+        assert!(!project_file_entries_match(
+            &source,
+            &NativeProjectFileEntry {
+                content_digest: Some("b".repeat(64)),
+                ..source.clone()
+            }
+        ));
+        assert!(!project_file_entries_match(
+            &source,
+            &NativeProjectFileEntry {
+                size_bytes: 6,
+                ..source.clone()
+            }
+        ));
+        assert!(!project_file_entries_match(
+            &source,
+            &NativeProjectFileEntry {
+                content_digest: None,
+                ..source.clone()
+            }
+        ));
+        assert!(!project_file_entries_match(
+            &NativeProjectFileEntry {
+                content_digest: None,
+                ..source.clone()
+            },
+            &source
+        ));
+        assert!(project_file_entries_match(&asset, &asset));
+        assert!(!project_file_entries_match(
+            &asset,
+            &NativeProjectFileEntry {
+                fingerprint: "2:5".into(),
+                ..asset.clone()
+            }
+        ));
     }
 
     #[test]

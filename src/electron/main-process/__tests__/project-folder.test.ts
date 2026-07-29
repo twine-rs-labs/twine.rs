@@ -56,6 +56,7 @@ import {
 	projectSessionScratchAssets,
 	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
+	projectFileEntriesMatch,
 	projectFileFingerprint,
 	readProjectFolderHydrationChunk,
 	renameProjectAsset,
@@ -63,7 +64,8 @@ import {
 	resolveProjectSessionConflicts,
 	saveProjectFolder,
 	startProjectSession,
-	stopProjectSession
+	stopProjectSession,
+	verifiedProjectFileHandle
 } from '../project-folder';
 import {
 	beginNativeProjectFolderHydration,
@@ -1342,7 +1344,183 @@ describe('project-folder native bridge', () => {
 		}
 	);
 
-	it('incrementally saves when floating mtimes round across a boundary', async () => {
+	it('uses size and SHA-256 for source equality and fingerprints for digest-less entries', () => {
+		const source = {
+			contentDigest: 'a'.repeat(64),
+			fingerprint: '1:5',
+			kind: 'passage' as const,
+			modifiedAt: '2026-07-29T20:51:35.000Z',
+			mtimeMs: 1,
+			path: 'passages/story/start.twee',
+			sizeBytes: 5
+		};
+		const asset = {
+			fingerprint: '1:5',
+			kind: 'asset' as const,
+			modifiedAt: '2026-07-29T20:51:35.000Z',
+			mtimeMs: 1,
+			path: 'assets/image.png',
+			sizeBytes: 5
+		};
+
+		expect(
+			projectFileEntriesMatch(source, {...source, fingerprint: '2:5'})
+		).toBe(true);
+		expect(
+			projectFileEntriesMatch(source, {
+				...source,
+				contentDigest: 'b'.repeat(64)
+			})
+		).toBe(false);
+		expect(projectFileEntriesMatch(source, {...source, sizeBytes: 6})).toBe(
+			false
+		);
+		expect(
+			projectFileEntriesMatch(source, {...source, contentDigest: undefined})
+		).toBe(false);
+		expect(
+			projectFileEntriesMatch({...source, contentDigest: undefined}, source)
+		).toBe(false);
+		expect(projectFileEntriesMatch(asset, {...asset})).toBe(true);
+		expect(projectFileEntriesMatch(asset, {...asset, fingerprint: '2:5'})).toBe(
+			false
+		);
+	});
+
+	it('verifies trusted source bytes despite an mtime-only fingerprint mismatch', async () => {
+		const source = 'Synthetic';
+
+		readFileMock.mockResolvedValue(source);
+		const handle = await verifiedProjectFileHandle(
+			'/native/project.twine.rs/passages/story/start.twee',
+			{
+				contentDigest: createHash('sha256').update(source).digest('hex'),
+				fingerprint: `999:${Buffer.byteLength(source)}`,
+				kind: 'passage',
+				modifiedAt: '2026-07-29T20:51:35.999Z',
+				mtimeMs: 999,
+				path: 'passages/story/start.twee',
+				sizeBytes: Buffer.byteLength(source)
+			}
+		);
+
+		await handle.close();
+	});
+
+	it('rejects a size mismatch before hashing and records metadata diagnostics', async () => {
+		const source = 'Synthetic';
+		const defaultOpenFile = openFileMock.getMockImplementation()!;
+		let readMock: jest.Mock | undefined;
+
+		readFileMock.mockResolvedValue(source);
+		openFileMock.mockImplementation(async (path, flags) => {
+			const handle = await defaultOpenFile(path, flags);
+			const handleStat = handle.stat;
+
+			readMock = handle.read;
+			return {
+				...handle,
+				stat: jest.fn(async options => ({
+					...(await handleStat(options)),
+					size: BigInt(Buffer.byteLength(source) + 1)
+				}))
+			};
+		});
+
+		await expect(
+			verifiedProjectFileHandle(
+				'/native/project.twine.rs/passages/story/start.twee',
+				{
+					contentDigest: createHash('sha256').update(source).digest('hex'),
+					fingerprint: `1:${Buffer.byteLength(source)}`,
+					kind: 'passage',
+					modifiedAt: '2026-07-29T20:51:35.001Z',
+					mtimeMs: 1,
+					path: 'passages/story/start.twee',
+					sizeBytes: Buffer.byteLength(source)
+				}
+			)
+		).rejects.toMatchObject({
+			code: 'PROJECT_FILE_VERIFICATION_FAILED',
+			verification: {
+				before: {sizeBytes: String(Buffer.byteLength(source) + 1)},
+				expected: {sizeBytes: Buffer.byteLength(source)},
+				stage: 'metadata-precheck'
+			}
+		});
+		expect(readMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects changed bytes after hashing and records digest diagnostics', async () => {
+		const trustedSource = 'Synthetic';
+		const changedSource = 'SynthetiX';
+
+		readFileMock.mockResolvedValue(changedSource);
+		await expect(
+			verifiedProjectFileHandle(
+				'/native/project.twine.rs/passages/story/start.twee',
+				{
+					contentDigest: createHash('sha256')
+						.update(trustedSource)
+						.digest('hex'),
+					fingerprint: `1:${Buffer.byteLength(trustedSource)}`,
+					kind: 'passage',
+					modifiedAt: '2026-07-29T20:51:35.001Z',
+					mtimeMs: 1,
+					path: 'passages/story/start.twee',
+					sizeBytes: Buffer.byteLength(trustedSource)
+				}
+			)
+		).rejects.toMatchObject({
+			code: 'PROJECT_FILE_VERIFICATION_FAILED',
+			verification: {digestMatches: false, stage: 'digest-check'}
+		});
+	});
+
+	it.each([
+		['mtime', {mtimeMs: 2n, mtimeNs: 2_000_000n}],
+		['size', {size: 10n}],
+		['identity', {ino: 2n}]
+	])('rejects a %s change while hashing', async (_label, afterChanges) => {
+		const source = 'Synthetic';
+		const defaultOpenFile = openFileMock.getMockImplementation()!;
+
+		readFileMock.mockResolvedValue(source);
+		openFileMock.mockImplementation(async (path, flags) => {
+			const handle = await defaultOpenFile(path, flags);
+			const handleStat = handle.stat;
+			let statCalls = 0;
+
+			return {
+				...handle,
+				stat: jest.fn(async options => {
+					const stats = await handleStat(options);
+
+					return statCalls++ === 0 ? stats : {...stats, ...afterChanges};
+				})
+			};
+		});
+
+		await expect(
+			verifiedProjectFileHandle(
+				'/native/project.twine.rs/passages/story/start.twee',
+				{
+					contentDigest: createHash('sha256').update(source).digest('hex'),
+					fingerprint: `1:${Buffer.byteLength(source)}`,
+					kind: 'passage',
+					modifiedAt: '2026-07-29T20:51:35.001Z',
+					mtimeMs: 1,
+					path: 'passages/story/start.twee',
+					sizeBytes: Buffer.byteLength(source)
+				}
+			)
+		).rejects.toMatchObject({
+			code: 'PROJECT_FILE_VERIFICATION_FAILED',
+			verification: {stage: 'mutation-check'}
+		});
+	});
+
+	it('incrementally saves when trusted source bytes have a different mtime fingerprint', async () => {
 		const mtimeNs = 1785358295000999900n;
 		const roundedMtimeMs = 1785358295001;
 		let passageSource = '<img src="assets/old.png">';
@@ -1382,10 +1560,7 @@ describe('project-folder native bridge', () => {
 		};
 		const passageFile = {
 			contentDigest: createHash('sha256').update(passageSource).digest('hex'),
-			fingerprint: projectFileFingerprint(
-				mtimeNs,
-				BigInt(Buffer.byteLength(passageSource))
-			),
+			fingerprint: `${roundedMtimeMs}:${Buffer.byteLength(passageSource)}`,
 			kind: 'passage' as const,
 			modifiedAt: '2026-07-29T20:51:35.0009999Z',
 			mtimeMs: roundedMtimeMs,
@@ -1707,9 +1882,9 @@ describe('project-folder native bridge', () => {
 
 		await expect(
 			saveProjectFolder('/native/project.twine.rs', story, options)
-		).rejects.toThrow(
-			'passages/story/001-start.twee changed outside twine.rs; refusing to overwrite it.'
-		);
+		).rejects.toMatchObject({
+			message: expect.stringContaining('"stage":"digest-check"')
+		});
 		expect(passageSource).toBe(externalSource);
 		expect(moveMock).not.toHaveBeenCalled();
 
@@ -1745,9 +1920,9 @@ describe('project-folder native bridge', () => {
 		});
 		await expect(
 			saveProjectFolder('/native/project.twine.rs', story, options)
-		).rejects.toThrow(
-			'passages/story/001-start.twee changed outside twine.rs; refusing to overwrite it.'
-		);
+		).rejects.toMatchObject({
+			message: expect.stringContaining('"stage":"mutation-check"')
+		});
 		expect(verificationStatCalls).toBeGreaterThanOrEqual(2);
 		expect(passageSource).toBe(originalSource);
 		expect(moveMock).not.toHaveBeenCalled();
@@ -1826,7 +2001,7 @@ describe('project-folder native bridge', () => {
 		await expect(
 			saveProjectFolder('/native/project.twine.rs', story, options)
 		).rejects.toThrow(
-			'passages/story/001-start.twee has no trusted content baseline; refusing to overwrite it.'
+			'passages/story/001-start.twee changed outside twine.rs; refusing to overwrite it.'
 		);
 		expect(writeFileMock).not.toHaveBeenCalled();
 		expect(linkFileMock).not.toHaveBeenCalled();

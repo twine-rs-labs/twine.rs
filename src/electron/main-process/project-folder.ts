@@ -3759,15 +3759,23 @@ function projectSessionConflicts(
 	return conflicts.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-function projectFileEntriesMatch(
+export function projectFileEntriesMatch(
 	previous: NativeProjectFileEntry,
 	current: NativeProjectFileEntry
 ) {
-	return (
-		previous.fingerprint === current.fingerprint &&
-		(previous.contentDigest === undefined ||
-			previous.contentDigest === current.contentDigest)
-	);
+	if (
+		previous.contentDigest !== undefined ||
+		current.contentDigest !== undefined
+	) {
+		return (
+			previous.contentDigest !== undefined &&
+			current.contentDigest !== undefined &&
+			previous.sizeBytes === current.sizeBytes &&
+			previous.contentDigest === current.contentDigest
+		);
+	}
+
+	return previous.fingerprint === current.fingerprint;
 }
 
 function graphLayoutForPassage(
@@ -5950,28 +5958,127 @@ function incrementalSaveHints(
 	return hints as Array<Exclude<ProjectFolderSaveHint, {type: 'full'}>>;
 }
 
-async function verifiedProjectFileHandle(
+type ProjectFileVerificationStage =
+	| 'trusted-baseline'
+	| 'open'
+	| 'metadata-read'
+	| 'metadata-precheck'
+	| 'content-read'
+	| 'metadata-reread'
+	| 'mutation-check'
+	| 'digest-check';
+
+interface ProjectFileVerificationDiagnostics {
+	after?: ReturnType<typeof projectFileStatDiagnostics>;
+	before?: ReturnType<typeof projectFileStatDiagnostics>;
+	cause: {code?: string; message: string};
+	digestMatches?: boolean;
+	expected: ReturnType<typeof projectFileExpectedDiagnostics>;
+	stage: ProjectFileVerificationStage;
+}
+
+type ProjectFileVerificationFailure = Error & {
+	code: 'PROJECT_FILE_VERIFICATION_FAILED';
+	verification: ProjectFileVerificationDiagnostics;
+};
+
+function projectFileExpectedDiagnostics(expected: NativeProjectFileEntry) {
+	return {
+		contentDigestPresent: expected.contentDigest !== undefined,
+		fingerprint: expected.fingerprint,
+		mtimeMs: expected.mtimeMs,
+		sizeBytes: expected.sizeBytes
+	};
+}
+
+function projectFileStatDiagnostics(stats: BigIntStats) {
+	return {
+		dev: stats.dev.toString(),
+		fingerprint: projectFileFingerprint(stats.mtimeNs, stats.size),
+		ino: stats.ino.toString(),
+		isFile: stats.isFile(),
+		mtimeNs: stats.mtimeNs.toString(),
+		sizeBytes: stats.size.toString()
+	};
+}
+
+function projectFileErrorDiagnostics(error: unknown) {
+	const message = error instanceof Error ? error.message : String(error);
+	const code =
+		typeof error === 'object' &&
+		error !== null &&
+		'code' in error &&
+		typeof error.code === 'string'
+			? error.code
+			: undefined;
+
+	return code ? {code, message} : {message};
+}
+
+function projectFileVerificationFailure(
+	expected: NativeProjectFileEntry,
+	stage: ProjectFileVerificationStage,
+	cause: unknown,
+	before?: BigIntStats,
+	after?: BigIntStats,
+	digestMatches?: boolean
+): ProjectFileVerificationFailure {
+	const verification: ProjectFileVerificationDiagnostics = {
+		after: after ? projectFileStatDiagnostics(after) : undefined,
+		before: before ? projectFileStatDiagnostics(before) : undefined,
+		cause: projectFileErrorDiagnostics(cause),
+		digestMatches,
+		expected: projectFileExpectedDiagnostics(expected),
+		stage
+	};
+
+	return Object.assign(
+		new Error(
+			`${expected.path} changed outside twine.rs; refusing to overwrite it. ` +
+				`Verification diagnostics: ${JSON.stringify(verification)}.`
+		),
+		{
+			code: 'PROJECT_FILE_VERIFICATION_FAILED' as const,
+			verification
+		}
+	);
+}
+
+function isProjectFileVerificationFailure(
+	error: unknown
+): error is ProjectFileVerificationFailure {
+	return (
+		error instanceof Error &&
+		'code' in error &&
+		error.code === 'PROJECT_FILE_VERIFICATION_FAILED' &&
+		'verification' in error
+	);
+}
+
+export async function verifiedProjectFileHandle(
 	path: string,
 	expected: NativeProjectFileEntry
 ) {
 	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+	let before: BigIntStats | undefined;
+	let after: BigIntStats | undefined;
+	let digestMatches: boolean | undefined;
+	let stage: ProjectFileVerificationStage = 'trusted-baseline';
 
 	try {
+		if (expected.contentDigest === undefined) {
+			throw new Error('trusted content digest is missing');
+		}
+		stage = 'open';
 		handle = await openFile(
 			path,
 			fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
 		);
-		const before = await handle.stat({bigint: true});
-		const beforeFingerprint = projectFileFingerprint(
-			before.mtimeNs,
-			before.size
-		);
+		stage = 'metadata-read';
+		before = await handle.stat({bigint: true});
+		stage = 'metadata-precheck';
 
-		if (
-			!before.isFile() ||
-			before.size !== BigInt(expected.sizeBytes) ||
-			beforeFingerprint !== expected.fingerprint
-		) {
+		if (!before.isFile() || before.size !== BigInt(expected.sizeBytes)) {
 			throw new Error('metadata changed');
 		}
 
@@ -5979,6 +6086,7 @@ async function verifiedProjectFileHandle(
 		const buffer = Buffer.allocUnsafe(64 * 1024);
 		let offset = 0;
 
+		stage = 'content-read';
 		for (;;) {
 			const {bytesRead} = await handle.read(buffer, 0, buffer.length, offset);
 
@@ -5989,25 +6097,37 @@ async function verifiedProjectFileHandle(
 			offset += bytesRead;
 		}
 
-		const after = await handle.stat({bigint: true});
+		stage = 'metadata-reread';
+		after = await handle.stat({bigint: true});
 		const identityChanged =
 			before.dev !== after.dev || before.ino !== after.ino;
 
+		stage = 'mutation-check';
 		if (
 			after.size !== before.size ||
 			after.mtimeNs !== before.mtimeNs ||
 			identityChanged ||
-			BigInt(offset) !== before.size ||
-			hasher.digest('hex') !== expected.contentDigest
+			BigInt(offset) !== before.size
 		) {
-			throw new Error('content changed');
+			throw new Error('metadata or identity changed while content was read');
+		}
+
+		stage = 'digest-check';
+		digestMatches = hasher.digest('hex') === expected.contentDigest;
+		if (!digestMatches) {
+			throw new Error('content digest changed');
 		}
 
 		return handle;
-	} catch {
+	} catch (error) {
 		await handle?.close().catch(() => undefined);
-		throw new Error(
-			`${expected.path} changed outside twine.rs; refusing to overwrite it.`
+		throw projectFileVerificationFailure(
+			expected,
+			stage,
+			error,
+			before,
+			after,
+			digestMatches
 		);
 	}
 }
@@ -6138,6 +6258,13 @@ async function compareAndSwapProjectFile(
 	let operationRecovered = false;
 	let verifiedHandle: Awaited<ReturnType<typeof openFile>> | undefined;
 	let recoveryPath: string | undefined;
+	let stage = 'probe-hard-link' as
+		| 'probe-hard-link'
+		| 'journal-write'
+		| 'claim-rename'
+		| 'claim-sync'
+		| 'baseline-verify'
+		| 'install-hard-link';
 
 	if (!claimPath) {
 		throw new Error(`Unsafe project claim path: ${claimProjectPath}`);
@@ -6151,6 +6278,7 @@ async function compareAndSwapProjectFile(
 			throw projectFileCasUnavailableError(error);
 		}
 
+		stage = 'journal-write';
 		await writeProjectFileCasJournal(rootPath, {
 			claimPath: claimProjectPath,
 			expected,
@@ -6160,11 +6288,15 @@ async function compareAndSwapProjectFile(
 
 		// The durable journal owns this exact claim. Renaming binds verification
 		// to the pathname entry that the no-replace install would supersede.
+		stage = 'claim-rename';
 		await renameFile(path, claimPath);
 		claimed = true;
+		stage = 'claim-sync';
 		await syncDirectoryBestEffort(dirname(path));
+		stage = 'baseline-verify';
 		verifiedHandle = await verifiedProjectFileHandle(claimPath, expected);
 		claimVerified = true;
+		stage = 'install-hard-link';
 		await linkFile(tempPath, path);
 		installed = true;
 	} catch (error) {
@@ -6191,11 +6323,26 @@ async function compareAndSwapProjectFile(
 		} else if (!claimed) {
 			operationRecovered = true;
 		}
+		const diagnostics = {
+			cause: isProjectFileVerificationFailure(error)
+				? {code: error.code}
+				: projectFileErrorDiagnostics(error),
+			expected: projectFileExpectedDiagnostics(expected),
+			recovery: recoveryPath
+				? 'incomplete'
+				: operationRecovered
+					? 'restored'
+					: 'not-required',
+			stage,
+			verification: isProjectFileVerificationFailure(error)
+				? error.verification
+				: undefined
+		};
 
 		throw new Error(
 			`${expected.path} changed outside twine.rs; refusing to overwrite it.${
 				recoveryPath ? ` Prior bytes remain at ${recoveryPath}.` : ''
-			}`
+			} Save diagnostics: ${JSON.stringify(diagnostics)}.`
 		);
 	} finally {
 		await verifiedHandle?.close().catch(() => undefined);
