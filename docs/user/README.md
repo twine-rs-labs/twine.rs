@@ -2,7 +2,7 @@
 
 Status: migration in progress
 Owner: product documentation maintainers
-Last verified: 2026-07-19
+Last verified: 2026-07-29
 Source of truth: shipped twine.rs workflows only
 
 The current mdBook under `docs/en/` is predominantly inherited Twine
@@ -18,7 +18,9 @@ inherited and need a final twine.rs-specific audit. Until that work is complete:
 - use [`../product/workbench.md`](../product/workbench.md) for workbench
   interactions;
 - use the root [`README.md`](../../README.md) for installation and development;
-- treat `docs/en/src/release-notes/` as upstream Twine history.
+- use [`CHANGELOG.md`](../../CHANGELOG.md) for Twine RS release notes and
+  [`SUPPORT.md`](../../SUPPORT.md) for its support lifecycle;
+- treat `docs/en/src/release-notes/` only as upstream Twine history.
 
 The active rewrite is tracked in
 [`../roadmap/product.md`](../roadmap/product.md).

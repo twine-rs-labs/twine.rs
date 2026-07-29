@@ -1,0 +1,122 @@
+name: Release checklist
+description: Prepare, approve, publish, and close out one Twine RS release.
+title: '[Release] v'
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this issue as the durable approval and closeout record required by
+        `RELEASING.md`. Keep it open until every Post-publication item passes.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version and tag
+      description: The exact SemVer version and matching annotated tag.
+      placeholder: 0.2.0-beta.1 / v0.2.0-beta.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Release channel
+      options:
+        - Prerelease
+        - Stable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Artifact profile
+      options:
+        - distributable-unsigned
+        - signed
+    validations:
+      required: true
+
+  - type: input
+    id: release_manager
+    attributes:
+      label: Release manager
+      placeholder: '@maintainer'
+    validations:
+      required: true
+
+  - type: input
+    id: previous
+    attributes:
+      label: Previous known-good release
+      description: Use "none — first formal release" only for the first release.
+      placeholder: v0.1.0 or none — first formal release
+    validations:
+      required: true
+
+  - type: input
+    id: plan
+    attributes:
+      label: Release plan
+      placeholder: docs/releases/plans/v0.2.0-beta.1.json
+    validations:
+      required: true
+
+  - type: textarea
+    id: checklist
+    attributes:
+      label: Release checklist
+      description: Check each item only after its evidence exists.
+      value: |
+        ## Candidate preparation
+
+        - [ ] The release manager is named and accepts sole release accountability.
+        - [ ] Version, tag, channel, artifact profile, and previous known-good release are selected.
+        - [ ] `npm run version:bump -- <version>` synchronized JavaScript and Rust versions.
+        - [ ] `CHANGELOG.md` has a complete dated section for this version.
+        - [ ] Known issues and supported targets are recorded.
+        - [ ] Project-format, settings-migration, backup, and previous-version reopening decisions are explicit.
+        - [ ] Application and project-data rollback instructions are explicit.
+        - [ ] The release plan passes `npm run release:check -- --plan <path>`.
+        - [ ] The release commit is clean, merged to `main`, and will not change.
+
+        ## Validation
+
+        - [ ] Required JavaScript, Rust, documentation, formatting, and reproducibility checks pass.
+        - [ ] Target-native packaged-app checks pass for every supported platform and architecture.
+        - [ ] Every target is built from the same exact commit.
+        - [ ] An existing project was opened, saved, backed up, and recovered.
+        - [ ] Migration and previous-version reopening were tested when persistence changed.
+        - [ ] Signing, notarization, stapling, and warnings match the selected artifact profile.
+        - [ ] Checksums, aggregate manifest, and all per-target manifests validate.
+        - [ ] No updater metadata is present.
+        - [ ] Same-commit Quality and Packaged Electron runs pass, and rollback/recovery evidence is recorded in the plan.
+
+        ## Publication readiness
+
+        - [ ] The release manager reviewed the notes, compatibility, trust profile, evidence, and rollback plan and recorded approval in the release plan.
+        - [ ] The annotated protected tag points to the approved release commit.
+        - [ ] The release workflow created a draft from the complete seven-artifact matrix.
+        - [ ] Draft filenames, hashes, version, source commit, notes, warnings, and prerelease status were verified.
+        - [ ] Every required artifact, checksum, manifest, note, license, and provenance file is attached.
+        - [ ] The draft release links this checklist.
+
+        ## Post-publication
+
+        - [ ] The manually dispatched publication job completed and the release is immutable.
+        - [ ] Fresh release-hosted downloads passed Windows, macOS, and Linux smoke checks.
+        - [ ] Published checksums and provenance match the release-hosted assets.
+        - [ ] The GitHub Release links this checklist and the publication workflow.
+        - [ ] The supported-version statement remains accurate.
+        - [ ] Any publication failure was handled under the withdrawal policy.
+        - [ ] Final release and workflow URLs are recorded in a checklist comment.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: acknowledgement
+    attributes:
+      label: Publication gate
+      options:
+        - label: I understand that publication is blocked until every item before Post-publication is checked.
+          required: true

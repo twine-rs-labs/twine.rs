@@ -1,0 +1,132 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/twine-rs-labs/twine.rs/main/docs/releases/release-plan.schema.json",
+	"title": "Twine RS release plan",
+	"type": "object",
+	"additionalProperties": false,
+	"required": [
+		"schemaVersion",
+		"version",
+		"tag",
+		"releaseDate",
+		"channel",
+		"profile",
+		"releaseManager",
+		"checklistIssue",
+		"firstRelease",
+		"previousKnownGoodVersion",
+		"approvals",
+		"compatibility",
+		"rollback",
+		"knownIssues"
+	],
+	"properties": {
+		"$schema": {
+			"type": "string"
+		},
+		"schemaVersion": {
+			"const": 1
+		},
+		"version": {
+			"type": "string",
+			"pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:beta|rc)\\.(?:0|[1-9][0-9]*))?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+		},
+		"tag": {
+			"type": "string",
+			"pattern": "^v"
+		},
+		"releaseDate": {
+			"type": "string",
+			"format": "date"
+		},
+		"channel": {
+			"enum": ["prerelease", "stable"]
+		},
+		"profile": {
+			"enum": ["distributable-unsigned", "signed"]
+		},
+		"releaseManager": {
+			"type": "string",
+			"pattern": "^@[A-Za-z0-9][A-Za-z0-9-]{0,38}$"
+		},
+		"checklistIssue": {
+			"type": "string",
+			"format": "uri",
+			"pattern": "^https://github\\.com/twine-rs-labs/twine\\.rs/issues/[0-9]+/?$"
+		},
+		"firstRelease": {
+			"type": "boolean"
+		},
+		"previousKnownGoodVersion": {
+			"type": ["string", "null"]
+		},
+		"approvals": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["releaseManager"],
+			"properties": {
+				"releaseManager": {
+					"const": true
+				}
+			}
+		},
+		"compatibility": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"projectFormat",
+				"settingsMigration",
+				"previousVersionCanOpenProjects",
+				"backupRequired",
+				"notes"
+			],
+			"properties": {
+				"projectFormat": {
+					"enum": ["unchanged", "backward-compatible", "breaking"]
+				},
+				"settingsMigration": {
+					"enum": ["none", "reversible", "irreversible"]
+				},
+				"previousVersionCanOpenProjects": {
+					"enum": ["yes", "no", "not-applicable"]
+				},
+				"backupRequired": {
+					"type": "boolean"
+				},
+				"notes": {
+					"type": "string",
+					"minLength": 1
+				}
+			}
+		},
+		"rollback": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["application", "projectData", "tested", "evidence"],
+			"properties": {
+				"application": {
+					"type": "string",
+					"minLength": 1
+				},
+				"projectData": {
+					"type": "string",
+					"minLength": 1
+				},
+				"tested": {
+					"const": true
+				},
+				"evidence": {
+					"type": "string",
+					"format": "uri"
+				}
+			}
+		},
+		"knownIssues": {
+			"type": "array",
+			"items": {
+				"type": "string",
+				"minLength": 1
+			}
+		}
+	}
+}

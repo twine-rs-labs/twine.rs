@@ -77,10 +77,51 @@ test('packaging CI exercises and retains every supported installable format', ()
 	assert.match(source, /linux-\$\{\{ matrix\.appimage_arch \}\}\.AppImage/);
 });
 
+test('release CI gates an immutable release on decisions and retained evidence', () => {
+	const source = workflow('release.yml');
+
+	for (const marker of [
+		'push:',
+		'tags:',
+		'workflow_dispatch:',
+		'--check-tag',
+		'git merge-base --is-ancestor',
+		'packaged_app_run',
+		'conclusion,databaseId,headSha',
+		'desktop-release-target-',
+		'desktop-release-compliance',
+		'electron-build/compliance/sbom.cdx.json',
+		'node scripts/organize-release.mjs --profile',
+		'--phase publish',
+		'--checklist-json',
+		'release-record.json',
+		'release-evidence.zip',
+		'Validate and publish immutable release',
+		"if: github.event_name == 'workflow_dispatch'",
+		'gh release edit "$RELEASE_TAG" --draft=false',
+		'--json isImmutable',
+		'gh release verify "$RELEASE_TAG"',
+		'fresh release smoke',
+		'verify-release-download.mjs',
+		'Post-publication fresh-download smoke passed'
+	]) {
+		assert.match(source, new RegExp(marker.replaceAll('$', '\\$')));
+	}
+	assert.match(source, /ALLOW_UNSIGNED_DISTRIBUTION:.*'1'/);
+	assert.match(source, /pattern: desktop-release-target-\*/);
+	assert.match(source, /merge-multiple: true/);
+	assert.equal((source.match(/target: linux-/g) ?? []).length, 2);
+	assert.equal((source.match(/target: mac-/g) ?? []).length, 2);
+	assert.equal((source.match(/target: win-/g) ?? []).length, 1);
+	assert.doesNotMatch(source, /TWINE_RELEASE_PROFILE: local/);
+	assert.doesNotMatch(source, /environment: release-publication/);
+});
+
 test('active workflows pin every action to an immutable revision', () => {
 	for (const name of [
 		'packaged-electron-smoke.yml',
 		'quality.yml',
+		'release.yml',
 		'rust-security-audit.yml'
 	]) {
 		const source = workflow(name);

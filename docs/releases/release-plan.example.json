@@ -1,0 +1,30 @@
+{
+	"$schema": "https://raw.githubusercontent.com/twine-rs-labs/twine.rs/main/docs/releases/release-plan.schema.json",
+	"schemaVersion": 1,
+	"version": "0.2.0-beta.1",
+	"tag": "v0.2.0-beta.1",
+	"releaseDate": "2026-08-01",
+	"channel": "prerelease",
+	"profile": "distributable-unsigned",
+	"releaseManager": "@release-manager",
+	"checklistIssue": "https://github.com/twine-rs-labs/twine.rs/issues/123",
+	"firstRelease": true,
+	"previousKnownGoodVersion": null,
+	"approvals": {
+		"releaseManager": true
+	},
+	"compatibility": {
+		"projectFormat": "unchanged",
+		"settingsMigration": "none",
+		"previousVersionCanOpenProjects": "not-applicable",
+		"backupRequired": false,
+		"notes": "No project-format or settings migration is required."
+	},
+	"rollback": {
+		"application": "No earlier formal Twine RS binary exists; uninstall this prerelease and return to the previously used application.",
+		"projectData": "Restore the pre-release project-folder backup if recovery is required.",
+		"tested": true,
+		"evidence": "https://github.com/twine-rs-labs/twine.rs/actions/runs/123456789"
+	},
+	"knownIssues": []
+}

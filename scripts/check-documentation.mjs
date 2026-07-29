@@ -5,6 +5,9 @@ import {fileURLToPath} from 'node:url';
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const documentationRoots = [
 	'README.md',
+	'CHANGELOG.md',
+	'RELEASING.md',
+	'SUPPORT.md',
 	'benchmarks/README.md',
 	'crates/README.md',
 	'docs/README.md',
@@ -13,6 +16,7 @@ const documentationRoots = [
 	'docs/design-system/IMPLEMENTATION_GUIDE.md',
 	'docs/design-system/readme.md',
 	'docs/product',
+	'docs/releases',
 	'docs/roadmap',
 	'docs/status',
 	'docs/user',
@@ -23,6 +27,7 @@ const documentationRoots = [
 const currentDocumentationDirectories = [
 	'docs/architecture',
 	'docs/product',
+	'docs/releases',
 	'docs/roadmap',
 	'docs/status'
 ];

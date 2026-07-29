@@ -2,7 +2,7 @@
 
 Status: active
 Owner: release maintainers
-Last verified: 2026-07-23
+Last verified: 2026-07-29
 Source of truth: unfinished release and distribution validation
 
 ## Outcomes
@@ -27,9 +27,14 @@ Source of truth: unfinished release and distribution validation
 
 ### Distribution
 
-- Retain the profile manifest, checksums, release notes, and recovery evidence
-  for every distributed artifact set; keep updater metadata disabled until a
-  separately approved signed update feed exists.
+- Exercise the governed workflow in [`../../RELEASING.md`](../../RELEASING.md)
+  for the first intentional prerelease or stable release, including its
+  protected tag, immutable GitHub Release, completed checklist, and
+  fresh-download smoke evidence.
+- Retain the generated release record, profile manifest, checksums, per-target
+  provenance, release notes, and recovery evidence for every distributed
+  artifact set; keep updater metadata disabled until a separately approved
+  signed update feed exists.
 - Preserve the accepted publisher-authenticity risk and prominent OS warning
   documentation for intentionally unsigned Windows and macOS distributions.
 - Document supported operating systems and known limitations.
@@ -37,7 +42,7 @@ Source of truth: unfinished release and distribution validation
 
 ## Exit criteria
 
-- Supported platform packages complete the release checklist.
+- The first intentional release has a completed and closed release checklist.
 - CI covers the normal build/test/documentation contract.
-- Installation, update, rollback, and project recovery have reproducible
-  evidence.
+- Installation, manual rollback, project recovery, and release-hosted download
+  verification have reproducible evidence.

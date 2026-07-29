@@ -1,0 +1,203 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://raw.githubusercontent.com/twine-rs-labs/twine.rs/main/docs/releases/release-record.schema.json",
+	"title": "Twine RS retained release record",
+	"$defs": {
+		"hashedFile": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["fileName", "sha256", "size"],
+			"properties": {
+				"fileName": {
+					"type": "string",
+					"minLength": 1
+				},
+				"sha256": {
+					"type": "string",
+					"pattern": "^[0-9a-f]{64}$"
+				},
+				"size": {
+					"type": "integer",
+					"minimum": 0
+				}
+			}
+		}
+	},
+	"type": "object",
+	"additionalProperties": false,
+	"required": [
+		"schemaVersion",
+		"generatedAt",
+		"version",
+		"tag",
+		"channel",
+		"profile",
+		"sourceCommit",
+		"releaseDate",
+		"releaseManager",
+		"approvals",
+		"previousKnownGoodVersion",
+		"compatibility",
+		"rollback",
+		"knownIssues",
+		"supportedTargets",
+		"validation",
+		"checklist",
+		"provenance"
+	],
+	"properties": {
+		"schemaVersion": {
+			"const": 1
+		},
+		"generatedAt": {
+			"type": "string",
+			"format": "date-time"
+		},
+		"version": {
+			"type": "string"
+		},
+		"tag": {
+			"type": "string"
+		},
+		"channel": {
+			"enum": ["prerelease", "stable"]
+		},
+		"profile": {
+			"enum": ["distributable-unsigned", "signed"]
+		},
+		"sourceCommit": {
+			"type": "string",
+			"pattern": "^[0-9a-f]{40}$"
+		},
+		"releaseDate": {
+			"type": "string",
+			"format": "date"
+		},
+		"releaseManager": {
+			"type": "string"
+		},
+		"approvals": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["releaseManager"],
+			"properties": {
+				"releaseManager": {
+					"const": true
+				}
+			}
+		},
+		"previousKnownGoodVersion": {
+			"type": ["string", "null"]
+		},
+		"compatibility": {
+			"type": "object"
+		},
+		"rollback": {
+			"type": "object"
+		},
+		"knownIssues": {
+			"type": "array"
+		},
+		"supportedTargets": {
+			"type": "array",
+			"minItems": 5,
+			"maxItems": 5
+		},
+		"validation": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"qualityRun",
+				"packagedAppRun",
+				"recoveryTest",
+				"releaseWorkflow"
+			],
+			"properties": {
+				"qualityRun": {
+					"type": "string",
+					"format": "uri"
+				},
+				"packagedAppRun": {
+					"type": "string",
+					"format": "uri"
+				},
+				"recoveryTest": {
+					"type": "string",
+					"format": "uri"
+				},
+				"releaseWorkflow": {
+					"type": "string",
+					"format": "uri"
+				}
+			}
+		},
+		"checklist": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"url",
+				"state",
+				"prePublicationComplete",
+				"postPublicationComplete"
+			],
+			"properties": {
+				"url": {
+					"type": "string",
+					"format": "uri"
+				},
+				"state": {
+					"enum": ["OPEN", "CLOSED"]
+				},
+				"prePublicationComplete": {
+					"const": true
+				},
+				"postPublicationComplete": {
+					"type": "boolean"
+				}
+			}
+		},
+		"provenance": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"artifactManifest",
+				"artifactCount",
+				"targetManifests",
+				"evidenceFiles",
+				"artifacts"
+			],
+			"properties": {
+				"artifactManifest": {
+					"$ref": "#/$defs/hashedFile"
+				},
+				"artifactCount": {
+					"const": 7
+				},
+				"targetManifests": {
+					"type": "array",
+					"minItems": 5,
+					"maxItems": 5,
+					"items": {
+						"$ref": "#/$defs/hashedFile"
+					}
+				},
+				"evidenceFiles": {
+					"type": "array",
+					"minItems": 7,
+					"maxItems": 7,
+					"items": {
+						"$ref": "#/$defs/hashedFile"
+					}
+				},
+				"artifacts": {
+					"type": "array",
+					"minItems": 7,
+					"maxItems": 7,
+					"items": {
+						"$ref": "#/$defs/hashedFile"
+					}
+				}
+			}
+		}
+	}
+}

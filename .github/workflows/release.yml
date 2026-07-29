@@ -1,0 +1,621 @@
+name: Publish desktop release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated tag whose draft and checklist are ready to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate release decision
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      channel: ${{ steps.plan.outputs.channel }}
+      commit: ${{ steps.plan.outputs.commit }}
+      packaged_app_run: ${{ steps.evidence.outputs.packaged_app_run }}
+      plan: ${{ steps.plan.outputs.plan }}
+      profile: ${{ steps.plan.outputs.profile }}
+      quality_run: ${{ steps.evidence.outputs.quality_run }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref_name }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - name: Validate annotated tag, plan, versions, and release notes
+        id: plan
+        shell: bash
+        env:
+          PLAN_PATH: docs/releases/plans/${{ inputs.tag || github.ref_name }}.json
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          plan="docs/releases/plans/${RELEASE_TAG}.json"
+          test -f "$plan"
+          commit="$(git rev-parse HEAD)"
+          node scripts/check-release.mjs \
+            --plan "$plan" \
+            --tag "$RELEASE_TAG" \
+            --commit "$commit" \
+            --check-tag
+          node -e '
+            const plan = require(`./${process.env.PLAN_PATH}`);
+            for (const key of [`channel`, `profile`, `tag`, `version`]) {
+              process.stdout.write(`${key}=${plan[key]}\n`);
+            }
+          ' >> "$GITHUB_OUTPUT"
+          {
+            echo "commit=$commit"
+            echo "plan=$plan"
+          } >> "$GITHUB_OUTPUT"
+      - name: Verify release history and same-commit CI evidence
+        id: evidence
+        env:
+          COMMIT: ${{ steps.plan.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          PLAN_PATH: ${{ steps.plan.outputs.plan }}
+        run: |
+          git merge-base --is-ancestor "$COMMIT" origin/main
+          node -e '
+            const {execFileSync} = require("node:child_process");
+            const plan = require(`./${process.env.PLAN_PATH}`);
+            const gh = args => execFileSync(
+              "gh",
+              args,
+              {encoding: "utf8"}
+            );
+            const published = JSON.parse(gh([
+              "release",
+              "list",
+              "--repo",
+              "twine-rs-labs/twine.rs",
+              "--limit",
+              "100",
+              "--json",
+              "isDraft,tagName"
+            ])).filter(release => !release.isDraft);
+            if (published.some(release => release.tagName === plan.tag)) {
+              throw new Error(`${plan.tag} is already published and immutable.`);
+            }
+            if (plan.firstRelease && published.length > 0) {
+              throw new Error("firstRelease cannot be true after a published release.");
+            }
+            if (!plan.firstRelease) {
+              const previousTag = `v${plan.previousKnownGoodVersion}`;
+              const previous = JSON.parse(gh([
+                "release",
+                "view",
+                previousTag,
+                "--repo",
+                "twine-rs-labs/twine.rs",
+                "--json",
+                "isDraft,tagName"
+              ]));
+              if (previous.isDraft || previous.tagName !== previousTag) {
+                throw new Error(`${previousTag} is not a published previous release.`);
+              }
+            }
+            const workflows = [
+              ["quality_run", "quality.yml"],
+              ["packaged_app_run", "packaged-electron-smoke.yml"]
+            ];
+            for (const [output, workflow] of workflows) {
+              const runs = JSON.parse(gh([
+                "run",
+                "list",
+                "--repo",
+                "twine-rs-labs/twine.rs",
+                "--commit",
+                process.env.COMMIT,
+                "--workflow",
+                workflow,
+                "--status",
+                "completed",
+                "--limit",
+                "20",
+                "--json",
+                "conclusion,databaseId,headSha"
+              ]));
+              const run = runs.find(
+                candidate =>
+                  candidate.conclusion === "success" &&
+                  candidate.headSha === process.env.COMMIT
+              );
+              if (!run) {
+                throw new Error(`${workflow} must pass for ${process.env.COMMIT}.`);
+              }
+              process.stdout.write(
+                `${output}=https://github.com/twine-rs-labs/twine.rs/actions/runs/${run.databaseId}\n`
+              );
+            }
+          ' >> "$GITHUB_OUTPUT"
+
+  package-installable:
+    name: ${{ matrix.label }} release package
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            platform: linux
+            os: ubuntu-24.04
+            arch: x64
+            appimage_arch: x86_64
+            target: linux-x64
+          - label: Linux ARM64
+            platform: linux
+            os: ubuntu-24.04-arm
+            arch: arm64
+            appimage_arch: arm64
+            target: linux-arm64
+          - label: macOS Intel
+            platform: mac
+            os: macos-15-intel
+            arch: x64
+            target: mac-x64
+          - label: macOS ARM64
+            platform: mac
+            os: macos-15
+            arch: arm64
+            target: mac-arm64
+          - label: Windows x64
+            platform: win
+            os: windows-2025
+            arch: x64
+            target: win-x64
+    env:
+      NODE_ENV: production
+      TWINE_RELEASE_PROFILE: ${{ needs.prepare.outputs.profile }}
+      ALLOW_UNSIGNED_DISTRIBUTION: ${{ needs.prepare.outputs.profile == 'distributable-unsigned' && '1' || '' }}
+      APPLE_APP_ID: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && vars.APPLE_APP_ID || '' }}
+      APPLE_ID: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
+      APPLE_ID_PASSWORD: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.APPLE_ID_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && vars.APPLE_TEAM_ID || '' }}
+      CSC_LINK: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.MACOS_CSC_LINK || '' }}
+      CSC_KEY_PASSWORD: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.MACOS_CSC_KEY_PASSWORD || '' }}
+      CSC_NAME: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && vars.CSC_NAME || '' }}
+      WIN_CSC_LINK: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && secrets.WINDOWS_CSC_LINK || '' }}
+      WIN_CSC_KEY_PASSWORD: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && secrets.WINDOWS_CSC_KEY_PASSWORD || '' }}
+      WINDOWS_SIGNER_SHA1: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && vars.WINDOWS_SIGNER_SHA1 || '' }}
+      WINDOWS_SIGNER_SUBJECT: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && vars.WINDOWS_SIGNER_SUBJECT || '' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install Rust WASM tooling
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-bindgen-cli --version 0.2.125 --locked
+      - run: npm ci
+      - name: Install Playwright Chromium on Windows
+        if: runner.os == 'Windows'
+        run: npx playwright install chromium
+      - name: Install Playwright Chromium and dependencies on Linux
+        if: runner.os == 'Linux'
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get install --yes --no-install-recommends libglib2.0-bin
+      - name: Build production Electron app
+        run: npm run build:electron-app:ci
+      - name: Test Windows native referenced-media hardening
+        if: runner.os == 'Windows'
+        run: cargo test -p twine_native --locked
+      - name: Package release artifacts
+        run: npm run package:electron:artifacts -- --${{ matrix.arch }}
+      - name: Exercise Linux AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
+        run: |
+          app_image=$(ls "$ARTIFACT_DIR"/Twine-RS-*-linux-${{ matrix.appimage_arch }}.AppImage)
+          chmod +x "$app_image"
+          APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "flushes a trailing"
+      - name: Extract and smoke Linux ZIP
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
+        run: |
+          extract_dir="$RUNNER_TEMP/twine-rs-linux-zip"
+          mkdir -p "$extract_dir"
+          unzip -q "$ARTIFACT_DIR"/Twine-RS-*-linux-${{ matrix.arch }}.zip -d "$extract_dir"
+          TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged
+      - name: Mount and smoke macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
+        run: |
+          mount_dir="$RUNNER_TEMP/twine-rs-dmg"
+          mkdir -p "$mount_dir"
+          hdiutil attach "$ARTIFACT_DIR"/Twine-RS-*-mac-${{ matrix.arch }}*.dmg -nobrowse -readonly -mountpoint "$mount_dir"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
+          hdiutil detach "$mount_dir"
+          trap - EXIT
+      - name: Install Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
+        run: |
+          $installer = Get-ChildItem $env:ARTIFACT_DIR -Filter 'Twine-RS-*-win-x64*.exe' | Select-Object -First 1
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'twine-rs-installed'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDirectory") -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "Installer exited with code $($process.ExitCode)."
+          }
+          $executable = Join-Path $installDirectory 'Twine RS.exe'
+          $uninstaller = Join-Path $installDirectory 'Uninstall Twine RS.exe'
+          if (!(Test-Path $executable) -or !(Test-Path $uninstaller)) {
+            throw 'The NSIS package did not install the expected application and uninstaller.'
+          }
+          "TWINE_E2E_EXECUTABLE=$executable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TWINE_E2E_UNINSTALLER=$uninstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Smoke installed Windows app
+        if: runner.os == 'Windows'
+        run: npm run e2e:electron:packaged
+      - name: Uninstall Windows package
+        if: always() && runner.os == 'Windows' && env.TWINE_E2E_UNINSTALLER != ''
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath $env:TWINE_E2E_UNINSTALLER -ArgumentList '/S' -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "Uninstaller exited with code $($process.ExitCode)."
+          }
+      - name: Retain target release input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-target-${{ matrix.target }}
+          path: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain standalone compliance evidence
+        if: matrix.target == 'linux-x64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-compliance
+          path: |
+            electron-build/compliance/THIRD_PARTY_NOTICES.md
+            electron-build/compliance/sbom.cdx.json
+            electron-build/compliance/LICENSES.chromium.html
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain Windows smoke diagnostics
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-smoke-diagnostics-${{ matrix.target }}
+          path: output/playwright/packaged-electron
+          if-no-files-found: warn
+          retention-days: 14
+
+  assemble-draft:
+    name: Assemble and verify draft release
+    needs: [prepare, package-installable]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      ALLOW_UNSIGNED_DISTRIBUTION: ${{ needs.prepare.outputs.profile == 'distributable-unsigned' && '1' || '' }}
+      APPLE_APP_ID: ${{ needs.prepare.outputs.profile == 'signed' && vars.APPLE_APP_ID || '' }}
+      APPLE_TEAM_ID: ${{ needs.prepare.outputs.profile == 'signed' && vars.APPLE_TEAM_ID || '' }}
+      CSC_NAME: ${{ needs.prepare.outputs.profile == 'signed' && vars.CSC_NAME || '' }}
+      WINDOWS_SIGNER_SHA1: ${{ needs.prepare.outputs.profile == 'signed' && vars.WINDOWS_SIGNER_SHA1 || '' }}
+      WINDOWS_SIGNER_SUBJECT: ${{ needs.prepare.outputs.profile == 'signed' && vars.WINDOWS_SIGNER_SUBJECT || '' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - name: Download every release target
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: desktop-release-target-*
+          path: artifacts/incoming/${{ needs.prepare.outputs.profile }}
+          merge-multiple: true
+      - name: Validate and assemble complete distribution
+        run: node scripts/organize-release.mjs --profile "${{ needs.prepare.outputs.profile }}"
+      - name: Download standalone compliance evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: desktop-release-compliance
+          path: artifacts/${{ needs.prepare.outputs.profile }}/compliance
+      - name: Generate curated notes and retain policy files
+        shell: bash
+        run: |
+          distribution="artifacts/${{ needs.prepare.outputs.profile }}"
+          node scripts/check-release.mjs \
+            --plan "${{ needs.prepare.outputs.plan }}" \
+            --tag "${{ needs.prepare.outputs.tag }}" \
+            --commit "${{ needs.prepare.outputs.commit }}" \
+            --artifact-manifest "$distribution/artifact-manifest.json" \
+            --write-notes "$distribution/release-notes.md"
+          cp LICENSE "$distribution/LICENSE"
+      - name: Create or refresh draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+          RELEASE_PROFILE: ${{ needs.prepare.outputs.profile }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          distribution="artifacts/$RELEASE_PROFILE"
+          if ! gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' >/dev/null 2>&1; then
+            args=(
+              "$RELEASE_TAG"
+              --draft
+              --verify-tag
+              --title "Twine RS $RELEASE_VERSION"
+              --notes-file "$distribution/release-notes.md"
+            )
+            if [ "$RELEASE_CHANNEL" = "prerelease" ]; then
+              args+=(--prerelease)
+            fi
+            gh release create "${args[@]}"
+          else
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true"
+            prerelease=false
+            if [ "$RELEASE_CHANNEL" = "prerelease" ]; then
+              prerelease=true
+            fi
+            gh release edit "$RELEASE_TAG" \
+              --title "Twine RS $RELEASE_VERSION" \
+              --notes-file "$distribution/release-notes.md" \
+              --prerelease="$prerelease"
+          fi
+          mapfile -d '' assets < <(find "$distribution" -type f -print0)
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+      - name: Retain assembled release unit for publication
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-unit
+          path: artifacts/${{ needs.prepare.outputs.profile }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Validate and publish immutable release
+    needs: [prepare, assemble-draft]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      issues: read
+    outputs:
+      release_url: ${{ steps.publish.outputs.release_url }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - name: Download assembled release unit
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: desktop-release-unit
+          path: artifacts/${{ needs.prepare.outputs.profile }}
+      - name: Fetch durable release checklist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_PATH: ${{ needs.prepare.outputs.plan }}
+        run: |
+          checklist_url="$(node -p "require('./${PLAN_PATH}').checklistIssue")"
+          gh issue view "$checklist_url" --json url,state,body > "$RUNNER_TEMP/release-checklist.json"
+      - name: Validate publication gate and generate retained record
+        shell: bash
+        run: |
+          distribution="artifacts/${{ needs.prepare.outputs.profile }}"
+          node scripts/check-release.mjs \
+            --plan "${{ needs.prepare.outputs.plan }}" \
+            --tag "${{ needs.prepare.outputs.tag }}" \
+            --commit "${{ needs.prepare.outputs.commit }}" \
+            --phase publish \
+            --checklist-json "$RUNNER_TEMP/release-checklist.json" \
+            --artifact-manifest "$distribution/artifact-manifest.json" \
+            --quality-run "${{ needs.prepare.outputs.quality_run }}" \
+            --packaged-app-run "${{ needs.prepare.outputs.packaged_app_run }}" \
+            --write-record "$distribution/release-record.json"
+          node scripts/archive-release.mjs \
+            --source "$distribution" \
+            --output "artifacts/Twine-RS-${{ needs.prepare.outputs.version }}-release-evidence.zip" \
+            --prefix "Twine-RS-${{ needs.prepare.outputs.version }}-release-evidence"
+      - name: Upload final evidence and publish
+        id: publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+          RELEASE_PROFILE: ${{ needs.prepare.outputs.profile }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          distribution="artifacts/$RELEASE_PROFILE"
+          evidence="artifacts/Twine-RS-$RELEASE_VERSION-release-evidence.zip"
+          gh release upload "$RELEASE_TAG" \
+            "$distribution/release-record.json" \
+            "$evidence" \
+            --clobber
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true"
+          expected_prerelease=false
+          if [ "$RELEASE_CHANNEL" = "prerelease" ]; then
+            expected_prerelease=true
+          fi
+          test "$(gh release view "$RELEASE_TAG" --json isPrerelease --jq '.isPrerelease')" = "$expected_prerelease"
+          expected_assets=$(($(find "$distribution" -type f | wc -l) + 1))
+          actual_assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')
+          test "$actual_assets" -eq "$expected_assets"
+          gh release edit "$RELEASE_TAG" --draft=false
+          test "$(gh release view "$RELEASE_TAG" --json isImmutable --jq '.isImmutable')" = "true"
+          attestation_verified=false
+          for attempt in 1 2 3 4 5 6; do
+            if gh release verify "$RELEASE_TAG"; then
+              attestation_verified=true
+              break
+            fi
+            sleep 5
+          done
+          test "$attestation_verified" = "true"
+          release_url="$(gh release view "$RELEASE_TAG" --json url --jq '.url')"
+          echo "release_url=$release_url" >> "$GITHUB_OUTPUT"
+
+  fresh-download-smoke:
+    name: ${{ matrix.label }} fresh release smoke
+    needs: [prepare, publish]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            platform: linux
+            os: ubuntu-24.04
+            pattern: Twine-RS-*-linux-x86_64.AppImage
+          - label: macOS ARM64
+            platform: mac
+            os: macos-15
+            pattern: Twine-RS-*-mac-arm64*.dmg
+          - label: Windows x64
+            platform: win
+            os: windows-2025
+            pattern: Twine-RS-*-win-x64*.exe
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright Chromium on Windows
+        if: runner.os == 'Windows'
+        run: npx playwright install chromium
+      - name: Install Playwright Chromium and dependencies on Linux
+        if: runner.os == 'Linux'
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get install --yes --no-install-recommends libglib2.0-bin
+      - name: Download published asset and checksums
+        shell: bash
+        env:
+          ASSET_PATTERN: ${{ matrix.pattern }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          download_dir="$RUNNER_TEMP/twine-release-download"
+          mkdir -p "$download_dir"
+          gh release download "$RELEASE_TAG" \
+            --pattern "$ASSET_PATTERN" \
+            --pattern "SHA256SUMS.txt" \
+            --dir "$download_dir"
+          asset="$(find "$download_dir" -maxdepth 1 -type f ! -name SHA256SUMS.txt -print -quit)"
+          node scripts/verify-release-download.mjs "$download_dir/SHA256SUMS.txt" "$asset"
+          echo "TWINE_DOWNLOADED_ASSET=$asset" >> "$GITHUB_ENV"
+      - name: Exercise downloaded Linux AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          chmod +x "$TWINE_DOWNLOADED_ASSET"
+          APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$TWINE_DOWNLOADED_ASSET" xvfb-run --auto-servernum npm run e2e:electron:packaged
+      - name: Mount and smoke downloaded macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mount_dir="$RUNNER_TEMP/twine-rs-release-dmg"
+          mkdir -p "$mount_dir"
+          hdiutil attach "$TWINE_DOWNLOADED_ASSET" -nobrowse -readonly -mountpoint "$mount_dir"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
+          hdiutil detach "$mount_dir"
+          trap - EXIT
+      - name: Install downloaded Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'twine-rs-release-installed'
+          $process = Start-Process -FilePath $env:TWINE_DOWNLOADED_ASSET -ArgumentList @('/S', "/D=$installDirectory") -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "Installer exited with code $($process.ExitCode)."
+          }
+          $executable = Join-Path $installDirectory 'Twine RS.exe'
+          $uninstaller = Join-Path $installDirectory 'Uninstall Twine RS.exe'
+          "TWINE_E2E_EXECUTABLE=$executable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TWINE_E2E_UNINSTALLER=$uninstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Smoke downloaded Windows package
+        if: runner.os == 'Windows'
+        run: npm run e2e:electron:packaged
+      - name: Uninstall downloaded Windows package
+        if: always() && runner.os == 'Windows' && env.TWINE_E2E_UNINSTALLER != ''
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath $env:TWINE_E2E_UNINSTALLER -ArgumentList '/S' -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "Uninstaller exited with code $($process.ExitCode)."
+          }
+      - name: Retain fresh-download diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-download-diagnostics-${{ matrix.platform }}
+          path: output/playwright/packaged-electron
+          if-no-files-found: warn
+          retention-days: 14
+
+  record-closeout-evidence:
+    name: Record post-publication evidence
+    needs: [prepare, publish, fresh-download-smoke]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+      - name: Link successful fresh-download evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_PATH: ${{ needs.prepare.outputs.plan }}
+          RELEASE_URL: ${{ needs.publish.outputs.release_url }}
+          WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          checklist_url="$(node -p "require('./${PLAN_PATH}').checklistIssue")"
+          gh issue comment "$checklist_url" --body "Post-publication fresh-download smoke passed on Windows, macOS, and Linux. Release: $RELEASE_URL. Workflow evidence: $WORKFLOW_URL. Complete the remaining Post-publication items, then close this checklist."

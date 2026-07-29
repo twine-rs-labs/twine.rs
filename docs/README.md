@@ -19,6 +19,8 @@ organized by the question it answers and by how its content changes over time.
 - **How should the product behave?** Read [`product/`](./product/README.md).
 - **How do I use the current product?** Start with
   [`user/README.md`](./user/README.md).
+- **How are releases governed?** Read [`../RELEASING.md`](../RELEASING.md) and
+  [`releases/`](./releases/README.md).
 - **How do I run benchmarks?** Read
   [`../benchmarks/README.md`](../benchmarks/README.md).
 - **How are the Rust crates organized?** Read
@@ -33,6 +35,7 @@ organized by the question it answers and by how its content changes over time.
 | `status/`        | Concise, dated capability and measurement snapshots    | Keep factual and link to evidence                                |
 | `roadmap/`       | Unfinished outcomes only                               | Remove completed work instead of accumulating status annotations |
 | `product/`       | Normative product behavior and vocabulary              | Avoid implementation chronology                                  |
+| `releases/`      | Reviewed release decisions and generated-record schema | Add one plan per release; generate records in CI                 |
 | `design-system/` | Design tokens, components, and visual source artifacts | Keep beside the artifacts                                        |
 | `user/`          | twine.rs-specific user documentation                   | Describe shipped behavior only                                   |
 | `upstream/`      | Material inherited from TwineJS                        | Never present it as twine.rs product truth                       |

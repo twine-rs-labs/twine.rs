@@ -106,6 +106,12 @@ installable Electron artifacts for the current host target.
 
 ### Desktop Release
 
+Release builds are not publishable merely because a host packaging command
+succeeds. [`RELEASING.md`](RELEASING.md) defines the approval, changelog,
+annotated tag, checklist, support, rollback, evidence-retention, and immutable
+publication process. Twine RS has not yet completed its first formal release
+under that process.
+
 ```sh
 npm run dist
 ALLOW_UNSIGNED_DISTRIBUTION=1 npm run dist:distributable-unsigned
@@ -174,6 +180,7 @@ SemVer prerelease versions are supported, for example:
 
 ```sh
 npm run version:bump -- 0.2.0-beta.1
+npm run release:check -- --plan docs/releases/plans/v0.2.0-beta.1.json
 ```
 
 ## Fixtures and CLI

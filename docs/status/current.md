@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-07-27
+Last verified: 2026-07-29
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -46,6 +46,11 @@ phase is optimization and release validation, not another ownership migration.
 - Segregated local, deliberately unsigned, and signed desktop artifact profiles
   with target-native trust manifests, checksum-bound assembly, and a
   non-distributable CI test bundle.
+- Release governance with a canonical changelog, support and rollback policy,
+  approved machine-readable plans, explicit solo-maintainer approval, a durable
+  checklist, annotated tag checks, tag-triggered draft assembly, manually
+  dispatched publication, retained release records, and post-publication
+  fresh-download smoke coverage.
 - Deterministic 10k/50k release-mode Electron benchmark fixtures and local
   machine baselines.
 - Generated bounded Rust/WASM read-model contracts for summaries, cursor pages,
@@ -128,6 +133,9 @@ The complete local 10k and 50k benchmark runs verify:
   and authoring behavior.
 - Packaged-app, cross-platform, and hosted-CI performance coverage remains
   incomplete.
+- No formal Twine RS release has yet exercised the release workflow, immutable
+  artifact retention, or completed checklist; the controls exist, but REL-011
+  closure evidence still requires the first intentional release.
 - The user manual still contains inherited Twine task and compatibility
   chapters. Current launcher, project-folder, conflict-review, workbench,
   asset, build, Settings, and Story Formats workflows are documented.
