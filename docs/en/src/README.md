@@ -1,5 +1,7 @@
 # Hello!
 
+<!-- documentation-class: upstream-compatibility -->
+
 > **Documentation scope:** this mdBook is predominantly the upstream Twine
 > manual retained for compatibility and general authoring concepts. It is not
 > yet an authoritative guide to every twine.rs workflow. The application shell,
@@ -7,8 +9,9 @@
 > assets, Build & Export, Settings, and Story Formats chapters describe the
 > current interface. Other inherited task chapters and the upstream release
 > notes are still being separated from twine.rs-specific documentation. See the
-> [twine.rs documentation map](../../README.md) and
-> [user-documentation status](../../user/README.md).
+> [twine.rs documentation map](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/README.md)
+> and
+> [user-documentation status](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/README.md).
 
 This is a reference guide for the Twine editor. It describes Twine's user
 interface and introduces the larger ecosystem that surrounds it. If you've never

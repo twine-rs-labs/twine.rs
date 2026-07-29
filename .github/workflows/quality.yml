@@ -19,10 +19,14 @@ jobs:
           node-version: 24.18.0
           cache: npm
       - run: npm ci
+      - name: Install pinned mdBook
+        run: cargo install mdbook --version 0.5.4 --locked
       - name: Unit and packaging tests
         run: npm run test:ci
       - name: Lint and documentation checks
         run: npm run lint
+      - name: Build compatibility manual
+        run: npm run build:docs
       - name: Formatting
         run: npm run format:check
       - name: Reproducible production web build

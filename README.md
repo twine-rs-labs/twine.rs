@@ -46,7 +46,7 @@ projects, and test the native core that supports the editor.
   and the `wasm32-unknown-unknown` target
 - `wasm-bindgen-cli` matching the version locked in `Cargo.lock` (currently
   0.2.125)
-- `mdbook` only if you build or serve the docs
+- mdBook 0.5.4 only if you build or serve the docs
 
 ## Setup
 
@@ -57,10 +57,31 @@ cargo install wasm-bindgen-cli --version 0.2.125 --locked
 cargo test --workspace
 ```
 
+Install the pinned documentation builder only when working on the served manual:
+
+```sh
+cargo install mdbook --version 0.5.4 --locked
+```
+
 Electron downloads its desktop runtime on demand. The first desktop launch or
 performance preparation therefore needs network access; later runs reuse the
 cached runtime. The repository scripts perform this download before launching
 Electron so it does not become part of a benchmark measurement.
+
+Playwright browser binaries are only needed for browser end-to-end tests, not
+for unit tests, linting, or documentation checks. Before running
+`npm run e2e`, install all configured Chromium, Firefox, and WebKit browsers:
+
+```sh
+npx playwright install
+```
+
+On Linux, use this command instead to install the browsers and their required
+system packages:
+
+```sh
+npx playwright install --with-deps
+```
 
 ## Run
 
@@ -90,6 +111,7 @@ twine.rs architecture, status, roadmap, and product documentation starts at
 npm run lint
 npm run build:web
 npm run build
+npm run build:docs
 npm test
 npm run test:coverage
 npm run e2e

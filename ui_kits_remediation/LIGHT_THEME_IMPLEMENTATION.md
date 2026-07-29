@@ -98,8 +98,8 @@ token, or add a tiny `[data-app-theme='light']` override beside it:
 
 | Location | Hardcoded thing | Fix |
 |---|---|---|
-| `ui_kits/workbench/workbench.css` `.gm__grid` | graph dot-grid uses literal `oklch(1 0 0 / 0.05)` white dots | swap the white dot for `var(--line-2)` (or override the radial under the light scope) |
-| `ui_kits/workbench/workbench.css` `.h-*` syntax classes | editor syntax palette is literal bright `oklch()` | map to `--sem-link / --sem-var / --sem-tag / --sem-saved` (already the right hues) |
+| `docs/design-system/ui_kits/workbench/workbench.css` `.gm__grid` | graph dot-grid uses literal `oklch(1 0 0 / 0.05)` white dots | swap the white dot for `var(--line-2)` (or override the radial under the light scope) |
+| `docs/design-system/ui_kits/workbench/workbench.css` `.h-*` syntax classes | editor syntax palette is literal bright `oklch()` | map to `--sem-link / --sem-var / --sem-tag / --sem-saved` (already the right hues) |
 | `.ew__line.is-cursor`, `:hover` washes | literal `oklch(… / 0.10)` line washes | use `--sel-wash` / a `--line` token |
 
 None of these block the theme; they're the editor-surface polish that makes

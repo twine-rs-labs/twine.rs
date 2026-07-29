@@ -28,6 +28,8 @@ test('quality CI enforces the JavaScript, documentation, and Rust contracts', ()
 	for (const command of [
 		'npm run test:ci',
 		'npm run lint',
+		'cargo install mdbook --version 0.5.4 --locked',
+		'npm run build:docs',
 		'npm run format:check',
 		'npm run check:web-reproducibility'
 	]) {

@@ -1,7 +1,9 @@
 # twine.rs — Implementation Guide
 
 Status: artifact integration reference
-Last verified: 2026-07-04
+Owner: design-system maintainers
+Last verified: 2026-07-29
+Source of truth: `src/components/design-system/index.ts` and production consumers
 
 How these HTML/JSX artifacts map into the real **React/Electron + Rust**
 application. Pair this with `readme.md` for content voice, visual foundations,
@@ -78,13 +80,21 @@ Three things to load, in order:
 ```
 
 In the production app you do not use `_ds_bundle.js` — consume the production
-components under `src/components/design-system/` and use these artifact
-components as visual references. The production components depend on React and
-the design-system CSS custom properties.
+components through the real barrel at
+[`src/components/design-system/index.ts`](../../src/components/design-system/index.ts)
+and use these artifact components as visual references. A production source
+file can, for example, use:
+
+```tsx
+import {Button} from '../../components/design-system';
+```
+
+The relative depth varies with the source file's location. The production
+components depend on React and the design-system CSS custom properties.
 
 > **Namespace note:** `TwineRsDesignSystem_073217` is the compiler-generated global for
-> these preview cards. In your app you'll `import { Button } from '@twine/ui'` instead —
-> the namespace is a preview artifact, not part of the production API.
+> these preview cards. It is preview-only and is not part of the production
+> component API.
 
 ---
 
