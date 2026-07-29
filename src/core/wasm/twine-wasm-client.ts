@@ -805,7 +805,8 @@ export class WasmCoreWorkerClient {
 				revision,
 				sessionId,
 				storyId
-			}
+			},
+			false
 		);
 	}
 
@@ -826,7 +827,8 @@ export class WasmCoreWorkerClient {
 				sessionId,
 				sourceKind,
 				storyId
-			}
+			},
+			false
 		);
 	}
 

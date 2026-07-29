@@ -71,6 +71,32 @@ function successfulResponse(request: WasmWorkerRequest): WasmWorkerSuccess {
 					totalCount: 101
 				}
 			} as WasmWorkerSuccess;
+		case 'queryPassageDocument':
+			return {
+				id: request.id,
+				kind: request.kind,
+				metrics: workerMetrics,
+				ok: true,
+				result: {
+					passageId: request.passageId,
+					revision: request.revision,
+					storyId: request.storyId,
+					text: 'passage body '.repeat(512)
+				}
+			} as WasmWorkerSuccess;
+		case 'querySourceDocument':
+			return {
+				id: request.id,
+				kind: request.kind,
+				metrics: workerMetrics,
+				ok: true,
+				result: {
+					kind: request.sourceKind,
+					revision: request.revision,
+					storyId: request.storyId,
+					text: `${request.sourceKind} body `.repeat(512)
+				}
+			} as WasmWorkerSuccess;
 		case 'queryStoryWordCount':
 			return {
 				id: request.id,
@@ -110,7 +136,7 @@ describe('WasmCoreWorkerClient', () => {
 		});
 	});
 
-	it('does not retain document enumeration pages in the client cache', async () => {
+	it('does not retain full-source documents in the client cache', async () => {
 		const client = new WasmCoreWorkerClient();
 		const send = jest.fn(async (request: WasmWorkerRequest) =>
 			successfulResponse(request)
@@ -140,8 +166,23 @@ describe('WasmCoreWorkerClient', () => {
 					);
 				}
 
+				for (let index = 0; index < 40; index++) {
+					await client.queryPassageDocument(
+						sessionId,
+						storyId,
+						`passage-${index}`,
+						1
+					);
+				}
+				await client.queryPassageDocument(sessionId, storyId, 'passage-0', 1);
+				await client.querySourceDocument(sessionId, storyId, 'script', 1);
+				await client.querySourceDocument(sessionId, storyId, 'stylesheet', 1);
+
 				await client.acknowledgeSaved(sessionId, 1);
 				await client.queryStoryWordCount(sessionId, storyId, 1);
+				await client.queryPassageDocument(sessionId, storyId, 'passage-0', 1);
+				await client.querySourceDocument(sessionId, storyId, 'script', 1);
+				await client.querySourceDocument(sessionId, storyId, 'stylesheet', 1);
 
 				for (let index = 0; index < 101; index++) {
 					await client.queryDocumentPage(
@@ -161,6 +202,12 @@ describe('WasmCoreWorkerClient', () => {
 			const documentEvents = readEvents.filter(
 				event => event.detail?.kind === 'queryDocumentPage'
 			);
+			const passageDocumentEvents = readEvents.filter(
+				event => event.detail?.kind === 'queryPassageDocument'
+			);
+			const sourceDocumentEvents = readEvents.filter(
+				event => event.detail?.kind === 'querySourceDocument'
+			);
 			const wordCountEvents = readEvents.filter(
 				event => event.detail?.kind === 'queryStoryWordCount'
 			);
@@ -172,6 +219,12 @@ describe('WasmCoreWorkerClient', () => {
 				requests.filter(request => request.kind === 'queryStoryWordCount')
 			).toHaveLength(2);
 			expect(
+				requests.filter(request => request.kind === 'queryPassageDocument')
+			).toHaveLength(84);
+			expect(
+				requests.filter(request => request.kind === 'querySourceDocument')
+			).toHaveLength(8);
+			expect(
 				requests.filter(request => request.kind === 'acknowledgeSaved')
 			).toHaveLength(2);
 			expect(diagnostics.readModelCacheEntryCount).toBe(2);
@@ -179,6 +232,18 @@ describe('WasmCoreWorkerClient', () => {
 			expect(documentEvents).toHaveLength(404);
 			expect(
 				documentEvents.every(event => event.detail?.cacheState === 'worker')
+			).toBe(true);
+			expect(passageDocumentEvents).toHaveLength(84);
+			expect(
+				passageDocumentEvents.every(
+					event => event.detail?.cacheState === 'worker'
+				)
+			).toBe(true);
+			expect(sourceDocumentEvents).toHaveLength(8);
+			expect(
+				sourceDocumentEvents.every(
+					event => event.detail?.cacheState === 'worker'
+				)
 			).toBe(true);
 			expect(
 				wordCountEvents.filter(event => event.detail?.cacheState === 'client')
