@@ -696,14 +696,20 @@ export class WasmCoreWorkerClient {
 		options: CoreDocumentQuery,
 		revision: number
 	) {
-		return this.queryReadModel<CoreDocumentPage>(sessionId, storyId, revision, {
-			id: 0,
-			kind: 'queryDocumentPage',
-			options,
-			revision,
+		return this.queryReadModel<CoreDocumentPage>(
 			sessionId,
-			storyId
-		});
+			storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'queryDocumentPage',
+				options,
+				revision,
+				sessionId,
+				storyId
+			},
+			false
+		);
 	}
 
 	async queryAssetsPage(
@@ -828,7 +834,8 @@ export class WasmCoreWorkerClient {
 		sessionId: string,
 		storyId: string,
 		revision: number,
-		request: ReadModelWorkerRequest
+		request: ReadModelWorkerRequest,
+		useClientCache = true
 	): Promise<T> {
 		const queuedAt = now();
 		const waitingOn = this.sessionMutationKinds.get(sessionId);
@@ -837,7 +844,7 @@ export class WasmCoreWorkerClient {
 		const queueWaitMs = now() - queuedAt;
 		const key = cacheKey(sessionId, storyId, request);
 		const generationKey = `${sessionId}:${storyId}:${request.kind}`;
-		const cached = this.readModelCache.get(key);
+		const cached = useClientCache ? this.readModelCache.get(key) : undefined;
 		const cacheState = cached?.revision === revision ? 'client' : 'worker';
 
 		recordPerformanceHarnessEvent('core-read-model-query', {
@@ -863,7 +870,10 @@ export class WasmCoreWorkerClient {
 
 		const result = (response as unknown as {result: T}).result;
 
-		if (this.readModelQueryGenerations.get(generationKey) === generation) {
+		if (
+			useClientCache &&
+			this.readModelQueryGenerations.get(generationKey) === generation
+		) {
 			this.readModelCache.set(key, {result, revision});
 		}
 		return result;
