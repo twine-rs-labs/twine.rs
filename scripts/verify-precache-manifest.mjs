@@ -21,7 +21,7 @@ async function findWasmAssets(directory, prefix = '') {
 
 export function verifyPrecacheSource(source, requiredRuntimeUrls = []) {
 	const manifest = source.match(
-		/\.precacheAndRoute\(\[(.*?)\](?:,\{\})?\)/s
+		/\.precacheAndRoute\(\[(.*?)\](?:,\{.*?\})?\)/s
 	)?.[1];
 
 	if (!manifest) {

@@ -99,6 +99,9 @@ export default defineConfig({
 					'**/*.{js,css,html,svg,woff,woff2,json,md,png,wasm}',
 					'**/LICENSE'
 				],
+				// Configuring this replaces Workbox's defaults, so retain its
+				// tracking parameters alongside the story-format JSONP callback.
+				ignoreURLParametersMatching: [/^utm_/, /^fbclid$/, /^callback$/],
 				manifestTransforms: [sortPrecacheManifest],
 				maximumFileSizeToCacheInBytes: 5 * 1024 * 1024
 			}

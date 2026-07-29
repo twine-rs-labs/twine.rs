@@ -103,6 +103,10 @@ test('the PWA precache manifest has one deterministic asset source', () => {
 	assert.doesNotMatch(config, /includeAssets:/);
 	assert.match(config, /png,wasm/);
 	assert.match(config, /'\*\*\/LICENSE'/);
+	assert.match(
+		config,
+		/ignoreURLParametersMatching: \[\/\^utm_\/, \/\^fbclid\$\/, \/\^callback\$\/\]/
+	);
 	assert.match(config, /maximumFileSizeToCacheInBytes: 5 \* 1024 \* 1024/);
 	assert.match(archiveScript, /verifyPrecacheManifest/);
 });
@@ -113,7 +117,8 @@ test('validates generated PWA precache runtime closure, uniqueness, and order', 
 		's.precacheAndRoute([{url:"a.js",revision:null},' +
 		`{url:"${wasmUrl}",revision:null},` +
 		'{url:"icons/pwa.png",revision:"hash"},' +
-		'{url:"manifest.webmanifest",revision:"hash"}],{})';
+		'{url:"manifest.webmanifest",revision:"hash"}],' +
+		'{ignoreURLParametersMatching:[/^utm_/,/^fbclid$/, /^callback$/]})';
 
 	assert.deepEqual(verifyPrecacheSource(valid, [wasmUrl]), [
 		'a.js',

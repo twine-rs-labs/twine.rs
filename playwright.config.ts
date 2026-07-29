@@ -16,7 +16,8 @@ const config: PlaywrightTestConfig = {
 	testIgnore: [
 		'electron-performance.spec.ts',
 		'packaged-electron.spec.ts',
-		'packaged-electron-preview.spec.ts'
+		'packaged-electron-preview.spec.ts',
+		'pwa-offline.spec.ts'
 	],
 	/* Maximum time one test can run for. */
 	timeout: 30 * 1000,

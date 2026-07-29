@@ -77,12 +77,20 @@ for unit tests, linting, or documentation checks. Before running
 npx playwright install
 ```
 
+The production-build offline check, `npm run e2e:pwa`, needs only Chromium:
+
+```sh
+npx playwright install chromium
+```
+
 On Linux, use this command instead to install the browsers and their required
 system packages:
 
 ```sh
 npx playwright install --with-deps
 ```
+
+Add `chromium` to that command when only running `npm run e2e:pwa`.
 
 ## Run
 

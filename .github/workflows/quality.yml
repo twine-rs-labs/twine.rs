@@ -19,6 +19,8 @@ jobs:
           node-version: 24.18.0
           cache: npm
       - run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
       - name: Install pinned mdBook
         run: cargo install mdbook --version 0.5.4 --locked
       - name: Unit and packaging tests
@@ -31,6 +33,10 @@ jobs:
         run: npm run format:check
       - name: Reproducible production web build
         run: npm run check:web-reproducibility
+      - name: Fresh-install offline PWA
+        run: npm run e2e:pwa
+        env:
+          TWINE_PWA_USE_EXISTING_BUILD: 1
 
   rust:
     name: Rust ${{ matrix.rust }}
