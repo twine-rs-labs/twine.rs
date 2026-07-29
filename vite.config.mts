@@ -96,10 +96,11 @@ export default defineConfig({
 			registerType: 'autoUpdate',
 			workbox: {
 				globPatterns: [
-					'**/*.{js,css,html,svg,woff,woff2,json,md,png}',
+					'**/*.{js,css,html,svg,woff,woff2,json,md,png,wasm}',
 					'**/LICENSE'
 				],
-				manifestTransforms: [sortPrecacheManifest]
+				manifestTransforms: [sortPrecacheManifest],
+				maximumFileSizeToCacheInBytes: 5 * 1024 * 1024
 			}
 		}),
 		removePreviewPwaTags

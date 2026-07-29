@@ -93,24 +93,43 @@ test('writes portable archives independent of input timestamps', async () => {
 
 test('the PWA precache manifest has one deterministic asset source', () => {
 	const config = readFileSync(join(process.cwd(), 'vite.config.mts'), 'utf8');
+	const archiveScript = readFileSync(
+		join(process.cwd(), 'scripts', 'archive-web.mjs'),
+		'utf8'
+	);
 
 	assert.match(config, /manifestTransforms: \[sortPrecacheManifest\]/);
 	assert.match(config, /includeManifestIcons: false/);
 	assert.doesNotMatch(config, /includeAssets:/);
+	assert.match(config, /png,wasm/);
 	assert.match(config, /'\*\*\/LICENSE'/);
+	assert.match(config, /maximumFileSizeToCacheInBytes: 5 \* 1024 \* 1024/);
+	assert.match(archiveScript, /verifyPrecacheManifest/);
 });
 
-test('validates generated PWA precache URL uniqueness and order', () => {
+test('validates generated PWA precache runtime closure, uniqueness, and order', () => {
+	const wasmUrl = 'assets/twine_wasm_bg-abc123.wasm';
 	const valid =
 		's.precacheAndRoute([{url:"a.js",revision:null},' +
+		`{url:"${wasmUrl}",revision:null},` +
 		'{url:"icons/pwa.png",revision:"hash"},' +
 		'{url:"manifest.webmanifest",revision:"hash"}],{})';
 
-	assert.deepEqual(verifyPrecacheSource(valid), [
+	assert.deepEqual(verifyPrecacheSource(valid, [wasmUrl]), [
 		'a.js',
+		wasmUrl,
 		'icons/pwa.png',
 		'manifest.webmanifest'
 	]);
+	assert.throws(
+		() =>
+			verifyPrecacheSource(
+				's.precacheAndRoute([{url:"a.js"},' +
+					'{url:"manifest.webmanifest"}],{})',
+				[wasmUrl]
+			),
+		/omits required runtime asset "assets\/twine_wasm_bg-abc123\.wasm"/
+	);
 	assert.throws(
 		() =>
 			verifyPrecacheSource(

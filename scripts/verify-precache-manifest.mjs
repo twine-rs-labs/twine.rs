@@ -1,6 +1,25 @@
-import {readFile} from 'node:fs/promises';
+import {readdir, readFile} from 'node:fs/promises';
+import path from 'node:path';
 
-export function verifyPrecacheSource(source) {
+async function findWasmAssets(directory, prefix = '') {
+	const urls = [];
+
+	for (const entry of await readdir(directory, {withFileTypes: true})) {
+		const url = prefix ? `${prefix}/${entry.name}` : entry.name;
+
+		if (entry.isDirectory()) {
+			urls.push(
+				...(await findWasmAssets(path.join(directory, entry.name), url))
+			);
+		} else if (entry.isFile() && entry.name.endsWith('.wasm')) {
+			urls.push(url);
+		}
+	}
+
+	return urls.sort();
+}
+
+export function verifyPrecacheSource(source, requiredRuntimeUrls = []) {
 	const manifest = source.match(
 		/\.precacheAndRoute\(\[(.*?)\](?:,\{\})?\)/s
 	)?.[1];
@@ -25,6 +44,16 @@ export function verifyPrecacheSource(source) {
 		);
 	}
 
+	const missingRuntimeUrl = requiredRuntimeUrls.find(
+		url => !uniqueUrls.has(url)
+	);
+
+	if (missingRuntimeUrl) {
+		throw new Error(
+			`The generated Workbox precache manifest omits required runtime asset ${JSON.stringify(missingRuntimeUrl)}.`
+		);
+	}
+
 	// vite-plugin-pwa appends its generated manifest after Workbox transforms.
 	// Everything else must follow the canonical URL order established in Vite.
 	const generatedManifest = 'manifest.webmanifest';
@@ -45,5 +74,8 @@ export function verifyPrecacheSource(source) {
 }
 
 export async function verifyPrecacheManifest(filePath) {
-	return verifyPrecacheSource(await readFile(filePath, 'utf8'));
+	return verifyPrecacheSource(
+		await readFile(filePath, 'utf8'),
+		await findWasmAssets(path.dirname(filePath))
+	);
 }
