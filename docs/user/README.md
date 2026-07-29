@@ -5,6 +5,18 @@ Owner: product documentation maintainers
 Last verified: 2026-07-29
 Source of truth: shipped twine.rs workflows only
 
+For current source setup, availability, and update behavior, read
+[`availability-and-updates.md`](./availability-and-updates.md).
+
+For desktop settings recovery and story-library backups, read
+[`recovery-and-backups.md`](./recovery-and-backups.md).
+
+For the current story-graph controls, read
+[`graph-navigation.md`](./graph-navigation.md).
+
+For desktop launch options and opening project folders from a terminal, read
+[`desktop-command-line.md`](./desktop-command-line.md).
+
 The current mdBook under `docs/en/` is predominantly inherited Twine
 documentation. It remains useful for general story-format concepts and
 compatibility behavior. Its application-shell, launcher, project-folder,

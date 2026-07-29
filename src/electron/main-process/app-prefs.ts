@@ -1,4 +1,7 @@
-import minimist from 'minimist';
+import {
+	commandLineAppPrefOverrideNames,
+	parseCommandLine
+} from './command-line';
 import {loadJsonFileSync, saveJsonFile} from './json-file';
 
 /**
@@ -35,7 +38,9 @@ const prefNames: AppPrefName[] = [
 	'scratchFileCleanupAge',
 	'storyLibraryFolderPath'
 ];
-const prefs: Partial<Record<AppPrefName, unknown>> = {};
+let commandLinePrefs: Partial<Record<AppPrefName, unknown>> = {};
+let explicitPrefs: Partial<Record<AppPrefName, unknown>> = {};
+let persistedPrefs: Partial<Record<AppPrefName, unknown>> = {};
 let prefsLoaded = false;
 
 /**
@@ -47,8 +52,12 @@ let prefsLoaded = false;
  * @see https://github.com/electron/electron/issues/21370
  */
 export function loadAppPrefs() {
-	const argv = minimist(process.argv.slice(1));
+	const argv = parseCommandLine(process.argv.slice(1));
 	let appPrefFile: any = {};
+
+	commandLinePrefs = {};
+	explicitPrefs = {};
+	persistedPrefs = {};
 
 	try {
 		appPrefFile = loadJsonFileSync('app-prefs.json');
@@ -57,9 +66,21 @@ export function loadAppPrefs() {
 	}
 
 	for (const prefName of prefNames) {
-		prefs[prefName] = argv[prefName] ?? appPrefFile[prefName];
+		if (Object.prototype.hasOwnProperty.call(appPrefFile, prefName)) {
+			persistedPrefs[prefName] = appPrefFile[prefName];
+		}
+
+		if (
+			commandLineAppPrefOverrideNames.includes(prefName) &&
+			Object.prototype.hasOwnProperty.call(argv, prefName)
+		) {
+			commandLinePrefs[prefName] = argv[prefName];
+		}
+
 		console.log(
-			`App pref ${prefName} set to ${JSON.stringify(prefs[prefName])}`
+			`App pref ${prefName} set to ${JSON.stringify(
+				commandLinePrefs[prefName] ?? persistedPrefs[prefName]
+			)}`
 		);
 	}
 
@@ -80,7 +101,15 @@ export function getAppPref(name: AppPrefName): unknown {
 		throw new Error('Tried to get an app pref before they were loaded');
 	}
 
-	return prefs[name];
+	if (Object.prototype.hasOwnProperty.call(explicitPrefs, name)) {
+		return explicitPrefs[name];
+	}
+
+	if (Object.prototype.hasOwnProperty.call(commandLinePrefs, name)) {
+		return commandLinePrefs[name];
+	}
+
+	return persistedPrefs[name];
 }
 
 /**
@@ -91,6 +120,13 @@ export async function setAppPref(name: AppPrefName, value: unknown) {
 		throw new Error('Tried to set an app pref before they were loaded');
 	}
 
-	prefs[name] = value;
-	await saveJsonFile('app-prefs.json', prefs);
+	explicitPrefs[name] = value;
+
+	if (value === undefined) {
+		delete persistedPrefs[name];
+	} else {
+		persistedPrefs[name] = value;
+	}
+
+	await saveJsonFile('app-prefs.json', {...persistedPrefs});
 }

@@ -815,6 +815,91 @@ describe('<StoryGraphPanel>', () => {
 		expect(after.y).toBe(start.y - 30);
 	});
 
+	it('pans with a primary-button drag when the Pan tool is active', async () => {
+		const {result} = renderComponent();
+		const viewport = result.container.querySelector(
+			'.story-edit-graph-viewport'
+		) as HTMLElement;
+
+		await waitForNode(result.container, 'start');
+		const before = worldView(result.container);
+
+		fireEvent.keyDown(window, {key: 'h'});
+		expect(
+			screen.getByRole('button', {name: 'Pan tool (H, or hold Space)'})
+		).toHaveAttribute('aria-pressed', 'true');
+		fireEvent.pointerDown(
+			viewport,
+			new PointerEvent('pointerdown', {
+				button: 0,
+				clientX: 80,
+				clientY: 70,
+				pointerId: 16
+			})
+		);
+		fireEvent.pointerMove(
+			viewport,
+			new PointerEvent('pointermove', {
+				button: 0,
+				clientX: 110,
+				clientY: 90,
+				pointerId: 16
+			})
+		);
+		fireEvent.pointerUp(
+			viewport,
+			new PointerEvent('pointerup', {
+				button: 0,
+				clientX: 110,
+				clientY: 90,
+				pointerId: 16
+			})
+		);
+
+		expect(worldView(result.container)).toEqual({
+			...before,
+			x: before.x + 30,
+			y: before.y + 20
+		});
+
+		fireEvent.keyDown(window, {key: 'v'});
+		expect(
+			screen.getByRole('button', {name: 'Select tool (V)'})
+		).toHaveAttribute('aria-pressed', 'true');
+	});
+
+	it('does not use a right-button drag to pan the graph', async () => {
+		const {result} = renderComponent();
+		const viewport = result.container.querySelector(
+			'.story-edit-graph-viewport'
+		) as HTMLElement;
+
+		await waitForNode(result.container, 'start');
+		const before = worldView(result.container);
+
+		fireEvent.pointerDown(
+			viewport,
+			new PointerEvent('pointerdown', {
+				button: 2,
+				clientX: 80,
+				clientY: 70,
+				pointerId: 17
+			})
+		);
+		fireEvent.pointerMove(
+			viewport,
+			new PointerEvent('pointermove', {
+				button: 2,
+				clientX: 110,
+				clientY: 90,
+				pointerId: 17
+			})
+		);
+
+		expect(worldView(result.container)).toEqual(before);
+		expect(viewport).not.toHaveClass('story-edit-graph-viewport--panning');
+	});
+
 	it('gives Space-panning precedence over passage dragging', async () => {
 		const {onSelect, result} = renderComponent();
 		const viewport = result.container.querySelector(
@@ -1203,6 +1288,76 @@ describe('<StoryGraphPanel>', () => {
 		expect(after.k).toBeGreaterThan(before.k);
 		expect(viewport.scrollLeft).toBe(0);
 		expect(viewport.scrollTop).toBe(0);
+	});
+
+	it('pans horizontally on Shift+wheel without changing zoom', async () => {
+		const {result} = renderComponent();
+		const viewport = result.container.querySelector(
+			'.story-edit-graph-viewport'
+		) as HTMLElement;
+
+		await waitForNode(result.container, 'start');
+		const before = worldView(result.container);
+
+		fireEvent.wheel(viewport, {
+			clientX: 120,
+			clientY: 100,
+			deltaY: 40,
+			shiftKey: true
+		});
+
+		expect(worldView(result.container)).toEqual({
+			...before,
+			x: before.x - 40
+		});
+	});
+
+	it('supports the keyboard zoom and Fit inputs outside editors', async () => {
+		const widthSpy = jest
+			.spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+			.mockReturnValue(320);
+		const heightSpy = jest
+			.spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+			.mockReturnValue(240);
+		const rectSpy = jest
+			.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+			.mockReturnValue({
+				bottom: 240,
+				height: 240,
+				left: 0,
+				right: 320,
+				toJSON: () => ({}),
+				top: 0,
+				width: 320,
+				x: 0,
+				y: 0
+			});
+		const {result} = renderComponent();
+
+		await waitForNode(result.container, 'start');
+		const initial = worldView(result.container);
+
+		fireEvent.keyDown(window, {key: '+'});
+		const afterPlus = worldView(result.container);
+
+		expect(afterPlus.k).toBeGreaterThan(initial.k);
+
+		fireEvent.keyDown(window, {key: '-'});
+		const afterMinus = worldView(result.container);
+
+		expect(afterMinus.k).toBeLessThan(afterPlus.k);
+
+		fireEvent.keyDown(window, {key: '='});
+		expect(worldView(result.container).k).toBeGreaterThan(afterMinus.k);
+
+		fireEvent.keyDown(window, {key: '0'});
+		const afterFit = worldView(result.container);
+
+		expect(afterFit.k).toBeLessThan(afterPlus.k);
+		expect(Object.values(afterFit).every(Number.isFinite)).toBe(true);
+		widthSpy.mockRestore();
+		heightSpy.mockRestore();
+		rectSpy.mockRestore();
 	});
 
 	it('keeps the live zoom when the story prop refreshes before graph view persistence', async () => {

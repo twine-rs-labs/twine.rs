@@ -2,7 +2,7 @@
 
 Status: accepted
 Decision date: 2026-06-22
-Last verified: 2026-07-23
+Last verified: 2026-07-29
 
 This record closes the M7 platform/documentation slice for the current Electron
 desktop app path. It documents what the app supports now, what is intentionally
@@ -25,9 +25,17 @@ rather than the Settings/Platform app architecture.
 
 ## Command Line
 
+Implementation clarification (2026-07-29): The original bare `twine`
+executable spelling was an outdated identifier. `twine-rs` is the generated
+usage name and Linux packaged executable. The macOS packaged executable is
+`Twine RS` inside `Twine RS.app`, and the Windows packaged executable is
+`Twine RS.exe`. This corrects the implementation names without changing the
+accepted command-line decision.
+
 Supported:
 
-- `twine --help` or `twine -h` prints usage text and exits before app startup.
+- Invoking the platform executable with `--help` or `-h` prints usage text and
+  exits before app startup.
 - Positional `.twine.rs` project folders are queued on startup and opened
   through the same native project-folder parser/session path used by the Open
   Project Folder button.

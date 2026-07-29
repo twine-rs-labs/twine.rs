@@ -53,6 +53,45 @@ describe('loadAppPrefs and getAppPrefs', () => {
 		expect(getAppPref('scratchFolderPath')).toBe('args-path');
 	});
 
+	it('does not persist a command-line override during an unrelated write', async () => {
+		mockJsonFile({
+			backupCadenceMinutes: 20,
+			scratchFolderPath: 'json-path'
+		});
+		minimistMock.mockReturnValue({scratchFolderPath: 'args-path'});
+		loadAppPrefs();
+
+		expect(getAppPref('scratchFolderPath')).toBe('args-path');
+		await setAppPref('backupCadenceMinutes', 30);
+
+		expect(saveJsonFileMock).toHaveBeenLastCalledWith('app-prefs.json', {
+			backupCadenceMinutes: 30,
+			scratchFolderPath: 'json-path'
+		});
+		expect(getAppPref('scratchFolderPath')).toBe('args-path');
+	});
+
+	it('persists an explicitly updated command-line overridden key', async () => {
+		mockJsonFile({scratchFolderPath: 'json-path'});
+		minimistMock.mockReturnValue({scratchFolderPath: 'args-path'});
+		loadAppPrefs();
+
+		await setAppPref('scratchFolderPath', 'explicit-path');
+
+		expect(getAppPref('scratchFolderPath')).toBe('explicit-path');
+		expect(saveJsonFileMock).toHaveBeenLastCalledWith('app-prefs.json', {
+			scratchFolderPath: 'explicit-path'
+		});
+	});
+
+	it('ignores CLI-shaped values for prefs absent from the option schema', () => {
+		mockJsonFile({backupReminderDays: 7});
+		minimistMock.mockReturnValue({backupReminderDays: 30});
+		loadAppPrefs();
+
+		expect(getAppPref('backupReminderDays')).toBe(7);
+	});
+
 	it("ignores values in the app prefs file that aren't known prefs", () => {
 		mockJsonFile({anUnrecognizedKey: 'fail'});
 		loadAppPrefs();
