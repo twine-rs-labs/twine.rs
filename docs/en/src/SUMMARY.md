@@ -2,10 +2,10 @@
 
 - [About This Compatibility Manual](README.md)
 - [Getting Started](getting-started/index.md)
-  - [Installing Twine](getting-started/installing.md)
+  - [Twine RS Availability and Source Setup](getting-started/installing.md)
   - [Basic Concepts](getting-started/basic-concepts.md)
   - [Getting Around in twine.rs](getting-started/getting-around.md)
-  - [Updating Twine](getting-started/updating.md)
+  - [Twine RS Update Availability](getting-started/updating.md)
   - [Uninstalling Twine](getting-started/uninstalling.md)
   - [Using an Older Version of Twine](getting-started/downgrading.md)
 - [Using the Story Library](story-library/index.md)

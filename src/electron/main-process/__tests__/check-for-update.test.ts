@@ -45,11 +45,16 @@ describe('checkForUpdate()', () => {
 	describe('if no update URL is configured', () => {
 		beforeEach(() => delete process.env.TWINE_RS_UPDATE_URL);
 
-		it('shows a dialog saying that the user has the most current version', async () => {
+		it('does not fetch and shows a dialog saying update checking is unavailable', async () => {
 			await checkForUpdate();
 			expect(fetchMock).not.toHaveBeenCalled();
 			expect(showMessageBoxMock.mock.calls).toEqual([
-				[expect.objectContaining({message: 'electron.updateCheck.upToDate'})]
+				[
+					expect.objectContaining({
+						message: 'electron.updateCheck.unavailable',
+						type: 'info'
+					})
+				]
 			]);
 		});
 	});

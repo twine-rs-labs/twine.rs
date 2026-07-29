@@ -1,4 +1,5 @@
 import {app, BrowserWindow, Menu, MenuItemConstructorOptions} from 'electron';
+import {twineRsDocumentationUrl} from '../shared';
 import {
 	chooseStoryDirectoryPath,
 	revealStoryDirectory,
@@ -69,7 +70,7 @@ export function initMenuBar() {
 				{
 					label: i18n.t('electron.menuBar.twineHelp'),
 					click: () => {
-						void openExternalUrl('https://twinery.org/2guide').catch(error => {
+						void openExternalUrl(twineRsDocumentationUrl).catch(error => {
 							console.warn('Failed to open Twine Help.', error);
 						});
 					}

@@ -1,21 +1,12 @@
-# Updating Twine
+# Twine RS update availability
 
-## Browser Twine
+Current Twine RS builds do not have an operated update metadata feed, and
+automatic updates are unavailable. The visible manual **Check for Updates**
+command reports that update checking is unavailable when no feed is configured.
 
-Browser Twine is updated when there's a new release, so there's no work for
-you to do to stay up-to-date. If you need to use an older version, go to
-`https://twinery.org/[version number]`. That is, to use 2.3.13, go to
-`https://twinery.org/2.3.13`. These different versions will use the same story
-library and preferences.
+See the canonical
+[Twine RS availability and updates guide](https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/availability-and-updates.md)
+for current shipped behavior and source-user update guidance.
 
-Keep in mind, though, that earlier versions will have bugs the most recent
-version does not, and there might be strange behavior moving backwards in time,
-so you should only use an older version if you really need to.
-
-## App Twine
-
-To check if a newer version of Twine is available, choose _Check for Updates_
-from the menu named _Twine_ in the menu bar (not the top toolbar). Twine will
-tell you if there's an update available and, if you like, will direct you to
-where to go to download the new version. Twine doesn't automatically update
-itself.
+Upstream Twine is a separate product. Its versions and update instructions do
+not describe Twine RS.

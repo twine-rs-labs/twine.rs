@@ -4,6 +4,7 @@ import {useTranslation} from 'react-i18next';
 import {useAppShellContext} from '../components/app-shell';
 import {IconButton, SegmentedControl} from '../components/design-system';
 import {useDialogsContext} from '../dialogs';
+import {twineRsDocumentationUrl} from '../electron/shared';
 import {Passage, Story} from '../store/stories';
 import {Point} from '../util/geometry';
 import {StoryEditMode} from '../routes/story-edit/workspace-state';
@@ -183,7 +184,7 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 		}
 
 		appShell.setToolbar({
-			helpUrl: 'https://twinery.org/2guide',
+			helpUrl: twineRsDocumentationUrl,
 			pinnedControls,
 			tabs
 		});

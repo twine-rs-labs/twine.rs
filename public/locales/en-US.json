@@ -350,6 +350,7 @@
 		"updateCheck": {
 			"download": "Download",
 			"error": "Something went wrong while checking for an updated version of Twine.",
+			"unavailable": "Update checking is unavailable because no update source is configured for this build.",
 			"updateAvailable": "A newer version of Twine is available.",
 			"upToDate": "This is the newest version of Twine available."
 		},

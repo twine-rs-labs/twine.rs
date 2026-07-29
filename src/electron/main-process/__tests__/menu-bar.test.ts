@@ -149,7 +149,9 @@ describe('initMenuBar', () => {
 				expect(item).not.toBeUndefined();
 				item.click();
 				expect(openExternalMock.mock.calls).toEqual([
-					['https://twinery.org/2guide']
+					[
+						'https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/README.md'
+					]
 				]);
 			});
 
@@ -325,7 +327,9 @@ describe('initMenuBar', () => {
 				expect(item).not.toBeUndefined();
 				item.click();
 				expect(openExternalMock.mock.calls).toEqual([
-					['https://twinery.org/2guide']
+					[
+						'https://github.com/twine-rs-labs/twine.rs/blob/main/docs/user/README.md'
+					]
 				]);
 			});
 

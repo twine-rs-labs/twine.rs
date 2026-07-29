@@ -45,7 +45,7 @@ export async function checkForUpdate() {
 			`${updateUrlEnvVar} is not set, skipping application update check`
 		);
 		dialog.showMessageBox({
-			message: i18n.t('electron.updateCheck.upToDate'),
+			message: i18n.t('electron.updateCheck.unavailable'),
 			type: 'info'
 		});
 		return;
