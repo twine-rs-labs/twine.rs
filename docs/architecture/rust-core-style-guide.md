@@ -2,12 +2,12 @@
 
 Status: current
 Owner: Rust core maintainers
-Last verified: 2026-07-04
+Last verified: 2026-07-29
 Source of truth: Rust workspace conventions
 
 This guide defines the house style for the Rust core. It is intentionally small:
-follow Rust defaults, keep Twine semantics explicit, and make every milestone
-harder to break than the last one.
+follow Rust defaults, keep Twine semantics explicit, and make implemented
+contracts difficult to break.
 
 Reference spine:
 
@@ -96,18 +96,18 @@ Reference spine:
   source-only layout behavior, and unsafe manifest paths.
 - Graph/search tests should assert counts and stable IDs/order, not only that
   output is non-empty.
-- CLI behavior can stay smoke-tested in M0, but command parsing should move to
-  stronger integration tests before it becomes a user-facing contract.
+- The developer CLI's command-line behavior should have black-box integration
+  tests for its public help, version, dispatch, and compatibility forms.
 
-## Integration readiness
+## Application integration
 
-- M1 Rust/WASM work should expose typed DTOs generated from the Rust boundary,
-  not hand-maintained TypeScript shadows.
-- M2 graph work should treat graph facts and graph layout separately.
-- M3 source editing should send typed edits/transactions through Rust, not
-  mutate canonical story state ad hoc in the UI.
-- M4+ story-format work should describe capabilities explicitly and keep legacy
-  JavaScript formats compatible.
+- Rust/WASM boundaries expose typed DTOs generated from the Rust boundary, not
+  hand-maintained TypeScript shadows.
+- Graph behavior treats graph facts and graph layout as separate contracts.
+- Source editing sends typed edits and transactions through Rust instead of
+  mutating canonical story state ad hoc in the UI.
+- Story-format integrations describe capabilities explicitly and retain
+  compatibility with supported JavaScript formats.
 - Product screens are bound by these same contracts: they mutate the model only
   through generated `StoryCommand`s and read only through query DTOs, never by
   parsing or computing canonical facts in the UI. Graph mode consumes the

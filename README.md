@@ -35,8 +35,9 @@ projects, and test the native core that supports the editor.
   replace previews.
 - Generated TypeScript bindings for Rust-shaped commands, patches, project
   snapshots, graph projections, diagnostics, assets, and indexes.
-- A `twine_cli` tool for inspecting, graphing, importing, exporting, and
-  benchmarking stories and project folders.
+- A developer-facing `twine_cli` engineering tool for inspecting, graphing,
+  importing, exporting, and benchmarking stories and project folders. It is
+  separate from the packaged desktop application's command line.
 
 ## Prerequisites
 
@@ -205,14 +206,19 @@ npm run version:bump -- 0.2.0-beta.1
 npm run release:check -- --plan docs/releases/plans/v0.2.0-beta.1.json
 ```
 
-## Fixtures and CLI
+## Fixtures and Developer CLI
 
 ```sh
 npm run bench:fixtures
 npm run bench:fixtures:large
 ```
 
+`twine_cli` builds the `twine-rs` engineering binary. See its complete command
+surface before using it; this is not the packaged desktop application's
+executable:
+
 ```sh
+cargo run -p twine_cli -- --help
 cargo run -p twine_cli -- inspect benchmarks/fixtures/generated/story-50000.story.json
 cargo run -p twine_cli -- graph benchmarks/fixtures/generated/story-1000.story.json
 cargo run -p twine_cli -- import story.twee /tmp/example.twine

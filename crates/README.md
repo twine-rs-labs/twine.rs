@@ -1,7 +1,14 @@
 # Rust Workspace
 
-This workspace is the first Rust core skeleton for the incremental `twine.rs`
-port.
+Status: current
+Owner: Rust core maintainers
+Last verified: 2026-07-29
+Source of truth: workspace `Cargo.toml` files and crate implementations
+
+This workspace contains the Rust libraries and developer tooling that support
+the current Twine RS editor. The crates define the canonical model, parsing,
+graph, search, storage, export, typed command/query boundary, and engineering
+CLI contracts used by the application.
 
 ## Crates
 
@@ -16,13 +23,19 @@ port.
 - `twine_core`: typed command → patch/event session spine, project snapshots,
   undo/redo transactions, graph projection commands, and generated TypeScript
   bindings for the workbench bridge.
+- `twine_wasm`: wasm-bindgen adapter exposing renderer-side
+  `twine_core::ProjectSession` commands, queries, and snapshots across the WASM
+  boundary.
 - `twine_search`: search-index traits plus a baseline linear implementation.
 - `twine_store`: persistence traits, JSON fixture helpers, and transactional
   canonical project-folder load/save with backups.
 - `twine_export`: JSON, Twee, Twine HTML, story-format binding, and archive
   exporters.
-- `twine_cli`: smoke-test CLI for inspecting/importing/exporting supported
-  story and project formats.
+- `twine_native`: native Node/Electron N-API bridge for project-folder I/O,
+  inventory scans, import preparation, and asset operations.
+- `twine_cli`: developer-facing `twine-rs` engineering CLI for inspecting,
+  graphing, importing, exporting, and benchmarking supported story and project
+  formats. It is not the packaged desktop application's command line.
 
 ## Commands
 
@@ -32,7 +45,7 @@ Run all Rust tests:
 cargo test --workspace
 ```
 
-Run the full Rust M0 quality loop:
+Run the repository Rust quality commands:
 
 ```sh
 cargo fmt-check
@@ -44,6 +57,12 @@ Inspect a generated fixture:
 
 ```sh
 cargo run -p twine_cli -- inspect benchmarks/fixtures/generated/story-50000.story.json
+```
+
+List the complete developer CLI command surface:
+
+```sh
+cargo run -p twine_cli -- --help
 ```
 
 Inspect the native graph projection for a fixture:
@@ -58,7 +77,7 @@ Regenerate frontend command/patch bindings:
 cargo test -p twine_core
 ```
 
-Import a Twee/HTML/JSON source into the M0 project layout:
+Import a Twee/HTML/JSON source into a project folder:
 
 ```sh
 cargo run -p twine_cli -- import story.twee /tmp/example.twine

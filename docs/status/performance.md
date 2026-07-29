@@ -2,8 +2,8 @@
 
 Status: current measured snapshot
 Owner: performance maintainers
-Last verified: 2026-07-16
-Source of truth: release-mode Electron harness and accepted local baselines
+Last verified: 2026-07-29
+Source of truth: release-mode Electron harness and tracked normalized references
 
 ## Harness state
 
@@ -13,18 +13,23 @@ fixture into an isolated temporary run root, and measures startup, editing,
 queries, graph frames, watcher ingestion, bridge payloads, persistence, and
 process memory.
 
-Complete 10k and 50k Apple M4 runs pass all machine-independent structural
-invariants. Matching local baselines are accepted. Raw reports and
-machine-specific baselines remain ignored, while normalized reproducibility
-evidence is tracked:
+The current tracked pair contains complete Apple M4 runs that pass all
+machine-independent structural invariants. Raw reports and machine-specific
+baselines remain ignored, while normalized reproducibility evidence is tracked:
 
 - [10k reference](../../benchmarks/reference/2026-07-16-apple-m4-10000.summary.json)
-- [50k reference](../../benchmarks/reference/2026-07-16-apple-m4-50000.summary.json)
+- [50k reference](../../benchmarks/reference/2026-07-21-apple-m4-50000.summary.json)
 
-Both source reports were captured from clean revision `bd13ddd6`, retained that
-revision and clean state through all five phases, and passed every blocking
-invariant. The earlier July 3 dirty-worktree summaries remain tracked as
-historical evidence.
+The 10k source report was captured from clean revision `bd13ddd6`, retained
+that revision and clean state through all five phases, passed every blocking
+invariant, and recorded `baselineStatus: "matched"`. The 50k source report was
+captured from clean revision `eb090ab`, retained that revision and clean state
+through all five phases, and passed every structural invariant. It recorded
+`baselineStatus: "missing"`, so it is target-only evidence without a matched
+regression baseline—not an accepted 50k baseline. The
+[earlier July 16 50k reference](../../benchmarks/reference/2026-07-16-apple-m4-50000.summary.json)
+remains tracked for historical comparison, as do the earlier July 3
+dirty-worktree summaries.
 
 A short diagnostic phase now exists for iteration on the dominant 50k edit/save
 cost. `npm run perf:electron:50k:diagnostic` performs one production launch and
@@ -117,7 +122,8 @@ The 50k diagnostic, query, graph, and watcher phases passed on 2026-07-10. They
 validate the incremental project-folder save path, bounded Contents path, and
 steady-state watcher path without requiring another complete multi-phase run.
 These ignored local reports remain historical engineering evidence; the clean
-July 16 summaries now provide the durable accepted reference.
+July 16 summaries remain durable historical evidence and comparison. The
+current tracked pair and its distinct baseline statuses are identified above.
 
 - A passage text edit used `incremental` save mode, touched one project path,
   and completed its native save in about 63 ms. The file write itself took

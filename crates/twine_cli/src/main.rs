@@ -25,6 +25,14 @@ fn main() -> Result<()> {
 
     match args.as_slice() {
         [] => bail!("{}", usage()),
+        [option] if is_command(option, "--help") || is_command(option, "-h") => {
+            println!("{}", usage());
+            Ok(())
+        }
+        [option] if is_command(option, "--version") => {
+            println!("twine-rs {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         [command] if is_command(command, "bench-graph") => bench_graph(50_000),
         [command, path] if is_command(command, "bench-open") => bench_open(path),
         [command, path] if is_command(command, "inspect") => inspect(path),
@@ -44,13 +52,30 @@ fn main() -> Result<()> {
         [command, project_dir, format] if is_command(command, "export") => {
             export_project(project_dir, format, None)
         }
-        [path] => inspect(path),
+        [path] if !is_known_command(path) && !is_option(path) => inspect(path),
         _ => bail!("{}", usage()),
     }
 }
 
 fn is_command(path: &Path, expected: &str) -> bool {
     path.as_os_str() == expected
+}
+
+fn is_known_command(path: &Path) -> bool {
+    [
+        "inspect",
+        "graph",
+        "bench-graph",
+        "bench-open",
+        "import",
+        "export",
+    ]
+    .iter()
+    .any(|command| is_command(path, command))
+}
+
+fn is_option(path: &Path) -> bool {
+    path.as_os_str().to_string_lossy().starts_with('-')
 }
 
 fn usage() -> &'static str {
@@ -60,7 +85,10 @@ fn usage() -> &'static str {
   twine-rs bench-graph [passage-count]
   twine-rs bench-open <project-dir>
   twine-rs import <story-json|twee|html> <project-dir>
-  twine-rs export <project-dir> <json|twee|html|archive> [output-file]"
+  twine-rs export <project-dir> <json|twee|html|archive> [output-file]
+  twine-rs <story-json|twee|html|project-dir>
+  twine-rs --help | -h
+  twine-rs --version"
 }
 
 fn bench_graph(passage_count: usize) -> Result<()> {
