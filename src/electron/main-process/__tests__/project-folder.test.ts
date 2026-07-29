@@ -201,6 +201,7 @@ describe('project-folder native bridge', () => {
 	const replaceNativeProjectFolderStoriesMock =
 		replaceNativeProjectFolderStories as jest.Mock;
 	const saveNativeProjectFolderMock = saveNativeProjectFolder as jest.Mock;
+	const renamedFileSources = new Map<string, string | Buffer>();
 
 	function mockZipEntries(entries: any[], entryCount = entries.length) {
 		openZipMock.mockImplementation(
@@ -314,6 +315,7 @@ describe('project-folder native bridge', () => {
 
 	beforeEach(() => {
 		jest.clearAllMocks();
+		renamedFileSources.clear();
 		performanceHarnessEnabledMock.mockReturnValue(false);
 		writeFileMock.mockResolvedValue(undefined);
 		copyMock.mockResolvedValue(undefined);
@@ -340,11 +342,15 @@ describe('project-folder native bridge', () => {
 					}))
 				};
 			}
-			const sourcePath = String(path).replace(
-				/\.[0-9a-f-]{36}\.baseline$/i,
-				''
-			);
-			const value = await readFileMock(sourcePath, 'utf8');
+			const pathText = String(path);
+			const pendingWrite = [...writeFileMock.mock.calls]
+				.reverse()
+				.find(([writtenPath]) => String(writtenPath) === pathText);
+			const sourcePath = pathText.replace(/\.[0-9a-f-]{36}\.baseline$/i, '');
+			const value =
+				pendingWrite?.[1] ??
+				renamedFileSources.get(pathText) ??
+				(await readFileMock(sourcePath, 'utf8'));
 			const source = Buffer.isBuffer(value)
 				? value
 				: Buffer.from(String(value));
@@ -450,7 +456,12 @@ describe('project-folder native bridge', () => {
 			Object.assign(new Error('missing'), {code: 'ENOENT'})
 		);
 		realpathMock.mockImplementation(async path => String(path));
-		renameFileMock.mockResolvedValue(undefined);
+		renameFileMock.mockImplementation(async (source, target) => {
+			renamedFileSources.set(
+				String(target),
+				await readFileMock(String(source), 'utf8')
+			);
+		});
 		statMock.mockImplementation(async path => ({
 			isDirectory: () => String(path).endsWith('.twine.rs'),
 			isFile: () => !String(path).endsWith('.twine.rs'),
@@ -459,7 +470,13 @@ describe('project-folder native bridge', () => {
 			size: 0
 		}));
 		lstatMock.mockImplementation(async path => {
-			if (String(path).endsWith('.twine/project-file-cas.json')) {
+			if (
+				String(path).endsWith('.twine/project-file-cas.json') ||
+				(String(path).endsWith('.link-probe') &&
+					removeMock.mock.calls.some(
+						([removedPath]) => String(removedPath) === String(path)
+					))
+			) {
 				throw Object.assign(new Error('missing'), {code: 'ENOENT'});
 			}
 
@@ -1676,6 +1693,264 @@ describe('project-folder native bridge', () => {
 		expect(removeMock).toHaveBeenCalledWith(claimPath);
 	});
 
+	it('cleans staging, rolls back prepared, and finishes committed batches before saving', async () => {
+		const rootPath = '/native/batch-recovery.twine.rs';
+		const manifestPath = `${rootPath}/twine.toml`;
+		const targets = [
+			{
+				kind: 'passage' as const,
+				oldSource: 'old passage',
+				path: 'passages/story/start.twee',
+				source: 'new passage'
+			},
+			{
+				kind: 'script' as const,
+				oldSource: 'old script',
+				path: 'scripts/story.js',
+				source: 'new script'
+			}
+		];
+		const missing = () => Object.assign(new Error('missing'), {code: 'ENOENT'});
+
+		for (const scenario of [
+			'staging',
+			'prepared',
+			'prepared-conflict',
+			'prepared-preserved-conflict',
+			'committed'
+		] as const) {
+			const phase = scenario.startsWith('prepared') ? 'prepared' : scenario;
+			const entries = targets.map((target, index) => {
+				const claimPath = `${target.path}.11111111-2222-4333-8444-55555555555${index}.baseline`;
+				const stagedPath = `${target.path}.aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee${index}.tmp`;
+
+				return {
+					claimPath,
+					expected: {
+						contentDigest: createHash('sha256')
+							.update(target.oldSource)
+							.digest('hex'),
+						fingerprint: `1:${Buffer.byteLength(target.oldSource)}`,
+						kind: target.kind,
+						modifiedAt: '2026-06-21T16:00:00.001Z',
+						mtimeMs: 1,
+						path: target.path,
+						sizeBytes: Buffer.byteLength(target.oldSource)
+					},
+					nextContentDigest: createHash('sha256')
+						.update(target.source)
+						.digest('hex'),
+					nextSizeBytes: Buffer.byteLength(target.source),
+					rollbackPath: `${stagedPath}.rollback`,
+					stagedPath,
+					targetPath: target.path
+				};
+			});
+			const journalPath = `${rootPath}/.twine/project-file-cas.json`;
+			const journal = {entries, phase, version: 2};
+			const files = new Map<string, string>([
+				[manifestPath, 'schema_version = 2'],
+				[journalPath, JSON.stringify(journal)]
+			]);
+
+			for (const [index, entry] of entries.entries()) {
+				files.set(`${rootPath}/${entry.stagedPath}`, targets[index].source);
+				if (phase === 'staging') {
+					files.set(
+						`${rootPath}/${targets[index].path}`,
+						targets[index].oldSource
+					);
+				} else {
+					files.set(`${rootPath}/${entry.claimPath}`, targets[index].oldSource);
+				}
+			}
+			if (phase !== 'staging') {
+				if (scenario === 'prepared-preserved-conflict') {
+					files.set(
+						`${rootPath}/${entries[0].rollbackPath}`,
+						'unexpected installed bytes'
+					);
+				} else {
+					files.set(
+						`${rootPath}/${targets[0].path}`,
+						scenario === 'prepared-conflict'
+							? 'unexpected installed bytes'
+							: targets[0].source
+					);
+				}
+			}
+
+			readFileMock.mockImplementation(async path => {
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				return source;
+			});
+			readJsonMock.mockImplementation(async path => {
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				return JSON.parse(source);
+			});
+			statMock.mockImplementation(async path => {
+				if (String(path) === rootPath) {
+					return {
+						isDirectory: () => true,
+						isFile: () => false,
+						mtime: new Date('2026-06-21T16:00:00.001Z'),
+						mtimeMs: 1,
+						size: 0
+					};
+				}
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				return {
+					isDirectory: () => false,
+					isFile: () => true,
+					mtime: new Date('2026-06-21T16:00:00.001Z'),
+					mtimeMs: 1,
+					size: Buffer.byteLength(source)
+				};
+			});
+			lstatMock.mockImplementation(async path => {
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				return {
+					isDirectory: () => false,
+					isFile: () => true,
+					isSymbolicLink: () => false,
+					mtime: new Date('2026-06-21T16:00:00.001Z'),
+					mtimeMs: 1,
+					size: Buffer.byteLength(source)
+				};
+			});
+			openFileMock.mockImplementation(async path => {
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				const bytes = Buffer.from(source);
+
+				return {
+					close: jest.fn(async () => undefined),
+					read: jest.fn(
+						async (
+							buffer: Buffer,
+							bufferOffset = 0,
+							length = buffer.length,
+							position = 0
+						) => {
+							const bytesRead = bytes.copy(
+								buffer,
+								bufferOffset,
+								position,
+								Math.min(bytes.length, position + length)
+							);
+
+							return {buffer, bytesRead};
+						}
+					),
+					stat: jest.fn(async () => ({
+						isFile: () => true,
+						mtimeMs: 1,
+						size: bytes.length
+					})),
+					sync: jest.fn(async () => undefined)
+				};
+			});
+			linkFileMock.mockImplementation(async (source, target) => {
+				const sourceText = String(source);
+				const targetText = String(target);
+
+				if (files.has(targetText)) {
+					throw Object.assign(new Error('exists'), {code: 'EEXIST'});
+				}
+				const content = files.get(sourceText);
+
+				if (content === undefined) {
+					throw missing();
+				}
+				files.set(targetText, content);
+			});
+			renameFileMock.mockImplementation(async (source, target) => {
+				const sourceText = String(source);
+				const content = files.get(sourceText);
+
+				if (content === undefined) {
+					throw missing();
+				}
+				files.set(String(target), content);
+				files.delete(sourceText);
+			});
+			let injectCleanupFailure = scenario === 'committed';
+
+			removeMock.mockImplementation(async path => {
+				if (injectCleanupFailure && String(path).endsWith('.baseline')) {
+					injectCleanupFailure = false;
+					throw new Error('injected cleanup failure');
+				}
+				files.delete(String(path));
+			});
+			saveNativeProjectFolderMock.mockReturnValue({
+				passageTextLoaded: true,
+				rootPath,
+				stories: [fakeStory(1)],
+				storyIds: [fakeStory(1).id]
+			});
+
+			if (scenario === 'committed') {
+				await expect(saveProjectFolder(rootPath, fakeStory(1))).rejects.toThrow(
+					'injected cleanup failure'
+				);
+				expect(files.has(journalPath)).toBe(true);
+			}
+			if (
+				scenario === 'prepared-conflict' ||
+				scenario === 'prepared-preserved-conflict'
+			) {
+				await expect(saveProjectFolder(rootPath, fakeStory(1))).rejects.toThrow(
+					'preserved unexpected installed bytes'
+				);
+				expect(
+					targets.map(target => files.get(`${rootPath}/${target.path}`))
+				).toEqual(targets.map(target => target.oldSource));
+				expect(files.get(`${rootPath}/${entries[0].rollbackPath}`)).toBe(
+					'unexpected installed bytes'
+				);
+				expect(files.has(journalPath)).toBe(true);
+				stopProjectSession(rootPath);
+				continue;
+			}
+			await saveProjectFolder(rootPath, fakeStory(1));
+
+			expect(
+				targets.map(target => files.get(`${rootPath}/${target.path}`))
+			).toEqual(
+				scenario === 'staging' || scenario === 'prepared'
+					? targets.map(target => target.oldSource)
+					: targets.map(target => target.source)
+			);
+			expect(
+				[...files.keys()].filter(path =>
+					/\.(?:baseline|tmp|rollback|link-probe)$/.test(path)
+				)
+			).toEqual([]);
+			expect(files.has(journalPath)).toBe(false);
+			stopProjectSession(rootPath);
+		}
+	});
+
 	it('refuses to recover a tampered claim into a missing project source', async () => {
 		const rootPath = '/native/tampered-recovery.twine.rs';
 		const claimName =
@@ -1948,7 +2223,7 @@ describe('project-folder native bridge', () => {
 			],
 			startPassage: 'passage-1'
 		};
-		const manifestSource = [
+		let manifestSource = [
 			'schema_version = 1',
 			'name = "Project"',
 			'tool_mode = "preserve-me"',
@@ -1977,7 +2252,7 @@ describe('project-folder native bridge', () => {
 			'[stories.tooling]',
 			'enabled = true'
 		].join('\n');
-		const aggregateSource = [
+		let aggregateSource = [
 			':: StoryTitle',
 			'Story',
 			'',
@@ -2037,6 +2312,19 @@ describe('project-folder native bridge', () => {
 		});
 		listNativeProjectAssetsMock.mockReturnValue([]);
 		nativeProjectFileManifestMock.mockReturnValue(files);
+		linkFileMock.mockImplementation(async (source, target) => {
+			const targetText = String(target);
+			const stagedWrite = writeFileMock.mock.calls.find(
+				([path]) => String(path) === String(source)
+			);
+
+			if (targetText === '/native/project.twine.rs/twine.toml') {
+				manifestSource = String(stagedWrite?.[1]);
+			}
+			if (targetText === '/native/project.twine.rs/sources/main.twee') {
+				aggregateSource = String(stagedWrite?.[1]);
+			}
+		});
 
 		await startProjectSession('/native/project.twine.rs', undefined, [
 			'story-id'
@@ -2394,18 +2682,26 @@ describe('project-folder native bridge', () => {
 			path: 'twine.toml',
 			sizeBytes: Buffer.byteLength(manifestSource)
 		});
-		const graphFile = () => ({
-			contentDigest: createHash('sha256').update('').digest('hex'),
-			fingerprint: graphWritten ? '2:0' : '1:0',
-			kind: 'graph' as const,
-			modifiedAt: '2026-06-21T16:00:00.000Z',
-			mtimeMs: graphWritten ? 2 : 1,
-			path: '.twine/graph.json',
-			sizeBytes: 0
-		});
+		const graphFile = () => {
+			const source = JSON.stringify(graphSource, null, 2);
+
+			return {
+				contentDigest: createHash('sha256').update(source).digest('hex'),
+				fingerprint: `${graphWritten ? 2 : 1}:${Buffer.byteLength(source)}`,
+				kind: 'graph' as const,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				mtimeMs: graphWritten ? 2 : 1,
+				path: '.twine/graph.json',
+				sizeBytes: Buffer.byteLength(source)
+			};
+		};
 
 		readFileMock.mockImplementation(async path =>
-			String(path).endsWith('twine.toml') ? manifestSource : ''
+			String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).endsWith('.twine/graph.json')
+					? JSON.stringify(graphSource, null, 2)
+					: ''
 		);
 		readJsonMock.mockImplementation(async path =>
 			String(path).endsWith('.twine/graph.json') ? graphSource : {}
@@ -2419,6 +2715,11 @@ describe('project-folder native bridge', () => {
 			const root = String(path) === '/native/project.twine.rs';
 			const graph = String(path).endsWith('.twine/graph.json');
 			const manifest = String(path).endsWith('twine.toml');
+			const source = graph
+				? JSON.stringify(graphSource, null, 2)
+				: manifest
+					? manifestSource
+					: '';
 			const mtimeMs =
 				(graph && graphWritten) || (manifest && manifestWritten) ? 2 : 1;
 
@@ -2427,7 +2728,7 @@ describe('project-folder native bridge', () => {
 				isFile: () => !root,
 				mtime: new Date('2026-06-21T16:00:00.000Z'),
 				mtimeMs,
-				size: manifest ? Buffer.byteLength(manifestSource) : 0
+				size: Buffer.byteLength(source)
 			};
 		});
 		writeFileMock.mockImplementation(async (path, text) => {
@@ -2534,6 +2835,332 @@ describe('project-folder native bridge', () => {
 		).resolves.toEqual(
 			expect.objectContaining({changedPaths: [], conflicts: []})
 		);
+	});
+
+	it('rolls back every staged-write, claim, install, and staged-tamper failure in a three-file batch', async () => {
+		const rootPath = '/native/project.twine.rs';
+		const manifestPath = `${rootPath}/twine.toml`;
+		const targetPaths = [
+			`${rootPath}/passages/story/start.twee`,
+			`${rootPath}/scripts/story.js`,
+			`${rootPath}/styles/story.css`
+		];
+		const originalSources = ['old passage', 'old script', 'old style'];
+		const nextSources = ['new passage', 'new script', 'new style'];
+		const manifestSource = [
+			'schema_version = 2',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'script = "scripts/story.js"',
+			'start_passage = "passage-id"',
+			'stylesheet = "styles/story.css"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/start.twee"'
+		].join('\n');
+		const original = fakeStory(1);
+		const story = {
+			...original,
+			id: 'story-id',
+			name: 'Story',
+			passages: [
+				{
+					...original.passages[0],
+					id: 'passage-id',
+					name: 'Start',
+					story: 'story-id',
+					text: nextSources[0]
+				}
+			],
+			script: nextSources[1],
+			stylesheet: nextSources[2]
+		};
+		const entry = (
+			path: string,
+			kind: 'manifest' | 'passage' | 'script' | 'stylesheet',
+			source: string
+		) => ({
+			contentDigest: createHash('sha256').update(source).digest('hex'),
+			fingerprint: `1:${Buffer.byteLength(source)}`,
+			kind,
+			modifiedAt: '2026-06-21T16:00:00.001Z',
+			mtimeMs: 1,
+			path: path.slice(rootPath.length + 1),
+			sizeBytes: Buffer.byteLength(source)
+		});
+		const baselineFiles = [
+			entry(manifestPath, 'manifest', manifestSource),
+			entry(targetPaths[0], 'passage', originalSources[0]),
+			entry(targetPaths[1], 'script', originalSources[1]),
+			entry(targetPaths[2], 'stylesheet', originalSources[2])
+		];
+		const options = {
+			documentUpdates: [
+				{
+					passageId: 'passage-id',
+					storyId: 'story-id',
+					text: nextSources[0],
+					type: 'passageText' as const
+				},
+				{storyId: 'story-id', text: nextSources[1], type: 'script' as const},
+				{
+					storyId: 'story-id',
+					text: nextSources[2],
+					type: 'stylesheet' as const
+				}
+			],
+			hints: [
+				{
+					passageId: 'passage-id',
+					storyId: 'story-id',
+					type: 'passageText' as const
+				},
+				{storyId: 'story-id', type: 'script' as const},
+				{storyId: 'story-id', type: 'stylesheet' as const}
+			],
+			incrementalOnly: true
+		};
+		const failures = [
+			...['stage', 'claim', 'install', 'tamper'].flatMap(operation =>
+				targetPaths.map((_, index) => ({index, operation}))
+			),
+			...[0, 1, 2].map(index => ({index, operation: 'journal'})),
+			{index: 1, operation: 'tamper-then-claim'}
+		];
+
+		for (const failure of failures) {
+			stopProjectSession(rootPath);
+			const files = new Map<string, string>([
+				[manifestPath, manifestSource],
+				...targetPaths.map(
+					(path, index) => [path, originalSources[index]] as const
+				)
+			]);
+			const missing = () =>
+				Object.assign(new Error('missing'), {code: 'ENOENT'});
+
+			readFileMock.mockImplementation(async path => {
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				return source;
+			});
+			readJsonMock.mockImplementation(async path => {
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				return JSON.parse(source);
+			});
+			statMock.mockImplementation(async path => {
+				if (String(path) === rootPath) {
+					return {
+						isDirectory: () => true,
+						isFile: () => false,
+						mtime: new Date('2026-06-21T16:00:00.001Z'),
+						mtimeMs: 1,
+						size: 0
+					};
+				}
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				return {
+					isDirectory: () => false,
+					isFile: () => true,
+					mtime: new Date('2026-06-21T16:00:00.001Z'),
+					mtimeMs: 1,
+					size: Buffer.byteLength(source)
+				};
+			});
+			lstatMock.mockImplementation(async path => {
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				return {
+					isDirectory: () => false,
+					isFile: () => true,
+					isSymbolicLink: () => false,
+					mtime: new Date('2026-06-21T16:00:00.001Z'),
+					mtimeMs: 1,
+					size: Buffer.byteLength(source)
+				};
+			});
+			openFileMock.mockImplementation(async path => {
+				const source = files.get(String(path));
+
+				if (source === undefined) {
+					throw missing();
+				}
+				const bytes = Buffer.from(source);
+
+				return {
+					close: jest.fn(async () => undefined),
+					read: jest.fn(
+						async (
+							buffer: Buffer,
+							bufferOffset = 0,
+							length = buffer.length,
+							position = 0
+						) => {
+							const bytesRead = bytes.copy(
+								buffer,
+								bufferOffset,
+								position,
+								Math.min(bytes.length, position + length)
+							);
+
+							return {buffer, bytesRead};
+						}
+					),
+					stat: jest.fn(async () => ({
+						isFile: () => true,
+						mtimeMs: 1,
+						size: bytes.length
+					})),
+					sync: jest.fn(async () => undefined)
+				};
+			});
+			writeFileMock.mockImplementation(async (path, source) => {
+				const pathText = String(path);
+				const stagedIndex = targetPaths.findIndex(target =>
+					pathText.startsWith(`${target}.`)
+				);
+				const journalPhase =
+					pathText.includes('/.twine/project-file-cas.json.') &&
+					pathText.endsWith('.tmp')
+						? (JSON.parse(String(source)).phase as string | undefined)
+						: undefined;
+
+				if (
+					failure.operation === 'stage' &&
+					stagedIndex === failure.index &&
+					pathText.endsWith('.tmp')
+				) {
+					throw new Error(`injected stage ${failure.index}`);
+				}
+				if (
+					failure.operation === 'journal' &&
+					['staging', 'prepared', 'committed'][failure.index] === journalPhase
+				) {
+					throw new Error(`injected journal ${failure.index}`);
+				}
+				files.set(pathText, String(source));
+			});
+			renameFileMock.mockImplementation(async (source, target) => {
+				const sourceText = String(source);
+				const targetText = String(target);
+				const claimIndex = targetPaths.indexOf(sourceText);
+
+				if (
+					(failure.operation === 'claim' ||
+						failure.operation === 'tamper-then-claim') &&
+					claimIndex === failure.index
+				) {
+					throw new Error(`injected claim ${failure.index}`);
+				}
+				const content = files.get(sourceText);
+
+				if (content === undefined) {
+					throw missing();
+				}
+				files.set(targetText, content);
+				files.delete(sourceText);
+			});
+			linkFileMock.mockImplementation(async (source, target) => {
+				const sourceText = String(source);
+				const targetText = String(target);
+				const installIndex = targetPaths.indexOf(targetText);
+				const stagedIndex = targetPaths.findIndex(path =>
+					sourceText.startsWith(`${path}.`)
+				);
+
+				if (
+					failure.operation === 'install' &&
+					installIndex === failure.index &&
+					/\.tmp$/.test(sourceText)
+				) {
+					throw new Error(`injected install ${failure.index}`);
+				}
+				if (files.has(targetText)) {
+					throw Object.assign(new Error('exists'), {code: 'EEXIST'});
+				}
+				const content = files.get(sourceText);
+
+				if (content === undefined) {
+					throw missing();
+				}
+				files.set(targetText, content);
+				if (
+					(failure.operation === 'tamper' ||
+						failure.operation === 'tamper-then-claim') &&
+					stagedIndex ===
+						(failure.operation === 'tamper' ? failure.index : 0) &&
+					targetText.endsWith('.link-probe')
+				) {
+					files.set(
+						sourceText,
+						`tampered stage ${
+							failure.operation === 'tamper' ? failure.index : 0
+						}`
+					);
+				}
+			});
+			removeMock.mockImplementation(async path => {
+				files.delete(String(path));
+			});
+			nativeProjectFileManifestMock.mockReturnValue(baselineFiles);
+			listNativeProjectAssetsMock.mockReturnValue([]);
+
+			await startProjectSession(rootPath, undefined, ['story-id']);
+			await expect(saveProjectFolder(rootPath, story, options)).rejects.toThrow(
+				failure.operation.startsWith('tamper')
+					? 'automatic recovery is incomplete'
+					: `injected ${failure.operation} ${failure.index}`
+			);
+
+			expect(targetPaths.map(path => files.get(path))).toEqual(originalSources);
+			const recoveryArtifacts = [...files.keys()].filter(path =>
+				/\.(?:baseline|tmp|rollback|link-probe)$/.test(path)
+			);
+
+			if (failure.operation.startsWith('tamper')) {
+				expect(recoveryArtifacts).not.toEqual([]);
+				expect(
+					recoveryArtifacts.some(
+						path =>
+							files.get(path) ===
+							`tampered stage ${
+								failure.operation === 'tamper' ? failure.index : 0
+							}`
+					)
+				).toBe(true);
+				expect(files.has(`${rootPath}/.twine/project-file-cas.json`)).toBe(
+					true
+				);
+			} else {
+				expect(recoveryArtifacts).toEqual([]);
+				expect(files.has(`${rootPath}/.twine/project-file-cas.json`)).toBe(
+					false
+				);
+			}
+			await expect(
+				projectSessionSnapshot(rootPath, ['story-id'])
+			).resolves.toEqual(
+				expect.objectContaining({changedPaths: [], conflicts: []})
+			);
+		}
 	});
 
 	it('refuses an incremental layout save when graph.json changed externally', async () => {

@@ -5999,12 +5999,31 @@ async function atomicWriteText(
 	}
 }
 
-interface ProjectFileCasJournal {
+interface SingleProjectFileCasJournal {
 	claimPath: string;
 	expected: NativeProjectFileEntry;
 	targetPath: string;
 	version: 1;
 }
+
+interface ProjectFileBatchJournalEntry {
+	claimPath: string;
+	expected: NativeProjectFileEntry;
+	nextContentDigest: string;
+	nextSizeBytes: number;
+	rollbackPath: string;
+	stagedPath: string;
+	targetPath: string;
+}
+
+interface ProjectFileBatchJournal {
+	entries: ProjectFileBatchJournalEntry[];
+	phase: 'staging' | 'prepared' | 'committed';
+	version: 2;
+}
+
+type ProjectFileCasJournal =
+	SingleProjectFileCasJournal | ProjectFileBatchJournal;
 
 function projectFileCasJournalPath(rootPath: string) {
 	return join(rootPath, '.twine', 'project-file-cas.json');
@@ -6152,13 +6171,13 @@ async function compareAndSwapProjectFile(
 	}
 }
 
-function validProjectFileCasJournal(
+function validSingleProjectFileCasJournal(
 	value: unknown
-): value is ProjectFileCasJournal {
+): value is SingleProjectFileCasJournal {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		return false;
 	}
-	const journal = value as Partial<ProjectFileCasJournal>;
+	const journal = value as Partial<SingleProjectFileCasJournal>;
 	const sourceKinds: NativeProjectFileKind[] = [
 		'manifest',
 		'metadata',
@@ -6189,6 +6208,104 @@ function validProjectFileCasJournal(
 	);
 }
 
+function validProjectFileBatchJournal(
+	value: unknown
+): value is ProjectFileBatchJournal {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return false;
+	}
+	const journal = value as Partial<ProjectFileBatchJournal>;
+	const entries = journal.entries;
+	const sourceKinds: NativeProjectFileKind[] = [
+		'manifest',
+		'metadata',
+		'graph',
+		'passage',
+		'script',
+		'stylesheet'
+	];
+
+	if (
+		journal.version !== 2 ||
+		!['staging', 'prepared', 'committed'].includes(journal.phase ?? '') ||
+		!Array.isArray(entries) ||
+		entries.length === 0 ||
+		entries.length > 100_000
+	) {
+		return false;
+	}
+
+	const paths = new Set<string>();
+
+	for (const entry of entries) {
+		if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+			return false;
+		}
+		const targetPath =
+			typeof entry.targetPath === 'string' ? entry.targetPath : '';
+		const claimSuffix =
+			typeof entry.claimPath === 'string'
+				? entry.claimPath.slice(targetPath.length)
+				: '';
+		const stagedSuffix =
+			typeof entry.stagedPath === 'string'
+				? entry.stagedPath.slice(targetPath.length)
+				: '';
+
+		if (
+			!entry.expected ||
+			entry.expected.path !== targetPath ||
+			!sourceKinds.includes(entry.expected.kind as NativeProjectFileKind) ||
+			typeof entry.expected.contentDigest !== 'string' ||
+			!/^[0-9a-f]{64}$/.test(entry.expected.contentDigest) ||
+			!Number.isFinite(entry.expected.mtimeMs) ||
+			!Number.isSafeInteger(entry.expected.sizeBytes) ||
+			entry.expected.sizeBytes < 0 ||
+			typeof entry.nextContentDigest !== 'string' ||
+			!/^[0-9a-f]{64}$/.test(entry.nextContentDigest) ||
+			!Number.isSafeInteger(entry.nextSizeBytes) ||
+			entry.nextSizeBytes < 0 ||
+			typeof entry.claimPath !== 'string' ||
+			typeof entry.stagedPath !== 'string' ||
+			typeof entry.rollbackPath !== 'string' ||
+			entry.rollbackPath !== `${entry.stagedPath}.rollback` ||
+			!entry.claimPath.startsWith(`${targetPath}.`) ||
+			!entry.stagedPath.startsWith(`${targetPath}.`) ||
+			!/^\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.baseline$/i.test(
+				claimSuffix
+			) ||
+			!/^\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/i.test(
+				stagedSuffix
+			)
+		) {
+			return false;
+		}
+
+		for (const path of [
+			targetPath,
+			entry.claimPath,
+			entry.stagedPath,
+			entry.rollbackPath
+		]) {
+			if (paths.has(path)) {
+				return false;
+			}
+			paths.add(path);
+		}
+	}
+
+	return true;
+}
+
+function validProjectFileCasJournal(
+	value: unknown
+): value is ProjectFileCasJournal {
+	return (
+		validSingleProjectFileCasJournal(value) ||
+		validProjectFileBatchJournal(value)
+	);
+}
+
 async function optionalLstat(path: string) {
 	try {
 		return await lstat(path);
@@ -6200,33 +6317,413 @@ async function optionalLstat(path: string) {
 	}
 }
 
-async function recoverInterruptedProjectFileClaims(rootPath: string) {
-	const journalPath = projectFileCasJournalPath(rootPath);
-	const journalStats = await optionalLstat(journalPath);
-	let value: unknown;
+async function verifiedFileContentHandle(
+	path: string,
+	contentDigest: string,
+	sizeBytes: number
+) {
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
 
-	if (!journalStats) {
-		return;
+	try {
+		handle = await openFile(
+			path,
+			fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
+		);
+		const before = await handle.stat();
+
+		if (!before.isFile() || before.size !== sizeBytes) {
+			throw new Error('metadata changed');
+		}
+
+		const hasher = createHash('sha256');
+		const buffer = Buffer.allocUnsafe(64 * 1024);
+		let offset = 0;
+
+		for (;;) {
+			const {bytesRead} = await handle.read(buffer, 0, buffer.length, offset);
+
+			if (bytesRead === 0) {
+				break;
+			}
+			hasher.update(buffer.subarray(0, bytesRead));
+			offset += bytesRead;
+		}
+
+		const after = await handle.stat();
+		const identityChanged =
+			(typeof before.dev === 'number' &&
+				typeof after.dev === 'number' &&
+				before.dev !== after.dev) ||
+			(typeof before.ino === 'number' &&
+				typeof after.ino === 'number' &&
+				before.ino !== after.ino);
+
+		if (
+			after.size !== before.size ||
+			after.mtimeMs !== before.mtimeMs ||
+			identityChanged ||
+			offset !== before.size ||
+			hasher.digest('hex') !== contentDigest
+		) {
+			throw new Error('content changed');
+		}
+
+		return handle;
+	} catch (error) {
+		await handle?.close().catch(() => undefined);
+		throw error;
 	}
-	if (!journalStats.isFile() || journalStats.isSymbolicLink()) {
+}
+
+async function projectFileContentMatches(
+	path: string,
+	contentDigest: string,
+	sizeBytes: number
+) {
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		handle = await verifiedFileContentHandle(path, contentDigest, sizeBytes);
+		return true;
+	} catch {
+		return false;
+	} finally {
+		await handle?.close().catch(() => undefined);
+	}
+}
+
+function absoluteProjectFileBatchEntry(
+	rootPath: string,
+	entry: ProjectFileBatchJournalEntry
+) {
+	const targetPath = safeProjectFilePath(rootPath, entry.targetPath);
+	const claimPath = safeProjectFilePath(rootPath, entry.claimPath);
+	const stagedPath = safeProjectFilePath(rootPath, entry.stagedPath);
+	const rollbackPath = safeProjectFilePath(rootPath, entry.rollbackPath);
+
+	if (!targetPath || !claimPath || !stagedPath || !rollbackPath) {
 		throw new Error(
-			`Project-file recovery journal is not a regular file: ${journalPath}.`
+			`Unsafe project-file batch recovery entry for ${entry.targetPath}.`
 		);
 	}
 
-	try {
-		value = await readJson(journalPath);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-			return;
+	return {claimPath, rollbackPath, stagedPath, targetPath};
+}
+
+async function removeOwnedProjectRecoveryFile(
+	path: string,
+	expected: {contentDigest: string; sizeBytes: number} | undefined = undefined
+) {
+	const stats = await optionalLstat(path);
+
+	if (!stats) {
+		return;
+	}
+	if (!stats.isFile() || stats.isSymbolicLink()) {
+		throw new Error(
+			`Project-file recovery path is not a regular file: ${path}.`
+		);
+	}
+	if (
+		expected &&
+		!(await projectFileContentMatches(
+			path,
+			expected.contentDigest,
+			expected.sizeBytes
+		))
+	) {
+		throw new Error(
+			`Project-file recovery path contains unverified bytes: ${path}.`
+		);
+	}
+	await remove(path);
+}
+
+async function cleanupProjectFileBatchArtifacts(
+	rootPath: string,
+	journal: ProjectFileBatchJournal
+) {
+	for (const entry of journal.entries) {
+		const {claimPath, rollbackPath, stagedPath} = absoluteProjectFileBatchEntry(
+			rootPath,
+			entry
+		);
+		const expectedClaim = {
+			contentDigest: entry.expected.contentDigest!,
+			sizeBytes: entry.expected.sizeBytes
+		};
+		const expectedNext = {
+			contentDigest: entry.nextContentDigest,
+			sizeBytes: entry.nextSizeBytes
+		};
+
+		await removeOwnedProjectRecoveryFile(claimPath, expectedClaim);
+		await removeOwnedProjectRecoveryFile(stagedPath, expectedNext);
+		await removeOwnedProjectRecoveryFile(
+			`${stagedPath}.link-probe`,
+			expectedNext
+		);
+		await removeOwnedProjectRecoveryFile(rollbackPath, expectedNext);
+	}
+}
+
+async function syncProjectFileBatchTargetDirectories(
+	rootPath: string,
+	journal: ProjectFileBatchJournal
+) {
+	const directories = new Set(
+		journal.entries.map(entry =>
+			dirname(absoluteProjectFileBatchEntry(rootPath, entry).targetPath)
+		)
+	);
+
+	for (const directory of directories) {
+		await syncDirectoryBestEffort(directory);
+	}
+}
+
+async function recoverStagingProjectFileBatch(
+	rootPath: string,
+	journal: ProjectFileBatchJournal
+) {
+	for (const entry of journal.entries) {
+		const {claimPath, rollbackPath} = absoluteProjectFileBatchEntry(
+			rootPath,
+			entry
+		);
+		const [claimStats, rollbackStats] = await Promise.all([
+			optionalLstat(claimPath),
+			optionalLstat(rollbackPath)
+		]);
+
+		if (claimStats || rollbackStats) {
+			throw new Error(
+				`Project-file batch recovery found committed state while staging ${entry.targetPath}.`
+			);
 		}
-		throw error;
 	}
 
-	if (!validProjectFileCasJournal(value)) {
-		throw new Error(`Invalid project-file recovery journal at ${journalPath}.`);
+	await cleanupProjectFileBatchArtifacts(rootPath, journal);
+	await clearProjectFileCasJournal(rootPath);
+}
+
+async function recoverPreparedProjectFileBatch(
+	rootPath: string,
+	journal: ProjectFileBatchJournal,
+	trustClaims = false
+) {
+	const unexpectedRollbackPaths: string[] = [];
+
+	for (const entry of journal.entries) {
+		const {claimPath, rollbackPath, targetPath} = absoluteProjectFileBatchEntry(
+			rootPath,
+			entry
+		);
+		const [initialTargetStats, claimStats, initialRollbackStats] =
+			await Promise.all([
+				optionalLstat(targetPath),
+				optionalLstat(claimPath),
+				optionalLstat(rollbackPath)
+			]);
+		let targetStats = initialTargetStats;
+		let rollbackStats = initialRollbackStats;
+		const targetAlreadyRestored =
+			!!targetStats &&
+			(await projectFileContentMatches(
+				targetPath,
+				entry.expected.contentDigest!,
+				entry.expected.sizeBytes
+			));
+
+		if (targetAlreadyRestored) {
+			continue;
+		}
+		if (claimStats && (!claimStats.isFile() || claimStats.isSymbolicLink())) {
+			throw new Error(
+				`Project-file batch recovery claim is not a regular file: ${claimPath}.`
+			);
+		}
+		if (!claimStats) {
+			throw new Error(
+				`Project-file batch recovery cannot restore ${entry.targetPath}; its baseline claim is missing.`
+			);
+		}
+
+		let verifiedClaim: Awaited<ReturnType<typeof openFile>> | undefined;
+		let claimMatchesExpected = true;
+
+		try {
+			verifiedClaim = await verifiedProjectFileHandle(
+				claimPath,
+				entry.expected
+			);
+		} catch {
+			claimMatchesExpected = false;
+			if (!trustClaims) {
+				throw new Error(
+					`Project-file batch recovery preserved unverified baseline bytes at ${claimPath}; refusing automatic rollback.`
+				);
+			}
+		} finally {
+			await verifiedClaim?.close().catch(() => undefined);
+		}
+
+		let unexpectedRollbackBytes = false;
+
+		if (targetStats) {
+			if (rollbackStats) {
+				throw new Error(
+					`Project-file batch recovery found conflicting bytes at ${targetPath}; the prior revision remains at ${claimPath}.`
+				);
+			}
+
+			await renameFile(targetPath, rollbackPath);
+			rollbackStats = await optionalLstat(rollbackPath);
+			targetStats = await optionalLstat(targetPath);
+
+			if (
+				targetStats ||
+				!rollbackStats ||
+				!rollbackStats.isFile() ||
+				rollbackStats.isSymbolicLink()
+			) {
+				if (!targetStats) {
+					await linkFile(rollbackPath, targetPath).catch(() => undefined);
+				}
+				throw new Error(
+					`Project-file batch recovery could not safely claim the staged bytes at ${targetPath}.`
+				);
+			}
+			unexpectedRollbackBytes = !(await projectFileContentMatches(
+				rollbackPath,
+				entry.nextContentDigest,
+				entry.nextSizeBytes
+			));
+		} else if (rollbackStats) {
+			if (!rollbackStats.isFile() || rollbackStats.isSymbolicLink()) {
+				throw new Error(
+					`Project-file batch recovery found conflicting rollback bytes at ${rollbackPath}.`
+				);
+			}
+			unexpectedRollbackBytes = !(await projectFileContentMatches(
+				rollbackPath,
+				entry.nextContentDigest,
+				entry.nextSizeBytes
+			));
+		}
+
+		try {
+			await linkFile(claimPath, targetPath);
+		} catch (error) {
+			throw new Error(
+				`Project-file batch recovery could not restore ${entry.targetPath}: ${
+					(error as Error).message
+				}`
+			);
+		}
+
+		if (claimMatchesExpected) {
+			let restoredHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+			try {
+				restoredHandle = await verifiedProjectFileHandle(
+					targetPath,
+					entry.expected
+				);
+			} catch {
+				throw new Error(
+					`Project-file batch recovery restored unverified bytes to ${targetPath}; refusing cleanup.`
+				);
+			} finally {
+				await restoredHandle?.close().catch(() => undefined);
+			}
+		}
+		if (unexpectedRollbackBytes) {
+			unexpectedRollbackPaths.push(rollbackPath);
+		}
 	}
 
+	await syncProjectFileBatchTargetDirectories(rootPath, journal);
+	if (unexpectedRollbackPaths.length > 0) {
+		throw new Error(
+			`Project-file batch recovery restored the prior revision, but preserved unexpected installed bytes at ${unexpectedRollbackPaths.join(
+				', '
+			)}.`
+		);
+	}
+	await cleanupProjectFileBatchArtifacts(rootPath, journal);
+	await clearProjectFileCasJournal(rootPath);
+}
+
+async function recoverCommittedProjectFileBatch(
+	rootPath: string,
+	journal: ProjectFileBatchJournal
+) {
+	for (const entry of journal.entries) {
+		const {rollbackPath, stagedPath, targetPath} =
+			absoluteProjectFileBatchEntry(rootPath, entry);
+		const [rollbackStats, stagedStats, targetStats] = await Promise.all([
+			optionalLstat(rollbackPath),
+			optionalLstat(stagedPath),
+			optionalLstat(targetPath)
+		]);
+
+		if (rollbackStats) {
+			throw new Error(
+				`Committed project-file recovery found an unexpected rollback file at ${rollbackPath}.`
+			);
+		}
+		if (
+			targetStats &&
+			(await projectFileContentMatches(
+				targetPath,
+				entry.nextContentDigest,
+				entry.nextSizeBytes
+			))
+		) {
+			continue;
+		}
+		if (
+			targetStats ||
+			!stagedStats ||
+			!stagedStats.isFile() ||
+			stagedStats.isSymbolicLink() ||
+			!(await projectFileContentMatches(
+				stagedPath,
+				entry.nextContentDigest,
+				entry.nextSizeBytes
+			))
+		) {
+			throw new Error(
+				`Committed project-file recovery cannot finish ${entry.targetPath}; expected staged bytes are unavailable.`
+			);
+		}
+
+		await linkFile(stagedPath, targetPath);
+
+		if (
+			!(await projectFileContentMatches(
+				targetPath,
+				entry.nextContentDigest,
+				entry.nextSizeBytes
+			))
+		) {
+			throw new Error(
+				`Committed project-file recovery installed unverified bytes at ${targetPath}.`
+			);
+		}
+	}
+
+	await syncProjectFileBatchTargetDirectories(rootPath, journal);
+	await cleanupProjectFileBatchArtifacts(rootPath, journal);
+	await clearProjectFileCasJournal(rootPath);
+}
+
+async function recoverSingleProjectFileClaim(
+	rootPath: string,
+	value: SingleProjectFileCasJournal
+) {
+	const journalPath = projectFileCasJournalPath(rootPath);
 	const targetPath = safeProjectFilePath(rootPath, value.targetPath);
 	const claimPath = safeProjectFilePath(rootPath, value.claimPath);
 
@@ -6294,6 +6791,198 @@ async function recoverInterruptedProjectFileClaims(rootPath: string) {
 
 	await remove(claimPath);
 	await clearProjectFileCasJournal(rootPath);
+}
+
+async function recoverInterruptedProjectFileClaims(rootPath: string) {
+	const journalPath = projectFileCasJournalPath(rootPath);
+	const journalStats = await optionalLstat(journalPath);
+	let value: unknown;
+
+	if (!journalStats) {
+		return;
+	}
+	if (!journalStats.isFile() || journalStats.isSymbolicLink()) {
+		throw new Error(
+			`Project-file recovery journal is not a regular file: ${journalPath}.`
+		);
+	}
+
+	try {
+		value = await readJson(journalPath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return;
+		}
+		throw error;
+	}
+
+	if (!validProjectFileCasJournal(value)) {
+		throw new Error(`Invalid project-file recovery journal at ${journalPath}.`);
+	}
+	if (value.version === 1) {
+		await recoverSingleProjectFileClaim(rootPath, value);
+		return;
+	}
+
+	if (value.phase === 'staging') {
+		await recoverStagingProjectFileBatch(rootPath, value);
+	} else if (value.phase === 'prepared') {
+		await recoverPreparedProjectFileBatch(rootPath, value);
+	} else {
+		await recoverCommittedProjectFileBatch(rootPath, value);
+	}
+}
+
+async function compareAndSwapProjectFiles(
+	rootPath: string,
+	files: Array<{
+		absolutePath: string;
+		expected: NativeProjectFileEntry;
+		projectPath: string;
+		text: string;
+	}>
+) {
+	const journal: ProjectFileBatchJournal = {
+		entries: files.map(file => {
+			const claimId = randomUUID();
+			const stagedId = randomUUID();
+			const stagedPath = `${file.projectPath}.${stagedId}.tmp`;
+
+			return {
+				claimPath: `${file.projectPath}.${claimId}.baseline`,
+				expected: file.expected,
+				nextContentDigest: createHash('sha256').update(file.text).digest('hex'),
+				nextSizeBytes: Buffer.byteLength(file.text),
+				rollbackPath: `${stagedPath}.rollback`,
+				stagedPath,
+				targetPath: file.projectPath
+			};
+		}),
+		phase: 'staging',
+		version: 2
+	};
+	let phase: ProjectFileBatchJournal['phase'] = 'staging';
+
+	await writeProjectFileCasJournal(rootPath, journal);
+
+	try {
+		for (const [index, file] of files.entries()) {
+			const entry = journal.entries[index];
+			const {stagedPath} = absoluteProjectFileBatchEntry(rootPath, entry);
+			const probePath = `${stagedPath}.link-probe`;
+			let stagedHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+			await mkdirp(dirname(file.absolutePath));
+			await writeFile(stagedPath, file.text, 'utf8');
+			try {
+				stagedHandle = await openFile(stagedPath, 'r');
+				await stagedHandle.sync();
+			} finally {
+				await stagedHandle?.close().catch(() => undefined);
+			}
+			try {
+				await linkFile(stagedPath, probePath);
+				await remove(probePath);
+			} catch (error) {
+				await remove(probePath).catch(() => undefined);
+				throw Object.assign(
+					new Error(
+						'Conflict-safe incremental saves are unavailable on this filesystem because it does not support same-directory hard links.'
+					),
+					{
+						cause: error,
+						code: 'PROJECT_FILE_CAS_UNAVAILABLE'
+					}
+				);
+			}
+		}
+
+		journal.phase = 'prepared';
+		await writeProjectFileCasJournal(rootPath, journal);
+		phase = 'prepared';
+
+		for (const entry of journal.entries) {
+			const {claimPath, targetPath} = absoluteProjectFileBatchEntry(
+				rootPath,
+				entry
+			);
+			let verifiedHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+			await renameFile(targetPath, claimPath);
+			await syncDirectoryBestEffort(dirname(targetPath));
+			try {
+				verifiedHandle = await verifiedProjectFileHandle(
+					claimPath,
+					entry.expected
+				);
+			} finally {
+				await verifiedHandle?.close().catch(() => undefined);
+			}
+		}
+
+		for (const entry of journal.entries) {
+			const {stagedPath, targetPath} = absoluteProjectFileBatchEntry(
+				rootPath,
+				entry
+			);
+			let stagedHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+			try {
+				stagedHandle = await verifiedFileContentHandle(
+					stagedPath,
+					entry.nextContentDigest,
+					entry.nextSizeBytes
+				);
+				await linkFile(stagedPath, targetPath);
+			} finally {
+				await stagedHandle?.close().catch(() => undefined);
+			}
+		}
+		for (const entry of journal.entries) {
+			const {targetPath} = absoluteProjectFileBatchEntry(rootPath, entry);
+			let installedHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+			try {
+				installedHandle = await verifiedFileContentHandle(
+					targetPath,
+					entry.nextContentDigest,
+					entry.nextSizeBytes
+				);
+			} finally {
+				await installedHandle?.close().catch(() => undefined);
+			}
+		}
+		await syncProjectFileBatchTargetDirectories(rootPath, journal);
+
+		journal.phase = 'committed';
+		await writeProjectFileCasJournal(rootPath, journal);
+		phase = 'committed';
+	} catch (error) {
+		if (phase !== 'committed') {
+			try {
+				if (phase === 'staging') {
+					await recoverStagingProjectFileBatch(rootPath, journal);
+				} else {
+					await recoverPreparedProjectFileBatch(rootPath, journal, true);
+				}
+			} catch (recoveryError) {
+				throw new Error(
+					`Project-file batch save failed and automatic recovery is incomplete: ${
+						(recoveryError as Error).message
+					}. Original error: ${(error as Error).message}`
+				);
+			}
+		}
+		throw error;
+	}
+
+	try {
+		await cleanupProjectFileBatchArtifacts(rootPath, journal);
+		await clearProjectFileCasJournal(rootPath);
+	} catch {
+		// The committed journal makes cleanup restart-safe. The next open/save
+		// will verify the installed revision and finish removing batch artifacts.
+	}
 }
 
 async function projectFileEntryForPath(
@@ -6650,19 +7339,40 @@ async function writeProjectFolderIncremental(
 
 	const writeStarted = performance.now();
 
-	for (const entry of concreteTouched) {
-		const baselineIndex = baselineFileIndex.get(entry.projectPath);
-		const baselineFile =
-			baselineIndex === undefined
-				? undefined
-				: session.baseline.files[baselineIndex];
+	if (concreteTouched.length > 1) {
+		await compareAndSwapProjectFiles(
+			rootPath,
+			concreteTouched.map(entry => {
+				const baselineIndex = baselineFileIndex.get(entry.projectPath);
+				const expected =
+					baselineIndex === undefined
+						? undefined
+						: session.baseline!.files[baselineIndex];
 
-		await atomicWriteText(
-			entry.absolutePath,
-			entry.text,
-			baselineFile,
-			rootPath
+				if (!expected?.contentDigest) {
+					throw new Error(
+						`${entry.projectPath} has no trusted content baseline; refusing to overwrite it.`
+					);
+				}
+
+				return {...entry, expected};
+			})
 		);
+	} else {
+		for (const entry of concreteTouched) {
+			const baselineIndex = baselineFileIndex.get(entry.projectPath);
+			const baselineFile =
+				baselineIndex === undefined
+					? undefined
+					: session.baseline.files[baselineIndex];
+
+			await atomicWriteText(
+				entry.absolutePath,
+				entry.text,
+				baselineFile,
+				rootPath
+			);
+		}
 	}
 	timings.writeTouchedFilesUs = Math.round(
 		(performance.now() - writeStarted) * 1000
