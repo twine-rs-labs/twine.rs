@@ -375,6 +375,8 @@ struct CoreAssetSnippet {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeProjectFileEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_digest: Option<String>,
     fingerprint: String,
     kind: String,
     modified_at: String,
@@ -3163,11 +3165,11 @@ fn scan_project_files(
                     return None;
                 }
 
-                let path = slash_path(path.strip_prefix(root).ok()?);
+                let project_path = slash_path(path.strip_prefix(root).ok()?);
 
-                Some(native_project_file_entry(path, kind, &stats))
+                Some(native_project_file_entry(project_path, kind, path, &stats))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
 
         files.append(&mut entries);
         return Ok(());
@@ -3177,8 +3179,9 @@ fn scan_project_files(
         files.push(native_project_file_entry(
             project_path.replace('\\', "/"),
             kind,
+            &absolute,
             &stats,
-        ));
+        )?);
     }
 
     Ok(())
@@ -3187,25 +3190,64 @@ fn scan_project_files(
 fn native_project_file_entry(
     project_path: String,
     kind: &str,
+    absolute_path: &Path,
     stats: &fs::Metadata,
-) -> NativeProjectFileEntry {
-    let mtime = stats.modified().unwrap_or(UNIX_EPOCH);
+) -> Result<NativeProjectFileEntry, io::Error> {
+    let (entry_stats, content_digest) = if kind == "asset" {
+        (stats.clone(), None)
+    } else {
+        let (stats, digest) = project_source_content_digest(absolute_path)?;
+
+        (stats, Some(digest))
+    };
+    let mtime = entry_stats.modified().unwrap_or(UNIX_EPOCH);
     let mtime_ms = system_time_to_ms(mtime);
 
-    NativeProjectFileEntry {
-        fingerprint: format!("{}:{}", mtime_ms.trunc() as u64, stats.len()),
+    Ok(NativeProjectFileEntry {
+        content_digest,
+        fingerprint: format!("{}:{}", mtime_ms.trunc() as u64, entry_stats.len()),
         kind: kind.to_owned(),
         modified_at: system_time_to_iso(mtime),
         mtime_ms,
         path: project_path,
-        size_bytes: stats.len(),
+        size_bytes: entry_stats.len(),
+    })
+}
+
+fn project_source_content_digest(path: &Path) -> Result<(fs::Metadata, String), io::Error> {
+    let mut file = File::open(path)?;
+    let before = file.metadata()?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut read_bytes = 0_u64;
+
+    loop {
+        let count = file.read(&mut buffer)?;
+
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+        read_bytes += count as u64;
     }
+
+    let after = file.metadata()?;
+
+    if read_bytes != before.len() || file_metadata_changed(&before, &after) {
+        return Err(io::Error::other(format!(
+            "{} changed while its content digest was captured",
+            path.display()
+        )));
+    }
+
+    Ok((before, format!("{:x}", hasher.finalize())))
 }
 
 fn native_project_file_entry_from_loaded(file: LoadedProjectFile) -> NativeProjectFileEntry {
     let mtime_ms = system_time_to_ms(file.modified_at);
 
     NativeProjectFileEntry {
+        content_digest: Some(file.content_digest),
         fingerprint: format!("{}:{}", mtime_ms.trunc() as u64, file.size_bytes),
         kind: file.kind.to_owned(),
         modified_at: system_time_to_iso(file.modified_at),
@@ -3221,6 +3263,7 @@ fn asset_project_file_entry(asset: &CoreAssetInventoryEntry) -> Option<NativePro
     let mtime_ms = parse_iso_to_ms(modified_at).unwrap_or(0.0);
 
     Some(NativeProjectFileEntry {
+        content_digest: None,
         fingerprint: format!("{}:{size}", mtime_ms.trunc() as u64),
         kind: "asset".into(),
         modified_at: modified_at.clone(),
@@ -3255,7 +3298,7 @@ fn project_session_conflicts(
                 path: (*path).clone(),
                 previous: None,
             }),
-            Some(previous_file) if previous_file.fingerprint != current_file.fingerprint => {
+            Some(previous_file) if !project_file_entries_match(previous_file, current_file) => {
                 conflicts.push(NativeProjectSessionConflict {
                     change: "modified".into(),
                     current: Some((*current_file).clone()),
@@ -3286,6 +3329,17 @@ fn project_session_conflicts(
 
     conflicts.sort_by(|left, right| left.path.cmp(&right.path));
     conflicts
+}
+
+fn project_file_entries_match(
+    previous: &NativeProjectFileEntry,
+    current: &NativeProjectFileEntry,
+) -> bool {
+    previous.fingerprint == current.fingerprint
+        && previous
+            .content_digest
+            .as_ref()
+            .is_none_or(|digest| current.content_digest.as_ref() == Some(digest))
 }
 
 fn discover_project_import_assets(
@@ -6696,6 +6750,7 @@ mod tests {
     fn manifest_diff_reports_add_modify_remove() {
         let previous = vec![
             NativeProjectFileEntry {
+                content_digest: None,
                 fingerprint: "1:10".into(),
                 kind: "manifest".into(),
                 modified_at: "2026-01-01T00:00:00Z".into(),
@@ -6704,6 +6759,7 @@ mod tests {
                 size_bytes: 10,
             },
             NativeProjectFileEntry {
+                content_digest: None,
                 fingerprint: "1:20".into(),
                 kind: "asset".into(),
                 modified_at: "2026-01-01T00:00:00Z".into(),
@@ -6714,6 +6770,7 @@ mod tests {
         ];
         let current = vec![
             NativeProjectFileEntry {
+                content_digest: None,
                 fingerprint: "2:10".into(),
                 kind: "manifest".into(),
                 modified_at: "2026-01-01T00:00:01Z".into(),
@@ -6722,6 +6779,7 @@ mod tests {
                 size_bytes: 10,
             },
             NativeProjectFileEntry {
+                content_digest: None,
                 fingerprint: "1:30".into(),
                 kind: "asset".into(),
                 modified_at: "2026-01-01T00:00:00Z".into(),
@@ -6740,5 +6798,51 @@ mod tests {
             changes,
             BTreeSet::from(["added".into(), "modified".into(), "removed".into()])
         );
+    }
+
+    #[test]
+    fn manifest_diff_reports_same_size_rewrite_with_restored_mtime() {
+        let root = temp_path("manifest-content-digest-rewrite");
+        let passage = root.join("passages/story/start.twee");
+
+        fs::create_dir_all(passage.parent().expect("passage parent")).expect("passage directory");
+        fs::write(root.join("twine.toml"), "version = 1\n").expect("project manifest");
+        fs::write(&passage, b"Synthetic").expect("initial passage");
+        let initial_mtime = fs::metadata(&passage)
+            .and_then(|metadata| metadata.modified())
+            .expect("initial passage mtime");
+        let previous = project_file_manifest(&root, None).expect("initial manifest");
+
+        fs::write(&passage, b"SynthetiX").expect("rewritten passage");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&passage)
+            .expect("rewritten passage handle")
+            .set_times(fs::FileTimes::new().set_modified(initial_mtime))
+            .expect("restore passage mtime");
+
+        let current = project_file_manifest(&root, None).expect("current manifest");
+        let previous_passage = previous
+            .iter()
+            .find(|file| file.path == "passages/story/start.twee")
+            .expect("previous passage entry");
+        let current_passage = current
+            .iter()
+            .find(|file| file.path == "passages/story/start.twee")
+            .expect("current passage entry");
+
+        assert_eq!(previous_passage.fingerprint, current_passage.fingerprint);
+        assert_ne!(
+            previous_passage.content_digest,
+            current_passage.content_digest
+        );
+        assert!(
+            project_session_conflicts(&previous, &current)
+                .iter()
+                .any(|conflict| conflict.path == "passages/story/start.twee"
+                    && conflict.change == "modified")
+        );
+
+        fs::remove_dir_all(root).expect("project cleanup");
     }
 }

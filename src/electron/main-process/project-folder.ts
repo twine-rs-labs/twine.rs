@@ -1,5 +1,12 @@
 import {constants as fsConstants, FSWatcher, watch} from 'fs';
-import {lstat, open as openFile, opendir, realpath} from 'fs/promises';
+import {
+	link as linkFile,
+	lstat,
+	open as openFile,
+	opendir,
+	realpath,
+	rename as renameFile
+} from 'fs/promises';
 import {createHash, randomUUID} from 'crypto';
 import {tmpdir} from 'os';
 import {setImmediate} from 'timers';
@@ -253,6 +260,7 @@ export type NativeProjectSessionResolution =
 	'acceptDisk' | 'dismiss' | 'keepApp';
 
 export interface NativeProjectFileEntry {
+	contentDigest?: string;
 	fingerprint: string;
 	kind: NativeProjectFileKind;
 	modifiedAt: string;
@@ -3187,11 +3195,14 @@ function aggregatePassageMappingsMatchFiles(
 		currentFiles.map(file => [file.path, file] as const)
 	);
 
-	return [...sourcePaths].every(
-		path =>
-			expectedByPath.get(path)?.fingerprint ===
-			currentByPath.get(path)?.fingerprint
-	);
+	return [...sourcePaths].every(path => {
+		const expected = expectedByPath.get(path);
+		const current = currentByPath.get(path);
+
+		return (
+			!!expected && !!current && projectFileEntriesMatch(expected, current)
+		);
+	});
 }
 
 async function aggregatePassageMappingsAreCurrent(
@@ -3497,8 +3508,24 @@ async function scanProjectFiles(
 	if (!fileStats.isFile()) {
 		return;
 	}
+	let contentDigest: string | undefined;
+
+	if (kind !== 'asset') {
+		const content = await readFile(absolutePath);
+		const afterReadStats = await stat(absolutePath);
+
+		if (
+			!afterReadStats.isFile() ||
+			afterReadStats.size !== fileStats.size ||
+			afterReadStats.mtimeMs !== fileStats.mtimeMs
+		) {
+			throw new Error(`${projectPath} changed while it was being scanned.`);
+		}
+		contentDigest = createHash('sha256').update(content).digest('hex');
+	}
 
 	files.push({
+		contentDigest,
 		fingerprint: `${Math.trunc(fileStats.mtimeMs)}:${fileStats.size}`,
 		kind,
 		modifiedAt: fileStats.mtime.toISOString(),
@@ -3695,7 +3722,7 @@ function projectSessionConflicts(
 			continue;
 		}
 
-		if (previousFile.fingerprint !== currentFile.fingerprint) {
+		if (!projectFileEntriesMatch(previousFile, currentFile)) {
 			conflicts.push({
 				change: 'modified',
 				current: currentFile,
@@ -3722,6 +3749,17 @@ function projectSessionConflicts(
 	}
 
 	return conflicts.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function projectFileEntriesMatch(
+	previous: NativeProjectFileEntry,
+	current: NativeProjectFileEntry
+) {
+	return (
+		previous.fingerprint === current.fingerprint &&
+		(previous.contentDigest === undefined ||
+			previous.contentDigest === current.contentDigest)
+	);
 }
 
 function graphLayoutForPassage(
@@ -5760,6 +5798,7 @@ export async function saveProjectFolder(
 	if (typeof rootPath !== 'string' || !isAbsolute(rootPath)) {
 		throw new Error('Project saves require an absolute project folder path.');
 	}
+	await recoverInterruptedProjectFileClaims(rootPath);
 
 	const [rootStats, manifestStats] = await Promise.all([
 		stat(rootPath),
@@ -5872,17 +5911,389 @@ function incrementalSaveHints(
 	return hints as Array<Exclude<ProjectFolderSaveHint, {type: 'full'}>>;
 }
 
-async function atomicWriteText(path: string, text: string) {
+async function verifiedProjectFileHandle(
+	path: string,
+	expected: NativeProjectFileEntry
+) {
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		handle = await openFile(
+			path,
+			fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
+		);
+		const before = await handle.stat();
+
+		if (
+			!before.isFile() ||
+			before.size !== expected.sizeBytes ||
+			before.mtimeMs !== expected.mtimeMs
+		) {
+			throw new Error('metadata changed');
+		}
+
+		const hasher = createHash('sha256');
+		const buffer = Buffer.allocUnsafe(64 * 1024);
+		let offset = 0;
+
+		for (;;) {
+			const {bytesRead} = await handle.read(buffer, 0, buffer.length, offset);
+
+			if (bytesRead === 0) {
+				break;
+			}
+			hasher.update(buffer.subarray(0, bytesRead));
+			offset += bytesRead;
+		}
+
+		const after = await handle.stat();
+		const identityChanged =
+			(typeof before.dev === 'number' &&
+				typeof after.dev === 'number' &&
+				before.dev !== after.dev) ||
+			(typeof before.ino === 'number' &&
+				typeof after.ino === 'number' &&
+				before.ino !== after.ino);
+
+		if (
+			after.size !== before.size ||
+			after.mtimeMs !== before.mtimeMs ||
+			identityChanged ||
+			offset !== before.size ||
+			hasher.digest('hex') !== expected.contentDigest
+		) {
+			throw new Error('content changed');
+		}
+
+		return handle;
+	} catch {
+		await handle?.close().catch(() => undefined);
+		throw new Error(
+			`${expected.path} changed outside twine.rs; refusing to overwrite it.`
+		);
+	}
+}
+
+async function atomicWriteText(
+	path: string,
+	text: string,
+	expected?: NativeProjectFileEntry,
+	rootPath?: string
+) {
 	const tempPath = `${path}.${randomUUID()}.tmp`;
 
 	try {
 		await mkdirp(dirname(path));
 		await writeFile(tempPath, text, 'utf8');
+		if (expected?.contentDigest !== undefined) {
+			if (!rootPath) {
+				throw new Error('Conflict-safe saves require a project root.');
+			}
+			await compareAndSwapProjectFile(rootPath, path, tempPath, expected);
+			return;
+		}
 		await move(tempPath, path, {overwrite: true});
 	} catch (error) {
 		await remove(tempPath).catch(() => undefined);
 		throw error;
 	}
+}
+
+interface ProjectFileCasJournal {
+	claimPath: string;
+	expected: NativeProjectFileEntry;
+	targetPath: string;
+	version: 1;
+}
+
+function projectFileCasJournalPath(rootPath: string) {
+	return join(rootPath, '.twine', 'project-file-cas.json');
+}
+
+async function syncDirectoryBestEffort(path: string) {
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		handle = await openFile(path, fsConstants.O_RDONLY);
+		await handle.sync();
+	} catch {
+		// Directory fsync is unavailable on some supported platforms.
+	} finally {
+		await handle?.close().catch(() => undefined);
+	}
+}
+
+async function writeProjectFileCasJournal(
+	rootPath: string,
+	journal: ProjectFileCasJournal
+) {
+	const path = projectFileCasJournalPath(rootPath);
+	const tempPath = `${path}.${randomUUID()}.tmp`;
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		await mkdirp(dirname(path));
+		await writeFile(tempPath, JSON.stringify(journal), 'utf8');
+		handle = await openFile(tempPath, 'r');
+		await handle.sync();
+		await handle.close();
+		handle = undefined;
+		await renameFile(tempPath, path);
+		await syncDirectoryBestEffort(dirname(path));
+	} catch (error) {
+		await handle?.close().catch(() => undefined);
+		await remove(tempPath).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function clearProjectFileCasJournal(rootPath: string) {
+	const path = projectFileCasJournalPath(rootPath);
+
+	await remove(path);
+	await syncDirectoryBestEffort(dirname(path));
+}
+
+async function compareAndSwapProjectFile(
+	rootPath: string,
+	path: string,
+	tempPath: string,
+	expected: NativeProjectFileEntry
+) {
+	const claimProjectPath = `${expected.path}.${randomUUID()}.baseline`;
+	const claimPath = safeProjectFilePath(rootPath, claimProjectPath);
+	const probePath = `${tempPath}.link-probe`;
+	let claimed = false;
+	let claimVerified = false;
+	let installed = false;
+	let operationRecovered = false;
+	let verifiedHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+	let recoveryPath: string | undefined;
+
+	if (!claimPath) {
+		throw new Error(`Unsafe project claim path: ${claimProjectPath}`);
+	}
+
+	try {
+		try {
+			await linkFile(tempPath, probePath);
+			await remove(probePath);
+		} catch (error) {
+			throw Object.assign(
+				new Error(
+					'Conflict-safe incremental saves are unavailable on this filesystem because it does not support same-directory hard links.'
+				),
+				{
+					cause: error,
+					code: 'PROJECT_FILE_CAS_UNAVAILABLE'
+				}
+			);
+		}
+
+		await writeProjectFileCasJournal(rootPath, {
+			claimPath: claimProjectPath,
+			expected,
+			targetPath: expected.path,
+			version: 1
+		});
+
+		// The durable journal owns this exact claim. Renaming binds verification
+		// to the pathname entry that the no-replace install would supersede.
+		await renameFile(path, claimPath);
+		claimed = true;
+		await syncDirectoryBestEffort(dirname(path));
+		verifiedHandle = await verifiedProjectFileHandle(claimPath, expected);
+		claimVerified = true;
+		await linkFile(tempPath, path);
+		installed = true;
+	} catch (error) {
+		if (
+			!claimed &&
+			(error as NodeJS.ErrnoException).code === 'PROJECT_FILE_CAS_UNAVAILABLE'
+		) {
+			throw error;
+		}
+		if (claimed && !installed) {
+			try {
+				await linkFile(claimPath, path);
+				operationRecovered = true;
+			} catch (restoreError) {
+				if (
+					(restoreError as NodeJS.ErrnoException).code === 'EEXIST' &&
+					claimVerified
+				) {
+					operationRecovered = true;
+				} else {
+					recoveryPath = claimPath;
+				}
+			}
+		} else if (!claimed) {
+			operationRecovered = true;
+		}
+
+		throw new Error(
+			`${expected.path} changed outside twine.rs; refusing to overwrite it.${
+				recoveryPath ? ` Prior bytes remain at ${recoveryPath}.` : ''
+			}`
+		);
+	} finally {
+		await verifiedHandle?.close().catch(() => undefined);
+		await remove(probePath).catch(() => undefined);
+		await remove(tempPath).catch(() => undefined);
+		if (installed || operationRecovered) {
+			try {
+				await remove(claimPath);
+				await clearProjectFileCasJournal(rootPath);
+			} catch {
+				// Leave the journal in place if cleanup is incomplete so the
+				// next open/save can recover this exact, app-owned claim.
+			}
+		}
+	}
+}
+
+function validProjectFileCasJournal(
+	value: unknown
+): value is ProjectFileCasJournal {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return false;
+	}
+	const journal = value as Partial<ProjectFileCasJournal>;
+	const sourceKinds: NativeProjectFileKind[] = [
+		'manifest',
+		'metadata',
+		'graph',
+		'passage',
+		'script',
+		'stylesheet'
+	];
+	const claimSuffix =
+		typeof journal.claimPath === 'string' &&
+		typeof journal.targetPath === 'string'
+			? journal.claimPath.slice(journal.targetPath.length)
+			: '';
+
+	return (
+		journal.version === 1 &&
+		typeof journal.claimPath === 'string' &&
+		typeof journal.targetPath === 'string' &&
+		!!journal.expected &&
+		journal.expected.path === journal.targetPath &&
+		sourceKinds.includes(journal.expected.kind as NativeProjectFileKind) &&
+		typeof journal.expected.contentDigest === 'string' &&
+		/^[0-9a-f]{64}$/.test(journal.expected.contentDigest) &&
+		journal.claimPath.startsWith(`${journal.targetPath}.`) &&
+		/^\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.baseline$/i.test(
+			claimSuffix
+		)
+	);
+}
+
+async function optionalLstat(path: string) {
+	try {
+		return await lstat(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return undefined;
+		}
+		throw error;
+	}
+}
+
+async function recoverInterruptedProjectFileClaims(rootPath: string) {
+	const journalPath = projectFileCasJournalPath(rootPath);
+	const journalStats = await optionalLstat(journalPath);
+	let value: unknown;
+
+	if (!journalStats) {
+		return;
+	}
+	if (!journalStats.isFile() || journalStats.isSymbolicLink()) {
+		throw new Error(
+			`Project-file recovery journal is not a regular file: ${journalPath}.`
+		);
+	}
+
+	try {
+		value = await readJson(journalPath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return;
+		}
+		throw error;
+	}
+
+	if (!validProjectFileCasJournal(value)) {
+		throw new Error(`Invalid project-file recovery journal at ${journalPath}.`);
+	}
+
+	const targetPath = safeProjectFilePath(rootPath, value.targetPath);
+	const claimPath = safeProjectFilePath(rootPath, value.claimPath);
+
+	if (!targetPath || !claimPath) {
+		throw new Error(`Unsafe project-file recovery journal at ${journalPath}.`);
+	}
+
+	const [targetStats, claimStats] = await Promise.all([
+		optionalLstat(targetPath),
+		optionalLstat(claimPath)
+	]);
+
+	if (!claimStats) {
+		if (!targetStats) {
+			throw new Error(
+				`Project-file recovery could not find ${value.targetPath} or its claimed baseline.`
+			);
+		}
+		await clearProjectFileCasJournal(rootPath);
+		return;
+	}
+	if (!claimStats.isFile() || claimStats.isSymbolicLink()) {
+		throw new Error(
+			`Project-file recovery claim is not a regular file: ${claimPath}.`
+		);
+	}
+	if (!targetStats) {
+		let installedHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+		try {
+			try {
+				// Install without replacement first, then validate through the
+				// installed target's no-follow handle. This binds validation to
+				// the object recovery would publish instead of trusting a
+				// pathname digest captured before the hard-link operation.
+				await linkFile(claimPath, targetPath);
+				installedHandle = await verifiedProjectFileHandle(
+					targetPath,
+					value.expected
+				);
+			} catch {
+				throw new Error(
+					`Project-file recovery preserved unverified bytes at ${claimPath}; refusing to load or save ${value.targetPath}.`
+				);
+			}
+			await remove(claimPath);
+			await clearProjectFileCasJournal(rootPath);
+		} finally {
+			await installedHandle?.close().catch(() => undefined);
+		}
+		return;
+	}
+
+	let verifiedHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		verifiedHandle = await verifiedProjectFileHandle(claimPath, value.expected);
+	} catch {
+		throw new Error(
+			`Project-file recovery preserved conflicting bytes at ${claimPath}; refusing automatic cleanup.`
+		);
+	} finally {
+		await verifiedHandle?.close().catch(() => undefined);
+	}
+
+	await remove(claimPath);
+	await clearProjectFileCasJournal(rootPath);
 }
 
 async function projectFileEntryForPath(
@@ -6209,9 +6620,17 @@ async function writeProjectFolderIncremental(
 		if (!baselineFile || !currentFile) {
 			return undefined;
 		}
-		if (baselineFile.fingerprint !== currentFile.fingerprint) {
+		if (!projectFileEntriesMatch(baselineFile, currentFile)) {
 			throw new Error(
 				`${entry.projectPath} changed outside twine.rs; refusing to overwrite it.`
+			);
+		}
+		if (
+			baselineFile.contentDigest === undefined ||
+			currentFile.contentDigest === undefined
+		) {
+			throw new Error(
+				`${entry.projectPath} has no trusted content baseline; refusing to overwrite it.`
 			);
 		}
 		if (
@@ -6232,7 +6651,18 @@ async function writeProjectFolderIncremental(
 	const writeStarted = performance.now();
 
 	for (const entry of concreteTouched) {
-		await atomicWriteText(entry.absolutePath, entry.text);
+		const baselineIndex = baselineFileIndex.get(entry.projectPath);
+		const baselineFile =
+			baselineIndex === undefined
+				? undefined
+				: session.baseline.files[baselineIndex];
+
+		await atomicWriteText(
+			entry.absolutePath,
+			entry.text,
+			baselineFile,
+			rootPath
+		);
 	}
 	timings.writeTouchedFilesUs = Math.round(
 		(performance.now() - writeStarted) * 1000
@@ -6850,6 +7280,7 @@ export async function openProjectFolder(
 		rootPath = filePaths[0];
 	}
 
+	await recoverInterruptedProjectFileClaims(rootPath);
 	const rootStats = await stat(rootPath);
 
 	if (!rootStats.isDirectory()) {
@@ -8003,7 +8434,11 @@ export function projectSessionMemoryDiagnostics() {
 			) ?? 0;
 		for (const file of session.baseline?.files ?? []) {
 			baselineFileStringBytes +=
-				(file.path.length + file.fingerprint.length + file.kind.length) * 2;
+				(file.path.length +
+					file.fingerprint.length +
+					file.kind.length +
+					(file.contentDigest?.length ?? 0)) *
+				2;
 		}
 		candidateCount += session.pending ? 1 : 0;
 		descriptorPathCount += session.descriptor?.paths.size ?? 0;

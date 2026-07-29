@@ -1,7 +1,14 @@
 import {dialog, shell} from 'electron';
 import {createHash} from 'crypto';
 import {FSWatcher, watch} from 'fs';
-import {lstat, open as openFile, opendir, realpath} from 'fs/promises';
+import {
+	link as linkFile,
+	lstat,
+	open as openFile,
+	opendir,
+	realpath,
+	rename as renameFile
+} from 'fs/promises';
 import {performance} from 'perf_hooks';
 import {
 	clearTimeout as clearRealTimeout,
@@ -90,10 +97,12 @@ jest.mock('electron');
 jest.mock('extract-zip', () => jest.fn());
 jest.mock('fs', () => ({...jest.requireActual('fs'), watch: jest.fn()}));
 jest.mock('fs/promises', () => ({
+	link: jest.fn(),
 	lstat: jest.fn(),
 	open: jest.fn(),
 	opendir: jest.fn(),
-	realpath: jest.fn()
+	realpath: jest.fn(),
+	rename: jest.fn()
 }));
 jest.mock('fs-extra');
 jest.mock('yauzl', () => ({open: jest.fn()}));
@@ -140,6 +149,7 @@ describe('project-folder native bridge', () => {
 	const mkdirMock = mkdir as jest.Mock;
 	const mkdtempMock = mkdtemp as jest.Mock;
 	const copyMock = copy as jest.Mock;
+	const linkFileMock = linkFile as jest.Mock;
 	const lstatMock = lstat as jest.Mock;
 	const extractZipMock = extractZip as jest.Mock;
 	const openFileMock = openFile as jest.Mock;
@@ -150,6 +160,7 @@ describe('project-folder native bridge', () => {
 	const readJsonMock = readJson as jest.Mock;
 	const readdirMock = readdir as jest.Mock;
 	const realpathMock = realpath as jest.Mock;
+	const renameFileMock = renameFile as jest.Mock;
 	const removeMock = remove as jest.Mock;
 	const showOpenDialogMock = dialog.showOpenDialog as jest.Mock;
 	const statMock = stat as jest.Mock;
@@ -323,12 +334,17 @@ describe('project-folder native bridge', () => {
 			if (flags === 'wx') {
 				return {
 					close: jest.fn(async () => undefined),
+					sync: jest.fn(async () => undefined),
 					write: jest.fn(async (_buffer, _offset, length) => ({
 						bytesWritten: length
 					}))
 				};
 			}
-			const value = await readFileMock(path, 'utf8');
+			const sourcePath = String(path).replace(
+				/\.[0-9a-f-]{36}\.baseline$/i,
+				''
+			);
+			const value = await readFileMock(sourcePath, 'utf8');
 			const source = Buffer.isBuffer(value)
 				? value
 				: Buffer.from(String(value));
@@ -349,8 +365,10 @@ describe('project-folder native bridge', () => {
 						return {buffer, bytesRead};
 					}
 				),
+				sync: jest.fn(async () => undefined),
 				stat: jest.fn(async () => ({
 					isFile: () => true,
+					mtimeMs: 1,
 					size: source.length
 				}))
 			};
@@ -372,12 +390,19 @@ describe('project-folder native bridge', () => {
 			}
 		);
 		mkdtempMock.mockResolvedValue('/tmp/twine-import-abc');
+		linkFileMock.mockResolvedValue(undefined);
 		moveMock.mockResolvedValue(undefined);
 		removeMock.mockResolvedValue(undefined);
 		mkdirMock.mockResolvedValue(undefined);
 		mkdirpMock.mockResolvedValue(undefined);
 		readFileMock.mockResolvedValue('');
-		readJsonMock.mockResolvedValue({});
+		readJsonMock.mockImplementation(async path => {
+			if (String(path).endsWith('.twine/project-file-cas.json')) {
+				throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+			}
+
+			return {};
+		});
 		diffNativeProjectFileManifestMock.mockReturnValue(undefined);
 		findNativeTwineHtmlFilesMock.mockReturnValue(undefined);
 		forgetNativeProjectFolderMock.mockReturnValue(undefined);
@@ -425,6 +450,7 @@ describe('project-folder native bridge', () => {
 			Object.assign(new Error('missing'), {code: 'ENOENT'})
 		);
 		realpathMock.mockImplementation(async path => String(path));
+		renameFileMock.mockResolvedValue(undefined);
 		statMock.mockImplementation(async path => ({
 			isDirectory: () => String(path).endsWith('.twine.rs'),
 			isFile: () => !String(path).endsWith('.twine.rs'),
@@ -432,10 +458,16 @@ describe('project-folder native bridge', () => {
 			mtimeMs: 1,
 			size: 0
 		}));
-		lstatMock.mockImplementation(async path => ({
-			...(await statMock(path)),
-			isSymbolicLink: () => false
-		}));
+		lstatMock.mockImplementation(async path => {
+			if (String(path).endsWith('.twine/project-file-cas.json')) {
+				throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+			}
+
+			return {
+				...(await statMock(path)),
+				isSymbolicLink: () => false
+			};
+		});
 		watchMock.mockImplementation(
 			jest.requireActual<typeof import('fs')>('fs').watch
 		);
@@ -1239,12 +1271,13 @@ describe('project-folder native bridge', () => {
 			sizeBytes: 0
 		};
 		const passageFile = {
-			fingerprint: '1:0',
+			contentDigest: createHash('sha256').update(passageSource).digest('hex'),
+			fingerprint: `1:${Buffer.byteLength(passageSource)}`,
 			kind: 'passage' as const,
 			modifiedAt: '2026-06-21T16:00:00.000Z',
 			mtimeMs: 1,
 			path: 'passages/story/001-start.twee',
-			sizeBytes: 0
+			sizeBytes: Buffer.byteLength(passageSource)
 		};
 		const assetFiles = ['assets/new.png', 'assets/old.png'].map(path => ({
 			fingerprint: '1:3',
@@ -1258,6 +1291,38 @@ describe('project-folder native bridge', () => {
 		readFileMock.mockImplementation(async path =>
 			String(path).endsWith('twine.toml') ? manifestSource : passageSource
 		);
+		let pendingPassageSource: string | undefined;
+
+		writeFileMock.mockImplementation(async (path, text) => {
+			if (
+				/^\/native\/project\.twine\.rs\/passages\/story\/001-start\.twee\..+\.tmp$/.test(
+					String(path)
+				)
+			) {
+				pendingPassageSource = String(text);
+			}
+		});
+		moveMock.mockImplementation(async (_source, target) => {
+			if (String(target).endsWith('passages/story/001-start.twee')) {
+				passageSource = pendingPassageSource ?? passageSource;
+			}
+		});
+		linkFileMock.mockImplementation(async (_source, target) => {
+			if (String(target).endsWith('passages/story/001-start.twee')) {
+				passageSource = pendingPassageSource ?? passageSource;
+			}
+		});
+		statMock.mockImplementation(async path => {
+			const passage = String(path).includes('passages/story/001-start.twee');
+
+			return {
+				isDirectory: () => String(path) === '/native/project.twine.rs',
+				isFile: () => String(path) !== '/native/project.twine.rs',
+				mtime: new Date('2026-06-21T16:00:00.001Z'),
+				mtimeMs: 1,
+				size: passage ? Buffer.byteLength(passageSource) : 0
+			};
+		});
 		listNativeProjectAssetsMock.mockReturnValue([]);
 		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
 		captureNativeProjectAssetDigestsMock.mockImplementation(
@@ -1307,12 +1372,11 @@ describe('project-folder native bridge', () => {
 			'<img src="assets/old.png"><img src="assets/new.png">',
 			'utf8'
 		);
-		expect(moveMock).toHaveBeenCalledWith(
+		expect(linkFileMock).toHaveBeenCalledWith(
 			expect.stringMatching(
 				/^\/native\/project\.twine\.rs\/passages\/story\/001-start\.twee\..+\.tmp$/
 			),
-			'/native/project.twine.rs/passages/story/001-start.twee',
-			{overwrite: true}
+			'/native/project.twine.rs/passages/story/001-start.twee'
 		);
 		expect(writeFileMock).not.toHaveBeenCalledWith(
 			'/native/project.twine.rs/twine.toml',
@@ -1369,6 +1433,318 @@ describe('project-folder native bridge', () => {
 				'assets/old.png'
 			]).map(baseline => baseline.expectedContentDigest)
 		).toEqual([undefined, undefined]);
+	});
+
+	it('refuses same-metadata passage rewrites before and during an incremental commit', async () => {
+		const originalSource = 'Synthetic';
+		const externalSource = 'SynthetiX';
+		const manifestSource = [
+			'schema_version = 1',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			'start_passage = "passage-id"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/001-start.twee"'
+		].join('\n');
+		const passagePath =
+			'/native/project.twine.rs/passages/story/001-start.twee';
+		const story = {
+			...fakeStory(1),
+			id: 'story-id',
+			name: 'Story',
+			passages: [
+				{
+					...fakeStory(1).passages[0],
+					id: 'passage-id',
+					name: 'Start',
+					story: 'story-id',
+					text: 'App local'
+				}
+			]
+		};
+		const digest = (source: string) =>
+			createHash('sha256').update(source).digest('hex');
+		const manifestFile = {
+			contentDigest: digest(manifestSource),
+			fingerprint: `1:${Buffer.byteLength(manifestSource)}`,
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:00.001Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: Buffer.byteLength(manifestSource)
+		};
+		const passageFile = {
+			contentDigest: digest(originalSource),
+			fingerprint: `1:${Buffer.byteLength(originalSource)}`,
+			kind: 'passage' as const,
+			modifiedAt: '2026-06-21T16:00:00.001Z',
+			mtimeMs: 1,
+			path: 'passages/story/001-start.twee',
+			sizeBytes: Buffer.byteLength(originalSource)
+		};
+		let passageSource = originalSource;
+
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : passageSource
+		);
+		statMock.mockImplementation(async path => {
+			const source = String(path).endsWith('twine.toml')
+				? manifestSource
+				: passageSource;
+
+			return {
+				isDirectory: () => String(path) === '/native/project.twine.rs',
+				isFile: () => String(path) !== '/native/project.twine.rs',
+				mtime: new Date('2026-06-21T16:00:00.001Z'),
+				mtimeMs: 1,
+				size: Buffer.byteLength(source)
+			};
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock.mockReturnValue([manifestFile, passageFile]);
+		await startProjectSession('/native/project.twine.rs', undefined, [
+			'story-id'
+		]);
+		const options = {
+			documentUpdates: [
+				{
+					passageId: 'passage-id',
+					storyId: 'story-id',
+					text: 'App local',
+					type: 'passageText' as const
+				}
+			],
+			hints: [
+				{
+					passageId: 'passage-id',
+					storyId: 'story-id',
+					type: 'passageText' as const
+				}
+			],
+			incrementalOnly: true
+		};
+
+		passageSource = externalSource;
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story, options)
+		).rejects.toThrow(
+			'passages/story/001-start.twee changed outside twine.rs; refusing to overwrite it.'
+		);
+		expect(passageSource).toBe(externalSource);
+		expect(writeFileMock).not.toHaveBeenCalled();
+		expect(moveMock).not.toHaveBeenCalled();
+
+		passageSource = originalSource;
+		writeFileMock.mockImplementation(async path => {
+			if (
+				String(path).startsWith(`${passagePath}.`) &&
+				String(path).endsWith('.tmp')
+			) {
+				passageSource = externalSource;
+			}
+		});
+
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story, options)
+		).rejects.toThrow(
+			'passages/story/001-start.twee changed outside twine.rs; refusing to overwrite it.'
+		);
+		expect(passageSource).toBe(externalSource);
+		expect(moveMock).not.toHaveBeenCalled();
+
+		passageSource = originalSource;
+		writeFileMock.mockResolvedValue(undefined);
+		linkFileMock.mockClear();
+		linkFileMock.mockImplementation(async (_source, target) => {
+			if (String(target) === passagePath) {
+				passageSource = externalSource;
+				throw Object.assign(new Error('external replacement'), {
+					code: 'EEXIST'
+				});
+			}
+		});
+
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story, options)
+		).rejects.toThrow(
+			'passages/story/001-start.twee changed outside twine.rs; refusing to overwrite it.'
+		);
+		expect(passageSource).toBe(externalSource);
+		expect(
+			linkFileMock.mock.calls.filter(
+				([, target]) => String(target) === passagePath
+			)
+		).toHaveLength(2);
+		expect(moveMock).not.toHaveBeenCalled();
+
+		passageSource = originalSource;
+		writeFileMock.mockResolvedValue(undefined);
+		linkFileMock.mockClear();
+		renameFileMock.mockClear();
+		linkFileMock.mockRejectedValueOnce(
+			Object.assign(new Error('hard links unsupported'), {code: 'EPERM'})
+		);
+
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story, options)
+		).rejects.toThrow(
+			'Conflict-safe incremental saves are unavailable on this filesystem'
+		);
+		expect(renameFileMock).not.toHaveBeenCalled();
+
+		stopProjectSession('/native/project.twine.rs');
+		nativeProjectFileManifestMock.mockReturnValue([
+			manifestFile,
+			{...passageFile, contentDigest: undefined}
+		]);
+		linkFileMock.mockClear();
+		renameFileMock.mockClear();
+		writeFileMock.mockClear();
+		await startProjectSession('/native/project.twine.rs', undefined, [
+			'story-id'
+		]);
+
+		await expect(
+			saveProjectFolder('/native/project.twine.rs', story, options)
+		).rejects.toThrow(
+			'passages/story/001-start.twee has no trusted content baseline; refusing to overwrite it.'
+		);
+		expect(writeFileMock).not.toHaveBeenCalled();
+		expect(linkFileMock).not.toHaveBeenCalled();
+		expect(renameFileMock).not.toHaveBeenCalled();
+	});
+
+	it('restores an interrupted compare-and-swap claim before loading or saving', async () => {
+		const rootPath = '/native/recovery.twine.rs';
+		const claimName =
+			'start.twee.11111111-2222-4333-8444-555555555555.baseline';
+		const claimPath = `${rootPath}/passages/story/${claimName}`;
+		const targetPath = `${rootPath}/passages/story/start.twee`;
+		const claimSource = 'Synthetic';
+
+		readJsonMock.mockImplementation(async path => {
+			if (String(path).endsWith('.twine/project-file-cas.json')) {
+				return {
+					claimPath: `passages/story/${claimName}`,
+					expected: {
+						contentDigest: createHash('sha256')
+							.update(claimSource)
+							.digest('hex'),
+						fingerprint: '1:9',
+						kind: 'passage',
+						modifiedAt: '2026-06-21T16:00:00.001Z',
+						mtimeMs: 1,
+						path: 'passages/story/start.twee',
+						sizeBytes: 9
+					},
+					targetPath: 'passages/story/start.twee',
+					version: 1
+				};
+			}
+
+			return {};
+		});
+		readFileMock.mockImplementation(async path =>
+			[claimPath, targetPath].includes(String(path)) ? claimSource : ''
+		);
+		lstatMock.mockImplementation(async path => {
+			if (String(path) === targetPath) {
+				throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+			}
+
+			return {
+				isDirectory: () => false,
+				isFile: () => true,
+				isSymbolicLink: () => false
+			};
+		});
+		saveNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [fakeStory(1)],
+			storyIds: [fakeStory(1).id]
+		});
+
+		await saveProjectFolder(rootPath, fakeStory(1));
+
+		expect(linkFileMock).toHaveBeenCalledWith(claimPath, targetPath);
+		expect(removeMock).toHaveBeenCalledWith(claimPath);
+	});
+
+	it('refuses to recover a tampered claim into a missing project source', async () => {
+		const rootPath = '/native/tampered-recovery.twine.rs';
+		const claimName =
+			'start.twee.11111111-2222-4333-8444-555555555555.baseline';
+		const claimPath = `${rootPath}/passages/story/${claimName}`;
+		const targetPath = `${rootPath}/passages/story/start.twee`;
+		const expectedSource = 'Synthetic';
+		const tamperedSource = 'SynthetiX';
+		const journalPath = `${rootPath}/.twine/project-file-cas.json`;
+
+		readJsonMock.mockResolvedValue({
+			claimPath: `passages/story/${claimName}`,
+			expected: {
+				contentDigest: createHash('sha256')
+					.update(expectedSource)
+					.digest('hex'),
+				fingerprint: '1:9',
+				kind: 'passage',
+				modifiedAt: '2026-06-21T16:00:00.001Z',
+				mtimeMs: 1,
+				path: 'passages/story/start.twee',
+				sizeBytes: 9
+			},
+			targetPath: 'passages/story/start.twee',
+			version: 1
+		});
+		readFileMock.mockResolvedValue(tamperedSource);
+		lstatMock.mockImplementation(async path => {
+			if (String(path) === targetPath) {
+				throw Object.assign(new Error('missing'), {code: 'ENOENT'});
+			}
+
+			return {
+				isDirectory: () => false,
+				isFile: () => true,
+				isSymbolicLink: () => false
+			};
+		});
+
+		await expect(saveProjectFolder(rootPath, fakeStory(1))).rejects.toThrow(
+			`Project-file recovery preserved unverified bytes at ${claimPath}`
+		);
+
+		expect(linkFileMock).toHaveBeenCalledWith(claimPath, targetPath);
+		expect(removeMock).not.toHaveBeenCalledWith(claimPath);
+		expect(removeMock).not.toHaveBeenCalledWith(journalPath);
+		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
+	});
+
+	it('does not treat foreign baseline-looking files as recovery claims', async () => {
+		const rootPath = '/native/foreign-baseline.twine.rs';
+		const foreignPath = `${rootPath}/passages/story/start.twee.11111111-2222-4333-8444-555555555555.baseline`;
+
+		readdirMock.mockResolvedValue([
+			'start.twee.11111111-2222-4333-8444-555555555555.baseline'
+		]);
+		saveNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [fakeStory(1)],
+			storyIds: [fakeStory(1).id]
+		});
+
+		await saveProjectFolder(rootPath, fakeStory(1));
+
+		expect(readdirMock).not.toHaveBeenCalled();
+		expect(
+			linkFileMock.mock.calls.some(([source]) => String(source) === foreignPath)
+		).toBe(false);
 	});
 
 	it('incrementally rewrites one aggregate source while preserving other passages', async () => {
@@ -1440,12 +1816,15 @@ describe('project-folder native bridge', () => {
 				sizeBytes: 0
 			},
 			{
-				fingerprint: '1:0',
+				contentDigest: createHash('sha256')
+					.update(aggregateSource)
+					.digest('hex'),
+				fingerprint: `1:${Buffer.byteLength(aggregateSource)}`,
 				kind: 'passage' as const,
 				modifiedAt: '2026-06-21T16:00:00.000Z',
 				mtimeMs: 1,
 				path: 'story.twee',
-				sizeBytes: 0
+				sizeBytes: Buffer.byteLength(aggregateSource)
 			}
 		];
 
@@ -1456,6 +1835,22 @@ describe('project-folder native bridge', () => {
 					? aggregateSource
 					: ''
 		);
+		statMock.mockImplementation(async path => {
+			const root = String(path) === '/native/project.twine.rs';
+			const source = String(path).endsWith('story.twee')
+				? aggregateSource
+				: String(path).endsWith('twine.toml')
+					? manifestSource
+					: '';
+
+			return {
+				isDirectory: () => root,
+				isFile: () => !root,
+				mtime: new Date('2026-06-21T16:00:00.000Z'),
+				mtimeMs: 1,
+				size: Buffer.byteLength(source)
+			};
+		});
 		listNativeProjectAssetsMock.mockReturnValue([]);
 		nativeProjectFileManifestMock.mockReturnValue(files);
 
@@ -1496,12 +1891,11 @@ describe('project-folder native bridge', () => {
 		expect(aggregateSave).toContain('window.legacy = true;');
 		expect(aggregateSave).not.toContain(compactStory.script);
 		expect(aggregateSave).not.toContain(compactStory.stylesheet);
-		expect(moveMock).toHaveBeenCalledWith(
+		expect(linkFileMock).toHaveBeenCalledWith(
 			expect.stringMatching(
 				/^\/native\/project\.twine\.rs\/story\.twee\..+\.tmp$/
 			),
-			'/native/project.twine.rs/story.twee',
-			{overwrite: true}
+			'/native/project.twine.rs/story.twee'
 		);
 		expect(saveNativeProjectFolderMock).not.toHaveBeenCalled();
 
@@ -1595,20 +1989,26 @@ describe('project-folder native bridge', () => {
 		].join('\n');
 		const files = [
 			{
-				fingerprint: '1:0',
+				contentDigest: createHash('sha256')
+					.update(manifestSource)
+					.digest('hex'),
+				fingerprint: `1:${Buffer.byteLength(manifestSource)}`,
 				kind: 'manifest' as const,
 				modifiedAt: '2026-06-21T16:00:00.000Z',
 				mtimeMs: 1,
 				path: 'twine.toml',
-				sizeBytes: 0
+				sizeBytes: Buffer.byteLength(manifestSource)
 			},
 			{
-				fingerprint: '1:0',
+				contentDigest: createHash('sha256')
+					.update(aggregateSource)
+					.digest('hex'),
+				fingerprint: `1:${Buffer.byteLength(aggregateSource)}`,
 				kind: 'passage' as const,
 				modifiedAt: '2026-06-21T16:00:00.000Z',
 				mtimeMs: 1,
 				path: 'sources/main.twee',
-				sizeBytes: 0
+				sizeBytes: Buffer.byteLength(aggregateSource)
 			}
 		];
 
@@ -1619,6 +2019,22 @@ describe('project-folder native bridge', () => {
 					? aggregateSource
 					: ''
 		);
+		statMock.mockImplementation(async path => {
+			const root = String(path) === '/native/project.twine.rs';
+			const source = String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).endsWith('sources/main.twee')
+					? aggregateSource
+					: '';
+
+			return {
+				isDirectory: () => root,
+				isFile: () => !root,
+				mtime: new Date('2026-06-21T16:00:00.000Z'),
+				mtimeMs: 1,
+				size: Buffer.byteLength(source)
+			};
+		});
 		listNativeProjectAssetsMock.mockReturnValue([]);
 		nativeProjectFileManifestMock.mockReturnValue(files);
 
@@ -1730,12 +2146,15 @@ describe('project-folder native bridge', () => {
 		].join('\n');
 		const files = [
 			{
-				fingerprint: '1:0',
+				contentDigest: createHash('sha256')
+					.update(manifestSource)
+					.digest('hex'),
+				fingerprint: `1:${Buffer.byteLength(manifestSource)}`,
 				kind: 'manifest' as const,
 				modifiedAt: '2026-06-21T16:00:00.000Z',
 				mtimeMs: 1,
 				path: 'twine.toml',
-				sizeBytes: 0
+				sizeBytes: Buffer.byteLength(manifestSource)
 			},
 			{
 				fingerprint: '1:0',
@@ -1770,14 +2189,37 @@ describe('project-folder native bridge', () => {
 					? secondPassageSource
 					: firstPassageSource
 		);
+		statMock.mockImplementation(async path => {
+			const root = String(path) === '/native/project.twine.rs';
+			const source = String(path).endsWith('twine.toml')
+				? manifestSource
+				: String(path).includes('story-two')
+					? secondPassageSource
+					: firstPassageSource;
+
+			return {
+				isDirectory: () => root,
+				isFile: () => !root,
+				mtime: new Date('2026-06-21T16:00:00.000Z'),
+				mtimeMs: 1,
+				size: Buffer.byteLength(source)
+			};
+		});
+		let pendingManifestSource: string | undefined;
+
 		writeFileMock.mockImplementation(async (path, source) => {
 			if (
 				String(path).includes('/twine.toml.') ||
 				String(path).endsWith('/twine.toml')
 			) {
-				manifestSource = String(source);
+				pendingManifestSource = String(source);
 			} else if (String(path).includes('/passages/story/')) {
 				firstPassageSource = String(source);
+			}
+		});
+		linkFileMock.mockImplementation(async (_source, target) => {
+			if (String(target).endsWith('/twine.toml')) {
+				manifestSource = pendingManifestSource ?? manifestSource;
 			}
 		});
 		listNativeProjectAssetsMock.mockReturnValue([]);
@@ -1942,14 +2384,18 @@ describe('project-folder native bridge', () => {
 		let pendingGraphSource: typeof graphSource | undefined;
 		let pendingManifestSource: string | undefined;
 		const manifestFile = () => ({
-			fingerprint: manifestWritten ? '2:0' : '1:0',
+			contentDigest: createHash('sha256').update(manifestSource).digest('hex'),
+			fingerprint: `${manifestWritten ? 2 : 1}:${Buffer.byteLength(
+				manifestSource
+			)}`,
 			kind: 'manifest' as const,
 			modifiedAt: '2026-06-21T16:00:00.000Z',
 			mtimeMs: manifestWritten ? 2 : 1,
 			path: 'twine.toml',
-			sizeBytes: 0
+			sizeBytes: Buffer.byteLength(manifestSource)
 		});
 		const graphFile = () => ({
+			contentDigest: createHash('sha256').update('').digest('hex'),
 			fingerprint: graphWritten ? '2:0' : '1:0',
 			kind: 'graph' as const,
 			modifiedAt: '2026-06-21T16:00:00.000Z',
@@ -1981,7 +2427,7 @@ describe('project-folder native bridge', () => {
 				isFile: () => !root,
 				mtime: new Date('2026-06-21T16:00:00.000Z'),
 				mtimeMs,
-				size: 0
+				size: manifest ? Buffer.byteLength(manifestSource) : 0
 			};
 		});
 		writeFileMock.mockImplementation(async (path, text) => {
@@ -1993,6 +2439,16 @@ describe('project-folder native bridge', () => {
 			}
 		});
 		moveMock.mockImplementation(async (_source, target) => {
+			if (String(target).endsWith('twine.toml')) {
+				manifestWritten = true;
+				manifestSource = pendingManifestSource ?? manifestSource;
+			}
+			if (String(target).endsWith('.twine/graph.json')) {
+				graphWritten = true;
+				graphSource = pendingGraphSource ?? graphSource;
+			}
+		});
+		linkFileMock.mockImplementation(async (_source, target) => {
 			if (String(target).endsWith('twine.toml')) {
 				manifestWritten = true;
 				manifestSource = pendingManifestSource ?? manifestSource;
@@ -2062,12 +2518,12 @@ describe('project-folder native bridge', () => {
 			)
 		).toBe(false);
 		expect(
-			moveMock.mock.invocationCallOrder.find((_, index) =>
-				String(moveMock.mock.calls[index][1]).endsWith('twine.toml')
+			linkFileMock.mock.invocationCallOrder.find((_, index) =>
+				String(linkFileMock.mock.calls[index][1]).endsWith('twine.toml')
 			)
 		).toBeLessThan(
-			moveMock.mock.invocationCallOrder.find((_, index) =>
-				String(moveMock.mock.calls[index][1]).endsWith('.twine/graph.json')
+			linkFileMock.mock.invocationCallOrder.find((_, index) =>
+				String(linkFileMock.mock.calls[index][1]).endsWith('.twine/graph.json')
 			) as number
 		);
 		await expect(
@@ -3262,12 +3718,15 @@ describe('project-folder native bridge', () => {
 					sizeBytes: 0
 				},
 				{
-					fingerprint: '1:0',
+					contentDigest: createHash('sha256')
+						.update(aggregateSource)
+						.digest('hex'),
+					fingerprint: `1:${Buffer.byteLength(aggregateSource)}`,
 					kind: 'passage' as const,
 					modifiedAt: '2026-06-21T16:00:00.000Z',
 					mtimeMs: 1,
 					path: 'sources/only.twee',
-					sizeBytes: 0,
+					sizeBytes: Buffer.byteLength(aggregateSource),
 					storyId: 'story-id'
 				}
 			],
@@ -3289,6 +3748,20 @@ describe('project-folder native bridge', () => {
 		readFileMock.mockImplementation(async path =>
 			String(path).endsWith('sources/only.twee') ? aggregateSource : ''
 		);
+		statMock.mockImplementation(async path => {
+			const root = String(path) === rootPath;
+			const source = String(path).endsWith('sources/only.twee')
+				? aggregateSource
+				: '';
+
+			return {
+				isDirectory: () => root,
+				isFile: () => !root,
+				mtime: new Date('2026-06-21T16:00:00.000Z'),
+				mtimeMs: 1,
+				size: Buffer.byteLength(source)
+			};
+		});
 
 		try {
 			await openProjectFolder(rootPath);
@@ -4729,9 +5202,9 @@ describe('project-folder native bridge', () => {
 		);
 	});
 
-	it('reports project session conflicts when watched files change', async () => {
+	it('reports compatibility-session conflicts for digest-only file changes', async () => {
 		const story = fakeStory(1);
-		let manifestVersion = 1;
+		let manifestSource = 'version = 1\n';
 
 		readJsonMock.mockImplementation(async path => {
 			if (path.endsWith('.twine/project.json')) {
@@ -4745,14 +5218,17 @@ describe('project-folder native bridge', () => {
 				code: 'ENOENT'
 			})
 		);
+		readFileMock.mockImplementation(async path =>
+			String(path).endsWith('twine.toml') ? manifestSource : ''
+		);
 		statMock.mockImplementation(async path => {
 			if (path.endsWith('twine.toml')) {
 				return {
 					isDirectory: () => false,
 					isFile: () => true,
-					mtime: new Date(`2026-06-21T16:00:0${manifestVersion}.000Z`),
-					mtimeMs: manifestVersion,
-					size: 42
+					mtime: new Date('2026-06-21T16:00:01.000Z'),
+					mtimeMs: 1,
+					size: Buffer.byteLength(manifestSource)
 				};
 			}
 
@@ -4763,7 +5239,7 @@ describe('project-folder native bridge', () => {
 			projectSessionSnapshot('/native/project.twine.rs')
 		).resolves.toEqual(expect.objectContaining({conflicts: []}));
 
-		manifestVersion = 2;
+		manifestSource = 'version = 2\n';
 
 		await expect(
 			projectSessionSnapshot('/native/project.twine.rs')

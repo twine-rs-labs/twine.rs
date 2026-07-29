@@ -161,6 +161,7 @@ impl LoadProjectOptions {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoadedProjectFile {
+    pub content_digest: String,
     pub kind: &'static str,
     pub modified_at: SystemTime,
     pub passage_id: Option<String>,
@@ -1763,7 +1764,27 @@ fn read_project_file(
             path: relative.clone(),
             source,
         })?;
+    let after = file
+        .metadata()
+        .map_err(|source| StoreError::ProjectFileRead {
+            path: relative.clone(),
+            source,
+        })?;
+
+    if value.len() as u64 != metadata.len()
+        || metadata.len() != after.len()
+        || matches!(
+            (metadata.modified(), after.modified()),
+            (Ok(before), Ok(after)) if before != after
+        )
+    {
+        return Err(StoreError::ProjectFileRead {
+            path: relative.clone(),
+            source: std::io::Error::other("project source changed while it was read"),
+        });
+    }
     files.push(LoadedProjectFile {
+        content_digest: manifest_digest(value.as_bytes()),
         kind,
         modified_at: metadata.modified().unwrap_or(UNIX_EPOCH),
         passage_id: passage_id.map(str::to_owned),

@@ -21,6 +21,7 @@ export interface ProjectStoryReplacement {
 }
 
 export interface NativeProjectFileEntry {
+	contentDigest?: string;
 	fingerprint: string;
 	kind:
 		| 'manifest'
