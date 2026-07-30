@@ -51,6 +51,13 @@ test('every desktop and release build regenerates WASM before compiling the rend
 	assert.match(scripts['start:electron'], /clean build:wasm build:web/);
 });
 
+test('the desktop renderer receives its CSP before the web archive is written', () => {
+	assert.match(
+		scripts['postbuild:web'],
+		/cpy .*install-main-renderer-csp\.mjs .*archive-web\.mjs/
+	);
+});
+
 test('every packageable desktop build generates compliance artifacts', () => {
 	assert.match(
 		scripts['build:compliance'],
