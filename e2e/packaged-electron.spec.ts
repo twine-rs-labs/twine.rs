@@ -940,7 +940,7 @@ async function rendererProjectSaveDiagnostics(page: Page) {
 									? event.name
 									: '';
 
-							return /baseline|persist|save/i.test(name);
+							return /baseline|patch|persist|save/i.test(name);
 						})
 						.slice(-100)
 				};
@@ -995,9 +995,12 @@ async function attachProjectSaveDiagnostics(
 		2
 	);
 
+	const diagnosticPath = testInfo.outputPath('project-save-diagnostics.json');
+
+	await writeFile(diagnosticPath, body, 'utf8');
 	await testInfo.attach('project-save-diagnostics', {
-		body: Buffer.from(body),
-		contentType: 'application/json'
+		contentType: 'application/json',
+		path: diagnosticPath
 	});
 }
 
