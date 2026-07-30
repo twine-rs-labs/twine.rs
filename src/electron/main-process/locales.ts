@@ -22,6 +22,7 @@ import sv from '../../../public/locales/sv.json';
 import tr from '../../../public/locales/tr.json';
 import uk from '../../../public/locales/uk.json';
 import zhCn from '../../../public/locales/zh-CN.json';
+import {closestAppLocale} from '../../util/locales';
 import {loadPrefs} from './prefs';
 
 export const i18n = i18next.createInstance();
@@ -70,9 +71,10 @@ export async function initLocales() {
 
 	try {
 		const {locale} = await loadPrefs();
+		const appLocale = closestAppLocale(locale);
 
-		console.log(`Changing i18next language to ${locale}`);
-		await i18n.changeLanguage(locale);
+		console.log(`Changing i18next language to ${appLocale}`);
+		await i18n.changeLanguage(appLocale);
 	} catch (error) {
 		console.warn("Preference couldn't be loaded, using default locale");
 	}

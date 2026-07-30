@@ -41,18 +41,23 @@ export function localeFilename(locale: string) {
 
 /**
  * Finds the closest match for a locale in app-supported locales, for example
- * mapping `en-US` to `en`. If none are plausible, this returns `en` as a
- * default.
+ * mapping `en-GB` to `en-us`. If none are plausible, this returns `en-us` as
+ * a default.
  */
-export function closestAppLocale(code: string) {
-	// Exact match?
-
-	if (locales.some(locale => locale.code === code)) {
-		return code;
+export function closestAppLocale(code: unknown) {
+	if (typeof code !== 'string') {
+		return 'en-us';
 	}
 
-	if (code.includes('-')) {
-		const roughCode = code.replace(/-.+/, '');
+	const normalizedCode = code.trim().replace(/_/g, '-').toLowerCase();
+	const exactMatch = locales.find(locale => locale.code === normalizedCode);
+
+	if (exactMatch) {
+		return exactMatch.code;
+	}
+
+	if (normalizedCode.includes('-')) {
+		const roughCode = normalizedCode.replace(/-.+/, '');
 		const roughMatch = locales.find(
 			locale =>
 				locale.code === roughCode ||

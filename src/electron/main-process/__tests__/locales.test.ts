@@ -22,7 +22,7 @@ describe('initLocales()', () => {
 		initMock.mockReturnValue(
 			new Promise<void>(resolve => (resolveInit = () => resolve()))
 		);
-		loadPrefsMock.mockResolvedValue({locale: 'mock-locale'});
+		loadPrefsMock.mockResolvedValue({locale: 'fr'});
 		changeLanguageMock.mockReturnValue(
 			new Promise<void>(resolve => (resolveLanguageChange = () => resolve()))
 		);
@@ -35,12 +35,22 @@ describe('initLocales()', () => {
 		resolveInit();
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(changeLanguageMock.mock.calls).toEqual([['mock-locale']]);
+		expect(changeLanguageMock.mock.calls).toEqual([['fr']]);
 		expect(settled).toBe(false);
 
 		resolveLanguageChange();
 		await initialization;
 		expect(settled).toBe(true);
+	});
+
+	it('normalizes an unsupported persisted locale', async () => {
+		initMock.mockResolvedValue(undefined);
+		loadPrefsMock.mockResolvedValue({locale: 'en-GB'});
+		changeLanguageMock.mockResolvedValue(undefined);
+
+		await initLocales();
+
+		expect(changeLanguageMock).toHaveBeenCalledWith('en-us');
 	});
 
 	it('does not throw an error if loading user preferences fails', async () => {

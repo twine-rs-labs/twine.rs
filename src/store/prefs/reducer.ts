@@ -1,6 +1,7 @@
 import {PrefsAction, PrefsState} from './prefs.types';
 import {defaults} from './defaults';
 import {formatWithNameAndVersion, newestFormatNamed} from '../story-formats';
+import {closestAppLocale} from '../../util/locales';
 
 function repairStoryFormatEditorPreferences(
 	value: PrefsState['storyFormatEditorPreferences'],
@@ -75,8 +76,14 @@ export const reducer: React.Reducer<PrefsState, PrefsAction> = (
 	action
 ) => {
 	switch (action.type) {
-		case 'init':
-			return {...state, ...action.state};
+		case 'init': {
+			const initializedState = {...state, ...action.state};
+
+			return {
+				...initializedState,
+				locale: closestAppLocale(initializedState.locale)
+			};
+		}
 
 		case 'repair': {
 			const defs = defaults();
@@ -114,6 +121,17 @@ export const reducer: React.Reducer<PrefsState, PrefsAction> = (
 				},
 				{}
 			);
+
+			if (typeof state.locale === 'string') {
+				const repairedLocale = closestAppLocale(state.locale);
+
+				if (repairedLocale !== state.locale) {
+					console.info(
+						`Repairing locale preference by setting it to ${repairedLocale}, was ${state.locale}`
+					);
+					changes.locale = repairedLocale;
+				}
+			}
 
 			// If the proofing or story format don't match an existing format, repair
 			// them to the most recent version with the same name. If none exist with
@@ -190,7 +208,13 @@ export const reducer: React.Reducer<PrefsState, PrefsAction> = (
 		}
 
 		case 'update': {
-			return {...state, [action.name]: action.value};
+			return {
+				...state,
+				[action.name]:
+					action.name === 'locale'
+						? closestAppLocale(action.value)
+						: action.value
+			};
 		}
 	}
 };

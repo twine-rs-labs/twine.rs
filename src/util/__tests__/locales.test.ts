@@ -19,6 +19,13 @@ describe('closestAppLocale()', () => {
 		expect(closestAppLocale('pt-br')).toBe('pt-br');
 	});
 
+	it('matches canonical region casing before trying a rough match', () => {
+		expect(closestAppLocale('pt-BR')).toBe('pt-br');
+		expect(closestAppLocale('pt-PT')).toBe('pt-pt');
+		expect(closestAppLocale('zh-CN')).toBe('zh-cn');
+		expect(closestAppLocale('EN_us')).toBe('en-us');
+	});
+
 	it('returns a rough match if one exists', () => {
 		expect(closestAppLocale('fr-CA')).toBe('fr');
 		expect(closestAppLocale('da-DK')).toBe('da');

@@ -13,14 +13,22 @@ describe('Pref reducer', () => {
 					{...defs, donateShown: false},
 					{
 						type: 'init',
-						state: {donateShown: true, locale: 'mock-locale'}
+						state: {donateShown: true, locale: 'fr'}
 					}
 				)
 			).toEqual({
 				...defs,
 				donateShown: true,
-				locale: 'mock-locale'
+				locale: 'fr'
 			}));
+
+		it('normalizes an unsupported persisted locale', () =>
+			expect(
+				reducer(defs, {
+					type: 'init',
+					state: {locale: 'en-GB'}
+				}).locale
+			).toBe('en-us'));
 	});
 
 	describe('the update action', () => {
@@ -28,12 +36,21 @@ describe('Pref reducer', () => {
 			expect(
 				reducer(
 					{...defs, donateShown: false},
-					{type: 'update', name: 'locale', value: 'mock-locale'}
+					{type: 'update', name: 'locale', value: 'fr'}
 				)
 			).toEqual({
 				...defs,
-				locale: 'mock-locale'
+				locale: 'fr'
 			}));
+
+		it('normalizes an unsupported locale', () =>
+			expect(
+				reducer(defs, {
+					type: 'update',
+					name: 'locale',
+					value: 'en-GB'
+				}).locale
+			).toBe('en-us'));
 	});
 
 	describe('the repair action', () => {
@@ -80,6 +97,11 @@ describe('Pref reducer', () => {
 					type: 'repair'
 				})
 			).toEqual(expect.objectContaining({donateShown: defs.donateShown})));
+
+		it('normalizes an unsupported locale', () =>
+			expect(
+				reducer({...defs, locale: 'fr-CA'}, {allFormats, type: 'repair'}).locale
+			).toBe('fr'));
 
 		it('repairs dialect-scoped native editor preferences field by field', () => {
 			const result = reducer(

@@ -1,4 +1,5 @@
 import {PrefsState} from './prefs.types';
+import {closestAppLocale} from '../../util/locales';
 
 export const defaults = (): PrefsState => ({
 	appTheme: 'system',
@@ -21,12 +22,13 @@ export const defaults = (): PrefsState => ({
 	keyboardOnlyEditing: true,
 	lastUpdateSeen: '',
 	lastUpdateCheckTime: new Date().getTime(),
-	locale:
+	locale: closestAppLocale(
 		(window.navigator as any).userLanguage ||
-		window.navigator.language ||
-		(window.navigator as any).browserLanguage ||
-		(window.navigator as any).systemLanguage ||
-		'en-us',
+			window.navigator.language ||
+			(window.navigator as any).browserLanguage ||
+			(window.navigator as any).systemLanguage ||
+			'en-us'
+	),
 	passageEditorFontFamily: 'var(--font-ui)',
 	passageEditorFontScale: 1,
 	passageTagDisplay: 'color',
