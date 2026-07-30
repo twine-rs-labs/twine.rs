@@ -1,13 +1,16 @@
-import {expect, Locator, Page, test} from '@playwright/test';
+import {expect, Locator, Page, test, type TestInfo} from '@playwright/test';
 import {
 	_electron as electron,
 	ElectronApplication,
 	FrameLocator
 } from 'playwright';
+import type {Dirent} from 'node:fs';
 import {
 	access,
+	lstat,
 	mkdir,
 	mkdtemp,
+	open,
 	readdir,
 	readFile,
 	writeFile
@@ -17,11 +20,16 @@ import path from 'node:path';
 
 type RunningApp = {
 	app: ElectronApplication;
+	mainProcessLogs: string[];
 	page: Page;
 	profileRoot: string;
+	rendererLogs: string[];
 };
 
 interface PreviewTestWindow extends Window {
+	twinePerformance?: {
+		snapshot(): Promise<unknown>;
+	};
 	twineElectron?: {
 		hydrateProjectFolder(rootPath: string): Promise<{
 			stories: Array<{
@@ -106,6 +114,15 @@ async function prepareIsolatedEnvironment(root: string) {
 	);
 }
 
+function appendDiagnosticLog(logs: string[], channel: string, message: string) {
+	for (const line of message.split(/\r?\n/).filter(Boolean)) {
+		logs.push(`${channel}: ${line}`);
+	}
+	if (logs.length > 500) {
+		logs.splice(0, logs.length - 500);
+	}
+}
+
 async function launchPackagedApp(
 	executablePath: string,
 	profileLabel: string
@@ -128,11 +145,42 @@ async function launchPackagedApp(
 		env: isolatedEnvironment(profileRoot),
 		executablePath
 	});
+	const mainProcessLogs: string[] = [];
+
+	app.on('console', message =>
+		appendDiagnosticLog(
+			mainProcessLogs,
+			`console ${message.type()}`,
+			message.text()
+		)
+	);
+	app
+		.process()
+		.stdout?.on('data', (chunk: Buffer | string) =>
+			appendDiagnosticLog(mainProcessLogs, 'stdout', String(chunk))
+		);
+	app
+		.process()
+		.stderr?.on('data', (chunk: Buffer | string) =>
+			appendDiagnosticLog(mainProcessLogs, 'stderr', String(chunk))
+		);
 	const page = await app.firstWindow();
+	const rendererLogs: string[] = [];
+
+	page.on('console', message =>
+		appendDiagnosticLog(
+			rendererLogs,
+			`console ${message.type()}`,
+			message.text()
+		)
+	);
+	page.on('pageerror', error =>
+		appendDiagnosticLog(rendererLogs, 'pageerror', error.message)
+	);
 
 	await page.waitForLoadState('domcontentloaded');
 	await expect(page.getByLabel('twine.rs')).toBeVisible();
-	return {app, page, profileRoot};
+	return {app, mainProcessLogs, page, profileRoot, rendererLogs};
 }
 
 function isPreviewPage(page: Page) {
@@ -377,29 +425,343 @@ async function projectRootFromRenderer(page: Page) {
 	});
 }
 
-async function waitForSavedText(projectRoot: string, expected: string) {
-	await expect
-		.poll(
-			async () => {
-				try {
-					return await readFile(path.join(projectRoot, 'story.twee'), 'utf8');
-				} catch {
-					// Passage-file projects keep their editable prose below passages/.
+const projectSaveDiagnosticEntryLimit = 200;
+const projectSaveDiagnosticErrorLimit = 20;
+const projectSaveDiagnosticFileLimit = 80;
+const projectSaveDiagnosticFilePreviewBytes = 8 * 1024;
+const projectSaveDiagnosticTotalPreviewBytes = 64 * 1024;
+const projectSaveDiagnosticTimeoutMs = 5_000;
+
+function projectSaveDiagnosticError(error: unknown) {
+	return {
+		message: error instanceof Error ? error.message : String(error),
+		stack: error instanceof Error ? error.stack : undefined
+	};
+}
+
+async function withProjectSaveDiagnosticTimeout<T>(
+	label: string,
+	operation: () => Promise<T>
+): Promise<T | {error: ReturnType<typeof projectSaveDiagnosticError>}> {
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	const operationResult = Promise.resolve()
+		.then(operation)
+		.catch(error => ({error: projectSaveDiagnosticError(error)}));
+	const timeoutResult = new Promise<{
+		error: ReturnType<typeof projectSaveDiagnosticError>;
+	}>(resolve => {
+		timeoutId = setTimeout(() => {
+			resolve({
+				error: projectSaveDiagnosticError(
+					new Error(
+						`${label} timed out after ${projectSaveDiagnosticTimeoutMs} ms.`
+					)
+				)
+			});
+		}, projectSaveDiagnosticTimeoutMs);
+	});
+
+	try {
+		return await Promise.race([operationResult, timeoutResult]);
+	} finally {
+		if (timeoutId !== undefined) {
+			clearTimeout(timeoutId);
+		}
+	}
+}
+
+function isProjectSaveDiagnosticPath(relativePath: string) {
+	return (
+		relativePath === 'twine.toml' ||
+		relativePath.endsWith('.twee') ||
+		relativePath.startsWith('.twine/') ||
+		/\.(?:baseline|link-probe|rollback|tmp)$/.test(relativePath)
+	);
+}
+
+function shouldTraverseProjectSaveDiagnosticDirectory(relativePath: string) {
+	return (
+		relativePath !== 'assets' &&
+		!relativePath.startsWith('assets/') &&
+		relativePath !== '.twine/cache' &&
+		!relativePath.startsWith('.twine/cache/')
+	);
+}
+
+async function projectSaveFilesystemSnapshot(projectRoot: string) {
+	const directories = [{absolutePath: projectRoot, relativePath: ''}];
+	const errors: Array<{message: string; path: string}> = [];
+	const files: Array<Record<string, unknown>> = [];
+	let inspectedBytes = 0;
+	let traversedEntries = 0;
+	let truncated = false;
+	const recordError = (relativePath: string, error: unknown) => {
+		if (errors.length < projectSaveDiagnosticErrorLimit) {
+			errors.push({
+				message: error instanceof Error ? error.message : String(error),
+				path: relativePath
+			});
+		} else {
+			truncated = true;
+		}
+	};
+
+	traversal: while (directories.length > 0) {
+		const directory = directories.shift()!;
+		let entries: Dirent[];
+
+		try {
+			entries = await readdir(directory.absolutePath, {withFileTypes: true});
+		} catch (error) {
+			recordError(directory.relativePath || '.', error);
+			continue;
+		}
+		entries.sort((left, right) => left.name.localeCompare(right.name));
+
+		for (const entry of entries) {
+			traversedEntries++;
+			if (traversedEntries > projectSaveDiagnosticEntryLimit) {
+				truncated = true;
+				break traversal;
+			}
+			const relativePath = directory.relativePath
+				? `${directory.relativePath}/${entry.name}`
+				: entry.name;
+			const absolutePath = path.join(directory.absolutePath, entry.name);
+
+			if (entry.isDirectory()) {
+				if (shouldTraverseProjectSaveDiagnosticDirectory(relativePath)) {
+					directories.push({absolutePath, relativePath});
 				}
+				continue;
+			}
+			if (!isProjectSaveDiagnosticPath(relativePath)) {
+				continue;
+			}
+			if (files.length >= projectSaveDiagnosticFileLimit) {
+				truncated = true;
+				continue;
+			}
 
-				const passagesRoot = path.join(projectRoot, 'passages');
-				const files = (await readdir(passagesRoot, {recursive: true})).filter(
-					file => file.endsWith('.twee')
-				);
-				const sources = await Promise.all(
-					files.map(file => readFile(path.join(passagesRoot, file), 'utf8'))
-				);
+			const file: Record<string, unknown> = {
+				path: relativePath,
+				type: entry.isFile()
+					? 'file'
+					: entry.isSymbolicLink()
+						? 'symlink'
+						: 'other'
+			};
 
-				return sources.join('\n');
+			try {
+				const stats = await lstat(absolutePath);
+
+				file.mtimeMs = stats.mtimeMs;
+				file.sizeBytes = stats.size;
+				if (stats.isFile()) {
+					const remainingBytes =
+						projectSaveDiagnosticTotalPreviewBytes - inspectedBytes;
+					const previewBytes = Math.min(
+						stats.size,
+						projectSaveDiagnosticFilePreviewBytes,
+						remainingBytes
+					);
+
+					if (previewBytes > 0) {
+						let handle: Awaited<ReturnType<typeof open>> | undefined;
+
+						try {
+							handle = await open(absolutePath, 'r');
+							const buffer = Buffer.alloc(previewBytes);
+							const {bytesRead} = await handle.read(
+								buffer,
+								0,
+								buffer.length,
+								0
+							);
+
+							inspectedBytes += bytesRead;
+							file.inspectedBytes = bytesRead;
+							file.sourcePreview = buffer
+								.subarray(0, bytesRead)
+								.toString('utf8');
+							file.sourceTruncated = stats.size > bytesRead;
+						} catch (error) {
+							recordError(relativePath, error);
+						} finally {
+							await handle?.close().catch(() => undefined);
+						}
+					}
+				}
+			} catch (error) {
+				recordError(relativePath, error);
+			}
+			files.push(file);
+		}
+	}
+
+	if (directories.length > 0) {
+		truncated = true;
+	}
+
+	return {
+		errors,
+		files,
+		inspectedBytes,
+		traversedEntries,
+		truncated
+	};
+}
+
+async function rendererProjectSaveDiagnostics(page: Page) {
+	if (page.isClosed()) {
+		return {error: 'Renderer page is closed.'};
+	}
+
+	return page.evaluate(async () => {
+		const saveStatus = document.querySelector<HTMLElement>(
+			'.app-shell__status-save'
+		);
+		const performanceHarness = (window as PreviewTestWindow).twinePerformance;
+		let performanceSnapshot:
+			| {
+					main?: unknown;
+					rendererEvents?: unknown[];
+			  }
+			| {error: string}
+			| undefined;
+
+		if (performanceHarness) {
+			try {
+				const snapshot = (await performanceHarness.snapshot()) as {
+					main?: unknown;
+					renderer?: {events?: unknown[]};
+				};
+				const events = Array.isArray(snapshot.renderer?.events)
+					? snapshot.renderer.events
+					: [];
+
+				performanceSnapshot = {
+					main: snapshot.main,
+					rendererEvents: events
+						.filter(event => {
+							const name =
+								typeof event === 'object' &&
+								event !== null &&
+								'name' in event &&
+								typeof event.name === 'string'
+									? event.name
+									: '';
+
+							return /baseline|persist|save/i.test(name);
+						})
+						.slice(-100)
+				};
+			} catch (error) {
+				performanceSnapshot = {
+					error: error instanceof Error ? error.message : String(error)
+				};
+			}
+		}
+
+		return {
+			location: window.location.href,
+			performance: performanceSnapshot ?? {
+				error: 'Performance harness is unavailable.'
 			},
-			{timeout: 30_000}
+			saveStatus: saveStatus
+				? {
+						text: saveStatus.textContent?.trim() ?? '',
+						title: saveStatus.getAttribute('title')
+					}
+				: undefined
+		};
+	});
+}
+
+async function attachProjectSaveDiagnostics(
+	running: RunningApp,
+	projectRoot: string,
+	expected: string,
+	failure: unknown,
+	testInfo: TestInfo
+) {
+	const [filesystem, renderer] = await Promise.all([
+		withProjectSaveDiagnosticTimeout('Filesystem snapshot', () =>
+			projectSaveFilesystemSnapshot(projectRoot)
+		),
+		withProjectSaveDiagnosticTimeout('Renderer snapshot', () =>
+			rendererProjectSaveDiagnostics(running.page)
 		)
-		.toContain(expected);
+	]);
+	const body = JSON.stringify(
+		{
+			expected: {length: expected.length, text: expected},
+			failure: projectSaveDiagnosticError(failure),
+			filesystem,
+			mainProcessLogs: running.mainProcessLogs,
+			projectRoot,
+			renderer,
+			rendererLogs: running.rendererLogs
+		},
+		(_key, value) => (typeof value === 'bigint' ? value.toString() : value),
+		2
+	);
+
+	await testInfo.attach('project-save-diagnostics', {
+		body: Buffer.from(body),
+		contentType: 'application/json'
+	});
+}
+
+async function waitForSavedText(
+	running: RunningApp,
+	projectRoot: string,
+	expected: string,
+	testInfo: TestInfo
+) {
+	try {
+		await expect
+			.poll(
+				async () => {
+					try {
+						return await readFile(path.join(projectRoot, 'story.twee'), 'utf8');
+					} catch {
+						// Passage-file projects keep their editable prose below passages/.
+					}
+
+					const passagesRoot = path.join(projectRoot, 'passages');
+					const files = (await readdir(passagesRoot, {recursive: true})).filter(
+						file => file.endsWith('.twee')
+					);
+					const sources = await Promise.all(
+						files.map(file => readFile(path.join(passagesRoot, file), 'utf8'))
+					);
+
+					return sources.join('\n');
+				},
+				{timeout: 30_000}
+			)
+			.toContain(expected);
+	} catch (error) {
+		try {
+			await attachProjectSaveDiagnostics(
+				running,
+				projectRoot,
+				expected,
+				error,
+				testInfo
+			);
+		} catch (diagnosticError) {
+			console.warn(
+				`Could not attach project-save diagnostics: ${
+					diagnosticError instanceof Error
+						? diagnosticError.message
+						: String(diagnosticError)
+				}`
+			);
+		}
+		throw error;
+	}
 }
 
 async function persistedStartUuid(page: Page) {
@@ -527,7 +889,7 @@ const silentWav = (() => {
 
 test.describe.configure({mode: 'serial'});
 
-test('Play exposes debug state and replaces fresh Test builds in the same window', async () => {
+test('Play exposes debug state and replaces fresh Test builds in the same window', async ({}, testInfo) => {
 	test.setTimeout(6 * 60 * 1000);
 	const executablePath = await packagedExecutable();
 	let running: RunningApp | undefined;
@@ -551,8 +913,10 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 			'Start'
 		);
 		await waitForSavedText(
+			running,
 			projectRoot,
-			'Start passage version one. [[Continue->Next]]'
+			'Start passage version one. [[Continue->Next]]',
+			testInfo
 		);
 
 		const preview = await launchPreview(running, () =>
@@ -663,8 +1027,10 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 			'Next'
 		);
 		await waitForSavedText(
+			running,
 			projectRoot,
-			'Next passage version two, built live.'
+			'Next passage version two, built live.',
+			testInfo
 		);
 
 		await preview.getByRole('button', {name: 'Graph'}).click();
@@ -699,8 +1065,10 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 			'Next'
 		);
 		await waitForSavedText(
+			running,
 			projectRoot,
-			'Next passage version three, rebuilt fresh.'
+			'Next passage version three, rebuilt fresh.',
+			testInfo
 		);
 		const secondPackage = await previewOrigin(preview);
 
@@ -720,7 +1088,7 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 	}
 });
 
-test('Test From Here preserves the saved start and Proof uses Paperthin in the managed shell', async () => {
+test('Test From Here preserves the saved start and Proof uses Paperthin in the managed shell', async ({}, testInfo) => {
 	test.setTimeout(5 * 60 * 1000);
 	const executablePath = await packagedExecutable();
 	let running: RunningApp | undefined;
@@ -743,8 +1111,10 @@ test('Test From Here preserves the saved start and Proof uses Paperthin in the m
 		const projectRoot = await projectRootFromRenderer(page);
 
 		await waitForSavedText(
+			running,
 			projectRoot,
-			'This is the passage-specific debug launch.'
+			'This is the passage-specific debug launch.',
+			testInfo
 		);
 		const savedStartBefore = await persistedStartUuid(page);
 		const testPreview = await launchPreview(running, () =>
@@ -1182,7 +1552,7 @@ test('copied assets, storage, package origins, cleanup, and protocol lifetime st
 	}
 });
 
-test('current passage resolves to a stable ID in every bundled format family', async () => {
+test('current passage resolves to a stable ID in every bundled format family', async ({}, testInfo) => {
 	test.setTimeout(8 * 60 * 1000);
 	const executablePath = await packagedExecutable();
 	const formats = [
@@ -1210,10 +1580,10 @@ test('current passage resolves to a stable ID in every bundled format family', a
 			const projectRoot = await projectRootFromRenderer(page);
 
 			await createPassage(page, 'Next', marker);
-			await waitForSavedText(projectRoot, marker);
+			await waitForSavedText(running, projectRoot, marker, testInfo);
 			await selectPassage(page, 'Start');
 			await replaceEditorText(page, startSource);
-			await waitForSavedText(projectRoot, startSource);
+			await waitForSavedText(running, projectRoot, startSource, testInfo);
 			const preview = await launchPreview(running, () =>
 				page.getByTitle('Play').click()
 			);

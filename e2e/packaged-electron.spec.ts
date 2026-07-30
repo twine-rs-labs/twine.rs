@@ -5,10 +5,13 @@ import {
 	ElectronApplication,
 	Page
 } from 'playwright';
+import type {Dirent} from 'node:fs';
 import {
 	access,
+	lstat,
 	mkdir,
 	mkdtemp,
+	open,
 	readFile,
 	readdir,
 	realpath,
@@ -30,6 +33,7 @@ type RunningPackagedApp = {
 	app: ElectronApplication;
 	mainProcessLogs: string[];
 	page: Page;
+	rendererLogs: string[];
 };
 
 type PackagedProjectStory = {
@@ -46,6 +50,9 @@ type PackagedProjectStory = {
 };
 
 interface PackagedProjectWindow extends Window {
+	twinePerformance?: {
+		snapshot(): Promise<unknown>;
+	};
 	twineElectron?: {
 		beginLegacyStoryWrite(storyId: string): string;
 		finishLegacyStoryWrite(token: string, errorMessage?: string): void;
@@ -203,10 +210,22 @@ async function launchPackagedApp(
 			appendMainProcessLog(mainProcessLogs, 'stderr', String(chunk))
 		);
 	const page = await app.firstWindow();
+	const rendererLogs: string[] = [];
+
+	page.on('console', message =>
+		appendMainProcessLog(
+			rendererLogs,
+			`console ${message.type()}`,
+			message.text()
+		)
+	);
+	page.on('pageerror', error =>
+		appendMainProcessLog(rendererLogs, 'pageerror', error.message)
+	);
 
 	await page.waitForLoadState('domcontentloaded');
 	await expect(page.getByLabel('twine.rs')).toBeVisible();
-	return {app, mainProcessLogs, page};
+	return {app, mainProcessLogs, page, rendererLogs};
 }
 
 function sourceEditor(page: Page) {
@@ -693,26 +712,341 @@ async function projectRootFromRenderer(page: Page) {
 	});
 }
 
-async function waitForSavedText(projectRoot: string, expected: string) {
-	await expect
-		.poll(
-			async () => {
-				try {
-					return await readFile(path.join(projectRoot, 'story.twee'), 'utf8');
-				} catch {
-					// Passage-file projects keep their editable prose below passages/.
-				}
-				const passagesRoot = path.join(projectRoot, 'passages');
-				const files = await readdir(passagesRoot, {recursive: true});
-				const passageFile = files.find(file => file.endsWith('.twee'));
+const projectSaveDiagnosticEntryLimit = 200;
+const projectSaveDiagnosticErrorLimit = 20;
+const projectSaveDiagnosticFileLimit = 80;
+const projectSaveDiagnosticFilePreviewBytes = 8 * 1024;
+const projectSaveDiagnosticTotalPreviewBytes = 64 * 1024;
+const projectSaveDiagnosticTimeoutMs = 5_000;
 
-				return passageFile
-					? readFile(path.join(passagesRoot, passageFile), 'utf8')
-					: '';
+function projectSaveDiagnosticError(error: unknown) {
+	return {
+		message: error instanceof Error ? error.message : String(error),
+		stack: error instanceof Error ? error.stack : undefined
+	};
+}
+
+async function withProjectSaveDiagnosticTimeout<T>(
+	label: string,
+	operation: () => Promise<T>
+): Promise<T | {error: ReturnType<typeof projectSaveDiagnosticError>}> {
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	const operationResult = Promise.resolve()
+		.then(operation)
+		.catch(error => ({error: projectSaveDiagnosticError(error)}));
+	const timeoutResult = new Promise<{
+		error: ReturnType<typeof projectSaveDiagnosticError>;
+	}>(resolve => {
+		timeoutId = setTimeout(() => {
+			resolve({
+				error: projectSaveDiagnosticError(
+					new Error(
+						`${label} timed out after ${projectSaveDiagnosticTimeoutMs} ms.`
+					)
+				)
+			});
+		}, projectSaveDiagnosticTimeoutMs);
+	});
+
+	try {
+		return await Promise.race([operationResult, timeoutResult]);
+	} finally {
+		if (timeoutId !== undefined) {
+			clearTimeout(timeoutId);
+		}
+	}
+}
+
+function isProjectSaveDiagnosticPath(relativePath: string) {
+	return (
+		relativePath === 'twine.toml' ||
+		relativePath.endsWith('.twee') ||
+		relativePath.startsWith('.twine/') ||
+		/\.(?:baseline|link-probe|rollback|tmp)$/.test(relativePath)
+	);
+}
+
+function shouldTraverseProjectSaveDiagnosticDirectory(relativePath: string) {
+	return (
+		relativePath !== 'assets' &&
+		!relativePath.startsWith('assets/') &&
+		relativePath !== '.twine/cache' &&
+		!relativePath.startsWith('.twine/cache/')
+	);
+}
+
+async function projectSaveFilesystemSnapshot(projectRoot: string) {
+	const directories = [{absolutePath: projectRoot, relativePath: ''}];
+	const errors: Array<{message: string; path: string}> = [];
+	const files: Array<Record<string, unknown>> = [];
+	let inspectedBytes = 0;
+	let traversedEntries = 0;
+	let truncated = false;
+	const recordError = (relativePath: string, error: unknown) => {
+		if (errors.length < projectSaveDiagnosticErrorLimit) {
+			errors.push({
+				message: error instanceof Error ? error.message : String(error),
+				path: relativePath
+			});
+		} else {
+			truncated = true;
+		}
+	};
+
+	traversal: while (directories.length > 0) {
+		const directory = directories.shift()!;
+		let entries: Dirent[];
+
+		try {
+			entries = await readdir(directory.absolutePath, {withFileTypes: true});
+		} catch (error) {
+			recordError(directory.relativePath || '.', error);
+			continue;
+		}
+		entries.sort((left, right) => left.name.localeCompare(right.name));
+
+		for (const entry of entries) {
+			traversedEntries++;
+			if (traversedEntries > projectSaveDiagnosticEntryLimit) {
+				truncated = true;
+				break traversal;
+			}
+			const relativePath = directory.relativePath
+				? `${directory.relativePath}/${entry.name}`
+				: entry.name;
+			const absolutePath = path.join(directory.absolutePath, entry.name);
+
+			if (entry.isDirectory()) {
+				if (shouldTraverseProjectSaveDiagnosticDirectory(relativePath)) {
+					directories.push({absolutePath, relativePath});
+				}
+				continue;
+			}
+			if (!isProjectSaveDiagnosticPath(relativePath)) {
+				continue;
+			}
+			if (files.length >= projectSaveDiagnosticFileLimit) {
+				truncated = true;
+				continue;
+			}
+
+			const file: Record<string, unknown> = {
+				path: relativePath,
+				type: entry.isFile()
+					? 'file'
+					: entry.isSymbolicLink()
+						? 'symlink'
+						: 'other'
+			};
+
+			try {
+				const stats = await lstat(absolutePath);
+
+				file.mtimeMs = stats.mtimeMs;
+				file.sizeBytes = stats.size;
+				if (stats.isFile()) {
+					const remainingBytes =
+						projectSaveDiagnosticTotalPreviewBytes - inspectedBytes;
+					const previewBytes = Math.min(
+						stats.size,
+						projectSaveDiagnosticFilePreviewBytes,
+						remainingBytes
+					);
+
+					if (previewBytes > 0) {
+						let handle: Awaited<ReturnType<typeof open>> | undefined;
+
+						try {
+							handle = await open(absolutePath, 'r');
+							const buffer = Buffer.alloc(previewBytes);
+							const {bytesRead} = await handle.read(
+								buffer,
+								0,
+								buffer.length,
+								0
+							);
+
+							inspectedBytes += bytesRead;
+							file.inspectedBytes = bytesRead;
+							file.sourcePreview = buffer
+								.subarray(0, bytesRead)
+								.toString('utf8');
+							file.sourceTruncated = stats.size > bytesRead;
+						} catch (error) {
+							recordError(relativePath, error);
+						} finally {
+							await handle?.close().catch(() => undefined);
+						}
+					}
+				}
+			} catch (error) {
+				recordError(relativePath, error);
+			}
+			files.push(file);
+		}
+	}
+
+	if (directories.length > 0) {
+		truncated = true;
+	}
+
+	return {
+		errors,
+		files,
+		inspectedBytes,
+		traversedEntries,
+		truncated
+	};
+}
+
+async function rendererProjectSaveDiagnostics(page: Page) {
+	if (page.isClosed()) {
+		return {error: 'Renderer page is closed.'};
+	}
+
+	return page.evaluate(async () => {
+		const saveStatus = document.querySelector<HTMLElement>(
+			'.app-shell__status-save'
+		);
+		const performanceHarness = (window as PackagedProjectWindow)
+			.twinePerformance;
+		let performanceSnapshot:
+			| {
+					main?: unknown;
+					rendererEvents?: unknown[];
+			  }
+			| {error: string}
+			| undefined;
+
+		if (performanceHarness) {
+			try {
+				const snapshot = (await performanceHarness.snapshot()) as {
+					main?: unknown;
+					renderer?: {events?: unknown[]};
+				};
+				const events = Array.isArray(snapshot.renderer?.events)
+					? snapshot.renderer.events
+					: [];
+
+				performanceSnapshot = {
+					main: snapshot.main,
+					rendererEvents: events
+						.filter(event => {
+							const name =
+								typeof event === 'object' &&
+								event !== null &&
+								'name' in event &&
+								typeof event.name === 'string'
+									? event.name
+									: '';
+
+							return /baseline|persist|save/i.test(name);
+						})
+						.slice(-100)
+				};
+			} catch (error) {
+				performanceSnapshot = {
+					error: error instanceof Error ? error.message : String(error)
+				};
+			}
+		}
+
+		return {
+			location: window.location.href,
+			performance: performanceSnapshot ?? {
+				error: 'Performance harness is unavailable.'
 			},
-			{timeout: 30_000}
+			saveStatus: saveStatus
+				? {
+						text: saveStatus.textContent?.trim() ?? '',
+						title: saveStatus.getAttribute('title')
+					}
+				: undefined
+		};
+	});
+}
+
+async function attachProjectSaveDiagnostics(
+	running: RunningPackagedApp,
+	projectRoot: string,
+	expected: string,
+	failure: unknown,
+	testInfo: TestInfo
+) {
+	const [filesystem, renderer] = await Promise.all([
+		withProjectSaveDiagnosticTimeout('Filesystem snapshot', () =>
+			projectSaveFilesystemSnapshot(projectRoot)
+		),
+		withProjectSaveDiagnosticTimeout('Renderer snapshot', () =>
+			rendererProjectSaveDiagnostics(running.page)
 		)
-		.toContain(expected);
+	]);
+	const body = JSON.stringify(
+		{
+			expected: {length: expected.length, text: expected},
+			failure: projectSaveDiagnosticError(failure),
+			filesystem,
+			mainProcessLogs: running.mainProcessLogs,
+			projectRoot,
+			renderer,
+			rendererLogs: running.rendererLogs
+		},
+		(_key, value) => (typeof value === 'bigint' ? value.toString() : value),
+		2
+	);
+
+	await testInfo.attach('project-save-diagnostics', {
+		body: Buffer.from(body),
+		contentType: 'application/json'
+	});
+}
+
+async function waitForSavedText(
+	running: RunningPackagedApp,
+	projectRoot: string,
+	expected: string,
+	testInfo: TestInfo
+) {
+	try {
+		await expect
+			.poll(
+				async () => {
+					try {
+						return await readFile(path.join(projectRoot, 'story.twee'), 'utf8');
+					} catch {
+						// Passage-file projects keep their editable prose below passages/.
+					}
+					const passagesRoot = path.join(projectRoot, 'passages');
+					const files = await readdir(passagesRoot, {recursive: true});
+					const passageFile = files.find(file => file.endsWith('.twee'));
+
+					return passageFile
+						? readFile(path.join(passagesRoot, passageFile), 'utf8')
+						: '';
+				},
+				{timeout: 30_000}
+			)
+			.toContain(expected);
+	} catch (error) {
+		try {
+			await attachProjectSaveDiagnostics(
+				running,
+				projectRoot,
+				expected,
+				error,
+				testInfo
+			);
+		} catch (diagnosticError) {
+			console.warn(
+				`Could not attach project-save diagnostics: ${
+					diagnosticError instanceof Error
+						? diagnosticError.message
+						: String(diagnosticError)
+				}`
+			);
+		}
+		throw error;
+	}
 }
 
 async function projectTextFiles(projectRoot: string) {
@@ -864,7 +1198,7 @@ async function openDialogCalls(app: ElectronApplication) {
 	});
 }
 
-test('packaged app preserves sibling stories across full save, rename, and reopen', async () => {
+test('packaged app preserves sibling stories across full save, rename, and reopen', async ({}, testInfo) => {
 	const executablePath = await packagedExecutable();
 	const renamedStoryName = 'Packaged Sibling Renamed';
 	const siblingStoryId = 'packaged-sibling-story-id';
@@ -879,7 +1213,7 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 	const openProfile = await mkdtemp(
 		path.join(os.tmpdir(), 'twine-rs-packaged-open-')
 	);
-	let running: {app: ElectronApplication; page: Page} | undefined;
+	let running: RunningPackagedApp | undefined;
 
 	try {
 		running = await launchPackagedApp(executablePath, createProfile);
@@ -902,8 +1236,10 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 		expect(await readdir(projectRoot)).not.toContain('story.twee');
 		await replaceEditorText(page, 'Packaged save survived the native bridge.');
 		await waitForSavedText(
+			running,
 			projectRoot,
-			'Packaged save survived the native bridge.'
+			'Packaged save survived the native bridge.',
+			testInfo
 		);
 
 		const siblingSave = await page.evaluate(
@@ -1285,8 +1621,10 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			'Single-file save survived the native bridge.'
 		);
 		await waitForSavedText(
+			running,
 			singleProjectRoot,
-			'Single-file save survived the native bridge.'
+			'Single-file save survived the native bridge.',
+			testInfo
 		);
 
 		await app.close();
@@ -1353,7 +1691,7 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 	}
 });
 
-test('packaged desktop embeds referenced media for every bundled format family', async () => {
+test('packaged desktop embeds referenced media for every bundled format family', async ({}, testInfo) => {
 	const executablePath = await packagedExecutable();
 	const profileRoot = await mkdtemp(
 		path.join(os.tmpdir(), 'twine-rs-packaged-media-')
@@ -1367,7 +1705,7 @@ test('packaged desktop embeds referenced media for every bundled format family',
 		'Snowman 2.1.1',
 		'SugarCube 2.37.3'
 	];
-	let running: {app: ElectronApplication; page: Page} | undefined;
+	let running: RunningPackagedApp | undefined;
 
 	try {
 		running = await launchPackagedApp(executablePath, profileRoot);
@@ -1391,7 +1729,12 @@ test('packaged desktop embeds referenced media for every bundled format family',
 			const originalAssets = await importReferencedMedia(page, projectRoot);
 
 			await replaceEditorText(page, mediaSource);
-			await waitForSavedText(projectRoot, 'Offline referenced media is ready.');
+			await waitForSavedText(
+				running,
+				projectRoot,
+				'Offline referenced media is ready.',
+				testInfo
+			);
 			await page.getByTitle('Build & Export').click();
 			await expect(page).toHaveURL(/#\/stories\/[^/]+\/build$/);
 			const embedSwitch = page.getByLabel('Embed referenced media');
