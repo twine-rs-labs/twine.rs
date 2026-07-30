@@ -3222,6 +3222,308 @@ describe('project-folder native bridge', () => {
 		);
 	});
 
+	function windowsDurabilitySaveFixture(includeScriptAndStyles: boolean) {
+		const rootPath = '/native/project.twine.rs';
+		const manifestPath = `${rootPath}/twine.toml`;
+		const passagePath = `${rootPath}/passages/story/start.twee`;
+		const scriptPath = `${rootPath}/scripts/story.js`;
+		const stylesheetPath = `${rootPath}/styles/story.css`;
+		const originalSources = {
+			[passagePath]: 'old passage',
+			[scriptPath]: 'old script',
+			[stylesheetPath]: 'old style'
+		};
+		const nextSources = {
+			[passagePath]: 'new passage',
+			[scriptPath]: 'new script',
+			[stylesheetPath]: 'new style'
+		};
+		const manifestSource = [
+			'schema_version = 2',
+			'name = "Project"',
+			'[[stories]]',
+			'id = "story-id"',
+			'ifid = "STORY-ID"',
+			'name = "Story"',
+			...(includeScriptAndStyles
+				? ['script = "scripts/story.js"', 'stylesheet = "styles/story.css"']
+				: []),
+			'start_passage = "passage-id"',
+			'[[stories.passages]]',
+			'id = "passage-id"',
+			'name = "Start"',
+			'file = "passages/story/start.twee"'
+		].join('\n');
+		const targetPaths = includeScriptAndStyles
+			? [passagePath, scriptPath, stylesheetPath]
+			: [passagePath];
+		const files = new Map<string, string>([
+			[manifestPath, manifestSource],
+			...targetPaths.map(
+				path =>
+					[path, originalSources[path as keyof typeof originalSources]] as const
+			)
+		]);
+		const missing = () => Object.assign(new Error('missing'), {code: 'ENOENT'});
+		const entry = (
+			path: string,
+			kind: 'manifest' | 'passage' | 'script' | 'stylesheet',
+			source: string
+		) => ({
+			contentDigest: createHash('sha256').update(source).digest('hex'),
+			fingerprint: `1:${Buffer.byteLength(source)}`,
+			kind,
+			modifiedAt: '2026-06-21T16:00:00.001Z',
+			mtimeMs: 1,
+			path: path.slice(rootPath.length + 1),
+			sizeBytes: Buffer.byteLength(source)
+		});
+		const baselineFiles = [
+			entry(manifestPath, 'manifest', manifestSource),
+			entry(passagePath, 'passage', originalSources[passagePath]),
+			...(includeScriptAndStyles
+				? [
+						entry(scriptPath, 'script', originalSources[scriptPath]),
+						entry(stylesheetPath, 'stylesheet', originalSources[stylesheetPath])
+					]
+				: [])
+		];
+		const original = fakeStory(1);
+		const story = {
+			...original,
+			id: 'story-id',
+			name: 'Story',
+			passages: [
+				{
+					...original.passages[0],
+					id: 'passage-id',
+					name: 'Start',
+					story: 'story-id',
+					text: nextSources[passagePath]
+				}
+			],
+			script: includeScriptAndStyles
+				? nextSources[scriptPath]
+				: original.script,
+			stylesheet: includeScriptAndStyles
+				? nextSources[stylesheetPath]
+				: original.stylesheet
+		};
+
+		readFileMock.mockImplementation(async path => {
+			const source = files.get(String(path));
+
+			if (source === undefined) {
+				throw missing();
+			}
+			return source;
+		});
+		readJsonMock.mockImplementation(async path => {
+			const source = files.get(String(path));
+
+			if (source === undefined) {
+				throw missing();
+			}
+			return JSON.parse(source);
+		});
+		writeFileMock.mockImplementation(async (path, source) => {
+			files.set(String(path), String(source));
+		});
+		removeMock.mockImplementation(async path => {
+			files.delete(String(path));
+		});
+		renameFileMock.mockImplementation(async (source, target) => {
+			const sourceText = String(source);
+			const content = files.get(sourceText);
+
+			if (content === undefined) {
+				throw missing();
+			}
+			files.set(String(target), content);
+			files.delete(sourceText);
+		});
+		linkFileMock.mockImplementation(async (source, target) => {
+			const content = files.get(String(source));
+
+			if (content === undefined) {
+				throw missing();
+			}
+			if (files.has(String(target))) {
+				throw Object.assign(new Error('exists'), {code: 'EEXIST'});
+			}
+			files.set(String(target), content);
+		});
+		statMock.mockImplementation(async path => {
+			if (String(path) === rootPath) {
+				return {
+					isDirectory: () => true,
+					isFile: () => false,
+					mtime: new Date('2026-06-21T16:00:00.001Z'),
+					mtimeMs: 1,
+					size: 0
+				};
+			}
+			const source = files.get(String(path));
+
+			if (source === undefined) {
+				throw missing();
+			}
+			return {
+				isDirectory: () => false,
+				isFile: () => true,
+				mtime: new Date('2026-06-21T16:00:00.001Z'),
+				mtimeMs: 1,
+				size: Buffer.byteLength(source)
+			};
+		});
+		lstatMock.mockImplementation(async path => {
+			const source = files.get(String(path));
+
+			if (source === undefined) {
+				throw missing();
+			}
+			return {
+				isDirectory: () => false,
+				isFile: () => true,
+				isSymbolicLink: () => false,
+				mtime: new Date('2026-06-21T16:00:00.001Z'),
+				mtimeMs: 1,
+				size: Buffer.byteLength(source)
+			};
+		});
+		openFileMock.mockImplementation(async (path, flags) => {
+			const pathText = String(path);
+			const source = files.get(pathText) ?? '';
+			const bytes = Buffer.from(source);
+			let offset = 0;
+
+			return {
+				close: jest.fn(async () => undefined),
+				read: jest.fn(
+					async (buffer: Buffer, bufferOffset = 0, length = buffer.length) => {
+						const bytesRead = bytes.copy(
+							buffer,
+							bufferOffset,
+							offset,
+							Math.min(bytes.length, offset + length)
+						);
+
+						offset += bytesRead;
+						return {buffer, bytesRead};
+					}
+				),
+				stat: jest.fn(async options =>
+					options?.bigint
+						? {
+								dev: 1n,
+								ino: 1n,
+								isFile: (): boolean => true,
+								mtimeMs: 1n,
+								mtimeNs: 1_000_000n,
+								size: BigInt(bytes.length)
+							}
+						: {
+								dev: 1,
+								ino: 1,
+								isFile: (): boolean => true,
+								mtimeMs: 1,
+								size: bytes.length
+							}
+				),
+				sync: jest.fn(async () => {
+					if (pathText.endsWith('.tmp') && flags === 'r') {
+						throw Object.assign(new Error('operation not permitted'), {
+							code: 'EPERM'
+						});
+					}
+				})
+			};
+		});
+		nativeProjectFileManifestMock.mockReturnValue(baselineFiles);
+		listNativeProjectAssetsMock.mockReturnValue([]);
+
+		return {
+			options: {
+				documentUpdates: [
+					{
+						passageId: 'passage-id',
+						storyId: 'story-id',
+						text: nextSources[passagePath],
+						type: 'passageText' as const
+					},
+					...(includeScriptAndStyles
+						? [
+								{
+									storyId: 'story-id',
+									text: nextSources[scriptPath],
+									type: 'script' as const
+								},
+								{
+									storyId: 'story-id',
+									text: nextSources[stylesheetPath],
+									type: 'stylesheet' as const
+								}
+							]
+						: [])
+				],
+				hints: [
+					{
+						passageId: 'passage-id',
+						storyId: 'story-id',
+						type: 'passageText' as const
+					},
+					...(includeScriptAndStyles
+						? [
+								{storyId: 'story-id', type: 'script' as const},
+								{storyId: 'story-id', type: 'stylesheet' as const}
+							]
+						: [])
+				],
+				incrementalOnly: true
+			},
+			rootPath,
+			story
+		};
+	}
+
+	it('uses a writable Windows handle to sync a single-save recovery journal', async () => {
+		const {options, rootPath, story} = windowsDurabilitySaveFixture(false);
+
+		await startProjectSession(rootPath, undefined, ['story-id']);
+		await expect(saveProjectFolder(rootPath, story, options)).resolves.toEqual(
+			expect.anything()
+		);
+
+		const journalTempOpens = openFileMock.mock.calls.filter(([path]) =>
+			/^\/native\/project\.twine\.rs\/\.twine\/project-file-cas\.json\..+\.tmp$/.test(
+				String(path)
+			)
+		);
+
+		expect(journalTempOpens).not.toEqual([]);
+		expect(journalTempOpens.every(([, flags]) => flags === 'r+')).toBe(true);
+	});
+
+	it('uses writable Windows handles to sync every staged file in a batch save', async () => {
+		const {options, rootPath, story} = windowsDurabilitySaveFixture(true);
+
+		await startProjectSession(rootPath, undefined, ['story-id']);
+		await expect(saveProjectFolder(rootPath, story, options)).resolves.toEqual(
+			expect.anything()
+		);
+
+		const stagedTempOpens = openFileMock.mock.calls.filter(
+			([path, flags]) =>
+				typeof flags === 'string' &&
+				/^\/native\/project\.twine\.rs\/(?:passages\/story\/start\.twee|scripts\/story\.js|styles\/story\.css)\..+\.tmp$/.test(
+					String(path)
+				)
+		);
+
+		expect(stagedTempOpens).toHaveLength(3);
+		expect(stagedTempOpens.every(([, flags]) => flags === 'r+')).toBe(true);
+	});
+
 	it('rolls back every staged-write, claim, install, and staged-tamper failure in a three-file batch', async () => {
 		const rootPath = '/native/project.twine.rs';
 		const manifestPath = `${rootPath}/twine.toml`;

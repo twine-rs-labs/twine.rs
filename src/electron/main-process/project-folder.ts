@@ -6223,7 +6223,7 @@ async function writeProjectFileCasJournal(
 	try {
 		await mkdirp(dirname(path));
 		await writeFile(tempPath, JSON.stringify(journal), 'utf8');
-		handle = await openFile(tempPath, 'r');
+		handle = await openFile(tempPath, 'r+');
 		await handle.sync();
 		await handle.close();
 		handle = undefined;
@@ -7064,7 +7064,7 @@ async function compareAndSwapProjectFiles(
 			await mkdirp(dirname(file.absolutePath));
 			await writeFile(stagedPath, file.text, 'utf8');
 			try {
-				stagedHandle = await openFile(stagedPath, 'r');
+				stagedHandle = await openFile(stagedPath, 'r+');
 				await stagedHandle.sync();
 			} finally {
 				await stagedHandle?.close().catch(() => undefined);
