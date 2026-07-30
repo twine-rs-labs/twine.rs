@@ -21,16 +21,16 @@ async function findWasmAssets(directory, prefix = '') {
 
 export function verifyPrecacheSource(source, requiredRuntimeUrls = []) {
 	const manifest = source.match(
-		/\.precacheAndRoute\(\[(.*?)\](?:,\{.*?\})?\)/s
+		/\.precacheAndRoute\(\s*\[(.*?)\]\s*(?:,\s*\{.*?\})?\s*\)/s
 	)?.[1];
 
 	if (!manifest) {
 		throw new Error('Could not find a generated Workbox precache manifest.');
 	}
 
-	const urls = [...manifest.matchAll(/\burl:("(?:\\.|[^"\\])*")/g)].map(match =>
-		JSON.parse(match[1])
-	);
+	const urls = [
+		...manifest.matchAll(/(?:\burl|"url")\s*:\s*("(?:\\.|[^"\\])*")/g)
+	].map(match => JSON.parse(match[1]));
 	const uniqueUrls = new Set(urls);
 
 	if (urls.length === 0) {

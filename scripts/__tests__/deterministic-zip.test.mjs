@@ -126,6 +126,20 @@ test('validates generated PWA precache runtime closure, uniqueness, and order', 
 		'icons/pwa.png',
 		'manifest.webmanifest'
 	]);
+	assert.deepEqual(
+		verifyPrecacheSource(
+			`workbox.precacheAndRoute([
+				{"url": "a.js", "revision": null},
+				{"url": "${wasmUrl}", "revision": null},
+				{"url": "icons/pwa.png", "revision": "hash"},
+				{"url": "manifest.webmanifest", "revision": "hash"}
+			], {
+				"ignoreURLParametersMatching": [/^utm_/, /^fbclid$/, /^callback$/]
+			})`,
+			[wasmUrl]
+		),
+		['a.js', wasmUrl, 'icons/pwa.png', 'manifest.webmanifest']
+	);
 	assert.throws(
 		() =>
 			verifyPrecacheSource(
