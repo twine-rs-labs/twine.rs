@@ -58,7 +58,10 @@ describe('instrumentPreviewHtml()', () => {
 		expect(result).toContain("['log', 'info', 'warn', 'error']");
 		expect(result).toContain("window.addEventListener('error'");
 		expect(result).toContain("window.addEventListener('unhandledrejection'");
-		expect(result).toContain("sessionStorage.getItem('Saved Session')");
+		expect(result).toContain("storage.getItem('Saved Session')");
+		expect(result).toContain(
+			'var ENABLE_HARLOWE_SESSION_STORAGE_FALLBACK = false'
+		);
 		expect(result).toContain("'Harlowe session'");
 		expect(result).toContain('<body>Story</body>');
 	});
@@ -196,6 +199,29 @@ describe('<StoryPreviewFrame>', () => {
 
 		expect(screen.getByText('Current: Second passage')).toBeInTheDocument();
 		expect(screen.getByText('800 x 600')).toBeInTheDocument();
+	});
+
+	it('reports an observed passage without identity as unknown', () => {
+		render(
+			<StoryPreviewFrame
+				html="<html><head></head><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				startPassageName="Start"
+				storyExists
+				title="Unknown runtime preview"
+			/>
+		);
+
+		expect(screen.getByText('Current: waiting')).toBeInTheDocument();
+		const sessionId = sessionIdFromFrame('Unknown runtime preview');
+
+		postBridgeMessage('Unknown runtime preview', sessionId, {
+			type: 'state',
+			viewport: {height: 600, width: 800}
+		});
+
+		expect(screen.getByText('Current: unknown')).toBeInTheDocument();
+		expect(screen.queryByText('Current: Start')).not.toBeInTheDocument();
 	});
 
 	it('buffers candidate runtime messages and promotes them with the frame', async () => {

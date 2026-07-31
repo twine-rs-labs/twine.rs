@@ -3,7 +3,8 @@ import type {BadgeTone} from '../components/design-system/badge';
 import type {CoreStorySummary} from '../core';
 import type {
 	StoryPreviewRuntimeLogEntry,
-	StoryPreviewRuntimePassage
+	StoryPreviewRuntimePassage,
+	StoryPreviewRuntimeState
 } from './story-preview-contract';
 
 export * from './story-preview-contract';
@@ -74,17 +75,17 @@ export function storyPreviewDebugMetrics(
 
 export function runtimePassageLabel(
 	passage: StoryPreviewRuntimePassage | undefined,
-	startPassageName: string | undefined
+	status: StoryPreviewRuntimeState['status']
 ) {
 	if (passage?.name) {
 		return `Current: ${passage.name}`;
 	}
 
-	if (startPassageName) {
-		return `Current: ${startPassageName}`;
+	if (status === 'waiting') {
+		return 'Current: waiting';
 	}
 
-	return 'Current: waiting';
+	return 'Current: unknown';
 }
 
 export function runtimeLogTone(logs: StoryPreviewRuntimeLogEntry[]): BadgeTone {

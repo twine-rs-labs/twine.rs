@@ -48,6 +48,17 @@ async function setPassageText(page: Page, text: string) {
 	await page.waitForTimeout(450);
 }
 
+async function selectPassage(page: Page, name: string) {
+	const passage = page
+		.getByRole('listitem')
+		.filter({has: page.getByText(name, {exact: true})})
+		.getByRole('button');
+
+	await expect(passage).toBeVisible();
+	await passage.click();
+	await expect(page.getByRole('region', {name, exact: true})).toBeVisible();
+}
+
 async function openStoryInTextMode(page: Page, name: string) {
 	await storyRow(page, name)
 		.getByRole('button', {name: `Open ${name}`})
@@ -377,6 +388,50 @@ test('publishes the current project to a playable page', async ({
 			.frameLocator('iframe[title="Story preview"]')
 			.locator(':visible:text-is("Smoke story is playable.")')
 	).toBeVisible();
+	await publishedPage.close();
+});
+
+test('tracks Harlowe passage navigation in a sandboxed browser preview', async ({
+	context,
+	page
+}) => {
+	await createProject(page, 'Harlowe passage telemetry');
+	await setPassageText(page, 'Start marker. [[Continue->Next]]');
+	await selectPassage(page, 'Next');
+	await setPassageText(page, 'Next marker.');
+
+	const [publishedPage] = await Promise.all([
+		context.waitForEvent('page'),
+		page.getByTitle('Play').click()
+	]);
+	const previewFrame = publishedPage.frameLocator(
+		'iframe[title="Story preview"]'
+	);
+	const previewIframe = publishedPage.locator('iframe[title="Story preview"]');
+	const testCurrent = publishedPage.getByRole('button', {
+		name: 'Test Current'
+	});
+
+	await expect(previewFrame.locator('tw-passage')).toContainText(
+		'Start marker.'
+	);
+	await expect(
+		publishedPage.getByText('Current: Start', {exact: true})
+	).toBeVisible();
+	await expect(testCurrent).toBeEnabled();
+	expect(
+		(await previewIframe.getAttribute('sandbox'))?.split(/\s+/)
+	).not.toContain('allow-same-origin');
+
+	await previewFrame.getByText('Continue', {exact: true}).click();
+
+	await expect(previewFrame.locator('tw-passage')).toContainText(
+		'Next marker.'
+	);
+	await expect(
+		publishedPage.getByText('Current: Next', {exact: true})
+	).toBeVisible();
+	await expect(testCurrent).toBeEnabled();
 	await publishedPage.close();
 });
 

@@ -73,7 +73,9 @@ export const StoryPreviewContentHost: React.FC<
 		() =>
 			sourceHtml === undefined
 				? undefined
-				: instrumentPreviewHtml(sourceHtml, bridgeSessionId),
+				: instrumentPreviewHtml(sourceHtml, bridgeSessionId, {
+						enableHarloweSessionStorageFallback: true
+					}),
 		[bridgeSessionId, sourceHtml]
 	);
 
@@ -427,7 +429,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 							tone={currentPassageId ? 'saved' : 'generated'}
 							title={currentPassage?.source}
 						>
-							{runtimePassageLabel(currentPassage, startPassageName)}
+							{runtimePassageLabel(currentPassage, runtimeState.status)}
 						</Badge>
 						<Badge icon="resize" mono tone="neutral">
 							{runtimeViewport

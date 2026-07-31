@@ -446,18 +446,123 @@ export function createStoryPreviewPassageLookup(
 	};
 }
 
-function bridgeScript(sessionId: string) {
+function bridgeScript(
+	sessionId: string,
+	enableHarloweSessionStorageFallback: boolean
+) {
 	return `
 <script>
 ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 (function () {
 	var SOURCE = ${JSON.stringify(STORY_PREVIEW_BRIDGE_SOURCE)};
 	var SESSION = ${JSON.stringify(sessionId)};
+	var ENABLE_HARLOWE_SESSION_STORAGE_FALLBACK = ${JSON.stringify(
+		enableHarloweSessionStorageFallback
+	)};
 	var MAX_ARGUMENTS = ${STORY_PREVIEW_BRIDGE_LIMITS.logArgumentCount};
 	var MAX_ARGUMENT_LENGTH = ${STORY_PREVIEW_BRIDGE_LIMITS.logArgumentLength};
 	var MAX_MESSAGE_LENGTH = ${STORY_PREVIEW_BRIDGE_LIMITS.logMessageLength};
 	var MAX_FORMAT_SESSION_LENGTH = 1024 * 1024;
+	var harloweSessionStorage;
 	var pendingState = 0;
+
+	function createMemorySessionStorage() {
+		var keys = [];
+		var values = Object.create(null);
+		var storage = {
+			clear: function () {
+				var hadSavedSession = Object.prototype.hasOwnProperty.call(values, 'Saved Session');
+				keys = [];
+				values = Object.create(null);
+
+				if (hadSavedSession) {
+					queueState();
+				}
+			},
+			getItem: function (key) {
+				key = String(key);
+				return Object.prototype.hasOwnProperty.call(values, key)
+					? values[key]
+					: null;
+			},
+			key: function (index) {
+				index = Number(index);
+				return Number.isFinite(index) && index >= 0
+					? keys[Math.floor(index)] || null
+					: null;
+			},
+			removeItem: function (key) {
+				key = String(key);
+
+				if (!Object.prototype.hasOwnProperty.call(values, key)) {
+					return;
+				}
+
+				delete values[key];
+				keys = keys.filter(function (candidate) {
+					return candidate !== key;
+				});
+
+				if (key === 'Saved Session') {
+					queueState();
+				}
+			},
+			setItem: function (key, value) {
+				key = String(key);
+				value = String(value);
+
+				if (!Object.prototype.hasOwnProperty.call(values, key)) {
+					keys.push(key);
+				}
+
+				values[key] = value;
+
+				if (key === 'Saved Session') {
+					queueState();
+				}
+			}
+		};
+
+		Object.defineProperty(storage, 'length', {
+			enumerable: true,
+			get: function () {
+				return keys.length;
+			}
+		});
+
+		return storage;
+	}
+
+	function installHarloweSessionStorageFallback() {
+		if (!ENABLE_HARLOWE_SESSION_STORAGE_FALLBACK) {
+			return;
+		}
+
+		try {
+			var storage = window.sessionStorage;
+			var probeKey = '__twine_rs_preview_session_probe__';
+			storage.setItem(probeKey, '1');
+			storage.removeItem(probeKey);
+			harloweSessionStorage = storage;
+			return;
+		} catch (error) {}
+
+		// Browser srcDoc previews intentionally retain an opaque origin. Give
+		// Harlowe a document-lifetime store instead of weakening the iframe
+		// sandbox with allow-same-origin.
+		var fallback = createMemorySessionStorage();
+
+		try {
+			Object.defineProperty(window, 'sessionStorage', {
+				configurable: true,
+				enumerable: true,
+				value: fallback
+			});
+			harloweSessionStorage = fallback;
+		} catch (error) {}
+	}
+
+	installHarloweSessionStorageFallback();
 
 	function bounded(value, limit) {
 		value = String(value);
@@ -564,7 +669,8 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		}
 
 		try {
-			var savedSession = sessionStorage.getItem('Saved Session');
+			var storage = harloweSessionStorage || sessionStorage;
+			var savedSession = storage.getItem('Saved Session');
 
 			if (!savedSession || savedSession.length > MAX_FORMAT_SESSION_LENGTH) {
 				return undefined;
@@ -766,8 +872,22 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 </script>`;
 }
 
-export function instrumentPreviewHtml(html: string, sessionId: string) {
-	const script = bridgeScript(sessionId);
+function isHarlowePreviewHtml(html: string) {
+	return /<tw-storydata\b[^>]*\bformat\s*=\s*(?:(["'])Harlowe\1|Harlowe(?=\s|>))/i.test(
+		html
+	);
+}
+
+export function instrumentPreviewHtml(
+	html: string,
+	sessionId: string,
+	options: {enableHarloweSessionStorageFallback?: boolean} = {}
+) {
+	const script = bridgeScript(
+		sessionId,
+		options.enableHarloweSessionStorageFallback === true &&
+			isHarlowePreviewHtml(html)
+	);
 
 	if (/<head(\s[^>]*)?>/i.test(html)) {
 		return html.replace(/<head(\s[^>]*)?>/i, match => `${match}${script}`);

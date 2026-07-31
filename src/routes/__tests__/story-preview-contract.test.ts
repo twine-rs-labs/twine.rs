@@ -32,7 +32,7 @@ describe('instrumented runtime passage detection', () => {
 			.spyOn(window, 'postMessage')
 			.mockImplementation(() => undefined);
 		const instrumented = instrumentPreviewHtml(
-			'<html><head></head><body></body></html>',
+			'<html><head></head><body><tw-storydata format="Harlowe"></tw-storydata></body></html>',
 			'session-1'
 		);
 		const script = /<script>([\s\S]*?)<\/script>/.exec(instrumented)?.[1];
@@ -58,6 +58,63 @@ describe('instrumented runtime passage detection', () => {
 
 		postMessage.mockRestore();
 		sessionStorage.clear();
+	});
+
+	it('supplies Harlowe session telemetry when sandbox storage is blocked', () => {
+		document.body.innerHTML = `
+				<tw-storydata format="Harlowe" startnode="1">
+					<tw-passagedata pid="1" name="Start">Start</tw-passagedata>
+					<tw-passagedata pid="2" name="Second">Second</tw-passagedata>
+				</tw-storydata>
+				<tw-story><tw-passage tags="">Second</tw-passage></tw-story>
+			`;
+		const sessionStorageDescriptor = Object.getOwnPropertyDescriptor(
+			window,
+			'sessionStorage'
+		);
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+
+		expect(sessionStorageDescriptor).toBeDefined();
+		Object.defineProperty(window, 'sessionStorage', {
+			configurable: true,
+			get() {
+				throw new DOMException(
+					'The document is sandboxed and lacks the allow-same-origin flag.',
+					'SecurityError'
+				);
+			}
+		});
+
+		try {
+			const instrumented = instrumentPreviewHtml(
+				'<html><head></head><body><tw-storydata format="Harlowe"></tw-storydata></body></html>',
+				'sandboxed-session',
+				{enableHarloweSessionStorageFallback: true}
+			);
+			const script = /<script>([\s\S]*?)<\/script>/.exec(instrumented)?.[1];
+
+			expect(script).toBeDefined();
+			window.eval(script!);
+			expect(window.sessionStorage.length).toBe(0);
+
+			window.sessionStorage.setItem(
+				'Saved Session',
+				JSON.stringify(['Start', 'Second'])
+			);
+			(window as any).__twineRsPreviewDebug.captureState();
+
+			expect(lastPostedState(postMessage)?.currentPassage).toEqual({
+				name: 'Second',
+				source: 'Harlowe session'
+			});
+		} finally {
+			postMessage.mockRestore();
+			Object.defineProperty(window, 'sessionStorage', {
+				...sessionStorageDescriptor
+			});
+		}
 	});
 });
 
