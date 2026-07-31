@@ -1222,6 +1222,22 @@ describe('project-folder native bridge', () => {
 		expect(mkdirpMock).not.toHaveBeenCalled();
 	});
 
+	it('does not read a colliding project manifest before reserving a create target', async () => {
+		const collision = new Error(
+			'A new project cannot replace an existing filesystem entry.'
+		);
+
+		readFileMock.mockRejectedValue(
+			Object.assign(new Error('operation not permitted'), {code: 'EPERM'})
+		);
+		createNativeProjectFolderMock.mockImplementation(() => {
+			throw collision;
+		});
+
+		await expect(createProjectFolder(fakeStory(1))).rejects.toBe(collision);
+		expect(readFileMock).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		['punctuation', 'A:B', 'A?B'],
 		['case', 'Case:Collision', 'CASE?COLLISION'],

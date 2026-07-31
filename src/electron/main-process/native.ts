@@ -221,7 +221,19 @@ function loadAddon() {
 	return undefined;
 }
 
-function parseNativeJson<T>(label: string, source: string): T | undefined {
+function parseNativeJson<T>(label: string, source: unknown): T | undefined {
+	// napi-derive should throw a napi::Result error, but older addons built from
+	// aliased Result signatures returned a JavaScript Error value instead.
+	// Propagate that value before JSON parsing so stale addons also fail safely.
+	if (source instanceof Error) {
+		throw source;
+	}
+	if (typeof source !== 'string') {
+		diagnostic = `Native project backend returned a non-string ${label}.`;
+		console.warn(diagnostic);
+		return undefined;
+	}
+
 	try {
 		return JSON.parse(source) as T;
 	} catch (error) {
@@ -235,7 +247,7 @@ function parseNativeJson<T>(label: string, source: string): T | undefined {
 
 function callNative<T>(
 	label: string,
-	callback: (addon: NativeProjectAddon) => string
+	callback: (addon: NativeProjectAddon) => unknown
 ) {
 	const loaded = loadAddon();
 
@@ -261,7 +273,7 @@ function callNative<T>(
  */
 function callNativeStrict<T>(
 	label: string,
-	callback: (addon: NativeProjectAddon) => string
+	callback: (addon: NativeProjectAddon) => unknown
 ) {
 	const loaded = loadAddon();
 

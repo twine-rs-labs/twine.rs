@@ -96,7 +96,9 @@ struct ImportAssetRewriteTrie {
     target_root: Option<String>,
 }
 
-type NativeResult<T> = napi::Result<T>;
+// Keep fallible #[napi] return types spelled as napi::Result<T>. napi-derive
+// recognizes this form syntactically; hiding it behind an alias returns a
+// JavaScript Error as a normal value instead of throwing it.
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,7 +173,7 @@ fn hydration_leases() -> &'static Mutex<BTreeMap<String, NativeHydrationLease>> 
 }
 
 #[napi(js_name = "hydrationMemoryDiagnosticsJson")]
-pub fn hydration_memory_diagnostics_json() -> NativeResult<String> {
+pub fn hydration_memory_diagnostics_json() -> napi::Result<String> {
     let leases = hydration_leases()
         .lock()
         .map_err(|_| napi::Error::from_reason("Native hydration lease lock was poisoned."))?;
@@ -499,14 +501,14 @@ pub fn health_json() -> String {
 pub fn load_project_folder_json(
     root_path: String,
     load_profile: Option<String>,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     json_string(&load_project_folder(root_path, load_profile)?).map_err(native_error)
 }
 
 fn load_project_folder(
     root_path: String,
     load_profile: Option<String>,
-) -> NativeResult<NativeProjectFolderResult> {
+) -> napi::Result<NativeProjectFolderResult> {
     let collect_timings = std::env::var("TWINE_PERF").is_ok_and(|value| value == "1");
     let root = PathBuf::from(&root_path);
     let passage_text_loaded = load_profile.as_deref() != Some("shell");
@@ -632,7 +634,7 @@ fn load_project_folder(
 pub fn begin_project_folder_hydration_json(
     root_path: String,
     story_ids_json: Option<String>,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     let story_ids = story_ids_json
         .map(|source| serde_json::from_str::<Vec<String>>(&source).map_err(native_error))
         .transpose()?;
@@ -680,7 +682,7 @@ pub fn read_project_folder_hydration_chunk_json(
     hydration_id: String,
     cursor: u32,
     limit: u32,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     let leases = hydration_leases()
         .lock()
         .map_err(|_| napi::Error::from_reason("Native hydration lease lock was poisoned."))?;
@@ -705,7 +707,7 @@ pub fn read_project_folder_hydration_chunk_json(
 }
 
 #[napi(js_name = "finishProjectFolderHydration")]
-pub fn finish_project_folder_hydration(hydration_id: String) -> NativeResult<()> {
+pub fn finish_project_folder_hydration(hydration_id: String) -> napi::Result<()> {
     hydration_leases()
         .lock()
         .map_err(|_| napi::Error::from_reason("Native hydration lease lock was poisoned."))?
@@ -713,7 +715,7 @@ pub fn finish_project_folder_hydration(hydration_id: String) -> NativeResult<()>
     Ok(())
 }
 
-fn parse_project_source_layout(source_layout: &str) -> NativeResult<ProjectSourceLayout> {
+fn parse_project_source_layout(source_layout: &str) -> napi::Result<ProjectSourceLayout> {
     match source_layout {
         "passage-files" => Ok(ProjectSourceLayout::PassageFiles),
         "single-twee" => Ok(ProjectSourceLayout::SingleTwee),
@@ -728,7 +730,7 @@ pub fn save_project_folder_json(
     root_path: String,
     story_json: String,
     source_layout: Option<String>,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     save_project_folder_json_inner(root_path, story_json, source_layout, false, None)
 }
 
@@ -738,7 +740,7 @@ pub fn save_project_folder_json_guarded(
     story_json: String,
     source_layout: Option<String>,
     expected_files_json: String,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     let expected_files = serde_json::from_str::<Vec<NativeProjectFileEntry>>(&expected_files_json)
         .map_err(native_error)?;
 
@@ -762,7 +764,7 @@ pub fn create_project_folder_json(
     root_path: String,
     story_json: String,
     source_layout: Option<String>,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     save_project_folder_json_inner(root_path, story_json, source_layout, true, None)
 }
 
@@ -770,7 +772,7 @@ pub fn create_project_folder_json(
 pub fn replace_project_folder_stories_json(
     root_path: String,
     replacements_json: String,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     replace_project_folder_stories_json_inner(root_path, replacements_json)
 }
 
@@ -778,7 +780,7 @@ pub fn replace_project_folder_stories_json(
 pub fn install_project_folder_no_replace(
     staging_root_path: String,
     destination_root_path: String,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     install_project_folder_no_replace_inner(staging_root_path, destination_root_path)
         .map(|installed| installed.to_string())
 }
@@ -786,7 +788,7 @@ pub fn install_project_folder_no_replace(
 fn install_project_folder_no_replace_inner(
     staging_root_path: String,
     destination_root_path: String,
-) -> NativeResult<bool> {
+) -> napi::Result<bool> {
     let staging_root = PathBuf::from(staging_root_path);
     let destination_root = PathBuf::from(destination_root_path);
 
@@ -855,7 +857,7 @@ fn install_project_folder_no_replace_inner(
     }
 }
 
-fn reserve_new_project_root(root: &Path) -> NativeResult<()> {
+fn reserve_new_project_root(root: &Path) -> napi::Result<()> {
     if let Some(parent) = root.parent() {
         fs::create_dir_all(parent).map_err(native_error)?;
     }
@@ -872,7 +874,7 @@ fn reserve_new_project_root(root: &Path) -> NativeResult<()> {
 fn replace_project_folder_stories_json_inner(
     root_path: String,
     replacements_json: String,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     let requested_root = PathBuf::from(&root_path);
 
     if !requested_root.is_absolute() {
@@ -1225,7 +1227,7 @@ fn save_project_folder_json_inner(
     source_layout: Option<String>,
     allow_create: bool,
     expected_files: Option<Vec<NativeProjectFileEntry>>,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     let total_started = Instant::now();
     let mut timings = NativeProjectSaveTimings::default();
     let requested_root = PathBuf::from(&root_path);
@@ -1424,7 +1426,7 @@ fn elapsed_us(started: Instant) -> u64 {
 pub fn remember_project_folder_json(
     index_path: String,
     project_json: String,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     let index_path = PathBuf::from(index_path);
     let project =
         serde_json::from_str::<NativeProjectFolderResult>(&project_json).map_err(native_error)?;
@@ -1457,7 +1459,7 @@ pub fn remember_project_folder_json(
 }
 
 #[napi(js_name = "forgetProjectFolderJson")]
-pub fn forget_project_folder_json(index_path: String, root_path: String) -> NativeResult<String> {
+pub fn forget_project_folder_json(index_path: String, root_path: String) -> napi::Result<String> {
     let index_path = PathBuf::from(index_path);
     let mut index = read_project_library_index(&index_path).map_err(native_error)?;
 
@@ -1470,14 +1472,14 @@ pub fn forget_project_folder_json(index_path: String, root_path: String) -> Nati
 }
 
 #[napi(js_name = "listRememberedProjectFoldersJson")]
-pub fn list_remembered_project_folders_json(index_path: String) -> NativeResult<String> {
+pub fn list_remembered_project_folders_json(index_path: String) -> napi::Result<String> {
     let index = read_project_library_index(Path::new(&index_path)).map_err(native_error)?;
 
     json_string(&index.projects).map_err(native_error)
 }
 
 #[napi(js_name = "listProjectAssetsJson")]
-pub fn list_project_assets_json(root_path: String) -> NativeResult<String> {
+pub fn list_project_assets_json(root_path: String) -> napi::Result<String> {
     let assets = list_project_assets(Path::new(&root_path)).map_err(native_error)?;
 
     json_string(&assets).map_err(native_error)
@@ -1572,7 +1574,7 @@ impl Task for CaptureProjectAssetDigestsTask {
     type Output = NativeProjectAssetDigestBatch;
     type JsValue = NativeProjectAssetDigestBatch;
 
-    fn compute(&mut self) -> NativeResult<Self::Output> {
+    fn compute(&mut self) -> napi::Result<Self::Output> {
         capture_project_asset_digests_impl(
             Path::new(&self.root_path),
             std::mem::take(&mut self.requests),
@@ -1582,7 +1584,7 @@ impl Task for CaptureProjectAssetDigestsTask {
         .map_err(|message| napi::Error::new(Status::InvalidArg, message))
     }
 
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> NativeResult<Self::JsValue> {
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> napi::Result<Self::JsValue> {
         Ok(output)
     }
 }
@@ -1591,7 +1593,7 @@ impl Task for ReadProjectAssetPayloadsTask {
     type Output = NativeProjectAssetPayloadBatch;
     type JsValue = NativeProjectAssetPayloadBatch;
 
-    fn compute(&mut self) -> NativeResult<Self::Output> {
+    fn compute(&mut self) -> napi::Result<Self::Output> {
         read_project_asset_payload_requests_with_policy(
             Path::new(&self.root_path),
             std::mem::take(&mut self.requests),
@@ -1607,7 +1609,7 @@ impl Task for ReadProjectAssetPayloadsTask {
         .map_err(|message| napi::Error::new(Status::InvalidArg, message))
     }
 
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> NativeResult<Self::JsValue> {
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> napi::Result<Self::JsValue> {
         Ok(output)
     }
 }
@@ -2418,7 +2420,7 @@ fn asset_payload_failure(
 pub fn project_file_manifest_json(
     root_path: String,
     assets_json: Option<String>,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     let assets = assets_json
         .as_deref()
         .map(serde_json::from_str::<Vec<CoreAssetInventoryEntry>>)
@@ -2431,7 +2433,7 @@ pub fn project_file_manifest_json(
 }
 
 #[napi(js_name = "prepareProjectImportJson")]
-pub fn prepare_project_import_json(source_path: String) -> NativeResult<String> {
+pub fn prepare_project_import_json(source_path: String) -> napi::Result<String> {
     let source_path = PathBuf::from(source_path);
     let extension = path_extension(&source_path);
 
@@ -2452,7 +2454,7 @@ pub fn prepare_project_import_json(source_path: String) -> NativeResult<String> 
 pub fn diff_project_file_manifest_json(
     previous_files_json: String,
     current_files_json: String,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     let previous = serde_json::from_str::<Vec<NativeProjectFileEntry>>(&previous_files_json)
         .map_err(native_error)?;
     let current = serde_json::from_str::<Vec<NativeProjectFileEntry>>(&current_files_json)
@@ -2463,7 +2465,7 @@ pub fn diff_project_file_manifest_json(
 }
 
 #[napi(js_name = "findTwineHtmlFilesJson")]
-pub fn find_twine_html_files_json(root_path: String) -> NativeResult<String> {
+pub fn find_twine_html_files_json(root_path: String) -> napi::Result<String> {
     let files = find_twine_html_files(Path::new(&root_path)).map_err(native_error)?;
 
     json_string(&files).map_err(native_error)
@@ -2474,7 +2476,7 @@ pub fn prepare_html_import_json(
     source_path: String,
     html_file_path: String,
     source_kind: String,
-) -> NativeResult<String> {
+) -> napi::Result<String> {
     let source = prepare_html_import(
         Path::new(&source_path),
         Path::new(&html_file_path),

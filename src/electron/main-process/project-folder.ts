@@ -8029,10 +8029,13 @@ async function writeProjectFolder(
 	create = false,
 	expectedFileBaseline?: NativeProjectFileEntry[]
 ) {
-	const existingSource = await sourceLayoutFromProjectManifest(
-		rootPath,
-		story.id
-	);
+	// A create must not inspect an existing target before the native backend
+	// atomically reserves it. Apart from racing with another creator, that read
+	// can surface macOS permission errors from a colliding project's manifest
+	// instead of the intended no-replace error.
+	const existingSource = create
+		? {passageNames: [], sourceLayout: 'passage-files' as const}
+		: await sourceLayoutFromProjectManifest(rootPath, story.id);
 	const effectiveSourceLayout = sourceLayout ?? existingSource.sourceLayout;
 	const aggregateSource =
 		sourceLayout === undefined &&

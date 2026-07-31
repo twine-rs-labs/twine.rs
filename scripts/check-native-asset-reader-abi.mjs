@@ -28,6 +28,17 @@ assert.equal(
 	'function',
 	'The native addon must export readProjectPreviewAssetPayloads.'
 );
+assert.equal(
+	typeof addon.createProjectFolderJson,
+	'function',
+	'The native addon must export createProjectFolderJson.'
+);
+
+assert.throws(
+	() => addon.createProjectFolderJson('relative-project-root', '{}'),
+	/Project roots must be absolute paths/,
+	'createProjectFolderJson must throw native errors instead of returning Error values.'
+);
 
 const missingProjectRoot = path.join(
 	os.tmpdir(),

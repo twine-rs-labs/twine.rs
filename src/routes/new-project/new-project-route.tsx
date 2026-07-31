@@ -25,6 +25,7 @@ import {
 } from '../../store/stories';
 import type {
 	NativeProjectImportSource,
+	NativeProjectFolderResult,
 	ProjectSourceLayout,
 	TwineElectronWindow
 } from '../../electron/shared';
@@ -120,6 +121,30 @@ function projectFolder(name: string, storyId: string, parent?: string) {
 	return `${
 		parent || '~/Documents/Twine RS/Stories'
 	}/${projectSlug(name, storyId)}.twine.rs`;
+}
+
+function projectCreationErrorMessage(error: unknown, storyName: string) {
+	const message = error instanceof Error ? error.message : String(error);
+
+	if (
+		message.includes(
+			'A new project cannot replace an existing filesystem entry.'
+		)
+	) {
+		return `A project named "${storyName}" already exists in this folder. Choose a different name.`;
+	}
+	if (
+		/\b(?:EACCES|EPERM)\b|permission denied|operation not permitted|access is denied/i.test(
+			message
+		)
+	) {
+		return 'Twine could not access the project folder. Check its permissions or choose a different project folder.';
+	}
+
+	return message.replace(
+		/^Error invoking remote method 'create-project-folder': Error:\s*/,
+		''
+	);
 }
 
 function projectPreviewFiles(
@@ -323,13 +348,19 @@ async function persistNativeProjectFolder(
 		return undefined;
 	}
 
-	const result = sourceLayout
-		? await twineElectron.createProjectFolder(
-				story,
-				preferredParent,
-				sourceLayout
-			)
-		: await twineElectron.createProjectFolder(story, preferredParent);
+	let result: NativeProjectFolderResult;
+
+	try {
+		result = sourceLayout
+			? await twineElectron.createProjectFolder(
+					story,
+					preferredParent,
+					sourceLayout
+				)
+			: await twineElectron.createProjectFolder(story, preferredParent);
+	} catch (error) {
+		throw new Error(projectCreationErrorMessage(error, story.name));
+	}
 
 	saveProjectMetadata(story.id, {
 		rootPath: result.rootPath,
@@ -529,7 +560,7 @@ export const NewProjectRoute: React.FC = () => {
 			);
 			navigate(`/stories/${storyId}`);
 		} catch (error) {
-			setError((error as Error).message);
+			setError(error instanceof Error ? error.message : String(error));
 		}
 	}
 

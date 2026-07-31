@@ -207,10 +207,11 @@ describe('<NewProjectRoute>', () => {
 	});
 
 	it('shows disk-only slug collisions without creating or navigating', async () => {
-		const errorMessage =
-			'A new project cannot replace an existing filesystem entry.';
+		const errorMessage = `A project named "A?B" already exists in this folder. Choose a different name.`;
 		const createProjectFolder = jest.fn(async () => {
-			throw new Error(errorMessage);
+			throw new Error(
+				"Error invoking remote method 'create-project-folder': Error: A new project cannot replace an existing filesystem entry."
+			);
 		});
 
 		(window as any).twineElectron = {
@@ -239,6 +240,55 @@ describe('<NewProjectRoute>', () => {
 		expect(
 			screen.queryByTestId('story-inspector-default')
 		).not.toBeInTheDocument();
+	});
+
+	it.each([
+		'EPERM: operation not permitted',
+		'Permission denied (os error 13)',
+		'Operation not permitted (os error 1)',
+		'Access is denied. (os error 5)'
+	])('shows a focused project-folder permission error for %s', async detail => {
+		const createProjectFolder = jest.fn(async () => {
+			throw new Error(
+				`Error invoking remote method 'create-project-folder': Error: ${detail}`
+			);
+		});
+
+		(window as any).twineElectron = {
+			createProjectFolder,
+			getStoryLibraryFolder: jest.fn(async () => '/native/library')
+		};
+		renderComponent();
+
+		fireEvent.click(screen.getByRole('button', {name: /create project/i}));
+
+		expect(
+			await screen.findByText(
+				'Twine could not access the project folder. Check its permissions or choose a different project folder.'
+			)
+		).toBeInTheDocument();
+	});
+
+	it('does not classify a duplicate story named EPERM as a permission error', async () => {
+		const createProjectFolder = jest.fn();
+
+		(window as any).twineElectron = {
+			createProjectFolder,
+			getStoryLibraryFolder: jest.fn(async () => '/native/library')
+		};
+		renderComponent('/new-project', ['/new-project'], {
+			stories: [{...fakeStory(1), name: 'EPERM'}]
+		});
+
+		fireEvent.change(screen.getByLabelText('Project name'), {
+			target: {value: 'EPERM'}
+		});
+		fireEvent.click(screen.getByRole('button', {name: /create project/i}));
+
+		expect(
+			await screen.findByText('There is already a story named "EPERM"')
+		).toBeInTheDocument();
+		expect(createProjectFolder).not.toHaveBeenCalled();
 	});
 
 	it('renders the import workspace for /new-project/import', () => {
