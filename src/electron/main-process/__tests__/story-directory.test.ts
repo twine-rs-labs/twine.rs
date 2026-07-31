@@ -6,6 +6,7 @@ import {
 	backupStoryDirectory,
 	createStoryDirectory,
 	revealStoryDirectory,
+	getBackupDirectoryPath,
 	getStoryDirectoryPath,
 	initStoryDirectory,
 	chooseStoryDirectoryPath,
@@ -37,7 +38,7 @@ describe('backupStoryDirectory()', () => {
 	const removeMock = remove as jest.Mock;
 	const statMock = stat as jest.Mock;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		readdirMock.mockResolvedValue([
 			{isDirectory: () => true, name: 'mock-backup-1'},
 			{isDirectory: () => true, name: 'mock-backup-2'}
@@ -55,7 +56,7 @@ describe('backupStoryDirectory()', () => {
 			}
 		});
 		jest.spyOn(console, 'log').mockReturnValue();
-		initStoryDirectory();
+		await initStoryDirectory();
 	});
 
 	describe.each([
@@ -177,9 +178,9 @@ describe('backupStoryDirectory()', () => {
 describe('resetStoryDirectoryPath()', () => {
 	const showRelaunchDialogMock = showRelaunchDialog as jest.Mock;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		jest.spyOn(console, 'log').mockReturnValue();
-		initStoryDirectory();
+		await initStoryDirectory();
 	});
 
 	it('resets the app pref and tracks the default story directory', async () => {
@@ -210,9 +211,9 @@ describe('chooseStoryDirectory()', () => {
 	const showRelaunchDialogMock = showRelaunchDialog as jest.Mock;
 	const showOpenDialogMock = dialog.showOpenDialog as jest.Mock;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		jest.spyOn(console, 'log').mockReturnValue();
-		initStoryDirectory();
+		await initStoryDirectory();
 		showMessageBoxMock.mockResolvedValue({response: 1});
 		showOpenDialogMock.mockResolvedValue({canceled: true});
 	});
@@ -385,9 +386,9 @@ describe('chooseStoryDirectory()', () => {
 describe('createStoryDirectory()', () => {
 	const mkdirpMock = mkdirp as jest.Mock;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		jest.spyOn(console, 'log').mockReturnValue();
-		initStoryDirectory();
+		await initStoryDirectory();
 	});
 
 	it('resolves after calling mkdirp() on the story directory path', async () => {
@@ -414,6 +415,133 @@ describe('initStoryDirectoryPath()', () => {
 		expect(getStoryDirectoryPath()).toBe(
 			'mock-electron-app-path-documents/mock-electron-app-name/electron.storiesDirectoryName'
 		);
+	});
+
+	it('uses a readable default path without creating it', async () => {
+		readdirMock.mockResolvedValue([]);
+
+		await initStoryDirectory();
+
+		expect(readdirMock).toHaveBeenCalledWith(
+			'mock-electron-app-path-documents/mock-electron-app-name/electron.storiesDirectoryName'
+		);
+		expect(mkdirpMock).not.toHaveBeenCalled();
+	});
+
+	it('creates and then verifies a missing default path', async () => {
+		const missingDirectoryError = Object.assign(new Error('missing'), {
+			code: 'ENOENT'
+		});
+		readdirMock
+			.mockRejectedValueOnce(missingDirectoryError)
+			.mockResolvedValue([]);
+
+		await initStoryDirectory();
+
+		expect(mkdirpMock).toHaveBeenCalledWith(
+			'mock-electron-app-path-documents/mock-electron-app-name/electron.storiesDirectoryName'
+		);
+		expect(readdirMock).toHaveBeenCalledTimes(2);
+	});
+
+	describe('When the default story directory is inaccessible', () => {
+		const defaultPath =
+			'mock-electron-app-path-documents/mock-electron-app-name/electron.storiesDirectoryName';
+		const inaccessibleDirectoryError = Object.assign(
+			new Error('permission denied'),
+			{code: 'EPERM'}
+		);
+		const quitMock = app.quit as jest.Mock;
+		const showErrorBoxMock = dialog.showErrorBox as jest.Mock;
+		const showMessageBoxMock = dialog.showMessageBox as jest.Mock;
+		const showOpenDialogMock = dialog.showOpenDialog as jest.Mock;
+
+		beforeEach(() => {
+			readdirMock.mockImplementation((path: string) => {
+				if (path === defaultPath) {
+					throw inaccessibleDirectoryError;
+				}
+
+				return [];
+			});
+			showMessageBoxMock.mockResolvedValue({response: 0});
+		});
+
+		it('persists a readable replacement and safe app-data backup path', async () => {
+			let backupFolderPath: string | undefined;
+
+			getAppPrefMock.mockImplementation((name: string) =>
+				name === 'backupFolderPath' ? backupFolderPath : undefined
+			);
+			setAppPrefMock.mockImplementation(
+				async (name: string, value: unknown) => {
+					if (name === 'backupFolderPath') {
+						backupFolderPath = value as string;
+					}
+				}
+			);
+			showOpenDialogMock.mockResolvedValue({
+				canceled: false,
+				filePaths: ['mock-readable-replacement']
+			});
+
+			await initStoryDirectory();
+
+			expect(getStoryDirectoryPath()).toBe('mock-readable-replacement');
+			expect(getBackupDirectoryPath()).toBe(
+				'mock-electron-app-path-userData/electron.backupsDirectoryName'
+			);
+			expect(setAppPrefMock).toHaveBeenNthCalledWith(
+				1,
+				'backupFolderPath',
+				'mock-electron-app-path-userData/electron.backupsDirectoryName'
+			);
+			expect(setAppPrefMock).toHaveBeenNthCalledWith(
+				2,
+				'storyLibraryFolderPath',
+				'mock-readable-replacement'
+			);
+			expect(mkdirpMock).toHaveBeenCalledWith(
+				'mock-electron-app-path-userData/electron.backupsDirectoryName'
+			);
+			expect(readdirMock).toHaveBeenCalledWith(
+				'mock-electron-app-path-userData/electron.backupsDirectoryName'
+			);
+
+			await backupStoryDirectory();
+
+			expect(copy).toHaveBeenCalledWith(
+				'mock-readable-replacement',
+				expect.stringMatching(
+					/^mock-electron-app-path-userData\/electron\.backupsDirectoryName\/.+/
+				),
+				{filter: expect.any(Function)}
+			);
+			expect(showOpenDialogMock).toHaveBeenCalledWith({
+				properties: ['createDirectory', 'openDirectory'],
+				title: 'Choose a readable story library folder'
+			});
+			expect(showRelaunchDialog).not.toHaveBeenCalled();
+		});
+
+		it('quits when choosing a replacement folder is cancelled', async () => {
+			showOpenDialogMock.mockResolvedValue({canceled: true, filePaths: []});
+
+			await expect(initStoryDirectory()).resolves.toBe(false);
+
+			expect(quitMock).toHaveBeenCalledTimes(1);
+			expect(setAppPrefMock).not.toHaveBeenCalled();
+		});
+
+		it('quits when the user chooses to quit instead', async () => {
+			showMessageBoxMock.mockResolvedValue({response: 1});
+
+			await expect(initStoryDirectory()).resolves.toBe(false);
+
+			expect(quitMock).toHaveBeenCalledTimes(1);
+			expect(showOpenDialogMock).not.toHaveBeenCalled();
+			expect(showErrorBoxMock).not.toHaveBeenCalled();
+		});
 	});
 
 	describe('When an app pref is set', () => {
@@ -485,12 +613,12 @@ describe('initStoryDirectoryPath()', () => {
 			);
 		});
 
-		it("returns the app pref path if it isn't readable, but can be created", async () => {
+		it('returns the app pref path if it is missing, but can be created', async () => {
 			// First attempt is the initial one; second is after the mkdirp call.
 
-			readdirMock.mockImplementationOnce(() => {
-				throw new Error();
-			});
+			readdirMock.mockRejectedValueOnce(
+				Object.assign(new Error('missing'), {code: 'ENOENT'})
+			);
 			await initStoryDirectory();
 			expect(getStoryDirectoryPath()).toBe(
 				'mock-story-library-folder-app-pref'
@@ -503,8 +631,12 @@ describe('initStoryDirectoryPath()', () => {
 			const showMessageBoxMock = dialog.showMessageBox as jest.Mock;
 
 			beforeEach(() => {
-				readdirMock.mockImplementation(() => {
-					throw new Error();
+				readdirMock.mockImplementation((path: string) => {
+					if (path === 'mock-story-library-folder-app-pref') {
+						throw new Error();
+					}
+
+					return [];
 				});
 				showMessageBoxMock.mockResolvedValue({response: 0});
 			});
@@ -528,7 +660,7 @@ describe('initStoryDirectoryPath()', () => {
 
 			it('quits if the user chooses that option', async () => {
 				showMessageBoxMock.mockResolvedValue({response: 1});
-				await initStoryDirectory();
+				await expect(initStoryDirectory()).resolves.toBe(false);
 				expect(quitMock).toHaveBeenCalledTimes(1);
 			});
 
@@ -547,10 +679,10 @@ describe('initStoryDirectoryPath()', () => {
 describe('revealStoryDirectoryPath()', () => {
 	let openPathSpy: jest.SpyInstance;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		openPathSpy = jest.spyOn(shell, 'openPath');
 		jest.spyOn(console, 'log').mockReturnValue();
-		initStoryDirectory();
+		await initStoryDirectory();
 	});
 
 	it('resolves after showing the story directory', async () => {

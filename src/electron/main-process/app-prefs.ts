@@ -62,7 +62,9 @@ export function loadAppPrefs() {
 	try {
 		appPrefFile = loadJsonFileSync('app-prefs.json');
 	} catch (error) {
-		console.warn("Couldn't read app prefs file; continuing", error);
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			console.warn("Couldn't read app prefs file; continuing", error);
+		}
 	}
 
 	for (const prefName of prefNames) {

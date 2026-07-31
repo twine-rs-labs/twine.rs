@@ -30,6 +30,10 @@ function documentsBackupDirectoryPath() {
 	);
 }
 
+function appDataBackupDirectoryPath() {
+	return join(app.getPath('userData'), i18n.t('electron.backupsDirectoryName'));
+}
+
 function pathContainsPath(parentPath: string, childPath: string) {
 	const relativePath = relative(resolve(parentPath), resolve(childPath));
 
@@ -49,10 +53,7 @@ function defaultBackupDirectoryPath(storyPath = storyDirectoryPath) {
 	const backupPath = documentsBackupDirectoryPath();
 
 	if (storyPath !== undefined && pathsOverlap(storyPath, backupPath)) {
-		return join(
-			app.getPath('userData'),
-			i18n.t('electron.backupsDirectoryName')
-		);
+		return appDataBackupDirectoryPath();
 	}
 
 	return backupPath;
@@ -83,6 +84,95 @@ function validateStoryDirectoryMovePath(
 
 function isUnsafeStoryDirectoryPreferencePath(prefPath: string) {
 	return pathsOverlap(prefPath, documentsBackupDirectoryPath());
+}
+
+function recoveryBackupDirectoryPath() {
+	const prefPath = getAppPref('backupFolderPath');
+
+	return typeof prefPath === 'string' ? prefPath : appDataBackupDirectoryPath();
+}
+
+async function isStoryDirectoryReadableOrCanBeCreated(path: string) {
+	try {
+		await readdir(path);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			return false;
+		}
+
+		try {
+			await mkdirp(path);
+			await readdir(path);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+}
+
+async function chooseStartupStoryDirectoryPath() {
+	while (true) {
+		const {response} = await dialog.showMessageBox({
+			buttons: ['Choose Another Folder', 'Quit'],
+			cancelId: 1,
+			defaultId: 0,
+			detail:
+				'Twine cannot read its default story library folder. Choose another readable folder to continue.',
+			message: 'Story Library Folder Is Unavailable',
+			type: 'error'
+		});
+
+		if (response !== 0) {
+			app.quit();
+			return undefined;
+		}
+
+		const {canceled, filePaths} = await dialog.showOpenDialog({
+			properties: ['createDirectory', 'openDirectory'],
+			title: 'Choose a readable story library folder'
+		});
+
+		if (canceled || !filePaths[0]) {
+			app.quit();
+			return undefined;
+		}
+
+		const path = filePaths[0];
+
+		if (
+			isUnsafeStoryDirectoryPreferencePath(path) ||
+			pathsOverlap(path, recoveryBackupDirectoryPath())
+		) {
+			dialog.showErrorBox(
+				'Story library folder cannot be used.',
+				'Choose a folder that is not the parent of Twine RS backups.'
+			);
+			continue;
+		}
+
+		if (await isStoryDirectoryReadableOrCanBeCreated(path)) {
+			return path;
+		}
+
+		dialog.showErrorBox(
+			'Story library folder cannot be used.',
+			'Twine could not read the selected folder. Choose a readable folder.'
+		);
+	}
+}
+
+async function prepareRecoveryBackupDirectoryPath(storyPath: string) {
+	if (typeof getAppPref('backupFolderPath') === 'string') {
+		return;
+	}
+
+	const backupPath = appDataBackupDirectoryPath();
+
+	validateBackupDirectoryPath(storyPath, backupPath);
+	await mkdirp(backupPath);
+	await readdir(backupPath);
+	await setAppPref('backupFolderPath', backupPath);
 }
 
 async function resetBackupDirectoryPreferenceIfUnsafe(storyPath: string) {
@@ -157,58 +247,59 @@ export async function initStoryDirectory() {
 			);
 			await setAppPref('storyLibraryFolderPath', undefined);
 		} else {
-			// Try reading it initially. We need to use readdir() instead of access()
-			// because access() just tells us if we can see the directory itself, not
-			// anything inside it.
+			// Use readdir() instead of access() because access() only tells us if we
+			// can see the directory itself, not anything inside it.
 
-			try {
-				await readdir(prefPath);
+			if (await isStoryDirectoryReadableOrCanBeCreated(prefPath)) {
 				storyDirectoryPath = prefPath;
 				await resetBackupDirectoryPreferenceIfUnsafe(storyDirectoryPath);
 				console.log(`Story library path initialized as ${storyDirectoryPath}`);
-				return;
-			} catch (error) {
-				// Maybe it doesn't exist yet. Try creating it.
-
-				try {
-					await mkdirp(prefPath);
-					await readdir(prefPath);
-					storyDirectoryPath = prefPath;
-					await resetBackupDirectoryPreferenceIfUnsafe(storyDirectoryPath);
-					return;
-				} catch (error) {
-					// OK, we give up.
-
-					const {response} = await dialog.showMessageBox({
-						detail: i18n.t('electron.errors.storyLibraryFolderAppPref.detail', {
-							path: prefPath
-						}),
-						message: i18n.t(
-							'electron.errors.storyLibraryFolderAppPref.message'
-						),
-						type: 'error',
-						buttons: [
-							i18n.t('electron.errors.storyLibraryFolderAppPref.useDefault'),
-							i18n.t('electron.errors.storyLibraryFolderAppPref.quit')
-						],
-						defaultId: 0
-					});
-
-					if (response === 1) {
-						app.quit();
-					}
-
-					// Reset the preference and fall through to the default path.
-
-					await setAppPref('storyLibraryFolderPath', undefined);
-				}
+				return true;
 			}
+
+			const {response} = await dialog.showMessageBox({
+				detail: i18n.t('electron.errors.storyLibraryFolderAppPref.detail', {
+					path: prefPath
+				}),
+				message: i18n.t('electron.errors.storyLibraryFolderAppPref.message'),
+				type: 'error',
+				buttons: [
+					i18n.t('electron.errors.storyLibraryFolderAppPref.useDefault'),
+					i18n.t('electron.errors.storyLibraryFolderAppPref.quit')
+				],
+				defaultId: 0
+			});
+
+			if (response === 1) {
+				app.quit();
+				return false;
+			}
+
+			// Reset the preference and fall through to the default path.
+
+			await setAppPref('storyLibraryFolderPath', undefined);
 		}
 	}
 
-	storyDirectoryPath = defaultStoryDirectoryPath();
+	const defaultPath = defaultStoryDirectoryPath();
+
+	if (await isStoryDirectoryReadableOrCanBeCreated(defaultPath)) {
+		storyDirectoryPath = defaultPath;
+	} else {
+		const replacementPath = await chooseStartupStoryDirectoryPath();
+
+		if (replacementPath === undefined) {
+			return false;
+		}
+
+		await prepareRecoveryBackupDirectoryPath(replacementPath);
+		storyDirectoryPath = replacementPath;
+		await setAppPref('storyLibraryFolderPath', replacementPath);
+	}
+
 	await resetBackupDirectoryPreferenceIfUnsafe(storyDirectoryPath);
 	console.log(`Story library path initialized as ${storyDirectoryPath}`);
+	return true;
 }
 
 /**

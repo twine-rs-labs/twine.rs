@@ -108,6 +108,8 @@ module.exports = {
 			NSBluetoothAlwaysUsageDescription: null,
 			NSBluetoothPeripheralUsageDescription: null,
 			NSCameraUsageDescription: null,
+			NSDocumentsFolderUsageDescription:
+				'Twine RS needs access to your Documents folder to store your story library and backups.',
 			NSMicrophoneUsageDescription: null
 		},
 		forceCodeSigning: releaseProfile === profiles.signed,

@@ -112,15 +112,30 @@ describe('loadAppPrefs and getAppPrefs', () => {
 		expect(getAppPref('scratchAssetStrategy' as any)).toBeUndefined();
 	});
 
-	it("doesn't throw an error if the app prefs file couldn't be loaded", () => {
+	it('silently treats a missing app prefs file as absent', () => {
 		minimistMock.mockReturnValue({
 			scratchFolderPath: 'mock-scratch-folder-path'
 		});
 		loadJsonFileSyncMock.mockImplementation(() => {
-			throw new Error();
+			throw Object.assign(new Error('missing'), {code: 'ENOENT'});
 		});
 		loadAppPrefs();
 		expect(getAppPref('scratchFolderPath')).toBe('mock-scratch-folder-path');
+		expect(console.warn).not.toHaveBeenCalled();
+	});
+
+	it('warns if the app prefs file could not be loaded for another reason', () => {
+		const error = Object.assign(new Error('permission denied'), {code: 'EACCES'});
+		loadJsonFileSyncMock.mockImplementation(() => {
+			throw error;
+		});
+
+		loadAppPrefs();
+
+		expect(console.warn).toHaveBeenCalledWith(
+			"Couldn't read app prefs file; continuing",
+			error
+		);
 	});
 });
 

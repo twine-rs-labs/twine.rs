@@ -14,8 +14,10 @@ export async function getUserCss(): Promise<string | undefined> {
 			'utf8'
 		);
 	} catch (error) {
-		console.warn(
-			`Error while loading user CSS, skipping: ${(error as Error).message}`
-		);
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			console.warn(
+				`Error while loading user CSS, skipping: ${(error as Error).message}`
+			);
+		}
 	}
 }

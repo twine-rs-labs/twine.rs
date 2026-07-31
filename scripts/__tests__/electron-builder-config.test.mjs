@@ -161,12 +161,14 @@ test('desktop targets are architecture-specific and selected by the runner', () 
 	assert.doesNotMatch(config.mac.artifactName, /universal/);
 });
 
-test('macOS packages remove unsupported sensitive-device usage declarations', () => {
+test('macOS packages declare Documents access and remove unsupported sensitive-device usage declarations', () => {
 	assert.deepEqual(config.mac.extendInfo, {
 		NSAudioCaptureUsageDescription: null,
 		NSBluetoothAlwaysUsageDescription: null,
 		NSBluetoothPeripheralUsageDescription: null,
 		NSCameraUsageDescription: null,
+		NSDocumentsFolderUsageDescription:
+			'Twine RS needs access to your Documents folder to store your story library and backups.',
 		NSMicrophoneUsageDescription: null
 	});
 });

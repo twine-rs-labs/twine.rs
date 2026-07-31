@@ -47,6 +47,18 @@ describe('initApp', () => {
 		expect(initStoryDirectoryMock).toHaveBeenCalledTimes(1);
 	});
 
+	it('stops startup cleanly if story directory recovery quits', async () => {
+		initStoryDirectoryMock.mockResolvedValue(false);
+
+		await initApp();
+
+		expect(createStoryDirectoryMock).not.toHaveBeenCalled();
+		expect(backupStoryDirectoryMock).not.toHaveBeenCalled();
+		expect(initIpcMock).not.toHaveBeenCalled();
+		expect(initMenuBarMock).not.toHaveBeenCalled();
+		expect(showErrorBoxMock).not.toHaveBeenCalled();
+	});
+
 	it('creates the story directory', async () => {
 		await initApp();
 		expect(createStoryDirectoryMock).toHaveBeenCalledTimes(1);

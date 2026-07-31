@@ -27,45 +27,47 @@ import {loadPrefs} from './prefs';
 
 export const i18n = i18next.createInstance();
 
+const resources = {
+	ca: {translation: ca},
+	cs: {translation: cs},
+	da: {translation: da},
+	de: {translation: de},
+	'en-us': {translation: enUs},
+	'en-US': {translation: enUs},
+	es: {translation: es},
+	fi: {translation: fi},
+	fr: {translation: fr},
+	it: {translation: it},
+	ja: {translation: ja},
+	ko: {translation: ko},
+	ms: {translation: ms},
+	nb: {translation: nb},
+	nl: {translation: nl},
+	pl: {translation: pl},
+	'pt-br': {translation: ptBr},
+	'pt-BR': {translation: ptBr},
+	'pt-pt': {translation: ptPt},
+	'pt-PT': {translation: ptPt},
+	ru: {translation: ru},
+	sl: {translation: sl},
+	sv: {translation: sv},
+	tr: {translation: tr},
+	uk: {translation: uk},
+	'zh-cn': {translation: zhCn},
+	'zh-CN': {translation: zhCn}
+};
+
 export async function initLocales() {
-	console.log(`Initializing i18next without locale`);
+	console.log('Initializing i18next with bundled locales');
 	await i18n.init({
 		debug: true,
 		fallbackLng: 'en-us',
 		interpolation: {
 			escapeValue: false
 		},
-		load: 'currentOnly'
+		load: 'currentOnly',
+		resources
 	});
-
-	console.log('Adding i18next translation resources');
-	i18n.addResourceBundle('ca', 'translation', ca);
-	i18n.addResourceBundle('cs', 'translation', cs);
-	i18n.addResourceBundle('da', 'translation', da);
-	i18n.addResourceBundle('de', 'translation', de);
-	i18n.addResourceBundle('en-us', 'translation', enUs);
-	i18n.addResourceBundle('en-US', 'translation', enUs);
-	i18n.addResourceBundle('es', 'translation', es);
-	i18n.addResourceBundle('fi', 'translation', fi);
-	i18n.addResourceBundle('fr', 'translation', fr);
-	i18n.addResourceBundle('it', 'translation', it);
-	i18n.addResourceBundle('ja', 'translation', ja);
-	i18n.addResourceBundle('ko', 'translation', ko);
-	i18n.addResourceBundle('ms', 'translation', ms);
-	i18n.addResourceBundle('nb', 'translation', nb);
-	i18n.addResourceBundle('nl', 'translation', nl);
-	i18n.addResourceBundle('pl', 'translation', pl);
-	i18n.addResourceBundle('pt-br', 'translation', ptBr);
-	i18n.addResourceBundle('pt-BR', 'translation', ptBr);
-	i18n.addResourceBundle('pt-pt', 'translation', ptPt);
-	i18n.addResourceBundle('pt-PT', 'translation', ptPt);
-	i18n.addResourceBundle('ru', 'translation', ru);
-	i18n.addResourceBundle('sl', 'translation', sl);
-	i18n.addResourceBundle('sv', 'translation', sv);
-	i18n.addResourceBundle('tr', 'translation', tr);
-	i18n.addResourceBundle('uk', 'translation', uk);
-	i18n.addResourceBundle('zh-cn', 'translation', zhCn);
-	i18n.addResourceBundle('zh-CN', 'translation', zhCn);
 
 	console.log('Getting locale preference');
 

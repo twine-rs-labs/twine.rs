@@ -1,5 +1,9 @@
 import {localeFilename} from './locales';
 
+export function browserI18nBaseUrl(baseUrl: string, pageUrl: string) {
+	return new URL(baseUrl, pageUrl).href;
+}
+
 export function browserI18nOptions(baseUrl: string, debug: boolean) {
 	return {
 		debug,

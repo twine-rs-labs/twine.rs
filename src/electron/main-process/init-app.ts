@@ -133,7 +133,9 @@ async function runAutomaticStoryDirectoryBackup() {
 export async function initApp() {
 	try {
 		await initLocales();
-		await initStoryDirectory();
+		if ((await initStoryDirectory()) === false) {
+			return;
+		}
 		await createStoryDirectory();
 		void runAutomaticStoryDirectoryBackup();
 		setInterval(

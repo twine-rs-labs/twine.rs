@@ -43,6 +43,26 @@ describe('initLocales()', () => {
 		expect(settled).toBe(true);
 	});
 
+	it('initializes with all bundled translation resources', async () => {
+		initMock.mockResolvedValue(undefined);
+		loadPrefsMock.mockResolvedValue({locale: 'fr'});
+		changeLanguageMock.mockResolvedValue(undefined);
+
+		await initLocales();
+
+		expect(initMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				resources: expect.objectContaining({
+					'en-us': expect.objectContaining({translation: expect.any(Object)}),
+					'en-US': expect.objectContaining({translation: expect.any(Object)}),
+					fr: expect.objectContaining({translation: expect.any(Object)}),
+					'pt-br': expect.objectContaining({translation: expect.any(Object)}),
+					'pt-BR': expect.objectContaining({translation: expect.any(Object)})
+				})
+			})
+		);
+	});
+
 	it('normalizes an unsupported persisted locale', async () => {
 		initMock.mockResolvedValue(undefined);
 		loadPrefsMock.mockResolvedValue({locale: 'en-GB'});

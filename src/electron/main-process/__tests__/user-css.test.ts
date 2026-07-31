@@ -18,14 +18,31 @@ describe('getUserCss', () => {
 		]);
 	});
 
-	it('returns undefined and  if the file could not be read', async () => {
+	it('silently returns undefined if user.css is missing', async () => {
 		const warnSpy = jest
 			.spyOn(global.console, 'warn')
 			.mockImplementation(() => {});
 
-		readFileMock.mockImplementation(() => Promise.reject(new Error()));
+		readFileMock.mockRejectedValue(
+			Object.assign(new Error('missing'), {code: 'ENOENT'})
+		);
 
 		expect(await getUserCss()).toBeUndefined();
-		expect(warnSpy).toHaveBeenCalledTimes(1);
+		expect(warnSpy).not.toHaveBeenCalled();
+	});
+
+	it('warns and returns undefined if user.css could not be read for another reason', async () => {
+		const warnSpy = jest
+			.spyOn(global.console, 'warn')
+			.mockImplementation(() => {});
+
+		readFileMock.mockRejectedValue(
+			Object.assign(new Error('permission denied'), {code: 'EACCES'})
+		);
+
+		expect(await getUserCss()).toBeUndefined();
+		expect(warnSpy).toHaveBeenCalledWith(
+			'Error while loading user CSS, skipping: permission denied'
+		);
 	});
 });
