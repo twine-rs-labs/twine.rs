@@ -407,6 +407,7 @@ describe('initIpc()', () => {
 			id: 7,
 			isDestroyed: () => false,
 			once: jest.fn(),
+			removeListener: jest.fn(),
 			send: jest.fn()
 		};
 		const sender8 = {id: 8};
@@ -494,6 +495,10 @@ describe('initIpc()', () => {
 		).rejects.toThrow(/active project session/);
 		await stopSession[1]({sender: sender7}, capability7);
 		expect(stopProjectSessionMock).not.toHaveBeenCalled();
+		expect(sender7.removeListener).toHaveBeenCalledWith(
+			'destroyed',
+			sender7.once.mock.calls[0][1]
+		);
 		await stopSession[1]({sender: sender8}, capability8);
 		expect(stopProjectSessionMock).toHaveBeenCalledWith('/mock/project');
 		expect(

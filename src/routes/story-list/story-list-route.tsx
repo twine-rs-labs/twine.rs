@@ -192,6 +192,7 @@ export const InnerStoryListRoute: React.FC = () => {
 	const [query, setQuery] = React.useState('');
 	const [view, setView] = React.useState<LauncherView>('table');
 	const [archiveRunning, setArchiveRunning] = React.useState(false);
+	const [archiveError, setArchiveError] = React.useState<string>();
 	const [duplicatingKey, setDuplicatingKey] = React.useState<string>();
 	const [duplicateError, setDuplicateError] = React.useState<string>();
 	const selectedStories = React.useMemo(
@@ -420,9 +421,14 @@ export const InnerStoryListRoute: React.FC = () => {
 			return;
 		}
 
+		setArchiveError(undefined);
 		setArchiveRunning(true);
 		try {
 			saveHtml(await publishArchive(), archiveFilename());
+		} catch (error) {
+			setArchiveError(
+				`Could not export library archive: ${(error as Error).message}`
+			);
 		} finally {
 			setArchiveRunning(false);
 		}
@@ -689,6 +695,11 @@ export const InnerStoryListRoute: React.FC = () => {
 					</div>
 				</header>
 				<SafariWarningCard />
+				{archiveError && (
+					<p className="story-list-launcher__error" role="alert">
+						{archiveError}
+					</p>
+				)}
 				{duplicateError && (
 					<p className="story-list-launcher__error" role="alert">
 						{duplicateError}

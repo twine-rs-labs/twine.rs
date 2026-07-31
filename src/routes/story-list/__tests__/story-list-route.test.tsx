@@ -4,10 +4,12 @@ import * as React from 'react';
 import {MemoryRouter} from 'react-router';
 import {saveAs} from 'file-saver';
 import {StoreCoreProjectHost} from '../../../core/project-host';
+import {metadataStory} from '../../../core/bootstrap-stories';
 import {
 	loadProjectMetadata,
 	saveProjectMetadata
 } from '../../../store/project-metadata';
+import {markProjectStoryHydration} from '../../../store/project-hydration';
 import {useDonationCheck} from '../../../store/prefs/use-donation-check';
 import {
 	FakeStateProvider,
@@ -346,6 +348,78 @@ describe('<StoryListRoute>', () => {
 		expect(archive).toBeInstanceOf(Blob);
 		expect((archive as Blob).type).toBe('text/html;charset=utf-8');
 		expect(filename).toBe('store.archiveFilename');
+	});
+
+	it('hydrates unopened file-backed stories directly for a library archive', async () => {
+		const story = fakeStory();
+		const rootPath = '/native/unopened-project.twine.rs';
+		const shellStory = metadataStory(story);
+		const hydrateProjectFolder = jest.fn().mockResolvedValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		const queryDocuments = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'queryDocumentPageAsync'
+		);
+
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: false,
+			rootPath
+		});
+		(window as any).twineElectron = {hydrateProjectFolder};
+
+		await renderComponent({stories: [shellStory]});
+		fireEvent.click(
+			screen.getByRole('button', {name: /export library archive/i})
+		);
+
+		await waitFor(() => expect(saveAs).toHaveBeenCalledTimes(1));
+		expect(hydrateProjectFolder).toHaveBeenCalledWith(rootPath, [story.id]);
+		expect(queryDocuments).not.toHaveBeenCalled();
+		expect(
+			screen.getByRole('button', {name: /export library archive/i})
+		).toBeEnabled();
+	});
+
+	it('reports a library archive hydration failure and re-enables export', async () => {
+		const story = fakeStory();
+		const rootPath = '/native/unreadable-project.twine.rs';
+
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: false,
+			rootPath
+		});
+		(window as any).twineElectron = {
+			hydrateProjectFolder: jest
+				.fn()
+				.mockRejectedValue(new Error('Permission denied'))
+		};
+
+		await renderComponent({stories: [metadataStory(story)]});
+		fireEvent.click(
+			screen.getByRole('button', {name: /export library archive/i})
+		);
+
+		expect(await screen.findByRole('alert')).toHaveTextContent(
+			'Could not export library archive: Permission denied'
+		);
+		expect(
+			screen.getByRole('button', {name: /export library archive/i})
+		).toBeEnabled();
+		expect(saveAs).not.toHaveBeenCalled();
 	});
 
 	it('opens global story tag management from the launcher', async () => {

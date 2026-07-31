@@ -39,6 +39,7 @@ import {
 	type AssetEmbeddingReport
 } from '../util/inline-assets';
 import {loadProjectMetadata} from './project-metadata';
+import {projectStoryHydration} from './project-hydration';
 import type {TwineElectronWindow} from '../electron/shared';
 
 export const referencedMediaEmbeddingLimits = {
@@ -219,6 +220,61 @@ export function usePublishing(): UsePublishingProps {
 			),
 		[coreProjectHost]
 	);
+
+	const hydrateArchiveStories = React.useCallback(async (selected: Story[]) => {
+		const bridge = (window as TwineElectronWindow).twineElectron;
+		const storiesByRoot = new Map<string, Story[]>();
+
+		for (const story of selected) {
+			const metadata = loadProjectMetadata(story.id);
+
+			if (
+				metadata?.storageKind === 'electron-project-folder' &&
+				metadata.status === 'file-backed' &&
+				metadata.rootPath &&
+				projectStoryHydration(story.id)?.passageTextLoaded === false
+			) {
+				storiesByRoot.set(metadata.rootPath, [
+					...(storiesByRoot.get(metadata.rootPath) ?? []),
+					story
+				]);
+			}
+		}
+
+		if (storiesByRoot.size === 0) {
+			return new Map<string, StoryWithDocuments>();
+		}
+		if (!bridge?.hydrateProjectFolder) {
+			throw new Error(
+				'The desktop project-folder hydration bridge is unavailable.'
+			);
+		}
+
+		const hydratedById = new Map<string, StoryWithDocuments>();
+
+		// Hydrate roots serially. A library archive already retains the complete
+		// output, so avoiding several simultaneous full-folder reads keeps its
+		// transient memory bounded.
+		for (const [rootPath, rootStories] of storiesByRoot) {
+			const result = await bridge.hydrateProjectFolder(
+				rootPath,
+				rootStories.map(story => story.id)
+			);
+
+			for (const story of result.stories) {
+				hydratedById.set(story.id, story);
+			}
+			for (const story of rootStories) {
+				if (!hydratedById.has(story.id)) {
+					throw new Error(
+						`Project folder hydration did not return story ${story.id}.`
+					);
+				}
+			}
+		}
+
+		return hydratedById;
+	}, []);
 
 	const loadProofFormatProperties = React.useCallback(
 		async (proofingFormat?: ProofingFormatSelection) => {
@@ -429,14 +485,20 @@ export function usePublishing(): UsePublishingProps {
 				const selected = storyIds
 					? stories.filter(story => storyIds.includes(story.id))
 					: stories;
+				const hydratedById = await hydrateArchiveStories(selected);
+
 				return publishArchive(
 					await Promise.all(
-						selected.map(story => completeStoryForPublishing(story.id))
+						selected.map(
+							story =>
+								hydratedById.get(story.id) ??
+								completeStoryForPublishing(story.id)
+						)
 					),
 					getAppInfo()
 				);
 			},
-			[completeStoryForPublishing, stories]
+			[completeStoryForPublishing, hydrateArchiveStories, stories]
 		),
 		proofStory: React.useCallback(
 			async (storyId, proofingFormat) => {

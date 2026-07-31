@@ -317,6 +317,16 @@ export function initIpc() {
 	const reservationSenderCleanupRegistered = new Set<number>();
 	let storyWriteFlushBarrier: Promise<void> | undefined;
 	const projectSessionSubscriptions = new Map<string, () => void>();
+	const projectSessionSenderCleanups = new Map<
+		number,
+		{
+			destroyed: () => void;
+			sender: {
+				once(event: 'destroyed', listener: () => void): unknown;
+				removeListener?: (event: 'destroyed', listener: () => void) => unknown;
+			};
+		}
+	>();
 
 	function trackStoryWriteRequest(request: Promise<void>) {
 		const tracked = Promise.resolve(request);
@@ -449,12 +459,57 @@ export function initIpc() {
 		return `${senderId}:${rootPath}`;
 	}
 
+	function senderHasProjectSessionSubscriptions(senderId: number) {
+		const prefix = `${senderId}:`;
+
+		return [...projectSessionSubscriptions.keys()].some(key =>
+			key.startsWith(prefix)
+		);
+	}
+
+	function removeProjectSessionSenderCleanup(senderId: number) {
+		const cleanup = projectSessionSenderCleanups.get(senderId);
+
+		cleanup?.sender.removeListener?.('destroyed', cleanup.destroyed);
+		projectSessionSenderCleanups.delete(senderId);
+	}
+
+	function ensureProjectSessionSenderCleanup(
+		senderId: number,
+		sender: {
+			once(event: 'destroyed', listener: () => void): unknown;
+			removeListener?: (event: 'destroyed', listener: () => void) => unknown;
+		}
+	) {
+		if (projectSessionSenderCleanups.has(senderId)) {
+			return;
+		}
+
+		const destroyed = () => {
+			const prefix = `${senderId}:`;
+
+			for (const [key, cleanup] of projectSessionSubscriptions) {
+				if (key.startsWith(prefix)) {
+					cleanup();
+					projectSessionSubscriptions.delete(key);
+				}
+			}
+			projectSessionSenderCleanups.delete(senderId);
+		};
+
+		projectSessionSenderCleanups.set(senderId, {destroyed, sender});
+		sender.once('destroyed', destroyed);
+	}
+
 	function stopProjectSessionSubscription(senderId: number, rootPath: string) {
 		const key = projectSessionSubscriptionKey(senderId, rootPath);
 		const hadSubscription = projectSessionSubscriptions.has(key);
 
 		projectSessionSubscriptions.get(key)?.();
 		projectSessionSubscriptions.delete(key);
+		if (!senderHasProjectSessionSubscriptions(senderId)) {
+			removeProjectSessionSenderCleanup(senderId);
+		}
 		return hadSubscription;
 	}
 
@@ -678,7 +733,7 @@ export function initIpc() {
 			};
 
 			projectSessionSubscriptions.set(subscriptionKey, cleanup);
-			event.sender.once('destroyed', cleanup);
+			ensureProjectSessionSenderCleanup(event.sender.id, event.sender);
 
 			try {
 				return await startProjectSession(rootPath, listener, storyIds);
