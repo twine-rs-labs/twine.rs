@@ -125,7 +125,9 @@ describe('loadAppPrefs and getAppPrefs', () => {
 	});
 
 	it('warns if the app prefs file could not be loaded for another reason', () => {
-		const error = Object.assign(new Error('permission denied'), {code: 'EACCES'});
+		const error = Object.assign(new Error('permission denied'), {
+			code: 'EACCES'
+		});
 		loadJsonFileSyncMock.mockImplementation(() => {
 			throw error;
 		});
