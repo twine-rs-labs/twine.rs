@@ -17,6 +17,7 @@ import {
 	emptyStoryIndex,
 	importAssetCommand,
 	insertAssetSnippetCommand,
+	mergeKnownAssetInventory,
 	replaceAssetCommand,
 	replaceKnownAssetInventoryForStory,
 	renameAssetCommand,
@@ -32,11 +33,7 @@ import type {
 } from '../../core';
 import type {CoreAssetReference} from '../../core/bindings/CoreAssetReference';
 import type {AssetManagerViewModelEntry} from '../../core/view-models';
-import {
-	fileUrlForPath,
-	normalizedAssetPath,
-	projectAssetPath
-} from '../../core/asset-paths';
+import {fileUrlForPath, projectAssetPath} from '../../core/asset-paths';
 import {selectPassage, Story, useStoriesContext} from '../../store/stories';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {usePrefsContext} from '../../store/prefs';
@@ -75,10 +72,6 @@ function storyForId(stories: Story[], storyId: string | undefined) {
 	return stories.find(story => story.id === storyId);
 }
 
-function assetInventoryKey(asset: CoreAssetInventoryEntry) {
-	return normalizedAssetPath(asset.normalizedPath || asset.path);
-}
-
 function indexWithProjectAssets(
 	storyId: string,
 	index: CoreStoryIndex | undefined,
@@ -90,17 +83,13 @@ function indexWithProjectAssets(
 		return base;
 	}
 
-	const inventoryByPath = new Map(
-		projectAssets.map(asset => [assetInventoryKey(asset), asset])
-	);
-
-	for (const asset of base.assetInventory) {
-		inventoryByPath.set(assetInventoryKey(asset), asset);
-	}
-
 	return {
 		...base,
-		assetInventory: Array.from(inventoryByPath.values())
+		assetInventory: mergeKnownAssetInventory(
+			base.assetInventory,
+			projectAssets,
+			{includeUnindexed: true}
+		)
 	};
 }
 

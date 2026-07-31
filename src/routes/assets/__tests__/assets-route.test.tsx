@@ -485,6 +485,16 @@ describe('<AssetsRoute>', () => {
 		await waitFor(() =>
 			expect(screen.getByText('File + references')).toBeInTheDocument()
 		);
+		expect(
+			screen
+				.getByText('Size', {selector: '.assets-route__field > span'})
+				.closest('.assets-route__field')
+		).toHaveTextContent('2.0 KB');
+		expect(
+			screen
+				.getByText('Modified', {selector: '.assets-route__field > span'})
+				.closest('.assets-route__field')
+		).not.toHaveTextContent('Unknown');
 	});
 
 	it('keeps live project assets visible while the Rust index is loading', async () => {

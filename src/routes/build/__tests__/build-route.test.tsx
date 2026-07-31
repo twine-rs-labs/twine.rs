@@ -186,6 +186,71 @@ describe('<BuildRoute>', () => {
 		expect(screen.getByLabelText('Embed referenced media')).toBeChecked();
 	});
 
+	it('does not present unknown asset sizes as a zero-byte estimate', async () => {
+		const path = 'assets/cover.png';
+
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {
+			getReferencedMediaEmbeddingCapability: jest.fn().mockResolvedValue({
+				available: true,
+				maxFileBytes: 25 * 1024 * 1024,
+				maxFileCount: 25,
+				maxTotalEncodedBytes: 25 * 1024 * 1024
+			})
+		};
+		replaceKnownAssetInventoryForStory('story-id', [
+			{...exportableAsset(path, 0), sizeBytes: null}
+		]);
+
+		renderComponent(`<img src="${path}">`);
+
+		expect(
+			await screen.findByText(
+				'1 candidate · Size estimate unavailable (1 candidate with unknown size).'
+			)
+		).toBeInTheDocument();
+		expect(screen.queryByText(/0 B estimated encoded size/)).toBeNull();
+	});
+
+	it('refreshes native asset sizes before estimating embedded media', async () => {
+		const path = 'assets/cover.png';
+		const projectSessionSnapshot = jest.fn().mockResolvedValue({
+			assets: [exportableAsset(path, 2048)]
+		});
+
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {
+			getReferencedMediaEmbeddingCapability: jest.fn().mockResolvedValue({
+				available: true,
+				maxFileBytes: 25 * 1024 * 1024,
+				maxFileCount: 25,
+				maxTotalEncodedBytes: 25 * 1024 * 1024
+			}),
+			projectSessionSnapshot
+		};
+
+		renderComponent(`<img src="${path}">`);
+
+		expect(
+			await screen.findByText('1 candidate · 2.7 KB estimated encoded size.')
+		).toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByLabelText('Embed referenced media')).toBeChecked()
+		);
+		expect(projectSessionSnapshot).toHaveBeenCalledWith(
+			'/project/moon-castle.twine.rs',
+			['story-id']
+		);
+	});
+
 	it('exports the selected file format', async () => {
 		renderComponent();
 

@@ -15,6 +15,7 @@ import {
 	knownAssetInventoryScanCompleteForStory,
 	loadDismissedDiagnosticIds,
 	materializeStoryFromSession,
+	replaceKnownAssetInventoryForStory,
 	useCoreProjectHost,
 	useKnownAssetInventoryVersion
 } from '../../core';
@@ -300,6 +301,24 @@ function inlineAssetDefaultReason(profile: InlineAssetProfile) {
 	return reasons.join(' and ');
 }
 
+function inlineAssetEstimateLabel(profile: InlineAssetProfile) {
+	if (profile.unknownSizeCount === 0) {
+		return `${bytesLabel(profile.estimatedEncodedBytes)} estimated encoded size.`;
+	}
+
+	const unknownLabel = `${profile.unknownSizeCount} candidate${
+		profile.unknownSizeCount === 1 ? '' : 's'
+	} with unknown size`;
+
+	if (profile.unknownSizeCount === profile.count) {
+		return `Size estimate unavailable (${unknownLabel}).`;
+	}
+
+	return `At least ${bytesLabel(
+		profile.estimatedEncodedBytes
+	)} encoded (${unknownLabel}).`;
+}
+
 function logTime() {
 	return new Date().toLocaleTimeString([], {
 		hour: '2-digit',
@@ -539,6 +558,45 @@ export const BuildRoute: React.FC = () => {
 	const inlineAssetsAutoDisabled =
 		exportFormat === 'html' && !inlineAssetsDefault;
 	const inlineAssetsAutoReason = inlineAssetDefaultReason(assetProfile);
+
+	React.useEffect(() => {
+		let active = true;
+		const bridge = (window as TwineElectronWindow).twineElectron;
+		const projectRoot = projectMetadata?.rootPath;
+
+		if (
+			!story ||
+			!fileBackedProject ||
+			!projectRoot ||
+			(!bridge?.projectSessionSnapshot && !bridge?.listProjectAssets)
+		) {
+			return () => {
+				active = false;
+			};
+		}
+
+		void (async () => {
+			const snapshot = bridge.projectSessionSnapshot
+				? await bridge.projectSessionSnapshot(projectRoot, [story.id])
+				: undefined;
+			const inventory =
+				snapshot?.assets ?? (await bridge.listProjectAssets(projectRoot));
+
+			if (active) {
+				replaceKnownAssetInventoryForStory(story.id, inventory);
+			}
+		})().catch(error => {
+			if (active) {
+				console.warn(
+					`Project assets could not be refreshed for Build: ${error}`
+				);
+			}
+		});
+
+		return () => {
+			active = false;
+		};
+	}, [fileBackedProject, projectMetadata?.rootPath, story]);
 
 	React.useEffect(() => {
 		let active = true;
@@ -1304,9 +1362,7 @@ export const BuildRoute: React.FC = () => {
 														{embeddingAvailable
 															? `${assetProfile.count} candidate${
 																	assetProfile.count === 1 ? '' : 's'
-																} · ${bytesLabel(
-																	assetProfile.estimatedEncodedBytes
-																)} estimated encoded size.`
+																} · ${inlineAssetEstimateLabel(assetProfile)}`
 															: (embeddingCapability?.reason ??
 																'Managed media embedding requires a file-backed desktop project.')}
 													</div>

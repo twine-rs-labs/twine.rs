@@ -1742,7 +1742,11 @@ test('packaged desktop embeds referenced media for every bundled format family',
 			await expect(page).toHaveURL(/#\/stories\/[^/]+\/build$/);
 			const embedSwitch = page.getByLabel('Embed referenced media');
 
-			await embedSwitch.locator('..').click();
+			await expect(
+				page.getByText(
+					/4 candidates · (?!0 B)\d+(?:\.\d+)? (?:B|KB|MB) estimated encoded size\./
+				)
+			).toBeVisible({timeout: 30_000});
 			await expect(embedSwitch).toBeChecked({timeout: 30_000});
 
 			const cleanFormatRoot = path.join(

@@ -43,6 +43,7 @@ export * from './bootstrap-stories';
 export * from './project-snapshot';
 export * from './view-models';
 export * from './diagnostic-dismissals';
+export * from './asset-inventory';
 export * from './wasm/performance';
 
 export type {

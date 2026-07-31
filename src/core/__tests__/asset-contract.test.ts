@@ -3,6 +3,7 @@ import {
 	deleteAssetCommand,
 	importAssetCommand,
 	insertAssetSnippetCommand,
+	mergeKnownAssetInventory,
 	renameAssetCommand,
 	replaceAssetCommand,
 	revealAssetCommand,
@@ -244,6 +245,44 @@ describe('asset M5 contract', () => {
 				referenceCount: 1,
 				sizeBytes: 2048,
 				thumbnailUrl: 'file:///project/assets/cover.png'
+			})
+		]);
+	});
+
+	it('keeps native file metadata when merging Rust asset references', () => {
+		const story = fakeStory(0);
+
+		story.passages = [
+			fakePassage({
+				id: 'start',
+				name: 'Start',
+				story: story.id,
+				text: '<img src="assets/cover.png">'
+			})
+		];
+		const indexed = storyToCoreIndex(story).assetInventory[0];
+		const native = {
+			...indexed,
+			exists: true,
+			modifiedAt: '2026-06-21T16:00:00.000Z',
+			previewUrl: 'file:///project/assets/cover.png',
+			referenceCount: 0,
+			references: [],
+			sizeBytes: 2048,
+			thumbnailUrl: 'file:///project/assets/cover.png',
+			unused: true
+		};
+
+		expect(mergeKnownAssetInventory([indexed], [native])).toEqual([
+			expect.objectContaining({
+				exists: true,
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				path: 'assets/cover.png',
+				referenceCount: 1,
+				references: indexed.references,
+				sizeBytes: 2048,
+				thumbnailUrl: 'file:///project/assets/cover.png',
+				unused: false
 			})
 		]);
 	});

@@ -2,6 +2,7 @@ import * as React from 'react';
 import type {CoreAssetInventoryEntry} from './bindings/CoreAssetInventoryEntry';
 import type {CoreAssetsPage} from './bindings/CoreAssetsPage';
 import type {CoreAssetsQuery} from './bindings/CoreAssetsQuery';
+import {mergeKnownAssetInventory} from './asset-inventory';
 import type {CoreBacklinksPage} from './bindings/CoreBacklinksPage';
 import type {CoreBacklinksQuery} from './bindings/CoreBacklinksQuery';
 import type {CoreContentsPage} from './bindings/CoreContentsPage';
@@ -2034,12 +2035,20 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		if (this.wasmClient.enabled) {
 			try {
 				const revision = await this.ensureWasmProjectSession();
-				return await this.wasmClient.queryAssetsPage(
+				const page = await this.wasmClient.queryAssetsPage(
 					this.sessionId,
 					storyId,
 					{...defaultAssetsQuery, ...options},
 					revision
 				);
+
+				return {
+					...page,
+					assets: mergeKnownAssetInventory(
+						page.assets,
+						knownAssetInventoryForStory(storyId)
+					)
+				};
 			} catch (error) {
 				console.warn(`Rust assets page query failed: ${error}`);
 			}

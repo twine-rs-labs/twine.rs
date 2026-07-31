@@ -542,6 +542,42 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(wasmClient.replaceProject).toHaveBeenCalledTimes(1);
 	});
 
+	it('overlays refreshed native metadata onto a stale Rust asset page', async () => {
+		const wasmClient = createTestCoreSessionClient();
+		const path = 'assets/cover.png';
+		const context = hostWithStory({
+			text: `<img src="${path}">`,
+			wasmClient
+		});
+
+		replaceKnownAssetInventoryForStory(context.story.id, []);
+		await context.host.ensureSessionReady();
+		replaceKnownAssetInventoryForStory(context.story.id, [
+			{
+				...asset(path),
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				sizeBytes: 2048
+			}
+		]);
+
+		const page = await context.host.queryAssetsPageAsync(context.story.id, {
+			limit: 10
+		});
+
+		expect(page.assets).toEqual([
+			expect.objectContaining({
+				modifiedAt: '2026-06-21T16:00:00.000Z',
+				path,
+				referenceCount: 1,
+				sizeBytes: 2048,
+				unused: false
+			})
+		]);
+		expect(page.assets[0].references).toHaveLength(1);
+		context.host.dispose();
+		replaceKnownAssetInventoryForStory(context.story.id, []);
+	});
+
 	it('uses the worker-advanced revision for follow-up commands', async () => {
 		const wasmClient = {
 			acknowledgeSaved: jest.fn(),
