@@ -2347,7 +2347,22 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	}
 
 	private hostForStory(storyId: string | undefined) {
-		const sessionId = storyId ? this.storySessions.get(storyId) : undefined;
+		let sessionId = storyId ? this.storySessions.get(storyId) : undefined;
+		const story = storyId
+			? this.stories.find(candidate => candidate.id === storyId)
+			: undefined;
+
+		// Project metadata is stored outside React state and can change while an
+		// import is preparing a replacement. Rebind synchronously before routing the
+		// next command or query so it cannot mutate one session while persistence
+		// materializes documents from another.
+		if (
+			story &&
+			(sessionId !== coreSessionIdForStory(story) || bootstrapStory(story.id))
+		) {
+			this.update(this.stories, this.dispatch);
+			sessionId = this.storySessions.get(story.id);
+		}
 
 		return sessionId ? this.hosts.get(sessionId) : undefined;
 	}

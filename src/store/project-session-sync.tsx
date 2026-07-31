@@ -11,7 +11,12 @@ import {
 } from '../core';
 import type {CoreExternalConflict} from '../core/bindings/CoreExternalConflict';
 import {markProjectStoryHydration} from './project-hydration';
-import {loadProjectMetadata, saveProjectMetadata} from './project-metadata';
+import {
+	getProjectMetadataRevision,
+	loadProjectMetadata,
+	saveProjectMetadata,
+	subscribeProjectMetadata
+} from './project-metadata';
 import {NativeProjectDeltaQueue} from './native-project-delta-queue';
 import {Story, StoryWithDocuments, useStoriesContext} from './stories';
 import {
@@ -76,6 +81,17 @@ function deterministicResolutionError(error: Error) {
 export const ProjectSessionSync: React.FC = () => {
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
+	const [metadataRevision, setMetadataRevision] = React.useState(
+		getProjectMetadataRevision
+	);
+
+	React.useEffect(
+		() =>
+			subscribeProjectMetadata(() =>
+				setMetadataRevision(getProjectMetadataRevision())
+			),
+		[]
+	);
 	const twineElectron = (window as TwineElectronWindow).twineElectron;
 	const dismissedDeltas = React.useRef(new Set<string>());
 	const nextReviewOrder = React.useRef(0);
@@ -93,14 +109,23 @@ export const ProjectSessionSync: React.FC = () => {
 			: undefined;
 	const [busy, setBusy] = React.useState(false);
 	const [error, setError] = React.useState<string>();
-	const roots = React.useMemo(() => projectRootsForStories(stories), [stories]);
-	const rootSignature = React.useMemo(
-		() => [...roots.keys()].sort().join('\n'),
+	const roots = React.useMemo(
+		() => projectRootsForStories(stories),
+		[metadataRevision, stories]
+	);
+	const rootMembershipSignature = React.useMemo(
+		() =>
+			JSON.stringify(
+				Array.from(roots, ([rootPath, rootStories]) => [
+					rootPath,
+					rootStories.map(story => story.id).sort()
+				]).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+			),
 		[roots]
 	);
-	const rootPaths = React.useMemo(
-		() => (rootSignature ? rootSignature.split('\n') : []),
-		[rootSignature]
+	const sessionRoots = React.useMemo(
+		() => JSON.parse(rootMembershipSignature) as [string, string[]][],
+		[rootMembershipSignature]
 	);
 	const rootStoryIds = React.useRef(new Map<string, string[]>());
 	const rootStoriesRef = React.useRef(new Map<string, Story[]>());
@@ -162,13 +187,8 @@ export const ProjectSessionSync: React.FC = () => {
 
 	React.useEffect(() => {
 		rootStoriesRef.current = roots;
-		rootStoryIds.current = new Map(
-			Array.from(roots, ([rootPath, rootStories]) => [
-				rootPath,
-				rootStories.map(story => story.id)
-			])
-		);
-	}, [roots]);
+		rootStoryIds.current = new Map(sessionRoots);
+	}, [roots, sessionRoots]);
 
 	const acknowledgeDelta = React.useCallback(
 		async (delta: NativeProjectSessionDelta) => {
@@ -234,6 +254,21 @@ export const ProjectSessionSync: React.FC = () => {
 				throw new Error(
 					`No active project session exists for "${delta.rootPath}".`
 				);
+			}
+			const targetMetadata = loadProjectMetadata(targetStoryId);
+
+			if (
+				targetMetadata?.storageKind !== 'electron-project-folder' ||
+				targetMetadata.status !== 'file-backed' ||
+				targetMetadata.rootPath !== delta.rootPath
+			) {
+				completeReviewClassification(delta);
+				recordPerformanceHarnessEvent('watcher-delta-stale-root', {
+					deltaId: delta.id,
+					rootPath: delta.rootPath,
+					storyId: targetStoryId
+				});
+				return 'continue' as const;
 			}
 			if (delta.recovery) {
 				if (signal.aborted) {
@@ -366,23 +401,24 @@ export const ProjectSessionSync: React.FC = () => {
 		}
 
 		let canceled = false;
-		for (const rootPath of rootPaths) {
+		const startTasks = new Map<string, Promise<boolean>>();
+		for (const [rootPath] of sessionRoots) {
 			const previousCleanup = sessionCleanupRef.current.get(rootPath);
 			startingSessionRoots.current.add(rootPath);
 
-			void (async () => {
+			const startTask = (async () => {
 				if (previousCleanup) {
 					await previousCleanup;
 				}
 				if (canceled) {
-					return;
+					return false;
 				}
 				const start = await twineElectron.startProjectSession(
 					rootPath,
 					rootStoryIds.current.get(rootPath) ?? []
 				);
 				if (canceled) {
-					return;
+					return true;
 				}
 				activeSessionInstances.current.set(rootPath, start.sessionInstanceId);
 				startingSessionRoots.current.delete(rootPath);
@@ -405,30 +441,43 @@ export const ProjectSessionSync: React.FC = () => {
 				// separate readiness mark so performance scenarios do not inject an
 				// external edit into that initialization work.
 				markPerformance('session-initialization-complete');
+				return false;
 			})().catch((startError: Error) => {
 				if (!canceled) {
 					startingSessionRoots.current.delete(rootPath);
 					bufferedSessionDeltas.current.delete(rootPath);
 					setError(startError.message);
 				}
+				return false;
 			});
+
+			startTasks.set(rootPath, startTask);
 		}
 
 		return () => {
 			canceled = true;
 			setPendingReviews(current =>
-				current.filter(review => !rootPaths.includes(review.rootPath))
+				current.filter(
+					review =>
+						!sessionRoots.some(([rootPath]) => rootPath === review.rootPath)
+				)
 			);
 
-			for (const rootPath of rootPaths) {
+			for (const [rootPath] of sessionRoots) {
 				activeSessionInstances.current.delete(rootPath);
 				startingSessionRoots.current.delete(rootPath);
 				bufferedSessionDeltas.current.delete(rootPath);
 				const drain = deltaQueueRef.current?.clearRoot(rootPath);
-				const stopResult = drain
+				const initialStop = drain
 					? drain.then(() => twineElectron.stopProjectSession?.(rootPath))
-					: twineElectron.stopProjectSession?.(rootPath);
-				const cleanup = Promise.resolve(stopResult).then(() => undefined);
+					: Promise.resolve(twineElectron.stopProjectSession?.(rootPath));
+				const cleanup = Promise.all([startTasks.get(rootPath), initialStop])
+					.then(([startedAfterCancellation]) =>
+						startedAfterCancellation
+							? twineElectron.stopProjectSession?.(rootPath)
+							: undefined
+					)
+					.then(() => undefined);
 
 				sessionCleanupRef.current.set(rootPath, cleanup);
 				void cleanup.finally(() => {
@@ -438,7 +487,7 @@ export const ProjectSessionSync: React.FC = () => {
 				});
 			}
 		};
-	}, [rootPaths, synchronizeStartAssets, twineElectron]);
+	}, [sessionRoots, synchronizeStartAssets, twineElectron]);
 
 	async function acceptDisk() {
 		if (!pendingReview || !twineElectron?.resolveProjectSessionConflicts) {

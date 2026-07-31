@@ -29,12 +29,18 @@ import type {
 	ProjectSourceLayout,
 	TwineElectronWindow
 } from '../../electron/shared';
-import {saveProjectMetadata} from '../../store/project-metadata';
+import {
+	loadProjectMetadata,
+	saveProjectMetadata
+} from '../../store/project-metadata';
 import {
 	mergeProjectStories,
 	projectStoryIdsForCurrentStories
 } from '../../store/merge-project-stories';
-import {markProjectStoryHydration} from '../../store/project-hydration';
+import {
+	markProjectStoryHydration,
+	projectStoryHydration
+} from '../../store/project-hydration';
 import {
 	formatWithNameAndVersion,
 	StoryFormat,
@@ -55,7 +61,11 @@ import {
 	maxImportZipBytes
 } from '../../util/import-limits';
 import {
+	type CoreAssetInventoryEntry,
+	materializeRegisteredStory,
 	registerStoryDocuments,
+	replaceKnownAssetInventoryForStory,
+	releaseBootstrapStory,
 	replaceStoryCommand,
 	useCoreProjectHost
 } from '../../core';
@@ -336,15 +346,18 @@ async function parseImportFile(file: File) {
 async function persistNativeProjectFolder(
 	story: StoryWithDocuments,
 	preferredParent?: string,
-	sourceLayout?: ProjectSourceLayout
+	sourceLayout?: ProjectSourceLayout,
+	options: {commitProjectState?: boolean} = {}
 ) {
 	const twineElectron = desktopBridge();
 
 	if (!twineElectron?.createProjectFolder) {
-		saveProjectMetadata(story.id, {
-			status: 'local-only',
-			storageKind: 'web-local'
-		});
+		if (options.commitProjectState ?? true) {
+			saveProjectMetadata(story.id, {
+				status: 'local-only',
+				storageKind: 'web-local'
+			});
+		}
 		return undefined;
 	}
 
@@ -362,17 +375,65 @@ async function persistNativeProjectFolder(
 		throw new Error(projectCreationErrorMessage(error, story.name));
 	}
 
-	saveProjectMetadata(story.id, {
+	if (options.commitProjectState ?? true) {
+		commitNativeProjectFolder(story.id, result);
+	}
+
+	return result;
+}
+
+function commitNativeProjectFolder(
+	storyId: string,
+	result: NativeProjectFolderResult
+) {
+	saveProjectMetadata(storyId, {
 		rootPath: result.rootPath,
 		status: 'file-backed',
 		storageKind: 'electron-project-folder'
 	});
-	markProjectStoryHydration(story.id, {
+	markProjectStoryHydration(storyId, {
 		passageTextLoaded: result.passageTextLoaded !== false,
 		rootPath: result.rootPath
 	});
+}
 
-	return result;
+async function materializeImportReplacement(story: Story) {
+	const metadata = loadProjectMetadata(story.id);
+	const bridge = desktopBridge();
+
+	if (
+		metadata?.storageKind === 'electron-project-folder' &&
+		metadata.status === 'file-backed' &&
+		metadata.rootPath &&
+		projectStoryHydration(story.id)?.passageTextLoaded === false
+	) {
+		if (!bridge?.hydrateProjectFolder) {
+			throw new Error(
+				'The desktop project-folder hydration bridge is unavailable.'
+			);
+		}
+
+		const result = await bridge.hydrateProjectFolder(metadata.rootPath, [
+			story.id
+		]);
+		const hydrated = result.stories.find(
+			candidate => candidate.id === story.id
+		);
+
+		if (!hydrated) {
+			throw new Error(
+				`Project folder hydration did not return story ${story.id}.`
+			);
+		}
+		if (result.passageTextLoaded === false) {
+			throw new Error(
+				`Project folder hydration did not load passages for story ${story.id}.`
+			);
+		}
+		return hydrated;
+	}
+
+	return materializeRegisteredStory(story);
 }
 
 export const NewProjectRoute: React.FC = () => {
@@ -405,6 +466,7 @@ export const NewProjectRoute: React.FC = () => {
 	const [importError, setImportError] = React.useState<string>();
 	const [draggingImport, setDraggingImport] = React.useState(false);
 	const fileInput = React.useRef<HTMLInputElement>(null);
+	const importRunActive = React.useRef(false);
 	const preparedImportIds = React.useRef(new Set<string>());
 	const storiesRef = React.useRef(stories);
 	const formatOptions = React.useMemo(
@@ -649,7 +711,7 @@ export const NewProjectRoute: React.FC = () => {
 	}
 
 	async function handleImport() {
-		if (!importQueue) {
+		if (importRunActive.current || !importQueue) {
 			return;
 		}
 
@@ -660,6 +722,14 @@ export const NewProjectRoute: React.FC = () => {
 		if (selectedStories.length === 0) {
 			return;
 		}
+
+		importRunActive.current = true;
+		setImporting(true);
+		setImportProgress({detail: 'Preparing replacement stories', progress: 58});
+		const registeredReplacementStoryIds: string[] = [];
+		const committedReplacementStoryIds = new Set<string>();
+		const replacementRootsByStoryId = new Map<string, string>();
+		let importCompleted = false;
 
 		try {
 			const existingStoriesBySelection = selectedStories.map(story =>
@@ -674,17 +744,48 @@ export const NewProjectRoute: React.FC = () => {
 						repairStory(story, identityStories, formats, defaultRepairFormat)
 					)
 				: identityStories;
-
-			setImporting(true);
-			setImportProgress({detail: 'Writing project folders', progress: 62});
-			const projectResults = await Promise.all(
-				storiesToImport.map(story =>
-					persistNativeProjectFolder(
-						story,
-						prefs.defaultProjectFolder || undefined
-					)
+			const currentReplacementStories = await Promise.all(
+				existingStoriesBySelection.map(existingStory =>
+					existingStory
+						? materializeImportReplacement(existingStory)
+						: Promise.resolve(undefined)
 				)
 			);
+
+			for (const currentStory of currentReplacementStories) {
+				if (currentStory) {
+					// Seed a newly assigned project session from the current library story.
+					// The imported story remains a distinct command, so Rust emits the
+					// patches that synchronize the retained React metadata.
+					registerStoryDocuments(currentStory);
+					registeredReplacementStoryIds.push(currentStory.id);
+				}
+			}
+
+			setImportProgress({detail: 'Writing project folders', progress: 62});
+			const projectResults: Array<NativeProjectFolderResult | undefined> = [];
+
+			for (const [index, story] of storiesToImport.entries()) {
+				const existingStory = existingStoriesBySelection[index];
+				const currentStory = currentReplacementStories[index];
+				const result =
+					existingStory && currentStory
+						? await persistNativeProjectFolder(
+								currentStory,
+								prefs.defaultProjectFolder || undefined,
+								undefined,
+								{commitProjectState: false}
+							)
+						: await persistNativeProjectFolder(
+								story,
+								prefs.defaultProjectFolder || undefined
+							);
+
+				if (existingStory && result) {
+					replacementRootsByStoryId.set(existingStory.id, result.rootPath);
+				}
+				projectResults.push(result);
+			}
 			const preparedImport = importQueue.preparedImport;
 
 			if (preparedImport) {
@@ -701,8 +802,53 @@ export const NewProjectRoute: React.FC = () => {
 							: []
 					)
 				);
+			}
+
+			const replacementAssetInventories = new Map<
+				string,
+				CoreAssetInventoryEntry[]
+			>();
+
+			for (const [index, result] of projectResults.entries()) {
+				const existingStory = existingStoriesBySelection[index];
+
+				if (existingStory && result) {
+					const bridge = desktopBridge();
+
+					if (!bridge?.listProjectAssets) {
+						throw new Error(
+							'The desktop project-folder asset bridge is unavailable.'
+						);
+					}
+					replacementAssetInventories.set(
+						existingStory.id,
+						await bridge.listProjectAssets(result.rootPath)
+					);
+				}
+			}
+
+			if (preparedImport) {
 				await desktopBridge()?.discardProjectImport?.(preparedImport.id);
 				preparedImportIds.current.delete(preparedImport.id);
+			}
+
+			for (const [index, result] of projectResults.entries()) {
+				const existingStory = existingStoriesBySelection[index];
+
+				if (!existingStory || !result) {
+					continue;
+				}
+
+				replaceKnownAssetInventoryForStory(
+					existingStory.id,
+					replacementAssetInventories.get(existingStory.id) ?? []
+				);
+				// Publishing metadata and hydration can rebind both the Core and native
+				// sessions. Do that only after the folder's final asset scan is ready and
+				// the current passage documents have a registered transport.
+				commitNativeProjectFolder(existingStory.id, result);
+				committedReplacementStoryIds.add(existingStory.id);
+				await coreProjectHost.ensureSessionReady(existingStory.id);
 			}
 
 			const newDocumentStories: StoryWithDocuments[] = [];
@@ -729,9 +875,65 @@ export const NewProjectRoute: React.FC = () => {
 			}
 			repairStories();
 			navigate('/');
+			importCompleted = true;
 		} catch (error) {
 			setImportError((error as Error).message);
 		} finally {
+			if (!importCompleted) {
+				const bridge = desktopBridge();
+				const uncommittedReplacementRoots = [
+					...replacementRootsByStoryId.entries()
+				]
+					.filter(([storyId]) => !committedReplacementStoryIds.has(storyId))
+					.map(([, rootPath]) => rootPath);
+				const cleanupErrors: string[] = [];
+
+				if (uncommittedReplacementRoots.length > 0) {
+					if (!bridge?.deleteProjectFolder) {
+						cleanupErrors.push(
+							...uncommittedReplacementRoots.map(
+								rootPath =>
+									`Could not remove incomplete replacement project folder "${rootPath}": the desktop deletion bridge is unavailable.`
+							)
+						);
+					} else {
+						const cleanupResults = await Promise.allSettled(
+							uncommittedReplacementRoots.map(rootPath =>
+								bridge.deleteProjectFolder(rootPath)
+							)
+						);
+
+						for (const [index, result] of cleanupResults.entries()) {
+							if (result.status === 'rejected') {
+								const reason =
+									result.reason instanceof Error
+										? result.reason.message
+										: String(result.reason);
+
+								cleanupErrors.push(
+									`Could not remove incomplete replacement project folder "${uncommittedReplacementRoots[index]}": ${reason}`
+								);
+							}
+						}
+					}
+
+					if (cleanupErrors.length > 0) {
+						setImportError(current =>
+							[current, ...cleanupErrors].filter(Boolean).join('\n')
+						);
+					}
+				}
+			}
+			for (const storyId of registeredReplacementStoryIds) {
+				if (committedReplacementStoryIds.has(storyId) && !importCompleted) {
+					markProjectStoryHydration(storyId, {
+						passageTextLoaded: false,
+						rootPath: loadProjectMetadata(storyId)?.rootPath
+					});
+				}
+				releaseBootstrapStory(storyId);
+			}
+			importRunActive.current = false;
 			setImporting(false);
 			setImportProgress(undefined);
 		}
@@ -1139,6 +1341,7 @@ export const NewProjectRoute: React.FC = () => {
 							</Button>
 							<Button
 								disabled={
+									importing ||
 									!importQueue ||
 									importQueue.stories.length === 0 ||
 									importQueue.selectedIds.length === 0

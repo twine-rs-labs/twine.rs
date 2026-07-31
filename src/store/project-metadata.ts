@@ -7,6 +7,29 @@ export interface ProjectMetadata {
 	updatedAt: string;
 }
 
+const listeners = new Set<() => void>();
+let revision = 0;
+
+function notifyProjectMetadataChanged() {
+	revision++;
+
+	for (const listener of [...listeners]) {
+		listener();
+	}
+}
+
+export function getProjectMetadataRevision() {
+	return revision;
+}
+
+export function subscribeProjectMetadata(listener: () => void) {
+	listeners.add(listener);
+
+	return () => {
+		listeners.delete(listener);
+	};
+}
+
 export function projectFolderSlug(value: string) {
 	return (
 		value
@@ -47,6 +70,7 @@ export function saveProjectMetadata(
 			updatedAt: now
 		})
 	);
+	notifyProjectMetadataChanged();
 }
 
 export function loadProjectMetadata(storyId: string) {
@@ -65,4 +89,5 @@ export function loadProjectMetadata(storyId: string) {
 
 export function deleteProjectMetadata(storyId: string) {
 	window.localStorage.removeItem(projectMetadataKey(storyId));
+	notifyProjectMetadataChanged();
 }

@@ -6,9 +6,16 @@ import type {
 	NativeProjectSessionStart
 } from '../../electron/shared';
 import {fakeStory} from '../../test-util';
-import {loadProjectMetadata} from '../project-metadata';
+import {
+	getProjectMetadataRevision,
+	loadProjectMetadata,
+	subscribeProjectMetadata
+} from '../project-metadata';
 import {ProjectSessionSync} from '../project-session-sync';
 import {StoriesContext} from '../stories';
+
+let mockProjectMetadataRevision = 0;
+const mockProjectMetadataListeners = new Set<() => void>();
 
 jest.mock('../../core', () => ({
 	...jest.requireActual('../../core'),
@@ -16,13 +23,32 @@ jest.mock('../../core', () => ({
 	useCoreProjectHost: jest.fn()
 }));
 jest.mock('../project-metadata', () => ({
+	getProjectMetadataRevision: jest.fn(() => mockProjectMetadataRevision),
 	loadProjectMetadata: jest.fn(),
-	saveProjectMetadata: jest.fn()
+	saveProjectMetadata: jest.fn(),
+	subscribeProjectMetadata: jest.fn((listener: () => void) => {
+		mockProjectMetadataListeners.add(listener);
+		return () => mockProjectMetadataListeners.delete(listener);
+	})
 }));
 
 describe('<ProjectSessionSync>', () => {
+	beforeEach(() => {
+		(getProjectMetadataRevision as jest.Mock).mockImplementation(
+			() => mockProjectMetadataRevision
+		);
+		(subscribeProjectMetadata as jest.Mock).mockImplementation(
+			(listener: () => void) => {
+				mockProjectMetadataListeners.add(listener);
+				return () => mockProjectMetadataListeners.delete(listener);
+			}
+		);
+	});
+
 	afterEach(() => {
 		delete (window as any).twineElectron;
+		mockProjectMetadataListeners.clear();
+		mockProjectMetadataRevision = 0;
 	});
 
 	function start(
@@ -228,6 +254,15 @@ describe('<ProjectSessionSync>', () => {
 			</React.StrictMode>
 		);
 
+		await waitFor(() => expect(startProjectSession).toHaveBeenCalledTimes(1));
+		await act(async () => {
+			firstStart.reject(
+				Object.assign(new Error('Project session start was canceled.'), {
+					code: 'PROJECT_SESSION_START_CANCELED'
+				})
+			);
+			await Promise.resolve();
+		});
 		await waitFor(() => expect(startProjectSession).toHaveBeenCalledTimes(2));
 		expect(stopProjectSession).toHaveBeenCalledTimes(1);
 		expect(startProjectSession.mock.invocationCallOrder[0]).toBeLessThan(
@@ -238,19 +273,149 @@ describe('<ProjectSessionSync>', () => {
 		);
 		await waitFor(() => expect(ensureSessionReady).toHaveBeenCalledTimes(1));
 
-		await act(async () => {
-			firstStart.reject(
-				Object.assign(new Error('Project session start was canceled.'), {
-					code: 'PROJECT_SESSION_START_CANCELED'
-				})
-			);
-			await Promise.resolve();
-		});
 		expect(ensureSessionReady).toHaveBeenCalledTimes(1);
 		expect(screen.queryByRole('status')).toBeNull();
 
 		unmount();
 		await waitFor(() => expect(stopProjectSession).toHaveBeenCalledTimes(2));
+	});
+
+	it('moves synchronization to a metadata root change without a story update', async () => {
+		const story = fakeStory();
+		let rootPath = '/old-project';
+		let observeDelta: ((delta: NativeProjectSessionDelta) => void) | undefined;
+		const ensureSessionReady = jest.fn(async () => {});
+		const ingestExternalDelta = jest.fn(async () => ({
+			conflicts: [],
+			outcome: 'applied'
+		}));
+		const startProjectSession = jest.fn(async (root: string) =>
+			start(root, [story.id])
+		);
+		const stopProjectSession = jest.fn(async () => {});
+
+		(loadProjectMetadata as jest.Mock).mockImplementation(() => ({
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		}));
+		(useCoreProjectHost as jest.Mock).mockReturnValue({
+			ensureSessionReady,
+			ingestExternalDelta
+		});
+		(window as any).twineElectron = {
+			onProjectSessionChanged: jest.fn(
+				(listener: (delta: NativeProjectSessionDelta) => void) => {
+					observeDelta = listener;
+					return jest.fn();
+				}
+			),
+			startProjectSession,
+			stopProjectSession
+		};
+		const rendered = render(
+			<StoriesContext.Provider value={{dispatch: jest.fn(), stories: [story]}}>
+				<ProjectSessionSync />
+			</StoriesContext.Provider>
+		);
+		await waitFor(() =>
+			expect(startProjectSession).toHaveBeenCalledWith('/old-project', [
+				story.id
+			])
+		);
+		await waitFor(() => expect(ensureSessionReady).toHaveBeenCalled());
+		rootPath = '/new-project';
+		await act(async () => {
+			observeDelta!(delta('stale-old-root', '/old-project'));
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+		expect(ingestExternalDelta).not.toHaveBeenCalled();
+		act(() => {
+			mockProjectMetadataRevision++;
+			for (const listener of [...mockProjectMetadataListeners]) {
+				listener();
+			}
+		});
+		await waitFor(() =>
+			expect(startProjectSession).toHaveBeenCalledWith('/new-project', [
+				story.id
+			])
+		);
+		expect(stopProjectSession).toHaveBeenCalledWith('/old-project');
+		rendered.unmount();
+	});
+
+	it('restarts a same-root session when its story membership changes', async () => {
+		const rootPath = '/project';
+		const firstStory = {...fakeStory(), id: 'story-z'};
+		const secondStory = {...fakeStory(), id: 'story-a'};
+		const ensureSessionReady = jest.fn(async () => {});
+		let resolveFirstStart: (start: NativeProjectSessionStart) => void = () =>
+			undefined;
+		const firstStart = new Promise<NativeProjectSessionStart>(resolve => {
+			resolveFirstStart = resolve;
+		});
+		const startProjectSession = jest
+			.fn(
+				async (
+					root: string,
+					storyIds: string[]
+				): Promise<NativeProjectSessionStart> => start(root, storyIds)
+			)
+			.mockReturnValueOnce(firstStart);
+		const stopProjectSession = jest.fn(async () => {});
+
+		(loadProjectMetadata as jest.Mock).mockReturnValue({
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(useCoreProjectHost as jest.Mock).mockReturnValue({ensureSessionReady});
+		(window as any).twineElectron = {
+			onProjectSessionChanged: jest.fn(() => jest.fn()),
+			startProjectSession,
+			stopProjectSession
+		};
+		const rendered = render(
+			<StoriesContext.Provider
+				value={{dispatch: jest.fn(), stories: [firstStory]}}
+			>
+				<ProjectSessionSync />
+			</StoriesContext.Provider>
+		);
+
+		await waitFor(() =>
+			expect(startProjectSession).toHaveBeenCalledWith(rootPath, ['story-z'])
+		);
+		rendered.rerender(
+			<StoriesContext.Provider
+				value={{dispatch: jest.fn(), stories: [firstStory, secondStory]}}
+			>
+				<ProjectSessionSync />
+			</StoriesContext.Provider>
+		);
+
+		await act(async () => {
+			await Promise.resolve();
+		});
+		expect(startProjectSession).toHaveBeenCalledTimes(1);
+		expect(stopProjectSession).toHaveBeenCalledTimes(1);
+		await act(async () => {
+			resolveFirstStart(start(rootPath, [firstStory.id], 'session:stale'));
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(startProjectSession).toHaveBeenCalledTimes(2));
+		expect(stopProjectSession).toHaveBeenCalledTimes(2);
+		expect(stopProjectSession).toHaveBeenCalledWith(rootPath);
+		expect(startProjectSession).toHaveBeenLastCalledWith(rootPath, [
+			'story-a',
+			'story-z'
+		]);
+		expect(stopProjectSession.mock.invocationCallOrder[1]).toBeLessThan(
+			startProjectSession.mock.invocationCallOrder[1]
+		);
+		rendered.unmount();
 	});
 
 	it('reviews simultaneous conflicts for different roots in FIFO order', async () => {

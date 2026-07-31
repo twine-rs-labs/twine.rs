@@ -1,13 +1,25 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {MemoryRouter, useNavigate} from 'react-router';
 import {
+	bootstrapStory,
 	bootstrapStoryPerformanceDiagnostics,
 	clearBootstrapStories,
-	CoreProjectHost
+	CoreProjectHost,
+	knownAssetInventoryForStory,
+	metadataStory,
+	useCoreProjectHost
 } from '../../../core';
 import {Story} from '../../../store/stories';
+import {
+	loadProjectMetadata,
+	saveProjectMetadata
+} from '../../../store/project-metadata';
+import {
+	markProjectStoryHydration,
+	projectStoryHydration
+} from '../../../store/project-hydration';
 import {
 	FakeStateProvider,
 	fakeLoadedStoryFormat,
@@ -24,11 +36,24 @@ const HistoryBackButton: React.FC = () => {
 	return <button onClick={() => navigate(-1)}>History back</button>;
 };
 
+const CoreHostCapture: React.FC<{
+	onHost?: (host: CoreProjectHost) => void;
+}> = ({onHost}) => {
+	const host = useCoreProjectHost();
+
+	React.useLayoutEffect(() => onHost?.(host), [host, onHost]);
+	return null;
+};
+
 describe('<NewProjectRoute>', () => {
 	function renderComponent(
 		path = '/new-project',
 		initialEntries: string[] = [path],
-		options: {coreProjectHost?: CoreProjectHost; stories?: Story[]} = {}
+		options: {
+			coreProjectHost?: CoreProjectHost;
+			onCoreProjectHost?: (host: CoreProjectHost) => void;
+			stories?: Story[];
+		} = {}
 	) {
 		const harloweFormat = fakeLoadedStoryFormat(
 			{name: 'Harlowe', version: '3.3.9'},
@@ -51,6 +76,7 @@ describe('<NewProjectRoute>', () => {
 					storyFormats={[harloweFormat, sugarCubeFormat, sugarCubeLegacyFormat]}
 				>
 					<NewProjectRoute />
+					<CoreHostCapture onHost={options.onCoreProjectHost} />
 					<StoryInspector />
 				</FakeStateProvider>
 				<LocationInspector />
@@ -64,6 +90,7 @@ describe('<NewProjectRoute>', () => {
 	afterEach(() => {
 		clearBootstrapStories();
 		delete (window as any).twineElectron;
+		window.localStorage.clear();
 	});
 
 	it.each([
@@ -527,9 +554,23 @@ describe('<NewProjectRoute>', () => {
 
 	it('does not register new documents when a mixed replacement fails', async () => {
 		const existingStory = fakeStory(1);
-		const applyStoryCommand = jest
-			.fn()
-			.mockRejectedValue(new Error('replacement failed'));
+		const applyStoryCommand = jest.fn(async command => {
+			expect(bootstrapStory(existingStory.id)).toEqual(
+				expect.objectContaining({
+					passages: [
+						expect.objectContaining({text: existingStory.passages[0].text})
+					]
+				})
+			);
+			expect(command).toEqual(
+				expect.objectContaining({
+					story: expect.objectContaining({
+						passages: [expect.objectContaining({text: 'replacement body'})]
+					})
+				})
+			);
+			throw new Error('replacement failed');
+		});
 
 		existingStory.name = 'Existing import target';
 		renderComponent('/new-project/import', undefined, {
@@ -568,6 +609,683 @@ describe('<NewProjectRoute>', () => {
 		expect(screen.getByTestId('location')).toHaveAttribute(
 			'data-pathname',
 			'/new-project/import'
+		);
+	});
+
+	it('keeps shell hydration pending when another replacement materialization fails', async () => {
+		const firstDocuments = {
+			...fakeStory(1),
+			name: 'First shell replacement'
+		};
+		const secondDocuments = {
+			...fakeStory(1),
+			name: 'Second shell replacement'
+		};
+		const firstRoot = '/native/first-shell.twine.rs';
+		const secondRoot = '/native/second-shell.twine.rs';
+		let rejectSecondHydration: (error: Error) => void = () => undefined;
+		const secondHydration = new Promise<never>((_resolve, reject) => {
+			rejectSecondHydration = reject;
+		});
+		const hydrateProjectFolder = jest.fn((rootPath: string) => {
+			if (rootPath === firstRoot) {
+				return Promise.resolve({
+					passageTextLoaded: true,
+					rootPath,
+					stories: [firstDocuments],
+					storyIds: [firstDocuments.id]
+				});
+			}
+
+			return secondHydration;
+		});
+
+		for (const [story, rootPath] of [
+			[firstDocuments, firstRoot],
+			[secondDocuments, secondRoot]
+		] as const) {
+			saveProjectMetadata(story.id, {
+				rootPath,
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+			markProjectStoryHydration(story.id, {
+				passageTextLoaded: false,
+				rootPath
+			});
+		}
+		(window as any).twineElectron = {hydrateProjectFolder};
+		renderComponent('/new-project/import', undefined, {
+			stories: [metadataStory(firstDocuments), metadataStory(secondDocuments)]
+		});
+		const source = new File(
+			[
+				`<tw-storydata name="${firstDocuments.name}" startnode="1" ifid="FIRST">`,
+				'<tw-passagedata pid="1" name="Start">first replacement</tw-passagedata>',
+				'</tw-storydata>',
+				`<tw-storydata name="${secondDocuments.name}" startnode="1" ifid="SECOND">`,
+				'<tw-passagedata pid="1" name="Start">second replacement</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'replacements.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		for (const story of [firstDocuments, secondDocuments]) {
+			await screen.findByText(story.name, {exact: true});
+			const row = screen.getByText(story.name, {exact: true}).closest('tr');
+
+			fireEvent.click(row!.querySelector('input[type="checkbox"]')!);
+		}
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+		await waitFor(() => expect(hydrateProjectFolder).toHaveBeenCalledTimes(2));
+		await act(async () => {
+			await Promise.resolve();
+			rejectSecondHydration(new Error('second hydration failed'));
+			await Promise.resolve();
+		});
+
+		expect(
+			await screen.findByText('second hydration failed')
+		).toBeInTheDocument();
+		expect(projectStoryHydration(firstDocuments.id)).toEqual(
+			expect.objectContaining({
+				passageTextLoaded: false,
+				rootPath: firstRoot
+			})
+		);
+		expect(bootstrapStory(firstDocuments.id)).toBeUndefined();
+	});
+
+	it('restores shell hydration when replacement fails after session setup', async () => {
+		const currentDocuments = {
+			...fakeStory(1),
+			name: 'Hydrated replacement target'
+		};
+		const oldRoot = '/native/current-target.twine.rs';
+		const newRoot = '/native/replacement-target.twine.rs';
+		const applyStoryCommand = jest.fn(async () => {
+			throw new Error('replacement command failed');
+		});
+		const ensureSessionReady = jest.fn(async () => undefined);
+		const deleteProjectFolder = jest.fn(async () => undefined);
+
+		saveProjectMetadata(currentDocuments.id, {
+			rootPath: oldRoot,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(currentDocuments.id, {
+			passageTextLoaded: false,
+			rootPath: oldRoot
+		});
+		(window as any).twineElectron = {
+			createProjectFolder: jest.fn(async story => ({
+				rootPath: newRoot,
+				stories: [story],
+				storyIds: [story.id]
+			})),
+			deleteProjectFolder,
+			hydrateProjectFolder: jest.fn(async () => ({
+				passageTextLoaded: true,
+				rootPath: oldRoot,
+				stories: [currentDocuments],
+				storyIds: [currentDocuments.id]
+			})),
+			listProjectAssets: jest.fn(async () => [])
+		};
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				applyStoryCommand,
+				ensureSessionReady
+			} as unknown as CoreProjectHost,
+			stories: [metadataStory(currentDocuments)]
+		});
+		const source = new File(
+			[
+				`<tw-storydata name="${currentDocuments.name}" startnode="1" ifid="REPLACEMENT">`,
+				'<tw-passagedata pid="1" name="Start">replacement body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'replacement.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		await screen.findByText(currentDocuments.name, {exact: true});
+		const row = screen
+			.getByText(currentDocuments.name, {exact: true})
+			.closest('tr');
+
+		fireEvent.click(row!.querySelector('input[type="checkbox"]')!);
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		expect(
+			await screen.findByText('replacement command failed')
+		).toBeInTheDocument();
+		expect(ensureSessionReady).toHaveBeenCalledWith(currentDocuments.id);
+		expect(applyStoryCommand).toHaveBeenCalled();
+		expect(deleteProjectFolder).not.toHaveBeenCalled();
+		expect(projectStoryHydration(currentDocuments.id)).toEqual(
+			expect.objectContaining({
+				passageTextLoaded: false,
+				rootPath: newRoot
+			})
+		);
+		expect(bootstrapStory(currentDocuments.id)).toBeUndefined();
+	});
+
+	it('deletes only replacement roots that have not been committed', async () => {
+		const firstStory = {
+			...fakeStory(1),
+			name: 'Committed replacement'
+		};
+		const secondStory = {
+			...fakeStory(1),
+			name: 'Uncommitted replacement'
+		};
+		const firstRoot = '/native/committed-replacement.twine.rs';
+		const secondRoot = '/native/uncommitted-replacement.twine.rs';
+		const deleteProjectFolder = jest.fn(async () => undefined);
+		const applyStoryCommand = jest.fn(async () => undefined);
+		const ensureSessionReady = jest.fn(async (storyId: string) => {
+			if (storyId === firstStory.id) {
+				throw new Error('first replacement session failed');
+			}
+		});
+
+		for (const story of [firstStory, secondStory]) {
+			saveProjectMetadata(story.id, {
+				status: 'local-only',
+				storageKind: 'web-local'
+			});
+		}
+		(window as any).twineElectron = {
+			createProjectFolder: jest.fn(async story => ({
+				rootPath: story.id === firstStory.id ? firstRoot : secondRoot,
+				stories: [story],
+				storyIds: [story.id]
+			})),
+			deleteProjectFolder,
+			listProjectAssets: jest.fn(async () => [])
+		};
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				applyStoryCommand,
+				ensureSessionReady
+			} as unknown as CoreProjectHost,
+			stories: [firstStory, secondStory]
+		});
+		const source = new File(
+			[
+				`<tw-storydata name="${firstStory.name}" startnode="1" ifid="FIRST">`,
+				'<tw-passagedata pid="1" name="Start">first body</tw-passagedata>',
+				'</tw-storydata>',
+				`<tw-storydata name="${secondStory.name}" startnode="1" ifid="SECOND">`,
+				'<tw-passagedata pid="1" name="Start">second body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'replacements.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		for (const story of [firstStory, secondStory]) {
+			await screen.findByText(story.name, {exact: true});
+			const row = screen.getByText(story.name, {exact: true}).closest('tr');
+
+			fireEvent.click(row!.querySelector('input[type="checkbox"]')!);
+		}
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		expect(
+			await screen.findByText('first replacement session failed')
+		).toBeInTheDocument();
+		await waitFor(() =>
+			expect(deleteProjectFolder).toHaveBeenCalledWith(secondRoot)
+		);
+		expect(deleteProjectFolder).toHaveBeenCalledTimes(1);
+		expect(deleteProjectFolder).not.toHaveBeenCalledWith(firstRoot);
+		expect(ensureSessionReady).toHaveBeenCalledTimes(1);
+		expect(applyStoryCommand).not.toHaveBeenCalled();
+		expect(loadProjectMetadata(firstStory.id)?.rootPath).toBe(firstRoot);
+		expect(loadProjectMetadata(secondStory.id)).toEqual(
+			expect.objectContaining({
+				status: 'local-only',
+				storageKind: 'web-local'
+			})
+		);
+	});
+
+	it('ignores a second import run while replacement materialization starts', async () => {
+		const existingStory = fakeStory(1);
+		const applyStoryCommand = jest.fn(async () => undefined);
+
+		existingStory.name = 'Existing import target';
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				applyStoryCommand
+			} as unknown as CoreProjectHost,
+			stories: [existingStory]
+		});
+		const source = new File(
+			[
+				'<tw-storydata name="Existing import target" startnode="1" ifid="REPLACEMENT">',
+				'<tw-passagedata pid="1" name="Start">replacement body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'replacement.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		await screen.findByText('Existing import target', {exact: true});
+		const conflictRow = screen
+			.getByText('Existing import target', {exact: true})
+			.closest('tr');
+
+		fireEvent.click(conflictRow!.querySelector('input[type="checkbox"]')!);
+		const runImport = screen.getByRole('button', {name: /run import/i});
+
+		await act(async () => {
+			fireEvent.click(runImport);
+			fireEvent.click(runImport);
+			await Promise.resolve();
+		});
+
+		await waitFor(() => expect(applyStoryCommand).toHaveBeenCalledTimes(1));
+	});
+
+	it('refreshes replacement asset inventory after copying archive assets', async () => {
+		const existingStory = fakeStory(1);
+		const newRoot = '/native/rebound-import.twine.rs';
+		const importedAsset = {
+			normalizedPath: 'assets/image.png',
+			path: 'assets/image.png'
+		};
+		const copyProjectImportAssets = jest.fn(async () => []);
+		const listProjectAssets = jest.fn(async () => {
+			expect(copyProjectImportAssets).toHaveBeenCalledWith(
+				'import-success',
+				newRoot
+			);
+			return [importedAsset];
+		});
+		const applyStoryCommand = jest.fn(async () => undefined);
+		const ensureSessionReady = jest.fn(async () => {
+			expect(listProjectAssets).toHaveBeenCalledWith(newRoot);
+			expect(knownAssetInventoryForStory(existingStory.id)).toEqual([
+				importedAsset
+			]);
+		});
+
+		existingStory.name = 'Existing import target';
+		saveProjectMetadata(existingStory.id, {
+			status: 'local-only',
+			storageKind: 'web-local'
+		});
+		(window as any).twineElectron = {
+			copyProjectImportAssets,
+			createProjectFolder: jest.fn(async story => ({
+				rootPath: newRoot,
+				stories: [story],
+				storyIds: [story.id]
+			})),
+			discardProjectImport: jest.fn(async () => undefined),
+			filePathForFile: jest.fn(() => '/imports/replacement.zip'),
+			getStoryLibraryFolder: jest.fn(async () => '/native/library'),
+			listProjectAssets,
+			prepareProjectImport: jest.fn(async () => ({
+				assets: [
+					{
+						originalPath: 'image.png',
+						sourcePath: '/tmp/import/image.png',
+						targetPath: 'assets/image.png'
+					}
+				],
+				htmlFilePath: '/tmp/import/replacement.html',
+				htmlSource: `
+					<tw-storydata name="Existing import target" startnode="1" format="Harlowe" format-version="3.3.9" ifid="REPLACEMENT" hidden>
+						<tw-passagedata pid="1" name="Start">replacement body</tw-passagedata>
+					</tw-storydata>
+				`,
+				id: 'import-success',
+				sourceKind: 'zip',
+				sourcePath: '/imports/replacement.zip'
+			}))
+		};
+		const zipFile = new File(['zip'], 'replacement.zip', {
+			type: 'application/zip'
+		});
+		const {container} = renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				applyStoryCommand,
+				ensureSessionReady
+			} as unknown as CoreProjectHost,
+			stories: [existingStory]
+		});
+
+		fireEvent.drop(container.querySelector('.new-project-route__import')!, {
+			dataTransfer: {dropEffect: 'copy', files: [zipFile]}
+		});
+		await screen.findByText('Existing import target', {exact: true});
+		const conflictRow = screen
+			.getByText('Existing import target', {exact: true})
+			.closest('tr');
+
+		fireEvent.click(conflictRow!.querySelector('input[type="checkbox"]')!);
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		await waitFor(() =>
+			expect(listProjectAssets).toHaveBeenCalledWith(newRoot)
+		);
+		expect(ensureSessionReady).toHaveBeenCalledWith(existingStory.id);
+		expect(knownAssetInventoryForStory(existingStory.id)).toEqual([
+			importedAsset
+		]);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/'
+			)
+		);
+	});
+
+	it.each(['copy', 'inventory'] as const)(
+		'keeps the current story usable when replacement asset %s fails',
+		async failureStage => {
+			const existingStory = fakeStory(1);
+			const newRoot = '/native/rebound-import.twine.rs';
+			let capturedHost: CoreProjectHost | undefined;
+			const failureMessage = `asset ${failureStage} failed`;
+			const deleteProjectFolder = jest.fn(async () => undefined);
+
+			existingStory.name = 'Existing import target';
+			saveProjectMetadata(existingStory.id, {
+				status: 'local-only',
+				storageKind: 'web-local'
+			});
+			(window as any).twineElectron = {
+				copyProjectImportAssets: jest.fn(async () => {
+					if (failureStage === 'copy') {
+						throw new Error(failureMessage);
+					}
+					return [];
+				}),
+				createProjectFolder: jest.fn(async story => {
+					expect(story.passages).toEqual([
+						expect.objectContaining({
+							id: existingStory.passages[0].id,
+							text: existingStory.passages[0].text
+						})
+					]);
+					return {rootPath: newRoot, stories: [story], storyIds: [story.id]};
+				}),
+				deleteProjectFolder,
+				discardProjectImport: jest.fn(async () => undefined),
+				filePathForFile: jest.fn(() => '/imports/replacement.zip'),
+				getStoryLibraryFolder: jest.fn(async () => '/native/library'),
+				listProjectAssets: jest.fn(async () => {
+					if (failureStage === 'inventory') {
+						throw new Error(failureMessage);
+					}
+					return [];
+				}),
+				prepareProjectImport: jest.fn(async () => ({
+					assets: [
+						{
+							originalPath: 'image.png',
+							sourcePath: '/tmp/import/image.png',
+							targetPath: 'assets/image.png'
+						}
+					],
+					htmlFilePath: '/tmp/import/replacement.html',
+					htmlSource: `
+					<tw-storydata name="Existing import target" startnode="1" format="Harlowe" format-version="3.3.9" ifid="REPLACEMENT" hidden>
+						<tw-passagedata pid="1" name="Start">replacement body</tw-passagedata>
+					</tw-storydata>
+				`,
+					id: 'import-failure',
+					sourceKind: 'zip',
+					sourcePath: '/imports/replacement.zip'
+				}))
+			};
+			const zipFile = new File(['zip'], 'replacement.zip', {
+				type: 'application/zip'
+			});
+			const {container} = renderComponent('/new-project/import', undefined, {
+				onCoreProjectHost: host => {
+					capturedHost = host;
+				},
+				stories: [existingStory]
+			});
+
+			fireEvent.drop(container.querySelector('.new-project-route__import')!, {
+				dataTransfer: {dropEffect: 'copy', files: [zipFile]}
+			});
+			await screen.findByText('Existing import target', {exact: true});
+			const conflictRow = screen
+				.getByText('Existing import target', {exact: true})
+				.closest('tr');
+
+			fireEvent.click(conflictRow!.querySelector('input[type="checkbox"]')!);
+			fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+			expect(await screen.findByText(failureMessage)).toBeInTheDocument();
+			await waitFor(() =>
+				expect(deleteProjectFolder).toHaveBeenCalledWith(newRoot)
+			);
+			expect(deleteProjectFolder).toHaveBeenCalledTimes(1);
+			expect(loadProjectMetadata(existingStory.id)).toEqual(
+				expect.objectContaining({
+					status: 'local-only',
+					storageKind: 'web-local'
+				})
+			);
+			if (failureStage === 'inventory') {
+				expect(
+					(window as any).twineElectron.listProjectAssets
+				).toHaveBeenCalledWith(newRoot);
+			} else {
+				expect(
+					(window as any).twineElectron.listProjectAssets
+				).not.toHaveBeenCalled();
+			}
+			expect(bootstrapStory(existingStory.id)).toBeUndefined();
+			expect(
+				screen.getByTestId(`passage-${existingStory.passages[0].id}`)
+			).toBeInTheDocument();
+			await expect(
+				capturedHost!.queryDocumentPageAsync(existingStory.id, {limit: 10})
+			).resolves.toEqual(
+				expect.objectContaining({
+					documents: expect.arrayContaining([
+						expect.objectContaining({
+							kind: 'passage',
+							text: existingStory.passages[0].text
+						})
+					])
+				})
+			);
+		}
+	);
+
+	it('removes an uncommitted replacement folder before a same-name retry', async () => {
+		const existingStory = fakeStory(1);
+		const newRoot = '/native/retry-target.twine.rs';
+		const operationOrder: string[] = [];
+		let folderExists = false;
+		let inventoryAttempts = 0;
+		let finishDeletion: () => void = () => undefined;
+		const deletion = new Promise<void>(resolve => {
+			finishDeletion = resolve;
+		});
+		const createProjectFolder = jest.fn(async story => {
+			operationOrder.push('create');
+			if (folderExists) {
+				throw Object.assign(new Error('project folder already exists'), {
+					code: 'EEXIST'
+				});
+			}
+			folderExists = true;
+			return {rootPath: newRoot, stories: [story], storyIds: [story.id]};
+		});
+		const deleteProjectFolder = jest.fn(async (rootPath: string) => {
+			expect(rootPath).toBe(newRoot);
+			operationOrder.push('delete-start');
+			await deletion;
+			operationOrder.push('delete');
+			folderExists = false;
+		});
+		const listProjectAssets = jest.fn(async () => {
+			operationOrder.push('inventory');
+			inventoryAttempts += 1;
+			if (inventoryAttempts === 1) {
+				throw new Error('first inventory failed');
+			}
+			return [];
+		});
+
+		existingStory.name = 'Retry import target';
+		saveProjectMetadata(existingStory.id, {
+			status: 'local-only',
+			storageKind: 'web-local'
+		});
+		(window as any).twineElectron = {
+			createProjectFolder,
+			deleteProjectFolder,
+			listProjectAssets
+		};
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				applyStoryCommand: jest.fn(async () => undefined),
+				ensureSessionReady: jest.fn(async () => undefined)
+			} as unknown as CoreProjectHost,
+			stories: [existingStory]
+		});
+		const source = new File(
+			[
+				`<tw-storydata name="${existingStory.name}" startnode="1" ifid="RETRY">`,
+				'<tw-passagedata pid="1" name="Start">replacement body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'retry.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		await screen.findByText(existingStory.name, {exact: true});
+		const row = screen
+			.getByText(existingStory.name, {exact: true})
+			.closest('tr');
+		const runImportButton = screen.getByRole('button', {name: /run import/i});
+
+		fireEvent.click(row!.querySelector('input[type="checkbox"]')!);
+		fireEvent.click(runImportButton);
+
+		expect(
+			await screen.findByText('first inventory failed')
+		).toBeInTheDocument();
+		await waitFor(() => expect(deleteProjectFolder).toHaveBeenCalledTimes(1));
+		expect(runImportButton).toBeDisabled();
+		await act(async () => {
+			finishDeletion();
+			await deletion;
+		});
+		await waitFor(() => expect(runImportButton).not.toBeDisabled());
+
+		fireEvent.click(runImportButton);
+
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				'/'
+			)
+		);
+		expect(createProjectFolder).toHaveBeenCalledTimes(2);
+		expect(deleteProjectFolder).toHaveBeenCalledTimes(1);
+		expect(operationOrder).toEqual([
+			'create',
+			'inventory',
+			'delete-start',
+			'delete',
+			'create',
+			'inventory'
+		]);
+		expect(folderExists).toBe(true);
+		expect(loadProjectMetadata(existingStory.id)?.rootPath).toBe(newRoot);
+	});
+
+	it('reports an uncommitted replacement folder that cleanup cannot remove', async () => {
+		const existingStory = fakeStory(1);
+		const newRoot = '/native/stranded-replacement.twine.rs';
+		const deleteProjectFolder = jest.fn(async () => {
+			throw new Error('trash unavailable');
+		});
+
+		existingStory.name = 'Stranded import target';
+		saveProjectMetadata(existingStory.id, {
+			status: 'local-only',
+			storageKind: 'web-local'
+		});
+		(window as any).twineElectron = {
+			createProjectFolder: jest.fn(async story => ({
+				rootPath: newRoot,
+				stories: [story],
+				storyIds: [story.id]
+			})),
+			deleteProjectFolder,
+			listProjectAssets: jest.fn(async () => {
+				throw new Error('inventory failed');
+			})
+		};
+		renderComponent('/new-project/import', undefined, {
+			stories: [existingStory]
+		});
+		const source = new File(
+			[
+				`<tw-storydata name="${existingStory.name}" startnode="1" ifid="STRANDED">`,
+				'<tw-passagedata pid="1" name="Start">replacement body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'stranded.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		await screen.findByText(existingStory.name, {exact: true});
+		const row = screen
+			.getByText(existingStory.name, {exact: true})
+			.closest('tr');
+
+		fireEvent.click(row!.querySelector('input[type="checkbox"]')!);
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		await waitFor(() => {
+			const error = screen.getByText(/inventory failed/);
+
+			expect(error).toHaveTextContent(newRoot);
+			expect(error).toHaveTextContent('trash unavailable');
+		});
+		expect(deleteProjectFolder).toHaveBeenCalledWith(newRoot);
+		expect(loadProjectMetadata(existingStory.id)).toEqual(
+			expect.objectContaining({
+				status: 'local-only',
+				storageKind: 'web-local'
+			})
 		);
 	});
 

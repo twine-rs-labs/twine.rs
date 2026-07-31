@@ -3,9 +3,11 @@ import * as React from 'react';
 import {
 	CoreAssetInventoryEntry,
 	deleteStoryCommand,
+	metadataStory,
 	movePassagesCommand,
 	PatchBatch,
 	queryGraphProjectionCommand,
+	registerStoryDocuments,
 	renameStoryTagCommand,
 	renameStoryCommand,
 	replaceStoryCommand,
@@ -1226,6 +1228,157 @@ describe('useCoreProjectHost', () => {
 		expect(coreProjectHostPerformanceSnapshot().workerClients).toBe(
 			initialHostCount
 		);
+	});
+
+	it('rebinds a story when import changes its project root before replacement', async () => {
+		window.localStorage.clear();
+		const story = {...fakeStory(), id: 'import-rebind-story'};
+		const oldRoot = '/native/old-import-root.twine.rs';
+		const newRoot = '/native/new-import-root.twine.rs';
+		const dispatch = jest.fn();
+		let capturedHost: CoreProjectHost | undefined;
+
+		saveProjectMetadata(story.id, {
+			rootPath: oldRoot,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: true,
+			rootPath: oldRoot
+		});
+		replaceKnownAssetInventoryForStory(story.id, []);
+		const rendered = render(
+			providerTree(
+				[story],
+				dispatch,
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						capturedHost = host;
+					}
+				})
+			)
+		);
+		const replacement = {
+			...story,
+			passages: story.passages.map((passage, index) => ({
+				...passage,
+				id: `imported-passage-${index}`,
+				text: `Imported body ${index}`
+			})),
+			startPassage: 'imported-passage-0'
+		};
+
+		registerStoryDocuments(story);
+		saveProjectMetadata(story.id, {
+			rootPath: newRoot,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: true,
+			rootPath: newRoot
+		});
+		await capturedHost!.applyStoryCommand(
+			replaceStoryCommand(story.id, replacement)
+		);
+		expect(dispatch).toHaveBeenCalledTimes(1);
+		const dispatched = dispatch.mock.calls[0][0];
+
+		expect(dispatched).toEqual(
+			expect.objectContaining({type: 'applyCorePatchBatch'})
+		);
+		expect(dispatched.actions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					props: expect.objectContaining({id: 'imported-passage-0'}),
+					storyId: story.id,
+					type: 'createPassage'
+				})
+			])
+		);
+		expect(dispatched.documentUpdates).toEqual([
+			{
+				passageId: 'imported-passage-0',
+				storyId: story.id,
+				text: 'Imported body 0',
+				type: 'passageText'
+			}
+		]);
+
+		expect(
+			(capturedHost as HostWithDiagnostics).performanceDiagnostics().sessions
+		).toEqual([
+			expect.objectContaining({
+				sessionId: `project:${newRoot}`,
+				storyIds: [story.id]
+			})
+		]);
+		await expect(
+			capturedHost!.queryDocumentPageAsync(story.id, {limit: 10})
+		).resolves.toEqual(
+			expect.objectContaining({
+				documents: expect.arrayContaining([
+					expect.objectContaining({
+						kind: 'passage',
+						text: 'Imported body 0'
+					})
+				])
+			})
+		);
+		rendered.unmount();
+		window.localStorage.clear();
+	});
+
+	it('refreshes an uninitialized session from a registered document transport', async () => {
+		window.localStorage.clear();
+		const completeStory = {
+			...fakeStory(),
+			id: 'import-refresh-story'
+		};
+		const story = metadataStory(completeStory);
+		const root = '/native/existing-import-root.twine.rs';
+		let capturedHost: CoreProjectHost | undefined;
+
+		saveProjectMetadata(story.id, {
+			rootPath: root,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: true,
+			rootPath: root
+		});
+		replaceKnownAssetInventoryForStory(story.id, []);
+		const rendered = render(
+			providerTree(
+				[story],
+				jest.fn(),
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						capturedHost = host;
+					}
+				})
+			)
+		);
+
+		registerStoryDocuments(completeStory);
+		await capturedHost!.ensureSessionReady(story.id);
+
+		await expect(
+			capturedHost!.queryDocumentPageAsync(story.id, {limit: 10})
+		).resolves.toEqual(
+			expect.objectContaining({
+				documents: expect.arrayContaining([
+					expect.objectContaining({
+						kind: 'passage',
+						text: completeStory.passages[0].text
+					})
+				])
+			})
+		);
+		rendered.unmount();
+		window.localStorage.clear();
 	});
 
 	it('creates distinct hosts for providers that share a dispatch', () => {
