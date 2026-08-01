@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing annotated tag whose draft and checklist are ready to publish
+        description: Existing annotated tag to rebuild as a draft or publish
         required: true
         type: string
+      publish:
+        description: Publish after rebuilding and validating the draft
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -212,7 +217,7 @@ jobs:
         run: |
           rustup target add wasm32-unknown-unknown
           cargo install wasm-bindgen-cli --version 0.2.125 --locked
-      - run: npm ci
+      - run: npm ci --include=dev
       - name: Install Playwright Chromium on Windows
         if: runner.os == 'Windows'
         run: npx playwright install chromium
@@ -408,7 +413,7 @@ jobs:
   publish:
     name: Validate and publish immutable release
     needs: [prepare, assemble-draft]
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-24.04
     permissions:
       contents: write

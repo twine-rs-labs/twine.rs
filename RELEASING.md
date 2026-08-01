@@ -31,9 +31,10 @@ plan and completed checklist issue.
 Review by another maintainer is encouraged when one is available and may be
 recorded in the checklist, but its absence does not block a release. For a
 solo-maintainer release, pushing the protected annotated tag creates the draft.
-Manually dispatching the workflow for that tag authorizes publication after the
-committed approval, required CI, draft verification, and every pre-publication
-checklist item have passed.
+Manually dispatching the workflow for that tag with `publish` enabled authorizes
+publication after the committed approval, required CI, draft verification, and
+every pre-publication checklist item have passed. A dispatch with `publish`
+disabled may rebuild or recover the draft but cannot publish it.
 
 ## Versions and tags
 
@@ -147,19 +148,22 @@ dated changelog, plan decisions, and clean source commit. A tag-triggered run:
 3. validates the complete profile-specific artifact and provenance matrix;
 4. creates a draft GitHub Release and uploads every artifact and evidence file.
 
-The tag-triggered run stops at the draft. After inspecting that draft and
-checking every pre-publication item, manually dispatch **Publish desktop
-release** with the existing annotated tag. The dispatched run rebuilds and
-revalidates the exact tag commit, then:
+The tag-triggered run stops at the draft. A failed pre-publication run may be
+recovered by manually dispatching **Publish desktop release** with the existing
+annotated tag and `publish` disabled; that run rebuilds and refreshes the draft
+but cannot publish it. After inspecting the draft and checking every
+pre-publication item, dispatch the workflow with the same tag and `publish`
+enabled. The publication run rebuilds and revalidates the exact tag commit,
+then:
 
 1. verifies that every pre-publication checklist item is complete;
 2. generates `release-record.json` and the deterministic release-evidence ZIP;
 3. publishes the immutable release;
 4. downloads and smokes release-hosted artifacts on Windows, macOS, and Linux.
 
-Manual dispatch is the final solo-maintainer publication approval. It can also
-recover a failed pre-publication run, but cannot change the tag, plan, source
-commit, or version.
+Manual dispatch with `publish` enabled is the final solo-maintainer publication
+approval. Either dispatch mode can recover a failed pre-publication run, but
+neither can change the tag, plan, source commit, or version.
 
 The deliberately unsigned profile is the usable profile until signing
 credentials exist. It requires no signing variables, secrets, or other profile

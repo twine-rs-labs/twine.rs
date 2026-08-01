@@ -86,6 +86,8 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		'push:',
 		'tags:',
 		'workflow_dispatch:',
+		'Publish after rebuilding and validating the draft',
+		'npm ci --include=dev',
 		'--check-tag',
 		'git merge-base --is-ancestor',
 		'packaged_app_run',
@@ -99,7 +101,7 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		'release-record.json',
 		'release-evidence.zip',
 		'Validate and publish immutable release',
-		"if: github.event_name == 'workflow_dispatch'",
+		"if: github.event_name == 'workflow_dispatch' && inputs.publish",
 		'gh release edit "$RELEASE_TAG" --draft=false',
 		'--json isImmutable',
 		'gh release verify "$RELEASE_TAG"',
@@ -110,6 +112,10 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		assert.match(source, new RegExp(marker.replaceAll('$', '\\$')));
 	}
 	assert.match(source, /ALLOW_UNSIGNED_DISTRIBUTION:.*'1'/);
+	assert.match(
+		source,
+		/publish:\n\s+description: Publish after rebuilding and validating the draft\n\s+required: true\n\s+default: false\n\s+type: boolean/
+	);
 	assert.match(source, /pattern: desktop-release-target-\*/);
 	assert.match(source, /merge-multiple: true/);
 	assert.equal((source.match(/target: linux-/g) ?? []).length, 2);
