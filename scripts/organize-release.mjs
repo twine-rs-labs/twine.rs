@@ -16,6 +16,7 @@ import {basename, dirname, join, resolve, sep} from 'node:path';
 
 const require = createRequire(import.meta.url);
 const {
+	distributionArtifactPath,
 	isDistributionProfile,
 	isUpdaterMetadata,
 	localArtifactNotice,
@@ -39,23 +40,6 @@ const baseArtifactFields = [
 	'signing',
 	'signingScope',
 	'stapling'
-];
-const buckets = [
-	{
-		dir: 'windows',
-		match: name => name.includes('-win-'),
-		primary: name => name.endsWith('.exe')
-	},
-	{
-		dir: 'mac',
-		match: name => name.includes('-mac-'),
-		primary: name => name.endsWith('.dmg')
-	},
-	{
-		dir: 'linux',
-		match: name => name.includes('-linux-'),
-		primary: name => name.endsWith('.AppImage')
-	}
 ];
 
 function parseArgs(args) {
@@ -510,29 +494,12 @@ function validateInputs({profile, source}, version) {
 	return {manifests, requirements, sourceCommit, sourceTree};
 }
 
-function destinationFor(name, root) {
-	const bucket = buckets.find(candidate => candidate.match(name));
-
-	if (!bucket) {
-		throw new Error(`No destination bucket exists for ${name}.`);
-	}
-
-	return bucket.primary(name)
-		? join(root, bucket.dir, name)
-		: join(root, bucket.dir, 'alternatives', name);
+function destinationFor(requirement, root) {
+	return join(root, ...distributionArtifactPath(requirement).split('/'));
 }
 
 function downloadPaths(requirements) {
-	return requirements.map(requirement => {
-		const bucket = buckets.find(candidate =>
-			candidate.match(requirement.fileName)
-		);
-		const alternative = bucket.primary(requirement.fileName)
-			? ''
-			: 'alternatives/';
-
-		return `${bucket.dir}/${alternative}${requirement.fileName}`;
-	});
+	return requirements.map(distributionArtifactPath);
 }
 
 function preferredDownload(files, predicate) {
@@ -653,7 +620,7 @@ function assemble(options, version, validation) {
 
 		for (const requirement of validation.requirements) {
 			const sourcePath = join(options.source, requirement.fileName);
-			const destination = destinationFor(requirement.fileName, temporaryOutput);
+			const destination = destinationFor(requirement, temporaryOutput);
 			const targetManifest = validation.manifests.find(({manifest}) =>
 				manifest.artifacts.some(
 					artifact => artifact.fileName === requirement.fileName

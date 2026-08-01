@@ -20,6 +20,7 @@ const repositoryRoot = resolve(
 const script = join(repositoryRoot, 'scripts/check-release.mjs');
 const require = createRequire(import.meta.url);
 const {
+	distributionArtifactPath,
 	profiles,
 	requiredArtifactMatrix,
 	targetManifestName
@@ -106,7 +107,7 @@ function fixture() {
 		sourceTree: 'clean',
 		artifacts: requiredArtifactMatrix(version, plan.profile).map(
 			(artifact, index) => ({
-				fileName: artifact.fileName,
+				fileName: distributionArtifactPath(artifact),
 				sha256: `${index}`.padStart(64, '0'),
 				size: index + 1
 			})
@@ -209,6 +210,28 @@ test('validates a candidate and writes curated release notes', () => {
 	assert.match(notes, /Deliberately unsigned/);
 	assert.match(notes, /First formal Twine RS release/i);
 	assert.match(notes, new RegExp(releaseFixture.plan.checklistIssue));
+});
+
+test('requires canonical distribution paths in the aggregate manifest', () => {
+	const releaseFixture = fixture();
+	const [artifact] = releaseFixture.artifactManifest.artifacts;
+
+	artifact.fileName = artifact.fileName.split('/').at(-1);
+	writeJson(
+		join(releaseFixture.root, 'artifact-manifest.json'),
+		releaseFixture.artifactManifest
+	);
+	const result = run(
+		releaseFixture,
+		'--artifact-manifest',
+		'artifact-manifest.json'
+	);
+
+	assert.equal(result.status, 1);
+	assert.match(
+		result.stderr,
+		/artifact manifest does not contain the exact supported artifact matrix/
+	);
 });
 
 test('publication validation writes a manifest-bound release record', () => {

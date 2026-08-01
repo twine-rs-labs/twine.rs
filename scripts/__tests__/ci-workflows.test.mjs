@@ -32,7 +32,7 @@ function workflow(name) {
 }
 
 function workflowStepRun(source, jobName, stepName) {
-	const jobMarker = `  ${jobName}:\n`;
+	const jobMarker = `\n  ${jobName}:\n`;
 	const jobStart = source.indexOf(jobMarker);
 	assert.ok(jobStart >= 0, `workflow should include the ${jobName} job`);
 	const followingJobs = source.slice(jobStart + jobMarker.length);
@@ -134,6 +134,7 @@ test('packaging CI exercises and retains every supported installable format', ()
 	assert.equal((source.match(/platform: mac/g) ?? []).length, 2);
 	assert.equal((source.match(/platform: windows/g) ?? []).length, 1);
 	assert.equal((source.match(/node-version: 24\.18\.0/g) ?? []).length, 2);
+	assert.equal((source.match(/compression-level: 0/g) ?? []).length, 2);
 	assert.match(source, /appimage_arch: x86_64/);
 	assert.match(source, /Twine-RS-\*-linux-x86_64\.AppImage/);
 	assert.match(source, /linux-\$\{\{ matrix\.appimage_arch \}\}\.AppImage/);
@@ -222,6 +223,7 @@ test('release CI gates an immutable release on decisions and retained evidence',
 	);
 	assert.match(source, /pattern: desktop-release-target-\*/);
 	assert.match(source, /merge-multiple: true/);
+	assert.equal((source.match(/compression-level: 0/g) ?? []).length, 2);
 	assert.match(
 		retainedTargetInput,
 		/path: artifacts\/staging\/\$\{\{ needs\.prepare\.outputs\.profile \}\}\/\$\{\{ matrix\.target \}\}\/Twine-RS-\*/
@@ -247,6 +249,13 @@ test('release CI gates an immutable release on decisions and retained evidence',
 	assert.equal(
 		(source.match(/name: Patch beta\.2 atomic-save smoke polling/g) ?? [])
 			.length,
+		2
+	);
+	assert.equal(
+		(
+			source.match(/name: Patch beta\.2 aggregate-manifest path validation/g) ??
+			[]
+		).length,
 		2
 	);
 	for (const marker of [
@@ -338,6 +347,69 @@ test('manual recovery packages only the validated tag commit', t => {
 		/Checked-out source does not match the validated release commit/
 	);
 	assert.throws(() => readFileSync(npmRecord, 'utf8'), {code: 'ENOENT'});
+});
+
+test('beta.2 manifest recovery patches the immutable-tag validator', t => {
+	const source = workflow('release.yml');
+	const draftRun = workflowStepRun(
+		source,
+		'assemble-draft',
+		'Patch beta.2 aggregate-manifest path validation'
+	);
+	const publishRun = workflowStepRun(
+		source,
+		'publish',
+		'Patch beta.2 aggregate-manifest path validation'
+	);
+	const script = nodeHeredoc(draftRun);
+	const temporaryRoot = mkdtempSync(join(tmpdir(), 'twine-beta2-validator-'));
+	const scriptsRoot = join(temporaryRoot, 'scripts');
+	const validatorPath = join(scriptsRoot, 'check-release.mjs');
+	const before = [
+		'\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
+		'\t\t.map(artifact => artifact.fileName)',
+		'\t\t.sort();'
+	].join('\r\n');
+	const current = [
+		'\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
+		'\t\t.map(distributionArtifactPath)',
+		'\t\t.sort();'
+	].join('\r\n');
+	const runPatch = () =>
+		spawnSync(process.execPath, ['-e', script], {
+			cwd: temporaryRoot,
+			encoding: 'utf8'
+		});
+
+	t.after(() => rmSync(temporaryRoot, {force: true, recursive: true}));
+	mkdirSync(scriptsRoot, {recursive: true});
+	assert.equal(draftRun, publishRun);
+
+	writeFileSync(validatorPath, before, 'utf8');
+	const firstRun = runPatch();
+	assert.equal(firstRun.status, 0, firstRun.stderr);
+	const patched = readFileSync(validatorPath, 'utf8');
+	assert.match(patched, /linux: 'linux'/);
+	assert.match(patched, /segments\.push\('alternatives'\)/);
+	assert.ok(patched.includes('\r\n'));
+	assert.equal(patched.replaceAll('\r\n', '').includes('\n'), false);
+
+	const secondRun = runPatch();
+	assert.equal(secondRun.status, 0, secondRun.stderr);
+	assert.equal(readFileSync(validatorPath, 'utf8'), patched);
+
+	writeFileSync(validatorPath, current, 'utf8');
+	const currentRun = runPatch();
+	assert.equal(currentRun.status, 0, currentRun.stderr);
+	assert.equal(readFileSync(validatorPath, 'utf8'), current);
+
+	writeFileSync(validatorPath, 'unexpected validator\r\n', 'utf8');
+	const failedRun = runPatch();
+	assert.notEqual(failedRun.status, 0);
+	assert.match(
+		failedRun.stderr,
+		/Could not locate the beta\.2 artifact-matrix validator/
+	);
 });
 
 test('beta.2 save-smoke patch is CRLF-safe and shared by both smoke phases', t => {

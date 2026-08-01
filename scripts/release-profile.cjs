@@ -229,6 +229,43 @@ function requiredArtifactMatrix(version, profile) {
 	}));
 }
 
+function distributionArtifactPath({extension, fileName, platform}) {
+	const normalizedPlatform = normalizePlatform(platform);
+	const layouts = {
+		linux: {
+			directory: 'linux',
+			extensions: ['AppImage', 'zip'],
+			primary: 'AppImage'
+		},
+		mac: {directory: 'mac', extensions: ['dmg'], primary: 'dmg'},
+		win: {directory: 'windows', extensions: ['exe'], primary: 'exe'}
+	};
+	const layout = layouts[normalizedPlatform];
+
+	if (
+		typeof fileName !== 'string' ||
+		fileName.length === 0 ||
+		fileName.includes('/') ||
+		fileName.includes('\\')
+	) {
+		throw new Error('Release artifact fileName must be a basename.');
+	}
+	if (
+		!layout.extensions.includes(extension) ||
+		path.extname(fileName) !== `.${extension}`
+	) {
+		throw new Error(
+			`Unsupported ${normalizedPlatform} release artifact extension "${extension}".`
+		);
+	}
+
+	return path.posix.join(
+		layout.directory,
+		...(extension === layout.primary ? [] : ['alternatives']),
+		fileName
+	);
+}
+
 function targetManifestName(version, platform, arch) {
 	return `Twine-RS-${version}-${normalizePlatform(platform)}-${normalizeArch(
 		arch
@@ -260,6 +297,7 @@ function isUpdaterMetadata(name) {
 module.exports = {
 	artifactName,
 	builderOutputDirectory,
+	distributionArtifactPath,
 	expectedArtifacts,
 	isDistributionProfile,
 	isUpdaterMetadata,

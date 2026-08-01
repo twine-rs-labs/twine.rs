@@ -23,6 +23,7 @@ const repositoryRoot = resolve(
 );
 const require = createRequire(import.meta.url);
 const {
+	distributionArtifactPath,
 	localArtifactNotice,
 	localArtifactNoticeName,
 	profiles,
@@ -318,6 +319,12 @@ test('assembles a complete unsigned distribution with warnings and labels', () =
 	);
 	assert.equal(manifest.profile, profiles.unsigned);
 	assert.equal(manifest.artifacts.length, 7);
+	assert.deepEqual(
+		manifest.artifacts.map(artifact => artifact.fileName).sort(),
+		requiredArtifactMatrix(version, profiles.unsigned)
+			.map(distributionArtifactPath)
+			.sort()
+	);
 	assert.equal(
 		manifest.artifacts.find(artifact => artifact.platform === 'mac').signing,
 		'ad-hoc'

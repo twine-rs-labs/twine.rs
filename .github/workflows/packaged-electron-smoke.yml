@@ -102,6 +102,7 @@ jobs:
         with:
           name: desktop-local-target-${{ matrix.platform }}-${{ matrix.arch }}
           path: ${{ matrix.artifacts }}
+          compression-level: 0
           if-no-files-found: error
           retention-days: 14
       - name: Exercise Linux AppImage
@@ -204,5 +205,6 @@ jobs:
         with:
           name: desktop-local-test-bundle
           path: artifacts/local-test-bundle
+          compression-level: 0
           if-no-files-found: error
           retention-days: 14
