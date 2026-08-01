@@ -35,8 +35,10 @@ The publication job generates `release-record.json` after:
 - every checklist item before `Post-publication` is checked.
 
 The tag-triggered run creates the draft but cannot publish it. Manual workflow
-dispatch for the same tag is the release manager's final publication approval.
-It rebuilds and revalidates the immutable tag commit before publishing.
+dispatch for the same tag with `publish` disabled rebuilds or recovers the draft
+without publishing. Dispatch with `publish` enabled is the release manager's
+final publication approval; it rebuilds and revalidates the immutable tag
+commit before publishing.
 
 The record follows
 [`release-record.schema.json`](./release-record.schema.json) and is uploaded

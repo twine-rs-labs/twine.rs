@@ -49,13 +49,19 @@ test('quality CI enforces the JavaScript, documentation, and Rust contracts', ()
 
 test('packaging CI exercises and retains every supported installable format', () => {
 	const source = workflow('packaged-electron-smoke.yml');
+	const packagedPreviewSource = readFileSync(
+		join(repositoryRoot, 'e2e', 'packaged-electron-preview.spec.ts'),
+		'utf8'
+	);
 
 	for (const marker of [
 		'Exercise Linux AppImage',
+		'Extend Linux ARM64 preview wait in test harness',
 		'Extract and smoke Linux ZIP',
 		'Mount and smoke macOS DMG',
 		'Install Windows package',
 		'Uninstall Windows package',
+		'Retain package smoke diagnostics',
 		`actions/upload-artifact@${actionRevisions['actions/upload-artifact']}`,
 		`actions/download-artifact@${actionRevisions['actions/download-artifact']}`,
 		'npm run release:assemble:local-test-bundle',
@@ -77,6 +83,18 @@ test('packaging CI exercises and retains every supported installable format', ()
 	assert.match(source, /appimage_arch: x86_64/);
 	assert.match(source, /Twine-RS-\*-linux-x86_64\.AppImage/);
 	assert.match(source, /linux-\$\{\{ matrix\.appimage_arch \}\}\.AppImage/);
+	assert.match(
+		packagedPreviewSource,
+		/async function expectCurrentPassage[\s\S]*?timeout: 90_000/
+	);
+	assert.match(
+		source,
+		/if: runner\.os == 'Linux' && matrix\.arch == 'arm64'[\s\S]*?expectCurrentPassage[\s\S]*?timeout: 90_000/
+	);
+	assert.match(
+		source,
+		/name: Retain package smoke diagnostics\n\s+if: failure\(\)/
+	);
 });
 
 test('release CI gates an immutable release on decisions and retained evidence', () => {
@@ -86,6 +104,10 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		'push:',
 		'tags:',
 		'workflow_dispatch:',
+		'Publish after rebuilding and validating the draft',
+		'npm ci --include=dev',
+		'Extend Linux ARM64 preview wait in test harness',
+		'Retain package smoke diagnostics',
 		'--check-tag',
 		'git merge-base --is-ancestor',
 		'packaged_app_run',
@@ -99,7 +121,7 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		'release-record.json',
 		'release-evidence.zip',
 		'Validate and publish immutable release',
-		"if: github.event_name == 'workflow_dispatch'",
+		"if: github.event_name == 'workflow_dispatch' && inputs.publish",
 		'gh release edit "$RELEASE_TAG" --draft=false',
 		'--json isImmutable',
 		'gh release verify "$RELEASE_TAG"',
@@ -110,8 +132,20 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		assert.match(source, new RegExp(marker.replaceAll('$', '\\$')));
 	}
 	assert.match(source, /ALLOW_UNSIGNED_DISTRIBUTION:.*'1'/);
+	assert.match(
+		source,
+		/publish:\n\s+description: Publish after rebuilding and validating the draft\n\s+required: true\n\s+default: false\n\s+type: boolean/
+	);
 	assert.match(source, /pattern: desktop-release-target-\*/);
 	assert.match(source, /merge-multiple: true/);
+	assert.match(
+		source,
+		/if: runner\.os == 'Linux' && matrix\.arch == 'arm64'[\s\S]*?expectCurrentPassage[\s\S]*?timeout: 90_000/
+	);
+	assert.match(
+		source,
+		/name: Retain package smoke diagnostics\n\s+if: failure\(\)/
+	);
 	assert.equal((source.match(/target: linux-/g) ?? []).length, 2);
 	assert.equal((source.match(/target: mac-/g) ?? []).length, 2);
 	assert.equal((source.match(/target: win-/g) ?? []).length, 1);

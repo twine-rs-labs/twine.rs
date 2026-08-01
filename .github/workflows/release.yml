@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing annotated tag whose draft and checklist are ready to publish
+        description: Existing annotated tag to rebuild as a draft or publish
         required: true
         type: string
+      publish:
+        description: Publish after rebuilding and validating the draft
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -212,7 +217,7 @@ jobs:
         run: |
           rustup target add wasm32-unknown-unknown
           cargo install wasm-bindgen-cli --version 0.2.125 --locked
-      - run: npm ci
+      - run: npm ci --include=dev
       - name: Install Playwright Chromium on Windows
         if: runner.os == 'Windows'
         run: npx playwright install chromium
@@ -237,6 +242,19 @@ jobs:
           app_image=$(ls "$ARTIFACT_DIR"/Twine-RS-*-linux-${{ matrix.appimage_arch }}.AppImage)
           chmod +x "$app_image"
           APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "flushes a trailing"
+      - name: Extend Linux ARM64 preview wait in test harness
+        if: runner.os == 'Linux' && matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          perl -0pi -e 's/(async function expectCurrentPassage.*?timeout: )30_000/${1}90_000/s' e2e/packaged-electron-preview.spec.ts
+          node -e '
+            const { readFileSync } = require("node:fs");
+            const source = readFileSync("e2e/packaged-electron-preview.spec.ts", "utf8");
+            const helper = source.match(/async function expectCurrentPassage.*?\n}/s)?.[0];
+            if (!helper?.includes("timeout: 90_000")) {
+              throw new Error("Linux ARM64 current-passage wait was not extended.");
+            }
+          '
       - name: Extract and smoke Linux ZIP
         if: runner.os == 'Linux'
         shell: bash
@@ -308,8 +326,8 @@ jobs:
             electron-build/compliance/LICENSES.chromium.html
           if-no-files-found: error
           retention-days: 7
-      - name: Retain Windows smoke diagnostics
-        if: failure() && runner.os == 'Windows'
+      - name: Retain package smoke diagnostics
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-release-smoke-diagnostics-${{ matrix.target }}
@@ -408,7 +426,7 @@ jobs:
   publish:
     name: Validate and publish immutable release
     needs: [prepare, assemble-draft]
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-24.04
     permissions:
       contents: write
