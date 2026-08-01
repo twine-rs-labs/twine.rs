@@ -463,8 +463,11 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var MAX_ARGUMENT_LENGTH = ${STORY_PREVIEW_BRIDGE_LIMITS.logArgumentLength};
 	var MAX_MESSAGE_LENGTH = ${STORY_PREVIEW_BRIDGE_LIMITS.logMessageLength};
 	var MAX_FORMAT_SESSION_LENGTH = 1024 * 1024;
+	var STARTUP_STATE_CAPTURE_DELAYS = [250, 500, 1000, 2000, 4000];
 	var harloweSessionStorage;
 	var pendingState = 0;
+	var pendingStartupState = 0;
+	var startupStateCaptureIndex = 0;
 
 	function createMemorySessionStorage() {
 		var keys = [];
@@ -792,8 +795,18 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 
 	function captureState() {
 		pendingState = 0;
+		var currentPassage = readRuntimePassage();
+
+		if (
+			currentPassage &&
+			(currentPassage.localId || currentPassage.name)
+		) {
+			clearTimeout(pendingStartupState);
+			pendingStartupState = 0;
+		}
+
 		post('state', {
-			currentPassage: readRuntimePassage(),
+			currentPassage: currentPassage,
 			viewport: {
 				hash: bounded(location.hash, ${STORY_PREVIEW_BRIDGE_LIMITS.hashLength}),
 				height: innerHeight,
@@ -802,6 +815,11 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 				width: innerWidth
 			}
 		});
+
+		return Boolean(
+			currentPassage &&
+			(currentPassage.localId || currentPassage.name)
+		);
 	}
 
 	function queueState() {
@@ -812,6 +830,23 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	function queueStateAfterRuntimeTick() {
 		queueState();
 		setTimeout(captureState, 250);
+	}
+
+	function captureStartupState() {
+		pendingStartupState = 0;
+
+		if (
+			captureState() ||
+			startupStateCaptureIndex >= STARTUP_STATE_CAPTURE_DELAYS.length
+		) {
+			return;
+		}
+
+		pendingStartupState = setTimeout(
+			captureStartupState,
+			STARTUP_STATE_CAPTURE_DELAYS[startupStateCaptureIndex]
+		);
+		startupStateCaptureIndex += 1;
 	}
 
 	['log', 'info', 'warn', 'error'].forEach(function (level) {
@@ -856,7 +891,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		window.addEventListener('hashchange', queueState);
 		window.addEventListener('popstate', queueState);
 		window.addEventListener('resize', queueState);
-		captureState();
+		captureStartupState();
 	}
 
 	window.__twineRsPreviewDebug = {captureState: captureState};

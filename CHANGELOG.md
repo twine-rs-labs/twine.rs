@@ -20,7 +20,7 @@ and releases use [Semantic Versioning](https://semver.org/).
 
 ### Security
 
-## [0.2.0-beta.1] - 2026-08-01
+## [0.2.0-beta.2] - 2026-08-01
 
 ### Added
 
@@ -40,5 +40,20 @@ and releases use [Semantic Versioning](https://semver.org/).
 - Windows x64, macOS Intel and Apple Silicon, and Linux x64 and arm64 desktop
   packages.
 
-[Unreleased]: https://github.com/twine-rs-labs/twine.rs/compare/v0.2.0-beta.1...HEAD
-[0.2.0-beta.1]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.1
+### Fixed
+
+- Added bounded late-start runtime-state capture so preview passage detection
+  recovers when a story format initializes its runtime after the bridge's first
+  startup sample.
+
+## [0.2.0-beta.1] - 2026-08-01
+
+### Changed
+
+- Unpublished release candidate superseded by 0.2.0-beta.2 after release
+  workflow and packaged Linux ARM64 validation exposed release-pipeline and
+  preview-startup defects. No draft or public release was created.
+
+[Unreleased]: https://github.com/twine-rs-labs/twine.rs/compare/v0.2.0-beta.2...HEAD
+[0.2.0-beta.2]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.2
+[0.2.0-beta.1]: https://github.com/twine-rs-labs/twine.rs/tree/v0.2.0-beta.1
