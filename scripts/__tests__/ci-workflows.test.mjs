@@ -179,6 +179,10 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		'name: Exercise downloaded Linux AppImage',
 		freshDownloadIndex
 	);
+	const retainedTargetInput = source.slice(
+		source.indexOf('      - name: Retain target release input'),
+		source.indexOf('      - name: Retain standalone compliance evidence')
+	);
 
 	for (const marker of [
 		'push:',
@@ -218,6 +222,14 @@ test('release CI gates an immutable release on decisions and retained evidence',
 	);
 	assert.match(source, /pattern: desktop-release-target-\*/);
 	assert.match(source, /merge-multiple: true/);
+	assert.match(
+		retainedTargetInput,
+		/path: artifacts\/staging\/\$\{\{ needs\.prepare\.outputs\.profile \}\}\/\$\{\{ matrix\.target \}\}\/Twine-RS-\*/
+	);
+	assert.doesNotMatch(
+		retainedTargetInput,
+		/path: artifacts\/staging\/\$\{\{ needs\.prepare\.outputs\.profile \}\}\/\$\{\{ matrix\.target \}\}\s*$/m
+	);
 	assert.match(
 		source,
 		/if: runner\.os == 'Linux' && matrix\.arch == 'arm64'[\s\S]*?expectCurrentPassage[\s\S]*?timeout: 90_000/
