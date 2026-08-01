@@ -27,10 +27,10 @@
 		"evidence": "https://github.com/twine-rs-labs/twine.rs/issues/1#issuecomment-5150731379"
 	},
 	"knownIssues": [
-		"Very large projects, especially projects containing tens of thousands of passages, are not yet fully optimized for latency or memory use.",
+		"In the current benchmark suite, some latency and memory results at the largest tested project sizes exceed the project’s initial performance targets.",
 		"Advanced Harlowe syntax editing is specific to the bundled Harlowe 3.3.9 format; other Harlowe versions use the generic editor.",
 		"Package export records an asset copy plan but does not bundle project asset bytes; desktop Playable HTML export can embed supported statically referenced media.",
 		"Some inherited compatibility user interface and documentation remain outside the primary Twine RS workbench.",
-		"Performance varies across operating systems and hardware, and packaged-app cross-platform and hosted-CI performance coverage remains incomplete."
+		"Cross-platform packaged-app and hosted-CI performance coverage remains incomplete."
 	]
 }
