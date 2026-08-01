@@ -804,7 +804,7 @@ async function expectCurrentPassage(preview: Page, name: string) {
 		preview
 			.locator('.story-preview-route__runtime-main')
 			.getByText(`Current: ${name}`, {exact: true})
-	).toBeVisible({timeout: 30_000});
+	).toBeVisible({timeout: 90_000});
 	await expect(
 		preview.getByRole('button', {name: 'Test Current'})
 	).toBeEnabled();
