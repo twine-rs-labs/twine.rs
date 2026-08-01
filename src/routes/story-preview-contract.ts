@@ -728,6 +728,19 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 			}
 		} catch (error) {}
 
+		try {
+			if (
+				window.SugarCube &&
+				window.SugarCube.State &&
+				window.SugarCube.State.passage
+			) {
+				return {
+					name: String(window.SugarCube.State.passage),
+					source: 'SugarCube State'
+				};
+			}
+		} catch (error) {}
+
 		var harlowePassage = passageFromHarloweSession();
 
 		if (harlowePassage) {
@@ -793,14 +806,19 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		return undefined;
 	}
 
+	function hasStablePassageIdentity(passage) {
+		return Boolean(
+			passage &&
+				(passage.localId || passage.name) &&
+				passage.source !== 'storydata startnode'
+		);
+	}
+
 	function captureState() {
 		pendingState = 0;
 		var currentPassage = readRuntimePassage();
 
-		if (
-			currentPassage &&
-			(currentPassage.localId || currentPassage.name)
-		) {
+		if (hasStablePassageIdentity(currentPassage)) {
 			clearTimeout(pendingStartupState);
 			pendingStartupState = 0;
 		}
@@ -816,10 +834,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 			}
 		});
 
-		return Boolean(
-			currentPassage &&
-			(currentPassage.localId || currentPassage.name)
-		);
+		return hasStablePassageIdentity(currentPassage);
 	}
 
 	function queueState() {
