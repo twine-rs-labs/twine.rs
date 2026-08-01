@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {
+	chmodSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -8,7 +9,7 @@ import {
 	writeFileSync
 } from 'node:fs';
 import {tmpdir} from 'node:os';
-import {dirname, join, resolve} from 'node:path';
+import {delimiter, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 
@@ -258,6 +259,73 @@ test('release CI gates an immutable release on decisions and retained evidence',
 	assert.equal((source.match(/target: win-/g) ?? []).length, 1);
 	assert.doesNotMatch(source, /TWINE_RELEASE_PROFILE: local/);
 	assert.doesNotMatch(source, /environment: release-publication/);
+});
+
+test('manual recovery packages only the validated tag commit', t => {
+	const source = workflow('release.yml');
+	const packageRun = workflowStepRun(
+		source,
+		'package-installable',
+		'Package release artifacts'
+	).replace('${{ matrix.arch }}', 'arm64');
+	const temporaryRoot = mkdtempSync(join(tmpdir(), 'twine-release-source-'));
+	const binRoot = join(temporaryRoot, 'bin');
+	const gitPath = join(binRoot, 'git');
+	const npmPath = join(binRoot, 'npm');
+	const npmRecord = join(temporaryRoot, 'npm-environment.txt');
+	const runPackage = overrides =>
+		spawnSync('bash', ['-e', '-o', 'pipefail', '-c', packageRun], {
+			cwd: temporaryRoot,
+			encoding: 'utf8',
+			env: {
+				...process.env,
+				FAKE_GIT_HEAD: 'tag-commit',
+				FAKE_NPM_RECORD: npmRecord,
+				GITHUB_SHA: 'workflow-commit',
+				PATH: `${binRoot}${delimiter}${process.env.PATH}`,
+				RELEASE_EVENT_NAME: 'workflow_dispatch',
+				RELEASE_SOURCE_COMMIT: 'tag-commit',
+				...overrides
+			}
+		});
+
+	t.after(() => rmSync(temporaryRoot, {force: true, recursive: true}));
+	mkdirSync(binRoot, {recursive: true});
+	writeFileSync(
+		gitPath,
+		['#!/bin/sh', 'printf \'%s\\n\' "$FAKE_GIT_HEAD"'].join('\n'),
+		'utf8'
+	);
+	writeFileSync(
+		npmPath,
+		[
+			'#!/bin/sh',
+			'printf \'%s\' "${GITHUB_SHA-unset}" > "$FAKE_NPM_RECORD"'
+		].join('\n'),
+		'utf8'
+	);
+	chmodSync(gitPath, 0o755);
+	chmodSync(npmPath, 0o755);
+
+	const manualRun = runPackage();
+	assert.equal(manualRun.status, 0, manualRun.stderr);
+	assert.equal(readFileSync(npmRecord, 'utf8'), 'unset');
+
+	const tagPushRun = runPackage({
+		GITHUB_SHA: 'tag-commit',
+		RELEASE_EVENT_NAME: 'push'
+	});
+	assert.equal(tagPushRun.status, 0, tagPushRun.stderr);
+	assert.equal(readFileSync(npmRecord, 'utf8'), 'tag-commit');
+
+	rmSync(npmRecord, {force: true});
+	const mismatchedRun = runPackage({FAKE_GIT_HEAD: 'unexpected-commit'});
+	assert.notEqual(mismatchedRun.status, 0);
+	assert.match(
+		mismatchedRun.stdout,
+		/Checked-out source does not match the validated release commit/
+	);
+	assert.throws(() => readFileSync(npmRecord, 'utf8'), {code: 'ENOENT'});
 });
 
 test('beta.2 save-smoke patch is CRLF-safe and shared by both smoke phases', t => {
