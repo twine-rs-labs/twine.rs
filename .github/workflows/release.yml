@@ -228,6 +228,36 @@ jobs:
           sudo apt-get install --yes --no-install-recommends libglib2.0-bin
       - name: Build production Electron app
         run: npm run build:electron-app:ci
+      - name: Restore verified generated WASM sources after bundling
+        shell: bash
+        run: |
+          generated_wasm_outputs=(
+            src/core/wasm/pkg/twine_wasm.d.ts
+            src/core/wasm/pkg/twine_wasm.js
+            src/core/wasm/pkg/twine_wasm_bg.wasm
+            src/core/wasm/pkg/twine_wasm_bg.wasm.d.ts
+          )
+          unexpected_changes="$(
+            git status --porcelain=v1 --untracked-files=all -- \
+              . \
+              ':(exclude)src/core/wasm/pkg/twine_wasm.d.ts' \
+              ':(exclude)src/core/wasm/pkg/twine_wasm.js' \
+              ':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm' \
+              ':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm.d.ts'
+          )"
+          if [[ -n "$unexpected_changes" ]]; then
+            echo "::error::Production build changed unexpected source paths."
+            git status --short --untracked-files=all
+            exit 1
+          fi
+          # build:web has already bundled these regenerated outputs. Restore the
+          # tagged copies before artifact metadata records the source tree state.
+          git restore --source=HEAD --worktree -- "${generated_wasm_outputs[@]}"
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "::error::Source tree is not clean after restoring generated WASM outputs."
+            git status --short --untracked-files=all
+            exit 1
+          fi
       - name: Test Windows native referenced-media hardening
         if: runner.os == 'Windows'
         run: cargo test -p twine_native --locked

@@ -99,6 +99,11 @@ test('packaging CI exercises and retains every supported installable format', ()
 
 test('release CI gates an immutable release on decisions and retained evidence', () => {
 	const source = workflow('release.yml');
+	const buildIndex = source.indexOf('name: Build production Electron app');
+	const restoreWasmIndex = source.indexOf(
+		'name: Restore verified generated WASM sources after bundling'
+	);
+	const packageIndex = source.indexOf('name: Package release artifacts');
 
 	for (const marker of [
 		'push:',
@@ -146,6 +151,21 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		source,
 		/name: Retain package smoke diagnostics\n\s+if: failure\(\)/
 	);
+	assert.ok(buildIndex >= 0 && buildIndex < restoreWasmIndex);
+	assert.ok(restoreWasmIndex < packageIndex);
+	for (const marker of [
+		"':(exclude)src/core/wasm/pkg/twine_wasm.d.ts'",
+		"':(exclude)src/core/wasm/pkg/twine_wasm.js'",
+		"':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm'",
+		"':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm.d.ts'",
+		'git status --porcelain=v1 --untracked-files=all',
+		'git restore --source=HEAD --worktree --'
+	]) {
+		assert.ok(
+			source.includes(marker),
+			`release workflow should include ${marker}`
+		);
+	}
 	assert.equal((source.match(/target: linux-/g) ?? []).length, 2);
 	assert.equal((source.match(/target: mac-/g) ?? []).length, 2);
 	assert.equal((source.match(/target: win-/g) ?? []).length, 1);
