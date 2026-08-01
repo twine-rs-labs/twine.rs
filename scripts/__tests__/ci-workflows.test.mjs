@@ -49,6 +49,10 @@ test('quality CI enforces the JavaScript, documentation, and Rust contracts', ()
 
 test('packaging CI exercises and retains every supported installable format', () => {
 	const source = workflow('packaged-electron-smoke.yml');
+	const packagedElectronSource = readFileSync(
+		join(repositoryRoot, 'e2e', 'packaged-electron.spec.ts'),
+		'utf8'
+	);
 	const packagedPreviewSource = readFileSync(
 		join(repositoryRoot, 'e2e', 'packaged-electron-preview.spec.ts'),
 		'utf8'
@@ -88,6 +92,10 @@ test('packaging CI exercises and retains every supported installable format', ()
 		/async function expectCurrentPassage[\s\S]*?timeout: 90_000/
 	);
 	assert.match(
+		packagedElectronSource,
+		/const passagesRoot[\s\S]*?let files: string\[\];[\s\S]*?code === 'ENOENT'[\s\S]*?return '';/
+	);
+	assert.match(
 		source,
 		/if: runner\.os == 'Linux' && matrix\.arch == 'arm64'[\s\S]*?expectCurrentPassage[\s\S]*?timeout: 90_000/
 	);
@@ -104,6 +112,10 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		'name: Restore verified generated WASM sources after bundling'
 	);
 	const packageIndex = source.indexOf('name: Package release artifacts');
+	const patchSaveSmokeIndex = source.indexOf(
+		'name: Patch beta.2 single-source save smoke polling'
+	);
+	const linuxSmokeIndex = source.indexOf('name: Exercise Linux AppImage');
 
 	for (const marker of [
 		'push:',
@@ -153,13 +165,17 @@ test('release CI gates an immutable release on decisions and retained evidence',
 	);
 	assert.ok(buildIndex >= 0 && buildIndex < restoreWasmIndex);
 	assert.ok(restoreWasmIndex < packageIndex);
+	assert.ok(packageIndex < patchSaveSmokeIndex);
+	assert.ok(patchSaveSmokeIndex < linuxSmokeIndex);
 	for (const marker of [
 		"':(exclude)src/core/wasm/pkg/twine_wasm.d.ts'",
 		"':(exclude)src/core/wasm/pkg/twine_wasm.js'",
 		"':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm'",
 		"':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm.d.ts'",
 		'git status --porcelain=v1 --untracked-files=all',
-		'git restore --source=HEAD --worktree --'
+		'git restore --source=HEAD --worktree --',
+		"if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'",
+		'Could not locate the beta.2 save-smoke polling helper.'
 	]) {
 		assert.ok(
 			source.includes(marker),

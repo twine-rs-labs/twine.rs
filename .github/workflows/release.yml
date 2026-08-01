@@ -263,6 +263,42 @@ jobs:
         run: cargo test -p twine_native --locked
       - name: Package release artifacts
         run: npm run package:electron:artifacts -- --${{ matrix.arch }}
+      - name: Patch beta.2 single-source save smoke polling
+        if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const {readFileSync, writeFileSync} = require('node:fs');
+          const file = 'e2e/packaged-electron.spec.ts';
+          const before = [
+            "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+            '\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
+            "\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));"
+          ].join('\n');
+          const after = [
+            "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+            '\t\t\t\t\tlet files: string[];',
+            '',
+            '\t\t\t\t\ttry {',
+            '\t\t\t\t\t\tfiles = await readdir(passagesRoot, {recursive: true});',
+            '\t\t\t\t\t} catch (error) {',
+            "\t\t\t\t\t\tif ((error as NodeJS.ErrnoException).code === 'ENOENT') {",
+            "\t\t\t\t\t\t\treturn '';",
+            '\t\t\t\t\t\t}',
+            '\t\t\t\t\t\tthrow error;',
+            '\t\t\t\t\t}',
+            "\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));"
+          ].join('\n');
+          const source = readFileSync(file, 'utf8');
+          const occurrences = source.split(before).length - 1;
+
+          if (occurrences > 1 || (occurrences === 0 && !source.includes(after))) {
+            throw new Error('Could not locate the beta.2 save-smoke polling helper.');
+          }
+          if (occurrences === 1) {
+            writeFileSync(file, source.replace(before, after), 'utf8');
+          }
+          NODE
       - name: Exercise Linux AppImage
         if: runner.os == 'Linux'
         shell: bash
