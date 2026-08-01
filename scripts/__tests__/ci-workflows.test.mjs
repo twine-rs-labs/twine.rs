@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync
+} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
@@ -20,6 +28,47 @@ function workflow(name) {
 		join(repositoryRoot, '.github', 'workflows', name),
 		'utf8'
 	);
+}
+
+function workflowStepRun(source, jobName, stepName) {
+	const jobMarker = `  ${jobName}:\n`;
+	const jobStart = source.indexOf(jobMarker);
+	assert.ok(jobStart >= 0, `workflow should include the ${jobName} job`);
+	const followingJobs = source.slice(jobStart + jobMarker.length);
+	const nextJobOffset = followingJobs.search(/^  [a-zA-Z0-9_-]+:\n/m);
+	const jobSource =
+		nextJobOffset === -1
+			? followingJobs
+			: followingJobs.slice(0, nextJobOffset);
+	const stepMarker = `      - name: ${stepName}\n`;
+	const stepStart = jobSource.indexOf(stepMarker);
+	assert.ok(stepStart >= 0, `${jobName} should include ${stepName}`);
+	const runMarker = '        run: |\n';
+	const runStart = jobSource.indexOf(runMarker, stepStart);
+	assert.ok(runStart >= 0, `${stepName} should include a run block`);
+	const lines = jobSource.slice(runStart + runMarker.length).split('\n');
+	const block = [];
+
+	for (const line of lines) {
+		if (line.startsWith('          ')) {
+			block.push(line.slice(10));
+		} else if (line === '') {
+			block.push(line);
+		} else {
+			break;
+		}
+	}
+
+	return block.join('\n');
+}
+
+function nodeHeredoc(runBlock) {
+	const marker = "node <<'NODE'\n";
+	const start = runBlock.indexOf(marker);
+	const end = runBlock.lastIndexOf('\nNODE');
+
+	assert.ok(start >= 0 && end > start, 'step should contain a Node heredoc');
+	return runBlock.slice(start + marker.length, end);
 }
 
 test('quality CI enforces the JavaScript, documentation, and Rust contracts', () => {
@@ -93,7 +142,11 @@ test('packaging CI exercises and retains every supported installable format', ()
 	);
 	assert.match(
 		packagedElectronSource,
-		/const passagesRoot[\s\S]*?let files: string\[\];[\s\S]*?code === 'ENOENT'[\s\S]*?return '';/
+		/async function waitForSavedText[\s\S]*?const passagesRoot[\s\S]*?try \{[\s\S]*?await readdir[\s\S]*?await readFile[\s\S]*?catch \(error\)[\s\S]*?code === 'ENOENT'[\s\S]*?return '';/
+	);
+	assert.match(
+		packagedPreviewSource,
+		/async function waitForSavedText[\s\S]*?const passagesRoot[\s\S]*?try \{[\s\S]*?const sources = await Promise\.all[\s\S]*?catch \(error\)[\s\S]*?code === 'ENOENT'[\s\S]*?return '';/
 	);
 	assert.match(
 		source,
@@ -113,9 +166,18 @@ test('release CI gates an immutable release on decisions and retained evidence',
 	);
 	const packageIndex = source.indexOf('name: Package release artifacts');
 	const patchSaveSmokeIndex = source.indexOf(
-		'name: Patch beta.2 single-source save smoke polling'
+		'name: Patch beta.2 atomic-save smoke polling'
 	);
 	const linuxSmokeIndex = source.indexOf('name: Exercise Linux AppImage');
+	const freshDownloadIndex = source.indexOf('fresh-download-smoke:');
+	const freshPatchSaveSmokeIndex = source.indexOf(
+		'name: Patch beta.2 atomic-save smoke polling',
+		freshDownloadIndex
+	);
+	const freshLinuxSmokeIndex = source.indexOf(
+		'name: Exercise downloaded Linux AppImage',
+		freshDownloadIndex
+	);
 
 	for (const marker of [
 		'push:',
@@ -167,6 +229,13 @@ test('release CI gates an immutable release on decisions and retained evidence',
 	assert.ok(restoreWasmIndex < packageIndex);
 	assert.ok(packageIndex < patchSaveSmokeIndex);
 	assert.ok(patchSaveSmokeIndex < linuxSmokeIndex);
+	assert.ok(freshDownloadIndex < freshPatchSaveSmokeIndex);
+	assert.ok(freshPatchSaveSmokeIndex < freshLinuxSmokeIndex);
+	assert.equal(
+		(source.match(/name: Patch beta\.2 atomic-save smoke polling/g) ?? [])
+			.length,
+		2
+	);
 	for (const marker of [
 		"':(exclude)src/core/wasm/pkg/twine_wasm.d.ts'",
 		"':(exclude)src/core/wasm/pkg/twine_wasm.js'",
@@ -175,7 +244,9 @@ test('release CI gates an immutable release on decisions and retained evidence',
 		'git status --porcelain=v1 --untracked-files=all',
 		'git restore --source=HEAD --worktree --',
 		"if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'",
-		'Could not locate the beta.2 save-smoke polling helper.'
+		"file: 'e2e/packaged-electron.spec.ts'",
+		"file: 'e2e/packaged-electron-preview.spec.ts'",
+		'Could not locate the beta.2 ${label}.'
 	]) {
 		assert.ok(
 			source.includes(marker),
@@ -187,6 +258,82 @@ test('release CI gates an immutable release on decisions and retained evidence',
 	assert.equal((source.match(/target: win-/g) ?? []).length, 1);
 	assert.doesNotMatch(source, /TWINE_RELEASE_PROFILE: local/);
 	assert.doesNotMatch(source, /environment: release-publication/);
+});
+
+test('beta.2 save-smoke patch is CRLF-safe and shared by both smoke phases', t => {
+	const source = workflow('release.yml');
+	const packageRun = workflowStepRun(
+		source,
+		'package-installable',
+		'Patch beta.2 atomic-save smoke polling'
+	);
+	const freshDownloadRun = workflowStepRun(
+		source,
+		'fresh-download-smoke',
+		'Patch beta.2 atomic-save smoke polling'
+	);
+	const script = nodeHeredoc(packageRun);
+	const temporaryRoot = mkdtempSync(join(tmpdir(), 'twine-beta2-smoke-patch-'));
+	const e2eRoot = join(temporaryRoot, 'e2e');
+	const installedPath = join(e2eRoot, 'packaged-electron.spec.ts');
+	const previewPath = join(e2eRoot, 'packaged-electron-preview.spec.ts');
+	const installedBefore = [
+		"\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+		'\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
+		"\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));",
+		'',
+		'\t\t\t\t\treturn passageFile',
+		"\t\t\t\t\t\t? readFile(path.join(passagesRoot, passageFile), 'utf8')",
+		"\t\t\t\t\t\t: '';"
+	].join('\r\n');
+	const previewBefore = [
+		"\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+		'\t\t\t\t\tconst files = (await readdir(passagesRoot, {recursive: true})).filter(',
+		"\t\t\t\t\t\tfile => file.endsWith('.twee')",
+		'\t\t\t\t\t);',
+		'\t\t\t\t\tconst sources = await Promise.all(',
+		"\t\t\t\t\t\tfiles.map(file => readFile(path.join(passagesRoot, file), 'utf8'))",
+		'\t\t\t\t\t);',
+		'',
+		"\t\t\t\t\treturn sources.join('\\n');"
+	].join('\r\n');
+	const runPatch = () =>
+		spawnSync(process.execPath, ['-e', script], {
+			cwd: temporaryRoot,
+			encoding: 'utf8'
+		});
+
+	t.after(() => rmSync(temporaryRoot, {force: true, recursive: true}));
+	mkdirSync(e2eRoot, {recursive: true});
+	writeFileSync(installedPath, installedBefore, 'utf8');
+	writeFileSync(previewPath, previewBefore, 'utf8');
+	assert.equal(packageRun, freshDownloadRun);
+
+	const firstRun = runPatch();
+	assert.equal(firstRun.status, 0, firstRun.stderr);
+	const installedAfter = readFileSync(installedPath, 'utf8');
+	const previewAfter = readFileSync(previewPath, 'utf8');
+
+	for (const patchedSource of [installedAfter, previewAfter]) {
+		assert.match(patchedSource, /code === 'ENOENT'/);
+		assert.ok(patchedSource.includes('\r\n'));
+		assert.equal(patchedSource.replaceAll('\r\n', '').includes('\n'), false);
+	}
+	assert.match(installedAfter, /\? await readFile/);
+	assert.match(previewAfter, /const sources = await Promise\.all/);
+
+	const secondRun = runPatch();
+	assert.equal(secondRun.status, 0, secondRun.stderr);
+	assert.equal(readFileSync(installedPath, 'utf8'), installedAfter);
+	assert.equal(readFileSync(previewPath, 'utf8'), previewAfter);
+
+	writeFileSync(installedPath, 'unexpected helper\r\n', 'utf8');
+	const failedRun = runPatch();
+	assert.notEqual(failedRun.status, 0);
+	assert.match(
+		failedRun.stderr,
+		/Could not locate the beta\.2 installed-app save helper/
+	);
 });
 
 test('active workflows pin every action to an immutable revision', () => {
