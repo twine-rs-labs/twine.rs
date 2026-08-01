@@ -262,7 +262,25 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test -p twine_native --locked
       - name: Package release artifacts
-        run: npm run package:electron:artifacts -- --${{ matrix.arch }}
+        shell: bash
+        env:
+          RELEASE_EVENT_NAME: ${{ github.event_name }}
+          RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          checked_out_commit="$(git rev-parse HEAD)"
+          if [[ "$checked_out_commit" != "$RELEASE_SOURCE_COMMIT" ]]; then
+            echo "::error::Checked-out source does not match the validated release commit."
+            exit 1
+          fi
+          # workflow_dispatch runs the current workflow definition while the
+          # package job checks out the selected immutable tag. The event SHA is
+          # therefore the workflow ref, not the packaged source commit. The
+          # comparison above preserves the fail-closed binding before removing
+          # that unrelated event value from the tag's artifact hook process.
+          if [[ "$RELEASE_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            unset GITHUB_SHA
+          fi
+          npm run package:electron:artifacts -- --${{ matrix.arch }}
       - name: Patch beta.2 atomic-save smoke polling
         if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
         shell: bash
