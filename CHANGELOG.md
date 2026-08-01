@@ -42,9 +42,9 @@ and releases use [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Added bounded late-start runtime-state capture so preview passage detection
-  recovers when a story format initializes its runtime after the bridge's first
-  startup sample.
+- Added bounded late-start runtime-state capture and namespaced SugarCube state
+  detection so preview passage detection recovers when a story format
+  initializes its runtime after the bridge's first startup sample.
 
 ## [0.2.0-beta.1] - 2026-08-01
 

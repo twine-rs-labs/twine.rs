@@ -19,6 +19,56 @@ function lastPostedState(postMessage: jest.SpyInstance) {
 }
 
 describe('instrumented runtime passage detection', () => {
+	it('keeps recapturing after a provisional start node until SugarCube exposes live state', () => {
+		jest.useFakeTimers();
+		document.body.innerHTML = `
+			<tw-storydata format="SugarCube" startnode="1">
+				<tw-passagedata pid="1" name="Start">Start</tw-passagedata>
+			</tw-storydata>
+		`;
+		delete (window as any).SugarCube;
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const instrumented = instrumentPreviewHtml(
+			'<html><head></head><body></body></html>',
+			'late-sugarcube-session'
+		);
+		const script = /<script>([\s\S]*?)<\/script>/.exec(instrumented)?.[1];
+
+		try {
+			expect(script).toBeDefined();
+			window.eval(script!);
+			document.dispatchEvent(new Event('DOMContentLoaded'));
+			expect(lastPostedState(postMessage)?.currentPassage).toEqual({
+				localId: '1',
+				name: 'Start',
+				source: 'storydata startnode'
+			});
+
+			document.body.insertAdjacentHTML(
+				'beforeend',
+				'<div id="passages"><div class="passage">Rendered</div></div>'
+			);
+			(window as any).__twineRsPreviewDebug.captureState();
+			expect(lastPostedState(postMessage)?.currentPassage).toBeUndefined();
+
+			(window as any).SugarCube = {State: {passage: 'Start'}};
+			jest.advanceTimersByTime(250);
+
+			expect(lastPostedState(postMessage)?.currentPassage).toEqual({
+				name: 'Start',
+				source: 'SugarCube State'
+			});
+			expect(jest.getTimerCount()).toBe(0);
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+			delete (window as any).SugarCube;
+			postMessage.mockRestore();
+		}
+	});
+
 	it('recaptures passage identity when the runtime initializes after the startup sample', () => {
 		jest.useFakeTimers();
 		document.body.innerHTML = '<div class="passage"></div>';
