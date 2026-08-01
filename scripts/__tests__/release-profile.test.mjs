@@ -15,10 +15,12 @@ import {afterEach, test} from 'node:test';
 
 const require = createRequire(import.meta.url);
 const {
+	distributionArtifactPath,
 	expectedArtifacts,
 	localArtifactNotice,
 	localArtifactNoticeName,
 	profiles,
+	requiredArtifactMatrix,
 	resolveReleaseProfile,
 	validatePackagingProfile
 } = require('../release-profile.cjs');
@@ -115,6 +117,32 @@ test('unsigned Windows and macOS filenames are visibly labeled', () => {
 			'Twine-RS-0.2.0-beta.1-linux-x86_64.AppImage',
 			'Twine-RS-0.2.0-beta.1-linux-x64.zip'
 		]
+	);
+});
+
+test('distribution artifact paths distinguish primary and alternative downloads', () => {
+	assert.deepEqual(
+		requiredArtifactMatrix('0.2.0-beta.1', profiles.unsigned).map(
+			distributionArtifactPath
+		),
+		[
+			'windows/Twine-RS-0.2.0-beta.1-win-x64-unsigned.exe',
+			'mac/Twine-RS-0.2.0-beta.1-mac-x64-unsigned.dmg',
+			'mac/Twine-RS-0.2.0-beta.1-mac-arm64-unsigned.dmg',
+			'linux/Twine-RS-0.2.0-beta.1-linux-x86_64.AppImage',
+			'linux/alternatives/Twine-RS-0.2.0-beta.1-linux-x64.zip',
+			'linux/Twine-RS-0.2.0-beta.1-linux-arm64.AppImage',
+			'linux/alternatives/Twine-RS-0.2.0-beta.1-linux-arm64.zip'
+		]
+	);
+	assert.throws(
+		() =>
+			distributionArtifactPath({
+				extension: 'zip',
+				fileName: '../unexpected.zip',
+				platform: 'linux'
+			}),
+		/fileName must be a basename/
 	);
 });
 

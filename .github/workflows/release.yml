@@ -457,6 +457,7 @@ jobs:
         with:
           name: desktop-release-target-${{ matrix.target }}
           path: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}/Twine-RS-*
+          compression-level: 0
           if-no-files-found: error
           retention-days: 7
       - name: Retain standalone compliance evidence
@@ -500,6 +501,64 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.18.0
+      - name: Patch beta.2 aggregate-manifest path validation
+        if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const {readFileSync, writeFileSync} = require('node:fs');
+
+          const file = 'scripts/check-release.mjs';
+          const before = [
+            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
+            '\t\t.map(artifact => artifact.fileName)',
+            '\t\t.sort();'
+          ].join('\n');
+          const after = [
+            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
+            '\t\t.map(artifact => {',
+            '\t\t\tconst directory = {',
+            "\t\t\t\tlinux: 'linux',",
+            "\t\t\t\tmac: 'mac',",
+            "\t\t\t\twin: 'windows'",
+            '\t\t\t}[artifact.platform];',
+            '\t\t\tconst segments = [directory];',
+            '',
+            "\t\t\tif (artifact.platform === 'linux' && artifact.extension === 'zip') {",
+            "\t\t\t\tsegments.push('alternatives');",
+            '\t\t\t}',
+            '\t\t\tsegments.push(artifact.fileName);',
+            "\t\t\treturn segments.join('/');",
+            '\t\t})',
+            '\t\t.sort();'
+          ].join('\n');
+          const current = [
+            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
+            '\t\t.map(distributionArtifactPath)',
+            '\t\t.sort();'
+          ].join('\n');
+          const source = readFileSync(file, 'utf8');
+          const eol = source.includes('\r\n') ? '\r\n' : '\n';
+          const normalizedSource = source.replaceAll('\r\n', '\n');
+          const occurrences = [before, after, current].map(
+            candidate => normalizedSource.split(candidate).length - 1
+          );
+
+          if (
+            occurrences.some(count => count > 1) ||
+            occurrences.reduce((total, count) => total + count, 0) !== 1
+          ) {
+            throw new Error('Could not locate the beta.2 artifact-matrix validator.');
+          }
+          if (occurrences[0] === 1) {
+            const patchedSource = normalizedSource.replace(before, after);
+            writeFileSync(
+              file,
+              eol === '\r\n' ? patchedSource.replaceAll('\n', '\r\n') : patchedSource,
+              'utf8'
+            );
+          }
+          NODE
       - name: Download every release target
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -564,6 +623,7 @@ jobs:
         with:
           name: desktop-release-unit
           path: artifacts/${{ needs.prepare.outputs.profile }}
+          compression-level: 0
           if-no-files-found: error
           retention-days: 7
 
@@ -585,6 +645,64 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.18.0
+      - name: Patch beta.2 aggregate-manifest path validation
+        if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const {readFileSync, writeFileSync} = require('node:fs');
+
+          const file = 'scripts/check-release.mjs';
+          const before = [
+            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
+            '\t\t.map(artifact => artifact.fileName)',
+            '\t\t.sort();'
+          ].join('\n');
+          const after = [
+            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
+            '\t\t.map(artifact => {',
+            '\t\t\tconst directory = {',
+            "\t\t\t\tlinux: 'linux',",
+            "\t\t\t\tmac: 'mac',",
+            "\t\t\t\twin: 'windows'",
+            '\t\t\t}[artifact.platform];',
+            '\t\t\tconst segments = [directory];',
+            '',
+            "\t\t\tif (artifact.platform === 'linux' && artifact.extension === 'zip') {",
+            "\t\t\t\tsegments.push('alternatives');",
+            '\t\t\t}',
+            '\t\t\tsegments.push(artifact.fileName);',
+            "\t\t\treturn segments.join('/');",
+            '\t\t})',
+            '\t\t.sort();'
+          ].join('\n');
+          const current = [
+            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
+            '\t\t.map(distributionArtifactPath)',
+            '\t\t.sort();'
+          ].join('\n');
+          const source = readFileSync(file, 'utf8');
+          const eol = source.includes('\r\n') ? '\r\n' : '\n';
+          const normalizedSource = source.replaceAll('\r\n', '\n');
+          const occurrences = [before, after, current].map(
+            candidate => normalizedSource.split(candidate).length - 1
+          );
+
+          if (
+            occurrences.some(count => count > 1) ||
+            occurrences.reduce((total, count) => total + count, 0) !== 1
+          ) {
+            throw new Error('Could not locate the beta.2 artifact-matrix validator.');
+          }
+          if (occurrences[0] === 1) {
+            const patchedSource = normalizedSource.replace(before, after);
+            writeFileSync(
+              file,
+              eol === '\r\n' ? patchedSource.replaceAll('\n', '\r\n') : patchedSource,
+              'utf8'
+            );
+          }
+          NODE
       - name: Download assembled release unit
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:

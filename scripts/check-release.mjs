@@ -8,6 +8,7 @@ import {fileURLToPath} from 'node:url';
 
 const require = createRequire(import.meta.url);
 const {
+	distributionArtifactPath,
 	profiles,
 	requiredArtifactMatrix,
 	targetManifestName
@@ -688,7 +689,7 @@ function sha256(path) {
 function validateArtifactManifest(path, plan, commit) {
 	const manifest = readJson(path, 'artifact manifest');
 	const expectedNames = requiredArtifactMatrix(plan.version, plan.profile)
-		.map(artifact => artifact.fileName)
+		.map(distributionArtifactPath)
 		.sort();
 	const names = Array.isArray(manifest.artifacts)
 		? manifest.artifacts.map(artifact => artifact.fileName).sort()
