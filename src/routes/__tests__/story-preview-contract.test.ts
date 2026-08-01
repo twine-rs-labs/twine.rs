@@ -19,6 +19,76 @@ function lastPostedState(postMessage: jest.SpyInstance) {
 }
 
 describe('instrumented runtime passage detection', () => {
+	it('recaptures passage identity when the runtime initializes after the startup sample', () => {
+		jest.useFakeTimers();
+		document.body.innerHTML = '<div class="passage"></div>';
+		delete (window as any).State;
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const instrumented = instrumentPreviewHtml(
+			'<html><head></head><body></body></html>',
+			'late-runtime-session'
+		);
+		const script = /<script>([\s\S]*?)<\/script>/.exec(instrumented)?.[1];
+
+		try {
+			expect(script).toBeDefined();
+			window.eval(script!);
+			document.dispatchEvent(new Event('DOMContentLoaded'));
+			expect(lastPostedState(postMessage)?.currentPassage).toBeUndefined();
+
+			(window as any).State = {passage: 'Start'};
+			jest.advanceTimersByTime(250);
+
+			expect(lastPostedState(postMessage)?.currentPassage).toEqual({
+				name: 'Start',
+				source: 'runtime'
+			});
+			expect(jest.getTimerCount()).toBe(0);
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+			delete (window as any).State;
+			postMessage.mockRestore();
+		}
+	});
+
+	it('stops startup recapture when passage identity remains unavailable', () => {
+		jest.useFakeTimers();
+		document.body.innerHTML = '<div class="passage"></div>';
+		delete (window as any).State;
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const instrumented = instrumentPreviewHtml(
+			'<html><head></head><body></body></html>',
+			'unknown-runtime-session'
+		);
+		const script = /<script>([\s\S]*?)<\/script>/.exec(instrumented)?.[1];
+
+		try {
+			expect(script).toBeDefined();
+			window.eval(script!);
+			document.dispatchEvent(new Event('DOMContentLoaded'));
+			jest.advanceTimersByTime(60_000);
+			const captureCount = postMessage.mock.calls.filter(
+				([message]) => message?.type === 'state'
+			).length;
+
+			expect(captureCount).toBeGreaterThan(1);
+			expect(jest.getTimerCount()).toBe(0);
+			jest.advanceTimersByTime(60_000);
+			expect(
+				postMessage.mock.calls.filter(([message]) => message?.type === 'state')
+			).toHaveLength(captureCount);
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+			postMessage.mockRestore();
+		}
+	});
+
 	it('uses bounded Harlowe session identity and never guesses from rendered text', () => {
 		document.body.innerHTML = `
 			<tw-storydata format="Harlowe" startnode="1">

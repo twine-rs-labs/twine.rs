@@ -10,5 +10,6 @@ Each intentional release adds one approved
 [`../release-plan.example.json`](../release-plan.example.json) and validate it
 with the command in [`RELEASING.md`](../../../RELEASING.md).
 
-No plan exists yet because Twine RS has not published its first formal release
-under this process.
+Retain every plan, including a plan for an unpublished candidate that was
+superseded after its immutable tag was created. The plan and checklist preserve
+the decision and failure evidence even though that version is never published.

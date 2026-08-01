@@ -1,0 +1,36 @@
+{
+	"$schema": "https://raw.githubusercontent.com/twine-rs-labs/twine.rs/main/docs/releases/release-plan.schema.json",
+	"schemaVersion": 1,
+	"version": "0.2.0-beta.2",
+	"tag": "v0.2.0-beta.2",
+	"releaseDate": "2026-08-01",
+	"channel": "prerelease",
+	"profile": "distributable-unsigned",
+	"releaseManager": "@bransta61",
+	"checklistIssue": "https://github.com/twine-rs-labs/twine.rs/issues/5",
+	"firstRelease": true,
+	"previousKnownGoodVersion": null,
+	"approvals": {
+		"releaseManager": true
+	},
+	"compatibility": {
+		"projectFormat": "unchanged",
+		"settingsMigration": "none",
+		"previousVersionCanOpenProjects": "not-applicable",
+		"backupRequired": false,
+		"notes": "No project-format or settings migration is introduced by this release. Previous-version reopening is not applicable; a separate project-folder backup remains recommended before early-adopter use."
+	},
+	"rollback": {
+		"application": "No earlier formal Twine RS binary exists; uninstall or discontinue using this prerelease and return to the application used before Twine RS.",
+		"projectData": "Stop editing the affected project, then restore the separate pre-adoption project-folder backup when recovery is required.",
+		"tested": true,
+		"evidence": "https://github.com/twine-rs-labs/twine.rs/issues/5#issuecomment-5151605573"
+	},
+	"knownIssues": [
+		"In the current benchmark suite, some latency and memory results at the largest tested project sizes exceed the project’s initial performance targets.",
+		"Advanced Harlowe syntax editing is specific to the bundled Harlowe 3.3.9 format; other Harlowe versions use the generic editor.",
+		"Package export records an asset copy plan but does not bundle project asset bytes; desktop Playable HTML export can embed supported statically referenced media.",
+		"Some inherited compatibility user interface and documentation remain outside the primary Twine RS workbench.",
+		"Cross-platform packaged-app and hosted-CI performance coverage remains incomplete."
+	]
+}
