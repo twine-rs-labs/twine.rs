@@ -1020,12 +1020,20 @@ async function waitForSavedText(
 						// Passage-file projects keep their editable prose below passages/.
 					}
 					const passagesRoot = path.join(projectRoot, 'passages');
-					const files = await readdir(passagesRoot, {recursive: true});
-					const passageFile = files.find(file => file.endsWith('.twee'));
 
-					return passageFile
-						? readFile(path.join(passagesRoot, passageFile), 'utf8')
-						: '';
+					try {
+						const files = await readdir(passagesRoot, {recursive: true});
+						const passageFile = files.find(file => file.endsWith('.twee'));
+
+						return passageFile
+							? await readFile(path.join(passagesRoot, passageFile), 'utf8')
+							: '';
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+							return '';
+						}
+						throw error;
+					}
 				},
 				{timeout: 30_000}
 			)

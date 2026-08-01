@@ -733,14 +733,22 @@ async function waitForSavedText(
 					}
 
 					const passagesRoot = path.join(projectRoot, 'passages');
-					const files = (await readdir(passagesRoot, {recursive: true})).filter(
-						file => file.endsWith('.twee')
-					);
-					const sources = await Promise.all(
-						files.map(file => readFile(path.join(passagesRoot, file), 'utf8'))
-					);
 
-					return sources.join('\n');
+					try {
+						const files = (
+							await readdir(passagesRoot, {recursive: true})
+						).filter(file => file.endsWith('.twee'));
+						const sources = await Promise.all(
+							files.map(file => readFile(path.join(passagesRoot, file), 'utf8'))
+						);
+
+						return sources.join('\n');
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+							return '';
+						}
+						throw error;
+					}
 				},
 				{timeout: 30_000}
 			)

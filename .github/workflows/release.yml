@@ -263,6 +263,102 @@ jobs:
         run: cargo test -p twine_native --locked
       - name: Package release artifacts
         run: npm run package:electron:artifacts -- --${{ matrix.arch }}
+      - name: Patch beta.2 atomic-save smoke polling
+        if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const {readFileSync, writeFileSync} = require('node:fs');
+
+          const patches = [
+            {
+              file: 'e2e/packaged-electron.spec.ts',
+              label: 'installed-app save helper',
+              before: [
+                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+                '\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
+                "\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));",
+                '',
+                '\t\t\t\t\treturn passageFile',
+                "\t\t\t\t\t\t? readFile(path.join(passagesRoot, passageFile), 'utf8')",
+                "\t\t\t\t\t\t: '';"
+              ].join('\n'),
+              after: [
+                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+                '',
+                '\t\t\t\t\ttry {',
+                '\t\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
+                "\t\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));",
+                '',
+                '\t\t\t\t\t\treturn passageFile',
+                "\t\t\t\t\t\t\t? await readFile(path.join(passagesRoot, passageFile), 'utf8')",
+                "\t\t\t\t\t\t\t: '';",
+                '\t\t\t\t\t} catch (error) {',
+                "\t\t\t\t\t\tif ((error as NodeJS.ErrnoException).code === 'ENOENT') {",
+                "\t\t\t\t\t\t\treturn '';",
+                '\t\t\t\t\t\t}',
+                '\t\t\t\t\t\tthrow error;',
+                '\t\t\t\t\t}'
+              ].join('\n')
+            },
+            {
+              file: 'e2e/packaged-electron-preview.spec.ts',
+              label: 'preview save helper',
+              before: [
+                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+                '\t\t\t\t\tconst files = (await readdir(passagesRoot, {recursive: true})).filter(',
+                "\t\t\t\t\t\tfile => file.endsWith('.twee')",
+                '\t\t\t\t\t);',
+                '\t\t\t\t\tconst sources = await Promise.all(',
+                "\t\t\t\t\t\tfiles.map(file => readFile(path.join(passagesRoot, file), 'utf8'))",
+                '\t\t\t\t\t);',
+                '',
+                "\t\t\t\t\treturn sources.join('\\n');"
+              ].join('\n'),
+              after: [
+                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+                '',
+                '\t\t\t\t\ttry {',
+                '\t\t\t\t\t\tconst files = (',
+                '\t\t\t\t\t\t\tawait readdir(passagesRoot, {recursive: true})',
+                "\t\t\t\t\t\t).filter(file => file.endsWith('.twee'));",
+                '\t\t\t\t\t\tconst sources = await Promise.all(',
+                "\t\t\t\t\t\t\tfiles.map(file => readFile(path.join(passagesRoot, file), 'utf8'))",
+                '\t\t\t\t\t\t);',
+                '',
+                "\t\t\t\t\t\treturn sources.join('\\n');",
+                '\t\t\t\t\t} catch (error) {',
+                "\t\t\t\t\t\tif ((error as NodeJS.ErrnoException).code === 'ENOENT') {",
+                "\t\t\t\t\t\t\treturn '';",
+                '\t\t\t\t\t\t}',
+                '\t\t\t\t\t\tthrow error;',
+                '\t\t\t\t\t}'
+              ].join('\n')
+            }
+          ];
+
+          for (const {file, label, before, after} of patches) {
+            const source = readFileSync(file, 'utf8');
+            const eol = source.includes('\r\n') ? '\r\n' : '\n';
+            const normalizedSource = source.replaceAll('\r\n', '\n');
+            const occurrences = normalizedSource.split(before).length - 1;
+
+            if (
+              occurrences > 1 ||
+              (occurrences === 0 && !normalizedSource.includes(after))
+            ) {
+              throw new Error(`Could not locate the beta.2 ${label}.`);
+            }
+            if (occurrences === 1) {
+              const patchedSource = normalizedSource.replace(before, after);
+              writeFileSync(
+                file,
+                eol === '\r\n' ? patchedSource.replaceAll('\n', '\r\n') : patchedSource,
+                'utf8'
+              );
+            }
+          }
+          NODE
       - name: Exercise Linux AppImage
         if: runner.os == 'Linux'
         shell: bash
@@ -572,6 +668,102 @@ jobs:
           node-version: 24.18.0
           cache: npm
       - run: npm ci
+      - name: Patch beta.2 atomic-save smoke polling
+        if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const {readFileSync, writeFileSync} = require('node:fs');
+
+          const patches = [
+            {
+              file: 'e2e/packaged-electron.spec.ts',
+              label: 'installed-app save helper',
+              before: [
+                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+                '\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
+                "\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));",
+                '',
+                '\t\t\t\t\treturn passageFile',
+                "\t\t\t\t\t\t? readFile(path.join(passagesRoot, passageFile), 'utf8')",
+                "\t\t\t\t\t\t: '';"
+              ].join('\n'),
+              after: [
+                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+                '',
+                '\t\t\t\t\ttry {',
+                '\t\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
+                "\t\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));",
+                '',
+                '\t\t\t\t\t\treturn passageFile',
+                "\t\t\t\t\t\t\t? await readFile(path.join(passagesRoot, passageFile), 'utf8')",
+                "\t\t\t\t\t\t\t: '';",
+                '\t\t\t\t\t} catch (error) {',
+                "\t\t\t\t\t\tif ((error as NodeJS.ErrnoException).code === 'ENOENT') {",
+                "\t\t\t\t\t\t\treturn '';",
+                '\t\t\t\t\t\t}',
+                '\t\t\t\t\t\tthrow error;',
+                '\t\t\t\t\t}'
+              ].join('\n')
+            },
+            {
+              file: 'e2e/packaged-electron-preview.spec.ts',
+              label: 'preview save helper',
+              before: [
+                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+                '\t\t\t\t\tconst files = (await readdir(passagesRoot, {recursive: true})).filter(',
+                "\t\t\t\t\t\tfile => file.endsWith('.twee')",
+                '\t\t\t\t\t);',
+                '\t\t\t\t\tconst sources = await Promise.all(',
+                "\t\t\t\t\t\tfiles.map(file => readFile(path.join(passagesRoot, file), 'utf8'))",
+                '\t\t\t\t\t);',
+                '',
+                "\t\t\t\t\treturn sources.join('\\n');"
+              ].join('\n'),
+              after: [
+                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
+                '',
+                '\t\t\t\t\ttry {',
+                '\t\t\t\t\t\tconst files = (',
+                '\t\t\t\t\t\t\tawait readdir(passagesRoot, {recursive: true})',
+                "\t\t\t\t\t\t).filter(file => file.endsWith('.twee'));",
+                '\t\t\t\t\t\tconst sources = await Promise.all(',
+                "\t\t\t\t\t\t\tfiles.map(file => readFile(path.join(passagesRoot, file), 'utf8'))",
+                '\t\t\t\t\t\t);',
+                '',
+                "\t\t\t\t\t\treturn sources.join('\\n');",
+                '\t\t\t\t\t} catch (error) {',
+                "\t\t\t\t\t\tif ((error as NodeJS.ErrnoException).code === 'ENOENT') {",
+                "\t\t\t\t\t\t\treturn '';",
+                '\t\t\t\t\t\t}',
+                '\t\t\t\t\t\tthrow error;',
+                '\t\t\t\t\t}'
+              ].join('\n')
+            }
+          ];
+
+          for (const {file, label, before, after} of patches) {
+            const source = readFileSync(file, 'utf8');
+            const eol = source.includes('\r\n') ? '\r\n' : '\n';
+            const normalizedSource = source.replaceAll('\r\n', '\n');
+            const occurrences = normalizedSource.split(before).length - 1;
+
+            if (
+              occurrences > 1 ||
+              (occurrences === 0 && !normalizedSource.includes(after))
+            ) {
+              throw new Error(`Could not locate the beta.2 ${label}.`);
+            }
+            if (occurrences === 1) {
+              const patchedSource = normalizedSource.replace(before, after);
+              writeFileSync(
+                file,
+                eol === '\r\n' ? patchedSource.replaceAll('\n', '\r\n') : patchedSource,
+                'utf8'
+              );
+            }
+          }
+          NODE
       - name: Install Playwright Chromium on Windows
         if: runner.os == 'Windows'
         run: npx playwright install chromium
