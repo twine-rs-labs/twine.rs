@@ -3,8 +3,9 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {mkdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
-import {dirname, isAbsolute, join, resolve} from 'node:path';
+import {basename, dirname, isAbsolute, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {validateCandidateCiEvidence} from './release-candidate.mjs';
 
 const require = createRequire(import.meta.url);
 const {
@@ -59,6 +60,10 @@ Options:
   --write-record <path>          Write the retained release record.
   --quality-run <url>            Successful same-commit Quality run.
   --packaged-app-run <url>       Successful same-commit packaged-app run.
+  --candidate-workflow-url <url> Draft candidate workflow reused for publication.
+  --candidate-artifacts-json <path>
+                                  Actions artifact response for the candidate run.
+  --candidate-metadata <path>    Retained release-candidate.json.
   --workflow-url <url>           Record the release workflow run.
   --root <path>                  Repository root (primarily for tests).
 `;
@@ -67,6 +72,9 @@ Options:
 function parseArgs(args) {
 	const options = {
 		artifactManifest: undefined,
+		candidateArtifactsJson: undefined,
+		candidateMetadata: undefined,
+		candidateWorkflowUrl: undefined,
 		checkTag: false,
 		checklistJson: undefined,
 		commit: undefined,
@@ -87,6 +95,9 @@ function parseArgs(args) {
 	};
 	const valueOptions = new Map([
 		['--artifact-manifest', 'artifactManifest'],
+		['--candidate-artifacts-json', 'candidateArtifactsJson'],
+		['--candidate-metadata', 'candidateMetadata'],
+		['--candidate-workflow-url', 'candidateWorkflowUrl'],
 		['--checklist-json', 'checklistJson'],
 		['--commit', 'commit'],
 		['--phase', 'phase'],
@@ -140,18 +151,41 @@ function parseArgs(args) {
 	if (options.writeRecord && !options.checklistJson) {
 		throw new Error('--write-record requires --checklist-json.');
 	}
-	if (options.writeRecord && (!options.qualityRun || !options.packagedAppRun)) {
+	if (
+		options.writeRecord &&
+		(!options.qualityRun || !options.packagedAppRun) &&
+		!options.candidateMetadata
+	) {
 		throw new Error(
-			'--write-record requires --quality-run and --packaged-app-run.'
+			'--write-record requires metadata-bound candidate evidence or --quality-run and --packaged-app-run.'
 		);
 	}
 	if (options.writeRecord && !options.workflowUrl) {
 		throw new Error('--write-record requires --workflow-url.');
 	}
+	if (
+		options.writeRecord &&
+		options.candidateWorkflowUrl &&
+		(!options.candidateArtifactsJson || !options.candidateMetadata)
+	) {
+		throw new Error(
+			'--write-record with --candidate-workflow-url requires --candidate-artifacts-json and --candidate-metadata.'
+		);
+	}
+	if (
+		Boolean(options.candidateArtifactsJson) !==
+		Boolean(options.candidateMetadata)
+	) {
+		throw new Error(
+			'--candidate-artifacts-json and --candidate-metadata must be provided together.'
+		);
+	}
 
 	options.root = resolve(options.root);
 	for (const key of [
 		'artifactManifest',
+		'candidateArtifactsJson',
+		'candidateMetadata',
 		'checklistJson',
 		'plan',
 		'writeNotes',
@@ -798,6 +832,70 @@ function retainedTargetManifests(artifactManifest) {
 	});
 }
 
+function retainedCandidateProvenance(artifactsPath, metadataPath, commit) {
+	const artifacts = readJson(artifactsPath, 'candidate artifacts response');
+	const metadata = readJson(metadataPath, 'candidate metadata');
+	assert(
+		metadata.schemaVersion === 2 &&
+			metadata.repository === 'twine-rs-labs/twine.rs' &&
+			metadata.sourceCommit === commit,
+		'Retained candidate metadata identity is invalid.'
+	);
+	assert(
+		/^[1-9][0-9]*$/.test(String(metadata.workflowRunId)) &&
+			metadata.workflowUrl ===
+				`https://github.com/twine-rs-labs/twine.rs/actions/runs/${metadata.workflowRunId}`,
+		'Retained candidate workflow URL is not bound to its run ID.'
+	);
+	const ciEvidence = validateCandidateCiEvidence(metadata.ciEvidence, {
+		repository: metadata.repository,
+		sourceCommit: commit
+	});
+	assert(
+		typeof metadata.artifactName === 'string' &&
+			metadata.artifactName.startsWith('desktop-pretag-'),
+		'Candidate metadata artifactName is invalid.'
+	);
+	const matches = (artifacts.artifacts ?? []).filter(
+		artifact => artifact.name === metadata.artifactName
+	);
+
+	assert(
+		matches.length === 1,
+		'Candidate artifacts response must contain exactly one metadata-bound pre-tag unit.'
+	);
+	const [artifact] = matches;
+	assert(
+		Number.isSafeInteger(artifact.id) && artifact.id > 0,
+		'Candidate artifact ID is invalid.'
+	);
+	assert(
+		typeof artifact.digest === 'string' &&
+			/^sha256:[0-9a-f]{64}$/i.test(artifact.digest),
+		'Candidate artifact digest is invalid.'
+	);
+	assert(
+		Number.isSafeInteger(artifact.size_in_bytes) && artifact.size_in_bytes > 0,
+		'Candidate artifact size is invalid.'
+	);
+
+	return {
+		artifact: {
+			digest: artifact.digest.toLowerCase(),
+			id: artifact.id,
+			name: artifact.name,
+			size: artifact.size_in_bytes
+		},
+		metadata: {
+			fileName: basename(metadataPath),
+			sha256: sha256(metadataPath),
+			size: statSync(metadataPath).size
+		},
+		candidateWorkflowUrl: metadata.workflowUrl,
+		ciEvidence
+	};
+}
+
 function profileDescription(profile) {
 	return profile === profiles.signed
 		? 'Signed: Authenticode on Windows, Developer ID plus notarization on macOS, and native-platform signing recorded as not applicable on Linux.'
@@ -855,12 +953,14 @@ The latest stable release is supported; prereleases receive best-effort support.
 
 ## Integrity and provenance
 
-Download \`SHA256SUMS.txt\`, \`artifact-manifest.json\`, \`release-record.json\`, and the per-target manifests to inspect the hashes, exact source commit, build profile, and observed signing state. Standalone license, notice, SBOM, and Chromium-license files accompany them. The complete evidence set is also retained in the release-evidence ZIP.
+Download \`SHA256SUMS.txt\`, \`artifact-manifest.json\`, \`release-candidate.json\`, \`release-record.json\`, and the per-target manifests to inspect the hashes, exact source commit, promoted candidate, build profile, and observed signing state. Standalone license, notice, SBOM, and Chromium-license files accompany them. The complete evidence set is also retained in the release-evidence ZIP.
 `;
 }
 
 function releaseRecord({
 	artifactManifest,
+	candidateProvenance,
+	candidateWorkflowUrl,
 	checklist,
 	commit,
 	packagedAppRun,
@@ -868,6 +968,55 @@ function releaseRecord({
 	qualityRun,
 	workflowUrl
 }) {
+	const boundCiEvidence = candidateProvenance?.ciEvidence;
+	if (boundCiEvidence) {
+		for (const [label, supplied, retained] of [
+			[
+				'candidate workflow',
+				candidateWorkflowUrl,
+				candidateProvenance.candidateWorkflowUrl
+			],
+			['quality run', qualityRun, boundCiEvidence.quality.url],
+			['packaged-app run', packagedAppRun, boundCiEvidence.packagedElectron.url]
+		]) {
+			assert(
+				!supplied || supplied === retained,
+				`Supplied ${label} does not match retained candidate metadata.`
+			);
+		}
+	}
+	const validation = {
+		qualityRun: boundCiEvidence?.quality.url ?? qualityRun,
+		packagedAppRun: boundCiEvidence?.packagedElectron.url ?? packagedAppRun,
+		recoveryTest: plan.rollback.evidence,
+		releaseWorkflow: workflowUrl
+	};
+	if (candidateProvenance?.candidateWorkflowUrl ?? candidateWorkflowUrl) {
+		validation.candidateWorkflow =
+			candidateProvenance?.candidateWorkflowUrl ?? candidateWorkflowUrl;
+	}
+
+	const provenance = {
+		artifactManifest: {
+			fileName: artifactManifest.fileName,
+			sha256: artifactManifest.sha256,
+			size: artifactManifest.size
+		},
+		artifactCount: artifactManifest.artifacts.length,
+		targetManifests: retainedTargetManifests(artifactManifest),
+		evidenceFiles: retainedEvidence(artifactManifest.rootDirectory),
+		artifacts: artifactManifest.artifacts.map(artifact => ({
+			fileName: artifact.fileName,
+			sha256: artifact.sha256,
+			size: artifact.size
+		}))
+	};
+	if (candidateProvenance) {
+		provenance.candidateArtifact = candidateProvenance.artifact;
+		provenance.candidateMetadata = candidateProvenance.metadata;
+		provenance.candidateCiEvidence = candidateProvenance.ciEvidence;
+	}
+
 	return {
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),
@@ -884,28 +1033,9 @@ function releaseRecord({
 		rollback: plan.rollback,
 		knownIssues: plan.knownIssues,
 		supportedTargets: expectedTargets,
-		validation: {
-			qualityRun,
-			packagedAppRun,
-			recoveryTest: plan.rollback.evidence,
-			releaseWorkflow: workflowUrl
-		},
+		validation,
 		checklist,
-		provenance: {
-			artifactManifest: {
-				fileName: artifactManifest.fileName,
-				sha256: artifactManifest.sha256,
-				size: artifactManifest.size
-			},
-			artifactCount: artifactManifest.artifacts.length,
-			targetManifests: retainedTargetManifests(artifactManifest),
-			evidenceFiles: retainedEvidence(artifactManifest.rootDirectory),
-			artifacts: artifactManifest.artifacts.map(artifact => ({
-				fileName: artifact.fileName,
-				sha256: artifact.sha256,
-				size: artifact.size
-			}))
-		}
+		provenance
 	};
 }
 
@@ -924,6 +1054,7 @@ export function runReleaseCheck(options) {
 	const changelog = changelogEntry(options.root, plan);
 	const commit = resolveCommit(options.root, options.commit);
 	for (const [label, value] of [
+		['candidateWorkflow', options.candidateWorkflowUrl],
 		['qualityRun', options.qualityRun],
 		['packagedAppRun', options.packagedAppRun],
 		['releaseWorkflow', options.workflowUrl]
@@ -955,6 +1086,13 @@ export function runReleaseCheck(options) {
 	const artifactManifest = options.artifactManifest
 		? validateArtifactManifest(options.artifactManifest, plan, commit)
 		: undefined;
+	const candidateProvenance = options.candidateArtifactsJson
+		? retainedCandidateProvenance(
+				options.candidateArtifactsJson,
+				options.candidateMetadata,
+				commit
+			)
+		: undefined;
 
 	if (options.writeNotes) {
 		writeText(options.writeNotes, releaseNotes(plan, commit, changelog));
@@ -965,6 +1103,8 @@ export function runReleaseCheck(options) {
 			`${JSON.stringify(
 				releaseRecord({
 					artifactManifest,
+					candidateProvenance,
+					candidateWorkflowUrl: options.candidateWorkflowUrl,
 					checklist,
 					commit,
 					packagedAppRun: options.packagedAppRun,

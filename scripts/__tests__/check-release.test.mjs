@@ -139,6 +139,46 @@ function fixture() {
 	writeJson(join(root, 'docs/releases/plans', `${tag}.json`), plan);
 	writeJson(join(root, 'checklist.json'), checklist);
 	writeJson(join(root, 'artifact-manifest.json'), artifactManifest);
+	const candidateArtifactName = `desktop-pretag-${tag}-distributable-unsigned-${'a'.repeat(64)}`;
+	writeJson(join(root, 'candidate-artifacts.json'), {
+		artifacts: [
+			{
+				digest: `sha256:${'b'.repeat(64)}`,
+				id: 123,
+				name: candidateArtifactName,
+				size_in_bytes: 456
+			}
+		]
+	});
+	writeJson(join(root, 'release-candidate.json'), {
+		schemaVersion: 2,
+		artifactName: candidateArtifactName,
+		repository: 'twine-rs-labs/twine.rs',
+		sourceCommit: commit,
+		workflowRunId: '3',
+		workflowUrl: 'https://github.com/twine-rs-labs/twine.rs/actions/runs/3',
+		ciEvidence: {
+			quality: {
+				workflowPath: '.github/workflows/quality.yml',
+				runId: '1',
+				url: 'https://github.com/twine-rs-labs/twine.rs/actions/runs/1',
+				headSha: commit
+			},
+			packagedElectron: {
+				workflowPath: '.github/workflows/packaged-electron-smoke.yml',
+				runId: '2',
+				url: 'https://github.com/twine-rs-labs/twine.rs/actions/runs/2',
+				headSha: commit
+			},
+			desktopLocalTestBundle: {
+				id: 456,
+				name: 'desktop-local-test-bundle',
+				digest: `sha256:${'c'.repeat(64)}`,
+				size: 789
+			}
+		},
+		releaseAssets: artifactManifest.artifacts
+	});
 	mkdirSync(join(root, 'provenance'));
 	for (const fileName of artifactManifest.targetManifests) {
 		writeJson(join(root, fileName), {target: fileName});
@@ -247,6 +287,12 @@ test('publication validation writes a manifest-bound release record', () => {
 		'artifact-manifest.json',
 		'--workflow-url',
 		'https://github.com/twine-rs-labs/twine.rs/actions/runs/4',
+		'--candidate-workflow-url',
+		'https://github.com/twine-rs-labs/twine.rs/actions/runs/3',
+		'--candidate-artifacts-json',
+		'candidate-artifacts.json',
+		'--candidate-metadata',
+		'release-candidate.json',
 		'--quality-run',
 		'https://github.com/twine-rs-labs/twine.rs/actions/runs/1',
 		'--packaged-app-run',
@@ -265,10 +311,97 @@ test('publication validation writes a manifest-bound release record', () => {
 		record.validation.qualityRun,
 		'https://github.com/twine-rs-labs/twine.rs/actions/runs/1'
 	);
+	assert.equal(
+		record.validation.candidateWorkflow,
+		'https://github.com/twine-rs-labs/twine.rs/actions/runs/3'
+	);
 	assert.equal(record.provenance.artifactCount, 7);
 	assert.equal(record.provenance.targetManifests.length, 5);
 	assert.equal(record.provenance.evidenceFiles.length, 7);
 	assert.match(record.provenance.artifactManifest.sha256, /^[0-9a-f]{64}$/);
+	assert.deepEqual(record.provenance.candidateArtifact, {
+		digest: `sha256:${'b'.repeat(64)}`,
+		id: 123,
+		name: `desktop-pretag-${tag}-distributable-unsigned-${'a'.repeat(64)}`,
+		size: 456
+	});
+	assert.equal(
+		record.provenance.candidateMetadata.fileName,
+		'release-candidate.json'
+	);
+	assert.match(record.provenance.candidateMetadata.sha256, /^[0-9a-f]{64}$/);
+	assert.deepEqual(record.provenance.candidateCiEvidence, {
+		quality: {
+			workflowPath: '.github/workflows/quality.yml',
+			runId: '1',
+			url: 'https://github.com/twine-rs-labs/twine.rs/actions/runs/1',
+			headSha: commit
+		},
+		packagedElectron: {
+			workflowPath: '.github/workflows/packaged-electron-smoke.yml',
+			runId: '2',
+			url: 'https://github.com/twine-rs-labs/twine.rs/actions/runs/2',
+			headSha: commit
+		},
+		desktopLocalTestBundle: {
+			id: 456,
+			name: 'desktop-local-test-bundle',
+			digest: `sha256:${'c'.repeat(64)}`,
+			size: 789
+		}
+	});
+});
+
+test('candidate reuse fields remain optional for historical release records', () => {
+	const schema = JSON.parse(
+		readFileSync(
+			join(repositoryRoot, 'docs/releases/release-record.schema.json'),
+			'utf8'
+		)
+	);
+
+	assert.ok(
+		!schema.properties.validation.required.includes('candidateWorkflow')
+	);
+	assert.ok(
+		!schema.properties.provenance.required.includes('candidateArtifact')
+	);
+	assert.ok(
+		!schema.properties.provenance.required.includes('candidateMetadata')
+	);
+	assert.ok(
+		!schema.properties.provenance.required.includes('candidateCiEvidence')
+	);
+});
+
+test('release records reject CI provenance tampered after candidate retention', () => {
+	const releaseFixture = fixture();
+	const metadataPath = join(releaseFixture.root, 'release-candidate.json');
+	const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+	metadata.ciEvidence.packagedElectron.url =
+		'https://github.com/twine-rs-labs/twine.rs/actions/runs/999';
+	writeJson(metadataPath, metadata);
+
+	const result = run(
+		releaseFixture,
+		'--phase',
+		'publish',
+		'--checklist-json',
+		'checklist.json',
+		'--artifact-manifest',
+		'artifact-manifest.json',
+		'--workflow-url',
+		'https://github.com/twine-rs-labs/twine.rs/actions/runs/4',
+		'--candidate-artifacts-json',
+		'candidate-artifacts.json',
+		'--candidate-metadata',
+		'release-candidate.json',
+		'--write-record',
+		'release-record.json'
+	);
+
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /Packaged Electron URL does not match/);
 });
 
 test('blocks publication while a pre-publication item is unchecked', () => {

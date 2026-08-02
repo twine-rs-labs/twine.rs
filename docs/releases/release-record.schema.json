@@ -21,6 +21,29 @@
 					"minimum": 0
 				}
 			}
+		},
+		"candidateRunEvidence": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["workflowPath", "runId", "url", "headSha"],
+			"properties": {
+				"workflowPath": {
+					"type": "string",
+					"pattern": "^\\.github/workflows/.+\\.yml$"
+				},
+				"runId": {
+					"type": "string",
+					"pattern": "^[1-9][0-9]*$"
+				},
+				"url": {
+					"type": "string",
+					"format": "uri"
+				},
+				"headSha": {
+					"type": "string",
+					"pattern": "^[0-9a-f]{40}$"
+				}
+			}
 		}
 	},
 	"type": "object",
@@ -113,6 +136,10 @@
 				"releaseWorkflow"
 			],
 			"properties": {
+				"candidateWorkflow": {
+					"type": "string",
+					"format": "uri"
+				},
 				"qualityRun": {
 					"type": "string",
 					"format": "uri"
@@ -169,6 +196,67 @@
 			"properties": {
 				"artifactManifest": {
 					"$ref": "#/$defs/hashedFile"
+				},
+				"candidateArtifact": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["id", "name", "digest", "size"],
+					"properties": {
+						"id": {
+							"type": "integer",
+							"minimum": 1
+						},
+						"name": {
+							"type": "string",
+							"pattern": "^desktop-pretag-"
+						},
+						"digest": {
+							"type": "string",
+							"pattern": "^sha256:[0-9a-f]{64}$"
+						},
+						"size": {
+							"type": "integer",
+							"minimum": 1
+						}
+					}
+				},
+				"candidateMetadata": {
+					"$ref": "#/$defs/hashedFile"
+				},
+				"candidateCiEvidence": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["quality", "packagedElectron", "desktopLocalTestBundle"],
+					"properties": {
+						"quality": {
+							"$ref": "#/$defs/candidateRunEvidence"
+						},
+						"packagedElectron": {
+							"$ref": "#/$defs/candidateRunEvidence"
+						},
+						"desktopLocalTestBundle": {
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["id", "name", "digest", "size"],
+							"properties": {
+								"id": {
+									"type": "integer",
+									"minimum": 1
+								},
+								"name": {
+									"const": "desktop-local-test-bundle"
+								},
+								"digest": {
+									"type": "string",
+									"pattern": "^sha256:[0-9a-f]{64}$"
+								},
+								"size": {
+									"type": "integer",
+									"minimum": 1
+								}
+							}
+						}
+					}
 				},
 				"artifactCount": {
 					"const": 7

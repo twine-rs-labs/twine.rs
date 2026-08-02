@@ -7,14 +7,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing annotated tag to rebuild as a draft or publish
+        description: Existing annotated tag to recover as a draft or publish
         required: true
         type: string
       publish:
-        description: Publish after rebuilding and validating the draft
+        description: Publish the inspected pre-tag candidate
         required: true
         default: false
         type: boolean
+      candidate_run_id:
+        description: Successful pre-tag candidate run ID (required manually)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -25,21 +29,32 @@ concurrency:
 
 jobs:
   prepare:
-    name: Validate release decision
+    name: Validate tag and select exact-main candidate
     runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
     outputs:
+      artifact_name: ${{ steps.plan.outputs.artifact_name }}
+      candidate_run_id: ${{ steps.evidence.outputs.candidate_run_id }}
       channel: ${{ steps.plan.outputs.channel }}
       commit: ${{ steps.plan.outputs.commit }}
-      packaged_app_run: ${{ steps.evidence.outputs.packaged_app_run }}
       plan: ${{ steps.plan.outputs.plan }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
       profile: ${{ steps.plan.outputs.profile }}
-      quality_run: ${{ steps.evidence.outputs.quality_run }}
       tag: ${{ steps.plan.outputs.tag }}
       version: ${{ steps.plan.outputs.version }}
     steps:
+      - name: Validate manual mode inputs
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id || '' }}
+        run: |
+          if [[ ! "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Manual draft recovery and publication require candidate_run_id."
+            exit 1
+          fi
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
@@ -47,7 +62,7 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.18.0
-      - name: Validate annotated tag, plan, versions, and release notes
+      - name: Validate annotated tag and derive candidate identity
         id: plan
         shell: bash
         env:
@@ -62,6 +77,7 @@ jobs:
             --tag "$RELEASE_TAG" \
             --commit "$commit" \
             --check-tag
+          plan_sha256="$(sha256sum "$plan" | cut -d ' ' -f 1)"
           node -e '
             const plan = require(`./${process.env.PLAN_PATH}`);
             for (const key of [`channel`, `profile`, `tag`, `version`]) {
@@ -69,13 +85,17 @@ jobs:
             }
           ' >> "$GITHUB_OUTPUT"
           {
+            echo "artifact_name=desktop-pretag-${RELEASE_TAG}-$(node -p "require('./$plan').profile")-$plan_sha256"
             echo "commit=$commit"
             echo "plan=$plan"
+            echo "plan_sha256=$plan_sha256"
           } >> "$GITHUB_OUTPUT"
-      - name: Verify release history and same-commit CI evidence
+      - name: Verify release history and resolve candidate
         id: evidence
         env:
           COMMIT: ${{ steps.plan.outputs.commit }}
+          EXPLICIT_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id || '' }}
+          EXPECTED_ARTIFACT: ${{ steps.plan.outputs.artifact_name }}
           GH_TOKEN: ${{ github.token }}
           PLAN_PATH: ${{ steps.plan.outputs.plan }}
         run: |
@@ -83,20 +103,18 @@ jobs:
           node -e '
             const {execFileSync} = require("node:child_process");
             const plan = require(`./${process.env.PLAN_PATH}`);
-            const gh = args => execFileSync(
-              "gh",
-              args,
-              {encoding: "utf8"}
-            );
+            const gh = args => execFileSync("gh", args, {encoding: "utf8"});
+            const artifactsFor = runId => JSON.parse(gh([
+              "api", `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/artifacts?per_page=100`
+            ])).artifacts ?? [];
+            const exactRetainedArtifact = (runId, name) => {
+              const matches = artifactsFor(runId).filter(artifact => artifact.name === name);
+              return matches.length === 1 && !matches[0].expired &&
+                Number.isSafeInteger(matches[0].size_in_bytes) && matches[0].size_in_bytes > 0;
+            };
             const published = JSON.parse(gh([
-              "release",
-              "list",
-              "--repo",
-              "twine-rs-labs/twine.rs",
-              "--limit",
-              "100",
-              "--json",
-              "isDraft,tagName"
+              "release", "list", "--repo", process.env.GITHUB_REPOSITORY,
+              "--limit", "100", "--json", "isDraft,tagName"
             ])).filter(release => !release.isDraft);
             if (published.some(release => release.tagName === plan.tag)) {
               throw new Error(`${plan.tag} is already published and immutable.`);
@@ -107,392 +125,42 @@ jobs:
             if (!plan.firstRelease) {
               const previousTag = `v${plan.previousKnownGoodVersion}`;
               const previous = JSON.parse(gh([
-                "release",
-                "view",
-                previousTag,
-                "--repo",
-                "twine-rs-labs/twine.rs",
-                "--json",
-                "isDraft,tagName"
+                "release", "view", previousTag, "--repo", process.env.GITHUB_REPOSITORY,
+                "--json", "isDraft,tagName"
               ]));
               if (previous.isDraft || previous.tagName !== previousTag) {
                 throw new Error(`${previousTag} is not a published previous release.`);
               }
             }
-            const workflows = [
-              ["quality_run", "quality.yml"],
-              ["packaged_app_run", "packaged-electron-smoke.yml"]
-            ];
-            for (const [output, workflow] of workflows) {
+            let candidateRunId = process.env.EXPLICIT_CANDIDATE_RUN_ID;
+            if (!candidateRunId) {
               const runs = JSON.parse(gh([
-                "run",
-                "list",
-                "--repo",
-                "twine-rs-labs/twine.rs",
-                "--commit",
-                process.env.COMMIT,
-                "--workflow",
-                workflow,
-                "--status",
-                "completed",
-                "--limit",
-                "20",
-                "--json",
-                "conclusion,databaseId,headSha"
-              ]));
-              const run = runs.find(
-                candidate =>
-                  candidate.conclusion === "success" &&
-                  candidate.headSha === process.env.COMMIT
-              );
-              if (!run) {
-                throw new Error(`${workflow} must pass for ${process.env.COMMIT}.`);
+                "run", "list", "--repo", process.env.GITHUB_REPOSITORY,
+                "--commit", process.env.COMMIT, "--workflow", "release-candidate.yml",
+                "--status", "completed", "--limit", "100",
+                "--json", "conclusion,createdAt,databaseId,event,headSha"
+              ])).filter(run =>
+                run.conclusion === "success" && run.event === "workflow_dispatch" &&
+                run.headSha === process.env.COMMIT
+              ).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+              candidateRunId = runs.find(run =>
+                exactRetainedArtifact(run.databaseId, process.env.EXPECTED_ARTIFACT)
+              )?.databaseId;
+              if (!candidateRunId) {
+                throw new Error(`No successful nonexpired exact-main candidate retains ${process.env.EXPECTED_ARTIFACT}.`);
               }
-              process.stdout.write(
-                `${output}=https://github.com/twine-rs-labs/twine.rs/actions/runs/${run.databaseId}\n`
-              );
             }
+            process.stdout.write(`candidate_run_id=${candidateRunId}\n`);
           ' >> "$GITHUB_OUTPUT"
 
-  package-installable:
-    name: ${{ matrix.label }} release package
+  draft:
+    name: Verify candidate and create or refresh draft
     needs: prepare
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: Linux x64
-            platform: linux
-            os: ubuntu-24.04
-            arch: x64
-            appimage_arch: x86_64
-            target: linux-x64
-          - label: Linux ARM64
-            platform: linux
-            os: ubuntu-24.04-arm
-            arch: arm64
-            appimage_arch: arm64
-            target: linux-arm64
-          - label: macOS Intel
-            platform: mac
-            os: macos-15-intel
-            arch: x64
-            target: mac-x64
-          - label: macOS ARM64
-            platform: mac
-            os: macos-15
-            arch: arm64
-            target: mac-arm64
-          - label: Windows x64
-            platform: win
-            os: windows-2025
-            arch: x64
-            target: win-x64
-    env:
-      NODE_ENV: production
-      TWINE_RELEASE_PROFILE: ${{ needs.prepare.outputs.profile }}
-      ALLOW_UNSIGNED_DISTRIBUTION: ${{ needs.prepare.outputs.profile == 'distributable-unsigned' && '1' || '' }}
-      APPLE_APP_ID: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && vars.APPLE_APP_ID || '' }}
-      APPLE_ID: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
-      APPLE_ID_PASSWORD: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.APPLE_ID_PASSWORD || '' }}
-      APPLE_TEAM_ID: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && vars.APPLE_TEAM_ID || '' }}
-      CSC_LINK: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.MACOS_CSC_LINK || '' }}
-      CSC_KEY_PASSWORD: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.MACOS_CSC_KEY_PASSWORD || '' }}
-      CSC_NAME: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && vars.CSC_NAME || '' }}
-      WIN_CSC_LINK: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && secrets.WINDOWS_CSC_LINK || '' }}
-      WIN_CSC_KEY_PASSWORD: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && secrets.WINDOWS_CSC_KEY_PASSWORD || '' }}
-      WINDOWS_SIGNER_SHA1: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && vars.WINDOWS_SIGNER_SHA1 || '' }}
-      WINDOWS_SIGNER_SUBJECT: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && vars.WINDOWS_SIGNER_SUBJECT || '' }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.tag }}
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24.18.0
-          cache: npm
-      - name: Install Rust WASM tooling
-        run: |
-          rustup target add wasm32-unknown-unknown
-          cargo install wasm-bindgen-cli --version 0.2.125 --locked
-      - run: npm ci --include=dev
-      - name: Install Playwright Chromium on Windows
-        if: runner.os == 'Windows'
-        run: npx playwright install chromium
-      - name: Install Playwright Chromium and dependencies on Linux
-        if: runner.os == 'Linux'
-        run: |
-          npx playwright install --with-deps chromium
-          sudo apt-get install --yes --no-install-recommends libglib2.0-bin
-      - name: Build production Electron app
-        run: npm run build:electron-app:ci
-      - name: Restore verified generated WASM sources after bundling
-        shell: bash
-        run: |
-          generated_wasm_outputs=(
-            src/core/wasm/pkg/twine_wasm.d.ts
-            src/core/wasm/pkg/twine_wasm.js
-            src/core/wasm/pkg/twine_wasm_bg.wasm
-            src/core/wasm/pkg/twine_wasm_bg.wasm.d.ts
-          )
-          unexpected_changes="$(
-            git status --porcelain=v1 --untracked-files=all -- \
-              . \
-              ':(exclude)src/core/wasm/pkg/twine_wasm.d.ts' \
-              ':(exclude)src/core/wasm/pkg/twine_wasm.js' \
-              ':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm' \
-              ':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm.d.ts'
-          )"
-          if [[ -n "$unexpected_changes" ]]; then
-            echo "::error::Production build changed unexpected source paths."
-            git status --short --untracked-files=all
-            exit 1
-          fi
-          # build:web has already bundled these regenerated outputs. Restore the
-          # tagged copies before artifact metadata records the source tree state.
-          git restore --source=HEAD --worktree -- "${generated_wasm_outputs[@]}"
-          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
-            echo "::error::Source tree is not clean after restoring generated WASM outputs."
-            git status --short --untracked-files=all
-            exit 1
-          fi
-      - name: Test Windows native referenced-media hardening
-        if: runner.os == 'Windows'
-        run: cargo test -p twine_native --locked
-      - name: Package release artifacts
-        shell: bash
-        env:
-          RELEASE_EVENT_NAME: ${{ github.event_name }}
-          RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
-        run: |
-          checked_out_commit="$(git rev-parse HEAD)"
-          if [[ "$checked_out_commit" != "$RELEASE_SOURCE_COMMIT" ]]; then
-            echo "::error::Checked-out source does not match the validated release commit."
-            exit 1
-          fi
-          # workflow_dispatch runs the current workflow definition while the
-          # package job checks out the selected immutable tag. The event SHA is
-          # therefore the workflow ref, not the packaged source commit. The
-          # comparison above preserves the fail-closed binding before removing
-          # that unrelated event value from the tag's artifact hook process.
-          if [[ "$RELEASE_EVENT_NAME" == 'workflow_dispatch' ]]; then
-            unset GITHUB_SHA
-          fi
-          npm run package:electron:artifacts -- --${{ matrix.arch }}
-      - name: Patch beta.2 atomic-save smoke polling
-        if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
-        shell: bash
-        run: |
-          node <<'NODE'
-          const {readFileSync, writeFileSync} = require('node:fs');
-
-          const patches = [
-            {
-              file: 'e2e/packaged-electron.spec.ts',
-              label: 'installed-app save helper',
-              before: [
-                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
-                '\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
-                "\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));",
-                '',
-                '\t\t\t\t\treturn passageFile',
-                "\t\t\t\t\t\t? readFile(path.join(passagesRoot, passageFile), 'utf8')",
-                "\t\t\t\t\t\t: '';"
-              ].join('\n'),
-              after: [
-                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
-                '',
-                '\t\t\t\t\ttry {',
-                '\t\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
-                "\t\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));",
-                '',
-                '\t\t\t\t\t\treturn passageFile',
-                "\t\t\t\t\t\t\t? await readFile(path.join(passagesRoot, passageFile), 'utf8')",
-                "\t\t\t\t\t\t\t: '';",
-                '\t\t\t\t\t} catch (error) {',
-                "\t\t\t\t\t\tif ((error as NodeJS.ErrnoException).code === 'ENOENT') {",
-                "\t\t\t\t\t\t\treturn '';",
-                '\t\t\t\t\t\t}',
-                '\t\t\t\t\t\tthrow error;',
-                '\t\t\t\t\t}'
-              ].join('\n')
-            },
-            {
-              file: 'e2e/packaged-electron-preview.spec.ts',
-              label: 'preview save helper',
-              before: [
-                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
-                '\t\t\t\t\tconst files = (await readdir(passagesRoot, {recursive: true})).filter(',
-                "\t\t\t\t\t\tfile => file.endsWith('.twee')",
-                '\t\t\t\t\t);',
-                '\t\t\t\t\tconst sources = await Promise.all(',
-                "\t\t\t\t\t\tfiles.map(file => readFile(path.join(passagesRoot, file), 'utf8'))",
-                '\t\t\t\t\t);',
-                '',
-                "\t\t\t\t\treturn sources.join('\\n');"
-              ].join('\n'),
-              after: [
-                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
-                '',
-                '\t\t\t\t\ttry {',
-                '\t\t\t\t\t\tconst files = (',
-                '\t\t\t\t\t\t\tawait readdir(passagesRoot, {recursive: true})',
-                "\t\t\t\t\t\t).filter(file => file.endsWith('.twee'));",
-                '\t\t\t\t\t\tconst sources = await Promise.all(',
-                "\t\t\t\t\t\t\tfiles.map(file => readFile(path.join(passagesRoot, file), 'utf8'))",
-                '\t\t\t\t\t\t);',
-                '',
-                "\t\t\t\t\t\treturn sources.join('\\n');",
-                '\t\t\t\t\t} catch (error) {',
-                "\t\t\t\t\t\tif ((error as NodeJS.ErrnoException).code === 'ENOENT') {",
-                "\t\t\t\t\t\t\treturn '';",
-                '\t\t\t\t\t\t}',
-                '\t\t\t\t\t\tthrow error;',
-                '\t\t\t\t\t}'
-              ].join('\n')
-            }
-          ];
-
-          for (const {file, label, before, after} of patches) {
-            const source = readFileSync(file, 'utf8');
-            const eol = source.includes('\r\n') ? '\r\n' : '\n';
-            const normalizedSource = source.replaceAll('\r\n', '\n');
-            const occurrences = normalizedSource.split(before).length - 1;
-
-            if (
-              occurrences > 1 ||
-              (occurrences === 0 && !normalizedSource.includes(after))
-            ) {
-              throw new Error(`Could not locate the beta.2 ${label}.`);
-            }
-            if (occurrences === 1) {
-              const patchedSource = normalizedSource.replace(before, after);
-              writeFileSync(
-                file,
-                eol === '\r\n' ? patchedSource.replaceAll('\n', '\r\n') : patchedSource,
-                'utf8'
-              );
-            }
-          }
-          NODE
-      - name: Exercise Linux AppImage
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
-        run: |
-          app_image=$(ls "$ARTIFACT_DIR"/Twine-RS-*-linux-${{ matrix.appimage_arch }}.AppImage)
-          chmod +x "$app_image"
-          APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "flushes a trailing"
-      - name: Extend Linux ARM64 preview wait in test harness
-        if: runner.os == 'Linux' && matrix.arch == 'arm64'
-        shell: bash
-        run: |
-          perl -0pi -e 's/(async function expectCurrentPassage.*?timeout: )30_000/${1}90_000/s' e2e/packaged-electron-preview.spec.ts
-          node -e '
-            const { readFileSync } = require("node:fs");
-            const source = readFileSync("e2e/packaged-electron-preview.spec.ts", "utf8");
-            const helper = source.match(/async function expectCurrentPassage.*?\n}/s)?.[0];
-            if (!helper?.includes("timeout: 90_000")) {
-              throw new Error("Linux ARM64 current-passage wait was not extended.");
-            }
-          '
-      - name: Extract and smoke Linux ZIP
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
-        run: |
-          extract_dir="$RUNNER_TEMP/twine-rs-linux-zip"
-          mkdir -p "$extract_dir"
-          unzip -q "$ARTIFACT_DIR"/Twine-RS-*-linux-${{ matrix.arch }}.zip -d "$extract_dir"
-          TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged
-      - name: Mount and smoke macOS DMG
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
-        run: |
-          mount_dir="$RUNNER_TEMP/twine-rs-dmg"
-          mkdir -p "$mount_dir"
-          hdiutil attach "$ARTIFACT_DIR"/Twine-RS-*-mac-${{ matrix.arch }}*.dmg -nobrowse -readonly -mountpoint "$mount_dir"
-          trap 'hdiutil detach "$mount_dir"' EXIT
-          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
-          hdiutil detach "$mount_dir"
-          trap - EXIT
-      - name: Install Windows package
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
-        run: |
-          $installer = Get-ChildItem $env:ARTIFACT_DIR -Filter 'Twine-RS-*-win-x64*.exe' | Select-Object -First 1
-          $installDirectory = Join-Path $env:RUNNER_TEMP 'twine-rs-installed'
-          $process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDirectory") -PassThru -Wait
-          if ($process.ExitCode -ne 0) {
-            throw "Installer exited with code $($process.ExitCode)."
-          }
-          $executable = Join-Path $installDirectory 'Twine RS.exe'
-          $uninstaller = Join-Path $installDirectory 'Uninstall Twine RS.exe'
-          if (!(Test-Path $executable) -or !(Test-Path $uninstaller)) {
-            throw 'The NSIS package did not install the expected application and uninstaller.'
-          }
-          "TWINE_E2E_EXECUTABLE=$executable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "TWINE_E2E_UNINSTALLER=$uninstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Smoke installed Windows app
-        if: runner.os == 'Windows'
-        run: npm run e2e:electron:packaged
-      - name: Uninstall Windows package
-        if: always() && runner.os == 'Windows' && env.TWINE_E2E_UNINSTALLER != ''
-        shell: pwsh
-        run: |
-          $process = Start-Process -FilePath $env:TWINE_E2E_UNINSTALLER -ArgumentList '/S' -PassThru -Wait
-          if ($process.ExitCode -ne 0) {
-            throw "Uninstaller exited with code $($process.ExitCode)."
-          }
-      - name: Retain target release input
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-release-target-${{ matrix.target }}
-          path: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}/Twine-RS-*
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain standalone compliance evidence
-        if: matrix.target == 'linux-x64'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-release-compliance
-          path: |
-            electron-build/compliance/THIRD_PARTY_NOTICES.md
-            electron-build/compliance/sbom.cdx.json
-            electron-build/compliance/LICENSES.chromium.html
-          if-no-files-found: error
-          retention-days: 7
-      - name: Retain package smoke diagnostics
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-release-smoke-diagnostics-${{ matrix.target }}
-          path: output/playwright/packaged-electron
-          if-no-files-found: warn
-          retention-days: 14
-
-  assemble-draft:
-    name: Assemble and verify draft release
-    needs: [prepare, package-installable]
+    if: github.event_name != 'workflow_dispatch' || inputs.publish == false
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: write
-    env:
-      ALLOW_UNSIGNED_DISTRIBUTION: ${{ needs.prepare.outputs.profile == 'distributable-unsigned' && '1' || '' }}
-      APPLE_APP_ID: ${{ needs.prepare.outputs.profile == 'signed' && vars.APPLE_APP_ID || '' }}
-      APPLE_TEAM_ID: ${{ needs.prepare.outputs.profile == 'signed' && vars.APPLE_TEAM_ID || '' }}
-      CSC_NAME: ${{ needs.prepare.outputs.profile == 'signed' && vars.CSC_NAME || '' }}
-      WINDOWS_SIGNER_SHA1: ${{ needs.prepare.outputs.profile == 'signed' && vars.WINDOWS_SIGNER_SHA1 || '' }}
-      WINDOWS_SIGNER_SUBJECT: ${{ needs.prepare.outputs.profile == 'signed' && vars.WINDOWS_SIGNER_SUBJECT || '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -501,89 +169,59 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.18.0
-      - name: Patch beta.2 aggregate-manifest path validation
-        if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
+      - name: Fetch and verify candidate run evidence
         shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ needs.prepare.outputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          node <<'NODE'
-          const {readFileSync, writeFileSync} = require('node:fs');
-
-          const file = 'scripts/check-release.mjs';
-          const before = [
-            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
-            '\t\t.map(artifact => artifact.fileName)',
-            '\t\t.sort();'
-          ].join('\n');
-          const after = [
-            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
-            '\t\t.map(artifact => {',
-            '\t\t\tconst directory = {',
-            "\t\t\t\tlinux: 'linux',",
-            "\t\t\t\tmac: 'mac',",
-            "\t\t\t\twin: 'windows'",
-            '\t\t\t}[artifact.platform];',
-            '\t\t\tconst segments = [directory];',
-            '',
-            "\t\t\tif (artifact.platform === 'linux' && artifact.extension === 'zip') {",
-            "\t\t\t\tsegments.push('alternatives');",
-            '\t\t\t}',
-            '\t\t\tsegments.push(artifact.fileName);',
-            "\t\t\treturn segments.join('/');",
-            '\t\t})',
-            '\t\t.sort();'
-          ].join('\n');
-          const current = [
-            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
-            '\t\t.map(distributionArtifactPath)',
-            '\t\t.sort();'
-          ].join('\n');
-          const source = readFileSync(file, 'utf8');
-          const eol = source.includes('\r\n') ? '\r\n' : '\n';
-          const normalizedSource = source.replaceAll('\r\n', '\n');
-          const occurrences = [before, after, current].map(
-            candidate => normalizedSource.split(candidate).length - 1
-          );
-
-          if (
-            occurrences.some(count => count > 1) ||
-            occurrences.reduce((total, count) => total + count, 0) !== 1
-          ) {
-            throw new Error('Could not locate the beta.2 artifact-matrix validator.');
-          }
-          if (occurrences[0] === 1) {
-            const patchedSource = normalizedSource.replace(before, after);
-            writeFileSync(
-              file,
-              eol === '\r\n' ? patchedSource.replaceAll('\n', '\r\n') : patchedSource,
-              'utf8'
-            );
-          }
-          NODE
-      - name: Download every release target
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          pattern: desktop-release-target-*
-          path: artifacts/incoming/${{ needs.prepare.outputs.profile }}
-          merge-multiple: true
-      - name: Validate and assemble complete distribution
-        run: node scripts/organize-release.mjs --profile "${{ needs.prepare.outputs.profile }}"
-      - name: Download standalone compliance evidence
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: desktop-release-compliance
-          path: artifacts/${{ needs.prepare.outputs.profile }}/compliance
-      - name: Generate curated notes and retain policy files
-        shell: bash
-        run: |
-          distribution="artifacts/${{ needs.prepare.outputs.profile }}"
-          node scripts/check-release.mjs \
-            --plan "${{ needs.prepare.outputs.plan }}" \
-            --tag "${{ needs.prepare.outputs.tag }}" \
+          gh api "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID" > "$RUNNER_TEMP/candidate-run.json"
+          gh api "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/candidate-artifacts.json"
+          node scripts/release-candidate.mjs verify-run \
+            --artifact-name "${{ needs.prepare.outputs.artifact_name }}" \
+            --artifacts-json "$RUNNER_TEMP/candidate-artifacts.json" \
             --commit "${{ needs.prepare.outputs.commit }}" \
-            --artifact-manifest "$distribution/artifact-manifest.json" \
-            --write-notes "$distribution/release-notes.md"
-          cp LICENSE "$distribution/LICENSE"
-      - name: Create or refresh draft GitHub Release
+            --repository "${{ github.repository }}" \
+            --run-id "$CANDIDATE_RUN_ID" \
+            --run-json "$RUNNER_TEMP/candidate-run.json"
+      - name: Download exact-main pre-tag candidate
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ needs.prepare.outputs.artifact_name }}
+          path: artifacts/reused-candidate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.prepare.outputs.candidate_run_id }}
+      - name: Resolve metadata-bound CI run identities
+        id: bound-evidence
+        run: |
+          node scripts/release-candidate.mjs write-bound-run-outputs \
+            --commit "${{ needs.prepare.outputs.commit }}" \
+            --metadata artifacts/reused-candidate/release-candidate.json \
+            --output "$GITHUB_OUTPUT" \
+            --repository "${{ github.repository }}"
+      - name: Fetch metadata-bound CI run evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/actions/runs/${{ steps.bound-evidence.outputs.quality_run_id }}" > "$RUNNER_TEMP/quality-run.json"
+          gh api "repos/${{ github.repository }}/actions/runs/${{ steps.bound-evidence.outputs.packaged_run_id }}" > "$RUNNER_TEMP/packaged-run.json"
+      - name: Validate downloaded candidate identity and bytes
+        run: |
+          node scripts/release-candidate.mjs verify-unit \
+            --artifact-name "${{ needs.prepare.outputs.artifact_name }}" \
+            --artifacts-json "$RUNNER_TEMP/candidate-artifacts.json" \
+            --commit "${{ needs.prepare.outputs.commit }}" \
+            --distribution "artifacts/reused-candidate/${{ needs.prepare.outputs.profile }}" \
+            --metadata artifacts/reused-candidate/release-candidate.json \
+            --packaged-run-json "$RUNNER_TEMP/packaged-run.json" \
+            --plan "${{ needs.prepare.outputs.plan }}" \
+            --quality-run-json "$RUNNER_TEMP/quality-run.json" \
+            --repository "${{ github.repository }}" \
+            --run-id "${{ needs.prepare.outputs.candidate_run_id }}" \
+            --run-json "$RUNNER_TEMP/candidate-run.json" \
+            --tag "${{ needs.prepare.outputs.tag }}"
+      - name: Create or refresh draft from verified candidate
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -592,47 +230,35 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          distribution="artifacts/$RELEASE_PROFILE"
+          distribution="artifacts/reused-candidate/$RELEASE_PROFILE"
           if ! gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' >/dev/null 2>&1; then
-            args=(
-              "$RELEASE_TAG"
-              --draft
-              --verify-tag
-              --title "Twine RS $RELEASE_VERSION"
-              --notes-file "$distribution/release-notes.md"
-            )
-            if [ "$RELEASE_CHANNEL" = "prerelease" ]; then
-              args+=(--prerelease)
-            fi
+            args=("$RELEASE_TAG" --draft --verify-tag --title "Twine RS $RELEASE_VERSION" --notes-file "$distribution/release-notes.md")
+            if [[ "$RELEASE_CHANNEL" == 'prerelease' ]]; then args+=(--prerelease); fi
             gh release create "${args[@]}"
           else
-            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true"
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = 'true'
             prerelease=false
-            if [ "$RELEASE_CHANNEL" = "prerelease" ]; then
-              prerelease=true
-            fi
-            gh release edit "$RELEASE_TAG" \
-              --title "Twine RS $RELEASE_VERSION" \
-              --notes-file "$distribution/release-notes.md" \
-              --prerelease="$prerelease"
+            if [[ "$RELEASE_CHANNEL" == 'prerelease' ]]; then prerelease=true; fi
+            gh release edit "$RELEASE_TAG" --title "Twine RS $RELEASE_VERSION" --notes-file "$distribution/release-notes.md" --prerelease="$prerelease"
           fi
           mapfile -d '' assets < <(find "$distribution" -type f -print0)
-          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
-      - name: Retain assembled release unit for publication
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-release-unit
-          path: artifacts/${{ needs.prepare.outputs.profile }}
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 7
+          gh release upload "$RELEASE_TAG" \
+            "${assets[@]}" \
+            artifacts/reused-candidate/release-candidate.json \
+            --clobber
+          gh api "repos/${{ github.repository }}/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/draft-release.json"
+          node scripts/release-candidate.mjs verify-draft \
+            --distribution "$distribution" \
+            --metadata artifacts/reused-candidate/release-candidate.json \
+            --release-json "$RUNNER_TEMP/draft-release.json"
 
   publish:
     name: Validate and publish immutable release
-    needs: [prepare, assemble-draft]
+    needs: prepare
     if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: write
       issues: read
     outputs:
@@ -645,69 +271,60 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.18.0
-      - name: Patch beta.2 aggregate-manifest path validation
-        if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
+      - name: Fetch candidate and release evidence
         shell: bash
+        env:
+          CANDIDATE_RUN_ID: ${{ needs.prepare.outputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          node <<'NODE'
-          const {readFileSync, writeFileSync} = require('node:fs');
-
-          const file = 'scripts/check-release.mjs';
-          const before = [
-            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
-            '\t\t.map(artifact => artifact.fileName)',
-            '\t\t.sort();'
-          ].join('\n');
-          const after = [
-            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
-            '\t\t.map(artifact => {',
-            '\t\t\tconst directory = {',
-            "\t\t\t\tlinux: 'linux',",
-            "\t\t\t\tmac: 'mac',",
-            "\t\t\t\twin: 'windows'",
-            '\t\t\t}[artifact.platform];',
-            '\t\t\tconst segments = [directory];',
-            '',
-            "\t\t\tif (artifact.platform === 'linux' && artifact.extension === 'zip') {",
-            "\t\t\t\tsegments.push('alternatives');",
-            '\t\t\t}',
-            '\t\t\tsegments.push(artifact.fileName);',
-            "\t\t\treturn segments.join('/');",
-            '\t\t})',
-            '\t\t.sort();'
-          ].join('\n');
-          const current = [
-            '\tconst expectedNames = requiredArtifactMatrix(plan.version, plan.profile)',
-            '\t\t.map(distributionArtifactPath)',
-            '\t\t.sort();'
-          ].join('\n');
-          const source = readFileSync(file, 'utf8');
-          const eol = source.includes('\r\n') ? '\r\n' : '\n';
-          const normalizedSource = source.replaceAll('\r\n', '\n');
-          const occurrences = [before, after, current].map(
-            candidate => normalizedSource.split(candidate).length - 1
-          );
-
-          if (
-            occurrences.some(count => count > 1) ||
-            occurrences.reduce((total, count) => total + count, 0) !== 1
-          ) {
-            throw new Error('Could not locate the beta.2 artifact-matrix validator.');
-          }
-          if (occurrences[0] === 1) {
-            const patchedSource = normalizedSource.replace(before, after);
-            writeFileSync(
-              file,
-              eol === '\r\n' ? patchedSource.replaceAll('\n', '\r\n') : patchedSource,
-              'utf8'
-            );
-          }
-          NODE
-      - name: Download assembled release unit
+          gh api "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID" > "$RUNNER_TEMP/candidate-run.json"
+          gh api "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/candidate-artifacts.json"
+          gh api "repos/${{ github.repository }}/releases/tags/${{ needs.prepare.outputs.tag }}" > "$RUNNER_TEMP/draft-release.json"
+          node scripts/release-candidate.mjs verify-run \
+            --artifact-name "${{ needs.prepare.outputs.artifact_name }}" \
+            --artifacts-json "$RUNNER_TEMP/candidate-artifacts.json" \
+            --commit "${{ needs.prepare.outputs.commit }}" \
+            --repository "${{ github.repository }}" \
+            --run-id "$CANDIDATE_RUN_ID" \
+            --run-json "$RUNNER_TEMP/candidate-run.json"
+      - name: Download inspected exact-main candidate
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: desktop-release-unit
-          path: artifacts/${{ needs.prepare.outputs.profile }}
+          name: ${{ needs.prepare.outputs.artifact_name }}
+          path: artifacts/reused-candidate
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.prepare.outputs.candidate_run_id }}
+      - name: Resolve metadata-bound CI run identities
+        id: bound-evidence
+        run: |
+          node scripts/release-candidate.mjs write-bound-run-outputs \
+            --commit "${{ needs.prepare.outputs.commit }}" \
+            --metadata artifacts/reused-candidate/release-candidate.json \
+            --output "$GITHUB_OUTPUT" \
+            --repository "${{ github.repository }}"
+      - name: Fetch metadata-bound CI run evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/actions/runs/${{ steps.bound-evidence.outputs.quality_run_id }}" > "$RUNNER_TEMP/quality-run.json"
+          gh api "repos/${{ github.repository }}/actions/runs/${{ steps.bound-evidence.outputs.packaged_run_id }}" > "$RUNNER_TEMP/packaged-run.json"
+      - name: Validate candidate and unchanged inspected draft
+        run: |
+          node scripts/release-candidate.mjs verify \
+            --artifact-name "${{ needs.prepare.outputs.artifact_name }}" \
+            --artifacts-json "$RUNNER_TEMP/candidate-artifacts.json" \
+            --commit "${{ needs.prepare.outputs.commit }}" \
+            --distribution "artifacts/reused-candidate/${{ needs.prepare.outputs.profile }}" \
+            --metadata artifacts/reused-candidate/release-candidate.json \
+            --packaged-run-json "$RUNNER_TEMP/packaged-run.json" \
+            --plan "${{ needs.prepare.outputs.plan }}" \
+            --quality-run-json "$RUNNER_TEMP/quality-run.json" \
+            --release-json "$RUNNER_TEMP/draft-release.json" \
+            --repository "${{ github.repository }}" \
+            --run-id "${{ needs.prepare.outputs.candidate_run_id }}" \
+            --run-json "$RUNNER_TEMP/candidate-run.json" \
+            --tag "${{ needs.prepare.outputs.tag }}"
       - name: Fetch durable release checklist
         shell: bash
         env:
@@ -716,10 +333,11 @@ jobs:
         run: |
           checklist_url="$(node -p "require('./${PLAN_PATH}').checklistIssue")"
           gh issue view "$checklist_url" --json url,state,body > "$RUNNER_TEMP/release-checklist.json"
-      - name: Validate publication gate and generate retained record
+      - name: Generate retained publication evidence
         shell: bash
         run: |
-          distribution="artifacts/${{ needs.prepare.outputs.profile }}"
+          distribution="artifacts/reused-candidate/${{ needs.prepare.outputs.profile }}"
+          cp artifacts/reused-candidate/release-candidate.json "$distribution/release-candidate.json"
           node scripts/check-release.mjs \
             --plan "${{ needs.prepare.outputs.plan }}" \
             --tag "${{ needs.prepare.outputs.tag }}" \
@@ -727,49 +345,42 @@ jobs:
             --phase publish \
             --checklist-json "$RUNNER_TEMP/release-checklist.json" \
             --artifact-manifest "$distribution/artifact-manifest.json" \
-            --quality-run "${{ needs.prepare.outputs.quality_run }}" \
-            --packaged-app-run "${{ needs.prepare.outputs.packaged_app_run }}" \
+            --candidate-artifacts-json "$RUNNER_TEMP/candidate-artifacts.json" \
+            --candidate-metadata "$distribution/release-candidate.json" \
             --write-record "$distribution/release-record.json"
           node scripts/archive-release.mjs \
             --source "$distribution" \
             --output "artifacts/Twine-RS-${{ needs.prepare.outputs.version }}-release-evidence.zip" \
             --prefix "Twine-RS-${{ needs.prepare.outputs.version }}-release-evidence"
+          node scripts/release-candidate.mjs write-publication-assets \
+            --evidence "artifacts/Twine-RS-${{ needs.prepare.outputs.version }}-release-evidence.zip" \
+            --output "$RUNNER_TEMP/publication-assets.json" \
+            --release-record "$distribution/release-record.json"
       - name: Upload final evidence and publish
         id: publish
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
           RELEASE_PROFILE: ${{ needs.prepare.outputs.profile }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          distribution="artifacts/$RELEASE_PROFILE"
+          distribution="artifacts/reused-candidate/$RELEASE_PROFILE"
           evidence="artifacts/Twine-RS-$RELEASE_VERSION-release-evidence.zip"
-          gh release upload "$RELEASE_TAG" \
-            "$distribution/release-record.json" \
-            "$evidence" \
-            --clobber
-          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true"
-          expected_prerelease=false
-          if [ "$RELEASE_CHANNEL" = "prerelease" ]; then
-            expected_prerelease=true
-          fi
-          test "$(gh release view "$RELEASE_TAG" --json isPrerelease --jq '.isPrerelease')" = "$expected_prerelease"
-          expected_assets=$(($(find "$distribution" -type f | wc -l) + 1))
-          actual_assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')
-          test "$actual_assets" -eq "$expected_assets"
+          gh release upload "$RELEASE_TAG" "$distribution/release-record.json" "$evidence" --clobber
+          gh api "repos/${{ github.repository }}/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/prepublish-release.json"
+          node scripts/release-candidate.mjs verify-publication \
+            --metadata artifacts/reused-candidate/release-candidate.json \
+            --publication-assets "$RUNNER_TEMP/publication-assets.json" \
+            --release-json "$RUNNER_TEMP/prepublish-release.json"
           gh release edit "$RELEASE_TAG" --draft=false
-          test "$(gh release view "$RELEASE_TAG" --json isImmutable --jq '.isImmutable')" = "true"
+          test "$(gh release view "$RELEASE_TAG" --json isImmutable --jq '.isImmutable')" = 'true'
           attestation_verified=false
           for attempt in 1 2 3 4 5 6; do
-            if gh release verify "$RELEASE_TAG"; then
-              attestation_verified=true
-              break
-            fi
+            if gh release verify "$RELEASE_TAG"; then attestation_verified=true; break; fi
             sleep 5
           done
-          test "$attestation_verified" = "true"
+          test "$attestation_verified" = 'true'
           release_url="$(gh release view "$RELEASE_TAG" --json url --jq '.url')"
           echo "release_url=$release_url" >> "$GITHUB_OUTPUT"
 
@@ -804,102 +415,6 @@ jobs:
           node-version: 24.18.0
           cache: npm
       - run: npm ci
-      - name: Patch beta.2 atomic-save smoke polling
-        if: needs.prepare.outputs.tag == 'v0.2.0-beta.2'
-        shell: bash
-        run: |
-          node <<'NODE'
-          const {readFileSync, writeFileSync} = require('node:fs');
-
-          const patches = [
-            {
-              file: 'e2e/packaged-electron.spec.ts',
-              label: 'installed-app save helper',
-              before: [
-                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
-                '\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
-                "\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));",
-                '',
-                '\t\t\t\t\treturn passageFile',
-                "\t\t\t\t\t\t? readFile(path.join(passagesRoot, passageFile), 'utf8')",
-                "\t\t\t\t\t\t: '';"
-              ].join('\n'),
-              after: [
-                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
-                '',
-                '\t\t\t\t\ttry {',
-                '\t\t\t\t\t\tconst files = await readdir(passagesRoot, {recursive: true});',
-                "\t\t\t\t\t\tconst passageFile = files.find(file => file.endsWith('.twee'));",
-                '',
-                '\t\t\t\t\t\treturn passageFile',
-                "\t\t\t\t\t\t\t? await readFile(path.join(passagesRoot, passageFile), 'utf8')",
-                "\t\t\t\t\t\t\t: '';",
-                '\t\t\t\t\t} catch (error) {',
-                "\t\t\t\t\t\tif ((error as NodeJS.ErrnoException).code === 'ENOENT') {",
-                "\t\t\t\t\t\t\treturn '';",
-                '\t\t\t\t\t\t}',
-                '\t\t\t\t\t\tthrow error;',
-                '\t\t\t\t\t}'
-              ].join('\n')
-            },
-            {
-              file: 'e2e/packaged-electron-preview.spec.ts',
-              label: 'preview save helper',
-              before: [
-                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
-                '\t\t\t\t\tconst files = (await readdir(passagesRoot, {recursive: true})).filter(',
-                "\t\t\t\t\t\tfile => file.endsWith('.twee')",
-                '\t\t\t\t\t);',
-                '\t\t\t\t\tconst sources = await Promise.all(',
-                "\t\t\t\t\t\tfiles.map(file => readFile(path.join(passagesRoot, file), 'utf8'))",
-                '\t\t\t\t\t);',
-                '',
-                "\t\t\t\t\treturn sources.join('\\n');"
-              ].join('\n'),
-              after: [
-                "\t\t\t\t\tconst passagesRoot = path.join(projectRoot, 'passages');",
-                '',
-                '\t\t\t\t\ttry {',
-                '\t\t\t\t\t\tconst files = (',
-                '\t\t\t\t\t\t\tawait readdir(passagesRoot, {recursive: true})',
-                "\t\t\t\t\t\t).filter(file => file.endsWith('.twee'));",
-                '\t\t\t\t\t\tconst sources = await Promise.all(',
-                "\t\t\t\t\t\t\tfiles.map(file => readFile(path.join(passagesRoot, file), 'utf8'))",
-                '\t\t\t\t\t\t);',
-                '',
-                "\t\t\t\t\t\treturn sources.join('\\n');",
-                '\t\t\t\t\t} catch (error) {',
-                "\t\t\t\t\t\tif ((error as NodeJS.ErrnoException).code === 'ENOENT') {",
-                "\t\t\t\t\t\t\treturn '';",
-                '\t\t\t\t\t\t}',
-                '\t\t\t\t\t\tthrow error;',
-                '\t\t\t\t\t}'
-              ].join('\n')
-            }
-          ];
-
-          for (const {file, label, before, after} of patches) {
-            const source = readFileSync(file, 'utf8');
-            const eol = source.includes('\r\n') ? '\r\n' : '\n';
-            const normalizedSource = source.replaceAll('\r\n', '\n');
-            const occurrences = normalizedSource.split(before).length - 1;
-
-            if (
-              occurrences > 1 ||
-              (occurrences === 0 && !normalizedSource.includes(after))
-            ) {
-              throw new Error(`Could not locate the beta.2 ${label}.`);
-            }
-            if (occurrences === 1) {
-              const patchedSource = normalizedSource.replace(before, after);
-              writeFileSync(
-                file,
-                eol === '\r\n' ? patchedSource.replaceAll('\n', '\r\n') : patchedSource,
-                'utf8'
-              );
-            }
-          }
-          NODE
       - name: Install Playwright Chromium on Windows
         if: runner.os == 'Windows'
         run: npx playwright install chromium
@@ -917,10 +432,7 @@ jobs:
         run: |
           download_dir="$RUNNER_TEMP/twine-release-download"
           mkdir -p "$download_dir"
-          gh release download "$RELEASE_TAG" \
-            --pattern "$ASSET_PATTERN" \
-            --pattern "SHA256SUMS.txt" \
-            --dir "$download_dir"
+          gh release download "$RELEASE_TAG" --pattern "$ASSET_PATTERN" --pattern SHA256SUMS.txt --dir "$download_dir"
           asset="$(find "$download_dir" -maxdepth 1 -type f ! -name SHA256SUMS.txt -print -quit)"
           node scripts/verify-release-download.mjs "$download_dir/SHA256SUMS.txt" "$asset"
           echo "TWINE_DOWNLOADED_ASSET=$asset" >> "$GITHUB_ENV"
@@ -947,9 +459,7 @@ jobs:
         run: |
           $installDirectory = Join-Path $env:RUNNER_TEMP 'twine-rs-release-installed'
           $process = Start-Process -FilePath $env:TWINE_DOWNLOADED_ASSET -ArgumentList @('/S', "/D=$installDirectory") -PassThru -Wait
-          if ($process.ExitCode -ne 0) {
-            throw "Installer exited with code $($process.ExitCode)."
-          }
+          if ($process.ExitCode -ne 0) { throw "Installer exited with code $($process.ExitCode)." }
           $executable = Join-Path $installDirectory 'Twine RS.exe'
           $uninstaller = Join-Path $installDirectory 'Uninstall Twine RS.exe'
           "TWINE_E2E_EXECUTABLE=$executable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -961,10 +471,8 @@ jobs:
         if: always() && runner.os == 'Windows' && env.TWINE_E2E_UNINSTALLER != ''
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath $env:TWINE_E2E_UNINSTALLER -ArgumentList '/S' -PassThru -Wait
-          if ($process.ExitCode -ne 0) {
-            throw "Uninstaller exited with code $($process.ExitCode)."
-          }
+          $process = Start-Process -FilePath $env.TWINE_E2E_UNINSTALLER -ArgumentList '/S' -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Uninstaller exited with code $($process.ExitCode)." }
       - name: Retain fresh-download diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
