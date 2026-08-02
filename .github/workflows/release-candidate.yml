@@ -1,0 +1,499 @@
+name: Build desktop release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Intended release tag whose committed plan will be built
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: pretag-release-candidate-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate exact-main candidate decision
+    runs-on: ubuntu-24.04
+    outputs:
+      artifact_name: ${{ steps.plan.outputs.artifact_name }}
+      channel: ${{ steps.plan.outputs.channel }}
+      commit: ${{ steps.plan.outputs.commit }}
+      desktop_bundle_artifact_digest: ${{ steps.evidence.outputs.desktop_bundle_artifact_digest }}
+      desktop_bundle_artifact_id: ${{ steps.evidence.outputs.desktop_bundle_artifact_id }}
+      desktop_bundle_artifact_name: ${{ steps.evidence.outputs.desktop_bundle_artifact_name }}
+      desktop_bundle_artifact_size: ${{ steps.evidence.outputs.desktop_bundle_artifact_size }}
+      packaged_app_run: ${{ steps.evidence.outputs.packaged_app_run }}
+      packaged_app_run_head_sha: ${{ steps.evidence.outputs.packaged_app_run_head_sha }}
+      packaged_app_run_id: ${{ steps.evidence.outputs.packaged_app_run_id }}
+      plan: ${{ steps.plan.outputs.plan }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
+      profile: ${{ steps.plan.outputs.profile }}
+      quality_run: ${{ steps.evidence.outputs.quality_run }}
+      quality_run_head_sha: ${{ steps.evidence.outputs.quality_run_head_sha }}
+      quality_run_id: ${{ steps.evidence.outputs.quality_run_id }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - name: Bind candidate to exact origin main HEAD
+        id: plan
+        shell: bash
+        env:
+          PLAN_PATH: docs/releases/plans/${{ inputs.tag }}.json
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "${{ github.ref }}" != 'refs/heads/main' ]]; then
+            echo "::error::Release candidates must be dispatched from main."
+            exit 1
+          fi
+          node scripts/release-candidate.mjs assert-pretag --tag "$RELEASE_TAG"
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          commit="$(git rev-parse HEAD)"
+          origin_main="$(git rev-parse refs/remotes/origin/main)"
+          if [[ "$commit" != "$origin_main" || "$commit" != "${{ github.sha }}" ]]; then
+            echo "::error::Candidate source is not the exact workflow-dispatch origin/main HEAD."
+            exit 1
+          fi
+          plan="docs/releases/plans/${RELEASE_TAG}.json"
+          test -f "$plan"
+          node scripts/check-release.mjs \
+            --plan "$plan" \
+            --tag "$RELEASE_TAG" \
+            --commit "$commit"
+          plan_sha256="$(sha256sum "$plan" | cut -d ' ' -f 1)"
+          node -e '
+            const plan = require(`./${process.env.PLAN_PATH}`);
+            for (const key of [`channel`, `profile`, `tag`, `version`]) {
+              process.stdout.write(`${key}=${plan[key]}\n`);
+            }
+          ' >> "$GITHUB_OUTPUT"
+          {
+            echo "artifact_name=desktop-pretag-${RELEASE_TAG}-$(node -p "require('./$plan').profile")-$plan_sha256"
+            echo "commit=$commit"
+            echo "plan=$plan"
+            echo "plan_sha256=$plan_sha256"
+          } >> "$GITHUB_OUTPUT"
+      - name: Verify release history and same-commit CI evidence
+        id: evidence
+        env:
+          COMMIT: ${{ steps.plan.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          PLAN_PATH: ${{ steps.plan.outputs.plan }}
+        run: |
+          node -e '
+            const {execFileSync} = require("node:child_process");
+            const plan = require(`./${process.env.PLAN_PATH}`);
+            const gh = args => execFileSync("gh", args, {encoding: "utf8"});
+            const completePackagedEvidence = runId => {
+              const artifacts = JSON.parse(gh([
+                "api", `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/artifacts?per_page=100`
+              ])).artifacts ?? [];
+              const matches = artifacts.filter(
+                artifact => artifact.name === "desktop-local-test-bundle"
+              );
+              if (matches.length !== 1 || matches[0].expired ||
+                !Number.isSafeInteger(matches[0].id) || matches[0].id <= 0 ||
+                !Number.isSafeInteger(matches[0].size_in_bytes) ||
+                matches[0].size_in_bytes <= 0 ||
+                typeof matches[0].digest !== "string" ||
+                !/^sha256:[0-9a-f]{64}$/i.test(matches[0].digest)) {
+                return undefined;
+              }
+              return matches[0];
+            };
+            const published = JSON.parse(gh([
+              "release", "list", "--repo", process.env.GITHUB_REPOSITORY,
+              "--limit", "100", "--json", "isDraft,tagName"
+            ])).filter(release => !release.isDraft);
+            if (published.some(release => release.tagName === plan.tag)) {
+              throw new Error(`${plan.tag} is already published and immutable.`);
+            }
+            if (plan.firstRelease && published.length > 0) {
+              throw new Error("firstRelease cannot be true after a published release.");
+            }
+            if (!plan.firstRelease) {
+              const previousTag = `v${plan.previousKnownGoodVersion}`;
+              const previous = JSON.parse(gh([
+                "release", "view", previousTag, "--repo", process.env.GITHUB_REPOSITORY,
+                "--json", "isDraft,tagName"
+              ]));
+              if (previous.isDraft || previous.tagName !== previousTag) {
+                throw new Error(`${previousTag} is not a published previous release.`);
+              }
+            }
+            for (const [output, workflow, requirePackagedEvidence] of [
+              ["quality_run", "quality.yml", false],
+              ["packaged_app_run", "packaged-electron-smoke.yml", true]
+            ]) {
+              const runs = JSON.parse(gh([
+                "run", "list", "--repo", process.env.GITHUB_REPOSITORY,
+                "--commit", process.env.COMMIT, "--workflow", workflow,
+                "--status", "completed", "--limit", "20",
+                "--json", "conclusion,databaseId,headSha,url"
+              ]));
+              let packagedArtifact;
+              const run = runs.find(candidate => {
+                if (candidate.conclusion !== "success" ||
+                  candidate.headSha !== process.env.COMMIT) return false;
+                if (!requirePackagedEvidence) return true;
+                packagedArtifact = completePackagedEvidence(candidate.databaseId);
+                return Boolean(packagedArtifact);
+              });
+              if (!run) {
+                throw new Error(`${workflow} must pass its complete native evidence gate for ${process.env.COMMIT}.`);
+              }
+              const expectedUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${run.databaseId}`;
+              if (run.url !== expectedUrl) throw new Error(`${workflow} returned an unexpected run URL.`);
+              process.stdout.write(`${output}=${run.url}\n`);
+              process.stdout.write(`${output}_id=${run.databaseId}\n`);
+              process.stdout.write(`${output}_head_sha=${run.headSha}\n`);
+              if (packagedArtifact) {
+                process.stdout.write(`desktop_bundle_artifact_id=${packagedArtifact.id}\n`);
+                process.stdout.write(`desktop_bundle_artifact_name=${packagedArtifact.name}\n`);
+                process.stdout.write(`desktop_bundle_artifact_digest=${packagedArtifact.digest.toLowerCase()}\n`);
+                process.stdout.write(`desktop_bundle_artifact_size=${packagedArtifact.size_in_bytes}\n`);
+              }
+            }
+          ' >> "$GITHUB_OUTPUT"
+
+  package-installable:
+    name: ${{ matrix.label }} candidate package
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            platform: linux
+            os: ubuntu-24.04
+            arch: x64
+            appimage_arch: x86_64
+            target: linux-x64
+          - label: Linux ARM64
+            platform: linux
+            os: ubuntu-24.04-arm
+            arch: arm64
+            appimage_arch: arm64
+            target: linux-arm64
+          - label: macOS Intel
+            platform: mac
+            os: macos-15-intel
+            arch: x64
+            target: mac-x64
+          - label: macOS ARM64
+            platform: mac
+            os: macos-15
+            arch: arm64
+            target: mac-arm64
+          - label: Windows x64
+            platform: win
+            os: windows-2025
+            arch: x64
+            target: win-x64
+    env:
+      NODE_ENV: production
+      TWINE_RELEASE_PROFILE: ${{ needs.prepare.outputs.profile }}
+      ALLOW_UNSIGNED_DISTRIBUTION: ${{ needs.prepare.outputs.profile == 'distributable-unsigned' && '1' || '' }}
+      APPLE_APP_ID: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && vars.APPLE_APP_ID || '' }}
+      APPLE_ID: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
+      APPLE_ID_PASSWORD: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.APPLE_ID_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && vars.APPLE_TEAM_ID || '' }}
+      CSC_LINK: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.MACOS_CSC_LINK || '' }}
+      CSC_KEY_PASSWORD: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && secrets.MACOS_CSC_KEY_PASSWORD || '' }}
+      CSC_NAME: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'mac' && vars.CSC_NAME || '' }}
+      WIN_CSC_LINK: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && secrets.WINDOWS_CSC_LINK || '' }}
+      WIN_CSC_KEY_PASSWORD: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && secrets.WINDOWS_CSC_KEY_PASSWORD || '' }}
+      WINDOWS_SIGNER_SHA1: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && vars.WINDOWS_SIGNER_SHA1 || '' }}
+      WINDOWS_SIGNER_SUBJECT: ${{ needs.prepare.outputs.profile == 'signed' && matrix.platform == 'win' && vars.WINDOWS_SIGNER_SUBJECT || '' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.commit }}
+      - name: Configure native tool cache locations
+        shell: bash
+        run: |
+          echo "ELECTRON_CACHE=$RUNNER_TEMP/electron-cache" >> "$GITHUB_ENV"
+          echo "ELECTRON_BUILDER_CACHE=$RUNNER_TEMP/electron-builder-cache" >> "$GITHUB_ENV"
+          echo "WASM_BINDGEN_ROOT=$RUNNER_TEMP/wasm-bindgen-cli-0.2.125" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Restore pinned wasm-bindgen CLI
+        id: wasm-bindgen-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/wasm-bindgen-cli-0.2.125
+          key: wasm-bindgen-cli-${{ runner.os }}-${{ runner.arch }}-0.2.125-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+      - name: Install or verify pinned wasm-bindgen CLI
+        shell: bash
+        run: |
+          rustup target add wasm32-unknown-unknown
+          if [[ "${{ steps.wasm-bindgen-cache.outputs.cache-hit }}" != 'true' ]]; then
+            cargo install wasm-bindgen-cli --version 0.2.125 --locked --root "$WASM_BINDGEN_ROOT"
+          fi
+          echo "$WASM_BINDGEN_ROOT/bin" >> "$GITHUB_PATH"
+          test "$("$WASM_BINDGEN_ROOT/bin/wasm-bindgen" --version)" = 'wasm-bindgen 0.2.125'
+      - name: Restore Electron download caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/electron-cache
+            ${{ runner.temp }}/electron-builder-cache
+          key: electron-downloads-${{ runner.os }}-${{ runner.arch }}-electron-43.1.1-builder-26.15.3-${{ hashFiles('package-lock.json') }}
+      - run: npm ci --include=dev
+      - name: Install Playwright Chromium on Windows
+        if: runner.os == 'Windows'
+        run: npx playwright install chromium
+      - name: Install Playwright Chromium and dependencies on Linux
+        if: runner.os == 'Linux'
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get install --yes --no-install-recommends libglib2.0-bin
+      - name: Build production Electron app
+        run: npm run build:electron-app:ci
+      - name: Restore verified generated WASM sources after bundling
+        shell: bash
+        run: |
+          generated_wasm_outputs=(
+            src/core/wasm/pkg/twine_wasm.d.ts
+            src/core/wasm/pkg/twine_wasm.js
+            src/core/wasm/pkg/twine_wasm_bg.wasm
+            src/core/wasm/pkg/twine_wasm_bg.wasm.d.ts
+          )
+          unexpected_changes="$(
+            git status --porcelain=v1 --untracked-files=all -- \
+              . \
+              ':(exclude)src/core/wasm/pkg/twine_wasm.d.ts' \
+              ':(exclude)src/core/wasm/pkg/twine_wasm.js' \
+              ':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm' \
+              ':(exclude)src/core/wasm/pkg/twine_wasm_bg.wasm.d.ts'
+          )"
+          if [[ -n "$unexpected_changes" ]]; then
+            echo "::error::Production build changed unexpected source paths."
+            git status --short --untracked-files=all
+            exit 1
+          fi
+          git restore --source=HEAD --worktree -- "${generated_wasm_outputs[@]}"
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "::error::Source tree is not clean after restoring generated WASM outputs."
+            git status --short --untracked-files=all
+            exit 1
+          fi
+      - name: Test Windows native referenced-media hardening
+        if: runner.os == 'Windows'
+        run: cargo test -p twine_native --locked
+      - name: Package release artifacts
+        shell: bash
+        env:
+          RELEASE_SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_COMMIT"
+          npm run package:electron:artifacts -- --${{ matrix.arch }}
+      - name: Exercise Linux AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
+        run: |
+          app_image=$(ls "$ARTIFACT_DIR"/Twine-RS-*-linux-${{ matrix.appimage_arch }}.AppImage)
+          chmod +x "$app_image"
+          APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "flushes a trailing"
+      - name: Extend Linux ARM64 preview wait in test harness
+        if: runner.os == 'Linux' && matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          perl -0pi -e 's/(async function expectCurrentPassage.*?timeout: )30_000/${1}90_000/s' e2e/packaged-electron-preview.spec.ts
+          node -e '
+            const {readFileSync} = require("node:fs");
+            const source = readFileSync("e2e/packaged-electron-preview.spec.ts", "utf8");
+            const helper = source.match(/async function expectCurrentPassage.*?\n}/s)?.[0];
+            if (!helper?.includes("timeout: 90_000")) {
+              throw new Error("Linux ARM64 current-passage wait was not extended.");
+            }
+          '
+      - name: Extract and smoke Linux ZIP
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
+        run: |
+          extract_dir="$RUNNER_TEMP/twine-rs-linux-zip"
+          mkdir -p "$extract_dir"
+          unzip -q "$ARTIFACT_DIR"/Twine-RS-*-linux-${{ matrix.arch }}.zip -d "$extract_dir"
+          TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged
+      - name: Mount and smoke macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
+        run: |
+          mount_dir="$RUNNER_TEMP/twine-rs-dmg"
+          mkdir -p "$mount_dir"
+          hdiutil attach "$ARTIFACT_DIR"/Twine-RS-*-mac-${{ matrix.arch }}*.dmg -nobrowse -readonly -mountpoint "$mount_dir"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
+          hdiutil detach "$mount_dir"
+          trap - EXIT
+      - name: Install Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARTIFACT_DIR: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}
+        run: |
+          $installer = Get-ChildItem $env:ARTIFACT_DIR -Filter 'Twine-RS-*-win-x64*.exe' | Select-Object -First 1
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'twine-rs-installed'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDirectory") -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "Installer exited with code $($process.ExitCode)."
+          }
+          $executable = Join-Path $installDirectory 'Twine RS.exe'
+          $uninstaller = Join-Path $installDirectory 'Uninstall Twine RS.exe'
+          if (!(Test-Path $executable) -or !(Test-Path $uninstaller)) {
+            throw 'The NSIS package did not install the expected application and uninstaller.'
+          }
+          "TWINE_E2E_EXECUTABLE=$executable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TWINE_E2E_UNINSTALLER=$uninstaller" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Smoke installed Windows app
+        if: runner.os == 'Windows'
+        run: npm run e2e:electron:packaged
+      - name: Uninstall Windows package
+        if: always() && runner.os == 'Windows' && env.TWINE_E2E_UNINSTALLER != ''
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath $env.TWINE_E2E_UNINSTALLER -ArgumentList '/S' -PassThru -Wait
+          if ($process.ExitCode -ne 0) {
+            throw "Uninstaller exited with code $($process.ExitCode)."
+          }
+      - name: Retain target candidate input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-pretag-target-${{ matrix.target }}
+          path: artifacts/staging/${{ needs.prepare.outputs.profile }}/${{ matrix.target }}/Twine-RS-*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain standalone compliance evidence
+        if: matrix.target == 'linux-x64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-pretag-compliance
+          path: |
+            electron-build/compliance/THIRD_PARTY_NOTICES.md
+            electron-build/compliance/sbom.cdx.json
+            electron-build/compliance/LICENSES.chromium.html
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain package smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-pretag-smoke-diagnostics-${{ matrix.target }}
+          path: output/playwright/packaged-electron
+          if-no-files-found: warn
+          retention-days: 14
+
+  assemble-candidate:
+    name: Assemble exact pre-tag release unit
+    needs: [prepare, package-installable]
+    runs-on: ubuntu-24.04
+    env:
+      ALLOW_UNSIGNED_DISTRIBUTION: ${{ needs.prepare.outputs.profile == 'distributable-unsigned' && '1' || '' }}
+      APPLE_APP_ID: ${{ needs.prepare.outputs.profile == 'signed' && vars.APPLE_APP_ID || '' }}
+      APPLE_TEAM_ID: ${{ needs.prepare.outputs.profile == 'signed' && vars.APPLE_TEAM_ID || '' }}
+      CSC_NAME: ${{ needs.prepare.outputs.profile == 'signed' && vars.CSC_NAME || '' }}
+      WINDOWS_SIGNER_SHA1: ${{ needs.prepare.outputs.profile == 'signed' && vars.WINDOWS_SIGNER_SHA1 || '' }}
+      WINDOWS_SIGNER_SUBJECT: ${{ needs.prepare.outputs.profile == 'signed' && vars.WINDOWS_SIGNER_SUBJECT || '' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - name: Download every candidate target
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: desktop-pretag-target-*
+          path: artifacts/incoming/${{ needs.prepare.outputs.profile }}
+          merge-multiple: true
+      - name: Validate and assemble complete distribution
+        run: node scripts/organize-release.mjs --profile "${{ needs.prepare.outputs.profile }}"
+      - name: Download standalone compliance evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: desktop-pretag-compliance
+          path: artifacts/${{ needs.prepare.outputs.profile }}/compliance
+      - name: Generate curated notes and retain policy files
+        shell: bash
+        run: |
+          distribution="artifacts/${{ needs.prepare.outputs.profile }}"
+          node scripts/check-release.mjs \
+            --plan "${{ needs.prepare.outputs.plan }}" \
+            --tag "${{ needs.prepare.outputs.tag }}" \
+            --commit "${{ needs.prepare.outputs.commit }}" \
+            --artifact-manifest "$distribution/artifact-manifest.json" \
+            --write-notes "$distribution/release-notes.md"
+          cp LICENSE "$distribution/LICENSE"
+      - name: Reconfirm candidate is still pre-tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: node scripts/release-candidate.mjs assert-pretag --tag "$RELEASE_TAG"
+      - name: Describe exact-main retained candidate
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_PLAN: ${{ needs.prepare.outputs.plan }}
+          RELEASE_PROFILE: ${{ needs.prepare.outputs.profile }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          WORKFLOW_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          node scripts/release-candidate.mjs write \
+            --artifact-name "${{ needs.prepare.outputs.artifact_name }}" \
+            --commit "$RELEASE_COMMIT" \
+            --desktop-bundle-artifact-digest "${{ needs.prepare.outputs.desktop_bundle_artifact_digest }}" \
+            --desktop-bundle-artifact-id "${{ needs.prepare.outputs.desktop_bundle_artifact_id }}" \
+            --desktop-bundle-artifact-name "${{ needs.prepare.outputs.desktop_bundle_artifact_name }}" \
+            --desktop-bundle-artifact-size "${{ needs.prepare.outputs.desktop_bundle_artifact_size }}" \
+            --distribution "artifacts/$RELEASE_PROFILE" \
+            --event "${{ github.event_name }}" \
+            --output artifacts/release-candidate.json \
+            --packaged-run-head-sha "${{ needs.prepare.outputs.packaged_app_run_head_sha }}" \
+            --packaged-run-id "${{ needs.prepare.outputs.packaged_app_run_id }}" \
+            --packaged-run-url "${{ needs.prepare.outputs.packaged_app_run }}" \
+            --plan "$RELEASE_PLAN" \
+            --quality-run-head-sha "${{ needs.prepare.outputs.quality_run_head_sha }}" \
+            --quality-run-id "${{ needs.prepare.outputs.quality_run_id }}" \
+            --quality-run-url "${{ needs.prepare.outputs.quality_run }}" \
+            --repository "${{ github.repository }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --run-id "${{ github.run_id }}" \
+            --tag "$RELEASE_TAG" \
+            --workflow-path .github/workflows/release-candidate.yml \
+            --workflow-url "$WORKFLOW_URL"
+      - name: Retain exact-main pre-tag candidate for draft and publication
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ needs.prepare.outputs.artifact_name }}
+          path: |
+            artifacts/${{ needs.prepare.outputs.profile }}
+            artifacts/release-candidate.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 30

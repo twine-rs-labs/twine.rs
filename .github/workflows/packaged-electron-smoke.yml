@@ -4,13 +4,58 @@ on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
+
+# Cancel only superseded pull-request runs. Exact merge-queue and main evidence
+# remains durable for pre-tag release candidate validation.
+concurrency:
+  group: packaged-electron-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  classify:
+    name: Classify packaged changes
+    runs-on: ubuntu-24.04
+    outputs:
+      native_required: ${{ steps.mode.outputs.native_required }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths fail closed
+        id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: |
+          node scripts/classify-packaged-changes.mjs \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --output "$GITHUB_OUTPUT"
+      - name: Apply merge-queue native transition
+        id: mode
+        shell: bash
+        env:
+          CHANGED_PATHS_REQUIRE_NATIVE: ${{ steps.paths.outputs.native_required }}
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_QUEUE_NATIVE_ONLY: ${{ vars.TWINE_MERGE_QUEUE_NATIVE_ONLY || 'false' }}
+        run: |
+          native_required="$CHANGED_PATHS_REQUIRE_NATIVE"
+          # Transition switch: gate-only PR/main runs intentionally retain no
+          # desktop-local-test-bundle, so release evidence cannot accept them.
+          if [[ "$MERGE_QUEUE_NATIVE_ONLY" == 'true' && "$EVENT_NAME" != 'merge_group' ]]; then
+            native_required=false
+          fi
+          echo "native_required=$native_required" >> "$GITHUB_OUTPUT"
+
   package-installable:
     name: ${{ matrix.label }} installable smoke
+    needs: classify
+    if: needs.classify.outputs.native_required == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -68,14 +113,38 @@ jobs:
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Configure native tool cache locations
+        shell: bash
+        run: |
+          echo "ELECTRON_CACHE=$RUNNER_TEMP/electron-cache" >> "$GITHUB_ENV"
+          echo "ELECTRON_BUILDER_CACHE=$RUNNER_TEMP/electron-builder-cache" >> "$GITHUB_ENV"
+          echo "WASM_BINDGEN_ROOT=$RUNNER_TEMP/wasm-bindgen-cli-0.2.125" >> "$GITHUB_ENV"
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.18.0
           cache: npm
-      - name: Install Rust WASM tooling
+      - name: Restore pinned wasm-bindgen CLI
+        id: wasm-bindgen-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/wasm-bindgen-cli-0.2.125
+          key: wasm-bindgen-cli-${{ runner.os }}-${{ runner.arch }}-0.2.125-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+      - name: Install or verify pinned wasm-bindgen CLI
+        shell: bash
         run: |
           rustup target add wasm32-unknown-unknown
-          cargo install wasm-bindgen-cli --version 0.2.125 --locked
+          if [[ "${{ steps.wasm-bindgen-cache.outputs.cache-hit }}" != 'true' ]]; then
+            cargo install wasm-bindgen-cli --version 0.2.125 --locked --root "$WASM_BINDGEN_ROOT"
+          fi
+          echo "$WASM_BINDGEN_ROOT/bin" >> "$GITHUB_PATH"
+          test "$("$WASM_BINDGEN_ROOT/bin/wasm-bindgen" --version)" = 'wasm-bindgen 0.2.125'
+      - name: Restore Electron download caches
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/electron-cache
+            ${{ runner.temp }}/electron-builder-cache
+          key: electron-downloads-${{ runner.os }}-${{ runner.arch }}-electron-43.1.1-builder-26.15.3-${{ hashFiles('package-lock.json') }}
       - run: npm ci
       - name: Install Playwright Chromium on Windows
         if: runner.os == 'Windows'
@@ -183,7 +252,8 @@ jobs:
 
   assemble-local-test-bundle:
     name: Validate complete local desktop test bundle
-    needs: package-installable
+    needs: [classify, package-installable]
+    if: needs.classify.outputs.native_required == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -208,3 +278,27 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 14
+
+  packaged-electron-gate:
+    name: Packaged Electron gate
+    if: always()
+    needs: [classify, package-installable, assemble-local-test-bundle]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the selected packaged evidence mode
+        shell: bash
+        env:
+          ASSEMBLY_RESULT: ${{ needs.assemble-local-test-bundle.result }}
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
+          NATIVE_REQUIRED: ${{ needs.classify.outputs.native_required }}
+          PACKAGE_RESULT: ${{ needs.package-installable.result }}
+        run: |
+          test "$CLASSIFY_RESULT" = 'success'
+          if [[ "$NATIVE_REQUIRED" == 'true' ]]; then
+            test "$PACKAGE_RESULT" = 'success'
+            test "$ASSEMBLY_RESULT" = 'success'
+          else
+            test "$NATIVE_REQUIRED" = 'false'
+            test "$PACKAGE_RESULT" = 'skipped'
+            test "$ASSEMBLY_RESULT" = 'skipped'
+          fi

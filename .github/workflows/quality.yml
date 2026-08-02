@@ -4,6 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
+
+# Only pull-request refreshes supersede one another. Merge queue and main
+# evidence must always finish because release candidates bind their exact SHA.
+concurrency:
+  group: quality-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -21,8 +29,22 @@ jobs:
       - run: npm ci
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-      - name: Install pinned mdBook
-        run: cargo install mdbook --version 0.5.4 --locked
+      - name: Restore pinned mdBook tool
+        id: mdbook-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/mdbook-0.5.4
+          key: mdbook-${{ runner.os }}-${{ runner.arch }}-0.5.4-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Install or verify pinned mdBook
+        shell: bash
+        env:
+          MDBOOK_ROOT: ${{ runner.temp }}/mdbook-0.5.4
+        run: |
+          if [[ "${{ steps.mdbook-cache.outputs.cache-hit }}" != 'true' ]]; then
+            cargo install mdbook --version 0.5.4 --locked --root "$MDBOOK_ROOT"
+          fi
+          echo "$MDBOOK_ROOT/bin" >> "$GITHUB_PATH"
+          test "$("$MDBOOK_ROOT/bin/mdbook" --version)" = 'mdbook v0.5.4'
       - name: Unit and packaging tests
         run: npm run test:ci
       - name: Lint and documentation checks
@@ -59,3 +81,18 @@ jobs:
           TWINE_RS_CARGO_TOOLCHAIN: ${{ matrix.rust }}
       - name: Rust workspace tests
         run: cargo +${{ matrix.rust }} test --workspace --locked
+
+  quality-gate:
+    name: Quality gate
+    if: always()
+    needs: [javascript, rust]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every quality job
+        shell: bash
+        env:
+          JAVASCRIPT_RESULT: ${{ needs.javascript.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+        run: |
+          test "$JAVASCRIPT_RESULT" = 'success'
+          test "$RUST_RESULT" = 'success'

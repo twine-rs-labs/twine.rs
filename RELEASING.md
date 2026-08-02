@@ -31,10 +31,11 @@ plan and completed checklist issue.
 Review by another maintainer is encouraged when one is available and may be
 recorded in the checklist, but its absence does not block a release. For a
 solo-maintainer release, pushing the protected annotated tag creates the draft.
-Manually dispatching the workflow for that tag with `publish` enabled authorizes
-publication after the committed approval, required CI, draft verification, and
-every pre-publication checklist item have passed. A dispatch with `publish`
-disabled may rebuild or recover the draft but cannot publish it.
+Manually dispatching the workflow for that tag with `publish` enabled and the
+successful inspected candidate run ID authorizes publication after the
+committed approval, required CI, draft verification, and every pre-publication
+checklist item have passed. A dispatch with `publish` disabled may re-verify a
+named pre-tag candidate and recover the draft but cannot build or publish it.
 
 ## Versions and tags
 
@@ -60,9 +61,10 @@ annotated tag is recommended but is not yet required.
 Configure a GitHub tag ruleset for `v*` that restricts creation to release
 maintainers or the release workflow and blocks updates and deletion. Once a
 release is published, its tag is never moved, deleted, or recreated. An
-unpublished tag whose workflow failed may be deleted only after the release
-manager records that decision in the checklist; its version must not be
-published from a different commit.
+unpublished tag whose workflow failed is abandoned in place: record the
+decision in the checklist and supersede it with a new version and tag. Never
+move, delete, or recreate it to reuse the version or publish from a different
+commit.
 
 Enable GitHub immutable releases before the first publication. All assets are
 uploaded to a draft and verified before the protected publication job makes it
@@ -109,6 +111,26 @@ npm run release:check -- --plan docs/releases/plans/v0.2.0-beta.1.json
 The JSON schema and field guidance are in
 [`docs/releases/README.md`](docs/releases/README.md).
 
+## Safe merge-queue activation
+
+Roll out merge-queue native-only execution in this order:
+
+1. Leave `TWINE_MERGE_QUEUE_NATIVE_ONLY` unset or `false` while the merge queue
+   ruleset is disabled. In this mode PR, `main`, and merge-group events retain
+   native evidence where the path classifier requires it.
+2. Merge the workflow changes that add `merge_group` handling and the stable
+   required checks named **Quality gate** and **Packaged Electron gate**.
+3. Configure the ruleset to require those two stable status checks.
+4. Enable and pilot the merge queue. Confirm the successful `merge_group` head
+   SHA is the SHA that lands on `main` and that its same-SHA evidence is
+   reusable by candidate preparation.
+5. Only after that confirmation, set `TWINE_MERGE_QUEUE_NATIVE_ONLY` to `true`.
+
+Enabling the variable earlier suppresses native work on PR and direct `main`
+events before merge-group evidence is proven reusable. Candidate preparation
+then blocks fail-closed because it cannot bind complete same-commit packaged
+evidence. Do not change GitHub rulesets and the variable in the opposite order.
+
 ## Candidate preparation
 
 1. Open the **Release checklist** issue form. Name the manager, version,
@@ -126,9 +148,18 @@ The JSON schema and field guidance are in
    and previous-version reopening path.
 6. Merge the clean release commit. Confirm its Quality and Packaged Electron
    workflows pass, review the completed evidence, and record release-manager
-   approval. The release workflow discovers and records those same-commit run
-   IDs without creating a self-referential plan commit.
-7. Create and push the annotated tag:
+   approval. Candidate preparation binds those same-commit run IDs and native
+   bundle provenance without creating a self-referential plan commit.
+7. Manually dispatch **Build desktop release candidate** from `main` with the
+   intended tag. The workflow fails unless its dispatch SHA is still the exact
+   `origin/main` HEAD, the intended tag is absent both locally and remotely,
+   and both required same-SHA CI workflows retain complete evidence. It binds
+   the quality and packaged run identities plus the native test-bundle artifact
+   ID, digest, and size; builds and smokes the five native targets; assembles
+   the exact distributable file set; rechecks that the tag is still absent; and
+   retains a hash-bound pre-tag candidate for 30 days. Review that successful
+   candidate run and record its ID.
+8. Create and push the annotated tag at that same commit:
 
    ```sh
    git tag -a v0.2.0-beta.1 -m "Twine RS 0.2.0-beta.1"
@@ -140,21 +171,33 @@ cannot be proven.
 
 ## Automated publication
 
-`.github/workflows/release.yml` checks the annotated tag, synchronized versions,
-dated changelog, plan decisions, and clean source commit. A tag-triggered run:
+`.github/workflows/release-candidate.yml` is the only release workflow that
+builds native packages. It has read-only repository permissions, runs before
+the tag exists, and binds its distinctly named retained unit to the exact main
+SHA, intended tag, profile, complete plan hash, native matrix, and file digests.
 
-1. builds the seven supported downloads on five target-native runners;
-2. exercises each installable format;
-3. validates the complete profile-specific artifact and provenance matrix;
-4. creates a draft GitHub Release and uploads every artifact and evidence file.
+`.github/workflows/release.yml` never builds or assembles native packages. A tag
+push checks the annotated tag and deterministically selects the newest
+successful, nonexpired pre-tag candidate whose run SHA and derived artifact
+name match the tagged commit and committed plan. It fully verifies that unit
+and its metadata-bound quality and packaged workflow runs. The shorter-lived
+native test-bundle artifact does not need to remain downloadable after its
+identity, digest, and size have been bound into the 30-day candidate. The
+workflow creates the draft GitHub Release, uploads the exact assets, verifies
+their digests and release metadata, and stops.
 
-The tag-triggered run stops at the draft. A failed pre-publication run may be
-recovered by manually dispatching **Publish desktop release** with the existing
-annotated tag and `publish` disabled; that run rebuilds and refreshes the draft
-but cannot publish it. After inspecting the draft and checking every
-pre-publication item, dispatch the workflow with the same tag and `publish`
-enabled. The publication run rebuilds and revalidates the exact tag commit,
-then:
+A failed draft run may be recovered by manually dispatching **Publish desktop
+release** with the existing tag, `publish` disabled, and the explicit pre-tag
+candidate run ID. Recovery re-verifies and reuses that unit; it does not rebuild
+or silently select another candidate.
+
+After inspecting the draft and checking every pre-publication item, dispatch
+the workflow with the same tag, `publish` enabled, and that candidate run ID.
+The publication run does not rebuild native packages or refresh the draft. It
+downloads the retained unit from the named run, verifies the run and artifact
+provenance, revalidates the plan, tag commit, profile, and artifact matrix, and
+requires every candidate draft asset to retain the exact inspected size and
+SHA-256 digest. It then:
 
 1. verifies that every pre-publication checklist item is complete;
 2. generates `release-record.json` and the deterministic release-evidence ZIP;
@@ -162,8 +205,16 @@ then:
 4. downloads and smokes release-hosted artifacts on Windows, macOS, and Linux.
 
 Manual dispatch with `publish` enabled is the final solo-maintainer publication
-approval. Either dispatch mode can recover a failed pre-publication run, but
-neither can change the tag, plan, source commit, or version.
+approval. An expired, missing, unsuccessful, or mismatched candidate fails
+closed. While the intended tag is still absent, dispatch a new pre-tag candidate
+from the still-current exact main SHA, then inspect it before tagging. After the
+tag exists, the candidate cannot be rebuilt or replaced for that tag: abandon
+that release and supersede it with a new version and tag according to the
+immutable-tag policy. Never move, delete, or recreate the tag to manufacture a
+replacement candidate. A publication retry may replace only its own
+`release-record.json` and release-evidence ZIP while the release remains a
+draft. Neither dispatch mode can change the tag, plan, source commit, profile,
+artifact matrix, or version.
 
 The deliberately unsigned profile is the usable profile until signing
 credentials exist. It requires no signing variables, secrets, or other profile
@@ -184,17 +235,23 @@ Every GitHub Release retains, for the life of the release:
 - all seven validated desktop artifacts;
 - `SHA256SUMS.txt`, `artifact-manifest.json`, and all five target manifests;
 - `WHICH TO DOWNLOAD.md`, `release-notes.md`, and `release-record.json`;
+- the exact pre-tag `release-candidate.json` that identifies the promoted run;
 - the project license, third-party notices, SBOM, Chromium licenses, and the
   deterministic release-evidence ZIP;
 - links to the checklist, quality run, packaged-app run, recovery test, and
-  publication workflow.
+  candidate and publication workflows;
+- the retained candidate artifact ID, digest, and size, plus the hash-bound
+  `release-candidate.json` inside the release-evidence ZIP;
+- the candidate-time quality and packaged run identities and head SHAs, plus
+  the native test-bundle artifact ID, name, digest, and size.
 
 The release record binds the version, tag, commit, profile, release-manager
 approval, compatibility and rollback decisions, evidence URLs,
 aggregate-manifest hash,
 every artifact hash, every target-manifest hash, and the standalone evidence
-hashes. Fourteen-day `desktop-local-*` CI artifacts remain test inputs only and
-are not release evidence.
+hashes. Fourteen-day `desktop-local-*` CI artifact bytes remain test inputs and
+need not outlive the 30-day candidate; their candidate-time identity and digest
+are retained as provenance.
 
 ## Post-publication and closeout
 

@@ -34,17 +34,37 @@ The publication job generates `release-record.json` after:
 - the release plan and dated changelog entry validate;
 - every checklist item before `Post-publication` is checked.
 
-The tag-triggered run creates the draft but cannot publish it. Manual workflow
-dispatch for the same tag with `publish` disabled rebuilds or recovers the draft
-without publishing. Dispatch with `publish` enabled is the release manager's
-final publication approval; it rebuilds and revalidates the immutable tag
-commit before publishing.
+Before tagging, manual **Build desktop release candidate** dispatch from exact
+`origin/main` builds and smokes the distributable matrix and retains its
+plan-hash-derived artifact for 30 days. Candidate creation fails unless the
+intended tag is absent locally and remotely, and rechecks that absence before
+retaining the unit. It binds the exact quality and packaged workflow run IDs,
+URLs, and head SHAs plus the native test-bundle artifact ID, name, digest, and
+size. The tag-triggered workflow discovers the newest successful, nonexpired
+unit matching the exact tagged SHA, intended tag, profile, and plan hash,
+verifies the candidate and those metadata-bound CI runs, and creates the draft
+without rebuilding. The shorter-lived native test-bundle bytes need not remain
+downloadable once their provenance is bound into the candidate.
+Manual draft recovery and publication require the explicit candidate run ID.
+Both reuse and revalidate that pre-tag unit; neither can build packages or
+silently fall back to another candidate.
+
+If a candidate expires or becomes unavailable before tagging, prepare another
+candidate only while the intended tag is still absent. Once the tag exists, do
+not rebuild or replace its candidate and do not move, delete, or recreate the
+tag. Abandon and supersede that release with a new version and tag under the
+immutable-tag policy.
 
 The record follows
 [`release-record.schema.json`](./release-record.schema.json) and is uploaded
 before the immutable release is published. It records post-publication
 completion as pending because fresh-download checks necessarily happen after
 publication; the linked checklist issue is the durable closeout record.
+New records include the candidate workflow URL, Actions artifact ID and digest,
+the metadata-bound CI run and native test-bundle provenance, and the hash of the
+standalone `release-candidate.json` also retained in the evidence ZIP. Those
+fields are optional in the schema so records produced before candidate reuse
+remain valid.
 
 Do not hand-edit a generated record or commit one as a substitute for the
 release workflow.
