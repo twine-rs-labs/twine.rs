@@ -123,7 +123,8 @@ Roll out merge-queue native-only execution in this order:
 3. Configure the ruleset to require those two stable status checks.
 4. Enable and pilot the merge queue. Confirm the successful `merge_group` head
    SHA is the SHA that lands on `main` and that its same-SHA evidence is
-   reusable by candidate preparation.
+   reusable by candidate preparation. Record the merge-group workflow URL,
+   both SHAs, and the `desktop-local-test-bundle` artifact ID and digest.
 5. Only after that confirmation, set `TWINE_MERGE_QUEUE_NATIVE_ONLY` to `true`.
 
 Enabling the variable earlier suppresses native work on PR and direct `main`
