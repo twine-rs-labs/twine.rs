@@ -40,6 +40,10 @@ const size = Number.parseInt(
 );
 const smoke = args.includes('--smoke');
 const failFast = args.includes('--fail-fast');
+const disableHarloweEditorExtensions = args.includes(
+	'--disable-harlowe-editor-extensions'
+);
+const profileEdit = args.includes('--profile-edit');
 const phaseIndex = args.indexOf('--phase');
 const requestedPhase = phaseIndex >= 0 ? args[phaseIndex + 1] : 'all';
 const completePhases = ['startup', 'edit', 'query', 'graph', 'watcher'];
@@ -56,6 +60,19 @@ if (!Number.isInteger(size) || size <= 0) {
 }
 if (!validPhases.includes(requestedPhase)) {
 	throw new Error(`--phase must be one of: ${validPhases.join(', ')}.`);
+}
+if (
+	(disableHarloweEditorExtensions || profileEdit) &&
+	requestedPhase !== 'edit'
+) {
+	throw new Error(
+		'--disable-harlowe-editor-extensions and --profile-edit require focused --phase edit.'
+	);
+}
+if (disableHarloweEditorExtensions && fixtureVariant !== 'default') {
+	throw new Error(
+		'--disable-harlowe-editor-extensions requires the default Harlowe fixture variant.'
+	);
 }
 
 const phases =
@@ -90,6 +107,8 @@ const report = path.join(
 		.toISOString()
 		.replace(/[:.]/g, '-')}-${size}${reportVariantSuffix}.json`
 );
+const editTrace = report.replace(/\.json$/, '.edit-trace.json.gz');
+const editCpuProfile = report.replace(/\.json$/, '.edit.cpuprofile');
 const checkpoint = report.replace(/\.json$/, '.checkpoint.json');
 const main = path.join(
 	repoRoot,
@@ -245,6 +264,13 @@ let runRootRemoved = false;
 let sourceFixtureUnchanged = false;
 let isolatedUserData = false;
 const checkpointState = {
+	configuration: {
+		baselineCompatible: !disableHarloweEditorExtensions && !profileEdit,
+		edit: {
+			disableHarloweEditorExtensions,
+			profile: profileEdit
+		}
+	},
 	createdAt: new Date().toISOString(),
 	currentPhase: undefined,
 	launches: [],
@@ -326,16 +352,32 @@ try {
 		phaseResults[phase] = {startedAt, status: 'running'};
 		await updateCheckpoint();
 
+		const playwrightArgs = [
+			'playwright',
+			'test',
+			'--config',
+			'playwright.electron.config.ts',
+			...(profileEdit ? ['--retries=0'] : [])
+		];
 		const result = spawnSync(
 			process.platform === 'win32' ? 'npx.cmd' : 'npx',
-			['playwright', 'test', '--config', 'playwright.electron.config.ts'],
+			playwrightArgs,
 			{
 				cwd: repoRoot,
 				encoding: 'utf8',
 				env: {
 					...process.env,
+					...(profileEdit
+						? {
+								TWINE_PERF_EDIT_CPU_PROFILE: editCpuProfile,
+								TWINE_PERF_EDIT_PROFILE: '1',
+								TWINE_PERF_EDIT_TRACE: editTrace
+							}
+						: {}),
 					TWINE_PERF_FIXTURE: fixture,
 					TWINE_PERF_FIXTURE_VARIANT: fixtureVariant,
+					TWINE_PERF_DISABLE_HARLOWE_EDITOR_EXTENSIONS:
+						disableHarloweEditorExtensions ? '1' : '0',
 					TWINE_PERF_LAUNCH_TRACE: launchTrace,
 					TWINE_PERF_PHASE: phase,
 					TWINE_PERF_REPORT: partialReport,

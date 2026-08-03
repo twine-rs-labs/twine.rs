@@ -52,10 +52,32 @@ runs with the unrelated VS Code Playwright server stopped at the OS process
 level still observed 86 ms and 245 ms maximum renderer long tasks and failed
 the matched edit-paint regression gate. A focused edit-only repeat observed
 245 ms and 129 ms long tasks, including a repeat of the 245 ms edit-4 stall;
-worker apply operations remained near 10 ms, and native persistence stayed below
-27 ms p95. Query, graph, and watcher never ran in the failing full suites. Those
-raw local reports are retained as diagnostics, while the clean July 18
-same-machine baseline remains the current durable 10k evidence.
+worker apply operations remained near 10 ms, and the asynchronous native write
+itself stayed below 27 ms p95. Query, graph, and watcher never ran in the
+failing full suites. Those raw local reports are retained as diagnostics, while
+the clean July 18 same-machine baseline remains the current durable 10k
+evidence.
+
+Focused attribution on 2026-08-03 located the regression. Disabling the native
+Harlowe editor did not remove it: that control still recorded 201 ms and 198 ms
+long tasks, with both stalls inside Electron story-persistence setup. A native
+renderer profile then captured a 154.7 ms response task. About 149.5 ms of that
+task was sampled in `beginLegacyStoryWrite` calling `ipcRenderer.sendSync`, with
+no overlapping renderer GC. The browser main thread was already occupied by a
+354.3 ms task, so the synchronous reservation prevented the renderer from
+painting until the browser could service it. The reservation was introduced by
+`9f131516` after the July 18 baseline. Harlowe parsing, the Rust/WASM worker,
+the story reducer, patch publication, and the asynchronous file write are not
+the owner of this tail.
+
+The clean 50k suite uses the same synchronous reservation; its zero long tasks
+are consistent with its 20 measured edits not colliding with a busy
+browser-main window and do not demonstrate a different persistence path. The
+A/B and profile reports came from an intentionally dirty diagnostic worktree;
+their production build stayed unchanged during each phase, but the reports are
+not clean provenance and do not replace either tracked baseline. Removing the
+synchronous renderer-to-main reservation from the edit critical path while
+preserving quit-safe write tracking is now the blocking edit follow-up.
 
 ## July-to-released-beta comparison
 

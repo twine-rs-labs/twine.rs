@@ -143,9 +143,12 @@ The complete local 10k and 50k benchmark runs verify:
   evidence before a signed profile can be claimed.
 - The fresh release-tag 50k run on 2026-08-03 completed all phases with 399/399
   invariants and no blocking regressions. Repeated clean 10k refresh attempts
-  stopped at the edit long-task gate and a focused repeat reproduced the
-  renderer stall, so the July 18 same-machine 10k baseline remains current
-  instead of being replaced by incomplete evidence.
+  stopped at the edit long-task gate. Focused A/B and renderer profiling now
+  attribute the stall to the post-July synchronous legacy-write reservation:
+  `beginLegacyStoryWrite` blocks in `ipcRenderer.sendSync` while the browser
+  main thread is occupied. The July 18 same-machine 10k baseline therefore
+  remains current until quit-safe write tracking is moved off the renderer edit
+  critical path and a clean complete suite replaces the incomplete evidence.
 - The user manual still contains inherited Twine task and compatibility
   chapters. Current launcher, project-folder, conflict-review, workbench,
   asset, build, Settings, and Story Formats workflows are documented.
