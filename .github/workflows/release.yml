@@ -450,7 +450,7 @@ jobs:
           mkdir -p "$mount_dir"
           hdiutil attach "$TWINE_DOWNLOADED_ASSET" -nobrowse -readonly -mountpoint "$mount_dir"
           trap 'hdiutil detach "$mount_dir"' EXIT
-          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
+          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "drains a trailing|preserves sibling"
           hdiutil detach "$mount_dir"
           trap - EXIT
       - name: Install downloaded Windows package

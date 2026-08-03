@@ -160,6 +160,33 @@ test('packaged CI retains complete native evidence', () => {
 	assert.match(source, /merge_group:\n\s+types: \[checks_requested\]/);
 });
 
+test('targeted packaged smoke grep alternatives match current test titles', () => {
+	const packagedTests = readFileSync(
+		join(repositoryRoot, 'e2e', 'packaged-electron.spec.ts'),
+		'utf8'
+	);
+	const testTitles = [...packagedTests.matchAll(/\btest\('([^']+)'/g)].map(
+		match => match[1]
+	);
+	const selectors = [
+		...['packaged-electron-smoke.yml', 'release-candidate.yml', 'release.yml']
+			.flatMap(name => [
+				...workflow(name).matchAll(/e2e:electron:packaged -- --grep "([^"]+)"/g)
+			])
+			.map(match => match[1])
+	];
+
+	assert.equal(selectors.length, 5);
+	for (const selector of selectors) {
+		for (const alternative of selector.split('|')) {
+			assert.ok(
+				testTitles.some(title => new RegExp(alternative).test(title)),
+				`packaged smoke selector ${JSON.stringify(alternative)} should match a test title`
+			);
+		}
+	}
+});
+
 test('stable final CI gates fail when required upstream work fails', () => {
 	const run = (script, env) =>
 		spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], {

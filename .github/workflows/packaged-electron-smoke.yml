@@ -178,7 +178,7 @@ jobs:
         run: |
           app_image=$(ls "${{ matrix.artifact_dir }}"/Twine-RS-*-linux-${{ matrix.appimage_arch }}.AppImage)
           chmod +x "$app_image"
-          APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "flushes a trailing"
+          APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "drains a trailing"
       - name: Extend Linux ARM64 preview wait in test harness
         if: runner.os == 'Linux' && matrix.arch == 'arm64'
         shell: bash
@@ -208,7 +208,7 @@ jobs:
           mkdir -p "$mount_dir"
           hdiutil attach "${{ matrix.artifact_dir }}"/Twine-RS-*-mac-${{ matrix.arch }}.dmg -nobrowse -readonly -mountpoint "$mount_dir"
           trap 'hdiutil detach "$mount_dir"' EXIT
-          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
+          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "drains a trailing|preserves sibling"
           hdiutil detach "$mount_dir"
           trap - EXIT
       - name: Install Windows package
