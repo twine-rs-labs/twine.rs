@@ -106,6 +106,14 @@ phase boundaries. The temporary launch trace records per-sample progress and
 is copied into the checkpoint when each child process exits. This preserves
 launch and phase state when a process crashes or times out.
 
+By default, a full run continues after a validated, completed phase reports a
+failed measurement invariant. The Playwright child still exits zero for this
+measurement-gate failure, while the runner records the phase and merged report
+as failed and baseline-ineligible. Missing, malformed, mismatched,
+infrastructure-failed, retry-unstable, build-changed, or provenance-unstable
+phase reports abort the run; every nonzero Playwright exit is infrastructure.
+Add `--fail-fast` to stop after the first measurement-invariant failure too.
+
 For fast 50k edit/save investigation, run the diagnostic phase:
 
 ```sh

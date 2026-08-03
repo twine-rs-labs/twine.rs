@@ -18,7 +18,14 @@ import {
 	performanceFixtureVariantRoot,
 	treeMetadataFingerprint
 } from './fixture-tools.mjs';
-import {mergeRawPerformanceReports, writeJson} from './performance-tools.mjs';
+import {
+	currentGitProvenance,
+	decideElectronPhaseContinuation,
+	mergeRawPerformanceReports,
+	preserveFirstNonzeroStatus,
+	validateElectronPhaseReport,
+	writeJson
+} from './performance-tools.mjs';
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -32,6 +39,7 @@ const size = Number.parseInt(
 	10
 );
 const smoke = args.includes('--smoke');
+const failFast = args.includes('--fail-fast');
 const phaseIndex = args.indexOf('--phase');
 const requestedPhase = phaseIndex >= 0 ? args[phaseIndex + 1] : 'all';
 const completePhases = ['startup', 'edit', 'query', 'graph', 'watcher'];
@@ -121,6 +129,7 @@ const buildInputs = [
 	path.join(repoRoot, 'vite.config.mts')
 ];
 const buildArtifacts = [main, renderer, native];
+const productionBuildRoot = path.join(repoRoot, 'electron-build');
 
 await access(fixture).catch(() => {
 	throw new Error(
@@ -221,12 +230,16 @@ async function assertFreshProductionBuild() {
 }
 
 const fixtureFingerprintBefore = await treeMetadataFingerprint(fixture);
+const productionBuildFingerprintBefore =
+	await treeMetadataFingerprint(productionBuildRoot);
+const gitProvenanceBefore = await currentGitProvenance(repoRoot);
 const runRoot = await mkdtemp(path.join(os.tmpdir(), 'twine-rs-perf-run-'));
 const runId = path.basename(runRoot);
 const launchTrace = path.join(runRoot, 'launch-trace.jsonl');
 const phaseResults = {};
 const rawReports = [];
 let runStatus = 0;
+let measurementStatus = 0;
 let merged;
 let runRootRemoved = false;
 let sourceFixtureUnchanged = false;
@@ -335,30 +348,77 @@ try {
 			}
 		);
 		const exitCode = result.status ?? 1;
+		checkpointState.launches = await readLaunchTrace();
+		const phaseSourceFixtureUnchanged =
+			(await treeMetadataFingerprint(fixture)) === fixtureFingerprintBefore;
+		const phaseProductionBuildUnchanged =
+			(await treeMetadataFingerprint(productionBuildRoot)) ===
+			productionBuildFingerprintBefore;
+		let partial;
+		let reportReadError;
+
+		try {
+			partial = JSON.parse(await readFile(partialReport, 'utf8'));
+		} catch (error) {
+			reportReadError = error;
+		}
+		const reportValidation = validateElectronPhaseReport(partial, {
+			fixtureVariant,
+			git: gitProvenanceBefore,
+			phase,
+			size
+		});
+
+		if (reportReadError) {
+			reportValidation.errors.unshift(
+				reportReadError.code === 'ENOENT'
+					? 'The phase report is missing.'
+					: `The phase report could not be read: ${reportReadError.message}`
+			);
+			reportValidation.valid = false;
+		}
+		const decision = decideElectronPhaseContinuation({
+			exitCode,
+			failFast,
+			productionBuildUnchanged: phaseProductionBuildUnchanged,
+			reportValidation,
+			sourceFixtureUnchanged: phaseSourceFixtureUnchanged
+		});
+
+		if (decision.usable) {
+			rawReports.push(partial);
+		}
+		if (exitCode !== 0) {
+			runStatus = preserveFirstNonzeroStatus(runStatus, exitCode);
+		} else if (decision.failureKind === 'assertion') {
+			measurementStatus = 1;
+		} else if (decision.status !== 'passed') {
+			runStatus = preserveFirstNonzeroStatus(runStatus, 1);
+		}
 
 		phaseResults[phase] = {
 			error: result.error?.message,
 			exitCode,
+			failureKind: decision.failureKind,
 			finishedAt: new Date().toISOString(),
-			processes: exitCode === 0 ? undefined : captureRelevantProcesses(),
+			measurementBodyCompleted: reportValidation.bodyCompleted,
+			processes:
+				decision.status === 'passed' ? undefined : captureRelevantProcesses(),
+			productionBuildUnchanged: phaseProductionBuildUnchanged,
+			reason: decision.reason,
+			reportValidationErrors:
+				reportValidation.errors.length > 0
+					? reportValidation.errors
+					: undefined,
+			sourceFixtureUnchanged: phaseSourceFixtureUnchanged,
 			startedAt,
-			status: exitCode === 0 ? 'passed' : 'failed'
+			status: decision.status
 		};
-		checkpointState.launches = await readLaunchTrace();
-
-		try {
-			rawReports.push(JSON.parse(await readFile(partialReport, 'utf8')));
-		} catch (error) {
-			if (error.code !== 'ENOENT') {
-				throw error;
-			}
-		}
 
 		await updateCheckpoint();
 		await settleLaunchServices();
 
-		if (exitCode !== 0) {
-			runStatus = exitCode;
+		if (!decision.continueRun) {
 			break;
 		}
 	}
@@ -366,7 +426,8 @@ try {
 	merged = mergeRawPerformanceReports(rawReports, phaseResults);
 
 	checkpointState.currentPhase = undefined;
-	checkpointState.status = runStatus === 0 ? 'completed' : 'failed';
+	checkpointState.status =
+		runStatus === 0 && measurementStatus === 0 ? 'completed' : 'failed';
 	await updateCheckpoint();
 } finally {
 	const launches = await readLaunchTrace();
@@ -441,7 +502,14 @@ try {
 
 checkpointState.evaluationExitCode = reportStatus;
 checkpointState.status =
-	runStatus === 0 && reportStatus === 0 ? 'completed' : 'failed';
+	runStatus === 0 && measurementStatus === 0 && reportStatus === 0
+		? 'completed'
+		: 'failed';
 await updateCheckpoint();
 
-process.exitCode = runStatus !== 0 ? runStatus : reportStatus;
+process.exitCode =
+	runStatus !== 0
+		? runStatus
+		: measurementStatus !== 0
+			? measurementStatus
+			: reportStatus;

@@ -21,6 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {performance as nodePerformance} from 'node:perf_hooks';
 import {performanceReportSchemaVersion} from '../benchmarks/performance-report-schema.mjs';
+import {currentGitProvenance} from '../benchmarks/performance-tools.mjs';
 
 interface PerformanceSnapshot {
 	main: {
@@ -252,6 +253,7 @@ const diagnostics: {
 	watcherPassage?: PerformanceSnapshot;
 } = {bridgeMetrics: [], startup: []};
 let playwrightRetrySettled = false;
+let measurementBodyCompleted = false;
 
 const inheritedElectronEnvironmentKeys = [
 	'APPDATA',
@@ -292,7 +294,6 @@ function addSample(name: string, value: number | undefined) {
 
 function assertInvariant(name: string, passed: boolean, detail?: string) {
 	assertions.push({detail, name, passed});
-	expect.soft(passed, `${name}${detail ? `: ${detail}` : ''}`).toBe(true);
 }
 
 function captureBridgeMetrics(current: PerformanceSnapshot) {
@@ -3580,7 +3581,12 @@ function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
 					: undefined
 			);
 		}
-		for (const field of ['heapUsed', 'heapTotal', 'external', 'arrayBuffers']) {
+		for (const field of [
+			'heapUsed',
+			'heapTotal',
+			'external',
+			'arrayBuffers'
+		] as const) {
 			addSample(
 				`${prefix}.main.${field}`,
 				typeof checkpoint.mainMemory[field] === 'number'
@@ -4101,25 +4107,44 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 		await readFile(path.resolve('node_modules/playwright/package.json'), 'utf8')
 	);
 	const cpu = os.cpus()[0];
-	const gitRevision = execFileSync('git', ['rev-parse', 'HEAD'], {
-		encoding: 'utf8'
-	}).trim();
-	const gitDirty =
-		execFileSync('git', ['status', '--porcelain'], {encoding: 'utf8'}).trim()
-			.length > 0;
+	const git = await currentGitProvenance(path.resolve('.'));
+	const failedInvariantCount = assertions.filter(
+		assertion => !assertion.passed
+	).length;
+	const failureKind =
+		measurementBodyCompleted && testInfo.status === 'passed'
+			? failedInvariantCount > 0
+				? 'assertion'
+				: undefined
+			: 'infrastructure';
+	const attempt = {
+		bodyCompleted: measurementBodyCompleted,
+		failedInvariantCount,
+		failureKind,
+		retry: testInfo.retry,
+		status: testInfo.status
+	};
+	let attempts: Array<typeof attempt> = [];
+
+	try {
+		const previous = JSON.parse(await readFile(reportPath, 'utf8'));
+
+		if (!Array.isArray(previous.measurement?.attempts)) {
+			throw new Error('Existing phase report has no retry history.');
+		}
+		attempts = previous.measurement.attempts;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			throw error;
+		}
+	}
+	attempts.push(attempt);
 
 	await writeFile(
 		reportPath,
 		`${JSON.stringify(
 			{
-				assertions: [
-					...assertions,
-					{
-						detail: testInfo.error?.message,
-						name: `phase-${phase}-completed`,
-						passed: testInfo.status === 'passed'
-					}
-				],
+				assertions,
 				createdAt: new Date().toISOString(),
 				diagnostics,
 				diagnostic: phase === 'diagnostic',
@@ -4131,7 +4156,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 						...(footprintEnabled ? {memoryFootprint: 1} : {}),
 						startup: 2
 					},
-					git: {dirty: gitDirty, revision: gitRevision},
+					git,
 					machine: {
 						arch: process.arch,
 						cpu: cpu?.model ?? 'unknown',
@@ -4148,6 +4173,12 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				},
 				fixture: fixtureManifest,
 				kind: 'twine-electron-performance',
+				measurement: {
+					attempts,
+					bodyCompleted: measurementBodyCompleted,
+					failedInvariantCount,
+					failureKind
+				},
 				phase,
 				sampleCount:
 					phase === 'diagnostic' || phase === 'memory-detail' ? 1 : undefined,
@@ -4171,6 +4202,7 @@ test.afterEach(async ({browserName}, testInfo) => {
 });
 
 test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () => {
+	measurementBodyCompleted = false;
 	test.setTimeout(
 		passageCount >= 50_000 && (phase === 'edit' || phase === 'query')
 			? 45 * 60 * 1000
@@ -4445,4 +4477,5 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 			await readFile(path.join(fixturePath, 'twine.toml'))
 		)
 	);
+	measurementBodyCompleted = true;
 });

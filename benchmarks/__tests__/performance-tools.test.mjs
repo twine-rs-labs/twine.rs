@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,8 @@ import {performanceReportSchemaVersion} from '../performance-report-schema.mjs';
 import {
 	aggregateSamples,
 	baselineCandidateErrors,
+	currentGitProvenance,
+	decideElectronPhaseContinuation,
 	evaluatePerformanceReport,
 	latestReport,
 	machineFingerprint,
@@ -14,9 +17,90 @@ import {
 	performanceBaselinePath,
 	performanceReportSchemaVersion as validatorPerformanceReportSchemaVersion,
 	percentile,
+	preserveFirstNonzeroStatus,
 	reportFixtureVariant,
-	regressionAllowance
+	regressionAllowance,
+	validateElectronPhaseReport
 } from '../performance-tools.mjs';
+
+function phaseReport(overrides = {}) {
+	const attempt = {
+		bodyCompleted: true,
+		failedInvariantCount: 0,
+		retry: 0,
+		status: 'passed'
+	};
+
+	return {
+		assertions: [{name: 'measured-invariant', passed: true}],
+		environment: {
+			fingerprint: 'machine',
+			git: {
+				dirty: false,
+				revision: 'abc123',
+				worktreeFingerprint: 'worktree-one'
+			}
+		},
+		fixture: {fixtureVariant: 'default', passageCount: 100},
+		kind: 'twine-electron-performance',
+		measurement: {
+			attempts: [attempt],
+			bodyCompleted: true,
+			failedInvariantCount: 0
+		},
+		phase: 'startup',
+		samples: {'startup.shellMs': [10]},
+		schemaVersion: performanceReportSchemaVersion,
+		test: {status: 'passed'},
+		...overrides
+	};
+}
+
+function validatePhase(report, overrides = {}) {
+	return validateElectronPhaseReport(report, {
+		fixtureVariant: 'default',
+		phase: 'startup',
+		size: 100,
+		...overrides
+	});
+}
+
+test('fingerprints tracked, staged, and untracked worktree contents', async () => {
+	const directory = await mkdtemp(path.join(tmpdir(), 'twine-perf-git-'));
+	const git = args => execFileSync('git', args, {cwd: directory});
+
+	try {
+		git(['init', '--quiet']);
+		git(['config', 'user.email', 'performance-test@example.invalid']);
+		git(['config', 'user.name', 'Performance Test']);
+		await writeFile(path.join(directory, 'tracked.txt'), 'one\n');
+		git(['add', 'tracked.txt']);
+		git(['commit', '--quiet', '-m', 'fixture']);
+		const clean = await currentGitProvenance(directory);
+
+		await writeFile(path.join(directory, 'tracked.txt'), 'two\n');
+		const unstaged = await currentGitProvenance(directory);
+
+		git(['add', 'tracked.txt']);
+		const staged = await currentGitProvenance(directory);
+
+		await writeFile(path.join(directory, 'untracked.txt'), 'aaa\n');
+		const untrackedOne = await currentGitProvenance(directory);
+		await writeFile(path.join(directory, 'untracked.txt'), 'bbb\n');
+		const untrackedTwo = await currentGitProvenance(directory);
+
+		assert.equal(clean.dirty, false);
+		assert.equal(unstaged.dirty, true);
+		assert.notEqual(clean.worktreeFingerprint, unstaged.worktreeFingerprint);
+		assert.notEqual(unstaged.worktreeFingerprint, staged.worktreeFingerprint);
+		assert.notEqual(
+			untrackedOne.worktreeFingerprint,
+			untrackedTwo.worktreeFingerprint
+		);
+	} finally {
+		await rm(directory, {force: true, recursive: true});
+	}
+});
 
 test('discovers the latest report within an explicit fixture variant', async () => {
 	const directory = await mkdtemp(path.join(tmpdir(), 'twine-perf-reports-'));
@@ -69,12 +153,17 @@ test('calculates stable nearest-rank percentiles and aggregates', () => {
 test('merges independently checkpointed benchmark phases', () => {
 	const common = {
 		environment: {
-			git: {dirty: false, revision: 'abc123'},
+			git: {
+				dirty: false,
+				revision: 'abc123',
+				worktreeFingerprint: 'worktree-one'
+			},
 			machine: {},
 			versions: {}
 		},
 		fixture: {passageCount: 50_000},
 		kind: 'twine-electron-performance',
+		measurement: {bodyCompleted: true},
 		schemaVersion: performanceReportSchemaVersion
 	};
 	const merged = mergeRawPerformanceReports(
@@ -118,6 +207,11 @@ test('merges independently checkpointed benchmark phases', () => {
 			passed: true
 		},
 		{
+			detail: '["worktree-one","worktree-one"]',
+			name: 'git-worktree-state-stable-across-phases',
+			passed: true
+		},
+		{
 			detail: '["default","default"]',
 			name: 'fixture-variant-stable-across-phases',
 			passed: true
@@ -126,6 +220,338 @@ test('merges independently checkpointed benchmark phases', () => {
 	assert.equal(merged.diagnostics.startup.length, 1);
 	assert.equal(merged.diagnostics.watcher.trace, true);
 	assert.equal(merged.test.status, 'passed');
+	assert.equal(merged.measurement, undefined);
+});
+
+test('continues after valid passing and assertion-failed phase reports', () => {
+	const passedValidation = validatePhase(phaseReport());
+
+	assert.equal(passedValidation.valid, true);
+	assert.deepEqual(
+		decideElectronPhaseContinuation({
+			exitCode: 0,
+			reportValidation: passedValidation
+		}),
+		{continueRun: true, status: 'passed', usable: true}
+	);
+
+	const assertionValidation = validatePhase(
+		phaseReport({
+			assertions: [{name: 'measured-invariant', passed: false}],
+			measurement: {
+				attempts: [
+					{
+						bodyCompleted: true,
+						failedInvariantCount: 1,
+						failureKind: 'assertion',
+						retry: 0,
+						status: 'passed'
+					}
+				],
+				bodyCompleted: true,
+				failedInvariantCount: 1,
+				failureKind: 'assertion'
+			}
+		})
+	);
+	const decision = decideElectronPhaseContinuation({
+		exitCode: 0,
+		reportValidation: assertionValidation
+	});
+
+	assert.equal(assertionValidation.valid, true);
+	assert.equal(decision.continueRun, true);
+	assert.equal(decision.failureKind, 'assertion');
+	assert.equal(decision.usable, true);
+});
+
+test('fail-fast stops after a completed assertion failure', () => {
+	const reportValidation = validatePhase(
+		phaseReport({
+			assertions: [{name: 'measured-invariant', passed: false}],
+			measurement: {
+				attempts: [
+					{
+						bodyCompleted: true,
+						failedInvariantCount: 1,
+						failureKind: 'assertion',
+						retry: 0,
+						status: 'passed'
+					}
+				],
+				bodyCompleted: true,
+				failedInvariantCount: 1,
+				failureKind: 'assertion'
+			}
+		})
+	);
+	const decision = decideElectronPhaseContinuation({
+		exitCode: 0,
+		failFast: true,
+		reportValidation
+	});
+
+	assert.equal(decision.continueRun, false);
+	assert.equal(decision.failureKind, 'assertion');
+	assert.equal(decision.usable, true);
+});
+
+test('rejects missing, malformed, mismatched, and unstable phase reports', () => {
+	assert.equal(validatePhase(undefined).valid, false);
+	assert.match(
+		validatePhase(
+			phaseReport({samples: {'startup.shellMs': ['ten']}})
+		).errors.join(' '),
+		/malformed/
+	);
+	assert.match(
+		validatePhase(
+			phaseReport({
+				fixture: {fixtureVariant: 'chapbook', passageCount: 50_000},
+				phase: 'edit'
+			})
+		).errors.join(' '),
+		/identifies edit|passages|fixture variant/
+	);
+	assert.match(
+		validatePhase(phaseReport(), {
+			git: {
+				dirty: false,
+				revision: 'abc123',
+				worktreeFingerprint: 'worktree-two'
+			}
+		}).errors.join(' '),
+		/Git revision or worktree state changed/
+	);
+});
+
+test('rejects completed timed-out and interrupted tests as infrastructure', () => {
+	for (const status of ['timedOut', 'interrupted']) {
+		const reportValidation = validatePhase(
+			phaseReport({
+				measurement: {
+					attempts: [
+						{
+							bodyCompleted: true,
+							failedInvariantCount: 0,
+							failureKind: 'infrastructure',
+							retry: 0,
+							status
+						}
+					],
+					bodyCompleted: true,
+					failedInvariantCount: 0,
+					failureKind: 'infrastructure'
+				},
+				test: {status}
+			})
+		);
+		const decision = decideElectronPhaseContinuation({
+			exitCode: 0,
+			reportValidation
+		});
+
+		assert.equal(reportValidation.valid, true);
+		assert.equal(decision.continueRun, false);
+		assert.equal(decision.failureKind, 'infrastructure');
+		assert.equal(decision.usable, false);
+	}
+});
+
+test('treats every nonzero Playwright exit as infrastructure', () => {
+	for (const reportValidation of [
+		validatePhase(phaseReport()),
+		validatePhase(
+			phaseReport({
+				assertions: [{name: 'measured-invariant', passed: false}],
+				measurement: {
+					attempts: [
+						{
+							bodyCompleted: true,
+							failedInvariantCount: 1,
+							failureKind: 'assertion',
+							retry: 0,
+							status: 'passed'
+						}
+					],
+					bodyCompleted: true,
+					failedInvariantCount: 1,
+					failureKind: 'assertion'
+				}
+			})
+		)
+	]) {
+		const decision = decideElectronPhaseContinuation({
+			exitCode: 7,
+			reportValidation
+		});
+
+		assert.equal(decision.failureKind, 'infrastructure');
+		assert.equal(decision.usable, false);
+		assert.match(decision.reason, /Playwright process exited nonzero/);
+	}
+});
+
+test('rejects retry histories containing infrastructure attempts', () => {
+	for (const finalFailure of [undefined, 'assertion']) {
+		const failedInvariantCount = finalFailure === 'assertion' ? 1 : 0;
+		const reportValidation = validatePhase(
+			phaseReport({
+				assertions: [
+					{name: 'measured-invariant', passed: failedInvariantCount === 0}
+				],
+				measurement: {
+					attempts: [
+						{
+							bodyCompleted: true,
+							failedInvariantCount: 0,
+							failureKind: 'infrastructure',
+							retry: 0,
+							status: 'failed'
+						},
+						{
+							bodyCompleted: true,
+							failedInvariantCount,
+							failureKind: finalFailure,
+							retry: 1,
+							status: 'passed'
+						}
+					],
+					bodyCompleted: true,
+					failedInvariantCount,
+					failureKind: finalFailure
+				}
+			})
+		);
+		const decision = decideElectronPhaseContinuation({
+			exitCode: 0,
+			reportValidation
+		});
+
+		assert.equal(reportValidation.valid, true);
+		assert.equal(decision.failureKind, 'infrastructure');
+		assert.equal(decision.usable, false);
+	}
+});
+
+test('requires retry histories to start at zero and remain consecutive', () => {
+	const report = phaseReport();
+
+	report.measurement.attempts[0].retry = 1;
+	assert.match(
+		validatePhase(report).errors.join(' '),
+		/attempt 0 is malformed/
+	);
+});
+
+test('rejects a non-final retry recorded before teardown as passing', () => {
+	const report = phaseReport({
+		measurement: {
+			attempts: [
+				{
+					bodyCompleted: true,
+					failedInvariantCount: 0,
+					retry: 0,
+					status: 'passed'
+				},
+				{
+					bodyCompleted: true,
+					failedInvariantCount: 0,
+					retry: 1,
+					status: 'passed'
+				}
+			],
+			bodyCompleted: true,
+			failedInvariantCount: 0
+		}
+	});
+	const reportValidation = validatePhase(report);
+	const decision = decideElectronPhaseContinuation({
+		exitCode: 0,
+		reportValidation
+	});
+
+	assert.match(
+		reportValidation.errors.join(' '),
+		/non-final retry attempt 0 hides an infrastructure failure/
+	);
+	assert.equal(decision.continueRun, false);
+	assert.equal(decision.failureKind, 'infrastructure');
+	assert.equal(decision.usable, false);
+});
+
+test('aborts if the source fixture changes during a phase', () => {
+	const decision = decideElectronPhaseContinuation({
+		exitCode: 0,
+		reportValidation: validatePhase(phaseReport()),
+		sourceFixtureUnchanged: false
+	});
+
+	assert.equal(decision.continueRun, false);
+	assert.equal(decision.failureKind, 'infrastructure');
+	assert.equal(decision.usable, false);
+});
+
+test('aborts if the production build changes during a phase', () => {
+	const decision = decideElectronPhaseContinuation({
+		exitCode: 0,
+		productionBuildUnchanged: false,
+		reportValidation: validatePhase(phaseReport())
+	});
+
+	assert.equal(decision.continueRun, false);
+	assert.equal(decision.failureKind, 'infrastructure');
+	assert.equal(decision.usable, false);
+});
+
+test('preserves the first nonzero phase status', () => {
+	assert.equal(preserveFirstNonzeroStatus(0, 2), 2);
+	assert.equal(preserveFirstNonzeroStatus(2, 1), 2);
+	assert.equal(preserveFirstNonzeroStatus(0, 0), 0);
+});
+
+test('keeps a fully collected assertion-failed suite baseline-ineligible', () => {
+	const phases = ['startup', 'edit', 'query', 'graph', 'watcher'];
+	const reports = phases.map(phase => {
+		const assertionFailed = phase === 'edit';
+		const failedInvariantCount = assertionFailed ? 1 : 0;
+
+		return phaseReport({
+			assertions: [{name: `${phase}-invariant`, passed: !assertionFailed}],
+			measurement: {
+				attempts: [
+					{
+						bodyCompleted: true,
+						failedInvariantCount,
+						failureKind: assertionFailed ? 'assertion' : undefined,
+						retry: 0,
+						status: 'passed'
+					}
+				],
+				bodyCompleted: true,
+				failedInvariantCount,
+				failureKind: assertionFailed ? 'assertion' : undefined
+			},
+			phase
+		});
+	});
+	const phaseResults = Object.fromEntries(
+		phases.map(phase => [
+			phase,
+			{status: phase === 'edit' ? 'failed' : 'passed'}
+		])
+	);
+	const merged = mergeRawPerformanceReports(reports, phaseResults);
+
+	merged.aggregates = {};
+	merged.evaluation = {passed: false};
+	assert.equal(merged.phase, 'all');
+	assert.equal(merged.test.status, 'failed');
+	assert.equal(merged.measurement, undefined);
+	assert.match(
+		baselineCandidateErrors(merged, {metrics: {}}).join(' '),
+		/passing all-phase report|Missing passing phase: edit/
+	);
 });
 
 test('blocks merged reports that mix fixture variants', () => {
@@ -422,11 +848,19 @@ test('accepts only complete all-phase baseline reports', () => {
 					{
 						name: 'git-dirty-state-stable-across-phases',
 						passed: true
+					},
+					{
+						name: 'git-worktree-state-stable-across-phases',
+						passed: true
 					}
 				],
 				environment: {
 					...report.environment,
-					git: {dirty: false, revision: 'abc123'}
+					git: {
+						dirty: false,
+						revision: 'abc123',
+						worktreeFingerprint: 'worktree-one'
+					}
 				}
 			},
 			budgets,
@@ -440,7 +874,11 @@ test('accepts only complete all-phase baseline reports', () => {
 				...report,
 				environment: {
 					...report.environment,
-					git: {dirty: false, revision: 'abc123'}
+					git: {
+						dirty: false,
+						revision: 'abc123',
+						worktreeFingerprint: 'worktree-one'
+					}
 				}
 			},
 			budgets,
