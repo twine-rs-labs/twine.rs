@@ -2,7 +2,7 @@
 
 Status: current
 Owner: performance maintainers
-Last verified: 2026-07-29
+Last verified: 2026-08-03
 Source of truth: normalized JSON references in this directory
 
 These small JSON snapshots preserve durable evidence for performance numbers
@@ -16,21 +16,37 @@ directory.
 
 The current clean references are:
 
-- [10k clean reference with a matched baseline](./2026-07-16-apple-m4-10000.summary.json)
-- [50k clean target-only reference](./2026-07-21-apple-m4-50000.summary.json)
+- [10k same-machine baseline source](./2026-07-18-apple-m4-10000.summary.json)
+- [50k released-beta clean reference with a matched baseline](./2026-08-03-apple-m4-50000.summary.json)
 
-Their complete source reports each used one clean Git revision and passed the
-cross-phase revision and dirty-state assertions. The 10k reference is from
-revision `bd13ddd6` and records `baselineStatus: "matched"`. The 50k reference
-is from revision `eb090ab` and records `baselineStatus: "missing"`: it passed
-the structural invariants, but it has no matched regression baseline and must
-not be described as an accepted baseline. The initial
+Their complete source reports each used one Git revision across all phases and
+passed the cross-phase revision and dirty-state assertions. The 10k reference
+is from clean revision `0951f942`; its report was captured with
+`baselineStatus: "missing"` and then accepted byte-for-byte as the current
+same-machine local baseline. The fresh 50k reference is from clean released
+revision `d3b25477` (`v0.2.0-beta.2`), passed all 399 blocking invariants and
+every regression check, and records `baselineStatus: "matched"`.
+
+A fresh 10k capture was also attempted from the released revision. Repeated
+clean runs stopped in the edit phase when the no-long-task invariant observed
+renderer stalls. Two host-quiet confirmation runs recorded 86 ms and 245 ms
+maximum long tasks and failed the matched edit-paint regression gate. A focused
+edit repeat reproduced the failure while worker, bridge, and save timings
+remained bounded. Because those reports are incomplete, they are not eligible
+as baselines or normalized references, and the July 18 same-machine baseline
+source remains current.
+
+The initial
 [10k historical snapshot](./2026-07-03-apple-m4-10000.summary.json) and
 [50k historical snapshot](./2026-07-03-apple-m4-50000.summary.json) remain for
 comparison; their dirty-worktree limitation is recorded inside each artifact.
+The previous clean [July 16](./2026-07-16-apple-m4-50000.summary.json) and
+[July 21](./2026-07-21-apple-m4-50000.summary.json) 50k references also remain
+for comparison; the July 21 report is target-only evidence with
+`baselineStatus: "missing"`.
 The previous clean
-[50k reference](./2026-07-16-apple-m4-50000.summary.json) also remains for
-comparison.
+[July 16 10k reference](./2026-07-16-apple-m4-10000.summary.json) remains as
+historical cross-machine evidence.
 
 Focused diagnostics can also preserve a small normalized decision record when
 the raw evidence is too large to track. The

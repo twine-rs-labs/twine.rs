@@ -20,6 +20,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import {performance as nodePerformance} from 'node:perf_hooks';
+import {performanceReportSchemaVersion} from '../benchmarks/performance-report-schema.mjs';
 
 interface PerformanceSnapshot {
 	main: {
@@ -4151,7 +4152,7 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				sampleCount:
 					phase === 'diagnostic' || phase === 'memory-detail' ? 1 : undefined,
 				samples,
-				schemaVersion: 2,
+				schemaVersion: performanceReportSchemaVersion,
 				smoke,
 				test: {
 					error: testInfo.error?.message,

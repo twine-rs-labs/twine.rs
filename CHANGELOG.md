@@ -3,9 +3,10 @@
 This file records user-visible changes to Twine RS. It does not duplicate the
 upstream Twine history under `docs/en/src/release-notes/`.
 
-Twine RS has not yet published a formal release under the process in
-[`RELEASING.md`](RELEASING.md). Do not reconstruct historical entries or tags
-without verifiable source and artifact evidence.
+Twine RS published its first formal public prerelease, `0.2.0-beta.2`, under
+the process in [`RELEASING.md`](RELEASING.md) on 2026-08-01. Do not add or
+reconstruct release entries or tags without verifiable source and artifact
+evidence.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases use [Semantic Versioning](https://semver.org/).

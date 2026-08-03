@@ -2,7 +2,7 @@
 
 Status: current measured snapshot
 Owner: performance maintainers
-Last verified: 2026-07-29
+Last verified: 2026-08-03
 Source of truth: release-mode Electron harness and tracked normalized references
 
 ## Harness state
@@ -17,19 +17,94 @@ The current tracked pair contains complete Apple M4 runs that pass all
 machine-independent structural invariants. Raw reports and machine-specific
 baselines remain ignored, while normalized reproducibility evidence is tracked:
 
-- [10k reference](../../benchmarks/reference/2026-07-16-apple-m4-10000.summary.json)
-- [50k reference](../../benchmarks/reference/2026-07-21-apple-m4-50000.summary.json)
+- [10k same-machine baseline source](../../benchmarks/reference/2026-07-18-apple-m4-10000.summary.json)
+- [50k released-beta reference](../../benchmarks/reference/2026-08-03-apple-m4-50000.summary.json)
 
-The 10k source report was captured from clean revision `bd13ddd6`, retained
-that revision and clean state through all five phases, passed every blocking
-invariant, and recorded `baselineStatus: "matched"`. The 50k source report was
-captured from clean revision `eb090ab`, retained that revision and clean state
-through all five phases, and passed every structural invariant. It recorded
-`baselineStatus: "missing"`, so it is target-only evidence without a matched
-regression baseline—not an accepted 50k baseline. The
-[earlier July 16 50k reference](../../benchmarks/reference/2026-07-16-apple-m4-50000.summary.json)
-remains tracked for historical comparison, as do the earlier July 3
-dirty-worktree summaries.
+The 10k source report was captured from clean revision `0951f942`, retained
+that revision and clean state through all five phases, and passed every
+blocking invariant. It recorded `baselineStatus: "missing"` before that exact
+report was accepted as the current same-machine local baseline. The fresh 50k
+report was captured from clean released revision `d3b25477`
+(`v0.2.0-beta.2`), retained that revision and clean state through all five
+phases, passed all 399 blocking invariants and every regression check, and
+recorded `baselineStatus: "matched"`. The
+[July 16](../../benchmarks/reference/2026-07-16-apple-m4-50000.summary.json) and
+[July 21](../../benchmarks/reference/2026-07-21-apple-m4-50000.summary.json)
+50k references remain tracked for historical comparison, as do the earlier
+July 3 dirty-worktree summaries.
+
+## Released-beta baseline refresh
+
+The clean full 50k suite from `v0.2.0-beta.2` completed on 2026-08-03 with no
+blocking regression. Shell visibility measured 2.371 s p50, interactive startup
+1.587 s p50, Contents 70.6 ms p95, search 15.6 ms p95, edit-to-paint 43.4 ms
+p95, graph frames 17.5 ms p95 and 17.8 ms maximum, retained resident memory
+1,145 MiB p50, and watcher observation-to-patch 264.0 ms p95. Shell,
+interactive, Contents, edit paint, graph p95, and resident memory still miss
+their absolute roadmap targets; search, graph maximum, and every matched
+regression gate pass.
+
+The requested 10k refresh did not produce a replacement accepted baseline.
+Preparation first regenerated the checked-in WASM artifact, making the initial
+complete diagnostic dirty. After restoring clean tag provenance, repeated full
+runs stopped in the edit phase on the no-long-task invariant. Two confirmation
+runs with the unrelated VS Code Playwright server stopped at the OS process
+level still observed 86 ms and 245 ms maximum renderer long tasks and failed
+the matched edit-paint regression gate. A focused edit-only repeat observed
+245 ms and 129 ms long tasks, including a repeat of the 245 ms edit-4 stall;
+worker apply operations remained near 10 ms, and native persistence stayed below
+27 ms p95. Query, graph, and watcher never ran in the failing full suites. Those
+raw local reports are retained as diagnostics, while the clean July 18
+same-machine baseline remains the current durable 10k evidence.
+
+## July-to-released-beta comparison
+
+The closest like-for-like comparators are the clean July 18 10k local-baseline
+source at `0951f942` and the clean July 21 50k reference at `eb090ab`. They
+share the current machine fingerprint, fixture identity, Electron and
+Playwright versions, and startup/memory measurement contracts. macOS changed
+from Darwin 25.5 to 25.6, and the raw report schema changed from 1 to 2 without
+changing those metric contracts.
+
+The current 10k data is failing partial evidence, not a new baseline. The range
+below uses the two host-quiet confirmation runs; both passed startup, then
+stopped in edit.
+
+| 10k metric                    |   July 18 |   Current range |              Change | Reading                                      |
+| ----------------------------- | --------: | --------------: | ------------------: | -------------------------------------------- |
+| Shell visible, p50            |  994.6 ms |  563.9–910.3 ms |    8.5–43.3% faster | Improved, but still misses the 400 ms target |
+| Interactive/open, p50         |  660.3 ms |  387.4–574.0 ms |   13.1–41.3% faster | Still passes the 1.5 s target                |
+| Edit to paint, p95            |   25.7 ms |   57.9–106.4 ms |     125–314% slower | Blocking regression; limit 30.7 ms           |
+| Renderer long-task maximum    |      0 ms |       86–245 ms | New blocking stalls | Reproduced in a focused edit-only run        |
+| Startup post-GC resident, p50 | 663.1 MiB | 712.0–712.1 MiB |   about 7.4% higher | Same three-sample checkpoint; target miss    |
+
+The startup memory row compares the same explicit three-sample checkpoint, not
+the policy's cross-phase resident-memory aggregate. It is descriptive because
+the current suites did not progress beyond edit. The edit result is unambiguous
+at the policy level: both confirmation runs exceed the 30.7 ms matched-baseline
+limit and the focused edit run reproduces the long tasks.
+
+The current 50k report is complete and clean, so its comparison is suitable for
+the normal regression policy.
+
+| 50k metric                        |     July 21 |    August 3 |       Change | Reading                                                  |
+| --------------------------------- | ----------: | ----------: | -----------: | -------------------------------------------------------- |
+| Shell visible, p50                |  4,581.4 ms |  2,371.4 ms | 48.2% faster | Material improvement; 400 ms target still missed         |
+| Interactive/open, p50             |  3,280.3 ms |  1,586.6 ms | 51.6% faster | Material improvement; 1.5 s target narrowly missed       |
+| Passage reindex compute, p95      |      4.6 ms |      1.2 ms | 73.9% faster | Target passes                                            |
+| Contents query, p95               |     88.6 ms |     70.6 ms | 20.3% faster | Improved; 50 ms target still missed                      |
+| Search query, p95                 |     30.4 ms |     15.6 ms | 48.7% faster | Target passes                                            |
+| Edit to paint, p95                |     83.2 ms |     43.4 ms | 47.8% faster | Material improvement; 16.6 ms target still missed        |
+| Graph frame, p95                  |     18.6 ms |     17.5 ms |  5.9% faster | Essentially unchanged; 16.6 ms target still missed       |
+| Graph frame, maximum              |     18.8 ms |     17.8 ms |  5.3% faster | Essentially unchanged; 50 ms target passes               |
+| Retained resident memory, p50     | 1,044.1 MiB | 1,145.0 MiB |  9.7% higher | Within regression allowance by only 3.6 MiB; target miss |
+| Watcher observation to patch, p95 |    325.6 ms |    264.0 ms | 18.9% faster | Directional diagnostic improvement                       |
+
+The large 50k latency changes are material directional evidence, but the
+August side is one full suite rather than a repeated sample, so this is not a
+claim of statistical significance. The 100.9 MiB memory increase deserves
+attention: it passes the blocking regression gate only because the policy
+allows 10% growth, and it remains far above the 600 MiB absolute target.
 
 A short diagnostic phase now exists for iteration on the dominant 50k edit/save
 cost. `npm run perf:electron:50k:diagnostic` performs one production launch and

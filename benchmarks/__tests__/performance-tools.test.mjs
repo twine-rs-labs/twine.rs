@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
+import {performanceReportSchemaVersion} from '../performance-report-schema.mjs';
 import {
 	aggregateSamples,
 	baselineCandidateErrors,
@@ -11,6 +12,7 @@ import {
 	machineFingerprint,
 	mergeRawPerformanceReports,
 	performanceBaselinePath,
+	performanceReportSchemaVersion as validatorPerformanceReportSchemaVersion,
 	percentile,
 	reportFixtureVariant,
 	regressionAllowance
@@ -73,7 +75,7 @@ test('merges independently checkpointed benchmark phases', () => {
 		},
 		fixture: {passageCount: 50_000},
 		kind: 'twine-electron-performance',
-		schemaVersion: 1
+		schemaVersion: performanceReportSchemaVersion
 	};
 	const merged = mergeRawPerformanceReports(
 		[
@@ -138,7 +140,7 @@ test('blocks merged reports that mix fixture variants', () => {
 		fixture: {passageCount: 10_000},
 		kind: 'twine-electron-performance',
 		samples: {},
-		schemaVersion: 1
+		schemaVersion: performanceReportSchemaVersion
 	};
 	const merged = mergeRawPerformanceReports([
 		{...common, phase: 'edit'},
@@ -178,7 +180,7 @@ test('preserves detailed memory diagnostics for focused reports', () => {
 		kind: 'twine-electron-performance',
 		phase: 'memory-detail',
 		samples: {},
-		schemaVersion: 1
+		schemaVersion: performanceReportSchemaVersion
 	};
 	const merged = mergeRawPerformanceReports([report], {
 		'memory-detail': {status: 'passed'}
@@ -352,6 +354,24 @@ test('does not compare metrics whose measurement contract changed', () => {
 	);
 });
 
+test('shares the report schema version between writer and validator', async () => {
+	const writerSource = await readFile(
+		new URL('../../e2e/electron-performance.spec.ts', import.meta.url),
+		'utf8'
+	);
+
+	assert.equal(performanceReportSchemaVersion, 2);
+	assert.equal(
+		validatorPerformanceReportSchemaVersion,
+		performanceReportSchemaVersion
+	);
+	assert.match(
+		writerSource,
+		/import \{performanceReportSchemaVersion\} from '\.\.\/benchmarks\/performance-report-schema\.mjs';/
+	);
+	assert.match(writerSource, /schemaVersion: performanceReportSchemaVersion/);
+});
+
 test('accepts only complete all-phase baseline reports', () => {
 	const budgets = {
 		metrics: {
@@ -374,11 +394,18 @@ test('accepts only complete all-phase baseline reports', () => {
 				{status: 'passed'}
 			])
 		),
-		schemaVersion: 1,
+		schemaVersion: performanceReportSchemaVersion,
 		test: {status: 'passed'}
 	};
 
 	assert.deepEqual(baselineCandidateErrors(report, budgets), []);
+	assert.match(
+		baselineCandidateErrors(
+			{...report, schemaVersion: performanceReportSchemaVersion - 1},
+			budgets
+		).join(' '),
+		/not a completed performance report/
+	);
 	assert.match(
 		baselineCandidateErrors(report, budgets, {requireClean: true}).join(' '),
 		/clean Git revision/

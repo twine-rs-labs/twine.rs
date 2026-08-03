@@ -2,8 +2,9 @@ import {createHash} from 'node:crypto';
 import {readFile, writeFile, mkdir, readdir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {performanceReportSchemaVersion} from './performance-report-schema.mjs';
 
-export const performanceReportSchemaVersion = 1;
+export {performanceReportSchemaVersion};
 export const completeElectronPhases = [
 	'startup',
 	'edit',

@@ -140,8 +140,16 @@ installable Electron artifacts for the current host target.
 Release builds are not publishable merely because a host packaging command
 succeeds. [`RELEASING.md`](RELEASING.md) defines the approval, changelog,
 annotated tag, checklist, support, rollback, evidence-retention, and immutable
-publication process. Twine RS has not yet completed its first formal release
-under that process.
+publication process. [`v0.2.0-beta.2`](https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.2)
+became the first formal public Twine RS prerelease under that process on
+2026-08-01.
+
+The beta uses the `distributable-unsigned` profile. Windows and macOS may show
+publisher or unidentified-developer warnings; verify the published checksums
+and provenance before installing, back up project folders before early-adopter
+use, and read the
+[`availability and updates guide`](docs/user/availability-and-updates.md).
+Automatic updates are not available in the beta.
 
 ```sh
 npm run dist
