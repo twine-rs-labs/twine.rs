@@ -116,8 +116,8 @@ The JSON schema and field guidance are in
 Roll out merge-queue native-only execution in this order:
 
 1. Leave `TWINE_MERGE_QUEUE_NATIVE_ONLY` unset or `false` while the merge queue
-   ruleset is disabled. In this mode PR, `main`, and merge-group events retain
-   native evidence where the path classifier requires it.
+   ruleset is disabled. In this mode pull-request and merge-group events retain
+   native evidence where the fail-closed path-and-mode classifier requires it.
 2. Merge the workflow changes that add `merge_group` handling and the stable
    required checks named **Quality gate** and **Packaged Electron gate**.
 3. Configure the ruleset to require those two stable status checks.
@@ -127,10 +127,20 @@ Roll out merge-queue native-only execution in this order:
    both SHAs, and the `desktop-local-test-bundle` artifact ID and digest.
 5. Only after that confirmation, set `TWINE_MERGE_QUEUE_NATIVE_ONLY` to `true`.
 
-Enabling the variable earlier suppresses native work on PR and direct `main`
-events before merge-group evidence is proven reusable. Candidate preparation
-then blocks fail-closed because it cannot bind complete same-commit packaged
-evidence. Do not change GitHub rulesets and the variable in the opposite order.
+Enabling the variable earlier suppresses native work on pull-request events
+before merge-group evidence is proven reusable. Candidate preparation then
+blocks fail-closed if a release commit lands without complete same-commit
+packaged evidence. Do not change GitHub rulesets and the variable in the
+opposite order.
+
+Quality and Packaged Electron do not run again when the merge-queue result is
+pushed to `main`; their successful `merge_group` runs are the durable
+same-commit evidence. Quality can be manually dispatched from `main` while the
+required SHA is still its HEAD to recover missing Quality evidence, and that
+recovery always runs the full JavaScript and Rust suite. Packaged Electron has
+no manual gate-only substitute for its native test bundle. Keep direct changes
+to `main` out of the release path, and prepare the candidate before the retained
+packaged evidence expires.
 
 ## Candidate preparation
 
@@ -147,10 +157,13 @@ evidence. Do not change GitHub rulesets and the variable in the opposite order.
    app evidence from the same release commit.
 5. Exercise project open, save, backup, recovery, and any applicable migration
    and previous-version reopening path.
-6. Merge the clean release commit. Confirm its Quality and Packaged Electron
-   workflows pass, review the completed evidence, and record release-manager
-   approval. Candidate preparation binds those same-commit run IDs and native
-   bundle provenance without creating a self-referential plan commit.
+6. Merge the clean release commit through the merge queue. Confirm the Quality
+   and Packaged Electron `merge_group` runs share the exact SHA that landed on
+   `main`, review the completed evidence, and record release-manager approval.
+   Candidate preparation binds those same-commit run IDs and native bundle
+   provenance without creating a self-referential plan commit. If only Quality
+   evidence needs recovery, manually dispatch **Quality gates** from `main`
+   before `main` advances beyond that SHA and before candidate preparation.
 7. Manually dispatch **Build desktop release candidate** from `main` with the
    intended tag. The workflow fails unless its dispatch SHA is still the exact
    `origin/main` HEAD, the intended tag is absent both locally and remotely,

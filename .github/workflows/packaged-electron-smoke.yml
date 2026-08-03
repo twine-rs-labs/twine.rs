@@ -2,13 +2,11 @@ name: Packaged Electron smoke
 
 on:
   pull_request:
-  push:
-    branches: [main]
   merge_group:
     types: [checks_requested]
 
-# Cancel only superseded pull-request runs. Exact merge-queue and main evidence
-# remains durable for pre-tag release candidate validation.
+# Cancel only superseded pull-request runs. Exact merge-queue evidence remains
+# durable for pre-tag release candidate validation.
 concurrency:
   group: packaged-electron-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -45,7 +43,7 @@ jobs:
           MERGE_QUEUE_NATIVE_ONLY: ${{ vars.TWINE_MERGE_QUEUE_NATIVE_ONLY || 'false' }}
         run: |
           native_required="$CHANGED_PATHS_REQUIRE_NATIVE"
-          # Transition switch: gate-only PR/main runs intentionally retain no
+          # Transition switch: gate-only pull-request runs intentionally retain no
           # desktop-local-test-bundle, so release evidence cannot accept them.
           if [[ "$MERGE_QUEUE_NATIVE_ONLY" == 'true' && "$EVENT_NAME" != 'merge_group' ]]; then
             native_required=false
