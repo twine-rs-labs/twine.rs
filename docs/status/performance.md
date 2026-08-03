@@ -13,50 +13,41 @@ fixture into an isolated temporary run root, and measures startup, editing,
 queries, graph frames, watcher ingestion, bridge payloads, persistence, and
 process memory.
 
-The current tracked pair contains complete Apple M4 runs that pass all
-machine-independent structural invariants. Raw reports and machine-specific
-baselines remain ignored, while normalized reproducibility evidence is tracked:
+The current tracked pair contains complete Apple M4 corrected-code runs. Raw
+reports and machine-specific baselines remain ignored, while normalized
+reproducibility evidence is tracked:
 
-- [10k same-machine baseline source](../../benchmarks/reference/2026-07-18-apple-m4-10000.summary.json)
-- [50k released-beta reference](../../benchmarks/reference/2026-08-03-apple-m4-50000.summary.json)
+- [10k clean passing reference](../../benchmarks/reference/2026-08-03-apple-m4-e6f5446a-10000.summary.json)
+- [50k clean failed-gate evidence](../../benchmarks/reference/2026-08-03-apple-m4-e6f5446a-50000.summary.json)
 
-The 10k source report was captured from clean revision `0951f942`, retained
-that revision and clean state through all five phases, and passed every
-blocking invariant. It recorded `baselineStatus: "missing"` before that exact
-report was accepted as the current same-machine local baseline. The fresh 50k
-report was captured from clean released revision `d3b25477`
-(`v0.2.0-beta.2`), retained that revision and clean state through all five
-phases, passed all 399 blocking invariants and every regression check, and
-recorded `baselineStatus: "matched"`. The
-[July 16](../../benchmarks/reference/2026-07-16-apple-m4-50000.summary.json) and
-[July 21](../../benchmarks/reference/2026-07-21-apple-m4-50000.summary.json)
-50k references remain tracked for historical comparison, as do the earlier
-July 3 dirty-worktree summaries.
+Both reports retained clean revision `e6f5446a` through all five phases and
+passed 417/417 assertions. The 10k evaluation passes. The 50k evaluation fails
+only its resident-memory regression comparison, so its normalized artifact is
+clean complete evidence, not an accepted baseline or baseline replacement. The
+previous July 18 10k and released-beta August 3 50k references are now
+historical, alongside the July 3, July 16, and July 21 snapshots.
 
-## Released-beta baseline refresh
+## Corrected clean validation
 
-The clean full 50k suite from `v0.2.0-beta.2` completed on 2026-08-03 with no
-blocking regression. Shell visibility measured 2.371 s p50, interactive startup
-1.587 s p50, Contents 70.6 ms p95, search 15.6 ms p95, edit-to-paint 43.4 ms
-p95, graph frames 17.5 ms p95 and 17.8 ms maximum, retained resident memory
-1,145 MiB p50, and watcher observation-to-patch 264.0 ms p95. Shell,
-interactive, Contents, edit paint, graph p95, and resident memory still miss
-their absolute roadmap targets; search, graph maximum, and every matched
-regression gate pass.
+The clean full suites at corrected revision `e6f5446a` completed all five
+phases. At 10k, shell visibility was 538.3 ms p50, interactive startup 358.5 ms
+p50, edit-to-paint 24.9 ms p95, retained resident memory 717.8125 MiB p50, and
+the edit-window long-task maximum was 0 ms. Its matched evaluation passes.
 
-The requested 10k refresh did not produce a replacement accepted baseline.
-Preparation first regenerated the checked-in WASM artifact, making the initial
-complete diagnostic dirty. After restoring clean tag provenance, repeated full
-runs stopped in the edit phase on the no-long-task invariant. Two confirmation
-runs with the unrelated VS Code Playwright server stopped at the OS process
-level still observed 86 ms and 245 ms maximum renderer long tasks and failed
-the matched edit-paint regression gate. A focused edit-only repeat observed
-245 ms and 129 ms long tasks, including a repeat of the 245 ms edit-4 stall;
-worker apply operations remained near 10 ms, and the asynchronous native write
-itself stayed below 27 ms p95. Query, graph, and watcher never ran in the
-failing full suites. Those raw local reports are retained as diagnostics, while
-the clean July 18 same-machine baseline remains the current durable 10k
-evidence.
+At 50k, shell visibility was 2.440 s p50, interactive startup 1.700 s p50,
+Contents 71.4 ms p95, search 18.8 ms p95, edit-to-paint 43.6 ms p95, graph
+frames 17.2 ms p95 and 17.6 ms maximum, retained resident memory 1,148.90625
+MiB p50, watcher observation-to-patch 269.2 ms p95, and the edit-window
+long-task maximum was 0 ms. All structural assertions pass. The only blocking
+evaluation failure is the memory comparison against the July 21 local baseline:
+1,044.125 MiB plus the 104.4125 MiB allowance gives a 1,148.5375 MiB limit.
+The result is 0.36875 MiB, about 0.032%, above that limit.
+
+The tracked released-beta August 3 reference measured 1,144.984375 MiB. The
+corrected result is 3.921875 MiB, about 0.34%, higher. A single result this close
+to the gate does not establish a significant memory regression; the harness
+nonetheless fails the comparison mechanically, and the 50k result cannot
+replace a baseline.
 
 Focused attribution on 2026-08-03 located the regression. Disabling the native
 Harlowe editor did not remove it: that control still recorded 201 ms and 198 ms
@@ -70,20 +61,14 @@ painting until the browser could service it. The reservation was introduced by
 the story reducer, patch publication, and the asynchronous file write are not
 the owner of this tail.
 
-The clean 50k suite uses the same synchronous reservation; its zero long tasks
-are consistent with its 20 measured edits not colliding with a busy
-browser-main window and do not demonstrate a different persistence path. The
-A/B and profile reports came from an intentionally dirty diagnostic worktree;
-their production build stayed unchanged during each phase, but the reports are
-not clean provenance and do not replace either tracked baseline. Quit-safe write
-tracking now removes the synchronous renderer-to-main reservation from the edit
-critical path. The replacement closes renderer mutation admission, flushes
-buffered editor text and already-admitted core work, drains renderer and main
-persistence, and uses a cancellable readiness-scoped quit handshake. Focused
-trace evidence and clean complete 10k/50k suites are still required before the
-edit regression can be closed or either tracked baseline can be replaced.
+The earlier A/B and profile reports came from an intentionally dirty diagnostic
+worktree and do not replace clean evidence. Quit-safe write tracking removes the
+synchronous renderer-to-main reservation from the edit critical path. The clean
+corrected suites now validate its all-phase behavior: both record zero long
+tasks across the 20 edit windows, with bounded edit-paint tails and every
+structural assertion passing.
 
-## July-to-released-beta comparison
+## Historical comparison
 
 The closest like-for-like comparators are the clean July 18 10k local-baseline
 source at `0951f942` and the clean July 21 50k reference at `eb090ab`. They
@@ -92,26 +77,10 @@ Playwright versions, and startup/memory measurement contracts. macOS changed
 from Darwin 25.5 to 25.6, and the raw report schema changed from 1 to 2 without
 changing those metric contracts.
 
-The current 10k data is failing partial evidence, not a new baseline. The range
-below uses the two host-quiet confirmation runs; both passed startup, then
-stopped in edit.
-
-| 10k metric                    |   July 18 |   Current range |              Change | Reading                                      |
-| ----------------------------- | --------: | --------------: | ------------------: | -------------------------------------------- |
-| Shell visible, p50            |  994.6 ms |  563.9–910.3 ms |    8.5–43.3% faster | Improved, but still misses the 400 ms target |
-| Interactive/open, p50         |  660.3 ms |  387.4–574.0 ms |   13.1–41.3% faster | Still passes the 1.5 s target                |
-| Edit to paint, p95            |   25.7 ms |   57.9–106.4 ms |     125–314% slower | Blocking regression; limit 30.7 ms           |
-| Renderer long-task maximum    |      0 ms |       86–245 ms | New blocking stalls | Reproduced in a focused edit-only run        |
-| Startup post-GC resident, p50 | 663.1 MiB | 712.0–712.1 MiB |   about 7.4% higher | Same three-sample checkpoint; target miss    |
-
-The startup memory row compares the same explicit three-sample checkpoint, not
-the policy's cross-phase resident-memory aggregate. It is descriptive because
-the current suites did not progress beyond edit. The edit result is unambiguous
-at the policy level: both confirmation runs exceed the 30.7 ms matched-baseline
-limit and the focused edit run reproduces the long tasks.
-
-The current 50k report is complete and clean, so its comparison is suitable for
-the normal regression policy.
+The July 18 10k and released-beta August 3 50k references remain useful
+historical comparators, but they are no longer the current tracked pair. The
+corrected 10k edit-paint p95 is 24.9 ms versus 25.7 ms on July 18, and its
+edit-window long-task maximum is again 0 ms.
 
 | 50k metric                        |     July 21 |    August 3 |       Change | Reading                                                  |
 | --------------------------------- | ----------: | ----------: | -----------: | -------------------------------------------------------- |

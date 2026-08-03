@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {baselineCandidateErrors} from './performance-tools.mjs';
 
 export const performanceReferenceSchemaVersion = 1;
 
@@ -57,7 +58,16 @@ function normalizedEvaluationChecks(checks = []) {
 		.filter(check => check.kind !== 'invariant')
 		.map(check =>
 			Object.fromEntries(
-				['actual', 'blocking', 'kind', 'limit', 'name', 'passed', 'status']
+				[
+					'actual',
+					'baseline',
+					'blocking',
+					'kind',
+					'limit',
+					'name',
+					'passed',
+					'status'
+				]
 					.filter(key => check[key] !== undefined)
 					.map(key => [key, check[key]])
 			)
@@ -86,8 +96,21 @@ function normalizedPhases(phases = {}) {
 
 export function createPerformanceReferenceSummary(
 	report,
-	{sourceReportFile, sourceReportSha256}
+	{budgets, sourceReportFile, sourceReportSha256}
 ) {
+	if (
+		!budgets ||
+		typeof budgets !== 'object' ||
+		Array.isArray(budgets) ||
+		!budgets.metrics ||
+		typeof budgets.metrics !== 'object' ||
+		Array.isArray(budgets.metrics)
+	) {
+		throw new TypeError(
+			'createPerformanceReferenceSummary requires performance budgets.'
+		);
+	}
+
 	const limitations = [];
 	const phaseProvenanceVerified = [
 		'git-revision-stable-across-phases',
@@ -102,6 +125,11 @@ export function createPerformanceReferenceSummary(
 		typeof report.environment.git.revision === 'string' &&
 		report.environment.git.revision.length > 0 &&
 		phaseProvenanceVerified;
+	const evaluationPassed = report.evaluation?.passed === true;
+	const strictBaselineErrors = baselineCandidateErrors(report, budgets, {
+		requireClean: true
+	});
+	const baselineEligible = strictBaselineErrors.length === 0;
 
 	if (report.environment?.git?.dirty) {
 		limitations.push(
@@ -112,11 +140,27 @@ export function createPerformanceReferenceSummary(
 			'The source report has no phase-stable, verified clean Git revision. This snapshot is historical performance evidence, not proof of clean-commit reproducibility.'
 		);
 	}
+	if (!evaluationPassed) {
+		limitations.push(
+			'The source report failed a blocking regression gate. It is normalized evidence, not eligible for baseline acceptance or replacement.'
+		);
+	} else if (cleanRevision && !baselineEligible) {
+		limitations.push(
+			`The source report does not satisfy strict baseline acceptance: ${strictBaselineErrors.join(
+				' '
+			)}`
+		);
+	}
 
 	return {
 		aggregates: report.aggregates,
+		baselineEligible,
 		classification: cleanRevision
-			? 'clean-commit-baseline'
+			? baselineEligible
+				? 'clean-commit-baseline'
+				: evaluationPassed
+					? 'clean-commit-ineligible-evidence'
+					: 'clean-commit-failed-gate-evidence'
 			: 'historical-initial-baseline',
 		createdAt: report.createdAt,
 		environment: report.environment,

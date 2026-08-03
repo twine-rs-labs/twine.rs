@@ -689,7 +689,25 @@ export function baselineCandidateErrors(
 	budgets,
 	{requireClean = false} = {}
 ) {
+	const errors = referenceCandidateErrors(report, budgets, {
+		candidateKind: 'baseline',
+		requireClean
+	});
+
+	if (report.evaluation?.passed !== true) {
+		errors.push('The report has blocking evaluation failures.');
+	}
+
+	return errors;
+}
+
+export function referenceCandidateErrors(
+	report,
+	budgets,
+	{candidateKind = 'reference', requireClean = false} = {}
+) {
 	const errors = [];
+	const baselineCandidate = candidateKind === 'baseline';
 
 	if (
 		report.schemaVersion !== performanceReportSchemaVersion ||
@@ -700,10 +718,18 @@ export function baselineCandidateErrors(
 		return errors;
 	}
 	if (report.smoke) {
-		errors.push('Smoke reports cannot be accepted as baselines.');
+		errors.push(
+			baselineCandidate
+				? 'Smoke reports cannot be accepted as baselines.'
+				: 'Smoke reports cannot be used as references.'
+		);
 	}
 	if (report.phase !== 'all' || report.test?.status !== 'passed') {
-		errors.push('A baseline must be a passing all-phase report.');
+		errors.push(
+			baselineCandidate
+				? 'A baseline must be a passing all-phase report.'
+				: 'A reference must be a passing all-phase report.'
+		);
 	}
 	for (const phase of completeElectronPhases) {
 		if (report.phases?.[phase]?.status !== 'passed') {
@@ -712,11 +738,57 @@ export function baselineCandidateErrors(
 	}
 	for (const [name, budget] of Object.entries(budgets.metrics ?? {})) {
 		if (metricValue(report, name, budget.stat) === undefined) {
-			errors.push(`Missing baseline metric: ${name}.`);
+			errors.push(
+				`Missing ${baselineCandidate ? 'baseline' : 'reference'} metric: ${name}.`
+			);
 		}
 	}
-	if (report.evaluation?.passed !== true) {
-		errors.push('The report has blocking invariant failures.');
+	if (
+		!Array.isArray(report.assertions) ||
+		report.assertions.length === 0 ||
+		report.assertions.some(
+			assertion =>
+				!isRecord(assertion) ||
+				typeof assertion.name !== 'string' ||
+				!assertion.name ||
+				assertion.passed !== true
+		)
+	) {
+		errors.push('A reference must have structurally passing invariants.');
+	}
+	const evaluationChecks = report.evaluation?.checks;
+	const evaluationChecksValid =
+		Array.isArray(evaluationChecks) &&
+		evaluationChecks.every(
+			check =>
+				isRecord(check) &&
+				typeof check.blocking === 'boolean' &&
+				typeof check.kind === 'string' &&
+				typeof check.name === 'string' &&
+				typeof check.passed === 'boolean'
+		);
+	const blockingFailures = evaluationChecksValid
+		? evaluationChecks.filter(check => check.blocking && !check.passed)
+		: [];
+	const invariantChecks = evaluationChecksValid
+		? evaluationChecks.filter(check => check.kind === 'invariant')
+		: [];
+
+	if (
+		typeof report.evaluation?.passed !== 'boolean' ||
+		!evaluationChecksValid ||
+		(report.evaluation.passed === true && blockingFailures.length > 0) ||
+		(report.evaluation.passed === false && blockingFailures.length === 0)
+	) {
+		errors.push('The report evaluation is missing or inconsistent.');
+	} else if (
+		invariantChecks.length !== report.assertions.length ||
+		invariantChecks.some(check => !check.passed) ||
+		blockingFailures.some(check => check.kind !== 'regression')
+	) {
+		errors.push(
+			'A reference may preserve failed regression gates, but all structural invariants must pass.'
+		);
 	}
 	if (
 		requireClean &&

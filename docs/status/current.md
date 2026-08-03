@@ -141,18 +141,14 @@ The complete local 10k and 50k benchmark runs verify:
 - The public beta is deliberately unsigned, automatic updates remain disabled,
   and trusted Windows/macOS signing still requires credentialed release-run
   evidence before a signed profile can be claimed.
-- The fresh release-tag 50k run on 2026-08-03 completed all phases with 399/399
-  invariants and no blocking regressions. Repeated clean 10k refresh attempts
-  stopped at the edit long-task gate. Focused A/B and renderer profiling now
-  attribute the stall to the post-July synchronous legacy-write reservation:
-  `beginLegacyStoryWrite` blocks in `ipcRenderer.sendSync` while the browser
-  main thread is occupied. Quit-safe write tracking now removes that
-  synchronous edit-path IPC in favor of an asynchronous renderer-quiescence
-  handshake that flushes buffered editor and admitted core work before
-  persistence shutdown. The July
-  18 same-machine 10k baseline remains current until a focused trace and clean
-  complete 10k/50k suites validate the change and replace the incomplete
-  evidence.
+- Clean corrected-code 10k and 50k suites at `e6f5446a` completed all five
+  phases with 417/417 assertions and no edit-window long tasks. The 10k
+  evaluation passes at 24.9 ms edit-paint p95. The 50k edit result is 43.6 ms
+  p95, but its overall evaluation fails one blocking resident-memory comparison
+  by 0.36875 MiB (about 0.032% of the computed limit). This is clean complete
+  evidence of the asynchronous renderer-quiescence fix; the 50k result is not
+  eligible to replace a baseline, and the small mechanical gate miss is not a
+  claim of a significant memory regression.
 - The user manual still contains inherited Twine task and compatibility
   chapters. Current launcher, project-folder, conflict-review, workbench,
   asset, build, Settings, and Story Formats workflows are documented.

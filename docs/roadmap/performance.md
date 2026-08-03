@@ -156,21 +156,19 @@ with unchanged structural assertions.
 ### 2. Incremental indexing and edit-to-paint — in progress
 
 - The released-beta 10k refresh exposed a blocking edit tail after the July 18
-  baseline. A Harlowe-disabled control retained 201 ms and 198 ms long tasks,
-  ruling out native Harlowe parsing as their owner. A renderer trace and CPU
-  profile attributed about 149.5 ms of a captured 154.7 ms task to
-  `beginLegacyStoryWrite` waiting in `ipcRenderer.sendSync`; renderer GC,
-  Rust/WASM apply work, the reducer, patch publication, and the asynchronous
-  native write were bounded. The synchronous reservation was added after the
-  accepted baseline by `9f131516`.
-- Quit-safe write tracking now replaces the synchronous renderer-to-main
-  reservation with a failure-safe asynchronous protocol. It preserves write
-  ordering, coalescing, error propagation, renderer lifecycle handling, and
-  shutdown flushing while quiescing buffered editor and admitted core work
-  before the renderer acknowledges quit. Verify the focused trace has no
-  reservation-owned long task, then require clean complete 10k and 50k suites
-  before accepting a new baseline; the current clean 50k sample used the old
-  path but did not hit the timing-dependent contention window.
+  baseline. A Harlowe-disabled control and renderer profile attributed the
+  timing-dependent stall to `beginLegacyStoryWrite` waiting in
+  `ipcRenderer.sendSync`, not native Harlowe parsing, renderer GC, Rust/WASM
+  apply work, patch publication, or the asynchronous write.
+- Quit-safe write tracking replaces that synchronous reservation with a
+  failure-safe asynchronous protocol. Clean complete 10k and 50k suites at
+  corrected revision `e6f5446a` now pass all five phases and 417/417 assertions,
+  record zero long tasks across all 20 edit windows, and measure edit-paint at
+  24.9 ms and 43.6 ms p95 respectively. The 10k evaluation passes. The 50k
+  evaluation fails only resident-memory p50 by 0.36875 MiB (about 0.032%) over
+  the computed regression limit, so it remains normalized evidence rather than
+  a baseline replacement. Treat memory as a separate mechanical gate; do not
+  reopen the synchronous-reservation attribution without new edit-path evidence.
 - The first incremental project-folder write is complete: a passage text edit
   writes one file in place, checks its accepted fingerprint, patches the native
   baseline, and acknowledges the exact Rust revision. Unsupported or broad
@@ -255,8 +253,8 @@ ingestion materially improve against the accepted measurements.
   baseline measured 17.9 ms p95 and 33.4 ms maximum. Graph stability is closed
   as an active goal, so a deeper viewport-projection rewrite is conditional on
   a future reproducible regression. Contents remains a smaller optional
-  follow-up; the synchronous-reservation edit regression is active in the
-  preceding work item.
+  follow-up; corrected clean all-phase evidence closes the
+  synchronous-reservation edit regression described in the preceding work item.
 
 Exit signal: no full-source rebuilds, bounded rendering remains true, and each
 surface materially improves against its accepted baseline.

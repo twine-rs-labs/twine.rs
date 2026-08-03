@@ -14,38 +14,32 @@ They are documentation evidence, not machine-specific regression baselines.
 Local baselines remain under the ignored `benchmarks/results/baselines/`
 directory.
 
-The current clean references are:
+The current clean corrected-code references are:
 
-- [10k same-machine baseline source](./2026-07-18-apple-m4-10000.summary.json)
-- [50k released-beta clean reference with a matched baseline](./2026-08-03-apple-m4-50000.summary.json)
+- [10k clean passing reference](./2026-08-03-apple-m4-e6f5446a-10000.summary.json)
+- [50k clean failed-gate evidence](./2026-08-03-apple-m4-e6f5446a-50000.summary.json)
 
 Their complete source reports each used one Git revision across all phases and
-passed the cross-phase revision and dirty-state assertions. The 10k reference
-is from clean revision `0951f942`; its report was captured with
-`baselineStatus: "missing"` and then accepted byte-for-byte as the current
-same-machine local baseline. The fresh 50k reference is from clean released
-revision `d3b25477` (`v0.2.0-beta.2`), passed all 399 blocking invariants and
-every regression check, and records `baselineStatus: "matched"`.
-
-A fresh 10k capture was also attempted from the released revision. Repeated
-clean runs stopped in the edit phase when the no-long-task invariant observed
-renderer stalls. Two host-quiet confirmation runs recorded 86 ms and 245 ms
-maximum long tasks and failed the matched edit-paint regression gate. A focused
-edit repeat reproduced the failure while worker, bridge, and save timings
-remained bounded. Because those reports are incomplete, they are not eligible
-as baselines or normalized references, and the July 18 same-machine baseline
-source remains current.
+passed all five phases and all 417 assertions at corrected revision `e6f5446a`.
+The 10k evaluation passes; edit-to-paint measured 24.9 ms p95 and the edit
+window recorded no long task. The 50k edit result measured 43.6 ms p95 with no
+edit-window long task, but its evaluation failed one blocking regression gate:
+resident-memory p50 was 1,148.90625 MiB against the July 21 local baseline's
+1,044.125 MiB plus 104.4125 MiB allowance, a 1,148.5375 MiB limit. The miss is
+0.36875 MiB, or about 0.032% of the limit. The normalized 50k artifact therefore
+preserves clean, complete evidence and the exact regression comparator, but is
+explicitly not baseline-eligible and is not a baseline replacement.
 
 The initial
 [10k historical snapshot](./2026-07-03-apple-m4-10000.summary.json) and
 [50k historical snapshot](./2026-07-03-apple-m4-50000.summary.json) remain for
 comparison; their dirty-worktree limitation is recorded inside each artifact.
-The previous clean [July 16](./2026-07-16-apple-m4-50000.summary.json) and
-[July 21](./2026-07-21-apple-m4-50000.summary.json) 50k references also remain
-for comparison; the July 21 report is target-only evidence with
-`baselineStatus: "missing"`.
-The previous clean
-[July 16 10k reference](./2026-07-16-apple-m4-10000.summary.json) remains as
+The previous clean [July 18 10k](./2026-07-18-apple-m4-10000.summary.json),
+[released-beta August 3 50k](./2026-08-03-apple-m4-50000.summary.json),
+[July 16 50k](./2026-07-16-apple-m4-50000.summary.json), and
+[July 21 50k](./2026-07-21-apple-m4-50000.summary.json) references are now
+historical comparison evidence. The previous clean
+[July 16 10k reference](./2026-07-16-apple-m4-10000.summary.json) also remains
 historical cross-machine evidence.
 
 Focused diagnostics can also preserve a small normalized decision record when
@@ -62,3 +56,8 @@ npm run perf:reference -- \
   --from benchmarks/results/electron-....json \
   --out benchmarks/reference/YYYY-MM-DD-machine-size.summary.json
 ```
+
+Reference generation accepts a complete report whose structural invariants
+pass even when a blocking regression comparison fails. The normalized summary
+retains that failure and marks it ineligible for baseline acceptance. Baseline
+acceptance remains stricter and rejects every failed blocking evaluation.

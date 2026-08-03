@@ -8,6 +8,7 @@ import {performanceReportSchemaVersion} from '../performance-report-schema.mjs';
 import {
 	aggregateSamples,
 	baselineCandidateErrors,
+	completeElectronPhases,
 	currentGitProvenance,
 	decideElectronPhaseContinuation,
 	evaluatePerformanceReport,
@@ -20,6 +21,7 @@ import {
 	preserveFirstNonzeroStatus,
 	reportFixtureVariant,
 	regressionAllowance,
+	referenceCandidateErrors,
 	validateElectronPhaseReport
 } from '../performance-tools.mjs';
 
@@ -822,7 +824,18 @@ test('accepts only complete all-phase baseline reports', () => {
 	const report = {
 		aggregates: {'edit.paintMs': {p95: 20}},
 		environment: {fingerprint: 'machine'},
-		evaluation: {passed: true},
+		assertions: [{name: 'measured-invariant', passed: true}],
+		evaluation: {
+			checks: [
+				{
+					blocking: true,
+					kind: 'invariant',
+					name: 'measured-invariant',
+					passed: true
+				}
+			],
+			passed: true
+		},
 		kind: 'twine-electron-performance',
 		phase: 'all',
 		phases: Object.fromEntries(
@@ -865,6 +878,19 @@ test('accepts only complete all-phase baseline reports', () => {
 						passed: true
 					}
 				],
+				evaluation: {
+					checks: [
+						'git-revision-stable-across-phases',
+						'git-dirty-state-stable-across-phases',
+						'git-worktree-state-stable-across-phases'
+					].map(name => ({
+						blocking: true,
+						kind: 'invariant',
+						name,
+						passed: true
+					})),
+					passed: true
+				},
 				environment: {
 					...report.environment,
 					git: {
@@ -911,5 +937,69 @@ test('accepts only complete all-phase baseline reports', () => {
 	assert.match(
 		baselineCandidateErrors({...report, aggregates: {}}, budgets).join(' '),
 		/Missing baseline metric/
+	);
+});
+
+test('allows complete failed-regression reports as references but not baselines', () => {
+	const budgets = {
+		metrics: {
+			'memory.residentMiB': {category: 'memory', stat: 'p50', target: 600}
+		}
+	};
+	const regression = {
+		actual: 1148.90625,
+		baseline: 1044.125,
+		blocking: true,
+		kind: 'regression',
+		limit: 1148.5375,
+		name: 'memory.residentMiB',
+		passed: false
+	};
+	const invariant = {
+		blocking: true,
+		kind: 'invariant',
+		name: 'measured-invariant',
+		passed: true
+	};
+	const report = {
+		aggregates: {'memory.residentMiB': {p50: regression.actual}},
+		assertions: [{name: 'measured-invariant', passed: true}],
+		environment: {fingerprint: 'machine'},
+		evaluation: {checks: [invariant, regression], passed: false},
+		kind: 'twine-electron-performance',
+		phase: 'all',
+		phases: Object.fromEntries(
+			completeElectronPhases.map(phase => [phase, {status: 'passed'}])
+		),
+		schemaVersion: performanceReportSchemaVersion,
+		smoke: false,
+		test: {status: 'passed'}
+	};
+
+	assert.deepEqual(referenceCandidateErrors(report, budgets), []);
+	assert.match(
+		baselineCandidateErrors(report, budgets).join(' '),
+		/blocking evaluation failures/
+	);
+	assert.match(
+		referenceCandidateErrors(
+			{
+				...report,
+				assertions: [{name: 'measured-invariant', passed: false}],
+				evaluation: {
+					checks: [{...invariant, passed: false}],
+					passed: false
+				}
+			},
+			budgets
+		).join(' '),
+		/structurally passing invariants.*all structural invariants must pass/
+	);
+	assert.match(
+		referenceCandidateErrors(
+			{...report, phases: {...report.phases, watcher: {status: 'failed'}}},
+			budgets
+		).join(' '),
+		/Missing passing phase: watcher/
 	);
 });
