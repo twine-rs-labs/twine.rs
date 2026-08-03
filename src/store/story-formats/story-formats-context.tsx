@@ -39,6 +39,9 @@ export const StoryFormatsContextProvider: React.FC<
 	const persistedReducer: React.Reducer<StoryFormatsState, StoryFormatsAction> =
 		React.useCallback(
 			(state, action) => {
+				if (storyFormats.canReduceAction?.(action) === false) {
+					return state;
+				}
 				const newState = reducer(state, action);
 
 				try {

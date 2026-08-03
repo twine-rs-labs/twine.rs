@@ -2,6 +2,7 @@ import {expect, test} from '@playwright/test';
 import type {TestInfo} from '@playwright/test';
 import {
 	_electron as electron,
+	type CDPSession,
 	ElectronApplication,
 	Locator,
 	Page
@@ -20,6 +21,8 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import {performance as nodePerformance} from 'node:perf_hooks';
+import {performanceReportSchemaVersion} from '../benchmarks/performance-report-schema.mjs';
+import {currentGitProvenance} from '../benchmarks/performance-tools.mjs';
 
 interface PerformanceSnapshot {
 	main: {
@@ -216,12 +219,38 @@ interface RunningApp {
 	root: string;
 }
 
+interface EditStageSample {
+	applyBridgeComputeMs: number;
+	applyBridgeRoundTripMs: number;
+	index: number;
+	postBridgeMs: number;
+	postPatchMs: number;
+	rendererPatchClassificationMs: number;
+	rendererPatchDispatchMs: number;
+	rendererPatchPublishMs: number;
+	rendererPatchTotalMs: number;
+	revision: number;
+	storiesDispatchPersistenceSetupMs: number;
+	storiesDispatchReducerMs: number;
+	storiesDispatchTotalMs: number;
+}
+
+interface RunningEditProfile {
+	startedAtMeasuredIndex: number;
+	session: CDPSession;
+}
+
 const fixturePath = process.env.TWINE_PERF_FIXTURE;
 const fixtureVariant = process.env.TWINE_PERF_FIXTURE_VARIANT ?? 'default';
 const reportPath = process.env.TWINE_PERF_REPORT;
 const passageCount = Number.parseInt(process.env.TWINE_PERF_SIZE ?? '', 10);
 const smoke = process.env.TWINE_PERF_SMOKE === '1';
 const footprintEnabled = process.env.TWINE_PERF_FOOTPRINT === '1';
+const disableHarloweEditorExtensions =
+	process.env.TWINE_PERF_DISABLE_HARLOWE_EDITOR_EXTENSIONS === '1';
+const editProfileEnabled = process.env.TWINE_PERF_EDIT_PROFILE === '1';
+const editTracePath = process.env.TWINE_PERF_EDIT_TRACE;
+const editCpuProfilePath = process.env.TWINE_PERF_EDIT_CPU_PROFILE;
 const phase = process.env.TWINE_PERF_PHASE;
 const runRoot = process.env.TWINE_PERF_RUN_ROOT;
 const launchTracePath = process.env.TWINE_PERF_LAUNCH_TRACE;
@@ -243,14 +272,29 @@ const samples: Record<string, number[]> = {};
 const assertions: Array<{detail?: string; name: string; passed: boolean}> = [];
 const diagnostics: {
 	bridgeMetrics: PerformanceSnapshot['renderer']['bridgeMetrics'];
+	editConfiguration?: {
+		disableHarloweEditorExtensions: boolean;
+		nativeEditorActive: boolean;
+		profile: boolean;
+	};
+	editProfile?: {
+		categories: string[];
+		cpuProfilePath: string;
+		dataLossOccurred: boolean;
+		startedAtMeasuredIndex: number;
+		stopReason: string;
+		tracePath: string;
+	};
+	editStages: EditStageSample[];
 	interaction?: PerformanceSnapshot;
 	memoryDetail?: PerformanceSnapshot;
 	startup: PerformanceSnapshot[];
 	watcher?: PerformanceSnapshot;
 	watcherAsset?: PerformanceSnapshot;
 	watcherPassage?: PerformanceSnapshot;
-} = {bridgeMetrics: [], startup: []};
+} = {bridgeMetrics: [], editStages: [], startup: []};
 let playwrightRetrySettled = false;
+let measurementBodyCompleted = false;
 
 const inheritedElectronEnvironmentKeys = [
 	'APPDATA',
@@ -291,7 +335,6 @@ function addSample(name: string, value: number | undefined) {
 
 function assertInvariant(name: string, passed: boolean, detail?: string) {
 	assertions.push({detail, name, passed});
-	expect.soft(passed, `${name}${detail ? `: ${detail}` : ''}`).toBe(true);
 }
 
 function captureBridgeMetrics(current: PerformanceSnapshot) {
@@ -389,6 +432,16 @@ async function launchFixture(): Promise<RunningApp> {
 		mkdir(backups, {recursive: true}),
 		mkdir(scratch, {recursive: true})
 	]);
+	if (disableHarloweEditorExtensions) {
+		await writeFile(
+			path.join(userData, 'prefs.json'),
+			`${JSON.stringify({
+				disabledStoryFormatEditorExtensions: [
+					{name: 'Harlowe', version: '3.3.9'}
+				]
+			})}\n`
+		);
+	}
 	await recordLaunchPhase('fixture-copy-finished', {root});
 
 	const launchStartedAt = nodePerformance.now();
@@ -651,6 +704,253 @@ async function stopEditLongTaskObservation(page: Page) {
 		harnessWindow.__twineEditLongTaskProbe?.observer?.disconnect();
 		delete harnessWindow.__twineEditLongTaskProbe;
 	});
+}
+
+const editTraceCategories = [
+	'toplevel',
+	'devtools.timeline',
+	'disabled-by-default-devtools.timeline',
+	'disabled-by-default-devtools.timeline.stack',
+	'blink.user_timing',
+	'v8',
+	'v8.execute',
+	'disabled-by-default-v8.gc'
+];
+
+function finiteEventDetail(
+	event: PerformanceSnapshot['renderer']['events'][number] | undefined,
+	name: string
+) {
+	const value = event?.detail?.[name];
+
+	return typeof value === 'number' && Number.isFinite(value)
+		? value
+		: undefined;
+}
+
+function correlatedEditStageSample(
+	current: PerformanceSnapshot,
+	index: number,
+	editRoundTripMs: number | undefined
+): EditStageSample | undefined {
+	const mutation = current.renderer.events
+		.filter(event => event.name === 'mutation-applied')
+		.at(-1);
+	const revision = finiteEventDetail(mutation, 'revision');
+
+	if (revision === undefined || editRoundTripMs === undefined) {
+		return undefined;
+	}
+
+	const applyBridge = current.renderer.bridgeMetrics
+		.filter(
+			metric =>
+				metric.kind === 'apply' &&
+				(metric.mutationStages?.revision === revision ||
+					metric.receivedAtEpochMs <= mutation!.epochTime)
+		)
+		.sort((left, right) => left.receivedAtEpochMs - right.receivedAtEpochMs)
+		.at(-1);
+	const rendererPatch = current.renderer.events
+		.filter(
+			event =>
+				event.name === 'renderer-patch-stages' &&
+				event.detail?.revision === revision &&
+				event.detail?.documentUpdates === 1 &&
+				event.epochTime <= mutation!.epochTime
+		)
+		.at(-1);
+	const storiesDispatch = current.renderer.events
+		.filter(
+			event =>
+				event.name === 'stories-dispatch-stages' &&
+				event.detail?.action === 'applyCorePatchBatch' &&
+				(!applyBridge || event.epochTime >= applyBridge.receivedAtEpochMs) &&
+				(!rendererPatch || event.epochTime <= rendererPatch.epochTime)
+		)
+		.at(-1);
+	const rendererPatchClassificationMs = finiteEventDetail(
+		rendererPatch,
+		'classificationMs'
+	);
+	const rendererPatchDispatchMs = finiteEventDetail(
+		rendererPatch,
+		'dispatchMs'
+	);
+	const rendererPatchPublishMs = finiteEventDetail(rendererPatch, 'publishMs');
+	const rendererPatchTotalMs = finiteEventDetail(rendererPatch, 'totalMs');
+	const storiesDispatchPersistenceSetupMs = finiteEventDetail(
+		storiesDispatch,
+		'persistenceSetupMs'
+	);
+	const storiesDispatchReducerMs = finiteEventDetail(
+		storiesDispatch,
+		'reducerMs'
+	);
+	const storiesDispatchTotalMs = finiteEventDetail(storiesDispatch, 'totalMs');
+	const values = [
+		applyBridge?.computeMs,
+		applyBridge?.roundTripMs,
+		rendererPatchClassificationMs,
+		rendererPatchDispatchMs,
+		rendererPatchPublishMs,
+		rendererPatchTotalMs,
+		storiesDispatchPersistenceSetupMs,
+		storiesDispatchReducerMs,
+		storiesDispatchTotalMs
+	];
+
+	if (
+		!applyBridge ||
+		values.some(value => typeof value !== 'number' || !Number.isFinite(value))
+	) {
+		return undefined;
+	}
+
+	const postBridgeMs = editRoundTripMs - applyBridge.roundTripMs;
+	const postPatchMs = postBridgeMs - rendererPatchTotalMs!;
+
+	if (!Number.isFinite(postBridgeMs) || !Number.isFinite(postPatchMs)) {
+		return undefined;
+	}
+
+	return {
+		applyBridgeComputeMs: applyBridge.computeMs,
+		applyBridgeRoundTripMs: applyBridge.roundTripMs,
+		index,
+		postBridgeMs,
+		postPatchMs,
+		rendererPatchClassificationMs: rendererPatchClassificationMs!,
+		rendererPatchDispatchMs: rendererPatchDispatchMs!,
+		rendererPatchPublishMs: rendererPatchPublishMs!,
+		rendererPatchTotalMs: rendererPatchTotalMs!,
+		revision,
+		storiesDispatchPersistenceSetupMs: storiesDispatchPersistenceSetupMs!,
+		storiesDispatchReducerMs: storiesDispatchReducerMs!,
+		storiesDispatchTotalMs: storiesDispatchTotalMs!
+	};
+}
+
+function recordEditStageSample(sample: EditStageSample) {
+	diagnostics.editStages.push(sample);
+	addSample('edit.applyBridge.computeMs', sample.applyBridgeComputeMs);
+	addSample('edit.applyBridge.roundTripMs', sample.applyBridgeRoundTripMs);
+	addSample('edit.postBridgeMs', sample.postBridgeMs);
+	addSample(
+		'edit.rendererPatch.classificationMs',
+		sample.rendererPatchClassificationMs
+	);
+	addSample('edit.rendererPatch.dispatchMs', sample.rendererPatchDispatchMs);
+	addSample('edit.rendererPatch.publishMs', sample.rendererPatchPublishMs);
+	addSample('edit.rendererPatch.totalMs', sample.rendererPatchTotalMs);
+	addSample(
+		'edit.storiesDispatch.persistenceSetupMs',
+		sample.storiesDispatchPersistenceSetupMs
+	);
+	addSample('edit.storiesDispatch.reducerMs', sample.storiesDispatchReducerMs);
+	addSample('edit.storiesDispatch.totalMs', sample.storiesDispatchTotalMs);
+	addSample('edit.postPatchMs', sample.postPatchMs);
+}
+
+async function startEditProfile(
+	page: Page,
+	startedAtMeasuredIndex: number
+): Promise<RunningEditProfile> {
+	if (!editTracePath || !editCpuProfilePath) {
+		throw new Error(
+			'TWINE_PERF_EDIT_TRACE and TWINE_PERF_EDIT_CPU_PROFILE are required when TWINE_PERF_EDIT_PROFILE=1.'
+		);
+	}
+
+	const session = await page.context().newCDPSession(page);
+	const {categories} = await session.send('Tracing.getCategories');
+	const missingCategories = editTraceCategories.filter(
+		category => !categories.includes(category)
+	);
+
+	if (missingCategories.length > 0) {
+		await session.detach();
+		throw new Error(
+			`CDP tracing categories unavailable: ${missingCategories.join(', ')}`
+		);
+	}
+
+	try {
+		await session.send('Profiler.enable');
+		await session.send('Profiler.setSamplingInterval', {interval: 1000});
+		await session.send('Profiler.start');
+		await session.send('Tracing.start', {
+			categories: editTraceCategories.join(','),
+			streamCompression: 'gzip',
+			streamFormat: 'json',
+			transferMode: 'ReturnAsStream'
+		});
+	} catch (error) {
+		await session.send('Profiler.disable').catch(() => undefined);
+		await session.detach();
+		throw error;
+	}
+
+	return {session, startedAtMeasuredIndex};
+}
+
+async function stopEditProfile(
+	profile: RunningEditProfile,
+	stopReason: string
+) {
+	const {session} = profile;
+	const cpuProfile = await session.send('Profiler.stop');
+	await session.send('Profiler.disable');
+	const tracingComplete = new Promise<{
+		dataLossOccurred?: boolean;
+		stream?: string;
+	}>(resolve => {
+		session.once('Tracing.tracingComplete', resolve);
+	});
+
+	await session.send('Tracing.end');
+	const {dataLossOccurred = false, stream} = await tracingComplete;
+
+	if (!stream || !editTracePath || !editCpuProfilePath) {
+		await session.detach();
+		throw new Error('CDP tracing did not return an artifact stream.');
+	}
+
+	await writeFile(
+		editCpuProfilePath,
+		`${JSON.stringify(cpuProfile.profile)}\n`
+	);
+	await writeFile(editTracePath, Buffer.alloc(0));
+	try {
+		let eof = false;
+
+		while (!eof) {
+			const chunk = await session.send('IO.read', {handle: stream});
+
+			await appendFile(
+				editTracePath,
+				Buffer.from(chunk.data, chunk.base64Encoded ? 'base64' : 'utf8')
+			);
+			eof = chunk.eof;
+		}
+	} finally {
+		await session.send('IO.close', {handle: stream}).catch(() => undefined);
+		await session.detach();
+	}
+
+	diagnostics.editProfile = {
+		categories: editTraceCategories,
+		cpuProfilePath: editCpuProfilePath,
+		dataLossOccurred,
+		startedAtMeasuredIndex: profile.startedAtMeasuredIndex,
+		stopReason,
+		tracePath: editTracePath
+	};
+	assertInvariant(
+		'edit-profile-trace-data-complete',
+		!dataLossOccurred,
+		`dataLossOccurred=${dataLossOccurred}`
+	);
 }
 
 function startupMetrics(
@@ -1355,6 +1655,7 @@ async function measureEdits(page: Page) {
 	const revisions: number[] = [];
 	let cleanMeasuredSamples = 0;
 	let externallyContaminatedSamples = 0;
+	let runningEditProfile: RunningEditProfile | undefined;
 
 	if (fixtureVariant === 'chapbook') {
 		try {
@@ -1392,197 +1693,299 @@ async function measureEdits(page: Page) {
 			);
 		}
 	}
+	const nativeToolbar = page.getByRole('toolbar', {
+		name: 'Harlowe editor toolbar'
+	});
+
+	if (fixtureVariant === 'default' && !disableHarloweEditorExtensions) {
+		await nativeToolbar
+			.waitFor({state: 'visible', timeout: 30_000})
+			.catch(() => undefined);
+	}
+	const nativeEditorActive = await nativeToolbar.isVisible();
+
+	diagnostics.editConfiguration = {
+		disableHarloweEditorExtensions,
+		nativeEditorActive,
+		profile: editProfileEnabled
+	};
+	assertInvariant(
+		'edit-native-editor-configuration-verified',
+		fixtureVariant !== 'default' ||
+			nativeEditorActive === !disableHarloweEditorExtensions,
+		JSON.stringify(diagnostics.editConfiguration)
+	);
 	await startEditLongTaskObservation(page);
 
-	for (let index = 0; index < (smoke ? 3 : 22); index++) {
-		await recordLaunchPhase('benchmark-sample-started', {
-			index,
-			phase,
-			surface: 'edit'
-		});
-		await reset(page);
-		const bridgeMetricStart = (await snapshot(page)).renderer.bridgeMetrics
-			.length;
-		let previousRevision = await currentRevision(page);
-		await content.click();
-		await page.keyboard.press('End');
-		const editorInputStartedAt = await page.evaluate(() => performance.now());
-
-		await page.keyboard.insertText(` perf-${index}`);
-		await waitForEvent(page, 'mutation-applied');
-		await waitForMeasure(page, 'mutation-to-paint');
-		previousRevision = await waitForRevisionAfter(page, previousRevision);
-		revisions.push(previousRevision);
-		let current = await snapshot(page);
-		const editRoundTripMs = lastEntry(
-			current,
-			'mutation-round-trip',
-			'measure'
-		)?.duration;
-		const editPaintEntry = lastEntry(current, 'mutation-to-paint', 'measure');
-		const editPaintMs = editPaintEntry?.duration;
-		const editorInputWindow = editPaintEntry
-			? {
-					duration: Math.max(
-						0,
-						editPaintEntry.startTime +
-							editPaintEntry.duration -
-							editorInputStartedAt
-					),
-					startTime: editorInputStartedAt
-				}
-			: undefined;
-		const editorInputLongTasks =
-			index >= 2 && editorInputWindow
-				? await mutationWindowLongTasks(page, editorInputWindow)
-				: [];
-		const undo = page.getByRole('button', {name: /^Undo/});
-
-		await expect(undo).toBeEnabled();
-		await undo.click();
-		await waitForEvent(page, 'undo-applied');
-		previousRevision = await waitForRevisionAfter(page, previousRevision);
-		revisions.push(previousRevision);
-		current = await snapshot(page);
-		const undoRoundTripMs = lastEntry(
-			current,
-			'undo-round-trip',
-			'measure'
-		)?.duration;
-		const redo = page.getByRole('button', {name: /^Redo/});
-
-		await expect(redo).toBeEnabled();
-		await redo.click();
-		await waitForEvent(page, 'redo-applied');
-		previousRevision = await waitForRevisionAfter(page, previousRevision);
-		revisions.push(previousRevision);
-		current = await snapshot(page);
-		const redoRoundTripMs = lastEntry(
-			current,
-			'redo-round-trip',
-			'measure'
-		)?.duration;
-		const externalIngestMetrics = current.renderer.bridgeMetrics
-			.slice(bridgeMetricStart)
-			.filter(metric =>
-				['applyExternalDelta', 'ingestExternalDelta'].includes(metric.kind)
-			);
-
-		if (index >= 2) {
-			assertInvariant(
-				`edit-${index}-mutation-window-captured`,
-				!!editPaintEntry,
-				JSON.stringify(editPaintEntry)
-			);
-			const longestEditorInputTask = Math.max(
-				0,
-				...editorInputLongTasks.map(entry => entry.duration)
-			);
-
-			addSample('edit.inputToPaintLongTaskWindowMaxMs', longestEditorInputTask);
-			for (const entry of editorInputLongTasks) {
-				addSample('edit.inputToPaintLongTaskMs', entry.duration);
+	try {
+		for (let index = 0; index < (smoke ? 3 : 22); index++) {
+			await recordLaunchPhase('benchmark-sample-started', {
+				index,
+				phase,
+				surface: 'edit'
+			});
+			await reset(page);
+			if (index === 2 && editProfileEnabled) {
+				runningEditProfile = await startEditProfile(page, 0);
 			}
-			assertInvariant(
-				`edit-${index}-input-to-paint-has-no-long-task`,
-				editorInputLongTasks.every(entry => entry.duration <= 50),
-				JSON.stringify({
-					longTasks: editorInputLongTasks,
-					window: {
-						duration: editorInputWindow?.duration,
-						startTime: editorInputWindow?.startTime
+			const bridgeMetricStart = (await snapshot(page)).renderer.bridgeMetrics
+				.length;
+			let previousRevision = await currentRevision(page);
+			await content.click();
+			await page.keyboard.press('End');
+			const editorInputStartedAt = await page.evaluate(() => performance.now());
+
+			await page.keyboard.insertText(` perf-${index}`);
+			await waitForEvent(page, 'mutation-applied');
+			await waitForMeasure(page, 'mutation-to-paint');
+			previousRevision = await waitForRevisionAfter(page, previousRevision);
+			revisions.push(previousRevision);
+			let current = await snapshot(page);
+			const editRoundTripMs = lastEntry(
+				current,
+				'mutation-round-trip',
+				'measure'
+			)?.duration;
+			const editPaintEntry = lastEntry(current, 'mutation-to-paint', 'measure');
+			const editPaintMs = editPaintEntry?.duration;
+			const editorInputWindow = editPaintEntry
+				? {
+						duration: Math.max(
+							0,
+							editPaintEntry.startTime +
+								editPaintEntry.duration -
+								editorInputStartedAt
+						),
+						startTime: editorInputStartedAt
 					}
-				})
-			);
-			if (externalIngestMetrics.length === 0) {
-				cleanMeasuredSamples++;
-				addSample('edit.roundTripMs', editRoundTripMs);
-				addSample('edit.paintMs', editPaintMs);
-				addSample('undo.roundTripMs', undoRoundTripMs);
-				addSample('redo.roundTripMs', redoRoundTripMs);
-			} else {
-				externallyContaminatedSamples++;
-				addSample(
-					'edit.externalIngestContaminated.roundTripMs',
-					editRoundTripMs
+				: undefined;
+			const editorInputLongTasks =
+				index >= 2 && editorInputWindow
+					? await mutationWindowLongTasks(page, editorInputWindow)
+					: [];
+			const editStageSample =
+				index >= 2
+					? correlatedEditStageSample(current, index, editRoundTripMs)
+					: undefined;
+			const undo = page.getByRole('button', {name: /^Undo/});
+
+			await expect(undo).toBeEnabled();
+			await undo.click();
+			await waitForEvent(page, 'undo-applied');
+			previousRevision = await waitForRevisionAfter(page, previousRevision);
+			revisions.push(previousRevision);
+			current = await snapshot(page);
+			const undoRoundTripMs = lastEntry(
+				current,
+				'undo-round-trip',
+				'measure'
+			)?.duration;
+			const redo = page.getByRole('button', {name: /^Redo/});
+
+			await expect(redo).toBeEnabled();
+			await redo.click();
+			await waitForEvent(page, 'redo-applied');
+			previousRevision = await waitForRevisionAfter(page, previousRevision);
+			revisions.push(previousRevision);
+			current = await snapshot(page);
+			const redoRoundTripMs = lastEntry(
+				current,
+				'redo-round-trip',
+				'measure'
+			)?.duration;
+			const externalIngestMetrics = current.renderer.bridgeMetrics
+				.slice(bridgeMetricStart)
+				.filter(metric =>
+					['applyExternalDelta', 'ingestExternalDelta'].includes(metric.kind)
 				);
-				addSample('edit.externalIngestContaminated.paintMs', editPaintMs);
-				addSample(
-					'undo.externalIngestContaminated.roundTripMs',
-					undoRoundTripMs
+
+			if (index >= 2) {
+				assertInvariant(
+					`edit-${index}-stage-sample-correlated`,
+					!!editStageSample,
+					JSON.stringify({
+						applyMetrics: current.renderer.bridgeMetrics.filter(
+							metric => metric.kind === 'apply'
+						),
+						events: current.renderer.events.filter(event =>
+							[
+								'mutation-applied',
+								'renderer-patch-stages',
+								'stories-dispatch-stages'
+							].includes(event.name)
+						)
+					})
 				);
-				addSample(
-					'redo.externalIngestContaminated.roundTripMs',
-					redoRoundTripMs
+				if (editStageSample) {
+					recordEditStageSample(editStageSample);
+				}
+				assertInvariant(
+					`edit-${index}-mutation-window-captured`,
+					!!editPaintEntry,
+					JSON.stringify(editPaintEntry)
 				);
+				const longestEditorInputTask = Math.max(
+					0,
+					...editorInputLongTasks.map(entry => entry.duration)
+				);
+
+				addSample(
+					'edit.inputToPaintLongTaskWindowMaxMs',
+					longestEditorInputTask
+				);
+				for (const entry of editorInputLongTasks) {
+					addSample('edit.inputToPaintLongTaskMs', entry.duration);
+				}
+				assertInvariant(
+					`edit-${index}-input-to-paint-has-no-long-task`,
+					editorInputLongTasks.every(entry => entry.duration <= 50),
+					JSON.stringify({
+						longTasks: editorInputLongTasks,
+						window: {
+							duration: editorInputWindow?.duration,
+							startTime: editorInputWindow?.startTime
+						}
+					})
+				);
+				if (externalIngestMetrics.length === 0) {
+					cleanMeasuredSamples++;
+					addSample('edit.roundTripMs', editRoundTripMs);
+					addSample('edit.paintMs', editPaintMs);
+					addSample('undo.roundTripMs', undoRoundTripMs);
+					addSample('redo.roundTripMs', redoRoundTripMs);
+				} else {
+					externallyContaminatedSamples++;
+					addSample(
+						'edit.externalIngestContaminated.roundTripMs',
+						editRoundTripMs
+					);
+					addSample('edit.externalIngestContaminated.paintMs', editPaintMs);
+					addSample(
+						'undo.externalIngestContaminated.roundTripMs',
+						undoRoundTripMs
+					);
+					addSample(
+						'redo.externalIngestContaminated.roundTripMs',
+						redoRoundTripMs
+					);
+				}
+				for (const metric of externalIngestMetrics) {
+					addSample('edit.externalIngest.roundTripMs', metric.roundTripMs);
+					addSample('edit.externalIngest.computeMs', metric.computeMs);
+					addSample('edit.externalIngest.queuedMs', metric.queuedMs);
+				}
 			}
-			for (const metric of externalIngestMetrics) {
-				addSample('edit.externalIngest.roundTripMs', metric.roundTripMs);
-				addSample('edit.externalIngest.computeMs', metric.computeMs);
-				addSample('edit.externalIngest.queuedMs', metric.queuedMs);
-			}
-		}
-		assertInvariant(
-			`edit-${index}-avoids-full-replace`,
-			!current.renderer.bridgeMetrics.some(
-				metric => metric.kind === 'replaceProject'
-			)
-		);
-		if (fixtureVariant === 'chapbook') {
-			const adapterEvents = current.renderer.events.filter(
-				event =>
-					event.name === 'legacy-editor-adapter-created' &&
-					event.detail?.formatName === 'Chapbook'
-			);
-			const adapterRebuilds = adapterEvents.length;
-			const editorLifecycleEvents = current.renderer.events.filter(event =>
-				['source-editor-view-created', 'source-editor-view-destroyed'].includes(
-					event.name
+			assertInvariant(
+				`edit-${index}-avoids-full-replace`,
+				!current.renderer.bridgeMetrics.some(
+					metric => metric.kind === 'replaceProject'
 				)
 			);
-			const lineIndexRebuilds = legacyFormatEventCount(
-				current,
-				'legacy-lookahead-line-index-rebuilt'
-			);
+			if (fixtureVariant === 'chapbook') {
+				const adapterEvents = current.renderer.events.filter(
+					event =>
+						event.name === 'legacy-editor-adapter-created' &&
+						event.detail?.formatName === 'Chapbook'
+				);
+				const adapterRebuilds = adapterEvents.length;
+				const editorLifecycleEvents = current.renderer.events.filter(event =>
+					[
+						'source-editor-view-created',
+						'source-editor-view-destroyed'
+					].includes(event.name)
+				);
+				const lineIndexRebuilds = legacyFormatEventCount(
+					current,
+					'legacy-lookahead-line-index-rebuilt'
+				);
 
-			addSample('chapbook.ordinary.adapterRebuildCount', adapterRebuilds);
-			addSample(
-				'chapbook.ordinary.editorViewLifecycleEventCount',
-				editorLifecycleEvents.length
-			);
-			addSample('chapbook.ordinary.lineIndexRebuildCount', lineIndexRebuilds);
-			assertInvariant(
-				`chapbook-ordinary-${index}-preserves-adapter-and-line-index`,
-				adapterRebuilds === 0 &&
-					editorLifecycleEvents.length === 0 &&
-					lineIndexRebuilds === 0,
-				JSON.stringify({
-					adapterEvents: adapterEvents.map(event => event.detail),
-					adapterRebuilds,
-					delimiterEvents: current.renderer.events
-						.filter(
-							event =>
-								event.name === 'legacy-delimiter-presence-changed' &&
-								event.detail?.formatName === 'Chapbook'
-						)
-						.map(event => event.detail),
-					editorLifecycleEvents,
-					lineIndexRebuilds
-				})
-			);
+				addSample('chapbook.ordinary.adapterRebuildCount', adapterRebuilds);
+				addSample(
+					'chapbook.ordinary.editorViewLifecycleEventCount',
+					editorLifecycleEvents.length
+				);
+				addSample('chapbook.ordinary.lineIndexRebuildCount', lineIndexRebuilds);
+				assertInvariant(
+					`chapbook-ordinary-${index}-preserves-adapter-and-line-index`,
+					adapterRebuilds === 0 &&
+						editorLifecycleEvents.length === 0 &&
+						lineIndexRebuilds === 0,
+					JSON.stringify({
+						adapterEvents: adapterEvents.map(event => event.detail),
+						adapterRebuilds,
+						delimiterEvents: current.renderer.events
+							.filter(
+								event =>
+									event.name === 'legacy-delimiter-presence-changed' &&
+									event.detail?.formatName === 'Chapbook'
+							)
+							.map(event => event.detail),
+						editorLifecycleEvents,
+						lineIndexRebuilds
+					})
+				);
+			}
+			captureBridgeMetrics(current);
+			await recordLaunchPhase('benchmark-sample-completed', {
+				index,
+				phase,
+				surface: 'edit'
+			});
+			if (
+				runningEditProfile &&
+				(editorInputLongTasks.some(entry => entry.duration >= 80) ||
+					index === (smoke ? 2 : 21))
+			) {
+				const stopReason = editorInputLongTasks.some(
+					entry => entry.duration >= 80
+				)
+					? 'first-input-to-paint-long-task-at-least-80ms'
+					: 'measured-samples-complete';
+
+				await stopEditProfile(runningEditProfile, stopReason);
+				runningEditProfile = undefined;
+			}
 		}
-		captureBridgeMetrics(current);
-		await recordLaunchPhase('benchmark-sample-completed', {
-			index,
-			phase,
-			surface: 'edit'
-		});
+	} finally {
+		if (runningEditProfile) {
+			await stopEditProfile(runningEditProfile, 'measurement-ended');
+		}
+		await stopEditLongTaskObservation(page);
 	}
-	await stopEditLongTaskObservation(page);
+	const expectedMeasuredSamples = smoke ? 1 : 20;
+	const editStageSampleNames = [
+		'edit.applyBridge.computeMs',
+		'edit.applyBridge.roundTripMs',
+		'edit.postBridgeMs',
+		'edit.rendererPatch.classificationMs',
+		'edit.rendererPatch.dispatchMs',
+		'edit.rendererPatch.publishMs',
+		'edit.rendererPatch.totalMs',
+		'edit.storiesDispatch.persistenceSetupMs',
+		'edit.storiesDispatch.reducerMs',
+		'edit.storiesDispatch.totalMs',
+		'edit.postPatchMs'
+	];
+
+	assertInvariant(
+		'edit-stage-sample-coverage-and-finite-correlation',
+		diagnostics.editStages.length === expectedMeasuredSamples &&
+			editStageSampleNames.every(
+				name =>
+					samples[name]?.length === expectedMeasuredSamples &&
+					samples[name].every(Number.isFinite)
+			),
+		JSON.stringify({
+			diagnostics: diagnostics.editStages.length,
+			samples: Object.fromEntries(
+				editStageSampleNames.map(name => [name, samples[name]?.length ?? 0])
+			)
+		})
+	);
 	assertInvariant(
 		'edit-input-to-paint-long-task-window-sample-coverage',
 		(samples['edit.inputToPaintLongTaskWindowMaxMs']?.length ?? 0) ===
-			(smoke ? 1 : 20),
+			expectedMeasuredSamples,
 		`${samples['edit.inputToPaintLongTaskWindowMaxMs']?.length ?? 0}/${
 			smoke ? 1 : 20
 		}`
@@ -2694,12 +3097,12 @@ async function measureContents(page: Page) {
 		assertInvariant(
 			`contents-${index}-queue-attribution-present`,
 			!!contentsTrace || !!hostCacheHit,
-			contentsTrace?.detail?.waitingOn as string | undefined
+			stringDetail(contentsTrace?.detail?.waitingOn)
 		);
 		assertInvariant(
 			`contents-${index}-session-ready-attribution-present`,
 			!!sessionReadyTrace || !!hostCacheHit,
-			sessionReadyTrace?.detail?.mode as string | undefined
+			stringDetail(sessionReadyTrace?.detail?.mode)
 		);
 		assertInvariant(
 			`contents-${index}-uses-wasm-worker`,
@@ -2902,6 +3305,10 @@ function numericDetail(value: unknown) {
 	return typeof value === 'number' && Number.isFinite(value)
 		? value
 		: undefined;
+}
+
+function stringDetail(value: unknown) {
+	return typeof value === 'string' ? value : undefined;
 }
 
 function captureNativeSaveMetrics(current: PerformanceSnapshot) {
@@ -3579,7 +3986,12 @@ function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
 					: undefined
 			);
 		}
-		for (const field of ['heapUsed', 'heapTotal', 'external', 'arrayBuffers']) {
+		for (const field of [
+			'heapUsed',
+			'heapTotal',
+			'external',
+			'arrayBuffers'
+		] as const) {
 			addSample(
 				`${prefix}.main.${field}`,
 				typeof checkpoint.mainMemory[field] === 'number'
@@ -4100,37 +4512,72 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 		await readFile(path.resolve('node_modules/playwright/package.json'), 'utf8')
 	);
 	const cpu = os.cpus()[0];
-	const gitRevision = execFileSync('git', ['rev-parse', 'HEAD'], {
-		encoding: 'utf8'
-	}).trim();
-	const gitDirty =
-		execFileSync('git', ['status', '--porcelain'], {encoding: 'utf8'}).trim()
-			.length > 0;
+	const git = await currentGitProvenance(path.resolve('.'));
+	const failedInvariantCount = assertions.filter(
+		assertion => !assertion.passed
+	).length;
+	const failureKind =
+		measurementBodyCompleted && testInfo.status === 'passed'
+			? failedInvariantCount > 0
+				? 'assertion'
+				: undefined
+			: 'infrastructure';
+	const attempt = {
+		bodyCompleted: measurementBodyCompleted,
+		failedInvariantCount,
+		failureKind,
+		retry: testInfo.retry,
+		status: testInfo.status
+	};
+	let attempts: Array<typeof attempt> = [];
+
+	try {
+		const previous = JSON.parse(await readFile(reportPath, 'utf8'));
+
+		if (!Array.isArray(previous.measurement?.attempts)) {
+			throw new Error('Existing phase report has no retry history.');
+		}
+		attempts = previous.measurement.attempts;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			throw error;
+		}
+	}
+	attempts.push(attempt);
 
 	await writeFile(
 		reportPath,
 		`${JSON.stringify(
 			{
-				assertions: [
-					...assertions,
-					{
-						detail: testInfo.error?.message,
-						name: `phase-${phase}-completed`,
-						passed: testInfo.status === 'passed'
-					}
-				],
+				assertions,
+				configuration: {
+					baselineCompatible:
+						!disableHarloweEditorExtensions && !editProfileEnabled,
+					edit:
+						phase === 'edit'
+							? (diagnostics.editConfiguration ?? {
+									disableHarloweEditorExtensions,
+									nativeEditorActive: null,
+									profile: editProfileEnabled
+								})
+							: undefined
+				},
 				createdAt: new Date().toISOString(),
 				diagnostics,
-				diagnostic: phase === 'diagnostic',
+				diagnostic:
+					phase === 'diagnostic' ||
+					disableHarloweEditorExtensions ||
+					editProfileEnabled,
 				memoryDetail: phase === 'memory-detail',
 				environment: {
 					metricContracts: {
+						editAttribution: 1,
 						memory: 3,
 						memoryAttribution: 1,
 						...(footprintEnabled ? {memoryFootprint: 1} : {}),
 						startup: 2
 					},
-					git: {dirty: gitDirty, revision: gitRevision},
+					git,
 					machine: {
 						arch: process.arch,
 						cpu: cpu?.model ?? 'unknown',
@@ -4147,11 +4594,17 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 				},
 				fixture: fixtureManifest,
 				kind: 'twine-electron-performance',
+				measurement: {
+					attempts,
+					bodyCompleted: measurementBodyCompleted,
+					failedInvariantCount,
+					failureKind
+				},
 				phase,
 				sampleCount:
 					phase === 'diagnostic' || phase === 'memory-detail' ? 1 : undefined,
 				samples,
-				schemaVersion: 2,
+				schemaVersion: performanceReportSchemaVersion,
 				smoke,
 				test: {
 					error: testInfo.error?.message,
@@ -4170,6 +4623,7 @@ test.afterEach(async ({browserName}, testInfo) => {
 });
 
 test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () => {
+	measurementBodyCompleted = false;
 	test.setTimeout(
 		passageCount >= 50_000 && (phase === 'edit' || phase === 'query')
 			? 45 * 60 * 1000
@@ -4185,6 +4639,17 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 		throw new Error(
 			'TWINE_PERF_FIXTURE, TWINE_PERF_REPORT, TWINE_PERF_RUN_ROOT, ' +
 				'TWINE_PERF_SIZE, and a valid TWINE_PERF_PHASE are required.'
+		);
+	}
+	if (
+		(disableHarloweEditorExtensions || editProfileEnabled) &&
+		phase !== 'edit'
+	) {
+		throw new Error('Focused edit controls require TWINE_PERF_PHASE=edit.');
+	}
+	if (editProfileEnabled && (!editTracePath || !editCpuProfilePath)) {
+		throw new Error(
+			'TWINE_PERF_EDIT_TRACE and TWINE_PERF_EDIT_CPU_PROFILE are required when profiling edits.'
 		);
 	}
 	const fixtureManifestBefore = await readFile(
@@ -4444,4 +4909,5 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 			await readFile(path.join(fixturePath, 'twine.toml'))
 		)
 	);
+	measurementBodyCompleted = true;
 });

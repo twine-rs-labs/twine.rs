@@ -2,7 +2,7 @@
 
 Status: active
 Owner: performance and architecture maintainers
-Last verified: 2026-07-16
+Last verified: 2026-08-03
 Source of truth: outstanding work revealed by accepted 10k/50k baselines
 
 ## Objective
@@ -155,6 +155,20 @@ with unchanged structural assertions.
 
 ### 2. Incremental indexing and edit-to-paint — in progress
 
+- The released-beta 10k refresh exposed a blocking edit tail after the July 18
+  baseline. A Harlowe-disabled control and renderer profile attributed the
+  timing-dependent stall to `beginLegacyStoryWrite` waiting in
+  `ipcRenderer.sendSync`, not native Harlowe parsing, renderer GC, Rust/WASM
+  apply work, patch publication, or the asynchronous write.
+- Quit-safe write tracking replaces that synchronous reservation with a
+  failure-safe asynchronous protocol. Clean complete 10k and 50k suites at
+  corrected revision `e6f5446a` now pass all five phases and 417/417 assertions,
+  record zero long tasks across all 20 edit windows, and measure edit-paint at
+  24.9 ms and 43.6 ms p95 respectively. The 10k evaluation passes. The 50k
+  evaluation fails only resident-memory p50 by 0.36875 MiB (about 0.032%) over
+  the computed regression limit, so it remains normalized evidence rather than
+  a baseline replacement. Treat memory as a separate mechanical gate; do not
+  reopen the synchronous-reservation attribution without new edit-path evidence.
 - The first incremental project-folder write is complete: a passage text edit
   writes one file in place, checks its accepted fingerprint, patches the native
   baseline, and acknowledges the exact Rust revision. Unsupported or broad
@@ -196,8 +210,8 @@ with unchanged structural assertions.
   text changes.
 
 Exit signal: a one-passage edit or external delta does no project-scale index
-rebuild; edit-to-paint and watcher ingestion materially improve against the
-focused 50k measurements.
+rebuild or synchronous renderer-to-main IPC; edit-to-paint and watcher
+ingestion materially improve against the accepted measurements.
 
 ### 3. Contents, graph, and watcher latency
 
@@ -238,8 +252,9 @@ focused 50k measurements.
   the first cold repeat exceeded 50 ms, at 135.1 ms. The final clean all-phase
   baseline measured 17.9 ms p95 and 33.4 ms maximum. Graph stability is closed
   as an active goal, so a deeper viewport-projection rewrite is conditional on
-  a future reproducible regression. Contents and edit paint remain smaller
-  optional follow-ups.
+  a future reproducible regression. Contents remains a smaller optional
+  follow-up; corrected clean all-phase evidence closes the
+  synchronous-reservation edit regression described in the preceding work item.
 
 Exit signal: no full-source rebuilds, bounded rendering remains true, and each
 surface materially improves against its accepted baseline.

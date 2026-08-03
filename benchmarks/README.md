@@ -106,6 +106,14 @@ phase boundaries. The temporary launch trace records per-sample progress and
 is copied into the checkpoint when each child process exits. This preserves
 launch and phase state when a process crashes or times out.
 
+By default, a full run continues after a validated, completed phase reports a
+failed measurement invariant. The Playwright child still exits zero for this
+measurement-gate failure, while the runner records the phase and merged report
+as failed and baseline-ineligible. Missing, malformed, mismatched,
+infrastructure-failed, retry-unstable, build-changed, or provenance-unstable
+phase reports abort the run; every nonzero Playwright exit is infrastructure.
+Add `--fail-fast` to stop after the first measurement-invariant failure too.
+
 For fast 50k edit/save investigation, run the diagnostic phase:
 
 ```sh
@@ -266,6 +274,23 @@ variable preamble, requiring zero adapter or look-ahead index rebuilds at every
 location. The graph phase performs a real node-layout mutation and blocks
 unless its final revision is acknowledged through an incremental native save
 with no full-save fallback or work left in flight.
+
+Focused edit diagnostics can disable the native Harlowe story-format editor or
+capture a renderer trace and 1 ms sampled CPU profile:
+
+```sh
+node benchmarks/run-electron-performance.mjs --size 10000 --phase edit --disable-harlowe-editor-extensions
+node benchmarks/run-electron-performance.mjs --size 10000 --phase edit --profile-edit
+```
+
+Both flags require an explicit `--phase edit`; the disable control also requires
+the default Harlowe fixture. Reports record the requested configuration and
+whether the Harlowe native toolbar was actually active. Profile artifacts are
+written beside the JSON report as `.edit-trace.json.gz` and `.edit.cpuprofile`.
+These focused reports are diagnostic-only and are not complete baseline
+evidence. Edit reports also retain per-edit-correlated bridge, renderer patch,
+and story dispatch stage samples so renderer response stalls can be attributed
+without rebuilding product instrumentation.
 
 For a quick harness check, build and generate the 100-passage fixture once,
 then run the abbreviated scenario:

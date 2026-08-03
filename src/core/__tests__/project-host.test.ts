@@ -24,6 +24,7 @@ import {
 	coreProjectHostPerformanceSnapshot,
 	CoreProjectHost,
 	CoreProjectHostProvider,
+	ProjectScopedCoreProjectHost,
 	StoreCoreProjectHost,
 	useCoreProjectHost
 } from '../project-host';
@@ -34,6 +35,7 @@ import {markProjectStoryHydration} from '../../store/project-hydration';
 import {saveProjectMetadata} from '../../store/project-metadata';
 import {fakePassage, fakeStory} from '../../test-util';
 import {createTestCoreSessionClient} from '../../test-util/test-core-session-client';
+import {PersistenceQuitCoordinator} from '../../store/persistence/electron-ipc/persistence-quit-coordinator';
 
 describe('StoreCoreProjectHost asset commands', () => {
 	function batch(patches: PatchBatch['patches'], label = 'Rust Command') {
@@ -483,6 +485,91 @@ describe('StoreCoreProjectHost asset commands', () => {
 			}),
 			'undoChange.movePassage'
 		);
+	});
+
+	it('drains an admitted worker mutation through synchronous persistence registration and blocks later mutations', async () => {
+		let finishApply: (batch: PatchBatch) => void = () => {};
+		let finishPersistence: () => void = () => {};
+		const wasmClient = fakeWasmClient(
+			() =>
+				new Promise<PatchBatch>(resolve => {
+					finishApply = resolve;
+				})
+		);
+		const story = fakeStory(1);
+		const persistence = new Promise<void>(resolve => {
+			finishPersistence = resolve;
+		});
+		const coordinator = new PersistenceQuitCoordinator();
+		const dispatch = jest.fn((action: StoriesActionOrThunk) => {
+			expect(coordinator.allowsPersistenceMutation()).toBe(true);
+			if (
+				typeof action !== 'function' &&
+				action.type === 'applyCorePatchBatch'
+			) {
+				coordinator.track(persistence);
+			}
+		});
+		const host = new ProjectScopedCoreProjectHost([story], dispatch);
+		const storeHost = [
+			...((host as any).hosts as Map<string, any>).values()
+		][0];
+
+		storeHost.wasmClient = wasmClient;
+		const command = updatePassageTextCommand(
+			story.id,
+			story.passages[0].id,
+			'worker text'
+		);
+		const admitted = host.applyStoryCommand(command);
+
+		await flushCommand();
+		expect(wasmClient.apply).toHaveBeenCalledTimes(1);
+		const prepared = jest.fn();
+		const preparation = coordinator.prepare('quit-worker').then(prepared);
+
+		await expect(host.applyStoryCommand(command)).rejects.toThrow(
+			'Core mutations are frozen'
+		);
+		expect(wasmClient.apply).toHaveBeenCalledTimes(1);
+		finishApply(
+			batch([
+				{
+					changes: {
+						layout: null,
+						name: null,
+						tags: null,
+						text: 'worker text'
+					},
+					passage_id: story.passages[0].id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				}
+			])
+		);
+		await admitted;
+		await Promise.resolve();
+		expect(dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actions: [],
+				persistenceHints: [expect.objectContaining({type: 'passageText'})],
+				type: 'applyCorePatchBatch'
+			}),
+			'undoChange.editPassage'
+		);
+		expect(prepared).not.toHaveBeenCalled();
+		finishPersistence();
+		await preparation;
+		expect(prepared).toHaveBeenCalledTimes(1);
+
+		coordinator.cancel('quit-worker');
+		const reopened = host.applyStoryCommand(command);
+
+		await flushCommand();
+		expect(wasmClient.apply).toHaveBeenCalledTimes(2);
+		finishApply(batch([]));
+		await reopened;
+		host.dispose();
 	});
 
 	it('captures native storage kind on a story deletion patch', async () => {

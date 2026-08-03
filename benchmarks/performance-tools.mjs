@@ -1,9 +1,18 @@
 import {createHash} from 'node:crypto';
-import {readFile, writeFile, mkdir, readdir} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {
+	lstat,
+	mkdir,
+	readFile,
+	readdir,
+	readlink,
+	writeFile
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {performanceReportSchemaVersion} from './performance-report-schema.mjs';
 
-export const performanceReportSchemaVersion = 1;
+export {performanceReportSchemaVersion};
 export const completeElectronPhases = [
 	'startup',
 	'edit',
@@ -11,6 +20,374 @@ export const completeElectronPhases = [
 	'graph',
 	'watcher'
 ];
+
+function isRecord(value) {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+const gitFingerprintMaxBytes = 128 * 1024 * 1024;
+
+function gitOutput(repoRoot, args) {
+	return execFileSync('git', args, {
+		cwd: repoRoot,
+		encoding: 'buffer',
+		maxBuffer: gitFingerprintMaxBytes
+	});
+}
+
+function updateFingerprint(hash, label, value) {
+	const contents = Buffer.isBuffer(value) ? value : Buffer.from(value);
+
+	hash.update(label);
+	hash.update('\0');
+	hash.update(String(contents.length));
+	hash.update('\0');
+	hash.update(contents);
+	hash.update('\0');
+}
+
+export async function currentGitProvenance(repoRoot) {
+	const revision = gitOutput(repoRoot, ['rev-parse', 'HEAD'])
+		.toString('utf8')
+		.trim();
+	const status = gitOutput(repoRoot, [
+		'status',
+		'--porcelain=v2',
+		'-z',
+		'--untracked-files=all'
+	]);
+	const staged = gitOutput(repoRoot, [
+		'diff',
+		'--cached',
+		'--no-ext-diff',
+		'--binary'
+	]);
+	const unstaged = gitOutput(repoRoot, ['diff', '--no-ext-diff', '--binary']);
+	const untracked = gitOutput(repoRoot, [
+		'ls-files',
+		'--others',
+		'--exclude-standard',
+		'-z'
+	])
+		.toString('utf8')
+		.split('\0')
+		.filter(Boolean)
+		.sort();
+	const hash = createHash('sha256');
+	let untrackedBytes = 0;
+
+	updateFingerprint(hash, 'status', status);
+	updateFingerprint(hash, 'staged', staged);
+	updateFingerprint(hash, 'unstaged', unstaged);
+	for (const relativePath of untracked) {
+		const absolutePath = path.join(repoRoot, relativePath);
+		const metadata = await lstat(absolutePath);
+		const contents = metadata.isSymbolicLink()
+			? Buffer.from(await readlink(absolutePath))
+			: await readFile(absolutePath);
+
+		untrackedBytes += contents.length;
+		if (untrackedBytes > gitFingerprintMaxBytes) {
+			throw new Error(
+				'Untracked files exceed the worktree fingerprint size limit.'
+			);
+		}
+		updateFingerprint(
+			hash,
+			`untracked:${relativePath}:${metadata.mode}:${
+				metadata.isSymbolicLink() ? 'symlink' : 'file'
+			}`,
+			contents
+		);
+	}
+
+	return {
+		dirty: status.length > 0,
+		revision,
+		worktreeFingerprint: hash.digest('hex')
+	};
+}
+
+export function preserveFirstNonzeroStatus(current, next) {
+	return current !== 0 ? current : next;
+}
+
+export function validateElectronPhaseReport(
+	report,
+	{fixtureVariant, git, phase, size}
+) {
+	const errors = [];
+
+	if (!isRecord(report)) {
+		return {
+			bodyCompleted: false,
+			errors: ['The phase report is not a JSON object.'],
+			failedAssertionCount: 0,
+			failureKind: 'infrastructure',
+			valid: false
+		};
+	}
+
+	if (report.schemaVersion !== performanceReportSchemaVersion) {
+		errors.push('The phase report uses an unsupported schema version.');
+	}
+	if (report.kind !== 'twine-electron-performance') {
+		errors.push('The phase report has an unexpected kind.');
+	}
+	if (report.phase !== phase) {
+		errors.push(
+			`The phase report identifies ${String(report.phase)} instead of ${phase}.`
+		);
+	}
+	if (report.fixture?.passageCount !== size) {
+		errors.push(
+			`The phase report identifies ${String(
+				report.fixture?.passageCount
+			)} passages instead of ${size}.`
+		);
+	}
+	try {
+		if (reportFixtureVariant(report) !== fixtureVariant) {
+			errors.push('The phase report has an unexpected fixture variant.');
+		}
+	} catch (error) {
+		errors.push(error.message);
+	}
+
+	const samplesValid =
+		isRecord(report.samples) &&
+		Object.values(report.samples).every(
+			values =>
+				Array.isArray(values) && values.every(value => Number.isFinite(value))
+		);
+
+	if (!samplesValid) {
+		errors.push('The phase report samples are malformed.');
+	}
+
+	const assertionsValid =
+		Array.isArray(report.assertions) &&
+		report.assertions.every(
+			assertion =>
+				isRecord(assertion) &&
+				typeof assertion.name === 'string' &&
+				assertion.name.length > 0 &&
+				typeof assertion.passed === 'boolean' &&
+				(assertion.detail === undefined || typeof assertion.detail === 'string')
+		);
+
+	if (!assertionsValid) {
+		errors.push('The phase report assertions are malformed.');
+	}
+
+	const failedAssertionCount = assertionsValid
+		? report.assertions.filter(assertion => !assertion.passed).length
+		: 0;
+	const bodyCompleted = report.measurement?.bodyCompleted === true;
+	const reportedFailedAssertionCount = report.measurement?.failedInvariantCount;
+	const failureKind = report.measurement?.failureKind;
+	const testStatus = report.test?.status;
+	const attempts = report.measurement?.attempts;
+
+	if (
+		!isRecord(report.measurement) ||
+		typeof report.measurement.bodyCompleted !== 'boolean' ||
+		!Number.isInteger(reportedFailedAssertionCount) ||
+		reportedFailedAssertionCount < 0 ||
+		(failureKind !== undefined &&
+			failureKind !== 'assertion' &&
+			failureKind !== 'infrastructure')
+	) {
+		errors.push('The phase report measurement result is malformed.');
+	}
+	if (typeof testStatus !== 'string' || testStatus.length === 0) {
+		errors.push('The phase report test status is malformed.');
+	}
+	if (reportedFailedAssertionCount !== failedAssertionCount) {
+		errors.push('The phase report failed-invariant count is inconsistent.');
+	}
+
+	let infrastructureAttemptCount = 0;
+
+	if (!Array.isArray(attempts) || attempts.length === 0) {
+		errors.push('The phase report retry history is missing or malformed.');
+	} else {
+		for (const [index, attempt] of attempts.entries()) {
+			if (
+				!isRecord(attempt) ||
+				attempt.retry !== index ||
+				typeof attempt.status !== 'string' ||
+				attempt.status.length === 0 ||
+				typeof attempt.bodyCompleted !== 'boolean' ||
+				!Number.isInteger(attempt.failedInvariantCount) ||
+				attempt.failedInvariantCount < 0 ||
+				(attempt.failureKind !== undefined &&
+					attempt.failureKind !== 'assertion' &&
+					attempt.failureKind !== 'infrastructure')
+			) {
+				errors.push(`The phase report retry attempt ${index} is malformed.`);
+				continue;
+			}
+
+			const expectedFailureKind =
+				attempt.bodyCompleted && attempt.status === 'passed'
+					? attempt.failedInvariantCount > 0
+						? 'assertion'
+						: undefined
+					: 'infrastructure';
+
+			if (attempt.failureKind !== expectedFailureKind) {
+				errors.push(
+					`The phase report retry attempt ${index} has an inconsistent result.`
+				);
+			}
+			if (expectedFailureKind === 'infrastructure') {
+				infrastructureAttemptCount += 1;
+			}
+			if (
+				index < attempts.length - 1 &&
+				expectedFailureKind !== 'infrastructure'
+			) {
+				errors.push(
+					`The non-final retry attempt ${index} hides an infrastructure failure.`
+				);
+				infrastructureAttemptCount += 1;
+			}
+		}
+
+		const finalAttempt = attempts.at(-1);
+
+		if (
+			!isRecord(finalAttempt) ||
+			finalAttempt.status !== testStatus ||
+			finalAttempt.bodyCompleted !== bodyCompleted ||
+			finalAttempt.failureKind !== failureKind ||
+			finalAttempt.failedInvariantCount !== reportedFailedAssertionCount
+		) {
+			errors.push(
+				'The final retry attempt does not match the top-level phase result.'
+			);
+		}
+	}
+
+	const reportGit = report.environment?.git;
+
+	if (
+		!isRecord(reportGit) ||
+		typeof reportGit.revision !== 'string' ||
+		reportGit.revision.length === 0 ||
+		typeof reportGit.dirty !== 'boolean' ||
+		typeof reportGit.worktreeFingerprint !== 'string' ||
+		reportGit.worktreeFingerprint.length === 0
+	) {
+		errors.push('The phase report is missing essential Git provenance.');
+	} else if (
+		git &&
+		(reportGit.revision !== git.revision ||
+			reportGit.dirty !== git.dirty ||
+			reportGit.worktreeFingerprint !== git.worktreeFingerprint)
+	) {
+		errors.push('The Git revision or worktree state changed across phases.');
+	}
+
+	return {
+		bodyCompleted,
+		errors,
+		failedAssertionCount,
+		failureKind,
+		git: isRecord(reportGit) ? reportGit : undefined,
+		infrastructureAttemptCount,
+		valid: errors.length === 0
+	};
+}
+
+export function decideElectronPhaseContinuation({
+	exitCode,
+	failFast = false,
+	productionBuildUnchanged = true,
+	reportValidation,
+	sourceFixtureUnchanged = true
+}) {
+	if (exitCode !== 0) {
+		return {
+			continueRun: false,
+			failureKind: 'infrastructure',
+			reason: 'The Playwright process exited nonzero.',
+			status: 'failed',
+			usable: false
+		};
+	}
+	if (!reportValidation.valid) {
+		return {
+			continueRun: false,
+			failureKind: 'infrastructure',
+			reason: reportValidation.errors.join(' '),
+			status: 'failed',
+			usable: false
+		};
+	}
+	if (reportValidation.infrastructureAttemptCount > 0) {
+		return {
+			continueRun: false,
+			failureKind: 'infrastructure',
+			reason: 'A Playwright retry attempt had an infrastructure failure.',
+			status: 'failed',
+			usable: false
+		};
+	}
+	if (!sourceFixtureUnchanged) {
+		return {
+			continueRun: false,
+			failureKind: 'infrastructure',
+			reason: 'The source fixture changed during the phase.',
+			status: 'failed',
+			usable: false
+		};
+	}
+	if (!productionBuildUnchanged) {
+		return {
+			continueRun: false,
+			failureKind: 'infrastructure',
+			reason: 'The production build changed during the phase.',
+			status: 'failed',
+			usable: false
+		};
+	}
+
+	const reportPassed =
+		reportValidation.bodyCompleted &&
+		reportValidation.failureKind === undefined &&
+		reportValidation.failedAssertionCount === 0;
+	const assertionFailed =
+		reportValidation.bodyCompleted &&
+		reportValidation.failureKind === 'assertion' &&
+		reportValidation.failedAssertionCount > 0;
+
+	if (reportPassed) {
+		return {
+			continueRun: true,
+			status: 'passed',
+			usable: true
+		};
+	}
+	if (assertionFailed) {
+		return {
+			continueRun: !failFast,
+			failureKind: 'assertion',
+			reason: 'The completed phase has failed performance assertions.',
+			status: 'failed',
+			usable: true
+		};
+	}
+
+	return {
+		continueRun: false,
+		failureKind: 'infrastructure',
+		reason: 'The phase measurement did not complete successfully.',
+		status: 'failed',
+		usable: false
+	};
+}
 
 export function percentile(values, percentage) {
 	const sorted = values
@@ -89,6 +466,9 @@ export function mergeRawPerformanceReports(reports, phaseResults = {}) {
 	const gitStates = reports.map(report => report.environment?.git);
 	const gitRevisions = gitStates.map(state => state?.revision);
 	const gitDirtyStates = gitStates.map(state => state?.dirty);
+	const gitWorktreeFingerprints = gitStates.map(
+		state => state?.worktreeFingerprint
+	);
 	const fixtureVariants = reports.map(reportFixtureVariant);
 	const mergedAssertions = reports.flatMap(report => report.assertions ?? []);
 
@@ -109,13 +489,24 @@ export function mergeRawPerformanceReports(reports, phaseResults = {}) {
 				gitDirtyStates.every(state => state === gitDirtyStates[0])
 		},
 		{
+			detail: JSON.stringify(gitWorktreeFingerprints),
+			name: 'git-worktree-state-stable-across-phases',
+			passed:
+				gitWorktreeFingerprints.every(
+					fingerprint => typeof fingerprint === 'string' && fingerprint
+				) &&
+				gitWorktreeFingerprints.every(
+					fingerprint => fingerprint === gitWorktreeFingerprints[0]
+				)
+		},
+		{
 			detail: JSON.stringify(fixtureVariants),
 			name: 'fixture-variant-stable-across-phases',
 			passed: fixtureVariants.every(variant => variant === fixtureVariants[0])
 		}
 	);
 
-	return {
+	const merged = {
 		...first,
 		assertions: mergedAssertions,
 		createdAt: new Date().toISOString(),
@@ -131,6 +522,12 @@ export function mergeRawPerformanceReports(reports, phaseResults = {}) {
 				: 'failed'
 		}
 	};
+
+	if (reports.length > 1) {
+		delete merged.measurement;
+	}
+
+	return merged;
 }
 
 export function currentMachine() {
@@ -292,7 +689,25 @@ export function baselineCandidateErrors(
 	budgets,
 	{requireClean = false} = {}
 ) {
+	const errors = referenceCandidateErrors(report, budgets, {
+		candidateKind: 'baseline',
+		requireClean
+	});
+
+	if (report.evaluation?.passed !== true) {
+		errors.push('The report has blocking evaluation failures.');
+	}
+
+	return errors;
+}
+
+export function referenceCandidateErrors(
+	report,
+	budgets,
+	{candidateKind = 'reference', requireClean = false} = {}
+) {
 	const errors = [];
+	const baselineCandidate = candidateKind === 'baseline';
 
 	if (
 		report.schemaVersion !== performanceReportSchemaVersion ||
@@ -303,10 +718,18 @@ export function baselineCandidateErrors(
 		return errors;
 	}
 	if (report.smoke) {
-		errors.push('Smoke reports cannot be accepted as baselines.');
+		errors.push(
+			baselineCandidate
+				? 'Smoke reports cannot be accepted as baselines.'
+				: 'Smoke reports cannot be used as references.'
+		);
 	}
 	if (report.phase !== 'all' || report.test?.status !== 'passed') {
-		errors.push('A baseline must be a passing all-phase report.');
+		errors.push(
+			baselineCandidate
+				? 'A baseline must be a passing all-phase report.'
+				: 'A reference must be a passing all-phase report.'
+		);
 	}
 	for (const phase of completeElectronPhases) {
 		if (report.phases?.[phase]?.status !== 'passed') {
@@ -315,24 +738,73 @@ export function baselineCandidateErrors(
 	}
 	for (const [name, budget] of Object.entries(budgets.metrics ?? {})) {
 		if (metricValue(report, name, budget.stat) === undefined) {
-			errors.push(`Missing baseline metric: ${name}.`);
+			errors.push(
+				`Missing ${baselineCandidate ? 'baseline' : 'reference'} metric: ${name}.`
+			);
 		}
 	}
-	if (report.evaluation?.passed !== true) {
-		errors.push('The report has blocking invariant failures.');
+	if (
+		!Array.isArray(report.assertions) ||
+		report.assertions.length === 0 ||
+		report.assertions.some(
+			assertion =>
+				!isRecord(assertion) ||
+				typeof assertion.name !== 'string' ||
+				!assertion.name ||
+				assertion.passed !== true
+		)
+	) {
+		errors.push('A reference must have structurally passing invariants.');
+	}
+	const evaluationChecks = report.evaluation?.checks;
+	const evaluationChecksValid =
+		Array.isArray(evaluationChecks) &&
+		evaluationChecks.every(
+			check =>
+				isRecord(check) &&
+				typeof check.blocking === 'boolean' &&
+				typeof check.kind === 'string' &&
+				typeof check.name === 'string' &&
+				typeof check.passed === 'boolean'
+		);
+	const blockingFailures = evaluationChecksValid
+		? evaluationChecks.filter(check => check.blocking && !check.passed)
+		: [];
+	const invariantChecks = evaluationChecksValid
+		? evaluationChecks.filter(check => check.kind === 'invariant')
+		: [];
+
+	if (
+		typeof report.evaluation?.passed !== 'boolean' ||
+		!evaluationChecksValid ||
+		(report.evaluation.passed === true && blockingFailures.length > 0) ||
+		(report.evaluation.passed === false && blockingFailures.length === 0)
+	) {
+		errors.push('The report evaluation is missing or inconsistent.');
+	} else if (
+		invariantChecks.length !== report.assertions.length ||
+		invariantChecks.some(check => !check.passed) ||
+		blockingFailures.some(check => check.kind !== 'regression')
+	) {
+		errors.push(
+			'A reference may preserve failed regression gates, but all structural invariants must pass.'
+		);
 	}
 	if (
 		requireClean &&
 		(report.environment?.git?.dirty !== false ||
 			typeof report.environment?.git?.revision !== 'string' ||
-			!report.environment.git.revision)
+			!report.environment.git.revision ||
+			typeof report.environment?.git?.worktreeFingerprint !== 'string' ||
+			!report.environment.git.worktreeFingerprint)
 	) {
 		errors.push('An accepted baseline must come from a clean Git revision.');
 	}
 	if (requireClean) {
 		for (const name of [
 			'git-revision-stable-across-phases',
-			'git-dirty-state-stable-across-phases'
+			'git-dirty-state-stable-across-phases',
+			'git-worktree-state-stable-across-phases'
 		]) {
 			if (
 				!report.assertions?.some(

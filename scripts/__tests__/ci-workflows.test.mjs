@@ -53,6 +53,7 @@ function stepRun(source, jobName, stepName) {
 test('quality CI enforces JavaScript, documentation, and Rust contracts', () => {
 	const source = workflow('quality.yml');
 	for (const marker of [
+		'Classify changed paths and modes fail closed',
 		'npm run test:ci',
 		'npm run lint',
 		'cargo install mdbook --version 0.5.4 --locked',
@@ -69,6 +70,8 @@ test('quality CI enforces JavaScript, documentation, and Rust contracts', () => 
 		/clippy --workspace --all-targets --locked -- -D warnings/
 	);
 	assert.match(source, /merge_group:\n\s+types: \[checks_requested\]/);
+	assert.match(source, /workflow_dispatch:/);
+	assert.doesNotMatch(source, /\n  push:/);
 	assert.match(
 		source,
 		/cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/
@@ -79,6 +82,40 @@ test('quality CI enforces JavaScript, documentation, and Rust contracts', () => 
 		/mdbook-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-0\.5\.4/
 	);
 	assert.doesNotMatch(source, /restore-keys:/);
+});
+
+test('quality CI routes explicit safe changes and preserves a stable fail-closed gate', () => {
+	const source = workflow('quality.yml');
+	const javascript = job(source, 'javascript');
+	const rust = job(source, 'rust');
+	const lightweight = job(source, 'lightweight');
+
+	assert.match(
+		javascript,
+		/if: needs\.classify\.outputs\.quality_mode == 'full'/
+	);
+	assert.match(rust, /if: needs\.classify\.outputs\.quality_mode == 'full'/);
+	assert.match(lightweight, /quality_mode == 'docs'/);
+	assert.match(lightweight, /quality_mode == 'metadata'/);
+	for (const marker of [
+		'npm run format:check',
+		'npm run check:docs',
+		'npm run build:docs'
+	]) {
+		assert.ok(lightweight.includes(marker), marker);
+	}
+	assert.match(
+		lightweight,
+		/name: Documentation checks\n\s+if: needs\.classify\.outputs\.quality_mode == 'docs'/
+	);
+	assert.match(
+		lightweight,
+		/name: Build compatibility manual\n\s+if: needs\.classify\.outputs\.quality_mode == 'docs'/
+	);
+	assert.match(
+		job(source, 'classify'),
+		/BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.merge_group\.base_sha \|\| github\.sha \}\}/
+	);
 });
 
 test('packaged CI retains complete native evidence', () => {
@@ -117,6 +154,37 @@ test('packaged CI retains complete native evidence', () => {
 	}
 	assert.doesNotMatch(source, /paths-ignore:/);
 	assert.doesNotMatch(source, /restore-keys:/);
+	assert.doesNotMatch(source, /\n  push:/);
+	assert.doesNotMatch(source, /workflow_dispatch:/);
+	assert.match(source, /pull_request:/);
+	assert.match(source, /merge_group:\n\s+types: \[checks_requested\]/);
+});
+
+test('targeted packaged smoke grep alternatives match current test titles', () => {
+	const packagedTests = readFileSync(
+		join(repositoryRoot, 'e2e', 'packaged-electron.spec.ts'),
+		'utf8'
+	);
+	const testTitles = [...packagedTests.matchAll(/\btest\('([^']+)'/g)].map(
+		match => match[1]
+	);
+	const selectors = [
+		...['packaged-electron-smoke.yml', 'release-candidate.yml', 'release.yml']
+			.flatMap(name => [
+				...workflow(name).matchAll(/e2e:electron:packaged -- --grep "([^"]+)"/g)
+			])
+			.map(match => match[1])
+	];
+
+	assert.equal(selectors.length, 5);
+	for (const selector of selectors) {
+		for (const alternative of selector.split('|')) {
+			assert.ok(
+				testTitles.some(title => new RegExp(alternative).test(title)),
+				`packaged smoke selector ${JSON.stringify(alternative)} should match a test title`
+			);
+		}
+	}
 });
 
 test('stable final CI gates fail when required upstream work fails', () => {
@@ -128,18 +196,55 @@ test('stable final CI gates fail when required upstream work fails', () => {
 	const qualityGate = stepRun(
 		workflow('quality.yml'),
 		'quality-gate',
-		'Require every quality job'
+		'Require selected quality jobs'
 	);
 	assert.equal(
-		run(qualityGate, {JAVASCRIPT_RESULT: 'success', RUST_RESULT: 'success'})
-			.status,
+		run(qualityGate, {
+			CLASSIFY_RESULT: 'success',
+			JAVASCRIPT_RESULT: 'success',
+			LIGHTWEIGHT_RESULT: 'skipped',
+			QUALITY_MODE: 'full',
+			RUST_RESULT: 'success'
+		}).status,
 		0
 	);
-	assert.notEqual(
-		run(qualityGate, {JAVASCRIPT_RESULT: 'failure', RUST_RESULT: 'success'})
-			.status,
-		0
-	);
+	for (const qualityMode of ['docs', 'metadata']) {
+		assert.equal(
+			run(qualityGate, {
+				CLASSIFY_RESULT: 'success',
+				JAVASCRIPT_RESULT: 'skipped',
+				LIGHTWEIGHT_RESULT: 'success',
+				QUALITY_MODE: qualityMode,
+				RUST_RESULT: 'skipped'
+			}).status,
+			0
+		);
+	}
+	for (const env of [
+		{
+			CLASSIFY_RESULT: 'success',
+			JAVASCRIPT_RESULT: 'failure',
+			LIGHTWEIGHT_RESULT: 'skipped',
+			QUALITY_MODE: 'full',
+			RUST_RESULT: 'success'
+		},
+		{
+			CLASSIFY_RESULT: 'failure',
+			JAVASCRIPT_RESULT: 'skipped',
+			LIGHTWEIGHT_RESULT: 'skipped',
+			QUALITY_MODE: '',
+			RUST_RESULT: 'skipped'
+		},
+		{
+			CLASSIFY_RESULT: 'success',
+			JAVASCRIPT_RESULT: 'skipped',
+			LIGHTWEIGHT_RESULT: 'success',
+			QUALITY_MODE: 'unknown',
+			RUST_RESULT: 'skipped'
+		}
+	]) {
+		assert.notEqual(run(qualityGate, env).status, 0);
+	}
 
 	const packagedGate = stepRun(
 		workflow('packaged-electron-smoke.yml'),
@@ -175,7 +280,7 @@ test('stable final CI gates fail when required upstream work fails', () => {
 	);
 });
 
-test('merge-queue transition never emits native evidence from PR or main gate-only runs', () => {
+test('merge-queue transition never emits native evidence from gate-only PR runs', () => {
 	const mode = stepRun(
 		workflow('packaged-electron-smoke.yml'),
 		'classify',
@@ -368,7 +473,7 @@ test('merge-queue native-only rollout is documented in fail-closed order', () =>
 	);
 	assert.ok(variable >= 0 && workflows > variable);
 	assert.ok(ruleset > workflows && pilot > ruleset && enable > pilot);
-	assert.match(releasing, /Candidate preparation\nthen blocks fail-closed/);
+	assert.match(releasing, /Candidate preparation then\nblocks fail-closed/);
 });
 
 test('manual modes require an explicit numeric candidate run ID', () => {

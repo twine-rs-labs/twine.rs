@@ -2,13 +2,11 @@ name: Packaged Electron smoke
 
 on:
   pull_request:
-  push:
-    branches: [main]
   merge_group:
     types: [checks_requested]
 
-# Cancel only superseded pull-request runs. Exact merge-queue and main evidence
-# remains durable for pre-tag release candidate validation.
+# Cancel only superseded pull-request runs. Exact merge-queue evidence remains
+# durable for pre-tag release candidate validation.
 concurrency:
   group: packaged-electron-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -45,7 +43,7 @@ jobs:
           MERGE_QUEUE_NATIVE_ONLY: ${{ vars.TWINE_MERGE_QUEUE_NATIVE_ONLY || 'false' }}
         run: |
           native_required="$CHANGED_PATHS_REQUIRE_NATIVE"
-          # Transition switch: gate-only PR/main runs intentionally retain no
+          # Transition switch: gate-only pull-request runs intentionally retain no
           # desktop-local-test-bundle, so release evidence cannot accept them.
           if [[ "$MERGE_QUEUE_NATIVE_ONLY" == 'true' && "$EVENT_NAME" != 'merge_group' ]]; then
             native_required=false
@@ -180,7 +178,7 @@ jobs:
         run: |
           app_image=$(ls "${{ matrix.artifact_dir }}"/Twine-RS-*-linux-${{ matrix.appimage_arch }}.AppImage)
           chmod +x "$app_image"
-          APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "flushes a trailing"
+          APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "drains a trailing"
       - name: Extend Linux ARM64 preview wait in test harness
         if: runner.os == 'Linux' && matrix.arch == 'arm64'
         shell: bash
@@ -210,7 +208,7 @@ jobs:
           mkdir -p "$mount_dir"
           hdiutil attach "${{ matrix.artifact_dir }}"/Twine-RS-*-mac-${{ matrix.arch }}.dmg -nobrowse -readonly -mountpoint "$mount_dir"
           trap 'hdiutil detach "$mount_dir"' EXIT
-          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "flushes a trailing|preserves sibling"
+          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "drains a trailing|preserves sibling"
           hdiutil detach "$mount_dir"
           trap - EXIT
       - name: Install Windows package

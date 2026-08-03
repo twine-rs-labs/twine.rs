@@ -79,6 +79,104 @@ describe('initApp', () => {
 	it('initializes IPC', async () => {
 		await initApp();
 		expect(initIpcMock).toHaveBeenCalledTimes(1);
+		const options = initIpcMock.mock.calls[0][0];
+		const window = (
+			BrowserWindow as unknown as {instances: BrowserWindow[]}
+		).instances.at(-1) as BrowserWindow;
+
+		expect(options.authoringRendererEstablished()).toBe(false);
+		expect(options.authoringRendererWasEstablished()).toBe(false);
+		expect(options.authoringWebContents()).toBe(window.webContents);
+		options.onAuthoringRendererReady();
+		expect(options.authoringRendererEstablished()).toBe(true);
+		expect(options.authoringRendererWasEstablished()).toBe(true);
+	});
+
+	it.each(['destroyed', 'render-process-gone'])(
+		'resets renderer readiness when webContents emits %s',
+		async eventName => {
+			await initApp();
+			const options = initIpcMock.mock.calls[0][0];
+			const window = (
+				BrowserWindow as unknown as {instances: BrowserWindow[]}
+			).instances.at(-1) as BrowserWindow & {webContents: {on: jest.Mock}};
+
+			options.onAuthoringRendererReady();
+			const listener = window.webContents.on.mock.calls.find(
+				([name]) => name === eventName
+			)?.[1];
+
+			listener();
+			expect(options.authoringRendererEstablished()).toBe(false);
+		}
+	);
+
+	it('resets renderer readiness on top-level cross-document navigation', async () => {
+		await initApp();
+		const options = initIpcMock.mock.calls[0][0];
+		const window = (
+			BrowserWindow as unknown as {instances: BrowserWindow[]}
+		).instances.at(-1) as BrowserWindow & {webContents: {on: jest.Mock}};
+		const navigation = window.webContents.on.mock.calls.find(
+			([name]) => name === 'did-start-navigation'
+		)?.[1];
+
+		options.onAuthoringRendererReady();
+		navigation({
+			isMainFrame: true,
+			isSameDocument: true,
+			url: 'file:///renderer/index.html#same-document'
+		});
+		expect(options.authoringRendererEstablished()).toBe(true);
+		navigation({
+			isMainFrame: true,
+			isSameDocument: false,
+			url: 'file:///replacement.html'
+		});
+		expect(options.authoringRendererEstablished()).toBe(false);
+	});
+
+	it('restores readiness when a started cross-document navigation is prevented', async () => {
+		await initApp();
+		const options = initIpcMock.mock.calls[0][0];
+		const window = (
+			BrowserWindow as unknown as {instances: BrowserWindow[]}
+		).instances.at(-1) as BrowserWindow & {webContents: {on: jest.Mock}};
+		const navigation = window.webContents.on.mock.calls.find(
+			([name]) => name === 'did-start-navigation'
+		)?.[1];
+		const willNavigate = window.webContents.on.mock.calls.find(
+			([name]) => name === 'will-navigate'
+		)?.[1];
+		const event = {preventDefault: jest.fn()};
+		const blockedUrl = 'https://example.com/blocked';
+
+		options.onAuthoringRendererReady();
+		navigation({
+			isMainFrame: true,
+			isSameDocument: false,
+			url: blockedUrl
+		});
+		expect(options.authoringRendererEstablished()).toBe(false);
+
+		willNavigate(event, blockedUrl);
+		expect(event.preventDefault).toHaveBeenCalledTimes(1);
+		expect(options.authoringRendererEstablished()).toBe(true);
+
+		navigation({
+			isMainFrame: true,
+			isSameDocument: false,
+			url: 'file:///committed-replacement.html'
+		});
+		expect(options.authoringRendererEstablished()).toBe(false);
+
+		options.onAuthoringRendererReady();
+		const processGone = window.webContents.on.mock.calls.find(
+			([name]) => name === 'render-process-gone'
+		)?.[1];
+
+		processGone();
+		expect(options.authoringRendererEstablished()).toBe(false);
 	});
 
 	it('initializes the menu bar', async () => {

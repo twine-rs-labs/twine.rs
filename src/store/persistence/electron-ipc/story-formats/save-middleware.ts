@@ -10,13 +10,7 @@ export function saveMiddleware(
 	state: StoryFormatsState,
 	action: StoryFormatsAction
 ) {
-	const shouldSave =
-		action.type === 'create' ||
-		action.type === 'delete' ||
-		action.type === 'repair' ||
-		(action.type === 'update' && isPersistableStoryFormatChange(action.props));
-
-	if (shouldSave) {
+	if (isPersistenceAffectingAction(action)) {
 		return saveJson(
 			'story-formats.json',
 			state.map(format => ({
@@ -29,4 +23,13 @@ export function saveMiddleware(
 			}))
 		);
 	}
+}
+
+export function isPersistenceAffectingAction(action: StoryFormatsAction) {
+	return (
+		action.type === 'create' ||
+		action.type === 'delete' ||
+		action.type === 'repair' ||
+		(action.type === 'update' && isPersistableStoryFormatChange(action.props))
+	);
 }

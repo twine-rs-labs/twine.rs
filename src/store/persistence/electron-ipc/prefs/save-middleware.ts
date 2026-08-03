@@ -6,7 +6,11 @@ import {saveJson} from '../save-json';
  * *after* the main reducer runs.
  */
 export function saveMiddleware(state: PrefsState, action: PrefsAction) {
-	if (action.type === 'repair' || action.type === 'update') {
+	if (isPersistenceAffectingAction(action)) {
 		return saveJson('prefs.json', state);
 	}
+}
+
+export function isPersistenceAffectingAction(action: PrefsAction) {
+	return action.type === 'repair' || action.type === 'update';
 }

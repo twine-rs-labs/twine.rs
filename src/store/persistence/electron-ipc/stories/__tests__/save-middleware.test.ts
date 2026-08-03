@@ -11,32 +11,22 @@ jest.mock('../save-story');
 
 describe('stories Electron IPC save middleware', () => {
 	const saveStoryMock = saveStory as jest.Mock;
-	let beginLegacyStoryWrite: jest.SpyInstance;
 	let deleteStory: jest.SpyInstance;
-	let finishLegacyStoryWrite: jest.SpyInstance;
 	let formatsState: StoryFormatsState;
 	let renameStory: jest.SpyInstance;
-	let reservationCounter: number;
 	let storiesState: StoriesState;
 
 	beforeEach(() => {
 		window.localStorage.clear();
-		reservationCounter = 0;
-		beginLegacyStoryWrite = jest.fn(
-			() => `reservation-${++reservationCounter}`
-		);
 		formatsState = [fakeLoadedStoryFormat()];
 		deleteStory = jest.fn(async () => undefined);
-		finishLegacyStoryWrite = jest.fn();
 		renameStory = jest.fn(async () => undefined);
 		saveStoryMock.mockResolvedValue(undefined);
 		storiesState = [metadataStory(fakeStory(2))];
 		storiesState[0].storyFormat = formatsState[0].name;
 		storiesState[0].storyFormatVersion = formatsState[0].version;
 		(window as any).twineElectron = {
-			beginLegacyStoryWrite,
 			deleteStory,
-			finishLegacyStoryWrite,
 			renameStory
 		};
 		jest.spyOn(console, 'warn').mockReturnValue();
@@ -167,7 +157,7 @@ describe('stories Electron IPC save middleware', () => {
 		expect('text' in storiesState[0].passages[0]).toBe(false);
 	});
 
-	it('reserves session saves before they wait behind renderer work', async () => {
+	it('registers session saves before they wait behind renderer work', async () => {
 		let finishFirstSave: () => void = () => {};
 		const firstSave = new Promise<void>(resolve => {
 			finishFirstSave = resolve;
@@ -199,10 +189,10 @@ describe('stories Electron IPC save middleware', () => {
 			formatsState
 		);
 
-		// Each action reserves its work synchronously. The first action also begins
-		// its per-story operation, while the second remains queued by session.
+		// The first action begins its per-story operation while the second remains
+		// queued by session, but both already returned completion promises.
 
-		expect(beginLegacyStoryWrite).toHaveBeenCalledTimes(3);
+		expect(saveStoryMock).toHaveBeenCalledTimes(1);
 		finishFirstSave();
 		if (typeof first === 'object') {
 			await first.completion;
@@ -210,42 +200,41 @@ describe('stories Electron IPC save middleware', () => {
 		if (typeof second === 'object') {
 			await second.completion;
 		}
-		expect(beginLegacyStoryWrite).toHaveBeenCalledTimes(4);
-		expect(finishLegacyStoryWrite).toHaveBeenCalledTimes(4);
+		expect(saveStoryMock).toHaveBeenCalledTimes(2);
 	});
 
-	it('releases earlier session reservations if a later reservation fails', () => {
-		const error = new Error('reservation failed');
-		const secondStory = metadataStory(fakeStory(1));
+	it('coalesces queued session saves to the latest work', async () => {
+		let finishFirstSave: () => void = () => {};
 
-		secondStory.storyFormat = formatsState[0].name;
-		secondStory.storyFormatVersion = formatsState[0].version;
-		storiesState = [...storiesState, secondStory];
-		beginLegacyStoryWrite
-			.mockReset()
-			.mockReturnValueOnce('reservation-1')
-			.mockImplementationOnce(() => {
-				throw error;
-			});
-
-		expect(() =>
+		saveStoryMock
+			.mockReturnValueOnce(
+				new Promise<void>(resolve => {
+					finishFirstSave = resolve;
+				})
+			)
+			.mockResolvedValue(undefined);
+		const saves = [1, 2, 3].map(revision =>
 			saveMiddleware(
 				storiesState,
 				{
 					actions: [],
-					revision: 1,
+					revision,
 					sessionId: 'session-1',
-					storyIds: storiesState.map(story => story.id),
+					storyIds: [storiesState[0].id],
 					type: 'applyCorePatchBatch'
 				},
 				formatsState
 			)
-		).toThrow(error);
-		expect(finishLegacyStoryWrite).toHaveBeenCalledWith(
-			'reservation-1',
-			'reservation failed'
 		);
-		expect(saveStoryMock).not.toHaveBeenCalled();
+
+		expect(saveStoryMock).toHaveBeenCalledTimes(1);
+		finishFirstSave();
+		await Promise.all(
+			saves.map(save =>
+				typeof save === 'object' ? save.completion : undefined
+			)
+		);
+		expect(saveStoryMock).toHaveBeenCalledTimes(2);
 	});
 
 	it.each([
@@ -467,7 +456,6 @@ describe('stories Electron IPC save middleware', () => {
 				formatsState
 			);
 
-			expect(beginLegacyStoryWrite).toHaveBeenCalledTimes(2);
 			expect(deleteStory).not.toHaveBeenCalled();
 			finishSave();
 			if (typeof save === 'object') {
@@ -477,7 +465,6 @@ describe('stories Electron IPC save middleware', () => {
 				await deletion.completion;
 			}
 			expect(deleteStory).toHaveBeenCalledWith(storiesState[0]);
-			expect(finishLegacyStoryWrite).toHaveBeenCalledTimes(2);
 		});
 	});
 
@@ -586,7 +573,6 @@ describe('stories Electron IPC save middleware', () => {
 				formatsState
 			);
 
-			expect(beginLegacyStoryWrite).toHaveBeenCalledTimes(2);
 			expect(renameStory).not.toHaveBeenCalled();
 			finishSave();
 			if (typeof save === 'object') {
@@ -600,7 +586,6 @@ describe('stories Electron IPC save middleware', () => {
 				storiesState[0],
 				formatsState
 			);
-			expect(finishLegacyStoryWrite).toHaveBeenCalledTimes(2);
 		});
 
 		it('saves file-backed project stories without renaming legacy HTML', () => {

@@ -2,7 +2,7 @@
 
 Status: current measured snapshot
 Owner: performance maintainers
-Last verified: 2026-07-29
+Last verified: 2026-08-03
 Source of truth: release-mode Electron harness and tracked normalized references
 
 ## Harness state
@@ -13,23 +13,93 @@ fixture into an isolated temporary run root, and measures startup, editing,
 queries, graph frames, watcher ingestion, bridge payloads, persistence, and
 process memory.
 
-The current tracked pair contains complete Apple M4 runs that pass all
-machine-independent structural invariants. Raw reports and machine-specific
-baselines remain ignored, while normalized reproducibility evidence is tracked:
+The current tracked pair contains complete Apple M4 corrected-code runs. Raw
+reports and machine-specific baselines remain ignored, while normalized
+reproducibility evidence is tracked:
 
-- [10k reference](../../benchmarks/reference/2026-07-16-apple-m4-10000.summary.json)
-- [50k reference](../../benchmarks/reference/2026-07-21-apple-m4-50000.summary.json)
+- [10k clean passing reference](../../benchmarks/reference/2026-08-03-apple-m4-e6f5446a-10000.summary.json)
+- [50k clean failed-gate evidence](../../benchmarks/reference/2026-08-03-apple-m4-e6f5446a-50000.summary.json)
 
-The 10k source report was captured from clean revision `bd13ddd6`, retained
-that revision and clean state through all five phases, passed every blocking
-invariant, and recorded `baselineStatus: "matched"`. The 50k source report was
-captured from clean revision `eb090ab`, retained that revision and clean state
-through all five phases, and passed every structural invariant. It recorded
-`baselineStatus: "missing"`, so it is target-only evidence without a matched
-regression baseline—not an accepted 50k baseline. The
-[earlier July 16 50k reference](../../benchmarks/reference/2026-07-16-apple-m4-50000.summary.json)
-remains tracked for historical comparison, as do the earlier July 3
-dirty-worktree summaries.
+Both reports retained clean revision `e6f5446a` through all five phases and
+passed 417/417 assertions. The 10k evaluation passes. The 50k evaluation fails
+only its resident-memory regression comparison, so its normalized artifact is
+clean complete evidence, not an accepted baseline or baseline replacement. The
+previous July 18 10k and released-beta August 3 50k references are now
+historical, alongside the July 3, July 16, and July 21 snapshots.
+
+## Corrected clean validation
+
+The clean full suites at corrected revision `e6f5446a` completed all five
+phases. At 10k, shell visibility was 538.3 ms p50, interactive startup 358.5 ms
+p50, edit-to-paint 24.9 ms p95, retained resident memory 717.8125 MiB p50, and
+the edit-window long-task maximum was 0 ms. Its matched evaluation passes.
+
+At 50k, shell visibility was 2.440 s p50, interactive startup 1.700 s p50,
+Contents 71.4 ms p95, search 18.8 ms p95, edit-to-paint 43.6 ms p95, graph
+frames 17.2 ms p95 and 17.6 ms maximum, retained resident memory 1,148.90625
+MiB p50, watcher observation-to-patch 269.2 ms p95, and the edit-window
+long-task maximum was 0 ms. All structural assertions pass. The only blocking
+evaluation failure is the memory comparison against the July 21 local baseline:
+1,044.125 MiB plus the 104.4125 MiB allowance gives a 1,148.5375 MiB limit.
+The result is 0.36875 MiB, about 0.032%, above that limit.
+
+The tracked released-beta August 3 reference measured 1,144.984375 MiB. The
+corrected result is 3.921875 MiB, about 0.34%, higher. A single result this close
+to the gate does not establish a significant memory regression; the harness
+nonetheless fails the comparison mechanically, and the 50k result cannot
+replace a baseline.
+
+Focused attribution on 2026-08-03 located the regression. Disabling the native
+Harlowe editor did not remove it: that control still recorded 201 ms and 198 ms
+long tasks, with both stalls inside Electron story-persistence setup. A native
+renderer profile then captured a 154.7 ms response task. About 149.5 ms of that
+task was sampled in `beginLegacyStoryWrite` calling `ipcRenderer.sendSync`, with
+no overlapping renderer GC. The browser main thread was already occupied by a
+354.3 ms task, so the synchronous reservation prevented the renderer from
+painting until the browser could service it. The reservation was introduced by
+`9f131516` after the July 18 baseline. Harlowe parsing, the Rust/WASM worker,
+the story reducer, patch publication, and the asynchronous file write are not
+the owner of this tail.
+
+The earlier A/B and profile reports came from an intentionally dirty diagnostic
+worktree and do not replace clean evidence. Quit-safe write tracking removes the
+synchronous renderer-to-main reservation from the edit critical path. The clean
+corrected suites now validate its all-phase behavior: both record zero long
+tasks across the 20 edit windows, with bounded edit-paint tails and every
+structural assertion passing.
+
+## Historical comparison
+
+The closest like-for-like comparators are the clean July 18 10k local-baseline
+source at `0951f942` and the clean July 21 50k reference at `eb090ab`. They
+share the current machine fingerprint, fixture identity, Electron and
+Playwright versions, and startup/memory measurement contracts. macOS changed
+from Darwin 25.5 to 25.6, and the raw report schema changed from 1 to 2 without
+changing those metric contracts.
+
+The July 18 10k and released-beta August 3 50k references remain useful
+historical comparators, but they are no longer the current tracked pair. The
+corrected 10k edit-paint p95 is 24.9 ms versus 25.7 ms on July 18, and its
+edit-window long-task maximum is again 0 ms.
+
+| 50k metric                        |     July 21 |    August 3 |       Change | Reading                                                  |
+| --------------------------------- | ----------: | ----------: | -----------: | -------------------------------------------------------- |
+| Shell visible, p50                |  4,581.4 ms |  2,371.4 ms | 48.2% faster | Material improvement; 400 ms target still missed         |
+| Interactive/open, p50             |  3,280.3 ms |  1,586.6 ms | 51.6% faster | Material improvement; 1.5 s target narrowly missed       |
+| Passage reindex compute, p95      |      4.6 ms |      1.2 ms | 73.9% faster | Target passes                                            |
+| Contents query, p95               |     88.6 ms |     70.6 ms | 20.3% faster | Improved; 50 ms target still missed                      |
+| Search query, p95                 |     30.4 ms |     15.6 ms | 48.7% faster | Target passes                                            |
+| Edit to paint, p95                |     83.2 ms |     43.4 ms | 47.8% faster | Material improvement; 16.6 ms target still missed        |
+| Graph frame, p95                  |     18.6 ms |     17.5 ms |  5.9% faster | Essentially unchanged; 16.6 ms target still missed       |
+| Graph frame, maximum              |     18.8 ms |     17.8 ms |  5.3% faster | Essentially unchanged; 50 ms target passes               |
+| Retained resident memory, p50     | 1,044.1 MiB | 1,145.0 MiB |  9.7% higher | Within regression allowance by only 3.6 MiB; target miss |
+| Watcher observation to patch, p95 |    325.6 ms |    264.0 ms | 18.9% faster | Directional diagnostic improvement                       |
+
+The large 50k latency changes are material directional evidence, but the
+August side is one full suite rather than a repeated sample, so this is not a
+claim of statistical significance. The 100.9 MiB memory increase deserves
+attention: it passes the blocking regression gate only because the policy
+allows 10% growth, and it remains far above the 600 MiB absolute target.
 
 A short diagnostic phase now exists for iteration on the dominant 50k edit/save
 cost. `npm run perf:electron:50k:diagnostic` performs one production launch and

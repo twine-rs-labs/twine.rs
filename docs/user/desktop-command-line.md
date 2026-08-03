@@ -2,12 +2,12 @@
 
 Status: current
 Owner: product documentation maintainers
-Last verified: 2026-07-29
+Last verified: 2026-08-03
 Source of truth: `commandLineHelpText` in the Twine RS desktop main process
 
-This page describes command-line inputs accepted by the current Twine RS
-desktop source build. Twine RS has not yet published formal downloadable
-installers, and install locations can vary.
+This page describes command-line inputs accepted by current Twine RS desktop
+source builds and the `0.2.0-beta.2` public prerelease. Install locations and
+executable layouts vary by platform and package.
 
 Command-line values apply to the desktop session launched by that command. The
 command line does not itself rewrite the corresponding persisted settings.

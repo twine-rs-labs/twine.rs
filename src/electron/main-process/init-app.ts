@@ -29,9 +29,16 @@ import {setCommandLineOpenRequestNotifier} from './command-line';
 import {installPermissionPolicy} from './permission-policy';
 
 let mainWindow: BrowserWindow | null;
+let authoringRendererEstablished = false;
+let authoringRendererWasEstablished = false;
+let pendingPreventedNavigation:
+	{readyBeforeNavigation: boolean; url: string} | undefined;
 
 async function createWindow() {
 	markMainPerformance('window-create-start');
+	authoringRendererEstablished = false;
+	authoringRendererWasEstablished = false;
+	pendingPreventedNavigation = undefined;
 	const screenSize = screen.getPrimaryDisplay().workAreaSize;
 	const rendererUrl = pathToFileURL(
 		path.resolve(__dirname, '../../../../renderer/index.html')
@@ -95,6 +102,8 @@ async function createWindow() {
 		}
 	});
 	mainWindow.on('closed', () => {
+		authoringRendererEstablished = false;
+		pendingPreventedNavigation = undefined;
 		mainWindow = null;
 		setCommandLineOpenRequestNotifier(undefined);
 	});
@@ -112,6 +121,28 @@ async function createWindow() {
 		}
 
 		event.preventDefault();
+		if (pendingPreventedNavigation?.url === url) {
+			authoringRendererEstablished =
+				pendingPreventedNavigation.readyBeforeNavigation;
+			pendingPreventedNavigation = undefined;
+		}
+	});
+	mainWindow.webContents.on('did-start-navigation', details => {
+		if (details.isMainFrame && !details.isSameDocument) {
+			pendingPreventedNavigation = {
+				readyBeforeNavigation: authoringRendererEstablished,
+				url: details.url
+			};
+			authoringRendererEstablished = false;
+		}
+	});
+	mainWindow.webContents.on('destroyed', () => {
+		authoringRendererEstablished = false;
+		pendingPreventedNavigation = undefined;
+	});
+	mainWindow.webContents.on('render-process-gone', () => {
+		authoringRendererEstablished = false;
+		pendingPreventedNavigation = undefined;
 	});
 	mainWindow.webContents.setWindowOpenHandler(({url}) => {
 		if (linkHandlingMode() === 'system') {
@@ -142,7 +173,16 @@ export async function initApp() {
 			() => void runAutomaticStoryDirectoryBackup(),
 			backupCadenceMs()
 		);
-		initIpc();
+		initIpc({
+			authoringRendererEstablished: () => authoringRendererEstablished,
+			authoringRendererWasEstablished: () => authoringRendererWasEstablished,
+			authoringWebContents: () => mainWindow?.webContents,
+			onAuthoringRendererReady: () => {
+				authoringRendererEstablished = true;
+				authoringRendererWasEstablished = true;
+				pendingPreventedNavigation = undefined;
+			}
+		});
 		initStoryPreviewProtocol();
 		initStoryPreviewWindowManager();
 		initMenuBar();

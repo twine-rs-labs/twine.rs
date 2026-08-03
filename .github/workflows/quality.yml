@@ -2,13 +2,12 @@ name: Quality gates
 
 on:
   pull_request:
-  push:
-    branches: [main]
   merge_group:
     types: [checks_requested]
+  workflow_dispatch:
 
-# Only pull-request refreshes supersede one another. Merge queue and main
-# evidence must always finish because release candidates bind their exact SHA.
+# Only pull-request refreshes supersede one another. Merge-queue and manual
+# exact-SHA recovery evidence must finish because release candidates bind it.
 concurrency:
   group: quality-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -17,8 +16,30 @@ permissions:
   contents: read
 
 jobs:
+  classify:
+    name: Classify quality changes
+    runs-on: ubuntu-24.04
+    outputs:
+      quality_mode: ${{ steps.paths.outputs.quality_mode }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths and modes fail closed
+        id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: |
+          node scripts/classify-packaged-changes.mjs \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --output "$GITHUB_OUTPUT"
+
   javascript:
     name: JavaScript and documentation
+    needs: classify
+    if: needs.classify.outputs.quality_mode == 'full'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -62,6 +83,8 @@ jobs:
 
   rust:
     name: Rust ${{ matrix.rust }}
+    needs: classify
+    if: needs.classify.outputs.quality_mode == 'full'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -82,17 +105,75 @@ jobs:
       - name: Rust workspace tests
         run: cargo +${{ matrix.rust }} test --workspace --locked
 
+  lightweight:
+    name: Lightweight documentation and metadata
+    needs: classify
+    if: >-
+      needs.classify.outputs.quality_mode == 'docs' ||
+      needs.classify.outputs.quality_mode == 'metadata'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - run: npm ci
+      - name: Restore pinned mdBook tool
+        if: needs.classify.outputs.quality_mode == 'docs'
+        id: mdbook-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/mdbook-0.5.4
+          key: mdbook-${{ runner.os }}-${{ runner.arch }}-0.5.4-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Install or verify pinned mdBook
+        if: needs.classify.outputs.quality_mode == 'docs'
+        shell: bash
+        env:
+          MDBOOK_ROOT: ${{ runner.temp }}/mdbook-0.5.4
+        run: |
+          if [[ "${{ steps.mdbook-cache.outputs.cache-hit }}" != 'true' ]]; then
+            cargo install mdbook --version 0.5.4 --locked --root "$MDBOOK_ROOT"
+          fi
+          echo "$MDBOOK_ROOT/bin" >> "$GITHUB_PATH"
+          test "$("$MDBOOK_ROOT/bin/mdbook" --version)" = 'mdbook v0.5.4'
+      - name: Formatting
+        run: npm run format:check
+      - name: Documentation checks
+        if: needs.classify.outputs.quality_mode == 'docs'
+        run: npm run check:docs
+      - name: Build compatibility manual
+        if: needs.classify.outputs.quality_mode == 'docs'
+        run: npm run build:docs
+
   quality-gate:
     name: Quality gate
     if: always()
-    needs: [javascript, rust]
+    needs: [classify, javascript, rust, lightweight]
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every quality job
+      - name: Require selected quality jobs
         shell: bash
         env:
+          CLASSIFY_RESULT: ${{ needs.classify.result }}
           JAVASCRIPT_RESULT: ${{ needs.javascript.result }}
+          LIGHTWEIGHT_RESULT: ${{ needs.lightweight.result }}
+          QUALITY_MODE: ${{ needs.classify.outputs.quality_mode }}
           RUST_RESULT: ${{ needs.rust.result }}
         run: |
-          test "$JAVASCRIPT_RESULT" = 'success'
-          test "$RUST_RESULT" = 'success'
+          test "$CLASSIFY_RESULT" = 'success'
+          case "$QUALITY_MODE" in
+            full)
+              test "$JAVASCRIPT_RESULT" = 'success'
+              test "$RUST_RESULT" = 'success'
+              test "$LIGHTWEIGHT_RESULT" = 'skipped'
+              ;;
+            docs|metadata)
+              test "$JAVASCRIPT_RESULT" = 'skipped'
+              test "$RUST_RESULT" = 'skipped'
+              test "$LIGHTWEIGHT_RESULT" = 'success'
+              ;;
+            *)
+              exit 1
+              ;;
+          esac

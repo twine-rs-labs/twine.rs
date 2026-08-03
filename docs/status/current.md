@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-07-29
+Last verified: 2026-08-03
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -11,8 +11,11 @@ Source of truth: shipped code paths and passing local validation
 authority. The Rust-session migration, incremental native watcher ingestion,
 and local release-mode Electron performance harness are implemented.
 
-It is not yet a performance-optimized or release-proven product. The current
-phase is optimization and release validation, not another ownership migration.
+`0.2.0-beta.2` is now the first formal public prerelease produced through the
+governed release path. The product remains prerelease software and still misses
+several large-project performance targets. The current phase is optimization,
+product depth, and post-beta release validation, not another ownership
+migration.
 
 ## Implemented foundations
 
@@ -50,7 +53,9 @@ phase is optimization and release validation, not another ownership migration.
   approved machine-readable plans, explicit solo-maintainer approval, a durable
   checklist, annotated tag checks, tag-triggered draft assembly, manually
   dispatched publication, retained release records, and post-publication
-  fresh-download smoke coverage.
+  fresh-download smoke coverage. The process produced the first formal public
+  prerelease, `v0.2.0-beta.2`, on 2026-08-01 using the deliberately unsigned
+  distribution profile.
 - Deterministic 10k/50k release-mode Electron benchmark fixtures and local
   machine baselines.
 - Generated bounded Rust/WASM read-model contracts for summaries, cursor pages,
@@ -133,9 +138,17 @@ The complete local 10k and 50k benchmark runs verify:
   and authoring behavior.
 - Packaged-app, cross-platform, and hosted-CI performance coverage remains
   incomplete.
-- No formal Twine RS release has yet exercised the release workflow, immutable
-  artifact retention, or completed checklist; the controls exist, but REL-011
-  closure evidence still requires the first intentional release.
+- The public beta is deliberately unsigned, automatic updates remain disabled,
+  and trusted Windows/macOS signing still requires credentialed release-run
+  evidence before a signed profile can be claimed.
+- Clean corrected-code 10k and 50k suites at `e6f5446a` completed all five
+  phases with 417/417 assertions and no edit-window long tasks. The 10k
+  evaluation passes at 24.9 ms edit-paint p95. The 50k edit result is 43.6 ms
+  p95, but its overall evaluation fails one blocking resident-memory comparison
+  by 0.36875 MiB (about 0.032% of the computed limit). This is clean complete
+  evidence of the asynchronous renderer-quiescence fix; the 50k result is not
+  eligible to replace a baseline, and the small mechanical gate miss is not a
+  claim of a significant memory regression.
 - The user manual still contains inherited Twine task and compatibility
   chapters. Current launcher, project-folder, conflict-review, workbench,
   asset, build, Settings, and Story Formats workflows are documented.
@@ -146,4 +159,4 @@ Only unfinished outcomes belong in the active roadmap:
 
 1. [`Performance optimization`](../roadmap/performance.md)
 2. [`Product-depth and legacy retirement`](../roadmap/product.md)
-3. [`Release validation`](../roadmap/release.md)
+3. [`Post-beta release validation`](../roadmap/release.md)

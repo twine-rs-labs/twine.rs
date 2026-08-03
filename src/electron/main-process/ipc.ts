@@ -5,6 +5,8 @@ import {
 	ipcMain as electronIpcMain,
 	shell
 } from 'electron';
+import type {WebContents} from 'electron';
+import {randomUUID} from 'crypto';
 import debounce from 'lodash/debounce';
 import type {DebouncedFunc} from 'lodash';
 import {consumeCommandLineOpenPaths} from './command-line';
@@ -22,7 +24,7 @@ import {
 	loadStoryFormatProperties,
 	loadStoryFormats
 } from './story-formats';
-import {trustedIpcRegistrar} from './ipc-security';
+import {assertTrustedIpcEvent, trustedIpcRegistrar} from './ipc-security';
 import {
 	grantProjectCapability,
 	resolveProjectCapability,
@@ -108,6 +110,133 @@ import {storyPreviewWindowManager} from './story-preview-window-manager';
 const ipcMain = trustedIpcRegistrar(electronIpcMain);
 let quitAfterStoryWriteFlush = false;
 const maxScratchAssetPathBytes = 4096;
+const rendererPersistenceDrainTimeoutMs = 10_000;
+
+export interface InitIpcOptions {
+	authoringRendererEstablished?: () => boolean;
+	authoringRendererWasEstablished?: () => boolean;
+	authoringWebContents?: () => WebContents | undefined;
+	onAuthoringRendererReady?: () => void;
+	rendererDrainTimeoutMs?: number;
+}
+
+function cancelRendererPersistenceQuit(
+	webContents: WebContents | undefined,
+	nonce: string
+) {
+	try {
+		if (webContents && !webContents.isDestroyed()) {
+			webContents.send('persistence-quit-cancelled', nonce);
+		}
+	} catch (error) {
+		console.warn(
+			'Could not notify the renderer that quit was cancelled.',
+			error
+		);
+	}
+}
+
+interface RendererPersistenceLease {
+	failure: Promise<never>;
+	release(): void;
+}
+
+function prepareRendererPersistenceQuit(
+	webContents: WebContents,
+	nonce: string,
+	timeoutMs: number
+) {
+	return new Promise<RendererPersistenceLease>((resolve, reject) => {
+		let prepared = false;
+		let released = false;
+		let rejectFailure: (error: Error) => void = () => {};
+		const failure = new Promise<never>((_resolve, rejectPromise) => {
+			rejectFailure = rejectPromise;
+		});
+		const cleanupReply = () => {
+			clearTimeout(timeout);
+			electronIpcMain.removeListener('persistence-quit-prepared', reply);
+		};
+		const cleanupLifecycle = () => {
+			webContents.removeListener('destroyed', rendererDestroyed);
+			webContents.removeListener('render-process-gone', rendererGone);
+			webContents.removeListener('did-navigate', rendererNavigated);
+		};
+		const release = () => {
+			if (released) {
+				return;
+			}
+			released = true;
+			cleanupReply();
+			cleanupLifecycle();
+		};
+		const fail = (error: Error) => {
+			if (released) {
+				return;
+			}
+			if (prepared) {
+				release();
+				rejectFailure(error);
+			} else {
+				release();
+				reject(error);
+			}
+		};
+		const reply = (
+			event: Electron.IpcMainEvent,
+			replyNonce: unknown,
+			errorMessage?: unknown
+		) => {
+			if (event.sender !== webContents || replyNonce !== nonce) {
+				return;
+			}
+			try {
+				assertTrustedIpcEvent(event);
+			} catch (error) {
+				fail(error as Error);
+				return;
+			}
+			if (errorMessage !== undefined && typeof errorMessage !== 'string') {
+				fail(new Error('Renderer returned an invalid persistence reply.'));
+				return;
+			}
+			if (typeof errorMessage === 'string') {
+				fail(new Error(errorMessage));
+				return;
+			}
+			prepared = true;
+			cleanupReply();
+			resolve({failure, release});
+		};
+		const rendererDestroyed = () =>
+			fail(new Error('The authoring renderer disappeared during shutdown.'));
+		const rendererGone = () =>
+			fail(
+				new Error('The authoring renderer process stopped during shutdown.')
+			);
+		const rendererNavigated = () =>
+			fail(new Error('The authoring renderer page changed during shutdown.'));
+		const timeout = setTimeout(
+			() =>
+				fail(new Error('Timed out waiting for renderer persistence to drain.')),
+			timeoutMs
+		);
+
+		electronIpcMain.on('persistence-quit-prepared', reply);
+		webContents.once('destroyed', rendererDestroyed);
+		webContents.once('render-process-gone', rendererGone);
+		webContents.on('did-navigate', rendererNavigated);
+		if (webContents.isDestroyed()) {
+			fail(new Error('The authoring renderer is unavailable during shutdown.'));
+			return;
+		}
+		try {
+			webContents.send('persistence-quit-requested', nonce);
+		} catch (error) {
+			fail(error as Error);
+		}
+	});
+}
 
 function validateScratchAssetRequests(value: unknown) {
 	if (!Array.isArray(value) || value.length > maxScratchPreviewAssetCount) {
@@ -229,7 +358,7 @@ function nativePlatformSettings() {
 	};
 }
 
-export function initIpc() {
+export function initIpc(options: InitIpcOptions = {}) {
 	quitAfterStoryWriteFlush = false;
 	const assetEffectCapabilities = createAssetEffectCapabilityRegistry({
 		cleanup: (journalToken, rootPath) =>
@@ -310,11 +439,6 @@ export function initIpc() {
 		}
 	> = {};
 	const pendingStoryWriteRequests = new Set<Promise<void>>();
-	const storyWriteReservations = new Map<
-		string,
-		{reject: (error: Error) => void; resolve: () => void; senderId?: number}
-	>();
-	const reservationSenderCleanupRegistered = new Set<number>();
 	let storyWriteFlushBarrier: Promise<void> | undefined;
 	const projectSessionSubscriptions = new Map<string, () => void>();
 	const projectSessionSenderCleanups = new Map<
@@ -339,46 +463,11 @@ export function initIpc() {
 		return tracked;
 	}
 
-	function storyWriteReservationKey(token: string, senderId?: number) {
-		return `${senderId ?? 'unknown'}:${token}`;
-	}
-
-	function finishStoryWriteReservation(
-		token: string,
-		senderId?: number,
-		errorMessage?: string
-	) {
-		const reservationKey = storyWriteReservationKey(token, senderId);
-		const reservation = storyWriteReservations.get(reservationKey);
-
-		if (
-			!reservation ||
-			(reservation.senderId !== undefined &&
-				senderId !== undefined &&
-				reservation.senderId !== senderId)
-		) {
-			return;
+	ipcMain.on('persistence-renderer-ready', event => {
+		if (event.sender === options.authoringWebContents?.()) {
+			options.onAuthoringRendererReady?.();
 		}
-
-		storyWriteReservations.delete(reservationKey);
-		if (errorMessage !== undefined) {
-			reservation.reject(new Error(errorMessage));
-		} else {
-			reservation.resolve();
-		}
-	}
-
-	function failStoryWriteReservationsForSender(
-		senderId: number,
-		errorMessage: string
-	) {
-		for (const [pendingKey, pending] of storyWriteReservations) {
-			if (pending.senderId === senderId) {
-				storyWriteReservations.delete(pendingKey);
-				pending.reject(new Error(errorMessage));
-			}
-		}
-	}
+	});
 
 	function createStorySaver() {
 		interface PendingSave {
@@ -516,81 +605,6 @@ export function initIpc() {
 	ipcMain.on('copy-text', (_event, text: string) => {
 		if (typeof text === 'string') {
 			clipboard.writeText(text);
-		}
-	});
-
-	ipcMain.on('begin-legacy-story-write', (event, token, storyId) => {
-		const senderId =
-			typeof event.sender?.id === 'number' ? event.sender.id : undefined;
-		const reservationKey =
-			typeof token === 'string'
-				? storyWriteReservationKey(token, senderId)
-				: '';
-
-		if (
-			typeof token !== 'string' ||
-			token === '' ||
-			typeof storyId !== 'string' ||
-			storyId === '' ||
-			storyWriteReservations.has(reservationKey)
-		) {
-			event.returnValue = false;
-			return;
-		}
-
-		let rejectReservation: (error: Error) => void = () => {};
-		let resolveReservation: () => void = () => {};
-		const reservation = new Promise<void>((resolve, reject) => {
-			rejectReservation = reject;
-			resolveReservation = resolve;
-		});
-
-		storyWriteReservations.set(reservationKey, {
-			reject: rejectReservation,
-			resolve: resolveReservation,
-			senderId
-		});
-		trackStoryWriteRequest(reservation);
-		if (
-			senderId !== undefined &&
-			!reservationSenderCleanupRegistered.has(senderId)
-		) {
-			reservationSenderCleanupRegistered.add(senderId);
-			event.sender?.once?.('destroyed', () => {
-				failStoryWriteReservationsForSender(
-					senderId,
-					'Pending story writes were interrupted because the renderer was destroyed.'
-				);
-				reservationSenderCleanupRegistered.delete(senderId);
-			});
-			event.sender?.on?.('render-process-gone', () => {
-				failStoryWriteReservationsForSender(
-					senderId,
-					'Pending story writes were interrupted because the renderer process stopped.'
-				);
-			});
-			event.sender?.on?.(
-				'did-start-navigation',
-				(navigation: {isMainFrame: boolean; isSameDocument: boolean}) => {
-					if (navigation.isMainFrame && !navigation.isSameDocument) {
-						failStoryWriteReservationsForSender(
-							senderId,
-							'Pending story writes were interrupted because the renderer page was replaced.'
-						);
-					}
-				}
-			);
-		}
-		event.returnValue = true;
-	});
-
-	ipcMain.on('finish-legacy-story-write', (event, token, errorMessage) => {
-		if (typeof token === 'string') {
-			finishStoryWriteReservation(
-				token,
-				event.sender?.id,
-				typeof errorMessage === 'string' ? errorMessage : undefined
-			);
 		}
 	});
 
@@ -1150,19 +1164,57 @@ export function initIpc() {
 		}
 
 		beginScratchPreviewShutdown();
-		storyWriteFlushBarrier = flushPendingStoryWrites().then(async () => {
-			try {
-				await cleanScratchDirectory();
-			} catch (error) {
-				console.warn('Could not clean scratch previews before quit.', error);
+		const nonce = randomUUID();
+		const authoringWebContents = options.authoringWebContents?.();
+		const authoringRendererEstablished =
+			options.authoringRendererEstablished?.() ?? false;
+		const authoringRendererWasEstablished =
+			options.authoringRendererWasEstablished?.() ??
+			authoringRendererEstablished;
+		storyWriteFlushBarrier = (async () => {
+			let rendererLease: RendererPersistenceLease | undefined;
+
+			if (authoringRendererEstablished && authoringWebContents) {
+				rendererLease = await prepareRendererPersistenceQuit(
+					authoringWebContents,
+					nonce,
+					options.rendererDrainTimeoutMs ?? rendererPersistenceDrainTimeoutMs
+				);
+			} else if (authoringRendererWasEstablished) {
+				throw new Error(
+					'The established authoring renderer is unavailable during shutdown.'
+				);
 			}
-		});
+			const finishCanonicalWrites = async () => {
+				await flushPendingStoryWrites();
+				try {
+					await cleanScratchDirectory();
+				} catch (error) {
+					console.warn('Could not clean scratch previews before quit.', error);
+				}
+			};
+			const canonicalWrites = finishCanonicalWrites();
+
+			if (!rendererLease) {
+				await canonicalWrites;
+				return;
+			}
+			try {
+				await Promise.race([canonicalWrites, rendererLease.failure]);
+			} catch (error) {
+				await canonicalWrites.catch(() => undefined);
+				throw error;
+			} finally {
+				rendererLease.release();
+			}
+		})();
 		void storyWriteFlushBarrier.then(
 			() => {
 				quitAfterStoryWriteFlush = true;
 				app.quit();
 			},
 			error => {
+				cancelRendererPersistenceQuit(authoringWebContents, nonce);
 				storyWriteFlushBarrier = undefined;
 				resumeScratchPreviewsAfterFailedShutdown();
 				console.error(

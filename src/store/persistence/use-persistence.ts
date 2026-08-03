@@ -8,6 +8,7 @@ import {PrefsAction, PrefsState} from '../prefs';
 
 export interface PersistenceHooks {
 	prefs: {
+		canReduceAction?: (action: PrefsAction) => boolean;
 		load: () => Promise<Partial<PrefsState>>;
 		saveMiddleware: (
 			state: PrefsState,
@@ -15,6 +16,7 @@ export interface PersistenceHooks {
 		) => void | Promise<void>;
 	};
 	stories: {
+		canReduceAction?: (action: StoriesAction) => boolean;
 		load: () => Promise<StoriesState>;
 		saveMiddleware: (
 			state: StoriesState,
@@ -23,6 +25,7 @@ export interface PersistenceHooks {
 		) => boolean | StoryPersistenceResult;
 	};
 	storyFormats: {
+		canReduceAction?: (action: StoryFormatsAction) => boolean;
 		load: () => Promise<StoryFormatsState>;
 		saveMiddleware: (
 			state: StoryFormatsState,

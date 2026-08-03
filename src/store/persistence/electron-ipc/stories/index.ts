@@ -1,2 +1,2 @@
 export * from './load';
-export {saveMiddleware} from './save-middleware';
+export {isPersistenceAffectingAction, saveMiddleware} from './save-middleware';

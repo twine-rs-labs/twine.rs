@@ -2,7 +2,7 @@
 
 Status: active
 Owner: product and frontend maintainers
-Last verified: 2026-07-27
+Last verified: 2026-08-03
 Source of truth: unfinished primary-product behavior
 
 ## Outcomes
@@ -40,7 +40,7 @@ Source of truth: unfinished primary-product behavior
   compatibility chapters for obsolete screen instructions.
 - Separate general Twine/story-format concepts from application-specific
   instructions.
-- Publish twine.rs release notes independently of the upstream Twine history.
+- Maintain Twine RS release notes independently of the upstream Twine history.
 
 ## Exit criteria
 

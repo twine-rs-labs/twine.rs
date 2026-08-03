@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {
-	baselineCandidateErrors,
+	referenceCandidateErrors,
 	readJson,
 	writeJson
 } from './performance-tools.mjs';
@@ -36,7 +36,7 @@ const report = JSON.parse(sourceBytes);
 const budgets = await readJson(
 	path.join(repoRoot, 'benchmarks', 'budgets.json')
 );
-const errors = baselineCandidateErrors(report, budgets);
+const errors = referenceCandidateErrors(report, budgets);
 
 if (errors.length > 0) {
 	throw new Error(
@@ -49,6 +49,7 @@ const sourceReportFile = path
 	.split(path.sep)
 	.join('/');
 const summary = createPerformanceReferenceSummary(report, {
+	budgets,
 	sourceReportFile,
 	sourceReportSha256: sha256(sourceBytes)
 });

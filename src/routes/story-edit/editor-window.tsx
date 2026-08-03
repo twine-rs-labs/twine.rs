@@ -29,6 +29,7 @@ import {useFormatEditorIntegration} from '../../store/use-format-editor-integrat
 import {Color, colorString} from '../../util/color';
 import {recordPerformanceHarnessEvent} from '../../util/performance';
 import {registerPerformanceRetainedObject} from '../../util/performance-memory-owners';
+import {rendererQuitQuiescence} from '../../util/renderer-quit-quiescence';
 import {
 	createLegacyStreamDocumentService,
 	type LegacyStreamModeAdapter
@@ -309,12 +310,18 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	]);
 
 	const [localText, setLocalText] = React.useState(buffer.value);
+	const currentLocalText = React.useRef(localText);
 	const currentBufferValue = React.useRef(buffer.value);
 	const expectedText = React.useRef<string | undefined>(undefined);
 	const pendingText = React.useRef<string | undefined>(undefined);
 	const pendingTimeout = React.useRef<number | undefined>(undefined);
+	const acceptingTextChanges = React.useRef(!rendererQuitQuiescence.isDraining);
+	const [quitReadOnly, setQuitReadOnly] = React.useState(
+		rendererQuitQuiescence.isDraining
+	);
 	const dirty = localText !== buffer.value;
 
+	currentLocalText.current = localText;
 	currentBufferValue.current = buffer.value;
 
 	const passageNames = selection?.passageNames ?? [];
@@ -383,27 +390,69 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		commitTextRef.current = commitText;
 	}, [commitText]);
 
+	const flushPendingText = React.useCallback(() => {
+		if (pendingTimeout.current) {
+			window.clearTimeout(pendingTimeout.current);
+			pendingTimeout.current = undefined;
+		}
+		const text = pendingText.current;
+
+		pendingText.current = undefined;
+		if (text === undefined) {
+			return undefined;
+		}
+
+		let completion: Promise<unknown>;
+
+		try {
+			completion = Promise.resolve(commitTextRef.current(text));
+		} catch (error) {
+			completion = Promise.reject(error);
+		}
+
+		return completion.catch(error => {
+			if (
+				pendingText.current === undefined &&
+				expectedText.current === text &&
+				currentLocalText.current === text
+			) {
+				pendingText.current = text;
+			}
+			throw error;
+		});
+	}, []);
+
+	React.useLayoutEffect(
+		() =>
+			rendererQuitQuiescence.registerBuffer({
+				closeAdmission() {
+					acceptingTextChanges.current = false;
+					setQuitReadOnly(true);
+				},
+				flush: flushPendingText,
+				reopenAdmission() {
+					acceptingTextChanges.current = true;
+					setQuitReadOnly(false);
+				}
+			}),
+		[buffer.id, flushPendingText]
+	);
+
 	// Flush any pending edit when the buffer changes or the window closes.
 	React.useEffect(() => {
 		expectedText.current = undefined;
 
 		return () => {
-			if (pendingTimeout.current) {
-				window.clearTimeout(pendingTimeout.current);
-				pendingTimeout.current = undefined;
-			}
+			const flushing = flushPendingText();
 
-			if (pendingText.current !== undefined) {
-				void Promise.resolve(commitTextRef.current(pendingText.current)).catch(
-					() => {
-						// The owning project host may already be gone during app
-						// teardown. Normal in-session commits retain their error path.
-					}
-				);
-				pendingText.current = undefined;
+			if (flushing) {
+				void flushing.catch(() => {
+					// The owning project host may already be gone during app
+					// teardown. Normal in-session commits retain their error path.
+				});
 			}
 		};
-	}, [buffer.id]);
+	}, [buffer.id, flushPendingText]);
 
 	React.useEffect(() => {
 		if (!shouldAcceptAuthoritativeText(expectedText.current, buffer.value)) {
@@ -411,15 +460,20 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		}
 
 		expectedText.current = undefined;
+		currentLocalText.current = buffer.value;
 		setLocalText(buffer.value);
 	}, [buffer.id, buffer.value]);
 
 	const handleChangeText = React.useCallback(
 		(text: string) => {
-			if (spec.kind === 'passage' && !passage) {
+			if (
+				!acceptingTextChanges.current ||
+				(spec.kind === 'passage' && !passage)
+			) {
 				return;
 			}
 
+			currentLocalText.current = text;
 			setLocalText(text);
 			expectedText.current = text;
 			pendingText.current = text;
@@ -998,6 +1052,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 							setAdapterFailure(error);
 						}}
 						placeholderText={t('dialogs.passageEdit.passageTextPlaceholder')}
+						readOnly={quitReadOnly}
 						ref={handleEditorRef}
 						replaceGenericTwineSyntax={
 							nativeEditorSession.session?.ownsSyntax ?? !!adaptedMode
