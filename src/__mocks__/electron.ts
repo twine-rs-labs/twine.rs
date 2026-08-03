@@ -28,7 +28,10 @@ export class BrowserWindow {
 			setPermissionRequestHandler: jest.fn()
 		};
 		(this as any).webContents = {
+			isDestroyed: jest.fn(() => false),
 			on: jest.fn(),
+			once: jest.fn(),
+			removeListener: jest.fn(),
 			send: jest.fn(),
 			session,
 			setWindowOpenHandler: jest.fn()
@@ -54,7 +57,8 @@ export const clipboard = {
 
 export const ipcMain = {
 	handle: jest.fn(),
-	on: jest.fn()
+	on: jest.fn(),
+	removeListener: jest.fn()
 };
 
 export const contextBridge = {
@@ -66,8 +70,7 @@ export const ipcRenderer = {
 	on: jest.fn(),
 	once: jest.fn(),
 	removeListener: jest.fn(),
-	send: jest.fn(),
-	sendSync: jest.fn()
+	send: jest.fn()
 };
 
 export const net = {

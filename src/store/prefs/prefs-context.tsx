@@ -22,6 +22,9 @@ export const PrefsContextProvider: React.FC<
 	const persistedReducer: React.Reducer<PrefsState, PrefsAction> =
 		React.useCallback(
 			(state, action) => {
+				if (prefs.canReduceAction?.(action) === false) {
+					return state;
+				}
 				const newState = reducer(state, action);
 
 				try {

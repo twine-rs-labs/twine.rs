@@ -18,7 +18,6 @@ const projectCapabilityField = '__twineProjectCapability';
 const projectCapabilities = new Map<string, string>();
 const activeAssetEffectCapabilities = new Set<string>();
 const assetEffectRenewalIntervalMs = 60 * 60 * 1000;
-let legacyStoryWriteToken = 0;
 
 function rememberProjectCapability<T>(project: T): T {
 	if (!project || typeof project !== 'object') {
@@ -99,16 +98,6 @@ setInterval(() => {
 const bridge = {
 	addLocalStoryFormat() {
 		return ipcRenderer.invoke('add-local-story-format');
-	},
-	beginLegacyStoryWrite(storyId: string) {
-		const token = `legacy-story-write-${++legacyStoryWriteToken}`;
-
-		if (
-			ipcRenderer.sendSync('begin-legacy-story-write', token, storyId) !== true
-		) {
-			throw new Error('Could not reserve a pending story write.');
-		}
-		return token;
 	},
 	chooseAssetFile(defaultPath?: string) {
 		return ipcRenderer.invoke('choose-asset-file', defaultPath);
@@ -316,8 +305,8 @@ const bridge = {
 	finishProjectFolderHydration(hydrationId: string) {
 		return ipcRenderer.invoke('finish-project-folder-hydration', hydrationId);
 	},
-	finishLegacyStoryWrite(token: string, errorMessage?: string) {
-		ipcRenderer.send('finish-legacy-story-write', token, errorMessage);
+	completePersistenceQuit(nonce: string, errorMessage?: string) {
+		ipcRenderer.send('persistence-quit-prepared', nonce, errorMessage);
 	},
 	listProjectAssets(rootPath: string) {
 		return ipcRenderer.invoke(
@@ -340,6 +329,9 @@ const bridge = {
 			paths,
 			limits
 		);
+	},
+	rendererPersistenceReady() {
+		ipcRenderer.send('persistence-renderer-ready');
 	},
 	openProjectFolder(options?: {loadPassageText?: boolean}) {
 		return invokeProjectResult('open-project-folder', options);
@@ -448,6 +440,20 @@ const bridge = {
 
 		return () =>
 			ipcRenderer.removeListener('project-session-changed', listener);
+	},
+	onPersistenceQuitCancelled(callback: (nonce: string) => void) {
+		const listener = (_event: unknown, nonce: string) => callback(nonce);
+
+		ipcRenderer.on('persistence-quit-cancelled', listener);
+		return () =>
+			ipcRenderer.removeListener('persistence-quit-cancelled', listener);
+	},
+	onPersistenceQuitRequested(callback: (nonce: string) => void) {
+		const listener = (_event: unknown, nonce: string) => callback(nonce);
+
+		ipcRenderer.on('persistence-quit-requested', listener);
+		return () =>
+			ipcRenderer.removeListener('persistence-quit-requested', listener);
 	}
 };
 

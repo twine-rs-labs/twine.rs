@@ -81,6 +81,7 @@ import {
 	measurePerformanceAfterPaint,
 	recordPerformanceHarnessEvent
 } from '../util/performance';
+import {rendererQuitQuiescence} from '../util/renderer-quit-quiescence';
 
 function storiesWithDocuments(stories: Story[]): StoryWithDocuments[] {
 	if (
@@ -2304,20 +2305,76 @@ export async function applyStoryTagRenameAcrossHosts(
 	}
 }
 
-class ProjectScopedCoreProjectHost implements CoreProjectHost {
+export class ProjectScopedCoreProjectHost implements CoreProjectHost {
+	private admittedMutations = new Set<Promise<unknown>>();
 	private client = createWasmCoreWorkerClient();
 	private dispatch: UndoableDispatch;
 	private hosts = new Map<string, StoreCoreProjectHost>();
+	private mutationAdmissionOpen = true;
 	private patchListeners = new Set<CoreProjectPatchListener>();
 	private statusListeners = new Set<(status: CoreSessionStatus) => void>();
 	private stories: StoriesState;
 	private storySessions = new Map<string, string>();
+	private unregisterQuitWorkflow: () => void;
+	private readonly dispatchFromCore: UndoableDispatch = (action, annotation) =>
+		rendererQuitQuiescence.runAdmittedDispatch(() =>
+			this.dispatch(action, annotation)
+		);
 
 	constructor(stories: StoriesState, dispatch: UndoableDispatch) {
 		this.stories = stories;
 		this.dispatch = dispatch;
+		this.unregisterQuitWorkflow = rendererQuitQuiescence.registerWorkflow({
+			drain: () => this.drainAdmittedMutations(),
+			freezeAdmission: () => {
+				this.mutationAdmissionOpen = false;
+			},
+			reopenAdmission: () => {
+				this.mutationAdmissionOpen = true;
+			}
+		});
 		projectScopedCoreHosts.add(this);
 		this.update(stories, dispatch);
+	}
+
+	private admitMutation<T>(operation: () => Promise<T>): Promise<T> {
+		if (
+			!this.mutationAdmissionOpen &&
+			!rendererQuitQuiescence.flushAdmissionActive
+		) {
+			return Promise.reject(
+				new Error('Core mutations are frozen while the application exits.')
+			);
+		}
+
+		let result: Promise<T>;
+
+		try {
+			result = operation();
+		} catch (error) {
+			return Promise.reject(error);
+		}
+		const tracked = Promise.resolve(result);
+
+		this.admittedMutations.add(tracked);
+		void tracked.then(
+			() => this.admittedMutations.delete(tracked),
+			() => this.admittedMutations.delete(tracked)
+		);
+		return result;
+	}
+
+	private async drainAdmittedMutations() {
+		let failure: unknown;
+
+		while (this.admittedMutations.size > 0) {
+			const results = await Promise.allSettled([...this.admittedMutations]);
+
+			failure ??= results.find(result => result.status === 'rejected')?.reason;
+		}
+		if (failure !== undefined) {
+			throw failure;
+		}
 	}
 
 	performanceDiagnostics() {
@@ -2382,20 +2439,22 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		return host;
 	}
 
-	async applyStoryCommand(command: StoryCommand, options?: CoreCommandOptions) {
-		if (command.type === 'renameStoryTag') {
-			return applyStoryTagRenameAcrossHosts(
-				this.hosts.values(),
-				command,
-				options
-			);
-		}
+	applyStoryCommand(command: StoryCommand, options?: CoreCommandOptions) {
+		return this.admitMutation(async () => {
+			if (command.type === 'renameStoryTag') {
+				return applyStoryTagRenameAcrossHosts(
+					this.hosts.values(),
+					command,
+					options
+				);
+			}
 
-		const host = this.requireHostForCommand(command);
+			const host = this.requireHostForCommand(command);
 
-		return options === undefined
-			? host.applyStoryCommand(command)
-			: host.applyStoryCommand(command, options);
+			return options === undefined
+				? host.applyStoryCommand(command)
+				: host.applyStoryCommand(command, options);
+		});
 	}
 
 	async ensureSessionReady(storyId: string) {
@@ -2410,15 +2469,17 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	}
 
 	applyExternalDelta(storyId: string, delta: CoreExternalDelta) {
-		const host = this.hostForStory(storyId);
+		return this.admitMutation(async () => {
+			const host = this.hostForStory(storyId);
 
-		if (!host) {
-			throw new Error(
-				`No core project session is available for story "${storyId}".`
-			);
-		}
+			if (!host) {
+				throw new Error(
+					`No core project session is available for story "${storyId}".`
+				);
+			}
 
-		return host.applyExternalDelta(storyId, delta);
+			return host.applyExternalDelta(storyId, delta);
+		});
 	}
 
 	ingestExternalDelta(
@@ -2426,15 +2487,17 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		delta: CoreExternalDelta,
 		options?: {force?: boolean}
 	) {
-		const host = this.hostForStory(storyId);
+		return this.admitMutation(async () => {
+			const host = this.hostForStory(storyId);
 
-		if (!host) {
-			throw new Error(
-				`No core project session is available for story "${storyId}".`
-			);
-		}
+			if (!host) {
+				throw new Error(
+					`No core project session is available for story "${storyId}".`
+				);
+			}
 
-		return host.ingestExternalDelta(storyId, delta, options);
+			return host.ingestExternalDelta(storyId, delta, options);
+		});
 	}
 
 	acknowledgeSaved(sessionId: string, revision: number) {
@@ -2448,22 +2511,30 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		stories: StoryWithDocuments[],
 		assets: CoreAssetInventoryEntry[]
 	) {
-		const host = this.hostForStory(storyId);
+		return this.admitMutation(async () => {
+			const host = this.hostForStory(storyId);
 
-		if (!host) {
-			throw new Error(
-				`No core project session is available for story "${storyId}".`
-			);
-		}
-		return host.recoverFromSnapshot(storyId, stories, assets);
+			if (!host) {
+				throw new Error(
+					`No core project session is available for story "${storyId}".`
+				);
+			}
+			return host.recoverFromSnapshot(storyId, stories, assets);
+		});
 	}
 
 	redo(storyId?: string) {
-		return this.hostForStory(storyId)?.redo() ?? Promise.resolve(undefined);
+		return this.admitMutation(
+			async () =>
+				this.hostForStory(storyId)?.redo() ?? Promise.resolve(undefined)
+		);
 	}
 
 	undo(storyId?: string) {
-		return this.hostForStory(storyId)?.undo() ?? Promise.resolve(undefined);
+		return this.admitMutation(
+			async () =>
+				this.hostForStory(storyId)?.undo() ?? Promise.resolve(undefined)
+		);
 	}
 
 	isDirty(storyId?: string) {
@@ -2699,35 +2770,43 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	}
 
 	initializeHydratedProject(storyId: string, stories: Story[]) {
-		const host = this.hostForStory(storyId);
-		if (!host) {
-			return Promise.reject(new Error(`No core session for story ${storyId}.`));
-		}
-		return host.initializeHydratedProject(storyId, stories);
+		return this.admitMutation(async () => {
+			const host = this.hostForStory(storyId);
+			if (!host) {
+				throw new Error(`No core session for story ${storyId}.`);
+			}
+			return host.initializeHydratedProject(storyId, stories);
+		});
 	}
 
 	beginHydratedProject(storyId: string, stories: Story[]) {
-		const host = this.hostForStory(storyId);
-		if (!host) {
-			return Promise.reject(new Error(`No core session for story ${storyId}.`));
-		}
-		return host.beginHydratedProject(storyId, stories);
+		return this.admitMutation(async () => {
+			const host = this.hostForStory(storyId);
+			if (!host) {
+				throw new Error(`No core session for story ${storyId}.`);
+			}
+			return host.beginHydratedProject(storyId, stories);
+		});
 	}
 
 	appendHydratedProjectPassages(storyId: string, passages: PassageWithText[]) {
-		const host = this.hostForStory(storyId);
-		if (!host) {
-			return Promise.reject(new Error(`No core session for story ${storyId}.`));
-		}
-		return host.appendHydratedProjectPassages(storyId, passages);
+		return this.admitMutation(async () => {
+			const host = this.hostForStory(storyId);
+			if (!host) {
+				throw new Error(`No core session for story ${storyId}.`);
+			}
+			return host.appendHydratedProjectPassages(storyId, passages);
+		});
 	}
 
 	finishHydratedProject(storyId: string) {
-		const host = this.hostForStory(storyId);
-		if (!host) {
-			return Promise.reject(new Error(`No core session for story ${storyId}.`));
-		}
-		return host.finishHydratedProject(storyId);
+		return this.admitMutation(async () => {
+			const host = this.hostForStory(storyId);
+			if (!host) {
+				throw new Error(`No core session for story ${storyId}.`);
+			}
+			return host.finishHydratedProject(storyId);
+		});
 	}
 
 	runtimeMode() {
@@ -2766,7 +2845,7 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 					story => bootstrapStory(story.id) ?? story
 				);
 
-				host = new StoreCoreProjectHost(initialStories, dispatch, {
+				host = new StoreCoreProjectHost(initialStories, this.dispatchFromCore, {
 					sessionId,
 					wasmClient: this.client
 				});
@@ -2778,7 +2857,7 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 				);
 				this.hosts.set(sessionId, host);
 			} else {
-				host.update(sessionStories, dispatch);
+				host.update(sessionStories, this.dispatchFromCore);
 			}
 
 			for (const story of sessionStories) {
@@ -2803,6 +2882,7 @@ class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	}
 
 	dispose() {
+		this.unregisterQuitWorkflow();
 		for (const storyId of this.storySessions.keys()) {
 			unregisterStoryMaterializer(storyId);
 		}

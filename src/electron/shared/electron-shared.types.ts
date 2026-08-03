@@ -455,7 +455,6 @@ export interface TwineElectronWindow extends Window {
 	};
 	twineElectron?: {
 		addLocalStoryFormat(): Promise<NativeAddLocalStoryFormatResult | undefined>;
-		beginLegacyStoryWrite(storyId: string): string;
 		chooseAssetFile(defaultPath?: string): Promise<string | undefined>;
 		chooseStoryLibraryFolder(): Promise<string | undefined>;
 		consumeCommandLineOpenRequests(): Promise<NativeCommandLineOpenResult>;
@@ -508,7 +507,7 @@ export interface TwineElectronWindow extends Window {
 			limit?: number
 		): Promise<NativeProjectHydrationChunk>;
 		finishProjectFolderHydration(hydrationId: string): Promise<void>;
-		finishLegacyStoryWrite(token: string, errorMessage?: string): void;
+		completePersistenceQuit(nonce: string, errorMessage?: string): void;
 		loadPrefs(): Promise<any>;
 		loadStories(): Promise<ElectronLoadedStoryEntry[]>;
 		loadStoryFormats(): Promise<any>;
@@ -519,6 +518,8 @@ export interface TwineElectronWindow extends Window {
 		onStoryPreviewCommand(
 			callback: (command: NativeStoryPreviewOwnerCommand) => void
 		): () => void;
+		onPersistenceQuitCancelled(callback: (nonce: string) => void): () => void;
+		onPersistenceQuitRequested(callback: (nonce: string) => void): () => void;
 		openStoryPreview(
 			request: NativeStoryPreviewLaunchRequest,
 			projectRoot?: string
@@ -542,6 +543,7 @@ export interface TwineElectronWindow extends Window {
 			paths: string[],
 			limits: NativeProjectAssetPayloadLimits
 		): Promise<NativeProjectAssetPayloadBatch>;
+		rendererPersistenceReady(): void;
 		onProjectSessionChanged(
 			callback: (delta: NativeProjectSessionDelta) => void
 		): () => void;

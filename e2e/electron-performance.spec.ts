@@ -3097,12 +3097,12 @@ async function measureContents(page: Page) {
 		assertInvariant(
 			`contents-${index}-queue-attribution-present`,
 			!!contentsTrace || !!hostCacheHit,
-			contentsTrace?.detail?.waitingOn as string | undefined
+			stringDetail(contentsTrace?.detail?.waitingOn)
 		);
 		assertInvariant(
 			`contents-${index}-session-ready-attribution-present`,
 			!!sessionReadyTrace || !!hostCacheHit,
-			sessionReadyTrace?.detail?.mode as string | undefined
+			stringDetail(sessionReadyTrace?.detail?.mode)
 		);
 		assertInvariant(
 			`contents-${index}-uses-wasm-worker`,
@@ -3305,6 +3305,10 @@ function numericDetail(value: unknown) {
 	return typeof value === 'number' && Number.isFinite(value)
 		? value
 		: undefined;
+}
+
+function stringDetail(value: unknown) {
+	return typeof value === 'string' ? value : undefined;
 }
 
 function captureNativeSaveMetrics(current: PerformanceSnapshot) {

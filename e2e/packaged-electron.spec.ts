@@ -54,8 +54,6 @@ interface PackagedProjectWindow extends Window {
 		snapshot(): Promise<unknown>;
 	};
 	twineElectron?: {
-		beginLegacyStoryWrite(storyId: string): string;
-		finishLegacyStoryWrite(token: string, errorMessage?: string): void;
 		duplicateProjectFolder(
 			rootPath: string,
 			replacements: Array<{
@@ -79,10 +77,6 @@ interface PackagedProjectWindow extends Window {
 			rootPath: string,
 			story: PackagedProjectStory
 		): Promise<{stories: PackagedProjectStory[]; storyIds: string[]}>;
-		saveStoryHtml(
-			story: {id: string; name: string},
-			data: string
-		): Promise<void>;
 	};
 }
 
@@ -230,6 +224,20 @@ async function launchPackagedApp(
 
 function sourceEditor(page: Page) {
 	return page.locator('[data-testid^="story-editor-window-"]').first();
+}
+
+function legacyStoryHtml(name: string, ifid: string, body: string) {
+	return [
+		`<tw-storydata name="${name}" startnode="1"`,
+		' creator="Twine" creator-version="2.12.0"',
+		' format="Harlowe" format-version="3.3.9"',
+		` ifid="${ifid}">`,
+		'<style role="stylesheet" id="twine-user-stylesheet" type="text/twine-css"></style>',
+		'<script role="script" id="twine-user-script" type="text/twine-javascript"></script>',
+		'<tw-passagedata pid="1" name="Start" tags="" position="100,100" size="100,100">',
+		body,
+		'</tw-passagedata></tw-storydata>'
+	].join('');
 }
 
 function tabWithText(page: Page, text: string) {
@@ -456,46 +464,40 @@ async function attachDuplicateProjectDiagnostics(
 	});
 }
 
-test('packaged desktop flushes a trailing legacy HTML save before exit', async () => {
+test('packaged desktop drains a trailing legacy editor save before exit', async () => {
 	const executablePath = await packagedExecutable();
 	const profileRoot = await mkdtemp(
-		path.join(os.tmpdir(), 'twine-rs-packaged-shutdown-save-')
+		path.join(os.tmpdir(), 'twine-rs-packaged-shutdown-legacy-save-')
 	);
-	let running: {app: ElectronApplication; page: Page} | undefined;
+	const storyName = 'Shutdown Legacy Save';
+	const storyPath = path.join(profileRoot, 'library', `${storyName}.html`);
+	let running: RunningPackagedApp | undefined;
 
 	try {
+		await prepareIsolatedEnvironment(profileRoot);
+		await writeFile(
+			storyPath,
+			legacyStoryHtml(
+				storyName,
+				'11111111-2222-4333-8444-555555555555',
+				'first save'
+			)
+		);
 		running = await launchPackagedApp(executablePath, profileRoot);
-		const story = {id: 'shutdown-save-story', name: 'Shutdown Save'};
+		const {page} = running;
+		const row = page
+			.getByTestId('story-list-row')
+			.filter({has: page.getByText(storyName, {exact: true})});
 
-		await running.page.evaluate(
-			async ({story}) => {
-				const bridge = (window as PackagedProjectWindow).twineElectron;
-
-				if (!bridge) {
-					throw new Error('Electron bridge is unavailable.');
-				}
-				await bridge.saveStoryHtml(story, 'first save');
-			},
-			{story}
-		);
-		await running.page.evaluate(
-			({story}) => {
-				const bridge = (window as PackagedProjectWindow).twineElectron;
-
-				if (!bridge) {
-					throw new Error('Electron bridge is unavailable.');
-				}
-				const reservation = bridge.beginLegacyStoryWrite(story.id);
-
-				window.setTimeout(() => {
-					void bridge.saveStoryHtml(story, 'trailing save').then(
-						() => bridge.finishLegacyStoryWrite(reservation),
-						error => bridge.finishLegacyStoryWrite(reservation, String(error))
-					);
-				}, 100);
-			},
-			{story}
-		);
+		await row
+			.getByRole('button', {name: `Open ${storyName}`})
+			.first()
+			.click();
+		await page
+			.getByLabel('Workspace Mode')
+			.getByRole('tab', {name: 'Text'})
+			.click();
+		await replaceEditorText(page, 'Trailing legacy editor save');
 		const appClosed = running.app.waitForEvent('close');
 
 		await running.app.evaluate(({BrowserWindow}) => {
@@ -504,9 +506,44 @@ test('packaged desktop flushes a trailing legacy HTML save before exit', async (
 		await appClosed;
 		running = undefined;
 
-		await expect(
-			readFile(path.join(profileRoot, 'library', 'Shutdown Save.html'), 'utf8')
-		).resolves.toBe('trailing save');
+		await expect(readFile(storyPath, 'utf8')).resolves.toContain(
+			'Trailing legacy editor save'
+		);
+	} finally {
+		await running?.app.close();
+	}
+});
+
+test('packaged desktop drains a trailing native project save before exit', async () => {
+	const executablePath = await packagedExecutable();
+	const profileRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-shutdown-save-')
+	);
+	let running: RunningPackagedApp | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, profileRoot);
+		const {page} = running;
+
+		await page.getByTitle('New Project').click();
+		await page.getByLabel('Project name').fill('Shutdown Save');
+		await tabWithText(page, 'Text').click();
+		await page.getByRole('button', {name: 'Create Project'}).click();
+		await expect(sourceEditor(page)).toBeVisible();
+		const projectRoot = await projectRootFromRenderer(page);
+
+		await replaceEditorText(page, 'Trailing editor save');
+		const appClosed = running.app.waitForEvent('close');
+
+		await running.app.evaluate(({BrowserWindow}) => {
+			BrowserWindow.getAllWindows()[0]?.close();
+		});
+		await appClosed;
+		running = undefined;
+
+		await expect(savedProjectSource(projectRoot)).resolves.toContain(
+			'Trailing editor save'
+		);
 	} finally {
 		await running?.app.close();
 	}

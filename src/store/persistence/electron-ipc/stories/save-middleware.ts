@@ -13,6 +13,7 @@ import {
 import {loadProjectMetadata} from '../../../project-metadata';
 import {saveStory} from './save-story';
 import {recordPerformanceHarnessEvent} from '../../../../util/performance';
+import {trackPersistence} from '../persistence-quit-coordinator';
 
 // When a story is deleted, we need to be able to look up information about it
 // from the last state.
@@ -21,7 +22,6 @@ let lastState: StoriesState;
 
 interface QueuedSave {
 	reject: (error: unknown) => void;
-	release: (error?: unknown) => void;
 	resolve: () => void;
 	task: () => Promise<void>;
 }
@@ -30,32 +30,14 @@ const activeSessionSaves = new Set<string>();
 const pendingSessionSaves = new Map<string, QueuedSave[]>();
 const storyPersistenceBarriers = new Map<string, Promise<void>>();
 
-function persistenceErrorMessage(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
-}
-
 function queueStoryPersistence(
-	twineElectron: NonNullable<TwineElectronWindow['twineElectron']>,
 	storyId: string,
 	task: () => Promise<void>
 ): Promise<void> {
-	const reservationToken = twineElectron.beginLegacyStoryWrite(storyId);
 	const previous = storyPersistenceBarriers.get(storyId);
-	const run = async () => {
-		try {
-			await task();
-			twineElectron.finishLegacyStoryWrite(reservationToken);
-		} catch (error) {
-			twineElectron.finishLegacyStoryWrite(
-				reservationToken,
-				persistenceErrorMessage(error)
-			);
-			throw error;
-		}
-	};
 	const operation = previous
-		? previous.catch(() => undefined).then(run)
-		: run();
+		? previous.catch(() => undefined).then(task)
+		: task();
 
 	storyPersistenceBarriers.set(storyId, operation);
 	void operation.then(
@@ -70,43 +52,7 @@ function queueStoryPersistence(
 			}
 		}
 	);
-	return operation;
-}
-
-function reserveStoryPersistence(
-	twineElectron: NonNullable<TwineElectronWindow['twineElectron']>,
-	storyIds: string[]
-) {
-	const tokens: string[] = [];
-
-	try {
-		for (const storyId of new Set(storyIds)) {
-			tokens.push(twineElectron.beginLegacyStoryWrite(storyId));
-		}
-	} catch (error) {
-		tokens.forEach(token =>
-			twineElectron.finishLegacyStoryWrite(
-				token,
-				persistenceErrorMessage(error)
-			)
-		);
-		throw error;
-	}
-	let released = false;
-
-	return (error?: unknown) => {
-		if (released) {
-			return;
-		}
-
-		released = true;
-		tokens.forEach(token =>
-			twineElectron.finishLegacyStoryWrite(
-				token,
-				error === undefined ? undefined : persistenceErrorMessage(error)
-			)
-		);
-	};
+	return trackPersistence(operation);
 }
 
 function runSessionSave(sessionId: string, save: QueuedSave) {
@@ -114,14 +60,8 @@ function runSessionSave(sessionId: string, save: QueuedSave) {
 	void save
 		.task()
 		.then(
-			() => {
-				save.release();
-				save.resolve();
-			},
-			error => {
-				save.release(error);
-				save.reject(error);
-			}
+			() => save.resolve(),
+			error => save.reject(error)
 		)
 		.finally(() => {
 			const pending = pendingSessionSaves.get(sessionId) ?? [];
@@ -130,8 +70,6 @@ function runSessionSave(sessionId: string, save: QueuedSave) {
 			pendingSessionSaves.delete(sessionId);
 			if (next) {
 				const superseded = pending;
-
-				superseded.forEach(save => save.release());
 
 				runSessionSave(sessionId, {
 					reject: error => {
@@ -142,7 +80,6 @@ function runSessionSave(sessionId: string, save: QueuedSave) {
 						next.resolve();
 						superseded.forEach(save => save.resolve());
 					},
-					release: next.release,
 					task: next.task
 				});
 			} else {
@@ -151,13 +88,9 @@ function runSessionSave(sessionId: string, save: QueuedSave) {
 		});
 }
 
-function queueSessionSave(
-	sessionId: string,
-	task: () => Promise<void>,
-	release: () => void
-) {
-	return new Promise<void>((resolve, reject) => {
-		const save = {reject, release, resolve, task};
+function queueSessionSave(sessionId: string, task: () => Promise<void>) {
+	const completion = new Promise<void>((resolve, reject) => {
+		const save = {reject, resolve, task};
 
 		if (!activeSessionSaves.has(sessionId)) {
 			runSessionSave(sessionId, save);
@@ -169,6 +102,8 @@ function queueSessionSave(
 			save
 		]);
 	});
+
+	return trackPersistence(completion);
 }
 
 function isNativeProjectStory(
@@ -186,6 +121,30 @@ function isNativeProjectStory(
 		metadata.status === 'file-backed' &&
 		!!metadata.rootPath
 	);
+}
+
+export function isPersistenceAffectingAction(action: StoriesAction) {
+	switch (action.type) {
+		case 'applyCorePatchBatch':
+			return action.persistence !== 'skip';
+		case 'createStory':
+		case 'deleteStory':
+		case 'createPassage':
+		case 'createPassages':
+		case 'deletePassage':
+		case 'deletePassages':
+			return true;
+		case 'updateStory':
+			return isPersistableStoryChange(action.props);
+		case 'updatePassage':
+			return isPersistablePassageChange(action.props);
+		case 'updatePassages':
+			return Object.values(action.passageUpdates).some(
+				isPersistablePassageChange
+			);
+		default:
+			return false;
+	}
 }
 
 /**
@@ -282,7 +241,7 @@ export function saveMiddleware(
 				});
 				try {
 					for (const save of saves) {
-						await queueStoryPersistence(twineElectron, save.storyId, save.task);
+						await queueStoryPersistence(save.storyId, save.task);
 					}
 					recordPerformanceHarnessEvent('persistence-save-completed', {
 						revision: action.revision,
@@ -303,15 +262,11 @@ export function saveMiddleware(
 				sessionId: action.sessionId
 			});
 			completion = action.sessionId
-				? queueSessionSave(
-						action.sessionId,
-						saveAll,
-						reserveStoryPersistence(
-							twineElectron,
-							saves.map(save => save.storyId)
-						)
-					)
+				? queueSessionSave(action.sessionId, saveAll)
 				: saveAll();
+			if (!action.sessionId) {
+				completion = trackPersistence(completion);
+			}
 			break;
 		}
 
@@ -329,7 +284,7 @@ export function saveMiddleware(
 
 			const createdStory = storyWithName(state, action.props.name);
 
-			completion = queueStoryPersistence(twineElectron, createdStory.id, () =>
+			completion = queueStoryPersistence(createdStory.id, () =>
 				saveStory(createdStory, formats)
 			);
 			persisted = true;
@@ -345,7 +300,7 @@ export function saveMiddleware(
 
 			const deletedStory = storyWithId(lastState, action.storyId);
 
-			completion = queueStoryPersistence(twineElectron, action.storyId, () =>
+			completion = queueStoryPersistence(action.storyId, () =>
 				twineElectron.deleteStory(deletedStory)
 			);
 			persisted = true;
@@ -362,10 +317,8 @@ export function saveMiddleware(
 					const newStory = storyWithId(state, action.storyId);
 
 					if (isNativeProjectStory(action.storyId)) {
-						completion = queueStoryPersistence(
-							twineElectron,
-							action.storyId,
-							() => saveStory(newStory, formats)
+						completion = queueStoryPersistence(action.storyId, () =>
+							saveStory(newStory, formats)
 						);
 						persisted = true;
 						break;
@@ -373,23 +326,17 @@ export function saveMiddleware(
 
 					const oldStory = storyWithId(lastState, action.storyId);
 
-					completion = queueStoryPersistence(
-						twineElectron,
-						action.storyId,
-						async () => {
-							await twineElectron.renameStory(oldStory, newStory);
-							await saveStory(newStory, formats);
-						}
-					);
+					completion = queueStoryPersistence(action.storyId, async () => {
+						await twineElectron.renameStory(oldStory, newStory);
+						await saveStory(newStory, formats);
+					});
 				} else {
 					// An ordinary update.
 
 					const updatedStory = storyWithId(state, action.storyId);
 
-					completion = queueStoryPersistence(
-						twineElectron,
-						action.storyId,
-						() => saveStory(updatedStory, formats)
+					completion = queueStoryPersistence(action.storyId, () =>
+						saveStory(updatedStory, formats)
 					);
 				}
 				persisted = true;
@@ -402,7 +349,7 @@ export function saveMiddleware(
 		case 'deletePassages': {
 			const changedStory = storyWithId(state, action.storyId);
 
-			completion = queueStoryPersistence(twineElectron, action.storyId, () =>
+			completion = queueStoryPersistence(action.storyId, () =>
 				saveStory(changedStory, formats)
 			);
 			persisted = true;
@@ -414,7 +361,7 @@ export function saveMiddleware(
 			if (isPersistablePassageChange(action.props)) {
 				const changedStory = storyWithId(state, action.storyId);
 
-				completion = queueStoryPersistence(twineElectron, action.storyId, () =>
+				completion = queueStoryPersistence(action.storyId, () =>
 					saveStory(changedStory, formats)
 				);
 				persisted = true;
@@ -430,7 +377,7 @@ export function saveMiddleware(
 			) {
 				const changedStory = storyWithId(state, action.storyId);
 
-				completion = queueStoryPersistence(twineElectron, action.storyId, () =>
+				completion = queueStoryPersistence(action.storyId, () =>
 					saveStory(changedStory, formats)
 				);
 				persisted = true;

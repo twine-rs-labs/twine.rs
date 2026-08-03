@@ -163,13 +163,14 @@ with unchanged structural assertions.
   Rust/WASM apply work, the reducer, patch publication, and the asynchronous
   native write were bounded. The synchronous reservation was added after the
   accepted baseline by `9f131516`.
-- Replace the synchronous renderer-to-main reservation with a quit-safe,
-  failure-safe protocol that cannot block the edit response task. Preserve
-  write ordering, coalescing, error propagation, renderer-destruction cleanup,
-  and shutdown flushing. Verify the focused trace has no reservation-owned long
-  task, then require clean complete 10k and 50k suites before accepting a new
-  baseline; the current clean 50k sample uses the same path but did not hit the
-  timing-dependent contention window.
+- Quit-safe write tracking now replaces the synchronous renderer-to-main
+  reservation with a failure-safe asynchronous protocol. It preserves write
+  ordering, coalescing, error propagation, renderer lifecycle handling, and
+  shutdown flushing while quiescing buffered editor and admitted core work
+  before the renderer acknowledges quit. Verify the focused trace has no
+  reservation-owned long task, then require clean complete 10k and 50k suites
+  before accepting a new baseline; the current clean 50k sample used the old
+  path but did not hit the timing-dependent contention window.
 - The first incremental project-folder write is complete: a passage text edit
   writes one file in place, checks its accepted fingerprint, patches the native
   baseline, and acknowledges the exact Rust revision. Unsupported or broad

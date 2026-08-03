@@ -146,9 +146,13 @@ The complete local 10k and 50k benchmark runs verify:
   stopped at the edit long-task gate. Focused A/B and renderer profiling now
   attribute the stall to the post-July synchronous legacy-write reservation:
   `beginLegacyStoryWrite` blocks in `ipcRenderer.sendSync` while the browser
-  main thread is occupied. The July 18 same-machine 10k baseline therefore
-  remains current until quit-safe write tracking is moved off the renderer edit
-  critical path and a clean complete suite replaces the incomplete evidence.
+  main thread is occupied. Quit-safe write tracking now removes that
+  synchronous edit-path IPC in favor of an asynchronous renderer-quiescence
+  handshake that flushes buffered editor and admitted core work before
+  persistence shutdown. The July
+  18 same-machine 10k baseline remains current until a focused trace and clean
+  complete 10k/50k suites validate the change and replace the incomplete
+  evidence.
 - The user manual still contains inherited Twine task and compatibility
   chapters. Current launcher, project-folder, conflict-review, workbench,
   asset, build, Settings, and Story Formats workflows are documented.

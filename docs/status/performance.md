@@ -75,9 +75,13 @@ are consistent with its 20 measured edits not colliding with a busy
 browser-main window and do not demonstrate a different persistence path. The
 A/B and profile reports came from an intentionally dirty diagnostic worktree;
 their production build stayed unchanged during each phase, but the reports are
-not clean provenance and do not replace either tracked baseline. Removing the
-synchronous renderer-to-main reservation from the edit critical path while
-preserving quit-safe write tracking is now the blocking edit follow-up.
+not clean provenance and do not replace either tracked baseline. Quit-safe write
+tracking now removes the synchronous renderer-to-main reservation from the edit
+critical path. The replacement closes renderer mutation admission, flushes
+buffered editor text and already-admitted core work, drains renderer and main
+persistence, and uses a cancellable readiness-scoped quit handshake. Focused
+trace evidence and clean complete 10k/50k suites are still required before the
+edit regression can be closed or either tracked baseline can be replaced.
 
 ## July-to-released-beta comparison
 

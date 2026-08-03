@@ -19,6 +19,7 @@ import {
 	waitForMockPromises
 } from '../../../test-util';
 import {InnerStoryEditRoute} from '../story-edit-route';
+import {rendererQuitQuiescence} from '../../../util/renderer-quit-quiescence';
 
 const HistoryBackButton: React.FC = () => {
 	const navigate = useNavigate();
@@ -518,6 +519,251 @@ describe('<StoryEditRoute>', () => {
 		expect(
 			container.querySelector('.story-edit-workspace > .fuzzy-finder')
 		).toBeTruthy();
+	});
+
+	it('flushes pending editor text immediately and ignores post-freeze edits', async () => {
+		const story = fakeStory(1);
+
+		story.passages[0].text = 'Before quit';
+		const {container} = await renderComponent(story);
+
+		fireEvent.click(
+			await screen.findByRole('tab', {
+				name: 'routes.storyEdit.workspace.textMode'
+			})
+		);
+		const content = await waitFor(() => {
+			const candidate = container.querySelector(
+				`[data-testid="story-editor-window-${story.passages[0].id}"] .cm-content`
+			);
+
+			expect(candidate).toBeInstanceOf(HTMLElement);
+			return candidate as HTMLElement;
+		});
+		const view = EditorView.findFromDOM(content);
+
+		if (!view) {
+			throw new Error('Live story editor view was not available');
+		}
+		const apply = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'applyStoryCommand'
+		);
+
+		jest.useFakeTimers();
+		act(() => {
+			view.dispatch({
+				changes: {
+					from: 0,
+					insert: 'Flushed at quit',
+					to: view.state.doc.length
+				}
+			});
+		});
+		expect(
+			apply.mock.calls.filter(
+				([command]) => command.type === 'updatePassageText'
+			)
+		).toHaveLength(0);
+
+		let draining: Promise<void> = Promise.resolve();
+		act(() => {
+			draining = rendererQuitQuiescence.drain();
+		});
+		await act(async () => draining);
+		expect(
+			apply.mock.calls.filter(
+				([command]) =>
+					command.type === 'updatePassageText' &&
+					command.text === 'Flushed at quit'
+			)
+		).toHaveLength(1);
+
+		act(() => {
+			view.dispatch({
+				changes: {from: 0, insert: 'Ignored', to: view.state.doc.length}
+			});
+			jest.advanceTimersByTime(500);
+		});
+		expect(
+			apply.mock.calls.filter(
+				([command]) => command.type === 'updatePassageText'
+			)
+		).toHaveLength(1);
+
+		act(() => rendererQuitQuiescence.cancel());
+		act(() => {
+			view.dispatch({
+				changes: {from: 0, insert: 'Reopened', to: view.state.doc.length}
+			});
+		});
+		await act(async () => {
+			jest.advanceTimersByTime(300);
+			await Promise.resolve();
+		});
+		expect(
+			apply.mock.calls.filter(
+				([command]) =>
+					command.type === 'updatePassageText' && command.text === 'Reopened'
+			)
+		).toHaveLength(1);
+		jest.useRealTimers();
+	});
+
+	it('restores a failed editor flush for the next quit attempt', async () => {
+		const story = fakeStory(1);
+
+		story.passages[0].text = 'Before quit';
+		const {container} = await renderComponent(story);
+
+		fireEvent.click(
+			await screen.findByRole('tab', {
+				name: 'routes.storyEdit.workspace.textMode'
+			})
+		);
+		const content = await waitFor(() => {
+			const candidate = container.querySelector(
+				`[data-testid="story-editor-window-${story.passages[0].id}"] .cm-content`
+			);
+
+			expect(candidate).toBeInstanceOf(HTMLElement);
+			return candidate as HTMLElement;
+		});
+		const view = EditorView.findFromDOM(content);
+
+		if (!view) {
+			throw new Error('Live story editor view was not available');
+		}
+		const apply = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.mockRejectedValueOnce(new Error('first flush failed'))
+			.mockResolvedValueOnce(undefined);
+
+		jest.useFakeTimers();
+		act(() => {
+			view.dispatch({
+				changes: {
+					from: 0,
+					insert: 'Retry at quit',
+					to: view.state.doc.length
+				}
+			});
+		});
+
+		let failedDrain: Promise<void> = Promise.resolve();
+
+		act(() => {
+			failedDrain = rendererQuitQuiescence.drain();
+		});
+		await expect(failedDrain).rejects.toThrow('first flush failed');
+		expect(
+			apply.mock.calls.filter(
+				([command]) =>
+					command.type === 'updatePassageText' &&
+					command.text === 'Retry at quit'
+			)
+		).toHaveLength(1);
+
+		act(() => rendererQuitQuiescence.cancel());
+		let retryDrain: Promise<void> = Promise.resolve();
+
+		act(() => {
+			retryDrain = rendererQuitQuiescence.drain();
+		});
+		await act(async () => retryDrain);
+		expect(
+			apply.mock.calls.filter(
+				([command]) =>
+					command.type === 'updatePassageText' &&
+					command.text === 'Retry at quit'
+			)
+		).toHaveLength(2);
+
+		act(() => rendererQuitQuiescence.cancel());
+		jest.useRealTimers();
+	});
+
+	it('does not restore an older failed flush over a newer pending edit', async () => {
+		const story = fakeStory(1);
+
+		story.passages[0].text = 'Before quit';
+		const {container} = await renderComponent(story);
+
+		fireEvent.click(
+			await screen.findByRole('tab', {
+				name: 'routes.storyEdit.workspace.textMode'
+			})
+		);
+		const content = await waitFor(() => {
+			const candidate = container.querySelector(
+				`[data-testid="story-editor-window-${story.passages[0].id}"] .cm-content`
+			);
+
+			expect(candidate).toBeInstanceOf(HTMLElement);
+			return candidate as HTMLElement;
+		});
+		const view = EditorView.findFromDOM(content);
+
+		if (!view) {
+			throw new Error('Live story editor view was not available');
+		}
+		let rejectFirstFlush: (error: Error) => void = () => {};
+		const firstFlush = new Promise<undefined>((_, reject) => {
+			rejectFirstFlush = reject;
+		});
+		const apply = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.mockReturnValueOnce(firstFlush)
+			.mockResolvedValueOnce(undefined);
+
+		jest.useFakeTimers();
+		act(() => {
+			view.dispatch({
+				changes: {
+					from: 0,
+					insert: 'Older pending edit',
+					to: view.state.doc.length
+				}
+			});
+		});
+		let cancelledDrain: Promise<void> = Promise.resolve();
+
+		act(() => {
+			cancelledDrain = rendererQuitQuiescence.drain();
+		});
+
+		act(() => rendererQuitQuiescence.cancel());
+		await expect(cancelledDrain).rejects.toThrow('was cancelled');
+		act(() => {
+			view.dispatch({
+				changes: {
+					from: 0,
+					insert: 'Newer pending edit',
+					to: view.state.doc.length
+				}
+			});
+		});
+		await act(async () => {
+			rejectFirstFlush(new Error('older flush failed'));
+			await Promise.resolve();
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+
+		let retryDrain: Promise<void> = Promise.resolve();
+
+		act(() => {
+			retryDrain = rendererQuitQuiescence.drain();
+		});
+		await act(async () => retryDrain);
+		expect(
+			apply.mock.calls.flatMap(([command]) =>
+				command.type === 'updatePassageText' ? [command.text] : []
+			)
+		).toEqual(['Older pending edit', 'Newer pending edit']);
+
+		act(() => rendererQuitQuiescence.cancel());
+		jest.useRealTimers();
 	});
 
 	it('opens story find and replace from shell toolbar story actions', async () => {

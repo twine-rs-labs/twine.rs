@@ -298,6 +298,24 @@ describe('initIpc()', () => {
 		expect(clipboardWriteTextMock).toHaveBeenCalledWith('test text');
 	});
 
+	it('accepts renderer readiness only from the authoring webContents', () => {
+		const authoringWebContents = {id: 7};
+		const ready = jest.fn();
+
+		initIpc({
+			authoringWebContents: () => authoringWebContents as any,
+			onAuthoringRendererReady: ready
+		});
+		const listener = onMock.mock.calls
+			.filter(call => call[0] === 'persistence-renderer-ready')
+			.at(-1)?.[1];
+
+		listener({sender: {id: 8}});
+		expect(ready).not.toHaveBeenCalled();
+		listener({sender: authoringWebContents});
+		expect(ready).toHaveBeenCalledTimes(1);
+	});
+
 	it('adds native project and asset handlers', async () => {
 		const story = fakeStory();
 		const chooseAsset = handleMock.mock.calls.find(
@@ -1444,6 +1462,23 @@ describe('initIpc()', () => {
 			expect(appQuitMock).toHaveBeenCalledTimes(1);
 		});
 
+		it('warns and continues quit when scratch cleanup fails', async () => {
+			const error = new Error('scratch busy');
+			const warn = jest.spyOn(console, 'warn').mockReturnValue();
+
+			cleanScratchDirectoryMock.mockRejectedValueOnce(error);
+			beforeQuitHandler({preventDefault: jest.fn()});
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(warn).toHaveBeenCalledWith(
+				'Could not clean scratch previews before quit.',
+				error
+			);
+			expect(appQuitMock).toHaveBeenCalledTimes(1);
+			expect(showErrorBoxMock).not.toHaveBeenCalled();
+		});
+
 		it.each(['delete-story', 'rename-story'])(
 			'waits for an acknowledged %s operation before resuming quit',
 			async channel => {
@@ -1477,150 +1512,294 @@ describe('initIpc()', () => {
 			}
 		);
 
-		it('waits for renderer-reserved work that reaches main after quit begins', async () => {
-			const beginReservation = onMock.mock.calls.find(
-				call => call[0] === 'begin-legacy-story-write'
-			);
-			const finishReservation = onMock.mock.calls.find(
-				call => call[0] === 'finish-legacy-story-write'
-			);
-			const sender = {id: 7, once: jest.fn()};
-			const beginEvent = {sender};
-			const preventDefault = jest.fn();
+		function rendererQuitHarness() {
+			const webContents = {
+				isDestroyed: jest.fn(() => false),
+				on: jest.fn(),
+				once: jest.fn(),
+				removeListener: jest.fn(),
+				send: jest.fn()
+			};
 
-			beginReservation[1](beginEvent, 'reservation-1', story.id);
-			expect(beginEvent).toEqual(expect.objectContaining({returnValue: true}));
-			beforeQuitHandler({preventDefault});
-			expect(preventDefault).toHaveBeenCalledTimes(1);
+			initIpc({
+				authoringRendererEstablished: () => true,
+				authoringWebContents: () => webContents as any,
+				rendererDrainTimeoutMs: 50
+			});
+			const handler = appOnMock.mock.calls
+				.filter(call => call[0] === 'before-quit')
+				.at(-1)?.[1];
+
+			handler({preventDefault: jest.fn()});
+			const nonce = webContents.send.mock.calls.find(
+				call => call[0] === 'persistence-quit-requested'
+			)?.[1];
+			const reply = onMock.mock.calls
+				.filter(call => call[0] === 'persistence-quit-prepared')
+				.at(-1)?.[1];
+
+			return {handler, nonce, reply, webContents};
+		}
+
+		it('targets the authoring renderer and ignores stale or foreign replies', async () => {
+			const {nonce, reply, webContents} = rendererQuitHarness();
+
+			reply({sender: webContents}, 'stale-nonce');
+			reply({sender: {}}, nonce);
+			await Promise.resolve();
 			expect(appQuitMock).not.toHaveBeenCalled();
-
-			await saveHandler[1]({}, story, 'reserved story html');
-			finishReservation[1]({sender}, 'reservation-1');
+			reply({sender: webContents}, nonce);
+			reply({sender: webContents}, nonce);
 			for (let index = 0; index < 10; index++) {
 				await Promise.resolve();
 			}
-			expect(saveStoryHtmlMock).toHaveBeenCalledWith(
-				story,
-				'reserved story html'
+			expect(appQuitMock).toHaveBeenCalledTimes(1);
+			expect(onMock).toHaveBeenCalledWith('persistence-quit-prepared', reply);
+			expect(webContents.removeListener).toHaveBeenCalledWith(
+				'did-navigate',
+				expect.any(Function)
 			);
+		});
+
+		it('flushes work reaching main before the renderer drain reply', async () => {
+			let finishSave: () => void = () => {};
+			const {nonce, reply, webContents} = rendererQuitHarness();
+
+			saveStoryHtmlMock.mockReturnValueOnce(
+				new Promise<void>(resolve => {
+					finishSave = resolve;
+				})
+			);
+			const acknowledgement = saveHandler[1]({}, story, 'late story html');
+			reply({sender: webContents}, nonce);
+			await Promise.resolve();
+			expect(appQuitMock).not.toHaveBeenCalled();
+			finishSave();
+			await acknowledgement;
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(cleanScratchDirectoryMock).toHaveBeenCalledTimes(1);
 			expect(appQuitMock).toHaveBeenCalledTimes(1);
 		});
 
-		it('keeps the app open when renderer-reserved work fails during quit', async () => {
-			const beginReservation = onMock.mock.calls.find(
-				call => call[0] === 'begin-legacy-story-write'
-			);
-			const finishReservation = onMock.mock.calls.find(
-				call => call[0] === 'finish-legacy-story-write'
-			);
-			const sender = {id: 7, once: jest.fn()};
-			const preventDefault = jest.fn();
-
+		it('cancels if the renderer disappears during main flush after preparing', async () => {
+			let finishSave: () => void = () => {};
 			jest.spyOn(console, 'error').mockReturnValue();
-			beginReservation[1]({sender}, 'reservation-1', story.id);
-			beforeQuitHandler({preventDefault});
-			finishReservation[1]({sender}, 'reservation-1', 'renderer save failed');
+			saveStoryHtmlMock.mockReturnValueOnce(
+				new Promise<void>(resolve => {
+					finishSave = resolve;
+				})
+			);
+			const acknowledgement = saveHandler[1]({}, story, 'blocked main save');
+			const prepared = rendererQuitHarness();
+			const rendererGone = prepared.webContents.once.mock.calls.find(
+				call => call[0] === 'render-process-gone'
+			)?.[1];
+
+			prepared.reply({sender: prepared.webContents}, prepared.nonce);
+			await Promise.resolve();
+			rendererGone();
+			finishSave();
+			await acknowledgement;
 			for (let index = 0; index < 10; index++) {
 				await Promise.resolve();
 			}
-			expect(preventDefault).toHaveBeenCalledTimes(1);
 			expect(appQuitMock).not.toHaveBeenCalled();
 			expect(
 				resumeScratchPreviewsAfterFailedShutdownMock
 			).toHaveBeenCalledTimes(1);
-			expect(cleanScratchDirectoryMock).not.toHaveBeenCalled();
-			expect(showErrorBoxMock).toHaveBeenCalledWith(
-				'electron.errors.storySave',
+			expect(prepared.webContents.send).toHaveBeenCalledWith(
+				'persistence-quit-cancelled',
+				prepared.nonce
+			);
+		});
+
+		it('cancels a failed renderer drain and supports a later quit', async () => {
+			jest.spyOn(console, 'error').mockReturnValue();
+			const first = rendererQuitHarness();
+
+			first.reply(
+				{sender: first.webContents},
+				first.nonce,
 				'renderer save failed'
 			);
-		});
-
-		it('treats an empty renderer error message as a failed reservation', async () => {
-			const beginReservation = onMock.mock.calls.find(
-				call => call[0] === 'begin-legacy-story-write'
-			);
-			const finishReservation = onMock.mock.calls.find(
-				call => call[0] === 'finish-legacy-story-write'
-			);
-			const sender = {id: 7, once: jest.fn()};
-
-			jest.spyOn(console, 'error').mockReturnValue();
-			beginReservation[1]({sender}, 'reservation-1', story.id);
-			beforeQuitHandler({preventDefault: jest.fn()});
-			finishReservation[1]({sender}, 'reservation-1', '');
 			for (let index = 0; index < 10; index++) {
 				await Promise.resolve();
 			}
-			expect(appQuitMock).not.toHaveBeenCalled();
-			expect(showErrorBoxMock).toHaveBeenCalledWith(
-				'electron.errors.storySave',
-				''
+			expect(first.webContents.send).toHaveBeenCalledWith(
+				'persistence-quit-cancelled',
+				first.nonce
 			);
+			expect(resumeScratchPreviewsAfterFailedShutdownMock).toHaveBeenCalled();
+			expect(appQuitMock).not.toHaveBeenCalled();
+
+			first.handler({preventDefault: jest.fn()});
+			const laterNonce = first.webContents.send.mock.calls
+				.filter(call => call[0] === 'persistence-quit-requested')
+				.at(-1)?.[1];
+			const laterReply = onMock.mock.calls
+				.filter(call => call[0] === 'persistence-quit-prepared')
+				.at(-1)?.[1];
+
+			laterReply({sender: first.webContents}, laterNonce);
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).toHaveBeenCalledTimes(1);
 		});
 
-		it.each([
-			[
-				'render-process-gone',
-				(listener: (...args: any[]) => void) => listener(),
-				'renderer process stopped'
-			],
-			[
-				'did-start-navigation',
-				(listener: (...args: any[]) => void) =>
-					listener({isMainFrame: true, isSameDocument: false}),
-				'renderer page was replaced'
-			]
-		])(
-			'fails renderer reservations on %s so quit cannot hang',
-			async (channel, emit, expectedMessage) => {
-				const beginReservation = onMock.mock.calls.find(
-					call => call[0] === 'begin-legacy-story-write'
-				);
-				const sender = {id: 7, on: jest.fn(), once: jest.fn()};
+		it('resumes failure handling when the cancellation send races destruction', async () => {
+			const warn = jest.spyOn(console, 'warn').mockReturnValue();
+			jest.spyOn(console, 'error').mockReturnValue();
+			const failed = rendererQuitHarness();
 
-				jest.spyOn(console, 'error').mockReturnValue();
-				beginReservation[1]({sender}, 'reservation-1', story.id);
-				beforeQuitHandler({preventDefault: jest.fn()});
-				const cleanup = sender.on.mock.calls.find(
-					call => call[0] === channel
-				)?.[1];
-
-				emit(cleanup);
-				for (let index = 0; index < 10; index++) {
-					await Promise.resolve();
+			failed.webContents.send.mockImplementation(channel => {
+				if (channel === 'persistence-quit-cancelled') {
+					throw new Error('webContents destroyed');
 				}
-				expect(appQuitMock).not.toHaveBeenCalled();
-				expect(showErrorBoxMock).toHaveBeenCalledWith(
-					'electron.errors.storySave',
-					expect.stringContaining(expectedMessage)
-				);
+			});
+			failed.reply({sender: failed.webContents}, failed.nonce, 'save failed');
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
 			}
-		);
-
-		it('keeps reservations across same-document renderer navigation', async () => {
-			const beginReservation = onMock.mock.calls.find(
-				call => call[0] === 'begin-legacy-story-write'
+			expect(warn).toHaveBeenCalledWith(
+				'Could not notify the renderer that quit was cancelled.',
+				expect.any(Error)
 			);
-			const finishReservation = onMock.mock.calls.find(
-				call => call[0] === 'finish-legacy-story-write'
-			);
-			const sender = {id: 7, on: jest.fn(), once: jest.fn()};
+			expect(resumeScratchPreviewsAfterFailedShutdownMock).toHaveBeenCalled();
+			expect(showErrorBoxMock).toHaveBeenCalled();
+			expect(appQuitMock).not.toHaveBeenCalled();
+		});
 
-			beginReservation[1]({sender}, 'reservation-1', story.id);
-			beforeQuitHandler({preventDefault: jest.fn()});
-			const navigation = sender.on.mock.calls.find(
-				call => call[0] === 'did-start-navigation'
+		it('times out by cancelling rather than forcing quit', async () => {
+			jest.spyOn(console, 'error').mockReturnValue();
+			const {nonce, webContents} = rendererQuitHarness();
+
+			jest.advanceTimersByTime(50);
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(webContents.send).toHaveBeenCalledWith(
+				'persistence-quit-cancelled',
+				nonce
+			);
+			expect(appQuitMock).not.toHaveBeenCalled();
+		});
+
+		it('keeps non-committed navigation nonfatal but cancels a renderer loss', async () => {
+			jest.spyOn(console, 'error').mockReturnValue();
+			const {nonce, reply, webContents} = rendererQuitHarness();
+
+			expect(
+				webContents.on.mock.calls.some(
+					call => call[0] === 'did-start-navigation'
+				)
+			).toBe(false);
+			reply({sender: webContents}, nonce);
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).toHaveBeenCalledTimes(1);
+
+			appQuitMock.mockClear();
+			const lost = rendererQuitHarness();
+			const rendererGone = lost.webContents.once.mock.calls.find(
+				call => call[0] === 'render-process-gone'
 			)?.[1];
 
-			navigation({isMainFrame: true, isSameDocument: true});
-			for (let index = 0; index < 5; index++) {
-				await Promise.resolve();
-			}
-			expect(appQuitMock).not.toHaveBeenCalled();
-			finishReservation[1]({sender}, 'reservation-1');
+			rendererGone();
 			for (let index = 0; index < 10; index++) {
 				await Promise.resolve();
 			}
+			expect(appQuitMock).not.toHaveBeenCalled();
+			expect(resumeScratchPreviewsAfterFailedShutdownMock).toHaveBeenCalled();
+		});
+
+		it('cancels a cross-document renderer navigation', async () => {
+			jest.spyOn(console, 'error').mockReturnValue();
+			const {webContents} = rendererQuitHarness();
+			const navigation = webContents.on.mock.calls.find(
+				call => call[0] === 'did-navigate'
+			)?.[1];
+
+			navigation();
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).not.toHaveBeenCalled();
+			expect(resumeScratchPreviewsAfterFailedShutdownMock).toHaveBeenCalled();
+			expect(webContents.removeListener).toHaveBeenCalledWith(
+				'destroyed',
+				expect.any(Function)
+			);
+		});
+
+		it('distinguishes an established missing renderer from early startup', async () => {
+			jest.spyOn(console, 'error').mockReturnValue();
+			initIpc({
+				authoringRendererEstablished: () => true,
+				authoringWebContents: () => undefined
+			});
+			const establishedHandler = appOnMock.mock.calls
+				.filter(call => call[0] === 'before-quit')
+				.at(-1)?.[1];
+
+			establishedHandler({preventDefault: jest.fn()});
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).not.toHaveBeenCalled();
+			expect(resumeScratchPreviewsAfterFailedShutdownMock).toHaveBeenCalled();
+			expect(cleanScratchDirectoryMock).not.toHaveBeenCalled();
+		});
+
+		it('keeps the app open after a previously ready renderer disappears', async () => {
+			jest.spyOn(console, 'error').mockReturnValue();
+			initIpc({
+				authoringRendererEstablished: () => false,
+				authoringRendererWasEstablished: () => true,
+				authoringWebContents: () => undefined
+			});
+			const disappearedHandler = appOnMock.mock.calls
+				.filter(call => call[0] === 'before-quit')
+				.at(-1)?.[1];
+
+			disappearedHandler({preventDefault: jest.fn()});
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(appQuitMock).not.toHaveBeenCalled();
+			expect(resumeScratchPreviewsAfterFailedShutdownMock).toHaveBeenCalled();
+			expect(cleanScratchDirectoryMock).not.toHaveBeenCalled();
+		});
+
+		it('treats an existing but not-ready renderer as early startup', async () => {
+			const webContents = {
+				isDestroyed: jest.fn(() => false),
+				on: jest.fn(),
+				once: jest.fn(),
+				removeListener: jest.fn(),
+				send: jest.fn()
+			};
+
+			initIpc({
+				authoringRendererEstablished: () => false,
+				authoringWebContents: () => webContents as any
+			});
+			const earlyHandler = appOnMock.mock.calls
+				.filter(call => call[0] === 'before-quit')
+				.at(-1)?.[1];
+
+			earlyHandler({preventDefault: jest.fn()});
+			for (let index = 0; index < 10; index++) {
+				await Promise.resolve();
+			}
+			expect(webContents.send).not.toHaveBeenCalledWith(
+				'persistence-quit-requested',
+				expect.anything()
+			);
+			expect(cleanScratchDirectoryMock).toHaveBeenCalledTimes(1);
 			expect(appQuitMock).toHaveBeenCalledTimes(1);
 		});
 

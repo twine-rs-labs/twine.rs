@@ -28,6 +28,15 @@ export default tseslint.config(
 				{allowShortCircuit: true}
 			],
 			'@typescript-eslint/no-unused-vars': ['error', {caughtErrors: 'none'}],
+			'no-restricted-syntax': [
+				'error',
+				{
+					message:
+						'Production renderer IPC must remain asynchronous; use send() or invoke().',
+					selector:
+						"CallExpression[callee.type='MemberExpression'][callee.object.name='ipcRenderer'][callee.property.name='sendSync']"
+				}
+			],
 			'react/display-name': 'off',
 			'react/prop-types': 'off',
 			'testing-library/no-render-in-setup': 'off',

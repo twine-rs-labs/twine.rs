@@ -1,4 +1,5 @@
 import {TwineElectronWindow} from '../../../electron/shared';
+import {trackPersistence} from './persistence-quit-coordinator';
 
 export function saveJson(filename: string, data: any): Promise<void> {
 	const {twineElectron} = window as TwineElectronWindow;
@@ -7,5 +8,5 @@ export function saveJson(filename: string, data: any): Promise<void> {
 		throw new Error('Electron bridge is not present on window.');
 	}
 
-	return twineElectron.saveJson(filename, data);
+	return trackPersistence(twineElectron.saveJson(filename, data));
 }

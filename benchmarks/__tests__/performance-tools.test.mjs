@@ -325,6 +325,17 @@ test('rejects missing, malformed, mismatched, and unstable phase reports', () =>
 	);
 });
 
+test('rejects null assertion detail instead of weakening the phase schema', () => {
+	const validation = validatePhase(
+		phaseReport({
+			assertions: [{detail: null, name: 'measured-invariant', passed: true}]
+		})
+	);
+
+	assert.equal(validation.valid, false);
+	assert.match(validation.errors.join(' '), /assertions are malformed/);
+});
+
 test('rejects completed timed-out and interrupted tests as infrastructure', () => {
 	for (const status of ['timedOut', 'interrupted']) {
 		const reportValidation = validatePhase(

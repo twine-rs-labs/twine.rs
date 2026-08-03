@@ -37,6 +37,9 @@ export const StoriesContextProvider: React.FC<
 	const persistedReducer: React.Reducer<StoriesState, StoriesAction> =
 		React.useMemo(
 			() => (state, action) => {
+				if (storiesPersistence.canReduceAction?.(action) === false) {
+					return state;
+				}
 				const reducerStarted = performance.now();
 				const newState = reducer(state, action);
 				const reducedAt = performance.now();
