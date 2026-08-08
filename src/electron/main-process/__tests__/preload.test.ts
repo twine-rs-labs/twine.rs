@@ -58,4 +58,59 @@ describe('desktop authoring preload', () => {
 		jest.clearAllTimers();
 		jest.useRealTimers();
 	});
+
+	it('reconstitutes typed package snapshot staleness across IPC', async () => {
+		jest.resetModules();
+		jest.clearAllMocks();
+		jest.useFakeTimers();
+		jest.doMock('electron');
+		Object.defineProperty(process, 'isMainFrame', {
+			configurable: true,
+			value: true
+		});
+		const electron = await import('electron');
+
+		(electron.ipcRenderer.invoke as jest.Mock).mockImplementation(
+			async (channel: string) => {
+				if (channel === 'open-project-folder') {
+					return {
+						__twineProjectCapability: 'capability-1',
+						rootPath: '/mock/project',
+						stories: [],
+						storyIds: []
+					};
+				}
+				if (channel === 'read-project-package-asset-payloads') {
+					return {
+						code: 'PACKAGE_ASSET_SNAPSHOT_STALE',
+						message: 'Project assets changed during the read.',
+						status: 'error'
+					};
+				}
+			}
+		);
+
+		await import('../preload');
+		const [, api] = (
+			electron.contextBridge.exposeInMainWorld as jest.Mock
+		).mock.calls.find(([name]) => name === 'twineElectron') as [
+			string,
+			NonNullable<TwineElectronWindow['twineElectron']>
+		];
+
+		await api.openProjectFolder();
+		await expect(
+			api.readProjectPackageAssetPayloads('/mock/project', [])
+		).rejects.toMatchObject({
+			code: 'PACKAGE_ASSET_SNAPSHOT_STALE',
+			message: 'Project assets changed during the read.'
+		});
+		expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+			'read-project-package-asset-payloads',
+			'capability-1',
+			[]
+		);
+		jest.clearAllTimers();
+		jest.useRealTimers();
+	});
 });

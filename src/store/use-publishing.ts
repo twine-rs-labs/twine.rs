@@ -5,6 +5,7 @@ import {
 	type PublishOptions
 } from '../util/publish';
 import {
+	createAssetCompleteStoryBuildPackage,
 	createStoryBuildPackage,
 	type StoryBuildPackage,
 	type StoryHtmlBuildTarget,
@@ -41,6 +42,10 @@ import {
 import {loadProjectMetadata} from './project-metadata';
 import {projectStoryHydration} from './project-hydration';
 import type {TwineElectronWindow} from '../electron/shared';
+import {
+	materializeStoryPackageSnapshot,
+	packageExportInputs
+} from './package-publishing';
 
 export const referencedMediaEmbeddingLimits = {
 	maxFileBytes: 25 * 1024 * 1024,
@@ -314,6 +319,67 @@ export function usePublishing(): UsePublishingProps {
 			target: StoryBuildTarget,
 			publishOptions?: Omit<BuildStoryPackageOptions, 'buildTarget'>
 		) => {
+			if (target === 'package') {
+				const metadata = loadProjectMetadata(storyId);
+				const storageAuthority =
+					metadata?.storageKind === 'web-local'
+						? 'web-local'
+						: metadata?.storageKind === 'electron-project-folder'
+							? 'native-project'
+							: 'unknown';
+				const rootPath =
+					metadata?.storageKind === 'electron-project-folder' &&
+					metadata.status === 'file-backed'
+						? metadata.rootPath
+						: undefined;
+				const bridge = (window as TwineElectronWindow).twineElectron;
+				const readPackageAssets =
+					rootPath && bridge?.readProjectPackageAssetPayloads
+						? (priorityPaths: string[]) =>
+								bridge.readProjectPackageAssetPayloads(rootPath, priorityPaths)
+						: undefined;
+
+				const snapshot = await materializeStoryPackageSnapshot(
+					coreProjectHost,
+					storyId,
+					() =>
+						currentStoryPreviewMetadata(
+							coreProjectHost,
+							previewMetadataRef.current,
+							storyId
+						),
+					{readPackageAssets, storageAuthority}
+				);
+				const format = formatWithNameAndVersion(
+					formats,
+					snapshot.story.storyFormat,
+					snapshot.story.storyFormatVersion
+				);
+				const formatProperties = await storyFormatsDispatch(
+					loadFormatProperties(format)
+				);
+
+				if (!formatProperties) {
+					throw new Error(`Couldn't load story format properties`);
+				}
+
+				return createAssetCompleteStoryBuildPackage(
+					snapshot.story,
+					getAppInfo(),
+					{
+						...publishOptions,
+						...packageExportInputs(
+							snapshot.assetInventory,
+							snapshot.assetBatch,
+							snapshot.revision
+						),
+						assetInventory: snapshot.assetInventory,
+						formatProperties,
+						target: 'package'
+					}
+				);
+			}
+
 			const story = await completeStoryForPublishing(storyId);
 			const assetInventory =
 				publishOptions?.assetInventory ??
@@ -423,6 +489,7 @@ export function usePublishing(): UsePublishingProps {
 		[
 			assetInventoryForStory,
 			completeStoryForPublishing,
+			coreProjectHost,
 			formats,
 			storyFormatsDispatch
 		]

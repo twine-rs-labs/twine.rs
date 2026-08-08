@@ -16,6 +16,7 @@ twine_graph.workspace = true
 twine_model.workspace = true
 twine_parse.workspace = true
 web-time.workspace = true
+web_atoms.workspace = true
 
 [lints]
 workspace = true

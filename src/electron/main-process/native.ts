@@ -7,6 +7,8 @@ import type {StoryWithDocuments as Story} from '../../store/stories';
 import type {
 	NativeProjectAssetPayloadBatch,
 	NativeProjectAssetPayloadLimits,
+	NativeProjectPackageAssetPayloadLimits,
+	NativeProjectPackageAssetInspection,
 	ProjectStoryReplacement,
 	ProjectSourceLayout
 } from '../shared';
@@ -55,6 +57,9 @@ interface NativeProjectAddon {
 	healthJson(): string;
 	hydrationMemoryDiagnosticsJson(): string;
 	listProjectAssetsJson(rootPath: string): string;
+	inspectProjectPackageAssets?(
+		rootPath: string
+	): Promise<NativeProjectPackageAssetInspection>;
 	listRememberedProjectFoldersJson(indexPath: string): string;
 	loadProjectFolderJson(
 		rootPath: string,
@@ -88,6 +93,15 @@ interface NativeProjectAddon {
 		maxFileBytes: number,
 		maxFileCount: number,
 		maxTotalEncodedBytes: number
+	): Promise<NativeAddonProjectAssetPayloadBatch>;
+	readProjectPackageAssetPayloads?(
+		rootPath: string,
+		requests: Array<
+			NativeProjectAssetReadBaseline & {enforceBaseline: boolean}
+		>,
+		maxAssetFileBytes: number,
+		maxAssetFileCount: number,
+		maxAssetTotalBytes: number
 	): Promise<NativeAddonProjectAssetPayloadBatch>;
 	captureProjectAssetDigests?(
 		rootPath: string,
@@ -374,6 +388,15 @@ export function nativeProjectAssetEmbeddingAvailable() {
 	return typeof loadAddon()?.readProjectAssetPayloads === 'function';
 }
 
+export function nativeProjectPackageAssetReaderAvailable() {
+	const addon = loadAddon();
+
+	return (
+		typeof addon?.inspectProjectPackageAssets === 'function' &&
+		typeof addon.readProjectPackageAssetPayloads === 'function'
+	);
+}
+
 export function nativeProjectAssetDigestCaptureAvailable() {
 	return typeof loadAddon()?.captureProjectAssetDigests === 'function';
 }
@@ -461,6 +484,7 @@ export async function readNativeProjectAssetPayloads(
 				encodedSizeBytes: payload.encodedSizeBytes,
 				mediaType: payload.mediaType,
 				path: payload.path,
+				sha256: payload.sha256,
 				sizeBytes: payload.sizeBytes
 			}))
 		} satisfies NativeProjectAssetPayloadBatch;
@@ -493,10 +517,53 @@ export async function readNativeProjectPreviewAssetPayloads(
 				encodedSizeBytes: payload.encodedSizeBytes,
 				mediaType: payload.mediaType,
 				path: payload.path,
+				sha256: payload.sha256,
 				sizeBytes: payload.sizeBytes
 			}))
 		} satisfies NativeProjectAssetPayloadBatch;
 	});
+}
+
+export async function readNativeProjectPackageAssetPayloads(
+	rootPath: string,
+	baselines: NativeProjectAssetReadBaseline[],
+	limits: NativeProjectPackageAssetPayloadLimits
+) {
+	const reader = loadAddon()?.readProjectPackageAssetPayloads;
+
+	if (!reader) {
+		throw new Error('The native package asset reader is unavailable.');
+	}
+	return enqueueNativeAssetRead(async () => {
+		const result = await reader(
+			rootPath,
+			baselines.map(baseline => ({...baseline, enforceBaseline: true})),
+			limits.maxAssetFileBytes,
+			limits.maxAssetFileCount,
+			limits.maxAssetTotalBytes
+		);
+
+		return {
+			...result,
+			payloads: result.payloads.map(payload => ({
+				bytes: payload.bytes,
+				encodedSizeBytes: payload.encodedSizeBytes,
+				mediaType: payload.mediaType,
+				path: payload.path,
+				sha256: payload.sha256,
+				sizeBytes: payload.sizeBytes
+			}))
+		} satisfies NativeProjectAssetPayloadBatch;
+	});
+}
+
+export async function inspectNativeProjectPackageAssets(rootPath: string) {
+	const inspect = loadAddon()?.inspectProjectPackageAssets;
+
+	if (!inspect) {
+		throw new Error('The native package asset inspector is unavailable.');
+	}
+	return enqueueNativeAssetRead(() => inspect(rootPath));
 }
 
 export function loadNativeProjectFolder(

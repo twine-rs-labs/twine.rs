@@ -1,4 +1,5 @@
 import {expect, test, type TestInfo} from '@playwright/test';
+import {createHash} from 'node:crypto';
 import {
 	_electron as electron,
 	chromium,
@@ -23,6 +24,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
+import extractZip from 'extract-zip';
 
 type DialogState = {
 	calls: Array<{properties?: string[]; title?: string}>;
@@ -1894,6 +1896,169 @@ test('packaged desktop embeds referenced media for every bundled format family',
 		}
 	} finally {
 		await running?.app.close();
+	}
+});
+
+test('packaged desktop exports an asset-complete archive that plays after its source project is removed', async ({}, testInfo) => {
+	test.setTimeout(5 * 60 * 1000);
+	const executablePath = await packagedExecutable();
+	const profileRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-package-')
+	);
+	const transferRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-package-transfer-')
+	);
+	const archivePath = path.join(transferRoot, 'offline-package.zip');
+	const offlineRoot = path.join(transferRoot, 'clean-offline-machine');
+	let running: RunningPackagedApp | undefined;
+	let offlineBrowser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, profileRoot);
+		const {page} = running;
+
+		await page.getByTitle('New Project').click();
+		await expect(page).toHaveURL(/#\/new-project$/);
+		await page.getByLabel('Project name').fill('Offline Package E2E');
+		await page
+			.locator('label')
+			.filter({hasText: 'Story format'})
+			.getByRole('combobox')
+			.selectOption({label: 'Harlowe 3.3.9'});
+		await tabWithText(page, 'Text').click();
+		await page.getByRole('button', {name: 'Create Project'}).click();
+		await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
+		await expect(sourceEditor(page)).toBeVisible();
+
+		const projectRoot = await projectRootFromRenderer(page);
+		const expectedAssets = await importReferencedMedia(page, projectRoot);
+
+		await replaceEditorText(page, mediaSource);
+		await waitForSavedText(
+			running,
+			projectRoot,
+			'Offline referenced media is ready.',
+			testInfo
+		);
+		await page.getByTitle('Build & Export').click();
+		await expect(page).toHaveURL(/#\/stories\/[^/]+\/build$/);
+		await page.getByText('Package (.zip)', {exact: true}).click();
+		const prepare = page.getByRole('button', {name: 'Prepare Package'});
+
+		await expect(prepare).toBeEnabled({timeout: 30_000});
+		await prepare.click();
+		await expect(
+			page.getByRole('region', {name: 'Package review'})
+		).toContainText('Complete in assessed scopes', {timeout: 30_000});
+		const save = page.getByRole('button', {name: 'Save Complete Package'});
+
+		await running.app.evaluate(({session}, savePath) => {
+			session.defaultSession.once('will-download', (_event, item) => {
+				item.setSavePath(savePath);
+			});
+		}, archivePath);
+		await save.click();
+		await expect
+			.poll(
+				async () => {
+					try {
+						return (await lstat(archivePath)).size;
+					} catch {
+						return 0;
+					}
+				},
+				{timeout: 30_000}
+			)
+			.toBeGreaterThan(0);
+
+		await running.app.close();
+		running = undefined;
+		await rm(projectRoot, {force: true, recursive: true});
+		await mkdir(offlineRoot);
+		await extractZip(archivePath, {dir: offlineRoot});
+
+		const manifest = JSON.parse(
+			await readFile(
+				path.join(offlineRoot, '_twine-package', 'manifest.json'),
+				'utf8'
+			)
+		) as {
+			assets: Array<{
+				archivePath?: string;
+				sha256?: string;
+				sizeBytes?: number;
+				status: string;
+			}>;
+			completeness: {
+				projectAssetBytes: string;
+				staticRuntimeDependencies: string;
+			};
+		};
+
+		expect(manifest.completeness).toMatchObject({
+			projectAssetBytes: 'complete',
+			staticRuntimeDependencies: 'complete'
+		});
+		for (const [name, expected] of expectedAssets) {
+			const packaged = await readFile(path.join(offlineRoot, 'assets', name));
+			const record = manifest.assets.find(
+				asset => asset.archivePath === `assets/${name}`
+			);
+
+			expect(packaged.equals(expected)).toBe(true);
+			expect(record).toMatchObject({
+				sha256: createHash('sha256').update(expected).digest('hex'),
+				sizeBytes: expected.length,
+				status: 'included'
+			});
+		}
+
+		offlineBrowser = await chromium.launch();
+		const offlinePage = await offlineBrowser.newPage();
+		const requestedUrls: string[] = [];
+
+		offlinePage.on('request', request => requestedUrls.push(request.url()));
+		await offlinePage.route(/^https?:\/\//, route => route.abort());
+		await offlinePage.goto(
+			pathToFileURL(path.join(offlineRoot, 'Offline Package E2E.html')).href
+		);
+		await expect(offlinePage.locator('#offline-marker')).toContainText(
+			'Offline referenced media is ready.'
+		);
+		await expect
+			.poll(() =>
+				offlinePage
+					.locator('#hero-media')
+					.evaluate((image: HTMLImageElement) =>
+						Boolean(image.complete && image.naturalWidth)
+					)
+			)
+			.toBe(true);
+		await expect
+			.poll(() =>
+				offlinePage
+					.locator('#audio-media')
+					.evaluate((audio: HTMLAudioElement) => audio.readyState > 0)
+			)
+			.toBe(true);
+		expect(
+			await offlinePage.locator('#poster-media').getAttribute('poster')
+		).toContain('assets/poster.png');
+		expect(
+			await offlinePage
+				.locator('#css-media')
+				.evaluate(element => getComputedStyle(element).backgroundImage)
+		).toContain('back%20drop.png');
+		expect(
+			requestedUrls.every(url =>
+				url.startsWith(pathToFileURL(`${offlineRoot}${path.sep}`).href)
+			)
+		).toBe(true);
+	} finally {
+		await offlineBrowser?.close();
+		await running?.app.close();
+		await rm(profileRoot, {force: true, recursive: true});
+		await rm(transferRoot, {force: true, recursive: true});
 	}
 });
 

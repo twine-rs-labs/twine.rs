@@ -29,7 +29,7 @@
 	"knownIssues": [
 		"In the current benchmark suite, some latency and memory results at the largest tested project sizes exceed the project’s initial performance targets.",
 		"Advanced Harlowe syntax editing is specific to the bundled Harlowe 3.3.9 format; other Harlowe versions use the generic editor.",
-		"Package export records an asset copy plan but does not bundle project asset bytes; desktop Playable HTML export can embed supported statically referenced media.",
+		"Asset-complete Package export is limited to file-backed desktop projects. Static runtime dependencies are assessed, while dynamic JavaScript dependency discovery is explicitly not evaluated.",
 		"Some inherited compatibility user interface and documentation remain outside the primary Twine RS workbench.",
 		"Cross-platform packaged-app and hosted-CI performance coverage remains incomplete."
 	]

@@ -101,8 +101,9 @@ The complete local 10k and 50k benchmark runs verify:
 - Desktop Playable HTML export can embed supported statically referenced
   project media through the constrained native project reader. The Build screen
   reports actual embedded, external, unresolved, and unsupported media. Browser
-  embedding remains unavailable, and Package export still contains an asset
-  plan rather than project asset bytes.
+  embedding remains unavailable. File-backed desktop Package export now
+  captures bounded project asset bytes, deterministic paths, checksums, and
+  scoped dependency/completeness reporting in a revision-locked snapshot.
 - Referenced-media validation and bounded file reads run as asynchronous native
   tasks, keeping Electron's main event loop available. Admission permits one
   active and one queued native read; a third request fails with backpressure

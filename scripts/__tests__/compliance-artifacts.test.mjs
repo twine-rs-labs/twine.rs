@@ -91,13 +91,17 @@ test('the story-format inventory is exhaustive and every format has an adjacent 
 test('the npm inventory follows Electron Builder production dependency traversal', () => {
 	const packages = collectNpmPackages(rootDir);
 
-	assert.equal(packages.length, 83);
+	assert.equal(packages.length, 84);
 	assert.equal(
 		packages.every(pkg => pkg.name && pkg.version && pkg.license),
 		true
 	);
 	assert.equal(
 		packages.some(pkg => pkg.name === 'jsonp'),
+		true
+	);
+	assert.equal(
+		packages.some(pkg => pkg.name === 'entities'),
 		true
 	);
 	assert.equal(
@@ -184,7 +188,7 @@ test('generated notices and SBOM are deterministic and package-verifiable', asyn
 	);
 	assert.equal(counts.storyFormats, 24);
 	assert.equal(counts.cargo, 0);
-	assert.equal(counts.npm, 83);
+	assert.equal(counts.npm, 84);
 	assert.equal(counts.runtime, 4);
 	assert.equal(counts.assets, 3);
 	assert.equal(bom.bomFormat, 'CycloneDX');

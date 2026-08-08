@@ -386,6 +386,7 @@ export interface NativeProjectAssetPayload {
 	encodedSizeBytes: number;
 	mediaType: string;
 	path: string;
+	sha256: string;
 	sizeBytes: number;
 }
 
@@ -407,6 +408,62 @@ export interface NativeProjectAssetPayloadLimits {
 	maxFileCount: number;
 	maxTotalEncodedBytes: number;
 }
+
+export interface NativeProjectPackageAssetPayloadLimits {
+	maxAssetFileBytes: number;
+	maxAssetFileCount: number;
+	maxAssetTotalBytes: number;
+}
+
+export interface NativeProjectPackageAssetInventoryEntry {
+	modifiedAtMs: number;
+	path: string;
+	requiredByStaticReference: boolean;
+	sizeBytes: number;
+}
+
+export interface NativeProjectPackageAssetInspectionEntry {
+	modifiedAtMs: number;
+	path: string;
+	sizeBytes: number;
+}
+
+export interface NativeProjectPackageAssetInspection {
+	failures: NativeProjectAssetPayloadFailure[];
+	inventory: NativeProjectPackageAssetInspectionEntry[];
+	scannedEntryCount: number;
+	truncated: boolean;
+}
+
+export interface NativeProjectPackageAssetExclusion {
+	path: string;
+	reason: 'platform-junk';
+}
+
+export interface NativeProjectPackageAssetSnapshot {
+	contentFingerprint: string;
+	generation: number;
+	inventoryFingerprint: string;
+	sessionInstanceId: string;
+}
+
+export interface NativeProjectPackageAssetPayloadBatch extends NativeProjectAssetPayloadBatch {
+	appliedLimits: NativeProjectPackageAssetPayloadLimits;
+	excluded: NativeProjectPackageAssetExclusion[];
+	inventory: NativeProjectPackageAssetInventoryEntry[];
+	snapshot: NativeProjectPackageAssetSnapshot;
+}
+
+export type NativeProjectPackageAssetPayloadIpcResult =
+	| {
+			batch: NativeProjectPackageAssetPayloadBatch;
+			status: 'success';
+	  }
+	| {
+			code: 'PACKAGE_ASSET_SNAPSHOT_STALE';
+			message: string;
+			status: 'error';
+	  };
 
 export interface NativeProjectImportAsset {
 	originalPath: string;
@@ -543,6 +600,10 @@ export interface TwineElectronWindow extends Window {
 			paths: string[],
 			limits: NativeProjectAssetPayloadLimits
 		): Promise<NativeProjectAssetPayloadBatch>;
+		readProjectPackageAssetPayloads(
+			rootPath: string,
+			priorityPaths: string[]
+		): Promise<NativeProjectPackageAssetPayloadBatch>;
 		rendererPersistenceReady(): void;
 		onProjectSessionChanged(
 			callback: (delta: NativeProjectSessionDelta) => void

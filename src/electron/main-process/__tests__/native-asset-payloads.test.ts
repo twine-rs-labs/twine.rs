@@ -3,6 +3,11 @@ const limits = {
 	maxFileCount: 2,
 	maxTotalEncodedBytes: 200
 };
+const packageLimits = {
+	maxAssetFileBytes: 100,
+	maxAssetFileCount: 2,
+	maxAssetTotalBytes: 200
+};
 const baselines = [
 	{
 		expectedExists: true,
@@ -20,6 +25,7 @@ const batch = {
 			mediaType: 'image/png',
 			modifiedAtMs: 1,
 			path: 'assets/asset.png',
+			sha256: 'a'.repeat(64),
 			sizeBytes: 3
 		}
 	],
@@ -38,10 +44,17 @@ function deferred<T>() {
 	return {promise, reject, resolve};
 }
 
-async function loadAdapter(reader: jest.Mock, digestCapture?: jest.Mock) {
+async function loadAdapter(
+	reader: jest.Mock,
+	digestCapture?: jest.Mock,
+	packageReader?: jest.Mock,
+	packageInspector?: jest.Mock
+) {
 	const nativeRequire = jest.fn().mockReturnValue({
 		captureProjectAssetDigests: digestCapture,
-		readProjectAssetPayloads: reader
+		inspectProjectPackageAssets: packageInspector,
+		readProjectAssetPayloads: reader,
+		readProjectPackageAssetPayloads: packageReader
 	});
 
 	jest.resetModules();
@@ -92,6 +105,7 @@ describe('readNativeProjectAssetPayloads()', () => {
 					encodedSizeBytes: 4,
 					mediaType: 'image/png',
 					path: 'assets/asset.png',
+					sha256: 'a'.repeat(64),
 					sizeBytes: 3
 				}
 			]
@@ -137,6 +151,85 @@ describe('readNativeProjectAssetPayloads()', () => {
 		await expect(
 			readNativeProjectAssetPayloads('/mock/project', baselines, limits)
 		).resolves.toEqual(expect.objectContaining({payloads: expect.any(Array)}));
+	});
+});
+
+describe('readNativeProjectPackageAssetPayloads()', () => {
+	beforeEach(() => {
+		process.env.TWINE_NATIVE = 'force';
+	});
+
+	afterEach(() => {
+		delete process.env.TWINE_NATIVE;
+	});
+
+	it('enforces the trusted baselines and preserves byte digests', async () => {
+		const packageReader = jest.fn().mockResolvedValue(batch);
+		const {readNativeProjectPackageAssetPayloads} = await loadAdapter(
+			jest.fn(),
+			undefined,
+			packageReader
+		);
+
+		await expect(
+			readNativeProjectPackageAssetPayloads(
+				'/mock/project',
+				baselines,
+				packageLimits
+			)
+		).resolves.toEqual(
+			expect.objectContaining({
+				payloads: [
+					expect.objectContaining({
+						path: 'assets/asset.png',
+						sha256: 'a'.repeat(64)
+					})
+				]
+			})
+		);
+		expect(packageReader).toHaveBeenCalledWith(
+			'/mock/project',
+			baselines.map(baseline => ({...baseline, enforceBaseline: true})),
+			packageLimits.maxAssetFileBytes,
+			packageLimits.maxAssetFileCount,
+			packageLimits.maxAssetTotalBytes
+		);
+	});
+
+	it('shares admission between package inspection and byte reads', async () => {
+		const pendingRead = deferred<typeof batch>();
+		const packageReader = jest.fn().mockReturnValue(pendingRead.promise);
+		const inspection = {
+			failures: [],
+			inventory: [{modifiedAtMs: 1, path: 'assets/asset.png', sizeBytes: 3}],
+			scannedEntryCount: 1,
+			truncated: false
+		};
+		const packageInspector = jest.fn().mockResolvedValue(inspection);
+		const {
+			inspectNativeProjectPackageAssets,
+			readNativeProjectPackageAssetPayloads
+		} = await loadAdapter(
+			jest.fn(),
+			undefined,
+			packageReader,
+			packageInspector
+		);
+		const read = readNativeProjectPackageAssetPayloads(
+			'/mock/project',
+			baselines,
+			packageLimits
+		);
+		const inspect = inspectNativeProjectPackageAssets('/mock/project');
+
+		await Promise.resolve();
+		expect(packageInspector).not.toHaveBeenCalled();
+		pendingRead.resolve(batch);
+		await expect(read).resolves.toEqual(
+			expect.objectContaining({totalSourceBytes: 3})
+		);
+		await expect(inspect).resolves.toEqual(inspection);
+		expect(packageInspector).toHaveBeenCalledWith('/mock/project');
 	});
 });
 

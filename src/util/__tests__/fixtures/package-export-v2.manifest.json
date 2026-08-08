@@ -1,0 +1,72 @@
+{
+	"assets": [
+		{
+			"archivePath": "assets/cover.png",
+			"logicalPath": "assets/cover.png",
+			"requiredByStaticReference": true,
+			"sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+			"sizeBytes": 1,
+			"status": "included"
+		},
+		{
+			"logicalPath": "assets/missing.png",
+			"reasonCode": "unreadable",
+			"reasonMessage": "The source file could not be read.",
+			"requiredByStaticReference": false,
+			"status": "failed"
+		}
+	],
+	"canonicalSource": [
+		{
+			"path": "source.twee",
+			"sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+			"sizeBytes": 1
+		}
+	],
+	"completeness": {
+		"copiedAssetContents": "partially-evaluated",
+		"dynamicDependencies": "not-evaluated",
+		"projectAssetBytes": "incomplete",
+		"staticRuntimeDependencies": "complete"
+	},
+	"dependencies": [
+		{
+			"disposition": "packaged",
+			"kind": "managed-local",
+			"original": "format.js",
+			"sourceLocation": "story-format"
+		}
+	],
+	"derivedOutputs": [
+		{
+			"mediaType": "text/html",
+			"path": "index.html",
+			"sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+			"sizeBytes": 1
+		}
+	],
+	"generatedAt": "2026-01-02T03:04:06.000Z",
+	"inventoryIssues": [],
+	"limits": {
+		"maxAssetFileBytes": 4294967295,
+		"maxAssetFileCount": 65535,
+		"maxAssetTotalBytes": 4294967295,
+		"maxComponentBytes": 255,
+		"maxEntryCount": 65535,
+		"maxGeneratedBytes": 4294967295,
+		"maxPathBytes": 240,
+		"maxZipBytes": 4294967295
+	},
+	"snapshot": {
+		"contentFingerprint": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+		"generation": 1,
+		"id": "snapshot-1",
+		"inventoryFingerprint": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+		"revision": "1",
+		"sessionInstanceId": "session-1",
+		"source": "fixture"
+	},
+	"story": {"name": "Fixture"},
+	"type": "twine.rs/story-build-package",
+	"version": 2
+}

@@ -1,8 +1,11 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {webcrypto} from 'node:crypto';
 import * as React from 'react';
-import {MemoryRouter} from 'react-router';
+import {MemoryRouter, useNavigate} from 'react-router';
 import {
 	replaceKnownAssetInventoryForStory,
+	updatePassageTextCommand,
+	useCoreProjectHost,
 	type CoreAssetInventoryEntry
 } from '../../../core';
 import {
@@ -13,12 +16,42 @@ import {
 } from '../../../test-util';
 import {saveFile} from '../../../util/save-file';
 import {saveProjectMetadata} from '../../../store/project-metadata';
-import type {TwineElectronWindow} from '../../../electron/shared';
+import type {
+	NativeProjectPackageAssetPayloadBatch,
+	TwineElectronWindow
+} from '../../../electron/shared';
 import {BuildRoute} from '../build-route';
 
 const mockPlayStory = jest.fn();
 const mockProofStory = jest.fn();
 const mockTestStory = jest.fn();
+let navigateForTest: ReturnType<typeof useNavigate>;
+let coreProjectHostForTest: ReturnType<typeof useCoreProjectHost>;
+
+interface Deferred<T> {
+	promise: Promise<T>;
+	resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>(promiseResolve => {
+		resolve = promiseResolve;
+	});
+
+	return {promise, resolve};
+}
+
+const BuildRouteTestControls: React.FC = () => {
+	navigateForTest = useNavigate();
+	coreProjectHostForTest = useCoreProjectHost();
+	return null;
+};
+
+Object.defineProperty(globalThis, 'crypto', {
+	configurable: true,
+	value: webcrypto
+});
 
 jest.mock('../../../store/use-story-launch', () => ({
 	useStoryLaunch: () => ({
@@ -63,8 +96,44 @@ function exportableAsset(
 	};
 }
 
+function packageAssetBatch(
+	props: Partial<NativeProjectPackageAssetPayloadBatch> = {}
+): NativeProjectPackageAssetPayloadBatch {
+	return {
+		appliedLimits: {
+			maxAssetFileBytes: 50 * 1024 * 1024,
+			maxAssetFileCount: 1000,
+			maxAssetTotalBytes: 50 * 1024 * 1024
+		},
+		excluded: [],
+		failures: [],
+		inventory: [],
+		payloads: [],
+		snapshot: {
+			contentFingerprint: 'a'.repeat(64),
+			generation: 3,
+			inventoryFingerprint: 'b'.repeat(64),
+			sessionInstanceId: 'session-1'
+		},
+		totalEncodedBytes: 0,
+		totalSourceBytes: 0,
+		...props
+	};
+}
+
 describe('<BuildRoute>', () => {
-	function renderComponent(openingText = 'Look north.') {
+	async function selectPackageForPreparation() {
+		fireEvent.click(screen.getByText('Package (.zip)'));
+		const prepare = screen.getByRole('button', {name: 'Prepare Package'});
+
+		await waitFor(() => expect(prepare).toBeEnabled());
+		return prepare;
+	}
+
+	function renderComponent(
+		openingText = 'Look north.',
+		options: {includeSecondStory?: boolean; missingStartPassage?: boolean} = {}
+	) {
 		const format = fakeLoadedStoryFormat(
 			{id: 'format-id', name: 'Chapbook', version: '2.1.0'},
 			{
@@ -89,6 +158,24 @@ describe('<BuildRoute>', () => {
 			storyFormat: format.name,
 			storyFormatVersion: format.version
 		};
+		if (options.missingStartPassage) story.startPassage = 'missing-passage';
+		const secondStory = {
+			...fakeStory(1),
+			id: 'story-id-b',
+			ifid: '11111111-2222-4333-8444-555555555555',
+			name: 'Sunken Library',
+			passages: fakeStory(1).passages.map(passage => ({
+				...passage,
+				id: 'passage-b',
+				name: 'Vestibule',
+				story: 'story-id-b',
+				text: 'Dusty shelves.'
+			})),
+			selected: false,
+			startPassage: 'passage-b',
+			storyFormat: format.name,
+			storyFormatVersion: format.version
+		};
 
 		render(
 			<FakeStateProvider
@@ -96,10 +183,11 @@ describe('<BuildRoute>', () => {
 					proofingFormat: {name: format.name, version: format.version},
 					storyFormat: {name: format.name, version: format.version}
 				}}
-				stories={[story]}
+				stories={options.includeSecondStory ? [story, secondStory] : [story]}
 				storyFormats={[format]}
 			>
 				<MemoryRouter initialEntries={[`/stories/${story.id}/build`]}>
+					<BuildRouteTestControls />
 					<TestRoute path="/stories/:storyId/build">
 						<BuildRoute />
 					</TestRoute>
@@ -107,10 +195,11 @@ describe('<BuildRoute>', () => {
 			</FakeStateProvider>
 		);
 
-		return {format, story};
+		return {format, secondStory, story};
 	}
 
 	beforeEach(() => {
+		jest.restoreAllMocks();
 		jest.clearAllMocks();
 		window.localStorage.clear();
 		replaceKnownAssetInventoryForStory('story-id', []);
@@ -128,7 +217,7 @@ describe('<BuildRoute>', () => {
 		expect(screen.getByText('Playable HTML')).toBeInTheDocument();
 		expect(screen.getByText('Twee Source')).toBeInTheDocument();
 		expect(screen.getByText('JSON')).toBeInTheDocument();
-		expect(screen.getByText('Archive (.zip)')).toBeInTheDocument();
+		expect(screen.getByText('Package (.zip)')).toBeInTheDocument();
 		expect(screen.getByText('Embed referenced media')).toBeInTheDocument();
 		expect(screen.getByText('Unavailable')).toBeInTheDocument();
 		expect(
@@ -266,6 +355,340 @@ describe('<BuildRoute>', () => {
 		expect(screen.getByText('Saved Moon Castle.html.')).toBeInTheDocument();
 	});
 
+	it('prepares and reviews a complete package before saving the exact archive', async () => {
+		const readProjectPackageAssetPayloads = jest
+			.fn()
+			.mockResolvedValue(packageAssetBatch());
+
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {
+			getReferencedMediaEmbeddingCapability: jest.fn().mockResolvedValue({
+				available: true,
+				maxFileBytes: 25 * 1024 * 1024,
+				maxFileCount: 25,
+				maxTotalEncodedBytes: 25 * 1024 * 1024
+			}),
+			readProjectPackageAssetPayloads
+		};
+		renderComponent();
+
+		fireEvent.click(await selectPackageForPreparation());
+
+		expect(
+			await screen.findByRole('region', {name: 'Package review'})
+		).toBeInTheDocument();
+		expect(screen.getByText('Complete in assessed scopes')).toBeInTheDocument();
+		expect(saveFile).not.toHaveBeenCalled();
+		expect(readProjectPackageAssetPayloads).toHaveBeenCalledWith(
+			'/project/moon-castle.twine.rs',
+			[]
+		);
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Save Complete Package'})
+		);
+
+		const savedBlob = (saveFile as jest.Mock).mock.calls[0][0] as Blob;
+		const expectedSize =
+			savedBlob.size < 1024
+				? `${savedBlob.size} B`
+				: `${(savedBlob.size / 1024).toFixed(1)} KB`;
+
+		expect(saveFile).toHaveBeenCalledWith(
+			savedBlob,
+			'Moon Castle.zip',
+			'application/zip'
+		);
+		expect(screen.getByText('Prepared size').parentElement).toHaveTextContent(
+			expectedSize
+		);
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Save Complete Package'})
+		);
+		expect((saveFile as jest.Mock).mock.calls[1][0]).toBe(savedBlob);
+		expect(readProjectPackageAssetPayloads).toHaveBeenCalledTimes(1);
+	});
+
+	it('requires explicit confirmation before saving an incomplete package', async () => {
+		const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {
+			getReferencedMediaEmbeddingCapability: jest.fn().mockResolvedValue({
+				available: true,
+				maxFileBytes: 25 * 1024 * 1024,
+				maxFileCount: 25,
+				maxTotalEncodedBytes: 25 * 1024 * 1024
+			}),
+			readProjectPackageAssetPayloads: jest.fn().mockResolvedValue(
+				packageAssetBatch({
+					failures: [
+						{
+							message: 'The file could not be read.',
+							path: 'assets/missing.png',
+							reason: 'unreadable'
+						}
+					],
+					inventory: [
+						{
+							modifiedAtMs: 1,
+							path: 'assets/missing.png',
+							requiredByStaticReference: false,
+							sizeBytes: 10
+						}
+					]
+				})
+			)
+		};
+		renderComponent('<img src="assets/missing.png">');
+
+		fireEvent.click(await selectPackageForPreparation());
+		const saveIncomplete = await screen.findByRole('button', {
+			name: 'Save Incomplete Package'
+		});
+
+		expect(screen.getByText(/The file could not be read/)).toBeInTheDocument();
+		fireEvent.click(saveIncomplete);
+		expect(confirm).toHaveBeenCalled();
+		expect(saveFile).not.toHaveBeenCalled();
+
+		confirm.mockReturnValue(true);
+		fireEvent.click(saveIncomplete);
+		expect(saveFile).toHaveBeenCalledWith(
+			expect.any(Blob),
+			'Moon Castle.zip',
+			'application/zip'
+		);
+		confirm.mockRestore();
+	});
+
+	it('blocks saving a package with security-grade inventory failures', async () => {
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {
+			getReferencedMediaEmbeddingCapability: jest.fn().mockResolvedValue({
+				available: true,
+				maxFileBytes: 25 * 1024 * 1024,
+				maxFileCount: 25,
+				maxTotalEncodedBytes: 25 * 1024 * 1024
+			}),
+			readProjectPackageAssetPayloads: jest.fn().mockResolvedValue(
+				packageAssetBatch({
+					failures: [
+						{
+							message: 'A symbolic link was not followed.',
+							path: 'assets/link.bin',
+							reason: 'symlink'
+						}
+					]
+				})
+			)
+		};
+		renderComponent();
+
+		fireEvent.click(await selectPackageForPreparation());
+
+		const blocked = await screen.findByRole('button', {
+			name: 'Package blocked'
+		});
+		expect(blocked).toBeDisabled();
+		expect(
+			screen.getByText(/symbolic link was not followed/)
+		).toBeInTheDocument();
+		expect(saveFile).not.toHaveBeenCalled();
+	});
+
+	it('rejects saving when the story revision changes after review', async () => {
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {
+			readProjectPackageAssetPayloads: jest
+				.fn()
+				.mockResolvedValue(packageAssetBatch())
+		};
+		const {story} = renderComponent();
+
+		fireEvent.click(await selectPackageForPreparation());
+		await screen.findByRole('button', {name: 'Save Complete Package'});
+		await act(async () => {
+			await coreProjectHostForTest.applyStoryCommand(
+				updatePassageTextCommand(
+					story.id,
+					story.passages[0].id,
+					'Changed after package review.'
+				)
+			);
+		});
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Save Complete Package'})
+		);
+
+		expect(
+			await screen.findByText(
+				'The story changed after this package was prepared. Prepare it again before saving.'
+			)
+		).toBeInTheDocument();
+		expect(saveFile).not.toHaveBeenCalled();
+		expect(
+			screen.queryByRole('region', {name: 'Package review'})
+		).not.toBeInTheDocument();
+	});
+
+	it('invalidates a reviewed package when navigating to another story', async () => {
+		const readProjectPackageAssetPayloads = jest
+			.fn()
+			.mockResolvedValue(packageAssetBatch());
+
+		for (const [id, rootPath] of [
+			['story-id', '/project/moon-castle.twine.rs'],
+			['story-id-b', '/project/sunken-library.twine.rs']
+		] as const) {
+			saveProjectMetadata(id, {
+				rootPath,
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+		}
+		(window as any).twineElectron = {readProjectPackageAssetPayloads};
+		renderComponent('Look north.', {includeSecondStory: true});
+
+		fireEvent.click(await selectPackageForPreparation());
+		await screen.findByRole('region', {name: 'Package review'});
+
+		act(() => navigateForTest('/stories/story-id-b/build'));
+
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('region', {name: 'Package review'})
+			).not.toBeInTheDocument()
+		);
+		expect(
+			screen.queryByRole('button', {name: /Save .* Package/})
+		).not.toBeInTheDocument();
+		expect(saveFile).not.toHaveBeenCalled();
+	});
+
+	it('discards an in-flight package when navigating to another story', async () => {
+		const pending = deferred<NativeProjectPackageAssetPayloadBatch>();
+		const readProjectPackageAssetPayloads = jest
+			.fn()
+			.mockReturnValueOnce(pending.promise);
+
+		for (const [id, rootPath] of [
+			['story-id', '/project/moon-castle.twine.rs'],
+			['story-id-b', '/project/sunken-library.twine.rs']
+		] as const) {
+			saveProjectMetadata(id, {
+				rootPath,
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+		}
+		(window as any).twineElectron = {readProjectPackageAssetPayloads};
+		renderComponent('Look north.', {includeSecondStory: true});
+
+		fireEvent.click(await selectPackageForPreparation());
+		await waitFor(() =>
+			expect(readProjectPackageAssetPayloads).toHaveBeenCalledTimes(1)
+		);
+		act(() => navigateForTest('/stories/story-id-b/build'));
+		await act(async () => {
+			pending.resolve(packageAssetBatch());
+			await pending.promise;
+		});
+
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('region', {name: 'Package review'})
+			).not.toBeInTheDocument()
+		);
+		expect(
+			screen.queryByRole('button', {name: /Save .* Package/})
+		).not.toBeInTheDocument();
+		expect(saveFile).not.toHaveBeenCalled();
+	});
+
+	it('prepares an asset-free Package without the desktop reader', async () => {
+		saveProjectMetadata('story-id', {
+			status: 'local-only',
+			storageKind: 'web-local'
+		});
+		renderComponent();
+
+		fireEvent.click(await selectPackageForPreparation());
+
+		expect(
+			await screen.findByRole('region', {name: 'Package review'})
+		).toBeInTheDocument();
+		expect(
+			screen.queryByText('Package export unavailable')
+		).not.toBeInTheDocument();
+		expect(screen.getByText('Complete in assessed scopes')).toBeInTheDocument();
+		expect(
+			screen.getByRole('button', {name: 'Save Complete Package'})
+		).toBeEnabled();
+	});
+
+	it('blocks an asset-free native Package without the desktop reader', async () => {
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		renderComponent();
+
+		fireEvent.click(screen.getByText('Package (.zip)'));
+
+		expect(
+			await screen.findByText('Package export unavailable')
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole('button', {name: 'Prepare Package'})
+		).toBeDisabled();
+	});
+
+	it('does not allow Inspect output to bypass active Core errors', async () => {
+		const readProjectPackageAssetPayloads = jest
+			.fn()
+			.mockResolvedValue(packageAssetBatch());
+
+		saveProjectMetadata('story-id', {
+			rootPath: '/project/moon-castle.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {readProjectPackageAssetPayloads};
+		renderComponent('Look north.', {missingStartPassage: true});
+
+		fireEvent.click(screen.getByText('Package (.zip)'));
+		await screen.findByText('1 story issue');
+
+		const inspect = screen.getByRole('button', {name: 'Inspect output'});
+		expect(
+			screen.getByRole('button', {name: 'Prepare Package'})
+		).toBeDisabled();
+		expect(inspect).toBeDisabled();
+		fireEvent.click(inspect);
+		expect(readProjectPackageAssetPayloads).not.toHaveBeenCalled();
+		expect(saveFile).not.toHaveBeenCalled();
+	});
+
 	it('passes desktop embedding through to prepared HTML and reporting', async () => {
 		const path = 'assets/cover.png';
 
@@ -282,6 +705,7 @@ describe('<BuildRoute>', () => {
 					encodedSizeBytes: 4,
 					mediaType: 'image/png',
 					path,
+					sha256: 'a'.repeat(64),
 					sizeBytes: 3
 				}
 			],
