@@ -46,6 +46,7 @@ import {
 	openProjectFolder,
 	prepareProjectImport,
 	projectSessionAssetReadBaselines,
+	projectSessionPackageAssetReadPlan,
 	projectSessionScratchAssets,
 	projectSessionSnapshot,
 	renameProjectAsset,
@@ -57,7 +58,9 @@ import {
 } from '../project-folder';
 import {
 	nativeProjectAssetEmbeddingAvailable,
+	nativeProjectPackageAssetReaderAvailable,
 	readNativeProjectAssetPayloads,
+	readNativeProjectPackageAssetPayloads,
 	readNativeProjectPreviewAssetPayloads
 } from '../native';
 import {
@@ -108,6 +111,8 @@ describe('initIpc()', () => {
 	const projectSessionSnapshotMock = projectSessionSnapshot as jest.Mock;
 	const projectSessionAssetReadBaselinesMock =
 		projectSessionAssetReadBaselines as jest.Mock;
+	const projectSessionPackageAssetReadPlanMock =
+		projectSessionPackageAssetReadPlan as jest.Mock;
 	const projectSessionScratchAssetsMock =
 		projectSessionScratchAssets as jest.Mock;
 	const renameProjectAssetMock = renameProjectAsset as jest.Mock;
@@ -139,8 +144,12 @@ describe('initIpc()', () => {
 	const showItemInFolderMock = shell.showItemInFolder as jest.Mock;
 	const nativeProjectAssetEmbeddingAvailableMock =
 		nativeProjectAssetEmbeddingAvailable as jest.Mock;
+	const nativeProjectPackageAssetReaderAvailableMock =
+		nativeProjectPackageAssetReaderAvailable as jest.Mock;
 	const readNativeProjectAssetPayloadsMock =
 		readNativeProjectAssetPayloads as jest.Mock;
+	const readNativeProjectPackageAssetPayloadsMock =
+		readNativeProjectPackageAssetPayloads as jest.Mock;
 	const readNativeProjectPreviewAssetPayloadsMock =
 		readNativeProjectPreviewAssetPayloads as jest.Mock;
 
@@ -198,6 +207,30 @@ describe('initIpc()', () => {
 					path
 				}))
 		);
+		projectSessionPackageAssetReadPlanMock.mockResolvedValue({
+			baselines: [
+				{
+					expectedContentDigest: 'a'.repeat(64),
+					expectedExists: true,
+					expectedModifiedAtMs: 1,
+					expectedSizeBytes: 100,
+					path: 'assets/asset.png'
+				}
+			],
+			discoveryFailures: [],
+			excluded: [],
+			generation: 1,
+			inventory: [
+				{
+					modifiedAtMs: 1,
+					path: 'assets/asset.png',
+					requiredByStaticReference: true,
+					sizeBytes: 100
+				}
+			],
+			inventoryFingerprint: 'b'.repeat(64),
+			sessionInstanceId: 'session-1'
+		});
 		renameProjectAssetMock.mockResolvedValue({
 			sourcePath: '/mock/project/assets/renamed.png',
 			targetPath: 'assets/renamed.png'
@@ -281,7 +314,14 @@ describe('initIpc()', () => {
 		resetStoryDirectoryPathMock.mockResolvedValue('/mock/default-library');
 		saveStoryHtmlMock.mockResolvedValue(undefined);
 		nativeProjectAssetEmbeddingAvailableMock.mockReturnValue(true);
+		nativeProjectPackageAssetReaderAvailableMock.mockReturnValue(true);
 		readNativeProjectAssetPayloadsMock.mockResolvedValue({
+			failures: [],
+			payloads: [],
+			totalEncodedBytes: 0,
+			totalSourceBytes: 0
+		});
+		readNativeProjectPackageAssetPayloadsMock.mockResolvedValue({
 			failures: [],
 			payloads: [],
 			totalEncodedBytes: 0,
@@ -631,6 +671,209 @@ describe('initIpc()', () => {
 		);
 		await revealLibrary[1]();
 		expect(revealStoryDirectoryMock).toHaveBeenCalled();
+	});
+
+	it('reads an exact package inventory with server-owned limits', async () => {
+		const startSession = handleMock.mock.calls.find(
+			call => call[0] === 'start-project-session'
+		);
+		const readPackageAssets = handleMock.mock.calls.find(
+			call => call[0] === 'read-project-package-asset-payloads'
+		);
+		const sender = {
+			id: 407,
+			isDestroyed: () => false,
+			once: jest.fn(),
+			removeListener: jest.fn(),
+			send: jest.fn()
+		};
+		const capability = (
+			grantProjectCapability(
+				{sender},
+				{rootPath: '/mock/project', stories: [], storyIds: []}
+			) as Record<string, unknown>
+		)[projectCapabilityField] as string;
+
+		await startSession[1]({sender}, capability, ['mock-story']);
+		await expect(
+			readPackageAssets[1]({sender}, capability, ['assets/asset.png'])
+		).resolves.toEqual({
+			batch: {
+				appliedLimits: {
+					maxAssetFileBytes: 50 * 1024 * 1024,
+					maxAssetFileCount: 1000,
+					maxAssetTotalBytes: 50 * 1024 * 1024
+				},
+				excluded: [],
+				failures: [],
+				inventory: [
+					{
+						modifiedAtMs: 1,
+						path: 'assets/asset.png',
+						requiredByStaticReference: true,
+						sizeBytes: 100
+					}
+				],
+				payloads: [],
+				snapshot: {
+					contentFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+					generation: 1,
+					inventoryFingerprint: 'b'.repeat(64),
+					sessionInstanceId: 'session-1'
+				},
+				totalEncodedBytes: 0,
+				totalSourceBytes: 0
+			},
+			status: 'success'
+		});
+		expect(projectSessionPackageAssetReadPlanMock).toHaveBeenCalledTimes(2);
+		expect(readNativeProjectPackageAssetPayloadsMock).toHaveBeenCalledWith(
+			'/mock/project',
+			[
+				{
+					expectedContentDigest: 'a'.repeat(64),
+					expectedExists: true,
+					expectedModifiedAtMs: 1,
+					expectedSizeBytes: 100,
+					path: 'assets/asset.png'
+				}
+			],
+			{
+				maxAssetFileBytes: 50 * 1024 * 1024,
+				maxAssetFileCount: 1000,
+				maxAssetTotalBytes: 50 * 1024 * 1024
+			}
+		);
+		await expect(
+			readPackageAssets[1]({sender}, capability, ['../outside'])
+		).rejects.toThrow('Package asset priority paths are invalid.');
+	});
+
+	it('rejects package bytes if the authoritative inventory changes', async () => {
+		const startSession = handleMock.mock.calls.find(
+			call => call[0] === 'start-project-session'
+		);
+		const readPackageAssets = handleMock.mock.calls.find(
+			call => call[0] === 'read-project-package-asset-payloads'
+		);
+		const sender = {
+			id: 408,
+			isDestroyed: () => false,
+			once: jest.fn(),
+			removeListener: jest.fn(),
+			send: jest.fn()
+		};
+		const capability = (
+			grantProjectCapability(
+				{sender},
+				{rootPath: '/mock/project', stories: [], storyIds: []}
+			) as Record<string, unknown>
+		)[projectCapabilityField] as string;
+		const originalPlan = await projectSessionPackageAssetReadPlanMock();
+
+		projectSessionPackageAssetReadPlanMock
+			.mockResolvedValueOnce(originalPlan)
+			.mockResolvedValueOnce({
+				...originalPlan,
+				inventoryFingerprint: 'c'.repeat(64)
+			});
+		await startSession[1]({sender}, capability, ['mock-story']);
+
+		await expect(
+			readPackageAssets[1]({sender}, capability, ['assets/asset.png'])
+		).resolves.toEqual({
+			code: 'PACKAGE_ASSET_SNAPSHOT_STALE',
+			message: 'Project assets changed while package bytes were read.',
+			status: 'error'
+		});
+	});
+
+	it('binds package payload digests and discovery failures deterministically', async () => {
+		const startSession = handleMock.mock.calls.find(
+			call => call[0] === 'start-project-session'
+		);
+		const readPackageAssets = handleMock.mock.calls.find(
+			call => call[0] === 'read-project-package-asset-payloads'
+		);
+		const sender = {
+			id: 409,
+			isDestroyed: () => false,
+			once: jest.fn(),
+			removeListener: jest.fn(),
+			send: jest.fn()
+		};
+		const capability = (
+			grantProjectCapability(
+				{sender},
+				{rootPath: '/mock/project', stories: [], storyIds: []}
+			) as Record<string, unknown>
+		)[projectCapabilityField] as string;
+		const plan = await projectSessionPackageAssetReadPlanMock();
+
+		projectSessionPackageAssetReadPlanMock.mockResolvedValue({
+			...plan,
+			discoveryFailures: [
+				{
+					message: 'Package asset symbolic link was not followed.',
+					path: 'assets/link.bin',
+					reason: 'symlink'
+				}
+			]
+		});
+		readNativeProjectPackageAssetPayloadsMock.mockResolvedValue({
+			failures: [],
+			payloads: [
+				{
+					bytes: Buffer.from('one'),
+					encodedSizeBytes: 4,
+					mediaType: 'application/octet-stream',
+					path: 'assets/asset.png',
+					sha256: '1'.repeat(64),
+					sizeBytes: 3
+				}
+			],
+			totalEncodedBytes: 4,
+			totalSourceBytes: 3
+		});
+		await startSession[1]({sender}, capability, ['mock-story']);
+		const firstResult = await readPackageAssets[1]({sender}, capability, []);
+		const secondResult = await readPackageAssets[1]({sender}, capability, []);
+		const first = firstResult.batch;
+		const second = secondResult.batch;
+
+		expect(first.failures).toEqual([
+			{
+				message: 'Package asset symbolic link was not followed.',
+				path: 'assets/link.bin',
+				reason: 'symlink'
+			}
+		]);
+		expect(first.snapshot.contentFingerprint).toMatch(/^[a-f0-9]{64}$/);
+		expect(second.snapshot.contentFingerprint).toBe(
+			first.snapshot.contentFingerprint
+		);
+
+		readNativeProjectPackageAssetPayloadsMock.mockResolvedValueOnce({
+			failures: [],
+			payloads: [
+				{
+					bytes: Buffer.from('two'),
+					encodedSizeBytes: 4,
+					mediaType: 'application/octet-stream',
+					path: 'assets/asset.png',
+					sha256: '2'.repeat(64),
+					sizeBytes: 3
+				}
+			],
+			totalEncodedBytes: 4,
+			totalSourceBytes: 3
+		});
+		const changedResult = await readPackageAssets[1]({sender}, capability, []);
+		const changed = changedResult.batch;
+
+		expect(changed.snapshot.contentFingerprint).not.toBe(
+			first.snapshot.contentFingerprint
+		);
 	});
 
 	it('requests a renderer full-save retry when incremental CAS is unavailable', async () => {

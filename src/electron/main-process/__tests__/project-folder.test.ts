@@ -53,6 +53,7 @@ import {
 	openProjectFolder,
 	prepareProjectImport,
 	projectSessionAssetReadBaselines,
+	projectSessionPackageAssetReadPlan,
 	projectSessionScratchAssets,
 	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
@@ -75,6 +76,7 @@ import {
 	findNativeTwineHtmlFiles,
 	finishNativeProjectFolderHydration,
 	forgetNativeProjectFolder,
+	inspectNativeProjectPackageAssets,
 	installNativeProjectFolderNoReplace,
 	listNativeProjectAssets,
 	listRememberedNativeProjectFolders,
@@ -119,6 +121,7 @@ jest.mock('../native', () => ({
 	findNativeTwineHtmlFiles: jest.fn(),
 	finishNativeProjectFolderHydration: jest.fn(),
 	forgetNativeProjectFolder: jest.fn(),
+	inspectNativeProjectPackageAssets: jest.fn(),
 	installNativeProjectFolderNoReplace: jest.fn(),
 	listNativeProjectAssets: jest.fn(),
 	listRememberedNativeProjectFolders: jest.fn(),
@@ -183,6 +186,8 @@ describe('project-folder native bridge', () => {
 		finishNativeProjectFolderHydration as jest.Mock;
 	const findNativeTwineHtmlFilesMock = findNativeTwineHtmlFiles as jest.Mock;
 	const forgetNativeProjectFolderMock = forgetNativeProjectFolder as jest.Mock;
+	const inspectNativeProjectPackageAssetsMock =
+		inspectNativeProjectPackageAssets as jest.Mock;
 	const installNativeProjectFolderNoReplaceMock =
 		installNativeProjectFolderNoReplace as jest.Mock;
 	const listNativeProjectAssetsMock = listNativeProjectAssets as jest.Mock;
@@ -323,6 +328,12 @@ describe('project-folder native bridge', () => {
 		jest.clearAllMocks();
 		renamedFileSources.clear();
 		performanceHarnessEnabledMock.mockReturnValue(false);
+		inspectNativeProjectPackageAssetsMock.mockResolvedValue({
+			failures: [],
+			inventory: [],
+			scannedEntryCount: 0,
+			truncated: false
+		});
 		writeFileMock.mockResolvedValue(undefined);
 		copyMock.mockResolvedValue(undefined);
 		extractZipMock.mockResolvedValue(undefined);
@@ -1110,7 +1121,7 @@ describe('project-folder native bridge', () => {
 				path: 'twine.toml',
 				sizeBytes: 1
 			},
-			...['assets/one.png', 'assets/two.png'].map(path => ({
+			...['assets/one.png', 'assets/two.png', 'assets/.DS_Store'].map(path => ({
 				fingerprint: '1:3',
 				kind: 'asset' as const,
 				modifiedAt: '2026-06-21T16:00:00.000Z',
@@ -1146,9 +1157,28 @@ describe('project-folder native bridge', () => {
 			})
 		);
 		saveNativeProjectFolderMock.mockReturnValue(nativeResult);
+		inspectNativeProjectPackageAssetsMock.mockResolvedValue({
+			failures: [
+				{
+					message: 'Package asset symbolic link was not followed.',
+					path: 'assets/linked.png',
+					reason: 'symlink'
+				}
+			],
+			inventory: ['assets/one.png', 'assets/two.png', 'assets/.DS_Store'].map(
+				path => ({modifiedAtMs: 1, path, sizeBytes: 3})
+			),
+			scannedEntryCount: 4,
+			truncated: false
+		});
 
 		const result = await saveProjectFolder(rootPath, firstStory);
 		const snapshot = await projectSessionSnapshot(rootPath);
+		const legacySnapshotScanCount =
+			diffNativeProjectFileManifestMock.mock.calls.length;
+		const packagePlan = await projectSessionPackageAssetReadPlan(rootPath, [
+			'assets/two.png'
+		]);
 
 		expect(result).toEqual(nativeResult);
 		expect(rememberNativeProjectFolderMock).toHaveBeenLastCalledWith(
@@ -1156,6 +1186,12 @@ describe('project-folder native bridge', () => {
 			nativeResult
 		);
 		expect(snapshot.storyIds).toEqual(storyIds);
+		expect(diffNativeProjectFileManifestMock).toHaveBeenCalledTimes(
+			legacySnapshotScanCount
+		);
+		expect(inspectNativeProjectPackageAssetsMock).toHaveBeenCalledWith(
+			rootPath
+		);
 		expect(captureNativeProjectAssetDigestsMock).toHaveBeenCalledWith(
 			rootPath,
 			[
@@ -1177,6 +1213,41 @@ describe('project-folder native bridge', () => {
 				'assets/two.png'
 			]).map(baseline => baseline.expectedContentDigest)
 		).toEqual(['1'.repeat(64), '2'.repeat(64)]);
+		expect(packagePlan).toEqual(
+			expect.objectContaining({
+				discoveryFailures: [
+					{
+						message: 'Package asset symbolic link was not followed.',
+						path: 'assets/linked.png',
+						reason: 'symlink'
+					}
+				],
+				excluded: [{path: 'assets/.DS_Store', reason: 'platform-junk'}],
+				inventory: [
+					{
+						modifiedAtMs: 1,
+						path: 'assets/two.png',
+						requiredByStaticReference: true,
+						sizeBytes: 3
+					},
+					{
+						modifiedAtMs: 1,
+						path: 'assets/one.png',
+						requiredByStaticReference: false,
+						sizeBytes: 3
+					}
+				],
+				inventoryFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+				sessionInstanceId: expect.any(String)
+			})
+		);
+		expect(packagePlan.baselines.map(baseline => baseline.path)).toEqual([
+			'assets/two.png',
+			'assets/one.png'
+		]);
+		expect(
+			packagePlan.baselines.map(baseline => baseline.expectedContentDigest)
+		).toEqual(['2'.repeat(64), '1'.repeat(64)]);
 		expect(
 			projectSessionScratchAssets(rootPath, [
 				{outputPath: 'media/one.png', path: 'assets/one.png'}
@@ -3501,6 +3572,47 @@ describe('project-folder native bridge', () => {
 			story
 		};
 	}
+
+	it('yields between every source scan in an incremental multi-document save', async () => {
+		const {options, rootPath, story} = windowsDurabilitySaveFixture(true);
+
+		nativeProjectAssetDigestCaptureAvailableMock.mockReturnValue(true);
+		await startProjectSession(rootPath, undefined, ['story-id']);
+		const scan = assetPaths.boundedReferencedMediaPathsInSource;
+		const events: string[] = [];
+		let scanCount = 0;
+		const scanSpy = jest
+			.spyOn(assetPaths, 'boundedReferencedMediaPathsInSource')
+			.mockImplementation((...args) => {
+				const index = ++scanCount;
+
+				events.push(`scan:${index}`);
+				setImmediate(() => events.push(`turn:${index}`));
+				return scan(...args);
+			});
+
+		try {
+			await saveProjectFolder(rootPath, story, options);
+
+			expect(scanSpy).toHaveBeenCalledTimes(6);
+			for (let index = 1; index < 6; index++) {
+				expect(events.indexOf(`turn:${index}`)).toBeGreaterThan(-1);
+				expect(events.indexOf(`turn:${index}`)).toBeLessThan(
+					events.indexOf(`scan:${index + 1}`)
+				);
+			}
+			expect(scanSpy.mock.calls.map(call => call.slice(1))).toEqual([
+				[false, false],
+				[false, false],
+				[false, true],
+				[false, true],
+				[true, false],
+				[true, false]
+			]);
+		} finally {
+			scanSpy.mockRestore();
+		}
+	});
 
 	it('uses a writable Windows handle to sync a single-save recovery journal', async () => {
 		const {options, rootPath, story} = windowsDurabilitySaveFixture(false);

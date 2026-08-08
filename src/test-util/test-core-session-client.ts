@@ -760,12 +760,15 @@ export class TestCoreSessionClient {
 		const nextScript = replaceAssetReferencesInSource(
 			story.script,
 			oldPath,
-			newPath
+			newPath,
+			false,
+			true
 		);
 		const nextStylesheet = replaceAssetReferencesInSource(
 			story.stylesheet,
 			oldPath,
-			newPath
+			newPath,
+			true
 		);
 
 		if (nextScript !== story.script) {

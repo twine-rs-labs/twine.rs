@@ -1,0 +1,226 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://twine.rs/schemas/story-build-package-v2.schema.json",
+	"title": "Twine RS story build package manifest v2",
+	"type": "object",
+	"additionalProperties": false,
+	"required": [
+		"type",
+		"version",
+		"generatedAt",
+		"story",
+		"canonicalSource",
+		"derivedOutputs",
+		"assets",
+		"inventoryIssues",
+		"dependencies",
+		"completeness",
+		"limits",
+		"snapshot"
+	],
+	"properties": {
+		"type": {"const": "twine.rs/story-build-package"},
+		"version": {"const": 2},
+		"generatedAt": {"type": "string", "format": "date-time"},
+		"story": {"type": "object"},
+		"canonicalSource": {
+			"type": "array",
+			"items": {"$ref": "#/$defs/canonicalOutput"}
+		},
+		"derivedOutputs": {
+			"type": "array",
+			"items": {"$ref": "#/$defs/derivedOutput"}
+		},
+		"assets": {
+			"type": "array",
+			"items": {
+				"oneOf": [
+					{"$ref": "#/$defs/includedAsset"},
+					{"$ref": "#/$defs/failedAsset"}
+				]
+			}
+		},
+		"inventoryIssues": {
+			"type": "array",
+			"items": {"$ref": "#/$defs/inventoryIssue"}
+		},
+		"dependencies": {
+			"type": "array",
+			"items": {"$ref": "#/$defs/dependency"}
+		},
+		"completeness": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"projectAssetBytes",
+				"staticRuntimeDependencies",
+				"dynamicDependencies",
+				"copiedAssetContents"
+			],
+			"properties": {
+				"projectAssetBytes": {
+					"enum": ["complete", "incomplete"]
+				},
+				"staticRuntimeDependencies": {
+					"enum": ["complete", "incomplete", "unknown"]
+				},
+				"dynamicDependencies": {"const": "not-evaluated"},
+				"copiedAssetContents": {
+					"enum": ["not-evaluated", "partially-evaluated"]
+				}
+			}
+		},
+		"limits": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"maxAssetFileBytes",
+				"maxAssetFileCount",
+				"maxAssetTotalBytes",
+				"maxComponentBytes",
+				"maxEntryCount",
+				"maxGeneratedBytes",
+				"maxPathBytes",
+				"maxZipBytes"
+			],
+			"properties": {
+				"maxAssetFileBytes": {"type": "integer", "minimum": 0},
+				"maxAssetFileCount": {"type": "integer", "minimum": 0},
+				"maxAssetTotalBytes": {"type": "integer", "minimum": 0},
+				"maxComponentBytes": {"type": "integer", "minimum": 0},
+				"maxEntryCount": {"type": "integer", "minimum": 0},
+				"maxGeneratedBytes": {"type": "integer", "minimum": 0},
+				"maxPathBytes": {"type": "integer", "minimum": 0},
+				"maxZipBytes": {"type": "integer", "minimum": 0}
+			}
+		},
+		"snapshot": {
+			"oneOf": [
+				{"type": "null"},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"contentFingerprint": {"$ref": "#/$defs/sha256"},
+						"generation": {"type": "integer", "minimum": 0},
+						"id": {"type": "string"},
+						"inventoryFingerprint": {"$ref": "#/$defs/sha256"},
+						"revision": {"type": ["string", "number"]},
+						"sessionInstanceId": {"type": "string"},
+						"source": {"type": "string"}
+					}
+				}
+			]
+		}
+	},
+	"$defs": {
+		"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+		"path": {"type": "string", "minLength": 1},
+		"canonicalOutput": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["path", "sha256", "sizeBytes"],
+			"properties": {
+				"path": {"$ref": "#/$defs/path"},
+				"sha256": {"$ref": "#/$defs/sha256"},
+				"sizeBytes": {"type": "integer", "minimum": 0}
+			}
+		},
+		"derivedOutput": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["path", "sha256", "sizeBytes"],
+			"properties": {
+				"mediaType": {"type": "string"},
+				"path": {"$ref": "#/$defs/path"},
+				"sha256": {"$ref": "#/$defs/sha256"},
+				"sizeBytes": {"type": "integer", "minimum": 0}
+			}
+		},
+		"includedAsset": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"logicalPath",
+				"archivePath",
+				"sha256",
+				"sizeBytes",
+				"requiredByStaticReference",
+				"status"
+			],
+			"properties": {
+				"logicalPath": {"$ref": "#/$defs/path"},
+				"archivePath": {"$ref": "#/$defs/path"},
+				"sha256": {"$ref": "#/$defs/sha256"},
+				"sizeBytes": {"type": "integer", "minimum": 0},
+				"requiredByStaticReference": {"type": "boolean"},
+				"status": {"const": "included"}
+			}
+		},
+		"failedAsset": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": [
+				"logicalPath",
+				"reasonCode",
+				"reasonMessage",
+				"requiredByStaticReference",
+				"status"
+			],
+			"properties": {
+				"logicalPath": {"$ref": "#/$defs/path"},
+				"reasonCode": {
+					"enum": [
+						"changed",
+						"excluded",
+						"file-count-exceeded",
+						"file-too-large",
+						"invalid-path",
+						"missing",
+						"nonportable",
+						"not-file",
+						"security",
+						"session-stale",
+						"symlink-escape",
+						"total-limit-exceeded",
+						"unreadable"
+					]
+				},
+				"reasonMessage": {"type": "string"},
+				"requiredByStaticReference": {"type": "boolean"},
+				"status": {"const": "failed"}
+			}
+		},
+		"inventoryIssue": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["path", "reasonCode", "reasonMessage"],
+			"properties": {
+				"path": {"type": "string"},
+				"reasonCode": {"type": "string", "minLength": 1},
+				"reasonMessage": {"type": "string"}
+			}
+		},
+		"dependency": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["original", "kind", "disposition"],
+			"properties": {
+				"original": {"type": "string"},
+				"sourceLocation": {"type": "string"},
+				"kind": {
+					"enum": [
+						"managed-local",
+						"remote-resource",
+						"navigation",
+						"unsafe-local",
+						"dynamic-unknown"
+					]
+				},
+				"disposition": {
+					"enum": ["packaged", "external", "blocked", "not-evaluated"]
+				}
+			}
+		}
+	}
+}

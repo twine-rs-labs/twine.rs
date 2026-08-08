@@ -136,10 +136,11 @@ const exportFormats: ExportFormatDefinition[] = [
 		sourceOnly: true
 	},
 	{
-		description: 'The playable HTML, source, and asset plan together.',
+		description:
+			'A checksummed offline package with playable HTML, source, and project asset bytes.',
 		format: 'archive',
 		icon: 'package',
-		label: 'Archive (.zip)',
+		label: 'Package (.zip)',
 		sourceOnly: false
 	}
 ];
@@ -495,6 +496,11 @@ export const BuildRoute: React.FC = () => {
 	const [busyAction, setBusyAction] = React.useState<string>();
 	const [error, setError] = React.useState<string>();
 	const [build, setBuild] = React.useState<StoryBuildPackage>();
+	const [buildStoryId, setBuildStoryId] = React.useState<string>();
+	const buildRequestSequence = React.useRef(0);
+	const activeStoryId = React.useRef(story?.id);
+
+	activeStoryId.current = story?.id;
 	const [inspectOpen, setInspectOpen] = React.useState(false);
 	const [inspectTab, setInspectTab] = React.useState<InspectTab>('source');
 	const [dismissedNoteIds, setDismissedNoteIds] = React.useState<Set<string>>(
@@ -544,6 +550,10 @@ export const BuildRoute: React.FC = () => {
 		projectMetadata?.storageKind === 'electron-project-folder' &&
 		projectMetadata.status === 'file-backed' &&
 		!!projectMetadata.rootPath;
+	const packageReaderAvailable =
+		fileBackedProject &&
+		typeof (window as TwineElectronWindow).twineElectron
+			?.readProjectPackageAssetPayloads === 'function';
 	const embeddingAvailable =
 		fileBackedProject && embeddingCapability?.available === true;
 	const scanComplete = story
@@ -722,7 +732,10 @@ export const BuildRoute: React.FC = () => {
 	}, []);
 
 	React.useEffect(() => {
+		buildRequestSequence.current++;
 		setBuild(undefined);
+		setBuildStoryId(undefined);
+		setBusyAction(undefined);
 		setDismissedNoteIds(new Set());
 		setError(undefined);
 	}, [
@@ -731,15 +744,20 @@ export const BuildRoute: React.FC = () => {
 		formatOptions.htmlCompatibility,
 		formatOptions.htmlEmbedReferencedMedia,
 		formatOptions.jsonPretty,
+		story?.id,
 		view
 	]);
+
+	React.useEffect(() => {
+		setLogs([]);
+	}, [story?.id]);
 
 	React.useEffect(() => {
 		setEmbedMediaTouched(false);
 	}, [story?.id]);
 
 	React.useEffect(() => {
-		if (embedMediaTouched) {
+		if (embedMediaTouched || exportFormat !== 'html') {
 			return;
 		}
 
@@ -748,7 +766,7 @@ export const BuildRoute: React.FC = () => {
 				? current
 				: {...current, htmlEmbedReferencedMedia: inlineAssetsDefault}
 		);
-	}, [embedMediaTouched, inlineAssetsDefault]);
+	}, [embedMediaTouched, exportFormat, inlineAssetsDefault]);
 
 	const format = React.useMemo(() => {
 		if (!story) {
@@ -788,16 +806,78 @@ export const BuildRoute: React.FC = () => {
 	);
 	const safetyIssues =
 		publishBoundTargets.includes(activeTarget) && safety ? safety.issues : [];
+	const activeBuild = buildStoryId === story?.id ? build : undefined;
 	const buildWarningDiagnosticCount =
-		build?.report.diagnostics.filter(
+		activeBuild?.report.diagnostics.filter(
 			diagnostic => diagnostic.severity === 'warning'
 		).length ?? 0;
 	const buildErrorDiagnosticCount =
-		build?.report.diagnostics.filter(
+		activeBuild?.report.diagnostics.filter(
 			diagnostic => diagnostic.severity === 'error'
 		).length ?? 0;
-	const preparedSize = build
-		? bytesLabel(build.files.reduce((total, file) => total + file.sizeBytes, 0))
+	const safetyErrorCount = safetyIssues.filter(
+		issue => issue.severity === 'error'
+	).length;
+	const packageManifest =
+		exportFormat === 'archive'
+			? activeBuild?.report.packageManifest
+			: undefined;
+	const packageOwnedByStory =
+		!!story &&
+		buildStoryId === story.id &&
+		packageManifest?.story.id === story.id;
+	const packagePrepared =
+		activeBuild?.report.target === 'package' &&
+		packageManifest !== undefined &&
+		packageOwnedByStory;
+	const packageChecksReady = storyIndex !== undefined && safety !== undefined;
+	const packageRequiresAssetReader = (storyIndex?.assets.length ?? 0) > 0;
+	const packageAssetReaderBlocked =
+		!packageReaderAvailable &&
+		(packageRequiresAssetReader ||
+			projectMetadata?.storageKind !== 'web-local');
+	const packageSaveBlocked =
+		packagePrepared &&
+		(!packageChecksReady ||
+			buildErrorDiagnosticCount > 0 ||
+			errorDiagnostics.length > 0 ||
+			safetyErrorCount > 0);
+	const packageComplete =
+		packagePrepared &&
+		!packageSaveBlocked &&
+		buildWarningDiagnosticCount === 0 &&
+		packageManifest.completeness.projectAssetBytes === 'complete' &&
+		packageManifest.completeness.staticRuntimeDependencies === 'complete';
+	const packagePrepareBlocked =
+		exportFormat === 'archive' &&
+		(packageAssetReaderBlocked ||
+			!packageChecksReady ||
+			errorDiagnostics.length > 0 ||
+			safetyErrorCount > 0);
+	const packageIncludedAssetCount =
+		packageManifest?.assets.filter(asset => asset.status === 'included')
+			.length ?? 0;
+	const packageFailedAssetCount =
+		packageManifest?.assets.filter(
+			asset => asset.status === 'failed' && asset.reasonCode !== 'excluded'
+		).length ?? 0;
+	const packageExcludedAssetCount =
+		packageManifest?.assets.filter(
+			asset => asset.status === 'failed' && asset.reasonCode === 'excluded'
+		).length ?? 0;
+	const packageExternalResourceCount =
+		packageManifest?.dependencies.filter(
+			dependency =>
+				dependency.kind === 'remote-resource' &&
+				dependency.disposition === 'external'
+		).length ?? 0;
+	const packageReviewDiagnostics =
+		activeBuild?.report.target === 'package'
+			? activeBuild.report.diagnostics
+			: [];
+	const preparedOutput = activeBuild ? outputToSave(activeBuild) : undefined;
+	const preparedSize = preparedOutput
+		? bytesLabel(preparedOutput.sizeBytes)
 		: 'Not built';
 	const sourceOnly = activeDefinition.sourceOnly;
 	const appendLog = React.useCallback((line: string) => {
@@ -824,6 +904,12 @@ export const BuildRoute: React.FC = () => {
 				throw new Error('No story is selected.');
 			}
 
+			const requestedStoryId = story.id;
+			const requestId = ++buildRequestSequence.current;
+			const requestIsCurrent = () =>
+				buildRequestSequence.current === requestId &&
+				activeStoryId.current === requestedStoryId;
+
 			setBusyAction(actionName);
 			setError(undefined);
 			appendLog(`Preparing ${label}.`);
@@ -844,9 +930,12 @@ export const BuildRoute: React.FC = () => {
 					jsonPretty: formatOptions.jsonPretty
 				});
 
+				if (!requestIsCurrent()) return undefined;
+
 				setBuild(nextBuild);
+				setBuildStoryId(requestedStoryId);
 				appendLog(
-					`Prepared ${nextBuild.files.length} output file(s), ${nextBuild.assets.length} asset plan item(s).`
+					`Prepared ${nextBuild.files.length} output file(s), ${nextBuild.assets.length} asset record(s).`
 				);
 				appendLog(
 					`Referenced media: ${nextBuild.report.inlinedAssetCount} embedded, ${nextBuild.report.externalAssetCount} external, ${nextBuild.report.unresolvedAssets.length} unresolved, ${nextBuild.report.unsupportedAssets.length} unsupported.`
@@ -858,13 +947,15 @@ export const BuildRoute: React.FC = () => {
 				}
 				return nextBuild;
 			} catch (error) {
+				if (!requestIsCurrent()) return undefined;
+
 				const message = (error as Error).message;
 
 				setError(message);
 				appendLog(`Failed: ${message}`);
 				throw error;
 			} finally {
-				setBusyAction(undefined);
+				if (requestIsCurrent()) setBusyAction(undefined);
 			}
 		},
 		[
@@ -880,24 +971,105 @@ export const BuildRoute: React.FC = () => {
 		]
 	);
 
+	const saveBuildOutput = React.useCallback(
+		(preparedBuild: StoryBuildPackage) => {
+			const file = outputToSave(preparedBuild);
+
+			if (!file) return false;
+			saveFile(file.contents, file.filename, file.mediaType);
+			appendLog(`Saved ${file.filename}.`);
+			return true;
+		},
+		[appendLog]
+	);
+
 	const savePreparedOutput = React.useCallback(async () => {
 		try {
 			const nextBuild = await prepareExportBuild('export');
-			const file = outputToSave(nextBuild);
 
-			if (file) {
-				saveFile(file.contents, file.filename, file.mediaType);
-				appendLog(`Saved ${file.filename}.`);
+			if (nextBuild) saveBuildOutput(nextBuild);
+		} catch {
+			// prepareExportBuild already recorded the error.
+		}
+	}, [prepareExportBuild, saveBuildOutput]);
+
+	const preparePackageForReview = React.useCallback(async () => {
+		try {
+			const nextBuild = await prepareExportBuild(
+				'prepare-package',
+				'package',
+				'Package review'
+			);
+
+			if (nextBuild) {
+				appendLog('Package snapshot prepared for review; nothing was saved.');
 			}
 		} catch {
 			// prepareExportBuild already recorded the error.
 		}
 	}, [appendLog, prepareExportBuild]);
 
+	const saveReviewedPackage = React.useCallback(() => {
+		if (
+			!story ||
+			!activeBuild ||
+			!packageManifest ||
+			!packageOwnedByStory ||
+			packageSaveBlocked ||
+			!packageChecksReady ||
+			errorDiagnostics.length > 0 ||
+			safetyErrorCount > 0
+		) {
+			return;
+		}
+
+		const snapshotRevision = packageManifest.snapshot?.revision;
+
+		if (
+			typeof snapshotRevision === 'number' &&
+			coreProjectHost.sessionStatus(story.id).revision !== snapshotRevision
+		) {
+			const message =
+				'The story changed after this package was prepared. Prepare it again before saving.';
+
+			setBuild(undefined);
+			setBuildStoryId(undefined);
+			setError(message);
+			appendLog(`Failed: ${message}`);
+			return;
+		}
+
+		if (
+			!packageComplete &&
+			!window.confirm(
+				'This package is incomplete. Missing, unreadable, external, or unsupported items are recorded in its manifest. Save the incomplete package anyway?'
+			)
+		) {
+			appendLog('Incomplete package save cancelled.');
+			return;
+		}
+
+		saveBuildOutput(activeBuild);
+	}, [
+		activeBuild,
+		appendLog,
+		coreProjectHost,
+		errorDiagnostics.length,
+		packageComplete,
+		packageChecksReady,
+		packageManifest,
+		packageOwnedByStory,
+		packageSaveBlocked,
+		safetyErrorCount,
+		saveBuildOutput,
+		story
+	]);
+
 	const inspectOutput = React.useCallback(async () => {
 		try {
-			await prepareExportBuild('inspect');
-			setInspectOpen(true);
+			const nextBuild = await prepareExportBuild('inspect');
+
+			if (nextBuild) setInspectOpen(true);
 		} catch {
 			// prepareExportBuild already recorded the error.
 		}
@@ -905,12 +1077,13 @@ export const BuildRoute: React.FC = () => {
 
 	const preparePublishPackage = React.useCallback(async () => {
 		try {
-			await prepareExportBuild(
+			const nextBuild = await prepareExportBuild(
 				'publish-online',
 				exportFormat === 'html' ? 'publish' : activeTarget,
 				'Prepare publish package'
 			);
-			appendLog('Publish package prepared.');
+
+			if (nextBuild) appendLog('Publish package prepared.');
 		} catch {
 			// prepareExportBuild already recorded the error.
 		}
@@ -921,6 +1094,12 @@ export const BuildRoute: React.FC = () => {
 			if (!story) {
 				return;
 			}
+
+			const requestedStoryId = story.id;
+			const requestId = ++buildRequestSequence.current;
+			const requestIsCurrent = () =>
+				buildRequestSequence.current === requestId &&
+				activeStoryId.current === requestedStoryId;
 
 			setBusyAction(action);
 			setError(undefined);
@@ -936,7 +1115,9 @@ export const BuildRoute: React.FC = () => {
 						(await proofStoryPackage(story.id, {
 							proofingFormat: selectedProofingFormat
 						}));
+					if (!requestIsCurrent()) return;
 					setBuild(nextBuild);
+					setBuildStoryId(requestedStoryId);
 					appendLog('Opened Proof preview.');
 					return;
 				}
@@ -947,15 +1128,19 @@ export const BuildRoute: React.FC = () => {
 					(await publishStoryPackage(story.id, {
 						buildTarget: action
 					}));
+				if (!requestIsCurrent()) return;
 				setBuild(nextBuild);
+				setBuildStoryId(requestedStoryId);
 				appendLog('Opened Play preview.');
 			} catch (error) {
+				if (!requestIsCurrent()) return;
+
 				const message = (error as Error).message;
 
 				setError(message);
 				appendLog(`Failed: ${message}`);
 			} finally {
-				setBusyAction(undefined);
+				if (requestIsCurrent()) setBusyAction(undefined);
 			}
 		},
 		[
@@ -1037,12 +1222,26 @@ export const BuildRoute: React.FC = () => {
 
 		if (exportFormat === 'archive') {
 			notes.push({
-				detail:
-					'Includes HTML, Twee source, JSON, and an asset copy plan. Project asset bytes are not archived.',
+				detail: packagePrepared
+					? 'Review the exact snapshot and its scoped completeness below before saving.'
+					: 'Preparation captures playable HTML, canonical Twee and JSON, all eligible project asset bytes, checksums, and a detailed manifest.',
 				icon: 'info-circle',
 				id: 'archive-contents',
-				title: 'Project files and an asset plan',
+				title: packagePrepared
+					? 'Package prepared, not yet saved'
+					: 'Asset-complete project snapshot',
 				tone: 'info'
+			});
+		}
+
+		if (exportFormat === 'archive' && packageAssetReaderBlocked) {
+			notes.push({
+				detail:
+					'Package export requires the desktop package reader unless this is a confirmed web-local story with no managed or referenced project assets.',
+				icon: 'alert-octagon',
+				id: 'package-reader-unavailable',
+				title: 'Package export unavailable',
+				tone: 'error'
 			});
 		}
 
@@ -1086,14 +1285,14 @@ export const BuildRoute: React.FC = () => {
 
 		if (
 			exportFormat === 'html' &&
-			build?.report.assetMode === 'inline-referenced' &&
-			build.report.assetInliningComplete
+			activeBuild?.report.assetMode === 'inline-referenced' &&
+			activeBuild.report.assetInliningComplete
 		) {
 			notes.push({
-				detail: `${build.report.inlinedAssetCount} referenced asset${
-					build.report.inlinedAssetCount === 1 ? '' : 's'
-				} embedded across ${build.report.inlinedReferenceCount} source reference${
-					build.report.inlinedReferenceCount === 1 ? '' : 's'
+				detail: `${activeBuild.report.inlinedAssetCount} referenced asset${
+					activeBuild.report.inlinedAssetCount === 1 ? '' : 's'
+				} embedded across ${activeBuild.report.inlinedReferenceCount} source reference${
+					activeBuild.report.inlinedReferenceCount === 1 ? '' : 's'
 				}.`,
 				icon: 'circle-check',
 				id: 'asset-embedding-complete',
@@ -1151,7 +1350,7 @@ export const BuildRoute: React.FC = () => {
 		error,
 		errorDiagnostics.length,
 		exportFormat,
-		build,
+		activeBuild,
 		embeddingAvailable,
 		embeddingCapability?.reason,
 		formatOptions.htmlCompatibility,
@@ -1160,6 +1359,8 @@ export const BuildRoute: React.FC = () => {
 		inlineAssetsAutoDisabled,
 		inlineAssetsAutoReason,
 		missingAssets,
+		packageAssetReaderBlocked,
+		packagePrepared,
 		safetyIssues,
 		sourceOnly,
 		story?.id
@@ -1193,8 +1394,8 @@ export const BuildRoute: React.FC = () => {
 		[inspectOpen, inspectionStory, storyIndex]
 	);
 	const htmlInspectionText = React.useMemo(
-		() => (inspectOpen ? htmlInspection(build) : ''),
-		[build, inspectOpen]
+		() => (inspectOpen ? htmlInspection(activeBuild) : ''),
+		[activeBuild, inspectOpen]
 	);
 	const inspectText =
 		inspectTab === 'source' ? sourceInspectionText : htmlInspectionText;
@@ -1448,12 +1649,12 @@ export const BuildRoute: React.FC = () => {
 											<div className="build-route__row-left">
 												<div className="build-route__row-title">Contents</div>
 												<div className="build-route__row-detail">
-													Playable HTML, Twee source, JSON, manifest, and asset
-													copy plan.
+													Playable HTML, canonical Twee and JSON, checksums,
+													manifest, and eligible project asset bytes.
 												</div>
 											</div>
-											<Badge icon="package" tone="neutral">
-												4 parts
+											<Badge icon="package" tone="saved">
+												Checksummed
 											</Badge>
 										</div>
 									)}
@@ -1521,16 +1722,144 @@ export const BuildRoute: React.FC = () => {
 								))}
 							</section>
 
-							<footer className="build-route__footer">
-								<Button
-									icon="download"
-									loading={busyAction === 'export'}
-									onClick={savePreparedOutput}
-									variant="primary"
+							{packagePrepared && packageManifest && (
+								<section
+									aria-label="Package review"
+									className="build-route__package-review"
 								>
-									Export {activeDefinition.label}
-								</Button>
+									<div className="build-route__package-review-head">
+										<div>
+											<div className="build-route__package-review-title">
+												Package review
+											</div>
+											<div className="build-route__package-review-detail">
+												Prepared {packageManifest.generatedAt}; saving uses
+												these exact reviewed bytes.
+											</div>
+										</div>
+										<Badge
+											icon={
+												packageSaveBlocked
+													? 'alert-octagon'
+													: packageComplete
+														? 'circle-check'
+														: 'alert-triangle'
+											}
+											tone={
+												packageSaveBlocked
+													? 'error'
+													: packageComplete
+														? 'saved'
+														: 'warn'
+											}
+										>
+											{packageSaveBlocked
+												? 'Blocked'
+												: packageComplete
+													? 'Complete in assessed scopes'
+													: 'Incomplete'}
+										</Badge>
+									</div>
+									<div className="build-route__package-review-grid">
+										<div>
+											<span>Project files</span>
+											<b>{packageManifest.completeness.projectAssetBytes}</b>
+											<small>
+												{packageIncludedAssetCount} included ·{' '}
+												{packageFailedAssetCount} unavailable ·{' '}
+												{packageExcludedAssetCount} excluded
+											</small>
+										</div>
+										<div>
+											<span>Static runtime</span>
+											<b>
+												{packageManifest.completeness.staticRuntimeDependencies}
+											</b>
+											<small>
+												{packageExternalResourceCount} external resource
+												{packageExternalResourceCount === 1 ? '' : 's'}
+											</small>
+										</div>
+										<div>
+											<span>Dynamic JavaScript</span>
+											<b>{packageManifest.completeness.dynamicDependencies}</b>
+											<small>
+												Copied CSS:{' '}
+												{packageManifest.completeness.copiedAssetContents}
+											</small>
+										</div>
+									</div>
+									{packageReviewDiagnostics.length > 0 ? (
+										<div className="build-route__package-findings">
+											<div className="build-route__package-findings-title">
+												Reported findings
+											</div>
+											<ul>
+												{packageReviewDiagnostics
+													.slice(0, 100)
+													.map((diagnostic, index) => (
+														<li
+															className={`build-route__package-finding build-route__package-finding--${diagnostic.severity}`}
+															key={`${diagnostic.code}-${diagnostic.outputPath}-${index}`}
+														>
+															<b>{diagnostic.severity}</b>{' '}
+															<span>{diagnostic.message}</span>
+														</li>
+													))}
+											</ul>
+											{packageReviewDiagnostics.length > 100 && (
+												<div className="build-route__package-findings-more">
+													{packageReviewDiagnostics.length - 100} additional
+													findings are recorded in _twine-package/manifest.json.
+												</div>
+											)}
+										</div>
+									) : (
+										<div className="build-route__package-findings-empty">
+											No package findings. Dynamic JavaScript remains explicitly
+											not evaluated.
+										</div>
+									)}
+								</section>
+							)}
+
+							<footer className="build-route__footer">
+								{exportFormat === 'archive' ? (
+									<Button
+										disabled={
+											packagePrepared
+												? packageSaveBlocked
+												: packagePrepareBlocked
+										}
+										icon={packagePrepared ? 'download' : 'package'}
+										loading={busyAction === 'prepare-package'}
+										onClick={
+											packagePrepared
+												? saveReviewedPackage
+												: preparePackageForReview
+										}
+										variant="primary"
+									>
+										{packagePrepared
+											? packageSaveBlocked
+												? 'Package blocked'
+												: packageComplete
+													? 'Save Complete Package'
+													: 'Save Incomplete Package'
+											: 'Prepare Package'}
+									</Button>
+								) : (
+									<Button
+										icon="download"
+										loading={busyAction === 'export'}
+										onClick={savePreparedOutput}
+										variant="primary"
+									>
+										Export {activeDefinition.label}
+									</Button>
+								)}
 								<Button
+									disabled={exportFormat === 'archive' && packagePrepareBlocked}
 									icon="search"
 									loading={busyAction === 'inspect'}
 									onClick={inspectOutput}
@@ -1538,7 +1867,7 @@ export const BuildRoute: React.FC = () => {
 									Inspect output
 								</Button>
 								<div className="build-route__footer-spacer" />
-								{!sourceOnly && (
+								{!sourceOnly && exportFormat !== 'archive' && (
 									<Button
 										icon="cloud-upload"
 										loading={busyAction === 'publish-online'}
@@ -1552,7 +1881,9 @@ export const BuildRoute: React.FC = () => {
 
 							{visibleProblemNotes.some(note => note.tone === 'warn') && (
 								<div className="build-route__footer-note">
-									Warnings never block an export. They are skipped and noted.
+									{exportFormat === 'archive'
+										? 'Package warnings require review and explicit confirmation before saving an incomplete package.'
+										: 'Warnings never block an export. They are skipped and noted.'}
 								</div>
 							)}
 						</>

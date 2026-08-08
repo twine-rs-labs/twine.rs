@@ -12,13 +12,13 @@ preparing output.
   metadata. It doesn't include the runtime or asset files.
 - _JSON_ exports structured story data for tools and version control. It can be
   pretty-printed for readable diffs.
-- _Archive (.zip)_ contains playable HTML, Twee, JSON, a package manifest, and
-  an asset copy plan. The copy plan describes project assets; the archive does
-  not currently include their binary file contents.
+- _Package (.zip)_ contains playable HTML, canonical Twee and JSON source,
+  eligible project asset bytes, a manifest, and SHA-256 checksums.
 
-Choose the format and its options, then choose _Export_ followed by the format
-name. Your browser or desktop environment will ask where to save the generated
-file.
+For HTML, Twee, and JSON, choose the format and its options, then choose
+_Export_ followed by the format name. Your browser or desktop environment will
+ask where to save the generated file. Package export uses the review flow
+described below.
 
 The output filename doesn't change the title inside the story. To change that
 title, [rename the story](../story-library/renaming.md) before exporting.
@@ -55,8 +55,48 @@ at the same relative paths when embedding is unavailable or turned off.
 
 Missing assets appear as warnings and are skipped. Story error diagnostics are
 shown for review, but warnings don't block export. A story-format
-publish-safety error does prevent HTML and archive builds. Choose _Fix in
+publish-safety error does prevent HTML and Package builds. Choose _Fix in
 Diagnostics_ when the Build screen offers it.
+
+## Creating an Offline Package
+
+Asset-complete Package export reads project assets from file-backed projects in
+the desktop app; stories with no managed or referenced project assets can also
+be packaged in the browser app. Choose _Package (.zip)_, then _Prepare Package_.
+Preparation takes one revision-locked snapshot; it does not save a file. The
+review shows the included, unavailable, excluded, and external counts, scoped
+completeness, and up to 100 warnings or blockers; every finding remains recorded
+in `_twine-package/manifest.json`. If the story changes after preparation,
+prepare it again before saving.
+
+The archive preserves each eligible regular file under `assets/` at its exact
+logical path. Known operating-system metadata is excluded. Missing, unreadable,
+changed, oversized, nonportable, external, and unsupported items are reported
+explicitly instead of being silently omitted. Portability collisions and
+security failures block saving; other omissions produce an incomplete package
+that requires explicit confirmation. Applied file-count and byte limits are
+recorded in `_twine-package/manifest.json`; the asset per-file and total-byte
+fields measure original file bytes, not base64 transport size.
+
+`_twine-package/manifest.json` lists canonical source, derived output, included
+asset hashes, dependency assessments, exclusions, and failures. `SHA256SUMS`
+covers every other archive entry. JSON and Twee preserve the captured project
+source; only the derived playable HTML rewrites indexed local references to
+their packaged `assets/` paths.
+
+_Complete in assessed scopes_ means all project asset bytes and statically
+visible runtime dependencies covered by the report are present. Copied CSS is
+scanned for `url()` and `@import` references. Dynamic JavaScript dependency
+discovery is always marked _not evaluated_; a story can still make a runtime
+network request that static analysis cannot predict. External or unknown
+dependencies are visible in the review and manifest, so an incomplete package
+never claims to be fully offline.
+
+Choose _Save Complete Package_ to save the reviewed archive bytes. An
+incomplete result instead offers _Save Incomplete Package_ and asks for
+confirmation. A package copied to another machine needs only its extracted
+contents for every dependency the manifest reports as packaged; it does not
+refer back to the original project directory.
 
 ## Inspecting a Build
 

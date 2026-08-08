@@ -9,6 +9,7 @@ import type {
 	NativeStoryPreviewCommandResult,
 	NativeStoryPreviewLaunchRequest,
 	NativeStoryPreviewOwnerCommand,
+	NativeProjectPackageAssetPayloadIpcResult,
 	ProjectStoryReplacement,
 	ProjectSourceLayout,
 	TwineElectronWindow
@@ -329,6 +330,22 @@ const bridge = {
 			paths,
 			limits
 		);
+	},
+	async readProjectPackageAssetPayloads(
+		rootPath: string,
+		priorityPaths: string[]
+	) {
+		const result = (await ipcRenderer.invoke(
+			'read-project-package-asset-payloads',
+			projectCapability(rootPath),
+			priorityPaths
+		)) as NativeProjectPackageAssetPayloadIpcResult;
+
+		if (result.status === 'error') {
+			throw Object.assign(new Error(result.message), {code: result.code});
+		}
+
+		return result.batch;
 	},
 	rendererPersistenceReady() {
 		ipcRenderer.send('persistence-renderer-ready');

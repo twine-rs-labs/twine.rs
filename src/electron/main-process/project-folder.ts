@@ -48,9 +48,9 @@ import {
 	assetKindForPath,
 	assetSnippet,
 	boundedReferencedMediaPathsInSource,
+	canonicalLogicalAssetPath,
 	compareAssetPaths,
 	fileUrlForPath,
-	localAssetReferencePath,
 	normalizedAssetPath
 } from '../../core/asset-paths';
 import {
@@ -68,7 +68,11 @@ import type {
 	ProjectFolderSaveHint,
 	ProjectFolderSaveOptions
 } from '../../store/persistence/project-folder-save-hints';
-import type {ProjectSourceLayout, ProjectStoryReplacement} from '../shared';
+import type {
+	NativeProjectAssetPayloadFailure,
+	ProjectSourceLayout,
+	ProjectStoryReplacement
+} from '../shared';
 import {
 	diffNativeProjectFileManifest,
 	beginNativeProjectFolderHydration,
@@ -76,6 +80,7 @@ import {
 	captureNativeProjectAssetDigests,
 	finishNativeProjectFolderHydration,
 	findNativeTwineHtmlFiles,
+	inspectNativeProjectPackageAssets,
 	listNativeProjectAssets,
 	loadNativeProjectFolder,
 	nativeAssetReadBusy,
@@ -276,6 +281,21 @@ export interface NativeProjectAssetReadBaseline {
 	expectedModifiedAtMs?: number;
 	expectedSizeBytes?: number;
 	path: string;
+}
+
+export interface ProjectPackageAssetReadPlan {
+	baselines: NativeProjectAssetReadBaseline[];
+	discoveryFailures: NativeProjectAssetPayloadFailure[];
+	excluded: Array<{path: string; reason: 'platform-junk'}>;
+	generation: number;
+	inventory: Array<{
+		modifiedAtMs: number;
+		path: string;
+		requiredByStaticReference: boolean;
+		sizeBytes: number;
+	}>;
+	inventoryFingerprint: string;
+	sessionInstanceId: string;
 }
 
 export interface NativeProjectSessionConflict {
@@ -3369,7 +3389,7 @@ async function metadataSidecarStories(
 }
 
 function safeProjectAssetPath(rootPath: string, assetPath: string) {
-	const projectPath = localAssetReferencePath(assetPath);
+	const projectPath = canonicalLogicalAssetPath(assetPath);
 
 	if (!projectPath) {
 		throw new Error(`Unsafe project asset path "${assetPath}".`);
@@ -5089,12 +5109,20 @@ async function trustedStoryAssetDigestState(
 	refreshEpoch: number
 ): Promise<ProjectAssetDigestStoryState | undefined> {
 	const paths: string[] = [];
-	const addSource = async (source: string) => {
+	const addSource = async (
+		source: string,
+		fullCssSource = false,
+		fullScriptSource = false
+	) => {
 		assertCurrentProjectSession(session.rootPath, session);
 		if (session.assetDigestRefreshEpoch !== refreshEpoch) {
 			return undefined;
 		}
-		const scanned = boundedReferencedMediaPathsInSource(source);
+		const scanned = boundedReferencedMediaPathsInSource(
+			source,
+			fullCssSource,
+			fullScriptSource
+		);
 		if (
 			!(await yieldProjectAssetDigestScanIfNeeded(
 				session,
@@ -5124,11 +5152,11 @@ async function trustedStoryAssetDigestState(
 			return {reason: 'source-scan-incomplete', status: 'unknown'};
 		}
 	}
-	const scriptAdded = await addSource(story.script);
+	const scriptAdded = await addSource(story.script, false, true);
 	if (scriptAdded === undefined) {
 		return undefined;
 	}
-	const stylesheetAdded = await addSource(story.stylesheet);
+	const stylesheetAdded = await addSource(story.stylesheet, true);
 	if (stylesheetAdded === undefined) {
 		return undefined;
 	}
@@ -5141,21 +5169,51 @@ async function trustedStoryAssetDigestState(
 	};
 }
 
-function updatedStoryAssetDigestState(
+async function updatedStoryAssetDigestState(
 	previous: ProjectAssetDigestStoryState | undefined,
-	edits: Array<{nextSource: string; previousSource?: string}>
-): ProjectAssetDigestStoryState {
+	edits: Array<{
+		kind: 'passage' | 'script' | 'stylesheet';
+		nextSource: string;
+		previousSource?: string;
+	}>
+): Promise<ProjectAssetDigestStoryState> {
 	if (!previous || previous.status !== 'ready') {
 		return {reason: 'prior-authority-unknown', status: 'unknown'};
 	}
 	const paths = new Set(previous.paths);
+	let scannedSource = false;
+	const scanSource = async (
+		source: string,
+		fullCssSource: boolean,
+		fullScriptSource: boolean
+	) => {
+		if (scannedSource) {
+			await new Promise<void>(resolveYield => setImmediate(resolveYield));
+		}
+		scannedSource = true;
+		return boundedReferencedMediaPathsInSource(
+			source,
+			fullCssSource,
+			fullScriptSource
+		);
+	};
 
 	for (const edit of edits) {
 		if (edit.previousSource === undefined) {
 			return {reason: 'previous-source-unavailable', status: 'unknown'};
 		}
-		const before = boundedReferencedMediaPathsInSource(edit.previousSource);
-		const after = boundedReferencedMediaPathsInSource(edit.nextSource);
+		const fullCssSource = edit.kind === 'stylesheet';
+		const fullScriptSource = edit.kind === 'script';
+		const before = await scanSource(
+			edit.previousSource,
+			fullCssSource,
+			fullScriptSource
+		);
+		const after = await scanSource(
+			edit.nextSource,
+			fullCssSource,
+			fullScriptSource
+		);
 
 		if (!before.complete || !after.complete) {
 			return {reason: 'source-scan-incomplete', status: 'unknown'};
@@ -7602,6 +7660,7 @@ async function writeProjectFolderIncremental(
 			['passage', 'script', 'stylesheet'].includes(entry.kind)
 				? [
 						{
+							kind: entry.kind as 'passage' | 'script' | 'stylesheet',
 							nextSource: entry.text,
 							previousSource: previousAssetSources.get(entry.projectPath)
 						}
@@ -7612,7 +7671,7 @@ async function writeProjectFolderIncremental(
 		if (sourceEdits.length > 0) {
 			storyUpdates.set(
 				story.id,
-				updatedStoryAssetDigestState(
+				await updatedStoryAssetDigestState(
 					session.assetDigestStories?.get(story.id),
 					sourceEdits
 				)
@@ -9134,6 +9193,147 @@ export function projectSessionAssetReadBaselines(
 	});
 }
 
+function bytewiseUtf8PathCompare(left: string, right: string) {
+	return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
+}
+
+function packagePlatformJunk(path: string) {
+	const name = basename(path);
+	const lowerName = name.toLowerCase();
+
+	return (
+		lowerName === '.ds_store' ||
+		lowerName === 'thumbs.db' ||
+		lowerName === 'desktop.ini' ||
+		name.startsWith('._')
+	);
+}
+
+/**
+ * Captures the exact regular-file asset inventory for a package read. The
+ * renderer may influence priority only; it cannot add or remove inventory
+ * entries or provide trusted baselines.
+ */
+export async function projectSessionPackageAssetReadPlan(
+	rootPath: string,
+	priorityPaths: string[]
+): Promise<ProjectPackageAssetReadPlan> {
+	const session = ensureProjectSession(rootPath);
+
+	if (!session.baseline) {
+		throw new Error('Package assets cannot be read before indexing completes.');
+	}
+	if (session.pending || session.scanning || session.localMutationDepth > 0) {
+		throw Object.assign(
+			new Error(
+				'Project assets are changing while the package inventory is being captured.'
+			),
+			{code: 'PACKAGE_ASSET_SNAPSHOT_STALE'}
+		);
+	}
+	const sessionInstanceId = session.sessionInstanceId;
+	const generation = session.generation;
+	const inspection = await inspectNativeProjectPackageAssets(rootPath);
+
+	assertCurrentProjectSession(rootPath, session);
+	if (
+		session.sessionInstanceId !== sessionInstanceId ||
+		session.generation !== generation ||
+		session.pending ||
+		session.scanning ||
+		session.localMutationDepth > 0
+	) {
+		throw Object.assign(
+			new Error(
+				'Project assets changed while the package inventory was captured.'
+			),
+			{code: 'PACKAGE_ASSET_SNAPSHOT_STALE'}
+		);
+	}
+
+	const priority = new Set(priorityPaths.map(normalizedAssetPath));
+	const assetFiles = [...inspection.inventory].sort((left, right) =>
+		bytewiseUtf8PathCompare(left.path, right.path)
+	);
+	const expectedContentDigestByPath = new Map(
+		assetFiles.flatMap(file => {
+			const digest = session.assetContentDigests?.get(
+				normalizedAssetPath(file.path)
+			);
+
+			return digest?.mtimeMs === file.modifiedAtMs &&
+				digest.sizeBytes === file.sizeBytes
+				? [[file.path, digest.contentDigest] as const]
+				: [];
+		})
+	);
+	const excluded = assetFiles
+		.filter(file => packagePlatformJunk(file.path))
+		.map(file => ({path: file.path, reason: 'platform-junk' as const}));
+	const included = assetFiles
+		.filter(file => !packagePlatformJunk(file.path))
+		.map(file => {
+			return {
+				expectedContentDigest: expectedContentDigestByPath.get(file.path),
+				file,
+				requiredByStaticReference: priority.has(normalizedAssetPath(file.path))
+			};
+		})
+		.sort((left, right) => {
+			if (left.requiredByStaticReference !== right.requiredByStaticReference) {
+				return left.requiredByStaticReference ? -1 : 1;
+			}
+			return bytewiseUtf8PathCompare(left.file.path, right.file.path);
+		});
+	const fingerprintHash = createHash('sha256');
+
+	const sortedFailures = [...inspection.failures].sort((left, right) =>
+		bytewiseUtf8PathCompare(
+			`${left.path}\0${left.reason}\0${left.message}`,
+			`${right.path}\0${right.reason}\0${right.message}`
+		)
+	);
+
+	fingerprintHash.update('twine-package-asset-inventory-v2\0');
+	fingerprintHash.update(
+		JSON.stringify({
+			failures: sortedFailures.map(failure => [
+				failure.path,
+				failure.reason,
+				failure.message
+			]),
+			files: assetFiles.map(file => [
+				file.path,
+				file.sizeBytes,
+				file.modifiedAtMs,
+				expectedContentDigestByPath.get(file.path) ?? null
+			]),
+			truncated: inspection.truncated
+		})
+	);
+
+	return {
+		baselines: included.map(({expectedContentDigest, file}) => ({
+			expectedContentDigest,
+			expectedExists: true,
+			expectedModifiedAtMs: file.modifiedAtMs,
+			expectedSizeBytes: file.sizeBytes,
+			path: file.path
+		})),
+		discoveryFailures: sortedFailures,
+		excluded,
+		generation,
+		inventory: included.map(({file, requiredByStaticReference}) => ({
+			modifiedAtMs: file.modifiedAtMs,
+			path: file.path,
+			requiredByStaticReference,
+			sizeBytes: file.sizeBytes
+		})),
+		inventoryFingerprint: fingerprintHash.digest('hex'),
+		sessionInstanceId
+	};
+}
+
 export function projectSessionScratchAssets(
 	rootPath: string,
 	assets: Array<{outputPath: string; path: string}>
@@ -9153,7 +9353,7 @@ export function projectSessionScratchAssets(
 		);
 
 	return assets.map(asset => {
-		const normalizedPath = localAssetReferencePath(asset.path);
+		const normalizedPath = canonicalLogicalAssetPath(asset.path);
 		const indexedPosition = normalizedPath
 			? baselineFileIndex?.get(normalizedPath)
 			: undefined;

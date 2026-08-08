@@ -6,7 +6,7 @@ import {
 	shell
 } from 'electron';
 import type {WebContents} from 'electron';
-import {randomUUID} from 'crypto';
+import {createHash, randomUUID} from 'crypto';
 import debounce from 'lodash/debounce';
 import type {DebouncedFunc} from 'lodash';
 import {consumeCommandLineOpenPaths} from './command-line';
@@ -72,6 +72,7 @@ import {
 	openProjectFolder,
 	prepareProjectImport,
 	projectSessionAssetReadBaselines,
+	projectSessionPackageAssetReadPlan,
 	projectSessionScratchAssets,
 	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
@@ -87,13 +88,18 @@ import {
 import {
 	nativeHydrationMemoryDiagnostics,
 	nativeProjectAssetEmbeddingAvailable,
+	nativeProjectPackageAssetReaderAvailable,
 	readNativeProjectAssetPayloads,
+	readNativeProjectPackageAssetPayloads,
 	readNativeProjectPreviewAssetPayloads
 } from './native';
 import type {
 	NativeCommandLineOpenResult,
 	NativeProjectAssetWriteResult,
 	NativeProjectAssetPayloadLimits,
+	NativeProjectPackageAssetPayloadLimits,
+	NativeProjectPackageAssetPayloadBatch,
+	NativeProjectPackageAssetPayloadIpcResult,
 	NativePlatformSettingsUpdate,
 	NativeStoryPreviewLaunchRequest,
 	ProjectStoryReplacement,
@@ -110,6 +116,69 @@ import {storyPreviewWindowManager} from './story-preview-window-manager';
 const ipcMain = trustedIpcRegistrar(electronIpcMain);
 let quitAfterStoryWriteFlush = false;
 const maxScratchAssetPathBytes = 4096;
+const packageAssetPathLimitBytes = 4096;
+const packageAssetLimits = {
+	maxAssetFileBytes: 50 * 1024 * 1024,
+	maxAssetFileCount: 1000,
+	maxAssetTotalBytes: 50 * 1024 * 1024
+} as const satisfies NativeProjectPackageAssetPayloadLimits;
+
+function validPackageAssetPriorityPath(value: unknown): value is string {
+	if (
+		typeof value !== 'string' ||
+		Buffer.byteLength(value, 'utf8') > packageAssetPathLimitBytes ||
+		!value.startsWith('assets/') ||
+		value.includes('\\') ||
+		value.includes('\0')
+	) {
+		return false;
+	}
+
+	const segments = value.split('/');
+
+	return (
+		segments.length > 1 &&
+		segments.every(segment => {
+			return segment.length > 0 && segment !== '.' && segment !== '..';
+		})
+	);
+}
+
+function bytewisePackageValueCompare(left: string, right: string) {
+	return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
+}
+
+function packageAssetContentFingerprint(
+	inventoryFingerprint: string,
+	payloads: NativeProjectPackageAssetPayloadBatch['payloads'],
+	failures: NativeProjectPackageAssetPayloadBatch['failures']
+) {
+	const hash = createHash('sha256');
+	const sortedPayloads = [...payloads].sort((left, right) =>
+		bytewisePackageValueCompare(left.path, right.path)
+	);
+	const sortedFailures = [...failures].sort((left, right) =>
+		bytewisePackageValueCompare(
+			`${left.path}\0${left.reason}\0${left.message}`,
+			`${right.path}\0${right.reason}\0${right.message}`
+		)
+	);
+
+	hash.update('twine-package-asset-content-v1\0');
+	hash.update(
+		JSON.stringify({
+			failures: sortedFailures.map(failure => [
+				failure.path,
+				failure.reason,
+				failure.message
+			]),
+			inventoryFingerprint,
+			payloads: sortedPayloads.map(payload => [payload.path, payload.sha256])
+		})
+	);
+
+	return hash.digest('hex');
+}
 const rendererPersistenceDrainTimeoutMs = 10_000;
 
 export interface InitIpcOptions {
@@ -705,6 +774,125 @@ export function initIpc(options: InitIpcOptions = {}) {
 				projectSessionAssetReadBaselines(rootPath, paths),
 				limits
 			);
+		}
+	);
+
+	ipcMain.handle(
+		'read-project-package-asset-payloads',
+		async (
+			event,
+			capability: string,
+			priorityPaths: string[]
+		): Promise<NativeProjectPackageAssetPayloadIpcResult> => {
+			try {
+				const rootPath = resolveProjectCapability(event, capability);
+
+				if (
+					!projectSessionSubscriptions.has(
+						projectSessionSubscriptionKey(event.sender.id, rootPath)
+					)
+				) {
+					throw new Error(
+						"Package assets can be read only from the renderer's active project session."
+					);
+				}
+				if (
+					!Array.isArray(priorityPaths) ||
+					priorityPaths.length > packageAssetLimits.maxAssetFileCount ||
+					priorityPaths.some(path => !validPackageAssetPriorityPath(path))
+				) {
+					throw new Error('Package asset priority paths are invalid.');
+				}
+				if (!nativeProjectPackageAssetReaderAvailable()) {
+					throw new Error('The native package asset reader is unavailable.');
+				}
+
+				const start = await projectSessionPackageAssetReadPlan(
+					rootPath,
+					priorityPaths
+				);
+				const selectedBaselines = start.baselines.slice(
+					0,
+					packageAssetLimits.maxAssetFileCount
+				);
+				const deferredFailures = start.baselines
+					.slice(packageAssetLimits.maxAssetFileCount)
+					.map(baseline => ({
+						message: `Asset was not read because the package file-count limit is ${packageAssetLimits.maxAssetFileCount}.`,
+						path: baseline.path,
+						reason: 'file-count-exceeded'
+					}));
+				const loaded = await readNativeProjectPackageAssetPayloads(
+					rootPath,
+					selectedBaselines,
+					packageAssetLimits
+				);
+				const end = await projectSessionPackageAssetReadPlan(
+					rootPath,
+					priorityPaths
+				);
+
+				if (
+					start.sessionInstanceId !== end.sessionInstanceId ||
+					start.generation !== end.generation ||
+					start.inventoryFingerprint !== end.inventoryFingerprint
+				) {
+					throw Object.assign(
+						new Error('Project assets changed while package bytes were read.'),
+						{code: 'PACKAGE_ASSET_SNAPSHOT_STALE'}
+					);
+				}
+				const failures = [
+					...start.discoveryFailures,
+					...loaded.failures,
+					...deferredFailures
+				].sort((left, right) =>
+					bytewisePackageValueCompare(
+						`${left.path}\0${left.reason}\0${left.message}`,
+						`${right.path}\0${right.reason}\0${right.message}`
+					)
+				);
+				const contentFingerprint = packageAssetContentFingerprint(
+					start.inventoryFingerprint,
+					loaded.payloads,
+					failures
+				);
+
+				return {
+					batch: {
+						...loaded,
+						appliedLimits: packageAssetLimits,
+						excluded: start.excluded,
+						failures,
+						inventory: start.inventory,
+						snapshot: {
+							contentFingerprint,
+							generation: start.generation,
+							inventoryFingerprint: start.inventoryFingerprint,
+							sessionInstanceId: start.sessionInstanceId
+						}
+					} satisfies NativeProjectPackageAssetPayloadBatch,
+					status: 'success'
+				};
+			} catch (error) {
+				if (
+					typeof error === 'object' &&
+					error !== null &&
+					'code' in error &&
+					error.code === 'PACKAGE_ASSET_SNAPSHOT_STALE'
+				) {
+					return {
+						code: 'PACKAGE_ASSET_SNAPSHOT_STALE',
+						message:
+							error instanceof Error
+								? error.message
+								: 'Project assets changed while package bytes were read.',
+						status: 'error'
+					};
+				}
+
+				throw error;
+			}
 		}
 	);
 

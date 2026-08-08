@@ -69,8 +69,9 @@ percent-encoded asset URLs work without giving the story access to the project
 folder. Closing or replacing the preview releases the package; previewing never
 links the project asset directory or changes its files.
 
-The [Build & Export](../publishing/publishing.md) screen reports missing assets
-and the copy plan for published output.
+The [Build & Export](../publishing/publishing.md) screen reports missing assets.
+For a file-backed desktop project, Package export can copy the actual bounded
+asset bytes into a checksummed archive and report anything it could not include.
 
 For desktop Playable HTML export, _Embed referenced media_ can place supported
 statically referenced images, audio, and video into the HTML as data URLs. It

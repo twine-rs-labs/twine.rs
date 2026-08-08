@@ -6,7 +6,7 @@ use std::{
     fs,
     hash::{DefaultHasher, Hash, Hasher},
     io::Read,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::OnceLock,
     time::UNIX_EPOCH,
 };
@@ -22,7 +22,18 @@ use twine_model::{
     PassageLayout, Project, Story, StoryId,
 };
 use twine_parse::{LinkParseOptions, parse_standard_links};
+use web_atoms::{C1_REPLACEMENTS, NAMED_ENTITIES};
 use web_time::Instant;
+
+#[cfg(test)]
+thread_local! {
+    static ASSET_ENTITY_PROJECTION_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_asset_entity_projection_step() {
+    ASSET_ENTITY_PROJECTION_STEPS.with(|steps| steps.set(steps.get() + 1));
+}
 
 const MAX_HISTORY_ENTRIES: usize = 200;
 const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
@@ -8752,7 +8763,7 @@ impl ProjectSession {
 
         for passage in story.passages.iter_mut() {
             let replaced =
-                replace_asset_references_in_source(&passage.text, &old_normalized, new_path);
+                replace_asset_references_in_source(&passage.text, &old_normalized, new_path, false);
 
             if replaced != passage.text {
                 passage.text = replaced.clone();
@@ -8767,7 +8778,13 @@ impl ProjectSession {
             }
         }
 
-        let script = replace_asset_references_in_source(&story.script, &old_normalized, new_path);
+        let script = replace_asset_references_in_source_with_mode(
+            &story.script,
+            &old_normalized,
+            new_path,
+            false,
+            true,
+        );
 
         if script != story.script {
             story.script = script.clone();
@@ -8778,7 +8795,7 @@ impl ProjectSession {
         }
 
         let stylesheet =
-            replace_asset_references_in_source(&story.stylesheet, &old_normalized, new_path);
+            replace_asset_references_in_source(&story.stylesheet, &old_normalized, new_path, true);
 
         if stylesheet != story.stylesheet {
             story.stylesheet = stylesheet.clone();
@@ -9385,27 +9402,34 @@ struct AssetPath {
 
 impl AssetPath {
     fn parse(path: &str) -> Result<Self, CoreError> {
-        let Some(normalized) = local_asset_reference_path(path) else {
-            return Err(CoreError::UnsafeAssetPath(path.into()));
-        };
-        let normalized = normalized
-            .strip_prefix("assets/")
-            .expect("local asset reference path should use assets/ prefix");
+        let mut normalized = path.replace('\\', "/");
 
-        if normalized.trim().is_empty() {
+        while let Some(without_prefix) = normalized.strip_prefix("./") {
+            normalized = without_prefix.into();
+        }
+        if normalized.starts_with('/') || normalized.contains('\0') || has_url_scheme(&normalized) {
+            return Err(CoreError::UnsafeAssetPath(path.into()));
+        }
+        let mut segments = normalized.split('/').collect::<Vec<_>>();
+
+        if segments
+            .first()
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("assets"))
+        {
+            segments.remove(0);
+        }
+        if segments.is_empty()
+            || segments.iter().any(|segment| {
+                segment.is_empty() || matches!(*segment, "." | "..") || segment.contains(':')
+            })
+        {
             return Err(CoreError::UnsafeAssetPath(path.into()));
         }
 
         let mut asset_relative_path = PathBuf::new();
 
-        for component in Path::new(normalized).components() {
-            match component {
-                Component::Normal(value) => asset_relative_path.push(value),
-                Component::CurDir => {}
-                Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
-                    return Err(CoreError::UnsafeAssetPath(path.into()));
-                }
-            }
+        for segment in segments {
+            asset_relative_path.push(segment);
         }
 
         if asset_relative_path.as_os_str().is_empty() || asset_relative_path.file_name().is_none() {
@@ -9446,6 +9470,23 @@ fn percent_encode_file_path(path: &str) -> String {
     for byte in path.bytes() {
         let is_unreserved =
             byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/' | b':');
+
+        if is_unreserved {
+            output.push(char::from(byte));
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+
+    output
+}
+
+fn percent_encode_asset_reference_path(path: &str) -> String {
+    let mut output = String::new();
+
+    for byte in path.bytes() {
+        let is_unreserved =
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/');
 
         if is_unreserved {
             output.push(char::from(byte));
@@ -9678,33 +9719,53 @@ fn replace_asset_references_in_source(
     source: &str,
     old_normalized: &str,
     new_path: &str,
+    full_css_source: bool,
 ) -> String {
-    let references = asset_references_in_source("", "", source, None);
+    replace_asset_references_in_source_with_mode(
+        source,
+        old_normalized,
+        new_path,
+        full_css_source,
+        false,
+    )
+}
+
+fn replace_asset_references_in_source_with_mode(
+    source: &str,
+    old_normalized: &str,
+    new_path: &str,
+    full_css_source: bool,
+    full_script_source: bool,
+) -> String {
+    let source_id = if full_css_source {
+        "story:stylesheet"
+    } else if full_script_source {
+        "story:script"
+    } else {
+        ""
+    };
+    let (references, _) = asset_reference_matches_in_source(source_id, "", source, None);
     let mut output = String::with_capacity(source.len());
+    let encoded_new_path = percent_encode_asset_reference_path(new_path);
     let mut cursor = 0;
     let mut changed = false;
 
-    for reference in references {
+    for matched in references {
+        let reference = matched.reference;
+
         if normalized_asset_path(&reference.path) != old_normalized {
             continue;
         }
 
-        let Some(start) = utf16_offset_to_byte(source, reference.start) else {
-            continue;
-        };
-        let Some(end) = utf16_offset_to_byte(source, reference.end) else {
-            continue;
-        };
-
-        output.push_str(&source[cursor..start]);
-        output.push_str(new_path);
+        output.push_str(&source[cursor..matched.byte_start]);
+        output.push_str(&encoded_new_path);
         if let Some(query) = &reference.query {
             output.push_str(query);
         }
         if let Some(fragment) = &reference.fragment {
             output.push_str(fragment);
         }
-        cursor = end;
+        cursor = matched.byte_end;
         changed = true;
     }
 
@@ -10092,128 +10153,2078 @@ fn is_identifier_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-fn asset_references_in_source(
+struct AssetReferenceMatch {
+    byte_end: usize,
+    byte_start: usize,
+    reference: CoreAssetReference,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SourceRangeMetrics {
+    end_utf16: usize,
+    line: usize,
+    start_utf16: usize,
+}
+
+fn source_range_metrics(
+    source: &str,
+    ranges: &[(usize, usize)],
+) -> (Vec<Option<SourceRangeMetrics>>, usize) {
+    let mut boundaries = Vec::with_capacity(ranges.len() * 2);
+    let mut valid = vec![false; ranges.len()];
+
+    for (index, (start, end)) in ranges.iter().copied().enumerate() {
+        if start > end
+            || end > source.len()
+            || !source.is_char_boundary(start)
+            || !source.is_char_boundary(end)
+        {
+            continue;
+        }
+        valid[index] = true;
+        boundaries.push((start, index, false));
+        boundaries.push((end, index, true));
+    }
+    boundaries.sort_unstable_by_key(|(offset, _, _)| *offset);
+
+    let mut metrics = vec![SourceRangeMetrics::default(); ranges.len()];
+    let mut byte_cursor = 0;
+    let mut line = 1;
+    let mut scanned_characters = 0;
+    let mut utf16_offset = 0;
+
+    for (offset, range_index, is_end) in boundaries {
+        for character in source[byte_cursor..offset].chars() {
+            utf16_offset += character.len_utf16();
+            line += usize::from(character == '\n');
+            scanned_characters += 1;
+        }
+        byte_cursor = offset;
+        if is_end {
+            metrics[range_index].end_utf16 = utf16_offset;
+        } else {
+            metrics[range_index].line = line;
+            metrics[range_index].start_utf16 = utf16_offset;
+        }
+    }
+
+    (
+        metrics
+            .into_iter()
+            .zip(valid)
+            .map(|(metrics, valid)| valid.then_some(metrics))
+            .collect(),
+        scanned_characters,
+    )
+}
+
+fn asset_reference_matches_in_source(
     source_id: &str,
     source_name: &str,
     source: &str,
     passage_id: Option<&str>,
-) -> Vec<CoreAssetReference> {
+) -> (Vec<AssetReferenceMatch>, usize) {
     #[derive(Clone, Debug)]
     struct Candidate {
         context: &'static str,
         end: usize,
+        semantic: Option<String>,
+        semantic_entities: Vec<HtmlEntitySegment>,
         start: usize,
     }
 
-    fn quoted_value<'a>(captures: &'a regex::Captures<'a>) -> Option<regex::Match<'a>> {
-        captures.name("double").or_else(|| captures.name("single"))
+    #[derive(Clone, Debug)]
+    struct HtmlEntitySegment {
+        decoded_end: usize,
+        decoded_start: usize,
+        raw_end: usize,
+        raw_start: usize,
     }
 
-    fn trimmed_candidate(value: regex::Match<'_>, context: &'static str) -> Option<Candidate> {
-        if value.as_str().contains('\\') {
+    #[derive(Clone, Debug)]
+    struct DecodedSourceValue {
+        end: usize,
+        entities: Vec<HtmlEntitySegment>,
+        start: usize,
+        value: String,
+    }
+
+    fn first_entity_ending_at_or_after(entities: &[HtmlEntitySegment], offset: usize) -> usize {
+        let mut low = 0;
+        let mut high = entities.len();
+
+        while low < high {
+            let middle = low + (high - low) / 2;
+            #[cfg(test)]
+            record_asset_entity_projection_step();
+            if entities[middle].decoded_end < offset {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        low
+    }
+
+    fn first_entity_ending_after(entities: &[HtmlEntitySegment], offset: usize) -> usize {
+        let mut low = 0;
+        let mut high = entities.len();
+
+        while low < high {
+            let middle = low + (high - low) / 2;
+            #[cfg(test)]
+            record_asset_entity_projection_step();
+            if entities[middle].decoded_end <= offset {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        low
+    }
+
+    fn first_entity_starting_at_or_after(entities: &[HtmlEntitySegment], offset: usize) -> usize {
+        let mut low = 0;
+        let mut high = entities.len();
+
+        while low < high {
+            let middle = low + (high - low) / 2;
+            #[cfg(test)]
+            record_asset_entity_projection_step();
+            if entities[middle].decoded_start < offset {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        low
+    }
+
+    fn decoded_boundary_to_raw(value: &DecodedSourceValue, offset: usize) -> Option<usize> {
+        let index = first_entity_ending_at_or_after(&value.entities, offset);
+        let delta = if index == 0 {
+            value.start
+        } else {
+            value.entities[index - 1]
+                .raw_end
+                .checked_sub(value.entities[index - 1].decoded_end)?
+        };
+        let Some(entity) = value.entities.get(index) else {
+            return delta.checked_add(offset);
+        };
+
+        if offset < entity.decoded_start {
+            return delta.checked_add(offset);
+        }
+        if offset == entity.decoded_start {
+            return Some(entity.raw_start);
+        }
+        if offset < entity.decoded_end {
             return None;
         }
-        let leading = value.as_str().len() - value.as_str().trim_start().len();
-        let trimmed = value.as_str().trim();
+        Some(entity.raw_end)
+    }
 
-        (!trimmed.is_empty()).then_some(Candidate {
-            context,
-            start: value.start() + leading,
-            end: value.start() + leading + trimmed.len(),
+    fn project_decoded_source_value(
+        value: &DecodedSourceValue,
+        start: usize,
+        end: usize,
+    ) -> Option<DecodedSourceValue> {
+        if start > end || !value.value.is_char_boundary(start) || !value.value.is_char_boundary(end)
+        {
+            return None;
+        }
+        let raw_start = decoded_boundary_to_raw(value, start)?;
+        let raw_end = decoded_boundary_to_raw(value, end)?;
+        let entity_start = first_entity_ending_after(&value.entities, start);
+        let entity_end = first_entity_starting_at_or_after(&value.entities, end);
+        let entities = value.entities[entity_start..entity_end]
+            .iter()
+            .cloned()
+            .map(|mut entity| {
+                entity.decoded_start -= start;
+                entity.decoded_end -= start;
+                entity
+            })
+            .collect();
+
+        Some(DecodedSourceValue {
+            end: raw_end,
+            entities,
+            start: raw_start,
+            value: value.value[start..end].into(),
         })
     }
 
-    fn srcset_candidates(value: regex::Match<'_>) -> Vec<Candidate> {
-        static DESCRIPTOR: OnceLock<regex::Regex> = OnceLock::new();
-        let descriptor = DESCRIPTOR.get_or_init(|| {
-            regex::RegexBuilder::new(r"(?i)\s+\d+(?:\.\d+)?[wxh]\s*$")
-                .build()
-                .expect("srcset descriptor regex should compile")
-        });
-        let mut candidates = Vec::new();
-        let mut segment_start = 0;
+    fn numeric_html_reference(code: u32) -> char {
+        let code = if code == 0 || code > 0x10_ffff || (0xd800..=0xdfff).contains(&code) {
+            0xfffd
+        } else if (0x80..=0x9f).contains(&code) {
+            C1_REPLACEMENTS[(code - 0x80) as usize]
+                .map(u32::from)
+                .unwrap_or(code)
+        } else {
+            code
+        };
 
-        if value.as_str().contains('\\')
-            || value.as_str().to_ascii_lowercase().contains("data:")
-            || value.as_str().to_ascii_lowercase().contains("blob:")
-        {
-            return candidates;
+        char::from_u32(code).unwrap_or('\u{fffd}')
+    }
+
+    fn html_character_reference(raw: &str, cursor: usize) -> Option<(String, usize)> {
+        let bytes = raw.as_bytes();
+        if bytes.get(cursor) != Some(&b'&') {
+            return None;
+        }
+        if bytes.get(cursor + 1) == Some(&b'#') {
+            let mut index = cursor + 2;
+            let hexadecimal = bytes
+                .get(index)
+                .is_some_and(|byte| matches!(*byte, b'x' | b'X'));
+            if hexadecimal {
+                index += 1;
+            }
+            let digit_start = index;
+            let mut value = 0_u32;
+            let mut overflow = false;
+
+            while let Some(byte) = bytes.get(index).copied() {
+                let digit = if hexadecimal {
+                    byte.to_ascii_lowercase()
+                        .checked_sub(b'0')
+                        .and_then(|digit| {
+                            if digit <= 9 {
+                                Some(u32::from(digit))
+                            } else if (b'a'..=b'f').contains(&byte.to_ascii_lowercase()) {
+                                Some(u32::from(byte.to_ascii_lowercase() - b'a' + 10))
+                            } else {
+                                None
+                            }
+                        })
+                } else {
+                    byte.is_ascii_digit().then_some(u32::from(byte - b'0'))
+                };
+                let Some(digit) = digit else {
+                    break;
+                };
+                value = value
+                    .checked_mul(if hexadecimal { 16 } else { 10 })
+                    .and_then(|value| value.checked_add(digit))
+                    .unwrap_or_else(|| {
+                        overflow = true;
+                        0x11_0000
+                    });
+                index += 1;
+            }
+            if index == digit_start {
+                return None;
+            }
+            if bytes.get(index) == Some(&b';') {
+                index += 1;
+            }
+            let character = numeric_html_reference(if overflow { 0x11_0000 } else { value });
+
+            return Some((character.to_string(), index - cursor));
         }
 
-        for segment in value.as_str().split(',') {
-            let leading = segment.len() - segment.trim_start().len();
-            let mut token = segment.trim();
-
-            if let Some(suffix) = descriptor.find(token) {
-                token = token[..suffix.start()].trim_end();
+        let name_start = cursor + 1;
+        let mut index = name_start;
+        let mut matched = None;
+        while index < bytes.len() && index - name_start <= 64 {
+            let byte = bytes[index];
+            if byte.is_ascii_alphanumeric() {
+                index += 1;
+            } else if byte == b';' {
+                index += 1;
+                if let Some(&(first, second)) = NAMED_ENTITIES
+                    .get(&raw[name_start..index])
+                    .filter(|(first, _)| *first != 0)
+                {
+                    matched = Some((index, first, second));
+                }
+                break;
+            } else {
+                break;
             }
+            if let Some(&(first, second)) = NAMED_ENTITIES
+                .get(&raw[name_start..index])
+                .filter(|(first, _)| *first != 0)
+            {
+                matched = Some((index, first, second));
+            }
+        }
+        let (end, first, second) = matched?;
+        if bytes.get(end - 1) != Some(&b';')
+            && bytes
+                .get(end)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'=')
+        {
+            return None;
+        }
+        let mut decoded = String::new();
+        decoded.push(char::from_u32(first).unwrap_or('\u{fffd}'));
+        if second != 0 {
+            decoded.push(char::from_u32(second).unwrap_or('\u{fffd}'));
+        }
 
-            if !token.is_empty() {
-                let start = value.start() + segment_start + leading;
-                candidates.push(Candidate {
-                    context: "html-srcset",
-                    start,
-                    end: start + token.len(),
+        Some((decoded, end - cursor))
+    }
+
+    fn decode_html_attribute_value(raw: &str, raw_start: usize) -> DecodedSourceValue {
+        if !raw.contains('&') {
+            return DecodedSourceValue {
+                end: raw_start + raw.len(),
+                entities: Vec::new(),
+                start: raw_start,
+                value: raw.into(),
+            };
+        }
+        let mut cursor = 0;
+        let mut decoded = String::new();
+        let mut entities = Vec::new();
+
+        while cursor < raw.len() {
+            let Some(relative_ampersand) = raw[cursor..].find('&') else {
+                decoded.push_str(&raw[cursor..]);
+                break;
+            };
+            let ampersand = cursor + relative_ampersand;
+            decoded.push_str(&raw[cursor..ampersand]);
+            cursor = ampersand;
+            if let Some((entity, consumed)) = html_character_reference(raw, cursor) {
+                let decoded_start = decoded.len();
+                decoded.push_str(&entity);
+                entities.push(HtmlEntitySegment {
+                    decoded_end: decoded.len(),
+                    decoded_start,
+                    raw_end: raw_start + cursor + consumed,
+                    raw_start: raw_start + cursor,
                 });
+                cursor += consumed;
+            } else {
+                decoded.push('&');
+                cursor += 1;
+            }
+        }
+
+        DecodedSourceValue {
+            end: raw_start + raw.len(),
+            entities,
+            start: raw_start,
+            value: decoded,
+        }
+    }
+
+    fn candidate_from_decoded(value: DecodedSourceValue, context: &'static str) -> Candidate {
+        Candidate {
+            context,
+            end: value.end,
+            semantic: Some(value.value),
+            semantic_entities: value.entities,
+            start: value.start,
+        }
+    }
+
+    fn candidate_raw_boundary(candidate: &Candidate, offset: usize) -> Option<usize> {
+        let mut delta = candidate.start;
+
+        for entity in &candidate.semantic_entities {
+            if offset < entity.decoded_start {
+                return delta.checked_add(offset);
+            }
+            if offset == entity.decoded_start {
+                return Some(entity.raw_start);
+            }
+            if offset < entity.decoded_end {
+                return None;
+            }
+            if offset == entity.decoded_end {
+                return Some(entity.raw_end);
+            }
+            delta = entity.raw_end.checked_sub(entity.decoded_end)?;
+        }
+        delta.checked_add(offset)
+    }
+
+    fn trimmed_candidate(value: &DecodedSourceValue, context: &'static str) -> Option<Candidate> {
+        let (start, end) = url_trimmed_bounds(&value.value);
+        let trimmed = &value.value[start..end];
+        let projected = project_decoded_source_value(value, start, end)?;
+
+        (!trimmed.is_empty()).then(|| candidate_from_decoded(projected, context))
+    }
+
+    fn html_space(byte: u8) -> bool {
+        matches!(byte, b'\t' | b'\n' | 0x0c | b'\r' | b' ')
+    }
+
+    fn declarative_refresh_url_range(input: &str) -> Option<(usize, usize)> {
+        let bytes = input.as_bytes();
+        let mut cursor = 0;
+
+        while bytes.get(cursor).is_some_and(|byte| html_space(*byte)) {
+            cursor += 1;
+        }
+        let integer_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        if cursor == integer_start && bytes.get(cursor) != Some(&b'.') {
+            return None;
+        }
+        while bytes
+            .get(cursor)
+            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'.')
+        {
+            cursor += 1;
+        }
+        let separator = *bytes.get(cursor)?;
+        if !matches!(separator, b';' | b',') && !html_space(separator) {
+            return None;
+        }
+        while bytes.get(cursor).is_some_and(|byte| html_space(*byte)) {
+            cursor += 1;
+        }
+        if bytes
+            .get(cursor)
+            .is_some_and(|byte| matches!(*byte, b';' | b','))
+        {
+            cursor += 1;
+        }
+        while bytes.get(cursor).is_some_and(|byte| html_space(*byte)) {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() {
+            return None;
+        }
+
+        let original_start = cursor;
+        if bytes[cursor].eq_ignore_ascii_case(&b'u') {
+            let mut url_cursor = cursor + 1;
+
+            if !bytes
+                .get(url_cursor)
+                .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'r'))
+            {
+                return Some((original_start, bytes.len()));
+            }
+            url_cursor += 1;
+            if !bytes
+                .get(url_cursor)
+                .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'l'))
+            {
+                return Some((original_start, bytes.len()));
+            }
+            url_cursor += 1;
+            while bytes.get(url_cursor).is_some_and(|byte| html_space(*byte)) {
+                url_cursor += 1;
+            }
+            if bytes.get(url_cursor) != Some(&b'=') {
+                return Some((original_start, bytes.len()));
+            }
+            cursor = url_cursor + 1;
+            while bytes.get(cursor).is_some_and(|byte| html_space(*byte)) {
+                cursor += 1;
+            }
+        }
+
+        let quote = bytes
+            .get(cursor)
+            .copied()
+            .filter(|byte| matches!(*byte, b'\'' | b'"'));
+        if quote.is_some() {
+            cursor += 1;
+        }
+        let end = quote
+            .and_then(|quote| bytes[cursor..].iter().position(|byte| *byte == quote))
+            .map_or(bytes.len(), |offset| cursor + offset);
+
+        Some((cursor, end))
+    }
+
+    fn srcset_candidates(value: &DecodedSourceValue) -> Vec<Candidate> {
+        let mut candidates = Vec::new();
+        let bytes = value.value.as_bytes();
+        let mut cursor = 0;
+
+        while cursor < bytes.len() {
+            while bytes
+                .get(cursor)
+                .is_some_and(|byte| html_space(*byte) || *byte == b',')
+            {
+                cursor += 1;
+            }
+            if cursor >= bytes.len() {
+                break;
             }
 
-            segment_start += segment.len() + 1;
+            let start = cursor;
+            while bytes.get(cursor).is_some_and(|byte| !html_space(*byte)) {
+                cursor += 1;
+            }
+            let mut end = cursor;
+            let mut trailing_comma = false;
+            while end > start && bytes[end - 1] == b',' {
+                trailing_comma = true;
+                end -= 1;
+            }
+            if !trailing_comma {
+                enum DescriptorState {
+                    AfterDescriptor,
+                    InDescriptor,
+                    InParens,
+                }
+                let mut state = DescriptorState::InDescriptor;
+
+                while let Some(byte) = bytes.get(cursor).copied() {
+                    match state {
+                        DescriptorState::InParens => {
+                            cursor += 1;
+                            if byte == b')' {
+                                state = DescriptorState::InDescriptor;
+                            }
+                        }
+                        DescriptorState::AfterDescriptor if html_space(byte) => cursor += 1,
+                        DescriptorState::AfterDescriptor => {
+                            state = DescriptorState::InDescriptor;
+                        }
+                        DescriptorState::InDescriptor if byte == b',' => {
+                            cursor += 1;
+                            break;
+                        }
+                        DescriptorState::InDescriptor => {
+                            cursor += 1;
+                            if byte == b'(' {
+                                state = DescriptorState::InParens;
+                            } else if html_space(byte) {
+                                state = DescriptorState::AfterDescriptor;
+                            }
+                        }
+                    }
+                }
+            }
+            if end == start {
+                continue;
+            }
+            let token = &value.value[start..end];
+            let ignored = token.get(..5).is_some_and(|prefix| {
+                prefix.eq_ignore_ascii_case("data:") || prefix.eq_ignore_ascii_case("blob:")
+            });
+
+            if !ignored && let Some(projected) = project_decoded_source_value(value, start, end) {
+                candidates.push(candidate_from_decoded(projected, "html-srcset"));
+            }
         }
 
         candidates
     }
 
-    static HTML_ATTRIBUTES: OnceLock<regex::Regex> = OnceLock::new();
-    let html_attributes = HTML_ATTRIBUTES.get_or_init(|| {
-        regex::RegexBuilder::new(
-            r#"(?:^|[\s<])(?P<attribute>srcset|src|href|poster)\s*=\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)')"#,
+    fn explicitly_managed_asset_reference(value: &str) -> bool {
+        let preprocessed = url_preprocessed_value(value);
+        let (source_path, _, _) = asset_reference_parts(&preprocessed);
+
+        parsed_local_asset_path(source_path)
+            .is_some_and(|(_, explicitly_managed)| explicitly_managed)
+    }
+
+    fn context_supports_arbitrary_asset(context: &str, original: &str) -> bool {
+        matches!(
+            context,
+            "css-import"
+                | "css-url"
+                | "html-background"
+                | "html-poster"
+                | "html-src"
+                | "html-srcset"
+                | "html-href"
+                | "html-data"
+                | "html-refresh"
+        ) || explicitly_managed_asset_reference(original)
+    }
+
+    fn css_name_byte(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+    }
+
+    fn css_whitespace(byte: u8) -> bool {
+        matches!(byte, b'\t' | b'\n' | 0x0c | b'\r' | b' ')
+    }
+
+    fn css_comment_end(bytes: &[u8], start: usize) -> Option<usize> {
+        let mut cursor = start + 2;
+
+        while cursor + 1 < bytes.len() {
+            if bytes[cursor] == b'*' && bytes[cursor + 1] == b'/' {
+                return Some(cursor + 2);
+            }
+            cursor += 1;
+        }
+        None
+    }
+
+    fn skip_css_trivia(
+        bytes: &[u8],
+        start: usize,
+        ignored_spans: &mut Vec<(usize, usize)>,
+    ) -> Option<usize> {
+        let mut cursor = start;
+
+        while cursor < bytes.len() {
+            if css_whitespace(bytes[cursor]) {
+                cursor += 1;
+                continue;
+            }
+            if bytes[cursor] == b'/' && bytes.get(cursor + 1) == Some(&b'*') {
+                let Some(end) = css_comment_end(bytes, cursor) else {
+                    ignored_spans.push((cursor, bytes.len()));
+                    return None;
+                };
+                ignored_spans.push((cursor, end));
+                cursor = end;
+                continue;
+            }
+            break;
+        }
+
+        Some(cursor)
+    }
+
+    #[derive(Default)]
+    struct SortedSpanCursor {
+        index: usize,
+    }
+
+    impl SortedSpanCursor {
+        fn overlaps(&mut self, start: usize, end: usize, spans: &[(usize, usize)]) -> bool {
+            while spans
+                .get(self.index)
+                .is_some_and(|(_, span_end)| *span_end <= start)
+            {
+                self.index += 1;
+            }
+
+            spans
+                .get(self.index)
+                .is_some_and(|(span_start, span_end)| start < *span_end && end > *span_start)
+        }
+    }
+
+    #[derive(Default)]
+    struct CssLexicalRanges {
+        complete: bool,
+        ignored_spans: Vec<(usize, usize)>,
+        import_ranges: Vec<(usize, usize)>,
+        url_ranges: Vec<(usize, usize)>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct SemanticSourceRange {
+        end: usize,
+        semantic: Option<String>,
+        semantic_entities: Vec<HtmlEntitySegment>,
+        start: usize,
+    }
+
+    #[derive(Default)]
+    struct CssSourceRanges {
+        complete: bool,
+        context_spans: Vec<(usize, usize)>,
+        ignored_spans: Vec<(usize, usize)>,
+        import_ranges: Vec<SemanticSourceRange>,
+        url_ranges: Vec<SemanticSourceRange>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct HtmlAssetAttribute {
+        attribute: String,
+        value: DecodedSourceValue,
+    }
+
+    #[derive(Default)]
+    struct HtmlLexicalScan {
+        attributes: Vec<HtmlAssetAttribute>,
+        complete: bool,
+        ignored_fallback_spans: Vec<(usize, usize)>,
+        style_attributes: Vec<DecodedSourceValue>,
+        style_contents: Vec<(usize, usize)>,
+    }
+
+    fn lexical_css_url_ranges(source: &str) -> CssLexicalRanges {
+        const MAX_CSS_FUNCTION_DEPTH: usize = 256;
+
+        struct CssFunctionContext {
+            image_set: bool,
+            option_start: bool,
+        }
+
+        let bytes = source.as_bytes();
+        let mut ignored_spans = Vec::new();
+        let mut import_ranges = Vec::new();
+        let mut ranges = Vec::new();
+        let mut functions: Vec<CssFunctionContext> = Vec::new();
+        let mut complete = true;
+        let mut cursor = 0;
+
+        'scan: while cursor < bytes.len() {
+            if bytes[cursor] == b'/' && bytes.get(cursor + 1) == Some(&b'*') {
+                let Some(end) = css_comment_end(bytes, cursor) else {
+                    ignored_spans.push((cursor, bytes.len()));
+                    break;
+                };
+                ignored_spans.push((cursor, end));
+                cursor = end;
+                continue;
+            }
+            let quote = bytes[cursor];
+            if quote == b'\\' {
+                complete = false;
+                cursor = (cursor + 2).min(bytes.len());
+                continue;
+            }
+            if bytes[cursor] == b'@'
+                && bytes
+                    .get(cursor + 1)
+                    .is_some_and(|byte| css_name_byte(*byte))
+            {
+                if let Some(context) = functions.last_mut()
+                    && context.image_set
+                    && context.option_start
+                {
+                    context.option_start = false;
+                }
+                let mut name = Vec::new();
+                let mut name_end = cursor + 1;
+                let mut name_complete = true;
+
+                while name_end < bytes.len() {
+                    if css_name_byte(bytes[name_end]) {
+                        name.push(bytes[name_end]);
+                        name_end += 1;
+                        continue;
+                    }
+                    if bytes[name_end] == b'/' && bytes.get(name_end + 1) == Some(&b'*') {
+                        let Some(end) = css_comment_end(bytes, name_end) else {
+                            ignored_spans.push((name_end, bytes.len()));
+                            name_complete = false;
+                            name_end = bytes.len();
+                            break;
+                        };
+                        ignored_spans.push((name_end, end));
+                        name_end = end;
+                        continue;
+                    }
+                    if bytes[name_end] == b'\\' {
+                        complete = false;
+                        break 'scan;
+                    }
+                    break;
+                }
+                if !name_complete {
+                    complete = false;
+                    break;
+                }
+                if name.eq_ignore_ascii_case(b"import") {
+                    let Some(quote_start) = skip_css_trivia(bytes, name_end, &mut ignored_spans)
+                    else {
+                        complete = false;
+                        break;
+                    };
+                    if bytes
+                        .get(quote_start)
+                        .is_some_and(|byte| matches!(*byte, b'\'' | b'"'))
+                    {
+                        let import_quote = bytes[quote_start];
+                        let mut end = quote_start + 1;
+                        let mut valid = true;
+
+                        while end < bytes.len() && bytes[end] != import_quote {
+                            if bytes[end] == b'\\' {
+                                valid = false;
+                                complete = false;
+                                end = (end + 2).min(bytes.len());
+                            } else {
+                                end += 1;
+                            }
+                        }
+                        let closed = bytes.get(end) == Some(&import_quote);
+
+                        ignored_spans
+                            .push((quote_start, if closed { end + 1 } else { bytes.len() }));
+                        if valid && closed && end > quote_start + 1 {
+                            import_ranges.push((quote_start + 1, end));
+                        }
+                        cursor = if closed { end + 1 } else { bytes.len() };
+                        continue;
+                    }
+                }
+                cursor = name_end.max(cursor + 1);
+                continue;
+            }
+            let apostrophe_in_word = quote == b'\''
+                && source[..cursor]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|character| character.is_alphanumeric() || character == '_');
+
+            if matches!(quote, b'\'' | b'"' | b'`') && !apostrophe_in_word {
+                let start = cursor;
+                let image_set_option = matches!(quote, b'\'' | b'"')
+                    && functions
+                        .last()
+                        .is_some_and(|context| context.image_set && context.option_start);
+                let mut escaped = false;
+
+                cursor += 1;
+                while cursor < bytes.len() {
+                    if bytes[cursor] == b'\\' {
+                        escaped = true;
+                        cursor = (cursor + 2).min(bytes.len());
+                        continue;
+                    }
+                    let current = bytes[cursor];
+                    cursor += 1;
+                    if current == quote {
+                        break;
+                    }
+                }
+                ignored_spans.push((start, cursor));
+                if image_set_option && escaped {
+                    complete = false;
+                }
+                if image_set_option
+                    && !escaped
+                    && cursor > start + 2
+                    && bytes.get(cursor - 1) == Some(&quote)
+                {
+                    ranges.push((start + 1, cursor - 1));
+                }
+                if let Some(context) = functions.last_mut()
+                    && context.image_set
+                {
+                    context.option_start = false;
+                }
+                continue;
+            }
+            if bytes[cursor] == b'(' {
+                if let Some(context) = functions.last_mut()
+                    && context.image_set
+                    && context.option_start
+                {
+                    context.option_start = false;
+                }
+                if functions.len() >= MAX_CSS_FUNCTION_DEPTH {
+                    complete = false;
+                    break 'scan;
+                }
+                functions.push(CssFunctionContext {
+                    image_set: false,
+                    option_start: false,
+                });
+                cursor += 1;
+                continue;
+            }
+            if bytes[cursor] == b')' {
+                functions.pop();
+                cursor += 1;
+                continue;
+            }
+            if bytes[cursor] == b',' {
+                if let Some(context) = functions.last_mut()
+                    && context.image_set
+                {
+                    context.option_start = true;
+                }
+                cursor += 1;
+                continue;
+            }
+            if css_name_byte(bytes[cursor]) && (cursor == 0 || !css_name_byte(bytes[cursor - 1])) {
+                let mut name = Vec::new();
+                let mut name_end = cursor;
+                let mut name_complete = true;
+
+                while name_end < bytes.len() {
+                    if css_name_byte(bytes[name_end]) {
+                        name.push(bytes[name_end]);
+                        name_end += 1;
+                        continue;
+                    }
+                    if bytes[name_end] == b'/' && bytes.get(name_end + 1) == Some(&b'*') {
+                        let Some(end) = css_comment_end(bytes, name_end) else {
+                            ignored_spans.push((name_end, bytes.len()));
+                            name_complete = false;
+                            name_end = bytes.len();
+                            break;
+                        };
+                        ignored_spans.push((name_end, end));
+                        name_end = end;
+                        continue;
+                    }
+                    if bytes[name_end] == b'\\' {
+                        complete = false;
+                        break 'scan;
+                    }
+                    break;
+                }
+                if !name_complete {
+                    complete = false;
+                    break;
+                }
+                let Some(open) = skip_css_trivia(bytes, name_end, &mut ignored_spans) else {
+                    complete = false;
+                    break;
+                };
+                if bytes.get(open) != Some(&b'(') {
+                    if let Some(context) = functions.last_mut()
+                        && context.image_set
+                        && context.option_start
+                    {
+                        context.option_start = false;
+                    }
+                    cursor = name_end.max(cursor + 1);
+                    continue;
+                }
+                if !name.eq_ignore_ascii_case(b"url") {
+                    if let Some(context) = functions.last_mut()
+                        && context.image_set
+                        && context.option_start
+                    {
+                        context.option_start = false;
+                    }
+                    let image_set = name.eq_ignore_ascii_case(b"image-set")
+                        || name.eq_ignore_ascii_case(b"-webkit-image-set");
+
+                    if functions.len() >= MAX_CSS_FUNCTION_DEPTH {
+                        complete = false;
+                        break 'scan;
+                    }
+                    functions.push(CssFunctionContext {
+                        image_set,
+                        option_start: image_set,
+                    });
+                    cursor = open + 1;
+                    continue;
+                }
+                if let Some(context) = functions.last_mut()
+                    && context.image_set
+                    && context.option_start
+                {
+                    context.option_start = false;
+                }
+                let Some(mut value_start) = skip_css_trivia(bytes, open + 1, &mut ignored_spans)
+                else {
+                    complete = false;
+                    break;
+                };
+                let mut value_end = value_start;
+                let mut end = value_start;
+                let mut valid = true;
+
+                if bytes
+                    .get(value_start)
+                    .is_some_and(|byte| matches!(*byte, b'\'' | b'"'))
+                {
+                    let value_quote = bytes[value_start];
+                    value_start += 1;
+                    end = value_start;
+                    while end < bytes.len() && bytes[end] != value_quote {
+                        if bytes[end] == b'\\' {
+                            valid = false;
+                            complete = false;
+                            end = (end + 2).min(bytes.len());
+                        } else {
+                            end += 1;
+                        }
+                    }
+                    value_end = end;
+                    let closed = bytes.get(end) == Some(&value_quote);
+                    if closed {
+                        end += 1;
+                    }
+                    let Some(trivia_end) = skip_css_trivia(bytes, end, &mut ignored_spans) else {
+                        complete = false;
+                        break;
+                    };
+                    end = trivia_end;
+                    valid = valid && closed && bytes.get(end) == Some(&b')');
+                } else {
+                    while end < bytes.len() && bytes[end] != b')' {
+                        if css_whitespace(bytes[end])
+                            || (bytes[end] == b'/' && bytes.get(end + 1) == Some(&b'*'))
+                        {
+                            value_end = end;
+                            let Some(trivia_end) = skip_css_trivia(bytes, end, &mut ignored_spans)
+                            else {
+                                valid = false;
+                                complete = false;
+                                end = bytes.len();
+                                break;
+                            };
+                            end = trivia_end;
+                            valid = valid && bytes.get(end) == Some(&b')');
+                            break;
+                        }
+                        if matches!(bytes[end], b'\\' | b'\'' | b'"')
+                            || (bytes[end] == b'/' && bytes.get(end + 1) == Some(&b'*'))
+                        {
+                            valid = false;
+                            if bytes[end] == b'\\' {
+                                complete = false;
+                            }
+                        }
+                        end += 1;
+                    }
+                    if value_end == value_start {
+                        value_end = end;
+                    }
+                    valid = valid && bytes.get(end) == Some(&b')');
+                }
+                while value_start < value_end && css_whitespace(bytes[value_start]) {
+                    value_start += 1;
+                }
+                while value_end > value_start && css_whitespace(bytes[value_end - 1]) {
+                    value_end -= 1;
+                }
+                if valid && value_end > value_start {
+                    ranges.push((value_start, value_end));
+                }
+                cursor = if bytes.get(end) == Some(&b')') {
+                    end + 1
+                } else {
+                    end.max(open + 1)
+                };
+                continue;
+            }
+            if let Some(context) = functions.last_mut()
+                && context.image_set
+                && context.option_start
+                && !css_whitespace(bytes[cursor])
+            {
+                context.option_start = false;
+            }
+            cursor += 1;
+        }
+
+        CssLexicalRanges {
+            complete,
+            ignored_spans,
+            import_ranges,
+            url_ranges: ranges,
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum HtmlNamespace {
+        Html,
+        Math,
+        Svg,
+    }
+
+    struct HtmlOpenElement {
+        html_integration_point: bool,
+        math_text_integration_point: bool,
+        namespace: HtmlNamespace,
+        tag: String,
+    }
+
+    struct ParsedHtmlAttribute {
+        name: String,
+        value: Option<DecodedSourceValue>,
+    }
+
+    #[derive(Default)]
+    struct LinkRelationClassification {
+        href: bool,
+        imagesrcset: bool,
+        unknown: bool,
+    }
+
+    fn classify_html_link_relations(rel: &str, as_value: &str) -> LinkRelationClassification {
+        let mut preload = false;
+        let mut resource = false;
+        let mut unknown = false;
+
+        for relation in rel.split(['\t', '\n', '\u{000C}', '\r', ' ']) {
+            if relation.is_empty() {
+                continue;
+            }
+            let relation = relation.to_ascii_lowercase();
+            if matches!(
+                relation.as_str(),
+                "apple-touch-icon"
+                    | "apple-touch-icon-precomposed"
+                    | "compression-dictionary"
+                    | "dns-prefetch"
+                    | "icon"
+                    | "manifest"
+                    | "mask-icon"
+                    | "modulepreload"
+                    | "pingback"
+                    | "preconnect"
+                    | "prefetch"
+                    | "preload"
+                    | "stylesheet"
+            ) {
+                resource = true;
+                preload |= relation == "preload";
+            } else if !matches!(
+                relation.as_str(),
+                "alternate"
+                    | "author"
+                    | "bookmark"
+                    | "canonical"
+                    | "expect"
+                    | "external"
+                    | "help"
+                    | "license"
+                    | "next"
+                    | "nofollow"
+                    | "noopener"
+                    | "noreferrer"
+                    | "opener"
+                    | "prev"
+                    | "privacy-policy"
+                    | "search"
+                    | "shortcut"
+                    | "sponsored"
+                    | "tag"
+                    | "terms-of-service"
+                    | "ugc"
+            ) {
+                unknown = true;
+            }
+        }
+        LinkRelationClassification {
+            href: resource,
+            imagesrcset: preload && as_value.eq_ignore_ascii_case("image"),
+            unknown: unknown && !resource,
+        }
+    }
+
+    fn decoded_html_attribute(name: &str) -> bool {
+        matches!(
+            name,
+            "as" | "background"
+                | "clip-path"
+                | "content"
+                | "cursor"
+                | "data"
+                | "encoding"
+                | "fill"
+                | "filter"
+                | "href"
+                | "http-equiv"
+                | "imagesrcset"
+                | "marker"
+                | "marker-end"
+                | "marker-mid"
+                | "marker-start"
+                | "mask"
+                | "poster"
+                | "rel"
+                | "src"
+                | "srcset"
+                | "stroke"
+                | "style"
+                | "type"
+                | "xlink:href"
         )
-        .case_insensitive(true)
-        .build()
-        .expect("HTML asset attribute regex should compile")
-    });
-    let mut candidates = Vec::new();
-    for captures in html_attributes.captures_iter(source) {
-        let Some(attribute) = captures.name("attribute") else {
-            continue;
+    }
+
+    fn svg_css_presentation_attribute(name: &str) -> bool {
+        matches!(
+            name,
+            "clip-path"
+                | "cursor"
+                | "fill"
+                | "filter"
+                | "marker"
+                | "marker-end"
+                | "marker-mid"
+                | "marker-start"
+                | "mask"
+                | "stroke"
+        )
+    }
+
+    fn html_asset_attribute(tag: &str, attribute: &str, input_type: &str) -> bool {
+        let tag = if tag == "image" { "img" } else { tag };
+
+        if attribute == "background"
+            && matches!(
+                tag,
+                "body" | "table" | "tbody" | "td" | "tfoot" | "th" | "thead" | "tr"
+            )
+        {
+            return true;
+        }
+        if attribute == "data" && tag == "object" {
+            return true;
+        }
+        if attribute == "poster" && tag == "video" {
+            return true;
+        }
+        if attribute == "srcset" && matches!(tag, "img" | "source") {
+            return true;
+        }
+        if attribute != "src" {
+            return false;
+        }
+        matches!(
+            tag,
+            "audio"
+                | "embed"
+                | "frame"
+                | "iframe"
+                | "img"
+                | "script"
+                | "source"
+                | "track"
+                | "video"
+        ) || (tag == "input" && input_type.eq_ignore_ascii_case("image"))
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum SvgHrefDisposition {
+        Navigation,
+        Resource,
+        Structural,
+    }
+
+    fn svg_href_disposition(tag: &str) -> Option<SvgHrefDisposition> {
+        match tag {
+            "a" => Some(SvgHrefDisposition::Navigation),
+            "feimage" | "image" | "lineargradient" | "mpath" | "pattern" | "radialgradient"
+            | "script" | "textpath" | "use" => Some(SvgHrefDisposition::Resource),
+            "animate" | "animatemotion" | "animatetransform" | "set" => {
+                Some(SvgHrefDisposition::Structural)
+            }
+            _ => None,
+        }
+    }
+
+    fn parsed_html_attribute<'a>(
+        attributes: &'a [ParsedHtmlAttribute],
+        name: &str,
+    ) -> Option<&'a DecodedSourceValue> {
+        attributes
+            .iter()
+            .find(|attribute| attribute.name == name)
+            .and_then(|attribute| attribute.value.as_ref())
+    }
+
+    fn html_tag_end(source: &str, start: usize) -> Option<usize> {
+        let bytes = source.as_bytes();
+        let mut quote = None;
+        let mut cursor = start;
+
+        while let Some(byte) = bytes.get(cursor).copied() {
+            if let Some(expected) = quote {
+                if byte == expected {
+                    quote = None;
+                }
+            } else if matches!(byte, b'\'' | b'"') {
+                quote = Some(byte);
+            } else if byte == b'>' {
+                return Some(cursor + 1);
+            }
+            cursor += 1;
+        }
+        None
+    }
+
+    fn html_comment_end(source: &str, start: usize) -> usize {
+        let bytes = source.as_bytes();
+        let mut cursor = start + 4;
+        if bytes.get(cursor) == Some(&b'>') {
+            return cursor + 1;
+        }
+        if bytes.get(cursor..cursor + 2) == Some(b"->") {
+            return cursor + 2;
+        }
+        while cursor < bytes.len() {
+            if bytes.get(cursor..cursor + 3) == Some(b"-->") {
+                return cursor + 3;
+            }
+            if bytes.get(cursor..cursor + 4) == Some(b"--!>") {
+                return cursor + 4;
+            }
+            cursor += 1;
+        }
+        bytes.len()
+    }
+
+    fn appropriate_raw_end_tag(source: &str, start: usize, tag: &str) -> bool {
+        let bytes = source.as_bytes();
+        bytes.get(start) == Some(&b'<')
+            && bytes.get(start + 1) == Some(&b'/')
+            && source
+                .get(start + 2..start + 2 + tag.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(tag))
+            && bytes
+                .get(start + 2 + tag.len())
+                .is_some_and(|byte| matches!(*byte, b'/' | b'>') || html_space(*byte))
+    }
+
+    fn raw_text_end(source: &str, start: usize, tag: &str) -> usize {
+        let mut cursor = start;
+
+        while let Some(offset) = source[cursor..].find("</") {
+            cursor += offset;
+            if appropriate_raw_end_tag(source, cursor, tag) {
+                return cursor;
+            }
+            cursor += 2;
+        }
+        source.len()
+    }
+
+    fn script_text_end(source: &str, start: usize) -> usize {
+        #[derive(Clone, Copy)]
+        enum State {
+            Data,
+            Double,
+            DoubleDash,
+            DoubleDashDash,
+            Escaped,
+            EscapedDash,
+            EscapedDashDash,
+        }
+
+        fn escaped_less_than(source: &str, cursor: &mut usize) -> Option<State> {
+            if appropriate_raw_end_tag(source, *cursor, "script") {
+                return None;
+            }
+            let bytes = source.as_bytes();
+            if !bytes.get(*cursor + 1).is_some_and(u8::is_ascii_alphabetic) {
+                return Some(State::Escaped);
+            }
+            let mut end = *cursor + 1;
+            while bytes.get(end).is_some_and(u8::is_ascii_alphabetic) {
+                end += 1;
+            }
+            let delimiter = bytes
+                .get(end)
+                .is_some_and(|byte| matches!(*byte, b'/' | b'>') || html_space(*byte));
+            let double = source[*cursor + 1..end].eq_ignore_ascii_case("script") && delimiter;
+            *cursor = if delimiter {
+                end
+            } else {
+                end.saturating_sub(1)
+            };
+            Some(if double {
+                State::Double
+            } else {
+                State::Escaped
+            })
+        }
+
+        fn double_less_than(source: &str, cursor: &mut usize) -> State {
+            let bytes = source.as_bytes();
+            if bytes.get(*cursor + 1) != Some(&b'/') {
+                return State::Double;
+            }
+            let mut end = *cursor + 2;
+            while bytes.get(end).is_some_and(u8::is_ascii_alphabetic) {
+                end += 1;
+            }
+            let delimiter = bytes
+                .get(end)
+                .is_some_and(|byte| matches!(*byte, b'/' | b'>') || html_space(*byte));
+            let escaped = source[*cursor + 2..end].eq_ignore_ascii_case("script") && delimiter;
+            *cursor = if delimiter {
+                end
+            } else {
+                end.saturating_sub(1)
+            };
+            if escaped {
+                State::Escaped
+            } else {
+                State::Double
+            }
+        }
+
+        let bytes = source.as_bytes();
+        let mut cursor = start;
+        let mut state = State::Data;
+        while cursor < bytes.len() {
+            let byte = bytes[cursor];
+            state = match state {
+                State::Data => {
+                    if appropriate_raw_end_tag(source, cursor, "script") {
+                        return cursor;
+                    }
+                    if bytes.get(cursor..cursor + 4) == Some(b"<!--") {
+                        state = State::EscapedDashDash;
+                        cursor += 4;
+                        continue;
+                    }
+                    State::Data
+                }
+                State::Escaped if byte == b'-' => State::EscapedDash,
+                State::Escaped if byte == b'<' => {
+                    let Some(next) = escaped_less_than(source, &mut cursor) else {
+                        return cursor;
+                    };
+                    next
+                }
+                State::Escaped => State::Escaped,
+                State::EscapedDash if byte == b'-' => State::EscapedDashDash,
+                State::EscapedDash if byte == b'<' => {
+                    let Some(next) = escaped_less_than(source, &mut cursor) else {
+                        return cursor;
+                    };
+                    next
+                }
+                State::EscapedDash => State::Escaped,
+                State::EscapedDashDash if byte == b'<' => {
+                    let Some(next) = escaped_less_than(source, &mut cursor) else {
+                        return cursor;
+                    };
+                    next
+                }
+                State::EscapedDashDash if byte == b'>' => State::Data,
+                State::EscapedDashDash if byte == b'-' => State::EscapedDashDash,
+                State::EscapedDashDash => State::Escaped,
+                State::Double if byte == b'-' => State::DoubleDash,
+                State::Double if byte == b'<' => double_less_than(source, &mut cursor),
+                State::Double => State::Double,
+                State::DoubleDash if byte == b'-' => State::DoubleDashDash,
+                State::DoubleDash if byte == b'<' => double_less_than(source, &mut cursor),
+                State::DoubleDash => State::Double,
+                State::DoubleDashDash if byte == b'<' => double_less_than(source, &mut cursor),
+                State::DoubleDashDash if byte == b'>' => State::Data,
+                State::DoubleDashDash if byte == b'-' => State::DoubleDashDash,
+                State::DoubleDashDash => State::Double,
+            };
+            cursor += 1;
+        }
+        source.len()
+    }
+
+    fn html_children_use_html(stack: &[HtmlOpenElement], next_tag: Option<&str>) -> bool {
+        let Some(current) = stack.last() else {
+            return true;
         };
-        let Some(value) = quoted_value(&captures) else {
-            continue;
+        current.namespace == HtmlNamespace::Html
+            || current.html_integration_point
+            || (current.namespace == HtmlNamespace::Math
+                && current.tag == "annotation-xml"
+                && next_tag == Some("svg"))
+            || (current.math_text_integration_point
+                && !matches!(next_tag, Some("mglyph" | "malignmark")))
+    }
+
+    fn html_void_element(tag: &str) -> bool {
+        matches!(
+            tag,
+            "area"
+                | "base"
+                | "basefont"
+                | "bgsound"
+                | "br"
+                | "col"
+                | "embed"
+                | "frame"
+                | "hr"
+                | "image"
+                | "img"
+                | "input"
+                | "keygen"
+                | "link"
+                | "meta"
+                | "param"
+                | "source"
+                | "track"
+                | "wbr"
+        )
+    }
+
+    fn html_foreign_breakout(tag: &str) -> bool {
+        matches!(
+            tag,
+            "b" | "big"
+                | "blockquote"
+                | "body"
+                | "br"
+                | "center"
+                | "code"
+                | "dd"
+                | "div"
+                | "dl"
+                | "dt"
+                | "em"
+                | "embed"
+                | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "head"
+                | "hr"
+                | "i"
+                | "img"
+                | "li"
+                | "listing"
+                | "menu"
+                | "meta"
+                | "nobr"
+                | "ol"
+                | "p"
+                | "pre"
+                | "ruby"
+                | "s"
+                | "small"
+                | "span"
+                | "strike"
+                | "strong"
+                | "sub"
+                | "sup"
+                | "table"
+                | "tt"
+                | "u"
+                | "ul"
+                | "var"
+        )
+    }
+
+    fn html_lexical_scan(source: &str) -> HtmlLexicalScan {
+        let bytes = source.as_bytes();
+        let mut result = HtmlLexicalScan {
+            complete: true,
+            ..HtmlLexicalScan::default()
+        };
+        let mut stack = Vec::<HtmlOpenElement>::new();
+        let mut cursor = 0;
+
+        while cursor < bytes.len() {
+            if bytes.get(cursor..cursor + 4) == Some(b"<!--") {
+                let resume = html_comment_end(source, cursor);
+                result.ignored_fallback_spans.push((cursor, resume));
+                cursor = resume;
+                continue;
+            }
+            if bytes.get(cursor..cursor + 9) == Some(b"<![CDATA[")
+                && !html_children_use_html(&stack, None)
+            {
+                let resume = source[cursor + 9..]
+                    .find("]]>")
+                    .map_or(bytes.len(), |offset| cursor + 9 + offset + 3);
+                result.ignored_fallback_spans.push((cursor, resume));
+                cursor = resume;
+                continue;
+            }
+            if bytes[cursor] != b'<' {
+                cursor += 1;
+                continue;
+            }
+            if matches!(bytes.get(cursor + 1), Some(b'!' | b'?')) {
+                let resume = source[cursor + 2..]
+                    .find('>')
+                    .map_or(bytes.len(), |offset| cursor + 2 + offset + 1);
+                result.ignored_fallback_spans.push((cursor, resume));
+                cursor = resume;
+                continue;
+            }
+            if bytes.get(cursor + 1) == Some(&b'/') {
+                if !bytes.get(cursor + 2).is_some_and(u8::is_ascii_alphabetic) {
+                    if bytes.get(cursor + 2) == Some(&b'>') {
+                        cursor += 3;
+                        continue;
+                    }
+                    let resume = source[cursor + 2..]
+                        .find('>')
+                        .map_or(bytes.len(), |offset| cursor + 2 + offset + 1);
+                    result.ignored_fallback_spans.push((cursor, resume));
+                    cursor = resume;
+                    continue;
+                }
+                let mut name_end = cursor + 2;
+                while bytes
+                    .get(name_end)
+                    .is_some_and(|byte| !html_space(*byte) && !matches!(*byte, b'/' | b'>'))
+                {
+                    name_end += 1;
+                }
+                let tag = source[cursor + 2..name_end].to_ascii_lowercase();
+                let Some(end) = html_tag_end(source, name_end) else {
+                    cursor = bytes.len();
+                    continue;
+                };
+                if let Some(stack_index) = stack.iter().rposition(|item| item.tag == tag) {
+                    stack.truncate(stack_index);
+                }
+                cursor = end;
+                continue;
+            }
+
+            if !bytes.get(cursor + 1).is_some_and(u8::is_ascii_alphabetic) {
+                cursor += 1;
+                continue;
+            }
+            let mut index = cursor + 1;
+            while bytes
+                .get(index)
+                .is_some_and(|byte| !html_space(*byte) && !matches!(*byte, b'/' | b'>'))
+            {
+                index += 1;
+            }
+            let tag = source[cursor + 1..index].to_ascii_lowercase();
+            if tag.is_empty() {
+                cursor += 1;
+                continue;
+            }
+            let mut tag_attributes = Vec::<ParsedHtmlAttribute>::new();
+            let mut seen_attributes = BTreeSet::new();
+            let mut closed = false;
+            let mut self_closing = false;
+            while index < bytes.len() {
+                while bytes.get(index).is_some_and(|byte| html_space(*byte)) {
+                    index += 1;
+                }
+                if bytes.get(index) == Some(&b'>') {
+                    index += 1;
+                    closed = true;
+                    break;
+                }
+                if bytes.get(index) == Some(&b'/') && bytes.get(index + 1) == Some(&b'>') {
+                    index += 2;
+                    closed = true;
+                    self_closing = true;
+                    break;
+                }
+                let name_start = index;
+                while bytes
+                    .get(index)
+                    .is_some_and(|byte| !html_space(*byte) && !matches!(*byte, b'=' | b'>' | b'/'))
+                {
+                    index += 1;
+                }
+                let name = source[name_start..index].to_ascii_lowercase();
+                while bytes.get(index).is_some_and(|byte| html_space(*byte)) {
+                    index += 1;
+                }
+                if name.is_empty() || bytes.get(index) != Some(&b'=') {
+                    if !name.is_empty() && seen_attributes.insert(name.clone()) {
+                        tag_attributes.push(ParsedHtmlAttribute { name, value: None });
+                    }
+                    if index == name_start {
+                        index += 1;
+                    }
+                    continue;
+                }
+                index += 1;
+                while bytes.get(index).is_some_and(|byte| html_space(*byte)) {
+                    index += 1;
+                }
+                let (value_start, value_end) = if let Some(quote) = bytes
+                    .get(index)
+                    .copied()
+                    .filter(|byte| matches!(*byte, b'\'' | b'"'))
+                {
+                    let value_start = index + 1;
+                    index = value_start;
+                    while bytes.get(index).is_some_and(|byte| *byte != quote) {
+                        index += 1;
+                    }
+                    if index >= bytes.len() {
+                        break;
+                    }
+                    let value_end = index;
+                    index += 1;
+                    (value_start, value_end)
+                } else {
+                    let value_start = index;
+                    while bytes
+                        .get(index)
+                        .is_some_and(|byte| !html_space(*byte) && *byte != b'>')
+                    {
+                        index += 1;
+                    }
+                    (value_start, index)
+                };
+                if seen_attributes.insert(name.clone()) {
+                    let decoded_attribute = decoded_html_attribute(&name);
+                    let raw_value = &source[value_start..value_end];
+                    if decoded_attribute && raw_value.contains('\0') {
+                        result.complete = false;
+                    }
+                    let value = decoded_attribute
+                        .then(|| decode_html_attribute_value(raw_value, value_start));
+                    tag_attributes.push(ParsedHtmlAttribute { name, value });
+                }
+            }
+            if !closed {
+                cursor = (cursor + 1).max(index);
+                continue;
+            }
+            // Parsed start tags are authoritative. Generic filename heuristics apply only to
+            // free source text, never to labels, metadata, or other attributes.
+            result.ignored_fallback_spans.push((cursor, index));
+
+            let mut html_context = html_children_use_html(&stack, Some(&tag));
+            let top_namespace = stack
+                .last()
+                .map_or(HtmlNamespace::Html, |item| item.namespace);
+            let font_breakout = tag == "font"
+                && tag_attributes
+                    .iter()
+                    .any(|item| matches!(item.name.as_str(), "color" | "face" | "size"));
+            if !html_context && (html_foreign_breakout(&tag) || font_breakout) {
+                while !stack.is_empty() && !html_children_use_html(&stack, Some(&tag)) {
+                    stack.pop();
+                }
+                html_context = true;
+            }
+            let namespace = if html_context {
+                match tag.as_str() {
+                    "svg" => HtmlNamespace::Svg,
+                    "math" => HtmlNamespace::Math,
+                    _ => HtmlNamespace::Html,
+                }
+            } else {
+                top_namespace
+            };
+            if let Some(style) = parsed_html_attribute(&tag_attributes, "style") {
+                result.style_attributes.push(style.clone());
+            }
+            if namespace == HtmlNamespace::Svg {
+                result.style_attributes.extend(
+                    tag_attributes
+                        .iter()
+                        .filter(|item| svg_css_presentation_attribute(&item.name))
+                        .filter_map(|item| item.value.clone()),
+                );
+            }
+            let has_download = tag_attributes
+                .iter()
+                .any(|attribute| attribute.name == "download");
+            let input_type = parsed_html_attribute(&tag_attributes, "type")
+                .map_or("", |value| value.value.as_str());
+            let svg_href = if namespace == HtmlNamespace::Svg {
+                svg_href_disposition(&tag)
+            } else {
+                None
+            };
+            let has_svg_href = tag_attributes
+                .iter()
+                .any(|attribute| attribute.name == "href");
+            let link_relation = (namespace == HtmlNamespace::Html && tag == "link").then(|| {
+                classify_html_link_relations(
+                    parsed_html_attribute(&tag_attributes, "rel")
+                        .map_or("", |value| value.value.as_str()),
+                    parsed_html_attribute(&tag_attributes, "as")
+                        .map_or("", |value| value.value.as_str()),
+                )
+            });
+            if link_relation
+                .as_ref()
+                .is_some_and(|relation| relation.unknown)
+                && (parsed_html_attribute(&tag_attributes, "href").is_some()
+                    || parsed_html_attribute(&tag_attributes, "imagesrcset").is_some())
+            {
+                result.complete = false;
+            }
+            if namespace == HtmlNamespace::Html
+                && tag == "meta"
+                && parsed_html_attribute(&tag_attributes, "http-equiv")
+                    .is_some_and(|value| value.value.eq_ignore_ascii_case("refresh"))
+                && let Some(content) = parsed_html_attribute(&tag_attributes, "content")
+                && let Some((start, end)) = declarative_refresh_url_range(&content.value)
+            {
+                if let Some(projected) = project_decoded_source_value(content, start, end) {
+                    result.attributes.push(HtmlAssetAttribute {
+                        attribute: "refresh".into(),
+                        value: projected,
+                    });
+                } else {
+                    result.complete = false;
+                }
+            }
+            for item in &tag_attributes {
+                let Some(value) = &item.value else {
+                    continue;
+                };
+                let svg_reference = svg_href.is_some_and(|disposition| {
+                    disposition == SvgHrefDisposition::Resource
+                        || (disposition == SvgHrefDisposition::Navigation && has_download)
+                }) && (item.name == "href"
+                    || (item.name == "xlink:href" && !has_svg_href));
+                let link_resource = tag == "link"
+                    && namespace == HtmlNamespace::Html
+                    && ((item.name == "href"
+                        && link_relation.as_ref().is_some_and(|relation| relation.href))
+                        || (item.name == "imagesrcset"
+                            && link_relation
+                                .as_ref()
+                                .is_some_and(|relation| relation.imagesrcset)));
+                let html_download_href = namespace == HtmlNamespace::Html
+                    && matches!(tag.as_str(), "a" | "area")
+                    && has_download
+                    && item.name == "href";
+                let html_resource = namespace == HtmlNamespace::Html
+                    && html_asset_attribute(&tag, &item.name, input_type);
+                let structured_asset_attribute =
+                    html_resource || svg_reference || link_resource || html_download_href;
+                if structured_asset_attribute {
+                    result.attributes.push(HtmlAssetAttribute {
+                        attribute: item.name.clone(),
+                        value: value.clone(),
+                    });
+                }
+            }
+
+            let encoding = parsed_html_attribute(&tag_attributes, "encoding")
+                .map(|value| value.value.to_ascii_lowercase());
+            let html_integration_point = (namespace == HtmlNamespace::Svg
+                && matches!(tag.as_str(), "desc" | "foreignobject" | "title"))
+                || (namespace == HtmlNamespace::Math
+                    && tag == "annotation-xml"
+                    && encoding.as_deref().is_some_and(|encoding| {
+                        matches!(encoding, "text/html" | "application/xhtml+xml")
+                    }));
+            let should_push = if namespace == HtmlNamespace::Html {
+                !html_void_element(&tag)
+            } else {
+                !self_closing
+            };
+            if should_push {
+                if stack.len() >= 512 {
+                    result.complete = false;
+                } else {
+                    stack.push(HtmlOpenElement {
+                        html_integration_point,
+                        math_text_integration_point: namespace == HtmlNamespace::Math
+                            && matches!(tag.as_str(), "mi" | "mn" | "mo" | "ms" | "mtext"),
+                        namespace,
+                        tag: tag.clone(),
+                    });
+                }
+            }
+            if namespace != HtmlNamespace::Html {
+                cursor = index;
+                continue;
+            }
+            match tag.as_str() {
+                "plaintext" => {
+                    result.ignored_fallback_spans.push((index, source.len()));
+                    cursor = source.len();
+                }
+                "script" => {
+                    let end = script_text_end(source, index);
+                    result.ignored_fallback_spans.push((index, end));
+                    cursor = end;
+                }
+                "style" => {
+                    let end = raw_text_end(source, index, &tag);
+                    result.style_contents.push((index, end));
+                    result.ignored_fallback_spans.push((index, end));
+                    cursor = end;
+                }
+                "iframe" | "noembed" | "noframes" | "noscript" | "title" | "textarea" | "xmp" => {
+                    let end = raw_text_end(source, index, &tag);
+                    result.ignored_fallback_spans.push((index, end));
+                    cursor = end;
+                }
+                _ => cursor = index,
+            }
+        }
+        result
+    }
+
+    fn semantic_source_range(value: DecodedSourceValue) -> SemanticSourceRange {
+        SemanticSourceRange {
+            end: value.end,
+            semantic: Some(value.value),
+            semantic_entities: value.entities,
+            start: value.start,
+        }
+    }
+
+    fn lexical_css_url_ranges_in_source(
+        source: &str,
+        full_css_source: bool,
+        html: &HtmlLexicalScan,
+    ) -> CssSourceRanges {
+        let lexical = if full_css_source {
+            lexical_css_url_ranges(source)
+        } else {
+            CssLexicalRanges {
+                complete: true,
+                ..CssLexicalRanges::default()
+            }
+        };
+        let mut result = CssSourceRanges {
+            complete: lexical.complete,
+            context_spans: if full_css_source {
+                vec![(0, source.len())]
+            } else {
+                Vec::new()
+            },
+            ignored_spans: lexical.ignored_spans,
+            import_ranges: lexical
+                .import_ranges
+                .into_iter()
+                .map(|(start, end)| SemanticSourceRange {
+                    end,
+                    semantic: None,
+                    semantic_entities: Vec::new(),
+                    start,
+                })
+                .collect(),
+            url_ranges: lexical
+                .url_ranges
+                .into_iter()
+                .map(|(start, end)| SemanticSourceRange {
+                    end,
+                    semantic: None,
+                    semantic_entities: Vec::new(),
+                    start,
+                })
+                .collect(),
         };
 
-        if attribute.as_str().eq_ignore_ascii_case("srcset") {
-            candidates.extend(srcset_candidates(value));
+        if !full_css_source {
+            for (content_start, content_end) in &html.style_contents {
+                let nested = lexical_css_url_ranges(&source[*content_start..*content_end]);
+                result.complete &= nested.complete;
+                result.context_spans.push((*content_start, *content_end));
+                result
+                    .url_ranges
+                    .extend(nested.url_ranges.into_iter().map(|(start, end)| {
+                        SemanticSourceRange {
+                            end: content_start + end,
+                            semantic: None,
+                            semantic_entities: Vec::new(),
+                            start: content_start + start,
+                        }
+                    }));
+                result
+                    .import_ranges
+                    .extend(nested.import_ranges.into_iter().map(|(start, end)| {
+                        SemanticSourceRange {
+                            end: content_start + end,
+                            semantic: None,
+                            semantic_entities: Vec::new(),
+                            start: content_start + start,
+                        }
+                    }));
+                result.ignored_spans.extend(
+                    nested
+                        .ignored_spans
+                        .into_iter()
+                        .map(|(start, end)| (content_start + start, content_start + end)),
+                );
+            }
+            for value in &html.style_attributes {
+                let nested = lexical_css_url_ranges(&value.value);
+                result.complete &= nested.complete;
+                result.context_spans.push((value.start, value.end));
+                for (start, end) in nested.url_ranges {
+                    if let Some(projected) = project_decoded_source_value(value, start, end) {
+                        result.url_ranges.push(semantic_source_range(projected));
+                    } else {
+                        result.complete = false;
+                    }
+                }
+                for (start, end) in nested.import_ranges {
+                    if let Some(projected) = project_decoded_source_value(value, start, end) {
+                        result.import_ranges.push(semantic_source_range(projected));
+                    } else {
+                        result.complete = false;
+                    }
+                }
+                for (start, end) in nested.ignored_spans {
+                    if let Some(projected) = project_decoded_source_value(value, start, end) {
+                        result.ignored_spans.push((projected.start, projected.end));
+                    } else {
+                        result.complete = false;
+                    }
+                }
+            }
+            result
+                .ignored_spans
+                .extend(html.ignored_fallback_spans.iter().copied());
+        }
+        result
+            .url_ranges
+            .sort_unstable_by_key(|range| (range.start, range.end));
+        result
+            .import_ranges
+            .sort_unstable_by_key(|range| (range.start, range.end));
+        result.ignored_spans.sort_unstable();
+        result.context_spans.sort_unstable();
+        result
+    }
+    let full_css_source = source_id.to_ascii_lowercase().ends_with(":stylesheet")
+        || source_name.eq_ignore_ascii_case("Story Stylesheet");
+    let full_script_source = source_id.to_ascii_lowercase().ends_with(":script")
+        || source_name.eq_ignore_ascii_case("Story JavaScript");
+    let html = if full_css_source || full_script_source {
+        HtmlLexicalScan {
+            complete: true,
+            ..HtmlLexicalScan::default()
+        }
+    } else {
+        html_lexical_scan(source)
+    };
+    let css_ranges = lexical_css_url_ranges_in_source(source, full_css_source, &html);
+    let mut candidates = Vec::new();
+    for attribute in if full_css_source {
+        &[]
+    } else {
+        html.attributes.as_slice()
+    } {
+        if attribute.attribute.eq_ignore_ascii_case("srcset")
+            || attribute.attribute.eq_ignore_ascii_case("imagesrcset")
+        {
+            candidates.extend(srcset_candidates(&attribute.value));
         } else {
-            let context = if attribute.as_str().eq_ignore_ascii_case("src") {
+            let context = if attribute.attribute.eq_ignore_ascii_case("src") {
                 "html-src"
-            } else if attribute.as_str().eq_ignore_ascii_case("href") {
+            } else if attribute.attribute.eq_ignore_ascii_case("href")
+                || attribute.attribute.eq_ignore_ascii_case("xlink:href")
+            {
                 "html-href"
+            } else if attribute.attribute.eq_ignore_ascii_case("data") {
+                "html-data"
+            } else if attribute.attribute.eq_ignore_ascii_case("refresh") {
+                "html-refresh"
+            } else if attribute.attribute.eq_ignore_ascii_case("background") {
+                "html-background"
             } else {
                 "html-poster"
             };
 
-            if let Some(candidate) = trimmed_candidate(value, context) {
+            if let Some(candidate) = trimmed_candidate(&attribute.value, context) {
                 candidates.push(candidate);
             }
         }
     }
 
-    static CSS_URLS: OnceLock<regex::Regex> = OnceLock::new();
-    let css_urls = CSS_URLS.get_or_init(|| {
-        regex::RegexBuilder::new(
-            r#"\burl\(\s*(?:"(?P<double>[^"]*)"|'(?P<single>[^']*)'|(?P<unquoted>[^)]*?))\s*\)"#,
-        )
-        .case_insensitive(true)
-        .build()
-        .expect("CSS asset URL regex should compile")
-    });
-    for captures in css_urls.captures_iter(source) {
-        let value = quoted_value(&captures).or_else(|| captures.name("unquoted"));
-
-        if let Some(candidate) = value.and_then(|value| trimmed_candidate(value, "css-url")) {
-            candidates.push(candidate);
-        }
+    for range in &css_ranges.url_ranges {
+        candidates.push(Candidate {
+            context: "css-url",
+            end: range.end,
+            semantic: range.semantic.clone(),
+            semantic_entities: range.semantic_entities.clone(),
+            start: range.start,
+        });
     }
+    for range in &css_ranges.import_ranges {
+        candidates.push(Candidate {
+            context: "css-import",
+            end: range.end,
+            semantic: range.semantic.clone(),
+            semantic_entities: range.semantic_entities.clone(),
+            start: range.start,
+        });
+    }
+    candidates.sort_by_key(|candidate| (candidate.start, candidate.end));
+    let structured_candidate_spans = candidates
+        .iter()
+        .map(|candidate| (candidate.start, candidate.end))
+        .collect::<Vec<_>>();
+    let mut quoted_candidate_cursor = SortedSpanCursor::default();
 
     // Keep every quoted or template span out of the fallback matcher. Escaped
     // and interpolated strings are not safe source ranges unless a format-aware
@@ -10221,7 +12232,21 @@ fn asset_references_in_source(
     let mut quoted_spans = Vec::new();
     let bytes = source.as_bytes();
     let mut quote_start = 0;
+    let mut comment_index = 0;
     while quote_start < bytes.len() {
+        while css_ranges
+            .ignored_spans
+            .get(comment_index)
+            .is_some_and(|(_, end)| *end <= quote_start)
+        {
+            comment_index += 1;
+        }
+        if let Some((start, end)) = css_ranges.ignored_spans.get(comment_index)
+            && quote_start >= *start
+        {
+            quote_start = *end;
+            continue;
+        }
         let quote = bytes[quote_start];
         if !matches!(quote, b'\'' | b'"' | b'`')
             || (quote == b'\''
@@ -10261,30 +12286,33 @@ fn asset_references_in_source(
         }
 
         let value = &source[content_start..cursor];
-        let leading = value.len() - value.trim_start().len();
-        let trimmed = value.trim();
+        let (start, end) = url_trimmed_bounds(value);
+        let trimmed = &value[start..end];
         let candidate = Candidate {
             context: "literal",
-            start: content_start + leading,
-            end: content_start + leading + trimmed.len(),
+            end: content_start + end,
+            semantic: None,
+            semantic_entities: Vec::new(),
+            start: content_start + start,
         };
-        if candidates
-            .iter()
-            .any(|existing| candidate.start < existing.end && candidate.end > existing.start)
-        {
+        if quoted_candidate_cursor.overlaps(
+            candidate.start,
+            candidate.end,
+            &structured_candidate_spans,
+        ) {
             quote_start = cursor + 1;
             continue;
         }
         let supported = safe_static_literal
             && !trimmed.is_empty()
-            && parsed_local_asset_reference(trimmed)
-                .and_then(|(path, _, _)| {
-                    Path::new(&path)
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .and_then(reference_asset_kind)
-                })
-                .is_some();
+            && parsed_local_asset_reference(trimmed).is_some_and(|(path, _, _)| {
+                Path::new(&path)
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .and_then(reference_asset_kind)
+                    .is_some()
+                    || explicitly_managed_asset_reference(trimmed)
+            });
 
         if supported {
             candidates.push(candidate);
@@ -10304,62 +12332,118 @@ fn asset_references_in_source(
         .build()
         .expect("asset literal regex should compile")
     });
+    candidates.sort_by_key(|candidate| (candidate.start, candidate.end));
+    let literal_candidate_spans = candidates
+        .iter()
+        .map(|candidate| (candidate.start, candidate.end))
+        .collect::<Vec<_>>();
+    let mut literal_candidate_cursor = SortedSpanCursor::default();
+    let mut literal_quote_cursor = SortedSpanCursor::default();
+    let mut literal_ignored_cursor = SortedSpanCursor::default();
     for path in literals
         .captures_iter(source)
         .filter_map(|captures| captures.name("path"))
     {
-        if candidates
-            .iter()
-            .any(|candidate| path.start() < candidate.end && path.end() > candidate.start)
-            || quoted_spans
-                .iter()
-                .any(|(start, end)| path.start() < *end && path.end() > *start)
+        if literal_ignored_cursor.overlaps(path.start(), path.end(), &css_ranges.ignored_spans)
+            || literal_candidate_cursor.overlaps(path.start(), path.end(), &literal_candidate_spans)
+            || literal_quote_cursor.overlaps(path.start(), path.end(), &quoted_spans)
         {
             continue;
         }
 
         candidates.push(Candidate {
             context: "literal",
-            start: path.start(),
             end: path.end(),
+            semantic: None,
+            semantic_entities: Vec::new(),
+            start: path.start(),
         });
     }
 
     candidates.sort_by_key(|candidate| (candidate.start, candidate.end));
+    let candidate_ranges = candidates
+        .iter()
+        .map(|candidate| (candidate.start, candidate.end))
+        .collect::<Vec<_>>();
+    let (candidate_metrics, scanned_characters) = source_range_metrics(source, &candidate_ranges);
     let mut references = Vec::new();
 
-    for candidate in candidates {
+    for (candidate, metrics) in candidates.into_iter().zip(candidate_metrics) {
+        let Some(metrics) = metrics else {
+            continue;
+        };
         let original = &source[candidate.start..candidate.end];
-        let Some((path, query, fragment)) = parsed_local_asset_reference(original) else {
+        let semantic = candidate.semantic.as_deref().unwrap_or(original);
+        let Some(path) = local_asset_reference_path(semantic) else {
             continue;
         };
-        let Some(extension) = Path::new(&path)
+        let extension = Path::new(&path)
             .extension()
-            .and_then(|value| value.to_str())
-        else {
+            .and_then(|value| value.to_str());
+        let known_kind = extension.and_then(reference_asset_kind);
+        if known_kind.is_none() && !context_supports_arbitrary_asset(candidate.context, semantic) {
             continue;
+        }
+        let kind = known_kind
+            .or_else(|| extension.map(asset_kind))
+            .unwrap_or("file");
+        let fragment_start = semantic.find('#');
+        let before_fragment = fragment_start.map_or(semantic, |start| &semantic[..start]);
+        let query_start = before_fragment.find('?');
+        let raw_query_start = if let Some(start) = query_start {
+            let Some(raw) = candidate_raw_boundary(&candidate, start) else {
+                continue;
+            };
+            Some(raw)
+        } else {
+            None
         };
-        let Some(kind) = reference_asset_kind(extension) else {
-            continue;
+        let raw_fragment_start = if let Some(start) = fragment_start {
+            let Some(raw) = candidate_raw_boundary(&candidate, start) else {
+                continue;
+            };
+            Some(raw)
+        } else {
+            None
         };
+        let query = raw_query_start
+            .map(|start| source[start..raw_fragment_start.unwrap_or(candidate.end)].to_owned());
+        let fragment = raw_fragment_start.map(|start| source[start..candidate.end].to_owned());
 
-        references.push(CoreAssetReference {
-            context: candidate.context.into(),
-            end: utf16_offset_at(source, candidate.end),
-            fragment,
-            kind: kind.into(),
-            line: line_number_at(source, candidate.start),
-            original: original.into(),
-            passage_id: passage_id.map(str::to_owned),
-            path,
-            query,
-            source_id: source_id.to_owned(),
-            source_name: source_name.to_owned(),
-            start: utf16_offset_at(source, candidate.start),
+        references.push(AssetReferenceMatch {
+            byte_end: candidate.end,
+            byte_start: candidate.start,
+            reference: CoreAssetReference {
+                context: candidate.context.into(),
+                end: metrics.end_utf16,
+                fragment,
+                kind: kind.into(),
+                line: metrics.line,
+                original: original.into(),
+                passage_id: passage_id.map(str::to_owned),
+                path,
+                query,
+                source_id: source_id.to_owned(),
+                source_name: source_name.to_owned(),
+                start: metrics.start_utf16,
+            },
         });
     }
 
-    references
+    (references, scanned_characters)
+}
+
+fn asset_references_in_source(
+    source_id: &str,
+    source_name: &str,
+    source: &str,
+    passage_id: Option<&str>,
+) -> Vec<CoreAssetReference> {
+    asset_reference_matches_in_source(source_id, source_name, source, passage_id)
+        .0
+        .into_iter()
+        .map(|matched| matched.reference)
+        .collect()
 }
 
 fn reference_asset_kind(extension: &str) -> Option<&'static str> {
@@ -10387,6 +12471,7 @@ fn utf16_offset_at(source: &str, byte_offset: usize) -> usize {
     source[..byte_offset].encode_utf16().count()
 }
 
+#[cfg(test)]
 fn utf16_offset_to_byte(source: &str, offset: usize) -> Option<usize> {
     if offset == 0 {
         return Some(0);
@@ -10424,64 +12509,106 @@ fn asset_kind_for_path(path: &str) -> String {
 }
 
 fn normalized_asset_path(path: &str) -> String {
-    local_asset_reference_path(path)
-        .unwrap_or_else(|| path.replace('\\', "/").trim_start_matches("./").into())
+    let logical = path.replace('\\', "/");
+    let logical = logical.trim_start_matches("./");
+
+    if logical
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("assets/"))
+    {
+        format!("assets/{}", &logical[7..])
+    } else {
+        local_asset_reference_path(path).unwrap_or_else(|| logical.into())
+    }
 }
 
 fn local_asset_reference_path(path: &str) -> Option<String> {
     parsed_local_asset_reference(path).map(|(path, _, _)| path)
 }
 
-fn parsed_local_asset_reference(path: &str) -> Option<(String, Option<String>, Option<String>)> {
-    let (path, query, fragment) = asset_reference_parts(path.trim());
-    let mut normalized = percent_decode_path(path)?.replace('\\', "/");
+fn url_trimmed_bounds(value: &str) -> (usize, usize) {
+    let bytes = value.as_bytes();
+    let mut start = 0;
+    let mut end = bytes.len();
 
-    while let Some(stripped) = normalized.strip_prefix("./") {
-        normalized = stripped.into();
+    while bytes
+        .get(start)
+        .is_some_and(|byte| *byte > 0 && *byte <= 0x20)
+    {
+        start += 1;
     }
+    while end > start && bytes[end - 1] > 0 && bytes[end - 1] <= 0x20 {
+        end -= 1;
+    }
+    (start, end)
+}
 
-    if has_url_scheme(&normalized) || normalized.starts_with("//") || normalized.contains('\0') {
+fn url_preprocessed_value(value: &str) -> String {
+    let (start, end) = url_trimmed_bounds(value);
+
+    value[start..end]
+        .chars()
+        .filter(|character| !matches!(*character, '\t' | '\n' | '\r'))
+        .collect()
+}
+
+fn parsed_local_asset_path(path: &str) -> Option<(String, bool)> {
+    let mut normalized = path.replace('\\', "/");
+
+    if has_url_scheme(&normalized) || normalized.starts_with("//") {
         return None;
     }
-
-    if normalized.starts_with('/') {
-        if normalized
-            .get(1..)
-            .is_some_and(|path| path.to_ascii_lowercase().starts_with("assets/"))
-        {
-            normalized.remove(0);
-        } else {
+    let absolute = normalized.starts_with('/');
+    if absolute {
+        normalized.remove(0);
+    }
+    let raw_segments = normalized.split('/').collect::<Vec<_>>();
+    if raw_segments.iter().any(|segment| segment.is_empty()) {
+        return None;
+    }
+    let mut segments = Vec::with_capacity(raw_segments.len());
+    for raw_segment in raw_segments {
+        let segment = percent_decode_path(raw_segment)?;
+        if segment.contains(['/', '\\', '\0']) {
             return None;
         }
+        segments.push(segment);
     }
-
-    if normalized.split('/').any(str::is_empty) {
+    while segments.first().is_some_and(|segment| segment == ".") {
+        segments.remove(0);
+    }
+    let explicitly_managed = segments
+        .first()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("assets"));
+    if absolute && !explicitly_managed {
         return None;
     }
-
-    let segments = normalized
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    let asset_segments = if segments
-        .first()
-        .is_some_and(|segment| segment.eq_ignore_ascii_case("assets"))
-    {
+    let asset_segments = if explicitly_managed {
         &segments[1..]
     } else {
         segments.as_slice()
     };
-
     if asset_segments.is_empty()
         || asset_segments
             .iter()
-            .any(|segment| *segment == "." || *segment == "..")
+            .any(|segment| segment == "." || segment == "..")
     {
         return None;
     }
 
     Some((
         format!("assets/{}", asset_segments.join("/")),
+        explicitly_managed,
+    ))
+}
+
+fn parsed_local_asset_reference(path: &str) -> Option<(String, Option<String>, Option<String>)> {
+    let preprocessed = url_preprocessed_value(path);
+    let (source_path, query, fragment) = asset_reference_parts(&preprocessed);
+    let (normalized, _) = parsed_local_asset_path(source_path)?;
+
+    Some((
+        normalized,
         query.map(str::to_owned),
         fragment.map(str::to_owned),
     ))
@@ -10541,13 +12668,14 @@ fn has_url_scheme(path: &str) -> bool {
 }
 
 fn asset_snippet(path: &str, kind: &str) -> CoreAssetSnippet {
+    let reference_path = percent_encode_asset_reference_path(path);
     let text = match kind {
-        "image" => format!(r#"<img src="{path}" alt="">"#),
-        "audio" => format!(r#"<audio src="{path}" controls></audio>"#),
-        "video" => format!(r#"<video src="{path}" controls></video>"#),
-        "stylesheet" => format!(r#"<link rel="stylesheet" href="{path}">"#),
-        "script" => format!(r#"<script src="{path}"></script>"#),
-        _ => path.to_owned(),
+        "image" => format!(r#"<img src="{reference_path}" alt="">"#),
+        "audio" => format!(r#"<audio src="{reference_path}" controls></audio>"#),
+        "video" => format!(r#"<video src="{reference_path}" controls></video>"#),
+        "stylesheet" => format!(r#"<link rel="stylesheet" href="{reference_path}">"#),
+        "script" => format!(r#"<script src="{reference_path}"></script>"#),
+        _ => reference_path,
     };
 
     CoreAssetSnippet {
@@ -14747,10 +16875,10 @@ mod tests {
     #[test]
     fn asset_references_include_context_suffixes_canonical_paths_and_utf16_ranges() {
         let source = concat!(
-            "😀 <img src=\" /assets/Hero image.png?v=1#face \" ",
-            "poster='./assets/video poster.webp'>\n",
+            "😀 <img src=\" /assets/Hero image.png?v=1#face \">\n",
+            "<video poster='./assets/video poster.webp'></video>\n",
             "<source srcset=\"./assets/small%20cat.webp 1x, assets/猫.webp?density=2 2x\">\n",
-            ".hero { background: url('assets/background image.svg#icon'); }\n",
+            "<style>.hero { background: url('assets/background image.svg#icon'); }</style>\n",
             "setupAudio(\"assets/sound.ogg?cache=yes\");\n",
             "(audio: \"assets/spoken intro.m4a\")",
         );
@@ -14798,10 +16926,1003 @@ mod tests {
             r#"<img src="../assets/traversal.png">"#,
             r#"<img src="assets/%2e%2e/encoded.png">"#,
             r#"<img src="/outside.png">"#,
-            r#"<img src="assets/unsupported.txt">"#,
         );
 
         assert!(asset_references_in_source("", "", source, None).is_empty());
+    }
+
+    #[test]
+    fn asset_reference_discovery_indexes_arbitrary_structured_and_managed_files() {
+        let mut references = asset_references_in_source(
+            "story:stylesheet",
+            "Story Stylesheet",
+            r#"@font-face { src: url("font.woff2") format("woff2"); }"#,
+            None,
+        );
+        references.extend(asset_references_in_source(
+            "passage-a",
+            "Start",
+            r#"<img src="assets/config.json">"#,
+            Some("a"),
+        ));
+        references.extend(asset_references_in_source(
+            "story:script",
+            "Story JavaScript",
+            r#"const module = "assets/runtime.wasm"; const note = "notes.txt";"#,
+            None,
+        ));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| (reference.path.as_str(), reference.kind.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/font.woff2", "file"),
+                ("assets/config.json", "file"),
+                ("assets/runtime.wasm", "file"),
+            ]
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_lexes_css_urls_outside_strings_and_comments() {
+        let source = concat!(
+            r#"<div style="background: url('inline.woff2')"></div>"#,
+            "\n<style>\n",
+            r#"a::after { content: "url(string.woff2)"; }"#,
+            "\n",
+            r#"/* url(comment.woff2) url(comment.png) */"#,
+            "\n",
+            r#"@font-face { src: u/**/rl("font.woff2"); }"#,
+            "\n</style>",
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| (reference.path.as_str(), reference.context.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/inline.woff2", "css-url"),
+                ("assets/font.woff2", "css-url"),
+            ]
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_indexes_svg_presentation_attribute_urls() {
+        let source = concat!(
+            r#"<svg><rect filter="url(filters.svg#blur)" fill="url(paints.svg#gradient)""#,
+            r#" clip-path="url(#local-clip)" marker-end="url(markers.svg#end)"></rect></svg>"#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| {
+                    let start = utf16_offset_to_byte(source, reference.start).expect("valid start");
+                    let end = utf16_offset_to_byte(source, reference.end).expect("valid end");
+                    (
+                        reference.path.as_str(),
+                        reference.context.as_str(),
+                        &source[start..end],
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/filters.svg", "css-url", "filters.svg#blur"),
+                ("assets/paints.svg", "css-url", "paints.svg#gradient"),
+                ("assets/markers.svg", "css-url", "markers.svg#end"),
+            ]
+        );
+        assert!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/filters.svg"),
+                "assets/final filters.svg",
+                false,
+            )
+            .contains(r#"filter="url(assets/final%20filters.svg#blur)""#)
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_ignores_parsed_nonresource_attributes() {
+        let source = concat!(
+            r#"<img src="actual.png" alt="hero.png">"#,
+            r#"<div title="hero.png" data-example=hero.png class="icon.png"></div>"#,
+            r#""free.png""#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| (reference.path.as_str(), reference.context.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/actual.png", "html-src"),
+                ("assets/free.png", "literal"),
+            ]
+        );
+        assert_eq!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/hero.png"),
+                "assets/replaced.png",
+                false,
+            ),
+            source
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_indexes_legacy_html_background_urls() {
+        let source = concat!(
+            r#"<body background="body&amp;hero.png?rev=1#top">"#,
+            r#"<table background="table.png"><thead background="head.png">"#,
+            r#"<tbody background="body-rows.png"><tfoot background="foot.png">"#,
+            r#"<tr background="row.png"><td background="cell.png">"#,
+            r#"<th background="header.png">"#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| (reference.path.as_str(), reference.context.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/body&hero.png", "html-background"),
+                ("assets/table.png", "html-background"),
+                ("assets/head.png", "html-background"),
+                ("assets/body-rows.png", "html-background"),
+                ("assets/foot.png", "html-background"),
+                ("assets/row.png", "html-background"),
+                ("assets/cell.png", "html-background"),
+                ("assets/header.png", "html-background"),
+            ]
+        );
+        assert!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/body&hero.png"),
+                "assets/final hero.png",
+                false,
+            )
+            .contains(r#"background="assets/final%20hero.png?rev=1#top""#)
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_qualifies_native_html_resource_attributes() {
+        let source = concat!(
+            r#"<div src="div.png" srcset="div-small.png 1x" poster="div-poster.png"></div>"#,
+            r#"<custom-label src="custom.png" srcset="custom-small.png 1x" poster="custom-poster.png"></custom-label>"#,
+            r#"<audio src="sound.ogg" poster="audio-poster.png" srcset="audio-small.png 1x"></audio>"#,
+            r#"<img src="actual.png" srcset="small.png 1x, large.png 2x" poster="img-poster.png">"#,
+            r#"<image src="legacy.png" srcset="legacy-small.png 1x">"#,
+            r#"<video src="movie.mp4" srcset="video-small.png 1x" poster="cover.png"></video>"#,
+            r#"<frame src="frame.html">"#,
+            r#"<input type="text" src="text-input.png"><input type="IMAGE" src="button.png">"#,
+            r#"<input type=" IMAGE" src="spaced-type.png">"#,
+            r#"<svg><rect src="svg.png" srcset="svg-small.png 1x" poster="svg-poster.png"></rect></svg>"#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| (reference.path.as_str(), reference.context.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/sound.ogg", "html-src"),
+                ("assets/actual.png", "html-src"),
+                ("assets/small.png", "html-srcset"),
+                ("assets/large.png", "html-srcset"),
+                ("assets/legacy.png", "html-src"),
+                ("assets/legacy-small.png", "html-srcset"),
+                ("assets/movie.mp4", "html-src"),
+                ("assets/cover.png", "html-poster"),
+                ("assets/frame.html", "html-src"),
+                ("assets/button.png", "html-src"),
+            ]
+        );
+        assert_eq!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/div.png"),
+                "assets/replaced.png",
+                false,
+            ),
+            source
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_classifies_svg_href_elements() {
+        let source = concat!(
+            r#"<svg><linearGradient href="gradients.svg#base"></linearGradient>"#,
+            r#"<radialGradient xlink:href="radial.svg#base"></radialGradient>"#,
+            r#"<pattern href="patterns.svg#base"></pattern><script href="runtime.js"></script>"#,
+            r#"<textPath href="paths.svg#curve"></textPath>"#,
+            r#"<image href="preferred.png" xlink:href="ignored.png"></image>"#,
+            r#"<feImage href="filters.exr"></feImage><use href="symbols.svg#check"></use>"#,
+            r#"<use href xlink:href="empty-fallback.svg"></use>"#,
+            r#"<a href="navigation.svg">Navigate</a><a download href="download.svg">Save</a>"#,
+            r#"<a download href xlink:href="download-fallback.svg">Empty</a>"#,
+            r#"<animate href="animation-target.svg#node"></animate>"#,
+            r#"<mpath href="motion.svg#curve"></mpath><filter href="legacy-filter.svg#base"></filter>"#,
+            r#"<rect href="rect.svg"></rect><g xlink:href="group.svg"></g></svg>"#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "assets/gradients.svg",
+                "assets/radial.svg",
+                "assets/patterns.svg",
+                "assets/runtime.js",
+                "assets/paths.svg",
+                "assets/preferred.png",
+                "assets/filters.exr",
+                "assets/symbols.svg",
+                "assets/download.svg",
+                "assets/motion.svg",
+            ]
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_indexes_image_set_string_options() {
+        let source = concat!(
+            r#"<div style="background-image:image-set('inline.webp')"></div>"#,
+            "\n<style>\n",
+            r#".hero { background-image: image-set("hero image.webp?rev=2#face" type("image/webp") 2x, url("fallback.webp") type("image/avif") 1x); }"#,
+            "\n",
+            r#".legacy { background-image: -webkit-image-/**/set /**/(/* lead */'legacy.webp', linear-gradient(red, blue) 2x); }"#,
+            "\n",
+            r#"a::after { content: "ghost.webp"; } /* image-set("comment.webp") */"#,
+            "\n</style>",
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| {
+                    let start = utf16_offset_to_byte(source, reference.start).expect("valid start");
+                    let end = utf16_offset_to_byte(source, reference.end).expect("valid end");
+                    (
+                        reference.path.as_str(),
+                        reference.context.as_str(),
+                        &source[start..end],
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/inline.webp", "css-url", "inline.webp"),
+                (
+                    "assets/hero image.webp",
+                    "css-url",
+                    "hero image.webp?rev=2#face",
+                ),
+                ("assets/fallback.webp", "css-url", "fallback.webp"),
+                ("assets/legacy.webp", "css-url", "legacy.webp"),
+            ]
+        );
+        assert!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/hero image.webp"),
+                "assets/hero final.webp",
+                false,
+            )
+            .contains(r#""assets/hero%20final.webp?rev=2#face" type("image/webp")"#)
+        );
+    }
+
+    #[test]
+    fn asset_reference_rewrite_encodes_logical_destination_paths() {
+        let logical_path = "assets/a#b%2F c.png";
+        let source = r#"<img src="old.png"><style>.hero{background:url("old.png")}</style>"#;
+        let rewritten = replace_asset_references_in_source(
+            source,
+            &normalized_asset_path("assets/old.png"),
+            logical_path,
+            false,
+        );
+
+        assert_eq!(
+            rewritten,
+            r#"<img src="assets/a%23b%252F%20c.png"><style>.hero{background:url("assets/a%23b%252F%20c.png")}</style>"#
+        );
+        assert_eq!(
+            asset_references_in_source("passage-a", "Start", &rewritten, Some("a"))
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![logical_path, logical_path]
+        );
+        assert_eq!(
+            asset_snippet(logical_path, "image").text,
+            r#"<img src="assets/a%23b%252F%20c.png" alt="">"#
+        );
+        assert_eq!(
+            AssetPath::parse(logical_path)
+                .expect("portable logical path")
+                .project_path,
+            logical_path
+        );
+        assert!(AssetPath::parse("assets/C:evil.png").is_err());
+        assert!(AssetPath::parse("assets/C:/evil.png").is_err());
+    }
+
+    #[test]
+    fn asset_reference_discovery_scopes_css_comments_to_css_content() {
+        let passage_source = r#"<div>/*</div><img src="hero.png"><div>*/</div>"#;
+        let passage_references =
+            asset_references_in_source("passage-a", "Start", passage_source, Some("a"));
+
+        assert_eq!(passage_references.len(), 1);
+        assert_eq!(passage_references[0].path, "assets/hero.png");
+
+        let stylesheet = concat!(
+            r#"/* <img src="comment.png"> url(comment.png) */"#,
+            "\n",
+            r#"a::after { content: " <img src='ghost.png'> "; }"#,
+            "\n",
+            r#"body { background: url("real.png"); }"#,
+        );
+        let stylesheet_references =
+            asset_references_in_source("story:stylesheet", "Story Stylesheet", stylesheet, None);
+
+        assert_eq!(stylesheet_references.len(), 1);
+        assert_eq!(stylesheet_references[0].path, "assets/real.png");
+        assert_eq!(
+            replace_asset_references_in_source(
+                stylesheet,
+                &normalized_asset_path("assets/comment.png"),
+                "assets/replaced.png",
+                true,
+            ),
+            stylesheet
+        );
+
+        let mixed_css_contexts = concat!(
+            r#"<style>a::after { content: " <img src='style-ghost.png'> "; }</style>"#,
+            "\n",
+            r#"<div style="--markup: <img src='inline-ghost.png'>;"></div>"#,
+            "\n",
+            r#"<img src="visible.png">"#,
+        );
+        let mixed_references =
+            asset_references_in_source("passage-a", "Start", mixed_css_contexts, Some("a"));
+
+        assert_eq!(mixed_references.len(), 1);
+        assert_eq!(mixed_references[0].path, "assets/visible.png");
+    }
+
+    #[test]
+    fn asset_reference_discovery_handles_dense_css_comment_spans() {
+        let source = r#"/*.png*/"""#.repeat(1_000);
+
+        assert!(
+            asset_references_in_source("story:stylesheet", "Story Stylesheet", &source, None,)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_handles_dense_data_srcsets_linearly() {
+        let source = format!(
+            r#"<img srcset="data:image/png;base64,{}AAAA, assets/real.png 2x">"#,
+            ",".repeat(65_536)
+        );
+        let references =
+            asset_references_in_source("passage-a", "Start", &source, Some("passage-a"));
+
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].path, "assets/real.png");
+    }
+
+    #[test]
+    fn asset_reference_discovery_projects_entity_dense_srcsets_logarithmically() {
+        let candidate_count = 512;
+        let source = format!(
+            r#"<img srcset="{}">"#,
+            (0..candidate_count)
+                .map(|index| format!("image-{index}&amp;retina.png 1x"))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        ASSET_ENTITY_PROJECTION_STEPS.with(|steps| steps.set(0));
+        let references =
+            asset_references_in_source("passage-a", "Start", &source, Some("passage-a"));
+        let projection_steps = ASSET_ENTITY_PROJECTION_STEPS.with(std::cell::Cell::get);
+
+        assert!(
+            projection_steps < candidate_count * 64,
+            "entity projection used {projection_steps} indexed comparisons"
+        );
+        assert_eq!(references.len(), candidate_count);
+        assert_eq!(references[0].path, "assets/image-0&retina.png");
+        assert_eq!(references[0].original, "image-0&amp;retina.png");
+        assert_eq!(references[511].path, "assets/image-511&retina.png");
+        assert_eq!(references[511].original, "image-511&amp;retina.png");
+    }
+
+    #[test]
+    fn asset_reference_discovery_preserves_srcset_commas_and_link_candidates() {
+        let source = concat!(
+            "😀",
+            r#"<img srcset="hero,retina.png?rev=1#face 2x, fallback.png 3x">"#,
+            "\n",
+            r#"<link rel="preload" as="image" imagesrcset="small.png 400w, large.png 800w" imagesizes="100vw">"#,
+            "\n",
+            r#"<img srcset="data:image/gif;base64,AA== ((x), recovered.png 2x">"#,
+            "\n",
+            r#"<meta http-equiv="refresh" content="0; URL='next page.html?rev=5#start'">"#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| {
+                    let start = utf16_offset_to_byte(source, reference.start).expect("valid start");
+                    let end = utf16_offset_to_byte(source, reference.end).expect("valid end");
+                    (
+                        reference.path.as_str(),
+                        reference.context.as_str(),
+                        &source[start..end],
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "assets/hero,retina.png",
+                    "html-srcset",
+                    "hero,retina.png?rev=1#face",
+                ),
+                ("assets/fallback.png", "html-srcset", "fallback.png"),
+                ("assets/small.png", "html-srcset", "small.png"),
+                ("assets/large.png", "html-srcset", "large.png"),
+                ("assets/recovered.png", "html-srcset", "recovered.png"),
+                (
+                    "assets/next page.html",
+                    "html-refresh",
+                    "next page.html?rev=5#start",
+                ),
+            ]
+        );
+        assert!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/hero,retina.png"),
+                "assets/hero,retina@2x.png",
+                false,
+            )
+            .contains("assets/hero%2Cretina%402x.png?rev=1#face 2x")
+        );
+        assert!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/next page.html"),
+                "assets/next final.html",
+                false,
+            )
+            .contains("URL='assets/next%20final.html?rev=5#start'")
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_decodes_entities_with_raw_ranges_and_suffixes() {
+        let source = concat!(
+            "😀",
+            r#"<img class="ordinary multi character value" src="hero&amp;retina.png&#63;rev=1&amp;x=2&num;face">"#,
+            r#"<img srcset="hero&comma;retina.webp 2x">"#,
+            r#"<img src="price&#x80;.png">"#,
+            r#"<img src="unknown&NotARealEntity;.png">"#,
+            r#"<img src="folder\hero.png">"#,
+            r#"<img src="folder&bsol;hero.png">"#,
+            r#"<img src="folder&#92;hero.png">"#,
+            r#"<source srcset="folder\hero.png 1x, folder&#x5c;hero.png 2x">"#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| {
+                    let start = utf16_offset_to_byte(source, reference.start).expect("valid start");
+                    let end = utf16_offset_to_byte(source, reference.end).expect("valid end");
+                    (
+                        reference.path.as_str(),
+                        reference.query.as_deref(),
+                        reference.fragment.as_deref(),
+                        &source[start..end],
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "assets/hero&retina.png",
+                    Some("&#63;rev=1&amp;x=2"),
+                    Some("&num;face"),
+                    "hero&amp;retina.png&#63;rev=1&amp;x=2&num;face",
+                ),
+                (
+                    "assets/hero,retina.webp",
+                    None,
+                    None,
+                    "hero&comma;retina.webp",
+                ),
+                ("assets/price€.png", None, None, "price&#x80;.png"),
+                (
+                    "assets/unknown&NotARealEntity;.png",
+                    None,
+                    None,
+                    "unknown&NotARealEntity;.png",
+                ),
+                ("assets/folder/hero.png", None, None, r#"folder\hero.png"#),
+                ("assets/folder/hero.png", None, None, "folder&bsol;hero.png",),
+                ("assets/folder/hero.png", None, None, "folder&#92;hero.png",),
+                ("assets/folder/hero.png", None, None, r#"folder\hero.png"#),
+                ("assets/folder/hero.png", None, None, "folder&#x5c;hero.png",),
+            ]
+        );
+        assert!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/hero&retina.png"),
+                "assets/final.png",
+                false,
+            )
+            .contains(r#"src="assets/final.png&#63;rev=1&amp;x=2&num;face""#)
+        );
+        assert_eq!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/folder/hero.png"),
+                "assets/replaced.png",
+                false,
+            )
+            .matches(r#"src="assets/replaced.png""#)
+            .count(),
+            3
+        );
+        assert!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/folder/hero.png"),
+                "assets/replaced.png",
+                false,
+            )
+            .contains(r#"srcset="assets/replaced.png 1x, assets/replaced.png 2x""#)
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_matches_html_entity_edge_cases() {
+        let source = concat!(
+            r#"<img src="legacy&copy.png">"#,
+            r#"<img src="blocked&ampx.png">"#,
+            r#"<img src="multi&NotEqualTilde;mark.png">"#,
+            r#"<img src="null&#0;.png">"#,
+            r#"<img src="surrogate&#xD800;.png">"#,
+            r#"<img src="large&#x110000;.png">"#,
+            r#"<div style="background:url(hero&amp;retina.png&#63;x=1&num;f)"></div>"#,
+            r#"<meta http-equiv="ref&#114;esh" content="0; URL=next&amp;page.bin&#63;x=1&num;f">"#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| (
+                    reference.path.as_str(),
+                    reference.context.as_str(),
+                    reference.query.as_deref(),
+                    reference.fragment.as_deref(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/legacy©.png", "html-src", None, None),
+                ("assets/blocked&ampx.png", "html-src", None, None),
+                ("assets/multi≂̸mark.png", "html-src", None, None),
+                ("assets/null�.png", "html-src", None, None),
+                ("assets/surrogate�.png", "html-src", None, None),
+                ("assets/large�.png", "html-src", None, None),
+                (
+                    "assets/hero&retina.png",
+                    "css-url",
+                    Some("&#63;x=1"),
+                    Some("&num;f"),
+                ),
+                (
+                    "assets/next&page.bin",
+                    "html-refresh",
+                    Some("&#63;x=1"),
+                    Some("&num;f"),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_matches_url_preprocessing_and_segment_boundaries() {
+        let source = concat!(
+            "<img src=\"x\ty.png\">",
+            "<img src=\"x\ny.png\">",
+            "<img src=\"x\ry.png\">",
+            r#"<img src="x&Tab;y.png">"#,
+            r#"<img src="x&NewLine;y.png">"#,
+            r#"<img src="x&#13;y.png">"#,
+            r#"<img src="x%09y.png">"#,
+            r#"<img src="&nbsp;hero.png">"#,
+            r#"<img src="&#1;edge.png">"#,
+            r#"<img src="hero.png ?rev=1">"#,
+            r#"<img src="a//b.png">"#,
+            r#"<img src="a&sol;&sol;b.png">"#,
+            r#"<img src="/assets//b.png">"#,
+            r#"<img src="a%2Fb.png">"#,
+            r#"<img src="a%5Cb.png">"#,
+            r#"<img src="assets%2Fhero.png">"#,
+            r#"<img src="a&percnt;2Fb.png">"#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "assets/xy.png",
+                "assets/xy.png",
+                "assets/xy.png",
+                "assets/xy.png",
+                "assets/xy.png",
+                "assets/xy.png",
+                "assets/x\ty.png",
+                "assets/ hero.png",
+                "assets/edge.png",
+                "assets/hero.png ",
+            ]
+        );
+        assert_eq!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/xy.png"),
+                "assets/clean.png",
+                false,
+            )
+            .matches("assets/clean.png")
+            .count(),
+            6
+        );
+        let literal_null = "<img src=\"\0hero.png\">";
+        assert!(
+            asset_references_in_source("passage-a", "Start", literal_null, Some("a")).is_empty()
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_preserves_non_c0_literal_whitespace() {
+        let source = "const first = \" hero.png\"; const second = \"﻿cover.webp\"; const unmanaged = \" assets/data.bin\";";
+
+        assert_eq!(
+            asset_references_in_source("passage-a", "Start", source, Some("a"))
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["assets/ hero.png", "assets/﻿cover.webp"]
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_respects_html_text_states_and_foreign_content() {
+        for tag in [
+            "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript",
+        ] {
+            let source = format!(
+                r#"<{tag}/><img src="ghost.png"> bare.png</{tag} data-close=">"><img src="real.png">"#
+            );
+            let references = asset_references_in_source("passage-a", "Start", &source, Some("a"));
+            assert_eq!(
+                references
+                    .iter()
+                    .map(|reference| reference.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["assets/real.png"]
+            );
+            assert_eq!(
+                replace_asset_references_in_source(
+                    &source,
+                    &normalized_asset_path("assets/ghost.png"),
+                    "assets/replaced.png",
+                    false,
+                ),
+                source
+            );
+        }
+
+        let script = r#"<script><!--<script></script><img src="ghost.png"> bare.png</script><img src="real.png">"#;
+        assert_eq!(
+            asset_references_in_source("passage-a", "Start", script, Some("a"))
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["assets/real.png"]
+        );
+        let abruptly_closed_escaped_script =
+            r#"<script><!--><script></script><img src="recovered.png">"#;
+        assert_eq!(
+            asset_references_in_source(
+                "passage-a",
+                "Start",
+                abruptly_closed_escaped_script,
+                Some("a"),
+            )
+            .iter()
+            .map(|reference| reference.path.as_str())
+            .collect::<Vec<_>>(),
+            vec!["assets/recovered.png"]
+        );
+        for (source, expected) in [
+            (
+                r#"<script><!--<foo</script><img src="after-foo.png">"#,
+                "assets/after-foo.png",
+            ),
+            (
+                r#"<script><!--<scriptX</script><img src="after-script-x.png">"#,
+                "assets/after-script-x.png",
+            ),
+        ] {
+            assert_eq!(
+                asset_references_in_source("passage-a", "Start", source, Some("a"))
+                    .iter()
+                    .map(|reference| reference.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec![expected]
+            );
+        }
+        let bogus_end_tag = r#"</<!--foo><img src="after-bogus-end.png">"#;
+        assert_eq!(
+            asset_references_in_source("passage-a", "Start", bogus_end_tag, Some("a"))
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["assets/after-bogus-end.png"]
+        );
+        assert!(
+            asset_references_in_source(
+                "passage-a",
+                "Start",
+                r#"<plaintext><img src="ghost.png"> bare.png<img src="never.png">"#,
+                Some("a"),
+            )
+            .is_empty()
+        );
+        let story_script = r#"const opening = "<textarea>"; const image = "assets/safe.png"; const fake = '<img src="ghost.png">';"#;
+        assert_eq!(
+            asset_references_in_source("story:script", "Story JavaScript", story_script, None,)
+                .iter()
+                .map(|reference| (reference.path.as_str(), reference.context.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("assets/safe.png", "literal")]
+        );
+        assert!(
+            replace_asset_references_in_source_with_mode(
+                story_script,
+                &normalized_asset_path("assets/safe.png"),
+                "assets/renamed.png",
+                false,
+                true,
+            )
+            .contains(r#"const image = "assets/renamed.png""#)
+        );
+
+        let foreign = concat!(
+            r#"<svg><title><img src="svg-title.png"></title>"#,
+            r#"<script><image href="svg-script.bin"></script>"#,
+            r#"<style><image href="svg-style.bin"></style>"#,
+            r#"<foreignObject><title><img src="html-title-ghost.png"></title></foreignObject>"#,
+            r#"</svg>"#,
+            r#"<math><annotation-xml><svg><foreignObject><title><img src="math-svg-ghost.png"></title></foreignObject></svg></annotation-xml></math>"#,
+            r#"<img src="real.png">"#,
+        );
+        assert_eq!(
+            asset_references_in_source("passage-a", "Start", foreign, Some("a"))
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "assets/svg-title.png",
+                "assets/svg-script.bin",
+                "assets/svg-style.bin",
+                "assets/real.png",
+            ]
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_classifies_link_relations_and_malformed_comments() {
+        let source = concat!(
+            r#"<link rel="canonical" href="canonical.png">"#,
+            r#"<link rel="expect" href="expect.png">"#,
+            r#"<link href="bare.png">"#,
+            r#"<link rel="future" href="unknown.png">"#,
+            r#"<link rel="future stylesheet" href="mixed.bin">"#,
+            r#"<link rel="icon" imagesrcset="ignored.png 1x">"#,
+            r#"<link rel="preload" as="script" imagesrcset="ignored-too.png 1x">"#,
+            r#"<link rel="preload" as="image" imagesrcset="small.png 1x, large.png 2x">"#,
+            r#"<svg><link href="foreign.png"></link></svg>"#,
+            r#"<div title="title.png" data-art="custom.png"></div>"#,
+            r#"<!-- bad --!><img src="after-bang.png">"#,
+            r#"<!--><img src="after-abrupt.png">"#,
+            r#"<!---><img src="after-start-dash.png">"#,
+            r#"<!bogus " ><img src="after-bogus.png">"#,
+            r#"<?bogus " ><img src="after-pi.png">"#,
+            r#"<style.foo><img src="style-child.png"></style.foo>"#,
+            r#"<script.foo><img src="script-child.png"></script.foo>"#,
+            r#"<1 src="ghost.png">"#,
+        );
+        assert_eq!(
+            asset_references_in_source("passage-a", "Start", source, Some("a"))
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "assets/mixed.bin",
+                "assets/small.png",
+                "assets/large.png",
+                "assets/after-bang.png",
+                "assets/after-abrupt.png",
+                "assets/after-start-dash.png",
+                "assets/after-bogus.png",
+                "assets/after-pi.png",
+                "assets/style-child.png",
+                "assets/script-child.png",
+                "assets/ghost.png",
+            ]
+        );
+        assert_eq!(
+            asset_references_in_source("passage-a", "Start", source, Some("a"))
+                .last()
+                .map(|reference| reference.context.as_str()),
+            Some("literal")
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_uses_ascii_only_html_matching() {
+        let source = concat!(
+            r#"<linK rel="stylesheet" href="kelvin.bin">"#,
+            r#"<svg><image xlinK:href="kelvin-attribute.bin"></image></svg>"#,
+            r#"<link rel="masK-icon" href="mask.png">"#,
+            r#"<link rel="&nbsp;stylesheet" href="nbsp.png">"#,
+            r#"<link rel="preload" as="&nbsp;image" imagesrcset="nbsp-image.png 1x">"#,
+            r#"<meta http-equiv=" refresh " content="0;URL=spaced-refresh.png">"#,
+            r#"<meta http-equiv="&nbsp;refresh" content="0;URL=nbsp-refresh.png">"#,
+            r#"<math><annotation-xml encoding="&nbsp;text/html"><title><img src="math-live.png"></title></annotation-xml></math>"#,
+            r#"<math><annotation-xml encoding=" text/html "><title><img src="math-spaced-live.png"></title></annotation-xml></math>"#,
+            r#"<LINK REL=" STYLESHEET " HREF="valid.bin">"#,
+        );
+
+        assert_eq!(
+            asset_references_in_source("passage-a", "Start", source, Some("a"))
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "assets/math-live.png",
+                "assets/math-spaced-live.png",
+                "assets/valid.bin",
+            ]
+        );
+    }
+
+    #[test]
+    fn asset_reference_discovery_handles_large_irrelevant_and_plain_attributes() {
+        let source = format!(
+            r#"<img class="{}" src="plain-multi-character.png"><img src="hero&amp;retina.png">"#,
+            "x".repeat(200_000)
+        );
+        assert_eq!(
+            asset_references_in_source("passage-a", "Start", &source, Some("a"))
+                .iter()
+                .map(|reference| reference.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["assets/plain-multi-character.png", "assets/hero&retina.png",]
+        );
+    }
+
+    #[test]
+    fn asset_reference_metrics_and_rewrite_scan_dense_references_once() {
+        let source = "😀 assets/shared.png\n".repeat(5_000);
+        let (matches, scanned_characters) =
+            asset_reference_matches_in_source("story:script", "Story JavaScript", &source, None);
+
+        assert_eq!(matches.len(), 5_000);
+        assert!(scanned_characters <= source.chars().count());
+        assert_eq!(matches[0].reference.start, 3);
+        assert_eq!(matches[0].reference.line, 1);
+        assert_eq!(matches[4_999].reference.line, 5_000);
+
+        let (overlapping, overlap_scan_count) =
+            source_range_metrics(&source, &[(0, source.len()), (4, source.len() - 1)]);
+        assert_eq!(overlap_scan_count, source.chars().count());
+        assert_eq!(
+            overlapping[1].expect("valid overlapping range").start_utf16,
+            2
+        );
+
+        let replaced = replace_asset_references_in_source(
+            &source,
+            &normalized_asset_path("assets/shared.png"),
+            "assets/replaced.png",
+            false,
+        );
+        assert_eq!(replaced.matches("assets/replaced.png").count(), 5_000);
+        assert!(!replaced.contains("assets/shared.png"));
+    }
+
+    #[test]
+    fn asset_reference_discovery_indexes_and_rewrites_static_css_imports() {
+        let stylesheet = concat!(
+            r#"@im/**/port /* lead */ "theme.css";"#,
+            "\n",
+            "@import /* one *//**/'print.css';",
+            "\n",
+            r#"@import /* a *//**/"tokens";"#,
+            "\n",
+            r#"body { background: url(/* before */ "assets/theme.bin" /* after */); }"#,
+            "\n",
+            r#"a::after { content: "ignored.css"; }"#,
+        );
+        let references =
+            asset_references_in_source("story:stylesheet", "Story Stylesheet", stylesheet, None);
+
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| (reference.path.as_str(), reference.context.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/theme.css", "css-import"),
+                ("assets/print.css", "css-import"),
+                ("assets/tokens", "css-import"),
+                ("assets/theme.bin", "css-url"),
+            ]
+        );
+        assert!(
+            replace_asset_references_in_source(
+                stylesheet,
+                &normalized_asset_path("assets/tokens"),
+                "assets/replaced.tokens",
+                true,
+            )
+            .contains(r#"@import /* a *//**/"assets/replaced.tokens";"#)
+        );
+
+        let passage_references = asset_references_in_source(
+            "passage-a",
+            "Start",
+            r#"<style>@import /* c */ "passage.tokens"; .x { background: url(/**/ "passage.bin" /**/) }</style>"#,
+            Some("a"),
+        );
+        assert_eq!(passage_references.len(), 2);
+        assert_eq!(passage_references[0].path, "assets/passage.tokens");
+        assert_eq!(passage_references[1].path, "assets/passage.bin");
     }
 
     #[test]
@@ -14820,6 +17941,7 @@ mod tests {
                 source,
                 &normalized_asset_path("assets/a.png"),
                 "assets/replaced.png",
+                false,
             ),
             source
         );
@@ -14843,23 +17965,70 @@ mod tests {
                     source,
                     &normalized_asset_path("assets/a.svg"),
                     "assets/replaced.svg",
+                    false,
                 ),
                 source
             );
         }
+
+        let source = concat!(
+            r#"<img srcset="data:image/png;base64,AAAA 1x, assets/猫%20cover.png?x=1#hero 2x">"#,
+            r#"<source srcset="blob:https://example.test/id, assets/sound.ogg 1x">"#,
+            r#"<source srcset="data:image/png;base64,AAAA, hero.webp 2x">"#,
+            r#"<link rel="preload" href="theme.bin?rev=2#main"><link rel="manifest" href="site.webmanifest"><link rel="canonical" href="canonical.bin"><link href="bare.tokens"><object data="model.glb"></object>"#,
+            r#"<svg><image href="icon.bin"></image><use xlink:href="sprite.bin#x"></use><feImage href="filter.exr"></feImage></svg>"#,
+            r#"<a download href="archive.zip">x</a><a href="later.zip" download>x</a><svg><a download xlink:href="vector-download.bin">x</a></svg><a href="navigation.bin">x</a>"#,
+            r#"<!-- <link href="comment.bin"> --><link title=">" rel="preload" href="after.bin"><link rel=icon href=unquoted.bin>"#,
+        );
+        let references = asset_references_in_source("passage-a", "Start", source, Some("a"));
+        assert_eq!(
+            references
+                .iter()
+                .map(|reference| (reference.path.as_str(), reference.context.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("assets/猫 cover.png", "html-srcset"),
+                ("assets/sound.ogg", "html-srcset"),
+                ("assets/hero.webp", "html-srcset"),
+                ("assets/theme.bin", "html-href"),
+                ("assets/site.webmanifest", "html-href"),
+                ("assets/model.glb", "html-data"),
+                ("assets/icon.bin", "html-href"),
+                ("assets/sprite.bin", "html-href"),
+                ("assets/filter.exr", "html-href"),
+                ("assets/archive.zip", "html-href"),
+                ("assets/later.zip", "html-href"),
+                ("assets/vector-download.bin", "html-href"),
+                ("assets/after.bin", "html-href"),
+                ("assets/unquoted.bin", "html-href"),
+            ]
+        );
+        let cat = &references[0];
+        let start = utf16_offset_to_byte(source, cat.start).expect("valid start");
+        let end = utf16_offset_to_byte(source, cat.end).expect("valid end");
+        assert_eq!(&source[start..end], "assets/猫%20cover.png?x=1#hero");
+        assert!(
+            replace_asset_references_in_source(
+                source,
+                &normalized_asset_path("assets/theme.bin"),
+                "assets/replaced.bin",
+                false,
+            )
+            .contains(r#"href="assets/replaced.bin?rev=2#main""#)
+        );
     }
 
     #[test]
     fn asset_reference_discovery_keeps_repeated_and_overlapping_names_exact() {
         let source = concat!(
-            r#"<link href="assets/theme.css"> "#,
+            r#"<link rel="stylesheet" href="assets/theme.css"> "#,
             r#"assets/icon.png assets/icon.png assets/icon-large.png"#,
         );
         let references =
             asset_references_in_source("story:script", "Story JavaScript", source, None);
 
         assert_eq!(references.len(), 4);
-        assert_eq!(references[0].context, "html-href");
+        assert_eq!(references[0].context, "literal");
         assert_eq!(references[0].path, "assets/theme.css");
         assert_eq!(references[1].original, "assets/icon.png");
         assert_eq!(references[2].original, "assets/icon.png");
@@ -14896,8 +18065,9 @@ mod tests {
                 source,
                 &normalized_asset_path("assets/old name.png"),
                 "assets/new name.png",
+                false,
             ),
-            "😀 <img src=\"assets/new name.png?v=7#preview\">"
+            "😀 <img src=\"assets/new%20name.png?v=7#preview\">"
         );
     }
 

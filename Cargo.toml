@@ -48,6 +48,7 @@ twine_wasm = { path = "crates/twine_wasm" }
 wasm-bindgen = "0.2"
 wasm-bindgen-test = "0.3"
 web-time = "1"
+web_atoms = "=0.2.5"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
