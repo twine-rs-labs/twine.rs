@@ -62,7 +62,7 @@
 }
 
 .app-shell__brand-text span {
-	color: var(--acc-green);
+	color: var(--acc-amber);
 }
 
 .app-shell__crumbs {

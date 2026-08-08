@@ -13,6 +13,10 @@ import {join} from 'node:path';
 import {after, test} from 'node:test';
 import yauzl from 'yauzl';
 import {writeDeterministicZip} from '../deterministic-zip.mjs';
+import {
+	expectedPwaManifestColors,
+	verifyPwaManifestSource
+} from '../verify-pwa-manifest.mjs';
 import {verifyPrecacheSource} from '../verify-precache-manifest.mjs';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'twine-rs-zip-test-'));
@@ -100,6 +104,8 @@ test('the PWA precache manifest has one deterministic asset source', () => {
 
 	assert.match(config, /manifestTransforms: \[sortPrecacheManifest\]/);
 	assert.match(config, /includeManifestIcons: false/);
+	assert.match(config, /background_color: '#080D11'/);
+	assert.match(config, /theme_color: '#F2B544'/);
 	assert.doesNotMatch(config, /includeAssets:/);
 	assert.match(config, /png,wasm/);
 	assert.match(config, /'\*\*\/LICENSE'/);
@@ -109,6 +115,24 @@ test('the PWA precache manifest has one deterministic asset source', () => {
 	);
 	assert.match(config, /maximumFileSizeToCacheInBytes: 5 \* 1024 \* 1024/);
 	assert.match(archiveScript, /verifyPrecacheManifest/);
+	assert.match(archiveScript, /verifyPwaManifest/);
+});
+
+test('validates generated PWA manifest brand and surface colors', () => {
+	assert.deepEqual(
+		verifyPwaManifestSource(JSON.stringify(expectedPwaManifestColors)),
+		expectedPwaManifestColors
+	);
+	assert.throws(
+		() =>
+			verifyPwaManifestSource(
+				JSON.stringify({
+					background_color: '#080D11',
+					theme_color: '#42b883'
+				})
+			),
+		/generated PWA manifest theme_color must be #F2B544/i
+	);
 });
 
 test('validates generated PWA precache runtime closure, uniqueness, and order', () => {

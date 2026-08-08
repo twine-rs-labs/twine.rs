@@ -190,13 +190,16 @@ describe('design-system primitives', () => {
 				<Badge dot icon="unlink" mono tone="error">
 					3 broken
 				</Badge>
-				<Tag color="purple" onClick={onClick} onRemove={onRemove}>
+				<Tag color="green" onClick={onClick} onRemove={onRemove}>
 					night
 				</Tag>
 			</>
 		);
 		expect(screen.getByText('3 broken')).toHaveClass('tw-badge--error');
 		expect(screen.getByText('3 broken')).toHaveClass('tw-badge--mono');
+		expect(document.querySelector('.tw-tag__dot')).toHaveStyle({
+			background: 'var(--named-green)'
+		});
 		fireEvent.click(screen.getByRole('button', {name: 'Remove tag'}));
 		expect(onRemove).toHaveBeenCalledTimes(1);
 		expect(onClick).not.toHaveBeenCalled();

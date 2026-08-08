@@ -1,4 +1,4 @@
-/* @ds-bundle: {"format":3,"namespace":"TwineRsDesignSystem_073217","components":[{"name":"Panel","sourcePath":"components/data/Panel.jsx"},{"name":"PassageNode","sourcePath":"components/data/PassageNode.jsx"},{"name":"Badge","sourcePath":"components/feedback/Badge.jsx"},{"name":"Tag","sourcePath":"components/feedback/Tag.jsx"},{"name":"Button","sourcePath":"components/forms/Button.jsx"},{"name":"Checkbox","sourcePath":"components/forms/Checkbox.jsx"},{"name":"IconButton","sourcePath":"components/forms/IconButton.jsx"},{"name":"Input","sourcePath":"components/forms/Input.jsx"},{"name":"SegmentedControl","sourcePath":"components/forms/SegmentedControl.jsx"},{"name":"Select","sourcePath":"components/forms/Select.jsx"},{"name":"Switch","sourcePath":"components/forms/Switch.jsx"}],"sourceHashes":{"components/data/Panel.jsx":"0312d431005a","components/data/PassageNode.jsx":"d339e2d369b0","components/feedback/Badge.jsx":"24eeae77197d","components/feedback/Tag.jsx":"3c1c24ff719e","components/forms/Button.jsx":"2bae4be06a84","components/forms/Checkbox.jsx":"b30cb0f32206","components/forms/IconButton.jsx":"2b68ca397ea4","components/forms/Input.jsx":"cdff6d8736dc","components/forms/SegmentedControl.jsx":"ebcea00d19cc","components/forms/Select.jsx":"94546e1f0d2f","components/forms/Switch.jsx":"44164cbc23ed","ui_kits/nav.js":"d6f29d0eb2ed","ui_kits/workbench/CommandPalette.jsx":"9ad8980944b1","ui_kits/workbench/GraphMode.jsx":"7c1813d86f7d","ui_kits/workbench/TextMode.jsx":"7d8c07accd85","ui_kits/workbench/data.js":"fecd556e8e3a"},"inlinedExternals":[],"unexposedExports":[]} */
+/* @ds-bundle: {"format":3,"namespace":"TwineRsDesignSystem_073217","components":[{"name":"Panel","sourcePath":"components/data/Panel.jsx"},{"name":"PassageNode","sourcePath":"components/data/PassageNode.jsx"},{"name":"Badge","sourcePath":"components/feedback/Badge.jsx"},{"name":"Tag","sourcePath":"components/feedback/Tag.jsx"},{"name":"Button","sourcePath":"components/forms/Button.jsx"},{"name":"Checkbox","sourcePath":"components/forms/Checkbox.jsx"},{"name":"IconButton","sourcePath":"components/forms/IconButton.jsx"},{"name":"Input","sourcePath":"components/forms/Input.jsx"},{"name":"SegmentedControl","sourcePath":"components/forms/SegmentedControl.jsx"},{"name":"Select","sourcePath":"components/forms/Select.jsx"},{"name":"Switch","sourcePath":"components/forms/Switch.jsx"}],"sourceHashes":{"components/data/Panel.jsx":"0312d431005a","components/data/PassageNode.jsx":"c936691cb280","components/feedback/Badge.jsx":"24eeae77197d","components/feedback/Tag.jsx":"0ed7b4fdb278","components/forms/Button.jsx":"2bae4be06a84","components/forms/Checkbox.jsx":"b30cb0f32206","components/forms/IconButton.jsx":"2b68ca397ea4","components/forms/Input.jsx":"cdff6d8736dc","components/forms/SegmentedControl.jsx":"ebcea00d19cc","components/forms/Select.jsx":"94546e1f0d2f","components/forms/Switch.jsx":"44164cbc23ed","ui_kits/nav.js":"d6f29d0eb2ed","ui_kits/workbench/CommandPalette.jsx":"9ad8980944b1","ui_kits/workbench/GraphMode.jsx":"2d0092a2776b","ui_kits/workbench/TextMode.jsx":"7d8c07accd85","ui_kits/workbench/data.js":"fecd556e8e3a"},"inlinedExternals":[],"unexposedExports":[]} */
 
 (() => {
 
@@ -86,7 +86,7 @@ const CSS = `
 .tw-node__head { display: flex; align-items: center; gap: 6px; }
 .tw-node__title { font-size: 12.5px; font-weight: var(--fw-semibold); color: var(--tx-1);
 	white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-.tw-node__start { color: var(--acc-green); font-size: 13px; display: inline-flex; flex: none; }
+.tw-node__start { color: var(--sem-saved); font-size: 13px; display: inline-flex; flex: none; }
 .tw-node__excerpt { margin-top: 5px; font-size: 11px; line-height: 1.4; color: var(--tx-3);
 	display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tw-node__tags { display: flex; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
@@ -109,7 +109,7 @@ const HUES = {
   red: 'var(--sem-error)',
   orange: 'var(--sem-dirty)',
   yellow: 'var(--sem-warn)',
-  green: 'var(--sem-saved)',
+  green: 'var(--named-green)',
   teal: 'var(--sem-generated)',
   cyan: 'var(--sem-var)',
   blue: 'var(--sem-link)',
@@ -254,7 +254,7 @@ const HUES = {
   red: 'var(--sem-error)',
   orange: 'var(--sem-dirty)',
   yellow: 'var(--sem-warn)',
-  green: 'var(--sem-saved)',
+  green: 'var(--named-green)',
   teal: 'var(--sem-generated)',
   cyan: 'var(--sem-var)',
   blue: 'var(--sem-link)',
@@ -1034,16 +1034,16 @@ function GraphMode({
     const mx = (x1 + x2) / 2;
     return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
   }
-  const tagColor = t => `var(--sem-${{
-    blue: 'link',
-    teal: 'generated',
-    yellow: 'warn',
-    purple: 'tag',
-    cyan: 'var',
-    green: 'saved',
-    orange: 'dirty',
-    red: 'error'
-  }[TAGS[t]] || 'link'})`;
+  const tagColor = t => ({
+    blue: 'var(--sem-link)',
+    teal: 'var(--sem-generated)',
+    yellow: 'var(--sem-warn)',
+    purple: 'var(--sem-tag)',
+    cyan: 'var(--sem-var)',
+    green: 'var(--named-green)',
+    orange: 'var(--sem-dirty)',
+    red: 'var(--sem-error)'
+  })[TAGS[t]] || 'var(--sem-link)';
   return /*#__PURE__*/React.createElement("div", {
     className: "gm"
   }, /*#__PURE__*/React.createElement("div", {

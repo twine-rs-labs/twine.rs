@@ -871,7 +871,7 @@
 }
 
 .tw-node__start {
-	color: var(--acc-green);
+	color: var(--sem-saved);
 	display: inline-flex;
 	flex: none;
 	font-size: 13px;

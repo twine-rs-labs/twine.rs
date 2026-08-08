@@ -37,7 +37,7 @@ twine.rs-design-system/
 │   ├── spacing.css           ← 4px scale, control sizing, radii, chrome dims
 │   ├── elevation.css         ← shadows, edge highlight, glows, motion
 │   └── base.css              ← element defaults, scrollbars, selection
-├── assets/                   ← twine-mark.svg, app icons (blue→green sweep)
+├── assets/                   ← twine-mark.svg, app icon (blue→amber sweep)
 ├── components/
 │   ├── forms/    Button · IconButton · Input · Select · SegmentedControl · Switch · Checkbox
 │   ├── feedback/ Badge · Tag
@@ -152,8 +152,8 @@ Aliases: `--bg-app · --bg-dock · --bg-panel · --bg-card · --bg-raised · --b
 
 **Borders** — `--line-1` (faint) · `--line-2` (default) · `--line-3` (strong).
 
-**Brand** — `--acc-blue` (primary action) + `-hi`/`-lo`/`-soft`; `--acc-green` (secondary
-pole) + `-hi`/`-soft`; `--acc-twine` (the blue→green gradient — brand moments & active-mode
+**Brand** — `--acc-blue` (primary action) + `-hi`/`-lo`/`-soft`; `--acc-amber` (secondary
+pole, canonical `#F2B544`) + `-hi`/`-soft`; `--acc-twine` (the blue→amber gradient — brand moments & active-mode
 underline only); `--focus-ring`.
 
 **Semantic roles** (one hue per concept, each with a `-soft` tint):

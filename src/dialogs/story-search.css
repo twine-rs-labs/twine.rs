@@ -102,7 +102,7 @@
 }
 
 .story-search-dialog .search-result-preview ins {
-	background: var(--light-green-translucent);
+	background: var(--sem-saved-soft);
 }
 
 .story-search-dialog .search-fields {

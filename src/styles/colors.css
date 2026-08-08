@@ -39,11 +39,12 @@
 	--light-yellow-translucent: var(--sem-warn-soft);
 	--faint-yellow: var(--sem-warn-soft);
 
-	--dark-green: var(--sem-saved);
-	--green: var(--sem-saved);
-	--light-green: var(--sem-saved-soft);
-	--light-green-translucent: var(--sem-saved-soft);
-	--faint-green: var(--sem-saved-soft);
+	/* Persisted author-selected green tags are independent of UI status colors. */
+	--dark-green: var(--named-green);
+	--green: var(--named-green);
+	--light-green: var(--named-green-soft);
+	--light-green-translucent: var(--named-green-soft);
+	--faint-green: var(--named-green-soft);
 
 	--dark-blue: var(--sem-link);
 	--blue: var(--acc-blue);

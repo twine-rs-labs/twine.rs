@@ -63,17 +63,17 @@
 		const { TwineRail } = window;
 
 		const TARGETS = [
-			['run','player-play','Play','green'],
-			['test','tool','Test From Selection','green'],
-			['proof','book','Proof','green'],
+			['run','player-play','Play','amber'],
+			['test','tool','Test From Selection','amber'],
+			['proof','book','Proof','amber'],
 			['validate','checkup','Validate','warn'],
 			['html','file-code','Export HTML','blue'],
-			['twee','file-text','Export Twee','green'],
-			['json','braces','Export JSON','green'],
-			['pkg','package','Package Project','green'],
+			['twee','file-text','Export Twee','amber'],
+			['json','braces','Export JSON','amber'],
+			['pkg','package','Package Project','amber'],
 			['publish','cloud-upload','Publish','warn']
 		];
-		const DOT = { green:'var(--sem-saved)', warn:'var(--sem-warn)', blue:'var(--acc-blue)', err:'var(--sem-error)' };
+		const DOT = { amber:'var(--sem-saved)', warn:'var(--sem-warn)', blue:'var(--acc-blue)', err:'var(--sem-error)' };
 
 		function App() {
 			const [sel, setSel] = React.useState(4); // Export HTML

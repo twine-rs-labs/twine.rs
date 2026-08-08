@@ -77,8 +77,10 @@ export default defineConfig({
 		VitePWA({
 			includeManifestIcons: false,
 			manifest: {
+				background_color: '#080D11',
 				name: packageJson.productName,
 				short_name: packageJson.productName,
+				theme_color: '#F2B544',
 				icons: [
 					{
 						src: './icons/pwa-192.png',

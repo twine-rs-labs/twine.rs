@@ -102,7 +102,7 @@
 								<div className="cn__group-h"><i className="ti ti-folder" /> passages/ · showing first {rows.length}</div>
 								{rows.map((r, i) => (
 									<div key={r[0]} className={'cn__row' + (sel===ROWS.indexOf(r)?' is-on':'')} onClick={()=>setSel(ROWS.indexOf(r))}>
-										<i className={'ti ti-'+(r[6]?'rocket':'file-text')+' cn__ricon'} style={r[6]?{color:'var(--acc-green)'}:null} />
+										<i className={'ti ti-'+(r[6]?'rocket':'file-text')+' cn__ricon'} style={r[6]?{color:'var(--sem-saved)'}:null} />
 										<div className="cn__rname">
 											<b>{r[0]}</b>
 											<Tag color={HUE[r[2]]}>{r[2]}</Tag>

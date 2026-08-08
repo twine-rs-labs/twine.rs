@@ -19,7 +19,7 @@ const HUES = {
 	red: 'var(--sem-error)',
 	orange: 'var(--sem-dirty)',
 	yellow: 'var(--sem-warn)',
-	green: 'var(--sem-saved)',
+	green: 'var(--named-green)',
 	teal: 'var(--sem-generated)',
 	cyan: 'var(--sem-var)',
 	blue: 'var(--sem-link)',

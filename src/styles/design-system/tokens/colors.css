@@ -3,9 +3,9 @@
    A unique, professional dark workbench palette.
 
    Built in OKLCH for perceptual evenness, emitted as oklch().
-   The surface ramp carries a faint cool blue-green undertone
+   The surface ramp carries a faint cool-blue undertone
    (hue ~235) that ties every panel back to the twine mark's
-   blue→green gradient without ever reading as "blue UI".
+   blue→amber gradient without ever reading as "blue UI".
 
    Naming:
      --ink-N    surfaces, deepest (0) → raised (5)
@@ -38,6 +38,7 @@
 	--tx-3: oklch(0.655 0.011 236); /* muted labels             */
 	--tx-4: oklch(0.5 0.012 238); /* faint / placeholder      */
 	--tx-on-accent: oklch(0.16 0.012 245); /* text on bright accent fills */
+	--tx-on-amber: oklch(0.16 0.012 245); /* text on amber fills */
 
 	/* ---- Brand accents — the twine gradient --------------- */
 	--acc-blue: oklch(0.705 0.135 248); /* primary action       */
@@ -45,16 +46,15 @@
 	--acc-blue-lo: oklch(0.5 0.1 250); /* pressed / deep       */
 	--acc-blue-soft: oklch(0.45 0.07 250 / 0.22); /* tint fill   */
 
-	--acc-green: oklch(0.78 0.155 152); /* secondary brand pole  */
-	--acc-green-hi: oklch(0.83 0.15 152);
-	--acc-green-soft: oklch(0.55 0.1 152 / 0.2);
+	--acc-amber: #f2b544; /* secondary brand pole              */
+	--acc-amber-hi: #ffd06e;
+	--acc-amber-soft: rgb(242 181 68 / 0.2);
 
 	/* The signature mark gradient */
 	--acc-twine: linear-gradient(
 		135deg,
 		oklch(0.66 0.16 252) 0%,
-		oklch(0.74 0.15 196) 42%,
-		oklch(0.8 0.16 152) 100%
+		var(--acc-amber) 100%
 	); /* @kind color */
 
 	/* Focus ring — bright blue, used on a 2px outline */
@@ -72,8 +72,8 @@
 	--sem-var: oklch(0.78 0.115 196); /* variables / macros      */
 	--sem-var-soft: oklch(0.55 0.08 196 / 0.2);
 
-	--sem-warn: oklch(0.8 0.135 78); /* warnings                */
-	--sem-warn-soft: oklch(0.6 0.1 78 / 0.22);
+	--sem-warn: oklch(0.86 0.15 102); /* warnings                */
+	--sem-warn-soft: oklch(0.64 0.11 102 / 0.22);
 
 	--sem-error: oklch(0.66 0.185 26); /* errors / broken links   */
 	--sem-error-soft: oklch(0.5 0.13 26 / 0.24);
@@ -81,8 +81,12 @@
 	--sem-dirty: oklch(0.76 0.155 56); /* unsaved / changed       */
 	--sem-dirty-soft: oklch(0.58 0.11 56 / 0.22);
 
-	--sem-saved: oklch(0.78 0.15 152); /* saved layout / success  */
-	--sem-saved-soft: oklch(0.55 0.1 152 / 0.2);
+	--sem-saved: var(--acc-amber); /* saved layout / success    */
+	--sem-saved-soft: var(--acc-amber-soft);
+
+	/* Named author colors remain available for explicit tag choices. */
+	--named-green: oklch(0.78 0.15 152);
+	--named-green-soft: oklch(0.55 0.1 152 / 0.2);
 
 	--sem-generated: oklch(0.76 0.11 212); /* generated layout    */
 	--sem-generated-soft: oklch(0.55 0.08 212 / 0.2);
@@ -125,7 +129,7 @@
 
    Design intent (read alongside the dark notes above):
    - NOT a searing white. The base frame is a soft cool paper
-     (oklch L≈0.95, a faint blue-green undertone, hue ~232) so
+     (oklch L≈0.95, a faint cool-blue undertone, hue ~232) so
      long writing sessions stay low-glare. Pure-ish white is
      reserved for the cards/editor you actually read in.
    - The ramp INVERTS its lift logic, not its roles. In dark,
@@ -134,9 +138,9 @@
      that sit ON the white surfaces, so the existing component
      CSS (button rest=ink-4 → hover=ink-5) now reads as a
      normal light control that darkens on hover.
-   - Accents keep the twine blue→green hues but drop ~0.15 in
-     lightness and gain chroma so they carry real contrast on
-     paper and take white text. The signature gradient stays.
+   - Accents keep the twine blue→amber identity. Blue deepens
+     for contrast on paper; amber remains the canonical brand
+     value. The signature gradient stays.
    - Semantic hues are deepened to AA-legible ink; their -soft
      tints become pale washes (low alpha) instead of glows.
    - Elevation switches from "1px light-from-above" to soft,
@@ -170,6 +174,7 @@
 	--tx-3: oklch(0.47 0.015 241); /* muted labels                 */
 	--tx-4: oklch(0.598 0.013 238); /* faint / placeholder          */
 	--tx-on-accent: oklch(0.992 0.004 230); /* text on accent fills */
+	--tx-on-amber: oklch(0.16 0.012 245); /* text on amber fills */
 
 	/* ---- Brand accents — the twine gradient, deepened ----- */
 	--acc-blue: oklch(0.548 0.158 252); /* primary action          */
@@ -177,15 +182,14 @@
 	--acc-blue-lo: oklch(0.47 0.15 252); /* pressed / deep        */
 	--acc-blue-soft: oklch(0.7 0.12 252 / 0.16); /* tint fill    */
 
-	--acc-green: oklch(0.56 0.135 158);
-	--acc-green-hi: oklch(0.61 0.135 158);
-	--acc-green-soft: oklch(0.68 0.12 158 / 0.18);
+	--acc-amber: #f2b544;
+	--acc-amber-hi: #d99a27;
+	--acc-amber-soft: rgb(242 181 68 / 0.18);
 
 	--acc-twine: linear-gradient(
 		135deg,
 		oklch(0.56 0.17 255) 0%,
-		oklch(0.62 0.13 200) 42%,
-		oklch(0.61 0.15 158) 100%
+		var(--acc-amber) 100%
 	); /* @kind color */
 
 	--focus-ring: oklch(0.548 0.16 250);
@@ -200,8 +204,8 @@
 	--sem-var: oklch(0.47 0.095 214);
 	--sem-var-soft: oklch(0.61 0.09 208 / 0.16);
 
-	--sem-warn: oklch(0.56 0.13 72);
-	--sem-warn-soft: oklch(0.79 0.13 80 / 0.28);
+	--sem-warn: oklch(0.55 0.14 95);
+	--sem-warn-soft: oklch(0.83 0.14 98 / 0.28);
 
 	--sem-error: oklch(0.53 0.198 27);
 	--sem-error-soft: oklch(0.64 0.175 27 / 0.15);
@@ -209,8 +213,12 @@
 	--sem-dirty: oklch(0.56 0.165 50);
 	--sem-dirty-soft: oklch(0.72 0.15 55 / 0.18);
 
-	--sem-saved: oklch(0.52 0.14 156);
-	--sem-saved-soft: oklch(0.65 0.13 156 / 0.16);
+	/* Darker amber ink keeps status text legible on paper surfaces. */
+	--sem-saved: #956100;
+	--sem-saved-soft: var(--acc-amber-soft);
+
+	--named-green: oklch(0.52 0.14 156);
+	--named-green-soft: oklch(0.65 0.13 156 / 0.16);
 
 	--sem-generated: oklch(0.51 0.1 218);
 	--sem-generated-soft: oklch(0.64 0.09 214 / 0.16);
