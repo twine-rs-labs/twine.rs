@@ -81,15 +81,31 @@ export default defineConfig({
 				short_name: packageJson.productName,
 				icons: [
 					{
-						src: './icons/pwa.png',
-						sizes: '1024x1024',
+						src: './icons/pwa-192.png',
+						sizes: '192x192',
 						type: 'image/png'
 					},
 					{
-						src: './icons/pwa-maskable.png',
-						purpose: 'maskable',
-						sizes: '1024x1024',
+						src: './icons/pwa-512.png',
+						sizes: '512x512',
 						type: 'image/png'
+					},
+					{
+						src: './icons/pwa.svg',
+						sizes: 'any',
+						type: 'image/svg+xml'
+					},
+					{
+						src: './icons/pwa-maskable-512.png',
+						purpose: 'maskable',
+						sizes: '512x512',
+						type: 'image/png'
+					},
+					{
+						src: './icons/pwa-maskable.svg',
+						purpose: 'maskable',
+						sizes: 'any',
+						type: 'image/svg+xml'
 					}
 				]
 			},

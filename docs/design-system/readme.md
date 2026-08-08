@@ -20,7 +20,7 @@ This system was built from the local planning materials available when the packa
 - **Original codebase survey:** the inherited `twinejs` React/TypeScript app.
   Key references used when the design package was created:
   - `twine.rs/src/styles/{colors,typography,metrics,depth}.css` — the legacy token system (Nunito, blue/green logo hues, oklch palette).
-  - `twine.rs/icons/logo.svg`, `app-release.svg` — the twine mark (blue→green sweep).
+  - `twine.rs/public/icons/favicon.svg`, `twine.rs/icons/app.svg` — the twine mark and application icon.
   - `twine.rs/src/components/**` — confirmed the icon library is **Tabler Icons** (`@tabler/icons`).
 - **Spec:** [`../product/screen-specifications.md`](../product/screen-specifications.md)
   — the canonical screen goals, UI inventories, vocabulary, and
@@ -138,8 +138,8 @@ meaning — selection, links, tags, diagnostics, build state.
   `player-play` (play), `tool` (test), `package-export` (export), `command`, `unlink`
   (broken link), `alert-triangle`/`alert-octagon` (diagnostics), `rocket` (start passage),
   `device-floppy` (save), `grid-dots` (snap).
-- **Assets on disk:** `assets/twine-mark.svg` (primary mark, blue→green sweep),
-  `assets/app-release.svg` (dark app icon), `assets/app-preview.svg` (graph-style icon).
+- **Assets on disk:** `assets/twine-mark.svg` (primary mark, blue→green sweep) and
+  `assets/app.svg` (application icon).
   All copied from the codebase; safe on dark surfaces.
 
 ---

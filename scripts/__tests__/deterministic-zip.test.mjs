@@ -116,14 +116,14 @@ test('validates generated PWA precache runtime closure, uniqueness, and order', 
 	const valid =
 		's.precacheAndRoute([{url:"a.js",revision:null},' +
 		`{url:"${wasmUrl}",revision:null},` +
-		'{url:"icons/pwa.png",revision:"hash"},' +
+		'{url:"icons/pwa-192.png",revision:"hash"},' +
 		'{url:"manifest.webmanifest",revision:"hash"}],' +
 		'{ignoreURLParametersMatching:[/^utm_/,/^fbclid$/, /^callback$/]})';
 
 	assert.deepEqual(verifyPrecacheSource(valid, [wasmUrl]), [
 		'a.js',
 		wasmUrl,
-		'icons/pwa.png',
+		'icons/pwa-192.png',
 		'manifest.webmanifest'
 	]);
 	assert.deepEqual(
@@ -131,14 +131,14 @@ test('validates generated PWA precache runtime closure, uniqueness, and order', 
 			`workbox.precacheAndRoute([
 				{"url": "a.js", "revision": null},
 				{"url": "${wasmUrl}", "revision": null},
-				{"url": "icons/pwa.png", "revision": "hash"},
+				{"url": "icons/pwa-192.png", "revision": "hash"},
 				{"url": "manifest.webmanifest", "revision": "hash"}
 			], {
 				"ignoreURLParametersMatching": [/^utm_/, /^fbclid$/, /^callback$/]
 			})`,
 			[wasmUrl]
 		),
-		['a.js', wasmUrl, 'icons/pwa.png', 'manifest.webmanifest']
+		['a.js', wasmUrl, 'icons/pwa-192.png', 'manifest.webmanifest']
 	);
 	assert.throws(
 		() =>

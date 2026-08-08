@@ -157,6 +157,9 @@ test('desktop targets are architecture-specific and selected by the runner', () 
 	assert.deepEqual(config.linux.target, ['AppImage', 'zip']);
 	assert.equal(config.mac.target, 'dmg');
 	assert.equal(config.win.target, 'nsis');
+	assert.equal(config.linux.icon, 'icons/app.png');
+	assert.equal(config.mac.icon, 'icons/app.svg');
+	assert.equal(config.win.icon, 'icons/app-no-padding.ico');
 	assert.match(config.mac.artifactName, /mac-\$\{arch\}/);
 	assert.doesNotMatch(config.mac.artifactName, /universal/);
 });
