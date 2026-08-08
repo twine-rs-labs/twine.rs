@@ -35,7 +35,7 @@ export const AppActions: React.FC<AppActionsProps> = props => {
 			/>
 			<IconButton
 				icon="award"
-				label={t('routeActions.app.aboutApp')}
+				label={t('routeActions.app.aboutTwineRs')}
 				onClick={() =>
 					dispatch({type: 'addDialog', component: AboutTwineDialog})
 				}

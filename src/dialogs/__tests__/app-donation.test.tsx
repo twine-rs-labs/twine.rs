@@ -37,11 +37,16 @@ describe('<AppDonationDialog>', () => {
 		]);
 	});
 
-	it('displays a link to donate', () => {
+	it('links only to Twine RS support', () => {
 		renderComponent();
 		expect(
-			screen.getByText('dialogs.appDonation.donate').getAttribute('href')
-		).toBe('https://twinery.org/donate');
+			screen
+				.getByText('dialogs.appDonation.supportTwineRs')
+				.getAttribute('href')
+		).toBe('https://www.patreon.com/TwineRSLab');
+		expect(screen.queryByRole('link')).toBe(
+			screen.getByText('dialogs.appDonation.supportTwineRs')
+		);
 	});
 
 	it('displays a button which calls the onClose prop', async () => {

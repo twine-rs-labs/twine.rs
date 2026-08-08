@@ -49,12 +49,14 @@ describe('<AppActions>', () => {
 	it('displays a button that shows the about dialog', () => {
 		renderComponent();
 		expect(
-			screen.queryByText('dialogs.aboutTwine.title')
+			screen.queryByText('dialogs.aboutTwine.twineRsTitle')
 		).not.toBeInTheDocument();
 		fireEvent.click(
-			screen.getByRole('button', {name: 'routeActions.app.aboutApp'})
+			screen.getByRole('button', {name: 'routeActions.app.aboutTwineRs'})
 		);
-		expect(screen.getByText('dialogs.aboutTwine.title')).toBeInTheDocument();
+		expect(
+			screen.getByText('dialogs.aboutTwine.twineRsTitle')
+		).toBeInTheDocument();
 	});
 
 	it('navigates to the Story Formats route instead of opening the legacy dialog', async () => {

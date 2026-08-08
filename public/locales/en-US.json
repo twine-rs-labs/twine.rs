@@ -156,21 +156,22 @@
 	},
 	"dialogs": {
 		"aboutTwine": {
-			"donateToTwine": "Help Twine Grow With A Donation",
 			"codeHeader": "Code",
-			"codeRepo": "Visit Source Code Repository",
+			"codeRepo": "Twine RS source repository",
 			"license": "This application is released under the <a href=\"https://www.gnu.org/licenses/gpl-3.0.html\">GPL v3 license</a>, but any work created with it may be released under any terms, including commercial ones.",
 			"localizationHeader": "Localizations",
-			"title": "About Twine {{version}}",
-			"twineDescription": "Twine is an open-source application for telling interactive, nonlinear stories.",
-			"upstreamRepo": "Visit the Upstream TwineJS Repository"
+			"supportTwineRs": "Support Twine RS on Patreon",
+			"supportUpstreamTwine": "Support upstream Twine",
+			"twineRsDescription": "Twine RS is an independent, open-source editor built from TwineJS for creating interactive, nonlinear stories.",
+			"twineRsTitle": "About Twine RS {{version}}",
+			"upstreamRepo": "Upstream TwineJS repository"
 		},
 		"appDonation": {
-			"donate": "Donate To Twine Development",
-			"onlyOnce": "(This message will only be shown to you once. If you'd like to donate to Twine development in the future, there's a link to do so in the About Twine dialog.)",
-			"supportMessage": "If you love Twine, please consider helping it grow with a donation. Twine is an open source project that will always be free to use—and with your help, Twine will continue to thrive.",
 			"noThanks": "No Thanks",
-			"title": "Support Twine Development"
+			"supportTwineRs": "Support Twine RS on Patreon",
+			"twineRsOnlyOnce": "(This message will only be shown to you once. You can support Twine RS in the future from the About Twine RS dialog.)",
+			"twineRsSupportMessage": "Twine RS is an independent, open-source editor built from TwineJS. If you find it useful, please consider supporting its continued development.",
+			"twineRsTitle": "Support Twine RS"
 		},
 		"appPrefs": {
 			"codeEditorFont": "Code Editor Font",
@@ -481,7 +482,7 @@
 	},
 	"routeActions": {
 		"app": {
-			"aboutApp": "About Twine",
+			"aboutTwineRs": "About Twine RS",
 			"preferences": "Preferences",
 			"reportBug": "Report a Bug",
 			"storyFormats": "Story Formats"

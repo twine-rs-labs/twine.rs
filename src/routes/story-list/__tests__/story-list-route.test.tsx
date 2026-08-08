@@ -651,7 +651,9 @@ describe('<StoryListRoute>', () => {
 		});
 
 		await renderComponent();
-		expect(screen.getByText('dialogs.appDonation.title')).toBeInTheDocument();
+		expect(
+			screen.getByText('dialogs.appDonation.twineRsTitle')
+		).toBeInTheDocument();
 	});
 
 	it('does not display a donation prompt if useDonationCheck() says it should not be shown', async () => {
@@ -661,7 +663,7 @@ describe('<StoryListRoute>', () => {
 
 		await renderComponent();
 		expect(
-			screen.queryByText('dialogs.appDonation.title')
+			screen.queryByText('dialogs.appDonation.twineRsTitle')
 		).not.toBeInTheDocument();
 	});
 

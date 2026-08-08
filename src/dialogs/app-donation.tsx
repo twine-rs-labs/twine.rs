@@ -1,4 +1,4 @@
-import {IconHeart} from '@tabler/icons-react';
+import {IconBrandPatreon} from '@tabler/icons-react';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {ButtonBar} from '../components/container/button-bar';
@@ -20,19 +20,19 @@ export const AppDonationDialog: React.FC<DialogComponentProps> = props => {
 			{...props}
 			className="app-donation-dialog"
 			fixedSize
-			headerLabel={t('dialogs.appDonation.title')}
+			headerLabel={t('dialogs.appDonation.twineRsTitle')}
 		>
 			<CardContent>
 				<div className="text">
-					<p>{t('dialogs.appDonation.supportMessage')}</p>
-					<p>{t('dialogs.appDonation.onlyOnce')}</p>
+					<p>{t('dialogs.appDonation.twineRsSupportMessage')}</p>
+					<p>{t('dialogs.appDonation.twineRsOnlyOnce')}</p>
 				</div>
 			</CardContent>
 			<ButtonBar>
 				<IconLink
-					href="https://twinery.org/donate"
-					icon={<IconHeart />}
-					label={t('dialogs.appDonation.donate')}
+					href="https://www.patreon.com/TwineRSLab"
+					icon={<IconBrandPatreon />}
+					label={t('dialogs.appDonation.supportTwineRs')}
 					variant="primary"
 				/>
 				<Button icon="x" onClick={props.onClose}>

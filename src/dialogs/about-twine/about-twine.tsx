@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {IconCode, IconGitFork, IconHeart} from '@tabler/icons-react';
+import {IconBrandPatreon, IconCode, IconGitFork} from '@tabler/icons-react';
 import {ButtonBar} from '../../components/container/button-bar';
 import {DialogCard} from '../../components/container/dialog-card';
 import {IconLink} from '../../components/control/icon-link';
@@ -18,12 +18,12 @@ export const AboutTwineDialog: React.FC<DialogComponentProps> = props => {
 			{...props}
 			className="about-twine-dialog"
 			fixedSize
-			headerLabel={t('dialogs.aboutTwine.title', {
+			headerLabel={t('dialogs.aboutTwine.twineRsTitle', {
 				version: info.version
 			})}
 		>
 			<div className="content">
-				<p>{t('dialogs.aboutTwine.twineDescription')}</p>
+				<p>{t('dialogs.aboutTwine.twineRsDescription')}</p>
 				<p
 					dangerouslySetInnerHTML={{
 						__html: t('dialogs.aboutTwine.license')
@@ -49,9 +49,9 @@ export const AboutTwineDialog: React.FC<DialogComponentProps> = props => {
 				</div>
 				<ButtonBar>
 					<IconLink
-						href="https://twinery.org/donate"
-						icon={<IconHeart />}
-						label={t('dialogs.aboutTwine.donateToTwine')}
+						href="https://www.patreon.com/TwineRSLab"
+						icon={<IconBrandPatreon />}
+						label={t('dialogs.aboutTwine.supportTwineRs')}
 						variant="primary"
 					/>
 					<IconLink
@@ -65,6 +65,11 @@ export const AboutTwineDialog: React.FC<DialogComponentProps> = props => {
 						label={t('dialogs.aboutTwine.upstreamRepo')}
 					/>
 				</ButtonBar>
+				<p className="upstream-support">
+					<a href="https://twinery.org/donate" target="_blank" rel="noreferrer">
+						{t('dialogs.aboutTwine.supportUpstreamTwine')}
+					</a>
+				</p>
 			</div>
 		</DialogCard>
 	);
