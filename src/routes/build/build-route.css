@@ -126,7 +126,7 @@
 	width: 38px;
 }
 
-.build-route__action-icon--green {
+.build-route__action-icon--amber {
 	background: var(--sem-saved-soft);
 	color: var(--sem-saved);
 }

@@ -14,8 +14,6 @@ const {
 } = require('./scripts/artifact-profile-hooks.cjs');
 const pkg = require('./package.json');
 
-const isPreview =
-	/^\d+\.\d+\.\d+-/.test(pkg.version) || process.env.FORCE_PREVIEW;
 const productName = 'Twine RS';
 const artifactProductName = 'Twine-RS';
 const releaseProfile = resolveReleaseProfile(process.env);
@@ -97,7 +95,7 @@ module.exports = {
 	linux: {
 		artifactName: `${artifactProductName}-${pkg.version}-linux-\${arch}.\${ext}`,
 		category: 'Development',
-		icon: `icons/app-${isPreview ? 'preview' : 'release'}.png`,
+		icon: 'icons/app.png',
 		target: ['AppImage', 'zip']
 	},
 	mac: {
@@ -114,7 +112,7 @@ module.exports = {
 		},
 		forceCodeSigning: releaseProfile === profiles.signed,
 		identity: releaseProfile === profiles.signed ? process.env.CSC_NAME : null,
-		icon: `icons/app-${isPreview ? 'preview' : 'release'}.png`,
+		icon: 'icons/app.svg',
 		notarize: false,
 		target: 'dmg'
 	},
@@ -126,7 +124,7 @@ module.exports = {
 	win: {
 		artifactName: `${artifactProductName}-${pkg.version}-win-\${arch}${unsignedSuffix}.\${ext}`,
 		forceCodeSigning: releaseProfile === profiles.signed,
-		icon: `icons/app-${isPreview ? 'preview' : 'release'}-no-padding.ico`,
+		icon: 'icons/app-no-padding.ico',
 		signExecutable: releaseProfile === profiles.signed,
 		target: 'nsis'
 	},

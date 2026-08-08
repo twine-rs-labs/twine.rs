@@ -19,7 +19,11 @@ function GraphMode({ selected, setSelected }) {
 		return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
 	}
 
-	const tagColor = t => `var(--sem-${({blue:'link',teal:'generated',yellow:'warn',purple:'tag',cyan:'var',green:'saved',orange:'dirty',red:'error'})[TAGS[t]] || 'link'})`;
+	const tagColor = t => ({
+		blue: 'var(--sem-link)', teal: 'var(--sem-generated)', yellow: 'var(--sem-warn)',
+		purple: 'var(--sem-tag)', cyan: 'var(--sem-var)', green: 'var(--named-green)',
+		orange: 'var(--sem-dirty)', red: 'var(--sem-error)'
+	})[TAGS[t]] || 'var(--sem-link)';
 
 	return (
 		<div className="gm">

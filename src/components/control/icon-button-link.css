@@ -97,19 +97,19 @@
 
 .icon-button.variant-create,
 .icon-link.variant-create {
-	color: var(--dark-green);
+	color: var(--sem-saved);
 }
 
 .icon-button.variant-create:hover:not(:disabled),
 .icon-link.variant-create:hover:not(:disabled) {
-	background: var(--light-green-translucent);
-	color: var(--dark-green);
+	background: var(--sem-saved-soft);
+	color: var(--sem-saved);
 }
 
 .icon-button.variant-create:active:not(:disabled),
 .icon-link.variant-create:active:not(:disabled) {
-	background: var(--green);
-	color: var(--dark-green);
+	background: var(--sem-saved);
+	color: var(--tx-on-amber);
 }
 
 .icon-button.variant-danger,

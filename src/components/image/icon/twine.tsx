@@ -14,8 +14,8 @@ export const IconTwine: React.FC = () => (
 				<stop offset="1" stopColor="#117aef" stopOpacity=".251" />
 			</linearGradient>
 			<linearGradient id="a">
-				<stop offset="0" stopColor="#10f05e" stopOpacity=".251" />
-				<stop offset="1" stopColor="#10f05e" />
+				<stop offset="0" stopColor="#F2B544" stopOpacity=".251" />
+				<stop offset="1" stopColor="#F2B544" />
 			</linearGradient>
 			<linearGradient
 				xlinkHref="#a"

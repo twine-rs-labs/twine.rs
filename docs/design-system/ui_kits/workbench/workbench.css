@@ -11,7 +11,7 @@
 .wb__brand { display: flex; align-items: center; gap: 8px; padding-right: 6px; }
 .wb__brand img { width: 20px; height: 20px; }
 .wb__brand b { font-family: var(--font-display); font-weight: 500; font-size: 14px; color: var(--tx-1); letter-spacing: -0.02em; }
-.wb__brand b span { color: var(--acc-green); }
+.wb__brand b span { color: var(--acc-amber); }
 .wb__crumbs { display: flex; align-items: center; gap: 6px; color: var(--tx-3); font-size: 12.5px; }
 .wb__crumbs .ti { font-size: 14px; color: var(--tx-4); }
 .wb__crumbs b { color: var(--tx-1); font-weight: 600; }
@@ -177,7 +177,7 @@
 	padding: 6px 8px 6px 10px; background: var(--ink-2); border: 1px solid var(--line-2); border-radius: var(--r-lg);
 	box-shadow: var(--shadow-pop), var(--edge-hi); }
 .gm__savebtn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px;
-	font-size: 11.5px; font-weight: 600; color: var(--tx-on-accent); background: var(--acc-green);
+	font-size: 11.5px; font-weight: 600; color: var(--tx-on-amber); background: var(--acc-amber);
 	border: 0; border-radius: var(--r-sm); cursor: pointer; }
 .gm__savebtn .ti { font-size: 14px; }
 .gm__keep { font-size: 11.5px; color: var(--tx-3); cursor: pointer; }

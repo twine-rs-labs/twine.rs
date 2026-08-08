@@ -19,13 +19,13 @@ This system was built from the local planning materials available when the packa
 
 - **Original codebase survey:** the inherited `twinejs` React/TypeScript app.
   Key references used when the design package was created:
-  - `twine.rs/src/styles/{colors,typography,metrics,depth}.css` — the legacy token system (Nunito, blue/green logo hues, oklch palette).
-  - `twine.rs/icons/logo.svg`, `app-release.svg` — the twine mark (blue→green sweep).
+  - `twine.rs/src/styles/{colors,typography,metrics,depth}.css` — the legacy token system (Nunito, logo hues, oklch palette).
+  - `twine.rs/public/icons/favicon.svg`, `twine.rs/icons/app.svg` — the twine mark and application icon.
   - `twine.rs/src/components/**` — confirmed the icon library is **Tabler Icons** (`@tabler/icons`).
 - **Spec:** [`../product/screen-specifications.md`](../product/screen-specifications.md)
   — the canonical screen goals, UI inventories, vocabulary, and
   desktop-vs-browser matrix.
-- **Brand DNA inherited:** the Twine logo gradient (blue → green) and the multi-hue
+- **Brand DNA inherited:** the Twine logo gradient (blue → amber) and the multi-hue
   semantic palette concept ("avoid a single-hue palette").
 
 ### Font substitution — please confirm
@@ -74,18 +74,18 @@ Examples (good): `Generate Graph Layout`, `Keep text-only`, `No saved graph layo
 ## Visual foundations
 
 The defining idea: a **cool-ink dark workbench**. Surfaces are near-neutral charcoal with a
-faint blue-green undertone (oklch hue ~235–240) so every panel quietly echoes the twine
+faint cool-blue undertone (oklch hue ~235–240) so every panel quietly echoes the twine
 mark's gradient without ever reading as "blue UI". Color is spent only where it carries
 meaning — selection, links, tags, diagnostics, build state.
 
 - **Color & vibe.** Layered `--ink-0…5` surface ramp (deepest app gutter → raised popover)
   plus a near-black `--ink-void` for the graph canvas. Text is a 4-step ramp (`--tx-1…4`).
   The mood is dim, even, low-glare — comfortable for long writing sessions.
-- **Accent.** The brand **blue→green twine gradient** (`--acc-twine`) is reserved for brand
+- **Accent.** The brand **blue→amber twine gradient** (`--acc-twine`) is reserved for brand
   moments and the active mode underline. Solid `--acc-blue` is the single primary-action color;
-  `--acc-green` is the secondary pole (Save Layout, success).
+  `--acc-amber` is the secondary pole (`#F2B544`; Save Layout, success).
 - **Semantic palette.** One hue per authoring concept so map layers stay legible when stacked:
-  link=blue, tag=purple, variable=cyan, warning=amber, error=red, dirty=orange, saved=green,
+  link=blue, tag=purple, variable=cyan, warning=yellow, error=red, dirty=orange, saved=amber,
   generated=teal, build=violet. Each has a `-soft` tint for fills/badges.
 - **Type.** Space Grotesk (display) / Hanken Grotesk (UI, 13px base) / JetBrains Mono (code &
   numbers). Dense workbench scale; nothing below ~10.5px and only for status meta.
@@ -138,8 +138,8 @@ meaning — selection, links, tags, diagnostics, build state.
   `player-play` (play), `tool` (test), `package-export` (export), `command`, `unlink`
   (broken link), `alert-triangle`/`alert-octagon` (diagnostics), `rocket` (start passage),
   `device-floppy` (save), `grid-dots` (snap).
-- **Assets on disk:** `assets/twine-mark.svg` (primary mark, blue→green sweep),
-  `assets/app-release.svg` (dark app icon), `assets/app-preview.svg` (graph-style icon).
+- **Assets on disk:** `assets/twine-mark.svg` (primary mark, blue→amber sweep) and
+  `assets/app.svg` (application icon).
   All copied from the codebase; safe on dark surfaces.
 
 ---

@@ -6,8 +6,8 @@
 			<stop style="stop-color:#117aef;stop-opacity:0.25098041;" offset="1" id="stop3765"></stop>
 		</linearGradient>
 		<linearGradient id="linearGradient3753">
-			<stop style="stop-color:#10f05e;stop-opacity:0.25098041;" offset="0" id="stop3755"></stop>
-			<stop style="stop-color:#10f05e;stop-opacity:1;" offset="1" id="stop3757"></stop>
+			<stop style="stop-color:#F2B544;stop-opacity:0.25098041;" offset="0" id="stop3755"></stop>
+			<stop style="stop-color:#F2B544;stop-opacity:1;" offset="1" id="stop3757"></stop>
 		</linearGradient>
 		<linearGradient xlink:href="#linearGradient3753" id="linearGradient3759" x1="52" y1="604.36218" x2="972" y2="604.36218" gradientUnits="userSpaceOnUse"></linearGradient>
 		<linearGradient xlink:href="#linearGradient3761" id="linearGradient3767" x1="256" y1="0" x2="231.9866" y2="725.54773" gradientUnits="userSpaceOnUse" gradientTransform="translate(0,28.362168)"></linearGradient>

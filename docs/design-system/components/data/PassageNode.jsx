@@ -13,7 +13,7 @@ const CSS = `
 .tw-node__head { display: flex; align-items: center; gap: 6px; }
 .tw-node__title { font-size: 12.5px; font-weight: var(--fw-semibold); color: var(--tx-1);
 	white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-.tw-node__start { color: var(--acc-green); font-size: 13px; display: inline-flex; flex: none; }
+.tw-node__start { color: var(--sem-saved); font-size: 13px; display: inline-flex; flex: none; }
 .tw-node__excerpt { margin-top: 5px; font-size: 11px; line-height: 1.4; color: var(--tx-3);
 	display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tw-node__tags { display: flex; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
@@ -36,7 +36,7 @@ function ensureStyle() {
 
 const HUES = {
 	red: 'var(--sem-error)', orange: 'var(--sem-dirty)', yellow: 'var(--sem-warn)',
-	green: 'var(--sem-saved)', teal: 'var(--sem-generated)', cyan: 'var(--sem-var)',
+	green: 'var(--named-green)', teal: 'var(--sem-generated)', cyan: 'var(--sem-var)',
 	blue: 'var(--sem-link)', purple: 'var(--sem-tag)'
 };
 

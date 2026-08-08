@@ -1450,7 +1450,7 @@ export const BuildRoute: React.FC = () => {
 							aria-label="Preview actions"
 						>
 							<div className="build-route__action-row">
-								<div className="build-route__action-icon build-route__action-icon--green">
+								<div className="build-route__action-icon build-route__action-icon--amber">
 									<TablerIcon icon="player-play" />
 								</div>
 								<div className="build-route__action-body">
