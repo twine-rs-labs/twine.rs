@@ -1,0 +1,6 @@
+(set: $light to true)
+The old citrus trees turn their leaves toward your lamp. Beneath the western bench, a line of wet footprints disappears into the wall.
+
+[[Climb toward the observatory->Observatory]]
+
+[[Cross the glass gallery->Glass Gallery]]

@@ -1,0 +1,14 @@
+(set: $light to false)(set: $key to false)(set: $rain to "silver")
+<div class="orchard-scene">
+  <img class="orchard-scene__art" src="assets/orchard-atrium.jpg" alt="">
+  <section class="orchard-card">
+    <div class="orchard-kicker">The Glass Orchard</div>
+    <div class="orchard-time">North Glasshouse · 03:17</div>
+    <h1>The orchard remembers every visitor.</h1>
+    <p>Rain maps the roof in silver veins. Beyond the fogged panes, a brass bell rings once—and a door that was not there yesterday stands open.</p>
+    <div class="orchard-links">
+      [[Enter the greenhouse->Greenhouse]]
+      [[Follow the service stairs->Service Stairs]]
+    </div>
+  </section>
+</div>
