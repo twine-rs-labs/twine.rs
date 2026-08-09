@@ -1,4 +1,4 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {MemoryRouter} from 'react-router';
@@ -37,6 +37,7 @@ describe('<StoryListRoute>', () => {
 
 	afterEach(() => {
 		delete (window as any).twineElectron;
+		jest.useRealTimers();
 		jest.restoreAllMocks();
 	});
 
@@ -93,6 +94,60 @@ describe('<StoryListRoute>', () => {
 	it('displays story rows if there are stories in state', async () => {
 		await renderComponent({stories: [fakeStory()]});
 		expect(screen.getByTestId('story-list-row')).toBeInTheDocument();
+	});
+
+	it('keeps story health neutral until the delayed summary query completes', async () => {
+		jest.useFakeTimers();
+		const story = fakeStory();
+		const querySummary = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryStorySummaryAsync')
+			.mockResolvedValue({
+				errorCount: 0,
+				graph: {brokenLinks: 0}
+			} as any);
+
+		await renderComponent({stories: [story]});
+
+		expect(
+			screen.getByText('Checking errors').closest('.tw-badge')
+		).toHaveClass('tw-badge--neutral');
+		expect(screen.queryByText('0 errors')).not.toBeInTheDocument();
+		expect(querySummary).not.toHaveBeenCalled();
+
+		await act(async () => {
+			jest.advanceTimersByTime(2000);
+			await Promise.resolve();
+		});
+
+		expect(querySummary).toHaveBeenCalledWith(story.id);
+		expect(screen.getByText('0 errors').closest('.tw-badge')).toHaveClass(
+			'tw-badge--success'
+		);
+	});
+
+	it('shows unavailable story health when the delayed summary query fails', async () => {
+		jest.useFakeTimers();
+		const story = fakeStory();
+		const querySummary = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryStorySummaryAsync')
+			.mockRejectedValue(new Error('Summary worker failed'));
+
+		await renderComponent({stories: [story]});
+
+		await act(async () => {
+			jest.advanceTimersByTime(2000);
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+
+		expect(querySummary).toHaveBeenCalledWith(story.id);
+		expect(
+			screen.getByText('Health unavailable').closest('.tw-badge')
+		).toHaveClass('tw-badge--neutral');
+		expect(
+			screen.getByText('Health unavailable').closest('.tw-badge')
+		).toHaveAttribute('title', 'Summary worker failed');
+		expect(screen.queryByText('Checking errors')).not.toBeInTheDocument();
 	});
 
 	it('duplicates a complete story from the launcher', async () => {

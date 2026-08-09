@@ -1323,7 +1323,7 @@ export const NewProjectRoute: React.FC = () => {
 																Replace
 															</Badge>
 														) : (
-															<Badge icon="plus" tone="saved">
+															<Badge icon="plus" tone="success">
 																New
 															</Badge>
 														)}

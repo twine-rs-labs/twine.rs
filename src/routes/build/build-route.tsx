@@ -1428,7 +1428,13 @@ export const BuildRoute: React.FC = () => {
 							icon={
 								capabilities?.publishSafe ? 'discount-check' : 'alert-circle'
 							}
-							tone={capabilities?.publishSafe ? 'saved' : 'warn'}
+							tone={
+								capabilities?.publishSafe
+									? 'accent'
+									: capabilities
+										? 'warn'
+										: 'neutral'
+							}
 						>
 							{story.storyFormat} {story.storyFormatVersion}
 						</Badge>
@@ -1638,7 +1644,7 @@ export const BuildRoute: React.FC = () => {
 													Twee source.
 												</div>
 											</div>
-											<Badge icon="check" tone="saved">
+											<Badge icon="check" tone="success">
 												Included
 											</Badge>
 										</div>
@@ -1653,7 +1659,7 @@ export const BuildRoute: React.FC = () => {
 													manifest, and eligible project asset bytes.
 												</div>
 											</div>
-											<Badge icon="package" tone="saved">
+											<Badge icon="package" tone="success">
 												Checksummed
 											</Badge>
 										</div>
@@ -1670,7 +1676,17 @@ export const BuildRoute: React.FC = () => {
 										</div>
 										<div>
 											<span>Format status</span>
-											<b>{formatStatusLabel(formatProperties)}</b>
+											<b
+												className={
+													capabilities?.publishSafe
+														? 'build-route__format-status--ok'
+														: capabilities
+															? 'build-route__format-status--warn'
+															: undefined
+												}
+											>
+												{formatStatusLabel(formatProperties)}
+											</b>
 										</div>
 									</div>
 								</div>
@@ -1749,7 +1765,7 @@ export const BuildRoute: React.FC = () => {
 												packageSaveBlocked
 													? 'error'
 													: packageComplete
-														? 'saved'
+														? 'success'
 														: 'warn'
 											}
 										>

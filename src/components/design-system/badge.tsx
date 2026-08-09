@@ -5,12 +5,14 @@ import './design-system.css';
 
 export type BadgeTone =
 	| 'neutral'
+	| 'accent'
 	| 'link'
 	| 'tag'
 	| 'var'
 	| 'warn'
 	| 'error'
 	| 'dirty'
+	| 'success'
 	| 'saved'
 	| 'generated'
 	| 'build';

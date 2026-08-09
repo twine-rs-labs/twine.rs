@@ -66,13 +66,14 @@ function allTags(stories: Story[]) {
 	return Array.from(new Set(stories.flatMap(story => story.tags))).sort();
 }
 
-function storyHealth(summary: CoreStorySummary | undefined) {
-	if (!summary) {
-		return {brokenLinks: 0, errors: 0};
-	}
-
+function storyHealth(summary: CoreStorySummary) {
 	return {brokenLinks: summary.graph.brokenLinks, errors: summary.errorCount};
 }
+
+type StoryHealthLoadState =
+	| {kind: 'loading'}
+	| {kind: 'loaded'; summary: CoreStorySummary}
+	| {kind: 'error'; message: string};
 
 function desktopBridge() {
 	return (window as TwineElectronWindow).twineElectron;
@@ -116,43 +117,72 @@ function ProjectMiniMap({story}: {story: Story}) {
 
 function HealthBadges({story}: {story: Story}) {
 	const coreProjectHost = useCoreProjectHost();
-	const [summary, setSummary] = React.useState<CoreStorySummary>();
-	const health = storyHealth(summary);
+	const [loadState, setLoadState] = React.useState<StoryHealthLoadState>({
+		kind: 'loading'
+	});
+	const health =
+		loadState.kind === 'loaded' ? storyHealth(loadState.summary) : undefined;
 
 	React.useEffect(() => {
 		let active = true;
 
-		setSummary(undefined);
+		setLoadState({kind: 'loading'});
 		// Route transitions keep the library mounted briefly. Do not enqueue an
 		// expensive large-story health scan that will be obsolete by the time the
 		// workbench opens; worker requests cannot be canceled after submission.
 		const timeout = window.setTimeout(() => {
-			void coreProjectHost.queryStorySummaryAsync(story.id).then(summary => {
-				if (active) {
-					setSummary(summary);
-				}
-			});
+			void coreProjectHost
+				.queryStorySummaryAsync(story.id)
+				.then(summary => {
+					if (active) {
+						setLoadState({kind: 'loaded', summary});
+					}
+				})
+				.catch(error => {
+					if (active) {
+						setLoadState({
+							kind: 'error',
+							message: error instanceof Error ? error.message : String(error)
+						});
+					}
+				});
 		}, 2000);
 
 		return () => {
 			active = false;
 			window.clearTimeout(timeout);
 		};
-	}, [coreProjectHost, story.id, story]);
+	}, [coreProjectHost, story.id, story.lastUpdate]);
+
+	if (loadState.kind === 'error') {
+		return (
+			<div className="story-list-launcher__health">
+				<Badge icon="alert-circle" tone="neutral" title={loadState.message}>
+					Health unavailable
+				</Badge>
+			</div>
+		);
+	}
 
 	return (
 		<div className="story-list-launcher__health">
 			<Badge
-				icon={health.errors > 0 ? 'alert-octagon' : 'circle-check'}
-				tone={health.errors > 0 ? 'error' : 'saved'}
+				icon={
+					!health
+						? 'loader-2'
+						: health.errors > 0
+							? 'alert-octagon'
+							: 'circle-check'
+				}
+				tone={!health ? 'neutral' : health.errors > 0 ? 'error' : 'success'}
 			>
-				{health.errors} errors
+				{health ? `${health.errors} errors` : 'Checking errors'}
 			</Badge>
 			<Badge
-				icon={health.brokenLinks > 0 ? 'unlink' : 'link'}
-				tone={health.brokenLinks > 0 ? 'warn' : 'neutral'}
+				icon={!health ? 'loader-2' : health.brokenLinks > 0 ? 'unlink' : 'link'}
+				tone={!health || health.brokenLinks === 0 ? 'neutral' : 'warn'}
 			>
-				{health.brokenLinks} broken
+				{health ? `${health.brokenLinks} broken` : 'Checking links'}
 			</Badge>
 		</div>
 	);

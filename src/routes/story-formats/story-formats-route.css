@@ -158,7 +158,7 @@
 }
 
 .story-formats-route__meta {
-	color: var(--tx-4);
+	color: var(--acc-amber-ink);
 	font-family: var(--font-mono);
 	font-size: var(--fs-xs);
 	margin-top: 2px;
@@ -207,8 +207,8 @@
 }
 
 .story-formats-route__status--ok {
-	background: var(--sem-saved-soft);
-	color: var(--sem-saved);
+	background: var(--sem-success-soft);
+	color: var(--sem-success);
 }
 
 .story-formats-route__status--warn {
@@ -309,7 +309,7 @@
 }
 
 .story-formats-route__row-value--ok {
-	color: var(--sem-saved);
+	color: var(--sem-success);
 }
 
 .story-formats-route__row-value--pending {

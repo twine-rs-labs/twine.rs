@@ -15,10 +15,11 @@ const CSS = `
 .tw-badge--link { background: var(--sem-link-soft); color: var(--sem-link); border-color: color-mix(in oklab, var(--sem-link) 35%, transparent); }
 .tw-badge--tag { background: var(--sem-tag-soft); color: var(--sem-tag); border-color: color-mix(in oklab, var(--sem-tag) 35%, transparent); }
 .tw-badge--var { background: var(--sem-var-soft); color: var(--sem-var); border-color: color-mix(in oklab, var(--sem-var) 35%, transparent); }
+.tw-badge--accent { background: var(--acc-amber-soft); color: var(--acc-amber-ink); border-color: color-mix(in oklab, var(--acc-amber-ink) 35%, transparent); }
 .tw-badge--warn { background: var(--sem-warn-soft); color: var(--sem-warn); border-color: color-mix(in oklab, var(--sem-warn) 35%, transparent); }
 .tw-badge--error { background: var(--sem-error-soft); color: var(--sem-error); border-color: color-mix(in oklab, var(--sem-error) 40%, transparent); }
 .tw-badge--dirty { background: var(--sem-dirty-soft); color: var(--sem-dirty); border-color: color-mix(in oklab, var(--sem-dirty) 35%, transparent); }
-.tw-badge--saved { background: var(--sem-saved-soft); color: var(--sem-saved); border-color: color-mix(in oklab, var(--sem-saved) 35%, transparent); }
+.tw-badge--success, .tw-badge--saved { background: var(--sem-saved-soft); color: var(--sem-saved); border-color: color-mix(in oklab, var(--sem-saved) 35%, transparent); }
 .tw-badge--generated { background: var(--sem-generated-soft); color: var(--sem-generated); border-color: color-mix(in oklab, var(--sem-generated) 35%, transparent); }
 .tw-badge--build { background: var(--sem-build-soft); color: var(--sem-build); border-color: color-mix(in oklab, var(--sem-build) 35%, transparent); }
 `;

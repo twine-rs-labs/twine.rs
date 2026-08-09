@@ -31,6 +31,14 @@ type RouteDiagnosticItem = DiagnosticsViewModelItem & {
 	dismissalId: string;
 	dismissed: boolean;
 };
+type DiagnosticsRequestOwner = {patchVersion: number; storyId: string};
+type DiagnosticsRouteLoadState =
+	| {kind: 'unloaded'}
+	| ({kind: 'loading'} & DiagnosticsRequestOwner)
+	| ({kind: 'loaded'; page: CoreDiagnosticsPage} & DiagnosticsRequestOwner)
+	| ({kind: 'error'; message: string} & DiagnosticsRequestOwner);
+type DiagnosticsLoadMoreState =
+	{kind: 'idle'} | {kind: 'loading'} | {kind: 'error'; message: string};
 
 const severityFilters: Array<{
 	id: SeverityFilter;
@@ -128,8 +136,22 @@ export const DiagnosticsRoute: React.FC = () => {
 	const [query, setQuery] = React.useState('');
 	const [selectedId, setSelectedId] = React.useState<string>();
 	const [patchVersion, setPatchVersion] = React.useState(0);
-	const [diagnosticsPage, setDiagnosticsPage] =
-		React.useState<CoreDiagnosticsPage>();
+	const [diagnosticsLoadState, setDiagnosticsLoadState] =
+		React.useState<DiagnosticsRouteLoadState>({kind: 'unloaded'});
+	const diagnosticsRequestVersion = React.useRef(0);
+	const [loadMoreState, setLoadMoreState] =
+		React.useState<DiagnosticsLoadMoreState>({kind: 'idle'});
+	const currentDiagnosticsLoadState: DiagnosticsRouteLoadState =
+		diagnosticsLoadState.kind === 'unloaded' ||
+		(story &&
+			diagnosticsLoadState.storyId === story.id &&
+			diagnosticsLoadState.patchVersion === patchVersion)
+			? diagnosticsLoadState
+			: {kind: 'unloaded'};
+	const diagnosticsPage =
+		currentDiagnosticsLoadState.kind === 'loaded'
+			? currentDiagnosticsLoadState.page
+			: undefined;
 	const [dismissedIds, setDismissedIds] = React.useState<Set<string>>(
 		() => new Set()
 	);
@@ -174,28 +196,38 @@ export const DiagnosticsRoute: React.FC = () => {
 	}, [story?.id]);
 
 	React.useEffect(() => {
-		let active = true;
+		const requestVersion = ++diagnosticsRequestVersion.current;
+		setLoadMoreState({kind: 'idle'});
 
 		if (!story) {
-			setDiagnosticsPage(undefined);
-			return () => {
-				active = false;
-			};
+			setDiagnosticsLoadState({kind: 'unloaded'});
+			return;
 		}
 
-		setDiagnosticsPage(undefined);
+		const requestOwner = {patchVersion, storyId: story.id};
+
+		setDiagnosticsLoadState({kind: 'loading', ...requestOwner});
 		void coreProjectHost
-			.queryDiagnosticsPageAsync(story.id, {limit: 250})
+			.queryDiagnosticsPageAsync(story.id, {cursor: null, limit: 250})
 			.then(page => {
-				if (active) {
-					setDiagnosticsPage(page);
+				if (diagnosticsRequestVersion.current === requestVersion) {
+					setDiagnosticsLoadState({kind: 'loaded', page, ...requestOwner});
+				}
+			})
+			.catch(error => {
+				if (diagnosticsRequestVersion.current === requestVersion) {
+					setDiagnosticsLoadState({
+						kind: 'error',
+						message: error instanceof Error ? error.message : String(error),
+						...requestOwner
+					});
 				}
 			});
 
 		return () => {
-			active = false;
+			diagnosticsRequestVersion.current += 1;
 		};
-	}, [coreProjectHost, patchVersion, story]);
+	}, [coreProjectHost, patchVersion, story?.id]);
 	const items = React.useMemo<RouteDiagnosticItem[]>(() => {
 		return (diagnosticsPage?.diagnostics ?? []).map((core, ordinal) => ({
 			core,
@@ -363,6 +395,67 @@ export const DiagnosticsRoute: React.FC = () => {
 		}
 	}
 
+	function loadNextDiagnosticsPage() {
+		if (
+			!story ||
+			currentDiagnosticsLoadState.kind !== 'loaded' ||
+			!currentDiagnosticsLoadState.page.nextCursor ||
+			loadMoreState.kind === 'loading'
+		) {
+			return;
+		}
+
+		const cursor = currentDiagnosticsLoadState.page.nextCursor;
+		const currentRevision = currentDiagnosticsLoadState.page.revision;
+		const requestVersion = diagnosticsRequestVersion.current;
+
+		setLoadMoreState({kind: 'loading'});
+		void coreProjectHost
+			.queryDiagnosticsPageAsync(story.id, {cursor, limit: 250})
+			.then(nextPage => {
+				if (diagnosticsRequestVersion.current !== requestVersion) {
+					return;
+				}
+
+				if (nextPage.revision !== currentRevision) {
+					setPatchVersion(version => version + 1);
+					return;
+				}
+
+				setDiagnosticsLoadState(current => {
+					if (
+						current.kind !== 'loaded' ||
+						current.storyId !== story.id ||
+						current.patchVersion !== patchVersion ||
+						current.page.nextCursor !== cursor ||
+						current.page.revision !== nextPage.revision
+					) {
+						return current;
+					}
+
+					return {
+						...current,
+						page: {
+							...nextPage,
+							diagnostics: [
+								...current.page.diagnostics,
+								...nextPage.diagnostics
+							]
+						}
+					};
+				});
+				setLoadMoreState({kind: 'idle'});
+			})
+			.catch(error => {
+				if (diagnosticsRequestVersion.current === requestVersion) {
+					setLoadMoreState({
+						kind: 'error',
+						message: error instanceof Error ? error.message : String(error)
+					});
+				}
+			});
+	}
+
 	if (!story) {
 		return (
 			<div className="diagnostics-route__empty">
@@ -372,18 +465,47 @@ export const DiagnosticsRoute: React.FC = () => {
 		);
 	}
 
-	if (!diagnosticsPage) {
+	if (currentDiagnosticsLoadState.kind === 'unloaded') {
 		return (
 			<div className="diagnostics-route__empty">
-				<TablerIcon icon="search" />
+				<TablerIcon icon="circle-dashed" />
+				<span>Diagnostics have not been checked.</span>
+			</div>
+		);
+	}
+
+	if (currentDiagnosticsLoadState.kind === 'loading') {
+		return (
+			<div className="diagnostics-route__empty">
+				<TablerIcon icon="loader-2" />
 				<span>Checking diagnostics...</span>
 			</div>
 		);
 	}
 
+	if (currentDiagnosticsLoadState.kind === 'error') {
+		return (
+			<div className="diagnostics-route__empty" role="alert">
+				<TablerIcon icon="alert-octagon" />
+				<span>
+					Diagnostics unavailable: {currentDiagnosticsLoadState.message}
+				</span>
+				<Button
+					icon="refresh"
+					onClick={() => setPatchVersion(version => version + 1)}
+					size="sm"
+				>
+					Retry Diagnostics
+				</Button>
+			</div>
+		);
+	}
+
+	const loadedDiagnosticsPage = currentDiagnosticsLoadState.page;
 	let lastGroup: string | undefined;
+	const hasMoreDiagnostics = Boolean(loadedDiagnosticsPage.nextCursor);
 	const emptyListState =
-		items.length === 0 ? (
+		items.length === 0 && !hasMoreDiagnostics ? (
 			<div className="diagnostics-route__empty-state" aria-live="polite">
 				<TablerIcon icon="circle-check" />
 				<h1>No issues found — your story is healthy</h1>
@@ -402,13 +524,19 @@ export const DiagnosticsRoute: React.FC = () => {
 				/>
 				<h1>
 					{visibility === 'active'
-						? 'No active diagnostics'
-						: 'No dismissed diagnostics'}
+						? hasMoreDiagnostics
+							? 'No active diagnostics in loaded results'
+							: 'No active diagnostics'
+						: hasMoreDiagnostics
+							? 'No dismissed diagnostics in loaded results'
+							: 'No dismissed diagnostics'}
 				</h1>
 				<p>
-					{visibility === 'active'
-						? 'Every known diagnostic is resolved or dismissed.'
-						: 'Dismissed diagnostics will appear here when you archive them.'}
+					{hasMoreDiagnostics
+						? 'Load more diagnostics to continue checking this project.'
+						: visibility === 'active'
+							? 'Every known diagnostic is resolved or dismissed.'
+							: 'Dismissed diagnostics will appear here when you archive them.'}
 				</p>
 			</div>
 		) : (
@@ -417,8 +545,16 @@ export const DiagnosticsRoute: React.FC = () => {
 				aria-live="polite"
 			>
 				<TablerIcon icon="search" />
-				<h1>No matching diagnostics</h1>
-				<p>Try another severity, category, or search term.</p>
+				<h1>
+					{hasMoreDiagnostics
+						? 'No matching diagnostics in loaded results'
+						: 'No matching diagnostics'}
+				</h1>
+				<p>
+					{hasMoreDiagnostics
+						? 'Load more diagnostics to continue searching this project.'
+						: 'Try another severity, category, or search term.'}
+				</p>
 			</div>
 		);
 
@@ -428,7 +564,9 @@ export const DiagnosticsRoute: React.FC = () => {
 				aria-label="Diagnostic filters"
 				className="diagnostics-route__filters"
 			>
-				<div className="diagnostics-route__filter-label">Status</div>
+				<div className="diagnostics-route__filter-label">
+					Status{hasMoreDiagnostics ? ' (loaded)' : ''}
+				</div>
 				<button
 					aria-current={visibility === 'active'}
 					className="diagnostics-route__filter"
@@ -455,7 +593,9 @@ export const DiagnosticsRoute: React.FC = () => {
 				</button>
 				{visibleSeverityFilters.length > 0 && (
 					<>
-						<div className="diagnostics-route__filter-label">Severity</div>
+						<div className="diagnostics-route__filter-label">
+							Severity{hasMoreDiagnostics ? ' (loaded)' : ''}
+						</div>
 						{visibleSeverityFilters.map(candidate => (
 							<button
 								aria-current={candidate.id === severity}
@@ -475,7 +615,9 @@ export const DiagnosticsRoute: React.FC = () => {
 				)}
 				{visibleTypeFilters.length > 0 && (
 					<>
-						<div className="diagnostics-route__filter-label">Type</div>
+						<div className="diagnostics-route__filter-label">
+							Type{hasMoreDiagnostics ? ' (loaded)' : ''}
+						</div>
 						{visibleTypeFilters.map(candidate => (
 							<button
 								aria-current={candidate === type}
@@ -504,9 +646,8 @@ export const DiagnosticsRoute: React.FC = () => {
 						value={query}
 					/>
 					<span className="diagnostics-route__toolbar-stat">
-						{visibleItems.length} {visibility}
-						{dismissedItems.length > 0 &&
-							` (${dismissedItems.length} dismissed)`}
+						{visibleItems.length} {visibility} shown · {items.length} of{' '}
+						{loadedDiagnosticsPage.totalCount} loaded
 					</span>
 					<Button
 						icon="refresh"
@@ -586,6 +727,28 @@ export const DiagnosticsRoute: React.FC = () => {
 									</React.Fragment>
 								);
 							})}
+					{hasMoreDiagnostics && (
+						<div className="diagnostics-route__load-more">
+							{loadMoreState.kind === 'error' && (
+								<span role="alert">
+									Could not load more diagnostics: {loadMoreState.message}
+								</span>
+							)}
+							<Button
+								disabled={loadMoreState.kind === 'loading'}
+								icon={
+									loadMoreState.kind === 'loading' ? 'loader-2' : 'chevron-down'
+								}
+								onClick={loadNextDiagnosticsPage}
+								size="sm"
+								variant="ghost"
+							>
+								{loadMoreState.kind === 'loading'
+									? 'Loading more diagnostics…'
+									: 'Load more diagnostics'}
+							</Button>
+						</div>
+					)}
 				</div>
 			</main>
 			<aside

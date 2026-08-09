@@ -28,6 +28,7 @@ use web_time::Instant;
 #[cfg(test)]
 thread_local! {
     static ASSET_ENTITY_PROJECTION_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DIAGNOSTIC_IDENTITY_SERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -679,6 +680,20 @@ pub struct CoreStorySummary {
     pub word_count: usize,
 }
 
+/// Compact diagnostic counts for status chrome, after applying UI dismissals.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreDiagnosticsSummary {
+    pub diagnostic_count: usize,
+    pub dismissed_count: usize,
+    pub error_count: usize,
+    pub info_count: usize,
+    pub revision: u32,
+    pub story_id: String,
+    pub warning_count: usize,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
@@ -843,6 +858,14 @@ pub struct CoreDiagnosticsQuery {
     pub limit: usize,
     #[serde(default)]
     pub severity: Option<CoreDiagnosticSeverity>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreDiagnosticsSummaryQuery {
+    #[serde(default)]
+    pub dismissed_ids: Vec<String>,
 }
 
 impl Default for CoreDiagnosticsQuery {
@@ -2927,6 +2950,96 @@ fn compact_external_delta_supported(changes: &[CoreExternalChange]) -> bool {
 struct CompactExternalPlan {
     candidate_fingerprints: BTreeMap<String, u64>,
     project_layouts: BTreeMap<usize, GraphLayout>,
+}
+
+#[cfg(test)]
+fn diagnostic_identity(diagnostic: &CoreDiagnostic) -> String {
+    DIAGNOSTIC_IDENTITY_SERIALIZATIONS.with(|count| count.set(count.get() + 1));
+
+    serde_json::to_string(&(
+        &diagnostic.code,
+        &diagnostic.source_id,
+        &diagnostic.passage_id,
+        diagnostic.start,
+        diagnostic.end,
+        &diagnostic.message,
+    ))
+    .expect("diagnostic identities contain only JSON-safe fields")
+}
+
+#[derive(Debug, Deserialize)]
+struct ParsedDiagnosticIdentity(String, String, Option<String>, usize, usize, String);
+
+impl ParsedDiagnosticIdentity {
+    fn hash(&self) -> u64 {
+        diagnostic_identity_hash(&self.0, &self.1, self.2.as_deref(), self.3, self.4, &self.5)
+    }
+
+    fn matches(&self, diagnostic: &CoreDiagnostic) -> bool {
+        self.0 == diagnostic.code
+            && self.1 == diagnostic.source_id
+            && self.2.as_deref() == diagnostic.passage_id.as_deref()
+            && self.3 == diagnostic.start
+            && self.4 == diagnostic.end
+            && self.5 == diagnostic.message
+    }
+}
+
+fn diagnostic_identity_hash(
+    code: &str,
+    source_id: &str,
+    passage_id: Option<&str>,
+    start: usize,
+    end: usize,
+    message: &str,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    code.hash(&mut hasher);
+    source_id.hash(&mut hasher);
+    passage_id.hash(&mut hasher);
+    start.hash(&mut hasher);
+    end.hash(&mut hasher);
+    message.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn parsed_diagnostic_identities(
+    dismissed_ids: Vec<String>,
+) -> BTreeMap<u64, Vec<ParsedDiagnosticIdentity>> {
+    let mut parsed = BTreeMap::<u64, Vec<ParsedDiagnosticIdentity>>::new();
+
+    for dismissed_id in dismissed_ids {
+        if let Ok(identity) = serde_json::from_str::<ParsedDiagnosticIdentity>(&dismissed_id) {
+            parsed.entry(identity.hash()).or_default().push(identity);
+        }
+    }
+
+    parsed
+}
+
+fn diagnostic_is_dismissed(
+    diagnostic: &CoreDiagnostic,
+    dismissed_identities: &BTreeMap<u64, Vec<ParsedDiagnosticIdentity>>,
+) -> bool {
+    if dismissed_identities.is_empty() {
+        return false;
+    }
+
+    let hash = diagnostic_identity_hash(
+        &diagnostic.code,
+        &diagnostic.source_id,
+        diagnostic.passage_id.as_deref(),
+        diagnostic.start,
+        diagnostic.end,
+        &diagnostic.message,
+    );
+
+    dismissed_identities.get(&hash).is_some_and(|identities| {
+        identities
+            .iter()
+            .any(|identity| identity.matches(diagnostic))
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -7681,6 +7794,37 @@ impl ProjectSession {
                 .count(),
             word_count: read_model.word_count,
         })
+    }
+
+    pub fn diagnostics_summary(
+        &mut self,
+        story_id: &str,
+        query: CoreDiagnosticsSummaryQuery,
+    ) -> Result<CoreDiagnosticsSummary, CoreError> {
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let dismissed_identities = parsed_diagnostic_identities(query.dismissed_ids);
+        let diagnostics = &self.read_model(story_id)?.diagnostics;
+        let mut summary = CoreDiagnosticsSummary {
+            revision,
+            story_id: story_id.to_owned(),
+            ..CoreDiagnosticsSummary::default()
+        };
+
+        for diagnostic in diagnostics {
+            if diagnostic_is_dismissed(diagnostic, &dismissed_identities) {
+                summary.dismissed_count += 1;
+                continue;
+            }
+
+            summary.diagnostic_count += 1;
+            match diagnostic.severity {
+                CoreDiagnosticSeverity::Error => summary.error_count += 1,
+                CoreDiagnosticSeverity::Info => summary.info_count += 1,
+                CoreDiagnosticSeverity::Warning => summary.warning_count += 1,
+            }
+        }
+
+        Ok(summary)
     }
 
     pub fn story_word_count(&self, story_id: &str) -> Result<usize, CoreError> {
@@ -16538,6 +16682,113 @@ mod tests {
         );
         assert_eq!(session.read_model_full_build_count, full_build_count);
         assert_eq!(session.read_model_last_touched_source_count, 1);
+    }
+
+    #[test]
+    fn diagnostics_summary_excludes_dismissed_identities_from_severity_counts() {
+        let mut missing_start_story = story();
+        missing_start_story.start_passage = PassageId::new("missing-start");
+        let mut session = ProjectSession::new(Project {
+            stories: vec![missing_start_story],
+            ..Project::default()
+        });
+        let page = session
+            .diagnostics_page(
+                "story-1",
+                CoreDiagnosticsQuery {
+                    limit: 250,
+                    ..CoreDiagnosticsQuery::default()
+                },
+            )
+            .expect("diagnostics page");
+        let dismissed_identity = r#"["missing-start-passage","story-1:metadata",null,0,0,"Story start passage is missing"]"#;
+        assert!(page.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "missing-start-passage"
+                && diagnostic_identity(diagnostic) == dismissed_identity
+        }));
+        let before = session
+            .diagnostics_summary("story-1", CoreDiagnosticsSummaryQuery::default())
+            .expect("diagnostics summary");
+        let after = session
+            .diagnostics_summary(
+                "story-1",
+                CoreDiagnosticsSummaryQuery {
+                    dismissed_ids: vec![dismissed_identity.into(), "stale-dismissal".into()],
+                },
+            )
+            .expect("filtered diagnostics summary");
+
+        assert_eq!(before.diagnostic_count, page.total_count);
+        assert_eq!(after.diagnostic_count, before.diagnostic_count - 1);
+        assert_eq!(after.dismissed_count, 1);
+        assert_eq!(after.revision, page.revision);
+        assert_eq!(after.error_count, before.error_count - 1);
+    }
+
+    #[test]
+    fn diagnostic_identity_matches_renderer_json_contract() {
+        let diagnostic = CoreDiagnostic {
+            code: "code\"".into(),
+            end: 9,
+            line: 1,
+            message: "Quoted \"line\"\nnext".into(),
+            passage_id: None,
+            quick_fixes: Vec::new(),
+            severity: CoreDiagnosticSeverity::Info,
+            source_id: "story\\source".into(),
+            start: 3,
+        };
+
+        assert_eq!(
+            diagnostic_identity(&diagnostic),
+            r#"["code\"","story\\source",null,3,9,"Quoted \"line\"\nnext"]"#
+        );
+    }
+
+    #[test]
+    fn diagnostics_summary_does_not_serialize_each_diagnostic_for_dismissals() {
+        let mut large_story = story();
+        let passages = (0..4_096)
+            .map(|index| {
+                passage(
+                    &format!("passage-{index}"),
+                    &format!("Passage {index}"),
+                    &format!("[[Missing {index}]]"),
+                    index as f64,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        large_story.start_passage = passages[0].id.clone();
+        large_story.passages = PassageIndex::from(passages);
+        let mut session = ProjectSession::new(Project {
+            stories: vec![large_story],
+            ..Project::default()
+        });
+        let page = session
+            .diagnostics_page(
+                "story-1",
+                CoreDiagnosticsQuery {
+                    limit: 1,
+                    ..CoreDiagnosticsQuery::default()
+                },
+            )
+            .expect("diagnostics page");
+        let dismissed_identity = diagnostic_identity(&page.diagnostics[0]);
+
+        DIAGNOSTIC_IDENTITY_SERIALIZATIONS.with(|count| count.set(0));
+        let summary = session
+            .diagnostics_summary(
+                "story-1",
+                CoreDiagnosticsSummaryQuery {
+                    dismissed_ids: vec![dismissed_identity],
+                },
+            )
+            .expect("diagnostics summary");
+
+        assert_eq!(summary.dismissed_count, 1);
+        assert_eq!(summary.diagnostic_count + 1, page.total_count);
+        DIAGNOSTIC_IDENTITY_SERIALIZATIONS.with(|count| assert_eq!(count.get(), 0));
     }
 
     #[test]

@@ -1027,7 +1027,7 @@ export const ContentsRoute: React.FC = () => {
 									</Badge>
 								)}
 								{selectedPassage?.id === story.startPassage && (
-									<Badge dot tone="saved">
+									<Badge dot tone="accent">
 										Start
 									</Badge>
 								)}

@@ -7,6 +7,8 @@ import type {CoreContentsPage} from '../bindings/CoreContentsPage';
 import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsQuery} from '../bindings/CoreDiagnosticsQuery';
+import type {CoreDiagnosticsSummary} from '../bindings/CoreDiagnosticsSummary';
+import type {CoreDiagnosticsSummaryQuery} from '../bindings/CoreDiagnosticsSummaryQuery';
 import type {CoreDocumentPage} from '../bindings/CoreDocumentPage';
 import type {CoreDocumentQuery} from '../bindings/CoreDocumentQuery';
 import type {CoreExternalDelta} from '../bindings/CoreExternalDelta';
@@ -67,6 +69,7 @@ type ReadModelWorkerRequest = Extract<
 			| 'queryAssetsPage'
 			| 'queryContentsPage'
 			| 'queryDiagnosticsPage'
+			| 'queryDiagnosticsSummary'
 			| 'queryDocumentPage'
 			| 'queryPassageFacts'
 			| 'queryPassageLocalFacts'
@@ -146,6 +149,7 @@ function cacheKey(sessionId: string, storyId: string, options: unknown) {
 
 export class WasmCoreWorkerClient {
 	private disabledReason: string | undefined;
+	private diagnosticsSummaryCacheKeys = new Map<string, string>();
 	private graphCache = new Map<string, CacheEntry<CoreGraphProjection>>();
 	private graphQueryGenerations = new Map<string, number>();
 	private indexCache = new Map<string, CacheEntry<CoreStoryIndex>>();
@@ -591,6 +595,31 @@ export class WasmCoreWorkerClient {
 		});
 	}
 
+	async queryDiagnosticsSummary(
+		sessionId: string,
+		storyId: string,
+		options: CoreDiagnosticsSummaryQuery,
+		revision: number
+	) {
+		const request: ReadModelWorkerRequest = {
+			id: 0,
+			kind: 'queryDiagnosticsSummary',
+			options,
+			revision,
+			sessionId,
+			storyId
+		};
+
+		return this.queryReadModel<CoreDiagnosticsSummary>(
+			sessionId,
+			storyId,
+			revision,
+			request,
+			true,
+			`${sessionId}:${storyId}`
+		);
+	}
+
 	async queryStoryWordCount(
 		sessionId: string,
 		storyId: string,
@@ -837,7 +866,8 @@ export class WasmCoreWorkerClient {
 		storyId: string,
 		revision: number,
 		request: ReadModelWorkerRequest,
-		useClientCache = true
+		useClientCache = true,
+		latestCacheOwnerKey?: string
 	): Promise<T> {
 		const queuedAt = now();
 		const waitingOn = this.sessionMutationKinds.get(sessionId);
@@ -845,6 +875,19 @@ export class WasmCoreWorkerClient {
 		await this.waitForMutations(sessionId);
 		const queueWaitMs = now() - queuedAt;
 		const key = cacheKey(sessionId, storyId, request);
+
+		if (latestCacheOwnerKey) {
+			const previousCacheEntryKey =
+				this.diagnosticsSummaryCacheKeys.get(latestCacheOwnerKey);
+
+			if (previousCacheEntryKey !== key) {
+				if (previousCacheEntryKey) {
+					this.readModelCache.delete(previousCacheEntryKey);
+				}
+				this.diagnosticsSummaryCacheKeys.set(latestCacheOwnerKey, key);
+			}
+		}
+
 		const generationKey = `${sessionId}:${storyId}:${request.kind}`;
 		const cached = useClientCache ? this.readModelCache.get(key) : undefined;
 		const cacheState = cached?.revision === revision ? 'client' : 'worker';
@@ -918,6 +961,7 @@ export class WasmCoreWorkerClient {
 
 	private clearQueryCaches(sessionId?: string) {
 		if (!sessionId) {
+			this.diagnosticsSummaryCacheKeys.clear();
 			this.graphCache.clear();
 			this.indexCache.clear();
 			this.lastGraphByStory.clear();
@@ -930,6 +974,11 @@ export class WasmCoreWorkerClient {
 
 		const prefix = `${sessionId}:`;
 
+		for (const key of this.diagnosticsSummaryCacheKeys.keys()) {
+			if (key.startsWith(prefix)) {
+				this.diagnosticsSummaryCacheKeys.delete(key);
+			}
+		}
 		for (const key of this.graphCache.keys()) {
 			if (key.startsWith(prefix)) {
 				this.graphCache.delete(key);

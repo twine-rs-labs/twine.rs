@@ -1323,7 +1323,7 @@ export const AssetsRoute: React.FC = () => {
 							dot
 							tone={
 								inventoryState === 'live'
-									? 'saved'
+									? 'success'
 									: inventoryState === 'error'
 										? 'error'
 										: inventoryState === 'loading'
@@ -1479,16 +1479,17 @@ export const AssetsRoute: React.FC = () => {
 								<Badge
 									dot
 									tone={
-										selectedAsset.exists === true
-											? 'saved'
-											: selectedAsset.exists === false
-												? 'error'
-												: 'warn'
+										selectedAsset.exists === false
+											? 'error'
+											: selectedAsset.exists === true &&
+												  selectedAsset.referenceCount > 0
+												? 'success'
+												: 'neutral'
 									}
 								>
 									{assetSourceLabel(selectedAsset)}
 								</Badge>
-								<Badge dot tone={selectedAsset.publish.copy ? 'saved' : 'warn'}>
+								<Badge dot tone="neutral">
 									{selectedAsset.publish.copy ? 'Publish' : 'Do not publish'}
 								</Badge>
 							</div>

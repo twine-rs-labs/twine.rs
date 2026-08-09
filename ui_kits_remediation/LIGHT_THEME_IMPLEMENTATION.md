@@ -65,8 +65,9 @@ That's the whole functional change. Everything token-driven now themes.
   surfaces, so existing component CSS (`button rest = ink-4 → hover = ink-5`)
   reads correctly as a light control that darkens on hover.
 - **Blue deepens for AA; amber stays canonical.** `--acc-amber` remains
-  `#F2B544`, while readable amber status text uses the darker light-theme
-  `--sem-saved` value and amber fills use `--tx-on-amber`.
+  `#F2B544` for brand and start/format accents. Positive status uses the
+  independent green `--sem-success`; small amber foregrounds use the darker
+  `--acc-amber-ink`, and amber fills use `--tx-on-amber`.
 - **Semantic hues stay identifiable**, deepened to AA-legible ink; their `-soft`
   tints become pale washes.
 - **Elevation switches from glow to shadow.** The color-bearing depth tokens
@@ -89,10 +90,10 @@ this pattern:
 	color: var(--tx-1);
 }
 .note--ok {
-	border-left-color: var(--sem-saved);
+	border-left-color: var(--sem-success);
 }
 .note--ok .icon {
-	color: var(--sem-saved);
+	color: var(--sem-success);
 }
 .note--warn {
 	border-left-color: var(--sem-warn);
@@ -113,7 +114,7 @@ token, or add a tiny `[data-app-theme='light']` override beside it:
 | Location                                                                   | Hardcoded thing                                              | Fix                                                                                   |
 | -------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
 | `docs/design-system/ui_kits/workbench/workbench.css` `.gm__grid`           | graph dot-grid uses literal `oklch(1 0 0 / 0.05)` white dots | swap the white dot for `var(--line-2)` (or override the radial under the light scope) |
-| `docs/design-system/ui_kits/workbench/workbench.css` `.h-*` syntax classes | editor syntax palette is literal bright `oklch()`            | map to `--sem-link / --sem-var / --sem-tag / --sem-saved` (already the right hues)    |
+| `docs/design-system/ui_kits/workbench/workbench.css` `.h-*` syntax classes | editor syntax palette is literal bright `oklch()`            | map to `--sem-link / --sem-var / --sem-tag / --named-green` (already the right hues)  |
 | `.ew__line.is-cursor`, `:hover` washes                                     | literal `oklch(… / 0.10)` line washes                        | use `--sel-wash` / a `--line` token                                                   |
 
 None of these block the theme; they're the editor-surface polish that makes

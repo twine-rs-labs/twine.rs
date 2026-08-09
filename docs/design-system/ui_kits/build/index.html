@@ -47,7 +47,7 @@
 	.bd__log-body { flex: 1; overflow: auto; padding: 10px 14px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7; }
 	.bd__ln { display: flex; gap: 10px; }
 	.bd__ln .ts { color: var(--tx-4); flex: none; }
-	.bd__ln .ok { color: var(--sem-saved); } .bd__ln .warn { color: var(--sem-warn); } .bd__ln .info { color: var(--tx-2); } .bd__ln .acc { color: var(--sem-link); }
+	.bd__ln .ok { color: var(--sem-success); } .bd__ln .warn { color: var(--sem-warn); } .bd__ln .info { color: var(--tx-2); } .bd__ln .acc { color: var(--sem-link); }
 </style>
 </head>
 <body>
@@ -73,7 +73,7 @@
 			['pkg','package','Package Project','amber'],
 			['publish','cloud-upload','Publish','warn']
 		];
-		const DOT = { amber:'var(--sem-saved)', warn:'var(--sem-warn)', blue:'var(--acc-blue)', err:'var(--sem-error)' };
+		const DOT = { amber:'var(--acc-amber-ink)', warn:'var(--sem-warn)', blue:'var(--acc-blue)', err:'var(--sem-error)' };
 
 		function App() {
 			const [sel, setSel] = React.useState(4); // Export HTML

@@ -10,6 +10,8 @@ import type {CoreContentsPage} from '../bindings/CoreContentsPage';
 import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsQuery} from '../bindings/CoreDiagnosticsQuery';
+import type {CoreDiagnosticsSummary} from '../bindings/CoreDiagnosticsSummary';
+import type {CoreDiagnosticsSummaryQuery} from '../bindings/CoreDiagnosticsSummaryQuery';
 import type {CoreDocumentPage} from '../bindings/CoreDocumentPage';
 import type {CoreDocumentQuery} from '../bindings/CoreDocumentQuery';
 import type {CorePassageFacts} from '../bindings/CorePassageFacts';
@@ -158,6 +160,14 @@ export type WasmWorkerRequest =
 	| {
 			id: number;
 			kind: 'queryStorySummary';
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryDiagnosticsSummary';
+			options: CoreDiagnosticsSummaryQuery;
 			revision: number;
 			sessionId: string;
 			storyId: string;
@@ -350,6 +360,13 @@ export type WasmWorkerSuccess =
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: CoreStorySummary;
+	  }
+	| {
+			id: number;
+			kind: 'queryDiagnosticsSummary';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CoreDiagnosticsSummary;
 	  }
 	| {
 			id: number;

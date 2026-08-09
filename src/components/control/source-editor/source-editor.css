@@ -171,9 +171,9 @@
 }
 
 .source-editor .cm-twine-link-self {
-	background: var(--source-editor-self-link-bg, var(--sem-saved-soft));
+	background: var(--source-editor-self-link-bg, var(--acc-amber-soft));
 	border-radius: 2px;
-	color: var(--source-editor-self-link, var(--sem-saved));
+	color: var(--source-editor-self-link, var(--acc-amber-ink));
 }
 
 .source-editor .cm-twine-link-broken {
@@ -197,7 +197,7 @@
 }
 
 .source-editor .cm-twine-string {
-	color: var(--source-editor-syntax-string, var(--sem-saved));
+	color: var(--source-editor-syntax-string, var(--named-green));
 }
 
 .source-editor .cm-twine-tag {

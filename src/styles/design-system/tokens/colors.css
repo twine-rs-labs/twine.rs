@@ -49,6 +49,7 @@
 	--acc-amber: #f2b544; /* secondary brand pole              */
 	--acc-amber-hi: #ffd06e;
 	--acc-amber-soft: rgb(242 181 68 / 0.2);
+	--acc-amber-ink: var(--acc-amber); /* readable accent foreground */
 
 	/* The signature mark gradient */
 	--acc-twine: linear-gradient(
@@ -81,8 +82,12 @@
 	--sem-dirty: oklch(0.76 0.155 56); /* unsaved / changed       */
 	--sem-dirty-soft: oklch(0.58 0.11 56 / 0.22);
 
-	--sem-saved: var(--acc-amber); /* saved layout / success    */
-	--sem-saved-soft: var(--acc-amber-soft);
+	/* Positive application state. Kept separate from both brand amber and
+	   author-selectable named green so those roles can evolve independently. */
+	--sem-success: oklch(0.78 0.15 152);
+	--sem-success-soft: oklch(0.55 0.1 152 / 0.2);
+	--sem-saved: var(--sem-success); /* literal saved-state alias */
+	--sem-saved-soft: var(--sem-success-soft);
 
 	/* Named author colors remain available for explicit tag choices. */
 	--named-green: oklch(0.78 0.15 152);
@@ -185,6 +190,7 @@
 	--acc-amber: #f2b544;
 	--acc-amber-hi: #d99a27;
 	--acc-amber-soft: rgb(242 181 68 / 0.18);
+	--acc-amber-ink: #956100;
 
 	--acc-twine: linear-gradient(
 		135deg,
@@ -213,9 +219,10 @@
 	--sem-dirty: oklch(0.56 0.165 50);
 	--sem-dirty-soft: oklch(0.72 0.15 55 / 0.18);
 
-	/* Darker amber ink keeps status text legible on paper surfaces. */
-	--sem-saved: #956100;
-	--sem-saved-soft: var(--acc-amber-soft);
+	--sem-success: oklch(0.45 0.13 156);
+	--sem-success-soft: oklch(0.65 0.13 156 / 0.16);
+	--sem-saved: var(--sem-success);
+	--sem-saved-soft: var(--sem-success-soft);
 
 	--named-green: oklch(0.52 0.14 156);
 	--named-green-soft: oklch(0.65 0.13 156 / 0.16);
@@ -279,6 +286,10 @@
 }
 
 body[data-high-contrast='true'] {
+	/* High contrast uses a dark frame even when the selected app theme is light. */
+	--acc-amber-ink: var(--acc-amber);
+	--sem-success: oklch(0.78 0.15 152);
+	--sem-success-soft: oklch(0.55 0.1 152 / 0.2);
 	--ink-0: oklch(0.1 0.006 240);
 	--ink-1: oklch(0.14 0.008 240);
 	--ink-2: oklch(0.18 0.01 239);

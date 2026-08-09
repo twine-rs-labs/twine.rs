@@ -183,7 +183,7 @@ body.dragging-passages .story-edit-route * {
 }
 
 .story-edit-open-progress__track span {
-	background: linear-gradient(90deg, var(--sem-link), var(--sem-saved));
+	background: linear-gradient(90deg, var(--sem-link), var(--acc-amber));
 	border-radius: inherit;
 	display: block;
 	height: 100%;
@@ -827,8 +827,8 @@ body.dragging-passages .story-edit-route * {
 }
 
 .story-edit-passage-start {
-	background: var(--sem-saved-soft);
-	color: var(--sem-saved);
+	background: var(--acc-amber-soft);
+	color: var(--acc-amber-ink);
 }
 
 .story-edit-passage-tag-count {

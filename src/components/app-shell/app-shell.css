@@ -428,6 +428,27 @@
 	color: var(--text-strong);
 }
 
+.app-shell__status-save--success,
+.app-shell__status-diagnostics--success {
+	color: var(--sem-success);
+}
+
+.app-shell__status-save--dirty {
+	color: var(--sem-dirty);
+}
+
+.app-shell__status-save--error {
+	color: var(--sem-error);
+}
+
+.app-shell__status-diagnostics--error {
+	color: var(--sem-error);
+}
+
+.app-shell__status-diagnostics--warn {
+	color: var(--sem-warn);
+}
+
 .app-shell__story-status {
 	background: color-mix(in oklab, var(--ink-1) 72%, transparent);
 	border: 1px solid var(--border-faint);

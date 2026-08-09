@@ -83,9 +83,10 @@ meaning — selection, links, tags, diagnostics, build state.
   The mood is dim, even, low-glare — comfortable for long writing sessions.
 - **Accent.** The brand **blue→amber twine gradient** (`--acc-twine`) is reserved for brand
   moments and the active mode underline. Solid `--acc-blue` is the single primary-action color;
-  `--acc-amber` is the secondary pole (`#F2B544`; Save Layout, success).
+  `--acc-amber` is the secondary pole (`#F2B544`), while `--acc-amber-ink` keeps start-passage
+  and format accents readable on either theme.
 - **Semantic palette.** One hue per authoring concept so map layers stay legible when stacked:
-  link=blue, tag=purple, variable=cyan, warning=yellow, error=red, dirty=orange, saved=amber,
+  link=blue, tag=purple, variable=cyan, warning=yellow, error=red, dirty=orange, success/saved=green,
   generated=teal, build=violet. Each has a `-soft` tint for fills/badges.
 - **Type.** Space Grotesk (display) / Hanken Grotesk (UI, 13px base) / JetBrains Mono (code &
   numbers). Dense workbench scale; nothing below ~10.5px and only for status meta.

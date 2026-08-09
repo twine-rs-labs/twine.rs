@@ -9,6 +9,8 @@ import type {CoreContentsPage} from './bindings/CoreContentsPage';
 import type {CoreContentsQuery} from './bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from './bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsQuery} from './bindings/CoreDiagnosticsQuery';
+import type {CoreDiagnosticsSummary} from './bindings/CoreDiagnosticsSummary';
+import type {CoreDiagnosticsSummaryQuery} from './bindings/CoreDiagnosticsSummaryQuery';
 import type {CoreDocumentPage} from './bindings/CoreDocumentPage';
 import type {CoreDocumentQuery} from './bindings/CoreDocumentQuery';
 import type {CoreExternalDelta} from './bindings/CoreExternalDelta';
@@ -174,6 +176,10 @@ export interface CoreProjectHost {
 		options?: StoryIndexQuery
 	): Promise<CoreStoryIndex>;
 	queryStorySummaryAsync(storyId: string): Promise<CoreStorySummary>;
+	queryDiagnosticsSummaryAsync(
+		storyId: string,
+		options?: Partial<CoreDiagnosticsSummaryQuery>
+	): Promise<CoreDiagnosticsSummary>;
 	queryStoryWordCountAsync(storyId: string): Promise<number>;
 	queryWorkbenchDockModelAsync(
 		storyId: string
@@ -321,6 +327,7 @@ type CoreProjectSessionClient = Pick<
 	| 'lastGraphProjection'
 	| 'mode'
 	| 'queryGraphProjection'
+	| 'queryDiagnosticsSummary'
 	| 'queryStoryIndex'
 	| 'queryStorySummary'
 	| 'queryStoryWordCount'
@@ -368,6 +375,9 @@ const defaultDiagnosticsQuery: CoreDiagnosticsQuery = {
 	cursor: null,
 	limit: 100,
 	severity: null
+};
+const defaultDiagnosticsSummaryQuery: CoreDiagnosticsSummaryQuery = {
+	dismissedIds: []
 };
 const defaultDocumentQuery: CoreDocumentQuery = {cursor: null, limit: 250};
 const defaultAssetsQuery: CoreAssetsQuery = {
@@ -611,6 +621,18 @@ function emptyStorySummary(storyId: string): CoreStorySummary {
 		tagCount: 0,
 		warningCount: 0,
 		wordCount: 0
+	};
+}
+
+function emptyDiagnosticsSummary(storyId: string): CoreDiagnosticsSummary {
+	return {
+		diagnosticCount: 0,
+		dismissedCount: 0,
+		errorCount: 0,
+		infoCount: 0,
+		revision: 0,
+		storyId,
+		warningCount: 0
 	};
 }
 
@@ -1879,6 +1901,28 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		return queryStorySummary(this.sessionId, storyId, revision);
 	}
 
+	async queryDiagnosticsSummaryAsync(
+		storyId: string,
+		options: Partial<CoreDiagnosticsSummaryQuery> = {}
+	) {
+		const queryDiagnosticsSummary = (
+			this.wasmClient as Partial<CoreProjectSessionClient>
+		).queryDiagnosticsSummary?.bind(this.wasmClient);
+
+		if (!this.wasmClient.enabled || !queryDiagnosticsSummary) {
+			throw new Error(
+				'Bounded Rust diagnostics summary queries are unavailable.'
+			);
+		}
+		const revision = await this.ensureWasmProjectSession();
+		return queryDiagnosticsSummary(
+			this.sessionId,
+			storyId,
+			{...defaultDiagnosticsSummaryQuery, ...options},
+			revision
+		);
+	}
+
 	async queryStoryWordCountAsync(storyId: string) {
 		const queryStoryWordCount = (
 			this.wasmClient as Partial<CoreProjectSessionClient>
@@ -2584,6 +2628,18 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
+	queryDiagnosticsSummaryAsync(
+		storyId: string,
+		options?: Partial<CoreDiagnosticsSummaryQuery>
+	) {
+		return (
+			this.hostForStory(storyId)?.queryDiagnosticsSummaryAsync(
+				storyId,
+				options
+			) ?? Promise.resolve(emptyDiagnosticsSummary(storyId))
+		);
+	}
+
 	queryStoryWordCountAsync(storyId: string) {
 		const host = this.hostForStory(storyId);
 
@@ -2958,6 +3014,8 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.queryStoryIndexAsync(queryStoryId, options),
 			queryStorySummaryAsync: queryStoryId =>
 				host.queryStorySummaryAsync(queryStoryId),
+			queryDiagnosticsSummaryAsync: (queryStoryId, options) =>
+				host.queryDiagnosticsSummaryAsync(queryStoryId, options),
 			queryStoryWordCountAsync: queryStoryId =>
 				host.queryStoryWordCountAsync(queryStoryId),
 			queryWorkbenchDockModelAsync: queryStoryId =>

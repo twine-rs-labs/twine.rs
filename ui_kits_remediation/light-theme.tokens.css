@@ -71,6 +71,7 @@
 	--acc-amber: #f2b544;
 	--acc-amber-hi: #d99a27;
 	--acc-amber-soft: rgb(242 181 68 / 0.18);
+	--acc-amber-ink: #956100;
 
 	--acc-twine: linear-gradient(
 		135deg,
@@ -99,9 +100,11 @@
 	--sem-dirty: oklch(0.56 0.165 50);
 	--sem-dirty-soft: oklch(0.72 0.15 55 / 0.18);
 
-	/* Darker amber ink keeps status text legible on paper surfaces. */
-	--sem-saved: #956100;
-	--sem-saved-soft: var(--acc-amber-soft);
+	/* Positive state stays green; saved is its literal-state alias. */
+	--sem-success: oklch(0.45 0.13 156);
+	--sem-success-soft: oklch(0.65 0.13 156 / 0.16);
+	--sem-saved: var(--sem-success);
+	--sem-saved-soft: var(--sem-success-soft);
 
 	/* Named author green remains available for explicit tag choices. */
 	--named-green: oklch(0.52 0.14 156);

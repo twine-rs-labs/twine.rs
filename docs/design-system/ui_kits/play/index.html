@@ -16,7 +16,7 @@
 	.pl__strip .sep { width: 1px; height: 22px; background: var(--line-2); margin: 0 4px; }
 	.pl__cur { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--tx-2); }
 	.pl__cur b { color: var(--tx-1); font-weight: 600; }
-	.pl__cur .ti { color: var(--sem-saved); font-size: 15px; }
+	.pl__cur .ti { color: var(--acc-amber-ink); font-size: 15px; }
 	.pl__body { flex: 1; display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
 	.pl__stage { display: flex; align-items: flex-start; justify-content: center; overflow: auto; padding: 36px 24px;
 		background: radial-gradient(120% 90% at 50% 0%, oklch(0.21 0.015 240) 0%, var(--ink-void) 70%); }
@@ -44,7 +44,7 @@
 	.pl__dlabel { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); margin: 4px 0 10px; }
 	.pl__var { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--line-1); font-family: var(--font-mono); font-size: 12px; }
 	.pl__var .k { color: var(--sem-var); } .pl__var .v { color: var(--tx-1); }
-	.pl__var .v.bool { color: var(--sem-saved); }
+	.pl__var .v.bool { color: var(--named-green); }
 	.pl__hist { display: flex; align-items: center; gap: 9px; padding: 6px 0; font-size: 12.5px; color: var(--tx-2); }
 	.pl__hist .n { width: 18px; height: 18px; border-radius: 50%; background: var(--ink-4); color: var(--tx-3); font-family: var(--font-mono); font-size: 9px; display: flex; align-items: center; justify-content: center; flex: none; }
 	.pl__hist.cur { color: var(--tx-1); } .pl__hist.cur .n { background: var(--acc-blue); color: var(--tx-on-accent); }
@@ -87,7 +87,7 @@
 									<div className="pl__frame-bar">
 										<span className="dot" style={{background:'var(--sem-error)'}} />
 										<span className="dot" style={{background:'var(--sem-warn)'}} />
-										<span className="dot" style={{background:'var(--sem-saved)'}} />
+										<span className="dot" style={{background:'var(--acc-amber-ink)'}} />
 										<span className="url">play://the-lighthouse/the-gravel-path</span>
 									</div>
 									<div className="pl__story">
@@ -123,7 +123,7 @@
 									{tab==='console' && <React.Fragment>
 										<div className="pl__dlabel">Runtime log</div>
 										<div style={{fontFamily:'var(--font-mono)',fontSize:11.5,lineHeight:1.7,color:'var(--tx-3)'}}>
-											<div style={{color:'var(--sem-saved)'}}>✓ story started · start: Arrival</div>
+											<div style={{color:'var(--sem-success)'}}>✓ story started · start: Arrival</div>
 											<div>→ (set: $arrived to true)</div>
 											<div>→ navigated → The Gravel Path</div>
 											<div style={{color:'var(--sem-warn)'}}>⚠ (datavalue:) is deprecated</div>

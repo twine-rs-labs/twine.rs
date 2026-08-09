@@ -2,19 +2,21 @@ import * as React from 'react';
 
 export type BadgeTone =
 	| 'neutral'
+	| 'accent'
 	| 'link'
 	| 'tag'
 	| 'var'
 	| 'warn'
 	| 'error'
 	| 'dirty'
+	| 'success'
 	| 'saved'
 	| 'generated'
 	| 'build';
 
 /**
  * Small status / count pill. Tones map to the semantic role colors, so a
- * "3 broken links" badge reads error-red while "Saved Layout" reads amber.
+ * "3 broken links" badge reads error-red while "Saved" reads success-green.
  */
 export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
 	children?: React.ReactNode;

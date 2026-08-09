@@ -115,7 +115,7 @@ reference CSS:
 ```css
 .ex__note         { background: var(--ink-2); border: 1px solid var(--line-1);
                     border-left: 3px solid var(--line-2); }
-.ex__note--ok     { border-left-color: var(--sem-saved); }
+.ex__note--ok     { border-left-color: var(--sem-success); }
 .ex__note--warn   { border-left-color: var(--sem-warn); }
 .ex__note--error  { border-left-color: var(--sem-error); }
 .ex__note--info   { border-left-color: var(--sem-generated); }
