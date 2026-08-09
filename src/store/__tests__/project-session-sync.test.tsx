@@ -97,7 +97,11 @@ describe('<ProjectSessionSync>', () => {
 	}
 
 	function renderTwoRoots(
-		options: {delayFirstConflict?: boolean; recovery?: boolean} = {}
+		options: {
+			conflictCount?: number;
+			delayFirstConflict?: boolean;
+			recovery?: boolean;
+		} = {}
 	) {
 		const stories = [
 			{...fakeStory(), id: 'story-one'},
@@ -109,15 +113,16 @@ describe('<ProjectSessionSync>', () => {
 		]);
 		let observeDelta: ((delta: NativeProjectSessionDelta) => void) | undefined;
 		const conflictResult = {
-			conflicts: [
-				{
+			conflicts: Array.from(
+				{length: options.conflictCount ?? 1},
+				(_, index) => ({
 					field: 'story:name',
 					message: 'changed locally and on disk',
 					passageId: null,
-					path: null,
+					path: index === 0 ? null : `conflict-${index + 1}.twee`,
 					storyId: 'story-one'
-				}
-			],
+				})
+			),
 			outcome: 'conflict'
 		};
 		let releaseFirstConflict: (() => void) | undefined;
@@ -423,6 +428,18 @@ describe('<ProjectSessionSync>', () => {
 
 		await context.emitChanges();
 		await screen.findByText(/conflict-one\.twee/);
+		expect(screen.getByText(/1 disk change requires review/)).toBeVisible();
+		expect(
+			screen.getByText(
+				'Using the disk version replaces conflicting app values. Keeping the app version overwrites the changed project files on disk.'
+			)
+		).toBeVisible();
+		expect(
+			screen.getByRole('button', {name: 'Use Disk Version'})
+		).toBeVisible();
+		expect(
+			screen.getByRole('button', {name: 'Keep App Version'})
+		).toBeVisible();
 		expect(screen.getByText('1 more project change queued.')).toBeVisible();
 
 		fireEvent.click(screen.getByRole('button', {name: 'Later'}));
@@ -463,11 +480,27 @@ describe('<ProjectSessionSync>', () => {
 		await screen.findByText(/conflict-two\.twee/);
 	});
 
+	it('uses plural grammar when multiple disk changes need review', async () => {
+		const context = renderTwoRoots({conflictCount: 2});
+
+		await context.emitChange(context.changes[0]);
+		expect(screen.getByText(/2 disk changes require review/)).toBeVisible();
+		context.rendered.unmount();
+	});
+
 	it('keeps simultaneous recovery reviews for different roots reachable', async () => {
 		const context = renderTwoRoots({recovery: true});
 
 		await context.emitChanges();
 		await screen.findByText('First project needs recovery.');
+		expect(
+			screen.getByText(
+				'Reloading from disk replaces the app version and resets undo history. Keeping the app version overwrites the changed project files on disk.'
+			)
+		).toBeVisible();
+		expect(
+			screen.getByRole('button', {name: 'Reload From Disk'})
+		).toBeVisible();
 		expect(screen.getByText('1 more project change queued.')).toBeVisible();
 
 		fireEvent.click(screen.getByRole('button', {name: 'Later'}));

@@ -3,6 +3,7 @@ import {Badge} from '../components/design-system/badge';
 import {Button} from '../components/design-system/button';
 import {SegmentedControl} from '../components/design-system/segmented-control';
 import {ErrorMessage} from '../components/error/error-message';
+import {pluralizedNoun} from '../util/pluralized-noun';
 import {
 	createStoryPreviewPassageLookup,
 	initialStoryPreviewRuntimeModel,
@@ -356,8 +357,8 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 								mono
 								tone={publishedStoryDataCount === 1 ? 'success' : 'warn'}
 							>
-								{publishedHtmlBytes} bytes · {publishedStoryDataCount} story
-								data
+								{publishedHtmlBytes} bytes · {publishedStoryDataCount}{' '}
+								{pluralizedNoun(publishedStoryDataCount, 'story-data element')}
 							</Badge>
 						)}
 					{debugMetrics.map(metric => (
@@ -444,7 +445,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 							tone={runtimeLogTone(runtimeLogs)}
 							title={latestLog?.message}
 						>
-							{runtimeLogs.length} logs
+							{runtimeLogs.length} {pluralizedNoun(runtimeLogs.length, 'log')}
 						</Badge>
 						{latestLog && (
 							<span

@@ -945,7 +945,7 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 			preview.getByText('Managed Play Debug', {exact: true})
 		).toBeVisible();
 		await expect(preview.getByText('2 passages', {exact: true})).toBeVisible();
-		await expect(preview.getByText('1 links', {exact: true})).toBeVisible();
+		await expect(preview.getByText('1 link', {exact: true})).toBeVisible();
 		await expect(preview.getByText('0 broken', {exact: true})).toBeVisible();
 		await expect(
 			preview.getByText('0 diagnostics', {exact: true})

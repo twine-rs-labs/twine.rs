@@ -156,7 +156,7 @@ describe('<DesktopStoryPreview>', () => {
 		const originalUrl = originalFrame.getAttribute('src');
 
 		postRuntimeLog(originalFrame, 'committed runtime');
-		expect(screen.getByText('1 logs')).toBeInTheDocument();
+		expect(screen.getByText('1 log')).toBeInTheDocument();
 		expect(screen.getByText('committed runtime')).toBeInTheDocument();
 
 		fixture.replacement({
@@ -197,7 +197,7 @@ describe('<DesktopStoryPreview>', () => {
 			'twine-preview://00000000-0000-4000-8000-000000000002/index.html'
 		);
 		expect(screen.getByTitle('Story story preview')).toBe(originalFrame);
-		expect(screen.getByText('1 logs')).toBeInTheDocument();
+		expect(screen.getByText('1 log')).toBeInTheDocument();
 		expect(
 			screen.queryByText('The latest story could not be built.')
 		).not.toBeInTheDocument();
@@ -213,7 +213,7 @@ describe('<DesktopStoryPreview>', () => {
 		).toBeNull();
 		expect(screen.getByTitle('Story story preview')).toBe(originalFrame);
 		expect(originalFrame).toHaveAttribute('src', originalUrl);
-		expect(screen.getByText('1 logs')).toBeInTheDocument();
+		expect(screen.getByText('1 log')).toBeInTheDocument();
 		expect(screen.getByText('committed runtime')).toBeInTheDocument();
 		expect(
 			screen.getByText('The replacement frame failed to load.')
