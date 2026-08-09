@@ -151,11 +151,11 @@
 }
 
 .new-project-route__file--new {
-	color: var(--sem-saved);
+	color: var(--sem-success);
 }
 
 .new-project-route__file--new .tw-ds-icon {
-	color: var(--sem-saved);
+	color: var(--sem-success);
 }
 
 .new-project-route__file--optional,
@@ -240,7 +240,7 @@
 }
 
 .new-project-route__progress-track span {
-	background: linear-gradient(90deg, var(--sem-link), var(--sem-saved));
+	background: linear-gradient(90deg, var(--sem-link), var(--acc-amber));
 	border-radius: inherit;
 	display: block;
 	height: 100%;

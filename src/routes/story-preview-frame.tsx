@@ -345,7 +345,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 						{storyName ?? title}
 					</span>
 					{startPassageName && (
-						<Badge icon="rocket" tone="saved">
+						<Badge icon="rocket" tone="accent">
 							Start: {startPassageName}
 						</Badge>
 					)}
@@ -354,7 +354,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 							<Badge
 								icon="database"
 								mono
-								tone={publishedStoryDataCount === 1 ? 'saved' : 'warn'}
+								tone={publishedStoryDataCount === 1 ? 'success' : 'warn'}
 							>
 								{publishedHtmlBytes} bytes · {publishedStoryDataCount} story
 								data
@@ -426,7 +426,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 					<div className="story-preview-route__runtime-main">
 						<Badge
 							icon={currentPassageId ? 'focus-2' : 'circle-dashed'}
-							tone={currentPassageId ? 'saved' : 'generated'}
+							tone={currentPassageId ? 'accent' : 'generated'}
 							title={currentPassage?.source}
 						>
 							{runtimePassageLabel(currentPassage, runtimeState.status)}

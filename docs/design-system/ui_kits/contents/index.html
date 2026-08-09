@@ -102,7 +102,7 @@
 								<div className="cn__group-h"><i className="ti ti-folder" /> passages/ · showing first {rows.length}</div>
 								{rows.map((r, i) => (
 									<div key={r[0]} className={'cn__row' + (sel===ROWS.indexOf(r)?' is-on':'')} onClick={()=>setSel(ROWS.indexOf(r))}>
-										<i className={'ti ti-'+(r[6]?'rocket':'file-text')+' cn__ricon'} style={r[6]?{color:'var(--sem-saved)'}:null} />
+										<i className={'ti ti-'+(r[6]?'rocket':'file-text')+' cn__ricon'} style={r[6]?{color:'var(--acc-amber-ink)'}:null} />
 										<div className="cn__rname">
 											<b>{r[0]}</b>
 											<Tag color={HUE[r[2]]}>{r[2]}</Tag>
@@ -125,7 +125,7 @@
 								<div className="cn__insp-path">{cur[1]}</div>
 								<div style={{display:'flex',gap:6,marginTop:10,flexWrap:'wrap'}}>
 									<Tag color={HUE[cur[2]]}>{cur[2]}</Tag>
-									{cur[6] && <Badge tone="saved" dot>Start</Badge>}
+									{cur[6] && <Badge tone="accent" dot>Start</Badge>}
 									{cur[5]>0 && <Badge tone="error" icon="unlink">{cur[5]} broken</Badge>}
 								</div>
 							</div>

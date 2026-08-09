@@ -213,6 +213,20 @@ export class TwineWasmProjectSession {
      * @param {any} query
      * @returns {any}
      */
+    query_diagnostics_summary(story_id, query) {
+        const ptr0 = passStringToWasm0(story_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.twinewasmprojectsession_query_diagnostics_summary(this.__wbg_ptr, ptr0, len0, query);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @param {string} story_id
+     * @param {any} query
+     * @returns {any}
+     */
     query_document_page(story_id, query) {
         const ptr0 = passStringToWasm0(story_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;

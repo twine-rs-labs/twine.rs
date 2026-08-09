@@ -603,6 +603,12 @@
 	color: var(--sem-var);
 }
 
+.tw-badge--accent {
+	background: var(--acc-amber-soft);
+	border-color: color-mix(in oklab, var(--acc-amber-ink) 35%, transparent);
+	color: var(--acc-amber-ink);
+}
+
 .tw-badge--warn {
 	background: var(--sem-warn-soft);
 	border-color: color-mix(in oklab, var(--sem-warn) 35%, transparent);
@@ -621,6 +627,7 @@
 	color: var(--sem-dirty);
 }
 
+.tw-badge--success,
 .tw-badge--saved {
 	background: var(--sem-saved-soft);
 	border-color: color-mix(in oklab, var(--sem-saved) 35%, transparent);
@@ -871,7 +878,7 @@
 }
 
 .tw-node__start {
-	color: var(--sem-saved);
+	color: var(--acc-amber-ink);
 	display: inline-flex;
 	flex: none;
 	font-size: 13px;

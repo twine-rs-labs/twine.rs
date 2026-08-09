@@ -5,10 +5,12 @@ import twineMarkUrl from '../../assets/twine-mark.svg';
 import {
 	diagnosticDismissalsChangedEvent,
 	diagnosticIdentity,
+	type DiagnosticDismissalsChangedDetail,
 	loadDismissedDiagnosticIds,
 	useCoreProjectHost
 } from '../../core';
 import type {CoreDiagnostic} from '../../core/bindings/CoreDiagnostic';
+import type {CoreDiagnosticsSummary} from '../../core/bindings/CoreDiagnosticsSummary';
 import {storyFileName} from '../../electron/shared';
 import {useStorySaveStatus} from '../../store/persistence/save-status';
 import {usePrefsContext} from '../../store/prefs';
@@ -49,6 +51,31 @@ type BuildState = {
 	kind: 'idle' | 'busy' | 'done' | 'error';
 	label: string;
 };
+
+type DiagnosticsLoadState =
+	| {kind: 'unloaded'}
+	| {
+			kind: 'loading';
+			dismissalsVersion: number;
+			patchVersion: number;
+			storyId: string;
+	  }
+	| {
+			dismissalsVersion: number;
+			kind: 'loaded';
+			patchVersion: number;
+			storyId: string;
+			summary: CoreDiagnosticsSummary;
+	  }
+	| {
+			dismissalsVersion: number;
+			kind: 'error';
+			message: string;
+			patchVersion: number;
+			storyId: string;
+	  };
+
+const diagnosticsRefreshDebounceMs = 300;
 
 interface StoryOpenProgress {
 	detail: string;
@@ -186,6 +213,20 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 	const [patchVersion, setPatchVersion] = React.useState(0);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
 	const [diagnostics, setDiagnostics] = React.useState<CoreDiagnostic[]>([]);
+	const [diagnosticsLoadState, setDiagnosticsLoadState] =
+		React.useState<DiagnosticsLoadState>({kind: 'unloaded'});
+	const diagnosticsRequestVersion = React.useRef(0);
+	const diagnosticsPatchVersion = React.useRef(patchVersion);
+	const diagnosticsRefreshPending = React.useRef(false);
+	const diagnosticsRefreshTimer = React.useRef<number | undefined>(undefined);
+	const latestDiagnosticsPatchVersion = React.useRef(patchVersion);
+	const lastDiagnosticsImmediateRefreshKey = React.useRef<string | undefined>(
+		undefined
+	);
+	const lastDiagnosticsRefreshHost = React.useRef(coreProjectHost);
+	const lastDiagnosticsRefreshPatchVersion = React.useRef(patchVersion);
+	const [diagnosticsRefreshPatchVersion, setDiagnosticsRefreshPatchVersion] =
+		React.useState(patchVersion);
 	const [wordCount, setWordCount] = React.useState(0);
 	const storySaveStatus = useStorySaveStatus();
 	const [buildState, setBuildState] = React.useState<BuildState>({
@@ -198,6 +239,17 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 		? stories.find(story => story.id === storyId)
 		: undefined;
 	const currentStory = storyId ? routedStory : selectedStory;
+	const diagnosticsStoryId = currentStory?.id;
+	const diagnosticsStoryIdRef = React.useRef(diagnosticsStoryId);
+	diagnosticsStoryIdRef.current = diagnosticsStoryId;
+	latestDiagnosticsPatchVersion.current = patchVersion;
+	const currentDiagnosticsLoadState: DiagnosticsLoadState =
+		diagnosticsLoadState.kind === 'unloaded' ||
+		(diagnosticsLoadState.storyId === diagnosticsStoryId &&
+			diagnosticsLoadState.dismissalsVersion === dismissalsVersion &&
+			diagnosticsLoadState.patchVersion === patchVersion)
+			? diagnosticsLoadState
+			: {kind: 'unloaded'};
 	const currentStoryHydration = useProjectStoryHydration(currentStory?.id);
 	const currentProjectMetadata = React.useMemo(
 		() => (currentStory ? loadProjectMetadata(currentStory.id) : undefined),
@@ -208,13 +260,12 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 		() => Object.keys(toolbar?.tabs ?? {}),
 		[toolbar]
 	);
-	const shouldQueryDiagnostics = drawerOpen;
 	const dismissedDiagnosticIds = React.useMemo(
 		() =>
 			currentStory
 				? loadDismissedDiagnosticIds(currentStory.id)
 				: new Set<string>(),
-		[currentStory, dismissalsVersion]
+		[currentStory?.id, dismissalsVersion]
 	);
 	const activeDiagnostics = React.useMemo(
 		() =>
@@ -224,8 +275,14 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 			),
 		[diagnostics, dismissedDiagnosticIds]
 	);
-	const diagnosticCount = activeDiagnostics.length;
-	const dismissedDiagnosticCount = diagnostics.length - diagnosticCount;
+	const diagnosticSummary =
+		currentDiagnosticsLoadState.kind === 'loaded'
+			? currentDiagnosticsLoadState.summary
+			: undefined;
+	const diagnosticCount = diagnosticSummary?.diagnosticCount ?? 0;
+	const dismissedDiagnosticCount = diagnosticSummary?.dismissedCount ?? 0;
+	const dismissedPreviewDiagnosticCount =
+		diagnostics.length - activeDiagnostics.length;
 	const crumbLabels = breadcrumbs(pathname, currentStory, mode);
 	const storyOpenProgress = React.useMemo<StoryOpenProgress | undefined>(() => {
 		if (
@@ -266,39 +323,164 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 	}, [coreProjectHost, currentStory?.id, patchVersion]);
 
 	React.useEffect(() => {
-		let active = true;
-
-		if (!currentStory || !shouldQueryDiagnostics) {
-			setDiagnostics([]);
-			return () => {
-				active = false;
-			};
-		}
-
+		diagnosticsRequestVersion.current += 1;
 		setDiagnostics([]);
-
-		void coreProjectHost
-			.queryDiagnosticsPageAsync(currentStory.id)
-			.then(page => {
-				if (active) {
-					setDiagnostics(page.diagnostics);
-				}
-			});
+		setDiagnosticsLoadState({kind: 'unloaded'});
 
 		return () => {
-			active = false;
+			diagnosticsRequestVersion.current += 1;
 		};
-	}, [coreProjectHost, currentStory, patchVersion, shouldQueryDiagnostics]);
+	}, [diagnosticsStoryId]);
+
+	React.useEffect(() => {
+		if (
+			diagnosticsRefreshPending.current &&
+			(!drawerOpen || !diagnosticsStoryId)
+		) {
+			if (diagnosticsRefreshTimer.current !== undefined) {
+				window.clearTimeout(diagnosticsRefreshTimer.current);
+				diagnosticsRefreshTimer.current = undefined;
+			}
+			diagnosticsRefreshPending.current = false;
+			diagnosticsRequestVersion.current += 1;
+			setDiagnostics([]);
+			setDiagnosticsLoadState({kind: 'unloaded'});
+			return;
+		}
+
+		if (diagnosticsPatchVersion.current === patchVersion) {
+			return;
+		}
+
+		diagnosticsPatchVersion.current = patchVersion;
+		diagnosticsRequestVersion.current += 1;
+		setDiagnostics([]);
+		if (!drawerOpen || !diagnosticsStoryId) {
+			setDiagnosticsLoadState({kind: 'unloaded'});
+			return;
+		}
+
+		setDiagnosticsLoadState({
+			dismissalsVersion,
+			kind: 'loading',
+			patchVersion,
+			storyId: diagnosticsStoryId
+		});
+		diagnosticsRefreshPending.current = true;
+		const timeout = window.setTimeout(() => {
+			if (diagnosticsRefreshTimer.current === timeout) {
+				diagnosticsRefreshTimer.current = undefined;
+			}
+			setDiagnosticsRefreshPatchVersion(patchVersion);
+		}, diagnosticsRefreshDebounceMs);
+		diagnosticsRefreshTimer.current = timeout;
+
+		return () => {
+			if (diagnosticsRefreshTimer.current === timeout) {
+				window.clearTimeout(timeout);
+				diagnosticsRefreshTimer.current = undefined;
+			}
+		};
+	}, [diagnosticsStoryId, dismissalsVersion, drawerOpen, patchVersion]);
+
+	React.useEffect(() => {
+		const immediateRefreshKey = `${drawerOpen}:${diagnosticsStoryId ?? ''}:${dismissalsVersion}`;
+		const immediateRefreshRequested =
+			lastDiagnosticsImmediateRefreshKey.current !== immediateRefreshKey ||
+			lastDiagnosticsRefreshHost.current !== coreProjectHost;
+		const patchRefreshRequested =
+			lastDiagnosticsRefreshPatchVersion.current !==
+			diagnosticsRefreshPatchVersion;
+
+		lastDiagnosticsImmediateRefreshKey.current = immediateRefreshKey;
+		lastDiagnosticsRefreshHost.current = coreProjectHost;
+		lastDiagnosticsRefreshPatchVersion.current = diagnosticsRefreshPatchVersion;
+
+		if (!diagnosticsStoryId || !drawerOpen) {
+			return;
+		}
+		if (
+			!immediateRefreshRequested &&
+			(!patchRefreshRequested ||
+				diagnosticsRefreshPatchVersion !==
+					latestDiagnosticsPatchVersion.current)
+		) {
+			return;
+		}
+
+		if (diagnosticsRefreshTimer.current !== undefined) {
+			window.clearTimeout(diagnosticsRefreshTimer.current);
+			diagnosticsRefreshTimer.current = undefined;
+		}
+
+		const requestVersion = ++diagnosticsRequestVersion.current;
+		diagnosticsRefreshPending.current = false;
+		const requestOwner = {
+			dismissalsVersion,
+			patchVersion: latestDiagnosticsPatchVersion.current,
+			storyId: diagnosticsStoryId
+		};
+
+		setDiagnostics([]);
+		setDiagnosticsLoadState({kind: 'loading', ...requestOwner});
+		void Promise.all([
+			coreProjectHost.queryDiagnosticsSummaryAsync(diagnosticsStoryId, {
+				dismissedIds: Array.from(dismissedDiagnosticIds).sort()
+			}),
+			coreProjectHost.queryDiagnosticsPageAsync(diagnosticsStoryId, {
+				cursor: null,
+				limit: 8,
+				severity: null
+			})
+		])
+			.then(([summary, page]) => {
+				if (diagnosticsRequestVersion.current === requestVersion) {
+					setDiagnostics(page.diagnostics);
+					setDiagnosticsLoadState({
+						kind: 'loaded',
+						summary,
+						...requestOwner
+					});
+				}
+			})
+			.catch(error => {
+				if (diagnosticsRequestVersion.current === requestVersion) {
+					setDiagnosticsLoadState({
+						kind: 'error',
+						message: error instanceof Error ? error.message : String(error),
+						...requestOwner
+					});
+				}
+			});
+	}, [
+		coreProjectHost,
+		diagnosticsRefreshPatchVersion,
+		diagnosticsStoryId,
+		dismissalsVersion,
+		dismissedDiagnosticIds,
+		drawerOpen
+	]);
 	const saveStatus =
 		storySaveStatus.kind === 'error'
 			? {
 					icon: 'alert-octagon',
 					label: 'Save error',
-					title: storySaveStatus.error.message
+					title: storySaveStatus.error.message,
+					tone: 'error'
 				}
 			: dirty
-				? {icon: 'database-import', label: 'Saving', title: undefined}
-				: {icon: 'database', label: 'Saved', title: undefined};
+				? {
+						icon: 'database-import',
+						label: 'Saving',
+						title: undefined,
+						tone: 'dirty'
+					}
+				: {
+						icon: 'database',
+						label: 'Saved',
+						title: undefined,
+						tone: 'success'
+					};
 
 	React.useEffect(() => {
 		if (routeTabs.length === 0) {
@@ -323,7 +505,13 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 	}, [coreProjectHost, stories]);
 
 	React.useEffect(() => {
-		function handleDismissalsChanged() {
+		function handleDismissalsChanged(event: Event) {
+			const detail = (event as CustomEvent<DiagnosticDismissalsChangedDetail>)
+				.detail;
+
+			if (detail?.storyId && detail.storyId !== diagnosticsStoryIdRef.current) {
+				return;
+			}
 			setDismissalsVersion(version => version + 1);
 		}
 
@@ -641,7 +829,127 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 			? 'error'
 			: buildState.kind === 'busy'
 				? 'build'
-				: 'saved';
+				: 'success';
+	const diagnosticStatus = (() => {
+		if (currentDiagnosticsLoadState.kind === 'unloaded') {
+			return {
+				icon: 'circle-dashed',
+				label: 'Diagnostics not checked',
+				tone: 'neutral'
+			};
+		}
+
+		if (currentDiagnosticsLoadState.kind === 'loading') {
+			return {
+				icon: 'loader-2',
+				label: 'Checking diagnostics',
+				tone: 'neutral'
+			};
+		}
+
+		if (currentDiagnosticsLoadState.kind === 'error') {
+			return {
+				icon: 'alert-octagon',
+				label: 'Diagnostics unavailable',
+				tone: 'error'
+			};
+		}
+
+		const label = `${diagnosticCount} diagnostic${diagnosticCount === 1 ? '' : 's'}`;
+
+		if (currentDiagnosticsLoadState.summary.errorCount > 0) {
+			return {icon: 'alert-octagon', label, tone: 'error'};
+		}
+
+		if (currentDiagnosticsLoadState.summary.warningCount > 0) {
+			return {icon: 'alert-triangle', label, tone: 'warn'};
+		}
+
+		if (diagnosticCount > 0) {
+			return {icon: 'info-circle', label, tone: 'neutral'};
+		}
+
+		return {icon: 'circle-check', label, tone: 'success'};
+	})();
+	const diagnosticsDrawerContent = (() => {
+		if (currentDiagnosticsLoadState.kind === 'unloaded') {
+			return (
+				<div className="app-shell__drawer-empty">
+					Diagnostics have not been checked for{' '}
+					{currentStory?.name ?? 'this workspace'}.
+				</div>
+			);
+		}
+
+		if (currentDiagnosticsLoadState.kind === 'loading') {
+			return (
+				<div className="app-shell__drawer-empty">
+					Checking diagnostics for {currentStory?.name ?? 'this workspace'}…
+				</div>
+			);
+		}
+
+		if (currentDiagnosticsLoadState.kind === 'error') {
+			return (
+				<div className="app-shell__drawer-empty" role="alert">
+					Diagnostics unavailable: {currentDiagnosticsLoadState.message}
+				</div>
+			);
+		}
+
+		if (diagnosticCount === 0) {
+			return (
+				<div className="app-shell__drawer-empty">
+					No active diagnostics for {currentStory?.name ?? 'this workspace'}
+					{dismissedDiagnosticCount > 0
+						? ` (${dismissedDiagnosticCount} dismissed)`
+						: ''}
+				</div>
+			);
+		}
+
+		if (activeDiagnostics.length === 0) {
+			return (
+				<div className="app-shell__drawer-empty">
+					No diagnostics are available in this preview
+					{dismissedPreviewDiagnosticCount > 0
+						? ` (${dismissedPreviewDiagnosticCount} previewed diagnostics dismissed)`
+						: ''}
+					. Open Diagnostics to browse the full list.
+				</div>
+			);
+		}
+
+		return activeDiagnostics.slice(0, 8).map(diagnostic => (
+			<div
+				className={classNames(
+					'app-shell__diag',
+					`app-shell__diag--${diagnostic.severity}`
+				)}
+				key={`${diagnostic.code}-${diagnostic.sourceId}-${diagnostic.start}`}
+			>
+				<Badge
+					icon={
+						diagnostic.severity === 'error'
+							? 'alert-octagon'
+							: diagnostic.severity === 'warning'
+								? 'alert-triangle'
+								: 'info-circle'
+					}
+					tone={
+						diagnostic.severity === 'error'
+							? 'error'
+							: diagnostic.severity === 'warning'
+								? 'warn'
+								: 'neutral'
+					}
+				>
+					{diagnostic.code}
+				</Badge>
+				<span>{diagnostic.message}</span>
+			</div>
+		));
+	})();
 
 	return (
 		<AppShellContext.Provider value={shellContext}>
@@ -810,10 +1118,18 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 						title="Diagnostics"
 						type="button"
 					>
-						<TablerIcon icon={diagnosticCount > 0 ? 'alert-triangle' : 'bug'} />
-						{diagnosticCount > 0 && (
-							<span className="app-shell__rail-count">{diagnosticCount}</span>
-						)}
+						<TablerIcon
+							icon={
+								currentDiagnosticsLoadState.kind === 'loaded' &&
+								diagnosticCount > 0
+									? diagnosticStatus.icon
+									: 'bug'
+							}
+						/>
+						{currentDiagnosticsLoadState.kind === 'loaded' &&
+							diagnosticCount > 0 && (
+								<span className="app-shell__rail-count">{diagnosticCount}</span>
+							)}
 					</button>
 					<button
 						aria-current={pathname.startsWith('/formats') ? 'page' : undefined}
@@ -886,37 +1202,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 							/>
 						</header>
 						<div className="app-shell__drawer-body">
-							{activeDiagnostics.length > 0 ? (
-								activeDiagnostics.slice(0, 8).map(diagnostic => (
-									<div
-										className={classNames(
-											'app-shell__diag',
-											`app-shell__diag--${diagnostic.severity}`
-										)}
-										key={`${diagnostic.code}-${diagnostic.sourceId}-${diagnostic.start}`}
-									>
-										<Badge
-											icon={
-												diagnostic.severity === 'error'
-													? 'alert-octagon'
-													: 'alert-triangle'
-											}
-											tone={diagnostic.severity === 'error' ? 'error' : 'warn'}
-										>
-											{diagnostic.code}
-										</Badge>
-										<span>{diagnostic.message}</span>
-									</div>
-								))
-							) : (
-								<div className="app-shell__drawer-empty">
-									No active diagnostics for{' '}
-									{currentStory?.name ?? 'this workspace'}
-									{dismissedDiagnosticCount > 0
-										? ` (${dismissedDiagnosticCount} dismissed)`
-										: ''}
-								</div>
-							)}
+							{diagnosticsDrawerContent}
 						</div>
 					</aside>
 				)}
@@ -954,26 +1240,38 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 						)}
 					</button>
 					<span
-						className="app-shell__status-item app-shell__status-save"
+						className={classNames(
+							'app-shell__status-item',
+							'app-shell__status-save',
+							`app-shell__status-save--${saveStatus.tone}`
+						)}
 						title={saveStatus.title}
 					>
 						<TablerIcon icon={saveStatus.icon} />
 						{saveStatus.label}
 					</span>
 					<button
-						className="app-shell__status-item app-shell__status-button"
+						className={classNames(
+							'app-shell__status-item',
+							'app-shell__status-button',
+							'app-shell__status-diagnostics',
+							`app-shell__status-diagnostics--${diagnosticStatus.tone}`
+						)}
 						onClick={() => setDrawerOpen(open => !open)}
 						title={
-							dismissedDiagnosticCount > 0
-								? `${dismissedDiagnosticCount} dismissed diagnostics`
-								: undefined
+							currentDiagnosticsLoadState.kind === 'error'
+								? currentDiagnosticsLoadState.message
+								: currentDiagnosticsLoadState.kind === 'loaded' &&
+									  dismissedDiagnosticCount > 0
+									? `${dismissedDiagnosticCount} dismissed diagnostic${
+											dismissedDiagnosticCount === 1 ? '' : 's'
+										}`
+									: undefined
 						}
 						type="button"
 					>
-						<TablerIcon
-							icon={diagnosticCount > 0 ? 'alert-triangle' : 'circle-check'}
-						/>
-						{diagnosticCount} diagnostics
+						<TablerIcon icon={diagnosticStatus.icon} />
+						{diagnosticStatus.label}
 					</button>
 					<span className="app-shell__status-spacer" />
 					<span className="app-shell__status-item app-shell__status-words">

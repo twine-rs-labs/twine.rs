@@ -31,7 +31,7 @@
 	.sf__caps { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 11px; }
 	.sf__cap { display: inline-flex; align-items: center; gap: 4px; height: 19px; padding: 0 7px; font-size: 10px; font-weight: 600;
 		border-radius: var(--r-xs); background: var(--ink-4); color: var(--tx-3); border: 1px solid var(--line-2); }
-	.sf__cap.on { background: var(--sem-saved-soft); color: var(--sem-saved); border-color: color-mix(in oklab, var(--sem-saved) 35%, transparent); }
+	.sf__cap.on { background: var(--sem-success-soft); color: var(--sem-success); border-color: color-mix(in oklab, var(--sem-success) 35%, transparent); }
 	.sf__cap .ti { font-size: 12px; }
 	/* detail */
 	.sf__detail { background: var(--ink-1); border-left: 1px solid var(--line-1); overflow: auto; padding: 20px; }
@@ -39,13 +39,13 @@
 	.sf__d-name { font-size: 18px; font-weight: 600; color: var(--tx-1); }
 	.sf__d-meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--tx-4); margin-top: 2px; }
 	.sf__d-status { display: flex; align-items: center; gap: 7px; margin-top: 14px; padding: 9px 11px; border-radius: var(--r-sm);
-		background: var(--sem-saved-soft); color: var(--sem-saved); font-size: 12px; }
+		background: var(--sem-success-soft); color: var(--sem-success); font-size: 12px; }
 	.sf__d-status .ti { font-size: 16px; }
 	.sf__label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); margin: 18px 0 9px; }
 	.sf__field { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; border-bottom: 1px solid var(--line-1); }
 	.sf__field span { color: var(--tx-3); } .sf__field b { color: var(--tx-1); font-weight: 500; }
 	.sf__caprow { display: flex; align-items: center; gap: 9px; padding: 7px 0; font-size: 12.5px; color: var(--tx-2); border-bottom: 1px solid var(--line-1); }
-	.sf__caprow .ti.y { color: var(--sem-saved); } .sf__caprow .ti.n { color: var(--tx-4); }
+	.sf__caprow .ti.y { color: var(--sem-success); } .sf__caprow .ti.n { color: var(--tx-4); }
 	.sf__caprow .ti { font-size: 16px; }
 	.sf__actions { display: flex; flex-direction: column; gap: 7px; margin-top: 18px; }
 </style>
@@ -81,7 +81,7 @@
 		function App() {
 			const [sel, setSel] = React.useState(0);
 			const f = FORMATS[sel];
-			const sc = { ok:['circle-check','var(--sem-saved)','var(--sem-saved-soft)'], warn:['alert-triangle','var(--sem-warn)','var(--sem-warn-soft)'], err:['alert-octagon','var(--sem-error)','var(--sem-error-soft)'] };
+			const sc = { ok:['circle-check','var(--sem-success)','var(--sem-success-soft)'], warn:['alert-triangle','var(--sem-warn)','var(--sem-warn-soft)'], err:['alert-octagon','var(--sem-error)','var(--sem-error-soft)'] };
 			const s = sc[f.status[0]];
 			return (
 				<div className="kit">
@@ -106,7 +106,7 @@
 											<div className="sf__logo" style={{background:x.bg}}>{x.logo}</div>
 											<div style={{flex:1,minWidth:0}}>
 												<div className="sf__name">{x.k}
-													{x.def && <Badge tone="saved" dot>Default</Badge>}
+											{x.def && <Badge tone="accent" dot>Default</Badge>}
 													{x.custom && <Badge tone="tag">Custom</Badge>}
 												</div>
 												<div className="sf__ver">v{x.ver} · {x.sub}</div>
@@ -132,7 +132,7 @@
 								{CAPS.map((c,j)=>(
 									<div className="sf__caprow" key={c}>
 										<i className={'ti ti-'+(f.caps[j]?'circle-check y':'circle-x n')} /> {c}
-										<span style={{marginLeft:'auto',fontSize:11,color:f.caps[j]?'var(--sem-saved)':'var(--tx-4)'}}>{f.caps[j]?'Supported':'—'}</span>
+										<span style={{marginLeft:'auto',fontSize:11,color:f.caps[j]?'var(--sem-success)':'var(--tx-4)'}}>{f.caps[j]?'Supported':'—'}</span>
 									</div>
 								))}
 								<div className="sf__label">Details</div>

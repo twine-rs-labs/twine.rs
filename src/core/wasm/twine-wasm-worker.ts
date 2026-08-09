@@ -271,6 +271,13 @@ async function handleRequest(
 				).session.query_story_summary(request.storyId);
 				break;
 
+			case 'queryDiagnosticsSummary':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_diagnostics_summary(request.storyId, request.options);
+				break;
+
 			case 'queryStoryWordCount':
 				result = (
 					ensureSession(request.sessionId, request.revision)

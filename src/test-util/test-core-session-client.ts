@@ -23,6 +23,7 @@ import {
 import {storyToCoreGraphProjection} from '../core/graph-projection';
 import {storySnapshotToStory} from '../core/patch-applier';
 import {storyToCoreIndex} from '../core/story-index';
+import {diagnosticIdentity} from '../core/diagnostic-dismissals';
 
 function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
 	return JSON.parse(JSON.stringify(snapshot));
@@ -672,6 +673,30 @@ export class TestCoreSessionClient {
 			)
 		};
 	});
+	queryDiagnosticsSummary = jest.fn(
+		async (
+			_sessionId: string,
+			storyId: string,
+			options: {dismissedIds: string[]}
+		) => {
+			const story = storySnapshotToStory(this.story(storyId));
+			const diagnostics = storyToCoreIndex(story).diagnostics;
+			const dismissedIds = new Set(options.dismissedIds);
+			const active = diagnostics.filter(
+				diagnostic => !dismissedIds.has(diagnosticIdentity(diagnostic))
+			);
+
+			return {
+				diagnosticCount: active.length,
+				dismissedCount: diagnostics.length - active.length,
+				errorCount: active.filter(item => item.severity === 'error').length,
+				infoCount: active.filter(item => item.severity === 'info').length,
+				revision: this.revision,
+				storyId,
+				warningCount: active.filter(item => item.severity === 'warning').length
+			};
+		}
+	);
 	queryStoryWordCount = jest.fn(async (_sessionId: string, storyId: string) => {
 		const story = storySnapshotToStory(this.story(storyId));
 

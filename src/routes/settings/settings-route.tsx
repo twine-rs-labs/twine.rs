@@ -332,7 +332,7 @@ export const SettingsRoute: React.FC = () => {
 					<div className="settings-route__subhead">
 						<Badge
 							icon="device-desktop"
-							tone={nativeDesktop ? 'saved' : 'neutral'}
+							tone={nativeDesktop ? 'success' : 'neutral'}
 						>
 							{nativeDesktop ? 'Native desktop' : 'Filesystem fallback'}
 						</Badge>

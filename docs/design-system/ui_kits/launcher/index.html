@@ -31,7 +31,7 @@
 	.lc__rail-sp { flex: 1; }
 	.lc__storage { background: var(--ink-2); border: 1px solid var(--line-2); border-radius: var(--r-md); padding: 11px; }
 	.lc__storage-h { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--tx-1); }
-	.lc__storage-h .ti { color: var(--sem-saved); font-size: 15px; }
+	.lc__storage-h .ti { color: var(--sem-success); font-size: 15px; }
 	.lc__storage p { margin: 6px 0 9px; font-size: 11px; line-height: 1.45; color: var(--tx-3); }
 	.lc__storage button { width: 100%; height: 28px; font-size: 11.5px; font-weight: 600; color: var(--tx-1);
 		background: var(--ink-4); border: 1px solid var(--line-2); border-radius: var(--r-sm); cursor: pointer; }
@@ -71,7 +71,7 @@
 	.lc__badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: var(--r-xs);
 		font-size: 10px; font-weight: 600; border: 1px solid transparent; }
 	.b-mixed { color: var(--sem-link); background: var(--sem-link-soft); }
-	.b-graph { color: var(--sem-saved); background: var(--sem-saved-soft); }
+	.b-graph { color: var(--sem-success); background: var(--sem-success-soft); }
 	.b-text  { color: var(--tx-2); background: var(--ink-4); border-color: var(--line-2); }
 	.b-broken { color: var(--sem-error); background: var(--sem-error-soft); }
 	.b-clean { color: var(--tx-4); }
@@ -113,7 +113,7 @@
 			{ name: 'Nightjar', path: '~/Documents/stories/nightjar', mode: 'text', fmt: 'Harlowe 3.3', p: '8,140', w: '196,330', assets: 64, broken: 0, mod: 'Last week', git: ['main', 'clean'] },
 			{ name: 'Archipelago (import)', path: '~/Downloads/archipelago.html', mode: 'graph', fmt: 'Harlowe 2.1', p: '1,204', w: '40,887', assets: 0, broken: 12, mod: 'Last week', git: ['—', 'none'] }
 		];
-		const dotColor = s => s === 'clean' ? 'var(--sem-saved)' : s === 'dirty' ? 'var(--sem-dirty)' : 'var(--tx-4)';
+		const dotColor = s => s === 'clean' ? 'var(--sem-success)' : s === 'dirty' ? 'var(--sem-dirty)' : 'var(--tx-4)';
 		const modeBadge = m => m === 'mixed' ? ['b-mixed','Mixed'] : m === 'graph' ? ['b-graph','Saved Layout'] : ['b-text','Source-Only'];
 
 		function Mini({ seed }) {

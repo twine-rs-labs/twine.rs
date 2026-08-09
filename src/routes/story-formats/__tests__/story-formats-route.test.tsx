@@ -126,6 +126,12 @@ describe('<StoryFormatsRoute>', () => {
 		).toBeInTheDocument();
 		expect(screen.getAllByText('Autocomplete')).not.toHaveLength(0);
 		expect(screen.getAllByText('Supported').length).toBeGreaterThan(0);
+		expect(
+			screen.getByText('Validated').closest('.story-formats-route__status')
+		).toHaveClass('story-formats-route__status--ok');
+		expect(screen.getAllByText('Supported')[0]).toHaveClass(
+			'story-formats-route__row-value--ok'
+		);
 	});
 
 	it('surfaces a content-free runtime editor diagnostic', () => {

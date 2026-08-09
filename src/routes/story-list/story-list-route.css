@@ -351,7 +351,7 @@
 }
 
 .story-list-launcher__map .story-list-launcher__map-start {
-	fill: var(--sem-saved);
+	fill: var(--acc-amber-ink);
 }
 
 .story-list-launcher__card-body {

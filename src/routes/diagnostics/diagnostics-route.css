@@ -99,6 +99,19 @@
 	overflow: auto;
 }
 
+.diagnostics-route__load-more {
+	align-items: center;
+	display: flex;
+	font-size: var(--fs-xs);
+	gap: 12px;
+	justify-content: center;
+	padding: 12px 16px;
+}
+
+.diagnostics-route__load-more [role='alert'] {
+	color: var(--sem-error);
+}
+
 .diagnostics-route__group {
 	align-items: center;
 	background: var(--ink-0);
@@ -292,7 +305,7 @@
 }
 
 .diagnostics-route__empty-state svg {
-	color: var(--sem-saved);
+	color: var(--sem-success);
 	font-size: 34px;
 }
 

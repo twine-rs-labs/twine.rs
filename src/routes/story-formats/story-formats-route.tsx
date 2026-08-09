@@ -1,4 +1,5 @@
 import * as React from 'react';
+import classNames from 'classnames';
 import {
 	Badge,
 	Button,
@@ -543,7 +544,7 @@ export const StoryFormatsRoute: React.FC = () => {
 									<div style={{flex: 1, minWidth: 0}}>
 										<div className="story-formats-route__name">
 											{format.name}
-											{isDefault && <Badge tone="saved">Default</Badge>}
+											{isDefault && <Badge tone="accent">Default</Badge>}
 											{isProofing && <Badge tone="build">Proofing</Badge>}
 											{format.userAdded && <Badge tone="tag">Custom</Badge>}
 										</div>
@@ -566,7 +567,7 @@ export const StoryFormatsRoute: React.FC = () => {
 										]
 											.filter((entry): entry is [string, true] => !!entry[1])
 											.map(([label]) => (
-												<Badge icon="check" key={label} tone="saved">
+												<Badge icon="check" key={label} tone="success">
 													{label}
 												</Badge>
 											))
@@ -652,7 +653,12 @@ export const StoryFormatsRoute: React.FC = () => {
 									<span className="story-formats-route__row-label">
 										{label}
 									</span>
-									<span className="story-formats-route__row-value">
+									<span
+										className={classNames(
+											'story-formats-route__row-value',
+											enabled && 'story-formats-route__row-value--ok'
+										)}
+									>
 										{enabled ? 'Supported' : '-'}
 									</span>
 								</div>

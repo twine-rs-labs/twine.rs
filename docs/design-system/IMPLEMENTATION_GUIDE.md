@@ -153,12 +153,14 @@ Aliases: `--bg-app · --bg-dock · --bg-panel · --bg-card · --bg-raised · --b
 **Borders** — `--line-1` (faint) · `--line-2` (default) · `--line-3` (strong).
 
 **Brand** — `--acc-blue` (primary action) + `-hi`/`-lo`/`-soft`; `--acc-amber` (secondary
-pole, canonical `#F2B544`) + `-hi`/`-soft`; `--acc-twine` (the blue→amber gradient — brand moments & active-mode
+pole, canonical `#F2B544`) + `-hi`/`-soft`; `--acc-amber-ink` is its readable foreground;
+`--acc-twine` (the blue→amber gradient — brand moments & active-mode
 underline only); `--focus-ring`.
 
 **Semantic roles** (one hue per concept, each with a `-soft` tint):
-`--sem-link · --sem-tag · --sem-var · --sem-warn · --sem-error · --sem-dirty · --sem-saved
-· --sem-generated · --sem-build`. Selection: `--sel-wash` / `--sel-line`.
+`--sem-link · --sem-tag · --sem-var · --sem-warn · --sem-error · --sem-dirty · --sem-success
+· --sem-generated · --sem-build`. `--sem-saved` is the literal saved-state alias for success.
+Selection: `--sel-wash` / `--sel-line`.
 
 **Spacing** — `--sp-1…12` (4px base). **Controls** — `--ctl-h` (30px default), `--ctl-h-sm/lg`.
 **Chrome** — `--bar-h` (44) · `--statusbar-h` (26) · `--dock-w` (264) · `--rail-w` (48).

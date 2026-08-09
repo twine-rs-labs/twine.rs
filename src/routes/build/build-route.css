@@ -127,8 +127,8 @@
 }
 
 .build-route__action-icon--amber {
-	background: var(--sem-saved-soft);
-	color: var(--sem-saved);
+	background: var(--acc-amber-soft);
+	color: var(--acc-amber-ink);
 }
 
 .build-route__format-title {
@@ -253,7 +253,7 @@
 }
 
 .build-route__note--ok {
-	border-left-color: var(--sem-saved);
+	border-left-color: var(--sem-success);
 }
 
 .build-route__note--warn {
@@ -276,7 +276,15 @@
 }
 
 .build-route__note--ok .build-route__note-icon {
-	color: var(--sem-saved);
+	color: var(--sem-success);
+}
+
+.build-route__meta .build-route__format-status--ok {
+	color: var(--sem-success);
+}
+
+.build-route__meta .build-route__format-status--warn {
+	color: var(--sem-warn);
 }
 
 .build-route__note--warn .build-route__note-icon {

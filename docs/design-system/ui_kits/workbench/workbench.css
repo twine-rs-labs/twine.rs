@@ -44,7 +44,7 @@
 .wb__status .s { display: inline-flex; align-items: center; gap: 5px; }
 .wb__status .ti { font-size: 13px; }
 .wb__status-sp { flex: 1; }
-.wb__status .ok { color: var(--sem-saved); }
+.wb__status .ok { color: var(--sem-success); }
 .wb__status .dirty { color: var(--sem-dirty); }
 .wb__status .err { color: var(--sem-error); }
 

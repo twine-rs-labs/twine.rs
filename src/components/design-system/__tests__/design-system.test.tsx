@@ -272,4 +272,18 @@ describe('design-system primitives', () => {
 
 		expect(await axe(container)).toHaveNoViolations();
 	});
+
+	it('keeps positive and amber accent badge roles distinct', () => {
+		render(
+			<>
+				<Badge tone="success">Validated</Badge>
+				<Badge tone="saved">Saved</Badge>
+				<Badge tone="accent">Start</Badge>
+			</>
+		);
+
+		expect(screen.getByText('Validated')).toHaveClass('tw-badge--success');
+		expect(screen.getByText('Saved')).toHaveClass('tw-badge--saved');
+		expect(screen.getByText('Start')).toHaveClass('tw-badge--accent');
+	});
 });

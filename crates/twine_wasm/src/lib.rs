@@ -3,9 +3,10 @@
 use std::collections::BTreeMap;
 use twine_core::{
     CoreAssetInventoryEntry, CoreAssetsQuery, CoreBacklinksQuery, CoreContentsQuery,
-    CoreDiagnosticsQuery, CoreDocumentQuery, CoreExternalDelta, CoreExternalIngestMode,
-    CoreGraphProjectionOptions, CoreSearchQuery, CoreSourceKind, CoreStoryIndexOptions,
-    PassageSnapshot, ProjectSession, ProjectSnapshot, StoryCommand, StorySnapshot,
+    CoreDiagnosticsQuery, CoreDiagnosticsSummaryQuery, CoreDocumentQuery, CoreExternalDelta,
+    CoreExternalIngestMode, CoreGraphProjectionOptions, CoreSearchQuery, CoreSourceKind,
+    CoreStoryIndexOptions, PassageSnapshot, ProjectSession, ProjectSnapshot, StoryCommand,
+    StorySnapshot,
 };
 use twine_model::{
     GraphLayout, GraphPosition, LibraryMetadata, Passage, PassageId, PassageIndex, PassageLayout,
@@ -177,6 +178,20 @@ impl TwineWasmProjectSession {
 
     pub fn query_story_summary(&mut self, story_id: String) -> Result<JsValue, JsValue> {
         to_js(&self.session.story_summary(&story_id).map_err(core_error)?)
+    }
+
+    pub fn query_diagnostics_summary(
+        &mut self,
+        story_id: String,
+        query: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let query = from_js::<CoreDiagnosticsSummaryQuery>(query)?;
+        to_js(
+            &self
+                .session
+                .diagnostics_summary(&story_id, query)
+                .map_err(core_error)?,
+        )
     }
 
     pub fn query_story_word_count(&self, story_id: String) -> Result<usize, JsValue> {

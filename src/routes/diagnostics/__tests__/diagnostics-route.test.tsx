@@ -1,10 +1,13 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
-import {MemoryRouter} from 'react-router';
+import {MemoryRouter, useNavigate} from 'react-router';
 import {
 	replaceKnownAssetInventoryForStory,
 	type CoreAssetInventoryEntry
 } from '../../../core';
+import type {CoreDiagnostic} from '../../../core/bindings/CoreDiagnostic';
+import type {CoreDiagnosticsPage} from '../../../core/bindings/CoreDiagnosticsPage';
+import {StoreCoreProjectHost} from '../../../core/project-host';
 import {
 	FakeStateProvider,
 	fakePassage,
@@ -16,6 +19,45 @@ import {
 import {DiagnosticsRoute} from '../diagnostics-route';
 
 const mockTestStory = jest.fn();
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>(resolvePromise => {
+		resolve = resolvePromise;
+	});
+
+	return {promise, resolve};
+}
+
+function coreDiagnostic(
+	code: string,
+	severity: CoreDiagnostic['severity'] = 'warning'
+): CoreDiagnostic {
+	return {
+		code,
+		end: 1,
+		line: 1,
+		message: `${code} diagnostic`,
+		passageId: null,
+		quickFixes: [],
+		severity,
+		sourceId: 'story.twee',
+		start: 0
+	};
+}
+
+const RouteNavigator: React.FC<{storyId: string}> = ({storyId}) => {
+	const navigate = useNavigate();
+
+	return (
+		<button
+			onClick={() => navigate(`/stories/${storyId}/diagnostics`)}
+			type="button"
+		>
+			Switch diagnostic story
+		</button>
+	);
+};
 
 jest.mock('../../../store/use-story-launch', () => ({
 	useStoryLaunch: () => ({
@@ -173,6 +215,8 @@ describe('<DiagnosticsRoute>', () => {
 		replaceKnownAssetInventoryForStory('story-id', []);
 	});
 
+	afterEach(() => jest.restoreAllMocks());
+
 	it('groups diagnostics and exposes source/graph reveal actions', async () => {
 		renderComponent();
 
@@ -242,6 +286,221 @@ describe('<DiagnosticsRoute>', () => {
 		expect(
 			screen.queryByRole('button', {name: /Broken Links/})
 		).not.toBeInTheDocument();
+	});
+
+	it('shows an error and retries when the diagnostics query fails', async () => {
+		const queryDiagnostics = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDiagnosticsPageAsync')
+			.mockRejectedValueOnce(new Error('Worker unavailable'));
+
+		renderCleanComponent();
+
+		expect(await screen.findByRole('alert')).toHaveTextContent(
+			'Diagnostics unavailable: Worker unavailable'
+		);
+		expect(
+			screen.queryByText('Checking diagnostics...')
+		).not.toBeInTheDocument();
+
+		queryDiagnostics.mockResolvedValueOnce({
+			diagnostics: [],
+			nextCursor: null,
+			revision: 1,
+			storyId: 'story-id',
+			totalCount: 0
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Retry Diagnostics'}));
+
+		expect(
+			await screen.findByText('No issues found — your story is healthy')
+		).toBeInTheDocument();
+		expect(queryDiagnostics).toHaveBeenCalledTimes(2);
+	});
+
+	it('loads additional diagnostics one bounded page at a time', async () => {
+		const queryDiagnostics = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDiagnosticsPageAsync')
+			.mockResolvedValueOnce({
+				diagnostics: [coreDiagnostic('FIRST')],
+				nextCursor: 'page-2',
+				revision: 1,
+				storyId: 'story-id',
+				totalCount: 2
+			})
+			.mockResolvedValueOnce({
+				diagnostics: [coreDiagnostic('SECOND', 'error')],
+				nextCursor: null,
+				revision: 1,
+				storyId: 'story-id',
+				totalCount: 2
+			});
+
+		renderCleanComponent();
+
+		expect((await screen.findAllByText('FIRST')).length).toBeGreaterThan(0);
+		expect(screen.getByText(/1 of 2 loaded/)).toBeInTheDocument();
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Load more diagnostics'})
+		);
+
+		expect((await screen.findAllByText('SECOND')).length).toBeGreaterThan(0);
+		expect(screen.getByText(/2 of 2 loaded/)).toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', {name: 'Load more diagnostics'})
+		).not.toBeInTheDocument();
+		expect(queryDiagnostics).toHaveBeenNthCalledWith(1, 'story-id', {
+			cursor: null,
+			limit: 250
+		});
+		expect(queryDiagnostics).toHaveBeenNthCalledWith(2, 'story-id', {
+			cursor: 'page-2',
+			limit: 250
+		});
+	});
+
+	it('continues a filtered search across unloaded diagnostics pages', async () => {
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDiagnosticsPageAsync')
+			.mockResolvedValueOnce({
+				diagnostics: [coreDiagnostic('FIRST')],
+				nextCursor: 'page-2',
+				revision: 1,
+				storyId: 'story-id',
+				totalCount: 2
+			})
+			.mockResolvedValueOnce({
+				diagnostics: [coreDiagnostic('SECOND')],
+				nextCursor: null,
+				revision: 1,
+				storyId: 'story-id',
+				totalCount: 2
+			});
+
+		renderCleanComponent();
+		await screen.findByLabelText('Filter diagnostics');
+		fireEvent.change(screen.getByLabelText('Filter diagnostics'), {
+			target: {value: 'SECOND'}
+		});
+
+		expect(
+			screen.getByText('No matching diagnostics in loaded results')
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(
+				'Load more diagnostics to continue searching this project.'
+			)
+		).toBeInTheDocument();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Load more diagnostics'})
+		);
+		expect((await screen.findAllByText('SECOND')).length).toBeGreaterThan(0);
+		expect(
+			screen.queryByText('No matching diagnostics in loaded results')
+		).not.toBeInTheDocument();
+	});
+
+	it('retains the loaded page when loading more fails and retries safely', async () => {
+		const queryDiagnostics = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDiagnosticsPageAsync')
+			.mockResolvedValueOnce({
+				diagnostics: [coreDiagnostic('FIRST')],
+				nextCursor: 'page-2',
+				revision: 1,
+				storyId: 'story-id',
+				totalCount: 2
+			})
+			.mockRejectedValueOnce(new Error('Worker unavailable'))
+			.mockResolvedValueOnce({
+				diagnostics: [coreDiagnostic('SECOND')],
+				nextCursor: null,
+				revision: 1,
+				storyId: 'story-id',
+				totalCount: 2
+			});
+
+		renderCleanComponent();
+		expect((await screen.findAllByText('FIRST')).length).toBeGreaterThan(0);
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Load more diagnostics'})
+		);
+		expect(await screen.findByRole('alert')).toHaveTextContent(
+			'Could not load more diagnostics: Worker unavailable'
+		);
+		expect(screen.getAllByText('FIRST').length).toBeGreaterThan(0);
+		expect(screen.queryByText('SECOND')).not.toBeInTheDocument();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Load more diagnostics'})
+		);
+		expect((await screen.findAllByText('SECOND')).length).toBeGreaterThan(0);
+		expect(screen.getAllByText('FIRST').length).toBeGreaterThan(0);
+		expect(screen.getByText(/2 of 2 loaded/)).toBeInTheDocument();
+		expect(queryDiagnostics).toHaveBeenCalledTimes(3);
+	});
+
+	it('does not render diagnostics owned by the previous route story', async () => {
+		const nextPage = deferred<CoreDiagnosticsPage>();
+		const first = diagnosticStory().story;
+		const second = {
+			...diagnosticStory().story,
+			id: 'second-story',
+			name: 'Second Castle'
+		};
+		second.passages = second.passages.map(passage => ({
+			...passage,
+			story: second.id
+		}));
+		second.startPassage = second.passages[0].id;
+
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDiagnosticsPageAsync')
+			.mockImplementation(storyId =>
+				storyId === first.id
+					? Promise.resolve({
+							diagnostics: [coreDiagnostic('FIRST-STORY')],
+							nextCursor: null,
+							revision: 1,
+							storyId,
+							totalCount: 1
+						})
+					: nextPage.promise
+			);
+
+		render(
+			<FakeStateProvider stories={[first, second]}>
+				<MemoryRouter initialEntries={[`/stories/${first.id}/diagnostics`]}>
+					<RouteNavigator storyId={second.id} />
+					<TestRoute path="/stories/:storyId/diagnostics">
+						<DiagnosticsRoute />
+					</TestRoute>
+				</MemoryRouter>
+			</FakeStateProvider>
+		);
+
+		expect((await screen.findAllByText('FIRST-STORY')).length).toBeGreaterThan(
+			0
+		);
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Switch diagnostic story'})
+		);
+
+		expect(screen.queryByText('FIRST-STORY')).not.toBeInTheDocument();
+		expect(
+			await screen.findByText('Checking diagnostics...')
+		).toBeInTheDocument();
+
+		nextPage.resolve({
+			diagnostics: [],
+			nextCursor: null,
+			revision: 1,
+			storyId: second.id,
+			totalCount: 0
+		});
+		expect(
+			await screen.findByText('No issues found — your story is healthy')
+		).toBeInTheDocument();
 	});
 
 	it('dismisses and restores a specific validation diagnostic', async () => {

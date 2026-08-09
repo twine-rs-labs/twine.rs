@@ -25,7 +25,7 @@ function diagnosticTone(summary: CoreStorySummary): BadgeTone {
 		return 'warn';
 	}
 
-	return 'saved';
+	return 'success';
 }
 
 export function storyPreviewDebugMetrics(
@@ -67,7 +67,7 @@ export function storyPreviewDebugMetrics(
 		{
 			icon: summary.diagnosticCount > 0 ? 'alert-triangle' : 'circle-check',
 			label: 'diagnostics',
-			tone: summary.diagnosticCount > 0 ? diagnosticTone(summary) : 'saved',
+			tone: summary.diagnosticCount > 0 ? diagnosticTone(summary) : 'success',
 			value: summary.diagnosticCount
 		}
 	];

@@ -381,6 +381,12 @@ describe('<AssetsRoute>', () => {
 
 		expect(screen.getAllByText('Unused').length).toBeGreaterThan(0);
 		expect(screen.getAllByText('0 refs').length).toBeGreaterThan(0);
+		expect(screen.getByText('File only', {selector: '.tw-badge'})).toHaveClass(
+			'tw-badge--neutral'
+		);
+		expect(screen.getByText('Publish', {selector: '.tw-badge'})).toHaveClass(
+			'tw-badge--neutral'
+		);
 	});
 
 	it('imports an asset from the native desktop file picker', async () => {

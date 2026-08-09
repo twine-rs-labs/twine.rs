@@ -30,15 +30,15 @@
 	.np__opt-t { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--tx-1); }
 	.np__opt-t .ti { font-size: 16px; }
 	.np__opt-d { font-size: 11px; color: var(--tx-3); margin-top: 4px; }
-	.np__rec { font-size: 9.5px; font-weight: 700; color: var(--sem-saved); margin-left: auto; }
+	.np__rec { font-size: 9.5px; font-weight: 700; color: var(--acc-amber-ink); margin-left: auto; }
 
 	.np__preview { background: var(--ink-1); border-left: 1px solid var(--line-1); display: flex; flex-direction: column; }
 	.np__prev-h { padding: 14px 16px; border-bottom: 1px solid var(--line-1); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-4); }
 	.np__tree { flex: 1; overflow: auto; padding: 12px 8px; font-family: var(--font-mono); font-size: 12px; }
 	.np__tnode { display: flex; align-items: center; gap: 7px; height: 24px; color: var(--tx-2); }
 	.np__tnode .ti { font-size: 15px; }
-	.np__tnode.new { color: var(--sem-saved); }
-	.np__tnode .badge { margin-left: auto; font-size: 8.5px; color: var(--sem-saved); background: var(--sem-saved-soft); padding: 0 5px; border-radius: var(--r-pill); }
+	.np__tnode.new { color: var(--sem-success); }
+	.np__tnode .badge { margin-left: auto; font-size: 8.5px; color: var(--sem-success); background: var(--sem-success-soft); padding: 0 5px; border-radius: var(--r-pill); }
 	.np__footer { display: flex; align-items: center; gap: 10px; padding: 14px 36px; border-top: 1px solid var(--line-1); background: var(--ink-1); }
 	.np__foot-note { font-size: 11px; color: var(--tx-4); }
 
@@ -59,7 +59,7 @@
 	.im__row .nm { color: var(--tx-1); }
 	.im__row .ty { font-family: var(--font-mono); font-size: 10px; color: var(--tx-4); }
 	.im__act { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 3px 8px; border-radius: var(--r-xs); }
-	.im__act.new { color: var(--sem-saved); background: var(--sem-saved-soft); }
+	.im__act.new { color: var(--sem-success); background: var(--sem-success-soft); }
 	.im__act.conflict { color: var(--sem-warn); background: var(--sem-warn-soft); }
 	.im__decisions { background: var(--ink-1); border-left: 1px solid var(--line-1); overflow: auto; padding: 18px; }
 	.im__dec { margin-bottom: 14px; }
@@ -143,7 +143,7 @@
 						<div className="np__preview">
 							<div className="np__prev-h">Files that will be written</div>
 							<div className="np__tree">
-								<div className="np__tnode new"><i className="ti ti-folder-open" style={{color:'var(--sem-saved)'}} /> the-lighthouse/</div>
+								<div className="np__tnode new"><i className="ti ti-folder-open" style={{color:'var(--sem-success)'}} /> the-lighthouse/</div>
 								<div className="np__tnode new" style={{paddingLeft:16}}><i className="ti ti-settings" /> twine.toml</div>
 								<div className="np__tnode new" style={{paddingLeft:16}}><i className="ti ti-folder" /> passages/</div>
 								<div className="np__tnode new" style={{paddingLeft:32}}><i className="ti ti-file-text" /> arrival.twee</div>
@@ -186,7 +186,7 @@
 								<div className="im__stat"><b>1,204</b><span>Passages</span></div>
 								<div className="im__stat"><b>2</b><span>Stories</span></div>
 								<div className="im__stat"><b>40,887</b><span>Words</span></div>
-								<div className="im__stat"><b style={{color:'var(--sem-saved)'}}>1,204</b><span>Graph positions</span></div>
+								<div className="im__stat"><b style={{color:'var(--sem-success)'}}>1,204</b><span>Graph positions</span></div>
 								<div className="im__stat"><b style={{color:'var(--sem-error)'}}>12</b><span>Broken links</span></div>
 							</div>
 							<div style={{padding:'10px 20px',fontSize:10,fontWeight:700,letterSpacing:'0.06em',textTransform:'uppercase',color:'var(--tx-4)',borderBottom:'1px solid var(--line-1)'}}>Detected · lighthouse-backup.twee</div>
@@ -228,7 +228,7 @@
 						</aside>
 					</div>
 					<div className="np__footer">
-						<span className="np__foot-note"><i className="ti ti-shield-check" style={{color:'var(--sem-saved)',verticalAlign:'-2px'}} /> Non-destructive · originals are never modified</span>
+						<span className="np__foot-note"><i className="ti ti-shield-check" style={{color:'var(--sem-success)',verticalAlign:'-2px'}} /> Non-destructive · originals are never modified</span>
 						<div style={{flex:1}} />
 						<Button variant="ghost">Cancel</Button>
 						<Button variant="primary" icon="player-play">Run Import</Button>
