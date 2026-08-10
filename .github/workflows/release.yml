@@ -246,7 +246,8 @@ jobs:
             "${assets[@]}" \
             artifacts/reused-candidate/release-candidate.json \
             --clobber
-          gh api "repos/${{ github.repository }}/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/draft-release.json"
+          release_id="$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId')"
+          gh api "repos/${{ github.repository }}/releases/$release_id" > "$RUNNER_TEMP/draft-release.json"
           node scripts/release-candidate.mjs verify-draft \
             --distribution "$distribution" \
             --metadata artifacts/reused-candidate/release-candidate.json \
@@ -279,7 +280,8 @@ jobs:
         run: |
           gh api "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID" > "$RUNNER_TEMP/candidate-run.json"
           gh api "repos/${{ github.repository }}/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/candidate-artifacts.json"
-          gh api "repos/${{ github.repository }}/releases/tags/${{ needs.prepare.outputs.tag }}" > "$RUNNER_TEMP/draft-release.json"
+          release_id="$(gh release view "${{ needs.prepare.outputs.tag }}" --json databaseId --jq '.databaseId')"
+          gh api "repos/${{ github.repository }}/releases/$release_id" > "$RUNNER_TEMP/draft-release.json"
           node scripts/release-candidate.mjs verify-run \
             --artifact-name "${{ needs.prepare.outputs.artifact_name }}" \
             --artifacts-json "$RUNNER_TEMP/candidate-artifacts.json" \
@@ -368,7 +370,8 @@ jobs:
           distribution="artifacts/reused-candidate/$RELEASE_PROFILE"
           evidence="artifacts/Twine-RS-$RELEASE_VERSION-release-evidence.zip"
           gh release upload "$RELEASE_TAG" "$distribution/release-record.json" "$evidence" --clobber
-          gh api "repos/${{ github.repository }}/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/prepublish-release.json"
+          release_id="$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId')"
+          gh api "repos/${{ github.repository }}/releases/$release_id" > "$RUNNER_TEMP/prepublish-release.json"
           node scripts/release-candidate.mjs verify-publication \
             --metadata artifacts/reused-candidate/release-candidate.json \
             --publication-assets "$RUNNER_TEMP/publication-assets.json" \

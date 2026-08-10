@@ -555,6 +555,23 @@ test('tag, recovery, and publication only promote a retained pre-tag candidate',
 		job(source, 'prepare'),
 		/--workflow", "packaged-electron-smoke\.yml"/
 	);
+	assert.doesNotMatch(source, /releases\/tags\//);
+	assert.equal(
+		(
+			source.match(
+				/gh release view .* --json databaseId --jq '\.databaseId'/g
+			) ?? []
+		).length,
+		3
+	);
+	assert.equal(
+		(
+			source.match(
+				/gh api "repos\/\$\{\{ github\.repository \}\}\/releases\/\$release_id"/g
+			) ?? []
+		).length,
+		3
+	);
 });
 
 test('merge-queue native-only rollout is documented in fail-closed order', () => {
