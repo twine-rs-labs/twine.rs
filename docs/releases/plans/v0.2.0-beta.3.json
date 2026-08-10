@@ -1,0 +1,36 @@
+{
+	"$schema": "https://raw.githubusercontent.com/twine-rs-labs/twine.rs/main/docs/releases/release-plan.schema.json",
+	"schemaVersion": 1,
+	"version": "0.2.0-beta.3",
+	"tag": "v0.2.0-beta.3",
+	"releaseDate": "2026-08-10",
+	"channel": "prerelease",
+	"profile": "distributable-unsigned",
+	"releaseManager": "@bransta61",
+	"checklistIssue": "https://github.com/twine-rs-labs/twine.rs/issues/22",
+	"firstRelease": false,
+	"previousKnownGoodVersion": "0.2.0-beta.2",
+	"approvals": {
+		"releaseManager": true
+	},
+	"compatibility": {
+		"projectFormat": "unchanged",
+		"settingsMigration": "none",
+		"previousVersionCanOpenProjects": "yes",
+		"backupRequired": false,
+		"notes": "No project-format or settings migration is introduced by this release. The immutable beta.2 CLI reopened a beta.3-created project and the restored beta.3 backup with matching story, passage, and link summaries. A separate project-folder backup remains recommended before prerelease use."
+	},
+	"rollback": {
+		"application": "Uninstall or discontinue using beta.3 and reinstall the previous known-good beta.2 release. Automatic downgrade is unavailable.",
+		"projectData": "Beta.2 can reopen the unchanged beta.3 project format. If project-data recovery is required, stop editing, restore the separate pre-beta.3 project-folder backup, and reopen that restored project with beta.2.",
+		"tested": true,
+		"evidence": "https://github.com/twine-rs-labs/twine.rs/issues/22#issuecomment-5238336334"
+	},
+	"knownIssues": [
+		"In the current benchmark suite, some latency and memory results at the largest tested project sizes exceed the project’s initial performance targets.",
+		"Advanced Harlowe syntax editing is specific to the bundled Harlowe 3.3.9 format; other Harlowe versions use the generic editor.",
+		"Asset-complete Package export is limited to file-backed desktop projects. Static runtime dependencies are assessed, while dynamic JavaScript dependency discovery is explicitly not evaluated.",
+		"Some inherited compatibility user interface and documentation remain outside the primary Twine RS workbench.",
+		"Cross-platform packaged-app and hosted-CI performance coverage remains incomplete."
+	]
+}

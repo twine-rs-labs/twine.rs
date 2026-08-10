@@ -21,6 +21,43 @@ and releases use [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+## [0.2.0-beta.3] - 2026-08-10
+
+### Added
+
+- Completed Package export for file-backed desktop projects. The beta.2
+  archive's playable output, canonical source, manifest, and asset copy plan
+  now extend to eligible project asset bytes, deterministic paths, SHA-256
+  checksums, bounded dependency assessment, and an explicit completeness
+  review before saving.
+- Added native and fallback image-dimension metadata for PNG, JPEG, GIF, SVG,
+  and WebP assets.
+
+### Changed
+
+- Unified the application, packaged desktop, PWA, and documentation icon family
+  and adopted amber as the application accent while preserving semantic status
+  colors.
+- Clarified Preview, Assets, and conflict-review counts and actions, including
+  explicit disk-versus-app overwrite warnings.
+- Pointed Twine RS support prompts to the Twine RS Lab Patreon while retaining
+  separately labeled upstream TwineJS links.
+
+### Fixed
+
+- Replaced renderer-blocking persistence reservations with asynchronous,
+  quit-safe coordination that flushes editor changes, core mutations, and
+  admitted saves before shutdown.
+- Excluded dismissed diagnostics from active severity counts and made
+  diagnostic loading, error, pagination, and refresh states explicit.
+
+### Security
+
+- Package asset collection now fails closed on unsafe paths and portability
+  collisions, uses bounded reads and output limits, and reports missing,
+  changed, external, unsupported, and unevaluated dependencies instead of
+  silently claiming an offline-complete package.
+
 ## [0.2.0-beta.2] - 2026-08-01
 
 ### Added
@@ -55,6 +92,6 @@ and releases use [Semantic Versioning](https://semver.org/).
   workflow and packaged Linux ARM64 validation exposed release-pipeline and
   preview-startup defects. No draft or public release was created.
 
-[Unreleased]: https://github.com/twine-rs-labs/twine.rs/compare/v0.2.0-beta.2...HEAD
+[Unreleased]: https://github.com/twine-rs-labs/twine.rs/compare/v0.2.0-beta.3...HEAD
+[0.2.0-beta.3]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.3
 [0.2.0-beta.2]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.2
-[0.2.0-beta.1]: https://github.com/twine-rs-labs/twine.rs/tree/v0.2.0-beta.1
