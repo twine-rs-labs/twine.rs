@@ -21,7 +21,21 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Restore pinned cargo-audit tool
+        id: cargo-audit-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-audit-0.22.2
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2
+      - name: Install or verify pinned cargo-audit
+        shell: bash
+        env:
+          CARGO_AUDIT_ROOT: ${{ runner.temp }}/cargo-audit-0.22.2
+        run: |
+          if [[ "${{ steps.cargo-audit-cache.outputs.cache-hit }}" != 'true' ]]; then
+            cargo install cargo-audit --version 0.22.2 --locked --root "$CARGO_AUDIT_ROOT"
+          fi
+          echo "$CARGO_AUDIT_ROOT/bin" >> "$GITHUB_PATH"
+          test "$("$CARGO_AUDIT_ROOT/bin/cargo-audit" --version)" = 'cargo-audit 0.22.2'
       - name: Audit Rust dependencies
         run: cargo audit --deny warnings

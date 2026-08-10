@@ -81,7 +81,19 @@ test('quality CI enforces JavaScript, documentation, and Rust contracts', () => 
 		source,
 		/mdbook-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-0\.5\.4/
 	);
-	assert.doesNotMatch(source, /restore-keys:/);
+	assert.match(
+		job(source, 'javascript'),
+		/electron-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.native-tool-versions\.outputs\.electron \}\}/
+	);
+	assert.match(
+		job(source, 'javascript'),
+		/electron_config_cache=\$RUNNER_TEMP\/electron-cache/
+	);
+	assert.match(
+		job(source, 'rust'),
+		/cargo-deps-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ hashFiles\('Cargo\.lock'\) \}\}/
+	);
+	assert.equal((source.match(/restore-keys:/g) ?? []).length, 1);
 });
 
 test('quality CI routes explicit safe changes and preserves a stable fail-closed gate', () => {
@@ -142,10 +154,14 @@ test('packaged CI retains complete native evidence', () => {
 		'name: Packaged Electron gate',
 		'desktop-local-test-bundle',
 		'WASM_BINDGEN_ROOT',
+		'node scripts/install-wasm-bindgen-cli.mjs --root "$WASM_BINDGEN_ROOT"',
 		'ELECTRON_CACHE',
+		'electron_config_cache',
 		'ELECTRON_BUILDER_CACHE',
 		'wasm-bindgen-cli-${{ runner.os }}-${{ runner.arch }}-0.2.125',
-		'electron-downloads-${{ runner.os }}-${{ runner.arch }}-electron-43.1.1-builder-26.15.3'
+		"cargo-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}",
+		'electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-tool-versions.outputs.electron }}',
+		'electron-builder-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-tool-versions.outputs.electron_builder }}'
 	]) {
 		assert.ok(
 			source.includes(marker),
@@ -153,7 +169,13 @@ test('packaged CI retains complete native evidence', () => {
 		);
 	}
 	assert.doesNotMatch(source, /paths-ignore:/);
-	assert.doesNotMatch(source, /restore-keys:/);
+	assert.equal((source.match(/restore-keys:/g) ?? []).length, 1);
+	assert.doesNotMatch(source, /electron-downloads-/);
+	assert.doesNotMatch(
+		source,
+		/wasm-bindgen-cli-.*hashFiles\('rust-toolchain\.toml', 'Cargo\.lock'\)/
+	);
+	assert.doesNotMatch(source, /cargo install wasm-bindgen-cli/);
 	assert.doesNotMatch(source, /\n  push:/);
 	assert.doesNotMatch(source, /workflow_dispatch:/);
 	assert.match(source, /pull_request:/);
@@ -406,9 +428,63 @@ test('pre-tag candidate binds exact main and builds the distributable matrix', (
 	);
 	assert.match(
 		source,
-		/electron-downloads-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-electron-43\.1\.1-builder-26\.15\.3/
+		/electron-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.native-tool-versions\.outputs\.electron \}\}/
 	);
-	assert.doesNotMatch(source, /restore-keys:/);
+	assert.match(
+		source,
+		/electron-builder-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ steps\.native-tool-versions\.outputs\.electron_builder \}\}/
+	);
+	assert.match(source, /electron_config_cache=\$RUNNER_TEMP\/electron-cache/);
+	assert.match(
+		source,
+		/cargo-deps-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ hashFiles\('Cargo\.lock'\) \}\}/
+	);
+	assert.equal((source.match(/restore-keys:/g) ?? []).length, 1);
+	assert.doesNotMatch(source, /electron-downloads-/);
+	assert.doesNotMatch(
+		source,
+		/wasm-bindgen-cli-.*hashFiles\('rust-toolchain\.toml', 'Cargo\.lock'\)/
+	);
+	assert.match(
+		source,
+		/node scripts\/install-wasm-bindgen-cli\.mjs --root "\$WASM_BINDGEN_ROOT"/
+	);
+	assert.doesNotMatch(source, /cargo install wasm-bindgen-cli/);
+});
+
+test('CI cache tool versions are derived from package-lock.json', () => {
+	const packageLock = JSON.parse(
+		readFileSync(join(repositoryRoot, 'package-lock.json'), 'utf8')
+	);
+	const result = spawnSync(
+		process.execPath,
+		[join(repositoryRoot, 'scripts', 'ci-cache-versions.mjs')],
+		{encoding: 'utf8'}
+	);
+
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(
+		result.stdout,
+		[
+			`electron=${packageLock.packages['node_modules/electron'].version}`,
+			`electron_builder=${packageLock.packages['node_modules/electron-builder'].version}`,
+			''
+		].join('\n')
+	);
+});
+
+test('RustSec audit caches and verifies the pinned cargo-audit binary', () => {
+	const source = workflow('rust-security-audit.yml');
+
+	assert.match(
+		source,
+		/cargo-audit-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-0\.22\.2/
+	);
+	assert.match(
+		source,
+		/cargo install cargo-audit --version 0\.22\.2 --locked --root "\$CARGO_AUDIT_ROOT"/
+	);
+	assert.match(source, /cargo-audit" --version\)" = 'cargo-audit 0\.22\.2'/);
 });
 
 test('tag, recovery, and publication only promote a retained pre-tag candidate', () => {

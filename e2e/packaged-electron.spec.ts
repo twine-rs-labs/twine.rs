@@ -38,6 +38,30 @@ type RunningPackagedApp = {
 	rendererLogs: string[];
 };
 
+function waitForCompletedDownload(app: ElectronApplication, savePath: string) {
+	return app.evaluate(
+		({session}, downloadPath) =>
+			new Promise<void>((resolve, reject) => {
+				const timeout = setTimeout(
+					() => reject(new Error('Electron download did not complete in 30s.')),
+					30_000
+				);
+				session.defaultSession.once('will-download', (_event, item) => {
+					item.setSavePath(downloadPath);
+					item.once('done', (_downloadEvent, state) => {
+						clearTimeout(timeout);
+						if (state === 'completed') {
+							resolve();
+						} else {
+							reject(new Error(`Electron download ended in state ${state}.`));
+						}
+					});
+				});
+			}),
+		savePath
+	);
+}
+
 type PackagedProjectStory = {
 	[key: string]: unknown;
 	id: string;
@@ -1803,34 +1827,22 @@ test('packaged desktop embeds referenced media for every bundled format family',
 			const outputPath = path.join(cleanFormatRoot, 'story.html');
 
 			await mkdir(cleanFormatRoot, {recursive: true});
-			await running.app.evaluate(({session}, savePath) => {
-				session.defaultSession.once('will-download', (_event, item) => {
-					item.setSavePath(savePath);
-				});
-			}, outputPath);
+			const download = waitForCompletedDownload(running.app, outputPath);
 			await page.getByRole('button', {name: 'Export Playable HTML'}).click();
 			const buildError = page
 				.getByText('Last build failed')
 				.locator('..')
 				.locator('.build-route__note-detail');
-			await expect
-				.poll(
-					async () => {
-						if (await buildError.isVisible()) {
-							throw new Error(
-								`${format} export failed: ${await buildError.innerText()}`
-							);
-						}
-
-						try {
-							return (await readFile(outputPath)).byteLength;
-						} catch {
-							return 0;
-						}
-					},
-					{timeout: 30_000}
-				)
-				.toBeGreaterThan(0);
+			try {
+				await download;
+			} catch (error) {
+				if (await buildError.isVisible()) {
+					throw new Error(
+						`${format} export failed: ${await buildError.innerText()}`
+					);
+				}
+				throw error;
+			}
 			await expect(page.getByText(/4 embedded, 0 external/)).toBeVisible();
 			await expect(page.getByText('Referenced media embedded')).toBeVisible();
 
@@ -1952,24 +1964,9 @@ test('packaged desktop exports an asset-complete archive that plays after its so
 		).toContainText('Complete in assessed scopes', {timeout: 30_000});
 		const save = page.getByRole('button', {name: 'Save Complete Package'});
 
-		await running.app.evaluate(({session}, savePath) => {
-			session.defaultSession.once('will-download', (_event, item) => {
-				item.setSavePath(savePath);
-			});
-		}, archivePath);
+		const download = waitForCompletedDownload(running.app, archivePath);
 		await save.click();
-		await expect
-			.poll(
-				async () => {
-					try {
-						return (await lstat(archivePath)).size;
-					} catch {
-						return 0;
-					}
-				},
-				{timeout: 30_000}
-			)
-			.toBeGreaterThan(0);
+		await download;
 
 		await running.app.close();
 		running = undefined;
