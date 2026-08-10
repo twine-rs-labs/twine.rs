@@ -63,6 +63,16 @@ async function downloadRelease(fetchImpl, release) {
 	throw failure;
 }
 
+export async function extractReleaseArchive({
+	archiveName,
+	execFileImpl = execFileAsync,
+	temporaryRoot
+}) {
+	await execFileImpl('tar', ['-xzf', archiveName, '-C', 'extract'], {
+		cwd: temporaryRoot
+	});
+}
+
 export function wasmBindgenReleaseAsset({
 	arch = process.arch,
 	platform = process.platform
@@ -115,7 +125,10 @@ export async function installWasmBindgenCli({
 
 		await mkdir(extractRoot);
 		await writeFile(archivePath, archive);
-		await execFileAsync('tar', ['-xzf', archivePath, '-C', extractRoot]);
+		await extractReleaseArchive({
+			archiveName: release.name,
+			temporaryRoot
+		});
 
 		const bundleRoot = path.join(
 			extractRoot,

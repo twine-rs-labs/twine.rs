@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {
+	extractReleaseArchive,
 	installWasmBindgenCli,
 	wasmBindgenReleaseAsset,
 	wasmBindgenVersion
@@ -61,6 +62,31 @@ test('rejects unsupported wasm-bindgen release targets', () => {
 		() => wasmBindgenReleaseAsset({arch: 'arm64', platform: 'win32'}),
 		/No pinned wasm-bindgen/
 	);
+});
+
+test('extracts with relative paths so Windows drive letters are not parsed as hosts', async () => {
+	const calls = [];
+
+	await extractReleaseArchive({
+		archiveName: 'wasm-bindgen-0.2.125-x86_64-pc-windows-msvc.tar.gz',
+		execFileImpl: async (...args) => calls.push(args),
+		temporaryRoot: String.raw`C:\Users\RUNNER~1\AppData\Local\Temp\twine-wasm-bindgen-cli`
+	});
+
+	assert.deepEqual(calls, [
+		[
+			'tar',
+			[
+				'-xzf',
+				'wasm-bindgen-0.2.125-x86_64-pc-windows-msvc.tar.gz',
+				'-C',
+				'extract'
+			],
+			{
+				cwd: String.raw`C:\Users\RUNNER~1\AppData\Local\Temp\twine-wasm-bindgen-cli`
+			}
+		]
+	]);
 });
 
 test('rejects a wasm-bindgen archive with the wrong checksum', async () => {
