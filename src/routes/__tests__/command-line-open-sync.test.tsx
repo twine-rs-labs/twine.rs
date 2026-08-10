@@ -1,6 +1,7 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {MemoryRouter, useNavigate} from 'react-router';
+import {CoreProjectHostProvider} from '../../core';
 import type {
 	NativeCommandLineOpenResult,
 	TwineElectronWindow
@@ -76,9 +77,11 @@ function app(context: StoriesContextProps) {
 		<React.StrictMode>
 			<MemoryRouter initialEntries={['/initial']}>
 				<StoriesContext.Provider value={context}>
-					<CommandLineOpenSync />
-					<LocationInspector />
-					<NavigationControls />
+					<CoreProjectHostProvider>
+						<CommandLineOpenSync />
+						<LocationInspector />
+						<NavigationControls />
+					</CoreProjectHostProvider>
 				</StoriesContext.Provider>
 			</MemoryRouter>
 		</React.StrictMode>

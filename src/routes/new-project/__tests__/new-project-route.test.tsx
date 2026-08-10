@@ -6,12 +6,15 @@ import {
 	bootstrapStory,
 	bootstrapStoryPerformanceDiagnostics,
 	clearBootstrapStories,
+	CoreAssetInventoryEntry,
 	CoreProjectHost,
 	knownAssetInventoryForStory,
+	knownAssetInventoryScanCompleteForStory,
 	metadataStory,
+	replaceKnownAssetInventoryForStory,
 	useCoreProjectHost
 } from '../../../core';
-import {Story} from '../../../store/stories';
+import {Story, StoryWithDocuments} from '../../../store/stories';
 import {
 	loadProjectMetadata,
 	saveProjectMetadata
@@ -29,6 +32,16 @@ import {
 } from '../../../test-util';
 import {NewProjectRoute} from '../new-project-route';
 import {maxImportSourceBytes} from '../../../util/import-limits';
+import {
+	hasLocalReplacementRecovery,
+	localReplacementRecoveryStatus,
+	recoverLocalReplacementJournal
+} from '../../../store/persistence/local-storage/stories/replacement-recovery';
+import {
+	doUpdateTransaction,
+	savePassage,
+	saveStory
+} from '../../../store/persistence/local-storage/stories/save';
 
 const HistoryBackButton: React.FC = () => {
 	const navigate = useNavigate();
@@ -554,28 +567,37 @@ describe('<NewProjectRoute>', () => {
 
 	it('does not register new documents when a mixed replacement fails', async () => {
 		const existingStory = fakeStory(1);
-		const applyStoryCommand = jest.fn(async command => {
-			expect(bootstrapStory(existingStory.id)).toEqual(
-				expect.objectContaining({
-					passages: [
-						expect.objectContaining({text: existingStory.passages[0].text})
-					]
-				})
-			);
-			expect(command).toEqual(
-				expect.objectContaining({
-					story: expect.objectContaining({
-						passages: [expect.objectContaining({text: 'replacement body'})]
+		const retireProjectStories = jest.fn(async () => undefined);
+		const applyStoryCommandPersisted = jest
+			.fn<
+				ReturnType<CoreProjectHost['applyStoryCommandPersisted']>,
+				Parameters<CoreProjectHost['applyStoryCommandPersisted']>
+			>()
+			.mockResolvedValue(undefined)
+			.mockImplementationOnce(async command => {
+				expect(bootstrapStory(existingStory.id)).toEqual(
+					expect.objectContaining({
+						passages: [
+							expect.objectContaining({text: existingStory.passages[0].text})
+						]
 					})
-				})
-			);
-			throw new Error('replacement failed');
-		});
+				);
+				expect(command).toEqual(
+					expect.objectContaining({
+						story: expect.objectContaining({
+							passages: [expect.objectContaining({text: 'replacement body'})]
+						})
+					})
+				);
+				throw new Error('replacement failed');
+			});
 
 		existingStory.name = 'Existing import target';
 		renderComponent('/new-project/import', undefined, {
 			coreProjectHost: {
-				applyStoryCommand
+				applyStoryCommandPersisted,
+				ensureSessionReady: jest.fn(async () => undefined),
+				retireProjectStories
 			} as unknown as CoreProjectHost,
 			stories: [existingStory]
 		});
@@ -604,12 +626,330 @@ describe('<NewProjectRoute>', () => {
 		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
 
 		expect(await screen.findByText('replacement failed')).toBeInTheDocument();
-		expect(applyStoryCommand).toHaveBeenCalled();
+		expect(applyStoryCommandPersisted).toHaveBeenCalled();
+		expect(retireProjectStories).not.toHaveBeenCalled();
 		expect(bootstrapStoryPerformanceDiagnostics().storyCount).toBe(0);
 		expect(screen.getByTestId('location')).toHaveAttribute(
 			'data-pathname',
 			'/new-project/import'
 		);
+	});
+
+	it('rolls back successful local replacements when a later replacement fails', async () => {
+		const first = {...fakeStory(1), name: 'First local replacement'};
+		const second = {...fakeStory(1), name: 'Second local replacement'};
+		const third = {...fakeStory(1), name: 'Failing local replacement'};
+		const applyStoryCommandPersisted = jest
+			.fn<
+				ReturnType<CoreProjectHost['applyStoryCommandPersisted']>,
+				Parameters<CoreProjectHost['applyStoryCommandPersisted']>
+			>()
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce(undefined)
+			.mockRejectedValueOnce(new Error('third replacement failed'))
+			.mockResolvedValue(undefined);
+		const ensureSessionReady = jest.fn(async () => undefined);
+
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				applyStoryCommandPersisted,
+				ensureSessionReady
+			} as unknown as CoreProjectHost,
+			stories: [first, second, third]
+		});
+		const source = new File(
+			[
+				`<tw-storydata name="${first.name}" startnode="1" ifid="FIRST-LOCAL">`,
+				'<tw-passagedata pid="1" name="Start">first imported body</tw-passagedata>',
+				'</tw-storydata>',
+				`<tw-storydata name="${second.name}" startnode="1" ifid="SECOND-LOCAL">`,
+				'<tw-passagedata pid="1" name="Start">second imported body</tw-passagedata>',
+				'</tw-storydata>',
+				`<tw-storydata name="${third.name}" startnode="1" ifid="THIRD-LOCAL">`,
+				'<tw-passagedata pid="1" name="Start">third imported body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'local-replacements.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		for (const story of [first, second, third]) {
+			await screen.findByText(story.name, {exact: true});
+			const row = screen.getByText(story.name, {exact: true}).closest('tr');
+
+			fireEvent.click(row!.querySelector('input[type="checkbox"]')!);
+		}
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		expect(
+			await screen.findByText('third replacement failed')
+		).toBeInTheDocument();
+		await waitFor(() =>
+			expect(applyStoryCommandPersisted).toHaveBeenCalledTimes(6)
+		);
+		expect(applyStoryCommandPersisted.mock.calls[0][0]).toEqual(
+			expect.objectContaining({
+				story: expect.objectContaining({
+					passages: [expect.objectContaining({text: 'first imported body'})]
+				}),
+				story_id: first.id,
+				type: 'replaceStory'
+			})
+		);
+		expect(applyStoryCommandPersisted.mock.calls[1][0]).toEqual(
+			expect.objectContaining({story_id: second.id, type: 'replaceStory'})
+		);
+		expect(applyStoryCommandPersisted.mock.calls[2][0]).toEqual(
+			expect.objectContaining({story_id: third.id, type: 'replaceStory'})
+		);
+		expect(applyStoryCommandPersisted.mock.calls[3][0]).toEqual(
+			expect.objectContaining({
+				story: expect.objectContaining({
+					passages: [expect.objectContaining({text: first.passages[0].text})]
+				}),
+				story_id: first.id,
+				type: 'replaceStory'
+			})
+		);
+		expect(applyStoryCommandPersisted.mock.calls[4][0]).toEqual(
+			expect.objectContaining({
+				story: expect.objectContaining({
+					passages: [expect.objectContaining({text: second.passages[0].text})]
+				}),
+				story_id: second.id,
+				type: 'replaceStory'
+			})
+		);
+		expect(applyStoryCommandPersisted.mock.calls[5][0]).toEqual(
+			expect.objectContaining({
+				story: expect.objectContaining({
+					passages: [expect.objectContaining({text: third.passages[0].text})]
+				}),
+				story_id: third.id,
+				type: 'replaceStory'
+			})
+		);
+		expect(applyStoryCommandPersisted.mock.calls[3][1]).toEqual({
+			history: 'skip',
+			persistence: 'save'
+		});
+		expect(applyStoryCommandPersisted.mock.calls[4][1]).toEqual({
+			history: 'skip',
+			persistence: 'save'
+		});
+		expect(applyStoryCommandPersisted.mock.calls[5][1]).toEqual({
+			history: 'skip',
+			persistence: 'save'
+		});
+		expect(ensureSessionReady).toHaveBeenCalledTimes(3);
+		expect(ensureSessionReady).toHaveBeenCalledWith(first.id);
+		expect(ensureSessionReady).toHaveBeenCalledWith(second.id);
+		expect(ensureSessionReady).toHaveBeenCalledWith(third.id);
+		expect(hasLocalReplacementRecovery()).toBe(false);
+		expect(bootstrapStory(first.id)).toBeUndefined();
+		expect(bootstrapStory(second.id)).toBeUndefined();
+		expect(bootstrapStory(third.id)).toBeUndefined();
+	});
+
+	it('retains a durable local recovery record when compensation fails', async () => {
+		const existingStory = {...fakeStory(1), name: 'Local recovery target'};
+		const persist = (story: StoryWithDocuments) =>
+			doUpdateTransaction(transaction => {
+				saveStory(transaction, story);
+				for (const passage of story.passages) {
+					savePassage(transaction, passage);
+				}
+			});
+		const applyStoryCommandPersisted = jest
+			.fn<
+				ReturnType<CoreProjectHost['applyStoryCommandPersisted']>,
+				Parameters<CoreProjectHost['applyStoryCommandPersisted']>
+			>()
+			.mockImplementationOnce(async () => {
+				persist({
+					...existingStory,
+					name: 'Imported replacement',
+					passages: [
+						{
+							...existingStory.passages[0],
+							text: 'imported replacement body'
+						}
+					]
+				});
+				return undefined;
+			})
+			.mockRejectedValueOnce(new Error('original compensation failed'));
+		const retireProjectStories = jest.fn(async () => undefined);
+
+		persist(existingStory);
+
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				admitProjectStories: jest.fn(async () => {
+					throw new Error('new project admission failed');
+				}),
+				applyStoryCommandPersisted,
+				ensureSessionReady: jest.fn(async () => undefined),
+				retireProjectStories
+			} as unknown as CoreProjectHost,
+			stories: [existingStory]
+		});
+		const source = new File(
+			[
+				`<tw-storydata name="${existingStory.name}" startnode="1" ifid="LOCAL-RECOVERY">`,
+				'<tw-passagedata pid="1" name="Start">imported replacement body</tw-passagedata>',
+				'</tw-storydata>',
+				'<tw-storydata name="Fresh recovery trigger" startnode="1" ifid="FRESH-RECOVERY">',
+				'<tw-passagedata pid="1" name="Start">fresh body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'recovery.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		await screen.findByText(existingStory.name, {exact: true});
+		const replacementRow = screen
+			.getByText(existingStory.name, {exact: true})
+			.closest('tr');
+
+		fireEvent.click(replacementRow!.querySelector('input[type="checkbox"]')!);
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		expect(
+			await screen.findByText(/original compensation failed/)
+		).toBeInTheDocument();
+		expect(hasLocalReplacementRecovery()).toBe(true);
+		expect(localReplacementRecoveryStatus()).toBe('sealed');
+		expect(retireProjectStories).toHaveBeenCalled();
+		recoverLocalReplacementJournal();
+		expect(hasLocalReplacementRecovery()).toBe(false);
+		expect(bootstrapStory(existingStory.id)).toBeUndefined();
+	});
+
+	it('retires failed new admissions and removes every created project folder', async () => {
+		const rootPath = '/native/failed-import.twine.rs';
+		const deleteProjectFolder = jest.fn(async () => undefined);
+		const retireProjectStories = jest.fn(async () => undefined);
+		let createdStoryId = '';
+
+		(window as any).twineElectron = {
+			createProjectFolder: jest.fn(async story => {
+				createdStoryId = story.id;
+				return {rootPath, stories: [story], storyIds: [story.id]};
+			}),
+			deleteProjectFolder
+		};
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				admitProjectStories: jest.fn(async () => {
+					throw new Error('admission failed');
+				}),
+				retireProjectStories
+			} as unknown as CoreProjectHost
+		});
+		const source = new File(
+			[
+				'<tw-storydata name="Failed import" startnode="1" ifid="FAILED">',
+				'<tw-passagedata pid="1" name="Start">body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'failed.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		await screen.findByText('Failed import');
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		expect(await screen.findByText('admission failed')).toBeInTheDocument();
+		await waitFor(() =>
+			expect(deleteProjectFolder).toHaveBeenCalledWith(rootPath)
+		);
+		expect(retireProjectStories).toHaveBeenCalledWith([createdStoryId]);
+		expect(loadProjectMetadata(createdStoryId)).toBeUndefined();
+		expect(bootstrapStory(createdStoryId)).toBeUndefined();
+	});
+
+	it('rolls back partial metadata commits before admission begins', async () => {
+		const createdStories: Story[] = [];
+		const deleteProjectFolder = jest.fn(async () => undefined);
+		const admitProjectStories = jest.fn(async () => undefined);
+		const retireProjectStories = jest.fn(async () => undefined);
+		const originalSetItem = Storage.prototype.setItem;
+
+		(window as any).twineElectron = {
+			createProjectFolder: jest.fn(async story => {
+				createdStories.push(story);
+				return {
+					rootPath: `/native/${story.id}.twine.rs`,
+					stories: [story],
+					storyIds: [story.id]
+				};
+			}),
+			deleteProjectFolder
+		};
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				admitProjectStories,
+				retireProjectStories
+			} as unknown as CoreProjectHost
+		});
+		const source = new File(
+			[
+				'<tw-storydata name="First project" startnode="1" ifid="FIRST">',
+				'<tw-passagedata pid="1" name="Start">first</tw-passagedata>',
+				'</tw-storydata>',
+				'<tw-storydata name="Second project" startnode="1" ifid="SECOND">',
+				'<tw-passagedata pid="1" name="Start">second</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'partial-metadata.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		await screen.findByText('First project');
+		await screen.findByText('Second project');
+		let projectMetadataWrites = 0;
+		const setItem = jest
+			.spyOn(Storage.prototype, 'setItem')
+			.mockImplementation(function (this: Storage, key, value) {
+				if (key.startsWith('twine-rs-project-metadata-')) {
+					projectMetadataWrites++;
+					if (projectMetadataWrites === 2) {
+						throw new Error('metadata commit failed');
+					}
+				}
+				return originalSetItem.call(this, key, value);
+			});
+
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		expect(
+			await screen.findByText('metadata commit failed')
+		).toBeInTheDocument();
+		await waitFor(() => expect(deleteProjectFolder).toHaveBeenCalledTimes(2));
+		setItem.mockRestore();
+		expect(admitProjectStories).not.toHaveBeenCalled();
+		expect(retireProjectStories).toHaveBeenCalledWith(
+			createdStories.map(story => story.id)
+		);
+		for (const story of createdStories) {
+			expect(loadProjectMetadata(story.id)).toBeUndefined();
+			expect(deleteProjectFolder).toHaveBeenCalledWith(
+				`/native/${story.id}.twine.rs`
+			);
+		}
 	});
 
 	it('keeps shell hydration pending when another replacement materialization fails', async () => {
@@ -707,10 +1047,25 @@ describe('<NewProjectRoute>', () => {
 		};
 		const oldRoot = '/native/current-target.twine.rs';
 		const newRoot = '/native/replacement-target.twine.rs';
-		const applyStoryCommand = jest.fn(async () => {
-			throw new Error('replacement command failed');
+		const applyStoryCommand = jest
+			.fn()
+			.mockRejectedValueOnce(new Error('replacement command failed'))
+			.mockResolvedValueOnce(undefined);
+		const previousAssets = [
+			{normalizedPath: 'assets/original.png', path: 'assets/original.png'}
+		] as CoreAssetInventoryEntry[];
+		let ensureCalls = 0;
+		const ensureSessionReady = jest.fn(async () => {
+			ensureCalls++;
+			if (ensureCalls === 2) {
+				expect(knownAssetInventoryForStory(currentDocuments.id)).toEqual(
+					previousAssets
+				);
+				expect(
+					knownAssetInventoryScanCompleteForStory(currentDocuments.id)
+				).toBe(false);
+			}
 		});
-		const ensureSessionReady = jest.fn(async () => undefined);
 		const deleteProjectFolder = jest.fn(async () => undefined);
 
 		saveProjectMetadata(currentDocuments.id, {
@@ -721,6 +1076,9 @@ describe('<NewProjectRoute>', () => {
 		markProjectStoryHydration(currentDocuments.id, {
 			passageTextLoaded: false,
 			rootPath: oldRoot
+		});
+		replaceKnownAssetInventoryForStory(currentDocuments.id, previousAssets, {
+			assetScanComplete: false
 		});
 		(window as any).twineElectron = {
 			createProjectFolder: jest.fn(async story => ({
@@ -770,17 +1128,24 @@ describe('<NewProjectRoute>', () => {
 		).toBeInTheDocument();
 		expect(ensureSessionReady).toHaveBeenCalledWith(currentDocuments.id);
 		expect(applyStoryCommand).toHaveBeenCalled();
-		expect(deleteProjectFolder).not.toHaveBeenCalled();
+		expect(deleteProjectFolder).toHaveBeenCalledWith(newRoot);
 		expect(projectStoryHydration(currentDocuments.id)).toEqual(
 			expect.objectContaining({
 				passageTextLoaded: false,
-				rootPath: newRoot
+				rootPath: oldRoot
 			})
+		);
+		expect(loadProjectMetadata(currentDocuments.id)?.rootPath).toBe(oldRoot);
+		expect(knownAssetInventoryForStory(currentDocuments.id)).toEqual(
+			previousAssets
+		);
+		expect(knownAssetInventoryScanCompleteForStory(currentDocuments.id)).toBe(
+			false
 		);
 		expect(bootstrapStory(currentDocuments.id)).toBeUndefined();
 	});
 
-	it('deletes only replacement roots that have not been committed', async () => {
+	it('restores committed replacements before deleting all transaction roots', async () => {
 		const firstStory = {
 			...fakeStory(1),
 			name: 'Committed replacement'
@@ -793,11 +1158,10 @@ describe('<NewProjectRoute>', () => {
 		const secondRoot = '/native/uncommitted-replacement.twine.rs';
 		const deleteProjectFolder = jest.fn(async () => undefined);
 		const applyStoryCommand = jest.fn(async () => undefined);
-		const ensureSessionReady = jest.fn(async (storyId: string) => {
-			if (storyId === firstStory.id) {
-				throw new Error('first replacement session failed');
-			}
-		});
+		const ensureSessionReady = jest
+			.fn()
+			.mockRejectedValueOnce(new Error('first replacement session failed'))
+			.mockResolvedValueOnce(undefined);
 
 		for (const story of [firstStory, secondStory]) {
 			saveProjectMetadata(story.id, {
@@ -851,11 +1215,16 @@ describe('<NewProjectRoute>', () => {
 		await waitFor(() =>
 			expect(deleteProjectFolder).toHaveBeenCalledWith(secondRoot)
 		);
-		expect(deleteProjectFolder).toHaveBeenCalledTimes(1);
-		expect(deleteProjectFolder).not.toHaveBeenCalledWith(firstRoot);
-		expect(ensureSessionReady).toHaveBeenCalledTimes(1);
+		expect(deleteProjectFolder).toHaveBeenCalledWith(firstRoot);
+		expect(deleteProjectFolder).toHaveBeenCalledTimes(2);
+		expect(ensureSessionReady).toHaveBeenCalledTimes(2);
 		expect(applyStoryCommand).not.toHaveBeenCalled();
-		expect(loadProjectMetadata(firstStory.id)?.rootPath).toBe(firstRoot);
+		expect(loadProjectMetadata(firstStory.id)).toEqual(
+			expect.objectContaining({
+				status: 'local-only',
+				storageKind: 'web-local'
+			})
+		);
 		expect(loadProjectMetadata(secondStory.id)).toEqual(
 			expect.objectContaining({
 				status: 'local-only',
@@ -866,12 +1235,12 @@ describe('<NewProjectRoute>', () => {
 
 	it('ignores a second import run while replacement materialization starts', async () => {
 		const existingStory = fakeStory(1);
-		const applyStoryCommand = jest.fn(async () => undefined);
+		const applyStoryCommandPersisted = jest.fn(async () => undefined);
 
 		existingStory.name = 'Existing import target';
 		renderComponent('/new-project/import', undefined, {
 			coreProjectHost: {
-				applyStoryCommand
+				applyStoryCommandPersisted
 			} as unknown as CoreProjectHost,
 			stories: [existingStory]
 		});
@@ -902,7 +1271,9 @@ describe('<NewProjectRoute>', () => {
 			await Promise.resolve();
 		});
 
-		await waitFor(() => expect(applyStoryCommand).toHaveBeenCalledTimes(1));
+		await waitFor(() =>
+			expect(applyStoryCommandPersisted).toHaveBeenCalledTimes(1)
+		);
 	});
 
 	it('refreshes replacement asset inventory after copying archive assets', async () => {

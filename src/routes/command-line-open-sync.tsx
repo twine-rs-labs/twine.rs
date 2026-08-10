@@ -1,16 +1,7 @@
 import * as React from 'react';
 import {useNavigate} from 'react-router';
-import type {
-	NativeCommandLineOpenResult,
-	TwineElectronWindow
-} from '../electron/shared';
-import {
-	mergeProjectStories,
-	projectStoryIdsForCurrentStories
-} from '../store/merge-project-stories';
-import {markProjectStoryHydration} from '../store/project-hydration';
-import {saveProjectMetadata} from '../store/project-metadata';
-import {useStoriesContext} from '../store/stories';
+import type {NativeCommandLineOpenResult} from '../electron/shared';
+import {useProjectLibraryService} from '../store/project-library-service';
 import {
 	markPerformance,
 	measurePerformance,
@@ -19,36 +10,24 @@ import {
 
 export const CommandLineOpenSync: React.FC = () => {
 	const navigate = useNavigate();
-	const {dispatch, stories} = useStoriesContext();
+	const projectLibrary = useProjectLibraryService();
 	const consumePromiseRef = React.useRef<Promise<void> | undefined>(undefined);
-	const dispatchRef = React.useRef(dispatch);
 	const initialConsumeRequestedRef = React.useRef(false);
 	const mountedRef = React.useRef(false);
 	const navigateRef = React.useRef(navigate);
 	const rerunRequestedRef = React.useRef(false);
-	const storiesRef = React.useRef(stories);
 
 	React.useLayoutEffect(() => {
-		dispatchRef.current = dispatch;
 		navigateRef.current = navigate;
-		storiesRef.current = stories;
-	}, [dispatch, navigate, stories]);
+	}, [navigate]);
 
 	React.useEffect(() => {
-		const bridge = (window as TwineElectronWindow).twineElectron;
-
-		if (!bridge?.consumeCommandLineOpenRequests) {
+		if (!projectLibrary.canConsumeCommandLineOpenRequests()) {
 			return;
 		}
-
-		const consumeCommandLineOpenRequests =
-			bridge.consumeCommandLineOpenRequests;
 		mountedRef.current = true;
 
 		function applyResult(result: NativeCommandLineOpenResult) {
-			const openedStoryIds: string[] = [];
-			let mergedStories = storiesRef.current;
-
 			for (const project of result.openedProjects) {
 				recordPerformanceHarnessEvent('native-project-shell-loaded', {
 					...project.loadPerformanceTimings,
@@ -58,35 +37,12 @@ export const CommandLineOpenSync: React.FC = () => {
 					storySourcesLoaded: project.storySourcesLoaded,
 					storyCount: project.stories.length
 				});
-				const projectStoryIds = projectStoryIdsForCurrentStories(
-					mergedStories,
-					project.stories,
-					{preserveExistingIdentity: false}
-				);
-
-				for (const [index, story] of project.stories.entries()) {
-					const storyId = projectStoryIds[index] ?? story.id;
-					saveProjectMetadata(storyId, {
-						rootPath: project.rootPath,
-						status: 'file-backed',
-						storageKind: 'electron-project-folder'
-					});
-					markProjectStoryHydration(storyId, {
-						passageTextLoaded: project.passageTextLoaded !== false,
-						rootPath: project.rootPath
-					});
-					openedStoryIds.push(storyId);
-				}
-
-				mergedStories = mergeProjectStories(mergedStories, project.stories, {
-					preserveExistingIdentity: false
-				});
 			}
+			const dispatchStarted = performance.now();
+			const {stories: mergedStories, storyIds: openedStoryIds} =
+				projectLibrary.admitOpenedProjects(result.openedProjects);
 
 			if (openedStoryIds.length > 0) {
-				const dispatchStarted = performance.now();
-				storiesRef.current = mergedStories;
-				dispatchRef.current({state: mergedStories, type: 'init'});
 				recordPerformanceHarnessEvent('renderer-project-shell-dispatched', {
 					durationMs: performance.now() - dispatchStarted,
 					passageCount: mergedStories.reduce(
@@ -136,7 +92,8 @@ export const CommandLineOpenSync: React.FC = () => {
 					markPerformance('open-start');
 
 					try {
-						const result = await consumeCommandLineOpenRequests();
+						const result =
+							await projectLibrary.consumeCommandLineOpenRequests();
 
 						if (mountedRef.current) {
 							applyResult(result);
@@ -159,7 +116,7 @@ export const CommandLineOpenSync: React.FC = () => {
 			});
 		}
 
-		const unsubscribe = bridge.onCommandLineOpenRequest?.(
+		const unsubscribe = projectLibrary.onCommandLineOpenRequest(
 			consumeQueuedRequests
 		);
 
@@ -172,7 +129,7 @@ export const CommandLineOpenSync: React.FC = () => {
 			mountedRef.current = false;
 			unsubscribe?.();
 		};
-	}, []);
+	}, [projectLibrary]);
 
 	return null;
 };

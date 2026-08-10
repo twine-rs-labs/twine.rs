@@ -16,9 +16,7 @@ import {SettingsRoute} from './settings';
 import {StoryFormatsRoute} from './story-formats';
 import {StoryEditRoute} from './story-edit';
 import {StoryListRoute} from './story-list';
-import {StoryPlayRoute} from './story-play';
-import {StoryProofRoute} from './story-proof';
-import {StoryTestRoute} from './story-test';
+import {StoryPreviewRoute} from './story-preview';
 import {StoryPreviewOwnerController} from './story-preview-owner-controller';
 
 const UnmatchedRoute: React.FC = () => {
@@ -58,13 +56,10 @@ export const Routes: React.FC = () => {
 						path="/stories/:storyId/diagnostics"
 					/>
 					<Route element={<AssetsRoute />} path="/stories/:storyId/assets" />
-					<Route element={<StoryPlayRoute />} path="/stories/:storyId/play" />
-					<Route element={<StoryProofRoute />} path="/stories/:storyId/proof" />
 					<Route
-						element={<StoryTestRoute />}
-						path="/stories/:storyId/test/:passageId"
+						element={<StoryPreviewRoute />}
+						path="/stories/:storyId/preview"
 					/>
-					<Route element={<StoryTestRoute />} path="/stories/:storyId/test" />
 					<Route element={<StoryEditRoute />} path="/stories/:storyId" />
 					<Route element={<UnmatchedRoute />} path="*" />
 				</RouterRoutes>

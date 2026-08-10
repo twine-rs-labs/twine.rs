@@ -79,12 +79,15 @@ describe('useStoryLaunch', () => {
 			await result.current.testStory('mock-story-id', 'current-id');
 
 			expect(openSpy.mock.calls).toEqual([
-				['#/stories/mock-story-id/play', '_blank'],
+				['#/stories/mock-story-id/preview?target=play', '_blank'],
 				[
-					'#/stories/mock-story-id/proof?proofingFormatName=Paper&proofingFormatVersion=1.0.0',
+					'#/stories/mock-story-id/preview?target=proof&proofingFormatName=Paper&proofingFormatVersion=1.0.0',
 					'_blank'
 				],
-				['#/stories/mock-story-id/test/current-id', '_blank']
+				[
+					'#/stories/mock-story-id/preview?target=test&passage=current-id',
+					'_blank'
+				]
 			]);
 			expect(buildStoryPreviewPackage).not.toHaveBeenCalled();
 		});

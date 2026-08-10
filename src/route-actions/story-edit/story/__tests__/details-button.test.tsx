@@ -1,46 +1,28 @@
 import {fireEvent, render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {StoreCoreProjectHost} from '../../../../core/project-host';
-import {useStoriesContext} from '../../../../store/stories';
-import {
-	fakeLoadedStoryFormat,
-	FakeStateProvider,
-	FakeStateProviderProps,
-	fakeStory,
-	waitForMockPromises
-} from '../../../../test-util';
+import {FakeStateProvider, FakeStateProviderProps} from '../../../../test-util';
 import {DetailsButton} from '../details-button';
 
-const TestDetailsButton: React.FC = () => {
-	const {stories} = useStoriesContext();
-
-	return <DetailsButton story={stories[0]} />;
+const TestDetailsButton: React.FC<{onOpen: () => void}> = ({onOpen}) => {
+	return <DetailsButton onOpenWorkbenchPanel={onOpen} />;
 };
 
 describe('<DetailsButton>', () => {
 	function renderComponent(contexts?: FakeStateProviderProps) {
-		return render(
+		const onOpen = jest.fn();
+		const result = render(
 			<FakeStateProvider {...contexts}>
-				<TestDetailsButton />
+				<TestDetailsButton onOpen={onOpen} />
 			</FakeStateProvider>
 		);
+		return {...result, onOpen};
 	}
 
-	it('opens the story details dialog when clicked', async () => {
-		const story = fakeStory();
-		const format = fakeLoadedStoryFormat();
-		const queryStorySummary = jest.spyOn(
-			StoreCoreProjectHost.prototype,
-			'queryStorySummaryAsync'
-		);
-
-		story.storyFormat = format.name;
-		story.storyFormatVersion = format.version;
-		renderComponent({stories: [story], storyFormats: [format]});
+	it('opens the story details workbench panel when clicked', () => {
+		const {onOpen} = renderComponent();
 		fireEvent.click(screen.getByRole('button', {name: 'common.details'}));
-		await waitForMockPromises(queryStorySummary);
-		expect(screen.getByText(story.name)).toBeInTheDocument();
+		expect(onOpen).toHaveBeenCalledWith('story-details');
 	});
 
 	it('is accessible', async () => {

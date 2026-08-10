@@ -1,43 +1,30 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {fireEvent, render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {StoreCoreProjectHost} from '../../../../core/project-host';
-import {useStoriesContext} from '../../../../store/stories';
-import {
-	FakeStateProvider,
-	FakeStateProviderProps,
-	waitForMockPromises
-} from '../../../../test-util';
+import {FakeStateProvider, FakeStateProviderProps} from '../../../../test-util';
 import {PassageTagsButton} from '../passage-tags-button';
 
-const TestPassageTagsButton: React.FC = () => {
-	const {stories} = useStoriesContext();
-
-	return <PassageTagsButton story={stories[0]} />;
+const TestPassageTagsButton: React.FC<{onOpen: () => void}> = ({onOpen}) => {
+	return <PassageTagsButton onOpenWorkbenchPanel={onOpen} />;
 };
 
 describe('<PassageTagsButton>', () => {
 	function renderComponent(contexts?: FakeStateProviderProps) {
-		return render(
+		const onOpen = jest.fn();
+		const result = render(
 			<FakeStateProvider {...contexts}>
-				<TestPassageTagsButton />
+				<TestPassageTagsButton onOpen={onOpen} />
 			</FakeStateProvider>
 		);
+		return {...result, onOpen};
 	}
 
-	it('opens the passage tags dialog when clicked', async () => {
-		const queryContentsPage = jest.spyOn(
-			StoreCoreProjectHost.prototype,
-			'queryContentsPageAsync'
-		);
-
-		renderComponent();
+	it('opens the passage tags workbench panel when clicked', () => {
+		const {onOpen} = renderComponent();
 		fireEvent.click(
 			screen.getByRole('button', {name: 'routes.storyEdit.toolbar.passageTags'})
 		);
-		await waitFor(() => expect(queryContentsPage).toHaveBeenCalledTimes(2));
-		await waitForMockPromises(queryContentsPage);
-		expect(screen.getByText('dialogs.passageTags.title')).toBeInTheDocument();
+		expect(onOpen).toHaveBeenCalledWith('passage-tags');
 	});
 
 	it('is accessible', async () => {

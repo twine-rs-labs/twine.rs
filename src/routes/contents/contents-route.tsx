@@ -24,14 +24,10 @@ import type {CoreContentsPage} from '../../core/bindings/CoreContentsPage';
 import type {CoreBacklinksPage} from '../../core/bindings/CoreBacklinksPage';
 import type {CorePassageLocalFacts} from '../../core/bindings/CorePassageLocalFacts';
 import {fileUrlForPath} from '../../core/asset-paths';
-import type {TwineElectronWindow} from '../../electron/shared';
 import {selectPassage, Story, useStoriesContext} from '../../store/stories';
-import {
-	defaultProjectFolderRoot,
-	loadProjectMetadata,
-	saveProjectMetadata
-} from '../../store/project-metadata';
+import {loadProjectMetadata} from '../../store/project-metadata';
 import {useProjectStoryHydration} from '../../store/project-hydration';
+import {useProjectLibraryService} from '../../store/project-library-service';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {reportStoryLaunchError} from '../../store/report-story-launch-error';
 import {
@@ -380,6 +376,7 @@ export const ContentsRoute: React.FC = () => {
 	const navigate = useNavigate();
 	const {testStory} = useStoryLaunch();
 	const coreProjectHost = useCoreProjectHost();
+	const projectLibrary = useProjectLibraryService();
 	const story = storyForId(stories, storyId);
 	const [filter, setFilter] = React.useState<ContentsFilter>('all');
 	const [query, setQuery] = React.useState('');
@@ -395,7 +392,6 @@ export const ContentsRoute: React.FC = () => {
 		[story]
 	);
 	const projectRoot = projectMetadata?.rootPath ?? inferredProjectRoot;
-	const twineElectron = (window as TwineElectronWindow).twineElectron;
 	const isFileBackedStory =
 		(projectMetadata?.storageKind === 'electron-project-folder' &&
 			projectMetadata.status === 'file-backed') ||
@@ -432,12 +428,7 @@ export const ContentsRoute: React.FC = () => {
 			return;
 		}
 
-		if (
-			!story ||
-			!twineElectron?.getStoryLibraryFolder ||
-			(!twineElectron.projectSessionSnapshot &&
-				!twineElectron.listProjectAssets)
-		) {
+		if (!story) {
 			setInferredProjectRoot(undefined);
 			return;
 		}
@@ -445,36 +436,20 @@ export const ContentsRoute: React.FC = () => {
 		let canceled = false;
 
 		async function inferProjectRoot() {
-			if (!story || !twineElectron?.getStoryLibraryFolder) {
+			if (!story) {
 				return;
 			}
 
 			try {
-				const storyLibraryFolder = await twineElectron.getStoryLibraryFolder();
-				const rootPath = defaultProjectFolderRoot(
-					storyLibraryFolder,
-					story.name
-				);
-				const snapshot = twineElectron.projectSessionSnapshot
-					? await twineElectron.projectSessionSnapshot(rootPath, [story.id])
-					: undefined;
-				const inventory =
-					snapshot?.assets ??
-					(twineElectron.listProjectAssets
-						? await twineElectron.listProjectAssets(rootPath)
-						: []);
+				const snapshot =
+					await projectLibrary.discoverAndBindProjectFolder(story);
 
-				if (canceled || inventory.length === 0) {
+				if (canceled || !snapshot) {
 					return;
 				}
 
-				saveProjectMetadata(story.id, {
-					rootPath,
-					status: 'file-backed',
-					storageKind: 'electron-project-folder'
-				});
-				replaceKnownAssetInventoryForStory(story.id, inventory);
-				setInferredProjectRoot(rootPath);
+				replaceKnownAssetInventoryForStory(story.id, snapshot.assets);
+				setInferredProjectRoot(snapshot.rootPath);
 			} catch {
 				if (!canceled) {
 					setInferredProjectRoot(undefined);
@@ -487,7 +462,7 @@ export const ContentsRoute: React.FC = () => {
 		return () => {
 			canceled = true;
 		};
-	}, [projectMetadata?.rootPath, story, twineElectron]);
+	}, [projectLibrary, projectMetadata?.rootPath, story]);
 
 	React.useEffect(() => {
 		let active = true;

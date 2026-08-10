@@ -19,6 +19,7 @@ import {
 import {usePrefsContext} from './prefs';
 import {useComputedTheme} from './prefs/use-computed-theme';
 import type {StoryBuildPackage} from '../util/build-package';
+import {storyPreviewRoutePath} from '../routes/story-preview/story-preview-route-path';
 
 export interface UseStoryLaunchProps {
 	playStory: (storyId: string) => Promise<void>;
@@ -249,21 +250,17 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 	}
 
 	const playStoryWithBuild = async (storyId: string) => {
-		window.open(`#/stories/${storyId}/play`, '_blank');
+		window.open(`#${storyPreviewRoutePath(storyId, 'play')}`, '_blank');
 		return undefined;
 	};
 	const proofStoryWithBuild = async (
 		storyId: string,
 		proofingFormat?: ProofingFormatSelection
 	) => {
-		const query = proofingFormat
-			? `?${new URLSearchParams({
-					proofingFormatName: proofingFormat.name,
-					proofingFormatVersion: proofingFormat.version
-				}).toString()}`
-			: '';
-
-		window.open(`#/stories/${storyId}/proof${query}`, '_blank');
+		window.open(
+			`#${storyPreviewRoutePath(storyId, 'proof', {proofingFormat})}`,
+			'_blank'
+		);
 		return undefined;
 	};
 
@@ -278,9 +275,9 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 		proofStoryWithBuild,
 		testStory: async (storyId, startPassageId) => {
 			window.open(
-				startPassageId
-					? `#/stories/${storyId}/test/${startPassageId}`
-					: `#/stories/${storyId}/test`,
+				`#${storyPreviewRoutePath(storyId, 'test', {
+					passageId: startPassageId
+				})}`,
 				'_blank'
 			);
 		}

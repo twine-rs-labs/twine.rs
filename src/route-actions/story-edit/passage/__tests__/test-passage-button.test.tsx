@@ -55,7 +55,10 @@ describe('<TestPassageButton>', () => {
 			})
 		);
 		expect(openSpy.mock.calls).toEqual([
-			[`#/stories/${story.id}/test/${story.passages[0].id}`, '_blank']
+			[
+				`#/stories/${story.id}/preview?target=test&passage=${story.passages[0].id}`,
+				'_blank'
+			]
 		]);
 	});
 

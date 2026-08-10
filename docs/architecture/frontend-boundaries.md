@@ -2,21 +2,48 @@
 
 Status: current
 Owner: React/core integration maintainers
-Last verified: 2026-07-18
+Last verified: 2026-08-10
 Source of truth: product mutation and query boundaries
 
 ## Persisted mutations
 
-Every persisted product mutation enters through a bound core project session.
-`useCoreProjectSession(storyId)` exposes apply, undo, redo, status, queries, and
-patch subscriptions for the story's logical project.
+Every persisted mutation to an open project's content or project-owned metadata
+enters through its bound Rust `ProjectSession`. This includes passages, story
+metadata and tags, source and graph layout, scripts and styles, assets, publish
+rules, and undo/redo. `useCoreProjectSession(storyId)` exposes apply, undo, redo,
+status, queries, and patch subscriptions for the story's logical project.
 
 Rust returns a `PatchBatch`. The frontend applies the batch through one
 `applyCorePatchBatch` reducer action and emits one persistence notification.
 Product routes must not reconstruct equivalent persistent reducer mutations.
 
-`npm run check:core-boundaries` prevents legacy undo imports and reducer-owned
-replace-all behavior from returning to product code.
+Whole-project lifecycle is a separate authority boundary. Creating, importing,
+duplicating, relocating, opening, and deleting projects goes through
+`ProjectLibraryService`, which owns native project-folder effects and coordinates
+Rust session admission or teardown. Product routes do not dispatch persistent
+story reducer actions or call native lifecycle bridges directly. Native folder
+operations that already wrote or deleted the project apply their Rust patch
+batch with persistence skipped; browser-local lifecycle operations retain the
+normal persistence pass.
+Deleting a native project retires its complete logical session after the folder
+operation succeeds; an unopened metadata-only project does not need passage
+hydration merely to be removed from the library and session registry.
+
+Browser-local replacement recovery is lifecycle bootstrap, not a parallel open
+project writer. Its journal compares affected projects independently and may
+restore an original local-storage snapshot only while `StateLoader` is holding
+the application before `CoreProjectHostProvider` admits sessions. Conflicts are
+resolved at that startup gate with an explicit keep-current or restore-original
+decision. Once sessions are admitted, project content mutations return to the
+bound Rust session boundary.
+
+Application-global preferences, recent/favorite/archive state, and the installed
+story-format registry remain application-level persistence. They do not belong
+to a project session.
+
+`npm run check:core-boundaries` prevents legacy undo imports, reducer-owned
+replace-all behavior, direct persistent story actions, and direct native project
+lifecycle calls from returning to product code.
 
 ## Permitted React state
 

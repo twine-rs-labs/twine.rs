@@ -147,6 +147,25 @@ describe('story edit workspace state', () => {
 		});
 	});
 
+	it('persists the active bottom-drawer panel as workspace-only state', () => {
+		const story = fakeStory();
+		const wrapper: React.FC<React.PropsWithChildren> = ({children}) =>
+			React.createElement(
+				PrefsContext.Provider,
+				{value: {dispatch: jest.fn(), prefs: prefsDefaults()}},
+				children
+			);
+		const {result} = renderHook(() => useStoryEditWorkspace(story), {wrapper});
+
+		act(() => result.current.setBottomDrawerPanelId('runtime'));
+
+		expect(result.current.bottomDrawerPanelId).toBe('runtime');
+		expect(
+			JSON.parse(window.localStorage.getItem('twine-story-edit-workspace')!)
+				.bottomDrawerPanelId
+		).toBe('runtime');
+	});
+
 	it('sanitizes stale editor windows and graph workspace state on read', () => {
 		const story = fakeStory(2);
 

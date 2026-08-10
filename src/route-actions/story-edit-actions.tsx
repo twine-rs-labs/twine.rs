@@ -3,7 +3,7 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {useAppShellContext} from '../components/app-shell';
 import {IconButton, SegmentedControl} from '../components/design-system';
-import {useDialogsContext} from '../dialogs';
+import {DialogsContextProvider} from '../dialogs';
 import {twineRsDocumentationUrl} from '../electron/shared';
 import {Passage, Story} from '../store/stories';
 import {Point} from '../util/geometry';
@@ -26,6 +26,10 @@ export interface StoryEditActionsProps {
 	onChangeRightDockCollapsed?: (value: boolean) => void;
 	onEditPassages: (passages: Passage[]) => void;
 	onOpenFuzzyFinder: () => void;
+	onOpenEditorWindow?: (kind: 'script' | 'stylesheet') => void;
+	onOpenWorkbenchPanel?: (
+		id: 'find-replace' | 'story-details' | 'passage-tags'
+	) => void;
 	rightDockCollapsed?: boolean;
 	story: Story;
 }
@@ -42,12 +46,13 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 		onChangeRightDockCollapsed,
 		onEditPassages,
 		onOpenFuzzyFinder,
+		onOpenEditorWindow,
+		onOpenWorkbenchPanel,
 		rightDockCollapsed = false,
 		story
 	} = props;
 	const {t} = useTranslation();
 	const appShell = useAppShellContext();
-	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const modeButtons = React.useMemo<
 		{
 			icon: string;
@@ -170,12 +175,30 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 				/>
 			),
 			[t('common.story')]: (
-				<StoryActions dialogsDispatch={dialogsDispatch} story={story} />
+				<StoryActions
+					onOpenEditorWindow={onOpenEditorWindow}
+					onOpenWorkbenchPanel={onOpenWorkbenchPanel}
+					story={story}
+				/>
 			),
 			[t('common.build')]: <BuildActions story={story} />,
-			[t('common.appName')]: <AppActions dialogsDispatch={dialogsDispatch} />
+			// App-owned dialogs deliberately keep their own local dialog host. The
+			// story workbench no longer provides a dialog surface for project editing.
+			[t('common.appName')]: (
+				<DialogsContextProvider>
+					<AppActions />
+				</DialogsContextProvider>
+			)
 		}),
-		[dialogsDispatch, getCenter, onEditPassages, onOpenFuzzyFinder, story, t]
+		[
+			getCenter,
+			onEditPassages,
+			onOpenEditorWindow,
+			onOpenFuzzyFinder,
+			onOpenWorkbenchPanel,
+			story,
+			t
+		]
 	);
 
 	React.useEffect(() => {

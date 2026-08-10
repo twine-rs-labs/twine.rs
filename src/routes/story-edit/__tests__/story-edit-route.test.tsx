@@ -782,7 +782,13 @@ describe('<StoryEditRoute>', () => {
 		);
 		await waitForMockPromises(querySearchPage);
 
-		expect(screen.getByText('dialogs.storySearch.title')).toBeInTheDocument();
+		expect(screen.getByRole('tabpanel')).toHaveAttribute(
+			'data-workbench-panel',
+			'find-replace'
+		);
+		expect(
+			screen.getByRole('textbox', {name: 'dialogs.storySearch.find'})
+		).toBeInTheDocument();
 	});
 
 	it('opens the stylesheet editor for a stylesheet source route target', async () => {
@@ -815,7 +821,13 @@ describe('<StoryEditRoute>', () => {
 			story => `/stories/${story.id}?mode=text&q=%24score&scope=variable`
 		);
 
-		expect(screen.getByText('dialogs.storySearch.title')).toBeInTheDocument();
+		expect(screen.getByRole('tabpanel')).toHaveAttribute(
+			'data-workbench-panel',
+			'find-replace'
+		);
+		expect(
+			screen.getByRole('textbox', {name: 'dialogs.storySearch.find'})
+		).toHaveValue('$score');
 	});
 
 	it('opens story details from shell toolbar story actions', async () => {
@@ -830,6 +842,10 @@ describe('<StoryEditRoute>', () => {
 		fireEvent.click(screen.getByRole('button', {name: 'common.details'}));
 		await waitForMockPromises(queryStorySummary);
 
+		expect(screen.getByRole('tabpanel')).toHaveAttribute(
+			'data-workbench-panel',
+			'story-details'
+		);
 		expect(
 			screen.getByLabelText('dialogs.storyDetails.snapToGrid')
 		).toBeInTheDocument();

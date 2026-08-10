@@ -544,11 +544,15 @@ describe('<StoryListRoute>', () => {
 			status: 'file-backed',
 			storageKind: 'electron-project-folder'
 		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: false,
+			rootPath
+		});
 		(window as any).twineElectron = {deleteProjectFolder};
 		jest.spyOn(window, 'confirm').mockReturnValue(true);
 
 		await renderComponent({
-			stories: [story],
+			stories: [metadataStory(story)],
 			storiesDispatchObserver: storiesDispatch
 		});
 		fireEvent.click(
@@ -568,9 +572,8 @@ describe('<StoryListRoute>', () => {
 		);
 		await waitFor(() => expect(loadProjectMetadata(story.id)).toBeUndefined());
 		expect(storiesDispatch).toHaveBeenCalledWith({
-			storageKind: 'electron-project-folder',
-			storyId: story.id,
-			type: 'deleteStory'
+			storyIds: [story.id],
+			type: 'retireProjectStories'
 		});
 		expect(applyStoryCommand).not.toHaveBeenCalled();
 	});

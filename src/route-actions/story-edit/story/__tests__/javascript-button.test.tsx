@@ -1,33 +1,30 @@
 import {fireEvent, render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {useStoriesContext} from '../../../../store/stories';
 import {FakeStateProvider, FakeStateProviderProps} from '../../../../test-util';
 import {JavaScriptButton} from '../javascript-button';
 
-const TestJavaScriptButton: React.FC = () => {
-	const {stories} = useStoriesContext();
-
-	return <JavaScriptButton story={stories[0]} />;
+const TestJavaScriptButton: React.FC<{onOpen: () => void}> = ({onOpen}) => {
+	return <JavaScriptButton onOpenEditorWindow={onOpen} />;
 };
 
 describe('<JavaScriptButton>', () => {
 	function renderComponent(contexts?: FakeStateProviderProps) {
-		return render(
+		const onOpen = jest.fn();
+		const result = render(
 			<FakeStateProvider {...contexts}>
-				<TestJavaScriptButton />
+				<TestJavaScriptButton onOpen={onOpen} />
 			</FakeStateProvider>
 		);
+		return {...result, onOpen};
 	}
 
-	it('opens the JavaScript dialog when clicked', () => {
-		renderComponent();
+	it('opens the JavaScript editor buffer when clicked', () => {
+		const {onOpen} = renderComponent();
 		fireEvent.click(
 			screen.getByRole('button', {name: 'routes.storyEdit.toolbar.javaScript'})
 		);
-		expect(
-			screen.getByText('dialogs.storyJavaScript.title')
-		).toBeInTheDocument();
+		expect(onOpen).toHaveBeenCalledTimes(1);
 	});
 
 	it('is accessible', async () => {

@@ -14,9 +14,7 @@ jest.mock('../diagnostics/diagnostics-route');
 jest.mock('../new-project/new-project-route');
 jest.mock('../settings/settings-route');
 jest.mock('../story-formats/story-formats-route');
-jest.mock('../story-play/story-play-route');
-jest.mock('../story-proof/story-proof-route');
-jest.mock('../story-test/story-test-route');
+jest.mock('../story-preview/story-preview-route');
 
 describe('<Routes>', () => {
 	function renderAtRoute(route: string, context?: Partial<PrefsContextProps>) {
@@ -76,9 +74,12 @@ describe('<Routes>', () => {
 			expect(screen.getByTestId('mock-story-list-route')).toBeInTheDocument();
 		});
 
-		it('renders the story play route at /stories/:id/play', () => {
-			renderAtRoute('/stories/123/play');
-			expect(screen.getByTestId('mock-story-play-route')).toBeInTheDocument();
+		it('renders the canonical preview route with its target query', () => {
+			renderAtRoute('/stories/123/preview?target=test&passage=456');
+			expect(screen.getByTestId('mock-story-preview-route')).toHaveAttribute(
+				'data-search',
+				'?target=test&passage=456'
+			);
 		});
 
 		it('renders the story build route at /stories/:id/build', () => {
@@ -111,24 +112,6 @@ describe('<Routes>', () => {
 		it('renders the settings route at /settings', () => {
 			renderAtRoute('/settings');
 			expect(screen.getByTestId('mock-settings-route')).toBeInTheDocument();
-		});
-
-		it('renders the story proof route at /stories/:id/proof', () => {
-			renderAtRoute('/stories/123/proof');
-			expect(screen.getByTestId('mock-story-proof-route')).toBeInTheDocument();
-		});
-
-		it('renders the story test route at /stories/:id/test', () => {
-			renderAtRoute('/stories/123/test');
-			expect(screen.getByTestId('mock-story-test-route')).toBeInTheDocument();
-		});
-
-		it('renders the story test route at /stories/:storyId/test/:passageId', () => {
-			renderAtRoute('/stories/123/test/456');
-			expect(screen.getByTestId('mock-story-test-route')).toHaveAttribute(
-				'data-passage-id',
-				'456'
-			);
 		});
 
 		it('renders the story list route at /welcome', () => {

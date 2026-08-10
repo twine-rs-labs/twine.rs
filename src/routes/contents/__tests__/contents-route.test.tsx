@@ -212,9 +212,9 @@ describe('<ContentsRoute>', () => {
 	});
 
 	it('recovers the default native project folder for asset previews', async () => {
-		(window as any).twineElectron = {
-			getStoryLibraryFolder: jest.fn(async () => '/native/library'),
-			listProjectAssets: jest.fn(async () => [
+		let projectSessionSnapshot: jest.Mock;
+		const {result} = renderComponent(story => {
+			const assets = [
 				{
 					...inventoryAsset('assets/cover.png'),
 					previewUrl:
@@ -222,9 +222,23 @@ describe('<ContentsRoute>', () => {
 					thumbnailUrl:
 						'file:///native/library/Projects/indexed-castle.twine.rs/assets/cover.png'
 				}
-			])
-		};
-		const {result} = renderComponent();
+			];
+
+			projectSessionSnapshot = jest.fn(async rootPath => ({
+				assets,
+				changedPaths: [],
+				conflicts: [],
+				files: [],
+				rootPath,
+				scannedAt: '2026-08-10T00:00:00.000Z',
+				stories: [story],
+				storyIds: [story.id]
+			}));
+			(window as any).twineElectron = {
+				getStoryLibraryFolder: jest.fn(async () => '/native/library'),
+				projectSessionSnapshot
+			};
+		});
 
 		fireEvent.click(screen.getByRole('button', {name: /Assets/}));
 
@@ -235,9 +249,9 @@ describe('<ContentsRoute>', () => {
 				)
 			).toBeInTheDocument()
 		);
-		expect(
-			(window as any).twineElectron.listProjectAssets
-		).toHaveBeenCalledWith('/native/library/Projects/indexed-castle.twine.rs');
+		expect(projectSessionSnapshot!).toHaveBeenCalledWith(
+			'/native/library/Projects/indexed-castle.twine.rs'
+		);
 	});
 
 	it('defers full indexing for shell-loaded native stories until hydration completes', async () => {

@@ -926,6 +926,12 @@ describe('AppShell', () => {
 		expect(screen.getAllByText('Settings').length).toBeGreaterThanOrEqual(1);
 	});
 
+	it('does not mark Workbench as current on the Preview route', async () => {
+		await renderShell(story, `/stories/${story.id}/preview?target=test`);
+
+		expect(screen.getByTitle('Workbench')).not.toHaveAttribute('aria-current');
+	});
+
 	it('reports persistence errors in the status bar', async () => {
 		await renderShell(story);
 

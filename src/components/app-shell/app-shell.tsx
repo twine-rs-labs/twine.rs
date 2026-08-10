@@ -112,16 +112,8 @@ function routeMode(pathname?: string): RouteMode {
 		return {icon: 'settings', label: 'Settings'};
 	}
 
-	if (routeHasSegment(pathname, 'play')) {
-		return {icon: 'player-play', label: 'Play'};
-	}
-
-	if (routeHasSegment(pathname, 'proof')) {
-		return {icon: 'eyeglass', label: 'Proof'};
-	}
-
-	if (routeHasSegment(pathname, 'test')) {
-		return {icon: 'tool', label: 'Test'};
+	if (routeHasSegment(pathname, 'preview')) {
+		return {icon: 'player-play', label: 'Preview'};
 	}
 
 	if (routeHasSegment(pathname, 'build')) {
@@ -1031,9 +1023,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 					<button
 						aria-current={
 							pathname.startsWith('/stories/') &&
-							!routeHasSegment(pathname, 'play') &&
-							!routeHasSegment(pathname, 'proof') &&
-							!routeHasSegment(pathname, 'test') &&
+							!routeHasSegment(pathname, 'preview') &&
 							!routeHasSegment(pathname, 'build') &&
 							!routeHasSegment(pathname, 'contents') &&
 							!routeHasSegment(pathname, 'diagnostics') &&

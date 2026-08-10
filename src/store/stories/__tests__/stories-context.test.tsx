@@ -6,6 +6,7 @@ import {useStoryFormatsContext} from '../../story-formats';
 import {useStoreErrorReporter} from '../../use-store-error-reporter';
 import {StoriesContextProvider, useStoriesContext} from '../stories-context';
 import type {StoriesAction} from '../stories.types';
+import {createPersistenceCompletion} from '../../persistence/completion';
 
 jest.mock('../../persistence/use-persistence');
 jest.mock('../reducer');
@@ -57,5 +58,43 @@ describe('StoriesContextProvider persistence freeze', () => {
 		expect(reducer).not.toHaveBeenCalled();
 		expect(saveMiddleware).not.toHaveBeenCalled();
 		expect(screen.getByTestId('story-count')).toHaveTextContent('0');
+	});
+
+	it('rejects the exact Core persistence barrier when local storage throws', async () => {
+		let dispatch: React.Dispatch<StoriesAction> = () => {};
+		const persistenceError = new Error('local storage quota exceeded');
+		const saveMiddleware = jest.fn(() => {
+			throw persistenceError;
+		});
+		const barrier = createPersistenceCompletion();
+
+		(usePersistence as jest.Mock).mockReturnValue({
+			stories: {saveMiddleware}
+		});
+		(useStoryFormatsContext as jest.Mock).mockReturnValue({formats: []});
+		(useStoreErrorReporter as jest.Mock).mockReturnValue({
+			reportError: jest.fn()
+		});
+		(reducer as jest.Mock).mockImplementation(state => state);
+
+		function Consumer() {
+			dispatch = useStoriesContext().dispatch;
+			return null;
+		}
+
+		render(
+			<StoriesContextProvider>
+				<Consumer />
+			</StoriesContextProvider>
+		);
+		act(() =>
+			dispatch({
+				actions: [],
+				persistenceToken: barrier.token,
+				type: 'applyCorePatchBatch'
+			})
+		);
+
+		await expect(barrier.completion).rejects.toBe(persistenceError);
 	});
 });

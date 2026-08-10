@@ -53,6 +53,7 @@ interface StoredProjectWorkspace {
 
 interface StoredWorkspace {
 	bottomDrawerOpen?: boolean;
+	bottomDrawerPanelId?: string;
 	leftDockCollapsed?: boolean;
 	mode?: StoryEditMode;
 	rightDockCollapsed?: boolean;
@@ -61,6 +62,7 @@ interface StoredWorkspace {
 export interface StoryEditWorkspaceState {
 	activeWindowId?: string;
 	bottomDrawerOpen: boolean;
+	bottomDrawerPanelId: string;
 	editorDockLayout: EditorDockLayout;
 	editorWindows?: EditorWindowSpec[];
 	graphOptions: StoryGraphWorkspaceOptions;
@@ -71,6 +73,7 @@ export interface StoryEditWorkspaceState {
 	selectedPassageId?: string;
 	setActiveWindowId: React.Dispatch<React.SetStateAction<string | undefined>>;
 	setBottomDrawerOpen: (value: boolean) => void;
+	setBottomDrawerPanelId: (value: string) => void;
 	setEditorDockLayout: (value: EditorDockLayout) => void;
 	setEditorWindows: React.Dispatch<
 		React.SetStateAction<EditorWindowSpec[] | undefined>
@@ -483,6 +486,9 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 	const [bottomDrawerOpen, setBottomDrawerOpen] = React.useState(
 		initialWorkspace.bottomDrawerOpen ?? false
 	);
+	const [bottomDrawerPanelId, setBottomDrawerPanelId] = React.useState(
+		initialWorkspace.bottomDrawerPanelId ?? 'links'
+	);
 	const [editorDockLayout, setEditorDockLayout] =
 		React.useState<EditorDockLayout>(
 			() => initialProjectWorkspace.editorDockLayout ?? 'tile'
@@ -599,15 +605,23 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		writeJson(workspaceStorageKey, {
 			...workspace,
 			bottomDrawerOpen,
+			bottomDrawerPanelId,
 			leftDockCollapsed,
 			mode,
 			rightDockCollapsed
 		});
-	}, [bottomDrawerOpen, leftDockCollapsed, mode, rightDockCollapsed]);
+	}, [
+		bottomDrawerOpen,
+		bottomDrawerPanelId,
+		leftDockCollapsed,
+		mode,
+		rightDockCollapsed
+	]);
 
 	return {
 		activeWindowId,
 		bottomDrawerOpen,
+		bottomDrawerPanelId,
 		editorDockLayout,
 		editorWindows,
 		graphOptions,
@@ -618,6 +632,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		selectedPassageId,
 		setActiveWindowId,
 		setBottomDrawerOpen,
+		setBottomDrawerPanelId,
 		setEditorDockLayout,
 		setEditorWindows,
 		setGraphOptions,

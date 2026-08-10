@@ -36,6 +36,12 @@ export function markProjectStoryHydration(
 	notify();
 }
 
+export function clearProjectStoryHydration(storyId: string) {
+	if (hydrationByStory.delete(storyId)) {
+		notify();
+	}
+}
+
 export function projectStoryHydration(storyId: string | undefined) {
 	return storyId ? hydrationByStory.get(storyId) : undefined;
 }

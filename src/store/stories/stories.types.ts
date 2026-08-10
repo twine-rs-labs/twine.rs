@@ -219,13 +219,25 @@ export interface ApplyCorePatchBatchAction {
 	documentUpdates?: ProjectFolderDocumentUpdate[];
 	persistence?: 'skip';
 	persistenceHints?: ProjectFolderSaveHint[];
+	persistenceToken?: string;
 	revision?: number;
 	sessionId?: string;
 	storyIds?: string[];
 	type: 'applyCorePatchBatch';
 }
 
-export type StoriesAction = CorePatchStoryAction | ApplyCorePatchBatchAction;
+/**
+ * Removes renderer shells after the project/library service has destroyed the
+ * corresponding whole-project resource. This is lifecycle teardown, not a
+ * project-content mutation or an undoable core patch.
+ */
+export interface RetireProjectStoriesAction {
+	storyIds: string[];
+	type: 'retireProjectStories';
+}
+
+export type StoriesAction =
+	CorePatchStoryAction | ApplyCorePatchBatchAction | RetireProjectStoriesAction;
 
 export type StoriesActionOrThunk =
 	StoriesAction | Thunk<StoriesState, StoriesAction>;

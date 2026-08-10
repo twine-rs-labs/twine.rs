@@ -1,6 +1,7 @@
 import {render, renderHook, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {
+	bootstrapStory,
 	CoreAssetInventoryEntry,
 	deleteStoryCommand,
 	metadataStory,
@@ -36,6 +37,18 @@ import {saveProjectMetadata} from '../../store/project-metadata';
 import {fakePassage, fakeStory} from '../../test-util';
 import {createTestCoreSessionClient} from '../../test-util/test-core-session-client';
 import {PersistenceQuitCoordinator} from '../../store/persistence/electron-ipc/persistence-quit-coordinator';
+import {bindPersistenceCompletion} from '../../store/persistence/completion';
+import {saveMiddleware as saveLocalStories} from '../../store/persistence/local-storage/stories/save-middleware';
+import {
+	doUpdateTransaction,
+	savePassage,
+	saveStory
+} from '../../store/persistence/local-storage/stories/save';
+import {
+	readStorageManifest,
+	readStoredPassageTexts,
+	storageManifestKey
+} from '../../store/persistence/local-storage/stories/storage';
 
 describe('StoreCoreProjectHost asset commands', () => {
 	function batch(patches: PatchBatch['patches'], label = 'Rust Command') {
@@ -281,6 +294,30 @@ describe('StoreCoreProjectHost asset commands', () => {
 		).toBe(0);
 	});
 
+	it('prevalidates duplicate admissions without leaking document ownership', async () => {
+		const context = hostWithStory({wasmClient: createTestCoreSessionClient()});
+		const story = {...fakeStory(), id: 'duplicate-admission'};
+
+		story.passages = story.passages.map(passage => ({
+			...passage,
+			story: story.id
+		}));
+
+		await expect(
+			context.host.admitProjectStories([story, story], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).rejects.toThrow('already belongs to this core project session');
+		expect(bootstrapStory(story.id)).toBeUndefined();
+		await expect(
+			context.host.admitProjectStories([story], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).resolves.toBeDefined();
+	});
+
 	it('accepts mixed document and metadata passages after initialization', async () => {
 		const wasmClient = fakeWasmClient(async () => batch([]));
 		const context = hostWithStory({text: 'Bootstrap body', wasmClient});
@@ -487,6 +524,99 @@ describe('StoreCoreProjectHost asset commands', () => {
 		);
 	});
 
+	it('does not resolve a persisted command until its exact save completes', async () => {
+		const persistenceError = new Error('project save failed');
+		const context = hostWithStory();
+		const persisted = context.host.applyStoryCommandPersisted(
+			updatePassageTextCommand(
+				context.story.id,
+				context.start.id,
+				'persisted worker text'
+			)
+		);
+
+		await flushCommand();
+		const action = context.dispatch.mock.calls
+			.map(([candidate]) => candidate)
+			.find(
+				candidate =>
+					typeof candidate !== 'function' &&
+					candidate.type === 'applyCorePatchBatch' &&
+					candidate.persistenceToken
+			);
+
+		expect(action).toEqual(
+			expect.objectContaining({persistenceToken: expect.any(String)})
+		);
+		bindPersistenceCompletion((action as any).persistenceToken, {
+			completion: Promise.reject(persistenceError),
+			persisted: true
+		});
+		await expect(persisted).rejects.toBe(persistenceError);
+	});
+
+	it('resolves a persisted command only after the local manifest commit', async () => {
+		window.localStorage.clear();
+		const story = fakeStory(0);
+		const start = fakePassage({
+			id: 'local-persisted-start',
+			name: 'Start',
+			story: story.id,
+			text: 'before'
+		});
+		let stories: StoriesState = [{...story, passages: [start]}];
+		const hostRef: {current?: StoreCoreProjectHost} = {};
+
+		doUpdateTransaction(transaction => {
+			saveStory(transaction, stories[0]);
+			savePassage(transaction, start);
+		});
+		saveLocalStories(stories, {state: stories, type: 'init'});
+		const initialRevision = readStorageManifest().revision;
+		const originalSetItem = Storage.prototype.setItem;
+		let manifestCommitted = false;
+		const setItem = jest
+			.spyOn(Storage.prototype, 'setItem')
+			.mockImplementation(function (this: Storage, key: string, value: string) {
+				const result = originalSetItem.call(this, key, value);
+
+				if (key === storageManifestKey) {
+					manifestCommitted = true;
+				}
+				return result;
+			});
+		const applyAction = (action: StoriesActionOrThunk) => {
+			if (typeof action === 'function') {
+				action(applyAction, () => stories);
+				return;
+			}
+			const nextStories = storiesReducer(stories, action);
+			const persistence = saveLocalStories(nextStories, action);
+
+			stories = nextStories;
+			if (action.type === 'applyCorePatchBatch' && action.persistenceToken) {
+				bindPersistenceCompletion(action.persistenceToken, persistence);
+			}
+			hostRef.current?.update(stories, dispatch);
+		};
+		const dispatch = jest.fn(applyAction);
+		const host = new StoreCoreProjectHost(stories, dispatch);
+
+		hostRef.current = host;
+
+		await host.applyStoryCommandPersisted(
+			updatePassageTextCommand(story.id, start.id, 'after manifest commit')
+		);
+
+		expect(manifestCommitted).toBe(true);
+		expect(readStorageManifest().revision).not.toBe(initialRevision);
+		expect(readStoredPassageTexts(story.id).get(start.id)).toBe(
+			'after manifest commit'
+		);
+		setItem.mockRestore();
+		window.localStorage.clear();
+	});
+
 	it('drains an admitted worker mutation through synchronous persistence registration and blocks later mutations', async () => {
 		let finishApply: (batch: PatchBatch) => void = () => {};
 		let finishPersistence: () => void = () => {};
@@ -569,6 +699,40 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(wasmClient.apply).toHaveBeenCalledTimes(2);
 		finishApply(batch([]));
 		await reopened;
+		host.dispose();
+	});
+
+	it('exposes a lifecycle barrier for admitted worker mutations', async () => {
+		let finishApply: (batch: PatchBatch) => void = () => {};
+		const wasmClient = fakeWasmClient(
+			() =>
+				new Promise<PatchBatch>(resolve => {
+					finishApply = resolve;
+				})
+		);
+		const story = fakeStory(1);
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = [
+			...((host as any).hosts as Map<string, any>).values()
+		][0];
+
+		storeHost.wasmClient = wasmClient;
+		const admitted = host.applyStoryCommand(
+			updatePassageTextCommand(story.id, story.passages[0].id, 'worker text')
+		);
+
+		await flushCommand();
+		let drained = false;
+		const drain = host.drainMutations().then(() => {
+			drained = true;
+		});
+
+		await Promise.resolve();
+		expect(drained).toBe(false);
+		finishApply(batch([]));
+		await admitted;
+		await drain;
+		expect(drained).toBe(true);
 		host.dispose();
 	});
 
@@ -1245,6 +1409,126 @@ describe('useCoreProjectHost', () => {
 		expect(() => renderHook(() => useCoreProjectHost())).toThrow(
 			'useCoreProjectHost must be used within a CoreProjectHostProvider.'
 		);
+	});
+
+	it('admits a new story through Rust and emits one non-persisting patch batch', async () => {
+		const sourceStory = fakeStory();
+		const story = {
+			...sourceStory,
+			id: 'admitted-story',
+			selected: true,
+			passages: sourceStory.passages.map(passage => ({
+				...passage,
+				selected: true,
+				story: 'admitted-story'
+			}))
+		};
+		const dispatch = jest.fn();
+		let capturedHost: CoreProjectHost | undefined;
+		const rendered = render(
+			providerTree(
+				[],
+				dispatch,
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						capturedHost = host;
+					}
+				})
+			)
+		);
+
+		await capturedHost!.admitProjectStories([story], {
+			history: 'skip',
+			persistence: 'skip'
+		});
+
+		expect(dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actions: [
+					expect.objectContaining({
+						props: expect.objectContaining({
+							id: story.id,
+							passages: [expect.objectContaining({selected: true})],
+							selected: true
+						}),
+						type: 'createStory'
+					})
+				],
+				documentUpdates: story.passages.map(passage => ({
+					passageId: passage.id,
+					storyId: story.id,
+					text: passage.text,
+					type: 'passageText'
+				})),
+				persistence: 'skip',
+				type: 'applyCorePatchBatch'
+			})
+		);
+		expect(hostStoryIds(capturedHost!)).toEqual([story.id]);
+		await expect(
+			capturedHost!.queryPassageDocumentAsync(story.id, story.passages[0].id)
+		).resolves.toEqual(expect.objectContaining({text: story.passages[0].text}));
+		rendered.unmount();
+	});
+
+	it('rolls back earlier session groups when grouped admission fails', async () => {
+		const first = {...fakeStory(), id: 'first-admission'};
+		const second = {...fakeStory(), id: 'second-admission'};
+		first.passages = first.passages.map(passage => ({
+			...passage,
+			story: first.id
+		}));
+		second.passages = second.passages.map(passage => ({
+			...passage,
+			story: second.id
+		}));
+		const dispatch = jest.fn();
+		let capturedHost: CoreProjectHost | undefined;
+		const originalAdmission =
+			StoreCoreProjectHost.prototype.admitProjectStories;
+		const admission = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'admitProjectStories')
+			.mockImplementation(function (
+				this: StoreCoreProjectHost,
+				stories,
+				options
+			) {
+				if (stories.some(story => story.id === second.id)) {
+					return Promise.reject(new Error('second session failed'));
+				}
+				return originalAdmission.call(this, stories, options);
+			});
+		const rendered = render(
+			providerTree(
+				[],
+				dispatch,
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						capturedHost = host;
+					}
+				})
+			)
+		);
+
+		await expect(
+			capturedHost!.admitProjectStories([first, second], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).rejects.toThrow('second session failed');
+		expect(hostStoryIds(capturedHost!)).toEqual([]);
+		expect(dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actions: [
+					expect.objectContaining({storyId: first.id, type: 'deleteStory'})
+				],
+				persistence: 'skip',
+				type: 'applyCorePatchBatch'
+			})
+		);
+
+		admission.mockRestore();
+		rendered.unmount();
 	});
 
 	it('does not let a throwing provider render mutate a live host with the same dispatch', () => {

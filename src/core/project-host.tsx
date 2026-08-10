@@ -43,12 +43,14 @@ import {
 } from './patch-applier';
 import {
 	passageToSnapshot,
-	projectSnapshotFromStories
+	projectSnapshotFromStories,
+	storyToSnapshot
 } from './project-snapshot';
 import {
 	bootstrapStory,
 	bootstrapStoryPerformanceDiagnostics,
 	metadataStory,
+	registerStoryDocuments,
 	registerStoryMaterializer,
 	releaseBootstrapStory,
 	unregisterStoryMaterializer
@@ -84,6 +86,7 @@ import {
 	recordPerformanceHarnessEvent
 } from '../util/performance';
 import {rendererQuitQuiescence} from '../util/renderer-quit-quiescence';
+import {createPersistenceCompletion} from '../store/persistence/completion';
 
 function storiesWithDocuments(stories: Story[]): StoryWithDocuments[] {
 	if (
@@ -134,6 +137,8 @@ export interface CoreCommandHistoryOptions {
 	annotation?: string;
 	effectToken?: string;
 	history?: 'record' | 'skip';
+	persistence?: 'save' | 'skip';
+	persistenceBarrier?: boolean;
 }
 export type CoreCommandOptions = string | CoreCommandHistoryOptions;
 
@@ -152,6 +157,20 @@ export interface CoreProjectHost {
 		command: StoryCommand,
 		options?: CoreCommandOptions
 	): Promise<PatchBatch | undefined>;
+	applyStoryCommandPersisted(
+		command: StoryCommand,
+		options?: CoreCommandOptions
+	): Promise<PatchBatch | undefined>;
+	admitProjectStories(
+		stories: StoryWithDocuments[],
+		options?: CoreCommandOptions
+	): Promise<PatchBatch | undefined>;
+	deleteProjectStories(
+		storyIds: string[],
+		options?: CoreCommandOptions
+	): Promise<PatchBatch | undefined>;
+	drainMutations(): Promise<void>;
+	retireProjectStories(storyIds: string[]): Promise<void>;
 	ensureSessionReady(storyId: string): Promise<void>;
 	initializeHydratedProject(storyId: string, stories: Story[]): Promise<void>;
 	ingestExternalDelta(
@@ -446,7 +465,9 @@ function normalizeCommandOptions(
 		: {
 				annotation: options?.annotation,
 				effectToken: options?.effectToken,
-				history: options?.history ?? 'record'
+				history: options?.history ?? 'record',
+				persistence: options?.persistence,
+				persistenceBarrier: options?.persistenceBarrier
 			};
 }
 
@@ -674,6 +695,8 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	private transactionTokens = new WeakMap<PatchBatch, number>();
 	private undoEffects: Array<string | undefined> = [];
 	private pendingSessionPatchDispatches = 0;
+	private pendingAdmissionStories = new Map<string, Story>();
+	private persistenceCompletions = new WeakMap<PatchBatch, Promise<void>>();
 	private stories: StoriesState;
 	private status: CoreSessionStatus = {
 		canRedo: false,
@@ -742,6 +765,112 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		}
 
 		return (await this.applyStoryCommandTracked(command, options)).batch;
+	}
+
+	async applyStoryCommandPersisted(
+		command: StoryCommand,
+		options?: CoreCommandOptions
+	) {
+		const normalized = normalizeCommandOptions(options);
+		const batch = await this.applyStoryCommand(command, {
+			...normalized,
+			persistence: 'save',
+			persistenceBarrier: true
+		});
+
+		if (!batch) {
+			throw new Error('The Core mutation did not produce a persistence batch.');
+		}
+		const completion = this.persistenceCompletions.get(batch);
+
+		if (!completion) {
+			throw new Error(
+				'The Core mutation did not schedule project persistence.'
+			);
+		}
+		await completion;
+		return batch;
+	}
+
+	async admitProjectStories(
+		stories: StoryWithDocuments[],
+		options?: CoreCommandOptions
+	) {
+		if (stories.length === 0) {
+			return undefined;
+		}
+		const storyIds = new Set<string>();
+
+		for (const story of stories) {
+			if (
+				storyIds.has(story.id) ||
+				this.sessionOwnedDocumentStories.has(story.id)
+			) {
+				throw new Error(
+					`Story "${story.id}" already belongs to this core project session.`
+				);
+			}
+			storyIds.add(story.id);
+		}
+
+		try {
+			for (const story of stories) {
+				registerStoryDocuments(story);
+				this.sessionOwnedDocumentStories.add(story.id);
+				this.pendingAdmissionStories.set(story.id, story);
+			}
+			const batch = await this.applyStoryCommand(
+				{
+					commands: stories.map(story => ({
+						story: storyToSnapshot(story),
+						type: 'createStory' as const
+					})),
+					type: 'batch'
+				},
+				options
+			);
+			for (const story of stories) {
+				releaseBootstrapStory(story.id);
+				this.pendingAdmissionStories.delete(story.id);
+			}
+			return batch;
+		} catch (error) {
+			for (const story of stories) {
+				this.sessionOwnedDocumentStories.delete(story.id);
+				this.pendingAdmissionStories.delete(story.id);
+				releaseBootstrapStory(story.id);
+			}
+			throw error;
+		}
+	}
+
+	async deleteProjectStories(storyIds: string[], options?: CoreCommandOptions) {
+		if (storyIds.length === 0) {
+			return undefined;
+		}
+		const batch = await this.applyStoryCommand(
+			{
+				commands: storyIds.map(storyId => ({
+					story_id: storyId,
+					type: 'deleteStory' as const
+				})),
+				type: 'batch'
+			},
+			options
+		);
+		for (const storyId of storyIds) {
+			this.sessionOwnedDocumentStories.delete(storyId);
+			releaseBootstrapStory(storyId);
+		}
+		return batch;
+	}
+
+	async retireProjectStories(storyIds: string[]) {
+		for (const storyId of storyIds) {
+			this.sessionOwnedDocumentStories.delete(storyId);
+			releaseBootstrapStory(storyId);
+		}
+		this.dispatch({storyIds, type: 'retireProjectStories'});
 	}
 
 	async applyStoryCommandTracked(
@@ -1027,7 +1156,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				result.batch,
 				commandAnnotation,
 				result.revision,
-				result.status
+				result.status,
+				undefined,
+				options.persistence,
+				options.persistenceBarrier
 			);
 			if (result.revision !== revision && options.history === 'record') {
 				this.recordHistoryEffect(options.effectToken);
@@ -1059,7 +1191,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				result.batch,
 				commandAnnotation,
 				result.revision,
-				result.status
+				result.status,
+				undefined,
+				options.persistence,
+				options.persistenceBarrier
 			);
 			if (result.revision !== revision && options.history === 'record') {
 				this.recordHistoryEffect(options.effectToken);
@@ -1077,13 +1212,17 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		annotation: string | undefined,
 		nextRevision: number,
 		status?: CoreSessionStatus,
-		externalDeltaId?: string
+		externalDeltaId?: string,
+		persistence?: 'save' | 'skip',
+		persistenceBarrier?: boolean
 	) {
 		const patchStarted = performance.now();
 		const persistenceHints = projectFolderSaveHintsForPatchBatch(batch);
 		const storyActions = projectPatchBatchStoryActions(batch, {
 			sessionOwnedDocumentsForStory: storyId =>
-				this.sessionOwnedDocumentStories.has(storyId)
+				this.sessionOwnedDocumentStories.has(storyId),
+			transientStoryForStory: storyId =>
+				this.pendingAdmissionStories.get(storyId)
 		});
 		for (const action of storyActions) {
 			if (action.type === 'deleteStory') {
@@ -1092,15 +1231,35 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		}
 		const patchedStoryIds = Array.from(
 			new Set(
-				batch.patches.flatMap(patch =>
-					'story_id' in patch ? [patch.story_id] : []
-				)
+				batch.patches.flatMap(patch => {
+					if ('story_id' in patch) {
+						return [patch.story_id];
+					}
+					if (patch.type === 'storyCreated') {
+						return [patch.story.id];
+					}
+					return [];
+				})
 			)
 		);
 		const documentUpdates: NonNullable<
 			ApplyCorePatchBatchAction['documentUpdates']
 		> = [];
 		for (const patch of batch.patches) {
+			if (
+				patch.type === 'storyCreated' &&
+				this.sessionOwnedDocumentStories.has(patch.story.id)
+			) {
+				documentUpdates.push(
+					...patch.story.passages.map(passage => ({
+						passageId: passage.id,
+						storyId: patch.story.id,
+						text: passage.text,
+						type: 'passageText' as const
+					}))
+				);
+				continue;
+			}
 			if (
 				patch.type === 'passageCreated' &&
 				this.sessionOwnedDocumentStories.has(patch.story_id)
@@ -1128,6 +1287,24 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			}
 		}
 		const classifiedAt = performance.now();
+		const persistenceCompletion =
+			persistenceBarrier &&
+			persistence !== 'skip' &&
+			!externalDeltaId &&
+			(storyActions.length > 0 || persistenceHints.length > 0)
+				? createPersistenceCompletion()
+				: undefined;
+
+		if (persistenceBarrier) {
+			const completion =
+				persistenceCompletion?.completion ??
+				Promise.reject(
+					new Error('The Core mutation did not schedule project persistence.')
+				);
+
+			void completion.catch(() => undefined);
+			this.persistenceCompletions.set(batch, completion);
+		}
 
 		this.wasmProjectRevision = nextRevision;
 		this.wasmProjectReplaceRevision = nextRevision;
@@ -1143,8 +1320,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 						{
 							actions,
 							documentUpdates,
-							persistence: externalDeltaId ? 'skip' : undefined,
+							persistence:
+								persistence === 'skip' || externalDeltaId ? 'skip' : undefined,
 							persistenceHints,
+							persistenceToken: persistenceCompletion?.token,
 							revision: nextRevision,
 							sessionId: this.sessionId,
 							storyIds: patchedStoryIds,
@@ -1512,6 +1691,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				this.publishStatus(status);
 			}
 		});
+	}
+
+	async drainMutations() {
+		await this.mutationQueue;
 	}
 
 	private enqueueMutation<T>(mutation: () => Promise<T>) {
@@ -2421,6 +2604,10 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		}
 	}
 
+	drainMutations() {
+		return this.drainAdmittedMutations();
+	}
+
 	performanceDiagnostics() {
 		return {
 			client: this.client.performanceDiagnostics(),
@@ -2498,6 +2685,209 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			return options === undefined
 				? host.applyStoryCommand(command)
 				: host.applyStoryCommand(command, options);
+		});
+	}
+
+	applyStoryCommandPersisted(
+		command: StoryCommand,
+		options?: CoreCommandOptions
+	) {
+		return this.admitMutation(async () => {
+			if (command.type === 'renameStoryTag') {
+				throw new Error(
+					'Persisted completion is only available for one project session.'
+				);
+			}
+			return this.requireHostForCommand(command).applyStoryCommandPersisted(
+				command,
+				options
+			);
+		});
+	}
+
+	admitProjectStories(
+		stories: StoryWithDocuments[],
+		options?: CoreCommandOptions
+	) {
+		return this.admitMutation(async () => {
+			const grouped = new Map<string, StoryWithDocuments[]>();
+			const completed: Array<{
+				createdHost: boolean;
+				host: StoreCoreProjectHost;
+				sessionId: string;
+				stories: StoryWithDocuments[];
+			}> = [];
+
+			for (const story of stories) {
+				if (
+					this.storySessions.has(story.id) ||
+					this.stories.some(candidate => candidate.id === story.id)
+				) {
+					throw new Error(
+						`Story "${story.id}" is already bound to a core project session.`
+					);
+				}
+				const sessionId = coreSessionIdForStory(story);
+
+				grouped.set(sessionId, [...(grouped.get(sessionId) ?? []), story]);
+			}
+
+			let lastBatch: PatchBatch | undefined;
+
+			try {
+				for (const [sessionId, sessionStories] of grouped) {
+					let host = this.hosts.get(sessionId);
+					const createdHost = !host;
+
+					if (!host) {
+						host = new StoreCoreProjectHost([], this.dispatchFromCore, {
+							sessionId,
+							wasmClient: this.client
+						});
+						host.subscribeToPatches(batch =>
+							this.patchListeners.forEach(listener => listener(batch))
+						);
+						host.subscribeToStatus(status =>
+							this.statusListeners.forEach(listener => listener(status))
+						);
+						this.hosts.set(sessionId, host);
+					}
+
+					for (const story of sessionStories) {
+						this.storySessions.set(story.id, sessionId);
+					}
+
+					try {
+						lastBatch = await host.admitProjectStories(sessionStories, options);
+					} catch (error) {
+						for (const story of sessionStories) {
+							if (this.storySessions.get(story.id) === sessionId) {
+								this.storySessions.delete(story.id);
+							}
+							unregisterStoryMaterializer(story.id);
+						}
+						if (createdHost) {
+							host.disposeEffects();
+							this.hosts.delete(sessionId);
+							await this.client.removeSession?.(sessionId);
+						}
+						throw error;
+					}
+
+					for (const story of sessionStories) {
+						registerStoryMaterializer(story.id, currentStory =>
+							materializeStoryFromSession(host!, currentStory)
+						);
+					}
+					completed.push({
+						createdHost,
+						host,
+						sessionId,
+						stories: sessionStories
+					});
+				}
+			} catch (error) {
+				const rollbackErrors: unknown[] = [];
+
+				for (const completedGroup of completed.reverse()) {
+					const storyIds = completedGroup.stories.map(story => story.id);
+
+					try {
+						await completedGroup.host.deleteProjectStories(storyIds, {
+							history: 'skip',
+							persistence: 'skip'
+						});
+						for (const storyId of storyIds) {
+							this.storySessions.delete(storyId);
+							unregisterStoryMaterializer(storyId);
+						}
+						if (completedGroup.createdHost) {
+							completedGroup.host.disposeEffects();
+							this.hosts.delete(completedGroup.sessionId);
+							await this.client.removeSession?.(completedGroup.sessionId);
+						}
+					} catch (rollbackError) {
+						rollbackErrors.push(rollbackError);
+					}
+				}
+				if (rollbackErrors.length > 0) {
+					throw new AggregateError(
+						[error, ...rollbackErrors],
+						`Project admission failed and ${rollbackErrors.length} admitted session group${
+							rollbackErrors.length === 1 ? '' : 's'
+						} could not be rolled back.`,
+						{cause: error}
+					);
+				}
+				throw error;
+			}
+
+			return lastBatch;
+		});
+	}
+
+	deleteProjectStories(storyIds: string[], options?: CoreCommandOptions) {
+		return this.admitMutation(async () => {
+			const grouped = new Map<
+				string,
+				{host: StoreCoreProjectHost; storyIds: string[]}
+			>();
+
+			for (const storyId of storyIds) {
+				const sessionId = this.storySessions.get(storyId);
+				const host = sessionId ? this.hosts.get(sessionId) : undefined;
+
+				if (!sessionId || !host) {
+					throw new Error(
+						`No core project session is available for story "${storyId}".`
+					);
+				}
+				const group = grouped.get(sessionId) ?? {host, storyIds: []};
+
+				group.storyIds.push(storyId);
+				grouped.set(sessionId, group);
+			}
+
+			let lastBatch: PatchBatch | undefined;
+
+			for (const {host, storyIds: sessionStoryIds} of grouped.values()) {
+				lastBatch = await host.deleteProjectStories(sessionStoryIds, options);
+			}
+			return lastBatch;
+		});
+	}
+
+	retireProjectStories(storyIds: string[]) {
+		return this.admitMutation(async () => {
+			const retiring = new Set(storyIds);
+			const sessionIds = new Set<string>();
+
+			for (const storyId of storyIds) {
+				const sessionId = this.storySessions.get(storyId);
+
+				if (sessionId) {
+					sessionIds.add(sessionId);
+				}
+			}
+			for (const [storyId, sessionId] of this.storySessions) {
+				if (sessionIds.has(sessionId) && !retiring.has(storyId)) {
+					throw new Error(
+						`Project session "${sessionId}" cannot be partially retired.`
+					);
+				}
+			}
+
+			this.dispatchFromCore({storyIds, type: 'retireProjectStories'});
+			for (const storyId of storyIds) {
+				this.storySessions.delete(storyId);
+				unregisterStoryMaterializer(storyId);
+				releaseBootstrapStory(storyId);
+			}
+			for (const sessionId of sessionIds) {
+				this.hosts.get(sessionId)?.disposeEffects();
+				this.hosts.delete(sessionId);
+				await this.client.removeSession?.(sessionId);
+			}
 		});
 	}
 
@@ -2994,6 +3384,14 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.ingestExternalDelta(deltaStoryId, delta, options),
 			applyStoryCommand: (command, options) =>
 				host.applyStoryCommand(command, options),
+			applyStoryCommandPersisted: (command, options) =>
+				host.applyStoryCommandPersisted(command, options),
+			admitProjectStories: (stories, options) =>
+				host.admitProjectStories(stories, options),
+			deleteProjectStories: (storyIds, options) =>
+				host.deleteProjectStories(storyIds, options),
+			drainMutations: () => host.drainMutations(),
+			retireProjectStories: storyIds => host.retireProjectStories(storyIds),
 			ensureSessionReady: readyStoryId => host.ensureSessionReady(readyStoryId),
 			beginHydratedProject: (readyStoryId, stories) =>
 				host.beginHydratedProject(readyStoryId, stories),

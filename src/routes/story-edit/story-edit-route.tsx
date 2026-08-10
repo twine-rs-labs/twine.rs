@@ -2,9 +2,6 @@ import * as React from 'react';
 import {Navigate, useLocation, useParams} from 'react-router';
 import {MainContent} from '../../components/container/main-content';
 import {DocumentTitle} from '../../components/document-title/document-title';
-import {DialogsContextProvider} from '../../dialogs';
-import {useDialogsContext} from '../../dialogs/context';
-import {StorySearchDialog} from '../../dialogs/story-search';
 import {StoryEditActions} from '../../route-actions';
 import {
 	Passage,
@@ -25,6 +22,13 @@ import {useInitialPassageCreation} from './use-initial-passage-creation';
 import {usePassageChangeHandlers} from './use-passage-change-handlers';
 import {useViewCenter} from './use-view-center';
 import {StoryWorkspaceShell} from './story-workspace-shell';
+import {
+	type FindReplaceWorkbenchRequest,
+	FindReplaceWorkbenchPanel,
+	PassageTagsWorkbenchPanel,
+	StoryDetailsWorkbenchPanel
+} from './story-workbench-panels';
+import type {StoryWorkbenchBottomDrawerPanel} from './workbench-extensions';
 import {useCoreProjectHost} from '../../core';
 import {
 	useStoryEditScrollMemory,
@@ -106,7 +110,6 @@ function sourcePositionForText(
 
 const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 	const location = useLocation();
-	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {dispatch} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
 	const {testStory} = useStoryLaunch();
@@ -121,6 +124,8 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 	const [searchRequests, setSearchRequests] = React.useState(
 		() => new Map<string, {key: number; query?: string}>()
 	);
+	const [findReplaceRequest, setFindReplaceRequest] =
+		React.useState<FindReplaceWorkbenchRequest>();
 	const mainContent = React.useRef<HTMLDivElement>(null);
 	const workspace = useStoryEditWorkspace(story);
 	const {getCenter, setCenter} = useViewCenter(story, mainContent);
@@ -293,6 +298,51 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		},
 		[story.id, testStory]
 	);
+	const openWorkbenchPanel = React.useCallback(
+		(
+			id: 'find-replace' | 'story-details' | 'passage-tags',
+			request?: Omit<FindReplaceWorkbenchRequest, 'key'>
+		) => {
+			if (id === 'find-replace') {
+				setFindReplaceRequest(current => ({
+					...request,
+					key: (current?.key ?? 0) + 1
+				}));
+			}
+			workspace.setBottomDrawerPanelId(id);
+			workspace.setBottomDrawerOpen(true);
+		},
+		[workspace]
+	);
+	const bottomDrawerPanels = React.useMemo<StoryWorkbenchBottomDrawerPanel[]>(
+		() => [
+			{
+				icon: 'search',
+				id: 'find-replace',
+				render: context => (
+					<FindReplaceWorkbenchPanel
+						context={context}
+						onOpenDetails={() => openWorkbenchPanel('story-details')}
+						request={findReplaceRequest}
+					/>
+				),
+				title: 'Find / Replace'
+			},
+			{
+				icon: 'info-circle',
+				id: 'story-details',
+				render: context => <StoryDetailsWorkbenchPanel context={context} />,
+				title: 'Details'
+			},
+			{
+				icon: 'tags',
+				id: 'passage-tags',
+				render: context => <PassageTagsWorkbenchPanel context={context} />,
+				title: 'Passage Tags'
+			}
+		],
+		[findReplaceRequest, openWorkbenchPanel]
+	);
 
 	React.useEffect(() => {
 		if (!location.search || handledRevealQuery.current === location.search) {
@@ -399,27 +449,12 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 			return;
 		}
 
-		if (query) {
-			dialogsDispatch({
-				type: 'addDialog',
-				component: StorySearchDialog,
-				props: {
-					find: query,
-					flags: {
-						includePassageNames: false,
-						matchCase: false,
-						useRegexes: false
-					},
-					replace: '',
-					storyId: story.id
-				}
-			});
-		}
+		if (query) openWorkbenchPanel('find-replace', {query});
 	}, [
 		coreProjectHost,
-		dialogsDispatch,
 		handleChoosePassage,
 		location.search,
+		openWorkbenchPanel,
 		openEditorWindow,
 		story,
 		workspace
@@ -438,12 +473,16 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 				onChangeMode={workspace.setMode}
 				onChangeRightDockCollapsed={workspace.setRightDockCollapsed}
 				onEditPassages={handleEditPassages}
+				onOpenEditorWindow={kind => openEditorWindow({kind})}
 				onOpenFuzzyFinder={() => setFuzzyFinderOpen(true)}
+				onOpenWorkbenchPanel={id => openWorkbenchPanel(id)}
 				rightDockCollapsed={workspace.rightDockCollapsed}
 				story={story}
 			/>
 			<MainContent grabbable={false} padded={false} ref={mainContent}>
 				<StoryWorkspaceShell
+					activeBottomDrawerPanelId={workspace.bottomDrawerPanelId}
+					bottomDrawerPanels={bottomDrawerPanels}
 					bottomDrawerOpen={workspace.bottomDrawerOpen}
 					editorDockLayout={workspace.editorDockLayout}
 					graphPanel={
@@ -470,12 +509,16 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 					activeWindowId={workspace.activeWindowId}
 					editorWindows={workspace.editorWindows}
 					onChangeBottomDrawerOpen={workspace.setBottomDrawerOpen}
+					onChangeBottomDrawerPanel={workspace.setBottomDrawerPanelId}
 					onChangeEditorDockLayout={workspace.setEditorDockLayout}
 					onChangeLeftDockCollapsed={workspace.setLeftDockCollapsed}
 					onChangeRightDockCollapsed={workspace.setRightDockCollapsed}
 					onCloseEditorWindow={handleCloseEditorWindow}
 					onFocusEditorWindow={handleFocusEditorWindow}
 					onOpenEditorWindow={openEditorWindow}
+					onOpenFindReplace={(query, options) =>
+						openWorkbenchPanel('find-replace', {query, ...options})
+					}
 					onReorderEditorWindows={handleReorderEditorWindows}
 					onRevealPassageInGraph={handleRevealPassageInGraph}
 					onSelectPassage={handleChoosePassage}
@@ -514,10 +557,4 @@ export const InnerStoryEditRoute: React.FC = () => {
 	);
 };
 
-// This is a separate component so that the inner one can use dialog context.
-
-export const StoryEditRoute: React.FC = () => (
-	<DialogsContextProvider>
-		<InnerStoryEditRoute />
-	</DialogsContextProvider>
-);
+export const StoryEditRoute: React.FC = InnerStoryEditRoute;

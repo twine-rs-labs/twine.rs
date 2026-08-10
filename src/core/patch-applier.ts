@@ -94,6 +94,7 @@ export function projectPatchBatchStoryActions(
 	batch: PatchBatch,
 	options: {
 		sessionOwnedDocumentsForStory?: (storyId: string) => boolean;
+		transientStoryForStory?: (storyId: string) => Story | undefined;
 	} = {}
 ) {
 	const actions: CorePatchStoryAction[] = [];
@@ -153,7 +154,11 @@ export function projectPatchBatchStoryActions(
 
 			case 'storyCreated':
 				actions.push({
-					props: storySnapshotToStory(patch.story),
+					props: storySnapshotToStory(
+						patch.story,
+						options.sessionOwnedDocumentsForStory?.(patch.story.id) ?? false,
+						options.transientStoryForStory?.(patch.story.id)
+					),
 					type: 'createStory'
 				});
 				break;
@@ -208,19 +213,27 @@ export function passageSnapshotToProps(
 	};
 }
 
-export function storySnapshotToStory(story: StorySnapshot): StoryWithDocuments {
+export function storySnapshotToStory(
+	story: StorySnapshot,
+	excludePassageText = false,
+	transientStory?: Story
+): StoryWithDocuments {
+	const transientPassages = new Map(
+		transientStory?.passages.map(passage => [passage.id, passage]) ?? []
+	);
+
 	return {
 		id: story.id,
 		ifid: story.ifid,
 		lastUpdate: new Date(),
 		name: story.name,
 		passages: story.passages.map(passage => ({
-			...passageSnapshotToProps(passage),
-			highlighted: false,
-			selected: false
+			...passageSnapshotToProps(passage, excludePassageText),
+			highlighted: transientPassages.get(passage.id)?.highlighted ?? false,
+			selected: transientPassages.get(passage.id)?.selected ?? false
 		})) as PassageWithText[],
 		script: story.script,
-		selected: false,
+		selected: transientStory?.selected ?? false,
 		snapToGrid: story.snapToGrid,
 		startPassage: story.startPassageId,
 		storyFormat: story.storyFormat,
@@ -278,5 +291,5 @@ function passagePatchToProps(
 function projectSnapshotToStories(
 	snapshot: Patch & {type: 'projectSnapshotReplaced'}
 ) {
-	return snapshot.snapshot.stories.map(storySnapshotToStory);
+	return snapshot.snapshot.stories.map(story => storySnapshotToStory(story));
 }

@@ -16,12 +16,7 @@ import {
 	TablerIcon,
 	Tag
 } from '../../components/design-system';
-import {
-	deleteStoryCommand,
-	registerStoryDocuments,
-	setStoryTagsCommand,
-	useCoreProjectHost
-} from '../../core';
+import {setStoryTagsCommand, useCoreProjectHost} from '../../core';
 import type {CoreStorySummary} from '../../core';
 import {
 	AppDonationDialog,
@@ -35,19 +30,13 @@ import {useDonationCheck} from '../../store/prefs/use-donation-check';
 import {
 	deselectAllStories,
 	deselectStory,
-	duplicateStory,
 	selectStory,
 	Story,
 	useStoriesContext
 } from '../../store/stories';
 import {usePublishing} from '../../store/use-publishing';
-import {
-	deleteProjectMetadata,
-	loadProjectMetadata,
-	saveProjectMetadata
-} from '../../store/project-metadata';
-import {markProjectStoryHydration} from '../../store/project-hydration';
-import type {TwineElectronWindow} from '../../electron/shared';
+import {loadProjectMetadata} from '../../store/project-metadata';
+import {useProjectLibraryService} from '../../store/project-library-service';
 import {archiveFilename} from '../../util/publish';
 import {saveHtml} from '../../util/save-file';
 import {Color, colorString} from '../../util/color';
@@ -74,10 +63,6 @@ type StoryHealthLoadState =
 	| {kind: 'loading'}
 	| {kind: 'loaded'; summary: CoreStorySummary}
 	| {kind: 'error'; message: string};
-
-function desktopBridge() {
-	return (window as TwineElectronWindow).twineElectron;
-}
 
 function fileBackedProjectRoot(story: Story) {
 	const metadata = loadProjectMetadata(story.id);
@@ -217,6 +202,7 @@ export const InnerStoryListRoute: React.FC = () => {
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const {dispatch: storiesDispatch, stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
+	const projectLibrary = useProjectLibraryService();
 	const {materializeStory, publishArchive} = usePublishing();
 	const {shouldShowDonationPrompt} = useDonationCheck();
 	const [query, setQuery] = React.useState('');
@@ -230,7 +216,7 @@ export const InnerStoryListRoute: React.FC = () => {
 		[stories]
 	);
 	const tags = React.useMemo(() => allTags(stories), [stories]);
-	const nativeDesktop = !!desktopBridge();
+	const nativeDesktop = projectLibrary.isDesktop();
 
 	const visibleStories = React.useMemo(() => {
 		const normalizedQuery = query.trim().toLowerCase();
@@ -295,7 +281,6 @@ export const InnerStoryListRoute: React.FC = () => {
 
 	async function duplicateProject(story: Story) {
 		const rootPath = fileBackedProjectRoot(story);
-		const twineElectron = desktopBridge();
 		const key = rootPath ?? `story:${story.id}`;
 
 		if (duplicatingKey) {
@@ -307,18 +292,9 @@ export const InnerStoryListRoute: React.FC = () => {
 		try {
 			if (!rootPath) {
 				const completeStory = await materializeStory(story.id);
-				const duplicate = duplicateStory(completeStory, stories);
 
-				storiesDispatch({
-					...duplicate,
-					props: registerStoryDocuments(duplicate.props)
-				});
+				await projectLibrary.duplicateProject([completeStory], stories);
 				return;
-			}
-			if (!twineElectron?.duplicateProjectFolder) {
-				throw new Error(
-					'The desktop project-folder duplication bridge is unavailable.'
-				);
 			}
 
 			const projectStories = stories.filter(
@@ -327,66 +303,7 @@ export const InnerStoryListRoute: React.FC = () => {
 			const completeStories = await Promise.all(
 				projectStories.map(projectStory => materializeStory(projectStory.id))
 			);
-			const reservedNames = [...stories];
-			const replacements = completeStories.map(sourceStory => {
-				const duplicate = duplicateStory(sourceStory, reservedNames).props;
-
-				reservedNames.push(duplicate);
-				return {
-					passageIds: sourceStory.passages.map((sourcePassage, index) => ({
-						duplicatePassageId: duplicate.passages[index].id,
-						sourcePassageId: sourcePassage.id
-					})),
-					sourceStoryId: sourceStory.id,
-					story: duplicate
-				};
-			});
-			const result = await twineElectron.duplicateProjectFolder(
-				rootPath,
-				replacements
-			);
-
-			try {
-				for (const duplicatedStory of result.stories) {
-					saveProjectMetadata(duplicatedStory.id, {
-						rootPath: result.rootPath,
-						status: 'file-backed',
-						storageKind: 'electron-project-folder'
-					});
-				}
-			} catch (error) {
-				for (const duplicatedStory of result.stories) {
-					deleteProjectMetadata(duplicatedStory.id);
-				}
-				try {
-					await twineElectron.deleteProjectFolder(result.rootPath);
-				} catch (cleanupError) {
-					throw new Error(
-						`${(error as Error).message}. The copied folder remains at ${
-							result.rootPath
-						}: ${(cleanupError as Error).message}`
-					);
-				}
-				throw error;
-			}
-
-			const hydratedStories = result.stories.map(duplicatedStory => {
-				markProjectStoryHydration(duplicatedStory.id, {
-					passageTextLoaded: result.passageTextLoaded !== false,
-					rootPath: result.rootPath
-				});
-				return registerStoryDocuments(duplicatedStory);
-			});
-
-			storiesDispatch({
-				actions: hydratedStories.map(story => ({
-					props: story,
-					type: 'createStory' as const
-				})),
-				persistence: 'skip',
-				storyIds: hydratedStories.map(story => story.id),
-				type: 'applyCorePatchBatch'
-			});
+			await projectLibrary.duplicateProject(completeStories, stories, rootPath);
 		} catch (error) {
 			setDuplicateError(
 				`Could not duplicate ${
@@ -470,9 +387,8 @@ export const InnerStoryListRoute: React.FC = () => {
 
 	async function deleteStory(story: Story) {
 		const rootPath = fileBackedProjectRoot(story);
-		const twineElectron = desktopBridge();
 		const canDeleteProjectFolder =
-			rootPath && twineElectron?.deleteProjectFolder;
+			projectLibrary.canDeleteProjectFolder(rootPath);
 		const projectStories = canDeleteProjectFolder
 			? stories.filter(
 					candidate => fileBackedProjectRoot(candidate) === rootPath
@@ -498,7 +414,7 @@ export const InnerStoryListRoute: React.FC = () => {
 						'',
 						'This will delete:',
 						`- Library story: "${story.name}"`,
-						...(twineElectron?.deleteStory
+						...(projectLibrary.willDeleteLegacyStoryFile()
 							? [
 									`- Legacy HTML file: ${storyFileName(
 										story
@@ -513,19 +429,9 @@ export const InnerStoryListRoute: React.FC = () => {
 		}
 
 		if (canDeleteProjectFolder) {
-			await twineElectron.deleteProjectFolder(rootPath);
-
-			for (const projectStory of projectStories) {
-				storiesDispatch({
-					storageKind: 'electron-project-folder',
-					storyId: projectStory.id,
-					type: 'deleteStory'
-				});
-				deleteProjectMetadata(projectStory.id);
-			}
+			await projectLibrary.deleteProjectFolder(rootPath!, projectStories);
 		} else {
-			await coreProjectHost.applyStoryCommand(deleteStoryCommand(story.id));
-			deleteProjectMetadata(story.id);
+			await projectLibrary.deleteStory(story);
 		}
 	}
 
