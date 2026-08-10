@@ -187,6 +187,26 @@ test('targeted packaged smoke grep alternatives match current test titles', () =
 	}
 });
 
+test('Windows uninstall steps use PowerShell environment variable syntax', () => {
+	for (const name of [
+		'packaged-electron-smoke.yml',
+		'release-candidate.yml',
+		'release.yml'
+	]) {
+		const source = workflow(name);
+		assert.doesNotMatch(
+			source,
+			/\$env\./,
+			`${name} must not use property syntax for PowerShell environment variables`
+		);
+		assert.equal(
+			(source.match(/\$env:TWINE_E2E_UNINSTALLER/g) ?? []).length,
+			1,
+			`${name} should read the Windows uninstaller path from the environment`
+		);
+	}
+});
+
 test('stable final CI gates fail when required upstream work fails', () => {
 	const run = (script, env) =>
 		spawnSync('bash', ['-e', '-o', 'pipefail', '-c', script], {

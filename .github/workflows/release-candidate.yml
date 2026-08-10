@@ -375,7 +375,7 @@ jobs:
         if: always() && runner.os == 'Windows' && env.TWINE_E2E_UNINSTALLER != ''
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath $env.TWINE_E2E_UNINSTALLER -ArgumentList '/S' -PassThru -Wait
+          $process = Start-Process -FilePath $env:TWINE_E2E_UNINSTALLER -ArgumentList '/S' -PassThru -Wait
           if ($process.ExitCode -ne 0) {
             throw "Uninstaller exited with code $($process.ExitCode)."
           }
