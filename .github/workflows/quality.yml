@@ -47,6 +47,20 @@ jobs:
         with:
           node-version: 24.18.0
           cache: npm
+      - name: Configure Electron cache location
+        shell: bash
+        run: |
+          echo "ELECTRON_CACHE=$RUNNER_TEMP/electron-cache" >> "$GITHUB_ENV"
+          echo "electron_config_cache=$RUNNER_TEMP/electron-cache" >> "$GITHUB_ENV"
+      - name: Resolve native tool versions
+        id: native-tool-versions
+        shell: bash
+        run: node scripts/ci-cache-versions.mjs >> "$GITHUB_OUTPUT"
+      - name: Restore Electron download cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/electron-cache
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-tool-versions.outputs.electron }}
       - run: npm ci
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
@@ -94,6 +108,15 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install pinned Rust toolchain
         run: rustup toolchain install ${{ matrix.rust }} --profile minimal --component clippy,rustfmt
+      - name: Restore Cargo dependency downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          key: cargo-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-deps-${{ runner.os }}-${{ runner.arch }}-
       - name: Rust formatting
         run: cargo +${{ matrix.rust }} fmt --all -- --check
       - name: Rust Clippy
