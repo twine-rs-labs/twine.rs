@@ -43,6 +43,7 @@ import {
 	saveProjectMetadata
 } from '../../store/project-metadata';
 import {markPerformance} from '../../util/performance';
+import {pluralizedNoun} from '../../util/pluralized-noun';
 import {
 	sourceNavigationTargetFromAssetReference,
 	sourceTarget
@@ -1260,7 +1261,7 @@ export const AssetsRoute: React.FC = () => {
 				<div className="assets-route__filter-label">Issues</div>
 				<button
 					aria-current={folder === 'Missing'}
-					className="assets-route__folder assets-route__folder--issue"
+					className="assets-route__folder assets-route__folder--issue assets-route__folder--missing"
 					onClick={() => selectFolder('Missing')}
 					type="button"
 				>
@@ -1272,7 +1273,7 @@ export const AssetsRoute: React.FC = () => {
 				</button>
 				<button
 					aria-current={folder === 'Unused'}
-					className="assets-route__folder assets-route__folder--issue"
+					className="assets-route__folder assets-route__folder--issue assets-route__folder--unused"
 					onClick={() => selectFolder('Unused')}
 					type="button"
 				>
@@ -1339,8 +1340,14 @@ export const AssetsRoute: React.FC = () => {
 										? 'Scan failed'
 										: 'Reference fallback'}
 						</Badge>
-						<span>{projectAssets.length} files</span>
-						<span>{assets.referenceCount} refs</span>
+						<span>
+							{projectAssets.length}{' '}
+							{pluralizedNoun(projectAssets.length, 'file')}
+						</span>
+						<span>
+							{assets.referenceCount}{' '}
+							{pluralizedNoun(assets.referenceCount, 'reference')}
+						</span>
 					</div>
 				</div>
 				{assetError && (
@@ -1410,7 +1417,10 @@ export const AssetsRoute: React.FC = () => {
 									</span>
 									<span className="assets-route__card-meta">
 										<span>Folder</span>
-										<span>{directory.count} items</span>
+										<span>
+											{directory.count}{' '}
+											{pluralizedNoun(directory.count, 'item')}
+										</span>
 									</span>
 								</button>
 							))}
@@ -1437,7 +1447,10 @@ export const AssetsRoute: React.FC = () => {
 									</span>
 									<span className="assets-route__card-meta">
 										<span>{assetKindLabel(asset)}</span>
-										<span>{asset.referenceCount} refs</span>
+										<span>
+											{asset.referenceCount}{' '}
+											{pluralizedNoun(asset.referenceCount, 'reference')}
+										</span>
 									</span>
 								</button>
 							))}

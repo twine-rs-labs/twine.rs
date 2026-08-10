@@ -3523,6 +3523,7 @@ fn project_asset_inventory_entry(
     stats: &fs::Metadata,
 ) -> CoreAssetInventoryEntry {
     let kind = asset_kind_for_path(project_path).to_owned();
+    let dimensions = image_dimensions(absolute_path);
     let preview_url = file_url_for_path(&absolute_path.to_string_lossy());
     let thumbnail_url = if kind == "image" {
         preview_url.clone()
@@ -3533,7 +3534,7 @@ fn project_asset_inventory_entry(
     CoreAssetInventoryEntry {
         duration_ms: None,
         exists: Some(true),
-        height: None,
+        height: dimensions.map(|(_, height)| height as f64),
         kind: kind.clone(),
         missing: false,
         modified_at: Some(system_time_to_iso(stats.modified().unwrap_or(UNIX_EPOCH))),
@@ -3551,8 +3552,179 @@ fn project_asset_inventory_entry(
         snippet: asset_snippet(project_path, &kind),
         thumbnail_url,
         unused: true,
-        width: None,
+        width: dimensions.map(|(width, _)| width as f64),
     }
+}
+
+fn image_dimensions(path: &Path) -> Option<(usize, usize)> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+
+    match extension.as_str() {
+        "gif" => gif_dimensions(path),
+        "jpg" | "jpeg" => jpeg_dimensions(path),
+        "png" => png_dimensions(path),
+        "svg" => svg_dimensions(path),
+        "webp" => webp_dimensions(path),
+        _ => None,
+    }
+}
+
+fn png_dimensions(path: &Path) -> Option<(usize, usize)> {
+    let mut bytes = [0; 24];
+    let mut file = File::open(path).ok()?;
+
+    file.read_exact(&mut bytes).ok()?;
+
+    if &bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+
+    Some((
+        u32::from_be_bytes(bytes[16..20].try_into().ok()?) as usize,
+        u32::from_be_bytes(bytes[20..24].try_into().ok()?) as usize,
+    ))
+}
+
+fn gif_dimensions(path: &Path) -> Option<(usize, usize)> {
+    let mut bytes = [0; 10];
+    let mut file = File::open(path).ok()?;
+
+    file.read_exact(&mut bytes).ok()?;
+
+    if &bytes[0..3] != b"GIF" {
+        return None;
+    }
+
+    Some((
+        u16::from_le_bytes(bytes[6..8].try_into().ok()?) as usize,
+        u16::from_le_bytes(bytes[8..10].try_into().ok()?) as usize,
+    ))
+}
+
+fn jpeg_dimensions(path: &Path) -> Option<(usize, usize)> {
+    let bytes = fs::read(path).ok()?;
+
+    if bytes.len() < 4 || bytes[0] != 0xff || bytes[1] != 0xd8 {
+        return None;
+    }
+
+    let mut index = 2;
+
+    while index + 9 < bytes.len() {
+        if bytes[index] != 0xff {
+            index += 1;
+            continue;
+        }
+
+        while index < bytes.len() && bytes[index] == 0xff {
+            index += 1;
+        }
+
+        if index >= bytes.len() {
+            return None;
+        }
+
+        let marker = bytes[index];
+        index += 1;
+
+        if marker == 0xda || marker == 0xd9 {
+            return None;
+        }
+
+        if index + 2 > bytes.len() {
+            return None;
+        }
+
+        let length = u16::from_be_bytes(bytes[index..index + 2].try_into().ok()?) as usize;
+
+        if length < 2 || index + length > bytes.len() {
+            return None;
+        }
+
+        if matches!(
+            marker,
+            0xc0 | 0xc1
+                | 0xc2
+                | 0xc3
+                | 0xc5
+                | 0xc6
+                | 0xc7
+                | 0xc9
+                | 0xca
+                | 0xcb
+                | 0xcd
+                | 0xce
+                | 0xcf
+        ) && length >= 7
+        {
+            let height = u16::from_be_bytes(bytes[index + 3..index + 5].try_into().ok()?) as usize;
+            let width = u16::from_be_bytes(bytes[index + 5..index + 7].try_into().ok()?) as usize;
+
+            return Some((width, height));
+        }
+
+        index += length;
+    }
+
+    None
+}
+
+fn svg_dimensions(path: &Path) -> Option<(usize, usize)> {
+    let source = fs::read_to_string(path).ok()?;
+
+    Some((
+        svg_dimension(&source, "width")?,
+        svg_dimension(&source, "height")?,
+    ))
+}
+
+fn svg_dimension(source: &str, attribute: &str) -> Option<usize> {
+    let regex = Regex::new(&format!(r#"{attribute}\s*=\s*["']([0-9]+)"#)).ok()?;
+    let value = regex.captures(source)?.get(1)?.as_str();
+
+    value.parse().ok()
+}
+
+fn webp_dimensions(path: &Path) -> Option<(usize, usize)> {
+    let mut bytes = Vec::with_capacity(30);
+
+    File::open(path)
+        .ok()?
+        .take(30)
+        .read_to_end(&mut bytes)
+        .ok()?;
+
+    if bytes.len() < 20 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+        return None;
+    }
+
+    match &bytes[12..16] {
+        b"VP8X" if bytes.len() >= 30 => Some((
+            little_endian_u24(&bytes[24..27]) + 1,
+            little_endian_u24(&bytes[27..30]) + 1,
+        )),
+        b"VP8L" if bytes.len() >= 25 && bytes[20] == 0x2f => {
+            let dimensions = u32::from_le_bytes(bytes[21..25].try_into().ok()?);
+
+            Some((
+                ((dimensions & 0x3fff) + 1) as usize,
+                (((dimensions >> 14) & 0x3fff) + 1) as usize,
+            ))
+        }
+        b"VP8 "
+            if bytes.len() >= 30 && bytes[23] == 0x9d && bytes[24] == 0x01 && bytes[25] == 0x2a =>
+        {
+            let width = u16::from_le_bytes(bytes[26..28].try_into().ok()?) & 0x3fff;
+            let height = u16::from_le_bytes(bytes[28..30].try_into().ok()?) & 0x3fff;
+
+            (width > 0 && height > 0).then_some((width as usize, height as usize))
+        }
+        _ => None,
+    }
+}
+
+fn little_endian_u24(bytes: &[u8]) -> usize {
+    bytes[0] as usize | ((bytes[1] as usize) << 8) | ((bytes[2] as usize) << 16)
 }
 
 fn project_file_manifest(
@@ -4580,6 +4752,106 @@ mod tests {
                 .expect("system time should be after epoch")
                 .as_nanos()
         ))
+    }
+
+    fn tiny_png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+
+        bytes.extend(width.to_be_bytes());
+        bytes.extend(height.to_be_bytes());
+        bytes
+    }
+
+    fn tiny_jpeg(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = vec![
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08,
+        ];
+
+        bytes.extend(height.to_be_bytes());
+        bytes.extend(width.to_be_bytes());
+        bytes.extend([0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00]);
+        bytes
+    }
+
+    fn tiny_webp(chunk: &[u8; 4], width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = vec![0; if chunk == b"VP8L" { 25 } else { 30 }];
+        let riff_size = (bytes.len() - 8) as u32;
+        let chunk_size = (bytes.len() - 20) as u32;
+
+        bytes[0..4].copy_from_slice(b"RIFF");
+        bytes[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        bytes[8..12].copy_from_slice(b"WEBP");
+        bytes[12..16].copy_from_slice(chunk);
+        bytes[16..20].copy_from_slice(&chunk_size.to_le_bytes());
+
+        match chunk {
+            b"VP8X" => {
+                let width = (u32::from(width) - 1).to_le_bytes();
+                let height = (u32::from(height) - 1).to_le_bytes();
+
+                bytes[24..27].copy_from_slice(&width[..3]);
+                bytes[27..30].copy_from_slice(&height[..3]);
+            }
+            b"VP8L" => {
+                let dimensions = (u32::from(width) - 1) | ((u32::from(height) - 1) << 14);
+
+                bytes[20] = 0x2f;
+                bytes[21..25].copy_from_slice(&dimensions.to_le_bytes());
+            }
+            b"VP8 " => {
+                bytes[23..26].copy_from_slice(&[0x9d, 0x01, 0x2a]);
+                bytes[26..28].copy_from_slice(&width.to_le_bytes());
+                bytes[28..30].copy_from_slice(&height.to_le_bytes());
+            }
+            _ => panic!("unsupported test WebP chunk"),
+        }
+
+        bytes
+    }
+
+    #[test]
+    fn project_asset_inventory_reads_raster_dimensions() {
+        let root = temp_path("asset-dimensions");
+        let assets = root.join("assets");
+
+        fs::create_dir_all(&assets).expect("asset directory should be created");
+        fs::write(assets.join("cover.png"), tiny_png(640, 360)).expect("PNG should be written");
+        fs::write(assets.join("portrait.jpg"), tiny_jpeg(320, 480))
+            .expect("JPEG should be written");
+        fs::write(assets.join("extended.webp"), tiny_webp(b"VP8X", 800, 450))
+            .expect("extended WebP should be written");
+        fs::write(assets.join("lossless.webp"), tiny_webp(b"VP8L", 512, 256))
+            .expect("lossless WebP should be written");
+        fs::write(assets.join("lossy.webp"), tiny_webp(b"VP8 ", 320, 180))
+            .expect("lossy WebP should be written");
+
+        let inventory = list_project_assets(&root).expect("assets should be scanned");
+        let dimensions = |path: &str| {
+            let asset = inventory
+                .iter()
+                .find(|asset| asset.path == path)
+                .expect("asset should be present");
+
+            (asset.width, asset.height)
+        };
+
+        assert_eq!(inventory.len(), 5);
+        assert_eq!(dimensions("assets/cover.png"), (Some(640.0), Some(360.0)));
+        assert_eq!(
+            dimensions("assets/portrait.jpg"),
+            (Some(320.0), Some(480.0))
+        );
+        assert_eq!(
+            dimensions("assets/extended.webp"),
+            (Some(800.0), Some(450.0))
+        );
+        assert_eq!(
+            dimensions("assets/lossless.webp"),
+            (Some(512.0), Some(256.0))
+        );
+        assert_eq!(dimensions("assets/lossy.webp"), (Some(320.0), Some(180.0)));
+
+        fs::remove_dir_all(root).expect("asset fixture should be removed");
     }
 
     #[test]

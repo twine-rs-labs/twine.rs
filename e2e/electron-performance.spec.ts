@@ -1612,7 +1612,7 @@ async function waitForWatcherMetric(
 }
 
 async function settleInitialWatcherReview(page: Page) {
-	const acceptDisk = page.getByRole('button', {name: 'Accept Disk'});
+	const acceptDisk = page.getByRole('button', {name: 'Use Disk Version'});
 	await page.waitForTimeout(750);
 
 	if (!(await acceptDisk.isVisible())) {

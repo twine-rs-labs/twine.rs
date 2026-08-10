@@ -146,7 +146,9 @@ describe('<StoryPreviewFrame>', () => {
 		expect(frame).toHaveAttribute('src', url);
 		expect(frame).not.toHaveAttribute('srcdoc');
 		expect(frame.getAttribute('sandbox')).toContain('allow-same-origin');
-		expect(screen.getByText('123 bytes · 1 story data')).toBeInTheDocument();
+		expect(
+			screen.getByText('123 bytes · 1 story-data element')
+		).toBeInTheDocument();
 
 		delete (window as any).twineElectron;
 	});
@@ -459,7 +461,7 @@ describe('<StoryPreviewFrame>', () => {
 			type: 'console'
 		});
 
-		expect(screen.getByText('1 logs')).toBeInTheDocument();
+		expect(screen.getByText('1 log')).toBeInTheDocument();
 		expect(screen.getByText('hello runtime')).toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole('button', {name: 'Reload'}));

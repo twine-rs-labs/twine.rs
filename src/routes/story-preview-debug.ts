@@ -6,6 +6,7 @@ import type {
 	StoryPreviewRuntimePassage,
 	StoryPreviewRuntimeState
 } from './story-preview-contract';
+import {pluralizedNoun} from '../util/pluralized-noun';
 
 export * from './story-preview-contract';
 
@@ -40,12 +41,12 @@ export function storyPreviewDebugMetrics(
 	return [
 		{
 			icon: 'files',
-			label: 'passages',
+			label: pluralizedNoun(summary.graph.passages, 'passage'),
 			value: summary.graph.passages
 		},
 		{
 			icon: 'link',
-			label: 'links',
+			label: pluralizedNoun(summary.graph.resolvedLinks, 'link'),
 			tone: 'link',
 			value: summary.graph.resolvedLinks
 		},
@@ -57,7 +58,10 @@ export function storyPreviewDebugMetrics(
 		},
 		{
 			icon: 'photo',
-			label: missingAssets > 0 ? 'missing assets' : 'assets',
+			label:
+				missingAssets > 0
+					? pluralizedNoun(missingAssets, 'missing asset')
+					: pluralizedNoun(summary.assetCount, 'asset'),
 			tone: missingAssets > 0 ? 'warn' : 'neutral',
 			value:
 				missingAssets > 0
@@ -66,7 +70,7 @@ export function storyPreviewDebugMetrics(
 		},
 		{
 			icon: summary.diagnosticCount > 0 ? 'alert-triangle' : 'circle-check',
-			label: 'diagnostics',
+			label: pluralizedNoun(summary.diagnosticCount, 'diagnostic'),
 			tone: summary.diagnosticCount > 0 ? diagnosticTone(summary) : 'success',
 			value: summary.diagnosticCount
 		}

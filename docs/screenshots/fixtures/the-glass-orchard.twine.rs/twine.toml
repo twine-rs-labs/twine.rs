@@ -1,0 +1,86 @@
+schema_version = 2
+app_version = "0.2.0-beta.2"
+name = "The Glass Orchard"
+
+[storage]
+kind = "project-folder"
+message = "Synthetic publication screenshot fixture"
+
+[library]
+sort_order = ["glass-orchard-story"]
+
+[library.colors]
+
+[[stories]]
+id = "glass-orchard-story"
+ifid = "A11CE5ED-9A7D-4A4B-8B77-0A7C4A551234"
+last_update = "2026-08-09T12:00:00.000Z"
+name = "The Glass Orchard"
+script = "scripts/the-glass-orchard.js"
+snap_to_grid = true
+start_passage = "arrival"
+story_format = "Harlowe"
+story_format_version = "3.3.9"
+stylesheet = "styles/the-glass-orchard.css"
+tags = ["mystery", "botanical", "fixture"]
+zoom = 1.0
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/01-arrival.twee"
+id = "arrival"
+name = "Arrival"
+tags = ["opening", "glasshouse"]
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/02-greenhouse.twee"
+id = "greenhouse"
+name = "Greenhouse"
+tags = ["glasshouse", "hub"]
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/03-service-stairs.twee"
+id = "service-stairs"
+name = "Service Stairs"
+tags = ["west-wing"]
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/04-archive.twee"
+id = "archive"
+name = "Archive"
+tags = ["west-wing", "clue"]
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/05-observatory.twee"
+id = "observatory"
+name = "Observatory"
+tags = ["east-wing", "clue"]
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/06-glass-gallery.twee"
+id = "glass-gallery"
+name = "Glass Gallery"
+tags = ["east-wing"]
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/07-root-cellar.twee"
+id = "root-cellar"
+name = "Root Cellar"
+tags = ["west-wing", "clue"]
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/08-bell-tower.twee"
+id = "bell-tower"
+name = "Bell Tower"
+tags = ["tower"]
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/09-night-garden.twee"
+id = "night-garden"
+name = "Night Garden"
+tags = ["garden", "hub"]
+
+[[stories.passages]]
+file = "passages/the-glass-orchard/10-departure.twee"
+id = "departure"
+name = "Departure"
+tags = ["ending"]

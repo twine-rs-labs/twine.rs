@@ -864,7 +864,7 @@ This matrix is the spot-check promise: current Twine options should either survi
 | Import dialog                         | `Import Stories`, file chooser, story chooser, `Import Selected Files`, `Import This Story`, replace warning, no stories message                                                    | Import/Migration Review with source file pane, detected stories/passages/assets/formats/metadata, conflict decisions, layout preservation/generation, and non-destructive preview.                                                                              |
 | App preferences                       | `Language`, `Theme`, `Dialog Width`, `Show Passage Tags As`, `Blinking Cursor in Editors`, `Use Enhanced Editors`, editor fonts and sizes                                           | Settings expands into `General`, `Workspace`, `Modes`, `Editor`, `Graph`, `Accessibility`, `Keyboard Shortcuts`, `Storage`, `Backups`, `Story Formats`, `Build`, `Integrations`, `Platform`, `About`.                                                           |
 | About/Donation/Bug                    | `About Twine`, license/code/localization, donation prompt, `Report a Bug`                                                                                                           | Keep in `About` and `Help`. Add `Copy Diagnostics`, `Open Logs`, `Open Config Folder` in desktop mode. Browser gets `Export Diagnostics`.                                                                                                                       |
-| External-file changed dialog          | `Save Changes in Twine`, `Use File and Relaunch`                                                                                                                                    | Desktop file watcher becomes richer conflict UI: `Accept Disk Changes`, `Keep App Changes`, `Compare`, `Merge`, `Duplicate`, `Reload Project`. Browser only sees this for File System Access handles or imported local handles.                                 |
+| External-file changed dialog          | `Save Changes in Twine`, `Use File and Relaunch`                                                                                                                                    | Desktop file watcher becomes richer conflict UI: `Use Disk Version`, `Keep App Version`, `Compare`, `Merge`, `Duplicate`, `Reload Project`. Browser only sees this for File System Access handles or imported local handles.                                    |
 
 ## Desktop vs Browser Capability Matrix
 
@@ -913,8 +913,8 @@ Desktop-only or desktop-best labels/actions:
 - `Open Backups Folder`
 - `Set Backup Location`
 - `Watch for External Changes`
-- `Use Disk Changes`
-- `Keep App Changes`
+- `Use Disk Version`
+- `Keep App Version`
 - `Show Git Diff`
 - `Open Logs Folder`
 - `Check for Updates`

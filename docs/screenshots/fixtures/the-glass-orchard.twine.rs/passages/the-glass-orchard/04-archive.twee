@@ -1,0 +1,8 @@
+(set: $key to true)
+<img src="assets/archive-key.jpg" alt="A brass archive key beside a constellation plate">
+
+The missing ledger has left a clean rectangle in the dust. In its place lies a warm brass key engraved with a map of unfamiliar stars.
+
+[[Take the tower stair->Bell Tower]]
+
+[[Open the sealed room->Locked Annex]]

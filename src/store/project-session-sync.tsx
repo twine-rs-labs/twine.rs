@@ -23,6 +23,7 @@ import {
 	markPerformance,
 	recordPerformanceHarnessEvent
 } from '../util/performance';
+import {pluralizedNoun} from '../util/pluralized-noun';
 import './project-session-sync.css';
 
 interface PendingProjectReview {
@@ -639,31 +640,47 @@ export const ProjectSessionSync: React.FC = () => {
 			)
 		: 0;
 	const pathPreview = pendingReview?.delta.changedPaths.slice(0, 3).join(', ');
+	const resolutionHint = pendingReview?.delta.recovery
+		? 'Reloading from disk replaces the app version and resets undo history. Keeping the app version overwrites the changed project files on disk.'
+		: 'Using the disk version replaces conflicting app values. Keeping the app version overwrites the changed project files on disk.';
 
 	return (
 		<div className="project-session-sync" role="status">
 			<div className="project-session-sync__title">Project folder changed</div>
 			{pendingReview ? (
-				<p>
-					{conflictCount > 0
-						? `${conflictCount} disk change${
-								conflictCount === 1 ? '' : 's'
-							} need review${pathPreview ? `: ${pathPreview}` : ''}.`
-						: (pendingReview.delta.recovery?.message ??
-							'The disk copy differs from the app copy.')}
-				</p>
+				<>
+					<p>
+						{conflictCount > 0
+							? `${conflictCount} ${pluralizedNoun(
+									conflictCount,
+									'disk change'
+								)} ${conflictCount === 1 ? 'requires' : 'require'} review${
+									pathPreview ? `: ${pathPreview}` : ''
+								}.`
+							: (pendingReview.delta.recovery?.message ??
+								'The disk copy differs from the app copy.')}
+					</p>
+					<p className="project-session-sync__resolution-hint">
+						{resolutionHint}
+					</p>
+				</>
 			) : null}
 			{pendingReviews.length > 1 ? (
-				<p>{pendingReviews.length - 1} more project change queued.</p>
+				<p>
+					{pendingReviews.length - 1} more{' '}
+					{pluralizedNoun(pendingReviews.length - 1, 'project change')} queued.
+				</p>
 			) : null}
 			{error ? <p className="project-session-sync__error">{error}</p> : null}
 			{pendingReview ? (
 				<div className="project-session-sync__actions">
 					<button disabled={busy} onClick={acceptDisk} type="button">
-						{pendingReview.delta.recovery ? 'Reload From Disk' : 'Accept Disk'}
+						{pendingReview.delta.recovery
+							? 'Reload From Disk'
+							: 'Use Disk Version'}
 					</button>
 					<button disabled={busy} onClick={keepApp} type="button">
-						Keep App
+						Keep App Version
 					</button>
 					<button disabled={busy} onClick={reviewLater} type="button">
 						Later

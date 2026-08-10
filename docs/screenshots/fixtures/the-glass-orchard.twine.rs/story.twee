@@ -1,0 +1,226 @@
+:: StoryTitle
+The Glass Orchard
+
+:: StoryData
+{
+  "ifid": "A11CE5ED-9A7D-4A4B-8B77-0A7C4A551234",
+  "format": "Harlowe",
+  "format-version": "3.3.9",
+  "start": "Arrival",
+  "tag-colors": {
+    "opening": "green",
+    "glasshouse": "green",
+    "hub": "blue",
+    "west-wing": "orange",
+    "east-wing": "purple",
+    "clue": "yellow",
+    "tower": "red",
+    "garden": "green",
+    "ending": "blue"
+  },
+  "zoom": 1
+}
+
+:: StoryStylesheet [stylesheet]
+@import url("styles/the-glass-orchard.css");
+
+tw-story {
+  background: #071311;
+  color: #edf4ed;
+  font-family: Georgia, "Times New Roman", serif;
+  margin: 0;
+  min-height: 100vh;
+  width: 100%;
+}
+
+tw-passage {
+  display: block;
+  margin: 0;
+  max-width: none;
+  padding: 0;
+}
+
+.orchard-scene {
+  align-items: center;
+  box-sizing: border-box;
+  display: flex;
+  min-height: 100vh;
+  overflow: hidden;
+  padding: 2rem 6vw;
+  position: relative;
+}
+
+.orchard-scene__art {
+  filter: brightness(.56) saturate(.82);
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+}
+
+.orchard-scene::after {
+  background: linear-gradient(90deg, rgba(3, 14, 13, .96) 0%, rgba(4, 17, 15, .88) 34%, rgba(5, 17, 16, .34) 68%, rgba(5, 12, 13, .12) 100%);
+  content: "";
+  inset: 0;
+  position: absolute;
+}
+
+.orchard-card {
+  backdrop-filter: blur(14px);
+  background: linear-gradient(145deg, rgba(10, 30, 27, .86), rgba(7, 20, 19, .7));
+  border: 1px solid rgba(151, 216, 190, .22);
+  border-left: 3px solid #d0a65b;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, .38);
+  max-width: 39rem;
+  padding: 1.5rem 2.25rem 1.4rem;
+  position: relative;
+  z-index: 1;
+}
+
+.orchard-kicker,
+.orchard-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+}
+
+.orchard-kicker {
+  color: #d0a65b;
+  font-size: .72rem;
+  margin-bottom: .55rem;
+}
+
+.orchard-time {
+  color: #8bd6bf;
+  font-size: .82rem;
+  margin-bottom: .85rem;
+}
+
+.orchard-card h1 {
+  color: #f2f2e9;
+  font-size: clamp(2.2rem, 3vw, 3.45rem);
+  font-weight: 500;
+  letter-spacing: -.035em;
+  line-height: .96;
+  margin: 0 0 .9rem;
+}
+
+.orchard-card p {
+  color: #cbd8d2;
+  font-size: 1rem;
+  line-height: 1.5;
+  margin: 0 0 .9rem;
+  max-width: 34rem;
+}
+
+.orchard-links {
+  border-top: 1px solid rgba(151, 216, 190, .16);
+  display: grid;
+  gap: .25rem;
+  padding-top: .6rem;
+}
+
+.orchard-links tw-link {
+  color: #96dec7;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: .94rem;
+  font-weight: 650;
+  letter-spacing: .01em;
+  padding: .35rem 0;
+}
+
+.orchard-links tw-link::after {
+  color: #d0a65b;
+  content: "  →";
+}
+
+.orchard-links tw-link:hover {
+  color: #f1c875;
+}
+
+:: StoryScript [script]
+console.info("Glass Orchard preview ready");
+
+:: Arrival [opening glasshouse] {"position":"80,280","size":"210,130"}
+(set: $light to false)(set: $key to false)(set: $rain to "silver")
+<div class="orchard-scene">
+  <img class="orchard-scene__art" src="assets/orchard-atrium.jpg" alt="">
+  <section class="orchard-card">
+    <div class="orchard-kicker">The Glass Orchard</div>
+    <div class="orchard-time">North Glasshouse · 03:17</div>
+    <h1>The orchard remembers every visitor.</h1>
+    <p>Rain maps the roof in silver veins. Beyond the fogged panes, a brass bell rings once—and a door that was not there yesterday stands open.</p>
+    <div class="orchard-links">
+      [[Enter the greenhouse->Greenhouse]]
+      [[Follow the service stairs->Service Stairs]]
+    </div>
+  </section>
+</div>
+
+:: Greenhouse [glasshouse hub] {"position":"360,140","size":"210,130"}
+(set: $light to true)
+The old citrus trees turn their leaves toward your lamp. Beneath the western bench, a line of wet footprints disappears into the wall.
+
+[[Climb toward the observatory->Observatory]]
+
+[[Cross the glass gallery->Glass Gallery]]
+
+:: Service Stairs [west-wing] {"position":"360,440","size":"210,130"}
+The iron stairs answer each step with a different note. One landing smells of dust; the next, of fresh rain.
+
+[[Try the archive door->Archive]]
+
+[[Descend to the root cellar->Root Cellar]]
+
+:: Archive [west-wing clue] {"position":"660,440","size":"210,130"}
+(set: $key to true)
+<img src="assets/archive-key.jpg" alt="A brass archive key beside a constellation plate">
+
+The missing ledger has left a clean rectangle in the dust. In its place lies a warm brass key engraved with a map of unfamiliar stars.
+
+[[Take the tower stair->Bell Tower]]
+
+[[Open the sealed room->Locked Annex]]
+
+:: Observatory [east-wing clue] {"position":"660,140","size":"210,130"}
+<img src="assets/constellation-plate.svg" alt="The orchard constellation plate">
+
+The telescope is aimed below the horizon. Its brass setting reads //ORCHARD, WINTER QUARTER//.
+
+[[Ring the brass bell->Bell Tower]]
+
+[[Follow the star map outside->Night Garden]]
+
+:: Glass Gallery [east-wing] {"position":"970,240","size":"210,130"}
+Portraits of vanished gardeners hang between the windows. Every painted eye is fixed on the same patch of moonlit soil.
+
+[[Compare the observatory records->Observatory]]
+
+[[Step into the night garden->Night Garden]]
+
+:: Root Cellar [west-wing clue] {"position":"970,440","size":"210,130"}
+The roots have grown around a tin dispatch case without crushing it. Inside: one torn page from the archive ledger.
+
+[[Return the page to the archive->Archive]]
+
+[[Follow the roots outside->Night Garden]]
+
+:: Bell Tower [tower] {"position":"970,60","size":"210,130"}
+The bell rope is wet. When you pull it, every greenhouse lamp wakes at once and the observatory door opens below.
+
+[[Walk toward the eastern gate->Departure]]
+
+:: Night Garden [garden hub] {"position":"1280,250","size":"210,130"}
+<img src="assets/moonflower-specimen.jpg" alt="A moonflower specimen plate">
+
+Moonflowers unfold across the old paths, each transparent petal holding a different reflection of the glasshouse.
+
+[[Leave by the eastern gate->Departure]]
+
+[[Return beneath the glass->Greenhouse]]
+
+:: Departure [ending] {"position":"1580,250","size":"210,130"}
+At dawn, the gate stands where it always did. The brass key in your pocket is warm, and one impossible flower has opened beside the road.
+
+[[Begin again->Arrival]]

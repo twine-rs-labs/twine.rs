@@ -25,6 +25,11 @@
 	margin: 0;
 }
 
+.project-session-sync .project-session-sync__resolution-hint {
+	color: var(--text-body);
+	margin-block-start: 8px;
+}
+
 .project-session-sync__error {
 	color: var(--sem-error);
 	margin-block-start: 8px;

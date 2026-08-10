@@ -14,7 +14,7 @@ candidate acknowledgement.
 
 Native watching emits generation-bound, changed-path deltas. Rust atomically
 classifies and applies typed field changes. Each delivered candidate is an
-immutable lease until Accept Disk, Keep App, or Later resolves it.
+immutable lease until Use Disk Version, Keep App Version, or Later resolves it.
 
 Safe content-only changes merge automatically. Overlapping changes and all
 external asset changes require review. External asset bytes are not undoable;

@@ -3406,19 +3406,165 @@ function safeProjectAssetPath(rootPath: string, assetPath: string) {
 	return {absolutePath, projectPath};
 }
 
-function projectAssetInventoryEntry(
+function pngDimensions(bytes: Buffer): [number, number] | undefined {
+	if (
+		bytes.length < 24 ||
+		bytes[0] !== 0x89 ||
+		bytes.subarray(1, 8).toString('binary') !== 'PNG\r\n\x1a\n'
+	) {
+		return undefined;
+	}
+
+	return [bytes.readUInt32BE(16), bytes.readUInt32BE(20)];
+}
+
+function gifDimensions(bytes: Buffer): [number, number] | undefined {
+	if (bytes.length < 10 || bytes.subarray(0, 3).toString('ascii') !== 'GIF') {
+		return undefined;
+	}
+
+	return [bytes.readUInt16LE(6), bytes.readUInt16LE(8)];
+}
+
+function jpegDimensions(bytes: Buffer): [number, number] | undefined {
+	if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+		return undefined;
+	}
+
+	let index = 2;
+
+	while (index + 9 < bytes.length) {
+		if (bytes[index] !== 0xff) {
+			index++;
+			continue;
+		}
+
+		while (index < bytes.length && bytes[index] === 0xff) {
+			index++;
+		}
+
+		if (index >= bytes.length) {
+			return undefined;
+		}
+
+		const marker = bytes[index++];
+
+		if (marker === 0xda || marker === 0xd9 || index + 2 > bytes.length) {
+			return undefined;
+		}
+
+		const length = bytes.readUInt16BE(index);
+
+		if (length < 2 || index + length > bytes.length) {
+			return undefined;
+		}
+
+		if (
+			[
+				0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce,
+				0xcf
+			].includes(marker) &&
+			length >= 7
+		) {
+			return [bytes.readUInt16BE(index + 5), bytes.readUInt16BE(index + 3)];
+		}
+
+		index += length;
+	}
+
+	return undefined;
+}
+
+function svgDimensions(bytes: Buffer): [number, number] | undefined {
+	const source = bytes.toString('utf8');
+	const width = source.match(/\bwidth\s*=\s*["']([0-9]+)/i)?.[1];
+	const height = source.match(/\bheight\s*=\s*["']([0-9]+)/i)?.[1];
+
+	return width && height ? [Number(width), Number(height)] : undefined;
+}
+
+function webpDimensions(bytes: Buffer): [number, number] | undefined {
+	if (
+		bytes.length < 20 ||
+		bytes.subarray(0, 4).toString('ascii') !== 'RIFF' ||
+		bytes.subarray(8, 12).toString('ascii') !== 'WEBP'
+	) {
+		return undefined;
+	}
+
+	const chunk = bytes.subarray(12, 16).toString('ascii');
+
+	if (chunk === 'VP8X' && bytes.length >= 30) {
+		return [bytes.readUIntLE(24, 3) + 1, bytes.readUIntLE(27, 3) + 1];
+	}
+
+	if (chunk === 'VP8L' && bytes.length >= 25 && bytes[20] === 0x2f) {
+		const dimensions = bytes.readUInt32LE(21);
+
+		return [(dimensions & 0x3fff) + 1, ((dimensions >>> 14) & 0x3fff) + 1];
+	}
+
+	if (
+		chunk === 'VP8 ' &&
+		bytes.length >= 30 &&
+		bytes[23] === 0x9d &&
+		bytes[24] === 0x01 &&
+		bytes[25] === 0x2a
+	) {
+		const width = bytes.readUInt16LE(26) & 0x3fff;
+		const height = bytes.readUInt16LE(28) & 0x3fff;
+
+		return width > 0 && height > 0 ? [width, height] : undefined;
+	}
+
+	return undefined;
+}
+
+async function imageDimensions(
+	projectPath: string,
+	absolutePath: string
+): Promise<[number, number] | undefined> {
+	const extension = extname(projectPath).slice(1).toLowerCase();
+
+	if (!['gif', 'jpeg', 'jpg', 'png', 'svg', 'webp'].includes(extension)) {
+		return undefined;
+	}
+
+	try {
+		const bytes = (await readFile(absolutePath)) as Buffer;
+
+		switch (extension) {
+			case 'gif':
+				return gifDimensions(bytes);
+			case 'jpeg':
+			case 'jpg':
+				return jpegDimensions(bytes);
+			case 'png':
+				return pngDimensions(bytes);
+			case 'svg':
+				return svgDimensions(bytes);
+			case 'webp':
+				return webpDimensions(bytes);
+		}
+	} catch {
+		return undefined;
+	}
+}
+
+async function projectAssetInventoryEntry(
 	projectPath: string,
 	absolutePath: string,
 	fileStats: BigIntStats
-): CoreAssetInventoryEntry {
+): Promise<CoreAssetInventoryEntry> {
 	const kind = assetKindForPath(projectPath);
+	const dimensions = await imageDimensions(projectPath, absolutePath);
 	const previewUrl = fileUrlForPath(absolutePath);
 	const mtimeMs = fileStats.mtimeNs / BigInt(1_000_000);
 
 	return {
 		durationMs: null,
 		exists: true,
-		height: null,
+		height: dimensions?.[1] ?? null,
 		kind,
 		missing: false,
 		modifiedAt: new Date(Number(mtimeMs)).toISOString(),
@@ -3436,7 +3582,7 @@ function projectAssetInventoryEntry(
 		snippet: assetSnippet(projectPath, kind),
 		thumbnailUrl: kind === 'image' ? previewUrl : null,
 		unused: true,
-		width: null
+		width: dimensions?.[0] ?? null
 	};
 }
 
@@ -3475,7 +3621,9 @@ async function scanAssetDirectory(
 			absolutePath
 		).replace(/\\/g, '/')}`;
 
-		assets.push(projectAssetInventoryEntry(assetPath, absolutePath, fileStats));
+		assets.push(
+			await projectAssetInventoryEntry(assetPath, absolutePath, fileStats)
+		);
 	}
 }
 
@@ -4404,7 +4552,7 @@ async function targetedAssetEntry(rootPath: string, projectPath: string) {
 		const fileStats = await statFile(asset.absolutePath, {bigint: true});
 
 		return fileStats.isFile()
-			? projectAssetInventoryEntry(
+			? await projectAssetInventoryEntry(
 					asset.projectPath,
 					asset.absolutePath,
 					fileStats

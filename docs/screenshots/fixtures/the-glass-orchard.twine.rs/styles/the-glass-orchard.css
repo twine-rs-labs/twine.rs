@@ -1,0 +1,124 @@
+tw-story {
+	background: #071311;
+	color: #edf4ed;
+	font-family: Georgia, 'Times New Roman', serif;
+	margin: 0;
+	min-height: 100vh;
+	width: 100%;
+}
+
+tw-passage {
+	display: block;
+	margin: 0;
+	max-width: none;
+	padding: 0;
+}
+
+.orchard-scene {
+	align-items: center;
+	box-sizing: border-box;
+	display: flex;
+	min-height: 100vh;
+	overflow: hidden;
+	padding: 2rem 6vw;
+	position: relative;
+}
+
+.orchard-scene__art {
+	filter: brightness(0.56) saturate(0.82);
+	height: 100%;
+	inset: 0;
+	object-fit: cover;
+	position: absolute;
+	width: 100%;
+}
+
+.orchard-scene::after {
+	background: linear-gradient(
+		90deg,
+		rgba(3, 14, 13, 0.96) 0%,
+		rgba(4, 17, 15, 0.88) 34%,
+		rgba(5, 17, 16, 0.34) 68%,
+		rgba(5, 12, 13, 0.12) 100%
+	);
+	content: '';
+	inset: 0;
+	position: absolute;
+}
+
+.orchard-card {
+	backdrop-filter: blur(14px);
+	background: linear-gradient(
+		145deg,
+		rgba(10, 30, 27, 0.86),
+		rgba(7, 20, 19, 0.7)
+	);
+	border: 1px solid rgba(151, 216, 190, 0.22);
+	border-left: 3px solid #d0a65b;
+	box-shadow: 0 28px 80px rgba(0, 0, 0, 0.38);
+	max-width: 39rem;
+	padding: 1.5rem 2.25rem 1.4rem;
+	position: relative;
+	z-index: 1;
+}
+
+.orchard-kicker,
+.orchard-time {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	letter-spacing: 0.22em;
+	text-transform: uppercase;
+}
+
+.orchard-kicker {
+	color: #d0a65b;
+	font-size: 0.72rem;
+	margin-bottom: 0.55rem;
+}
+
+.orchard-time {
+	color: #8bd6bf;
+	font-size: 0.82rem;
+	margin-bottom: 0.85rem;
+}
+
+.orchard-card h1 {
+	color: #f2f2e9;
+	font-size: clamp(2.2rem, 3vw, 3.45rem);
+	font-weight: 500;
+	letter-spacing: -0.035em;
+	line-height: 0.96;
+	margin: 0 0 0.9rem;
+}
+
+.orchard-card p {
+	color: #cbd8d2;
+	font-size: 1rem;
+	line-height: 1.5;
+	margin: 0 0 0.9rem;
+	max-width: 34rem;
+}
+
+.orchard-links {
+	border-top: 1px solid rgba(151, 216, 190, 0.16);
+	display: grid;
+	gap: 0.25rem;
+	padding-top: 0.6rem;
+}
+
+.orchard-links tw-link {
+	color: #96dec7;
+	font-family: ui-sans-serif, system-ui, sans-serif;
+	font-size: 0.94rem;
+	font-weight: 650;
+	letter-spacing: 0.01em;
+	padding: 0.35rem 0;
+}
+
+.orchard-links tw-link::after {
+	color: #d0a65b;
+	content: '  →';
+}
+
+.orchard-links tw-link:hover {
+	color: #f1c875;
+}

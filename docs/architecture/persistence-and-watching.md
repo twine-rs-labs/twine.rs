@@ -55,8 +55,8 @@ accepted generation `N`.
 - `awaitingResolution` candidates cannot be replaced while Rust ingestion or
   review is active.
 - Events arriving meanwhile are retained and reconciled after resolution.
-- Accept Disk promotes the exact candidate.
-- Keep App writes the current session and rebuilds the accepted baseline.
+- Use Disk Version promotes the exact candidate.
+- Keep App Version writes the current session and rebuilds the accepted baseline.
 - Later dismisses notification without changing Rust state, baseline, or
   generation.
 - A deferred candidate is re-emitted only when its disk signature changes.
@@ -82,7 +82,7 @@ external bytes are undoable.
 Project identity changes, unsupported schema changes, invalid manifests, unsafe
 paths, and unrepresentable compatibility metadata use an explicit recovery
 warning. Full snapshot replacement is limited to initial load, manual refresh,
-Keep App baseline rebuilding, and confirmed recovery.
+Keep App Version baseline rebuilding, and confirmed recovery.
 
 ## Asset effects
 

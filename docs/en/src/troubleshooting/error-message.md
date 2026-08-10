@@ -31,7 +31,7 @@ The desktop app watches open project folders. It applies nonconflicting
 external edits automatically and shows a _Project folder changed_ notice when
 the disk and app copies conflict.
 
-The notice offers _Accept Disk_, _Keep App_, and _Later_. A recovery case may
+The notice offers _Use Disk Version_, _Keep App Version_, and _Later_. A recovery case may
 instead offer _Reload From Disk_, which resets undo history. See
 [Reviewing External Changes](../story-library/conflicts.md) before choosing
 which copy should win.

@@ -5982,10 +5982,47 @@ describe('project-folder native bridge', () => {
 
 	it('lists native project assets with file metadata and preview URLs', async () => {
 		const mtime = new Date('2026-06-21T16:00:00.000Z');
+		const cover = Buffer.alloc(24);
+		const webp = (
+			chunk: 'VP8 ' | 'VP8L' | 'VP8X',
+			width: number,
+			height: number
+		) => {
+			const bytes = Buffer.alloc(chunk === 'VP8L' ? 25 : 30);
+
+			bytes.write('RIFF', 0, 'ascii');
+			bytes.writeUInt32LE(bytes.length - 8, 4);
+			bytes.write('WEBP', 8, 'ascii');
+			bytes.write(chunk, 12, 'ascii');
+			bytes.writeUInt32LE(bytes.length - 20, 16);
+
+			if (chunk === 'VP8X') {
+				bytes.writeUIntLE(width - 1, 24, 3);
+				bytes.writeUIntLE(height - 1, 27, 3);
+			} else if (chunk === 'VP8L') {
+				bytes[20] = 0x2f;
+				bytes.writeUInt32LE(((width - 1) | ((height - 1) << 14)) >>> 0, 21);
+			} else {
+				Buffer.from([0x9d, 0x01, 0x2a]).copy(bytes, 23);
+				bytes.writeUInt16LE(width, 26);
+				bytes.writeUInt16LE(height, 28);
+			}
+
+			return bytes;
+		};
+		const webpFiles = new Map([
+			['extended.webp', webp('VP8X', 800, 450)],
+			['lossless.webp', webp('VP8L', 512, 256)],
+			['lossy.webp', webp('VP8 ', 320, 180)]
+		]);
+
+		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(cover);
+		cover.writeUInt32BE(640, 16);
+		cover.writeUInt32BE(360, 20);
 
 		readdirMock.mockImplementation(async path => {
 			if (path === '/native/project.twine.rs/assets') {
-				return ['cover.png', 'audio'];
+				return ['cover.png', 'audio', ...webpFiles.keys()];
 			}
 
 			if (path === '/native/project.twine.rs/assets/audio') {
@@ -6000,6 +6037,21 @@ describe('project-folder native bridge', () => {
 			mtime,
 			size: path.endsWith('.mp3') ? 4096 : 2048
 		}));
+		readFileMock.mockImplementation(async path => {
+			const pathText = String(path);
+
+			if (pathText.endsWith('cover.png')) {
+				return cover;
+			}
+
+			for (const [name, bytes] of webpFiles) {
+				if (pathText.endsWith(name)) {
+					return bytes;
+				}
+			}
+
+			return Buffer.alloc(0);
+		});
 
 		await expect(
 			listProjectAssets('/native/project.twine.rs')
@@ -6013,13 +6065,31 @@ describe('project-folder native bridge', () => {
 				width: null
 			}),
 			expect.objectContaining({
-				height: null,
+				height: 360,
 				kind: 'image',
 				modifiedAt: '2026-06-21T16:00:00.000Z',
 				path: 'assets/cover.png',
 				sizeBytes: 2048,
 				thumbnailUrl: 'file:///native/project.twine.rs/assets/cover.png',
-				width: null
+				width: 640
+			}),
+			expect.objectContaining({
+				height: 450,
+				kind: 'image',
+				path: 'assets/extended.webp',
+				width: 800
+			}),
+			expect.objectContaining({
+				height: 256,
+				kind: 'image',
+				path: 'assets/lossless.webp',
+				width: 512
+			}),
+			expect.objectContaining({
+				height: 180,
+				kind: 'image',
+				path: 'assets/lossy.webp',
+				width: 320
 			})
 		]);
 	});
@@ -8324,7 +8394,10 @@ describe('project-folder native bridge', () => {
 					})
 				})
 			);
-			expect(readFileMock).not.toHaveBeenCalled();
+			expect(readFileMock).toHaveBeenCalledTimes(1);
+			expect(readFileMock).toHaveBeenCalledWith(
+				'/native/project.twine.rs/assets/cover.png'
+			);
 		} finally {
 			stopProjectSession('/native/project.twine.rs');
 			jest.useRealTimers();

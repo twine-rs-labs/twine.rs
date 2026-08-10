@@ -150,14 +150,6 @@
 	font-size: 15px;
 }
 
-.new-project-route__file--new {
-	color: var(--sem-success);
-}
-
-.new-project-route__file--new .tw-ds-icon {
-	color: var(--sem-success);
-}
-
 .new-project-route__file--optional,
 .new-project-route__file--empty {
 	color: var(--tx-3);

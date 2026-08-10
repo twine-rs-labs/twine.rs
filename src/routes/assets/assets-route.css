@@ -111,8 +111,12 @@
 	transform: rotate(90deg);
 }
 
-.assets-route__folder--issue svg {
+.assets-route__folder--missing svg {
 	color: var(--sem-error);
+}
+
+.assets-route__folder--unused svg {
+	color: var(--sem-warn);
 }
 
 .assets-route__count {

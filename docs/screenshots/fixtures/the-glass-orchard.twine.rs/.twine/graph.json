@@ -1,0 +1,39 @@
+{
+	"passages": {
+		"schema": 2,
+		"byStory": {
+			"glass-orchard-story": {
+				"arrival": {
+					"bounds": {"height": 130, "left": 80, "top": 280, "width": 210}
+				},
+				"greenhouse": {
+					"bounds": {"height": 130, "left": 360, "top": 140, "width": 210}
+				},
+				"service-stairs": {
+					"bounds": {"height": 130, "left": 360, "top": 440, "width": 210}
+				},
+				"observatory": {
+					"bounds": {"height": 130, "left": 660, "top": 140, "width": 210}
+				},
+				"archive": {
+					"bounds": {"height": 130, "left": 660, "top": 440, "width": 210}
+				},
+				"bell-tower": {
+					"bounds": {"height": 130, "left": 970, "top": 60, "width": 210}
+				},
+				"glass-gallery": {
+					"bounds": {"height": 130, "left": 970, "top": 240, "width": 210}
+				},
+				"root-cellar": {
+					"bounds": {"height": 130, "left": 970, "top": 440, "width": 210}
+				},
+				"night-garden": {
+					"bounds": {"height": 130, "left": 1280, "top": 250, "width": 210}
+				},
+				"departure": {
+					"bounds": {"height": 130, "left": 1580, "top": 250, "width": 210}
+				}
+			}
+		}
+	}
+}
