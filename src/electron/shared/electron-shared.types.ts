@@ -275,6 +275,16 @@ export interface NativeProjectFolderResult {
 	storyIds: string[];
 }
 
+export interface NativeProjectReplacementTransaction {
+	id: string;
+	project: NativeProjectFolderResult;
+}
+
+export interface NativeProjectDeletionTransaction {
+	id: string;
+	rootPath: string;
+}
+
 export interface NativeProjectFolderSaveFallback {
 	expectedFileBaseline: ProjectFolderExpectedFile[];
 	rootPath: string;
@@ -530,6 +540,18 @@ export interface TwineElectronWindow extends Window {
 			preferredParent?: string,
 			sourceLayout?: ProjectSourceLayout
 		): Promise<NativeProjectFolderResult>;
+		beginProjectReplacement(
+			rootPath: string,
+			stories: StoryWithDocuments[],
+			importId?: string
+		): Promise<NativeProjectReplacementTransaction>;
+		commitProjectReplacements(transactionIds: string[]): Promise<void>;
+		rollbackProjectReplacement(transactionId: string): Promise<void>;
+		beginProjectFolderDeletion(
+			rootPath: string
+		): Promise<NativeProjectDeletionTransaction>;
+		commitProjectFolderDeletion(transactionId: string): Promise<void>;
+		rollbackProjectFolderDeletion(transactionId: string): Promise<void>;
 		duplicateProjectFolder(
 			rootPath: string,
 			replacements: ProjectStoryReplacement[]

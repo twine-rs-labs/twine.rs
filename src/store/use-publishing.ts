@@ -46,6 +46,7 @@ import {
 	materializeStoryPackageSnapshot,
 	packageExportInputs
 } from './package-publishing';
+import {workbenchBufferCoordinator} from '../util/workbench-buffer-coordinator';
 
 export const referencedMediaEmbeddingLimits = {
 	maxFileBytes: 25 * 1024 * 1024,
@@ -207,6 +208,7 @@ export function usePublishing(): UsePublishingProps {
 
 	const completeStoryForPublishing = React.useCallback(
 		async (storyId: string) => {
+			await workbenchBufferCoordinator.flushStory(storyId);
 			const story = storyWithId(stories, storyId);
 
 			return materializeStoryFromSession(coreProjectHost, story);
@@ -215,14 +217,16 @@ export function usePublishing(): UsePublishingProps {
 	);
 
 	const completeStorySnapshotForPreview = React.useCallback(
-		(storyId: string) =>
-			materializeStoryPreviewSnapshot(coreProjectHost, storyId, () =>
+		async (storyId: string) => {
+			await workbenchBufferCoordinator.flushStory(storyId);
+			return materializeStoryPreviewSnapshot(coreProjectHost, storyId, () =>
 				currentStoryPreviewMetadata(
 					coreProjectHost,
 					previewMetadataRef.current,
 					storyId
 				)
-			),
+			);
+		},
 		[coreProjectHost]
 	);
 
@@ -319,6 +323,7 @@ export function usePublishing(): UsePublishingProps {
 			target: StoryBuildTarget,
 			publishOptions?: Omit<BuildStoryPackageOptions, 'buildTarget'>
 		) => {
+			await workbenchBufferCoordinator.flushStory(storyId);
 			if (target === 'package') {
 				const metadata = loadProjectMetadata(storyId);
 				const storageAuthority =

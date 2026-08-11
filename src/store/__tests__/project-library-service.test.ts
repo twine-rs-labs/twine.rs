@@ -24,6 +24,7 @@ function host(overrides: Partial<CoreProjectHost> = {}) {
 		admitProjectStories: jest.fn(async () => undefined),
 		applyStoryCommand: jest.fn(async () => undefined),
 		applyStoryCommandPersisted: jest.fn(async () => undefined),
+		deleteProjectStories: jest.fn(async () => undefined),
 		drainMutations: jest.fn(async () => undefined),
 		ensureSessionReady: jest.fn(async () => undefined),
 		retireProjectStories: jest.fn(async () => undefined),
@@ -40,6 +41,38 @@ describe('ProjectLibraryService', () => {
 	beforeEach(() => {
 		window.localStorage.clear();
 		delete (window as any).twineElectron;
+	});
+
+	it('uses exact persistence barriers for local create, duplicate, and delete', async () => {
+		const story = fakeStory();
+		const admitProjectStories = jest.fn(async () => undefined);
+		const deleteProjectStories = jest.fn(async () => undefined);
+		const coreHost = host({admitProjectStories, deleteProjectStories});
+		const projectLibrary = service(coreHost);
+
+		await projectLibrary.createProject(story);
+		expect(admitProjectStories).toHaveBeenLastCalledWith([story], {
+			history: 'skip',
+			persistence: 'save',
+			persistenceBarrier: true
+		});
+
+		await projectLibrary.duplicateProject([story], [story]);
+		expect(admitProjectStories).toHaveBeenLastCalledWith(
+			[expect.objectContaining({id: expect.not.stringMatching(story.id)})],
+			{
+				history: 'skip',
+				persistence: 'save',
+				persistenceBarrier: true
+			}
+		);
+
+		await projectLibrary.deleteStory(story);
+		expect(deleteProjectStories).toHaveBeenCalledWith([story.id], {
+			history: 'skip',
+			persistence: 'save',
+			persistenceBarrier: true
+		});
 	});
 
 	it('does not delete an admitted project when saved acknowledgement fails', async () => {
@@ -93,7 +126,8 @@ describe('ProjectLibraryService', () => {
 				rootPath,
 				stories: replacements.map((replacement: any) => replacement.story),
 				storyIds: replacements.map((replacement: any) => replacement.story.id)
-			}))
+			})),
+			listProjectAssets: jest.fn(async () => [])
 		};
 
 		await expect(
@@ -102,6 +136,148 @@ describe('ProjectLibraryService', () => {
 		expect(deleteProjectFolder).not.toHaveBeenCalled();
 		expect(coreHost.retireProjectStories).not.toHaveBeenCalled();
 		error.mockRestore();
+	});
+
+	it('loads the native asset inventory before admitting imported project stories', async () => {
+		const story = fakeStory();
+		const rootPath = '/native/imported.twine.rs';
+		const admitProjectStories = jest.fn(async () => undefined);
+		const listProjectAssets = jest.fn(async () => []);
+		const coreHost = host({admitProjectStories});
+
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {listProjectAssets};
+
+		await service(coreHost).admitProjectStories([story]);
+
+		expect(listProjectAssets).toHaveBeenCalledWith(rootPath);
+		expect(knownAssetInventoryScanCompleteForStory(story.id)).toBe(true);
+		expect(listProjectAssets.mock.invocationCallOrder[0]).toBeLessThan(
+			admitProjectStories.mock.invocationCallOrder[0]
+		);
+	});
+
+	it('re-lists native assets when an abandoned admission is retried', async () => {
+		const story = fakeStory();
+		const rootPath = '/native/retry-import.twine.rs';
+		const firstAssets = [
+			{normalizedPath: 'assets/old.png', path: 'assets/old.png'}
+		] as CoreAssetInventoryEntry[];
+		const secondAssets = [
+			{normalizedPath: 'assets/new.png', path: 'assets/new.png'}
+		] as CoreAssetInventoryEntry[];
+		const admitProjectStories = jest
+			.fn()
+			.mockRejectedValueOnce(new Error('late admission failed'))
+			.mockResolvedValueOnce(undefined);
+		const listProjectAssets = jest
+			.fn()
+			.mockResolvedValueOnce(firstAssets)
+			.mockResolvedValueOnce(secondAssets);
+		const coreHost = host({admitProjectStories});
+		const projectLibrary = service(coreHost);
+		const bindProject = () =>
+			saveProjectMetadata(story.id, {
+				rootPath,
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+
+		(window as any).twineElectron = {listProjectAssets};
+		bindProject();
+		await expect(projectLibrary.admitProjectStories([story])).rejects.toThrow(
+			'late admission failed'
+		);
+		expect(knownAssetInventoryScanCompleteForStory(story.id)).toBe(false);
+
+		bindProject();
+		await projectLibrary.admitProjectStories([story]);
+
+		expect(listProjectAssets).toHaveBeenCalledTimes(2);
+		expect(knownAssetInventoryForStory(story.id)).toEqual(secondAssets);
+	});
+
+	it('snapshots an unopened native project before staged deletion', async () => {
+		const story = fakeStory();
+		const rootPath = '/native/lazy-project.twine.rs';
+		const retireProjectStories = jest.fn(async () => undefined);
+		const coreHost = host({retireProjectStories});
+		const beginProjectFolderDeletion = jest.fn(async () => ({
+			id: 'delete-lazy',
+			rootPath
+		}));
+		const commitProjectFolderDeletion = jest.fn(async () => undefined);
+		const projectSessionSnapshot = jest.fn(async () => ({
+			assets: [],
+			changedPaths: [],
+			conflicts: [],
+			files: [],
+			rootPath,
+			scannedAt: new Date().toISOString(),
+			stories: [story],
+			storyIds: [story.id]
+		}));
+
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: false,
+			rootPath
+		});
+		(window as any).twineElectron = {
+			beginProjectFolderDeletion,
+			commitProjectFolderDeletion,
+			projectSessionSnapshot,
+			rollbackProjectFolderDeletion: jest.fn(async () => undefined)
+		};
+
+		await service(coreHost).deleteProjectFolder(rootPath, [story]);
+
+		expect(projectSessionSnapshot).toHaveBeenCalledWith(rootPath);
+		expect(retireProjectStories).toHaveBeenCalledWith([story.id]);
+		expect(commitProjectFolderDeletion).toHaveBeenCalledWith('delete-lazy');
+	});
+
+	it('refuses to delete a lazy project whose native IFID does not match', async () => {
+		const story = fakeStory();
+		const mismatchedStory = {...story, ifid: 'DIFFERENT-IFID'};
+		const rootPath = '/native/unrelated-project.twine.rs';
+		const beginProjectFolderDeletion = jest.fn();
+
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: false,
+			rootPath
+		});
+		(window as any).twineElectron = {
+			beginProjectFolderDeletion,
+			projectSessionSnapshot: jest.fn(async () => ({
+				assets: [],
+				changedPaths: [],
+				conflicts: [],
+				files: [],
+				rootPath,
+				scannedAt: new Date().toISOString(),
+				stories: [mismatchedStory],
+				storyIds: [story.id]
+			}))
+		};
+
+		await expect(
+			service(host()).deleteProjectFolder(rootPath, [story])
+		).rejects.toThrow('does not contain exactly one story matching');
+		expect(beginProjectFolderDeletion).not.toHaveBeenCalled();
 	});
 
 	it('does not bind a same-named folder without an exact native identity match', async () => {
@@ -260,15 +436,20 @@ describe('ProjectLibraryService', () => {
 		).toHaveBeenCalledWith(rootPath);
 	});
 
-	it('retires an earlier storage cohort when a later admission cohort fails', async () => {
+	it('durably rolls back local admission before forgetting a failed mixed cohort', async () => {
 		const nativeStory = fakeStory();
 		const localStory = fakeStory();
 		const admitProjectStories = jest
 			.fn()
 			.mockResolvedValueOnce(undefined)
-			.mockRejectedValueOnce(new Error('local admission failed'));
+			.mockRejectedValueOnce(new Error('native admission failed'));
+		const deleteProjectStories = jest.fn(async () => undefined);
 		const retireProjectStories = jest.fn(async () => undefined);
-		const coreHost = host({admitProjectStories, retireProjectStories});
+		const coreHost = host({
+			admitProjectStories,
+			deleteProjectStories,
+			retireProjectStories
+		});
 
 		saveProjectMetadata(nativeStory.id, {
 			rootPath: '/native/project.twine.rs',
@@ -279,14 +460,28 @@ describe('ProjectLibraryService', () => {
 			status: 'local-only',
 			storageKind: 'web-local'
 		});
+		(window as any).twineElectron = {
+			listProjectAssets: jest.fn(async () => [])
+		};
 
 		await expect(
 			service(coreHost).admitProjectStories([nativeStory, localStory])
-		).rejects.toThrow('local admission failed');
-		expect(retireProjectStories).toHaveBeenCalledWith([
-			nativeStory.id,
-			localStory.id
-		]);
+		).rejects.toThrow('native admission failed');
+		expect(admitProjectStories).toHaveBeenNthCalledWith(1, [localStory], {
+			history: 'skip',
+			persistence: 'save',
+			persistenceBarrier: true
+		});
+		expect(admitProjectStories).toHaveBeenNthCalledWith(2, [nativeStory], {
+			history: 'skip',
+			persistence: 'skip'
+		});
+		expect(deleteProjectStories).toHaveBeenCalledWith([localStory.id], {
+			history: 'skip',
+			persistence: 'save',
+			persistenceBarrier: true
+		});
+		expect(retireProjectStories).toHaveBeenCalledWith([localStory.id]);
 		expect(loadProjectMetadata(nativeStory.id)).toBeUndefined();
 		expect(loadProjectMetadata(localStory.id)).toBeUndefined();
 	});
@@ -459,5 +654,118 @@ describe('ProjectLibraryService', () => {
 			{history: 'skip', persistence: 'save'}
 		);
 		expect(bootstrapStory(original.id)).toBeUndefined();
+	});
+
+	it('commits native folder deletion only after retiring its bound session', async () => {
+		const story = fakeStory();
+		const rootPath = '/native/delete-me.twine.rs';
+		const order: string[] = [];
+		const retireProjectStories = jest.fn(async () => {
+			order.push('retire');
+		});
+		const coreHost = host({retireProjectStories});
+
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		(window as any).twineElectron = {
+			beginProjectFolderDeletion: jest.fn(async () => {
+				order.push('begin');
+				return {id: 'delete-transaction', rootPath};
+			}),
+			commitProjectFolderDeletion: jest.fn(async () => {
+				order.push('commit');
+			}),
+			rollbackProjectFolderDeletion: jest.fn(async () => undefined)
+		};
+
+		await service(coreHost).deleteProjectFolder(rootPath, [story]);
+
+		expect(order).toEqual(['begin', 'retire', 'commit']);
+		expect(loadProjectMetadata(story.id)).toBeUndefined();
+	});
+
+	it('restores the native folder and renderer session when deletion commit fails', async () => {
+		const story = fakeStory();
+		const rootPath = '/native/delete-retry.twine.rs';
+		const rollbackProjectFolderDeletion = jest.fn(async () => undefined);
+		const admitProjectStories = jest.fn(async () => undefined);
+		const coreHost = host({admitProjectStories});
+
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: true,
+			rootPath
+		});
+		(window as any).twineElectron = {
+			beginProjectFolderDeletion: jest.fn(async () => ({
+				id: 'delete-transaction',
+				rootPath
+			})),
+			commitProjectFolderDeletion: jest.fn(async () => {
+				throw new Error('journal commit failed');
+			}),
+			rollbackProjectFolderDeletion
+		};
+
+		await expect(
+			service(coreHost).deleteProjectFolder(rootPath, [story])
+		).rejects.toThrow('journal commit failed');
+		expect(rollbackProjectFolderDeletion).toHaveBeenCalledWith(
+			'delete-transaction'
+		);
+		expect(loadProjectMetadata(story.id)).toEqual(
+			expect.objectContaining({rootPath, status: 'file-backed'})
+		);
+		expect(admitProjectStories).toHaveBeenCalledWith(
+			[expect.objectContaining({id: story.id})],
+			{history: 'skip', persistence: 'skip'}
+		);
+	});
+
+	it('keeps a project retired when native deletion rollback fails', async () => {
+		const story = fakeStory();
+		const rootPath = '/native/delete-recovery-required.twine.rs';
+		const admitProjectStories = jest.fn(async () => undefined);
+		const retireProjectStories = jest.fn(async () => undefined);
+		const coreHost = host({admitProjectStories, retireProjectStories});
+
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(story.id, {
+			passageTextLoaded: true,
+			rootPath
+		});
+		(window as any).twineElectron = {
+			beginProjectFolderDeletion: jest.fn(async () => ({
+				id: 'delete-transaction',
+				rootPath
+			})),
+			commitProjectFolderDeletion: jest.fn(async () => {
+				throw new Error('journal commit failed');
+			}),
+			rollbackProjectFolderDeletion: jest.fn(async () => {
+				throw new Error('native rollback failed');
+			})
+		};
+
+		await expect(
+			service(coreHost).deleteProjectFolder(rootPath, [story])
+		).rejects.toThrow(
+			'Project deletion failed and native recovery is required'
+		);
+		expect(loadProjectMetadata(story.id)).toBeUndefined();
+		expect(projectStoryHydration(story.id)).toBeUndefined();
+		expect(retireProjectStories).toHaveBeenCalledTimes(1);
+		expect(admitProjectStories).not.toHaveBeenCalled();
 	});
 });

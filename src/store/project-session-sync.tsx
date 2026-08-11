@@ -119,14 +119,25 @@ export const ProjectSessionSync: React.FC = () => {
 			JSON.stringify(
 				Array.from(roots, ([rootPath, rootStories]) => [
 					rootPath,
-					rootStories.map(story => story.id).sort()
+					rootStories
+						.map(story => [
+							story.id,
+							loadProjectMetadata(story.id)?.updatedAt ?? ''
+						])
+						.sort(([left], [right]) =>
+							left < right ? -1 : left > right ? 1 : 0
+						)
 				]).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
 			),
 		[roots]
 	);
 	const sessionRoots = React.useMemo(
-		() => JSON.parse(rootMembershipSignature) as [string, string[]][],
-		[rootMembershipSignature]
+		() =>
+			Array.from(roots, ([rootPath, rootStories]) => [
+				rootPath,
+				rootStories.map(story => story.id).sort()
+			]) as [string, string[]][],
+		[rootMembershipSignature, roots]
 	);
 	const rootStoryIds = React.useRef(new Map<string, string[]>());
 	const rootStoriesRef = React.useRef(new Map<string, Story[]>());

@@ -3,7 +3,12 @@ import {EditorView} from '@codemirror/view';
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {MemoryRouter, useNavigate} from 'react-router';
+import {
+	createMemoryRouter,
+	MemoryRouter,
+	RouterProvider,
+	useNavigate
+} from 'react-router';
 import {AppShell} from '../../../components/app-shell';
 import {StoreCoreProjectHost} from '../../../core/project-host';
 import {Story} from '../../../store/stories';
@@ -107,6 +112,53 @@ describe('<StoryEditRoute>', () => {
 		return result;
 	}
 
+	async function renderDataRouterComponent(story: Story) {
+		const format = fakeLoadedStoryFormat();
+		if (typeof globalThis.Request === 'undefined') {
+			class TestNavigationRequest {
+				readonly method: string;
+				readonly signal?: AbortSignal | null;
+				readonly url: string;
+
+				constructor(input: string | URL, init?: RequestInit) {
+					this.method = init?.method ?? 'GET';
+					this.signal = init?.signal;
+					this.url = input.toString();
+				}
+			}
+
+			Object.defineProperty(globalThis, 'Request', {
+				configurable: true,
+				value: TestNavigationRequest
+			});
+		}
+
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryStoryWordCountAsync')
+			.mockImplementation(() => new Promise<never>(() => {}));
+		format.name = story.storyFormat;
+		format.version = story.storyFormatVersion;
+		const router = createMemoryRouter(
+			[{element: <TestStoryEditRoute />, path: '*'}],
+			{initialEntries: ['/before', `/stories/${story.id}`]}
+		);
+
+		jest.useFakeTimers();
+		const result = render(
+			<FakeStateProvider stories={[story]} storyFormats={[format]}>
+				<RouterProvider router={router} />
+			</FakeStateProvider>
+		);
+
+		act(() => {
+			jest.runAllTimers();
+		});
+		jest.useRealTimers();
+		await act(async () => Promise.resolve());
+
+		return {...result, router};
+	}
+
 	it('sets the document title to the story name', async () => {
 		const story = fakeStory();
 
@@ -130,7 +182,11 @@ describe('<StoryEditRoute>', () => {
 			'/'
 		);
 
-		fireEvent.click(screen.getByRole('button', {name: 'History back'}));
+		await act(async () => {
+			fireEvent.click(screen.getByRole('button', {name: 'History back'}));
+			await Promise.resolve();
+			await Promise.resolve();
+		});
 		await waitFor(() =>
 			expect(screen.getByTestId('location')).toHaveAttribute(
 				'data-pathname',
@@ -545,10 +601,9 @@ describe('<StoryEditRoute>', () => {
 		if (!view) {
 			throw new Error('Live story editor view was not available');
 		}
-		const apply = jest.spyOn(
-			StoreCoreProjectHost.prototype,
-			'applyStoryCommand'
-		);
+		const apply = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommandPersisted')
+			.mockResolvedValue({} as any);
 
 		jest.useFakeTimers();
 		act(() => {
@@ -635,9 +690,9 @@ describe('<StoryEditRoute>', () => {
 			throw new Error('Live story editor view was not available');
 		}
 		const apply = jest
-			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommandPersisted')
 			.mockRejectedValueOnce(new Error('first flush failed'))
-			.mockResolvedValueOnce(undefined);
+			.mockResolvedValueOnce({} as any);
 
 		jest.useFakeTimers();
 		act(() => {
@@ -655,7 +710,9 @@ describe('<StoryEditRoute>', () => {
 		act(() => {
 			failedDrain = rendererQuitQuiescence.drain();
 		});
-		await expect(failedDrain).rejects.toThrow('first flush failed');
+		await act(async () => {
+			await expect(failedDrain).rejects.toThrow('first flush failed');
+		});
 		expect(
 			apply.mock.calls.filter(
 				([command]) =>
@@ -708,13 +765,13 @@ describe('<StoryEditRoute>', () => {
 			throw new Error('Live story editor view was not available');
 		}
 		let rejectFirstFlush: (error: Error) => void = () => {};
-		const firstFlush = new Promise<undefined>((_, reject) => {
+		const firstFlush = new Promise<any>((_, reject) => {
 			rejectFirstFlush = reject;
 		});
 		const apply = jest
-			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommandPersisted')
 			.mockReturnValueOnce(firstFlush)
-			.mockResolvedValueOnce(undefined);
+			.mockResolvedValueOnce({} as any);
 
 		jest.useFakeTimers();
 		act(() => {
@@ -764,6 +821,140 @@ describe('<StoryEditRoute>', () => {
 
 		act(() => rendererQuitQuiescence.cancel());
 		jest.useRealTimers();
+	});
+
+	it('keeps a dirty editor open when its final persisted flush fails', async () => {
+		const story = fakeStory(1);
+		const {container} = await renderComponent(story);
+
+		fireEvent.click(
+			await screen.findByRole('tab', {
+				name: 'routes.storyEdit.workspace.textMode'
+			})
+		);
+		const editorWindow = await screen.findByTestId(
+			`story-editor-window-${story.passages[0].id}`
+		);
+		const editorShell = editorWindow.closest('.story-edit-editor-window');
+		const content = editorWindow.querySelector('.cm-content');
+		const view = content
+			? EditorView.findFromDOM(content as HTMLElement)
+			: undefined;
+
+		if (!editorShell || !view) {
+			throw new Error('Live story editor view was not available');
+		}
+		let rejectSave!: (error: Error) => void;
+		const failedSave = new Promise<never>((_resolve, reject) => {
+			rejectSave = reject;
+		});
+		const apply = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommandPersisted')
+			.mockReturnValueOnce(failedSave)
+			.mockResolvedValueOnce({} as any);
+
+		jest.useFakeTimers();
+		act(() => {
+			view.dispatch({
+				changes: {
+					from: 0,
+					insert: 'Unsaved final edit',
+					to: view.state.doc.length
+				}
+			});
+		});
+		await act(async () => {
+			fireEvent.click(
+				editorShell.querySelector('[aria-label^="common.close"]')!
+			);
+			await Promise.resolve();
+		});
+		await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+		await act(async () => {
+			rejectSave(new Error('disk unavailable'));
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+
+		expect(container.querySelector('.story-edit-editor-window')).toBeTruthy();
+		expect(screen.getByText('Save failed')).toHaveAttribute(
+			'title',
+			'disk unavailable'
+		);
+
+		await act(async () => {
+			fireEvent.click(
+				editorShell.querySelector('[aria-label^="common.close"]')!
+			);
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+		expect(apply).toHaveBeenCalledTimes(2);
+		await waitFor(() =>
+			expect(container.querySelector('.story-edit-editor-window')).toBeNull()
+		);
+		jest.useRealTimers();
+	});
+
+	it('blocks history navigation until dirty text is durably committed', async () => {
+		const story = fakeStory(1);
+		const {container, router} = await renderDataRouterComponent(story);
+
+		fireEvent.click(
+			await screen.findByRole('tab', {
+				name: 'routes.storyEdit.workspace.textMode'
+			})
+		);
+		const editorWindow = await screen.findByTestId(
+			`story-editor-window-${story.passages[0].id}`
+		);
+		const content = editorWindow.querySelector('.cm-content');
+		const view = content
+			? EditorView.findFromDOM(content as HTMLElement)
+			: undefined;
+
+		if (!view) {
+			throw new Error('Live story editor view was not available');
+		}
+
+		let rejectSave!: (error: Error) => void;
+		const failedSave = new Promise<never>((_resolve, reject) => {
+			rejectSave = reject;
+		});
+		const apply = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommandPersisted')
+			.mockReturnValueOnce(failedSave)
+			.mockResolvedValueOnce({} as any);
+
+		act(() => {
+			view.dispatch({
+				changes: {
+					from: 0,
+					insert: 'Navigate only after saving',
+					to: view.state.doc.length
+				}
+			});
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'History back'}));
+		await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+		await act(async () => {
+			rejectSave(new Error('disk unavailable'));
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+
+		await waitFor(() =>
+			expect(screen.getByText('Save failed')).toHaveAttribute(
+				'title',
+				'disk unavailable'
+			)
+		);
+		expect(router.state.location.pathname).toBe(`/stories/${story.id}`);
+		expect(container.querySelector('.story-edit-editor-window')).toBeTruthy();
+
+		fireEvent.click(screen.getByRole('button', {name: 'History back'}));
+		await waitFor(() => expect(router.state.location.pathname).toBe('/before'));
+		expect(apply).toHaveBeenCalledTimes(2);
 	});
 
 	it('opens story find and replace from shell toolbar story actions', async () => {

@@ -376,6 +376,7 @@ describe('<NewProjectRoute>', () => {
 			})),
 			discardProjectImport: jest.fn(async () => undefined),
 			filePathForFile: jest.fn(() => '/imports/Transylvania.zip'),
+			listProjectAssets: jest.fn(async () => []),
 			prepareProjectImport: jest.fn(async () => ({
 				assets: [
 					{
@@ -431,9 +432,11 @@ describe('<NewProjectRoute>', () => {
 			}),
 			undefined
 		);
-		expect(
-			(window as any).twineElectron.discardProjectImport
-		).toHaveBeenCalledWith('import-1');
+		await waitFor(() =>
+			expect(
+				(window as any).twineElectron.discardProjectImport
+			).toHaveBeenCalledWith('import-1')
+		);
 		await waitFor(() =>
 			expect(screen.getByTestId('location')).toHaveAttribute(
 				'data-pathname',
@@ -826,7 +829,7 @@ describe('<NewProjectRoute>', () => {
 		).toBeInTheDocument();
 		expect(hasLocalReplacementRecovery()).toBe(true);
 		expect(localReplacementRecoveryStatus()).toBe('sealed');
-		expect(retireProjectStories).toHaveBeenCalled();
+		expect(retireProjectStories).not.toHaveBeenCalled();
 		recoverLocalReplacementJournal();
 		expect(hasLocalReplacementRecovery()).toBe(false);
 		expect(bootstrapStory(existingStory.id)).toBeUndefined();
@@ -843,7 +846,8 @@ describe('<NewProjectRoute>', () => {
 				createdStoryId = story.id;
 				return {rootPath, stories: [story], storyIds: [story.id]};
 			}),
-			deleteProjectFolder
+			deleteProjectFolder,
+			listProjectAssets: jest.fn(async () => [])
 		};
 		renderComponent('/new-project/import', undefined, {
 			coreProjectHost: {
@@ -873,7 +877,7 @@ describe('<NewProjectRoute>', () => {
 		await waitFor(() =>
 			expect(deleteProjectFolder).toHaveBeenCalledWith(rootPath)
 		);
-		expect(retireProjectStories).toHaveBeenCalledWith([createdStoryId]);
+		expect(retireProjectStories).not.toHaveBeenCalled();
 		expect(loadProjectMetadata(createdStoryId)).toBeUndefined();
 		expect(bootstrapStory(createdStoryId)).toBeUndefined();
 	});
@@ -941,9 +945,7 @@ describe('<NewProjectRoute>', () => {
 		await waitFor(() => expect(deleteProjectFolder).toHaveBeenCalledTimes(2));
 		setItem.mockRestore();
 		expect(admitProjectStories).not.toHaveBeenCalled();
-		expect(retireProjectStories).toHaveBeenCalledWith(
-			createdStories.map(story => story.id)
-		);
+		expect(retireProjectStories).not.toHaveBeenCalled();
 		for (const story of createdStories) {
 			expect(loadProjectMetadata(story.id)).toBeUndefined();
 			expect(deleteProjectFolder).toHaveBeenCalledWith(
@@ -1046,7 +1048,7 @@ describe('<NewProjectRoute>', () => {
 			name: 'Hydrated replacement target'
 		};
 		const oldRoot = '/native/current-target.twine.rs';
-		const newRoot = '/native/replacement-target.twine.rs';
+		const rollbackProjectReplacement = jest.fn(async () => undefined);
 		const applyStoryCommand = jest
 			.fn()
 			.mockRejectedValueOnce(new Error('replacement command failed'))
@@ -1081,19 +1083,22 @@ describe('<NewProjectRoute>', () => {
 			assetScanComplete: false
 		});
 		(window as any).twineElectron = {
-			createProjectFolder: jest.fn(async story => ({
-				rootPath: newRoot,
-				stories: [story],
-				storyIds: [story.id]
+			beginProjectReplacement: jest.fn(async (rootPath, stories) => ({
+				id: 'replacement-transaction',
+				project: {
+					rootPath,
+					stories,
+					storyIds: stories.map((story: StoryWithDocuments) => story.id)
+				}
 			})),
-			deleteProjectFolder,
 			hydrateProjectFolder: jest.fn(async () => ({
 				passageTextLoaded: true,
 				rootPath: oldRoot,
 				stories: [currentDocuments],
 				storyIds: [currentDocuments.id]
 			})),
-			listProjectAssets: jest.fn(async () => [])
+			listProjectAssets: jest.fn(async () => []),
+			rollbackProjectReplacement
 		};
 		renderComponent('/new-project/import', undefined, {
 			coreProjectHost: {
@@ -1127,8 +1132,13 @@ describe('<NewProjectRoute>', () => {
 			await screen.findByText('replacement command failed')
 		).toBeInTheDocument();
 		expect(ensureSessionReady).toHaveBeenCalledWith(currentDocuments.id);
-		expect(applyStoryCommand).toHaveBeenCalled();
-		expect(deleteProjectFolder).toHaveBeenCalledWith(newRoot);
+		expect(applyStoryCommand).toHaveBeenCalledWith(expect.any(Object), {
+			persistence: 'skip'
+		});
+		expect(deleteProjectFolder).not.toHaveBeenCalled();
+		expect(rollbackProjectReplacement).toHaveBeenCalledWith(
+			'replacement-transaction'
+		);
 		expect(projectStoryHydration(currentDocuments.id)).toEqual(
 			expect.objectContaining({
 				passageTextLoaded: false,
@@ -1143,6 +1153,93 @@ describe('<NewProjectRoute>', () => {
 			false
 		);
 		expect(bootstrapStory(currentDocuments.id)).toBeUndefined();
+	});
+
+	it('does not restore renderer state when native replacement rollback fails', async () => {
+		const currentDocuments = {
+			...fakeStory(1),
+			name: 'Recovery required replacement'
+		};
+		const rootPath = '/native/recovery-required.twine.rs';
+		const applyStoryCommand = jest.fn(async () => undefined);
+		const ensureSessionReady = jest.fn(async () => undefined);
+		const rollbackProjectReplacement = jest.fn(async () => {
+			throw new Error('native rollback failed');
+		});
+
+		saveProjectMetadata(currentDocuments.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		markProjectStoryHydration(currentDocuments.id, {
+			passageTextLoaded: false,
+			rootPath
+		});
+		(window as any).twineElectron = {
+			beginProjectReplacement: jest.fn(async (_rootPath, stories) => ({
+				id: 'replacement-transaction',
+				project: {
+					passageTextLoaded: true,
+					rootPath,
+					stories,
+					storyIds: stories.map((story: StoryWithDocuments) => story.id)
+				}
+			})),
+			commitProjectReplacements: jest.fn(async () => {
+				throw new Error('replacement cohort commit failed');
+			}),
+			hydrateProjectFolder: jest.fn(async () => ({
+				passageTextLoaded: true,
+				rootPath,
+				stories: [currentDocuments],
+				storyIds: [currentDocuments.id]
+			})),
+			listProjectAssets: jest.fn(async () => []),
+			rollbackProjectReplacement
+		};
+		renderComponent('/new-project/import', undefined, {
+			coreProjectHost: {
+				applyStoryCommand,
+				ensureSessionReady
+			} as unknown as CoreProjectHost,
+			stories: [metadataStory(currentDocuments)]
+		});
+		const source = new File(
+			[
+				`<tw-storydata name="${currentDocuments.name}" startnode="1" ifid="RECOVERY-REQUIRED">`,
+				'<tw-passagedata pid="1" name="Start">replacement body</tw-passagedata>',
+				'</tw-storydata>'
+			],
+			'recovery-required.html',
+			{type: 'text/html'}
+		);
+
+		fireEvent.change(screen.getByLabelText('Source file'), {
+			target: {files: [source]}
+		});
+		await screen.findByText(currentDocuments.name, {exact: true});
+		const row = screen
+			.getByText(currentDocuments.name, {exact: true})
+			.closest('tr');
+
+		fireEvent.click(row!.querySelector('input[type="checkbox"]')!);
+		fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+
+		expect(
+			await screen.findByText(/replacement cohort commit failed/)
+		).toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByText(/native rollback failed/)).toBeInTheDocument()
+		);
+		expect(rollbackProjectReplacement).toHaveBeenCalledWith(
+			'replacement-transaction'
+		);
+		// The only command is the forward replacement. Restoring Core before the
+		// native journal succeeds would create a live split-brain project.
+		expect(applyStoryCommand).toHaveBeenCalledTimes(1);
+		expect(ensureSessionReady).toHaveBeenCalledTimes(1);
+		expect(loadProjectMetadata(currentDocuments.id)?.rootPath).toBe(rootPath);
 	});
 
 	it('restores committed replacements before deleting all transaction roots', async () => {
@@ -1360,6 +1457,17 @@ describe('<NewProjectRoute>', () => {
 			expect(listProjectAssets).toHaveBeenCalledWith(newRoot)
 		);
 		expect(ensureSessionReady).toHaveBeenCalledWith(existingStory.id);
+		expect(
+			(window as any).twineElectron.createProjectFolder
+		).toHaveBeenCalledWith(
+			expect.objectContaining({
+				passages: [expect.objectContaining({text: 'replacement body'})]
+			}),
+			undefined
+		);
+		expect(applyStoryCommand).toHaveBeenCalledWith(expect.any(Object), {
+			persistence: 'skip'
+		});
 		expect(knownAssetInventoryForStory(existingStory.id)).toEqual([
 			importedAsset
 		]);
@@ -1377,8 +1485,16 @@ describe('<NewProjectRoute>', () => {
 			const existingStory = fakeStory(1);
 			const newRoot = '/native/rebound-import.twine.rs';
 			let capturedHost: CoreProjectHost | undefined;
+			let copyAttempts = 0;
 			const failureMessage = `asset ${failureStage} failed`;
 			const deleteProjectFolder = jest.fn(async () => undefined);
+			const copyProjectImportAssets = jest.fn(async () => {
+				copyAttempts++;
+				if (failureStage === 'copy' && copyAttempts === 1) {
+					throw new Error(failureMessage);
+				}
+				return [];
+			});
 
 			existingStory.name = 'Existing import target';
 			saveProjectMetadata(existingStory.id, {
@@ -1386,17 +1502,11 @@ describe('<NewProjectRoute>', () => {
 				storageKind: 'web-local'
 			});
 			(window as any).twineElectron = {
-				copyProjectImportAssets: jest.fn(async () => {
-					if (failureStage === 'copy') {
-						throw new Error(failureMessage);
-					}
-					return [];
-				}),
+				copyProjectImportAssets,
 				createProjectFolder: jest.fn(async story => {
 					expect(story.passages).toEqual([
 						expect.objectContaining({
-							id: existingStory.passages[0].id,
-							text: existingStory.passages[0].text
+							text: 'replacement body'
 						})
 					]);
 					return {rootPath: newRoot, stories: [story], storyIds: [story.id]};
@@ -1487,6 +1597,28 @@ describe('<NewProjectRoute>', () => {
 					])
 				})
 			);
+			if (failureStage === 'copy') {
+				fireEvent.click(screen.getByRole('button', {name: /run import/i}));
+				await waitFor(() =>
+					expect(copyProjectImportAssets).toHaveBeenCalledTimes(2)
+				);
+				expect(copyProjectImportAssets).toHaveBeenNthCalledWith(
+					1,
+					'import-failure',
+					newRoot
+				);
+				expect(copyProjectImportAssets).toHaveBeenNthCalledWith(
+					2,
+					'import-failure',
+					newRoot
+				);
+				await waitFor(() =>
+					expect(screen.getByTestId('location')).toHaveAttribute(
+						'data-pathname',
+						'/'
+					)
+				);
+			}
 		}
 	);
 

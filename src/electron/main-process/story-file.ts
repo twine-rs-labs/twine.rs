@@ -2,7 +2,12 @@ import {app, dialog, shell} from 'electron';
 import {mkdtemp, move, readdir, rename, stat, writeFile} from 'fs-extra';
 import {basename, join, resolve} from 'path';
 import {i18n} from './locales';
-import {openProjectFolder, readBoundedImportText} from './project-folder';
+import {
+	openProjectFolder,
+	readBoundedImportText,
+	recoverProjectDeletionTransactions,
+	recoverProjectReplacementTransactions
+} from './project-folder';
 import {
 	forgetProjectFolder,
 	rememberedProjectFolders
@@ -209,6 +214,8 @@ async function loadRememberedProjectStories(
  * legacy HTML story files from the story directory.
  */
 export async function loadStories() {
+	await recoverProjectDeletionTransactions();
+	await recoverProjectReplacementTransactions();
 	const storyPath = getStoryDirectoryPath();
 	const result: ElectronLoadedStoryEntry[] = [];
 

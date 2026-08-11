@@ -5,6 +5,7 @@ import {usePublishing} from '../use-publishing';
 import {saveProjectMetadata} from '../project-metadata';
 import {useComputedTheme} from '../prefs/use-computed-theme';
 import {usePrefsContext} from '../prefs';
+import {workbenchBufferCoordinator} from '../../util/workbench-buffer-coordinator';
 
 jest.mock('../use-publishing');
 jest.mock('../../util/is-electron');
@@ -61,9 +62,16 @@ describe('useStoryLaunch', () => {
 		usePublishingMock.mockReturnValue({buildStoryPreviewPackage});
 	});
 
+	afterEach(() => {
+		jest.restoreAllMocks();
+	});
+
 	describe('in a browser context', () => {
 		beforeEach(() => {
-			openSpy = jest.fn();
+			openSpy = jest.fn(() => ({
+				close: jest.fn(),
+				location: {replace: jest.fn()}
+			}));
 			isElectronRendererMock.mockReturnValue(false);
 			(window as any).open = openSpy;
 		});
@@ -78,18 +86,60 @@ describe('useStoryLaunch', () => {
 			});
 			await result.current.testStory('mock-story-id', 'current-id');
 
-			expect(openSpy.mock.calls).toEqual([
-				['#/stories/mock-story-id/preview?target=play', '_blank'],
+			expect(openSpy).toHaveBeenCalledTimes(3);
+			expect(openSpy).toHaveBeenCalledWith(
+				expect.stringMatching(/^http:\/\/localhost\/?$/),
+				'_blank'
+			);
+			expect(
+				openSpy.mock.results.map(({value}) => value.location.replace.mock.calls)
+			).toEqual([
+				[['#/stories/mock-story-id/preview?target=play']],
 				[
-					'#/stories/mock-story-id/preview?target=proof&proofingFormatName=Paper&proofingFormatVersion=1.0.0',
-					'_blank'
+					[
+						'#/stories/mock-story-id/preview?target=proof&proofingFormatName=Paper&proofingFormatVersion=1.0.0'
+					]
 				],
-				[
-					'#/stories/mock-story-id/preview?target=test&passage=current-id',
-					'_blank'
-				]
+				[['#/stories/mock-story-id/preview?target=test&passage=current-id']]
 			]);
 			expect(buildStoryPreviewPackage).not.toHaveBeenCalled();
+		});
+
+		it('reserves a tab before waiting for the story dirty-buffer barrier', async () => {
+			let finishFlush!: () => void;
+			const flush = jest
+				.spyOn(workbenchBufferCoordinator, 'flushStory')
+				.mockImplementation(
+					() => new Promise<void>(resolve => (finishFlush = resolve))
+				);
+			const {result} = renderHook(() => useStoryLaunch());
+			const launch = result.current.testStory('mock-story-id', 'current-id');
+			const previewWindow = openSpy.mock.results[0].value;
+
+			await Promise.resolve();
+			expect(flush).toHaveBeenCalledWith('mock-story-id');
+			expect(openSpy).toHaveBeenCalledTimes(1);
+			expect(previewWindow.location.replace).not.toHaveBeenCalled();
+			finishFlush();
+			await launch;
+			expect(previewWindow.location.replace).toHaveBeenCalledWith(
+				'#/stories/mock-story-id/preview?target=test&passage=current-id'
+			);
+		});
+
+		it('closes the reserved tab when a dirty buffer cannot persist', async () => {
+			jest
+				.spyOn(workbenchBufferCoordinator, 'flushStory')
+				.mockRejectedValue(new Error('save failed'));
+			const {result} = renderHook(() => useStoryLaunch());
+
+			await expect(result.current.playStory('mock-story-id')).rejects.toThrow(
+				'save failed'
+			);
+			const previewWindow = openSpy.mock.results[0].value;
+
+			expect(previewWindow.location.replace).not.toHaveBeenCalled();
+			expect(previewWindow.close).toHaveBeenCalledTimes(1);
 		});
 	});
 

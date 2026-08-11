@@ -1,5 +1,12 @@
 import * as React from 'react';
-import {Navigate, useLocation, useParams} from 'react-router';
+import {
+	Navigate,
+	UNSAFE_DataRouterContext,
+	useBeforeUnload,
+	useBlocker,
+	useLocation,
+	useParams
+} from 'react-router';
 import {MainContent} from '../../components/container/main-content';
 import {DocumentTitle} from '../../components/document-title/document-title';
 import {StoryEditActions} from '../../route-actions';
@@ -30,7 +37,9 @@ import {
 } from './story-workbench-panels';
 import type {StoryWorkbenchBottomDrawerPanel} from './workbench-extensions';
 import {useCoreProjectHost} from '../../core';
+import {workbenchBufferCoordinator} from '../../util/workbench-buffer-coordinator';
 import {
+	type StoryEditMode,
 	useStoryEditScrollMemory,
 	useStoryEditWorkspace
 } from './workspace-state';
@@ -107,6 +116,73 @@ function sourcePositionForText(
 
 	return lineStart;
 }
+
+const DataRouterWorkbenchNavigationGuard: React.FC<{storyId: string}> = ({
+	storyId
+}) => {
+	const shouldBlock = React.useCallback(
+		({
+			currentLocation,
+			nextLocation
+		}: {
+			currentLocation: {pathname: string};
+			nextLocation: {pathname: string};
+		}) =>
+			currentLocation.pathname !== nextLocation.pathname &&
+			workbenchBufferCoordinator.hasPendingChanges(storyId),
+		[storyId]
+	);
+	const blocker = useBlocker(shouldBlock);
+
+	useBeforeUnload(
+		React.useCallback(
+			event => {
+				if (!workbenchBufferCoordinator.hasPendingChanges(storyId)) {
+					return;
+				}
+
+				event.preventDefault();
+				event.returnValue = '';
+			},
+			[storyId]
+		)
+	);
+
+	React.useEffect(() => {
+		if (blocker.state !== 'blocked') {
+			return;
+		}
+
+		let active = true;
+
+		void workbenchBufferCoordinator.flushStory(storyId).then(
+			() => {
+				if (active) {
+					blocker.proceed();
+				}
+			},
+			() => {
+				if (active) {
+					blocker.reset();
+				}
+			}
+		);
+
+		return () => {
+			active = false;
+		};
+	}, [blocker, storyId]);
+
+	return null;
+};
+
+const WorkbenchNavigationGuard: React.FC<{storyId: string}> = ({storyId}) => {
+	const dataRouter = React.useContext(UNSAFE_DataRouterContext);
+
+	return dataRouter ? (
+		<DataRouterWorkbenchNavigationGuard storyId={storyId} />
+	) : null;
+};
 
 const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 	const location = useLocation();
@@ -343,6 +419,22 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		],
 		[findReplaceRequest, openWorkbenchPanel]
 	);
+	const handleChangeMode = React.useCallback(
+		async (mode: StoryEditMode) => {
+			if (mode === workspace.mode) {
+				return;
+			}
+			try {
+				await workbenchBufferCoordinator.flushStory(story.id);
+				workspace.setMode(mode);
+			} catch (error) {
+				window.alert(
+					`Could not save the open editor before changing views (${(error as Error).message}).`
+				);
+			}
+		},
+		[story.id, workspace]
+	);
 
 	React.useEffect(() => {
 		if (!location.search || handledRevealQuery.current === location.search) {
@@ -377,7 +469,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		handledRevealQuery.current = location.search;
 
 		if (mode === 'text' || mode === 'graph' || mode === 'split') {
-			workspace.setMode(mode);
+			void handleChangeMode(mode);
 		}
 
 		if (mode === 'graph' && passage) {
@@ -452,6 +544,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		if (query) openWorkbenchPanel('find-replace', {query});
 	}, [
 		coreProjectHost,
+		handleChangeMode,
 		handleChoosePassage,
 		location.search,
 		openWorkbenchPanel,
@@ -462,6 +555,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 
 	return (
 		<div className="story-edit-route">
+			<WorkbenchNavigationGuard storyId={story.id} />
 			<DocumentTitle title={story.name} />
 			<StoryEditActions
 				bottomDrawerOpen={workspace.bottomDrawerOpen}
@@ -470,7 +564,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 				mode={workspace.mode}
 				onChangeBottomDrawerOpen={workspace.setBottomDrawerOpen}
 				onChangeLeftDockCollapsed={workspace.setLeftDockCollapsed}
-				onChangeMode={workspace.setMode}
+				onChangeMode={mode => void handleChangeMode(mode)}
 				onChangeRightDockCollapsed={workspace.setRightDockCollapsed}
 				onEditPassages={handleEditPassages}
 				onOpenEditorWindow={kind => openEditorWindow({kind})}

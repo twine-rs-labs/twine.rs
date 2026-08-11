@@ -403,7 +403,8 @@ describe('StoreCoreProjectHost asset commands', () => {
 					}
 				],
 				startPassage: 'imported-start'
-			})
+			}),
+			undefined
 		);
 
 		await expect(
@@ -553,6 +554,175 @@ describe('StoreCoreProjectHost asset commands', () => {
 			persisted: true
 		});
 		await expect(persisted).rejects.toBe(persistenceError);
+	});
+
+	it('does not complete project admission before its exact persistence barrier', async () => {
+		const story = fakeStory(1);
+		let finishPersistence!: () => void;
+		const persistence = new Promise<void>(resolve => {
+			finishPersistence = resolve;
+		});
+		const dispatch = jest.fn((action: StoriesActionOrThunk) => {
+			if (
+				typeof action !== 'function' &&
+				action.type === 'applyCorePatchBatch' &&
+				action.persistenceToken
+			) {
+				bindPersistenceCompletion(action.persistenceToken, {
+					completion: persistence,
+					persisted: true
+				});
+			}
+		});
+		const host = new StoreCoreProjectHost([], dispatch);
+		let completed = false;
+		const admission = host
+			.admitProjectStories([story], {
+				history: 'skip',
+				persistence: 'save',
+				persistenceBarrier: true
+			})
+			.then(() => {
+				completed = true;
+			});
+
+		await flushCommand();
+		expect(completed).toBe(false);
+		finishPersistence();
+		await admission;
+		expect(completed).toBe(true);
+	});
+
+	it('compensates Core admission when its persistence barrier rejects', async () => {
+		const story = fakeStory(1);
+		const persistenceError = new Error('manifest commit failed');
+		const dispatch = jest.fn((action: StoriesActionOrThunk) => {
+			if (
+				typeof action !== 'function' &&
+				action.type === 'applyCorePatchBatch' &&
+				action.persistenceToken
+			) {
+				bindPersistenceCompletion(action.persistenceToken, {
+					completion: Promise.reject(persistenceError),
+					persisted: true
+				});
+			}
+		});
+		const host = new StoreCoreProjectHost([], dispatch);
+
+		await expect(
+			host.admitProjectStories([story], {
+				history: 'skip',
+				persistence: 'save',
+				persistenceBarrier: true
+			})
+		).rejects.toBe(persistenceError);
+		expect(dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actions: [
+					expect.objectContaining({storyId: story.id, type: 'deleteStory'})
+				],
+				persistence: 'skip',
+				type: 'applyCorePatchBatch'
+			}),
+			undefined
+		);
+	});
+
+	it('retains Core ownership when failed admission compensation is incomplete', async () => {
+		const story = {...fakeStory(1), id: 'incomplete-admission-rollback'};
+		const persistenceError = new Error('manifest commit failed');
+		const dispatch = jest.fn((action: StoriesActionOrThunk) => {
+			if (
+				typeof action !== 'function' &&
+				action.type === 'applyCorePatchBatch' &&
+				action.persistenceToken
+			) {
+				bindPersistenceCompletion(action.persistenceToken, {
+					completion: Promise.reject(persistenceError),
+					persisted: true
+				});
+			}
+		});
+		const host = new StoreCoreProjectHost([], dispatch);
+		const originalApply = host.applyStoryCommand.bind(host);
+		const apply = jest
+			.spyOn(host, 'applyStoryCommand')
+			.mockImplementation((command, options) =>
+				command.type === 'batch' &&
+				command.commands.every(candidate => candidate.type === 'deleteStory')
+					? Promise.reject(new Error('Core rollback failed'))
+					: originalApply(command, options)
+			);
+
+		await expect(
+			host.admitProjectStories([story], {
+				history: 'skip',
+				persistence: 'save',
+				persistenceBarrier: true
+			})
+		).rejects.toEqual(
+			expect.objectContaining({code: 'CORE_ADMISSION_ROLLBACK_INCOMPLETE'})
+		);
+		await expect(
+			host.admitProjectStories([story], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).rejects.toThrow('already belongs to this core project session');
+		expect(bootstrapStory(story.id)).toEqual(
+			expect.objectContaining({id: story.id})
+		);
+		apply.mockRestore();
+	});
+
+	it('retains original documents when failed deletion compensation is incomplete', async () => {
+		const story = {...fakeStory(1), id: 'incomplete-deletion-rollback'};
+		const persistenceError = new Error('manifest commit failed');
+
+		registerStoryDocuments(story);
+		const dispatch = jest.fn((action: StoriesActionOrThunk) => {
+			if (
+				typeof action !== 'function' &&
+				action.type === 'applyCorePatchBatch' &&
+				action.persistenceToken
+			) {
+				bindPersistenceCompletion(action.persistenceToken, {
+					completion: Promise.reject(persistenceError),
+					persisted: true
+				});
+			}
+		});
+		const host = new StoreCoreProjectHost([story], dispatch);
+		const originalApply = host.applyStoryCommand.bind(host);
+		const apply = jest
+			.spyOn(host, 'applyStoryCommand')
+			.mockImplementation((command, options) =>
+				command.type === 'batch' &&
+				command.commands.every(candidate => candidate.type === 'createStory')
+					? Promise.reject(new Error('Core restore failed'))
+					: originalApply(command, options)
+			);
+
+		await expect(
+			host.deleteProjectStories([story.id], {
+				history: 'skip',
+				persistence: 'save',
+				persistenceBarrier: true
+			})
+		).rejects.toEqual(
+			expect.objectContaining({code: 'CORE_DELETION_ROLLBACK_INCOMPLETE'})
+		);
+		expect(bootstrapStory(story.id)).toEqual(
+			expect.objectContaining({id: story.id})
+		);
+		await expect(
+			host.admitProjectStories([story], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).rejects.toThrow('already belongs to this core project session');
+		apply.mockRestore();
 	});
 
 	it('resolves a persisted command only after the local manifest commit', async () => {
@@ -1526,8 +1696,311 @@ describe('useCoreProjectHost', () => {
 				type: 'applyCorePatchBatch'
 			})
 		);
+		await expect(
+			capturedHost!.admitProjectStories([first], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).resolves.toBeDefined();
+		expect(hostStoryIds(capturedHost!)).toEqual([first.id]);
 
 		admission.mockRestore();
+		rendered.unmount();
+	});
+
+	it('durably rolls back an earlier admission group when a later group fails', async () => {
+		const first = {...fakeStory(), id: 'first-persisted-admission'};
+		const second = {...fakeStory(), id: 'second-persisted-admission'};
+
+		first.passages = first.passages.map(passage => ({
+			...passage,
+			story: first.id
+		}));
+		second.passages = second.passages.map(passage => ({
+			...passage,
+			story: second.id
+		}));
+		const dispatch = jest.fn((action: StoriesActionOrThunk) => {
+			if (
+				typeof action !== 'function' &&
+				action.type === 'applyCorePatchBatch' &&
+				action.persistenceToken
+			) {
+				bindPersistenceCompletion(action.persistenceToken, {
+					completion: Promise.resolve(),
+					persisted: true
+				});
+			}
+		});
+		let capturedHost: CoreProjectHost | undefined;
+		const originalAdmission =
+			StoreCoreProjectHost.prototype.admitProjectStories;
+		const admission = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'admitProjectStories')
+			.mockImplementation(function (
+				this: StoreCoreProjectHost,
+				stories,
+				options
+			) {
+				if (stories.some(story => story.id === second.id)) {
+					return Promise.reject(new Error('second persisted session failed'));
+				}
+				return originalAdmission.call(this, stories, options);
+			});
+		const rendered = render(
+			providerTree(
+				[],
+				dispatch,
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						capturedHost = host;
+					}
+				})
+			)
+		);
+
+		await expect(
+			capturedHost!.admitProjectStories([first, second], {
+				history: 'skip',
+				persistence: 'save',
+				persistenceBarrier: true
+			})
+		).rejects.toThrow('second persisted session failed');
+		expect(hostStoryIds(capturedHost!)).toEqual([]);
+		expect(dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				actions: [
+					expect.objectContaining({storyId: first.id, type: 'deleteStory'})
+				],
+				persistenceToken: expect.any(String),
+				type: 'applyCorePatchBatch'
+			})
+		);
+
+		admission.mockRestore();
+		rendered.unmount();
+	});
+
+	it('retains outer ownership when admission compensation is incomplete', async () => {
+		const story = {...fakeStory(1), id: 'outer-incomplete-admission'};
+
+		story.passages = story.passages.map(passage => ({
+			...passage,
+			story: story.id
+		}));
+		const dispatch = jest.fn();
+		let capturedHost: CoreProjectHost | undefined;
+		const admission = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'admitProjectStories')
+			.mockRejectedValue(
+				Object.assign(new Error('Core rollback failed'), {
+					code: 'CORE_ADMISSION_ROLLBACK_INCOMPLETE'
+				})
+			);
+		const rendered = render(
+			providerTree(
+				[],
+				dispatch,
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						capturedHost = host;
+					}
+				})
+			)
+		);
+
+		await expect(
+			capturedHost!.admitProjectStories([story], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).rejects.toEqual(
+			expect.objectContaining({code: 'CORE_ADMISSION_ROLLBACK_INCOMPLETE'})
+		);
+		expect(hostStoryIds(capturedHost!)).toEqual([story.id]);
+		await expect(
+			capturedHost!.admitProjectStories([story], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).rejects.toThrow('already bound to a core project session');
+
+		admission.mockRestore();
+		rendered.unmount();
+	});
+
+	it('clears outer ownership after deletion so the story can be re-admitted', async () => {
+		const story = {...fakeStory(1), id: 'delete-and-readmit'};
+
+		story.passages = story.passages.map(passage => ({
+			...passage,
+			story: story.id
+		}));
+		const dispatch = jest.fn();
+		let capturedHost: CoreProjectHost | undefined;
+		const rendered = render(
+			providerTree(
+				[story],
+				dispatch,
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						capturedHost = host;
+					}
+				})
+			)
+		);
+
+		await capturedHost!.deleteProjectStories([story.id], {
+			history: 'skip',
+			persistence: 'skip'
+		});
+		expect(hostStoryIds(capturedHost!)).toEqual([]);
+		await expect(
+			capturedHost!.admitProjectStories([story], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).resolves.toBeDefined();
+		expect(hostStoryIds(capturedHost!)).toEqual([story.id]);
+
+		rendered.unmount();
+	});
+
+	it('restores earlier session groups when a later deletion fails', async () => {
+		const first = {...fakeStory(1), id: 'first-delete-group'};
+		const second = {...fakeStory(1), id: 'second-delete-group'};
+
+		first.passages = first.passages.map(passage => ({
+			...passage,
+			story: first.id
+		}));
+		second.passages = second.passages.map(passage => ({
+			...passage,
+			story: second.id
+		}));
+		const dispatch = jest.fn();
+		let capturedHost: CoreProjectHost | undefined;
+		const originalDeletion =
+			StoreCoreProjectHost.prototype.deleteProjectStories;
+		const deletion = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'deleteProjectStories')
+			.mockImplementation(function (
+				this: StoreCoreProjectHost,
+				storyIds,
+				options
+			) {
+				return storyIds.includes(second.id)
+					? Promise.reject(new Error('second deletion failed'))
+					: originalDeletion.call(this, storyIds, options);
+			});
+		const rendered = render(
+			providerTree(
+				[first, second],
+				dispatch,
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						capturedHost = host;
+					}
+				})
+			)
+		);
+
+		await expect(
+			capturedHost!.deleteProjectStories([first.id, second.id], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).rejects.toThrow('second deletion failed');
+		expect(hostStoryIds(capturedHost!)).toEqual([first.id, second.id]);
+		await expect(
+			capturedHost!.queryPassageDocumentAsync(first.id, first.passages[0].id)
+		).resolves.toEqual(expect.objectContaining({text: first.passages[0].text}));
+
+		deletion.mockRestore();
+		rendered.unmount();
+	});
+
+	it('retains inner and outer ownership when grouped deletion recovery fails', async () => {
+		const first = {...fakeStory(1), id: 'unresolved-first-delete-group'};
+		const second = {...fakeStory(1), id: 'unresolved-second-delete-group'};
+
+		first.passages = first.passages.map(passage => ({
+			...passage,
+			story: first.id
+		}));
+		second.passages = second.passages.map(passage => ({
+			...passage,
+			story: second.id
+		}));
+		const dispatch = jest.fn();
+		let capturedHost: CoreProjectHost | undefined;
+		const originalDeletion =
+			StoreCoreProjectHost.prototype.deleteProjectStories;
+		const deletion = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'deleteProjectStories')
+			.mockImplementation(function (
+				this: StoreCoreProjectHost,
+				storyIds,
+				options
+			) {
+				return storyIds.includes(second.id)
+					? Promise.reject(new Error('second deletion failed'))
+					: originalDeletion.call(this, storyIds, options);
+			});
+		const originalApply = StoreCoreProjectHost.prototype.applyStoryCommand;
+		const apply = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyStoryCommand')
+			.mockImplementation(function (
+				this: StoreCoreProjectHost,
+				command,
+				options
+			) {
+				return command.type === 'batch' &&
+					command.commands.some(
+						candidate =>
+							candidate.type === 'createStory' &&
+							candidate.story.id === first.id
+					)
+					? Promise.reject(new Error('first deletion restore failed'))
+					: originalApply.call(this, command, options);
+			});
+		const rendered = render(
+			providerTree(
+				[first, second],
+				dispatch,
+				React.createElement(CaptureHost, {
+					onHost: host => {
+						capturedHost = host;
+					}
+				})
+			)
+		);
+
+		await expect(
+			capturedHost!.deleteProjectStories([first.id, second.id], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).rejects.toThrow('could not be restored');
+		expect(hostStoryIds(capturedHost!)).toEqual([first.id, second.id]);
+		const firstHost = (
+			capturedHost as ProjectScopedCoreProjectHost as any
+		).hosts.get(`story:${first.id}`) as StoreCoreProjectHost;
+
+		await expect(
+			firstHost.admitProjectStories([first], {
+				history: 'skip',
+				persistence: 'skip'
+			})
+		).rejects.toThrow('already belongs to this core project session');
+		expect(bootstrapStory(first.id)).toEqual(
+			expect.objectContaining({id: first.id})
+		);
+		(capturedHost as ProjectScopedCoreProjectHost).update([second], dispatch);
+		expect(hostStoryIds(capturedHost!)).toEqual([first.id, second.id]);
+
+		apply.mockRestore();
+		deletion.mockRestore();
 		rendered.unmount();
 	});
 

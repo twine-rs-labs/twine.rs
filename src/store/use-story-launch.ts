@@ -20,6 +20,7 @@ import {usePrefsContext} from './prefs';
 import {useComputedTheme} from './prefs/use-computed-theme';
 import type {StoryBuildPackage} from '../util/build-package';
 import {storyPreviewRoutePath} from '../routes/story-preview/story-preview-route-path';
+import {workbenchBufferCoordinator} from '../util/workbench-buffer-coordinator';
 
 export interface UseStoryLaunchProps {
 	playStory: (storyId: string) => Promise<void>;
@@ -54,6 +55,29 @@ function previewAssetRequests(
 				.filter(asset => asset.sourcePath !== null)
 				.map(({outputPath, path}) => ({outputPath, path}))
 		: [];
+}
+
+async function openBrowserPreviewAfterFlush(storyId: string, path: string) {
+	const baseUrl = new URL(window.location.href);
+
+	baseUrl.hash = '';
+	// Reserve the tab synchronously while the click still carries browser user
+	// activation. Publish the preview route only after every editor buffer has
+	// durably reached the bound project session.
+	const previewWindow = window.open(baseUrl.href, '_blank');
+
+	if (!previewWindow) {
+		throw new Error(
+			'The browser blocked the preview window. Allow popups and try again.'
+		);
+	}
+	try {
+		await workbenchBufferCoordinator.flushStory(storyId);
+		previewWindow.location.replace(`#${path}`);
+	} catch (error) {
+		previewWindow.close();
+		throw error;
+	}
 }
 
 async function refreshedProjectAssets(
@@ -128,6 +152,7 @@ export function useNativeStoryPreviewPreparation() {
 			if (!twineElectron) {
 				throw new Error('Electron bridge is not present on window.');
 			}
+			await workbenchBufferCoordinator.flushStory(storyId);
 
 			const {assetInventory, projectRoot} = await refreshedProjectAssets(
 				storyId,
@@ -250,16 +275,19 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 	}
 
 	const playStoryWithBuild = async (storyId: string) => {
-		window.open(`#${storyPreviewRoutePath(storyId, 'play')}`, '_blank');
+		await openBrowserPreviewAfterFlush(
+			storyId,
+			storyPreviewRoutePath(storyId, 'play')
+		);
 		return undefined;
 	};
 	const proofStoryWithBuild = async (
 		storyId: string,
 		proofingFormat?: ProofingFormatSelection
 	) => {
-		window.open(
-			`#${storyPreviewRoutePath(storyId, 'proof', {proofingFormat})}`,
-			'_blank'
+		await openBrowserPreviewAfterFlush(
+			storyId,
+			storyPreviewRoutePath(storyId, 'proof', {proofingFormat})
 		);
 		return undefined;
 	};
@@ -274,11 +302,11 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 		},
 		proofStoryWithBuild,
 		testStory: async (storyId, startPassageId) => {
-			window.open(
-				`#${storyPreviewRoutePath(storyId, 'test', {
+			await openBrowserPreviewAfterFlush(
+				storyId,
+				storyPreviewRoutePath(storyId, 'test', {
 					passageId: startPassageId
-				})}`,
-				'_blank'
+				})
 			);
 		}
 	};

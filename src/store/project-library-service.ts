@@ -2,7 +2,9 @@ import {v4 as uuid} from '@lukeed/uuid';
 import * as React from 'react';
 import type {
 	NativeProjectFolderResult,
+	NativeProjectDeletionTransaction,
 	NativeProjectImportSource,
+	NativeProjectReplacementTransaction,
 	NativeProjectSessionSnapshot,
 	ProjectSourceLayout,
 	ProjectStoryReplacement,
@@ -44,6 +46,7 @@ import {
 	prepareLocalReplacementRecovery,
 	sealLocalReplacementRecovery
 } from './persistence/local-storage/stories/replacement-recovery';
+import {workbenchBufferCoordinator} from '../util/workbench-buffer-coordinator';
 
 function bridge() {
 	return (window as TwineElectronWindow).twineElectron;
@@ -112,7 +115,7 @@ export class ProjectLibraryService {
 	}
 
 	canDeleteProjectFolder(rootPath: string | undefined) {
-		return !!rootPath && !!bridge()?.deleteProjectFolder;
+		return !!rootPath && !!bridge()?.beginProjectFolderDeletion;
 	}
 
 	canConsumeCommandLineOpenRequests() {
@@ -220,6 +223,72 @@ export class ProjectLibraryService {
 		return bridge()?.copyProjectImportAssets?.(importId, rootPath);
 	}
 
+	beginProjectReplacement(
+		rootPath: string,
+		stories: StoryWithDocuments[],
+		importId?: string
+	): Promise<NativeProjectReplacementTransaction> {
+		const operation = bridge()?.beginProjectReplacement?.(
+			rootPath,
+			stories,
+			importId
+		);
+
+		return (
+			operation ??
+			Promise.reject(
+				new Error('The native project replacement bridge is unavailable.')
+			)
+		);
+	}
+
+	commitProjectReplacements(transactionIds: string[]) {
+		return (
+			bridge()?.commitProjectReplacements?.(transactionIds) ??
+			Promise.reject(
+				new Error('The native project replacement bridge is unavailable.')
+			)
+		);
+	}
+
+	rollbackProjectReplacement(transactionId: string) {
+		return (
+			bridge()?.rollbackProjectReplacement?.(transactionId) ??
+			Promise.reject(
+				new Error('The native project replacement bridge is unavailable.')
+			)
+		);
+	}
+
+	beginProjectFolderDeletion(
+		rootPath: string
+	): Promise<NativeProjectDeletionTransaction> {
+		return (
+			bridge()?.beginProjectFolderDeletion?.(rootPath) ??
+			Promise.reject(
+				new Error('The native project deletion bridge is unavailable.')
+			)
+		);
+	}
+
+	commitProjectFolderDeletion(transactionId: string) {
+		return (
+			bridge()?.commitProjectFolderDeletion?.(transactionId) ??
+			Promise.reject(
+				new Error('The native project deletion bridge is unavailable.')
+			)
+		);
+	}
+
+	rollbackProjectFolderDeletion(transactionId: string) {
+		return (
+			bridge()?.rollbackProjectFolderDeletion?.(transactionId) ??
+			Promise.reject(
+				new Error('The native project deletion bridge is unavailable.')
+			)
+		);
+	}
+
 	listProjectAssets(rootPath: string): Promise<CoreAssetInventoryEntry[]> {
 		const operation = bridge()?.listProjectAssets?.(rootPath);
 
@@ -310,11 +379,18 @@ export class ProjectLibraryService {
 			preferredParent,
 			sourceLayout
 		);
+		if (result) {
+			// A freshly created project cannot contain assets yet. Publish that
+			// completed empty scan before Core readiness or save acknowledgement can
+			// wait on the native inventory barrier.
+			replaceKnownAssetInventoryForStory(story.id, []);
+		}
 
 		try {
 			await this.coreProjectHost.admitProjectStories([story], {
 				history: 'skip',
-				persistence: result ? 'skip' : 'save'
+				persistence: result ? 'skip' : 'save',
+				persistenceBarrier: !result
 			});
 		} catch (error) {
 			await this.cleanupFailedProject(story.id, result?.rootPath, error);
@@ -329,7 +405,7 @@ export class ProjectLibraryService {
 	async admitProjectStories(stories: StoryWithDocuments[]) {
 		const nativeStories: StoryWithDocuments[] = [];
 		const localStories: StoryWithDocuments[] = [];
-		const attemptedStories: StoryWithDocuments[] = [];
+		const admittedStories: StoryWithDocuments[] = [];
 
 		for (const story of stories) {
 			const fileBacked =
@@ -338,26 +414,28 @@ export class ProjectLibraryService {
 
 			(fileBacked ? nativeStories : localStories).push(story);
 		}
+		await this.ensureNativeAssetInventories(nativeStories);
 
 		try {
+			if (localStories.length > 0) {
+				await this.coreProjectHost.admitProjectStories(localStories, {
+					history: 'skip',
+					persistence: 'save',
+					persistenceBarrier: true
+				});
+				admittedStories.push(...localStories);
+			}
 			if (nativeStories.length > 0) {
-				attemptedStories.push(...nativeStories);
 				await this.coreProjectHost.admitProjectStories(nativeStories, {
 					history: 'skip',
 					persistence: 'skip'
 				});
+				admittedStories.push(...nativeStories);
 				await this.acknowledgeStoriesSaved(nativeStories);
-			}
-			if (localStories.length > 0) {
-				attemptedStories.push(...localStories);
-				await this.coreProjectHost.admitProjectStories(localStories, {
-					history: 'skip',
-					persistence: 'save'
-				});
 			}
 		} catch (error) {
 			try {
-				await this.rollbackProjectAdmissions(attemptedStories);
+				await this.rollbackProjectAdmissions(admittedStories);
 				for (const story of stories) {
 					this.forgetProject(story.id);
 				}
@@ -395,7 +473,8 @@ export class ProjectLibraryService {
 			try {
 				await this.coreProjectHost.admitProjectStories(duplicates, {
 					history: 'skip',
-					persistence: 'save'
+					persistence: 'save',
+					persistenceBarrier: true
 				});
 			} catch (error) {
 				for (const story of duplicates) {
@@ -432,6 +511,7 @@ export class ProjectLibraryService {
 			for (const story of result.stories) {
 				this.commitProjectFolder(story.id, result);
 			}
+			await this.ensureNativeAssetInventories(result.stories);
 			await this.coreProjectHost.admitProjectStories(result.stories, {
 				history: 'skip',
 				persistence: 'skip'
@@ -552,9 +632,30 @@ export class ProjectLibraryService {
 		if (stories.length === 0) {
 			return;
 		}
+		const localStoryIds = stories
+			.filter(
+				story =>
+					loadProjectMetadata(story.id)?.storageKind !==
+					'electron-project-folder'
+			)
+			.map(story => story.id);
+
+		if (localStoryIds.length > 0) {
+			await this.coreProjectHost.deleteProjectStories(localStoryIds, {
+				history: 'skip',
+				persistence: 'save',
+				persistenceBarrier: true
+			});
+		}
 		await this.coreProjectHost.retireProjectStories(
 			stories.map(story => story.id)
 		);
+		for (const story of stories) {
+			this.forgetProject(story.id);
+		}
+	}
+
+	forgetProjectBindings(stories: Story[]) {
 		for (const story of stories) {
 			this.forgetProject(story.id);
 		}
@@ -634,26 +735,122 @@ export class ProjectLibraryService {
 	}
 
 	async deleteProjectFolder(rootPath: string, stories: Story[]) {
-		const nativeBridge = bridge();
-
-		if (!nativeBridge?.deleteProjectFolder) {
-			throw new Error(
-				'The desktop project-folder deletion bridge is unavailable.'
-			);
-		}
-		await nativeBridge.deleteProjectFolder(rootPath);
-		await this.coreProjectHost.retireProjectStories(
-			stories.map(story => story.id)
-		);
 		for (const story of stories) {
-			this.forgetProject(story.id);
+			await workbenchBufferCoordinator.flushStory(story.id);
+		}
+		const lazySnapshot = stories.some(
+			story => projectStoryHydration(story.id)?.passageTextLoaded === false
+		)
+			? await this.projectDeletionSnapshot(rootPath, stories)
+			: undefined;
+		const originals = lazySnapshot
+			? stories.map(story => {
+					const original = lazySnapshot.stories.find(
+						candidate =>
+							candidate.id === story.id && candidate.ifid === story.ifid
+					);
+
+					if (!original) {
+						throw new Error(
+							`The native project snapshot does not contain story "${story.id}".`
+						);
+					}
+					return original;
+				})
+			: await Promise.all(
+					stories.map(story => materializeRegisteredStory(story))
+				);
+		const bindings = stories.map(story => ({
+			assets: lazySnapshot
+				? [...lazySnapshot.assets]
+				: [...knownAssetInventoryForStory(story.id)],
+			assetScanComplete:
+				!!lazySnapshot || knownAssetInventoryScanCompleteForStory(story.id),
+			hydration: lazySnapshot
+				? {
+						...projectStoryHydration(story.id),
+						passageTextLoaded: true,
+						revision: projectStoryHydration(story.id)?.revision ?? 0,
+						rootPath
+					}
+				: projectStoryHydration(story.id),
+			metadata: loadProjectMetadata(story.id),
+			storyId: story.id
+		}));
+		const transaction = await this.beginProjectFolderDeletion(rootPath);
+		let retired = false;
+
+		try {
+			for (const story of stories) {
+				this.forgetProject(story.id);
+			}
+			await this.coreProjectHost.retireProjectStories(
+				stories.map(story => story.id)
+			);
+			retired = true;
+			await this.commitProjectFolderDeletion(transaction.id);
+		} catch (error) {
+			const rollbackErrors: unknown[] = [];
+			let nativeRollbackSucceeded = false;
+
+			try {
+				await this.rollbackProjectFolderDeletion(transaction.id);
+				nativeRollbackSucceeded = true;
+			} catch (rollbackError) {
+				rollbackErrors.push(rollbackError);
+			}
+			if (!nativeRollbackSucceeded) {
+				if (!retired) {
+					try {
+						await this.coreProjectHost.retireProjectStories(
+							stories.map(story => story.id)
+						);
+					} catch (rollbackError) {
+						rollbackErrors.push(rollbackError);
+					}
+				}
+				throw new AggregateError(
+					[error, ...rollbackErrors],
+					'Project deletion failed and native recovery is required before the project can be reopened.',
+					{cause: error}
+				);
+			}
+			for (const binding of bindings) {
+				this.restoreProjectBinding(
+					binding.storyId,
+					binding.metadata,
+					binding.hydration
+				);
+				replaceKnownAssetInventoryForStory(binding.storyId, binding.assets, {
+					assetScanComplete: binding.assetScanComplete
+				});
+			}
+			if (retired) {
+				try {
+					await this.coreProjectHost.admitProjectStories(originals, {
+						history: 'skip',
+						persistence: 'skip'
+					});
+				} catch (rollbackError) {
+					rollbackErrors.push(rollbackError);
+				}
+			}
+			if (rollbackErrors.length > 0) {
+				throw new AggregateError(
+					[error, ...rollbackErrors],
+					'Project deletion failed and its prior project state could not be fully restored.',
+					{cause: error}
+				);
+			}
+			throw error;
 		}
 	}
 
 	async deleteStory(story: Story) {
 		await this.coreProjectHost.deleteProjectStories([story.id], {
 			history: 'skip',
-			persistence: 'save'
+			persistence: 'save',
+			persistenceBarrier: true
 		});
 		this.forgetProject(story.id);
 	}
@@ -672,6 +869,9 @@ export class ProjectLibraryService {
 	private forgetProject(storyId: string) {
 		deleteProjectMetadata(storyId);
 		clearProjectStoryHydration(storyId);
+		replaceKnownAssetInventoryForStory(storyId, [], {
+			assetScanComplete: false
+		});
 	}
 
 	private async acknowledgeStoriesSaved(stories: Story[]) {
@@ -698,6 +898,56 @@ export class ProjectLibraryService {
 				);
 			}
 		}
+	}
+
+	private async ensureNativeAssetInventories(stories: Story[]) {
+		const storiesByRoot = new Map<string, Story[]>();
+
+		for (const story of stories) {
+			if (knownAssetInventoryScanCompleteForStory(story.id)) {
+				continue;
+			}
+			const rootPath = loadProjectMetadata(story.id)?.rootPath;
+
+			if (!rootPath) {
+				continue;
+			}
+			storiesByRoot.set(rootPath, [
+				...(storiesByRoot.get(rootPath) ?? []),
+				story
+			]);
+		}
+
+		for (const [rootPath, projectStories] of storiesByRoot) {
+			const inventory = await this.listProjectAssets(rootPath);
+
+			for (const story of projectStories) {
+				replaceKnownAssetInventoryForStory(story.id, inventory);
+			}
+		}
+	}
+
+	private async projectDeletionSnapshot(rootPath: string, stories: Story[]) {
+		const nativeBridge = bridge();
+
+		if (!nativeBridge?.projectSessionSnapshot) {
+			throw new Error(
+				'An unopened project cannot be deleted without a native project snapshot.'
+			);
+		}
+		const snapshot = await nativeBridge.projectSessionSnapshot(rootPath);
+		for (const story of stories) {
+			const identityMatches = snapshot.stories.filter(
+				candidate => candidate.id === story.id && candidate.ifid === story.ifid
+			);
+
+			if (identityMatches.length !== 1) {
+				throw new Error(
+					`The native project snapshot does not contain exactly one story matching "${story.id}" and its IFID.`
+				);
+			}
+		}
+		return snapshot;
 	}
 
 	private restoreProjectBinding(

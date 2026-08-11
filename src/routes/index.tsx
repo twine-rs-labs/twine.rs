@@ -1,8 +1,10 @@
 import * as React from 'react';
 import {
-	HashRouter,
+	createHashRouter,
+	createRoutesFromElements,
+	Outlet,
 	Route,
-	Routes as RouterRoutes,
+	RouterProvider,
 	useLocation
 } from 'react-router';
 import {AppShell} from '../components/app-shell';
@@ -28,42 +30,53 @@ const UnmatchedRoute: React.FC = () => {
 	return <StoryListRoute />;
 };
 
+const RootRoute: React.FC = () => (
+	<>
+		<CommandLineOpenSync />
+		<StoryPreviewOwnerController />
+		<AppShell>
+			<Outlet />
+		</AppShell>
+	</>
+);
+
+function createAppRouter() {
+	return createHashRouter(
+		createRoutesFromElements(
+			<Route element={<RootRoute />}>
+				<Route element={<StoryListRoute />} path="/" />
+				<Route element={<StoryListRoute />} path="/welcome" />
+				<Route element={<NewProjectRoute />} path="/new-project" />
+				<Route element={<NewProjectRoute />} path="/new-project/import" />
+				<Route element={<StoryFormatsRoute />} path="/formats" />
+				<Route element={<SettingsRoute />} path="/settings" />
+				<Route element={<BuildRoute />} path="/stories/:storyId/build" />
+				<Route element={<ContentsRoute />} path="/stories/:storyId/contents" />
+				<Route
+					element={<DiagnosticsRoute />}
+					path="/stories/:storyId/diagnostics"
+				/>
+				<Route element={<AssetsRoute />} path="/stories/:storyId/assets" />
+				<Route
+					element={<StoryPreviewRoute />}
+					path="/stories/:storyId/preview"
+				/>
+				<Route element={<StoryEditRoute />} path="/stories/:storyId" />
+				<Route element={<UnmatchedRoute />} path="*" />
+			</Route>
+		)
+	);
+}
+
 export const Routes: React.FC = () => {
-	// A <HashRouter> is used to make our lives easier--to load local story
+	// A hash router is used to make our lives easier--to load local story
 	// formats, we need the document HREF to reflect where the HTML file is.
 	// Otherwise we'd have to store the actual location somewhere, which will
 	// differ between web and Electron contexts.
+	//
+	// The data-router form also lets the workbench block history and direct
+	// route transitions until its renderer-local buffers are durably committed.
+	const router = React.useMemo(createAppRouter, []);
 
-	return (
-		<HashRouter>
-			<CommandLineOpenSync />
-			<StoryPreviewOwnerController />
-			<AppShell>
-				<RouterRoutes>
-					<Route element={<StoryListRoute />} path="/" />
-					<Route element={<StoryListRoute />} path="/welcome" />
-					<Route element={<NewProjectRoute />} path="/new-project" />
-					<Route element={<NewProjectRoute />} path="/new-project/import" />
-					<Route element={<StoryFormatsRoute />} path="/formats" />
-					<Route element={<SettingsRoute />} path="/settings" />
-					<Route element={<BuildRoute />} path="/stories/:storyId/build" />
-					<Route
-						element={<ContentsRoute />}
-						path="/stories/:storyId/contents"
-					/>
-					<Route
-						element={<DiagnosticsRoute />}
-						path="/stories/:storyId/diagnostics"
-					/>
-					<Route element={<AssetsRoute />} path="/stories/:storyId/assets" />
-					<Route
-						element={<StoryPreviewRoute />}
-						path="/stories/:storyId/preview"
-					/>
-					<Route element={<StoryEditRoute />} path="/stories/:storyId" />
-					<Route element={<UnmatchedRoute />} path="*" />
-				</RouterRoutes>
-			</AppShell>
-		</HashRouter>
-	);
+	return <RouterProvider router={router} />;
 };

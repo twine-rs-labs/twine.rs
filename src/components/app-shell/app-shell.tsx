@@ -21,6 +21,7 @@ import {usePublishing} from '../../store/use-publishing';
 import {useStoryLaunch} from '../../store/use-story-launch';
 import {saveHtml, saveTwee} from '../../util/save-file';
 import {storyToTwee} from '../../util/twee';
+import {workbenchBufferCoordinator} from '../../util/workbench-buffer-coordinator';
 import {
 	markPerformance,
 	recordPerformanceHarnessEvent
@@ -590,6 +591,21 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 		},
 		[]
 	);
+	const navigateAfterFlush = React.useCallback(
+		async (path: string) => {
+			try {
+				await workbenchBufferCoordinator.flushAll();
+				navigate(path);
+			} catch (error) {
+				setBuildState({
+					error: (error as Error).message,
+					kind: 'error',
+					label: 'Save'
+				});
+			}
+		},
+		[navigate]
+	);
 
 	const runPlay = React.useCallback(
 		() =>
@@ -640,7 +656,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				icon: 'files',
 				id: 'nav.library',
 				label: 'Story Library',
-				run: () => navigate('/'),
+				run: () => navigateAfterFlush('/'),
 				shortcut: shortcut('nav.library')
 			},
 			{
@@ -648,14 +664,14 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				icon: 'puzzle',
 				id: 'nav.formats',
 				label: 'Story Formats',
-				run: () => navigate('/formats')
+				run: () => navigateAfterFlush('/formats')
 			},
 			{
 				group: 'Navigation',
 				icon: 'settings',
 				id: 'nav.settings',
 				label: 'Settings',
-				run: () => navigate('/settings'),
+				run: () => navigateAfterFlush('/settings'),
 				shortcut: shortcut('nav.settings')
 			},
 			{
@@ -663,7 +679,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				icon: 'folder-plus',
 				id: 'nav.new-project',
 				label: 'New Project',
-				run: () => navigate('/new-project'),
+				run: () => navigateAfterFlush('/new-project'),
 				shortcut: shortcut('nav.new-project')
 			},
 			{
@@ -672,7 +688,8 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				icon: 'layout-columns',
 				id: 'nav.current-story',
 				label: currentStory ? `Edit ${currentStory.name}` : 'Edit Story',
-				run: () => currentStory && navigate(`/stories/${currentStory.id}`),
+				run: () =>
+					currentStory && navigateAfterFlush(`/stories/${currentStory.id}`),
 				shortcut: shortcut('nav.current-story')
 			},
 			{
@@ -682,7 +699,8 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				id: 'build.screen',
 				label: 'Build & Export',
 				run: () =>
-					currentStory && navigate(`/stories/${currentStory.id}/build`),
+					currentStory &&
+					navigateAfterFlush(`/stories/${currentStory.id}/build`),
 				shortcut: shortcut('build.screen')
 			},
 			{
@@ -694,7 +712,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				run: () => {
 					if (currentStory) {
 						markPerformance('contents-navigation-start');
-						navigate(`/stories/${currentStory.id}/contents`);
+						void navigateAfterFlush(`/stories/${currentStory.id}/contents`);
 					}
 				}
 			},
@@ -705,7 +723,8 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				id: 'nav.diagnostics',
 				label: 'Diagnostics',
 				run: () =>
-					currentStory && navigate(`/stories/${currentStory.id}/diagnostics`)
+					currentStory &&
+					navigateAfterFlush(`/stories/${currentStory.id}/diagnostics`)
 			},
 			{
 				disabled: !currentStory,
@@ -714,7 +733,8 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				id: 'nav.assets',
 				label: 'Assets',
 				run: () =>
-					currentStory && navigate(`/stories/${currentStory.id}/assets`)
+					currentStory &&
+					navigateAfterFlush(`/stories/${currentStory.id}/assets`)
 			},
 			{
 				disabled: !currentStory,
@@ -771,7 +791,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 				id: `story.${story.id}`,
 				keywords: [story.name],
 				label: story.name,
-				run: () => navigate(`/stories/${story.id}`)
+				run: () => navigateAfterFlush(`/stories/${story.id}`)
 			}))
 		];
 
@@ -779,7 +799,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 	}, [
 		activeToolbarTab,
 		currentStory,
-		navigate,
+		navigateAfterFlush,
 		prefs.keybindingPreset,
 		routeTabs,
 		runExportHtml,
@@ -1014,7 +1034,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 					<button
 						aria-current={pathname === '/' ? 'page' : undefined}
 						className="app-shell__rail-button"
-						onClick={() => navigate('/')}
+						onClick={() => void navigateAfterFlush('/')}
 						title="Stories"
 						type="button"
 					>
@@ -1034,7 +1054,8 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 						className="app-shell__rail-button"
 						disabled={!currentStory}
 						onClick={() =>
-							currentStory && navigate(`/stories/${currentStory.id}`)
+							currentStory &&
+							void navigateAfterFlush(`/stories/${currentStory.id}`)
 						}
 						title="Workbench"
 						type="button"
@@ -1050,7 +1071,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 						onClick={() => {
 							if (currentStory) {
 								markPerformance('contents-navigation-start');
-								navigate(`/stories/${currentStory.id}/contents`);
+								void navigateAfterFlush(`/stories/${currentStory.id}/contents`);
 							}
 						}}
 						title="Contents"
@@ -1065,7 +1086,8 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 						className="app-shell__rail-button"
 						disabled={!currentStory}
 						onClick={() =>
-							currentStory && navigate(`/stories/${currentStory.id}/assets`)
+							currentStory &&
+							void navigateAfterFlush(`/stories/${currentStory.id}/assets`)
 						}
 						title="Assets"
 						type="button"
@@ -1088,7 +1110,8 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 						className="app-shell__rail-button"
 						disabled={!currentStory}
 						onClick={() =>
-							currentStory && navigate(`/stories/${currentStory.id}/build`)
+							currentStory &&
+							void navigateAfterFlush(`/stories/${currentStory.id}/build`)
 						}
 						title="Build & Export"
 						type="button"
@@ -1103,7 +1126,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 						disabled={!currentStory}
 						onClick={() =>
 							currentStory &&
-							navigate(`/stories/${currentStory.id}/diagnostics`)
+							void navigateAfterFlush(`/stories/${currentStory.id}/diagnostics`)
 						}
 						title="Diagnostics"
 						type="button"
@@ -1124,7 +1147,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 					<button
 						aria-current={pathname.startsWith('/formats') ? 'page' : undefined}
 						className="app-shell__rail-button"
-						onClick={() => navigate('/formats')}
+						onClick={() => void navigateAfterFlush('/formats')}
 						title="Story Formats"
 						type="button"
 					>
@@ -1133,7 +1156,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 					<button
 						aria-current={pathname.startsWith('/settings') ? 'page' : undefined}
 						className="app-shell__rail-button"
-						onClick={() => navigate('/settings')}
+						onClick={() => void navigateAfterFlush('/settings')}
 						title="Settings"
 						type="button"
 					>
@@ -1144,7 +1167,7 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 							pathname.startsWith('/new-project') ? 'page' : undefined
 						}
 						className="app-shell__rail-button"
-						onClick={() => navigate('/new-project')}
+						onClick={() => void navigateAfterFlush('/new-project')}
 						title="New Project"
 						type="button"
 					>
@@ -1210,7 +1233,8 @@ export const AppShell: React.FC<React.PropsWithChildren> = ({children}) => {
 						)}
 						disabled={!currentStory}
 						onClick={() =>
-							currentStory && navigate(`/stories/${currentStory.id}`)
+							currentStory &&
+							void navigateAfterFlush(`/stories/${currentStory.id}`)
 						}
 						title={
 							currentStory

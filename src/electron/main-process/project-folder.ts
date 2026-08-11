@@ -70,6 +70,7 @@ import type {
 } from '../../store/persistence/project-folder-save-hints';
 import type {
 	NativeProjectAssetPayloadFailure,
+	NativeProjectReplacementTransaction,
 	ProjectSourceLayout,
 	ProjectStoryReplacement
 } from '../shared';
@@ -5854,12 +5855,877 @@ async function refreshProjectSessionBaselineAfterAssetMutation(
 	);
 }
 
+type ProjectReplacementPhase =
+	'staging' | 'prepared' | 'backup-moved' | 'installed' | 'renderer-committed';
+
+interface ProjectReplacementJournal {
+	backupRootPath: string;
+	createdAt: string;
+	id: string;
+	phase: ProjectReplacementPhase;
+	rootPath: string;
+	stagingRootPath: string;
+	storyIds: string[];
+	version: 1;
+}
+
+interface ProjectReplacementCommitDecision {
+	createdAt: string;
+	id: string;
+	transactionIds: string[];
+	version: 1;
+}
+
+const activeProjectReplacementRoots = new Set<string>();
+
+function projectReplacementJournalDirectory() {
+	return join(getStoryDirectoryPath(), '.twine', 'project-replacements');
+}
+
+function projectReplacementDecisionDirectory() {
+	return join(projectReplacementJournalDirectory(), 'commit-decisions');
+}
+
+function projectReplacementJournalPath(id: string) {
+	if (!/^[a-f0-9-]{36}$/i.test(id)) {
+		throw new Error('Invalid project replacement transaction ID.');
+	}
+	return join(projectReplacementJournalDirectory(), `${id}.json`);
+}
+
+function projectReplacementPaths(rootPath: string, id: string) {
+	const parent = dirname(rootPath);
+
+	return {
+		backupRootPath: join(parent, `.twine-rs-replacement-${id}.backup.twine.rs`),
+		stagingRootPath: join(parent, `.twine-rs-replacement-${id}.staged.twine.rs`)
+	};
+}
+
+function validProjectReplacementJournal(
+	value: unknown
+): value is ProjectReplacementJournal {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const journal = value as Partial<ProjectReplacementJournal>;
+	const phases: ProjectReplacementPhase[] = [
+		'staging',
+		'prepared',
+		'backup-moved',
+		'installed',
+		'renderer-committed'
+	];
+
+	if (
+		journal.version !== 1 ||
+		typeof journal.id !== 'string' ||
+		!/^[a-f0-9-]{36}$/i.test(journal.id) ||
+		typeof journal.rootPath !== 'string' ||
+		!isAbsolute(journal.rootPath) ||
+		typeof journal.backupRootPath !== 'string' ||
+		!isAbsolute(journal.backupRootPath) ||
+		typeof journal.stagingRootPath !== 'string' ||
+		!isAbsolute(journal.stagingRootPath) ||
+		typeof journal.createdAt !== 'string' ||
+		!phases.includes(journal.phase as ProjectReplacementPhase) ||
+		!Array.isArray(journal.storyIds) ||
+		!journal.storyIds.every(storyId => typeof storyId === 'string')
+	) {
+		return false;
+	}
+	const expected = projectReplacementPaths(journal.rootPath, journal.id);
+
+	return (
+		resolve(journal.backupRootPath) === resolve(expected.backupRootPath) &&
+		resolve(journal.stagingRootPath) === resolve(expected.stagingRootPath)
+	);
+}
+
+async function writeProjectReplacementJournal(
+	journal: ProjectReplacementJournal
+) {
+	const path = projectReplacementJournalPath(journal.id);
+	const tempPath = `${path}.${randomUUID()}.tmp`;
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		await mkdirp(dirname(path));
+		await writeFile(tempPath, JSON.stringify(journal), 'utf8');
+		handle = await openFile(tempPath, 'r+');
+		await handle.sync();
+		await handle.close();
+		handle = undefined;
+		await renameFile(tempPath, path);
+		await syncDirectoryBestEffort(dirname(path));
+	} catch (error) {
+		await handle?.close().catch(() => undefined);
+		await remove(tempPath).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function readProjectReplacementJournal(id: string) {
+	const path = projectReplacementJournalPath(id);
+	const value = await readJson(path);
+
+	if (!validProjectReplacementJournal(value) || value.id !== id) {
+		throw new Error(`Invalid project replacement journal at ${path}.`);
+	}
+	return value;
+}
+
+async function clearProjectReplacementJournal(id: string) {
+	const path = projectReplacementJournalPath(id);
+
+	await remove(path);
+	await syncDirectoryBestEffort(dirname(path));
+}
+
+function validProjectReplacementCommitDecision(
+	value: unknown
+): value is ProjectReplacementCommitDecision {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const decision = value as Partial<ProjectReplacementCommitDecision>;
+
+	return (
+		decision.version === 1 &&
+		typeof decision.id === 'string' &&
+		/^[a-f0-9-]{36}$/i.test(decision.id) &&
+		typeof decision.createdAt === 'string' &&
+		Array.isArray(decision.transactionIds) &&
+		decision.transactionIds.length > 0 &&
+		new Set(decision.transactionIds).size === decision.transactionIds.length &&
+		decision.transactionIds.every(
+			transactionId =>
+				typeof transactionId === 'string' &&
+				/^[a-f0-9-]{36}$/i.test(transactionId)
+		)
+	);
+}
+
+function projectReplacementDecisionPath(id: string) {
+	if (!/^[a-f0-9-]{36}$/i.test(id)) {
+		throw new Error('Invalid project replacement commit decision ID.');
+	}
+	return join(projectReplacementDecisionDirectory(), `${id}.json`);
+}
+
+async function writeProjectReplacementCommitDecision(
+	decision: ProjectReplacementCommitDecision
+) {
+	const path = projectReplacementDecisionPath(decision.id);
+	const tempPath = `${path}.${randomUUID()}.tmp`;
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		await mkdirp(dirname(path));
+		await writeFile(tempPath, JSON.stringify(decision), 'utf8');
+		handle = await openFile(tempPath, 'r+');
+		await handle.sync();
+		await handle.close();
+		handle = undefined;
+		await renameFile(tempPath, path);
+		await syncDirectoryBestEffort(dirname(path));
+	} catch (error) {
+		await handle?.close().catch(() => undefined);
+		await remove(tempPath).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function clearProjectReplacementCommitDecision(id: string) {
+	const path = projectReplacementDecisionPath(id);
+
+	await remove(path);
+	await syncDirectoryBestEffort(dirname(path));
+}
+
+async function projectPathExists(path: string) {
+	try {
+		const stats = await lstat(path);
+
+		return stats.isDirectory() && !stats.isSymbolicLink();
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return false;
+		}
+		throw error;
+	}
+}
+
+async function syncProjectReplacementTree(path: string): Promise<void> {
+	const stats = await lstat(path);
+
+	if (stats.isSymbolicLink()) {
+		throw new Error('Project replacement staging contains a symbolic link.');
+	}
+	if (stats.isFile()) {
+		const handle = await openFile(path, 'r');
+
+		try {
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		return;
+	}
+	if (!stats.isDirectory()) {
+		return;
+	}
+	const directory = await opendir(path);
+
+	for await (const entry of directory) {
+		await syncProjectReplacementTree(join(path, entry.name));
+	}
+	await syncDirectoryBestEffort(path);
+}
+
+async function removeReplacementOwnedRoot(
+	journal: ProjectReplacementJournal,
+	path: string
+) {
+	const expected = projectReplacementPaths(journal.rootPath, journal.id);
+
+	if (
+		resolve(path) !== resolve(expected.backupRootPath) &&
+		resolve(path) !== resolve(expected.stagingRootPath) &&
+		resolve(path) !== resolve(journal.rootPath)
+	) {
+		throw new Error('Refusing to remove an unowned project replacement path.');
+	}
+	stopProjectSession(path);
+	await remove(path);
+}
+
+async function restoreProjectReplacement(journal: ProjectReplacementJournal) {
+	const rootExists = await projectPathExists(journal.rootPath);
+	const backupExists = await projectPathExists(journal.backupRootPath);
+	const stagingExists = await projectPathExists(journal.stagingRootPath);
+
+	stopProjectSession(journal.rootPath);
+	stopProjectSession(journal.backupRootPath);
+	stopProjectSession(journal.stagingRootPath);
+
+	if (backupExists) {
+		if (rootExists) {
+			await removeReplacementOwnedRoot(journal, journal.rootPath);
+		}
+		await renameFile(journal.backupRootPath, journal.rootPath);
+		await syncDirectoryBestEffort(dirname(journal.rootPath));
+	} else if (!rootExists) {
+		throw new Error(
+			`Project replacement recovery could not find the original root ${journal.rootPath}.`
+		);
+	}
+	if (stagingExists) {
+		await removeReplacementOwnedRoot(journal, journal.stagingRootPath);
+	}
+	const restored = await readProjectFolder(journal.rootPath, {
+		loadPassageText: false
+	});
+
+	rememberProjectFolder(restored);
+	await clearProjectReplacementJournal(journal.id);
+}
+
+async function finalizeProjectReplacement(journal: ProjectReplacementJournal) {
+	if (!(await projectPathExists(journal.rootPath))) {
+		throw new Error(
+			`Committed project replacement root is missing: ${journal.rootPath}`
+		);
+	}
+	if (await projectPathExists(journal.backupRootPath)) {
+		await removeReplacementOwnedRoot(journal, journal.backupRootPath);
+	}
+	if (await projectPathExists(journal.stagingRootPath)) {
+		await removeReplacementOwnedRoot(journal, journal.stagingRootPath);
+	}
+	await syncDirectoryBestEffort(dirname(journal.rootPath));
+	await clearProjectReplacementJournal(journal.id);
+}
+
+async function recoverProjectReplacementJournal(
+	journal: ProjectReplacementJournal
+) {
+	if (journal.phase === 'renderer-committed') {
+		await finalizeProjectReplacement(journal);
+	} else {
+		await restoreProjectReplacement(journal);
+	}
+}
+
+export async function recoverProjectReplacementTransactions() {
+	const directory = projectReplacementJournalDirectory();
+	const decisionDirectory = projectReplacementDecisionDirectory();
+	let decisionEntries: string[] = [];
+	let entries: string[];
+
+	try {
+		decisionEntries = await readdir(decisionDirectory);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			throw error;
+		}
+	}
+	for (const entry of decisionEntries
+		.filter(name => name.endsWith('.json'))
+		.sort()) {
+		const path = join(decisionDirectory, entry);
+		const value = await readJson(path);
+
+		if (!validProjectReplacementCommitDecision(value)) {
+			throw new Error(
+				`Invalid project replacement commit decision at ${path}.`
+			);
+		}
+		for (const transactionId of value.transactionIds) {
+			let journal: ProjectReplacementJournal;
+
+			try {
+				journal = await readProjectReplacementJournal(transactionId);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+					continue;
+				}
+				throw error;
+			}
+			if (journal.phase !== 'renderer-committed') {
+				journal.phase = 'renderer-committed';
+				await writeProjectReplacementJournal(journal);
+			}
+			await finalizeProjectReplacement(journal);
+			activeProjectReplacementRoots.delete(resolve(journal.rootPath));
+		}
+		await clearProjectReplacementCommitDecision(value.id);
+	}
+
+	try {
+		entries = await readdir(directory);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return;
+		}
+		throw error;
+	}
+	for (const entry of entries.filter(name => name.endsWith('.json')).sort()) {
+		const value = await readJson(join(directory, entry));
+
+		if (!validProjectReplacementJournal(value)) {
+			throw new Error(
+				`Invalid project replacement journal at ${join(directory, entry)}.`
+			);
+		}
+		await recoverProjectReplacementJournal(value);
+		activeProjectReplacementRoots.delete(resolve(value.rootPath));
+	}
+}
+
+export async function beginProjectReplacement(
+	rootPath: string,
+	stories: Story[],
+	importId?: string
+): Promise<NativeProjectReplacementTransaction> {
+	const absoluteRootPath = resolve(rootPath);
+
+	if (!isAbsolute(rootPath) || !basename(rootPath).endsWith('.twine.rs')) {
+		throw new Error(
+			'Project replacement requires an absolute project folder ending with .twine.rs.'
+		);
+	}
+	if (stories.length === 0) {
+		throw new Error('Project replacement requires at least one story.');
+	}
+	if (
+		activeProjectReplacementRoots.has(absoluteRootPath) ||
+		activeProjectDeletionRoots.has(absoluteRootPath)
+	) {
+		throw new Error(
+			'A project lifecycle operation is already active for this project folder.'
+		);
+	}
+	// Reserve synchronously before the first filesystem await. Otherwise two
+	// callers can both pass the availability check while the first project read
+	// is suspended, then stage competing journals for the same root.
+	activeProjectReplacementRoots.add(absoluteRootPath);
+	let journal: ProjectReplacementJournal | undefined;
+	let journalPersisted = false;
+	try {
+		const current = await readProjectFolder(absoluteRootPath, {
+			loadPassageText: false
+		});
+		const currentStoryIds = [...current.storyIds].sort();
+		const replacementStoryIds = stories.map(story => story.id).sort();
+
+		if (
+			currentStoryIds.length !== replacementStoryIds.length ||
+			currentStoryIds.some(
+				(storyId, index) => storyId !== replacementStoryIds[index]
+			)
+		) {
+			throw new Error(
+				'Project replacement must preserve the complete project story identity.'
+			);
+		}
+		const id = randomUUID();
+		const paths = projectReplacementPaths(absoluteRootPath, id);
+
+		journal = {
+			...paths,
+			createdAt: new Date().toISOString(),
+			id,
+			phase: 'staging',
+			rootPath: absoluteRootPath,
+			storyIds: replacementStoryIds,
+			version: 1
+		};
+		await recoverInterruptedProjectFileClaims(absoluteRootPath);
+		await writeProjectReplacementJournal(journal);
+		journalPersisted = true;
+		await copy(absoluteRootPath, journal.stagingRootPath, {
+			dereference: false,
+			errorOnExist: true,
+			overwrite: false,
+			preserveTimestamps: true
+		});
+		for (const story of stories) {
+			await writeProjectFolder(journal.stagingRootPath, story);
+		}
+		if (importId) {
+			await copyProjectImportAssets(importId, journal.stagingRootPath);
+		}
+		await syncProjectReplacementTree(journal.stagingRootPath);
+		journal.phase = 'prepared';
+		await writeProjectReplacementJournal(journal);
+
+		stopProjectSession(absoluteRootPath);
+		stopProjectSession(journal.stagingRootPath);
+		await renameFile(absoluteRootPath, journal.backupRootPath);
+		await syncDirectoryBestEffort(dirname(absoluteRootPath));
+		journal.phase = 'backup-moved';
+		await writeProjectReplacementJournal(journal);
+
+		await renameFile(journal.stagingRootPath, absoluteRootPath);
+		await syncDirectoryBestEffort(dirname(absoluteRootPath));
+		journal.phase = 'installed';
+		await writeProjectReplacementJournal(journal);
+
+		const project = await readProjectFolder(absoluteRootPath, {
+			loadPassageText: true
+		});
+
+		if (!rememberProjectFolderStrict(project)) {
+			throw new Error(
+				'The replacement project could not be registered in the native project library.'
+			);
+		}
+		return {id, project};
+	} catch (error) {
+		if (!journal || !journalPersisted) {
+			activeProjectReplacementRoots.delete(absoluteRootPath);
+			throw error;
+		}
+		try {
+			const recoverable = await readProjectReplacementJournal(journal.id);
+
+			await restoreProjectReplacement(recoverable);
+			activeProjectReplacementRoots.delete(absoluteRootPath);
+		} catch (recoveryError) {
+			throw new AggregateError(
+				[error, recoveryError],
+				`Project replacement failed and automatic recovery is incomplete for ${absoluteRootPath}.`,
+				{cause: error}
+			);
+		}
+		throw error;
+	}
+}
+
+export async function commitProjectReplacements(transactionIds: string[]) {
+	const uniqueIds = [...new Set(transactionIds)];
+
+	if (uniqueIds.length === 0 || uniqueIds.length !== transactionIds.length) {
+		throw new Error(
+			'Project replacement commit requires unique active transactions.'
+		);
+	}
+	const journals = await Promise.all(
+		uniqueIds.map(transactionId => readProjectReplacementJournal(transactionId))
+	);
+
+	for (const journal of journals) {
+		if (journal.phase !== 'installed') {
+			throw new Error(
+				`Project replacement ${journal.id} cannot commit from phase ${journal.phase}.`
+			);
+		}
+	}
+	const decision: ProjectReplacementCommitDecision = {
+		createdAt: new Date().toISOString(),
+		id: randomUUID(),
+		transactionIds: uniqueIds,
+		version: 1
+	};
+
+	await writeProjectReplacementCommitDecision(decision);
+	let cleanupIncomplete = false;
+	for (const journal of journals) {
+		try {
+			journal.phase = 'renderer-committed';
+			await writeProjectReplacementJournal(journal);
+			await finalizeProjectReplacement(journal);
+		} catch (error) {
+			// The cohort decision is durable. Startup will finish every transaction,
+			// so cleanup cannot turn a committed renderer state into a rollback.
+			cleanupIncomplete = true;
+			warnBestEffortProjectMaintenance('Project replacement cleanup', error);
+		}
+		activeProjectReplacementRoots.delete(resolve(journal.rootPath));
+	}
+	if (cleanupIncomplete) {
+		return;
+	}
+	try {
+		await clearProjectReplacementCommitDecision(decision.id);
+	} catch (error) {
+		warnBestEffortProjectMaintenance(
+			'Project replacement commit-decision cleanup',
+			error
+		);
+	}
+}
+
+export async function rollbackProjectReplacement(transactionId: string) {
+	const journal = await readProjectReplacementJournal(transactionId);
+
+	if (journal.phase === 'renderer-committed') {
+		throw new Error('A committed project replacement cannot be rolled back.');
+	}
+	await restoreProjectReplacement(journal);
+	activeProjectReplacementRoots.delete(resolve(journal.rootPath));
+}
+
+type ProjectDeletionPhase = 'prepared' | 'staged' | 'renderer-committed';
+
+interface ProjectDeletionJournal {
+	createdAt: string;
+	id: string;
+	phase: ProjectDeletionPhase;
+	rootPath: string;
+	stagedRootPath: string;
+	storyIds: string[];
+	version: 1;
+}
+
+const activeProjectDeletionRoots = new Set<string>();
+
+function projectDeletionJournalDirectory() {
+	return join(getStoryDirectoryPath(), '.twine', 'project-deletions');
+}
+
+function projectDeletionJournalPath(id: string) {
+	if (!/^[a-f0-9-]{36}$/i.test(id)) {
+		throw new Error('Invalid project deletion transaction ID.');
+	}
+	return join(projectDeletionJournalDirectory(), `${id}.json`);
+}
+
+function projectDeletionStagedRoot(rootPath: string, id: string) {
+	return join(dirname(rootPath), `.twine-rs-deletion-${id}.staged.twine.rs`);
+}
+
+function validProjectDeletionJournal(
+	value: unknown
+): value is ProjectDeletionJournal {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const journal = value as Partial<ProjectDeletionJournal>;
+	const phases: ProjectDeletionPhase[] = [
+		'prepared',
+		'staged',
+		'renderer-committed'
+	];
+
+	return (
+		journal.version === 1 &&
+		typeof journal.id === 'string' &&
+		/^[a-f0-9-]{36}$/i.test(journal.id) &&
+		typeof journal.createdAt === 'string' &&
+		typeof journal.rootPath === 'string' &&
+		isAbsolute(journal.rootPath) &&
+		typeof journal.stagedRootPath === 'string' &&
+		isAbsolute(journal.stagedRootPath) &&
+		resolve(journal.stagedRootPath) ===
+			resolve(projectDeletionStagedRoot(journal.rootPath, journal.id)) &&
+		phases.includes(journal.phase as ProjectDeletionPhase) &&
+		Array.isArray(journal.storyIds) &&
+		journal.storyIds.every(storyId => typeof storyId === 'string')
+	);
+}
+
+async function writeProjectDeletionJournal(journal: ProjectDeletionJournal) {
+	const path = projectDeletionJournalPath(journal.id);
+	const tempPath = `${path}.${randomUUID()}.tmp`;
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		await mkdirp(dirname(path));
+		await writeFile(tempPath, JSON.stringify(journal), 'utf8');
+		handle = await openFile(tempPath, 'r+');
+		await handle.sync();
+		await handle.close();
+		handle = undefined;
+		await renameFile(tempPath, path);
+		await syncDirectoryBestEffort(dirname(path));
+	} catch (error) {
+		await handle?.close().catch(() => undefined);
+		await remove(tempPath).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function readProjectDeletionJournal(id: string) {
+	const path = projectDeletionJournalPath(id);
+	const value = await readJson(path);
+
+	if (!validProjectDeletionJournal(value) || value.id !== id) {
+		throw new Error(`Invalid project deletion journal at ${path}.`);
+	}
+	return value;
+}
+
+async function clearProjectDeletionJournal(id: string) {
+	const path = projectDeletionJournalPath(id);
+
+	await remove(path);
+	await syncDirectoryBestEffort(dirname(path));
+}
+
+async function restoreProjectDeletion(journal: ProjectDeletionJournal) {
+	const rootExists = await projectPathExists(journal.rootPath);
+	const stagedExists = await projectPathExists(journal.stagedRootPath);
+
+	if (rootExists && stagedExists) {
+		throw new Error(
+			'Project deletion recovery found both the original and staged roots; neither was changed.'
+		);
+	}
+	if (!rootExists && !stagedExists) {
+		throw new Error(
+			'Project deletion recovery could not find the original or staged root.'
+		);
+	}
+	stopProjectSession(journal.rootPath);
+	stopProjectSession(journal.stagedRootPath);
+	if (stagedExists) {
+		await renameFile(journal.stagedRootPath, journal.rootPath);
+		await syncDirectoryBestEffort(dirname(journal.rootPath));
+	}
+	const project = await readProjectFolder(journal.rootPath, {
+		loadPassageText: false
+	});
+
+	if (!rememberProjectFolderStrict(project)) {
+		throw new Error(
+			'The restored project deletion could not be registered in the native library.'
+		);
+	}
+	await clearProjectDeletionJournal(journal.id);
+}
+
+async function finalizeProjectDeletion(journal: ProjectDeletionJournal) {
+	if (await projectPathExists(journal.rootPath)) {
+		throw new Error(
+			`Committed project deletion unexpectedly found the original root ${journal.rootPath}.`
+		);
+	}
+	if (await projectPathExists(journal.stagedRootPath)) {
+		await shell.trashItem(journal.stagedRootPath);
+	}
+	await syncDirectoryBestEffort(dirname(journal.rootPath));
+	await clearProjectDeletionJournal(journal.id);
+}
+
+export async function recoverProjectDeletionTransactions() {
+	const directory = projectDeletionJournalDirectory();
+	let entries: string[];
+
+	try {
+		entries = await readdir(directory);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return;
+		}
+		throw error;
+	}
+	for (const entry of entries.filter(name => name.endsWith('.json')).sort()) {
+		const path = join(directory, entry);
+		const value = await readJson(path);
+
+		if (!validProjectDeletionJournal(value)) {
+			throw new Error(`Invalid project deletion journal at ${path}.`);
+		}
+		if (value.phase === 'renderer-committed') {
+			await finalizeProjectDeletion(value);
+		} else {
+			await restoreProjectDeletion(value);
+		}
+		activeProjectDeletionRoots.delete(resolve(value.rootPath));
+	}
+}
+
+export async function beginProjectFolderDeletion(rootPath: string) {
+	const absoluteRootPath = resolve(rootPath);
+
+	if (!isAbsolute(rootPath) || !basename(rootPath).endsWith('.twine.rs')) {
+		throw new Error(
+			'Project deletion requires an absolute project folder ending with .twine.rs.'
+		);
+	}
+	if (
+		activeProjectReplacementRoots.has(absoluteRootPath) ||
+		activeProjectDeletionRoots.has(absoluteRootPath)
+	) {
+		throw new Error(
+			'A project lifecycle operation is already active for this project folder.'
+		);
+	}
+	// Match replacement transactions: ownership of a root is reserved before
+	// validation performs any asynchronous filesystem work.
+	activeProjectDeletionRoots.add(absoluteRootPath);
+	let journal: ProjectDeletionJournal | undefined;
+	let journalPersisted = false;
+	try {
+		const rootStats = await stat(absoluteRootPath);
+
+		if (!rootStats.isDirectory()) {
+			throw Object.assign(
+				new Error(`${absoluteRootPath} is not a project folder directory.`),
+				{code: 'ENOTDIR'}
+			);
+		}
+		let manifestStats: Awaited<ReturnType<typeof stat>>;
+
+		try {
+			manifestStats = await stat(join(absoluteRootPath, 'twine.toml'));
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+				throw new Error(
+					`Refusing to delete ${absoluteRootPath}; no twine.toml project manifest was found.`
+				);
+			}
+			throw error;
+		}
+		if (!manifestStats.isFile()) {
+			throw new Error(
+				`Refusing to delete ${absoluteRootPath}; no twine.toml project manifest was found.`
+			);
+		}
+		const project = await readProjectFolder(absoluteRootPath, {
+			loadPassageText: false
+		});
+		const id = randomUUID();
+
+		journal = {
+			createdAt: new Date().toISOString(),
+			id,
+			phase: 'prepared',
+			rootPath: absoluteRootPath,
+			stagedRootPath: projectDeletionStagedRoot(absoluteRootPath, id),
+			storyIds: project.storyIds,
+			version: 1
+		};
+		await writeProjectDeletionJournal(journal);
+		journalPersisted = true;
+		stopProjectSession(absoluteRootPath);
+		const forgotten = forgetProjectFolder(absoluteRootPath);
+
+		if (forgotten === undefined) {
+			throw new Error(
+				'The project library index could not stage this project for deletion.'
+			);
+		}
+		await renameFile(absoluteRootPath, journal.stagedRootPath);
+		await syncDirectoryBestEffort(dirname(absoluteRootPath));
+		journal.phase = 'staged';
+		await writeProjectDeletionJournal(journal);
+		return {id, rootPath: absoluteRootPath};
+	} catch (error) {
+		if (!journal || !journalPersisted) {
+			activeProjectDeletionRoots.delete(absoluteRootPath);
+			throw error;
+		}
+		try {
+			await restoreProjectDeletion(
+				await readProjectDeletionJournal(journal.id)
+			);
+			activeProjectDeletionRoots.delete(absoluteRootPath);
+		} catch (recoveryError) {
+			throw new AggregateError(
+				[error, recoveryError],
+				`Project deletion failed and automatic recovery is incomplete for ${absoluteRootPath}.`,
+				{cause: error}
+			);
+		}
+		throw error;
+	}
+}
+
+export async function commitProjectFolderDeletion(transactionId: string) {
+	const journal = await readProjectDeletionJournal(transactionId);
+
+	if (journal.phase !== 'staged') {
+		throw new Error(
+			`Project deletion ${transactionId} cannot commit from phase ${journal.phase}.`
+		);
+	}
+	journal.phase = 'renderer-committed';
+	await writeProjectDeletionJournal(journal);
+	try {
+		await finalizeProjectDeletion(journal);
+	} catch (error) {
+		// The durable decision makes the hidden staged root unavailable to the
+		// library. Startup retries trashing without resurrecting renderer state.
+		warnBestEffortProjectMaintenance('Project deletion cleanup', error);
+	}
+	activeProjectDeletionRoots.delete(resolve(journal.rootPath));
+}
+
+export async function rollbackProjectFolderDeletion(transactionId: string) {
+	const journal = await readProjectDeletionJournal(transactionId);
+
+	if (journal.phase === 'renderer-committed') {
+		throw new Error('A committed project deletion cannot be rolled back.');
+	}
+	await restoreProjectDeletion(journal);
+	activeProjectDeletionRoots.delete(resolve(journal.rootPath));
+}
+
+function assertProjectLifecycleMutationAvailable(rootPath: string) {
+	const absoluteRootPath = resolve(rootPath);
+
+	if (activeProjectReplacementRoots.has(absoluteRootPath)) {
+		throw new Error(
+			'Project changes are blocked while replacement recovery is pending. Restart Twine to complete recovery.'
+		);
+	}
+	if (activeProjectDeletionRoots.has(absoluteRootPath)) {
+		throw new Error(
+			'Project changes are blocked while deletion recovery is pending. Restart Twine to complete recovery.'
+		);
+	}
+}
+
 export async function createProjectFolder(
 	story: Story,
 	preferredParent?: string,
 	sourceLayout: ProjectSourceLayout = 'passage-files'
 ): Promise<NativeProjectFolderResult> {
 	const rootPath = projectRootForStory(story, preferredParent);
+	assertProjectLifecycleMutationAvailable(rootPath);
 
 	const writtenProject = await writeProjectFolder(
 		rootPath,
@@ -5927,6 +6793,7 @@ export async function duplicateProjectFolder(
 	if (replacements.length === 0) {
 		throw new Error('Project duplication requires at least one story.');
 	}
+	assertProjectLifecycleMutationAvailable(sourceRootPath);
 
 	const [rootStats, manifestStats] = await Promise.all([
 		stat(sourceRootPath),
@@ -6020,6 +6887,7 @@ export async function saveProjectFolder(
 	if (typeof rootPath !== 'string' || !isAbsolute(rootPath)) {
 		throw new Error('Project saves require an absolute project folder path.');
 	}
+	assertProjectLifecycleMutationAvailable(rootPath);
 	await recoverInterruptedProjectFileClaims(rootPath);
 
 	const [rootStats, manifestStats] = await Promise.all([
@@ -8631,6 +9499,7 @@ export async function copyProjectImportAssets(
 	importId: string,
 	rootPath: string
 ): Promise<NativeProjectAssetWriteResult[]> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const preparedImport = preparedProjectImports.get(importId);
 
 	if (!preparedImport) {
@@ -8640,126 +9509,116 @@ export async function copyProjectImportAssets(
 	const results: NativeProjectAssetWriteResult[] = [];
 	let totalBytes = 0;
 
-	try {
-		for (const asset of preparedImport.assets) {
-			const target = safeProjectAssetPath(rootPath, asset.targetPath);
-			const temporaryPath = join(
-				dirname(target.absolutePath),
-				`.${basename(target.absolutePath)}.import-${randomUUID()}.tmp`
-			);
-			let sourceHandle: Awaited<ReturnType<typeof openFile>> | undefined;
-			let targetHandle: Awaited<ReturnType<typeof openFile>> | undefined;
-			let installed = false;
+	for (const asset of preparedImport.assets) {
+		const target = safeProjectAssetPath(rootPath, asset.targetPath);
+		const temporaryPath = join(
+			dirname(target.absolutePath),
+			`.${basename(target.absolutePath)}.import-${randomUUID()}.tmp`
+		);
+		let sourceHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+		let targetHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+		let installed = false;
 
+		await ensureSafeProjectImportAssetDirectory(
+			rootPath,
+			dirname(target.absolutePath)
+		);
+
+		try {
+			if ((await realpath(asset.sourcePath)) !== asset.canonicalSourcePath) {
+				throw new Error('Project import asset changed after preparation.');
+			}
+			sourceHandle = await openFile(
+				asset.canonicalSourcePath,
+				fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
+			);
+			const sourceStats = await sourceHandle.stat();
+
+			if (
+				!sourceStats.isFile() ||
+				sourceStats.size !== asset.expectedSizeBytes
+			) {
+				throw new Error('Project import asset changed after preparation.');
+			}
+			assertImportFileSize(sourceStats.size, maxImportZipEntryBytes);
+			totalBytes += sourceStats.size;
+			if (totalBytes > maxImportZipExpandedBytes) {
+				throw new Error(
+					`Project import assets exceed the ${zipLimitMebibytes(
+						maxImportZipExpandedBytes
+					)} MiB cumulative size limit.`
+				);
+			}
+
+			targetHandle = await openFile(temporaryPath, 'wx');
+			const buffer = Buffer.allocUnsafe(64 * 1024);
+			let copiedBytes = 0;
+
+			while (copiedBytes < sourceStats.size) {
+				const requestedBytes = Math.min(
+					buffer.length,
+					sourceStats.size - copiedBytes
+				);
+				const {bytesRead} = await sourceHandle.read(
+					buffer,
+					0,
+					requestedBytes,
+					null
+				);
+
+				if (bytesRead === 0) {
+					throw new Error('Project import asset changed while it was copied.');
+				}
+
+				let writtenBytes = 0;
+
+				while (writtenBytes < bytesRead) {
+					const {bytesWritten} = await targetHandle.write(
+						buffer,
+						writtenBytes,
+						bytesRead - writtenBytes,
+						null
+					);
+
+					if (bytesWritten === 0) {
+						throw new Error('Project import asset could not be copied.');
+					}
+					writtenBytes += bytesWritten;
+				}
+				copiedBytes += bytesRead;
+			}
+
+			const sentinel = Buffer.allocUnsafe(1);
+			const {bytesRead: trailingBytes} = await sourceHandle.read(
+				sentinel,
+				0,
+				1,
+				null
+			);
+
+			if (trailingBytes !== 0) {
+				throw new Error('Project import asset changed while it was copied.');
+			}
+
+			await targetHandle.close();
+			targetHandle = undefined;
 			await ensureSafeProjectImportAssetDirectory(
 				rootPath,
 				dirname(target.absolutePath)
 			);
-
-			try {
-				if ((await realpath(asset.sourcePath)) !== asset.canonicalSourcePath) {
-					throw new Error('Project import asset changed after preparation.');
-				}
-				sourceHandle = await openFile(
-					asset.canonicalSourcePath,
-					fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
-				);
-				const sourceStats = await sourceHandle.stat();
-
-				if (
-					!sourceStats.isFile() ||
-					sourceStats.size !== asset.expectedSizeBytes
-				) {
-					throw new Error('Project import asset changed after preparation.');
-				}
-				assertImportFileSize(sourceStats.size, maxImportZipEntryBytes);
-				totalBytes += sourceStats.size;
-				if (totalBytes > maxImportZipExpandedBytes) {
-					throw new Error(
-						`Project import assets exceed the ${zipLimitMebibytes(
-							maxImportZipExpandedBytes
-						)} MiB cumulative size limit.`
-					);
-				}
-
-				targetHandle = await openFile(temporaryPath, 'wx');
-				const buffer = Buffer.allocUnsafe(64 * 1024);
-				let copiedBytes = 0;
-
-				while (copiedBytes < sourceStats.size) {
-					const requestedBytes = Math.min(
-						buffer.length,
-						sourceStats.size - copiedBytes
-					);
-					const {bytesRead} = await sourceHandle.read(
-						buffer,
-						0,
-						requestedBytes,
-						null
-					);
-
-					if (bytesRead === 0) {
-						throw new Error(
-							'Project import asset changed while it was copied.'
-						);
-					}
-
-					let writtenBytes = 0;
-
-					while (writtenBytes < bytesRead) {
-						const {bytesWritten} = await targetHandle.write(
-							buffer,
-							writtenBytes,
-							bytesRead - writtenBytes,
-							null
-						);
-
-						if (bytesWritten === 0) {
-							throw new Error('Project import asset could not be copied.');
-						}
-						writtenBytes += bytesWritten;
-					}
-					copiedBytes += bytesRead;
-				}
-
-				const sentinel = Buffer.allocUnsafe(1);
-				const {bytesRead: trailingBytes} = await sourceHandle.read(
-					sentinel,
-					0,
-					1,
-					null
-				);
-
-				if (trailingBytes !== 0) {
-					throw new Error('Project import asset changed while it was copied.');
-				}
-
-				await targetHandle.close();
-				targetHandle = undefined;
-				await ensureSafeProjectImportAssetDirectory(
-					rootPath,
-					dirname(target.absolutePath)
-				);
-				await move(temporaryPath, target.absolutePath, {overwrite: true});
-				installed = true;
-			} finally {
-				await sourceHandle?.close().catch(() => undefined);
-				await targetHandle?.close().catch(() => undefined);
-				if (!installed) {
-					await remove(temporaryPath).catch(() => undefined);
-				}
+			await move(temporaryPath, target.absolutePath, {overwrite: true});
+			installed = true;
+		} finally {
+			await sourceHandle?.close().catch(() => undefined);
+			await targetHandle?.close().catch(() => undefined);
+			if (!installed) {
+				await remove(temporaryPath).catch(() => undefined);
 			}
-			results.push({
-				sourcePath: target.absolutePath,
-				targetPath: target.projectPath
-			});
 		}
-	} catch (error) {
-		preparedProjectImports.delete(importId);
-		if (preparedImport.cleanupPath) {
-			await remove(preparedImport.cleanupPath).catch(() => undefined);
-		}
-		throw error;
+		results.push({
+			sourcePath: target.absolutePath,
+			targetPath: target.projectPath
+		});
 	}
 
 	const assets = await listProjectAssets(rootPath);
@@ -8915,6 +9774,7 @@ export async function applyProjectAssetEffect(
 ) {
 	const journal = await readAssetEffectJournal(effectToken);
 	requireAssetEffectRoot(journal, expectedRootPath);
+	assertProjectLifecycleMutationAvailable(journal.rootPath);
 	const directory = assetEffectDirectory(effectToken);
 	const target = safeProjectAssetPath(journal.rootPath, journal.targetPath);
 	const oldAsset = journal.oldPath
@@ -9017,6 +9877,7 @@ export async function copyAssetToProject(
 	rootPath: string,
 	sourcePath: string
 ): Promise<NativeProjectAssetWriteResult> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const filename = basename(sourcePath);
 	const targetPath = `assets/${filename}`;
 	const destinationPath = join(rootPath, targetPath);
@@ -9059,6 +9920,7 @@ export async function renameProjectAsset(
 	oldPath: string,
 	newPath: string
 ): Promise<NativeProjectAssetWriteResult> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const oldAsset = safeProjectAssetPath(rootPath, oldPath);
 	const newAsset = safeProjectAssetPath(rootPath, newPath);
 	const beforeFingerprint = await fileFingerprint(oldAsset.absolutePath);
@@ -9106,6 +9968,7 @@ export async function replaceProjectAsset(
 	path: string,
 	sourcePath: string
 ): Promise<NativeProjectAssetWriteResult> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const asset = safeProjectAssetPath(rootPath, path);
 	const beforeFingerprint = await fileFingerprint(asset.absolutePath);
 
@@ -9149,6 +10012,7 @@ export async function deleteProjectAsset(
 	rootPath: string,
 	path: string
 ): Promise<NativeProjectAssetWriteResult> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const asset = safeProjectAssetPath(rootPath, path);
 	const beforeFingerprint = await fileFingerprint(asset.absolutePath);
 
@@ -9185,45 +10049,9 @@ export async function deleteProjectAsset(
 }
 
 export async function deleteProjectFolder(rootPath: string) {
-	const absoluteRootPath = resolve(rootPath);
-	const rootStats = await stat(absoluteRootPath);
+	const transaction = await beginProjectFolderDeletion(rootPath);
 
-	if (!rootStats.isDirectory()) {
-		throw Object.assign(
-			new Error(`${absoluteRootPath} is not a project folder directory.`),
-			{code: 'ENOTDIR'}
-		);
-	}
-
-	if (!basename(absoluteRootPath).endsWith('.twine.rs')) {
-		throw new Error(
-			`Refusing to delete ${absoluteRootPath}; project folders must end with .twine.rs.`
-		);
-	}
-
-	let manifestStats: {isFile(): boolean};
-
-	try {
-		manifestStats = await stat(join(absoluteRootPath, 'twine.toml'));
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-			throw new Error(
-				`Refusing to delete ${absoluteRootPath}; no twine.toml project manifest was found.`
-			);
-		}
-
-		throw error;
-	}
-
-	if (!manifestStats.isFile()) {
-		throw new Error(
-			`Refusing to delete ${absoluteRootPath}; no twine.toml project manifest was found.`
-		);
-	}
-
-	stopProjectSession(absoluteRootPath);
-	await shell.trashItem(absoluteRootPath);
-	forgetProjectFolder(absoluteRootPath);
+	await commitProjectFolderDeletion(transaction.id);
 }
 
 async function ensureInitialProjectSessionBaseline(
@@ -9787,6 +10615,7 @@ export async function resolveProjectSessionConflicts(
 	stories: Story[] = [],
 	deltaId?: string
 ) {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const session = ensureProjectSession(rootPath);
 	const resolved = deltaId
 		? session.resolvedCandidates.get(deltaId)

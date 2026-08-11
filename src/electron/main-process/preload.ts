@@ -3,7 +3,7 @@
 // as a page script in this privileged renderer.
 
 import {contextBridge, ipcRenderer, webUtils} from 'electron';
-import {Story} from '../../store/stories/stories.types';
+import {Story, StoryWithDocuments} from '../../store/stories/stories.types';
 import type {
 	NativeStoryPreviewAppearance,
 	NativeStoryPreviewCommandResult,
@@ -18,6 +18,8 @@ import type {
 const projectCapabilityField = '__twineProjectCapability';
 const projectCapabilities = new Map<string, string>();
 const activeAssetEffectCapabilities = new Set<string>();
+const activeProjectReplacementTransactions = new Set<string>();
+const activeProjectDeletionTransactions = new Map<string, string>();
 const assetEffectRenewalIntervalMs = 60 * 60 * 1000;
 
 function rememberProjectCapability<T>(project: T): T {
@@ -166,6 +168,70 @@ const bridge = {
 			preferredParent,
 			sourceLayout
 		);
+	},
+	async beginProjectReplacement(
+		rootPath: string,
+		stories: StoryWithDocuments[],
+		importId?: string
+	) {
+		const result = await ipcRenderer.invoke(
+			'begin-project-replacement',
+			projectCapability(rootPath),
+			stories,
+			importId
+		);
+
+		rememberProjectCapability(result.project);
+		activeProjectReplacementTransactions.add(result.id);
+		return result;
+	},
+	async commitProjectReplacements(transactionIds: string[]) {
+		if (
+			transactionIds.length === 0 ||
+			transactionIds.some(
+				transactionId =>
+					!activeProjectReplacementTransactions.has(transactionId)
+			)
+		) {
+			throw new Error('This project replacement transaction is unavailable.');
+		}
+		await ipcRenderer.invoke('commit-project-replacements', transactionIds);
+		for (const transactionId of transactionIds) {
+			activeProjectReplacementTransactions.delete(transactionId);
+		}
+	},
+	async rollbackProjectReplacement(transactionId: string) {
+		if (!activeProjectReplacementTransactions.has(transactionId)) {
+			throw new Error('This project replacement transaction is unavailable.');
+		}
+		await ipcRenderer.invoke('rollback-project-replacement', transactionId);
+		activeProjectReplacementTransactions.delete(transactionId);
+	},
+	async beginProjectFolderDeletion(rootPath: string) {
+		const result = await ipcRenderer.invoke(
+			'begin-project-folder-deletion',
+			projectCapability(rootPath)
+		);
+
+		activeProjectDeletionTransactions.set(result.id, result.rootPath);
+		return result;
+	},
+	async commitProjectFolderDeletion(transactionId: string) {
+		const rootPath = activeProjectDeletionTransactions.get(transactionId);
+
+		if (!rootPath) {
+			throw new Error('This project deletion transaction is unavailable.');
+		}
+		await ipcRenderer.invoke('commit-project-folder-deletion', transactionId);
+		activeProjectDeletionTransactions.delete(transactionId);
+		projectCapabilities.delete(rootPath);
+	},
+	async rollbackProjectFolderDeletion(transactionId: string) {
+		if (!activeProjectDeletionTransactions.has(transactionId)) {
+			throw new Error('This project deletion transaction is unavailable.');
+		}
+		await ipcRenderer.invoke('rollback-project-folder-deletion', transactionId);
+		activeProjectDeletionTransactions.delete(transactionId);
 	},
 	duplicateProjectFolder(
 		rootPath: string,

@@ -30,6 +30,7 @@ import {Color, colorString} from '../../util/color';
 import {recordPerformanceHarnessEvent} from '../../util/performance';
 import {registerPerformanceRetainedObject} from '../../util/performance-memory-owners';
 import {rendererQuitQuiescence} from '../../util/renderer-quit-quiescence';
+import {workbenchBufferCoordinator} from '../../util/workbench-buffer-coordinator';
 import {
 	createLegacyStreamDocumentService,
 	type LegacyStreamModeAdapter
@@ -245,6 +246,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	const [editor, setEditor] = React.useState<SourceEditorHandle>();
 	const [readyBufferId, setReadyBufferId] = React.useState<string>();
 	const [adapterFailure, setAdapterFailure] = React.useState<Error>();
+	const [bufferSaveError, setBufferSaveError] = React.useState<Error>();
 	const [delimiterGeneration, setDelimiterGeneration] = React.useState(0);
 	const delimiterCount = React.useRef<number | undefined>(undefined);
 	const reportedIntegrationFailures = React.useRef(new Set<string>());
@@ -315,6 +317,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	const expectedText = React.useRef<string | undefined>(undefined);
 	const pendingText = React.useRef<string | undefined>(undefined);
 	const pendingTimeout = React.useRef<number | undefined>(undefined);
+	const pendingCommit = React.useRef<Promise<void> | undefined>(undefined);
+	const editRevision = React.useRef(0);
 	const acceptingTextChanges = React.useRef(!rendererQuitQuiescence.isDraining);
 	const [quitReadOnly, setQuitReadOnly] = React.useState(
 		rendererQuitQuiescence.isDraining
@@ -390,6 +394,51 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		commitTextRef.current = commitText;
 	}, [commitText]);
 
+	const commitBufferedText = React.useCallback((text: string) => {
+		const previousCommit = pendingCommit.current;
+		let operation: Promise<void>;
+
+		try {
+			operation = previousCommit
+				? previousCommit
+						.catch(() => undefined)
+						.then(() => Promise.resolve(commitTextRef.current(text)))
+				: Promise.resolve(commitTextRef.current(text));
+		} catch (error) {
+			operation = Promise.reject(error);
+		}
+		const guarded = operation
+			.then(() => {
+				setBufferSaveError(undefined);
+			})
+			.catch(error => {
+				if (
+					pendingText.current === undefined &&
+					expectedText.current === text &&
+					currentLocalText.current === text
+				) {
+					pendingText.current = text;
+				}
+				setBufferSaveError(error as Error);
+				throw error;
+			});
+
+		pendingCommit.current = guarded;
+		void guarded.then(
+			() => {
+				if (pendingCommit.current === guarded) {
+					pendingCommit.current = undefined;
+				}
+			},
+			() => {
+				if (pendingCommit.current === guarded) {
+					pendingCommit.current = undefined;
+				}
+			}
+		);
+		return guarded;
+	}, []);
+
 	const flushPendingText = React.useCallback(() => {
 		if (pendingTimeout.current) {
 			window.clearTimeout(pendingTimeout.current);
@@ -399,28 +448,10 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 
 		pendingText.current = undefined;
 		if (text === undefined) {
-			return undefined;
+			return pendingCommit.current;
 		}
-
-		let completion: Promise<unknown>;
-
-		try {
-			completion = Promise.resolve(commitTextRef.current(text));
-		} catch (error) {
-			completion = Promise.reject(error);
-		}
-
-		return completion.catch(error => {
-			if (
-				pendingText.current === undefined &&
-				expectedText.current === text &&
-				currentLocalText.current === text
-			) {
-				pendingText.current = text;
-			}
-			throw error;
-		});
-	}, []);
+		return commitBufferedText(text);
+	}, [commitBufferedText]);
 
 	React.useLayoutEffect(
 		() =>
@@ -436,6 +467,20 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				}
 			}),
 		[buffer.id, flushPendingText]
+	);
+
+	React.useLayoutEffect(
+		() =>
+			workbenchBufferCoordinator.register({
+				bufferId: buffer.id,
+				flush: flushPendingText,
+				hasPendingChanges: () =>
+					pendingText.current !== undefined ||
+					pendingCommit.current !== undefined,
+				revision: () => editRevision.current,
+				storyId: story.id
+			}),
+		[buffer.id, flushPendingText, story.id]
 	);
 
 	// Flush any pending edit when the buffer changes or the window closes.
@@ -462,6 +507,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		expectedText.current = undefined;
 		currentLocalText.current = buffer.value;
 		setLocalText(buffer.value);
+		setBufferSaveError(undefined);
 	}, [buffer.id, buffer.value]);
 
 	const handleChangeText = React.useCallback(
@@ -474,6 +520,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			}
 
 			currentLocalText.current = text;
+			editRevision.current++;
 			setLocalText(text);
 			expectedText.current = text;
 			pendingText.current = text;
@@ -485,11 +532,20 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			pendingTimeout.current = window.setTimeout(() => {
 				pendingTimeout.current = undefined;
 				pendingText.current = undefined;
-				void commitTextRef.current(text);
+				void commitBufferedText(text).catch(() => undefined);
 			}, 300);
 		},
-		[passage, spec.kind]
+		[commitBufferedText, passage, spec.kind]
 	);
+
+	const handleClose = React.useCallback(async () => {
+		try {
+			await flushPendingText();
+			onClose();
+		} catch {
+			// The failed text remains registered and dirty for an explicit retry.
+		}
+	}, [flushPendingText, onClose]);
 
 	function handleAddTag(name: string) {
 		if (!passage) {
@@ -956,6 +1012,15 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 						title={t('common.unsavedChanges')}
 					/>
 				)}
+				{bufferSaveError && (
+					<Badge
+						icon="alert-triangle"
+						title={bufferSaveError.message}
+						tone="error"
+					>
+						Save failed
+					</Badge>
+				)}
 				<span className="story-edit-editor-window-bar-sp" />
 				<IconButton
 					icon="search"
@@ -966,7 +1031,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				<IconButton
 					icon="x"
 					label={`${t('common.close')} ${buffer.name}`}
-					onClick={onClose}
+					onClick={() => void handleClose()}
 					size="sm"
 				/>
 			</header>

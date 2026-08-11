@@ -129,7 +129,7 @@ export function useCorePassageDocument(
 			if (!storyId || !passageId || text === document?.text) {
 				return;
 			}
-			await host.applyStoryCommand({
+			await host.applyStoryCommandPersisted({
 				passage_id: passageId,
 				story_id: storyId,
 				text,
@@ -211,7 +211,7 @@ export function useCoreSourceDocument(
 			if (!storyId || !kind || text === document?.text) {
 				return;
 			}
-			await host.applyStoryCommand(
+			await host.applyStoryCommandPersisted(
 				kind === 'script'
 					? {script: text, story_id: storyId, type: 'updateStoryScript'}
 					: {

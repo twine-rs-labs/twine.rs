@@ -1,4 +1,4 @@
-import {fireEvent, render, screen} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {useStoriesContext} from '../../../../store/stories';
@@ -41,10 +41,12 @@ describe('<TestPassageButton>', () => {
 		).toBeDisabled();
 	});
 
-	it('tests the story from the passage when clicked', () => {
-		const openSpy = jest
-			.spyOn(window, 'open')
-			.mockReturnValue(undefined as any);
+	it('tests the story from the passage when clicked', async () => {
+		const replace = jest.fn();
+		const openSpy = jest.spyOn(window, 'open').mockReturnValue({
+			close: jest.fn(),
+			location: {replace}
+		} as any);
 		const story = fakeStory();
 
 		renderComponent({passage: story.passages[0]}, {stories: [story]});
@@ -54,12 +56,15 @@ describe('<TestPassageButton>', () => {
 				name: 'routes.storyEdit.toolbar.testFromHere'
 			})
 		);
-		expect(openSpy.mock.calls).toEqual([
-			[
-				`#/stories/${story.id}/preview?target=test&passage=${story.passages[0].id}`,
-				'_blank'
-			]
-		]);
+		expect(openSpy).toHaveBeenCalledWith(
+			expect.stringMatching(/^http:\/\/localhost\/?$/),
+			'_blank'
+		);
+		await waitFor(() =>
+			expect(replace).toHaveBeenCalledWith(
+				`#/stories/${story.id}/preview?target=test&passage=${story.passages[0].id}`
+			)
+		);
 	});
 
 	it('is accessible', async () => {

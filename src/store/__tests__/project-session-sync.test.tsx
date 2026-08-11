@@ -351,6 +351,48 @@ describe('<ProjectSessionSync>', () => {
 		rendered.unmount();
 	});
 
+	it('restarts a same-root native session after a replacement metadata commit', async () => {
+		const story = fakeStory();
+		const rootPath = '/same-project';
+		let updatedAt = 'before-replacement';
+		const ensureSessionReady = jest.fn(async () => {});
+		const startProjectSession = jest.fn(async (root: string) =>
+			start(root, [story.id])
+		);
+		const stopProjectSession = jest.fn(async () => {});
+
+		(loadProjectMetadata as jest.Mock).mockImplementation(() => ({
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder',
+			updatedAt
+		}));
+		(useCoreProjectHost as jest.Mock).mockReturnValue({ensureSessionReady});
+		(window as any).twineElectron = {
+			onProjectSessionChanged: jest.fn(() => jest.fn()),
+			startProjectSession,
+			stopProjectSession
+		};
+		const rendered = render(
+			<StoriesContext.Provider value={{dispatch: jest.fn(), stories: [story]}}>
+				<ProjectSessionSync />
+			</StoriesContext.Provider>
+		);
+
+		await waitFor(() => expect(startProjectSession).toHaveBeenCalledTimes(1));
+		updatedAt = 'after-replacement';
+		act(() => {
+			mockProjectMetadataRevision++;
+			for (const listener of [...mockProjectMetadataListeners]) {
+				listener();
+			}
+		});
+		await waitFor(() => expect(startProjectSession).toHaveBeenCalledTimes(2));
+		expect(stopProjectSession).toHaveBeenCalledWith(rootPath);
+		expect(startProjectSession).toHaveBeenLastCalledWith(rootPath, [story.id]);
+		rendered.unmount();
+	});
+
 	it('restarts a same-root session when its story membership changes', async () => {
 		const rootPath = '/project';
 		const firstStory = {...fakeStory(), id: 'story-z'};

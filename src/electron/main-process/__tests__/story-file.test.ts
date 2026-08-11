@@ -20,7 +20,12 @@ import {
 	stopTrackingFile,
 	wasFileChangedExternally
 } from '../track-file-changes';
-import {openProjectFolder, readBoundedImportText} from '../project-folder';
+import {
+	openProjectFolder,
+	readBoundedImportText,
+	recoverProjectDeletionTransactions,
+	recoverProjectReplacementTransactions
+} from '../project-folder';
 import {
 	forgetProjectFolder,
 	rememberedProjectFolders
@@ -34,7 +39,9 @@ jest.mock('../story-directory', () => ({
 }));
 jest.mock('../project-folder', () => ({
 	openProjectFolder: jest.fn(),
-	readBoundedImportText: jest.fn()
+	readBoundedImportText: jest.fn(),
+	recoverProjectDeletionTransactions: jest.fn(async () => undefined),
+	recoverProjectReplacementTransactions: jest.fn(async () => undefined)
 }));
 jest.mock('../project-library-index', () => ({
 	forgetProjectFolder: jest.fn(),
@@ -104,6 +111,10 @@ describe('loadStories', () => {
 	const readFileMock = readFile as jest.Mock;
 	const readBoundedImportTextMock = readBoundedImportText as jest.Mock;
 	const openProjectFolderMock = openProjectFolder as jest.Mock;
+	const recoverProjectDeletionTransactionsMock =
+		recoverProjectDeletionTransactions as jest.Mock;
+	const recoverProjectReplacementTransactionsMock =
+		recoverProjectReplacementTransactions as jest.Mock;
 	const forgetProjectFolderMock = forgetProjectFolder as jest.Mock;
 	const rememberedProjectFoldersMock = rememberedProjectFolders as jest.Mock;
 	const statMock = stat as jest.Mock;
@@ -156,6 +167,21 @@ describe('loadStories', () => {
 					throw new Error(`Asked to stat a non-mocked file: ${name}`);
 			}
 		});
+	});
+
+	it('recovers lifecycle journals before reading the project library snapshot', async () => {
+		await loadStories();
+
+		expect(recoverProjectDeletionTransactionsMock).toHaveBeenCalledTimes(1);
+		expect(recoverProjectReplacementTransactionsMock).toHaveBeenCalledTimes(1);
+		expect(
+			recoverProjectDeletionTransactionsMock.mock.invocationCallOrder[0]
+		).toBeLessThan(
+			recoverProjectReplacementTransactionsMock.mock.invocationCallOrder[0]
+		);
+		expect(
+			recoverProjectReplacementTransactionsMock.mock.invocationCallOrder[0]
+		).toBeLessThan(rememberedProjectFoldersMock.mock.invocationCallOrder[0]);
 	});
 
 	it('resolves to an array of stories in the story library directory', async () => {

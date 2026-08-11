@@ -24,6 +24,7 @@ import {
 import type {
 	NativeProjectImportSource,
 	NativeProjectFolderResult,
+	NativeProjectReplacementTransaction,
 	ProjectSourceLayout
 } from '../../electron/shared';
 import {loadProjectMetadata} from '../../store/project-metadata';
@@ -63,6 +64,7 @@ import {
 	useCoreProjectHost
 } from '../../core';
 import {StoryEditMode} from '../story-edit/workspace-state';
+import {workbenchBufferCoordinator} from '../../util/workbench-buffer-coordinator';
 import './new-project-route.css';
 
 type NewProjectTab = 'create' | 'import';
@@ -365,6 +367,7 @@ export const NewProjectRoute: React.FC = () => {
 	const fileInput = React.useRef<HTMLInputElement>(null);
 	const importRunActive = React.useRef(false);
 	const preparedImportIds = React.useRef(new Set<string>());
+	const routeMounted = React.useRef(true);
 	const storiesRef = React.useRef(stories);
 	const formatOptions = React.useMemo(
 		() =>
@@ -411,8 +414,14 @@ export const NewProjectRoute: React.FC = () => {
 
 	React.useEffect(() => {
 		// Keep prepared native import handles scoped to this route. The library
-		// service owns the native disposal operation.
+		// service owns the native disposal operation. An active import keeps its
+		// handle until every filesystem transaction has committed or rolled back.
+		routeMounted.current = true;
 		return () => {
+			routeMounted.current = false;
+			if (importRunActive.current) {
+				return;
+			}
 			for (const importId of preparedImportIds.current) {
 				void projectLibrary.discardProjectImport(importId);
 			}
@@ -624,6 +633,8 @@ export const NewProjectRoute: React.FC = () => {
 		const appliedLocalReplacementStoryIds = new Set<string>();
 		const createdRoots = new Set<string>();
 		const createdRootByStoryId = new Map<string, string>();
+		const nativeReplacementTransactions: NativeProjectReplacementTransaction[] =
+			[];
 		const replacementState = new Map<
 			string,
 			{
@@ -637,11 +648,14 @@ export const NewProjectRoute: React.FC = () => {
 		>();
 		let newDocumentStories: StoryWithDocuments[] = [];
 		let newProjectLifecycleStarted = false;
+		let newProjectMetadataStarted = false;
 		let localReplacementRecoveryPrepared = false;
 		let retainLocalReplacementRecovery = false;
 		let importCompleted = false;
+		const preparedImport = importQueue.preparedImport;
 
 		try {
+			await workbenchBufferCoordinator.flushAll();
 			const existingStoriesBySelection = selectedStories.map(story =>
 				stories.find(
 					existing => storyFileName(existing) === storyFileName(story)
@@ -682,25 +696,73 @@ export const NewProjectRoute: React.FC = () => {
 			}
 
 			setImportProgress({detail: 'Writing project folders', progress: 62});
-			const projectResults: Array<NativeProjectFolderResult | undefined> = [];
+			const projectResults: Array<NativeProjectFolderResult | undefined> =
+				Array.from({length: storiesToImport.length});
+			const nativeReplacementIndexes = new Set<number>();
+			const replacementIndexesByRoot = new Map<string, number[]>();
+
+			for (const [
+				index,
+				existingStory
+			] of existingStoriesBySelection.entries()) {
+				if (!existingStory || !currentReplacementStories[index]) {
+					continue;
+				}
+				const metadata = loadProjectMetadata(existingStory.id);
+
+				if (
+					metadata?.storageKind === 'electron-project-folder' &&
+					metadata.status === 'file-backed' &&
+					metadata.rootPath
+				) {
+					replacementIndexesByRoot.set(metadata.rootPath, [
+						...(replacementIndexesByRoot.get(metadata.rootPath) ?? []),
+						index
+					]);
+					nativeReplacementIndexes.add(index);
+				}
+			}
+
+			for (const [rootPath, indexes] of replacementIndexesByRoot) {
+				const replacementByStoryId = new Map(
+					indexes.map(index => [
+						existingStoriesBySelection[index]!.id,
+						storiesToImport[index]
+					])
+				);
+				const currentProjectStories = await Promise.all(
+					stories
+						.filter(
+							story => loadProjectMetadata(story.id)?.rootPath === rootPath
+						)
+						.map(story => materializeImportReplacement(story, projectLibrary))
+				);
+				const finalProjectStories = currentProjectStories.map(
+					story => replacementByStoryId.get(story.id) ?? story
+				);
+				const transaction = await projectLibrary.beginProjectReplacement(
+					rootPath,
+					finalProjectStories,
+					preparedImport?.id
+				);
+
+				nativeReplacementTransactions.push(transaction);
+				for (const index of indexes) {
+					projectResults[index] = transaction.project;
+				}
+			}
 
 			for (const [index, story] of storiesToImport.entries()) {
+				if (nativeReplacementIndexes.has(index)) {
+					continue;
+				}
 				const existingStory = existingStoriesBySelection[index];
-				const currentStory = currentReplacementStories[index];
-				const result =
-					existingStory && currentStory
-						? await projectLibrary.createProjectFolder(
-								currentStory,
-								prefs.defaultProjectFolder || undefined,
-								undefined,
-								{commitProjectState: false}
-							)
-						: await projectLibrary.createProjectFolder(
-								story,
-								prefs.defaultProjectFolder || undefined,
-								undefined,
-								{commitProjectState: false}
-							);
+				const result = await projectLibrary.createProjectFolder(
+					story,
+					prefs.defaultProjectFolder || undefined,
+					undefined,
+					{commitProjectState: false}
+				);
 
 				if (result) {
 					createdRoots.add(result.rootPath);
@@ -709,15 +771,14 @@ export const NewProjectRoute: React.FC = () => {
 						result.rootPath
 					);
 				}
-				projectResults.push(result);
+				projectResults[index] = result;
 			}
-			const preparedImport = importQueue.preparedImport;
 
 			if (preparedImport) {
 				setImportProgress({detail: 'Copying project assets', progress: 82});
 				await Promise.all(
-					projectResults.flatMap(result =>
-						result
+					projectResults.flatMap((result, index) =>
+						result && !nativeReplacementIndexes.has(index)
 							? [
 									projectLibrary.copyProjectImportAssets(
 										preparedImport.id,
@@ -754,11 +815,6 @@ export const NewProjectRoute: React.FC = () => {
 			if (localReplacementStories.length > 0) {
 				projectLibrary.prepareLocalReplacementRecovery(localReplacementStories);
 				localReplacementRecoveryPrepared = true;
-			}
-
-			if (preparedImport) {
-				await projectLibrary.discardProjectImport(preparedImport.id);
-				preparedImportIds.current.delete(preparedImport.id);
 			}
 
 			for (const [index, result] of projectResults.entries()) {
@@ -802,7 +858,8 @@ export const NewProjectRoute: React.FC = () => {
 						);
 					} else {
 						await coreProjectHost.applyStoryCommand(
-							replaceStoryCommand(existingStory.id, story)
+							replaceStoryCommand(existingStory.id, story),
+							{persistence: 'skip'}
 						);
 						if (previous) {
 							previous.replacementStory = story;
@@ -818,7 +875,7 @@ export const NewProjectRoute: React.FC = () => {
 				// Metadata publication and Rust admission form one lifecycle cohort.
 				// Cleanup must cover a failure in either phase, including a partial
 				// metadata commit before Core admission begins.
-				newProjectLifecycleStarted = true;
+				newProjectMetadataStarted = true;
 				for (const story of newDocumentStories) {
 					const result = projectResults[storiesToImport.indexOf(story)];
 
@@ -829,13 +886,29 @@ export const NewProjectRoute: React.FC = () => {
 					}
 				}
 				await projectLibrary.admitProjectStories(newDocumentStories);
+				newProjectLifecycleStarted = true;
 			}
 			repairStories();
 			if (localReplacementRecoveryPrepared) {
 				projectLibrary.clearLocalReplacementRecovery();
 				localReplacementRecoveryPrepared = false;
 			}
+			if (nativeReplacementTransactions.length > 0) {
+				await projectLibrary.commitProjectReplacements(
+					nativeReplacementTransactions.map(transaction => transaction.id)
+				);
+			}
 			importCompleted = true;
+			if (preparedImport) {
+				try {
+					await projectLibrary.discardProjectImport(preparedImport.id);
+					preparedImportIds.current.delete(preparedImport.id);
+				} catch (error) {
+					console.warn(
+						`Could not discard committed import staging: ${(error as Error).message}`
+					);
+				}
+			}
 			navigate('/');
 		} catch (error) {
 			setImportError((error as Error).message);
@@ -843,11 +916,35 @@ export const NewProjectRoute: React.FC = () => {
 			if (!importCompleted) {
 				const cleanupErrors: string[] = [];
 				const retainedRoots = new Set<string>();
+				const failedNativeRollbackStoryIds = new Set<string>();
 
-				const replacementRollbackStoryIds = new Set([
-					...committedReplacementStoryIds,
-					...appliedReplacementStoryIds
-				]);
+				if (nativeReplacementTransactions.length > 0) {
+					const rollbackResults = await Promise.allSettled(
+						nativeReplacementTransactions.map(transaction =>
+							projectLibrary.rollbackProjectReplacement(transaction.id)
+						)
+					);
+
+					for (const [index, result] of rollbackResults.entries()) {
+						if (result.status === 'rejected') {
+							const transaction = nativeReplacementTransactions[index];
+
+							for (const storyId of transaction.project.storyIds) {
+								failedNativeRollbackStoryIds.add(storyId);
+							}
+							cleanupErrors.push(
+								`Could not restore native project replacement ${transaction.project.rootPath}; the affected project remains unavailable until startup recovery completes: ${(result.reason as Error).message}`
+							);
+						}
+					}
+				}
+
+				const replacementRollbackStoryIds = new Set(
+					[
+						...committedReplacementStoryIds,
+						...appliedReplacementStoryIds
+					].filter(storyId => !failedNativeRollbackStoryIds.has(storyId))
+				);
 				const committedReplacements = [...replacementRollbackStoryIds]
 					.map(storyId => replacementState.get(storyId))
 					.filter((value): value is NonNullable<typeof value> => !!value);
@@ -905,6 +1002,8 @@ export const NewProjectRoute: React.FC = () => {
 							`Could not retire projects admitted before the import failed: ${(error as Error).message}`
 						);
 					}
+				} else if (newProjectMetadataStarted) {
+					projectLibrary.forgetProjectBindings(newDocumentStories);
 				}
 
 				for (const [storyId, previous] of replacementState) {
@@ -975,6 +1074,16 @@ export const NewProjectRoute: React.FC = () => {
 				releaseBootstrapStory(storyId);
 			}
 			importRunActive.current = false;
+			if (
+				!routeMounted.current &&
+				preparedImport &&
+				preparedImportIds.current.has(preparedImport.id)
+			) {
+				await projectLibrary
+					.discardProjectImport(preparedImport.id)
+					.catch(() => undefined);
+				preparedImportIds.current.delete(preparedImport.id);
+			}
 			setImporting(false);
 			setImportProgress(undefined);
 		}
