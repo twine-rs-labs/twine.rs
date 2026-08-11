@@ -114,9 +114,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git/db
-          key: cargo-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-deps-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            cargo-deps-${{ runner.os }}-${{ runner.arch }}-
+            cargo-deps-${{ runner.os }}-
       - name: Rust formatting
         run: cargo +${{ matrix.rust }} fmt --all -- --check
       - name: Rust Clippy

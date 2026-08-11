@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import {
+	downloadRelease,
 	extractReleaseArchive,
 	installWasmBindgenCli,
 	wasmBindgenReleaseAsset,
@@ -43,6 +44,11 @@ const expectedAssets = [
 	]
 ];
 
+const testRelease = {
+	name: 'wasm-bindgen-test.tar.gz',
+	url: 'https://example.invalid/wasm-bindgen-test.tar.gz'
+};
+
 test('maps every packaged runner to a checksum-pinned wasm-bindgen release', () => {
 	for (const [platform, arch, target, sha256] of expectedAssets) {
 		const release = wasmBindgenReleaseAsset({arch, platform});
@@ -62,6 +68,80 @@ test('rejects unsupported wasm-bindgen release targets', () => {
 		() => wasmBindgenReleaseAsset({arch: 'arm64', platform: 'win32'}),
 		/No pinned wasm-bindgen/
 	);
+});
+
+test('does not retry permanent wasm-bindgen download client errors', async () => {
+	let attempts = 0;
+	const backoffs = [];
+
+	await assert.rejects(
+		downloadRelease(
+			async () => {
+				attempts += 1;
+				return new Response(null, {status: 404});
+			},
+			testRelease,
+			{delayImpl: async milliseconds => backoffs.push(milliseconds)}
+		),
+		/HTTP 404/
+	);
+
+	assert.equal(attempts, 1);
+	assert.deepEqual(backoffs, []);
+});
+
+test('retries transient wasm-bindgen download server errors', async () => {
+	const statuses = [503, 503, 200];
+	const backoffs = [];
+
+	const response = await downloadRelease(
+		async () => new Response(null, {status: statuses.shift()}),
+		testRelease,
+		{delayImpl: async milliseconds => backoffs.push(milliseconds)}
+	);
+
+	assert.equal(response.status, 200);
+	assert.deepEqual(statuses, []);
+	assert.deepEqual(backoffs, [2_000, 4_000]);
+});
+
+test('retries wasm-bindgen download rate limits', async () => {
+	let attempts = 0;
+	const backoffs = [];
+
+	const response = await downloadRelease(
+		async () => {
+			attempts += 1;
+			return new Response(null, {status: attempts === 1 ? 429 : 200});
+		},
+		testRelease,
+		{delayImpl: async milliseconds => backoffs.push(milliseconds)}
+	);
+
+	assert.equal(response.status, 200);
+	assert.equal(attempts, 2);
+	assert.deepEqual(backoffs, [2_000]);
+});
+
+test('retries wasm-bindgen download network failures', async () => {
+	let attempts = 0;
+	const backoffs = [];
+
+	const response = await downloadRelease(
+		async () => {
+			attempts += 1;
+			if (attempts === 1) {
+				throw new Error('temporary network failure');
+			}
+			return new Response(null, {status: 200});
+		},
+		testRelease,
+		{delayImpl: async milliseconds => backoffs.push(milliseconds)}
+	);
+
+	assert.equal(response.status, 200);
+	assert.equal(attempts, 2);
+	assert.deepEqual(backoffs, [2_000]);
 });
 
 test('extracts with relative paths so Windows drive letters are not parsed as hosts', async () => {
