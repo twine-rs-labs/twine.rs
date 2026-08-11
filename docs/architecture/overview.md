@@ -83,6 +83,8 @@ Electron owns native capabilities:
   renderer state and mutation paths.
 - [`desktop-preview-sessions.md`](./desktop-preview-sessions.md) defines the
   preview entry, package protocol, narrow IPC, and session lifecycle.
+- [`runtime-debugger-protocol.md`](./runtime-debugger-protocol.md) defines the
+  versioned, read-only story-runtime inspection and adapter boundary.
 - [`../decisions/`](../decisions/README.md) records the reasons behind the
   stable choices.
 

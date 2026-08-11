@@ -2,7 +2,7 @@
 
 Status: current
 Owner: Electron and frontend maintainers
-Last verified: 2026-07-27
+Last verified: 2026-08-11
 Source of truth: desktop preview entry, preview IPC, window manager, protocol,
 and shared preview surface
 
@@ -60,8 +60,11 @@ Browser preview routes and the desktop entry render the same
 `StoryPreviewFrame` surface. Browser content uses `srcDoc`; desktop content uses
 the opaque package URL. The instrumented story reports bounded current-passage,
 viewport, console, error, and unhandled-rejection messages to the surface.
-Candidate-generation messages are reduced into a bounded private runtime model;
-commit promotes that model with the candidate frame, while rollback discards it.
+It also negotiates the additive, read-only Runtime Debugger v1 adapter contract
+described in [`runtime-debugger-protocol.md`](./runtime-debugger-protocol.md).
+Candidate-generation messages, including debugger section completeness, are
+reduced into a bounded private runtime model; commit promotes that model with
+the candidate frame, while rollback discards it.
 
 Source and Graph commands return to the owning editor and focus the referenced
 passage. Test From Start and Test Current return generation-tagged requests to

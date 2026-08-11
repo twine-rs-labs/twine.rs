@@ -120,6 +120,7 @@ export interface StoryPreviewFrameProps {
 	onContentLoad?: () => void;
 	onRevealGraph?: (passageId?: string) => void;
 	onRevealSource?: (passageId?: string) => void;
+	onRuntimeModelChange?: (model: StoryPreviewRuntimeModel) => void;
 	onStagedContentLoad?: () => void;
 	onTestCurrentPassage?: (passageId: string) => void;
 	onTestFromStart?: () => void;
@@ -153,6 +154,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		onContentLoad,
 		onRevealGraph,
 		onRevealSource,
+		onRuntimeModelChange,
 		onStagedContentLoad,
 		onTestCurrentPassage,
 		onTestFromStart,
@@ -281,6 +283,10 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 			stagedRuntimeRef.current = undefined;
 		}
 	}, [bridgeSessionId, stagedContentSource]);
+
+	React.useEffect(() => {
+		onRuntimeModelChange?.(runtimeModel);
+	}, [onRuntimeModelChange, runtimeModel]);
 
 	React.useEffect(() => {
 		function handleMessage(event: MessageEvent) {

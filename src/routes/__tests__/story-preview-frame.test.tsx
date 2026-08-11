@@ -227,6 +227,7 @@ describe('<StoryPreviewFrame>', () => {
 	});
 
 	it('buffers candidate runtime messages and promotes them with the frame', async () => {
+		const onRuntimeModelChange = jest.fn();
 		const currentSource = {
 			bridgeSessionId: 'current-session',
 			htmlBytes: 123,
@@ -248,6 +249,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				storyExists
 				title="Committed preview"
 			/>
@@ -257,6 +259,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				stagedContentSource={candidateSource}
 				stagedPassages={candidatePassages}
 				stagedTitle="Candidate preview"
@@ -280,15 +283,59 @@ describe('<StoryPreviewFrame>', () => {
 			type: 'state',
 			viewport: {height: 640, width: 960}
 		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'generic',
+			capabilities: ['currentPassage'],
+			format: 'SugarCube',
+			formatVersion: '2.37.3',
+			protocolVersion: 1,
+			reliability: 'best-effort',
+			type: 'debugger-hello'
+		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'sugarcube-2.37.3',
+			capabilities: [
+				'currentPassage',
+				'storyVariables',
+				'temporaryVariables',
+				'visitedPassages'
+			],
+			format: 'SugarCube',
+			formatVersion: '2.37.3',
+			protocolVersion: 1,
+			reliability: 'exact-version',
+			type: 'debugger-hello'
+		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'sugarcube-2.37.3',
+			currentPassage: {localId: '9', source: 'debugger'},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				temporaryVariables: {state: 'complete'},
+				visitedPassages: {state: 'complete'}
+			},
+			storyVariables: [],
+			temporaryVariables: [],
+			type: 'debugger-snapshot',
+			visitedPassages: [{localId: '9'}]
+		});
 
 		expect(screen.getByText('0 logs')).toBeInTheDocument();
 		expect(screen.queryByText('candidate startup')).not.toBeInTheDocument();
 		expect(screen.queryByText('candidate rejection')).not.toBeInTheDocument();
+		expect(
+			onRuntimeModelChange.mock.calls.some(
+				([model]) => model.debugger.hello !== undefined
+			)
+		).toBe(false);
 
 		rerender(
 			<StoryPreviewFrame
 				contentSource={candidateSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				passages={candidatePassages}
 				storyExists
 				title="Candidate committed preview"
@@ -302,9 +349,19 @@ describe('<StoryPreviewFrame>', () => {
 		expect(screen.getByTitle('Candidate committed preview')).toBe(
 			candidateFrame
 		);
+		await waitFor(() =>
+			expect(
+				onRuntimeModelChange.mock.calls.some(
+					([model]) =>
+						model.debugger.hello?.id === 'sugarcube-2.37.3' &&
+						model.debugger.snapshot?.currentPassage?.id === 'candidate-id'
+				)
+			).toBe(true)
+		);
 	});
 
 	it('discards buffered candidate messages on rollback', async () => {
+		const onRuntimeModelChange = jest.fn();
 		const currentSource = {
 			bridgeSessionId: 'current-session',
 			htmlBytes: 123,
@@ -323,6 +380,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				stagedContentSource={candidateSource}
 				stagedTitle="Candidate preview"
 				storyExists
@@ -335,10 +393,26 @@ describe('<StoryPreviewFrame>', () => {
 			level: 'error',
 			type: 'console'
 		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'generic',
+			capabilities: ['currentPassage'],
+			format: 'Unknown',
+			formatVersion: '1.0.0',
+			protocolVersion: 1,
+			reliability: 'best-effort',
+			type: 'debugger-hello'
+		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'generic',
+			protocolVersion: 1,
+			sections: {currentPassage: {state: 'unavailable'}},
+			type: 'debugger-snapshot'
+		});
 		rerender(
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				storyExists
 				title="Committed preview"
 			/>
@@ -347,6 +421,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				stagedContentSource={candidateSource}
 				stagedTitle="Retry candidate preview"
 				storyExists
@@ -357,6 +432,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={candidateSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				storyExists
 				title="Candidate committed preview"
 			/>
@@ -369,6 +445,11 @@ describe('<StoryPreviewFrame>', () => {
 		);
 		expect(screen.getByText('0 logs')).toBeInTheDocument();
 		expect(screen.queryByText('abandoned startup')).not.toBeInTheDocument();
+		expect(
+			onRuntimeModelChange.mock.calls.some(
+				([model]) => model.debugger.hello !== undefined
+			)
+		).toBe(false);
 	});
 
 	it('reports content loads to the hosting shell', () => {
