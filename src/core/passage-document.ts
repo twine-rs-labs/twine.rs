@@ -126,10 +126,18 @@ export function useCorePassageDocument(
 
 	const apply = React.useCallback(
 		async (text: string) => {
-			if (!storyId || !passageId || text === document?.text) {
+			if (!storyId || !passageId) {
 				return;
 			}
-			await host.applyStoryCommand({
+			if (text === document?.text) {
+				await host.retryStoryPersistence({
+					passageId,
+					storyId,
+					type: 'passageText'
+				});
+				return;
+			}
+			await host.applyStoryCommandPersisted({
 				passage_id: passageId,
 				story_id: storyId,
 				text,
@@ -208,10 +216,14 @@ export function useCoreSourceDocument(
 
 	const apply = React.useCallback(
 		async (text: string) => {
-			if (!storyId || !kind || text === document?.text) {
+			if (!storyId || !kind) {
 				return;
 			}
-			await host.applyStoryCommand(
+			if (text === document?.text) {
+				await host.retryStoryPersistence({storyId, type: kind});
+				return;
+			}
+			await host.applyStoryCommandPersisted(
 				kind === 'script'
 					? {script: text, story_id: storyId, type: 'updateStoryScript'}
 					: {

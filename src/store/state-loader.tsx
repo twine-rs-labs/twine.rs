@@ -1,6 +1,7 @@
 import * as React from 'react';
 import {LoadingCurtain} from '../components/loading-curtain';
-import {usePersistence} from './persistence/use-persistence';
+import {Badge, Button, Panel} from '../components/design-system';
+import {PersistenceHooks, usePersistence} from './persistence/use-persistence';
 import {usePrefsContext} from './prefs';
 import {useStoriesContext} from './stories';
 import {useStoryFormatsContext} from './story-formats';
@@ -11,6 +12,177 @@ import {
 	registerBootstrapStories
 } from '../core/bootstrap-stories';
 import type {Story, StoryWithDocuments} from './stories';
+import {isElectronRenderer} from '../util/is-electron';
+import type {TwineElectronWindow} from '../electron/shared';
+import {
+	isNativeProjectRecoveryRequiredError,
+	NativeProjectRecoveryRequiredError
+} from './persistence/electron-ipc/stories/load';
+import {
+	discardInvalidLocalReplacementRecovery,
+	inspectLocalReplacementRecovery,
+	LocalReplacementRecoveryDecision,
+	LocalReplacementRecoveryIssue,
+	LocalReplacementRecoveryReport,
+	recoverLocalReplacementJournal,
+	resolveLocalReplacementRecovery
+} from './persistence/local-storage/stories/replacement-recovery';
+import './state-loader.css';
+
+interface LoadedState {
+	formatsState: Awaited<ReturnType<PersistenceHooks['storyFormats']['load']>>;
+	prefsState: Awaited<ReturnType<PersistenceHooks['prefs']['load']>>;
+	storiesState: Awaited<ReturnType<PersistenceHooks['stories']['load']>>;
+}
+
+interface InitialStateLoad extends PersistedStateLoad {
+	recoveryReport: LocalReplacementRecoveryReport;
+}
+
+interface PersistedStateLoad {
+	errors: unknown[];
+	state: LoadedState;
+}
+
+interface PendingLocalRecovery {
+	report: LocalReplacementRecoveryReport;
+}
+
+interface PendingNativeRecovery {
+	message: string;
+}
+
+const emptyRecoveryReport: LocalReplacementRecoveryReport = {issues: []};
+
+function isStorageAccessError(error: unknown) {
+	return error instanceof DOMException && error.name === 'SecurityError';
+}
+
+function unavailableRecoveryReport(
+	error: unknown
+): LocalReplacementRecoveryReport {
+	return {
+		issues: [
+			{
+				canKeepCurrent: false,
+				canRestoreOriginal: false,
+				message: `Browser storage is unavailable: ${(error as Error).message}`,
+				state: 'unavailable',
+				storyName: 'Browser storage unavailable'
+			}
+		]
+	};
+}
+
+function retryAutomaticLocalRecovery(
+	report: LocalReplacementRecoveryReport
+): LocalReplacementRecoveryReport {
+	// Preserve the startup recovery's one automatic retry, but keep both mutating
+	// attempts ahead of any persistence snapshot that can be admitted.
+	return report.issues.length > 0 ? recoverLocalReplacementJournal() : report;
+}
+
+const LocalReplacementRecoveryResolver: React.FC<{
+	busy: boolean;
+	error?: string;
+	onDecision: (
+		issue: LocalReplacementRecoveryIssue,
+		decision: LocalReplacementRecoveryDecision
+	) => void;
+	onRetry: () => void;
+	report: LocalReplacementRecoveryReport;
+}> = ({busy, error, onDecision, onRetry, report}) => (
+	<main
+		aria-labelledby="local-replacement-recovery-title"
+		className="local-replacement-recovery"
+	>
+		<Panel icon="rotate-clockwise" pad title="Project recovery required">
+			<h1 id="local-replacement-recovery-title">Review recovered projects</h1>
+			<p>
+				A previous import did not finish cleanly. Project sessions will remain
+				closed until each affected local project has a safe resolution.
+			</p>
+			<div className="local-replacement-recovery__issues">
+				{report.issues.map((issue, index) => (
+					<section
+						className="local-replacement-recovery__issue"
+						key={issue.storyId ?? `invalid-${index}`}
+					>
+						<div>
+							<strong>{issue.storyName}</strong>
+							<p>{issue.message}</p>
+						</div>
+						{issue.canKeepCurrent || issue.canRestoreOriginal ? (
+							<div className="local-replacement-recovery__actions">
+								{issue.canKeepCurrent ? (
+									<Button
+										aria-label={`Keep current ${issue.storyName}`}
+										disabled={busy}
+										onClick={() => onDecision(issue, 'keep-current')}
+									>
+										Keep Current
+									</Button>
+								) : null}
+								{issue.canRestoreOriginal ? (
+									<Button
+										aria-label={`Restore original ${issue.storyName}`}
+										disabled={busy}
+										onClick={() => onDecision(issue, 'restore-original')}
+										variant="primary"
+									>
+										Restore Original
+									</Button>
+								) : null}
+							</div>
+						) : null}
+					</section>
+				))}
+			</div>
+			{error || report.error ? (
+				<Badge icon="alert-octagon" role="alert" tone="error">
+					{error ?? report.error}
+				</Badge>
+			) : null}
+			<div className="local-replacement-recovery__footer">
+				<Button icon="refresh" loading={busy} onClick={onRetry}>
+					Retry Recovery
+				</Button>
+			</div>
+		</Panel>
+	</main>
+);
+
+const NativeProjectRecoveryResolver: React.FC<{
+	busy: boolean;
+	error?: string;
+	message: string;
+	onReveal: () => void;
+	onRetry: () => void;
+}> = ({busy, error, message, onReveal, onRetry}) => (
+	<main
+		aria-labelledby="native-project-recovery-title"
+		className="local-replacement-recovery"
+	>
+		<Panel icon="alert-octagon" pad title="Project recovery required">
+			<h1 id="native-project-recovery-title">Project library is closed</h1>
+			<p>
+				Twine could not safely finish a project-folder operation. No project
+				sessions will open until the on-disk state can be verified.
+			</p>
+			<Badge icon="alert-octagon" role="alert" tone="error">
+				{error ?? message}
+			</Badge>
+			<div className="local-replacement-recovery__footer">
+				<Button disabled={busy} onClick={onReveal}>
+					Reveal Project Library
+				</Button>
+				<Button icon="refresh" loading={busy} onClick={onRetry}>
+					Retry Recovery
+				</Button>
+			</div>
+		</Panel>
+	</main>
+);
 
 function storiesWithDocuments(stories: Story[]): StoryWithDocuments[] {
 	if (
@@ -30,11 +202,13 @@ function storiesWithDocuments(stories: Story[]): StoryWithDocuments[] {
 async function loadOrDefault<T>(
 	name: string,
 	load: () => Promise<T>,
-	defaultValue: T
+	defaultValue: T,
+	onError?: (error: unknown) => void
 ): Promise<T> {
 	try {
 		return await load();
 	} catch (error) {
+		onError?.(error);
 		console.warn(
 			`Could not load ${name}; continuing with default state: ${
 				(error as Error).message
@@ -46,6 +220,12 @@ async function loadOrDefault<T>(
 
 export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 	const [inited, setInited] = React.useState(false);
+	const [pendingLocalRecovery, setPendingLocalRecovery] =
+		React.useState<PendingLocalRecovery>();
+	const [pendingNativeRecovery, setPendingNativeRecovery] =
+		React.useState<PendingNativeRecovery>();
+	const [recoveryBusy, setRecoveryBusy] = React.useState(false);
+	const [recoveryError, setRecoveryError] = React.useState<string>();
 	const [prefsRepaired, setPrefsRepaired] = React.useState(false);
 	const [formatsRepaired, setFormatsRepaired] = React.useState(false);
 	const [storiesRepaired, setStoriesRepaired] = React.useState(false);
@@ -58,15 +238,68 @@ export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 		useStoryFormatsContext();
 	const repairStories = useStoriesRepair();
 	const {prefs, stories, storyFormats} = usePersistence();
-	const initializationRef = React.useRef<
-		| Promise<{
-				formatsState: Awaited<ReturnType<typeof storyFormats.load>>;
-				prefsState: Awaited<ReturnType<typeof prefs.load>>;
-				storiesState: Awaited<ReturnType<typeof stories.load>>;
-		  }>
-		| undefined
-	>(undefined);
+	const initializationRef = React.useRef<Promise<InitialStateLoad> | undefined>(
+		undefined
+	);
 	const initializationAppliedRef = React.useRef(false);
+	const mountedRef = React.useRef(true);
+	const recoveryRunActiveRef = React.useRef(false);
+	const applyLoadedState = React.useCallback(
+		({formatsState, prefsState, storiesState}: LoadedState) => {
+			if (!mountedRef.current || initializationAppliedRef.current) {
+				return;
+			}
+			initializationAppliedRef.current = true;
+			formatsDispatch({type: 'init', state: formatsState});
+			prefsDispatch({type: 'init', state: prefsState});
+			storiesDispatch({type: 'init', state: storiesState});
+			markPerformance('all-passages-ready');
+			setPendingLocalRecovery(undefined);
+			setInited(true);
+		},
+		[formatsDispatch, prefsDispatch, storiesDispatch]
+	);
+	const loadPersistedState =
+		React.useCallback(async (): Promise<PersistedStateLoad> => {
+			const errors: unknown[] = [];
+			const recordError = (error: unknown) => errors.push(error);
+			const loadStoriesFailClosed = async () => {
+				try {
+					return await stories.load();
+				} catch (error) {
+					if (
+						isElectronRenderer() &&
+						!isNativeProjectRecoveryRequiredError(error)
+					) {
+						const message =
+							error instanceof Error ? error.message : String(error);
+
+						throw new NativeProjectRecoveryRequiredError(
+							`Project library could not be safely loaded: ${message}`
+						);
+					}
+					throw error;
+				}
+			};
+			const [formatsState, prefsState, storiesState] = await Promise.all([
+				loadOrDefault('story formats', storyFormats.load, [], recordError),
+				loadOrDefault('preferences', prefs.load, {}, recordError),
+				loadOrDefault('stories', loadStoriesFailClosed, [], recordError)
+			]);
+
+			return {
+				errors,
+				state: {formatsState, prefsState, storiesState}
+			};
+		}, [prefs, stories, storyFormats]);
+
+	React.useEffect(() => {
+		mountedRef.current = true;
+
+		return () => {
+			mountedRef.current = false;
+		};
+	}, []);
 
 	// Done in steps so that the repair action can see the inited state, and then
 	// each repair action can see the results of the preceding ones.
@@ -80,44 +313,191 @@ export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 		if (!initializationRef.current) {
 			markPerformance('open-start');
 			initializationRef.current = (async () => {
-				const formatsState = await loadOrDefault(
-					'story formats',
-					storyFormats.load,
-					[]
-				);
-				const prefsState = await loadOrDefault('preferences', prefs.load, {});
-				const storiesState = await loadOrDefault('stories', stories.load, []);
+				const electron = isElectronRenderer();
+				const recoveryReport = electron
+					? emptyRecoveryReport
+					: retryAutomaticLocalRecovery(recoverLocalReplacementJournal());
+				// Load every persistence domain so storage failures are reported together.
+				// This state is disposable unless the pre-snapshot recovery report is clean.
+				const loaded = await loadPersistedState();
 
-				return {formatsState, prefsState, storiesState};
+				return {
+					...loaded,
+					recoveryReport
+				};
 			})();
 		}
 
-		void initializationRef.current.then(
-			({formatsState, prefsState, storiesState}) => {
-				if (canceled || initializationAppliedRef.current) {
-					return;
-				}
-
-				initializationAppliedRef.current = true;
-				formatsDispatch({type: 'init', state: formatsState});
-				prefsDispatch({type: 'init', state: prefsState});
-				storiesDispatch({type: 'init', state: storiesState});
-				markPerformance('all-passages-ready');
-				setInited(true);
+		void initializationRef.current.then(({errors, recoveryReport, state}) => {
+			if (canceled || initializationAppliedRef.current) {
+				return;
 			}
-		);
+			const electron = isElectronRenderer();
+			const inspectionReport = electron
+				? emptyRecoveryReport
+				: inspectLocalReplacementRecovery();
+			const storageAccessError = electron
+				? undefined
+				: errors.find(isStorageAccessError);
+			const nativeRecoveryError = electron
+				? errors.find(isNativeProjectRecoveryRequiredError)
+				: undefined;
+
+			if (nativeRecoveryError) {
+				setPendingNativeRecovery({message: nativeRecoveryError.message});
+				return;
+			}
+			const gatedReport =
+				recoveryReport.issues.length > 0
+					? recoveryReport
+					: inspectionReport.issues.length > 0
+						? inspectionReport
+						: storageAccessError
+							? unavailableRecoveryReport(storageAccessError)
+							: inspectionReport;
+
+			if (gatedReport.issues.length > 0) {
+				setPendingLocalRecovery({report: gatedReport});
+				return;
+			}
+			applyLoadedState(state);
+		});
 
 		return () => {
 			canceled = true;
 		};
-	}, [
-		formatsDispatch,
-		prefs,
-		prefsDispatch,
-		stories,
-		storiesDispatch,
-		storyFormats
-	]);
+	}, [applyLoadedState, loadPersistedState]);
+
+	const finishRecovery = React.useCallback(
+		async (operationReport: LocalReplacementRecoveryReport) => {
+			const recoveryReport = retryAutomaticLocalRecovery(operationReport);
+
+			if (mountedRef.current) {
+				setPendingLocalRecovery({report: recoveryReport});
+			}
+			// An unresolved report makes this a disposable availability probe. Only a
+			// snapshot taken after clean recovery can reach applyLoadedState().
+			const {errors, state: loaded} = await loadPersistedState();
+			const inspectionReport = inspectLocalReplacementRecovery();
+			const storageAccessError = errors.find(isStorageAccessError);
+
+			if (!mountedRef.current) {
+				return;
+			}
+			const gatedReport =
+				recoveryReport.issues.length > 0
+					? recoveryReport
+					: inspectionReport.issues.length > 0
+						? inspectionReport
+						: storageAccessError
+							? unavailableRecoveryReport(storageAccessError)
+							: inspectionReport;
+
+			if (gatedReport.issues.length > 0) {
+				setPendingLocalRecovery({report: gatedReport});
+				return;
+			}
+			applyLoadedState(loaded);
+		},
+		[applyLoadedState, loadPersistedState]
+	);
+
+	async function handleRecoveryDecision(
+		issue: LocalReplacementRecoveryIssue,
+		decision: LocalReplacementRecoveryDecision
+	) {
+		if (!pendingLocalRecovery || recoveryRunActiveRef.current) {
+			return;
+		}
+		recoveryRunActiveRef.current = true;
+		setRecoveryBusy(true);
+		setRecoveryError(undefined);
+
+		try {
+			const report =
+				issue.state === 'invalid'
+					? discardInvalidLocalReplacementRecovery()
+					: resolveLocalReplacementRecovery(issue.storyId!, decision);
+
+			await finishRecovery(report);
+		} catch (error) {
+			if (mountedRef.current) {
+				setRecoveryError((error as Error).message);
+			}
+		} finally {
+			recoveryRunActiveRef.current = false;
+			if (mountedRef.current) {
+				setRecoveryBusy(false);
+			}
+		}
+	}
+
+	async function handleRecoveryRetry() {
+		if (!pendingLocalRecovery || recoveryRunActiveRef.current) {
+			return;
+		}
+		recoveryRunActiveRef.current = true;
+		setRecoveryBusy(true);
+		setRecoveryError(undefined);
+
+		try {
+			await finishRecovery(recoverLocalReplacementJournal());
+		} catch (error) {
+			if (mountedRef.current) {
+				setRecoveryError((error as Error).message);
+			}
+		} finally {
+			recoveryRunActiveRef.current = false;
+			if (mountedRef.current) {
+				setRecoveryBusy(false);
+			}
+		}
+	}
+
+	async function handleNativeRecoveryRetry() {
+		if (!pendingNativeRecovery || recoveryRunActiveRef.current) {
+			return;
+		}
+		recoveryRunActiveRef.current = true;
+		setRecoveryBusy(true);
+		setRecoveryError(undefined);
+
+		try {
+			const {errors, state} = await loadPersistedState();
+			const nativeRecoveryError = errors.find(
+				isNativeProjectRecoveryRequiredError
+			);
+
+			if (!mountedRef.current) {
+				return;
+			}
+			if (nativeRecoveryError) {
+				setPendingNativeRecovery({message: nativeRecoveryError.message});
+				return;
+			}
+			setPendingNativeRecovery(undefined);
+			applyLoadedState(state);
+		} catch (error) {
+			if (mountedRef.current) {
+				setRecoveryError((error as Error).message);
+			}
+		} finally {
+			recoveryRunActiveRef.current = false;
+			if (mountedRef.current) {
+				setRecoveryBusy(false);
+			}
+		}
+	}
+
+	function handleRevealNativeRecovery() {
+		const bridge = (window as TwineElectronWindow).twineElectron;
+
+		void bridge?.revealStoryLibraryFolder().catch(error => {
+			if (mountedRef.current) {
+				setRecoveryError((error as Error).message);
+			}
+		});
+	}
 
 	React.useEffect(() => {
 		if (inited && !formatsRepaired) {
@@ -178,6 +558,30 @@ export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 		storiesRepaired,
 		storiesState
 	]);
+
+	if (pendingNativeRecovery) {
+		return (
+			<NativeProjectRecoveryResolver
+				busy={recoveryBusy}
+				error={recoveryError}
+				message={pendingNativeRecovery.message}
+				onReveal={handleRevealNativeRecovery}
+				onRetry={handleNativeRecoveryRetry}
+			/>
+		);
+	}
+
+	if (pendingLocalRecovery) {
+		return (
+			<LocalReplacementRecoveryResolver
+				busy={recoveryBusy}
+				error={recoveryError}
+				onDecision={handleRecoveryDecision}
+				onRetry={handleRecoveryRetry}
+				report={pendingLocalRecovery.report}
+			/>
+		);
+	}
 
 	return inited &&
 		formatsRepaired &&

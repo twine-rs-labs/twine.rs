@@ -7,8 +7,6 @@ import {
 } from '@testing-library/react';
 import * as React from 'react';
 import {MemoryRouter} from 'react-router';
-import {DialogsContext} from '../../../dialogs/context';
-import {StorySearchDialog} from '../../../dialogs/story-search';
 import {
 	CoreProjectHostProvider,
 	StoreCoreProjectHost
@@ -84,7 +82,7 @@ async function renderComponent(
 			story: ReturnType<typeof storyWithLinkedPassages>['story']
 		) => void;
 		deferWorkspaceQueries?: boolean;
-		dialogsDispatch?: jest.Mock;
+		onOpenFindReplace?: jest.Mock;
 		storyDispatch?: jest.Mock;
 	}
 ) {
@@ -110,42 +108,41 @@ async function renderComponent(
 	const onSelectPassage = jest.fn();
 	const onRevealPassageInGraph = jest.fn();
 	const onOpenEditorWindow = jest.fn();
-	const dialogsDispatch = context?.dialogsDispatch ?? jest.fn();
+	const onOpenFindReplace = context?.onOpenFindReplace ?? jest.fn();
 	const storyDispatch = context?.storyDispatch ?? jest.fn();
 
 	context?.configureStory?.(story);
 
 	render(
 		<MemoryRouter>
-			<DialogsContext.Provider value={{dialogs: [], dispatch: dialogsDispatch}}>
-				<StoriesContext.Provider
-					value={{
-						dispatch: storyDispatch,
-						stories: [story]
-					}}
-				>
-					<CoreProjectHostProvider>
-						<StoryWorkspaceShell
-							bottomDrawerOpen={false}
-							editorDockLayout="tile"
-							graphPanel={<div data-testid="graph-panel" />}
-							leftDockCollapsed={false}
-							mode={mode}
-							onChangeBottomDrawerOpen={jest.fn()}
-							onChangeEditorDockLayout={jest.fn()}
-							onChangeLeftDockCollapsed={jest.fn()}
-							onChangeRightDockCollapsed={jest.fn()}
-							onOpenEditorWindow={onOpenEditorWindow}
-							onRevealPassageInGraph={onRevealPassageInGraph}
-							onSelectPassage={onSelectPassage}
-							rightDockCollapsed={false}
-							selectedPassageId={start.id}
-							story={story}
-							{...props}
-						/>
-					</CoreProjectHostProvider>
-				</StoriesContext.Provider>
-			</DialogsContext.Provider>
+			<StoriesContext.Provider
+				value={{
+					dispatch: storyDispatch,
+					stories: [story]
+				}}
+			>
+				<CoreProjectHostProvider>
+					<StoryWorkspaceShell
+						bottomDrawerOpen={false}
+						editorDockLayout="tile"
+						graphPanel={<div data-testid="graph-panel" />}
+						leftDockCollapsed={false}
+						mode={mode}
+						onChangeBottomDrawerOpen={jest.fn()}
+						onChangeEditorDockLayout={jest.fn()}
+						onChangeLeftDockCollapsed={jest.fn()}
+						onChangeRightDockCollapsed={jest.fn()}
+						onOpenEditorWindow={onOpenEditorWindow}
+						onOpenFindReplace={onOpenFindReplace}
+						onRevealPassageInGraph={onRevealPassageInGraph}
+						onSelectPassage={onSelectPassage}
+						rightDockCollapsed={false}
+						selectedPassageId={start.id}
+						story={story}
+						{...props}
+					/>
+				</CoreProjectHostProvider>
+			</StoriesContext.Provider>
 		</MemoryRouter>
 	);
 
@@ -159,7 +156,7 @@ async function renderComponent(
 		await waitForQueries();
 	}
 	return {
-		dialogsDispatch,
+		onOpenFindReplace,
 		next,
 		onOpenEditorWindow,
 		onRevealPassageInGraph,
@@ -309,6 +306,63 @@ describe('<StoryWorkspaceShell>', () => {
 		fireEvent.click(nextButton);
 		expect(onSelectPassage).toHaveBeenCalledWith(next);
 		expect(screen.getAllByText('Missing').length).toBeGreaterThan(0);
+	});
+
+	it('renders named workbench drawer panels with the bound session context', async () => {
+		const onChangeBottomDrawerPanel = jest.fn();
+
+		await renderComponent('text', {
+			activeBottomDrawerPanelId: 'runtime',
+			bottomDrawerOpen: true,
+			bottomDrawerPanels: [
+				{
+					icon: 'bug',
+					id: 'runtime',
+					render: context => (
+						<div data-testid="runtime-panel">
+							{context.story.name}:{context.selection.passage?.name}
+						</div>
+					),
+					title: 'Runtime'
+				}
+			],
+			onChangeBottomDrawerPanel
+		});
+
+		expect(screen.getByTestId('runtime-panel')).toHaveTextContent(':Start');
+		expect(screen.getByRole('tabpanel')).toHaveAttribute(
+			'data-workbench-panel',
+			'runtime'
+		);
+		fireEvent.click(
+			screen.getByRole('tab', {
+				name: 'routes.storyEdit.workspace.bottomDrawer'
+			})
+		);
+		expect(onChangeBottomDrawerPanel).toHaveBeenCalledWith('links');
+	});
+
+	it('appends named inspector extensions without replacing core inspection', async () => {
+		await renderComponent('text', {
+			inspectorExtensions: [
+				{
+					id: 'runtime-summary',
+					render: context => (
+						<div data-testid="runtime-inspector">
+							{context.selection.passage?.name}
+						</div>
+					)
+				}
+			]
+		});
+
+		expect(screen.getByTestId('runtime-inspector')).toHaveTextContent('Start');
+		expect(
+			document.querySelector('[data-workbench-extension="runtime-summary"]')
+		).toBeInTheDocument();
+		expect(
+			screen.getByText('routes.storyEdit.workspace.variables')
+		).toBeInTheDocument();
 	});
 
 	it('shows indexed contents and project intelligence in the docks', async () => {
@@ -466,8 +520,8 @@ describe('<StoryWorkspaceShell>', () => {
 		expect(onOpenEditorWindow).toHaveBeenCalledWith({kind: 'script'});
 	});
 
-	it('routes variable entries to story search from the contents navigator', async () => {
-		const {dialogsDispatch, story} = await renderComponent('text');
+	it('routes variable entries to the find/replace workbench panel', async () => {
+		const {onOpenFindReplace} = await renderComponent('text');
 
 		fireEvent.click(
 			within(
@@ -488,19 +542,8 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 		fireEvent.click(within(leftDock).getByRole('button', {name: /\$score/}));
 
-		expect(dialogsDispatch).toHaveBeenCalledWith({
-			type: 'addDialog',
-			component: StorySearchDialog,
-			props: {
-				find: '$score',
-				flags: {
-					includePassageNames: false,
-					matchCase: false,
-					useRegexes: false
-				},
-				replace: '',
-				storyId: story.id
-			}
+		expect(onOpenFindReplace).toHaveBeenCalledWith('$score', {
+			includePassageNames: false
 		});
 	});
 

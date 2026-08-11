@@ -14,6 +14,10 @@ import {
 	StorySaveStatus
 } from '../persistence/save-status';
 import {recordPerformanceHarnessEvent} from '../../util/performance';
+import {
+	bindPersistenceCompletion,
+	rejectPersistenceCompletion
+} from '../persistence/completion';
 
 export const StoriesContext = React.createContext<StoriesContextProps>({
 	dispatch: () => {},
@@ -38,6 +42,15 @@ export const StoriesContextProvider: React.FC<
 		React.useMemo(
 			() => (state, action) => {
 				if (storiesPersistence.canReduceAction?.(action) === false) {
+					if (
+						action.type === 'applyCorePatchBatch' &&
+						action.persistenceToken
+					) {
+						rejectPersistenceCompletion(
+							action.persistenceToken,
+							new Error('Project persistence is currently unavailable.')
+						);
+					}
 					return state;
 				}
 				const reducerStarted = performance.now();
@@ -50,6 +63,12 @@ export const StoriesContextProvider: React.FC<
 						action,
 						formats
 					);
+					if (
+						action.type === 'applyCorePatchBatch' &&
+						action.persistenceToken
+					) {
+						bindPersistenceCompletion(action.persistenceToken, persistence);
+					}
 					recordPerformanceHarnessEvent('stories-dispatch-stages', {
 						action: action.type,
 						persistenceSetupMs: performance.now() - reducedAt,
@@ -118,6 +137,12 @@ export const StoriesContextProvider: React.FC<
 						queueStorySaveStatus({kind: 'saved', savedAt: Date.now()});
 					}
 				} catch (error) {
+					if (
+						action.type === 'applyCorePatchBatch' &&
+						action.persistenceToken
+					) {
+						rejectPersistenceCompletion(action.persistenceToken, error);
+					}
 					queueStorySaveStatus({kind: 'error', error: error as Error});
 					reportError(error as Error, 'store.errors.cantPersistStories');
 				}

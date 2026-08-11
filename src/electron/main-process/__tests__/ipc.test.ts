@@ -32,8 +32,12 @@ import {
 } from '../platform-settings';
 import {
 	applyProjectAssetEffect,
+	beginProjectFolderDeletion,
+	beginProjectReplacement,
 	chooseAssetFile,
 	cleanupStaleProjectAssetEffects,
+	commitProjectFolderDeletion,
+	commitProjectReplacements,
 	copyProjectImportAssets,
 	copyAssetToProject,
 	createProjectFolder,
@@ -49,9 +53,12 @@ import {
 	projectSessionPackageAssetReadPlan,
 	projectSessionScratchAssets,
 	projectSessionSnapshot,
+	reconcileProjectSessionForPerformance,
 	renameProjectAsset,
 	replaceProjectAsset,
 	resolveProjectSessionConflicts,
+	rollbackProjectFolderDeletion,
+	rollbackProjectReplacement,
 	saveProjectFolder,
 	startProjectSession,
 	stopProjectSession
@@ -68,6 +75,7 @@ import {
 	projectCapabilityField
 } from '../project-capabilities';
 import {storyPreviewWindowManager} from '../story-preview-window-manager';
+import {performanceHarnessEnabled} from '../performance-harness';
 
 jest.mock('../json-file');
 jest.mock('../native');
@@ -79,6 +87,10 @@ jest.mock('../scratch-file');
 jest.mock('../story-directory');
 jest.mock('../story-file');
 jest.mock('../story-formats');
+jest.mock('../performance-harness', () => ({
+	...jest.requireActual('../performance-harness'),
+	performanceHarnessEnabled: jest.fn(() => false)
+}));
 
 describe('initIpc()', () => {
 	const deleteStoryMock = deleteStory as jest.Mock;
@@ -89,8 +101,14 @@ describe('initIpc()', () => {
 	const loadStoryFormatPropertiesMock = loadStoryFormatProperties as jest.Mock;
 	const chooseAssetFileMock = chooseAssetFile as jest.Mock;
 	const applyProjectAssetEffectMock = applyProjectAssetEffect as jest.Mock;
+	const beginProjectFolderDeletionMock =
+		beginProjectFolderDeletion as jest.Mock;
+	const beginProjectReplacementMock = beginProjectReplacement as jest.Mock;
 	const cleanupStaleProjectAssetEffectsMock =
 		cleanupStaleProjectAssetEffects as jest.Mock;
+	const commitProjectFolderDeletionMock =
+		commitProjectFolderDeletion as jest.Mock;
+	const commitProjectReplacementsMock = commitProjectReplacements as jest.Mock;
 	const copyAssetToProjectMock = copyAssetToProject as jest.Mock;
 	const copyProjectImportAssetsMock = copyProjectImportAssets as jest.Mock;
 	const chooseStoryDirectoryPathMock = chooseStoryDirectoryPath as jest.Mock;
@@ -109,6 +127,9 @@ describe('initIpc()', () => {
 	const openProjectFolderMock = openProjectFolder as jest.Mock;
 	const prepareProjectImportMock = prepareProjectImport as jest.Mock;
 	const projectSessionSnapshotMock = projectSessionSnapshot as jest.Mock;
+	const reconcileProjectSessionForPerformanceMock =
+		reconcileProjectSessionForPerformance as jest.Mock;
+	const performanceHarnessEnabledMock = performanceHarnessEnabled as jest.Mock;
 	const projectSessionAssetReadBaselinesMock =
 		projectSessionAssetReadBaselines as jest.Mock;
 	const projectSessionPackageAssetReadPlanMock =
@@ -119,6 +140,10 @@ describe('initIpc()', () => {
 	const replaceProjectAssetMock = replaceProjectAsset as jest.Mock;
 	const resolveProjectSessionConflictsMock =
 		resolveProjectSessionConflicts as jest.Mock;
+	const rollbackProjectFolderDeletionMock =
+		rollbackProjectFolderDeletion as jest.Mock;
+	const rollbackProjectReplacementMock =
+		rollbackProjectReplacement as jest.Mock;
 	const saveProjectFolderMock = saveProjectFolder as jest.Mock;
 	const startProjectSessionMock = startProjectSession as jest.Mock;
 	const stopProjectSessionMock = stopProjectSession as jest.Mock;
@@ -158,7 +183,17 @@ describe('initIpc()', () => {
 		showItemInFolderMock.mockClear();
 		chooseAssetFileMock.mockResolvedValue('/mock/asset.png');
 		applyProjectAssetEffectMock.mockResolvedValue(undefined);
+		beginProjectFolderDeletionMock.mockResolvedValue({
+			id: 'deletion-transaction',
+			rootPath: '/mock/project'
+		});
+		beginProjectReplacementMock.mockResolvedValue({
+			id: 'replacement-transaction',
+			project: {rootPath: '/mock/project', stories: [], storyIds: []}
+		});
 		cleanupStaleProjectAssetEffectsMock.mockResolvedValue(undefined);
+		commitProjectFolderDeletionMock.mockResolvedValue(undefined);
+		commitProjectReplacementsMock.mockResolvedValue(undefined);
 		copyAssetToProjectMock.mockResolvedValue({
 			sourcePath: '/mock/project/assets/asset.png',
 			targetPath: 'assets/asset.png'
@@ -197,6 +232,12 @@ describe('initIpc()', () => {
 			stories: [],
 			storyIds: []
 		});
+		reconcileProjectSessionForPerformanceMock.mockResolvedValue({
+			generation: 1,
+			rootPath: '/mock/project',
+			sessionInstanceId: 'session-1'
+		});
+		performanceHarnessEnabledMock.mockReturnValue(false);
 		projectSessionAssetReadBaselinesMock.mockImplementation(
 			(_rootPath: string, paths: string[]) =>
 				paths.map(path => ({
@@ -245,6 +286,8 @@ describe('initIpc()', () => {
 			stories: [],
 			storyIds: []
 		});
+		rollbackProjectFolderDeletionMock.mockResolvedValue(undefined);
+		rollbackProjectReplacementMock.mockResolvedValue(undefined);
 		replaceProjectAssetMock.mockResolvedValue({
 			sourcePath: '/mock/project/assets/asset.png',
 			targetPath: 'assets/asset.png'
@@ -673,6 +716,39 @@ describe('initIpc()', () => {
 		expect(revealStoryDirectoryMock).toHaveBeenCalled();
 	});
 
+	it('gates the reconciliation handler and resolves its project capability', async () => {
+		expect(
+			handleMock.mock.calls.find(
+				call => call[0] === 'performance-harness-reconcile-project-session'
+			)
+		).toBeUndefined();
+
+		performanceHarnessEnabledMock.mockReturnValue(true);
+		initIpc();
+		const reconcile = handleMock.mock.calls
+			.filter(
+				call => call[0] === 'performance-harness-reconcile-project-session'
+			)
+			.at(-1);
+		const sender = {id: 701};
+		const capability = (
+			grantProjectCapability(
+				{sender},
+				{rootPath: '/mock/project', stories: [], storyIds: []}
+			) as Record<string, unknown>
+		)[projectCapabilityField] as string;
+
+		await expect(reconcile?.[1]({sender}, capability)).resolves.toEqual(
+			expect.objectContaining({rootPath: '/mock/project'})
+		);
+		expect(reconcileProjectSessionForPerformanceMock).toHaveBeenCalledWith(
+			'/mock/project'
+		);
+		await expect(
+			reconcile?.[1]({sender: {id: 702}}, capability)
+		).rejects.toThrow();
+	});
+
 	it('reads an exact package inventory with server-owned limits', async () => {
 		const startSession = handleMock.mock.calls.find(
 			call => call[0] === 'start-project-session'
@@ -747,6 +823,75 @@ describe('initIpc()', () => {
 		await expect(
 			readPackageAssets[1]({sender}, capability, ['../outside'])
 		).rejects.toThrow('Package asset priority paths are invalid.');
+	});
+
+	it('authorizes project replacement and revokes access only after deletion commit', async () => {
+		const beginReplacement = handleMock.mock.calls.find(
+			call => call[0] === 'begin-project-replacement'
+		);
+		const commitReplacements = handleMock.mock.calls.find(
+			call => call[0] === 'commit-project-replacements'
+		);
+		const beginDeletion = handleMock.mock.calls.find(
+			call => call[0] === 'begin-project-folder-deletion'
+		);
+		const commitDeletion = handleMock.mock.calls.find(
+			call => call[0] === 'commit-project-folder-deletion'
+		);
+		const rollbackDeletion = handleMock.mock.calls.find(
+			call => call[0] === 'rollback-project-folder-deletion'
+		);
+		const sender = {
+			id: 509,
+			isDestroyed: () => false,
+			once: jest.fn(),
+			removeListener: jest.fn(),
+			send: jest.fn()
+		};
+		const event = {sender};
+		const capability = (
+			grantProjectCapability(event, {
+				rootPath: '/mock/project',
+				stories: [],
+				storyIds: []
+			}) as Record<string, unknown>
+		)[projectCapabilityField] as string;
+		const story = fakeStory(1);
+		const replacement = await beginReplacement[1](
+			event,
+			capability,
+			[story],
+			'import-1'
+		);
+
+		expect(beginProjectReplacementMock).toHaveBeenCalledWith(
+			'/mock/project',
+			[story],
+			'import-1'
+		);
+		await commitReplacements[1](event, [replacement.id]);
+		expect(commitProjectReplacementsMock).toHaveBeenCalledWith([
+			'replacement-transaction'
+		]);
+
+		const replacementCapability = replacement.project[
+			projectCapabilityField
+		] as string;
+		const staged = await beginDeletion[1](event, replacementCapability);
+
+		await rollbackDeletion[1](event, staged.id);
+		expect(rollbackProjectFolderDeletionMock).toHaveBeenCalledWith(
+			'deletion-transaction'
+		);
+		const committed = await beginDeletion[1](event, replacementCapability);
+
+		await commitDeletion[1](event, committed.id);
+		expect(commitProjectFolderDeletionMock).toHaveBeenCalledWith(
+			'deletion-transaction'
+		);
+		await expect(
+			beginDeletion[1](event, replacementCapability)
+		).rejects.toThrow('Unknown or expired project capability');
 	});
 
 	it('rejects package bytes if the authoritative inventory changes', async () => {
@@ -1265,12 +1410,12 @@ describe('initIpc()', () => {
 			call => call[0] === 'load-stories'
 		);
 
-		expect(await listener[1]()).toEqual(stories);
+		expect(await listener[1]()).toEqual({status: 'loaded', stories});
 		expect(loadStoriesMock).toHaveBeenCalledTimes(1);
 	});
 
-	it('returns an empty story library if loadStories() throws', async () => {
-		jest.spyOn(console, 'warn').mockReturnValue();
+	it('returns a recovery requirement if loadStories() throws', async () => {
+		jest.spyOn(console, 'error').mockReturnValue();
 		loadStoriesMock.mockImplementation(() => {
 			throw new Error('mock-story-load-error');
 		});
@@ -1280,7 +1425,10 @@ describe('initIpc()', () => {
 		);
 
 		expect(listener).not.toBeUndefined();
-		expect(await listener[1]()).toEqual([]);
+		expect(await listener[1]()).toEqual({
+			message: 'mock-story-load-error',
+			status: 'recovery-required'
+		});
 	});
 
 	describe('the handler it adds for load-story-formats events', () => {

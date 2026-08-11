@@ -111,6 +111,12 @@ export interface NativeProjectSessionStart {
 	storyIds: string[];
 }
 
+export interface NativePerformanceProjectSessionReconcile {
+	generation: number;
+	rootPath: string;
+	sessionInstanceId: string;
+}
+
 export type NativeProjectSessionResolution =
 	'acceptDisk' | 'dismiss' | 'keepApp';
 
@@ -273,6 +279,16 @@ export interface NativeProjectFolderResult {
 	storySourcesLoaded?: boolean;
 	stories: StoryWithDocuments[];
 	storyIds: string[];
+}
+
+export interface NativeProjectReplacementTransaction {
+	id: string;
+	project: NativeProjectFolderResult;
+}
+
+export interface NativeProjectDeletionTransaction {
+	id: string;
+	rootPath: string;
 }
 
 export interface NativeProjectFolderSaveFallback {
@@ -497,6 +513,10 @@ export interface ElectronNativeProjectStoryEntry {
 export type ElectronLoadedStoryEntry =
 	ElectronLegacyStoryFile | ElectronNativeProjectStoryEntry;
 
+export type ElectronStoryLoadResult =
+	| {status: 'loaded'; stories: ElectronLoadedStoryEntry[]}
+	| {message: string; status: 'recovery-required'};
+
 export interface NativeAddLocalStoryFormatResult {
 	name: string;
 	url: string;
@@ -507,6 +527,9 @@ export interface TwineElectronWindow extends Window {
 	twinePerformanceNative?: {
 		checkpoint(name: string, renderer: Record<string, number>): Promise<void>;
 		collectGarbage(): Promise<void>;
+		reconcileProjectSession(
+			rootPath: string
+		): Promise<NativePerformanceProjectSessionReconcile>;
 		reset(): Promise<void>;
 		snapshot(): Promise<unknown>;
 	};
@@ -530,6 +553,18 @@ export interface TwineElectronWindow extends Window {
 			preferredParent?: string,
 			sourceLayout?: ProjectSourceLayout
 		): Promise<NativeProjectFolderResult>;
+		beginProjectReplacement(
+			rootPath: string,
+			stories: StoryWithDocuments[],
+			importId?: string
+		): Promise<NativeProjectReplacementTransaction>;
+		commitProjectReplacements(transactionIds: string[]): Promise<void>;
+		rollbackProjectReplacement(transactionId: string): Promise<void>;
+		beginProjectFolderDeletion(
+			rootPath: string
+		): Promise<NativeProjectDeletionTransaction>;
+		commitProjectFolderDeletion(transactionId: string): Promise<void>;
+		rollbackProjectFolderDeletion(transactionId: string): Promise<void>;
 		duplicateProjectFolder(
 			rootPath: string,
 			replacements: ProjectStoryReplacement[]
@@ -566,7 +601,7 @@ export interface TwineElectronWindow extends Window {
 		finishProjectFolderHydration(hydrationId: string): Promise<void>;
 		completePersistenceQuit(nonce: string, errorMessage?: string): void;
 		loadPrefs(): Promise<any>;
-		loadStories(): Promise<ElectronLoadedStoryEntry[]>;
+		loadStories(): Promise<ElectronStoryLoadResult>;
 		loadStoryFormats(): Promise<any>;
 		loadStoryFormatProperties(
 			url: string,

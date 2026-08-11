@@ -1,7 +1,6 @@
 import * as React from 'react';
 import {RenameStoryButton} from '../../../components/story/rename-story-button';
 import {renameStoryCommand, useCoreProjectHost} from '../../../core';
-import type {DialogsContextProps} from '../../../dialogs';
 import {Story, useStoriesContext} from '../../../store/stories';
 import {DetailsButton} from './details-button';
 import {FindReplaceButton} from './find-replace-button';
@@ -10,18 +9,21 @@ import {PassageTagsButton} from './passage-tags-button';
 import {StylesheetButton} from './stylesheet-button';
 
 export interface StoryActionsProps {
-	dialogsDispatch?: DialogsContextProps['dispatch'];
+	onOpenEditorWindow?: (kind: 'script' | 'stylesheet') => void;
+	onOpenWorkbenchPanel?: (
+		id: 'find-replace' | 'story-details' | 'passage-tags'
+	) => void;
 	story: Story;
 }
 
 export const StoryActions: React.FC<StoryActionsProps> = props => {
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
-	const {dialogsDispatch, story} = props;
+	const {onOpenEditorWindow, onOpenWorkbenchPanel, story} = props;
 
 	return (
 		<div className="route-action-group">
-			<FindReplaceButton dialogsDispatch={dialogsDispatch} story={story} />
+			<FindReplaceButton onOpenWorkbenchPanel={onOpenWorkbenchPanel} />
 			<RenameStoryButton
 				existingStories={stories}
 				onRename={name =>
@@ -29,10 +31,14 @@ export const StoryActions: React.FC<StoryActionsProps> = props => {
 				}
 				story={story}
 			/>
-			<DetailsButton dialogsDispatch={dialogsDispatch} story={story} />
-			<PassageTagsButton dialogsDispatch={dialogsDispatch} story={story} />
-			<JavaScriptButton dialogsDispatch={dialogsDispatch} story={story} />
-			<StylesheetButton dialogsDispatch={dialogsDispatch} story={story} />
+			<DetailsButton onOpenWorkbenchPanel={onOpenWorkbenchPanel} />
+			<PassageTagsButton onOpenWorkbenchPanel={onOpenWorkbenchPanel} />
+			<JavaScriptButton
+				onOpenEditorWindow={() => onOpenEditorWindow?.('script')}
+			/>
+			<StylesheetButton
+				onOpenEditorWindow={() => onOpenEditorWindow?.('stylesheet')}
+			/>
 		</div>
 	);
 };

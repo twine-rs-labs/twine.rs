@@ -1,5 +1,5 @@
 import {TwineElectronWindow} from '../../../../../electron/shared';
-import {load} from '../load';
+import {load, NativeProjectRecoveryRequiredError} from '../load';
 import {StoryWithDocuments as Story} from '../../../../stories/stories.types';
 import {fakeAppInfo, fakeStory} from '../../../../../test-util';
 import {publishStory} from '../../../../../util/publish';
@@ -15,7 +15,7 @@ describe('stories Electron IPC load', () => {
 		Object.assign(electronWindow, {
 			twineElectron: {
 				loadStories: async function () {
-					return data;
+					return {status: 'loaded', stories: data};
 				}
 			}
 		});
@@ -170,5 +170,26 @@ describe('stories Electron IPC load', () => {
 		expect(await load()).toEqual([]);
 		mockLoadStories({});
 		expect(await load()).toEqual([]);
+	});
+
+	it('rejects a native recovery requirement instead of admitting an empty library', async () => {
+		Object.assign(electronWindow, {
+			twineElectron: {
+				loadStories: async () => ({
+					message: 'replacement backup conflicts with the active root',
+					status: 'recovery-required' as const
+				})
+			}
+		});
+
+		await expect(load()).rejects.toEqual(
+			expect.objectContaining({
+				code: 'NATIVE_PROJECT_RECOVERY_REQUIRED',
+				message: 'replacement backup conflicts with the active root'
+			})
+		);
+		await expect(load()).rejects.toBeInstanceOf(
+			NativeProjectRecoveryRequiredError
+		);
 	});
 });

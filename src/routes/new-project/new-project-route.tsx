@@ -15,8 +15,6 @@ import {
 import {storyFileName} from '../../electron/shared';
 import {defaults as prefsDefaults, usePrefsContext} from '../../store/prefs';
 import {
-	createStory,
-	importStories as importStoriesAction,
 	passageDefaults,
 	storyDefaults,
 	Story,
@@ -26,21 +24,15 @@ import {
 import type {
 	NativeProjectImportSource,
 	NativeProjectFolderResult,
-	ProjectSourceLayout,
-	TwineElectronWindow
+	NativeProjectReplacementTransaction,
+	ProjectSourceLayout
 } from '../../electron/shared';
+import {loadProjectMetadata} from '../../store/project-metadata';
+import {projectStoryHydration} from '../../store/project-hydration';
 import {
-	loadProjectMetadata,
-	saveProjectMetadata
-} from '../../store/project-metadata';
-import {
-	mergeProjectStories,
-	projectStoryIdsForCurrentStories
-} from '../../store/merge-project-stories';
-import {
-	markProjectStoryHydration,
-	projectStoryHydration
-} from '../../store/project-hydration';
+	ProjectLibraryService,
+	useProjectLibraryService
+} from '../../store/project-library-service';
 import {
 	formatWithNameAndVersion,
 	StoryFormat,
@@ -62,6 +54,8 @@ import {
 } from '../../util/import-limits';
 import {
 	type CoreAssetInventoryEntry,
+	knownAssetInventoryForStory,
+	knownAssetInventoryScanCompleteForStory,
 	materializeRegisteredStory,
 	registerStoryDocuments,
 	replaceKnownAssetInventoryForStory,
@@ -70,6 +64,7 @@ import {
 	useCoreProjectHost
 } from '../../core';
 import {StoryEditMode} from '../story-edit/workspace-state';
+import {workbenchBufferCoordinator} from '../../util/workbench-buffer-coordinator';
 import './new-project-route.css';
 
 type NewProjectTab = 'create' | 'import';
@@ -131,30 +126,6 @@ function projectFolder(name: string, storyId: string, parent?: string) {
 	return `${
 		parent || '~/Documents/Twine RS/Stories'
 	}/${projectSlug(name, storyId)}.twine.rs`;
-}
-
-function projectCreationErrorMessage(error: unknown, storyName: string) {
-	const message = error instanceof Error ? error.message : String(error);
-
-	if (
-		message.includes(
-			'A new project cannot replace an existing filesystem entry.'
-		)
-	) {
-		return `A project named "${storyName}" already exists in this folder. Choose a different name.`;
-	}
-	if (
-		/\b(?:EACCES|EPERM)\b|permission denied|operation not permitted|access is denied/i.test(
-			message
-		)
-	) {
-		return 'Twine could not access the project folder. Check its permissions or choose a different project folder.';
-	}
-
-	return message.replace(
-		/^Error invoking remote method 'create-project-folder': Error:\s*/,
-		''
-	);
 }
 
 function projectPreviewFiles(
@@ -258,28 +229,6 @@ function waitForPaint() {
 	});
 }
 
-function desktopBridge() {
-	return (window as TwineElectronWindow).twineElectron;
-}
-
-function nativeFilePath(file: File) {
-	const twineElectron = desktopBridge();
-
-	try {
-		const path = twineElectron?.filePathForFile?.(file);
-
-		if (path?.trim()) {
-			return path;
-		}
-	} catch {
-		// Fall back to Electron versions that exposed File.path directly.
-	}
-
-	const legacyPath = (file as File & {path?: string}).path;
-
-	return legacyPath?.trim() ? legacyPath : undefined;
-}
-
 function canPrepareNativeImport(file: File) {
 	return /\.(html?|zip)$/i.test(file.name);
 }
@@ -303,9 +252,11 @@ function safeRepairFormat(
 	return undefined;
 }
 
-async function parseImportFile(file: File) {
-	const twineElectron = desktopBridge();
-	const sourcePath = nativeFilePath(file);
+async function parseImportFile(
+	file: File,
+	projectLibrary: ProjectLibraryService
+) {
+	const sourcePath = projectLibrary.filePathForFile(file);
 
 	assertImportFileSize(
 		file.size,
@@ -313,9 +264,13 @@ async function parseImportFile(file: File) {
 	);
 
 	if (sourcePath && canPrepareNativeImport(file)) {
-		if (twineElectron?.prepareProjectImport) {
+		if (projectLibrary.isDesktop()) {
 			const preparedImport =
-				await twineElectron.prepareProjectImport(sourcePath);
+				await projectLibrary.prepareProjectImport(sourcePath);
+
+			if (!preparedImport) {
+				throw new Error('The desktop project import bridge is unavailable.');
+			}
 
 			try {
 				return {
@@ -323,7 +278,7 @@ async function parseImportFile(file: File) {
 					stories: await importStoriesFromHtml(preparedImport.htmlSource)
 				};
 			} catch (error) {
-				await twineElectron.discardProjectImport?.(preparedImport.id);
+				await projectLibrary.discardProjectImport(preparedImport.id);
 				throw error;
 			}
 		}
@@ -343,63 +298,11 @@ async function parseImportFile(file: File) {
 	};
 }
 
-async function persistNativeProjectFolder(
-	story: StoryWithDocuments,
-	preferredParent?: string,
-	sourceLayout?: ProjectSourceLayout,
-	options: {commitProjectState?: boolean} = {}
+async function materializeImportReplacement(
+	story: Story,
+	projectLibrary: ProjectLibraryService
 ) {
-	const twineElectron = desktopBridge();
-
-	if (!twineElectron?.createProjectFolder) {
-		if (options.commitProjectState ?? true) {
-			saveProjectMetadata(story.id, {
-				status: 'local-only',
-				storageKind: 'web-local'
-			});
-		}
-		return undefined;
-	}
-
-	let result: NativeProjectFolderResult;
-
-	try {
-		result = sourceLayout
-			? await twineElectron.createProjectFolder(
-					story,
-					preferredParent,
-					sourceLayout
-				)
-			: await twineElectron.createProjectFolder(story, preferredParent);
-	} catch (error) {
-		throw new Error(projectCreationErrorMessage(error, story.name));
-	}
-
-	if (options.commitProjectState ?? true) {
-		commitNativeProjectFolder(story.id, result);
-	}
-
-	return result;
-}
-
-function commitNativeProjectFolder(
-	storyId: string,
-	result: NativeProjectFolderResult
-) {
-	saveProjectMetadata(storyId, {
-		rootPath: result.rootPath,
-		status: 'file-backed',
-		storageKind: 'electron-project-folder'
-	});
-	markProjectStoryHydration(storyId, {
-		passageTextLoaded: result.passageTextLoaded !== false,
-		rootPath: result.rootPath
-	});
-}
-
-async function materializeImportReplacement(story: Story) {
 	const metadata = loadProjectMetadata(story.id);
-	const bridge = desktopBridge();
 
 	if (
 		metadata?.storageKind === 'electron-project-folder' &&
@@ -407,15 +310,10 @@ async function materializeImportReplacement(story: Story) {
 		metadata.rootPath &&
 		projectStoryHydration(story.id)?.passageTextLoaded === false
 	) {
-		if (!bridge?.hydrateProjectFolder) {
-			throw new Error(
-				'The desktop project-folder hydration bridge is unavailable.'
-			);
-		}
-
-		const result = await bridge.hydrateProjectFolder(metadata.rootPath, [
-			story.id
-		]);
+		const result = await projectLibrary.hydrateProjectFolder(
+			metadata.rootPath,
+			[story.id]
+		);
 		const hydrated = result.stories.find(
 			candidate => candidate.id === story.id
 		);
@@ -442,8 +340,9 @@ export const NewProjectRoute: React.FC = () => {
 	const repairStories = useStoriesRepair();
 	const {prefs} = usePrefsContext();
 	const {formats} = useStoryFormatsContext();
-	const {dispatch, stories} = useStoriesContext();
+	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
+	const projectLibrary = useProjectLibraryService();
 	const pathname = location.pathname ?? '';
 	const [tab, setTab] = React.useState<NewProjectTab>(
 		pathname.endsWith('/import') ? 'import' : 'create'
@@ -468,6 +367,7 @@ export const NewProjectRoute: React.FC = () => {
 	const fileInput = React.useRef<HTMLInputElement>(null);
 	const importRunActive = React.useRef(false);
 	const preparedImportIds = React.useRef(new Set<string>());
+	const routeMounted = React.useRef(true);
 	const storiesRef = React.useRef(stories);
 	const formatOptions = React.useMemo(
 		() =>
@@ -498,9 +398,9 @@ export const NewProjectRoute: React.FC = () => {
 	React.useEffect(() => {
 		let cancelled = false;
 
-		desktopBridge()
-			?.getStoryLibraryFolder?.()
-			.then(path => {
+		projectLibrary
+			.getStoryLibraryFolder()
+			?.then(path => {
 				if (!cancelled) {
 					setStoryLibraryFolder(path);
 				}
@@ -510,7 +410,25 @@ export const NewProjectRoute: React.FC = () => {
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [projectLibrary]);
+
+	React.useEffect(() => {
+		// Keep prepared native import handles scoped to this route. The library
+		// service owns the native disposal operation. An active import keeps its
+		// handle until every filesystem transaction has committed or rolled back.
+		routeMounted.current = true;
+		return () => {
+			routeMounted.current = false;
+			if (importRunActive.current) {
+				return;
+			}
+			for (const importId of preparedImportIds.current) {
+				void projectLibrary.discardProjectImport(importId);
+			}
+
+			preparedImportIds.current.clear();
+		};
+	}, [projectLibrary]);
 
 	React.useEffect(() => {
 		const nextTab = pathname.endsWith('/import') ? 'import' : 'create';
@@ -518,26 +436,13 @@ export const NewProjectRoute: React.FC = () => {
 		setTab(nextTab);
 	}, [pathname]);
 
-	React.useEffect(
-		() => () => {
-			for (const importId of preparedImportIds.current) {
-				void desktopBridge()?.discardProjectImport?.(importId);
-			}
-
-			preparedImportIds.current.clear();
-		},
-		[]
-	);
-
 	async function discardPreparedImports() {
 		const importIds = [...preparedImportIds.current];
 
 		preparedImportIds.current.clear();
 
 		await Promise.all(
-			importIds.map(importId =>
-				desktopBridge()?.discardProjectImport?.(importId)
-			)
+			importIds.map(importId => projectLibrary.discardProjectImport(importId))
 		);
 	}
 
@@ -604,16 +509,10 @@ export const NewProjectRoute: React.FC = () => {
 				storyFormatVersion: selectedFormat.version
 			};
 
-			await persistNativeProjectFolder(
+			await projectLibrary.createProject(
 				story,
 				prefs.defaultProjectFolder || undefined,
 				sourceLayout
-			);
-
-			dispatch(
-				createStory(stories, prefs, {
-					...registerStoryDocuments(story)
-				})
 			);
 
 			window.localStorage.setItem(
@@ -640,8 +539,10 @@ export const NewProjectRoute: React.FC = () => {
 			await discardPreparedImports();
 
 			setImportProgress({detail: 'Parsing story data', progress: 54});
-			const {preparedImport, stories: importedStories} =
-				await parseImportFile(file);
+			const {preparedImport, stories: importedStories} = await parseImportFile(
+				file,
+				projectLibrary
+			);
 
 			trackPreparedImport(preparedImport);
 			setImportProgress({detail: 'Preparing import review', progress: 86});
@@ -728,10 +629,33 @@ export const NewProjectRoute: React.FC = () => {
 		setImportProgress({detail: 'Preparing replacement stories', progress: 58});
 		const registeredReplacementStoryIds: string[] = [];
 		const committedReplacementStoryIds = new Set<string>();
-		const replacementRootsByStoryId = new Map<string, string>();
+		const appliedReplacementStoryIds = new Set<string>();
+		const appliedLocalReplacementStoryIds = new Set<string>();
+		const createdRoots = new Set<string>();
+		const createdRootByStoryId = new Map<string, string>();
+		const nativeReplacementTransactions: NativeProjectReplacementTransaction[] =
+			[];
+		const replacementState = new Map<
+			string,
+			{
+				assets: CoreAssetInventoryEntry[];
+				assetScanComplete: boolean;
+				hydration: ReturnType<typeof projectStoryHydration>;
+				metadata: ReturnType<typeof loadProjectMetadata>;
+				replacementStory?: StoryWithDocuments;
+				story: StoryWithDocuments;
+			}
+		>();
+		let newDocumentStories: StoryWithDocuments[] = [];
+		let newProjectLifecycleStarted = false;
+		let newProjectMetadataStarted = false;
+		let localReplacementRecoveryPrepared = false;
+		let retainLocalReplacementRecovery = false;
 		let importCompleted = false;
+		const preparedImport = importQueue.preparedImport;
 
 		try {
+			await workbenchBufferCoordinator.flushAll();
 			const existingStoriesBySelection = selectedStories.map(story =>
 				stories.find(
 					existing => storyFileName(existing) === storyFileName(story)
@@ -747,7 +671,7 @@ export const NewProjectRoute: React.FC = () => {
 			const currentReplacementStories = await Promise.all(
 				existingStoriesBySelection.map(existingStory =>
 					existingStory
-						? materializeImportReplacement(existingStory)
+						? materializeImportReplacement(existingStory, projectLibrary)
 						: Promise.resolve(undefined)
 				)
 			);
@@ -759,42 +683,104 @@ export const NewProjectRoute: React.FC = () => {
 					// patches that synchronize the retained React metadata.
 					registerStoryDocuments(currentStory);
 					registeredReplacementStoryIds.push(currentStory.id);
+					replacementState.set(currentStory.id, {
+						assets: [...knownAssetInventoryForStory(currentStory.id)],
+						assetScanComplete: knownAssetInventoryScanCompleteForStory(
+							currentStory.id
+						),
+						hydration: projectStoryHydration(currentStory.id),
+						metadata: loadProjectMetadata(currentStory.id),
+						story: currentStory
+					});
 				}
 			}
 
 			setImportProgress({detail: 'Writing project folders', progress: 62});
-			const projectResults: Array<NativeProjectFolderResult | undefined> = [];
+			const projectResults: Array<NativeProjectFolderResult | undefined> =
+				Array.from({length: storiesToImport.length});
+			const nativeReplacementIndexes = new Set<number>();
+			const replacementIndexesByRoot = new Map<string, number[]>();
+
+			for (const [
+				index,
+				existingStory
+			] of existingStoriesBySelection.entries()) {
+				if (!existingStory || !currentReplacementStories[index]) {
+					continue;
+				}
+				const metadata = loadProjectMetadata(existingStory.id);
+
+				if (
+					metadata?.storageKind === 'electron-project-folder' &&
+					metadata.status === 'file-backed' &&
+					metadata.rootPath
+				) {
+					replacementIndexesByRoot.set(metadata.rootPath, [
+						...(replacementIndexesByRoot.get(metadata.rootPath) ?? []),
+						index
+					]);
+					nativeReplacementIndexes.add(index);
+				}
+			}
+
+			for (const [rootPath, indexes] of replacementIndexesByRoot) {
+				const replacementByStoryId = new Map(
+					indexes.map(index => [
+						existingStoriesBySelection[index]!.id,
+						storiesToImport[index]
+					])
+				);
+				const currentProjectStories = await Promise.all(
+					stories
+						.filter(
+							story => loadProjectMetadata(story.id)?.rootPath === rootPath
+						)
+						.map(story => materializeImportReplacement(story, projectLibrary))
+				);
+				const finalProjectStories = currentProjectStories.map(
+					story => replacementByStoryId.get(story.id) ?? story
+				);
+				const transaction = await projectLibrary.beginProjectReplacement(
+					rootPath,
+					finalProjectStories,
+					preparedImport?.id
+				);
+
+				nativeReplacementTransactions.push(transaction);
+				for (const index of indexes) {
+					projectResults[index] = transaction.project;
+				}
+			}
 
 			for (const [index, story] of storiesToImport.entries()) {
-				const existingStory = existingStoriesBySelection[index];
-				const currentStory = currentReplacementStories[index];
-				const result =
-					existingStory && currentStory
-						? await persistNativeProjectFolder(
-								currentStory,
-								prefs.defaultProjectFolder || undefined,
-								undefined,
-								{commitProjectState: false}
-							)
-						: await persistNativeProjectFolder(
-								story,
-								prefs.defaultProjectFolder || undefined
-							);
-
-				if (existingStory && result) {
-					replacementRootsByStoryId.set(existingStory.id, result.rootPath);
+				if (nativeReplacementIndexes.has(index)) {
+					continue;
 				}
-				projectResults.push(result);
+				const existingStory = existingStoriesBySelection[index];
+				const result = await projectLibrary.createProjectFolder(
+					story,
+					prefs.defaultProjectFolder || undefined,
+					undefined,
+					{commitProjectState: false}
+				);
+
+				if (result) {
+					createdRoots.add(result.rootPath);
+					createdRootByStoryId.set(
+						existingStory?.id ?? story.id,
+						result.rootPath
+					);
+				}
+				projectResults[index] = result;
 			}
-			const preparedImport = importQueue.preparedImport;
 
 			if (preparedImport) {
 				setImportProgress({detail: 'Copying project assets', progress: 82});
 				await Promise.all(
-					projectResults.flatMap(result =>
-						result
+					projectResults.flatMap((result, index) =>
+						result && !nativeReplacementIndexes.has(index)
 							? [
-									desktopBridge()?.copyProjectImportAssets?.(
+									projectLibrary.copyProjectImportAssets(
 										preparedImport.id,
 										result.rootPath
 									)
@@ -813,23 +799,22 @@ export const NewProjectRoute: React.FC = () => {
 				const existingStory = existingStoriesBySelection[index];
 
 				if (existingStory && result) {
-					const bridge = desktopBridge();
-
-					if (!bridge?.listProjectAssets) {
-						throw new Error(
-							'The desktop project-folder asset bridge is unavailable.'
-						);
-					}
 					replacementAssetInventories.set(
 						existingStory.id,
-						await bridge.listProjectAssets(result.rootPath)
+						await projectLibrary.listProjectAssets(result.rootPath)
 					);
 				}
 			}
+			const localReplacementStories = currentReplacementStories.filter(
+				(story, index): story is StoryWithDocuments =>
+					!!story &&
+					!!existingStoriesBySelection[index] &&
+					!projectResults[index]
+			);
 
-			if (preparedImport) {
-				await desktopBridge()?.discardProjectImport?.(preparedImport.id);
-				preparedImportIds.current.delete(preparedImport.id);
+			if (localReplacementStories.length > 0) {
+				projectLibrary.prepareLocalReplacementRecovery(localReplacementStories);
+				localReplacementRecoveryPrepared = true;
 			}
 
 			for (const [index, result] of projectResults.entries()) {
@@ -846,117 +831,261 @@ export const NewProjectRoute: React.FC = () => {
 				// Publishing metadata and hydration can rebind both the Core and native
 				// sessions. Do that only after the folder's final asset scan is ready and
 				// the current passage documents have a registered transport.
-				commitNativeProjectFolder(existingStory.id, result);
+				projectLibrary.commitProjectFolder(existingStory.id, result);
 				committedReplacementStoryIds.add(existingStory.id);
 				await coreProjectHost.ensureSessionReady(existingStory.id);
 			}
 
-			const newDocumentStories: StoryWithDocuments[] = [];
+			newDocumentStories = [];
 
 			for (const [index, story] of storiesToImport.entries()) {
 				const existingStory = existingStoriesBySelection[index];
 
 				if (existingStory) {
-					await coreProjectHost.applyStoryCommand(
-						replaceStoryCommand(existingStory.id, story)
-					);
+					const previous = replacementState.get(existingStory.id);
+
+					if (!projectResults[index]) {
+						// A persisted-command rejection can happen after Rust applied the
+						// replacement but local storage failed. Record compensation state
+						// before awaiting the exact persistence completion.
+						if (previous) {
+							previous.replacementStory = story;
+						}
+						appliedReplacementStoryIds.add(existingStory.id);
+						appliedLocalReplacementStoryIds.add(existingStory.id);
+						await coreProjectHost.applyStoryCommandPersisted(
+							replaceStoryCommand(existingStory.id, story)
+						);
+					} else {
+						await coreProjectHost.applyStoryCommand(
+							replaceStoryCommand(existingStory.id, story),
+							{persistence: 'skip'}
+						);
+						if (previous) {
+							previous.replacementStory = story;
+						}
+						appliedReplacementStoryIds.add(existingStory.id);
+					}
 				} else {
 					newDocumentStories.push(story);
 				}
 			}
 
 			if (newDocumentStories.length > 0) {
-				dispatch(
-					importStoriesAction(
-						newDocumentStories.map(registerStoryDocuments),
-						stories
-					)
-				);
+				// Metadata publication and Rust admission form one lifecycle cohort.
+				// Cleanup must cover a failure in either phase, including a partial
+				// metadata commit before Core admission begins.
+				newProjectMetadataStarted = true;
+				for (const story of newDocumentStories) {
+					const result = projectResults[storiesToImport.indexOf(story)];
+
+					if (result) {
+						projectLibrary.commitProjectFolder(story.id, result);
+					} else {
+						projectLibrary.commitLocalProject(story.id);
+					}
+				}
+				await projectLibrary.admitProjectStories(newDocumentStories);
+				newProjectLifecycleStarted = true;
 			}
 			repairStories();
-			navigate('/');
+			if (localReplacementRecoveryPrepared) {
+				projectLibrary.clearLocalReplacementRecovery();
+				localReplacementRecoveryPrepared = false;
+			}
+			if (nativeReplacementTransactions.length > 0) {
+				await projectLibrary.commitProjectReplacements(
+					nativeReplacementTransactions.map(transaction => transaction.id)
+				);
+			}
 			importCompleted = true;
+			if (preparedImport) {
+				try {
+					await projectLibrary.discardProjectImport(preparedImport.id);
+					preparedImportIds.current.delete(preparedImport.id);
+				} catch (error) {
+					console.warn(
+						`Could not discard committed import staging: ${(error as Error).message}`
+					);
+				}
+			}
+			navigate('/');
 		} catch (error) {
 			setImportError((error as Error).message);
 		} finally {
 			if (!importCompleted) {
-				const bridge = desktopBridge();
-				const uncommittedReplacementRoots = [
-					...replacementRootsByStoryId.entries()
-				]
-					.filter(([storyId]) => !committedReplacementStoryIds.has(storyId))
-					.map(([, rootPath]) => rootPath);
 				const cleanupErrors: string[] = [];
+				const retainedRoots = new Set<string>();
+				const failedNativeRollbackStoryIds = new Set<string>();
 
-				if (uncommittedReplacementRoots.length > 0) {
-					if (!bridge?.deleteProjectFolder) {
-						cleanupErrors.push(
-							...uncommittedReplacementRoots.map(
-								rootPath =>
-									`Could not remove incomplete replacement project folder "${rootPath}": the desktop deletion bridge is unavailable.`
-							)
-						);
-					} else {
-						const cleanupResults = await Promise.allSettled(
-							uncommittedReplacementRoots.map(rootPath =>
-								bridge.deleteProjectFolder(rootPath)
-							)
-						);
+				if (nativeReplacementTransactions.length > 0) {
+					const rollbackResults = await Promise.allSettled(
+						nativeReplacementTransactions.map(transaction =>
+							projectLibrary.rollbackProjectReplacement(transaction.id)
+						)
+					);
 
-						for (const [index, result] of cleanupResults.entries()) {
-							if (result.status === 'rejected') {
-								const reason =
-									result.reason instanceof Error
-										? result.reason.message
-										: String(result.reason);
+					for (const [index, result] of rollbackResults.entries()) {
+						if (result.status === 'rejected') {
+							const transaction = nativeReplacementTransactions[index];
 
-								cleanupErrors.push(
-									`Could not remove incomplete replacement project folder "${uncommittedReplacementRoots[index]}": ${reason}`
-								);
+							for (const storyId of transaction.project.storyIds) {
+								failedNativeRollbackStoryIds.add(storyId);
 							}
+							cleanupErrors.push(
+								`Could not restore native project replacement ${transaction.project.rootPath}; the affected project remains unavailable until startup recovery completes: ${(result.reason as Error).message}`
+							);
 						}
 					}
+				}
 
-					if (cleanupErrors.length > 0) {
-						setImportError(current =>
-							[current, ...cleanupErrors].filter(Boolean).join('\n')
+				const replacementRollbackStoryIds = new Set(
+					[
+						...committedReplacementStoryIds,
+						...appliedReplacementStoryIds
+					].filter(storyId => !failedNativeRollbackStoryIds.has(storyId))
+				);
+				const committedReplacements = [...replacementRollbackStoryIds]
+					.map(storyId => replacementState.get(storyId))
+					.filter((value): value is NonNullable<typeof value> => !!value);
+
+				if (committedReplacements.length !== replacementRollbackStoryIds.size) {
+					if (
+						[...replacementRollbackStoryIds].some(storyId =>
+							appliedLocalReplacementStoryIds.has(storyId)
+						)
+					) {
+						retainLocalReplacementRecovery = true;
+					}
+					for (const storyId of replacementRollbackStoryIds) {
+						const rootPath = createdRootByStoryId.get(storyId);
+
+						if (rootPath) retainedRoots.add(rootPath);
+					}
+					cleanupErrors.push(
+						'Could not restore every replaced project because its prior lifecycle state was unavailable.'
+					);
+				} else if (committedReplacements.length > 0) {
+					try {
+						await projectLibrary.rollbackProjectReplacements(
+							committedReplacements
+						);
+					} catch (error) {
+						if (
+							[...replacementRollbackStoryIds].some(storyId =>
+								appliedLocalReplacementStoryIds.has(storyId)
+							)
+						) {
+							retainLocalReplacementRecovery = true;
+						}
+						for (const storyId of replacementRollbackStoryIds) {
+							const rootPath = createdRootByStoryId.get(storyId);
+
+							if (rootPath) retainedRoots.add(rootPath);
+						}
+						cleanupErrors.push(
+							`Could not restore replaced projects after the failed import: ${(error as Error).message}`
 						);
 					}
+				}
+
+				if (newProjectLifecycleStarted) {
+					try {
+						await projectLibrary.rollbackProjectAdmissions(newDocumentStories);
+					} catch (error) {
+						for (const story of newDocumentStories) {
+							const rootPath = createdRootByStoryId.get(story.id);
+
+							if (rootPath) retainedRoots.add(rootPath);
+						}
+						cleanupErrors.push(
+							`Could not retire projects admitted before the import failed: ${(error as Error).message}`
+						);
+					}
+				} else if (newProjectMetadataStarted) {
+					projectLibrary.forgetProjectBindings(newDocumentStories);
+				}
+
+				for (const [storyId, previous] of replacementState) {
+					const rootPath = createdRootByStoryId.get(storyId);
+
+					if (rootPath && previous.metadata?.rootPath === rootPath) {
+						retainedRoots.add(rootPath);
+					}
+				}
+				if (
+					localReplacementRecoveryPrepared &&
+					!retainLocalReplacementRecovery
+				) {
+					try {
+						projectLibrary.clearLocalReplacementRecovery();
+						localReplacementRecoveryPrepared = false;
+					} catch (error) {
+						cleanupErrors.push(
+							`Could not clear the local project recovery record: ${(error as Error).message}`
+						);
+					}
+				}
+				const removableRoots = [...createdRoots].filter(
+					rootPath => !retainedRoots.has(rootPath)
+				);
+
+				if (removableRoots.length > 0) {
+					const cleanupResults = await Promise.allSettled(
+						removableRoots.map(rootPath =>
+							projectLibrary.removeProjectFolder(rootPath)
+						)
+					);
+
+					for (const [index, result] of cleanupResults.entries()) {
+						if (result.status === 'rejected') {
+							const reason =
+								result.reason instanceof Error
+									? result.reason.message
+									: String(result.reason);
+
+							cleanupErrors.push(
+								`Could not remove incomplete project folder "${removableRoots[index]}": ${reason}`
+							);
+						}
+					}
+				}
+				if (
+					localReplacementRecoveryPrepared &&
+					retainLocalReplacementRecovery
+				) {
+					try {
+						// Seal immediately before the import UI unlocks. Startup compares
+						// each affected project's exact provisional contents independently.
+						projectLibrary.sealLocalReplacementRecovery();
+					} catch (error) {
+						cleanupErrors.push(
+							`Could not seal the local project recovery record: ${(error as Error).message}`
+						);
+					}
+				}
+				if (cleanupErrors.length > 0) {
+					setImportError(current =>
+						[current, ...cleanupErrors].filter(Boolean).join('\n')
+					);
 				}
 			}
 			for (const storyId of registeredReplacementStoryIds) {
-				if (committedReplacementStoryIds.has(storyId) && !importCompleted) {
-					markProjectStoryHydration(storyId, {
-						passageTextLoaded: false,
-						rootPath: loadProjectMetadata(storyId)?.rootPath
-					});
-				}
 				releaseBootstrapStory(storyId);
 			}
 			importRunActive.current = false;
+			if (
+				!routeMounted.current &&
+				preparedImport &&
+				preparedImportIds.current.has(preparedImport.id)
+			) {
+				await projectLibrary
+					.discardProjectImport(preparedImport.id)
+					.catch(() => undefined);
+				preparedImportIds.current.delete(preparedImport.id);
+			}
 			setImporting(false);
 			setImportProgress(undefined);
-		}
-	}
-
-	function rememberNativeProjectStories(
-		rootPath: string,
-		projectStories: Story[],
-		storeStoryIds: string[],
-		passageTextLoaded: boolean
-	) {
-		for (const [index, story] of projectStories.entries()) {
-			const storyId = storeStoryIds[index] ?? story.id;
-
-			saveProjectMetadata(storyId, {
-				rootPath,
-				status: 'file-backed',
-				storageKind: 'electron-project-folder'
-			});
-			markProjectStoryHydration(storyId, {
-				passageTextLoaded,
-				rootPath
-			});
 		}
 	}
 
@@ -995,7 +1124,7 @@ export const NewProjectRoute: React.FC = () => {
 			await waitForPaint();
 			await discardPreparedImports();
 
-			const result = await desktopBridge()?.openProjectFolder?.({
+			const result = await projectLibrary.openProjectFolder({
 				loadPassageText: false
 			});
 
@@ -1004,29 +1133,9 @@ export const NewProjectRoute: React.FC = () => {
 			}
 
 			setImportProgress({detail: 'Preparing story shell', progress: 76});
-			const storeStoryIds = projectStoryIdsForCurrentStories(
-				storiesRef.current,
-				result.stories,
-				{preserveExistingIdentity: false}
-			);
-
-			rememberNativeProjectStories(
-				result.rootPath,
-				result.stories,
-				storeStoryIds,
-				result.passageTextLoaded !== false
-			);
-			const shellStories = mergeProjectStories(
-				storiesRef.current,
-				result.stories,
-				{preserveExistingIdentity: false}
-			);
+			const shellStories = await projectLibrary.admitOpenedProject(result);
 
 			storiesRef.current = shellStories;
-			dispatch({
-				state: shellStories,
-				type: 'init'
-			});
 			repairStories();
 			markPerformance('shell-visible');
 			measurePerformance('open-to-shell', 'open-start', 'shell-visible');

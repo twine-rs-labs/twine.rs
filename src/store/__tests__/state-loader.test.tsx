@@ -1,22 +1,99 @@
 import * as React from 'react';
-import {act, render, screen, waitFor} from '@testing-library/react';
-import {fakeUnloadedStoryFormat} from '../../test-util';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {fakePrefs, fakeStory, fakeUnloadedStoryFormat} from '../../test-util';
 import {usePersistence} from '../persistence/use-persistence';
 import {usePrefsContext} from '../prefs';
 import {StateLoader} from '../state-loader';
-import {useStoriesContext} from '../stories';
+import {StoryWithDocuments, useStoriesContext} from '../stories';
 import {
 	StoryFormat,
 	StoryFormatsAction,
 	useStoryFormatsContext
 } from '../story-formats';
 import * as useStoriesRepairModule from '../use-stories-repair';
+import {
+	hasLocalReplacementRecovery,
+	prepareLocalReplacementRecovery,
+	sealLocalReplacementRecovery
+} from '../persistence/local-storage/stories/replacement-recovery';
+import {
+	doUpdateTransaction,
+	savePassage,
+	saveStory
+} from '../persistence/local-storage/stories/save';
+import {load as loadLocalStories} from '../persistence/local-storage/stories/load';
+import {storageManifestKey} from '../persistence/local-storage/stories/storage';
+import {
+	load as loadLocalPrefs,
+	save as saveLocalPrefs
+} from '../persistence/local-storage/prefs';
+import {
+	load as loadLocalStoryFormats,
+	save as saveLocalStoryFormats
+} from '../persistence/local-storage/story-formats';
+import {isElectronRenderer} from '../../util/is-electron';
 
 jest.mock('../prefs/prefs-context');
 jest.mock('../stories/stories-context');
 jest.mock('../story-formats/story-formats-context');
 jest.mock('../persistence/use-persistence');
 jest.mock('../../components/loading-curtain/loading-curtain');
+jest.mock('../../util/is-electron');
+
+function persistStories(...stories: StoryWithDocuments[]) {
+	doUpdateTransaction(transaction => {
+		for (const story of stories) {
+			saveStory(transaction, story);
+			for (const passage of story.passages) {
+				savePassage(transaction, passage);
+			}
+		}
+	});
+}
+
+function replacement(story: StoryWithDocuments, text: string) {
+	return {
+		...story,
+		name: `${story.name} replacement`,
+		passages: story.passages.map((passage, index) => ({
+			...passage,
+			text: index === 0 ? text : passage.text
+		}))
+	};
+}
+
+function storyById(stories: StoryWithDocuments[], storyId: string) {
+	return stories.find(story => story.id === storyId)!;
+}
+
+function failManifestCommits(...commitNumbers: number[]) {
+	const originalSetItem = Storage.prototype.setItem;
+	const failures = new Set(commitNumbers);
+	let manifestCommits = 0;
+
+	return jest.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+		this: Storage,
+		key: string,
+		value: string
+	) {
+		if (key === storageManifestKey && failures.has(++manifestCommits)) {
+			throw new Error(`manifest commit ${manifestCommits} failed`);
+		}
+		return originalSetItem.call(this, key, value);
+	});
+}
+
+function useLocalStoryLoader() {
+	(usePersistence as jest.Mock).mockReturnValue({
+		prefs: {load: async () => ({mockPrefsState: true})},
+		stories: {load: loadLocalStories},
+		storyFormats: {load: async () => ({mockStoryFormatsState: true})}
+	});
+}
+
+function admittedStories(dispatch: jest.Mock) {
+	return dispatch.mock.calls[0][0].state as StoryWithDocuments[];
+}
 
 describe('<StateLoader>', () => {
 	let defaultFormat: StoryFormat;
@@ -25,10 +102,12 @@ describe('<StateLoader>', () => {
 	let storiesDispatchMock: jest.Mock;
 
 	beforeEach(() => {
+		window.localStorage.clear();
 		defaultFormat = fakeUnloadedStoryFormat();
 		prefsDispatchMock = jest.fn();
 		formatsDispatchMock = jest.fn();
 		storiesDispatchMock = jest.fn();
+		(isElectronRenderer as jest.Mock).mockReturnValue(false);
 
 		(usePrefsContext as jest.Mock).mockReturnValue({
 			dispatch: prefsDispatchMock,
@@ -51,6 +130,11 @@ describe('<StateLoader>', () => {
 			stories: {load: async () => ({mockStoriesState: true})},
 			storyFormats: {load: async () => ({mockStoryFormatsState: true})}
 		});
+	});
+
+	afterEach(() => {
+		jest.restoreAllMocks();
+		window.localStorage.clear();
 	});
 
 	it('dispatches init and repair actions once mounted', async () => {
@@ -181,6 +265,422 @@ describe('<StateLoader>', () => {
 		expect(await screen.findByTestId('children')).toBeInTheDocument();
 	});
 
+	it('keeps project sessions closed until local recovery is resolved', async () => {
+		const original = fakeStory(1);
+		const imported = {
+			...original,
+			passages: [{...original.passages[0], text: 'imported body'}]
+		};
+		const edited = {
+			...imported,
+			passages: [{...imported.passages[0], text: 'edited after failure'}]
+		};
+		const persist = (story: typeof original) =>
+			doUpdateTransaction(transaction => {
+				saveStory(transaction, story);
+				for (const passage of story.passages) {
+					savePassage(transaction, passage);
+				}
+			});
+
+		persist(original);
+		prepareLocalReplacementRecovery([original]);
+		persist(imported);
+		sealLocalReplacementRecovery();
+		persist(edited);
+
+		render(
+			<StateLoader>
+				<div data-testid="project-sessions" />
+			</StateLoader>
+		);
+
+		expect(
+			await screen.findByRole('heading', {name: 'Review recovered projects'})
+		).toBeInTheDocument();
+		expect(screen.queryByTestId('project-sessions')).not.toBeInTheDocument();
+		expect(storiesDispatchMock).not.toHaveBeenCalled();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: `Keep current ${original.name}`})
+		);
+
+		expect(await screen.findByTestId('project-sessions')).toBeInTheDocument();
+		expect(hasLocalReplacementRecovery()).toBe(false);
+	});
+
+	it('admits a post-recovery snapshot after an initial one-shot commit failure', async () => {
+		const original = fakeStory(1);
+		const imported = replacement(original, 'provisional body');
+
+		persistStories(original);
+		prepareLocalReplacementRecovery([original]);
+		persistStories(imported);
+		sealLocalReplacementRecovery();
+		failManifestCommits(1);
+		useLocalStoryLoader();
+
+		render(
+			<StateLoader>
+				<div data-testid="project-sessions" />
+			</StateLoader>
+		);
+
+		expect(await screen.findByTestId('project-sessions')).toBeInTheDocument();
+		const admitted = admittedStories(storiesDispatchMock);
+		const durable = (await loadLocalStories()) as StoryWithDocuments[];
+
+		expect(admitted).toEqual(durable);
+		expect(storyById(admitted, original.id).passages[0].text).toBe(
+			original.passages[0].text
+		);
+		expect(hasLocalReplacementRecovery()).toBe(false);
+	});
+
+	it('admits a post-recovery snapshot when Retry completes a one-shot failure', async () => {
+		const original = fakeStory(1);
+		const imported = replacement(original, 'provisional body');
+
+		persistStories(original);
+		prepareLocalReplacementRecovery([original]);
+		persistStories(imported);
+		sealLocalReplacementRecovery();
+		failManifestCommits(1, 2, 3);
+		useLocalStoryLoader();
+
+		render(
+			<StateLoader>
+				<div data-testid="project-sessions" />
+			</StateLoader>
+		);
+
+		expect(
+			await screen.findByRole('heading', {name: 'Review recovered projects'})
+		).toBeInTheDocument();
+		expect(screen.queryByTestId('project-sessions')).not.toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Retry Recovery'}));
+
+		expect(await screen.findByTestId('project-sessions')).toBeInTheDocument();
+		const admitted = admittedStories(storiesDispatchMock);
+		const durable = (await loadLocalStories()) as StoryWithDocuments[];
+
+		expect(admitted).toEqual(durable);
+		expect(storyById(admitted, original.id).passages[0].text).toBe(
+			original.passages[0].text
+		);
+		expect(hasLocalReplacementRecovery()).toBe(false);
+	});
+
+	it('admits every post-recovery project after partial multi-project resolution', async () => {
+		const first = fakeStory(1);
+		const second = fakeStory(1);
+		const firstImported = replacement(first, 'first provisional');
+		const secondImported = replacement(second, 'second provisional');
+		const firstEdited = replacement(firstImported, 'first conflict');
+
+		persistStories(first, second);
+		prepareLocalReplacementRecovery([first, second]);
+		persistStories(firstImported, secondImported);
+		sealLocalReplacementRecovery();
+		persistStories(firstEdited);
+		failManifestCommits(1, 2);
+		useLocalStoryLoader();
+
+		render(
+			<StateLoader>
+				<div data-testid="project-sessions" />
+			</StateLoader>
+		);
+
+		expect(
+			await screen.findByRole('heading', {name: 'Review recovered projects'})
+		).toBeInTheDocument();
+		expect(screen.queryByTestId('project-sessions')).not.toBeInTheDocument();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: `Restore original ${first.name}`})
+		);
+
+		expect(await screen.findByTestId('project-sessions')).toBeInTheDocument();
+		const admitted = admittedStories(storiesDispatchMock);
+		const durable = (await loadLocalStories()) as StoryWithDocuments[];
+
+		expect(admitted).toEqual(durable);
+		expect(storyById(admitted, first.id).passages[0].text).toBe(
+			first.passages[0].text
+		);
+		expect(storyById(admitted, second.id).passages[0].text).toBe(
+			second.passages[0].text
+		);
+		expect(hasLocalReplacementRecovery()).toBe(false);
+	});
+
+	it('preserves per-domain fallbacks after a terminal recovery decision', async () => {
+		const original = fakeStory(1);
+		const imported = replacement(original, 'provisional body');
+		const edited = replacement(imported, 'keep this conflict');
+		const loadStoryFormats = jest
+			.fn()
+			.mockResolvedValueOnce({initialFormatsState: true})
+			.mockRejectedValueOnce(new Error('formats failed after recovery'));
+
+		persistStories(original);
+		prepareLocalReplacementRecovery([original]);
+		persistStories(imported);
+		sealLocalReplacementRecovery();
+		persistStories(edited);
+		(usePersistence as jest.Mock).mockReturnValue({
+			prefs: {load: async () => ({recoveredPrefsState: true})},
+			stories: {load: async () => ({recoveredStoriesState: true})},
+			storyFormats: {load: loadStoryFormats}
+		});
+		const warn = jest.spyOn(console, 'warn').mockReturnValue();
+
+		render(
+			<StateLoader>
+				<div data-testid="project-sessions" />
+			</StateLoader>
+		);
+		expect(
+			await screen.findByRole('heading', {name: 'Review recovered projects'})
+		).toBeInTheDocument();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: `Keep current ${original.name}`})
+		);
+
+		expect(await screen.findByTestId('project-sessions')).toBeInTheDocument();
+		expect(loadStoryFormats).toHaveBeenCalledTimes(2);
+		expect(formatsDispatchMock.mock.calls[0]).toEqual([
+			{type: 'init', state: []}
+		]);
+		expect(prefsDispatchMock.mock.calls[0]).toEqual([
+			{type: 'init', state: {recoveredPrefsState: true}}
+		]);
+		expect(storiesDispatchMock.mock.calls[0]).toEqual([
+			{type: 'init', state: {recoveredStoriesState: true}}
+		]);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining('formats failed after recovery')
+		);
+	});
+
+	it('keeps sessions gated after a terminal decision if storage becomes unavailable', async () => {
+		const original = fakeStory(1);
+		const imported = replacement(original, 'provisional body');
+		const edited = replacement(imported, 'keep this conflict');
+		const securityError = new DOMException('Access denied', 'SecurityError');
+		const loadPrefs = jest
+			.fn()
+			.mockResolvedValueOnce({initialPrefsState: true})
+			.mockRejectedValueOnce(securityError)
+			.mockResolvedValueOnce({recoveredPrefsState: true});
+		const loadStories = jest.fn(async () => ({recoveredStoriesState: true}));
+		const loadStoryFormats = jest.fn(async () => ({
+			recoveredFormatsState: true
+		}));
+
+		persistStories(original);
+		prepareLocalReplacementRecovery([original]);
+		persistStories(imported);
+		sealLocalReplacementRecovery();
+		persistStories(edited);
+		(usePersistence as jest.Mock).mockReturnValue({
+			prefs: {load: loadPrefs},
+			stories: {load: loadStories},
+			storyFormats: {load: loadStoryFormats}
+		});
+		jest.spyOn(console, 'warn').mockReturnValue();
+
+		render(
+			<StateLoader>
+				<div data-testid="project-sessions" />
+			</StateLoader>
+		);
+		expect(
+			await screen.findByRole('heading', {name: 'Review recovered projects'})
+		).toBeInTheDocument();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: `Keep current ${original.name}`})
+		);
+
+		expect(
+			await screen.findByText(/Browser storage is unavailable: Access denied/)
+		).toBeInTheDocument();
+		expect(screen.queryByTestId('project-sessions')).not.toBeInTheDocument();
+		expect(prefsDispatchMock).not.toHaveBeenCalled();
+		expect(storiesDispatchMock).not.toHaveBeenCalled();
+		expect(formatsDispatchMock).not.toHaveBeenCalled();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Retry Recovery'}));
+
+		expect(await screen.findByTestId('project-sessions')).toBeInTheDocument();
+		expect(loadPrefs).toHaveBeenCalledTimes(3);
+		expect(prefsDispatchMock.mock.calls[0]).toEqual([
+			{type: 'init', state: {recoveredPrefsState: true}}
+		]);
+	});
+
+	it('reloads every persistence domain before opening sessions after storage returns', async () => {
+		const savedPrefs = fakePrefs({locale: 'sr'});
+		const savedFormat = fakeUnloadedStoryFormat({
+			name: 'Saved User Format',
+			userAdded: true,
+			version: '1.2.3'
+		});
+		const savedStory = fakeStory(1);
+		const securityError = new DOMException('Access denied', 'SecurityError');
+		let releasePrefsRetry!: () => void;
+		const prefsRetryBarrier = new Promise<void>(resolve => {
+			releasePrefsRetry = resolve;
+		});
+		const loadPrefs = jest.fn(async () => {
+			await prefsRetryBarrier;
+			return loadLocalPrefs();
+		});
+		const loadStories = jest.fn(async () => loadLocalStories());
+		const loadStoryFormats = jest.fn(async () => loadLocalStoryFormats());
+
+		saveLocalPrefs(savedPrefs);
+		saveLocalStoryFormats([savedFormat]);
+		doUpdateTransaction(transaction => {
+			saveStory(transaction, savedStory);
+			for (const passage of savedStory.passages) {
+				savePassage(transaction, passage);
+			}
+		});
+		loadPrefs.mockRejectedValueOnce(securityError);
+		loadStories.mockRejectedValueOnce(securityError);
+		loadStoryFormats.mockRejectedValueOnce(securityError);
+		(usePersistence as jest.Mock).mockReturnValue({
+			prefs: {load: loadPrefs},
+			stories: {load: loadStories},
+			storyFormats: {load: loadStoryFormats}
+		});
+		const warn = jest.spyOn(console, 'warn').mockReturnValue();
+		const getItem = jest
+			.spyOn(Storage.prototype, 'getItem')
+			.mockImplementation(() => {
+				throw new DOMException('Access denied', 'SecurityError');
+			});
+
+		render(
+			<StateLoader>
+				<div data-testid="project-sessions" />
+			</StateLoader>
+		);
+
+		expect(
+			await screen.findByText(/Browser storage is unavailable: Access denied/)
+		).toBeInTheDocument();
+		expect(screen.queryByTestId('project-sessions')).not.toBeInTheDocument();
+		expect(loadPrefs).toHaveBeenCalledTimes(1);
+		expect(loadStories).toHaveBeenCalledTimes(1);
+		expect(loadStoryFormats).toHaveBeenCalledTimes(1);
+		expect(prefsDispatchMock).not.toHaveBeenCalled();
+		expect(storiesDispatchMock).not.toHaveBeenCalled();
+		expect(formatsDispatchMock).not.toHaveBeenCalled();
+		getItem.mockRestore();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Retry Recovery'}));
+		await waitFor(() => {
+			expect(loadPrefs).toHaveBeenCalledTimes(2);
+			expect(loadStories).toHaveBeenCalledTimes(2);
+			expect(loadStoryFormats).toHaveBeenCalledTimes(2);
+		});
+		expect(screen.queryByTestId('project-sessions')).not.toBeInTheDocument();
+		expect(prefsDispatchMock).not.toHaveBeenCalled();
+		expect(storiesDispatchMock).not.toHaveBeenCalled();
+		expect(formatsDispatchMock).not.toHaveBeenCalled();
+
+		await act(async () => {
+			releasePrefsRetry();
+			await prefsRetryBarrier;
+		});
+
+		expect(await screen.findByTestId('project-sessions')).toBeInTheDocument();
+		expect(prefsDispatchMock.mock.calls[0]).toEqual([
+			{type: 'init', state: expect.objectContaining({locale: 'sr'})}
+		]);
+		expect(formatsDispatchMock.mock.calls[0]).toEqual([
+			{
+				type: 'init',
+				state: [
+					expect.objectContaining({
+						id: savedFormat.id,
+						name: savedFormat.name,
+						userAdded: true,
+						version: savedFormat.version
+					})
+				]
+			}
+		]);
+		expect(storiesDispatchMock.mock.calls[0][0]).toEqual({
+			type: 'init',
+			state: [expect.objectContaining({id: savedStory.id})]
+		});
+		expect(await loadLocalPrefs()).toEqual(savedPrefs);
+		expect(await loadLocalStoryFormats()).toEqual([
+			expect.objectContaining({
+				id: savedFormat.id,
+				name: savedFormat.name,
+				userAdded: true,
+				version: savedFormat.version
+			})
+		]);
+		warn.mockRestore();
+	});
+
+	it('retries every persistence domain while storage remains unavailable', async () => {
+		const securityError = new DOMException('Access denied', 'SecurityError');
+		const loadPrefs = jest.fn(async () => {
+			throw securityError;
+		});
+		const loadStories = jest.fn(async () => {
+			throw securityError;
+		});
+		const loadStoryFormats = jest.fn(async () => {
+			throw securityError;
+		});
+
+		(usePersistence as jest.Mock).mockReturnValue({
+			prefs: {load: loadPrefs},
+			stories: {load: loadStories},
+			storyFormats: {load: loadStoryFormats}
+		});
+		const warn = jest.spyOn(console, 'warn').mockReturnValue();
+		const getItem = jest
+			.spyOn(Storage.prototype, 'getItem')
+			.mockImplementation(() => {
+				throw securityError;
+			});
+
+		render(
+			<StateLoader>
+				<div data-testid="project-sessions" />
+			</StateLoader>
+		);
+		expect(
+			await screen.findByText(/Browser storage is unavailable: Access denied/)
+		).toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Retry Recovery'}));
+
+		await waitFor(() => {
+			expect(loadPrefs).toHaveBeenCalledTimes(2);
+			expect(loadStories).toHaveBeenCalledTimes(2);
+			expect(loadStoryFormats).toHaveBeenCalledTimes(2);
+		});
+		expect(screen.queryByTestId('project-sessions')).not.toBeInTheDocument();
+		expect(prefsDispatchMock).not.toHaveBeenCalled();
+		expect(storiesDispatchMock).not.toHaveBeenCalled();
+		expect(formatsDispatchMock).not.toHaveBeenCalled();
+		getItem.mockRestore();
+		warn.mockRestore();
+	});
+
 	it('falls back to empty state if persistence loading fails', async () => {
 		jest.spyOn(console, 'warn').mockReturnValue();
 		(usePersistence as jest.Mock).mockReturnValue({
@@ -207,6 +707,60 @@ describe('<StateLoader>', () => {
 		expect(storiesDispatchMock.mock.calls[0]).toEqual([
 			{type: 'init', state: []}
 		]);
+	});
+
+	it('keeps Electron project sessions closed until native recovery and reload succeed', async () => {
+		(isElectronRenderer as jest.Mock).mockReturnValue(true);
+		const recoveredStories = {nativeStoriesState: true};
+		const loadPrefs = jest.fn(async () => ({nativePrefsState: true}));
+		const loadStoryFormats = jest.fn(async () => ({nativeFormatsState: true}));
+		const loadStories = jest
+			.fn()
+			.mockRejectedValueOnce(
+				new Error('replacement root conflicts with its recovery backup')
+			)
+			.mockResolvedValueOnce(recoveredStories);
+		const revealStoryLibraryFolder = jest.fn(async () => undefined);
+
+		Object.assign(window, {twineElectron: {revealStoryLibraryFolder}});
+		(usePersistence as jest.Mock).mockReturnValue({
+			prefs: {load: loadPrefs},
+			stories: {load: loadStories},
+			storyFormats: {load: loadStoryFormats}
+		});
+
+		render(
+			<StateLoader>
+				<div data-testid="native-project-sessions" />
+			</StateLoader>
+		);
+
+		expect(await screen.findByText('Project library is closed')).toBeVisible();
+		expect(
+			screen.getByText(
+				'Project library could not be safely loaded: replacement root conflicts with its recovery backup'
+			)
+		).toBeVisible();
+		expect(screen.queryByTestId('native-project-sessions')).toBeNull();
+		expect(storiesDispatchMock).not.toHaveBeenCalled();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Reveal Project Library'})
+		);
+		await waitFor(() =>
+			expect(revealStoryLibraryFolder).toHaveBeenCalledTimes(1)
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'Retry Recovery'}));
+
+		expect(await screen.findByTestId('native-project-sessions')).toBeVisible();
+		expect(loadPrefs).toHaveBeenCalledTimes(2);
+		expect(loadStoryFormats).toHaveBeenCalledTimes(2);
+		expect(loadStories).toHaveBeenCalledTimes(2);
+		expect(storiesDispatchMock).toHaveBeenCalledWith({
+			state: recoveredStories,
+			type: 'init'
+		});
+		delete (window as any).twineElectron;
 	});
 
 	it('loads and applies persistence exactly once in StrictMode', async () => {

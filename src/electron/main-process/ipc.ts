@@ -56,7 +56,11 @@ import {
 import {
 	chooseAssetFile,
 	applyProjectAssetEffect,
+	beginProjectFolderDeletion,
+	beginProjectReplacement,
 	cleanupStaleProjectAssetEffects,
+	commitProjectReplacements,
+	commitProjectFolderDeletion,
 	copyProjectImportAssets,
 	copyAssetToProject,
 	createProjectFolder,
@@ -75,11 +79,14 @@ import {
 	projectSessionPackageAssetReadPlan,
 	projectSessionScratchAssets,
 	projectSessionMemoryDiagnostics,
+	reconcileProjectSessionForPerformance,
 	projectSessionSnapshot,
 	readProjectFolderHydrationChunk,
 	renameProjectAsset,
 	replaceProjectAsset,
 	resolveProjectSessionConflicts,
+	rollbackProjectReplacement,
+	rollbackProjectFolderDeletion,
 	saveProjectFolder,
 	startProjectSession,
 	stopProjectSession,
@@ -485,6 +492,13 @@ export function initIpc(options: InitIpcOptions = {}) {
 		ipcMain.handle('performance-harness-collect-garbage', async () => {
 			global.gc?.();
 		});
+		ipcMain.handle(
+			'performance-harness-reconcile-project-session',
+			async (event, capability: string) =>
+				reconcileProjectSessionForPerformance(
+					resolveProjectCapability(event, capability)
+				)
+		);
 	}
 
 	void Promise.resolve(cleanupStaleProjectAssetEffects()).catch(error => {
@@ -510,6 +524,11 @@ export function initIpc(options: InitIpcOptions = {}) {
 	const pendingStoryWriteRequests = new Set<Promise<void>>();
 	let storyWriteFlushBarrier: Promise<void> | undefined;
 	const projectSessionSubscriptions = new Map<string, () => void>();
+	const projectReplacementTransactions = new Map<number, Set<string>>();
+	const projectDeletionTransactions = new Map<
+		number,
+		Map<string, {capability: string; rootPath: string}>
+	>();
 	const projectSessionSenderCleanups = new Map<
 		number,
 		{
@@ -617,11 +636,15 @@ export function initIpc(options: InitIpcOptions = {}) {
 		return `${senderId}:${rootPath}`;
 	}
 
-	function senderHasProjectSessionSubscriptions(senderId: number) {
+	function senderHasProjectLifecycleResources(senderId: number) {
 		const prefix = `${senderId}:`;
 
-		return [...projectSessionSubscriptions.keys()].some(key =>
-			key.startsWith(prefix)
+		return (
+			[...projectSessionSubscriptions.keys()].some(key =>
+				key.startsWith(prefix)
+			) ||
+			(projectReplacementTransactions.get(senderId)?.size ?? 0) > 0 ||
+			(projectDeletionTransactions.get(senderId)?.size ?? 0) > 0
 		);
 	}
 
@@ -652,6 +675,26 @@ export function initIpc(options: InitIpcOptions = {}) {
 					projectSessionSubscriptions.delete(key);
 				}
 			}
+			for (const transactionId of projectReplacementTransactions.get(
+				senderId
+			) ?? []) {
+				void rollbackProjectReplacement(transactionId).catch(error =>
+					console.warn(
+						`Could not roll back abandoned project replacement ${transactionId}: ${error}`
+					)
+				);
+			}
+			for (const transactionId of (
+				projectDeletionTransactions.get(senderId) ?? new Map()
+			).keys()) {
+				void rollbackProjectFolderDeletion(transactionId).catch(error =>
+					console.warn(
+						`Could not roll back abandoned project deletion ${transactionId}: ${error}`
+					)
+				);
+			}
+			projectReplacementTransactions.delete(senderId);
+			projectDeletionTransactions.delete(senderId);
 			projectSessionSenderCleanups.delete(senderId);
 		};
 
@@ -665,7 +708,7 @@ export function initIpc(options: InitIpcOptions = {}) {
 
 		projectSessionSubscriptions.get(key)?.();
 		projectSessionSubscriptions.delete(key);
-		if (!senderHasProjectSessionSubscriptions(senderId)) {
+		if (!senderHasProjectLifecycleResources(senderId)) {
 			removeProjectSessionSenderCleanup(senderId);
 		}
 		return hadSubscription;
@@ -1112,6 +1155,121 @@ export function initIpc(options: InitIpcOptions = {}) {
 	);
 
 	ipcMain.handle(
+		'begin-project-replacement',
+		async (
+			event,
+			capability: string,
+			stories: StoryWithDocuments[],
+			importId?: string
+		) => {
+			const transaction = await beginProjectReplacement(
+				resolveProjectCapability(event, capability),
+				stories,
+				importId
+			);
+			const transactions =
+				projectReplacementTransactions.get(event.sender.id) ??
+				new Set<string>();
+
+			transactions.add(transaction.id);
+			projectReplacementTransactions.set(event.sender.id, transactions);
+			ensureProjectSessionSenderCleanup(event.sender.id, event.sender);
+			return {
+				...transaction,
+				project: grantProjectCapability(event, transaction.project)
+			};
+		}
+	);
+
+	ipcMain.handle(
+		'commit-project-replacements',
+		async (event, transactionIds: string[]) => {
+			const transactions = projectReplacementTransactions.get(event.sender.id);
+
+			if (
+				transactionIds.length === 0 ||
+				transactionIds.some(transactionId => !transactions?.has(transactionId))
+			) {
+				throw new Error('Unknown or expired project replacement transaction.');
+			}
+			await commitProjectReplacements(transactionIds);
+			for (const transactionId of transactionIds) {
+				transactions?.delete(transactionId);
+			}
+			if (!senderHasProjectLifecycleResources(event.sender.id)) {
+				removeProjectSessionSenderCleanup(event.sender.id);
+			}
+		}
+	);
+
+	ipcMain.handle(
+		'rollback-project-replacement',
+		async (event, transactionId: string) => {
+			const transactions = projectReplacementTransactions.get(event.sender.id);
+
+			if (!transactions?.has(transactionId)) {
+				throw new Error('Unknown or expired project replacement transaction.');
+			}
+			await rollbackProjectReplacement(transactionId);
+			transactions.delete(transactionId);
+			if (!senderHasProjectLifecycleResources(event.sender.id)) {
+				removeProjectSessionSenderCleanup(event.sender.id);
+			}
+		}
+	);
+
+	ipcMain.handle(
+		'begin-project-folder-deletion',
+		async (event, capability: string) => {
+			const rootPath = resolveProjectCapability(event, capability);
+			const transaction = await beginProjectFolderDeletion(rootPath);
+			const transactions =
+				projectDeletionTransactions.get(event.sender.id) ?? new Map();
+
+			transactions.set(transaction.id, {capability, rootPath});
+			projectDeletionTransactions.set(event.sender.id, transactions);
+			ensureProjectSessionSenderCleanup(event.sender.id, event.sender);
+			return transaction;
+		}
+	);
+
+	ipcMain.handle(
+		'commit-project-folder-deletion',
+		async (event, transactionId: string) => {
+			const transactions = projectDeletionTransactions.get(event.sender.id);
+
+			const transaction = transactions?.get(transactionId);
+
+			if (!transaction) {
+				throw new Error('Unknown or expired project deletion transaction.');
+			}
+			await commitProjectFolderDeletion(transactionId);
+			assetEffectCapabilities.revokeRoot(event, transaction.rootPath);
+			revokeProjectCapability(event, transaction.capability);
+			transactions?.delete(transactionId);
+			if (!senderHasProjectLifecycleResources(event.sender.id)) {
+				removeProjectSessionSenderCleanup(event.sender.id);
+			}
+		}
+	);
+
+	ipcMain.handle(
+		'rollback-project-folder-deletion',
+		async (event, transactionId: string) => {
+			const transactions = projectDeletionTransactions.get(event.sender.id);
+
+			if (!transactions?.has(transactionId)) {
+				throw new Error('Unknown or expired project deletion transaction.');
+			}
+			await rollbackProjectFolderDeletion(transactionId);
+			transactions?.delete(transactionId);
+			if (!senderHasProjectLifecycleResources(event.sender.id)) {
+				removeProjectSessionSenderCleanup(event.sender.id);
+			}
+		}
+	);
+
+	ipcMain.handle(
 		'duplicate-project-folder',
 		async (
 			event,
@@ -1244,12 +1402,18 @@ export function initIpc(options: InitIpcOptions = {}) {
 
 	ipcMain.handle('load-stories', async event => {
 		try {
-			return (await loadStories()).map(story =>
-				'rootPath' in story ? grantProjectCapability(event, story) : story
-			);
+			return {
+				status: 'loaded',
+				stories: (await loadStories()).map(story =>
+					'rootPath' in story ? grantProjectCapability(event, story) : story
+				)
+			};
 		} catch (error) {
-			console.warn(`Could not load stories, returning empty array: ${error}`);
-			return [];
+			console.error(`Project library recovery or loading failed: ${error}`);
+			return {
+				message: error instanceof Error ? error.message : String(error),
+				status: 'recovery-required'
+			};
 		}
 	});
 

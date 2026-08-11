@@ -279,7 +279,12 @@ describe('<AssetsRoute>', () => {
 
 		(window as any).twineElectron = {
 			getStoryLibraryFolder: jest.fn(async () => '/native/library'),
-			listProjectAssets: jest.fn(async () => inventory)
+			projectSessionSnapshot: jest.fn(async rootPath => ({
+				...projectSnapshot(inventory),
+				rootPath,
+				stories: [story],
+				storyIds: [story.id]
+			}))
 		};
 
 		const result = render(
@@ -296,7 +301,7 @@ describe('<AssetsRoute>', () => {
 			expect(screen.getByText('Live folder')).toBeInTheDocument()
 		);
 		expect(
-			(window as any).twineElectron.listProjectAssets
+			(window as any).twineElectron.projectSessionSnapshot
 		).toHaveBeenCalledWith('/native/library/Projects/asset-castle.twine.rs');
 
 		await openAssetsFolder();

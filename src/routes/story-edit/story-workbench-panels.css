@@ -1,0 +1,184 @@
+@import '../../styles/metrics.css';
+@import '../../styles/colors.css';
+
+.story-workbench-search .search-fields {
+	display: grid;
+	grid-gap: var(--grid-size);
+	grid-template-columns: 1fr 1fr;
+	margin: 0;
+	padding: var(--grid-size);
+}
+
+.story-workbench-search .search-field {
+	display: flex;
+	flex-direction: column;
+	height: 5em;
+	min-width: 0;
+}
+
+.story-workbench-search .search-field > textarea {
+	background: var(--bg-card);
+	border: 1px solid var(--line-2);
+	border-radius: var(--corner-round);
+	color: var(--tx-1);
+	flex: 1;
+	font: inherit;
+	min-height: 0;
+	padding: calc(var(--grid-size) / 2);
+	resize: none;
+	width: 100%;
+}
+
+.story-workbench-search .search-field > textarea:focus {
+	border-color: var(--focus-ring);
+	box-shadow: var(--glow-focus);
+	outline: none;
+}
+
+.story-workbench-search .search-results {
+	align-items: center;
+	display: flex;
+	gap: var(--grid-size);
+	justify-content: space-between;
+	padding: 0 var(--grid-size);
+}
+
+.story-workbench-search .search-results > span {
+	color: var(--tx-3);
+	font-size: var(--fs-sm);
+	text-align: right;
+}
+
+.story-workbench-search .search-result-list {
+	border-top: 1px solid var(--light-gray);
+	list-style: none;
+	margin: var(--grid-size) 0 0;
+	max-height: 17em;
+	overflow: auto;
+	padding: var(--control-inner-padding) var(--grid-size) var(--grid-size);
+}
+
+.story-workbench-search .search-result-list li {
+	margin: 0;
+	padding: 0;
+}
+
+.story-workbench-search .search-result {
+	background: transparent;
+	border: 0;
+	border-radius: var(--corner-round);
+	color: var(--dark-gray);
+	cursor: pointer;
+	display: grid;
+	font: 90% var(--font-system);
+	gap: 2px;
+	padding: var(--control-inner-padding);
+	text-align: left;
+	width: 100%;
+}
+
+.story-workbench-search .search-result:disabled {
+	cursor: default;
+	opacity: 0.75;
+}
+
+.story-workbench-search .search-result:not(:disabled):hover {
+	background: var(--light-gray-translucent);
+}
+
+.story-workbench-search .search-result:not(:disabled):focus-visible {
+	box-shadow: inset 0 0 0 2px var(--blue);
+	outline: none;
+}
+
+.story-workbench-search .search-result-title {
+	align-items: baseline;
+	color: var(--black);
+	display: flex;
+	font-weight: bold;
+	gap: var(--control-inner-padding);
+	min-width: 0;
+}
+
+.story-workbench-search .search-result-title > span {
+	color: var(--gray);
+	font-size: 85%;
+	font-weight: normal;
+}
+
+.story-workbench-search .search-result-excerpt,
+.story-workbench-search .search-result-preview del,
+.story-workbench-search .search-result-preview ins {
+	overflow-wrap: anywhere;
+}
+
+.story-workbench-search .search-result-preview {
+	display: grid;
+	gap: 2px;
+}
+
+.story-workbench-search .search-result-preview del,
+.story-workbench-search .search-result-preview ins {
+	text-decoration: none;
+}
+
+.story-workbench-search .search-result-preview del {
+	background: var(--light-red-translucent);
+}
+
+.story-workbench-search .search-result-preview ins {
+	background: var(--sem-success-soft);
+}
+
+.story-workbench-passage-tags .passage-tag-entry {
+	align-items: center;
+	display: grid;
+	gap: var(--grid-size);
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.story-workbench-passage-tags .passage-tag-entry + .passage-tag-entry {
+	margin-top: var(--grid-size);
+}
+
+.story-workbench-passage-tags .tag-editor {
+	min-width: 0;
+}
+
+.story-workbench-passage-tags .passage-tag-count {
+	background: var(--faint-blue);
+	border-radius: var(--corner-round);
+	color: var(--dark-blue);
+	font-size: 90%;
+	padding: var(--control-inner-padding);
+	white-space: nowrap;
+}
+
+.story-workbench-details .story-format {
+	align-items: center;
+	display: grid;
+	grid-gap: var(--grid-size);
+	grid-template-columns: auto 1fr;
+	margin: var(--grid-size) var(--grid-size) 0 var(--grid-size);
+}
+
+.story-stats {
+	align-items: start;
+	display: grid;
+	grid-gap: var(--grid-size);
+	grid-template-columns: 2fr 3fr;
+}
+
+.story-stats .counts td:first-child {
+	font-weight: bold;
+	padding-right: 0.25em;
+	text-align: right;
+}
+
+.story-stats .update-and-ifid :first-child {
+	margin-top: 0;
+}
+
+.story-stats .update-and-ifid :last-child {
+	margin-bottom: 0;
+}

@@ -21,6 +21,10 @@ async function visit(directory) {
 
 		const source = await readFile(path, 'utf8');
 		const displayPath = relative(root, path);
+		const productSurface =
+			/^(?:src\/routes|src\/components|src\/dialogs|src\/route-actions)\//.test(
+				displayPath
+			);
 
 		if (/from\s+['"][^'"]*undoable-stories/.test(source)) {
 			violations.push(`${displayPath}: imports the removed legacy undo store`);
@@ -41,25 +45,48 @@ async function visit(directory) {
 				`${displayPath}: issues an unscoped full-story-index query; use a bounded read-model query or explicit index options`
 			);
 		}
-		if (
-			/^(?:src\/routes|src\/components|src\/dialogs|src\/route-actions)\//.test(
-				displayPath
-			) &&
-			/\bqueryPassageFactsAsync\s*\(/.test(source)
-		) {
+		if (productSurface && /\bqueryPassageFactsAsync\s*\(/.test(source)) {
 			violations.push(
 				`${displayPath}: requests compatibility passage facts; use local passage facts plus a bounded backlink page`
 			);
 		}
 		if (
-			/^(?:src\/routes|src\/components|src\/dialogs|src\/route-actions)\//.test(
-				displayPath
-			) &&
+			productSurface &&
 			displayPath !== 'src/routes/build/build-route.tsx' &&
 			/\b(?:passage|selectedPassage|target|start)\.text\b/.test(source)
 		) {
 			violations.push(
 				`${displayPath}: reads a passage body from the React story mirror; use a bounded session query or explicit document materialization`
+			);
+		}
+		if (
+			productSurface &&
+			/import\s*{[^}]*\b(?:createStory|deleteStory|duplicateStory|importStories)\b[^}]*}\s*from\s*['"][^'"]*store\/stories['"]/s.test(
+				source
+			)
+		) {
+			violations.push(
+				`${displayPath}: imports a legacy persistent story action; route lifecycle through ProjectLibraryService or project content through CoreProjectHost`
+			);
+		}
+		if (
+			productSurface &&
+			/type:\s*['"](?:applyCorePatchBatch|createStory|deleteStory|updateStory|createPassage|createPassages|deletePassage|deletePassages|updatePassage)['"]/.test(
+				source
+			)
+		) {
+			violations.push(
+				`${displayPath}: constructs a persistent story reducer action outside the core or project-library boundary`
+			);
+		}
+		if (
+			productSurface &&
+			/\b(?:twineElectron|desktopBridge\(\)|bridge)\??\.(?:createProjectFolder|duplicateProjectFolder|deleteProjectFolder|openProjectFolder|prepareProjectImport)\s*\(/.test(
+				source
+			)
+		) {
+			violations.push(
+				`${displayPath}: calls a native project lifecycle bridge directly; use ProjectLibraryService`
 			);
 		}
 		if (

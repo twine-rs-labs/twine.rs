@@ -1,7 +1,0 @@
-@import '../styles/accessibility.css';
-@import '../styles/metrics.css';
-
-.story-stylesheet-dialog p {
-	margin: 0;
-	padding: var(--grid-size);
-}

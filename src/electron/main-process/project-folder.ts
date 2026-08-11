@@ -70,6 +70,7 @@ import type {
 } from '../../store/persistence/project-folder-save-hints';
 import type {
 	NativeProjectAssetPayloadFailure,
+	NativeProjectReplacementTransaction,
 	ProjectSourceLayout,
 	ProjectStoryReplacement
 } from '../shared';
@@ -366,6 +367,12 @@ export interface NativeProjectSessionStart {
 	storyIds: string[];
 }
 
+export interface NativePerformanceProjectSessionReconcile {
+	generation: number;
+	rootPath: string;
+	sessionInstanceId: string;
+}
+
 type NativePassageBounds = {
 	height: number;
 	left: number;
@@ -448,6 +455,14 @@ interface ProjectSessionState {
 		observedAtEpochMs: number;
 	};
 	reconcileAfterResolution?: boolean;
+	reconcileCompletedEpoch?: number;
+	reconcileRequestedEpoch?: number;
+	reconcileStartedEpoch?: number;
+	reconcileWaiters?: Set<{
+		reject: (reason?: unknown) => void;
+		resolve: (value: NativePerformanceProjectSessionReconcile) => void;
+		targetEpoch: number;
+	}>;
 	rescanReconcileRequested?: boolean;
 	rescanRequested?: boolean;
 	resolvedCandidates: Map<string, ProjectSessionResolutionRecord>;
@@ -4996,6 +5011,7 @@ function requestProjectSessionRescan(
 
 function resumeProjectSessionRescan(session: ProjectSessionState) {
 	if (
+		projectSessions.get(projectSessionKey(session.rootPath)) !== session ||
 		!session.rescanRequested ||
 		session.scanning ||
 		session.localMutationDepth > 0
@@ -5010,7 +5026,48 @@ function resumeProjectSessionRescan(session: ProjectSessionState) {
 		clearTimeout(session.debounceTimer);
 		session.debounceTimer = undefined;
 	}
-	void pollProjectSession(session, reconcile);
+	pollProjectSessionInBackground(session, reconcile);
+}
+
+function settleProjectSessionReconcileWaiters(session: ProjectSessionState) {
+	for (const waiter of session.reconcileWaiters ?? []) {
+		if ((session.reconcileCompletedEpoch ?? 0) < waiter.targetEpoch) {
+			continue;
+		}
+		session.reconcileWaiters?.delete(waiter);
+		if (session.pending) {
+			waiter.reject(projectSessionReconcilePendingError());
+			continue;
+		}
+		waiter.resolve({
+			generation: session.generation,
+			rootPath: session.rootPath,
+			sessionInstanceId: session.sessionInstanceId
+		});
+	}
+}
+
+function projectSessionReconcilePendingError() {
+	return Object.assign(
+		new Error(
+			'Project reconciliation found an unresolved external-change candidate.'
+		),
+		{code: 'PROJECT_SESSION_RECONCILE_PENDING'}
+	);
+}
+
+function rejectProjectSessionReconcileWaiters(
+	session: ProjectSessionState,
+	reason: unknown,
+	throughEpoch = Number.POSITIVE_INFINITY
+) {
+	for (const waiter of session.reconcileWaiters ?? []) {
+		if (waiter.targetEpoch > throughEpoch) {
+			continue;
+		}
+		session.reconcileWaiters?.delete(waiter);
+		waiter.reject(reason);
+	}
 }
 
 async function pollProjectSession(
@@ -5026,6 +5083,12 @@ async function pollProjectSession(
 		session.pollAfterResolution = true;
 		session.reconcileAfterResolution =
 			session.reconcileAfterResolution || reconcile;
+		if (reconcile) {
+			rejectProjectSessionReconcileWaiters(
+				session,
+				projectSessionReconcilePendingError()
+			);
+		}
 		return;
 	}
 
@@ -5035,11 +5098,21 @@ async function pollProjectSession(
 	}
 
 	const mutationEpoch = session.localMutationEpoch;
+	const reconcileEpoch = reconcile
+		? Math.max(
+				(session.reconcileCompletedEpoch ?? 0) + 1,
+				session.reconcileRequestedEpoch ?? 0
+			)
+		: undefined;
 
 	session.scanning = true;
+	if (reconcileEpoch !== undefined) {
+		session.reconcileStartedEpoch = reconcileEpoch;
+	}
 
 	try {
 		const candidate = await readProjectSessionDelta(session, reconcile);
+		assertCurrentProjectSession(session.rootPath, session);
 
 		if (
 			session.localMutationEpoch !== mutationEpoch ||
@@ -5059,10 +5132,65 @@ async function pollProjectSession(
 		if (candidate && nextSignature !== previousSignature) {
 			notifyProjectSession(session);
 		}
+		if (reconcileEpoch !== undefined) {
+			session.reconcileCompletedEpoch = reconcileEpoch;
+			settleProjectSessionReconcileWaiters(session);
+		}
+	} catch (error) {
+		if (reconcileEpoch !== undefined) {
+			rejectProjectSessionReconcileWaiters(session, error, reconcileEpoch);
+		}
+		throw error;
 	} finally {
+		if (session.reconcileStartedEpoch === reconcileEpoch) {
+			session.reconcileStartedEpoch = undefined;
+		}
 		session.scanning = false;
 		resumeProjectSessionRescan(session);
 	}
+}
+
+function pollProjectSessionInBackground(
+	session: ProjectSessionState,
+	reconcile = false
+) {
+	void pollProjectSession(session, reconcile).catch(error =>
+		warnBestEffortProjectMaintenance('Project session reconciliation', error)
+	);
+}
+
+/** Performance-harness-only full reconciliation barrier. */
+export async function reconcileProjectSessionForPerformance(
+	rootPath: string
+): Promise<NativePerformanceProjectSessionReconcile> {
+	const session = projectSessions.get(projectSessionKey(rootPath));
+
+	if (!session?.baseline) {
+		throw new Error('Project session is not active for reconciliation.');
+	}
+	assertCurrentProjectSession(rootPath, session);
+	if (session.pending) {
+		throw projectSessionReconcilePendingError();
+	}
+	const targetEpoch =
+		Math.max(
+			session.reconcileCompletedEpoch ?? 0,
+			session.reconcileRequestedEpoch ?? 0,
+			session.reconcileStartedEpoch ?? 0
+		) + 1;
+	session.reconcileRequestedEpoch = targetEpoch;
+	const result = new Promise<NativePerformanceProjectSessionReconcile>(
+		(resolve, reject) => {
+			if (!session.reconcileWaiters) {
+				session.reconcileWaiters = new Set();
+			}
+			session.reconcileWaiters.add({reject, resolve, targetEpoch});
+		}
+	);
+
+	requestProjectSessionRescan(session, true);
+	resumeProjectSessionRescan(session);
+	return result;
 }
 
 function scheduleProjectSessionPoll(session: ProjectSessionState) {
@@ -5075,7 +5203,7 @@ function scheduleProjectSessionPoll(session: ProjectSessionState) {
 
 	session.debounceTimer = setTimeout(() => {
 		session.debounceTimer = undefined;
-		void pollProjectSession(session);
+		pollProjectSessionInBackground(session);
 	}, projectSessionWatchDebounceMs);
 }
 
@@ -5700,9 +5828,15 @@ async function adoptProjectSessionBaselineReceipt(
 }
 
 function ensureProjectSessionHydration(rootPath: string) {
-	const session = beginProjectSessionBaselineCapture(rootPath);
+	const session = ensureProjectSession(rootPath);
 
-	session.hydrationPromise ??= (async () => {
+	if (session.hydrationPromise) {
+		return session.hydrationPromise;
+	}
+
+	beginProjectSessionBaselineCapture(rootPath);
+
+	session.hydrationPromise = (async () => {
 		const nativeStart = beginNativeProjectFolderHydration(rootPath);
 		if (nativeStart) {
 			nativeProjectHydrations.add(nativeStart.hydrationId);
@@ -5854,12 +5988,1889 @@ async function refreshProjectSessionBaselineAfterAssetMutation(
 	);
 }
 
+type ProjectReplacementPhase =
+	| 'staging'
+	| 'prepared'
+	| 'backup-moved'
+	| 'installed'
+	| 'renderer-committed'
+	| 'cleanup-verified';
+
+interface ProjectReplacementJournal {
+	baselineRootManifest: ProjectReplacementTreeManifest;
+	backupRootPath: string;
+	createdAt: string;
+	id: string;
+	phase: ProjectReplacementPhase;
+	provisionalRootManifest?: ProjectReplacementTreeManifest;
+	rootPath: string;
+	stagingRootPath: string;
+	storyIds: string[];
+	version: 2;
+}
+
+interface LegacyProjectReplacementJournal {
+	backupRootPath: string;
+	createdAt: string;
+	id: string;
+	phase: ProjectReplacementPhase;
+	rootPath: string;
+	stagingRootPath: string;
+	storyIds: string[];
+	version: 1;
+}
+
+interface ProjectReplacementTreeManifest {
+	digest: string;
+	entryCount: number;
+	totalBytes: number;
+	version: 1;
+}
+
+interface ProjectReplacementCommitDecision {
+	createdAt: string;
+	id: string;
+	transactionIds: string[];
+	version: 1;
+}
+
+const activeProjectReplacementRoots = new Set<string>();
+
+function projectReplacementJournalDirectory() {
+	return join(getStoryDirectoryPath(), '.twine', 'project-replacements');
+}
+
+function projectReplacementDecisionDirectory() {
+	return join(projectReplacementJournalDirectory(), 'commit-decisions');
+}
+
+function projectReplacementJournalPath(id: string) {
+	if (!/^[a-f0-9-]{36}$/i.test(id)) {
+		throw new Error('Invalid project replacement transaction ID.');
+	}
+	return join(projectReplacementJournalDirectory(), `${id}.json`);
+}
+
+function projectReplacementPaths(rootPath: string, id: string) {
+	const parent = dirname(rootPath);
+
+	return {
+		backupRootPath: join(parent, `.twine-rs-replacement-${id}.backup.twine.rs`),
+		stagingRootPath: join(parent, `.twine-rs-replacement-${id}.staged.twine.rs`)
+	};
+}
+
+function validProjectReplacementJournal(
+	value: unknown
+): value is ProjectReplacementJournal {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const journal = value as Partial<ProjectReplacementJournal>;
+	const phases: ProjectReplacementPhase[] = [
+		'staging',
+		'prepared',
+		'backup-moved',
+		'installed',
+		'renderer-committed',
+		'cleanup-verified'
+	];
+
+	if (
+		journal.version !== 2 ||
+		typeof journal.id !== 'string' ||
+		!/^[a-f0-9-]{36}$/i.test(journal.id) ||
+		typeof journal.rootPath !== 'string' ||
+		!isAbsolute(journal.rootPath) ||
+		typeof journal.backupRootPath !== 'string' ||
+		!isAbsolute(journal.backupRootPath) ||
+		typeof journal.stagingRootPath !== 'string' ||
+		!isAbsolute(journal.stagingRootPath) ||
+		typeof journal.createdAt !== 'string' ||
+		!phases.includes(journal.phase as ProjectReplacementPhase) ||
+		!Array.isArray(journal.storyIds) ||
+		!journal.storyIds.every(storyId => typeof storyId === 'string') ||
+		!validProjectReplacementTreeManifest(journal.baselineRootManifest) ||
+		(journal.phase !== 'staging' &&
+			!validProjectReplacementTreeManifest(journal.provisionalRootManifest))
+	) {
+		return false;
+	}
+	const expected = projectReplacementPaths(journal.rootPath, journal.id);
+
+	return (
+		resolve(journal.backupRootPath) === resolve(expected.backupRootPath) &&
+		resolve(journal.stagingRootPath) === resolve(expected.stagingRootPath)
+	);
+}
+
+function validLegacyProjectReplacementJournal(
+	value: unknown
+): value is LegacyProjectReplacementJournal {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const journal = value as Partial<LegacyProjectReplacementJournal>;
+	const phases: ProjectReplacementPhase[] = [
+		'staging',
+		'prepared',
+		'backup-moved',
+		'installed',
+		'renderer-committed'
+	];
+
+	if (
+		journal.version !== 1 ||
+		typeof journal.id !== 'string' ||
+		!/^[a-f0-9-]{36}$/i.test(journal.id) ||
+		typeof journal.rootPath !== 'string' ||
+		!isAbsolute(journal.rootPath) ||
+		typeof journal.backupRootPath !== 'string' ||
+		!isAbsolute(journal.backupRootPath) ||
+		typeof journal.stagingRootPath !== 'string' ||
+		!isAbsolute(journal.stagingRootPath) ||
+		typeof journal.createdAt !== 'string' ||
+		!phases.includes(journal.phase as ProjectReplacementPhase) ||
+		!Array.isArray(journal.storyIds) ||
+		!journal.storyIds.every(storyId => typeof storyId === 'string')
+	) {
+		return false;
+	}
+	const expected = projectReplacementPaths(journal.rootPath, journal.id);
+
+	return (
+		resolve(journal.backupRootPath) === resolve(expected.backupRootPath) &&
+		resolve(journal.stagingRootPath) === resolve(expected.stagingRootPath)
+	);
+}
+
+function validProjectReplacementTreeManifest(
+	value: unknown
+): value is ProjectReplacementTreeManifest {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const manifest = value as Partial<ProjectReplacementTreeManifest>;
+
+	return (
+		manifest.version === 1 &&
+		typeof manifest.digest === 'string' &&
+		/^[0-9a-f]{64}$/.test(manifest.digest) &&
+		Number.isSafeInteger(manifest.entryCount) &&
+		(manifest.entryCount ?? -1) >= 0 &&
+		Number.isSafeInteger(manifest.totalBytes) &&
+		(manifest.totalBytes ?? -1) >= 0
+	);
+}
+
+async function writeProjectReplacementJournal(
+	journal: ProjectReplacementJournal
+) {
+	const path = projectReplacementJournalPath(journal.id);
+	const tempPath = `${path}.${randomUUID()}.tmp`;
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		await mkdirp(dirname(path));
+		await writeFile(tempPath, JSON.stringify(journal), 'utf8');
+		handle = await openFile(tempPath, 'r+');
+		await handle.sync();
+		await handle.close();
+		handle = undefined;
+		await renameFile(tempPath, path);
+		await syncDirectoryBestEffort(dirname(path));
+	} catch (error) {
+		await handle?.close().catch(() => undefined);
+		await remove(tempPath).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function readProjectReplacementJournal(id: string) {
+	const path = projectReplacementJournalPath(id);
+	const value = await readJson(path);
+
+	if (!validProjectReplacementJournal(value) || value.id !== id) {
+		throw new Error(`Invalid project replacement journal at ${path}.`);
+	}
+	return value;
+}
+
+async function readPersistedProjectReplacementJournal(id: string) {
+	const path = projectReplacementJournalPath(id);
+	const value = await readJson(path);
+
+	if (
+		(!validProjectReplacementJournal(value) &&
+			!validLegacyProjectReplacementJournal(value)) ||
+		value.id !== id
+	) {
+		throw new Error(`Invalid project replacement journal at ${path}.`);
+	}
+	return value;
+}
+
+async function clearProjectReplacementJournal(id: string) {
+	const path = projectReplacementJournalPath(id);
+
+	await remove(path);
+	await syncDirectoryBestEffort(dirname(path));
+}
+
+function validProjectReplacementCommitDecision(
+	value: unknown
+): value is ProjectReplacementCommitDecision {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const decision = value as Partial<ProjectReplacementCommitDecision>;
+
+	return (
+		decision.version === 1 &&
+		typeof decision.id === 'string' &&
+		/^[a-f0-9-]{36}$/i.test(decision.id) &&
+		typeof decision.createdAt === 'string' &&
+		Array.isArray(decision.transactionIds) &&
+		decision.transactionIds.length > 0 &&
+		new Set(decision.transactionIds).size === decision.transactionIds.length &&
+		decision.transactionIds.every(
+			transactionId =>
+				typeof transactionId === 'string' &&
+				/^[a-f0-9-]{36}$/i.test(transactionId)
+		)
+	);
+}
+
+function projectReplacementDecisionPath(id: string) {
+	if (!/^[a-f0-9-]{36}$/i.test(id)) {
+		throw new Error('Invalid project replacement commit decision ID.');
+	}
+	return join(projectReplacementDecisionDirectory(), `${id}.json`);
+}
+
+async function writeProjectReplacementCommitDecision(
+	decision: ProjectReplacementCommitDecision
+) {
+	const path = projectReplacementDecisionPath(decision.id);
+	const tempPath = `${path}.${randomUUID()}.tmp`;
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		await mkdirp(dirname(path));
+		await writeFile(tempPath, JSON.stringify(decision), 'utf8');
+		handle = await openFile(tempPath, 'r+');
+		await handle.sync();
+		await handle.close();
+		handle = undefined;
+		await renameFile(tempPath, path);
+		await syncDirectoryBestEffort(dirname(path));
+	} catch (error) {
+		await handle?.close().catch(() => undefined);
+		await remove(tempPath).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function clearProjectReplacementCommitDecision(id: string) {
+	const path = projectReplacementDecisionPath(id);
+
+	await remove(path);
+	await syncDirectoryBestEffort(dirname(path));
+}
+
+async function projectPathExists(path: string) {
+	try {
+		const stats = await lstat(path);
+
+		return stats.isDirectory() && !stats.isSymbolicLink();
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return false;
+		}
+		throw error;
+	}
+}
+
+async function projectPathEntryExists(path: string) {
+	try {
+		await lstat(path);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return false;
+		}
+		throw error;
+	}
+}
+
+async function syncProjectReplacementTree(path: string): Promise<void> {
+	const stats = await lstat(path);
+
+	if (stats.isSymbolicLink()) {
+		throw new Error('Project replacement staging contains a symbolic link.');
+	}
+	if (stats.isFile()) {
+		const handle = await openFile(path, 'r');
+
+		try {
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		return;
+	}
+	if (!stats.isDirectory()) {
+		return;
+	}
+	const directory = await opendir(path);
+
+	for await (const entry of directory) {
+		await syncProjectReplacementTree(join(path, entry.name));
+	}
+	await syncDirectoryBestEffort(path);
+}
+
+function projectReplacementConflict(message: string) {
+	return Object.assign(new Error(message), {
+		code: 'PROJECT_REPLACEMENT_CONFLICT' as const
+	});
+}
+
+function projectLifecycleCleanupPending(message: string, cause: unknown) {
+	return Object.assign(new Error(message, {cause}), {
+		code: 'PROJECT_LIFECYCLE_CLEANUP_PENDING' as const
+	});
+}
+
+function isProjectLifecycleCleanupPending(error: unknown) {
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		'code' in error &&
+		error.code === 'PROJECT_LIFECYCLE_CLEANUP_PENDING'
+	);
+}
+
+async function projectLifecycleCleanupStep<T>(
+	label: string,
+	operation: () => Promise<T>
+) {
+	try {
+		return await operation();
+	} catch (error) {
+		throw projectLifecycleCleanupPending(
+			`${label} is incomplete and will be retried.`,
+			error
+		);
+	}
+}
+
+async function projectReplacementPathExists(path: string, label: string) {
+	try {
+		return await projectPathEntryExists(path);
+	} catch (error) {
+		throw Object.assign(
+			projectReplacementConflict(
+				`${label} could not be checked; preserving every replacement root for explicit recovery.`
+			),
+			{cause: error}
+		);
+	}
+}
+
+async function projectReplacementTreeManifest(
+	rootPath: string
+): Promise<ProjectReplacementTreeManifest> {
+	const hasher = createHash('sha256');
+	let entryCount = 0;
+	let totalBytes = 0;
+
+	const updateField = (value: string) => {
+		hasher.update(String(Buffer.byteLength(value)));
+		hasher.update(':');
+		hasher.update(value);
+		hasher.update('\0');
+	};
+	const scan = async (absolutePath: string, projectPath: string) => {
+		const before = await lstat(absolutePath, {bigint: true});
+
+		if (before.isSymbolicLink()) {
+			throw projectReplacementConflict(
+				`Project replacement cannot verify symbolic link ${projectPath || '.'}.`
+			);
+		}
+		if (before.isDirectory()) {
+			entryCount++;
+			updateField('directory');
+			updateField(projectPath);
+			updateField(String(before.mode));
+			const names = (await readdir(absolutePath)).sort((left, right) =>
+				left.localeCompare(right)
+			);
+
+			for (const name of names) {
+				await scan(
+					join(absolutePath, name),
+					projectPath ? `${projectPath}/${name}` : name
+				);
+			}
+			const afterNames = (await readdir(absolutePath)).sort((left, right) =>
+				left.localeCompare(right)
+			);
+			const after = await lstat(absolutePath, {bigint: true});
+
+			if (
+				!after.isDirectory() ||
+				after.isSymbolicLink() ||
+				after.ino !== before.ino ||
+				after.dev !== before.dev ||
+				after.mode !== before.mode ||
+				after.mtimeNs !== before.mtimeNs ||
+				after.ctimeNs !== before.ctimeNs ||
+				afterNames.length !== names.length ||
+				afterNames.some((name, index) => name !== names[index])
+			) {
+				throw projectReplacementConflict(
+					`${projectPath || '.'} changed while the replacement transaction was verifying it.`
+				);
+			}
+			return;
+		}
+		if (!before.isFile()) {
+			throw projectReplacementConflict(
+				`Project replacement cannot verify special file ${projectPath || '.'}.`
+			);
+		}
+		const loadedContent = await readFile(absolutePath);
+		const content = Buffer.isBuffer(loadedContent)
+			? loadedContent
+			: Buffer.from(loadedContent);
+		const after = await lstat(absolutePath, {bigint: true});
+
+		if (
+			!after.isFile() ||
+			after.size !== before.size ||
+			after.mtimeNs !== before.mtimeNs ||
+			after.ctimeNs !== before.ctimeNs ||
+			after.mode !== before.mode ||
+			after.ino !== before.ino ||
+			after.dev !== before.dev
+		) {
+			throw projectReplacementConflict(
+				`${projectPath} changed while the replacement transaction was verifying it.`
+			);
+		}
+		entryCount++;
+		totalBytes += content.byteLength;
+		updateField('file');
+		updateField(projectPath);
+		updateField(String(before.mode));
+		updateField(String(content.byteLength));
+		updateField(createHash('sha256').update(content).digest('hex'));
+	};
+
+	await scan(rootPath, '');
+	return {
+		digest: hasher.digest('hex'),
+		entryCount,
+		totalBytes,
+		version: 1
+	};
+}
+
+function projectReplacementTreeManifestsMatch(
+	left: ProjectReplacementTreeManifest,
+	right: ProjectReplacementTreeManifest
+) {
+	return (
+		left.digest === right.digest &&
+		left.entryCount === right.entryCount &&
+		left.totalBytes === right.totalBytes
+	);
+}
+
+async function assertProjectReplacementTree(
+	path: string,
+	expected: ProjectReplacementTreeManifest,
+	label: string
+) {
+	let current: ProjectReplacementTreeManifest;
+
+	try {
+		current = await projectReplacementTreeManifest(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			throw projectReplacementConflict(`${label} is missing at ${path}.`);
+		}
+		if (
+			(error as Error & {code?: string}).code === 'PROJECT_REPLACEMENT_CONFLICT'
+		) {
+			throw error;
+		}
+		throw Object.assign(
+			projectReplacementConflict(
+				`${label} could not be verified; preserving every replacement root for explicit recovery.`
+			),
+			{cause: error}
+		);
+	}
+	if (!projectReplacementTreeManifestsMatch(expected, current)) {
+		throw projectReplacementConflict(
+			`${label} changed outside Twine; preserving every replacement root for explicit recovery.`
+		);
+	}
+}
+
+type ProjectReplacementOwnedRootRole = 'backup' | 'installed' | 'staging';
+
+function projectReplacementOwnedRootRole(
+	journal: ProjectReplacementJournal,
+	path: string
+): ProjectReplacementOwnedRootRole {
+	const ownershipPaths = projectReplacementPaths(journal.rootPath, journal.id);
+
+	if (resolve(path) === resolve(ownershipPaths.backupRootPath)) {
+		return 'backup';
+	}
+	if (resolve(path) === resolve(ownershipPaths.stagingRootPath)) {
+		return 'staging';
+	}
+	if (resolve(path) === resolve(journal.rootPath)) {
+		return 'installed';
+	}
+	throw new Error('Refusing to remove an unowned project replacement path.');
+}
+
+function projectReplacementQuarantinePath(
+	journal: ProjectReplacementJournal,
+	role: ProjectReplacementOwnedRootRole
+) {
+	return join(
+		dirname(journal.rootPath),
+		`.twine-rs-replacement-${journal.id}.${role}.quarantine.twine.rs`
+	);
+}
+
+async function quarantineAndTrashReplacementOwnedRoot(
+	journal: ProjectReplacementJournal,
+	path: string,
+	expected: ProjectReplacementTreeManifest
+) {
+	const role = projectReplacementOwnedRootRole(journal, path);
+	const quarantinePath = projectReplacementQuarantinePath(journal, role);
+	const sourceExists = await projectReplacementPathExists(
+		path,
+		'Project replacement cleanup source'
+	);
+	const quarantineExists = await projectReplacementPathExists(
+		quarantinePath,
+		'Project replacement cleanup quarantine'
+	);
+
+	if (sourceExists && quarantineExists) {
+		throw projectReplacementConflict(
+			`Project replacement cleanup found both ${path} and ${quarantinePath}; neither was removed.`
+		);
+	}
+	if (!sourceExists && !quarantineExists) {
+		return;
+	}
+	if (sourceExists) {
+		await assertProjectReplacementTree(
+			path,
+			expected,
+			'Project replacement cleanup source'
+		);
+		stopProjectSession(path);
+		await projectLifecycleCleanupStep(
+			'Project replacement quarantine move',
+			async () => {
+				await renameFile(path, quarantinePath);
+				await syncDirectoryBestEffort(dirname(path));
+			}
+		);
+	}
+	await assertProjectReplacementTree(
+		quarantinePath,
+		expected,
+		'Quarantined project replacement data'
+	);
+	stopProjectSession(quarantinePath);
+	// Electron cannot bind Trash disposal to the manifest scan. Keep this final
+	// pathname operation recoverable so a post-verification mutation or path
+	// substitution is never permanently removed by Twine.
+	await projectLifecycleCleanupStep(
+		'Project replacement quarantine trash cleanup',
+		async () => {
+			await shell.trashItem(quarantinePath);
+			await syncDirectoryBestEffort(dirname(quarantinePath));
+		}
+	);
+}
+
+async function assertProjectReplacementCleanupRoot(
+	journal: ProjectReplacementJournal,
+	path: string,
+	expected: ProjectReplacementTreeManifest
+) {
+	const role = projectReplacementOwnedRootRole(journal, path);
+	const quarantinePath = projectReplacementQuarantinePath(journal, role);
+	const sourceExists = await projectReplacementPathExists(
+		path,
+		'Project replacement cleanup source'
+	);
+	const quarantineExists = await projectReplacementPathExists(
+		quarantinePath,
+		'Project replacement cleanup quarantine'
+	);
+
+	if (sourceExists && quarantineExists) {
+		throw projectReplacementConflict(
+			`Project replacement cleanup found both ${path} and ${quarantinePath}; neither was removed.`
+		);
+	}
+	if (sourceExists) {
+		await assertProjectReplacementTree(
+			path,
+			expected,
+			'Project replacement cleanup source'
+		);
+	} else if (quarantineExists) {
+		await assertProjectReplacementTree(
+			quarantinePath,
+			expected,
+			'Quarantined project replacement data'
+		);
+	}
+}
+
+async function restoreProjectReplacement(journal: ProjectReplacementJournal) {
+	const rootExists = await projectReplacementPathExists(
+		journal.rootPath,
+		'Project replacement root'
+	);
+	const backupExists = await projectReplacementPathExists(
+		journal.backupRootPath,
+		'Project replacement backup'
+	);
+	const stagingExists = await projectReplacementPathExists(
+		journal.stagingRootPath,
+		'Project replacement staging root'
+	);
+
+	stopProjectSession(journal.rootPath);
+	stopProjectSession(journal.backupRootPath);
+	stopProjectSession(journal.stagingRootPath);
+
+	if (backupExists) {
+		await assertProjectReplacementTree(
+			journal.backupRootPath,
+			journal.baselineRootManifest,
+			'Project replacement backup'
+		);
+		if (!journal.provisionalRootManifest) {
+			throw projectReplacementConflict(
+				'Project replacement has no durable provisional manifest; preserving every root for explicit recovery.'
+			);
+		}
+		await quarantineAndTrashReplacementOwnedRoot(
+			journal,
+			journal.rootPath,
+			journal.provisionalRootManifest
+		);
+		await renameFile(journal.backupRootPath, journal.rootPath);
+		await syncDirectoryBestEffort(dirname(journal.rootPath));
+	} else if (!rootExists) {
+		throw new Error(
+			`Project replacement recovery could not find the original root ${journal.rootPath}.`
+		);
+	}
+	if (stagingExists || journal.provisionalRootManifest) {
+		if (!journal.provisionalRootManifest) {
+			throw projectReplacementConflict(
+				'Incomplete replacement staging cannot be verified automatically; preserving it for explicit recovery.'
+			);
+		}
+		await quarantineAndTrashReplacementOwnedRoot(
+			journal,
+			journal.stagingRootPath,
+			journal.provisionalRootManifest
+		);
+	}
+	const restored = await readProjectFolder(journal.rootPath, {
+		loadPassageText: false
+	});
+
+	rememberProjectFolder(restored);
+	await clearProjectReplacementJournal(journal.id);
+}
+
+async function finalizeProjectReplacement(
+	journal: ProjectReplacementJournal,
+	durableCommit = false
+) {
+	if (!journal.provisionalRootManifest) {
+		throw projectReplacementConflict(
+			'Committed replacement has no durable provisional manifest; preserving every root for explicit recovery.'
+		);
+	}
+	if (
+		journal.phase === 'renderer-committed' ||
+		(durableCommit && journal.phase === 'installed')
+	) {
+		await assertProjectReplacementTree(
+			journal.rootPath,
+			journal.provisionalRootManifest,
+			'Committed project replacement root'
+		);
+		await assertProjectReplacementCleanupRoot(
+			journal,
+			journal.backupRootPath,
+			journal.baselineRootManifest
+		);
+		await assertProjectReplacementCleanupRoot(
+			journal,
+			journal.stagingRootPath,
+			journal.provisionalRootManifest
+		);
+		journal.phase = 'cleanup-verified';
+		try {
+			await writeProjectReplacementJournal(journal);
+		} catch (error) {
+			throw Object.assign(
+				projectReplacementConflict(
+					'Committed replacement cleanup could not record its verified state; preserving every root for explicit recovery.'
+				),
+				{cause: error}
+			);
+		}
+	} else if (journal.phase !== 'cleanup-verified') {
+		throw new Error(
+			`Project replacement ${journal.id} cannot finalize from phase ${journal.phase}.`
+		);
+	}
+	await quarantineAndTrashReplacementOwnedRoot(
+		journal,
+		journal.backupRootPath,
+		journal.baselineRootManifest
+	);
+	await quarantineAndTrashReplacementOwnedRoot(
+		journal,
+		journal.stagingRootPath,
+		journal.provisionalRootManifest
+	);
+	await projectLifecycleCleanupStep(
+		'Project replacement journal cleanup',
+		async () => {
+			await syncDirectoryBestEffort(dirname(journal.rootPath));
+			await clearProjectReplacementJournal(journal.id);
+		}
+	);
+}
+
+async function recoverProjectReplacementJournal(
+	journal: ProjectReplacementJournal
+) {
+	if (
+		journal.phase === 'renderer-committed' ||
+		journal.phase === 'cleanup-verified'
+	) {
+		await finalizeProjectReplacement(journal);
+	} else {
+		await restoreProjectReplacement(journal);
+	}
+}
+
+function legacyProjectReplacementPreservedRoot(
+	journal: LegacyProjectReplacementJournal
+) {
+	return join(
+		dirname(journal.rootPath),
+		`.twine-rs-replacement-${journal.id}.legacy-provisional.twine.rs`
+	);
+}
+
+async function recoverLegacyProjectReplacementJournal(
+	journal: LegacyProjectReplacementJournal,
+	durableCommit: boolean
+) {
+	const rootExists = await projectPathExists(journal.rootPath);
+	const backupExists = await projectPathExists(journal.backupRootPath);
+	const preservedRootPath = legacyProjectReplacementPreservedRoot(journal);
+	const preservedRootExists = await projectPathExists(preservedRootPath);
+
+	stopProjectSession(journal.rootPath);
+	stopProjectSession(journal.backupRootPath);
+	stopProjectSession(journal.stagingRootPath);
+	stopProjectSession(preservedRootPath);
+	if (durableCommit || journal.phase === 'renderer-committed') {
+		if (!rootExists) {
+			throw projectReplacementConflict(
+				`Legacy committed replacement root is missing at ${journal.rootPath}; all remaining roots were preserved for explicit recovery.`
+			);
+		}
+		// Version 1 did not record ownership manifests. Preserve its backup and
+		// staging roots instead of deleting data that may have changed externally.
+		await projectLifecycleCleanupStep(
+			'Legacy project replacement journal cleanup',
+			() => clearProjectReplacementJournal(journal.id)
+		);
+		return;
+	}
+	if (rootExists && backupExists) {
+		if (preservedRootExists) {
+			throw projectReplacementConflict(
+				`Legacy replacement recovery found multiple provisional roots; all roots were preserved for explicit recovery.`
+			);
+		}
+		// Restore the original without deleting the uncommitted root. The hidden
+		// quarantine remains available for manual inspection after recovery.
+		await renameFile(journal.rootPath, preservedRootPath);
+		await renameFile(journal.backupRootPath, journal.rootPath);
+		await syncDirectoryBestEffort(dirname(journal.rootPath));
+	} else if (!rootExists && backupExists) {
+		await renameFile(journal.backupRootPath, journal.rootPath);
+		await syncDirectoryBestEffort(dirname(journal.rootPath));
+	} else if (!rootExists) {
+		throw projectReplacementConflict(
+			`Legacy replacement recovery could not find the original root ${journal.rootPath}; all remaining roots were preserved for explicit recovery.`
+		);
+	} else if (
+		journal.phase !== 'staging' &&
+		journal.phase !== 'prepared' &&
+		!preservedRootExists
+	) {
+		throw projectReplacementConflict(
+			`Legacy replacement recovery cannot identify the original root at ${journal.rootPath}; all roots were preserved for explicit recovery.`
+		);
+	}
+	const restored = await readProjectFolder(journal.rootPath, {
+		loadPassageText: false
+	});
+
+	rememberProjectFolder(restored);
+	await clearProjectReplacementJournal(journal.id);
+}
+
+export async function recoverProjectReplacementTransactions() {
+	const directory = projectReplacementJournalDirectory();
+	const decisionDirectory = projectReplacementDecisionDirectory();
+	let decisionEntries: string[] = [];
+	let entries: string[];
+
+	try {
+		decisionEntries = await readdir(decisionDirectory);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			throw error;
+		}
+	}
+	for (const entry of decisionEntries
+		.filter(name => name.endsWith('.json'))
+		.sort()) {
+		const path = join(decisionDirectory, entry);
+		const value = await readJson(path);
+
+		if (!validProjectReplacementCommitDecision(value)) {
+			throw new Error(
+				`Invalid project replacement commit decision at ${path}.`
+			);
+		}
+		let cleanupPending = false;
+
+		for (const transactionId of value.transactionIds) {
+			let journal: LegacyProjectReplacementJournal | ProjectReplacementJournal;
+
+			try {
+				journal = await readPersistedProjectReplacementJournal(transactionId);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+					continue;
+				}
+				throw error;
+			}
+			try {
+				if (validLegacyProjectReplacementJournal(journal)) {
+					await recoverLegacyProjectReplacementJournal(journal, true);
+				} else {
+					await finalizeProjectReplacement(journal, true);
+				}
+				activeProjectReplacementRoots.delete(resolve(journal.rootPath));
+			} catch (error) {
+				if (!isProjectLifecycleCleanupPending(error)) {
+					throw error;
+				}
+				cleanupPending = true;
+				warnBestEffortProjectMaintenance(
+					'Committed project replacement startup cleanup',
+					error
+				);
+			}
+		}
+		if (!cleanupPending) {
+			try {
+				await clearProjectReplacementCommitDecision(value.id);
+			} catch (error) {
+				warnBestEffortProjectMaintenance(
+					'Project replacement commit-decision cleanup',
+					error
+				);
+			}
+		}
+	}
+
+	try {
+		entries = await readdir(directory);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return;
+		}
+		throw error;
+	}
+	for (const entry of entries.filter(name => name.endsWith('.json')).sort()) {
+		const value = await readJson(join(directory, entry));
+
+		if (
+			!validProjectReplacementJournal(value) &&
+			!validLegacyProjectReplacementJournal(value)
+		) {
+			throw new Error(
+				`Invalid project replacement journal at ${join(directory, entry)}.`
+			);
+		}
+		try {
+			if (validLegacyProjectReplacementJournal(value)) {
+				await recoverLegacyProjectReplacementJournal(value, false);
+			} else {
+				await recoverProjectReplacementJournal(value);
+			}
+		} catch (error) {
+			if (
+				(value.phase !== 'renderer-committed' &&
+					value.phase !== 'cleanup-verified') ||
+				!isProjectLifecycleCleanupPending(error)
+			) {
+				throw error;
+			}
+			warnBestEffortProjectMaintenance(
+				'Committed project replacement startup cleanup',
+				error
+			);
+		}
+		activeProjectReplacementRoots.delete(resolve(value.rootPath));
+	}
+}
+
+export async function beginProjectReplacement(
+	rootPath: string,
+	stories: Story[],
+	importId?: string
+): Promise<NativeProjectReplacementTransaction> {
+	const absoluteRootPath = resolve(rootPath);
+
+	if (!isAbsolute(rootPath) || !basename(rootPath).endsWith('.twine.rs')) {
+		throw new Error(
+			'Project replacement requires an absolute project folder ending with .twine.rs.'
+		);
+	}
+	if (stories.length === 0) {
+		throw new Error('Project replacement requires at least one story.');
+	}
+	if (
+		activeProjectReplacementRoots.has(absoluteRootPath) ||
+		activeProjectDeletionRoots.has(absoluteRootPath)
+	) {
+		throw new Error(
+			'A project lifecycle operation is already active for this project folder.'
+		);
+	}
+	// Reserve synchronously before the first filesystem await. Otherwise two
+	// callers can both pass the availability check while the first project read
+	// is suspended, then stage competing journals for the same root.
+	activeProjectReplacementRoots.add(absoluteRootPath);
+	let journal: ProjectReplacementJournal | undefined;
+	let journalPersisted = false;
+	try {
+		await recoverInterruptedProjectFileClaims(absoluteRootPath);
+		const current = await readProjectFolder(absoluteRootPath, {
+			loadPassageText: false
+		});
+		const currentStoryIds = [...current.storyIds].sort();
+		const replacementStoryIds = stories.map(story => story.id).sort();
+
+		if (
+			currentStoryIds.length !== replacementStoryIds.length ||
+			currentStoryIds.some(
+				(storyId, index) => storyId !== replacementStoryIds[index]
+			)
+		) {
+			throw new Error(
+				'Project replacement must preserve the complete project story identity.'
+			);
+		}
+		const id = randomUUID();
+		const paths = projectReplacementPaths(absoluteRootPath, id);
+		const baselineRootManifest =
+			await projectReplacementTreeManifest(absoluteRootPath);
+
+		journal = {
+			...paths,
+			baselineRootManifest,
+			createdAt: new Date().toISOString(),
+			id,
+			phase: 'staging',
+			rootPath: absoluteRootPath,
+			storyIds: replacementStoryIds,
+			version: 2
+		};
+		await writeProjectReplacementJournal(journal);
+		journalPersisted = true;
+		await copy(absoluteRootPath, journal.stagingRootPath, {
+			dereference: false,
+			errorOnExist: true,
+			overwrite: false,
+			preserveTimestamps: true
+		});
+		for (const story of stories) {
+			await writeProjectFolder(journal.stagingRootPath, story);
+		}
+		if (importId) {
+			await copyProjectImportAssets(importId, journal.stagingRootPath);
+		}
+		await syncProjectReplacementTree(journal.stagingRootPath);
+		journal.provisionalRootManifest = await projectReplacementTreeManifest(
+			journal.stagingRootPath
+		);
+		journal.phase = 'prepared';
+		await writeProjectReplacementJournal(journal);
+
+		await assertProjectReplacementTree(
+			absoluteRootPath,
+			journal.baselineRootManifest,
+			'Project being replaced'
+		);
+		stopProjectSession(absoluteRootPath);
+		stopProjectSession(journal.stagingRootPath);
+		await renameFile(absoluteRootPath, journal.backupRootPath);
+		await syncDirectoryBestEffort(dirname(absoluteRootPath));
+		await assertProjectReplacementTree(
+			journal.backupRootPath,
+			journal.baselineRootManifest,
+			'Project replacement backup'
+		);
+		journal.phase = 'backup-moved';
+		await writeProjectReplacementJournal(journal);
+
+		await renameFile(journal.stagingRootPath, absoluteRootPath);
+		await syncDirectoryBestEffort(dirname(absoluteRootPath));
+		await assertProjectReplacementTree(
+			absoluteRootPath,
+			journal.provisionalRootManifest,
+			'Installed project replacement root'
+		);
+		journal.phase = 'installed';
+		await writeProjectReplacementJournal(journal);
+
+		const project = await readProjectFolder(absoluteRootPath, {
+			loadPassageText: true
+		});
+
+		if (!rememberProjectFolderStrict(project)) {
+			throw new Error(
+				'The replacement project could not be registered in the native project library.'
+			);
+		}
+		return {id, project};
+	} catch (error) {
+		if (!journal || !journalPersisted) {
+			activeProjectReplacementRoots.delete(absoluteRootPath);
+			throw error;
+		}
+		try {
+			const recoverable = await readProjectReplacementJournal(journal.id);
+
+			await restoreProjectReplacement(recoverable);
+			activeProjectReplacementRoots.delete(absoluteRootPath);
+		} catch (recoveryError) {
+			throw new AggregateError(
+				[error, recoveryError],
+				`Project replacement failed and automatic recovery is incomplete for ${absoluteRootPath}.`,
+				{cause: error}
+			);
+		}
+		throw error;
+	}
+}
+
+export async function commitProjectReplacements(transactionIds: string[]) {
+	const uniqueIds = [...new Set(transactionIds)];
+
+	if (uniqueIds.length === 0 || uniqueIds.length !== transactionIds.length) {
+		throw new Error(
+			'Project replacement commit requires unique active transactions.'
+		);
+	}
+	const journals = await Promise.all(
+		uniqueIds.map(transactionId => readProjectReplacementJournal(transactionId))
+	);
+
+	for (const journal of journals) {
+		if (journal.phase !== 'installed') {
+			throw new Error(
+				`Project replacement ${journal.id} cannot commit from phase ${journal.phase}.`
+			);
+		}
+		if (!journal.provisionalRootManifest) {
+			throw projectReplacementConflict(
+				`Project replacement ${journal.id} has no durable provisional manifest.`
+			);
+		}
+		await assertProjectReplacementTree(
+			journal.rootPath,
+			journal.provisionalRootManifest,
+			'Installed project replacement root'
+		);
+		await assertProjectReplacementTree(
+			journal.backupRootPath,
+			journal.baselineRootManifest,
+			'Project replacement backup'
+		);
+	}
+	const decision: ProjectReplacementCommitDecision = {
+		createdAt: new Date().toISOString(),
+		id: randomUUID(),
+		transactionIds: uniqueIds,
+		version: 1
+	};
+
+	await writeProjectReplacementCommitDecision(decision);
+	let cleanupIncomplete = false;
+	const recoveryRequired: unknown[] = [];
+	for (const journal of journals) {
+		let retainLifecycleLock = false;
+
+		try {
+			journal.phase = 'renderer-committed';
+			await writeProjectReplacementJournal(journal);
+			await finalizeProjectReplacement(journal);
+		} catch (error) {
+			if (
+				(error as Error & {code?: string}).code ===
+				'PROJECT_REPLACEMENT_CONFLICT'
+			) {
+				recoveryRequired.push(error);
+				retainLifecycleLock = true;
+			} else {
+				// The cohort decision is durable. Startup can retry failures that only
+				// leave redundant transaction metadata or backup data behind.
+				cleanupIncomplete = true;
+				warnBestEffortProjectMaintenance('Project replacement cleanup', error);
+			}
+		}
+		if (!retainLifecycleLock) {
+			activeProjectReplacementRoots.delete(resolve(journal.rootPath));
+		}
+	}
+	if (recoveryRequired.length > 0) {
+		throw Object.assign(
+			new AggregateError(
+				recoveryRequired,
+				'Committed project replacement requires explicit recovery before the project can be used.'
+			),
+			{code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'}
+		);
+	}
+	if (cleanupIncomplete) {
+		return;
+	}
+	try {
+		await clearProjectReplacementCommitDecision(decision.id);
+	} catch (error) {
+		warnBestEffortProjectMaintenance(
+			'Project replacement commit-decision cleanup',
+			error
+		);
+	}
+}
+
+export async function rollbackProjectReplacement(transactionId: string) {
+	const journal = await readProjectReplacementJournal(transactionId);
+
+	if (
+		journal.phase === 'renderer-committed' ||
+		journal.phase === 'cleanup-verified'
+	) {
+		throw new Error('A committed project replacement cannot be rolled back.');
+	}
+	await restoreProjectReplacement(journal);
+	activeProjectReplacementRoots.delete(resolve(journal.rootPath));
+}
+
+type ProjectDeletionPhase =
+	'prepared' | 'staged' | 'renderer-committed' | 'cleanup-verified';
+
+interface ProjectDeletionJournal {
+	baselineRootManifest: ProjectReplacementTreeManifest;
+	createdAt: string;
+	id: string;
+	phase: ProjectDeletionPhase;
+	rootPath: string;
+	stagedRootPath: string;
+	storyIds: string[];
+	version: 2;
+}
+
+interface LegacyProjectDeletionJournal {
+	createdAt: string;
+	id: string;
+	phase: ProjectDeletionPhase;
+	rootPath: string;
+	stagedRootPath: string;
+	storyIds: string[];
+	version: 1;
+}
+
+const activeProjectDeletionRoots = new Set<string>();
+
+function projectDeletionJournalDirectory() {
+	return join(getStoryDirectoryPath(), '.twine', 'project-deletions');
+}
+
+function projectDeletionJournalPath(id: string) {
+	if (!/^[a-f0-9-]{36}$/i.test(id)) {
+		throw new Error('Invalid project deletion transaction ID.');
+	}
+	return join(projectDeletionJournalDirectory(), `${id}.json`);
+}
+
+function projectDeletionStagedRoot(rootPath: string, id: string) {
+	return join(dirname(rootPath), `.twine-rs-deletion-${id}.staged.twine.rs`);
+}
+
+function validProjectDeletionJournal(
+	value: unknown
+): value is ProjectDeletionJournal {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const journal = value as Partial<ProjectDeletionJournal>;
+	const phases: ProjectDeletionPhase[] = [
+		'prepared',
+		'staged',
+		'renderer-committed',
+		'cleanup-verified'
+	];
+
+	return (
+		journal.version === 2 &&
+		typeof journal.id === 'string' &&
+		/^[a-f0-9-]{36}$/i.test(journal.id) &&
+		typeof journal.createdAt === 'string' &&
+		typeof journal.rootPath === 'string' &&
+		isAbsolute(journal.rootPath) &&
+		typeof journal.stagedRootPath === 'string' &&
+		isAbsolute(journal.stagedRootPath) &&
+		resolve(journal.stagedRootPath) ===
+			resolve(projectDeletionStagedRoot(journal.rootPath, journal.id)) &&
+		phases.includes(journal.phase as ProjectDeletionPhase) &&
+		validProjectReplacementTreeManifest(journal.baselineRootManifest) &&
+		Array.isArray(journal.storyIds) &&
+		journal.storyIds.every(storyId => typeof storyId === 'string')
+	);
+}
+
+function validLegacyProjectDeletionJournal(
+	value: unknown
+): value is LegacyProjectDeletionJournal {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const journal = value as Partial<LegacyProjectDeletionJournal>;
+	const phases: ProjectDeletionPhase[] = [
+		'prepared',
+		'staged',
+		'renderer-committed'
+	];
+
+	return (
+		journal.version === 1 &&
+		typeof journal.id === 'string' &&
+		/^[a-f0-9-]{36}$/i.test(journal.id) &&
+		typeof journal.createdAt === 'string' &&
+		typeof journal.rootPath === 'string' &&
+		isAbsolute(journal.rootPath) &&
+		typeof journal.stagedRootPath === 'string' &&
+		isAbsolute(journal.stagedRootPath) &&
+		resolve(journal.stagedRootPath) ===
+			resolve(projectDeletionStagedRoot(journal.rootPath, journal.id)) &&
+		phases.includes(journal.phase as ProjectDeletionPhase) &&
+		Array.isArray(journal.storyIds) &&
+		journal.storyIds.every(storyId => typeof storyId === 'string')
+	);
+}
+
+async function writeProjectDeletionJournal(journal: ProjectDeletionJournal) {
+	const path = projectDeletionJournalPath(journal.id);
+	const tempPath = `${path}.${randomUUID()}.tmp`;
+	let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+
+	try {
+		await mkdirp(dirname(path));
+		await writeFile(tempPath, JSON.stringify(journal), 'utf8');
+		handle = await openFile(tempPath, 'r+');
+		await handle.sync();
+		await handle.close();
+		handle = undefined;
+		await renameFile(tempPath, path);
+		await syncDirectoryBestEffort(dirname(path));
+	} catch (error) {
+		await handle?.close().catch(() => undefined);
+		await remove(tempPath).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function readProjectDeletionJournal(id: string) {
+	const path = projectDeletionJournalPath(id);
+	const value = await readJson(path);
+
+	if (!validProjectDeletionJournal(value) || value.id !== id) {
+		throw new Error(`Invalid project deletion journal at ${path}.`);
+	}
+	return value;
+}
+
+async function clearProjectDeletionJournal(id: string) {
+	const path = projectDeletionJournalPath(id);
+
+	await remove(path);
+	await syncDirectoryBestEffort(dirname(path));
+}
+
+function projectDeletionConflict(message: string) {
+	return Object.assign(new Error(message), {
+		code: 'PROJECT_DELETION_CONFLICT' as const
+	});
+}
+
+async function projectDeletionPathExists(path: string, label: string) {
+	try {
+		return await projectPathEntryExists(path);
+	} catch (error) {
+		throw Object.assign(
+			projectDeletionConflict(
+				`${label} could not be checked; preserving the deletion transaction for explicit recovery.`
+			),
+			{cause: error}
+		);
+	}
+}
+
+async function assertProjectDeletionTree(
+	path: string,
+	expected: ProjectReplacementTreeManifest,
+	label: string
+) {
+	let current: ProjectReplacementTreeManifest;
+
+	try {
+		current = await projectReplacementTreeManifest(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			throw projectDeletionConflict(`${label} is missing at ${path}.`);
+		}
+		throw Object.assign(
+			projectDeletionConflict(
+				`${label} could not be verified; preserving the staged deletion for explicit recovery.`
+			),
+			{cause: error}
+		);
+	}
+	if (!projectReplacementTreeManifestsMatch(expected, current)) {
+		throw projectDeletionConflict(
+			`${label} changed outside Twine; preserving the staged deletion for explicit recovery.`
+		);
+	}
+}
+
+function projectDeletionQuarantinePath(journal: ProjectDeletionJournal) {
+	return join(
+		dirname(journal.rootPath),
+		`.twine-rs-deletion-${journal.id}.quarantine.twine.rs`
+	);
+}
+
+async function quarantineAndTrashProjectDeletion(
+	journal: ProjectDeletionJournal
+) {
+	const quarantinePath = projectDeletionQuarantinePath(journal);
+	const stagedExists = await projectDeletionPathExists(
+		journal.stagedRootPath,
+		'Committed staged project deletion root'
+	);
+	const quarantineExists = await projectDeletionPathExists(
+		quarantinePath,
+		'Committed project deletion quarantine'
+	);
+
+	if (stagedExists && quarantineExists) {
+		throw projectDeletionConflict(
+			`Project deletion cleanup found both ${journal.stagedRootPath} and ${quarantinePath}; neither was trashed.`
+		);
+	}
+	if (!stagedExists && !quarantineExists) {
+		return;
+	}
+	if (stagedExists) {
+		await assertProjectDeletionTree(
+			journal.stagedRootPath,
+			journal.baselineRootManifest,
+			'Committed staged project deletion'
+		);
+		stopProjectSession(journal.stagedRootPath);
+		await projectLifecycleCleanupStep(
+			'Project deletion quarantine move',
+			async () => {
+				await renameFile(journal.stagedRootPath, quarantinePath);
+				await syncDirectoryBestEffort(dirname(journal.rootPath));
+			}
+		);
+	}
+	await assertProjectDeletionTree(
+		quarantinePath,
+		journal.baselineRootManifest,
+		'Quarantined project deletion'
+	);
+	stopProjectSession(quarantinePath);
+	await projectLifecycleCleanupStep(
+		'Project deletion trash cleanup',
+		async () => {
+			await shell.trashItem(quarantinePath);
+			await syncDirectoryBestEffort(dirname(journal.rootPath));
+		}
+	);
+}
+
+async function assertProjectDeletionCleanupRoot(
+	journal: ProjectDeletionJournal
+) {
+	const quarantinePath = projectDeletionQuarantinePath(journal);
+	const stagedExists = await projectDeletionPathExists(
+		journal.stagedRootPath,
+		'Committed staged project deletion root'
+	);
+	const quarantineExists = await projectDeletionPathExists(
+		quarantinePath,
+		'Committed project deletion quarantine'
+	);
+
+	if (stagedExists && quarantineExists) {
+		throw projectDeletionConflict(
+			`Project deletion cleanup found both ${journal.stagedRootPath} and ${quarantinePath}; neither was trashed.`
+		);
+	}
+	if (stagedExists) {
+		await assertProjectDeletionTree(
+			journal.stagedRootPath,
+			journal.baselineRootManifest,
+			'Committed staged project deletion'
+		);
+	} else if (quarantineExists) {
+		await assertProjectDeletionTree(
+			quarantinePath,
+			journal.baselineRootManifest,
+			'Quarantined project deletion'
+		);
+	}
+}
+
+async function restoreProjectDeletion(journal: ProjectDeletionJournal) {
+	const rootExists = await projectDeletionPathExists(
+		journal.rootPath,
+		'Project deletion root'
+	);
+	const stagedExists = await projectDeletionPathExists(
+		journal.stagedRootPath,
+		'Staged project deletion root'
+	);
+
+	if (rootExists && stagedExists) {
+		throw new Error(
+			'Project deletion recovery found both the original and staged roots; neither was changed.'
+		);
+	}
+	if (!rootExists && !stagedExists) {
+		throw new Error(
+			'Project deletion recovery could not find the original or staged root.'
+		);
+	}
+	stopProjectSession(journal.rootPath);
+	stopProjectSession(journal.stagedRootPath);
+	if (stagedExists) {
+		await assertProjectDeletionTree(
+			journal.stagedRootPath,
+			journal.baselineRootManifest,
+			'Staged project deletion'
+		);
+		await renameFile(journal.stagedRootPath, journal.rootPath);
+		await syncDirectoryBestEffort(dirname(journal.rootPath));
+	}
+	await assertProjectDeletionTree(
+		journal.rootPath,
+		journal.baselineRootManifest,
+		'Restored project deletion root'
+	);
+	const project = await readProjectFolder(journal.rootPath, {
+		loadPassageText: false
+	});
+
+	if (!rememberProjectFolderStrict(project)) {
+		throw new Error(
+			'The restored project deletion could not be registered in the native library.'
+		);
+	}
+	await clearProjectDeletionJournal(journal.id);
+}
+
+async function abortUnstagedProjectDeletion(journal: ProjectDeletionJournal) {
+	const rootExists = await projectDeletionPathExists(
+		journal.rootPath,
+		'Unstaged project deletion root'
+	);
+	const stagedExists = await projectDeletionPathExists(
+		journal.stagedRootPath,
+		'Unstaged project deletion staging root'
+	);
+
+	if (!rootExists || stagedExists) {
+		return false;
+	}
+	const project = await readProjectFolder(journal.rootPath, {
+		loadPassageText: false
+	});
+
+	if (!rememberProjectFolderStrict(project)) {
+		throw new Error(
+			'The unstaged project deletion could not be restored to the native library.'
+		);
+	}
+	await clearProjectDeletionJournal(journal.id);
+	return true;
+}
+
+async function finalizeProjectDeletion(journal: ProjectDeletionJournal) {
+	if (journal.phase === 'renderer-committed') {
+		const rootExists = await projectDeletionPathExists(
+			journal.rootPath,
+			'Committed project deletion root'
+		);
+		if (rootExists) {
+			throw projectDeletionConflict(
+				`Committed project deletion unexpectedly found the original root ${journal.rootPath}.`
+			);
+		}
+		await assertProjectDeletionCleanupRoot(journal);
+		journal.phase = 'cleanup-verified';
+		try {
+			await writeProjectDeletionJournal(journal);
+		} catch (error) {
+			throw Object.assign(
+				projectDeletionConflict(
+					'Committed deletion cleanup could not record its verified state; preserving the staged root for explicit recovery.'
+				),
+				{cause: error}
+			);
+		}
+	} else if (journal.phase !== 'cleanup-verified') {
+		throw new Error(
+			`Project deletion ${journal.id} cannot finalize from phase ${journal.phase}.`
+		);
+	}
+	await quarantineAndTrashProjectDeletion(journal);
+	await projectLifecycleCleanupStep('Project deletion journal cleanup', () =>
+		clearProjectDeletionJournal(journal.id)
+	);
+}
+
+async function recoverLegacyProjectDeletion(
+	journal: LegacyProjectDeletionJournal
+) {
+	const rootExists = await projectPathExists(journal.rootPath);
+	const stagedExists = await projectPathExists(journal.stagedRootPath);
+
+	stopProjectSession(journal.rootPath);
+	stopProjectSession(journal.stagedRootPath);
+	if (journal.phase === 'renderer-committed') {
+		if (rootExists) {
+			throw projectDeletionConflict(
+				`Legacy committed project deletion unexpectedly found the original root ${journal.rootPath}; all roots were preserved for explicit recovery.`
+			);
+		}
+		// Version 1 did not record ownership manifests. Keep any hidden staged
+		// root instead of trashing data that may have changed externally.
+		await projectLifecycleCleanupStep(
+			'Legacy project deletion journal cleanup',
+			() => clearProjectDeletionJournal(journal.id)
+		);
+		return;
+	}
+	if (rootExists && stagedExists) {
+		throw projectDeletionConflict(
+			'Legacy project deletion recovery found both the original and staged roots; neither was changed.'
+		);
+	}
+	if (!rootExists && !stagedExists) {
+		throw projectDeletionConflict(
+			'Legacy project deletion recovery could not find the original or staged root.'
+		);
+	}
+	if (stagedExists) {
+		await renameFile(journal.stagedRootPath, journal.rootPath);
+		await syncDirectoryBestEffort(dirname(journal.rootPath));
+	}
+	const restored = await readProjectFolder(journal.rootPath, {
+		loadPassageText: false
+	});
+
+	if (!rememberProjectFolderStrict(restored)) {
+		throw new Error(
+			'The restored legacy project deletion could not be registered in the native library.'
+		);
+	}
+	await clearProjectDeletionJournal(journal.id);
+}
+
+export async function recoverProjectDeletionTransactions() {
+	const directory = projectDeletionJournalDirectory();
+	let entries: string[];
+
+	try {
+		entries = await readdir(directory);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			return;
+		}
+		throw error;
+	}
+	for (const entry of entries.filter(name => name.endsWith('.json')).sort()) {
+		const path = join(directory, entry);
+		const value = await readJson(path);
+
+		if (
+			!validProjectDeletionJournal(value) &&
+			!validLegacyProjectDeletionJournal(value)
+		) {
+			throw new Error(`Invalid project deletion journal at ${path}.`);
+		}
+		try {
+			if (validLegacyProjectDeletionJournal(value)) {
+				await recoverLegacyProjectDeletion(value);
+			} else if (
+				value.phase === 'renderer-committed' ||
+				value.phase === 'cleanup-verified'
+			) {
+				await finalizeProjectDeletion(value);
+			} else {
+				await restoreProjectDeletion(value);
+			}
+		} catch (error) {
+			if (
+				(value.phase !== 'renderer-committed' &&
+					value.phase !== 'cleanup-verified') ||
+				!isProjectLifecycleCleanupPending(error)
+			) {
+				throw error;
+			}
+			warnBestEffortProjectMaintenance(
+				'Committed project deletion startup cleanup',
+				error
+			);
+		}
+		activeProjectDeletionRoots.delete(resolve(value.rootPath));
+	}
+}
+
+export async function beginProjectFolderDeletion(rootPath: string) {
+	const absoluteRootPath = resolve(rootPath);
+
+	if (!isAbsolute(rootPath) || !basename(rootPath).endsWith('.twine.rs')) {
+		throw new Error(
+			'Project deletion requires an absolute project folder ending with .twine.rs.'
+		);
+	}
+	if (
+		activeProjectReplacementRoots.has(absoluteRootPath) ||
+		activeProjectDeletionRoots.has(absoluteRootPath)
+	) {
+		throw new Error(
+			'A project lifecycle operation is already active for this project folder.'
+		);
+	}
+	// Match replacement transactions: ownership of a root is reserved before
+	// validation performs any asynchronous filesystem work.
+	activeProjectDeletionRoots.add(absoluteRootPath);
+	let journal: ProjectDeletionJournal | undefined;
+	let journalPersisted = false;
+	let rootStaged = false;
+	try {
+		await recoverInterruptedProjectFileClaims(absoluteRootPath);
+		const rootStats = await stat(absoluteRootPath);
+
+		if (!rootStats.isDirectory()) {
+			throw Object.assign(
+				new Error(`${absoluteRootPath} is not a project folder directory.`),
+				{code: 'ENOTDIR'}
+			);
+		}
+		let manifestStats: Awaited<ReturnType<typeof stat>>;
+
+		try {
+			manifestStats = await stat(join(absoluteRootPath, 'twine.toml'));
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+				throw new Error(
+					`Refusing to delete ${absoluteRootPath}; no twine.toml project manifest was found.`
+				);
+			}
+			throw error;
+		}
+		if (!manifestStats.isFile()) {
+			throw new Error(
+				`Refusing to delete ${absoluteRootPath}; no twine.toml project manifest was found.`
+			);
+		}
+		const project = await readProjectFolder(absoluteRootPath, {
+			loadPassageText: false
+		});
+		const id = randomUUID();
+		const baselineRootManifest =
+			await projectReplacementTreeManifest(absoluteRootPath);
+
+		journal = {
+			baselineRootManifest,
+			createdAt: new Date().toISOString(),
+			id,
+			phase: 'prepared',
+			rootPath: absoluteRootPath,
+			stagedRootPath: projectDeletionStagedRoot(absoluteRootPath, id),
+			storyIds: project.storyIds,
+			version: 2
+		};
+		await writeProjectDeletionJournal(journal);
+		journalPersisted = true;
+		stopProjectSession(absoluteRootPath);
+		const forgotten = forgetProjectFolder(absoluteRootPath);
+
+		if (forgotten === undefined) {
+			throw new Error(
+				'The project library index could not stage this project for deletion.'
+			);
+		}
+		await assertProjectDeletionTree(
+			absoluteRootPath,
+			journal.baselineRootManifest,
+			'Project being staged for deletion'
+		);
+		await renameFile(absoluteRootPath, journal.stagedRootPath);
+		rootStaged = true;
+		await syncDirectoryBestEffort(dirname(absoluteRootPath));
+		await assertProjectDeletionTree(
+			journal.stagedRootPath,
+			journal.baselineRootManifest,
+			'Staged project deletion'
+		);
+		journal.phase = 'staged';
+		await writeProjectDeletionJournal(journal);
+		return {id, rootPath: absoluteRootPath};
+	} catch (error) {
+		if (!journal || !journalPersisted) {
+			activeProjectDeletionRoots.delete(absoluteRootPath);
+			throw error;
+		}
+		try {
+			const recoverable = await readProjectDeletionJournal(journal.id);
+
+			if (rootStaged || !(await abortUnstagedProjectDeletion(recoverable))) {
+				await restoreProjectDeletion(recoverable);
+			}
+			activeProjectDeletionRoots.delete(absoluteRootPath);
+		} catch (recoveryError) {
+			throw new AggregateError(
+				[error, recoveryError],
+				`Project deletion failed and automatic recovery is incomplete for ${absoluteRootPath}.`,
+				{cause: error}
+			);
+		}
+		throw error;
+	}
+}
+
+export async function commitProjectFolderDeletion(transactionId: string) {
+	const journal = await readProjectDeletionJournal(transactionId);
+
+	if (journal.phase !== 'staged') {
+		throw new Error(
+			`Project deletion ${transactionId} cannot commit from phase ${journal.phase}.`
+		);
+	}
+	journal.phase = 'renderer-committed';
+	await writeProjectDeletionJournal(journal);
+	try {
+		await finalizeProjectDeletion(journal);
+	} catch (error) {
+		if (
+			(error as Error & {code?: string}).code === 'PROJECT_DELETION_CONFLICT'
+		) {
+			throw Object.assign(
+				new Error(
+					'Committed project deletion requires explicit recovery before the project library can reopen.',
+					{cause: error}
+				),
+				{code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'}
+			);
+		}
+		// The durable decision makes the hidden staged root unavailable to the
+		// library. Startup retries trashing without resurrecting renderer state.
+		warnBestEffortProjectMaintenance('Project deletion cleanup', error);
+	}
+	activeProjectDeletionRoots.delete(resolve(journal.rootPath));
+}
+
+export async function rollbackProjectFolderDeletion(transactionId: string) {
+	const journal = await readProjectDeletionJournal(transactionId);
+
+	if (
+		journal.phase === 'renderer-committed' ||
+		journal.phase === 'cleanup-verified'
+	) {
+		throw new Error('A committed project deletion cannot be rolled back.');
+	}
+	await restoreProjectDeletion(journal);
+	activeProjectDeletionRoots.delete(resolve(journal.rootPath));
+}
+
+function assertProjectLifecycleMutationAvailable(rootPath: string) {
+	const absoluteRootPath = resolve(rootPath);
+
+	if (activeProjectReplacementRoots.has(absoluteRootPath)) {
+		throw new Error(
+			'Project changes are blocked while replacement recovery is pending. Restart Twine to complete recovery.'
+		);
+	}
+	if (activeProjectDeletionRoots.has(absoluteRootPath)) {
+		throw new Error(
+			'Project changes are blocked while deletion recovery is pending. Restart Twine to complete recovery.'
+		);
+	}
+}
+
 export async function createProjectFolder(
 	story: Story,
 	preferredParent?: string,
 	sourceLayout: ProjectSourceLayout = 'passage-files'
 ): Promise<NativeProjectFolderResult> {
 	const rootPath = projectRootForStory(story, preferredParent);
+	assertProjectLifecycleMutationAvailable(rootPath);
 
 	const writtenProject = await writeProjectFolder(
 		rootPath,
@@ -5927,6 +7938,7 @@ export async function duplicateProjectFolder(
 	if (replacements.length === 0) {
 		throw new Error('Project duplication requires at least one story.');
 	}
+	assertProjectLifecycleMutationAvailable(sourceRootPath);
 
 	const [rootStats, manifestStats] = await Promise.all([
 		stat(sourceRootPath),
@@ -6020,6 +8032,7 @@ export async function saveProjectFolder(
 	if (typeof rootPath !== 'string' || !isAbsolute(rootPath)) {
 		throw new Error('Project saves require an absolute project folder path.');
 	}
+	assertProjectLifecycleMutationAvailable(rootPath);
 	await recoverInterruptedProjectFileClaims(rootPath);
 
 	const [rootStats, manifestStats] = await Promise.all([
@@ -8439,8 +10452,13 @@ export async function hydrateProjectFolder(
 	rootPath: string,
 	storyIds?: string[]
 ): Promise<NativeProjectFolderResult> {
-	const projectFolder = await ensureProjectSessionHydration(rootPath);
-	ensureProjectSession(rootPath).hydrationPromise = undefined;
+	const hydrationPromise = ensureProjectSessionHydration(rootPath);
+	const projectFolder = await hydrationPromise;
+	const session = ensureProjectSession(rootPath);
+
+	if (session.hydrationPromise === hydrationPromise) {
+		session.hydrationPromise = undefined;
+	}
 	if (projectFolder.hydrationId) {
 		const byStory = new Map(
 			projectFolder.stories.map(story => [story.id, story] as const)
@@ -8493,8 +10511,13 @@ export async function beginProjectFolderHydration(
 	rootPath: string,
 	storyIds?: string[]
 ): Promise<NativeProjectHydrationStart> {
-	const projectFolder = await ensureProjectSessionHydration(rootPath);
-	ensureProjectSession(rootPath).hydrationPromise = undefined;
+	const hydrationPromise = ensureProjectSessionHydration(rootPath);
+	const projectFolder = await hydrationPromise;
+	const session = ensureProjectSession(rootPath);
+
+	if (session.hydrationPromise === hydrationPromise) {
+		session.hydrationPromise = undefined;
+	}
 	if (projectFolder.hydrationId) {
 		const publicProjectFolder = {...projectFolder};
 		delete publicProjectFolder.baselineReceipt;
@@ -8631,6 +10654,7 @@ export async function copyProjectImportAssets(
 	importId: string,
 	rootPath: string
 ): Promise<NativeProjectAssetWriteResult[]> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const preparedImport = preparedProjectImports.get(importId);
 
 	if (!preparedImport) {
@@ -8640,126 +10664,116 @@ export async function copyProjectImportAssets(
 	const results: NativeProjectAssetWriteResult[] = [];
 	let totalBytes = 0;
 
-	try {
-		for (const asset of preparedImport.assets) {
-			const target = safeProjectAssetPath(rootPath, asset.targetPath);
-			const temporaryPath = join(
-				dirname(target.absolutePath),
-				`.${basename(target.absolutePath)}.import-${randomUUID()}.tmp`
-			);
-			let sourceHandle: Awaited<ReturnType<typeof openFile>> | undefined;
-			let targetHandle: Awaited<ReturnType<typeof openFile>> | undefined;
-			let installed = false;
+	for (const asset of preparedImport.assets) {
+		const target = safeProjectAssetPath(rootPath, asset.targetPath);
+		const temporaryPath = join(
+			dirname(target.absolutePath),
+			`.${basename(target.absolutePath)}.import-${randomUUID()}.tmp`
+		);
+		let sourceHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+		let targetHandle: Awaited<ReturnType<typeof openFile>> | undefined;
+		let installed = false;
 
+		await ensureSafeProjectImportAssetDirectory(
+			rootPath,
+			dirname(target.absolutePath)
+		);
+
+		try {
+			if ((await realpath(asset.sourcePath)) !== asset.canonicalSourcePath) {
+				throw new Error('Project import asset changed after preparation.');
+			}
+			sourceHandle = await openFile(
+				asset.canonicalSourcePath,
+				fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
+			);
+			const sourceStats = await sourceHandle.stat();
+
+			if (
+				!sourceStats.isFile() ||
+				sourceStats.size !== asset.expectedSizeBytes
+			) {
+				throw new Error('Project import asset changed after preparation.');
+			}
+			assertImportFileSize(sourceStats.size, maxImportZipEntryBytes);
+			totalBytes += sourceStats.size;
+			if (totalBytes > maxImportZipExpandedBytes) {
+				throw new Error(
+					`Project import assets exceed the ${zipLimitMebibytes(
+						maxImportZipExpandedBytes
+					)} MiB cumulative size limit.`
+				);
+			}
+
+			targetHandle = await openFile(temporaryPath, 'wx');
+			const buffer = Buffer.allocUnsafe(64 * 1024);
+			let copiedBytes = 0;
+
+			while (copiedBytes < sourceStats.size) {
+				const requestedBytes = Math.min(
+					buffer.length,
+					sourceStats.size - copiedBytes
+				);
+				const {bytesRead} = await sourceHandle.read(
+					buffer,
+					0,
+					requestedBytes,
+					null
+				);
+
+				if (bytesRead === 0) {
+					throw new Error('Project import asset changed while it was copied.');
+				}
+
+				let writtenBytes = 0;
+
+				while (writtenBytes < bytesRead) {
+					const {bytesWritten} = await targetHandle.write(
+						buffer,
+						writtenBytes,
+						bytesRead - writtenBytes,
+						null
+					);
+
+					if (bytesWritten === 0) {
+						throw new Error('Project import asset could not be copied.');
+					}
+					writtenBytes += bytesWritten;
+				}
+				copiedBytes += bytesRead;
+			}
+
+			const sentinel = Buffer.allocUnsafe(1);
+			const {bytesRead: trailingBytes} = await sourceHandle.read(
+				sentinel,
+				0,
+				1,
+				null
+			);
+
+			if (trailingBytes !== 0) {
+				throw new Error('Project import asset changed while it was copied.');
+			}
+
+			await targetHandle.close();
+			targetHandle = undefined;
 			await ensureSafeProjectImportAssetDirectory(
 				rootPath,
 				dirname(target.absolutePath)
 			);
-
-			try {
-				if ((await realpath(asset.sourcePath)) !== asset.canonicalSourcePath) {
-					throw new Error('Project import asset changed after preparation.');
-				}
-				sourceHandle = await openFile(
-					asset.canonicalSourcePath,
-					fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)
-				);
-				const sourceStats = await sourceHandle.stat();
-
-				if (
-					!sourceStats.isFile() ||
-					sourceStats.size !== asset.expectedSizeBytes
-				) {
-					throw new Error('Project import asset changed after preparation.');
-				}
-				assertImportFileSize(sourceStats.size, maxImportZipEntryBytes);
-				totalBytes += sourceStats.size;
-				if (totalBytes > maxImportZipExpandedBytes) {
-					throw new Error(
-						`Project import assets exceed the ${zipLimitMebibytes(
-							maxImportZipExpandedBytes
-						)} MiB cumulative size limit.`
-					);
-				}
-
-				targetHandle = await openFile(temporaryPath, 'wx');
-				const buffer = Buffer.allocUnsafe(64 * 1024);
-				let copiedBytes = 0;
-
-				while (copiedBytes < sourceStats.size) {
-					const requestedBytes = Math.min(
-						buffer.length,
-						sourceStats.size - copiedBytes
-					);
-					const {bytesRead} = await sourceHandle.read(
-						buffer,
-						0,
-						requestedBytes,
-						null
-					);
-
-					if (bytesRead === 0) {
-						throw new Error(
-							'Project import asset changed while it was copied.'
-						);
-					}
-
-					let writtenBytes = 0;
-
-					while (writtenBytes < bytesRead) {
-						const {bytesWritten} = await targetHandle.write(
-							buffer,
-							writtenBytes,
-							bytesRead - writtenBytes,
-							null
-						);
-
-						if (bytesWritten === 0) {
-							throw new Error('Project import asset could not be copied.');
-						}
-						writtenBytes += bytesWritten;
-					}
-					copiedBytes += bytesRead;
-				}
-
-				const sentinel = Buffer.allocUnsafe(1);
-				const {bytesRead: trailingBytes} = await sourceHandle.read(
-					sentinel,
-					0,
-					1,
-					null
-				);
-
-				if (trailingBytes !== 0) {
-					throw new Error('Project import asset changed while it was copied.');
-				}
-
-				await targetHandle.close();
-				targetHandle = undefined;
-				await ensureSafeProjectImportAssetDirectory(
-					rootPath,
-					dirname(target.absolutePath)
-				);
-				await move(temporaryPath, target.absolutePath, {overwrite: true});
-				installed = true;
-			} finally {
-				await sourceHandle?.close().catch(() => undefined);
-				await targetHandle?.close().catch(() => undefined);
-				if (!installed) {
-					await remove(temporaryPath).catch(() => undefined);
-				}
+			await move(temporaryPath, target.absolutePath, {overwrite: true});
+			installed = true;
+		} finally {
+			await sourceHandle?.close().catch(() => undefined);
+			await targetHandle?.close().catch(() => undefined);
+			if (!installed) {
+				await remove(temporaryPath).catch(() => undefined);
 			}
-			results.push({
-				sourcePath: target.absolutePath,
-				targetPath: target.projectPath
-			});
 		}
-	} catch (error) {
-		preparedProjectImports.delete(importId);
-		if (preparedImport.cleanupPath) {
-			await remove(preparedImport.cleanupPath).catch(() => undefined);
-		}
-		throw error;
+		results.push({
+			sourcePath: target.absolutePath,
+			targetPath: target.projectPath
+		});
 	}
 
 	const assets = await listProjectAssets(rootPath);
@@ -8915,6 +10929,7 @@ export async function applyProjectAssetEffect(
 ) {
 	const journal = await readAssetEffectJournal(effectToken);
 	requireAssetEffectRoot(journal, expectedRootPath);
+	assertProjectLifecycleMutationAvailable(journal.rootPath);
 	const directory = assetEffectDirectory(effectToken);
 	const target = safeProjectAssetPath(journal.rootPath, journal.targetPath);
 	const oldAsset = journal.oldPath
@@ -9017,6 +11032,7 @@ export async function copyAssetToProject(
 	rootPath: string,
 	sourcePath: string
 ): Promise<NativeProjectAssetWriteResult> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const filename = basename(sourcePath);
 	const targetPath = `assets/${filename}`;
 	const destinationPath = join(rootPath, targetPath);
@@ -9059,6 +11075,7 @@ export async function renameProjectAsset(
 	oldPath: string,
 	newPath: string
 ): Promise<NativeProjectAssetWriteResult> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const oldAsset = safeProjectAssetPath(rootPath, oldPath);
 	const newAsset = safeProjectAssetPath(rootPath, newPath);
 	const beforeFingerprint = await fileFingerprint(oldAsset.absolutePath);
@@ -9106,6 +11123,7 @@ export async function replaceProjectAsset(
 	path: string,
 	sourcePath: string
 ): Promise<NativeProjectAssetWriteResult> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const asset = safeProjectAssetPath(rootPath, path);
 	const beforeFingerprint = await fileFingerprint(asset.absolutePath);
 
@@ -9149,6 +11167,7 @@ export async function deleteProjectAsset(
 	rootPath: string,
 	path: string
 ): Promise<NativeProjectAssetWriteResult> {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const asset = safeProjectAssetPath(rootPath, path);
 	const beforeFingerprint = await fileFingerprint(asset.absolutePath);
 
@@ -9185,45 +11204,9 @@ export async function deleteProjectAsset(
 }
 
 export async function deleteProjectFolder(rootPath: string) {
-	const absoluteRootPath = resolve(rootPath);
-	const rootStats = await stat(absoluteRootPath);
+	const transaction = await beginProjectFolderDeletion(rootPath);
 
-	if (!rootStats.isDirectory()) {
-		throw Object.assign(
-			new Error(`${absoluteRootPath} is not a project folder directory.`),
-			{code: 'ENOTDIR'}
-		);
-	}
-
-	if (!basename(absoluteRootPath).endsWith('.twine.rs')) {
-		throw new Error(
-			`Refusing to delete ${absoluteRootPath}; project folders must end with .twine.rs.`
-		);
-	}
-
-	let manifestStats: {isFile(): boolean};
-
-	try {
-		manifestStats = await stat(join(absoluteRootPath, 'twine.toml'));
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-			throw new Error(
-				`Refusing to delete ${absoluteRootPath}; no twine.toml project manifest was found.`
-			);
-		}
-
-		throw error;
-	}
-
-	if (!manifestStats.isFile()) {
-		throw new Error(
-			`Refusing to delete ${absoluteRootPath}; no twine.toml project manifest was found.`
-		);
-	}
-
-	stopProjectSession(absoluteRootPath);
-	await shell.trashItem(absoluteRootPath);
-	forgetProjectFolder(absoluteRootPath);
+	await commitProjectFolderDeletion(transaction.id);
 }
 
 async function ensureInitialProjectSessionBaseline(
@@ -9294,9 +11277,13 @@ export async function projectSessionSnapshot(
 		settleProjectAssetDigestRefresh(session, initialRefreshEpoch);
 	}
 
-	return readProjectSessionSnapshot(rootPath, session.baseline, {
-		storyIds: storyIds ?? session.baseline.storyIds
-	});
+	return readProjectSessionSnapshot(
+		rootPath,
+		session.baseline,
+		storyIds === undefined
+			? {stories: await readProjectStories(rootPath)}
+			: {storyIds}
+	);
 }
 
 export function projectSessionAssetReadBaselines(
@@ -9556,7 +11543,7 @@ export async function startProjectSession(
 
 	if (!session.interval) {
 		session.interval = setInterval(
-			() => void pollProjectSession(session, true),
+			() => pollProjectSessionInBackground(session, true),
 			session.watcherAvailable
 				? projectSessionReconcileMs
 				: projectSessionFallbackPollMs
@@ -9638,6 +11625,15 @@ export function stopProjectSession(rootPath: string) {
 		resolveWaiter();
 	}
 	session.assetDigestRefreshWaiters?.clear();
+	rejectProjectSessionReconcileWaiters(
+		session,
+		Object.assign(
+			new Error(
+				`Project session stopped during reconciliation for ${rootPath}.`
+			),
+			{code: projectSessionStartCanceledCode}
+		)
+	);
 	finishProjectSessionBaselineCapture(session);
 	projectSessions.delete(key);
 }
@@ -9776,7 +11772,7 @@ function scheduleProjectSessionReconciliation(session: ProjectSessionState) {
 
 	setTimeout(() => {
 		if (projectSessions.get(projectSessionKey(session.rootPath)) === session) {
-			void pollProjectSession(session, reconcile);
+			pollProjectSessionInBackground(session, reconcile);
 		}
 	}, 0);
 }
@@ -9787,6 +11783,7 @@ export async function resolveProjectSessionConflicts(
 	stories: Story[] = [],
 	deltaId?: string
 ) {
+	assertProjectLifecycleMutationAvailable(rootPath);
 	const session = ensureProjectSession(rootPath);
 	const resolved = deltaId
 		? session.resolvedCandidates.get(deltaId)

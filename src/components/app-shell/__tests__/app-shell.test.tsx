@@ -17,6 +17,7 @@ import {markProjectStoryHydration} from '../../../store/project-hydration';
 import {StoriesContext, Story} from '../../../store/stories';
 import {fakeStory} from '../../../test-util/fakes';
 import {waitForMockPromises} from '../../../test-util';
+import {workbenchBufferCoordinator} from '../../../util/workbench-buffer-coordinator';
 import {AppShell} from '../app-shell';
 import {useAppShellContext} from '../app-shell-context';
 
@@ -924,6 +925,31 @@ describe('AppShell', () => {
 			'page'
 		);
 		expect(screen.getAllByText('Settings').length).toBeGreaterThanOrEqual(1);
+	});
+
+	it('does not mark Workbench as current on the Preview route', async () => {
+		await renderShell(story, `/stories/${story.id}/preview?target=test`);
+
+		expect(screen.getByTitle('Workbench')).not.toHaveAttribute('aria-current');
+	});
+
+	it('keeps the current route when a dirty-buffer navigation flush fails', async () => {
+		const flush = jest
+			.spyOn(workbenchBufferCoordinator, 'flushAll')
+			.mockRejectedValue(new Error('final edit could not be saved'));
+
+		await renderShell(story);
+		fireEvent.click(screen.getByTitle('Stories'));
+
+		await waitFor(() => expect(flush).toHaveBeenCalled());
+		expect(screen.getByTitle('Workbench')).toHaveAttribute(
+			'aria-current',
+			'page'
+		);
+		expect(
+			await screen.findByTitle('final edit could not be saved')
+		).toHaveTextContent('Save');
+		flush.mockRestore();
 	});
 
 	it('reports persistence errors in the status bar', async () => {

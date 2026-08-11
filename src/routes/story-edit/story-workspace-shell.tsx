@@ -39,8 +39,6 @@ import type {CoreWorkbenchDockModel} from '../../core/bindings/CoreWorkbenchDock
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {CoreProjectHost} from '../../core/project-host';
 import type {TwineElectronWindow} from '../../electron/shared';
-import {useDialogsContext} from '../../dialogs/context';
-import {StorySearchDialog} from '../../dialogs/story-search';
 import {loadProjectMetadata} from '../../store/project-metadata';
 import {
 	markProjectStoryHydration,
@@ -48,6 +46,7 @@ import {
 } from '../../store/project-hydration';
 import {mergeProjectStories} from '../../store/merge-project-stories';
 import {
+	highlightPassages,
 	Passage,
 	PassageWithText,
 	Story,
@@ -67,22 +66,35 @@ import {
 	sourceNavigationTargetFromContentsEntry,
 	sourceTarget
 } from './source-navigation';
+import type {
+	StoryWorkbenchBottomDrawerPanel,
+	StoryWorkbenchExtensionContext,
+	StoryWorkbenchInspectorExtension
+} from './workbench-extensions';
 
 export interface StoryWorkspaceShellProps {
+	activeBottomDrawerPanelId?: string;
 	activeWindowId?: string;
 	bottomDrawerOpen: boolean;
+	bottomDrawerPanels?: readonly StoryWorkbenchBottomDrawerPanel[];
 	editorDockLayout: EditorDockLayout;
 	editorWindows?: EditorWindowSpec[];
 	graphPanel: React.ReactNode;
+	inspectorExtensions?: readonly StoryWorkbenchInspectorExtension[];
 	leftDockCollapsed: boolean;
 	mode: StoryEditMode;
 	onChangeBottomDrawerOpen: (value: boolean) => void;
+	onChangeBottomDrawerPanel?: (id: string) => void;
 	onChangeEditorDockLayout: (value: EditorDockLayout) => void;
 	onChangeLeftDockCollapsed: (value: boolean) => void;
 	onChangeRightDockCollapsed: (value: boolean) => void;
 	onCloseEditorWindow?: (spec: EditorWindowSpec) => void;
 	onFocusEditorWindow?: (id: string) => void;
 	onOpenEditorWindow?: (spec: EditorWindowSpec) => void;
+	onOpenFindReplace?: (
+		query: string,
+		options?: {includePassageNames?: boolean}
+	) => void;
 	onReorderEditorWindows?: (from: number, to: number) => void;
 	onRevealPassageInGraph: (passage: Passage) => void;
 	onSelectPassage: (passage: Passage) => void;
@@ -853,6 +865,8 @@ const OutlineItem: React.FC<{
 const Inspector: React.FC<{
 	assets: AssetManagerViewModel;
 	diagnostics: DiagnosticsViewModel;
+	extensionContext: StoryWorkbenchExtensionContext;
+	extensions: readonly StoryWorkbenchInspectorExtension[];
 	host: CoreProjectHost;
 	index: CoreStoryIndex;
 	onRevealPassageInGraph: (passage: Passage) => void;
@@ -864,6 +878,8 @@ const Inspector: React.FC<{
 	const {
 		assets,
 		diagnostics,
+		extensionContext,
+		extensions,
 		host,
 		index,
 		onRevealPassageInGraph,
@@ -1136,20 +1152,101 @@ const Inspector: React.FC<{
 					<dd>{assets.entries.length}</dd>
 				</dl>
 			</OutlineSection>
+			{extensions.map(extension => (
+				<section
+					className="story-edit-inspector-extension"
+					data-workbench-extension={extension.id}
+					key={extension.id}
+				>
+					{extension.render(extensionContext)}
+				</section>
+			))}
 		</div>
 	);
 };
 
+const LinksBottomDrawerContent: React.FC<{
+	onSelectPassage: (passage: Passage) => void;
+	selection: WorkbenchSelection;
+	story: Story;
+}> = ({onSelectPassage, selection, story}) => {
+	const {t} = useTranslation();
+	const links = selection.linkFacts;
+
+	return links.length > 0 ? (
+		<ul>
+			{links.map(link => {
+				const linkedPassage = link.targetId
+					? story.passages.find(passage => passage.id === link.targetId)
+					: undefined;
+
+				return (
+					<li key={`${link.sourceId}:${link.targetName}`}>
+						{linkedPassage ? (
+							<button
+								className="story-edit-link-chip"
+								onClick={() => onSelectPassage(linkedPassage)}
+								type="button"
+							>
+								{link.targetName}
+							</button>
+						) : (
+							<span className="story-edit-link-chip missing">
+								{link.targetName}
+							</span>
+						)}
+					</li>
+				);
+			})}
+		</ul>
+	) : (
+		<p>{t('routes.storyEdit.workspace.noLinks')}</p>
+	);
+};
+
 const BottomDrawer: React.FC<{
+	activePanelId: string;
+	extensionContext: StoryWorkbenchExtensionContext;
 	onChangeOpen: (value: boolean) => void;
+	onChangePanel?: (id: string) => void;
 	onSelectPassage: (passage: Passage) => void;
 	open: boolean;
+	panels: readonly StoryWorkbenchBottomDrawerPanel[];
 	selection: WorkbenchSelection;
 	story: Story;
 }> = props => {
-	const {onChangeOpen, onSelectPassage, open, selection, story} = props;
+	const {
+		activePanelId,
+		extensionContext,
+		onChangeOpen,
+		onChangePanel,
+		onSelectPassage,
+		open,
+		panels,
+		selection,
+		story
+	} = props;
 	const {t} = useTranslation();
-	const links = selection.linkFacts;
+	const allPanels = React.useMemo<StoryWorkbenchBottomDrawerPanel[]>(
+		() => [
+			{
+				icon: 'link',
+				id: 'links',
+				render: () => (
+					<LinksBottomDrawerContent
+						onSelectPassage={onSelectPassage}
+						selection={selection}
+						story={story}
+					/>
+				),
+				title: t('routes.storyEdit.workspace.bottomDrawer')
+			},
+			...panels
+		],
+		[onSelectPassage, panels, selection, story, t]
+	);
+	const activePanel =
+		allPanels.find(panel => panel.id === activePanelId) ?? allPanels[0];
 
 	if (!open) {
 		return null;
@@ -1162,47 +1259,44 @@ const BottomDrawer: React.FC<{
 		>
 			<Panel
 				actions={
-					<IconButton
-						icon="chevron-down"
-						label={t('routes.storyEdit.workspace.closeBottomDrawer')}
-						onClick={() => onChangeOpen(false)}
-						size="sm"
-					/>
+					<>
+						{allPanels.length > 1 && (
+							<span
+								aria-label="Workbench bottom panels"
+								className="story-edit-bottom-drawer-tabs"
+								role="tablist"
+							>
+								{allPanels.map(panel => (
+									<Button
+										aria-selected={panel.id === activePanel.id}
+										icon={panel.icon}
+										key={panel.id}
+										onClick={() => onChangePanel?.(panel.id)}
+										role="tab"
+										size="sm"
+										variant={panel.id === activePanel.id ? 'default' : 'ghost'}
+									>
+										{panel.title}
+									</Button>
+								))}
+							</span>
+						)}
+						<IconButton
+							icon="chevron-down"
+							label={t('routes.storyEdit.workspace.closeBottomDrawer')}
+							onClick={() => onChangeOpen(false)}
+							size="sm"
+						/>
+					</>
 				}
 				bodyClassName="story-edit-bottom-drawer-content"
 				flush
-				icon="link"
-				title={t('routes.storyEdit.workspace.bottomDrawer')}
+				icon={activePanel.icon}
+				title={activePanel.title}
 			>
-				{links.length > 0 ? (
-					<ul>
-						{links.map(link => {
-							const linkedPassage = link.targetId
-								? story.passages.find(passage => passage.id === link.targetId)
-								: undefined;
-
-							return (
-								<li key={`${link.sourceId}:${link.targetName}`}>
-									{linkedPassage ? (
-										<button
-											className="story-edit-link-chip"
-											onClick={() => onSelectPassage(linkedPassage)}
-											type="button"
-										>
-											{link.targetName}
-										</button>
-									) : (
-										<span className="story-edit-link-chip missing">
-											{link.targetName}
-										</span>
-									)}
-								</li>
-							);
-						})}
-					</ul>
-				) : (
-					<p>{t('routes.storyEdit.workspace.noLinks')}</p>
-				)}
+				<div data-workbench-panel={activePanel.id} role="tabpanel">
+					{activePanel.render(extensionContext)}
+				</div>
 			</Panel>
 		</section>
 	);
@@ -1212,20 +1306,25 @@ export const StoryWorkspaceShell: React.FC<
 	StoryWorkspaceShellProps
 > = props => {
 	const {
+		activeBottomDrawerPanelId = 'links',
 		activeWindowId,
 		bottomDrawerOpen,
+		bottomDrawerPanels = [],
 		editorDockLayout,
 		editorWindows,
 		graphPanel,
+		inspectorExtensions = [],
 		leftDockCollapsed,
 		mode,
 		onChangeBottomDrawerOpen,
+		onChangeBottomDrawerPanel,
 		onChangeEditorDockLayout,
 		onChangeLeftDockCollapsed,
 		onChangeRightDockCollapsed,
 		onCloseEditorWindow,
 		onFocusEditorWindow,
 		onOpenEditorWindow,
+		onOpenFindReplace,
 		onReorderEditorWindows,
 		onRevealPassageInGraph,
 		onSelectPassage,
@@ -1244,6 +1343,19 @@ export const StoryWorkspaceShell: React.FC<
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
 	const hydratingStories = React.useRef(new Set<string>());
 	const storiesRef = React.useRef(stories);
+	storiesRef.current = stories;
+	const highlightExtensionPassages = React.useCallback(
+		(passageIds: string[]) => {
+			const currentStory = storiesRef.current.find(
+				candidate => candidate.id === story.id
+			);
+
+			if (currentStory) {
+				storiesDispatch(highlightPassages(currentStory, passageIds));
+			}
+		},
+		[storiesDispatch, story.id]
+	);
 	const hydration = useProjectStoryHydration(story.id);
 	const projectMetadata = React.useMemo(
 		() => loadProjectMetadata(story.id),
@@ -1278,10 +1390,6 @@ export const StoryWorkspaceShell: React.FC<
 		passageTextLoaded,
 		story.passages.length
 	]);
-
-	React.useEffect(() => {
-		storiesRef.current = stories;
-	}, [stories]);
 
 	React.useEffect(() => {
 		if (passageTextLoaded) {
@@ -1614,6 +1722,28 @@ export const StoryWorkspaceShell: React.FC<
 			),
 		[backlinkPage, passageFacts, selectedPassageId, story]
 	);
+	const extensionContext = React.useMemo<StoryWorkbenchExtensionContext>(
+		() => ({
+			host: coreProjectHost,
+			onHighlightPassages: highlightExtensionPassages,
+			onRevealPassageInGraph,
+			onSelectPassage,
+			onTestPassage,
+			selection,
+			onOpenEditorWindow,
+			story
+		}),
+		[
+			coreProjectHost,
+			highlightExtensionPassages,
+			onOpenEditorWindow,
+			onRevealPassageInGraph,
+			onSelectPassage,
+			onTestPassage,
+			selection,
+			story
+		]
+	);
 	const passage = selection.passage;
 	// The dock's open buffers. `undefined` follows the current selection so
 	// selecting a passage in Split/Text mode shows it without an explicit open.
@@ -1656,27 +1786,13 @@ export const StoryWorkspaceShell: React.FC<
 			),
 		[backlinkPage, dockWindows, passageFacts, selection.passage?.id, story]
 	);
-	const {dispatch: dialogsDispatch} = useDialogsContext();
 	const {t} = useTranslation();
 	const showGraph = mode === 'graph' || mode === 'split';
 	const showText = mode === 'text' || mode === 'split';
 
 	function handleOpenContentsSource(entry: ContentsViewModelEntry) {
 		if (entry.core.kind === 'variable') {
-			dialogsDispatch({
-				type: 'addDialog',
-				component: StorySearchDialog,
-				props: {
-					find: entry.label,
-					flags: {
-						includePassageNames: false,
-						matchCase: false,
-						useRegexes: false
-					},
-					replace: '',
-					storyId: story.id
-				}
-			});
+			onOpenFindReplace?.(entry.label, {includePassageNames: false});
 			return;
 		}
 
@@ -1832,6 +1948,8 @@ export const StoryWorkspaceShell: React.FC<
 					<Inspector
 						assets={assets}
 						diagnostics={diagnostics}
+						extensionContext={extensionContext}
+						extensions={inspectorExtensions}
 						host={coreProjectHost}
 						index={index}
 						onRevealPassageInGraph={onRevealPassageInGraph}
@@ -1843,9 +1961,13 @@ export const StoryWorkspaceShell: React.FC<
 				</DockPanel>
 			</aside>
 			<BottomDrawer
+				activePanelId={activeBottomDrawerPanelId}
+				extensionContext={extensionContext}
 				onChangeOpen={onChangeBottomDrawerOpen}
+				onChangePanel={onChangeBottomDrawerPanel}
 				onSelectPassage={onSelectPassage}
 				open={bottomDrawerOpen}
+				panels={bottomDrawerPanels}
 				selection={selection}
 				story={story}
 			/>

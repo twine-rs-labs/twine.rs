@@ -1,45 +1,32 @@
-import {act, fireEvent, render, screen} from '@testing-library/react';
+import {fireEvent, render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {MemoryRouter} from 'react-router';
-import {useStoriesContext} from '../../../../store/stories';
 import {FakeStateProvider, FakeStateProviderProps} from '../../../../test-util';
 import {FindReplaceButton} from '../find-replace-button';
 
-const TestFindReplaceButton: React.FC = () => {
-	const {stories} = useStoriesContext();
-
-	return <FindReplaceButton story={stories[0]} />;
+const TestFindReplaceButton: React.FC<{onOpen: () => void}> = ({onOpen}) => {
+	return <FindReplaceButton onOpenWorkbenchPanel={onOpen} />;
 };
 
 describe('<FindReplaceButton>', () => {
-	afterEach(async () => await act(() => Promise.resolve()));
-
 	function renderComponent(contexts?: FakeStateProviderProps) {
-		return render(
-			<MemoryRouter>
-				<FakeStateProvider {...contexts}>
-					<TestFindReplaceButton />
-				</FakeStateProvider>
-			</MemoryRouter>
+		const onOpen = jest.fn();
+		const result = render(
+			<FakeStateProvider {...contexts}>
+				<TestFindReplaceButton onOpen={onOpen} />
+			</FakeStateProvider>
 		);
+		return {...result, onOpen};
 	}
 
-	it('opens the find/replace dialog when clicked', async () => {
-		renderComponent();
+	it('opens the find/replace workbench panel when clicked', () => {
+		const {onOpen} = renderComponent();
 		fireEvent.click(
 			screen.getByRole('button', {
 				name: 'routes.storyEdit.toolbar.findAndReplace'
 			})
 		);
-		expect(screen.getByText('dialogs.storySearch.title')).toBeInTheDocument();
-		fireEvent.change(
-			screen.getByRole('textbox', {name: 'dialogs.storySearch.find'}),
-			{target: {value: 'needle-that-is-not-present'}}
-		);
-		expect(
-			await screen.findByText('dialogs.storySearch.noMatches')
-		).toBeInTheDocument();
+		expect(onOpen).toHaveBeenCalledWith('find-replace');
 	});
 
 	it('is accessible', async () => {

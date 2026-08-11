@@ -1,6 +1,4 @@
 import * as React from 'react';
-import {useDialogsContext} from '../../dialogs';
-import {usePrefsContext} from '../../store/prefs';
 import {Story} from '../../store/stories';
 import {Point} from '../../util/geometry';
 
@@ -8,9 +6,6 @@ export function useViewCenter(
 	story: Story,
 	elementRef: React.RefObject<HTMLElement | null>
 ) {
-	const {dialogs} = useDialogsContext();
-	const {prefs} = usePrefsContext();
-
 	const getCenter = React.useCallback(() => {
 		if (!elementRef.current) {
 			throw new Error(
@@ -42,13 +37,9 @@ export function useViewCenter(
 				top: (top - height / story.zoom / 2) * story.zoom
 			};
 
-			if (dialogs.length > 0) {
-				scroll.left += prefs.dialogWidth / 2;
-			}
-
 			elementRef.current.scrollTo(scroll);
 		},
-		[dialogs.length, elementRef, prefs.dialogWidth, story.zoom]
+		[elementRef, story.zoom]
 	);
 
 	return {getCenter, setCenter};

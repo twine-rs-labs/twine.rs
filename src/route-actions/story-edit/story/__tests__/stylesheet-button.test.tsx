@@ -1,33 +1,30 @@
 import {fireEvent, render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {useStoriesContext} from '../../../../store/stories';
 import {FakeStateProvider, FakeStateProviderProps} from '../../../../test-util';
 import {StylesheetButton} from '../stylesheet-button';
 
-const TestStylesheetButton: React.FC = () => {
-	const {stories} = useStoriesContext();
-
-	return <StylesheetButton story={stories[0]} />;
+const TestStylesheetButton: React.FC<{onOpen: () => void}> = ({onOpen}) => {
+	return <StylesheetButton onOpenEditorWindow={onOpen} />;
 };
 
 describe('<StylesheetButton>', () => {
 	function renderComponent(contexts?: FakeStateProviderProps) {
-		return render(
+		const onOpen = jest.fn();
+		const result = render(
 			<FakeStateProvider {...contexts}>
-				<TestStylesheetButton />
+				<TestStylesheetButton onOpen={onOpen} />
 			</FakeStateProvider>
 		);
+		return {...result, onOpen};
 	}
 
-	it('opens the stylesheet dialog when clicked', () => {
-		renderComponent();
+	it('opens the stylesheet editor buffer when clicked', () => {
+		const {onOpen} = renderComponent();
 		fireEvent.click(
 			screen.getByRole('button', {name: 'routes.storyEdit.toolbar.stylesheet'})
 		);
-		expect(
-			screen.getByText('dialogs.storyStylesheet.title')
-		).toBeInTheDocument();
+		expect(onOpen).toHaveBeenCalledTimes(1);
 	});
 
 	it('is accessible', async () => {

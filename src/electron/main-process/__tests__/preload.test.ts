@@ -113,4 +113,131 @@ describe('desktop authoring preload', () => {
 		jest.clearAllTimers();
 		jest.useRealTimers();
 	});
+
+	it('exposes project-capability reconciliation only to the performance harness', async () => {
+		jest.resetModules();
+		jest.clearAllMocks();
+		jest.useFakeTimers();
+		jest.doMock('electron');
+		Object.defineProperty(process, 'isMainFrame', {
+			configurable: true,
+			value: true
+		});
+		const previousPerformance = process.env.TWINE_PERF;
+		process.env.TWINE_PERF = '1';
+		const electron = await import('electron');
+		(electron.ipcRenderer.invoke as jest.Mock).mockImplementation(
+			async (channel: string) => {
+				if (channel === 'open-project-folder') {
+					return {
+						__twineProjectCapability: 'capability-1',
+						rootPath: '/mock/project',
+						stories: [],
+						storyIds: []
+					};
+				}
+			}
+		);
+
+		try {
+			await import('../preload');
+			const [, electronBridge] = (
+				electron.contextBridge.exposeInMainWorld as jest.Mock
+			).mock.calls.find(([name]) => name === 'twineElectron') as [
+				string,
+				NonNullable<TwineElectronWindow['twineElectron']>
+			];
+			const [, performanceBridge] = (
+				electron.contextBridge.exposeInMainWorld as jest.Mock
+			).mock.calls.find(([name]) => name === 'twinePerformanceNative') as [
+				string,
+				NonNullable<TwineElectronWindow['twinePerformanceNative']>
+			];
+
+			await electronBridge.openProjectFolder();
+			await performanceBridge.reconcileProjectSession('/mock/project');
+			expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+				'performance-harness-reconcile-project-session',
+				'capability-1'
+			);
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+			if (previousPerformance === undefined) {
+				delete process.env.TWINE_PERF;
+			} else {
+				process.env.TWINE_PERF = previousPerformance;
+			}
+		}
+	});
+
+	it('tracks lifecycle transactions and drops project access after deletion commit', async () => {
+		jest.resetModules();
+		jest.clearAllMocks();
+		jest.useFakeTimers();
+		jest.doMock('electron');
+		Object.defineProperty(process, 'isMainFrame', {
+			configurable: true,
+			value: true
+		});
+		const electron = await import('electron');
+
+		(electron.ipcRenderer.invoke as jest.Mock).mockImplementation(
+			async (channel: string) => {
+				if (channel === 'open-project-folder') {
+					return {
+						__twineProjectCapability: 'capability-1',
+						rootPath: '/mock/project',
+						stories: [],
+						storyIds: []
+					};
+				}
+				if (channel === 'begin-project-replacement') {
+					return {
+						id: 'replacement-1',
+						project: {
+							__twineProjectCapability: 'capability-2',
+							rootPath: '/mock/project',
+							stories: [],
+							storyIds: []
+						}
+					};
+				}
+				if (channel === 'begin-project-folder-deletion') {
+					return {id: 'deletion-1', rootPath: '/mock/project'};
+				}
+			}
+		);
+
+		await import('../preload');
+		const [, api] = (
+			electron.contextBridge.exposeInMainWorld as jest.Mock
+		).mock.calls.find(([name]) => name === 'twineElectron') as [
+			string,
+			NonNullable<TwineElectronWindow['twineElectron']>
+		];
+
+		await api.openProjectFolder();
+		const replacement = await api.beginProjectReplacement('/mock/project', []);
+
+		expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(
+			'begin-project-replacement',
+			'capability-1',
+			[],
+			undefined
+		);
+		await api.commitProjectReplacements([replacement.id]);
+		const deletion = await api.beginProjectFolderDeletion('/mock/project');
+
+		expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(
+			'begin-project-folder-deletion',
+			'capability-2'
+		);
+		await api.commitProjectFolderDeletion(deletion.id);
+		expect(() => api.listProjectAssets('/mock/project')).toThrow(
+			'not granted by the main process'
+		);
+		jest.clearAllTimers();
+		jest.useRealTimers();
+	});
 });

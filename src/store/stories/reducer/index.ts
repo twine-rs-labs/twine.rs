@@ -19,6 +19,12 @@ export const reducer: React.Reducer<StoriesState, StoriesAction> = (
 		case 'applyCorePatchBatch':
 			return action.actions.reduce(reducer, state);
 
+		case 'retireProjectStories': {
+			const retiredIds = new Set(action.storyIds);
+
+			return state.filter(story => !retiredIds.has(story.id));
+		}
+
 		case 'createPassage':
 			return createPassage(state, action.storyId, action.props);
 

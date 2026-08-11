@@ -203,7 +203,7 @@ describe('stories Electron IPC save middleware', () => {
 		expect(saveStoryMock).toHaveBeenCalledTimes(2);
 	});
 
-	it('coalesces queued session saves to the latest work', async () => {
+	it('persists every queued session save in order', async () => {
 		let finishFirstSave: () => void = () => {};
 
 		saveStoryMock
@@ -213,14 +213,44 @@ describe('stories Electron IPC save middleware', () => {
 				})
 			)
 			.mockResolvedValue(undefined);
-		const saves = [1, 2, 3].map(revision =>
+		const story = storiesState[0];
+		const documentUpdates = [
+			{
+				passageId: story.passages[0].id,
+				storyId: story.id,
+				text: 'first passage',
+				type: 'passageText' as const
+			},
+			{
+				passageId: story.passages[1].id,
+				storyId: story.id,
+				text: 'second passage',
+				type: 'passageText' as const
+			},
+			{
+				storyId: story.id,
+				text: 'story script',
+				type: 'script' as const
+			}
+		];
+		const saves = documentUpdates.map((documentUpdate, index) =>
 			saveMiddleware(
 				storiesState,
 				{
 					actions: [],
-					revision,
+					documentUpdates: [documentUpdate],
+					persistenceHints: [
+						documentUpdate.type === 'passageText'
+							? {
+									passageId: documentUpdate.passageId,
+									storyId: story.id,
+									type: 'passageText' as const
+								}
+							: {storyId: story.id, type: 'script' as const}
+					],
+					revision: index + 1,
 					sessionId: 'session-1',
-					storyIds: [storiesState[0].id],
+					storyIds: [story.id],
 					type: 'applyCorePatchBatch'
 				},
 				formatsState
@@ -234,7 +264,10 @@ describe('stories Electron IPC save middleware', () => {
 				typeof save === 'object' ? save.completion : undefined
 			)
 		);
-		expect(saveStoryMock).toHaveBeenCalledTimes(2);
+		expect(saveStoryMock).toHaveBeenCalledTimes(3);
+		expect(
+			saveStoryMock.mock.calls.map(([, , options]) => options.documentUpdates)
+		).toEqual(documentUpdates.map(update => [update]));
 	});
 
 	it.each([

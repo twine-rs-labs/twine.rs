@@ -19,6 +19,8 @@ import {
 import {usePrefsContext} from './prefs';
 import {useComputedTheme} from './prefs/use-computed-theme';
 import type {StoryBuildPackage} from '../util/build-package';
+import {storyPreviewRoutePath} from '../routes/story-preview/story-preview-route-path';
+import {workbenchBufferCoordinator} from '../util/workbench-buffer-coordinator';
 
 export interface UseStoryLaunchProps {
 	playStory: (storyId: string) => Promise<void>;
@@ -55,6 +57,29 @@ function previewAssetRequests(
 		: [];
 }
 
+async function openBrowserPreviewAfterFlush(storyId: string, path: string) {
+	// Reserve the tab synchronously while the click still carries browser user
+	// activation, but keep it inert until every editor buffer has durably reached
+	// the bound project session. Loading the application root here would let the
+	// new tab snapshot stale persisted state before the flush completes.
+	const previewWindow = window.open('about:blank', '_blank');
+
+	if (!previewWindow) {
+		throw new Error(
+			'The browser blocked the preview window. Allow popups and try again.'
+		);
+	}
+	try {
+		await workbenchBufferCoordinator.flushStory(storyId);
+		previewWindow.location.replace(
+			new URL(`#${path}`, window.location.href).href
+		);
+	} catch (error) {
+		previewWindow.close();
+		throw error;
+	}
+}
+
 async function refreshedProjectAssets(
 	storyId: string,
 	twineElectron: TwineElectronBridge
@@ -77,7 +102,7 @@ async function refreshedProjectAssets(
 
 	try {
 		const snapshot = twineElectron.projectSessionSnapshot
-			? await twineElectron.projectSessionSnapshot(projectRoot)
+			? await twineElectron.projectSessionSnapshot(projectRoot, [storyId])
 			: undefined;
 
 		inventory =
@@ -127,6 +152,7 @@ export function useNativeStoryPreviewPreparation() {
 			if (!twineElectron) {
 				throw new Error('Electron bridge is not present on window.');
 			}
+			await workbenchBufferCoordinator.flushStory(storyId);
 
 			const {assetInventory, projectRoot} = await refreshedProjectAssets(
 				storyId,
@@ -249,21 +275,20 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 	}
 
 	const playStoryWithBuild = async (storyId: string) => {
-		window.open(`#/stories/${storyId}/play`, '_blank');
+		await openBrowserPreviewAfterFlush(
+			storyId,
+			storyPreviewRoutePath(storyId, 'play')
+		);
 		return undefined;
 	};
 	const proofStoryWithBuild = async (
 		storyId: string,
 		proofingFormat?: ProofingFormatSelection
 	) => {
-		const query = proofingFormat
-			? `?${new URLSearchParams({
-					proofingFormatName: proofingFormat.name,
-					proofingFormatVersion: proofingFormat.version
-				}).toString()}`
-			: '';
-
-		window.open(`#/stories/${storyId}/proof${query}`, '_blank');
+		await openBrowserPreviewAfterFlush(
+			storyId,
+			storyPreviewRoutePath(storyId, 'proof', {proofingFormat})
+		);
 		return undefined;
 	};
 
@@ -277,11 +302,11 @@ export function useStoryLaunch(): UseStoryLaunchProps {
 		},
 		proofStoryWithBuild,
 		testStory: async (storyId, startPassageId) => {
-			window.open(
-				startPassageId
-					? `#/stories/${storyId}/test/${startPassageId}`
-					: `#/stories/${storyId}/test`,
-				'_blank'
+			await openBrowserPreviewAfterFlush(
+				storyId,
+				storyPreviewRoutePath(storyId, 'test', {
+					passageId: startPassageId
+				})
 			);
 		}
 	};

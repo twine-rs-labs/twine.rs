@@ -1704,6 +1704,15 @@ button.story-edit-outline-item:focus-visible {
 	padding: var(--sp-4);
 }
 
+.story-edit-bottom-drawer-tabs {
+	display: flex;
+	gap: 2px;
+}
+
+.story-edit-inspector-extension {
+	border-top: 1px solid var(--line-1);
+}
+
 .story-edit-bottom-drawer-content ul {
 	display: flex;
 	flex-wrap: wrap;

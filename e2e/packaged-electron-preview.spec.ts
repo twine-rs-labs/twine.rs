@@ -30,6 +30,9 @@ interface PreviewTestWindow extends Window {
 	twinePerformance?: {
 		snapshot(): Promise<unknown>;
 	};
+	twinePerformanceNative?: {
+		reconcileProjectSession(rootPath: string): Promise<unknown>;
+	};
 	twineElectron?: {
 		hydrateProjectFolder(rootPath: string): Promise<{
 			stories: Array<{
@@ -326,7 +329,7 @@ async function replaceEditorText(
 	const editor = sourceEditor(page, passageName);
 
 	await expect(editor).toBeVisible();
-	await editor.locator('.cm-content').click();
+	await editor.locator('.cm-content').focus();
 	await page.keyboard.press(
 		process.platform === 'darwin' ? 'Meta+A' : 'Control+A'
 	);
@@ -431,12 +434,51 @@ const projectSaveDiagnosticFileLimit = 80;
 const projectSaveDiagnosticFilePreviewBytes = 8 * 1024;
 const projectSaveDiagnosticTotalPreviewBytes = 64 * 1024;
 const projectSaveDiagnosticTimeoutMs = 5_000;
+const projectSessionReviewStabilityMs = 2_500;
 
 function projectSaveDiagnosticError(error: unknown) {
 	return {
 		message: error instanceof Error ? error.message : String(error),
 		stack: error instanceof Error ? error.stack : undefined
 	};
+}
+
+async function expectNoProjectSessionReview(page: Page) {
+	const reviewText = await page.evaluate(async stabilityMs => {
+		const currentReview = () =>
+			document.querySelector<HTMLElement>('.project-session-sync');
+		const initialReview = currentReview();
+
+		if (initialReview) {
+			return initialReview.textContent?.trim() ?? '';
+		}
+
+		return new Promise<string | undefined>(resolve => {
+			const observer = new MutationObserver(() => {
+				const review = currentReview();
+
+				if (review) {
+					window.clearTimeout(timeout);
+					observer.disconnect();
+					resolve(review.textContent?.trim() ?? '');
+				}
+			});
+			const timeout = window.setTimeout(() => {
+				observer.disconnect();
+				resolve(undefined);
+			}, stabilityMs);
+
+			observer.observe(document.documentElement, {
+				childList: true,
+				subtree: true
+			});
+		});
+	}, projectSessionReviewStabilityMs);
+
+	expect(
+		reviewText,
+		'A project session review appeared after the native save completed.'
+	).toBeUndefined();
 }
 
 async function withProjectSaveDiagnosticTimeout<T>(
@@ -621,6 +663,9 @@ async function rendererProjectSaveDiagnostics(page: Page) {
 		const saveStatus = document.querySelector<HTMLElement>(
 			'.app-shell__status-save'
 		);
+		const projectSessionReviews = Array.from(
+			document.querySelectorAll<HTMLElement>('.project-session-sync')
+		);
 		const performanceHarness = (window as PreviewTestWindow).twinePerformance;
 		let performanceSnapshot:
 			| {
@@ -652,7 +697,7 @@ async function rendererProjectSaveDiagnostics(page: Page) {
 									? event.name
 									: '';
 
-							return /baseline|patch|persist|save/i.test(name);
+							return /baseline|patch|persist|save|session|watcher/i.test(name);
 						})
 						.slice(-100)
 				};
@@ -667,6 +712,12 @@ async function rendererProjectSaveDiagnostics(page: Page) {
 			location: window.location.href,
 			performance: performanceSnapshot ?? {
 				error: 'Performance harness is unavailable.'
+			},
+			projectSessionReviews: {
+				count: projectSessionReviews.length,
+				text: projectSessionReviews.map(
+					review => review.textContent?.trim() ?? ''
+				)
 			},
 			saveStatus: saveStatus
 				? {
@@ -753,6 +804,21 @@ async function waitForSavedText(
 				{timeout: 30_000}
 			)
 			.toContain(expected);
+		await expect(running.page.locator('.app-shell__status-save')).toHaveText(
+			'Saved',
+			{timeout: 30_000}
+		);
+		await running.page.evaluate(async rootPath => {
+			const native = (window as PreviewTestWindow).twinePerformanceNative;
+
+			if (!native) {
+				throw new Error('Performance reconciliation bridge is unavailable.');
+			}
+			await native.reconcileProjectSession(rootPath);
+		}, projectRoot);
+		// Continuously cover two 1,250 ms fallback-poll intervals so a delayed
+		// self-write review cannot remain hidden by keyboard focus.
+		await expectNoProjectSessionReview(running.page);
 	} catch (error) {
 		try {
 			await attachProjectSaveDiagnostics(
@@ -917,6 +983,12 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		const projectRoot = await projectRootFromRenderer(page);
 
 		await createPassage(page, 'Next', 'Next passage version one.');
+		await waitForSavedText(
+			running,
+			projectRoot,
+			'Next passage version one.',
+			testInfo
+		);
 		await selectPassage(page, 'Start');
 		await replaceEditorText(
 			page,
@@ -1113,14 +1185,19 @@ test('Test From Here preserves the saved start and Proof uses Paperthin in the m
 			name: 'Managed Test And Proof',
 			startPassage: 'Saved Start'
 		});
+		const projectRoot = await projectRootFromRenderer(page);
 		await replaceEditorText(page, 'The saved start must remain unchanged.');
+		await waitForSavedText(
+			running,
+			projectRoot,
+			'The saved start must remain unchanged.',
+			testInfo
+		);
 		await createPassage(
 			page,
 			'Nonstart',
 			'This is the passage-specific debug launch.'
 		);
-		const projectRoot = await projectRootFromRenderer(page);
-
 		await waitForSavedText(
 			running,
 			projectRoot,
@@ -1193,7 +1270,7 @@ test('Test From Here preserves the saved start and Proof uses Paperthin in the m
 	}
 });
 
-test('copied assets, storage, package origins, cleanup, and protocol lifetime stay isolated', async () => {
+test('copied assets, storage, package origins, cleanup, and protocol lifetime stay isolated', async ({}, testInfo) => {
 	test.setTimeout(8 * 60 * 1000);
 	const executablePath = await packagedExecutable();
 	let running: RunningApp | undefined;
@@ -1256,10 +1333,11 @@ test('copied assets, storage, package origins, cleanup, and protocol lifetime st
 			.getByRole('group', {name: 'Workspace Mode'})
 			.getByRole('tab', {name: 'Text'})
 			.click();
+		const projectOneMarker = 'Asset preview one.';
 		await replaceEditorText(
 			page,
 			[
-				'<p class="asset-marker">Asset preview one.</p>',
+				`<p class="asset-marker">${projectOneMarker}</p>`,
 				'<img id="hero" src="./assets/hero.svg?cache=1">',
 				'<img id="encoded" src="assets/back%20drop.svg?cache=1">',
 				'<img id="root-relative" src="/assets/poster.svg">',
@@ -1269,6 +1347,7 @@ test('copied assets, storage, package origins, cleanup, and protocol lifetime st
 				'<a id="payload" href="assets/payload.json">payload</a>'
 			].join('\n')
 		);
+		await waitForSavedText(running, projectOneRoot, projectOneMarker, testInfo);
 		const previewOne = await launchPreview(running, () =>
 			page.getByTitle('Play').click()
 		);
@@ -1424,14 +1503,17 @@ test('copied assets, storage, package origins, cleanup, and protocol lifetime st
 			.getByRole('group', {name: 'Workspace Mode'})
 			.getByRole('tab', {name: 'Text'})
 			.click();
+		const projectTwoMarker = 'Asset preview two.';
 		await replaceEditorText(
 			page,
 			[
-				'<p>Asset preview two.</p>',
+				`<p>${projectTwoMarker}</p>`,
 				'<img id="hero" src="assets/hero.svg">',
 				'<a href="assets/payload.json">payload</a>'
 			].join('\n')
 		);
+		const projectTwoRoot = await projectRootFromRenderer(page);
+		await waitForSavedText(running, projectTwoRoot, projectTwoMarker, testInfo);
 		const previewTwo = await launchPreview(running, () =>
 			page.getByTitle('Play').click()
 		);

@@ -1,9 +1,7 @@
 import {faker} from '@faker-js/faker';
 import {renderHook} from '@testing-library/react';
-import * as React from 'react';
-import {DialogsContext} from '../../../dialogs';
 import {Story} from '../../../store/stories';
-import {FakeStateProvider, fakeStory} from '../../../test-util';
+import {fakeStory} from '../../../test-util';
 import {useViewCenter} from '../use-view-center';
 
 describe('useViewCenter', () => {
@@ -59,46 +57,6 @@ describe('useViewCenter', () => {
 				[
 					{
 						left: (left - 200 / story.zoom / 2) * story.zoom,
-						top: (top - 100 / story.zoom / 2) * story.zoom
-					}
-				]
-			]);
-		});
-
-		it('adjusts the center if dialogs are open', () => {
-			const dialogWidth = faker.number.int();
-			const {result} = renderHook(
-				() => useViewCenter(story, {current: el as any}),
-				{
-					wrapper: ({children}) => (
-						<FakeStateProvider prefs={{dialogWidth}}>
-							<DialogsContext.Provider
-								value={{
-									dispatch: jest.fn(),
-									dialogs: [
-										{
-											collapsed: false,
-											component: () => null,
-											highlighted: false,
-											maximized: false
-										}
-									]
-								}}
-							>
-								{children}
-							</DialogsContext.Provider>
-						</FakeStateProvider>
-					)
-				}
-			);
-			const left = faker.number.int();
-			const top = faker.number.int();
-
-			result.current.setCenter({left, top});
-			expect(el.scrollTo.mock.calls).toEqual([
-				[
-					{
-						left: (left - 200 / story.zoom / 2) * story.zoom + dialogWidth / 2,
 						top: (top - 100 / story.zoom / 2) * story.zoom
 					}
 				]
