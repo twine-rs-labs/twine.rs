@@ -132,9 +132,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git/db
-          key: cargo-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-deps-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            cargo-deps-${{ runner.os }}-${{ runner.arch }}-
+            cargo-deps-${{ runner.os }}-
       - name: Restore pinned wasm-bindgen CLI
         id: wasm-bindgen-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

@@ -6,6 +6,8 @@ on:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
   push:
+    branches:
+      - '**'
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'

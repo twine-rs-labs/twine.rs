@@ -91,8 +91,9 @@ test('quality CI enforces JavaScript, documentation, and Rust contracts', () => 
 	);
 	assert.match(
 		job(source, 'rust'),
-		/cargo-deps-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ hashFiles\('Cargo\.lock'\) \}\}/
+		/cargo-deps-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\('Cargo\.lock'\) \}\}/
 	);
+	assert.doesNotMatch(job(source, 'rust'), /cargo-deps-.*runner\.arch/);
 	assert.equal((source.match(/restore-keys:/g) ?? []).length, 1);
 });
 
@@ -159,7 +160,7 @@ test('packaged CI retains complete native evidence', () => {
 		'electron_config_cache',
 		'ELECTRON_BUILDER_CACHE',
 		'wasm-bindgen-cli-${{ runner.os }}-${{ runner.arch }}-0.2.125',
-		"cargo-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}",
+		"cargo-deps-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}",
 		'electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-tool-versions.outputs.electron }}',
 		'electron-builder-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-tool-versions.outputs.electron_builder }}'
 	]) {
@@ -437,8 +438,9 @@ test('pre-tag candidate binds exact main and builds the distributable matrix', (
 	assert.match(source, /electron_config_cache=\$RUNNER_TEMP\/electron-cache/);
 	assert.match(
 		source,
-		/cargo-deps-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-\$\{\{ hashFiles\('Cargo\.lock'\) \}\}/
+		/cargo-deps-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\('Cargo\.lock'\) \}\}/
 	);
+	assert.doesNotMatch(source, /cargo-deps-.*runner\.arch/);
 	assert.equal((source.match(/restore-keys:/g) ?? []).length, 1);
 	assert.doesNotMatch(source, /electron-downloads-/);
 	assert.doesNotMatch(
@@ -476,6 +478,8 @@ test('CI cache tool versions are derived from package-lock.json', () => {
 test('RustSec audit caches and verifies the pinned cargo-audit binary', () => {
 	const source = workflow('rust-security-audit.yml');
 
+	assert.match(source, /push:\n    branches:\n      - '\*\*'\n    paths:/);
+	assert.doesNotMatch(source, /\n    tags:/);
 	assert.match(
 		source,
 		/cargo-audit-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-0\.22\.2/

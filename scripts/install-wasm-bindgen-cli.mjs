@@ -34,13 +34,23 @@ const releaseAssets = {
 	}
 };
 
-async function downloadRelease(fetchImpl, release) {
+export async function downloadRelease(
+	fetchImpl,
+	release,
+	{delayImpl = delay} = {}
+) {
 	let failure;
 
 	for (let attempt = 1; attempt <= 3; attempt += 1) {
-		try {
-			const response = await fetchImpl(release.url);
+		let response;
 
+		try {
+			response = await fetchImpl(release.url);
+		} catch (error) {
+			failure = error;
+		}
+
+		if (response) {
 			if (response.ok) {
 				return response;
 			}
@@ -48,15 +58,17 @@ async function downloadRelease(fetchImpl, release) {
 			failure = new Error(
 				`Downloading ${release.name} failed with HTTP ${response.status}.`
 			);
-			if (response.status < 500 && response.status !== 429) {
+			if (
+				response.status >= 400 &&
+				response.status < 500 &&
+				response.status !== 429
+			) {
 				throw failure;
 			}
-		} catch (error) {
-			failure = error;
 		}
 
 		if (attempt < 3) {
-			await delay(attempt * 2_000);
+			await delayImpl(attempt * 2_000);
 		}
 	}
 
