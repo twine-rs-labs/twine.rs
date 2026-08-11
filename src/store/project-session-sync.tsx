@@ -33,6 +33,11 @@ interface PendingProjectReview {
 	rootPath: string;
 }
 
+interface ReviewOrder {
+	order: number;
+	rootPath: string;
+}
+
 function reviveSessionStory(story: StoryWithDocuments): StoryWithDocuments {
 	return {
 		...story,
@@ -79,6 +84,130 @@ function deterministicResolutionError(error: Error) {
 	);
 }
 
+interface ProjectRootLifecycleProps {
+	activeSessionInstances: React.MutableRefObject<Map<string, string>>;
+	bufferedSessionDeltas: React.MutableRefObject<
+		Map<string, NativeProjectSessionDelta[]>
+	>;
+	deltaQueueRef: React.MutableRefObject<NativeProjectDeltaQueue<NativeProjectSessionDelta> | null>;
+	fingerprint: string;
+	rootPath: string;
+	sessionCleanupRef: React.MutableRefObject<Map<string, Promise<void>>>;
+	clearReviewsForRoot: (rootPath: string) => void;
+	setError: React.Dispatch<React.SetStateAction<string | undefined>>;
+	startingSessionRoots: React.MutableRefObject<Set<string>>;
+	synchronizeStartAssets: (start: NativeProjectSessionStart) => Promise<void>;
+	twineElectron: TwineElectronWindow['twineElectron'];
+}
+
+const ProjectRootLifecycle: React.FC<ProjectRootLifecycleProps> = ({
+	activeSessionInstances,
+	bufferedSessionDeltas,
+	deltaQueueRef,
+	fingerprint,
+	rootPath,
+	sessionCleanupRef,
+	clearReviewsForRoot,
+	setError,
+	startingSessionRoots,
+	synchronizeStartAssets,
+	twineElectron
+}) => {
+	React.useEffect(() => {
+		if (!twineElectron?.startProjectSession) {
+			return;
+		}
+
+		const [, stories] = JSON.parse(fingerprint) as [string, [string, string][]];
+		const storyIds = stories.map(([storyId]) => storyId);
+		let canceled = false;
+		const previousCleanup = sessionCleanupRef.current.get(rootPath);
+
+		startingSessionRoots.current.add(rootPath);
+		const startTask = (async () => {
+			if (previousCleanup) {
+				await previousCleanup;
+			}
+			if (canceled) {
+				return false;
+			}
+			const start = await twineElectron.startProjectSession(rootPath, storyIds);
+			if (canceled) {
+				return true;
+			}
+			activeSessionInstances.current.set(rootPath, start.sessionInstanceId);
+			startingSessionRoots.current.delete(rootPath);
+			const buffered = bufferedSessionDeltas.current.get(rootPath) ?? [];
+
+			bufferedSessionDeltas.current.delete(rootPath);
+			for (const delta of buffered) {
+				if (delta.sessionInstanceId === start.sessionInstanceId) {
+					deltaQueueRef.current?.enqueue(delta);
+				}
+			}
+
+			recordPerformanceHarnessEvent('native-session-baseline-ready', {
+				...start.performanceTimings,
+				rootPath: start.rootPath
+			});
+			await synchronizeStartAssets(start);
+			// The native baseline is ready before the initial asset inventory has
+			// necessarily crossed the serialized core-session queue. Keep a
+			// separate readiness mark so performance scenarios do not inject an
+			// external edit into that initialization work.
+			markPerformance('session-initialization-complete');
+			return false;
+		})().catch((startError: Error) => {
+			if (!canceled) {
+				startingSessionRoots.current.delete(rootPath);
+				bufferedSessionDeltas.current.delete(rootPath);
+				setError(startError.message);
+			}
+			return false;
+		});
+
+		return () => {
+			canceled = true;
+			clearReviewsForRoot(rootPath);
+			activeSessionInstances.current.delete(rootPath);
+			startingSessionRoots.current.delete(rootPath);
+			bufferedSessionDeltas.current.delete(rootPath);
+			const drain = deltaQueueRef.current?.clearRoot(rootPath);
+			const initialStop = drain
+				? drain.then(() => twineElectron.stopProjectSession?.(rootPath))
+				: Promise.resolve(twineElectron.stopProjectSession?.(rootPath));
+			const cleanup = Promise.all([startTask, initialStop])
+				.then(([startedAfterCancellation]) =>
+					startedAfterCancellation
+						? twineElectron.stopProjectSession?.(rootPath)
+						: undefined
+				)
+				.then(() => undefined);
+
+			sessionCleanupRef.current.set(rootPath, cleanup);
+			void cleanup.finally(() => {
+				if (sessionCleanupRef.current.get(rootPath) === cleanup) {
+					sessionCleanupRef.current.delete(rootPath);
+				}
+			});
+		};
+	}, [
+		activeSessionInstances,
+		bufferedSessionDeltas,
+		deltaQueueRef,
+		fingerprint,
+		rootPath,
+		sessionCleanupRef,
+		clearReviewsForRoot,
+		setError,
+		startingSessionRoots,
+		synchronizeStartAssets,
+		twineElectron
+	]);
+
+	return null;
+};
+
 export const ProjectSessionSync: React.FC = () => {
 	const {stories} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
@@ -96,7 +225,7 @@ export const ProjectSessionSync: React.FC = () => {
 	const twineElectron = (window as TwineElectronWindow).twineElectron;
 	const dismissedDeltas = React.useRef(new Set<string>());
 	const nextReviewOrder = React.useRef(0);
-	const reviewOrderByDelta = React.useRef(new Map<string, number>());
+	const reviewOrderByDelta = React.useRef(new Map<string, ReviewOrder>());
 	const [pendingReviews, setPendingReviews] = React.useState<
 		PendingProjectReview[]
 	>([]);
@@ -132,12 +261,8 @@ export const ProjectSessionSync: React.FC = () => {
 		[roots]
 	);
 	const sessionRoots = React.useMemo(
-		() =>
-			Array.from(roots, ([rootPath, rootStories]) => [
-				rootPath,
-				rootStories.map(story => story.id).sort()
-			]) as [string, string[]][],
-		[rootMembershipSignature, roots]
+		() => JSON.parse(rootMembershipSignature) as [string, [string, string][]][],
+		[rootMembershipSignature]
 	);
 	const rootStoryIds = React.useRef(new Map<string, string[]>());
 	const rootStoriesRef = React.useRef(new Map<string, Story[]>());
@@ -149,13 +274,16 @@ export const ProjectSessionSync: React.FC = () => {
 
 	const rememberReviewOrder = React.useCallback(
 		(delta: NativeProjectSessionDelta) => {
-			let order = reviewOrderByDelta.current.get(delta.id);
+			let reviewOrder = reviewOrderByDelta.current.get(delta.id);
 
-			if (order === undefined) {
-				order = nextReviewOrder.current++;
-				reviewOrderByDelta.current.set(delta.id, order);
+			if (reviewOrder === undefined) {
+				reviewOrder = {
+					order: nextReviewOrder.current++,
+					rootPath: delta.rootPath
+				};
+				reviewOrderByDelta.current.set(delta.id, reviewOrder);
 			}
-			return order;
+			return reviewOrder.order;
 		},
 		[]
 	);
@@ -186,20 +314,41 @@ export const ProjectSessionSync: React.FC = () => {
 	);
 	const completeReviewClassification = React.useCallback(
 		(delta: NativeProjectSessionDelta) => {
-			const order = reviewOrderByDelta.current.get(delta.id);
+			const reviewOrder = reviewOrderByDelta.current.get(delta.id);
 
-			if (order !== undefined) {
+			if (reviewOrder !== undefined) {
 				setUnclassifiedReviewOrders(current =>
-					current.filter(candidate => candidate !== order)
+					current.filter(candidate => candidate !== reviewOrder.order)
 				);
 			}
 		},
 		[]
 	);
+	const clearReviewsForRoot = React.useCallback((rootPath: string) => {
+		const orders = new Set<number>();
+
+		for (const [deltaId, reviewOrder] of reviewOrderByDelta.current) {
+			if (reviewOrder.rootPath === rootPath) {
+				orders.add(reviewOrder.order);
+				reviewOrderByDelta.current.delete(deltaId);
+			}
+		}
+		setPendingReviews(current =>
+			current.filter(review => review.rootPath !== rootPath)
+		);
+		setUnclassifiedReviewOrders(current =>
+			current.filter(order => !orders.has(order))
+		);
+	}, []);
 
 	React.useEffect(() => {
 		rootStoriesRef.current = roots;
-		rootStoryIds.current = new Map(sessionRoots);
+		rootStoryIds.current = new Map(
+			sessionRoots.map(([rootPath, stories]) => [
+				rootPath,
+				stories.map(([storyId]) => storyId)
+			])
+		);
 	}, [roots, sessionRoots]);
 
 	const acknowledgeDelta = React.useCallback(
@@ -371,135 +520,41 @@ export const ProjectSessionSync: React.FC = () => {
 		[coreProjectHost]
 	);
 
-	React.useEffect(() => {
-		if (!twineElectron?.onProjectSessionChanged) {
-			return;
-		}
-
-		return twineElectron.onProjectSessionChanged(delta => {
-			if (dismissedDeltas.current.has(delta.id)) {
-				return;
-			}
-
-			const activeInstance = activeSessionInstances.current.get(delta.rootPath);
-
-			if (!activeInstance) {
-				if (startingSessionRoots.current.has(delta.rootPath)) {
-					bufferedSessionDeltas.current.set(delta.rootPath, [
-						...(bufferedSessionDeltas.current.get(delta.rootPath) ?? []),
-						delta
-					]);
+	React.useLayoutEffect(() => {
+		if (twineElectron?.onProjectSessionChanged) {
+			return twineElectron.onProjectSessionChanged(delta => {
+				if (dismissedDeltas.current.has(delta.id)) {
+					return;
 				}
-				return;
-			}
-			if (activeInstance !== delta.sessionInstanceId) {
-				return;
-			}
 
-			recordPerformanceHarnessEvent('watcher-delta-observed', {
-				changedPaths: delta.changedPaths.length,
-				deltaId: delta.id,
-				entityChanges: delta.delta.changes.length,
-				nativeTrace: delta.performanceTrace,
-				recovery: !!delta.recovery
-			});
-			deltaQueueRef.current?.enqueue(delta);
-		});
-	}, [twineElectron]);
-
-	React.useEffect(() => {
-		if (!twineElectron?.startProjectSession) {
-			return;
-		}
-
-		let canceled = false;
-		const startTasks = new Map<string, Promise<boolean>>();
-		for (const [rootPath] of sessionRoots) {
-			const previousCleanup = sessionCleanupRef.current.get(rootPath);
-			startingSessionRoots.current.add(rootPath);
-
-			const startTask = (async () => {
-				if (previousCleanup) {
-					await previousCleanup;
-				}
-				if (canceled) {
-					return false;
-				}
-				const start = await twineElectron.startProjectSession(
-					rootPath,
-					rootStoryIds.current.get(rootPath) ?? []
+				const activeInstance = activeSessionInstances.current.get(
+					delta.rootPath
 				);
-				if (canceled) {
-					return true;
-				}
-				activeSessionInstances.current.set(rootPath, start.sessionInstanceId);
-				startingSessionRoots.current.delete(rootPath);
-				const buffered = bufferedSessionDeltas.current.get(rootPath) ?? [];
 
-				bufferedSessionDeltas.current.delete(rootPath);
-				for (const delta of buffered) {
-					if (delta.sessionInstanceId === start.sessionInstanceId) {
-						deltaQueueRef.current?.enqueue(delta);
+				if (!activeInstance) {
+					if (startingSessionRoots.current.has(delta.rootPath)) {
+						bufferedSessionDeltas.current.set(delta.rootPath, [
+							...(bufferedSessionDeltas.current.get(delta.rootPath) ?? []),
+							delta
+						]);
 					}
+					return;
+				}
+				if (activeInstance !== delta.sessionInstanceId) {
+					return;
 				}
 
-				recordPerformanceHarnessEvent('native-session-baseline-ready', {
-					...start.performanceTimings,
-					rootPath: start.rootPath
+				recordPerformanceHarnessEvent('watcher-delta-observed', {
+					changedPaths: delta.changedPaths.length,
+					deltaId: delta.id,
+					entityChanges: delta.delta.changes.length,
+					nativeTrace: delta.performanceTrace,
+					recovery: !!delta.recovery
 				});
-				await synchronizeStartAssets(start);
-				// The native baseline is ready before the initial asset inventory has
-				// necessarily crossed the serialized core-session queue. Keep a
-				// separate readiness mark so performance scenarios do not inject an
-				// external edit into that initialization work.
-				markPerformance('session-initialization-complete');
-				return false;
-			})().catch((startError: Error) => {
-				if (!canceled) {
-					startingSessionRoots.current.delete(rootPath);
-					bufferedSessionDeltas.current.delete(rootPath);
-					setError(startError.message);
-				}
-				return false;
+				deltaQueueRef.current?.enqueue(delta);
 			});
-
-			startTasks.set(rootPath, startTask);
 		}
-
-		return () => {
-			canceled = true;
-			setPendingReviews(current =>
-				current.filter(
-					review =>
-						!sessionRoots.some(([rootPath]) => rootPath === review.rootPath)
-				)
-			);
-
-			for (const [rootPath] of sessionRoots) {
-				activeSessionInstances.current.delete(rootPath);
-				startingSessionRoots.current.delete(rootPath);
-				bufferedSessionDeltas.current.delete(rootPath);
-				const drain = deltaQueueRef.current?.clearRoot(rootPath);
-				const initialStop = drain
-					? drain.then(() => twineElectron.stopProjectSession?.(rootPath))
-					: Promise.resolve(twineElectron.stopProjectSession?.(rootPath));
-				const cleanup = Promise.all([startTasks.get(rootPath), initialStop])
-					.then(([startedAfterCancellation]) =>
-						startedAfterCancellation
-							? twineElectron.stopProjectSession?.(rootPath)
-							: undefined
-					)
-					.then(() => undefined);
-
-				sessionCleanupRef.current.set(rootPath, cleanup);
-				void cleanup.finally(() => {
-					if (sessionCleanupRef.current.get(rootPath) === cleanup) {
-						sessionCleanupRef.current.delete(rootPath);
-					}
-				});
-			}
-		};
-	}, [sessionRoots, synchronizeStartAssets, twineElectron]);
+	}, [twineElectron]);
 
 	async function acceptDisk() {
 		if (!pendingReview || !twineElectron?.resolveProjectSessionConflicts) {
@@ -640,10 +695,6 @@ export const ProjectSessionSync: React.FC = () => {
 		}
 	}
 
-	if (!pendingReview && !error) {
-		return null;
-	}
-
 	const conflictCount = pendingReview
 		? Math.max(
 				pendingReview.conflicts.length,
@@ -656,48 +707,77 @@ export const ProjectSessionSync: React.FC = () => {
 		: 'Using the disk version replaces conflicting app values. Keeping the app version overwrites the changed project files on disk.';
 
 	return (
-		<div className="project-session-sync" role="status">
-			<div className="project-session-sync__title">Project folder changed</div>
-			{pendingReview ? (
-				<>
-					<p>
-						{conflictCount > 0
-							? `${conflictCount} ${pluralizedNoun(
-									conflictCount,
-									'disk change'
-								)} ${conflictCount === 1 ? 'requires' : 'require'} review${
-									pathPreview ? `: ${pathPreview}` : ''
-								}.`
-							: (pendingReview.delta.recovery?.message ??
-								'The disk copy differs from the app copy.')}
-					</p>
-					<p className="project-session-sync__resolution-hint">
-						{resolutionHint}
-					</p>
-				</>
-			) : null}
-			{pendingReviews.length > 1 ? (
-				<p>
-					{pendingReviews.length - 1} more{' '}
-					{pluralizedNoun(pendingReviews.length - 1, 'project change')} queued.
-				</p>
-			) : null}
-			{error ? <p className="project-session-sync__error">{error}</p> : null}
-			{pendingReview ? (
-				<div className="project-session-sync__actions">
-					<button disabled={busy} onClick={acceptDisk} type="button">
-						{pendingReview.delta.recovery
-							? 'Reload From Disk'
-							: 'Use Disk Version'}
-					</button>
-					<button disabled={busy} onClick={keepApp} type="button">
-						Keep App Version
-					</button>
-					<button disabled={busy} onClick={reviewLater} type="button">
-						Later
-					</button>
+		<>
+			{sessionRoots.map(([rootPath, stories]) => {
+				const fingerprint = JSON.stringify([rootPath, stories]);
+
+				return (
+					<ProjectRootLifecycle
+						activeSessionInstances={activeSessionInstances}
+						bufferedSessionDeltas={bufferedSessionDeltas}
+						deltaQueueRef={deltaQueueRef}
+						fingerprint={fingerprint}
+						key={rootPath}
+						rootPath={rootPath}
+						sessionCleanupRef={sessionCleanupRef}
+						clearReviewsForRoot={clearReviewsForRoot}
+						setError={setError}
+						startingSessionRoots={startingSessionRoots}
+						synchronizeStartAssets={synchronizeStartAssets}
+						twineElectron={twineElectron}
+					/>
+				);
+			})}
+			{pendingReview || error ? (
+				<div className="project-session-sync" role="status">
+					<div className="project-session-sync__title">
+						Project folder changed
+					</div>
+					{pendingReview ? (
+						<>
+							<p>
+								{conflictCount > 0
+									? `${conflictCount} ${pluralizedNoun(
+											conflictCount,
+											'disk change'
+										)} ${conflictCount === 1 ? 'requires' : 'require'} review${
+											pathPreview ? `: ${pathPreview}` : ''
+										}.`
+									: (pendingReview.delta.recovery?.message ??
+										'The disk copy differs from the app copy.')}
+							</p>
+							<p className="project-session-sync__resolution-hint">
+								{resolutionHint}
+							</p>
+						</>
+					) : null}
+					{pendingReviews.length > 1 ? (
+						<p>
+							{pendingReviews.length - 1} more{' '}
+							{pluralizedNoun(pendingReviews.length - 1, 'project change')}{' '}
+							queued.
+						</p>
+					) : null}
+					{error ? (
+						<p className="project-session-sync__error">{error}</p>
+					) : null}
+					{pendingReview ? (
+						<div className="project-session-sync__actions">
+							<button disabled={busy} onClick={acceptDisk} type="button">
+								{pendingReview.delta.recovery
+									? 'Reload From Disk'
+									: 'Use Disk Version'}
+							</button>
+							<button disabled={busy} onClick={keepApp} type="button">
+								Keep App Version
+							</button>
+							<button disabled={busy} onClick={reviewLater} type="button">
+								Later
+							</button>
+						</div>
+					) : null}
 				</div>
 			) : null}
-		</div>
+		</>
 	);
 };
