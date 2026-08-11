@@ -56,13 +56,10 @@ describe('<TestPassageButton>', () => {
 				name: 'routes.storyEdit.toolbar.testFromHere'
 			})
 		);
-		expect(openSpy).toHaveBeenCalledWith(
-			expect.stringMatching(/^http:\/\/localhost\/?$/),
-			'_blank'
-		);
+		expect(openSpy).toHaveBeenCalledWith('about:blank', '_blank');
 		await waitFor(() =>
 			expect(replace).toHaveBeenCalledWith(
-				`#/stories/${story.id}/preview?target=test&passage=${story.passages[0].id}`
+				`http://localhost/#/stories/${story.id}/preview?target=test&passage=${story.passages[0].id}`
 			)
 		);
 	});

@@ -507,6 +507,10 @@ export interface ElectronNativeProjectStoryEntry {
 export type ElectronLoadedStoryEntry =
 	ElectronLegacyStoryFile | ElectronNativeProjectStoryEntry;
 
+export type ElectronStoryLoadResult =
+	| {status: 'loaded'; stories: ElectronLoadedStoryEntry[]}
+	| {message: string; status: 'recovery-required'};
+
 export interface NativeAddLocalStoryFormatResult {
 	name: string;
 	url: string;
@@ -588,7 +592,7 @@ export interface TwineElectronWindow extends Window {
 		finishProjectFolderHydration(hydrationId: string): Promise<void>;
 		completePersistenceQuit(nonce: string, errorMessage?: string): void;
 		loadPrefs(): Promise<any>;
-		loadStories(): Promise<ElectronLoadedStoryEntry[]>;
+		loadStories(): Promise<ElectronStoryLoadResult>;
 		loadStoryFormats(): Promise<any>;
 		loadStoryFormatProperties(
 			url: string,

@@ -65,23 +65,15 @@ function runSessionSave(sessionId: string, save: QueuedSave) {
 		)
 		.finally(() => {
 			const pending = pendingSessionSaves.get(sessionId) ?? [];
-			const next = pending.pop();
+			const next = pending.shift();
 
-			pendingSessionSaves.delete(sessionId);
+			if (pending.length > 0) {
+				pendingSessionSaves.set(sessionId, pending);
+			} else {
+				pendingSessionSaves.delete(sessionId);
+			}
 			if (next) {
-				const superseded = pending;
-
-				runSessionSave(sessionId, {
-					reject: error => {
-						next.reject(error);
-						superseded.forEach(save => save.reject(error));
-					},
-					resolve: () => {
-						next.resolve();
-						superseded.forEach(save => save.resolve());
-					},
-					task: next.task
-				});
+				runSessionSave(sessionId, next);
 			} else {
 				activeSessionSaves.delete(sessionId);
 			}

@@ -87,20 +87,21 @@ describe('useStoryLaunch', () => {
 			await result.current.testStory('mock-story-id', 'current-id');
 
 			expect(openSpy).toHaveBeenCalledTimes(3);
-			expect(openSpy).toHaveBeenCalledWith(
-				expect.stringMatching(/^http:\/\/localhost\/?$/),
-				'_blank'
-			);
+			expect(openSpy).toHaveBeenCalledWith('about:blank', '_blank');
 			expect(
 				openSpy.mock.results.map(({value}) => value.location.replace.mock.calls)
 			).toEqual([
-				[['#/stories/mock-story-id/preview?target=play']],
+				[['http://localhost/#/stories/mock-story-id/preview?target=play']],
 				[
 					[
-						'#/stories/mock-story-id/preview?target=proof&proofingFormatName=Paper&proofingFormatVersion=1.0.0'
+						'http://localhost/#/stories/mock-story-id/preview?target=proof&proofingFormatName=Paper&proofingFormatVersion=1.0.0'
 					]
 				],
-				[['#/stories/mock-story-id/preview?target=test&passage=current-id']]
+				[
+					[
+						'http://localhost/#/stories/mock-story-id/preview?target=test&passage=current-id'
+					]
+				]
 			]);
 			expect(buildStoryPreviewPackage).not.toHaveBeenCalled();
 		});
@@ -118,12 +119,12 @@ describe('useStoryLaunch', () => {
 
 			await Promise.resolve();
 			expect(flush).toHaveBeenCalledWith('mock-story-id');
-			expect(openSpy).toHaveBeenCalledTimes(1);
+			expect(openSpy).toHaveBeenCalledWith('about:blank', '_blank');
 			expect(previewWindow.location.replace).not.toHaveBeenCalled();
 			finishFlush();
 			await launch;
 			expect(previewWindow.location.replace).toHaveBeenCalledWith(
-				'#/stories/mock-story-id/preview?target=test&passage=current-id'
+				'http://localhost/#/stories/mock-story-id/preview?target=test&passage=current-id'
 			);
 		});
 
@@ -258,7 +259,9 @@ describe('useStoryLaunch', () => {
 
 			await result.current.playStory('mock-story-id');
 
-			expect(projectSessionSnapshot).toHaveBeenCalledWith('/native/project');
+			expect(projectSessionSnapshot).toHaveBeenCalledWith('/native/project', [
+				'mock-story-id'
+			]);
 			expect(buildStoryPreviewPackage).toHaveBeenCalledWith(
 				'mock-story-id',
 				'play',

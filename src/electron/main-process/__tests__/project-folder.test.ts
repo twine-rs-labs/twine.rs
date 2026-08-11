@@ -253,9 +253,60 @@ describe('project-folder native bridge', () => {
 				)
 			];
 		};
+		const rebasedPath = (path: string, source: string, target: string) =>
+			path === source ? target : `${target}${path.slice(source.length)}`;
+		const moveTree = (source: string, target: string) => {
+			for (const path of [...directories].filter(
+				path => path === source || path.startsWith(`${source}/`)
+			)) {
+				directories.delete(path);
+				directories.add(rebasedPath(path, source, target));
+			}
+			for (const [path, value] of [...projects].filter(
+				([path]) => path === source || path.startsWith(`${source}/`)
+			)) {
+				projects.delete(path);
+				const nextPath = rebasedPath(path, source, target);
+
+				projects.set(nextPath, {...value, rootPath: nextPath});
+			}
+			for (const [path, value] of [...json].filter(
+				([path]) => path === source || path.startsWith(`${source}/`)
+			)) {
+				json.delete(path);
+				json.set(rebasedPath(path, source, target), value);
+			}
+		};
+		const removeTree = (target: string) => {
+			for (const path of [...directories].filter(
+				path => path === target || path.startsWith(`${target}/`)
+			)) {
+				directories.delete(path);
+			}
+			for (const path of [...projects.keys()].filter(
+				path => path === target || path.startsWith(`${target}/`)
+			)) {
+				projects.delete(path);
+			}
+			for (const path of [...json.keys()].filter(
+				path => path === target || path.startsWith(`${target}/`)
+			)) {
+				json.delete(path);
+			}
+		};
 
 		writeFileMock.mockImplementation(async (path, value) => {
 			pendingWrites.set(String(path), String(value));
+		});
+		readFileMock.mockImplementation(async path => {
+			const value = json.get(String(path));
+
+			if (value === undefined) {
+				throw Object.assign(new Error(`missing ${String(path)}`), {
+					code: 'ENOENT'
+				});
+			}
+			return JSON.stringify(value);
 		});
 		readJsonMock.mockImplementation(async path => {
 			const value = json.get(String(path));
@@ -289,38 +340,37 @@ describe('project-folder native bridge', () => {
 					code: 'ENOENT'
 				});
 			}
-			directories.delete(sourcePath);
-			directories.add(targetPath);
-			const project = projects.get(sourcePath);
-
-			projects.delete(sourcePath);
-			if (project) {
-				projects.set(targetPath, {...project, rootPath: targetPath});
-			}
+			moveTree(sourcePath, targetPath);
 		});
 		removeMock.mockImplementation(async path => {
-			const target = String(path);
-
-			directories.delete(target);
-			projects.delete(target);
-			json.delete(target);
+			removeTree(String(path));
 		});
 		lstatMock.mockImplementation(async path => {
 			const target = String(path);
+			const stableMetadata = {
+				ctimeNs: BigInt(1),
+				dev: BigInt(1),
+				ino: BigInt(1),
+				mtimeNs: BigInt(1)
+			};
 
 			if (directories.has(target)) {
 				return {
+					...stableMetadata,
 					isDirectory: () => true,
 					isFile: () => false,
 					isSymbolicLink: () => false,
+					mode: BigInt(0o40755),
 					size: 0
 				};
 			}
 			if (json.has(target)) {
 				return {
+					...stableMetadata,
 					isDirectory: () => false,
 					isFile: () => true,
 					isSymbolicLink: () => false,
+					mode: BigInt(0o100644),
 					size: JSON.stringify(json.get(target)).length
 				};
 			}
@@ -368,8 +418,7 @@ describe('project-folder native bridge', () => {
 		});
 		forgetNativeProjectFolderMock.mockReturnValue([]);
 		(shell.trashItem as jest.Mock).mockImplementation(async path => {
-			directories.delete(String(path));
-			projects.delete(String(path));
+			removeTree(String(path));
 		});
 
 		return {directories, json, projects};
@@ -5911,6 +5960,75 @@ describe('project-folder native bridge', () => {
 		expect(result.stories[0].passages[0].text).toBe('hydrated passage text');
 	});
 
+	it('does not strand baseline capture when a late caller reuses background hydration', async () => {
+		const rootPath = '/native/moon-castle.twine.rs';
+		const story = {...fakeStory(1), id: 'story-id', name: 'Moon Castle'};
+		const hydratedProject = {
+			baselineReceipt: {
+				assets: [],
+				completedAt: '2026-06-21T16:00:01.000Z',
+				files: [],
+				id: 'background-hydration',
+				layoutDataJson: '{}',
+				rootPath,
+				schemaVersion: 1,
+				startedAt: '2026-06-21T16:00:00.000Z',
+				storyIds: [story.id]
+			},
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		};
+
+		loadNativeProjectFolderMock
+			.mockReturnValueOnce({
+				passageTextLoaded: false,
+				rootPath,
+				stories: [
+					{
+						...story,
+						passages: story.passages.map(passage => ({...passage, text: ''}))
+					}
+				],
+				storyIds: [story.id]
+			})
+			.mockReturnValue(hydratedProject);
+
+		await openProjectFolder(rootPath, {loadPassageText: false});
+		for (
+			let attempts = 0;
+			attempts < 20 && loadNativeProjectFolderMock.mock.calls.length < 2;
+			attempts++
+		) {
+			await new Promise<void>(resolve => setRealTimeout(resolve, 0));
+		}
+		await new Promise<void>(resolve => setImmediate(resolve));
+
+		await expect(hydrateProjectFolder(rootPath, [story.id])).resolves.toEqual(
+			expect.objectContaining({passageTextLoaded: true, stories: [story]})
+		);
+
+		let timeout: ReturnType<typeof setRealTimeout> | undefined;
+		try {
+			const snapshot = await Promise.race([
+				projectSessionSnapshot(rootPath),
+				new Promise<never>((_resolve, reject) => {
+					timeout = setRealTimeout(
+						() => reject(new Error('Project session snapshot timed out.')),
+						250
+					);
+				})
+			]);
+
+			expect(snapshot.stories).toEqual([story]);
+		} finally {
+			if (timeout) {
+				clearRealTimeout(timeout);
+			}
+		}
+	});
+
 	it('leases full hydration as bounded passage chunks', async () => {
 		const story = fakeStory(3);
 		loadNativeProjectFolderMock.mockReturnValue({
@@ -8969,6 +9087,503 @@ describe('project-folder native bridge', () => {
 		expect(filesystem.json.size).toBe(0);
 	});
 
+	it('aborts before the root swap when the source project changes after staging', async () => {
+		const original = {...fakeStory(1), id: 'staging-conflict-story'};
+		const replacement = {
+			...original,
+			passages: original.passages.map(passage => ({
+				...passage,
+				story: original.id,
+				text: 'staged replacement'
+			}))
+		};
+		const rootPath = '/native/staging-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const externalPath = `${rootPath}/external-after-staging`;
+		const write = writeFileMock.getMockImplementation()!;
+		let changed = false;
+
+		writeFileMock.mockImplementation(async (path, value) => {
+			await write(path, value);
+			if (!changed && String(value).includes('"phase":"prepared"')) {
+				changed = true;
+				filesystem.directories.add(externalPath);
+			}
+		});
+
+		await expect(
+			beginProjectReplacement(rootPath, [replacement])
+		).rejects.toThrow('changed outside Twine');
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(
+			[...filesystem.directories].some(path =>
+				path.includes('.backup.twine.rs')
+			)
+		).toBe(false);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('preserves an externally changed provisional root and backup on rollback', async () => {
+		const original = {...fakeStory(1), id: 'rollback-conflict-story'};
+		const replacement = {
+			...original,
+			passages: original.passages.map(passage => ({
+				...passage,
+				story: original.id,
+				text: 'provisional replacement'
+			}))
+		};
+		const rootPath = '/native/rollback-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [replacement]);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {backupRootPath: string};
+		const externalPath = `${rootPath}/external-after-install`;
+
+		filesystem.directories.add(externalPath);
+		await expect(rollbackProjectReplacement(transaction.id)).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(journal.backupRootPath)).toBe(true);
+		expect(filesystem.json.size).toBeGreaterThan(0);
+
+		filesystem.directories.delete(externalPath);
+		await rollbackProjectReplacement(transaction.id);
+	});
+
+	it('detects a directory entry added during replacement verification before rollback cleanup', async () => {
+		const original = {...fakeStory(1), id: 'rollback-scan-race-story'};
+		const rootPath = '/native/rollback-scan-race.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {backupRootPath: string};
+		const externalPath = `${rootPath}/late-external-entry`;
+		const readDirectory = readdirMock.getMockImplementation()!;
+		let rootReads = 0;
+
+		readdirMock.mockImplementation(async path => {
+			const names = await readDirectory(path);
+
+			if (String(path) === rootPath && ++rootReads === 1) {
+				filesystem.directories.add(externalPath);
+			}
+			return names;
+		});
+
+		await expect(rollbackProjectReplacement(transaction.id)).rejects.toThrow(
+			'changed while the replacement transaction was verifying'
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(filesystem.directories.has(journal.backupRootPath)).toBe(true);
+
+		filesystem.directories.delete(externalPath);
+		readdirMock.mockImplementation(readDirectory);
+		await rollbackProjectReplacement(transaction.id);
+	});
+
+	it.each(['ctime', 'mode'] as const)(
+		'detects a same-length file %s change during manifest verification',
+		async field => {
+			const original = {...fakeStory(1), id: `file-${field}-race-story`};
+			const rootPath = `/native/file-${field}-race.twine.rs`;
+			const filesystem = configureProjectTransactionFilesystem(rootPath, [
+				original
+			]);
+			const filePath = `${rootPath}/same-length.json`;
+			const readStats = lstatMock.getMockImplementation()!;
+			let fileStats = 0;
+
+			filesystem.json.set(filePath, {text: 'same'});
+			lstatMock.mockImplementation(async (path, options) => {
+				const stats = await readStats(path, options);
+
+				if (String(path) !== filePath || ++fileStats !== 2) {
+					return stats;
+				}
+				return {
+					...stats,
+					...(field === 'ctime'
+						? {ctimeNs: BigInt(2)}
+						: {mode: BigInt(0o100600)})
+				};
+			});
+
+			await expect(
+				beginProjectReplacement(rootPath, [original])
+			).rejects.toThrow(
+				'changed while the replacement transaction was verifying'
+			);
+			expect(filesystem.directories.has(rootPath)).toBe(true);
+			expect(filesystem.json.has(filePath)).toBe(true);
+		}
+	);
+
+	it('reverifies a quarantined installed root before rollback removes it', async () => {
+		const original = {...fakeStory(1), id: 'rollback-quarantine-race-story'};
+		const rootPath = '/native/rollback-quarantine-race.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const quarantinePath = `/native/.twine-rs-replacement-${transaction.id}.installed.quarantine.twine.rs`;
+		const externalPath = `${quarantinePath}/external-after-quarantine`;
+		const rename = renameFileMock.getMockImplementation()!;
+
+		renameFileMock.mockImplementation(async (source, target) => {
+			await rename(source, target);
+			if (String(target) === quarantinePath) {
+				filesystem.directories.add(externalPath);
+			}
+		});
+
+		await expect(rollbackProjectReplacement(transaction.id)).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(false);
+		expect(filesystem.directories.has(quarantinePath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(removeMock).not.toHaveBeenCalledWith(rootPath);
+
+		filesystem.directories.delete(externalPath);
+		renameFileMock.mockImplementation(rename);
+		await rollbackProjectReplacement(transaction.id);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+	});
+
+	it('blocks commit when the provisional root changed after installation', async () => {
+		const original = {...fakeStory(1), id: 'commit-conflict-story'};
+		const rootPath = '/native/commit-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {backupRootPath: string};
+		const externalPath = `${rootPath}/external-before-commit`;
+
+		filesystem.directories.add(externalPath);
+		await expect(commitProjectReplacements([transaction.id])).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(journal.backupRootPath)).toBe(true);
+
+		filesystem.directories.delete(externalPath);
+		await rollbackProjectReplacement(transaction.id);
+	});
+
+	it('fails closed if the provisional root changes after the durable commit decision', async () => {
+		const original = {...fakeStory(1), id: 'decision-conflict-story'};
+		const rootPath = '/native/decision-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {backupRootPath: string};
+		const externalPath = `${rootPath}/external-after-decision`;
+		const write = writeFileMock.getMockImplementation()!;
+		let changed = false;
+
+		writeFileMock.mockImplementation(async (path, value) => {
+			await write(path, value);
+			if (!changed && String(value).includes('"transactionIds"')) {
+				changed = true;
+				filesystem.directories.add(externalPath);
+			}
+		});
+
+		await expect(commitProjectReplacements([transaction.id])).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(journal.backupRootPath)).toBe(true);
+		expect(
+			[...filesystem.json.keys()].some(path =>
+				path.includes('/commit-decisions/')
+			)
+		).toBe(true);
+
+		filesystem.directories.delete(externalPath);
+		writeFileMock.mockImplementation(write);
+		await recoverProjectReplacementTransactions();
+		expect(filesystem.directories.has(journal.backupRootPath)).toBe(false);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('reverifies a quarantined replacement backup before committed cleanup removes it', async () => {
+		const original = {...fakeStory(1), id: 'backup-quarantine-race-story'};
+		const rootPath = '/native/backup-quarantine-race.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {backupRootPath: string};
+		const quarantinePath = `/native/.twine-rs-replacement-${transaction.id}.backup.quarantine.twine.rs`;
+		const externalPath = `${quarantinePath}/external-after-quarantine`;
+		const rename = renameFileMock.getMockImplementation()!;
+
+		renameFileMock.mockImplementation(async (source, target) => {
+			await rename(source, target);
+			if (String(target) === quarantinePath) {
+				filesystem.directories.add(externalPath);
+			}
+		});
+
+		await expect(commitProjectReplacements([transaction.id])).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(filesystem.directories.has(journal.backupRootPath)).toBe(false);
+		expect(filesystem.directories.has(quarantinePath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(removeMock).not.toHaveBeenCalledWith(journal.backupRootPath);
+
+		filesystem.directories.delete(externalPath);
+		renameFileMock.mockImplementation(rename);
+		await recoverProjectReplacementTransactions();
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('rejects a regular file substituted for a replacement backup before cleanup', async () => {
+		const original = {...fakeStory(1), id: 'backup-file-substitution-story'};
+		const rootPath = '/native/backup-file-substitution.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {backupRootPath: string};
+		const write = writeFileMock.getMockImplementation()!;
+		let substituted = false;
+
+		writeFileMock.mockImplementation(async (path, value) => {
+			await write(path, value);
+			if (!substituted && String(value).includes('"renderer-committed"')) {
+				substituted = true;
+				for (const path of [...filesystem.directories].filter(
+					path =>
+						path === journal.backupRootPath ||
+						path.startsWith(`${journal.backupRootPath}/`)
+				)) {
+					filesystem.directories.delete(path);
+				}
+				filesystem.projects.delete(journal.backupRootPath);
+				filesystem.json.set(journal.backupRootPath, {external: 'file'});
+			}
+		});
+
+		await expect(commitProjectReplacements([transaction.id])).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(filesystem.json.has(journal.backupRootPath)).toBe(true);
+		expect(
+			[...filesystem.json.values()].some(
+				(value: any) => value.id === transaction.id
+			)
+		).toBe(true);
+	});
+
+	it('rejects a symlink substituted for a quarantined replacement backup', async () => {
+		const original = {...fakeStory(1), id: 'backup-symlink-substitution-story'};
+		const rootPath = '/native/backup-symlink-substitution.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const quarantinePath = `/native/.twine-rs-replacement-${transaction.id}.backup.quarantine.twine.rs`;
+		const rename = renameFileMock.getMockImplementation()!;
+		const readStats = lstatMock.getMockImplementation()!;
+		let quarantined = false;
+
+		renameFileMock.mockImplementation(async (source, target) => {
+			await rename(source, target);
+			quarantined ||= String(target) === quarantinePath;
+		});
+		lstatMock.mockImplementation(async (path, options) => {
+			if (quarantined && String(path) === quarantinePath) {
+				return {
+					ctimeNs: BigInt(2),
+					dev: BigInt(1),
+					ino: BigInt(2),
+					isDirectory: () => false,
+					isFile: () => false,
+					isSymbolicLink: () => true,
+					mode: BigInt(0o120777),
+					mtimeNs: BigInt(1),
+					size: 0
+				};
+			}
+			return readStats(path, options);
+		});
+
+		await expect(commitProjectReplacements([transaction.id])).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(filesystem.directories.has(quarantinePath)).toBe(true);
+		expect(removeMock).not.toHaveBeenCalledWith(quarantinePath);
+
+		lstatMock.mockImplementation(readStats);
+		renameFileMock.mockImplementation(rename);
+		await recoverProjectReplacementTransactions();
+		expect(filesystem.directories.has(quarantinePath)).toBe(false);
+	});
+
+	it('does not gate startup on retryable committed replacement cleanup', async () => {
+		const original = {...fakeStory(1), id: 'replacement-cleanup-pending-story'};
+		const rootPath = '/native/replacement-cleanup-pending.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const quarantinePath = `/native/.twine-rs-replacement-${transaction.id}.backup.quarantine.twine.rs`;
+		const removeTree = removeMock.getMockImplementation()!;
+
+		removeMock.mockImplementation(async path => {
+			if (String(path) === quarantinePath) {
+				throw Object.assign(new Error('permission denied'), {code: 'EACCES'});
+			}
+			return removeTree(path);
+		});
+
+		await expect(
+			commitProjectReplacements([transaction.id])
+		).resolves.toBeUndefined();
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(quarantinePath)).toBe(true);
+		expect(
+			[...filesystem.json.values()].some(
+				(value: any) =>
+					value.id === transaction.id && value.phase === 'cleanup-verified'
+			)
+		).toBe(true);
+		const laterEditPath = `${rootPath}/edit-after-cleanup-failure`;
+
+		filesystem.directories.add(laterEditPath);
+		await expect(
+			recoverProjectReplacementTransactions()
+		).resolves.toBeUndefined();
+		expect(filesystem.directories.has(laterEditPath)).toBe(true);
+		expect(filesystem.json.size).toBeGreaterThan(0);
+
+		removeMock.mockImplementation(removeTree);
+		await recoverProjectReplacementTransactions();
+		expect(filesystem.directories.has(quarantinePath)).toBe(false);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('requires recovery if the verified replacement cleanup phase is not durable', async () => {
+		const original = {...fakeStory(1), id: 'cleanup-phase-write-story'};
+		const rootPath = '/native/cleanup-phase-write.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const write = writeFileMock.getMockImplementation()!;
+
+		writeFileMock.mockImplementation(async (path, value) => {
+			if (String(value).includes('"phase":"cleanup-verified"')) {
+				throw Object.assign(new Error('permission denied'), {code: 'EACCES'});
+			}
+			return write(path, value);
+		});
+
+		await expect(commitProjectReplacements([transaction.id])).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.json.size).toBeGreaterThan(0);
+
+		writeFileMock.mockImplementation(write);
+		await recoverProjectReplacementTransactions();
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it.each(['backup', 'staging'] as const)(
+		'reports recovery required when the replacement %s root cannot be checked during committed cleanup',
+		async target => {
+			const original = {...fakeStory(1), id: `cleanup-${target}-io-story`};
+			const rootPath = `/native/cleanup-${target}-io.twine.rs`;
+			const filesystem = configureProjectTransactionFilesystem(rootPath, [
+				original
+			]);
+			const transaction = await beginProjectReplacement(rootPath, [original]);
+			const journal = [...filesystem.json.values()].find(
+				(value: any) => value.id === transaction.id
+			) as {backupRootPath: string; stagingRootPath: string};
+			const readStats = lstatMock.getMockImplementation()!;
+			let backupReads = 0;
+
+			if (target === 'staging') {
+				filesystem.directories.add(journal.stagingRootPath);
+			}
+			lstatMock.mockImplementation(async (path, options) => {
+				if (
+					(target === 'backup' &&
+						String(path) === journal.backupRootPath &&
+						++backupReads === 3) ||
+					(target === 'staging' && String(path) === journal.stagingRootPath)
+				) {
+					throw Object.assign(new Error('permission denied'), {code: 'EACCES'});
+				}
+				return readStats(path, options);
+			});
+
+			await expect(commitProjectReplacements([transaction.id])).rejects.toEqual(
+				expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+			);
+			expect(filesystem.directories.has(rootPath)).toBe(true);
+			expect(filesystem.json.size).toBeGreaterThan(0);
+			await expect(saveProjectFolder(rootPath, original)).rejects.toThrow(
+				'Project changes are blocked while replacement recovery is pending.'
+			);
+
+			lstatMock.mockImplementation(readStats);
+			await recoverProjectReplacementTransactions();
+			expect(filesystem.json.size).toBe(0);
+		}
+	);
+
+	it('preserves an externally changed backup instead of restoring over it', async () => {
+		const original = {...fakeStory(1), id: 'backup-conflict-story'};
+		const rootPath = '/native/backup-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {backupRootPath: string};
+		const externalPath = `${journal.backupRootPath}/external-backup-change`;
+
+		filesystem.directories.add(externalPath);
+		await expect(rollbackProjectReplacement(transaction.id)).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(journal.backupRootPath)).toBe(true);
+
+		filesystem.directories.delete(externalPath);
+		await rollbackProjectReplacement(transaction.id);
+	});
+
 	it('blocks project writes until a failed replacement rollback is recovered', async () => {
 		const original = {...fakeStory(1), id: 'blocked-rollback-story'};
 		const replacement = {
@@ -8986,7 +9601,7 @@ describe('project-folder native bridge', () => {
 
 		renameFileMock.mockRejectedValueOnce(new Error('native rollback failed'));
 		await expect(rollbackProjectReplacement(transaction.id)).rejects.toThrow(
-			'native rollback failed'
+			'Project replacement quarantine move is incomplete'
 		);
 		await expect(saveProjectFolder(rootPath, replacement)).rejects.toThrow(
 			'Project changes are blocked while replacement recovery is pending.'
@@ -9083,6 +9698,100 @@ describe('project-folder native bridge', () => {
 		}
 	);
 
+	it.each([
+		'staging',
+		'prepared',
+		'backup-moved',
+		'installed',
+		'renderer-committed'
+	] as const)(
+		'recovers a legacy v1 replacement journal in the %s phase without deleting unverified roots',
+		async phase => {
+			const original = {...fakeStory(1), id: `legacy-${phase}-story`};
+			const replacement = {
+				...original,
+				passages: original.passages.map(passage => ({
+					...passage,
+					story: original.id,
+					text: `${phase} legacy provisional body`
+				}))
+			};
+			const rootPath = `/native/legacy-${phase}.twine.rs`;
+			const filesystem = configureProjectTransactionFilesystem(rootPath, [
+				original
+			]);
+
+			await beginProjectReplacement(rootPath, [replacement]);
+			const [journalPath, storedJournal] = [...filesystem.json.entries()].find(
+				([path]) =>
+					path.includes('/project-replacements/') &&
+					!path.includes('/commit-decisions/')
+			)!;
+			const journal = storedJournal as {
+				backupRootPath: string;
+				baselineRootManifest?: unknown;
+				phase: string;
+				provisionalRootManifest?: unknown;
+				stagingRootPath: string;
+				version: number;
+			};
+			const provisional = filesystem.projects.get(rootPath)!;
+			const originalProject = filesystem.projects.get(journal.backupRootPath)!;
+
+			journal.version = 1;
+			journal.phase = phase;
+			delete journal.baselineRootManifest;
+			delete journal.provisionalRootManifest;
+			if (phase === 'staging' || phase === 'prepared') {
+				filesystem.projects.set(rootPath, {...originalProject, rootPath});
+				filesystem.directories.delete(journal.backupRootPath);
+				filesystem.projects.delete(journal.backupRootPath);
+				filesystem.directories.add(journal.stagingRootPath);
+				filesystem.projects.set(journal.stagingRootPath, {
+					...provisional,
+					rootPath: journal.stagingRootPath
+				});
+			} else if (phase === 'backup-moved') {
+				filesystem.directories.delete(rootPath);
+				filesystem.projects.delete(rootPath);
+				filesystem.directories.add(journal.stagingRootPath);
+				filesystem.projects.set(journal.stagingRootPath, {
+					...provisional,
+					rootPath: journal.stagingRootPath
+				});
+			}
+			filesystem.json.set(journalPath, journal);
+
+			await recoverProjectReplacementTransactions();
+
+			expect(
+				(filesystem.projects.get(rootPath)?.stories[0].passages[0] as any).text
+			).toBe(
+				phase === 'renderer-committed'
+					? `${phase} legacy provisional body`
+					: original.passages[0].text
+			);
+			expect(filesystem.json.size).toBe(0);
+			if (phase === 'installed') {
+				expect(
+					[...filesystem.directories].some(path =>
+						path.includes('.legacy-provisional.twine.rs')
+					)
+				).toBe(true);
+			}
+			if (
+				phase === 'staging' ||
+				phase === 'prepared' ||
+				phase === 'backup-moved'
+			) {
+				expect(filesystem.directories.has(journal.stagingRootPath)).toBe(true);
+			}
+			if (phase === 'renderer-committed') {
+				expect(filesystem.directories.has(journal.backupRootPath)).toBe(true);
+			}
+		}
+	);
+
 	it('keeps the durable cohort decision when replacement cleanup is interrupted', async () => {
 		const original = {...fakeStory(1), id: 'decision-recovery-story'};
 		const replacement = {
@@ -9137,7 +9846,380 @@ describe('project-folder native bridge', () => {
 
 		expect(filesystem.directories.has(rootPath)).toBe(false);
 		expect(shell.trashItem).toHaveBeenCalledWith(
-			expect.stringMatching(/\.twine-rs-deletion-.*\.staged\.twine\.rs$/)
+			expect.stringMatching(/\.twine-rs-deletion-.*\.quarantine\.twine\.rs$/)
+		);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('reports recovery required when a deleted root reappears before finalization', async () => {
+		const story = {...fakeStory(1), id: 'deletion-root-conflict-story'};
+		const rootPath = '/native/delete-root-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {stagedRootPath: string};
+
+		filesystem.directories.add(rootPath);
+		await expect(commitProjectFolderDeletion(transaction.id)).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(journal.stagedRootPath)).toBe(true);
+		expect(filesystem.json.size).toBeGreaterThan(0);
+
+		filesystem.directories.delete(rootPath);
+		await recoverProjectDeletionTransactions();
+		expect(filesystem.directories.has(journal.stagedRootPath)).toBe(false);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('aborts before staging when the deletion root changes after its baseline is journaled', async () => {
+		const story = {...fakeStory(1), id: 'deletion-prestage-conflict-story'};
+		const rootPath = '/native/delete-prestage-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const externalPath = `${rootPath}/external-before-stage`;
+		const write = writeFileMock.getMockImplementation()!;
+		let changed = false;
+
+		writeFileMock.mockImplementation(async (path, value) => {
+			await write(path, value);
+			if (!changed && String(value).includes('"phase":"prepared"')) {
+				changed = true;
+				filesystem.directories.add(externalPath);
+			}
+		});
+
+		await expect(beginProjectFolderDeletion(rootPath)).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(
+			[...filesystem.directories].some(path =>
+				path.includes('.twine-rs-deletion-')
+			)
+		).toBe(false);
+		expect(filesystem.json.size).toBe(0);
+
+		filesystem.directories.delete(externalPath);
+		writeFileMock.mockImplementation(write);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+
+		await rollbackProjectFolderDeletion(transaction.id);
+	});
+
+	it('rejects a changed root-only deletion recovery snapshot', async () => {
+		const story = {...fakeStory(1), id: 'deletion-root-only-conflict-story'};
+		const rootPath = '/native/delete-root-only-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {stagedRootPath: string};
+		const stagedProject = filesystem.projects.get(journal.stagedRootPath)!;
+		const externalPath = `${rootPath}/external-root-only-change`;
+
+		filesystem.directories.delete(journal.stagedRootPath);
+		filesystem.projects.delete(journal.stagedRootPath);
+		filesystem.directories.add(rootPath);
+		filesystem.projects.set(rootPath, {...stagedProject, rootPath});
+		filesystem.directories.add(externalPath);
+
+		await expect(recoverProjectDeletionTransactions()).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(filesystem.json.size).toBeGreaterThan(0);
+
+		filesystem.directories.delete(externalPath);
+		await recoverProjectDeletionTransactions();
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('reports recovery required when a staged deletion root cannot be checked', async () => {
+		const story = {...fakeStory(1), id: 'deletion-staged-io-story'};
+		const rootPath = '/native/delete-staged-io.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {stagedRootPath: string};
+		const readStats = lstatMock.getMockImplementation()!;
+
+		lstatMock.mockImplementation(async (path, options) => {
+			if (String(path) === journal.stagedRootPath) {
+				throw Object.assign(new Error('permission denied'), {code: 'EACCES'});
+			}
+			return readStats(path, options);
+		});
+
+		await expect(commitProjectFolderDeletion(transaction.id)).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(shell.trashItem).not.toHaveBeenCalledWith(journal.stagedRootPath);
+		expect(filesystem.directories.has(journal.stagedRootPath)).toBe(true);
+		await expect(saveProjectFolder(rootPath, story)).rejects.toThrow(
+			'Project changes are blocked while deletion recovery is pending.'
+		);
+
+		lstatMock.mockImplementation(readStats);
+		await recoverProjectDeletionTransactions();
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('preserves an externally changed staged deletion on rollback', async () => {
+		const story = {...fakeStory(1), id: 'deletion-rollback-conflict-story'};
+		const rootPath = '/native/delete-rollback-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {stagedRootPath: string};
+		const externalPath = `${journal.stagedRootPath}/external-after-staging`;
+
+		filesystem.directories.add(externalPath);
+		await expect(rollbackProjectFolderDeletion(transaction.id)).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(filesystem.directories.has(journal.stagedRootPath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(filesystem.directories.has(rootPath)).toBe(false);
+
+		filesystem.directories.delete(externalPath);
+		await rollbackProjectFolderDeletion(transaction.id);
+	});
+
+	it('reports recovery required instead of trashing a changed staged deletion', async () => {
+		const story = {...fakeStory(1), id: 'deletion-commit-conflict-story'};
+		const rootPath = '/native/delete-commit-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {stagedRootPath: string};
+		const externalPath = `${journal.stagedRootPath}/external-before-trash`;
+
+		filesystem.directories.add(externalPath);
+		await expect(commitProjectFolderDeletion(transaction.id)).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(shell.trashItem).not.toHaveBeenCalledWith(journal.stagedRootPath);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+
+		filesystem.directories.delete(externalPath);
+		await recoverProjectDeletionTransactions();
+		expect(filesystem.directories.has(journal.stagedRootPath)).toBe(false);
+	});
+
+	it('reverifies a quarantined deletion before sending it to Trash', async () => {
+		const story = {...fakeStory(1), id: 'deletion-quarantine-race-story'};
+		const rootPath = '/native/delete-quarantine-race.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const quarantinePath = `/native/.twine-rs-deletion-${transaction.id}.quarantine.twine.rs`;
+		const externalPath = `${quarantinePath}/external-after-quarantine`;
+		const rename = renameFileMock.getMockImplementation()!;
+
+		renameFileMock.mockImplementation(async (source, target) => {
+			await rename(source, target);
+			if (String(target) === quarantinePath) {
+				filesystem.directories.add(externalPath);
+			}
+		});
+
+		await expect(commitProjectFolderDeletion(transaction.id)).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(filesystem.directories.has(quarantinePath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(shell.trashItem).not.toHaveBeenCalledWith(quarantinePath);
+
+		filesystem.directories.delete(externalPath);
+		renameFileMock.mockImplementation(rename);
+		await recoverProjectDeletionTransactions();
+		expect(filesystem.directories.has(quarantinePath)).toBe(false);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('rejects a regular file substituted for a staged deletion before cleanup', async () => {
+		const story = {...fakeStory(1), id: 'deletion-file-substitution-story'};
+		const rootPath = '/native/delete-file-substitution.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {stagedRootPath: string};
+
+		for (const path of [...filesystem.directories].filter(
+			path =>
+				path === journal.stagedRootPath ||
+				path.startsWith(`${journal.stagedRootPath}/`)
+		)) {
+			filesystem.directories.delete(path);
+		}
+		filesystem.projects.delete(journal.stagedRootPath);
+		filesystem.json.set(journal.stagedRootPath, {external: 'file'});
+
+		await expect(commitProjectFolderDeletion(transaction.id)).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(filesystem.json.has(journal.stagedRootPath)).toBe(true);
+		expect(shell.trashItem).not.toHaveBeenCalled();
+		expect(
+			[...filesystem.json.values()].some(
+				(value: any) => value.id === transaction.id
+			)
+		).toBe(true);
+	});
+
+	it('rejects a symlink substituted for a quarantined deletion', async () => {
+		const story = {...fakeStory(1), id: 'deletion-symlink-substitution-story'};
+		const rootPath = '/native/delete-symlink-substitution.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const quarantinePath = `/native/.twine-rs-deletion-${transaction.id}.quarantine.twine.rs`;
+		const rename = renameFileMock.getMockImplementation()!;
+		const readStats = lstatMock.getMockImplementation()!;
+		let quarantined = false;
+
+		renameFileMock.mockImplementation(async (source, target) => {
+			await rename(source, target);
+			quarantined ||= String(target) === quarantinePath;
+		});
+		lstatMock.mockImplementation(async (path, options) => {
+			if (quarantined && String(path) === quarantinePath) {
+				return {
+					ctimeNs: BigInt(2),
+					dev: BigInt(1),
+					ino: BigInt(2),
+					isDirectory: () => false,
+					isFile: () => false,
+					isSymbolicLink: () => true,
+					mode: BigInt(0o120777),
+					mtimeNs: BigInt(1),
+					size: 0
+				};
+			}
+			return readStats(path, options);
+		});
+
+		await expect(commitProjectFolderDeletion(transaction.id)).rejects.toEqual(
+			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
+		);
+		expect(filesystem.directories.has(quarantinePath)).toBe(true);
+		expect(shell.trashItem).not.toHaveBeenCalledWith(quarantinePath);
+
+		lstatMock.mockImplementation(readStats);
+		renameFileMock.mockImplementation(rename);
+		await recoverProjectDeletionTransactions();
+		expect(filesystem.directories.has(quarantinePath)).toBe(false);
+	});
+
+	it('does not gate startup on retryable committed deletion cleanup', async () => {
+		const story = {...fakeStory(1), id: 'deletion-cleanup-pending-story'};
+		const rootPath = '/native/delete-cleanup-pending.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const quarantinePath = `/native/.twine-rs-deletion-${transaction.id}.quarantine.twine.rs`;
+		const trash = (shell.trashItem as jest.Mock).getMockImplementation()!;
+
+		(shell.trashItem as jest.Mock).mockImplementation(async path => {
+			if (String(path) === quarantinePath) {
+				throw Object.assign(new Error('permission denied'), {code: 'EACCES'});
+			}
+			return trash(path);
+		});
+
+		await expect(
+			commitProjectFolderDeletion(transaction.id)
+		).resolves.toBeUndefined();
+		expect(filesystem.directories.has(rootPath)).toBe(false);
+		expect(filesystem.directories.has(quarantinePath)).toBe(true);
+		expect(
+			[...filesystem.json.values()].some(
+				(value: any) =>
+					value.id === transaction.id && value.phase === 'cleanup-verified'
+			)
+		).toBe(true);
+		await expect(recoverProjectDeletionTransactions()).resolves.toBeUndefined();
+		expect(filesystem.json.size).toBeGreaterThan(0);
+
+		(shell.trashItem as jest.Mock).mockImplementation(trash);
+		await recoverProjectDeletionTransactions();
+		expect(filesystem.directories.has(quarantinePath)).toBe(false);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('keeps a changed staged deletion gated during automatic rollback recovery', async () => {
+		const story = {...fakeStory(1), id: 'deletion-recovery-conflict-story'};
+		const rootPath = '/native/delete-recovery-conflict.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+		const transaction = await beginProjectFolderDeletion(rootPath);
+		const journal = [...filesystem.json.values()].find(
+			(value: any) => value.id === transaction.id
+		) as {stagedRootPath: string};
+		const externalPath = `${journal.stagedRootPath}/external-before-recovery`;
+
+		filesystem.directories.add(externalPath);
+		await expect(recoverProjectDeletionTransactions()).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(filesystem.directories.has(journal.stagedRootPath)).toBe(true);
+		expect(filesystem.json.size).toBeGreaterThan(0);
+
+		filesystem.directories.delete(externalPath);
+		await recoverProjectDeletionTransactions();
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('recovers legacy v1 deletion journals without trashing unverified staged data', async () => {
+		const story = {...fakeStory(1), id: 'legacy-deletion-story'};
+		const rootPath = '/native/legacy-delete.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+
+		await beginProjectFolderDeletion(rootPath);
+		const [journalPath, storedJournal] = [...filesystem.json.entries()].find(
+			([path]) => path.includes('/project-deletions/')
+		)!;
+		const legacyJournal = {...(storedJournal as any), version: 1};
+
+		delete legacyJournal.baselineRootManifest;
+		filesystem.json.set(journalPath, legacyJournal);
+		await recoverProjectDeletionTransactions();
+
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(shell.trashItem).not.toHaveBeenCalledWith(
+			legacyJournal.stagedRootPath
+		);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('completes a committed legacy v1 deletion without trashing its unverified staged root', async () => {
+		const story = {...fakeStory(1), id: 'legacy-committed-deletion-story'};
+		const rootPath = '/native/legacy-committed-delete.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [story]);
+
+		await beginProjectFolderDeletion(rootPath);
+		const [journalPath, storedJournal] = [...filesystem.json.entries()].find(
+			([path]) => path.includes('/project-deletions/')
+		)!;
+		const legacyJournal = {
+			...(storedJournal as any),
+			phase: 'renderer-committed',
+			version: 1
+		};
+
+		delete legacyJournal.baselineRootManifest;
+		filesystem.json.set(journalPath, legacyJournal);
+		await recoverProjectDeletionTransactions();
+
+		expect(filesystem.directories.has(rootPath)).toBe(false);
+		expect(filesystem.directories.has(legacyJournal.stagedRootPath)).toBe(true);
+		expect(shell.trashItem).not.toHaveBeenCalledWith(
+			legacyJournal.stagedRootPath
 		);
 		expect(filesystem.json.size).toBe(0);
 	});
@@ -9216,7 +10298,7 @@ describe('project-folder native bridge', () => {
 
 		expect(filesystem.directories.has(rootPath)).toBe(false);
 		expect(shell.trashItem).toHaveBeenCalledWith(
-			expect.stringMatching(/\.twine-rs-deletion-.*\.staged\.twine\.rs$/)
+			expect.stringMatching(/\.twine-rs-deletion-.*\.quarantine\.twine\.rs$/)
 		);
 		expect(filesystem.json.size).toBe(0);
 	});
@@ -9228,7 +10310,7 @@ describe('project-folder native bridge', () => {
 		await deleteProjectFolder('/native/project.twine.rs');
 
 		expect(shell.trashItem).toHaveBeenCalledWith(
-			expect.stringMatching(/\.twine-rs-deletion-.*\.staged\.twine\.rs$/)
+			expect.stringMatching(/\.twine-rs-deletion-.*\.quarantine\.twine\.rs$/)
 		);
 		expect(removeMock).not.toHaveBeenCalledWith('/native/project.twine.rs');
 	});

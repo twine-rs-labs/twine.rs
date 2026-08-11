@@ -284,9 +284,14 @@ const bridge = {
 		return ipcRenderer.invoke('load-prefs');
 	},
 	loadStories() {
-		return ipcRenderer
-			.invoke('load-stories')
-			.then(stories => stories.map(rememberProjectCapability));
+		return ipcRenderer.invoke('load-stories').then(result =>
+			result.status === 'loaded'
+				? {
+						...result,
+						stories: result.stories.map(rememberProjectCapability)
+					}
+				: result
+		);
 	},
 	loadStoryFormats() {
 		return ipcRenderer.invoke('load-story-formats');

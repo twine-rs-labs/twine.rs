@@ -87,7 +87,10 @@ import {
 	recordPerformanceHarnessEvent
 } from '../util/performance';
 import {rendererQuitQuiescence} from '../util/renderer-quit-quiescence';
-import {createPersistenceCompletion} from '../store/persistence/completion';
+import {
+	createPersistenceCompletion,
+	rejectPersistenceCompletion
+} from '../store/persistence/completion';
 
 function storiesWithDocuments(stories: Story[]): StoryWithDocuments[] {
 	if (
@@ -143,6 +146,63 @@ export interface CoreCommandHistoryOptions {
 }
 export type CoreCommandOptions = string | CoreCommandHistoryOptions;
 
+export type CorePersistenceTarget =
+	| {passageId: string; storyId: string; type: 'passageText'}
+	| {storyId: string; type: 'script' | 'stylesheet'};
+
+function persistenceTargetKey(target: CorePersistenceTarget) {
+	return target.type === 'passageText'
+		? `${target.storyId}:passage:${target.passageId}`
+		: `${target.storyId}:source:${target.type}`;
+}
+
+function persistenceTargetsForAction(action: ApplyCorePatchBatchAction) {
+	const targets = new Map<string, CorePersistenceTarget>();
+	const add = (target: CorePersistenceTarget) =>
+		targets.set(persistenceTargetKey(target), target);
+
+	for (const update of action.documentUpdates ?? []) {
+		add(update);
+	}
+	for (const hint of action.persistenceHints ?? []) {
+		if (
+			hint.type === 'passageText' ||
+			hint.type === 'script' ||
+			hint.type === 'stylesheet'
+		) {
+			add(hint);
+		}
+	}
+	return [...targets.values()];
+}
+
+function persistenceRetryActionForTarget(
+	action: ApplyCorePatchBatchAction,
+	target: CorePersistenceTarget
+): ApplyCorePatchBatchAction {
+	const targetKey = persistenceTargetKey(target);
+	const documentUpdates = (action.documentUpdates ?? []).filter(
+		update => persistenceTargetKey(update) === targetKey
+	);
+	const persistenceHints = (action.persistenceHints ?? []).filter(
+		hint =>
+			(hint.type === 'passageText' ||
+				hint.type === 'script' ||
+				hint.type === 'stylesheet') &&
+			persistenceTargetKey(hint) === targetKey
+	);
+
+	return {
+		actions: [],
+		documentUpdates,
+		persistenceHints: persistenceHints.length > 0 ? persistenceHints : [target],
+		revision: action.revision,
+		sessionId: action.sessionId,
+		storyIds: [target.storyId],
+		type: 'applyCorePatchBatch'
+	};
+}
+
 export interface CoreProjectHost {
 	appendHydratedProjectPassages(
 		storyId: string,
@@ -162,6 +222,7 @@ export interface CoreProjectHost {
 		command: StoryCommand,
 		options?: CoreCommandOptions
 	): Promise<PatchBatch | undefined>;
+	retryStoryPersistence(target: CorePersistenceTarget): Promise<boolean>;
 	admitProjectStories(
 		stories: StoryWithDocuments[],
 		options?: CoreCommandOptions
@@ -698,6 +759,22 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 	private pendingSessionPatchDispatches = 0;
 	private pendingAdmissionStories = new Map<string, Story>();
 	private persistenceCompletions = new WeakMap<PatchBatch, Promise<void>>();
+	private persistenceActions = new WeakMap<
+		PatchBatch,
+		{
+			action: ApplyCorePatchBatchAction;
+			annotation: string | undefined;
+		}
+	>();
+	private failedPersistenceByTarget = new Map<
+		string,
+		{
+			action: ApplyCorePatchBatchAction;
+			annotation: string | undefined;
+			inFlight?: Promise<void>;
+			target: CorePersistenceTarget;
+		}
+	>();
 	private stories: StoriesState;
 	private status: CoreSessionStatus = {
 		canRedo: false,
@@ -782,8 +859,103 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		if (!batch) {
 			throw new Error('The Core mutation did not produce a persistence batch.');
 		}
-		await this.awaitPersistenceCompletion(batch);
+		try {
+			await this.awaitPersistenceCompletion(batch);
+			this.clearFailedPersistenceThrough(batch);
+		} catch (error) {
+			const retryable = this.persistenceActions.get(batch);
+
+			if (retryable) {
+				for (const target of persistenceTargetsForAction(retryable.action)) {
+					const receipt = {
+						action: persistenceRetryActionForTarget(retryable.action, target),
+						annotation: retryable.annotation,
+						target
+					};
+
+					this.failedPersistenceByTarget.set(
+						persistenceTargetKey(target),
+						receipt
+					);
+				}
+			}
+			throw error;
+		}
 		return batch;
+	}
+
+	async retryStoryPersistence(target: CorePersistenceTarget) {
+		const targetKey = persistenceTargetKey(target);
+		const retryable = this.failedPersistenceByTarget.get(targetKey);
+
+		if (!retryable) {
+			return false;
+		}
+		if (!retryable.inFlight) {
+			retryable.inFlight = this.retryPersistenceAction(retryable).finally(
+				() => {
+					retryable.inFlight = undefined;
+				}
+			);
+		}
+		await retryable.inFlight;
+		return true;
+	}
+
+	private async retryPersistenceAction(retryable: {
+		action: ApplyCorePatchBatchAction;
+		annotation: string | undefined;
+		target: CorePersistenceTarget;
+	}) {
+		const persistence = createPersistenceCompletion();
+		const action = {
+			...retryable.action,
+			persistenceToken: persistence.token
+		};
+
+		try {
+			this.dispatch(action, retryable.annotation);
+		} catch (error) {
+			try {
+				rejectPersistenceCompletion(persistence.token, error);
+			} catch {
+				// The reducer may have consumed the token before throwing. Preserve the
+				// original dispatch failure either way.
+			}
+			throw error;
+		}
+		await persistence.completion;
+		const targetKey = persistenceTargetKey(retryable.target);
+
+		if (this.failedPersistenceByTarget.get(targetKey) === retryable) {
+			this.failedPersistenceByTarget.delete(targetKey);
+		}
+	}
+
+	private clearFailedPersistenceThrough(batch: PatchBatch) {
+		const persisted = this.persistenceActions.get(batch);
+
+		if (!persisted) {
+			return;
+		}
+		this.clearFailedPersistenceTargets(
+			persistenceTargetsForAction(persisted.action),
+			persisted.action.revision ?? 0
+		);
+	}
+
+	private clearFailedPersistenceTargets(
+		targets: CorePersistenceTarget[],
+		persistedRevision: number
+	) {
+		for (const target of targets) {
+			const targetKey = persistenceTargetKey(target);
+			const failed = this.failedPersistenceByTarget.get(targetKey);
+
+			if (failed && (failed.action.revision ?? 0) <= persistedRevision) {
+				this.failedPersistenceByTarget.delete(targetKey);
+			}
+		}
 	}
 
 	private async awaitPersistenceCompletion(batch: PatchBatch | undefined) {
@@ -1430,6 +1602,21 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				});
 				continue;
 			}
+			if (patch.type === 'storyScriptUpdated') {
+				documentUpdates.push({
+					storyId: patch.story_id,
+					text: patch.script,
+					type: 'script'
+				});
+				continue;
+			}
+			if (patch.type === 'storyStylesheetUpdated') {
+				documentUpdates.push({
+					storyId: patch.story_id,
+					text: patch.stylesheet,
+					type: 'stylesheet'
+				});
+			}
 		}
 		const classifiedAt = performance.now();
 		const persistenceCompletion =
@@ -1455,27 +1642,36 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		this.wasmProjectReplaceRevision = nextRevision;
 		this.wasmProjectReplacePromise = Promise.resolve();
 		this.pendingSessionPatchDispatches += storyActions.length > 0 ? 1 : 0;
+		let dispatchedPersistenceAction: ApplyCorePatchBatchAction | undefined;
+
 		applyProjectPatchBatch(
 			batch,
 			{
 				deleteAsset: (storyId, path) => this.deleteAsset(storyId, path),
 				dispatch: action => this.dispatch(action, annotation),
-				dispatchBatch: actions =>
-					this.dispatch(
-						{
-							actions,
-							documentUpdates,
-							persistence:
-								persistence === 'skip' || externalDeltaId ? 'skip' : undefined,
-							persistenceHints,
-							persistenceToken: persistenceCompletion?.token,
-							revision: nextRevision,
-							sessionId: this.sessionId,
-							storyIds: patchedStoryIds,
-							type: 'applyCorePatchBatch'
-						},
-						annotation
-					),
+				dispatchBatch: actions => {
+					const action: ApplyCorePatchBatchAction = {
+						actions,
+						documentUpdates,
+						persistence:
+							persistence === 'skip' || externalDeltaId ? 'skip' : undefined,
+						persistenceHints,
+						persistenceToken: persistenceCompletion?.token,
+						revision: nextRevision,
+						sessionId: this.sessionId,
+						storyIds: patchedStoryIds,
+						type: 'applyCorePatchBatch'
+					};
+
+					if (persistenceCompletion) {
+						this.persistenceActions.set(batch, {
+							action: {...action, persistenceToken: undefined},
+							annotation
+						});
+					}
+					dispatchedPersistenceAction = action;
+					this.dispatch(action, annotation);
+				},
 				dispatchEmptyBatch: persistenceHints.length > 0,
 				renameAsset: (storyId, oldPath, newPath) =>
 					this.renameAsset(storyId, oldPath, newPath),
@@ -1492,6 +1688,14 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			},
 			storyActions
 		);
+		if (externalDeltaId || persistence === 'skip') {
+			this.clearFailedPersistenceTargets(
+				dispatchedPersistenceAction
+					? persistenceTargetsForAction(dispatchedPersistenceAction)
+					: [],
+				nextRevision
+			);
+		}
 		const dispatchedAt = performance.now();
 
 		if (externalDeltaId) {
@@ -2851,6 +3055,14 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		});
 	}
 
+	retryStoryPersistence(target: CorePersistenceTarget) {
+		return this.admitMutation(
+			() =>
+				this.hostForStory(target.storyId)?.retryStoryPersistence(target) ??
+				Promise.resolve(false)
+		);
+	}
+
 	admitProjectStories(
 		stories: StoryWithDocuments[],
 		options?: CoreCommandOptions
@@ -3683,6 +3895,7 @@ export function useCoreProjectSession(storyId: string | undefined) {
 				host.applyStoryCommand(command, options),
 			applyStoryCommandPersisted: (command, options) =>
 				host.applyStoryCommandPersisted(command, options),
+			retryStoryPersistence: target => host.retryStoryPersistence(target),
 			admitProjectStories: (stories, options) =>
 				host.admitProjectStories(stories, options),
 			deleteProjectStories: (storyIds, options) =>

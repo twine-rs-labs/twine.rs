@@ -316,6 +316,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	const currentBufferValue = React.useRef(buffer.value);
 	const expectedText = React.useRef<string | undefined>(undefined);
 	const pendingText = React.useRef<string | undefined>(undefined);
+	const failedPersistenceText = React.useRef<string | undefined>(undefined);
 	const pendingTimeout = React.useRef<number | undefined>(undefined);
 	const pendingCommit = React.useRef<Promise<void> | undefined>(undefined);
 	const editRevision = React.useRef(0);
@@ -409,15 +410,17 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		}
 		const guarded = operation
 			.then(() => {
+				if (currentLocalText.current === text) {
+					failedPersistenceText.current = undefined;
+				}
 				setBufferSaveError(undefined);
 			})
 			.catch(error => {
 				if (
 					pendingText.current === undefined &&
-					expectedText.current === text &&
 					currentLocalText.current === text
 				) {
-					pendingText.current = text;
+					failedPersistenceText.current = text;
 				}
 				setBufferSaveError(error as Error);
 				throw error;
@@ -444,7 +447,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			window.clearTimeout(pendingTimeout.current);
 			pendingTimeout.current = undefined;
 		}
-		const text = pendingText.current;
+		const text = pendingText.current ?? failedPersistenceText.current;
 
 		pendingText.current = undefined;
 		if (text === undefined) {
@@ -476,7 +479,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				flush: flushPendingText,
 				hasPendingChanges: () =>
 					pendingText.current !== undefined ||
-					pendingCommit.current !== undefined,
+					pendingCommit.current !== undefined ||
+					failedPersistenceText.current !== undefined,
 				revision: () => editRevision.current,
 				storyId: story.id
 			}),
@@ -504,10 +508,19 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			return;
 		}
 
+		if (
+			failedPersistenceText.current !== undefined &&
+			failedPersistenceText.current !== buffer.value
+		) {
+			failedPersistenceText.current = undefined;
+			setBufferSaveError(undefined);
+		}
 		expectedText.current = undefined;
 		currentLocalText.current = buffer.value;
 		setLocalText(buffer.value);
-		setBufferSaveError(undefined);
+		if (failedPersistenceText.current === undefined) {
+			setBufferSaveError(undefined);
+		}
 	}, [buffer.id, buffer.value]);
 
 	const handleChangeText = React.useCallback(

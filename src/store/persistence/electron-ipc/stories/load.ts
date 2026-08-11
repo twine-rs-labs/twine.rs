@@ -9,6 +9,26 @@ import {importStoriesAsync} from '../../../../util/import';
 import {markProjectStoryHydration} from '../../../project-hydration';
 import {saveProjectMetadata} from '../../../project-metadata';
 
+export class NativeProjectRecoveryRequiredError extends Error {
+	readonly code = 'NATIVE_PROJECT_RECOVERY_REQUIRED';
+
+	constructor(message: string) {
+		super(message);
+		this.name = 'NativeProjectRecoveryRequiredError';
+	}
+}
+
+export function isNativeProjectRecoveryRequiredError(
+	error: unknown
+): error is NativeProjectRecoveryRequiredError {
+	return (
+		error instanceof NativeProjectRecoveryRequiredError ||
+		(error instanceof Error &&
+			(error as Error & {code?: string}).code ===
+				'NATIVE_PROJECT_RECOVERY_REQUIRED')
+	);
+}
+
 function isNativeProjectStoryEntry(
 	entry: ElectronLoadedStoryEntry
 ): entry is ElectronNativeProjectStoryEntry {
@@ -35,7 +55,12 @@ export async function load(): Promise<Story[]> {
 		throw new Error('Electron bridge is not present on window.');
 	}
 
-	const stories = await twineElectron.loadStories();
+	const loadResult = await twineElectron.loadStories();
+
+	if (loadResult.status === 'recovery-required') {
+		throw new NativeProjectRecoveryRequiredError(loadResult.message);
+	}
+	const stories = loadResult.stories;
 
 	if (stories && Array.isArray(stories)) {
 		const result: Story[] = [];

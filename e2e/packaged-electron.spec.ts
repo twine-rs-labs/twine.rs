@@ -481,7 +481,13 @@ async function attachDuplicateProjectDiagnostics(
 	await testInfo.attach('duplicate-project-diagnostics', {
 		body: Buffer.from(
 			JSON.stringify(
-				{index, launcherRows, libraryTree, mainProcessLogs},
+				{
+					index,
+					launcherRows,
+					libraryTree,
+					mainProcessLogs,
+					rendererLogs: running?.rendererLogs ?? []
+				},
 				null,
 				2
 			)
@@ -1670,8 +1676,14 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 
 		await tabWithText(page, 'Story').click();
 		await page.getByLabel('Find and Replace', {exact: true}).click();
-		const searchDialog = page.getByRole('dialog', {name: 'Find and Replace'});
-		await expect(searchDialog).toBeVisible();
+		const searchPanel = page.getByRole('region', {name: 'References'});
+
+		await expect(
+			searchPanel.getByRole('tab', {name: 'Find / Replace'})
+		).toHaveAttribute('aria-selected', 'true');
+		await expect(
+			searchPanel.getByRole('textbox', {name: 'Find'})
+		).toBeVisible();
 
 		await page.keyboard.press('Escape');
 		await page.getByTitle('New Project').click();

@@ -155,21 +155,25 @@ async function loadRememberedProjectStories(
 				loadedProjectPaths.add(rememberedProjectPath);
 			}
 		} catch (error) {
-			console.warn(
-				`Could not load remembered native project ${project.rootPath}: ${
-					(error as Error).message
-				}`
-			);
-
 			const code = (error as NodeJS.ErrnoException).code;
 
 			if (code === 'ENOENT' || code === 'ENOTDIR') {
+				console.warn(
+					`Could not load remembered native project ${project.rootPath}: ${
+						(error as Error).message
+					}`
+				);
 				const projectBasename = basename(project.rootPath);
 				const paths = missingProjectPathsByBasename.get(projectBasename) ?? [];
 
 				paths.push(project.rootPath);
 				missingProjectPathsByBasename.set(projectBasename, paths);
+				continue;
 			}
+			throw new Error(
+				`Could not load remembered native project ${project.rootPath}.`,
+				{cause: error}
+			);
 		}
 	}
 
@@ -193,10 +197,19 @@ async function loadRememberedProjectStories(
 					loadedProjectPaths.add(resolve(openedProject.rootPath));
 				}
 			} catch (error) {
-				console.warn(
-					`Could not load scanned native project ${projectPath}: ${
-						(error as Error).message
-					}`
+				const code = (error as NodeJS.ErrnoException).code;
+
+				if (code === 'ENOENT' || code === 'ENOTDIR') {
+					console.warn(
+						`Could not load scanned native project ${projectPath}: ${
+							(error as Error).message
+						}`
+					);
+					continue;
+				}
+				throw new Error(
+					`Could not load scanned native project ${projectPath}.`,
+					{cause: error}
 				);
 			}
 		}

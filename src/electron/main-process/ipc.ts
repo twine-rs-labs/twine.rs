@@ -1394,12 +1394,18 @@ export function initIpc(options: InitIpcOptions = {}) {
 
 	ipcMain.handle('load-stories', async event => {
 		try {
-			return (await loadStories()).map(story =>
-				'rootPath' in story ? grantProjectCapability(event, story) : story
-			);
+			return {
+				status: 'loaded',
+				stories: (await loadStories()).map(story =>
+					'rootPath' in story ? grantProjectCapability(event, story) : story
+				)
+			};
 		} catch (error) {
-			console.warn(`Could not load stories, returning empty array: ${error}`);
-			return [];
+			console.error(`Project library recovery or loading failed: ${error}`);
+			return {
+				message: error instanceof Error ? error.message : String(error),
+				status: 'recovery-required'
+			};
 		}
 	});
 

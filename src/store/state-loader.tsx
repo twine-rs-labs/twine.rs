@@ -13,6 +13,11 @@ import {
 } from '../core/bootstrap-stories';
 import type {Story, StoryWithDocuments} from './stories';
 import {isElectronRenderer} from '../util/is-electron';
+import type {TwineElectronWindow} from '../electron/shared';
+import {
+	isNativeProjectRecoveryRequiredError,
+	NativeProjectRecoveryRequiredError
+} from './persistence/electron-ipc/stories/load';
 import {
 	discardInvalidLocalReplacementRecovery,
 	inspectLocalReplacementRecovery,
@@ -41,6 +46,10 @@ interface PersistedStateLoad {
 
 interface PendingLocalRecovery {
 	report: LocalReplacementRecoveryReport;
+}
+
+interface PendingNativeRecovery {
+	message: string;
 }
 
 const emptyRecoveryReport: LocalReplacementRecoveryReport = {issues: []};
@@ -143,6 +152,38 @@ const LocalReplacementRecoveryResolver: React.FC<{
 	</main>
 );
 
+const NativeProjectRecoveryResolver: React.FC<{
+	busy: boolean;
+	error?: string;
+	message: string;
+	onReveal: () => void;
+	onRetry: () => void;
+}> = ({busy, error, message, onReveal, onRetry}) => (
+	<main
+		aria-labelledby="native-project-recovery-title"
+		className="local-replacement-recovery"
+	>
+		<Panel icon="alert-octagon" pad title="Project recovery required">
+			<h1 id="native-project-recovery-title">Project library is closed</h1>
+			<p>
+				Twine could not safely finish a project-folder operation. No project
+				sessions will open until the on-disk state can be verified.
+			</p>
+			<Badge icon="alert-octagon" role="alert" tone="error">
+				{error ?? message}
+			</Badge>
+			<div className="local-replacement-recovery__footer">
+				<Button disabled={busy} onClick={onReveal}>
+					Reveal Project Library
+				</Button>
+				<Button icon="refresh" loading={busy} onClick={onRetry}>
+					Retry Recovery
+				</Button>
+			</div>
+		</Panel>
+	</main>
+);
+
 function storiesWithDocuments(stories: Story[]): StoryWithDocuments[] {
 	if (
 		stories.some(story =>
@@ -181,6 +222,8 @@ export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 	const [inited, setInited] = React.useState(false);
 	const [pendingLocalRecovery, setPendingLocalRecovery] =
 		React.useState<PendingLocalRecovery>();
+	const [pendingNativeRecovery, setPendingNativeRecovery] =
+		React.useState<PendingNativeRecovery>();
 	const [recoveryBusy, setRecoveryBusy] = React.useState(false);
 	const [recoveryError, setRecoveryError] = React.useState<string>();
 	const [prefsRepaired, setPrefsRepaired] = React.useState(false);
@@ -220,10 +263,28 @@ export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 		React.useCallback(async (): Promise<PersistedStateLoad> => {
 			const errors: unknown[] = [];
 			const recordError = (error: unknown) => errors.push(error);
+			const loadStoriesFailClosed = async () => {
+				try {
+					return await stories.load();
+				} catch (error) {
+					if (
+						isElectronRenderer() &&
+						!isNativeProjectRecoveryRequiredError(error)
+					) {
+						const message =
+							error instanceof Error ? error.message : String(error);
+
+						throw new NativeProjectRecoveryRequiredError(
+							`Project library could not be safely loaded: ${message}`
+						);
+					}
+					throw error;
+				}
+			};
 			const [formatsState, prefsState, storiesState] = await Promise.all([
 				loadOrDefault('story formats', storyFormats.load, [], recordError),
 				loadOrDefault('preferences', prefs.load, {}, recordError),
-				loadOrDefault('stories', stories.load, [], recordError)
+				loadOrDefault('stories', loadStoriesFailClosed, [], recordError)
 			]);
 
 			return {
@@ -278,6 +339,14 @@ export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 			const storageAccessError = electron
 				? undefined
 				: errors.find(isStorageAccessError);
+			const nativeRecoveryError = electron
+				? errors.find(isNativeProjectRecoveryRequiredError)
+				: undefined;
+
+			if (nativeRecoveryError) {
+				setPendingNativeRecovery({message: nativeRecoveryError.message});
+				return;
+			}
 			const gatedReport =
 				recoveryReport.issues.length > 0
 					? recoveryReport
@@ -385,6 +454,51 @@ export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 		}
 	}
 
+	async function handleNativeRecoveryRetry() {
+		if (!pendingNativeRecovery || recoveryRunActiveRef.current) {
+			return;
+		}
+		recoveryRunActiveRef.current = true;
+		setRecoveryBusy(true);
+		setRecoveryError(undefined);
+
+		try {
+			const {errors, state} = await loadPersistedState();
+			const nativeRecoveryError = errors.find(
+				isNativeProjectRecoveryRequiredError
+			);
+
+			if (!mountedRef.current) {
+				return;
+			}
+			if (nativeRecoveryError) {
+				setPendingNativeRecovery({message: nativeRecoveryError.message});
+				return;
+			}
+			setPendingNativeRecovery(undefined);
+			applyLoadedState(state);
+		} catch (error) {
+			if (mountedRef.current) {
+				setRecoveryError((error as Error).message);
+			}
+		} finally {
+			recoveryRunActiveRef.current = false;
+			if (mountedRef.current) {
+				setRecoveryBusy(false);
+			}
+		}
+	}
+
+	function handleRevealNativeRecovery() {
+		const bridge = (window as TwineElectronWindow).twineElectron;
+
+		void bridge?.revealStoryLibraryFolder().catch(error => {
+			if (mountedRef.current) {
+				setRecoveryError((error as Error).message);
+			}
+		});
+	}
+
 	React.useEffect(() => {
 		if (inited && !formatsRepaired) {
 			formatsDispatch({type: 'repair'});
@@ -444,6 +558,18 @@ export const StateLoader: React.FC<React.PropsWithChildren> = ({children}) => {
 		storiesRepaired,
 		storiesState
 	]);
+
+	if (pendingNativeRecovery) {
+		return (
+			<NativeProjectRecoveryResolver
+				busy={recoveryBusy}
+				error={recoveryError}
+				message={pendingNativeRecovery.message}
+				onReveal={handleRevealNativeRecovery}
+				onRetry={handleNativeRecoveryRetry}
+			/>
+		);
+	}
 
 	if (pendingLocalRecovery) {
 		return (

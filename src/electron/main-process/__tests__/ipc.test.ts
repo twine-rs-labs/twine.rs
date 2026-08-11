@@ -1362,12 +1362,12 @@ describe('initIpc()', () => {
 			call => call[0] === 'load-stories'
 		);
 
-		expect(await listener[1]()).toEqual(stories);
+		expect(await listener[1]()).toEqual({status: 'loaded', stories});
 		expect(loadStoriesMock).toHaveBeenCalledTimes(1);
 	});
 
-	it('returns an empty story library if loadStories() throws', async () => {
-		jest.spyOn(console, 'warn').mockReturnValue();
+	it('returns a recovery requirement if loadStories() throws', async () => {
+		jest.spyOn(console, 'error').mockReturnValue();
 		loadStoriesMock.mockImplementation(() => {
 			throw new Error('mock-story-load-error');
 		});
@@ -1377,7 +1377,10 @@ describe('initIpc()', () => {
 		);
 
 		expect(listener).not.toBeUndefined();
-		expect(await listener[1]()).toEqual([]);
+		expect(await listener[1]()).toEqual({
+			message: 'mock-story-load-error',
+			status: 'recovery-required'
+		});
 	});
 
 	describe('the handler it adds for load-story-formats events', () => {

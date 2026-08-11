@@ -31,12 +31,14 @@ import {
 	load as loadLocalStoryFormats,
 	save as saveLocalStoryFormats
 } from '../persistence/local-storage/story-formats';
+import {isElectronRenderer} from '../../util/is-electron';
 
 jest.mock('../prefs/prefs-context');
 jest.mock('../stories/stories-context');
 jest.mock('../story-formats/story-formats-context');
 jest.mock('../persistence/use-persistence');
 jest.mock('../../components/loading-curtain/loading-curtain');
+jest.mock('../../util/is-electron');
 
 function persistStories(...stories: StoryWithDocuments[]) {
 	doUpdateTransaction(transaction => {
@@ -105,6 +107,7 @@ describe('<StateLoader>', () => {
 		prefsDispatchMock = jest.fn();
 		formatsDispatchMock = jest.fn();
 		storiesDispatchMock = jest.fn();
+		(isElectronRenderer as jest.Mock).mockReturnValue(false);
 
 		(usePrefsContext as jest.Mock).mockReturnValue({
 			dispatch: prefsDispatchMock,
@@ -704,6 +707,60 @@ describe('<StateLoader>', () => {
 		expect(storiesDispatchMock.mock.calls[0]).toEqual([
 			{type: 'init', state: []}
 		]);
+	});
+
+	it('keeps Electron project sessions closed until native recovery and reload succeed', async () => {
+		(isElectronRenderer as jest.Mock).mockReturnValue(true);
+		const recoveredStories = {nativeStoriesState: true};
+		const loadPrefs = jest.fn(async () => ({nativePrefsState: true}));
+		const loadStoryFormats = jest.fn(async () => ({nativeFormatsState: true}));
+		const loadStories = jest
+			.fn()
+			.mockRejectedValueOnce(
+				new Error('replacement root conflicts with its recovery backup')
+			)
+			.mockResolvedValueOnce(recoveredStories);
+		const revealStoryLibraryFolder = jest.fn(async () => undefined);
+
+		Object.assign(window, {twineElectron: {revealStoryLibraryFolder}});
+		(usePersistence as jest.Mock).mockReturnValue({
+			prefs: {load: loadPrefs},
+			stories: {load: loadStories},
+			storyFormats: {load: loadStoryFormats}
+		});
+
+		render(
+			<StateLoader>
+				<div data-testid="native-project-sessions" />
+			</StateLoader>
+		);
+
+		expect(await screen.findByText('Project library is closed')).toBeVisible();
+		expect(
+			screen.getByText(
+				'Project library could not be safely loaded: replacement root conflicts with its recovery backup'
+			)
+		).toBeVisible();
+		expect(screen.queryByTestId('native-project-sessions')).toBeNull();
+		expect(storiesDispatchMock).not.toHaveBeenCalled();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'Reveal Project Library'})
+		);
+		await waitFor(() =>
+			expect(revealStoryLibraryFolder).toHaveBeenCalledTimes(1)
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'Retry Recovery'}));
+
+		expect(await screen.findByTestId('native-project-sessions')).toBeVisible();
+		expect(loadPrefs).toHaveBeenCalledTimes(2);
+		expect(loadStoryFormats).toHaveBeenCalledTimes(2);
+		expect(loadStories).toHaveBeenCalledTimes(2);
+		expect(storiesDispatchMock).toHaveBeenCalledWith({
+			state: recoveredStories,
+			type: 'init'
+		});
+		delete (window as any).twineElectron;
 	});
 
 	it('loads and applies persistence exactly once in StrictMode', async () => {

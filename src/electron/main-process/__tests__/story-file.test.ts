@@ -184,6 +184,27 @@ describe('loadStories', () => {
 		).toBeLessThan(rememberedProjectFoldersMock.mock.invocationCallOrder[0]);
 	});
 
+	it('rejects before reading the library when deletion recovery fails', async () => {
+		const recoveryError = new Error('deletion recovery conflict');
+
+		recoverProjectDeletionTransactionsMock.mockRejectedValueOnce(recoveryError);
+
+		await expect(loadStories()).rejects.toBe(recoveryError);
+		expect(recoverProjectReplacementTransactionsMock).not.toHaveBeenCalled();
+		expect(rememberedProjectFoldersMock).not.toHaveBeenCalled();
+	});
+
+	it('rejects before reading the library when replacement recovery fails', async () => {
+		const recoveryError = new Error('replacement recovery conflict');
+
+		recoverProjectReplacementTransactionsMock.mockRejectedValueOnce(
+			recoveryError
+		);
+
+		await expect(loadStories()).rejects.toBe(recoveryError);
+		expect(rememberedProjectFoldersMock).not.toHaveBeenCalled();
+	});
+
 	it('resolves to an array of stories in the story library directory', async () => {
 		const result = await loadStories();
 
@@ -384,6 +405,32 @@ describe('loadStories', () => {
 		);
 	});
 
+	it('rejects the complete library snapshot when a remembered native project cannot open', async () => {
+		const recoveryError = Object.assign(
+			new Error('project file recovery conflict'),
+			{code: 'PROJECT_FILE_RECOVERY_REQUIRED'}
+		);
+
+		rememberedProjectFoldersMock.mockReturnValue([
+			{
+				rootPath: '/native/conflicted.twine.rs',
+				storyIds: ['story-id'],
+				updatedAt: '2026-06-21T16:00:00.000Z'
+			}
+		]);
+		openProjectFolderMock.mockRejectedValue(recoveryError);
+
+		await expect(loadStories()).rejects.toEqual(
+			expect.objectContaining({
+				cause: recoveryError,
+				message:
+					'Could not load remembered native project /native/conflicted.twine.rs.'
+			})
+		);
+		expect(forgetProjectFolderMock).not.toHaveBeenCalled();
+		expect(readFileMock).not.toHaveBeenCalled();
+	});
+
 	it('adopts scanned native project folders when the remembered index is empty', async () => {
 		const looseStory = fakeStory(1);
 		const projectStory = fakeStory(2);
@@ -476,6 +523,36 @@ describe('loadStories', () => {
 				mtime: expect.any(Date)
 			}
 		]);
+	});
+
+	it('rejects the complete library snapshot when a scanned native project cannot open', async () => {
+		const recoveryError = new Error('scanned project recovery conflict');
+
+		readdirMock.mockImplementation((name: string, options?: any) => {
+			if (options?.withFileTypes) {
+				return Promise.resolve(
+					name === 'mock-story-directory'
+						? [
+								{
+									isDirectory: () => true,
+									name: 'conflicted.twine.rs'
+								}
+							]
+						: []
+				);
+			}
+			return Promise.resolve([]);
+		});
+		statMock.mockResolvedValue({isFile: () => true});
+		openProjectFolderMock.mockRejectedValue(recoveryError);
+
+		await expect(loadStories()).rejects.toEqual(
+			expect.objectContaining({
+				cause: recoveryError,
+				message:
+					'Could not load scanned native project mock-story-directory/conflicted.twine.rs.'
+			})
+		);
 	});
 
 	it('tries to recover missing remembered project folders from the current library before forgetting them', async () => {

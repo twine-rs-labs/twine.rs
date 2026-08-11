@@ -16,7 +16,9 @@ import {
 	setStorySnapToGridCommand,
 	setStoryZoomCommand,
 	StoryCommand,
-	updatePassageTextCommand
+	updatePassageTextCommand,
+	updateStoryScriptCommand,
+	updateStoryStylesheetCommand
 } from '..';
 import {
 	knownAssetInventoryForStory,
@@ -30,15 +32,30 @@ import {
 	useCoreProjectHost
 } from '../project-host';
 import {reducer as storiesReducer} from '../../store/stories/reducer';
-import {StoriesContext, StoriesState} from '../../store/stories';
+import {
+	StoriesContext,
+	StoriesState,
+	StoryWithDocuments
+} from '../../store/stories';
 import {StoriesActionOrThunk} from '../../store/stories';
 import {markProjectStoryHydration} from '../../store/project-hydration';
-import {saveProjectMetadata} from '../../store/project-metadata';
+import {
+	deleteProjectMetadata,
+	saveProjectMetadata
+} from '../../store/project-metadata';
 import {fakePassage, fakeStory} from '../../test-util';
 import {createTestCoreSessionClient} from '../../test-util/test-core-session-client';
 import {PersistenceQuitCoordinator} from '../../store/persistence/electron-ipc/persistence-quit-coordinator';
-import {bindPersistenceCompletion} from '../../store/persistence/completion';
+import {
+	bindPersistenceCompletion,
+	rejectPersistenceCompletion
+} from '../../store/persistence/completion';
 import {saveMiddleware as saveLocalStories} from '../../store/persistence/local-storage/stories/save-middleware';
+import {load as loadLocalStories} from '../../store/persistence/local-storage/stories/load';
+import {saveMiddleware as saveElectronStories} from '../../store/persistence/electron-ipc/stories/save-middleware';
+import {load as loadElectronStories} from '../../store/persistence/electron-ipc/stories/load';
+import {TwineElectronWindow} from '../../electron/shared';
+import {ProjectFolderSaveOptions} from '../../store/persistence/project-folder-save-hints';
 import {
 	doUpdateTransaction,
 	savePassage,
@@ -785,6 +802,559 @@ describe('StoreCoreProjectHost asset commands', () => {
 		);
 		setItem.mockRestore();
 		window.localStorage.clear();
+	});
+
+	function localPersistenceHarness(story: StoryWithDocuments) {
+		window.localStorage.clear();
+		let stories: StoriesState = [story];
+		let remainingManifestFailures = 0;
+		const hostRef: {current?: StoreCoreProjectHost} = {};
+
+		registerStoryDocuments(story);
+		doUpdateTransaction(transaction => {
+			saveStory(transaction, story);
+			for (const passage of story.passages) {
+				savePassage(transaction, passage);
+			}
+		});
+		const originalSetItem = Storage.prototype.setItem;
+		const setItem = jest
+			.spyOn(Storage.prototype, 'setItem')
+			.mockImplementation(function (this: Storage, key: string, value: string) {
+				if (key === storageManifestKey && remainingManifestFailures > 0) {
+					remainingManifestFailures--;
+					throw new Error('manifest unavailable');
+				}
+				return originalSetItem.call(this, key, value);
+			});
+		const applyAction = (action: StoriesActionOrThunk) => {
+			if (typeof action === 'function') {
+				action(applyAction, () => stories);
+				return;
+			}
+			const nextStories = storiesReducer(stories, action);
+
+			stories = nextStories;
+			try {
+				const persistence = saveLocalStories(nextStories, action);
+
+				if (action.type === 'applyCorePatchBatch' && action.persistenceToken) {
+					bindPersistenceCompletion(action.persistenceToken, persistence);
+				}
+			} catch (error) {
+				if (action.type === 'applyCorePatchBatch' && action.persistenceToken) {
+					rejectPersistenceCompletion(action.persistenceToken, error);
+				}
+			}
+			hostRef.current?.update(stories, dispatch);
+		};
+		const dispatch = jest.fn(applyAction);
+		const host = new StoreCoreProjectHost(stories, dispatch);
+
+		hostRef.current = host;
+		return {
+			cleanup() {
+				setItem.mockRestore();
+				window.localStorage.clear();
+			},
+			host,
+			setManifestFailures(count: number) {
+				remainingManifestFailures = count;
+			}
+		};
+	}
+
+	function electronPersistenceHarness(story: StoryWithDocuments) {
+		window.localStorage.clear();
+		const rootPath = `/native/${story.id}.twine.rs`;
+		let stories: StoriesState = [story];
+		let remainingSaveFailures = 0;
+		let durableScript = story.script;
+		let durableStylesheet = story.stylesheet;
+		const durablePassageText = new Map(
+			story.passages.map(passage => [passage.id, passage.text])
+		);
+		const hostRef: {current?: StoreCoreProjectHost} = {};
+
+		registerStoryDocuments(story);
+		saveProjectMetadata(story.id, {
+			rootPath,
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		const saveProjectFolder = jest.fn(
+			async (
+				_rootPath: string,
+				savedStory: StoryWithDocuments,
+				options?: ProjectFolderSaveOptions
+			): Promise<undefined> => {
+				if (remainingSaveFailures > 0) {
+					remainingSaveFailures--;
+					throw new Error('native save unavailable');
+				}
+				for (const passage of savedStory.passages) {
+					durablePassageText.set(passage.id, passage.text);
+				}
+				for (const update of options?.documentUpdates ?? []) {
+					if (update.type === 'script') {
+						durableScript = update.text;
+					} else if (update.type === 'stylesheet') {
+						durableStylesheet = update.text;
+					}
+				}
+				return undefined;
+			}
+		);
+		const loadStories = jest.fn(async () => ({
+			status: 'loaded' as const,
+			stories: [
+				{
+					kind: 'native-project' as const,
+					passageTextLoaded: true,
+					rootPath,
+					story: {
+						...story,
+						script: durableScript,
+						stylesheet: durableStylesheet,
+						passages: story.passages.map(passage => ({
+							...passage,
+							text: durablePassageText.get(passage.id) ?? ''
+						}))
+					},
+					storyIds: [story.id]
+				}
+			]
+		}));
+
+		(window as TwineElectronWindow).twineElectron = {
+			loadStories,
+			saveProjectFolder,
+			saveStoryHtml: jest.fn(async () => undefined)
+		} as unknown as NonNullable<TwineElectronWindow['twineElectron']>;
+		saveElectronStories(stories, {state: stories, type: 'init'}, []);
+		const applyAction = (action: StoriesActionOrThunk) => {
+			if (typeof action === 'function') {
+				action(applyAction, () => stories);
+				return;
+			}
+			const nextStories = storiesReducer(stories, action);
+
+			stories = nextStories;
+			try {
+				const persistence = saveElectronStories(nextStories, action, []);
+
+				if (action.type === 'applyCorePatchBatch' && action.persistenceToken) {
+					bindPersistenceCompletion(action.persistenceToken, persistence);
+				}
+			} catch (error) {
+				if (action.type === 'applyCorePatchBatch' && action.persistenceToken) {
+					rejectPersistenceCompletion(action.persistenceToken, error);
+				}
+			}
+			hostRef.current?.update(stories, dispatch);
+		};
+		const dispatch = jest.fn(applyAction);
+		const host = new StoreCoreProjectHost(stories, dispatch);
+
+		hostRef.current = host;
+		return {
+			cleanup() {
+				deleteProjectMetadata(story.id);
+				delete (window as TwineElectronWindow).twineElectron;
+				window.localStorage.clear();
+			},
+			host,
+			load: loadElectronStories,
+			setSaveFailures(count: number) {
+				remainingSaveFailures = count;
+			}
+		};
+	}
+
+	it('retries the exact failed persistence batch after Core already accepted the text', async () => {
+		window.localStorage.clear();
+		const story = {...fakeStory(0), id: 'retry-persisted-core-text'};
+		const start = fakePassage({
+			id: 'retry-persisted-start',
+			name: 'Start',
+			story: story.id,
+			text: 'durable before'
+		});
+		let stories: StoriesState = [{...story, passages: [start]}];
+		const hostRef: {current?: StoreCoreProjectHost} = {};
+
+		registerStoryDocuments({...story, passages: [start]});
+		doUpdateTransaction(transaction => {
+			saveStory(transaction, stories[0]);
+			savePassage(transaction, start);
+		});
+		saveLocalStories(stories, {state: stories, type: 'init'});
+		const originalSetItem = Storage.prototype.setItem;
+		let failNextManifest = true;
+		const setItem = jest
+			.spyOn(Storage.prototype, 'setItem')
+			.mockImplementation(function (this: Storage, key: string, value: string) {
+				if (key === storageManifestKey && failNextManifest) {
+					failNextManifest = false;
+					throw new Error('manifest unavailable');
+				}
+				return originalSetItem.call(this, key, value);
+			});
+		const applyAction = (action: StoriesActionOrThunk) => {
+			if (typeof action === 'function') {
+				action(applyAction, () => stories);
+				return;
+			}
+			const nextStories = storiesReducer(stories, action);
+
+			stories = nextStories;
+			try {
+				const persistence = saveLocalStories(nextStories, action);
+
+				if (action.type === 'applyCorePatchBatch' && action.persistenceToken) {
+					bindPersistenceCompletion(action.persistenceToken, persistence);
+				}
+			} catch (error) {
+				if (action.type === 'applyCorePatchBatch' && action.persistenceToken) {
+					rejectPersistenceCompletion(action.persistenceToken, error);
+				}
+			}
+			hostRef.current?.update(stories, dispatch);
+		};
+		const dispatch = jest.fn(applyAction);
+		const host = new StoreCoreProjectHost(stories, dispatch);
+
+		hostRef.current = host;
+		await expect(
+			host.applyStoryCommandPersisted(
+				updatePassageTextCommand(story.id, start.id, 'retry survives reload')
+			)
+		).rejects.toThrow('manifest unavailable');
+		expect(
+			(await host.queryPassageDocumentAsync(story.id, start.id)).text
+		).toBe('retry survives reload');
+		expect(readStoredPassageTexts(story.id).get(start.id)).toBe(
+			'durable before'
+		);
+
+		const target = {
+			passageId: start.id,
+			storyId: story.id,
+			type: 'passageText' as const
+		};
+
+		await expect(host.retryStoryPersistence(target)).resolves.toBe(true);
+		expect(readStoredPassageTexts(story.id).get(start.id)).toBe(
+			'retry survives reload'
+		);
+		await expect(host.retryStoryPersistence(target)).resolves.toBe(false);
+
+		setItem.mockRestore();
+		window.localStorage.clear();
+	});
+
+	it('retains a failed passage receipt when a sibling passage persists', async () => {
+		const story = {...fakeStory(0), id: 'retry-sibling-success'};
+		const passageA = fakePassage({
+			id: 'retry-sibling-a',
+			name: 'A',
+			story: story.id,
+			text: 'A before'
+		});
+		const passageB = fakePassage({
+			id: 'retry-sibling-b',
+			name: 'B',
+			story: story.id,
+			text: 'B before'
+		});
+		const harness = localPersistenceHarness({
+			...story,
+			passages: [passageA, passageB]
+		});
+		const targetA = {
+			passageId: passageA.id,
+			storyId: story.id,
+			type: 'passageText' as const
+		};
+
+		try {
+			harness.setManifestFailures(1);
+			await expect(
+				harness.host.applyStoryCommandPersisted(
+					updatePassageTextCommand(story.id, passageA.id, 'A after')
+				)
+			).rejects.toThrow('manifest unavailable');
+			await harness.host.applyStoryCommandPersisted(
+				updatePassageTextCommand(story.id, passageB.id, 'B after')
+			);
+
+			await expect(harness.host.retryStoryPersistence(targetA)).resolves.toBe(
+				true
+			);
+			const [loaded] = await loadLocalStories();
+
+			expect(
+				(
+					loaded.passages.find(
+						passage => passage.id === passageA.id
+					) as unknown as {
+						text: string;
+					}
+				)?.text
+			).toBe('A after');
+			expect(
+				(
+					loaded.passages.find(
+						passage => passage.id === passageB.id
+					) as unknown as {
+						text: string;
+					}
+				)?.text
+			).toBe('B after');
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it('keeps independent receipts when two sibling passages fail', async () => {
+		const story = {...fakeStory(0), id: 'retry-sibling-failures'};
+		const passageA = fakePassage({
+			id: 'retry-failed-a',
+			name: 'A',
+			story: story.id,
+			text: 'A before'
+		});
+		const passageB = fakePassage({
+			id: 'retry-failed-b',
+			name: 'B',
+			story: story.id,
+			text: 'B before'
+		});
+		const harness = localPersistenceHarness({
+			...story,
+			passages: [passageA, passageB]
+		});
+		const target = (passageId: string) => ({
+			passageId,
+			storyId: story.id,
+			type: 'passageText' as const
+		});
+
+		try {
+			harness.setManifestFailures(2);
+			await expect(
+				harness.host.applyStoryCommandPersisted(
+					updatePassageTextCommand(story.id, passageA.id, 'A after')
+				)
+			).rejects.toThrow('manifest unavailable');
+			await expect(
+				harness.host.applyStoryCommandPersisted(
+					updatePassageTextCommand(story.id, passageB.id, 'B after')
+				)
+			).rejects.toThrow('manifest unavailable');
+
+			await expect(
+				harness.host.retryStoryPersistence(target(passageA.id))
+			).resolves.toBe(true);
+			let [loaded] = await loadLocalStories();
+
+			expect(
+				(
+					loaded.passages.find(
+						passage => passage.id === passageA.id
+					) as unknown as {
+						text: string;
+					}
+				)?.text
+			).toBe('A after');
+			expect(
+				(
+					loaded.passages.find(
+						passage => passage.id === passageB.id
+					) as unknown as {
+						text: string;
+					}
+				)?.text
+			).toBe('B before');
+			await expect(
+				harness.host.retryStoryPersistence(target(passageB.id))
+			).resolves.toBe(true);
+			[loaded] = await loadLocalStories();
+			expect(
+				(
+					loaded.passages.find(
+						passage => passage.id === passageB.id
+					) as unknown as {
+						text: string;
+					}
+				)?.text
+			).toBe('B after');
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it('clears only a failed receipt superseded by a successful write to the same passage', async () => {
+		const story = {...fakeStory(0), id: 'retry-same-passage'};
+		const passage = fakePassage({
+			id: 'retry-same-passage-start',
+			name: 'Start',
+			story: story.id,
+			text: 'before'
+		});
+		const harness = localPersistenceHarness({...story, passages: [passage]});
+		const target = {
+			passageId: passage.id,
+			storyId: story.id,
+			type: 'passageText' as const
+		};
+
+		try {
+			harness.setManifestFailures(1);
+			await expect(
+				harness.host.applyStoryCommandPersisted(
+					updatePassageTextCommand(story.id, passage.id, 'failed value')
+				)
+			).rejects.toThrow('manifest unavailable');
+			await harness.host.applyStoryCommandPersisted(
+				updatePassageTextCommand(story.id, passage.id, 'durable value')
+			);
+
+			await expect(harness.host.retryStoryPersistence(target)).resolves.toBe(
+				false
+			);
+			const [loaded] = await loadLocalStories();
+
+			expect((loaded.passages[0] as unknown as {text: string}).text).toBe(
+				'durable value'
+			);
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it.each(['fail then succeed', 'fail then fail'] as const)(
+		'keeps Electron sibling receipts when writes %s and reloads the exact durable documents',
+		async sequence => {
+			const story = {...fakeStory(0), id: `electron-retry-${sequence}`};
+			const passageA = fakePassage({
+				id: `electron-a-${sequence}`,
+				name: 'A',
+				story: story.id,
+				text: 'A before'
+			});
+			const passageB = fakePassage({
+				id: `electron-b-${sequence}`,
+				name: 'B',
+				story: story.id,
+				text: 'B before'
+			});
+			const harness = electronPersistenceHarness({
+				...story,
+				passages: [passageA, passageB]
+			});
+			const target = (passageId: string) => ({
+				passageId,
+				storyId: story.id,
+				type: 'passageText' as const
+			});
+
+			try {
+				harness.setSaveFailures(sequence === 'fail then fail' ? 2 : 1);
+				await expect(
+					harness.host.applyStoryCommandPersisted(
+						updatePassageTextCommand(story.id, passageA.id, 'A after')
+					)
+				).rejects.toThrow('native save unavailable');
+				const second = harness.host.applyStoryCommandPersisted(
+					updatePassageTextCommand(story.id, passageB.id, 'B after')
+				);
+
+				if (sequence === 'fail then fail') {
+					await expect(second).rejects.toThrow('native save unavailable');
+				} else {
+					await second;
+				}
+
+				await expect(
+					harness.host.retryStoryPersistence(target(passageA.id))
+				).resolves.toBe(true);
+				let [loaded] = await harness.load();
+
+				expect(
+					(
+						loaded.passages.find(({id}) => id === passageA.id) as unknown as {
+							text: string;
+						}
+					).text
+				).toBe('A after');
+				expect(
+					(
+						loaded.passages.find(({id}) => id === passageB.id) as unknown as {
+							text: string;
+						}
+					).text
+				).toBe(sequence === 'fail then fail' ? 'B before' : 'B after');
+
+				if (sequence === 'fail then fail') {
+					await expect(
+						harness.host.retryStoryPersistence(target(passageB.id))
+					).resolves.toBe(true);
+					[loaded] = await harness.load();
+					expect(
+						(
+							loaded.passages.find(({id}) => id === passageB.id) as unknown as {
+								text: string;
+							}
+						).text
+					).toBe('B after');
+				}
+			} finally {
+				harness.cleanup();
+			}
+		}
+	);
+
+	it('keeps independent Electron receipts for script and stylesheet documents', async () => {
+		const story = {
+			...fakeStory(0),
+			id: 'electron-retry-story-source',
+			script: 'script before',
+			stylesheet: 'stylesheet before'
+		};
+		const harness = electronPersistenceHarness({...story, passages: []});
+
+		try {
+			harness.setSaveFailures(2);
+			await expect(
+				harness.host.applyStoryCommandPersisted(
+					updateStoryScriptCommand(story.id, 'script after')
+				)
+			).rejects.toThrow('native save unavailable');
+			await expect(
+				harness.host.applyStoryCommandPersisted(
+					updateStoryStylesheetCommand(story.id, 'stylesheet after')
+				)
+			).rejects.toThrow('native save unavailable');
+
+			await expect(
+				harness.host.retryStoryPersistence({storyId: story.id, type: 'script'})
+			).resolves.toBe(true);
+			let [loaded] = await harness.load();
+
+			expect(loaded.script).toBe('script after');
+			expect(loaded.stylesheet).toBe('stylesheet before');
+			await expect(
+				harness.host.retryStoryPersistence({
+					storyId: story.id,
+					type: 'stylesheet'
+				})
+			).resolves.toBe(true);
+			[loaded] = await harness.load();
+			expect(loaded.stylesheet).toBe('stylesheet after');
+		} finally {
+			harness.cleanup();
+		}
 	});
 
 	it('drains an admitted worker mutation through synchronous persistence registration and blocks later mutations', async () => {

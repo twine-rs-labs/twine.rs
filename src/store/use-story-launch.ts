@@ -58,13 +58,11 @@ function previewAssetRequests(
 }
 
 async function openBrowserPreviewAfterFlush(storyId: string, path: string) {
-	const baseUrl = new URL(window.location.href);
-
-	baseUrl.hash = '';
 	// Reserve the tab synchronously while the click still carries browser user
-	// activation. Publish the preview route only after every editor buffer has
-	// durably reached the bound project session.
-	const previewWindow = window.open(baseUrl.href, '_blank');
+	// activation, but keep it inert until every editor buffer has durably reached
+	// the bound project session. Loading the application root here would let the
+	// new tab snapshot stale persisted state before the flush completes.
+	const previewWindow = window.open('about:blank', '_blank');
 
 	if (!previewWindow) {
 		throw new Error(
@@ -73,7 +71,9 @@ async function openBrowserPreviewAfterFlush(storyId: string, path: string) {
 	}
 	try {
 		await workbenchBufferCoordinator.flushStory(storyId);
-		previewWindow.location.replace(`#${path}`);
+		previewWindow.location.replace(
+			new URL(`#${path}`, window.location.href).href
+		);
 	} catch (error) {
 		previewWindow.close();
 		throw error;
@@ -102,7 +102,7 @@ async function refreshedProjectAssets(
 
 	try {
 		const snapshot = twineElectron.projectSessionSnapshot
-			? await twineElectron.projectSessionSnapshot(projectRoot)
+			? await twineElectron.projectSessionSnapshot(projectRoot, [storyId])
 			: undefined;
 
 		inventory =
