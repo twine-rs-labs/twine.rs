@@ -37,7 +37,7 @@ async function setPassageText(page: Page, text: string) {
 	const editor = page.locator('[data-testid^="story-editor-window-"]').first();
 
 	await expect(editor).toBeVisible();
-	await editor.locator('.cm-content').click();
+	await editor.locator('.cm-content').focus();
 	await page.keyboard.press(
 		process.platform === 'darwin' ? 'Meta+A' : 'Control+A'
 	);

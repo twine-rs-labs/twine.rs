@@ -79,6 +79,9 @@ interface PackagedProjectWindow extends Window {
 	twinePerformance?: {
 		snapshot(): Promise<unknown>;
 	};
+	twinePerformanceNative?: {
+		reconcileProjectSession(rootPath: string): Promise<unknown>;
+	};
 	twineElectron?: {
 		duplicateProjectFolder(
 			rootPath: string,
@@ -585,7 +588,7 @@ async function replaceEditorText(page: Page, text: string) {
 	const editor = sourceEditor(page);
 
 	await expect(editor).toBeVisible();
-	await editor.locator('.cm-content').click();
+	await editor.locator('.cm-content').focus();
 	await page.keyboard.press(
 		process.platform === 'darwin' ? 'Meta+A' : 'Control+A'
 	);
@@ -787,12 +790,51 @@ const projectSaveDiagnosticFileLimit = 80;
 const projectSaveDiagnosticFilePreviewBytes = 8 * 1024;
 const projectSaveDiagnosticTotalPreviewBytes = 64 * 1024;
 const projectSaveDiagnosticTimeoutMs = 5_000;
+const projectSessionReviewStabilityMs = 2_500;
 
 function projectSaveDiagnosticError(error: unknown) {
 	return {
 		message: error instanceof Error ? error.message : String(error),
 		stack: error instanceof Error ? error.stack : undefined
 	};
+}
+
+async function expectNoProjectSessionReview(page: Page) {
+	const reviewText = await page.evaluate(async stabilityMs => {
+		const currentReview = () =>
+			document.querySelector<HTMLElement>('.project-session-sync');
+		const initialReview = currentReview();
+
+		if (initialReview) {
+			return initialReview.textContent?.trim() ?? '';
+		}
+
+		return new Promise<string | undefined>(resolve => {
+			const observer = new MutationObserver(() => {
+				const review = currentReview();
+
+				if (review) {
+					window.clearTimeout(timeout);
+					observer.disconnect();
+					resolve(review.textContent?.trim() ?? '');
+				}
+			});
+			const timeout = window.setTimeout(() => {
+				observer.disconnect();
+				resolve(undefined);
+			}, stabilityMs);
+
+			observer.observe(document.documentElement, {
+				childList: true,
+				subtree: true
+			});
+		});
+	}, projectSessionReviewStabilityMs);
+
+	expect(
+		reviewText,
+		'A project session review appeared after the native save completed.'
+	).toBeUndefined();
 }
 
 async function withProjectSaveDiagnosticTimeout<T>(
@@ -977,6 +1019,9 @@ async function rendererProjectSaveDiagnostics(page: Page) {
 		const saveStatus = document.querySelector<HTMLElement>(
 			'.app-shell__status-save'
 		);
+		const projectSessionReviews = Array.from(
+			document.querySelectorAll<HTMLElement>('.project-session-sync')
+		);
 		const performanceHarness = (window as PackagedProjectWindow)
 			.twinePerformance;
 		let performanceSnapshot:
@@ -1009,7 +1054,7 @@ async function rendererProjectSaveDiagnostics(page: Page) {
 									? event.name
 									: '';
 
-							return /baseline|patch|persist|save/i.test(name);
+							return /baseline|patch|persist|save|session|watcher/i.test(name);
 						})
 						.slice(-100)
 				};
@@ -1024,6 +1069,12 @@ async function rendererProjectSaveDiagnostics(page: Page) {
 			location: window.location.href,
 			performance: performanceSnapshot ?? {
 				error: 'Performance harness is unavailable.'
+			},
+			projectSessionReviews: {
+				count: projectSessionReviews.length,
+				text: projectSessionReviews.map(
+					review => review.textContent?.trim() ?? ''
+				)
 			},
 			saveStatus: saveStatus
 				? {
@@ -1107,6 +1158,21 @@ async function waitForSavedText(
 				{timeout: 30_000}
 			)
 			.toContain(expected);
+		await expect(running.page.locator('.app-shell__status-save')).toHaveText(
+			'Saved',
+			{timeout: 30_000}
+		);
+		await running.page.evaluate(async rootPath => {
+			const native = (window as PackagedProjectWindow).twinePerformanceNative;
+
+			if (!native) {
+				throw new Error('Performance reconciliation bridge is unavailable.');
+			}
+			await native.reconcileProjectSession(rootPath);
+		}, projectRoot);
+		// Continuously cover two 1,250 ms fallback-poll intervals so a delayed
+		// self-write review cannot remain hidden by keyboard focus.
+		await expectNoProjectSessionReview(running.page);
 	} catch (error) {
 		try {
 			await attachProjectSaveDiagnostics(

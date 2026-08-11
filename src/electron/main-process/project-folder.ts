@@ -367,6 +367,12 @@ export interface NativeProjectSessionStart {
 	storyIds: string[];
 }
 
+export interface NativePerformanceProjectSessionReconcile {
+	generation: number;
+	rootPath: string;
+	sessionInstanceId: string;
+}
+
 type NativePassageBounds = {
 	height: number;
 	left: number;
@@ -449,6 +455,14 @@ interface ProjectSessionState {
 		observedAtEpochMs: number;
 	};
 	reconcileAfterResolution?: boolean;
+	reconcileCompletedEpoch?: number;
+	reconcileRequestedEpoch?: number;
+	reconcileStartedEpoch?: number;
+	reconcileWaiters?: Set<{
+		reject: (reason?: unknown) => void;
+		resolve: (value: NativePerformanceProjectSessionReconcile) => void;
+		targetEpoch: number;
+	}>;
 	rescanReconcileRequested?: boolean;
 	rescanRequested?: boolean;
 	resolvedCandidates: Map<string, ProjectSessionResolutionRecord>;
@@ -4997,6 +5011,7 @@ function requestProjectSessionRescan(
 
 function resumeProjectSessionRescan(session: ProjectSessionState) {
 	if (
+		projectSessions.get(projectSessionKey(session.rootPath)) !== session ||
 		!session.rescanRequested ||
 		session.scanning ||
 		session.localMutationDepth > 0
@@ -5011,7 +5026,48 @@ function resumeProjectSessionRescan(session: ProjectSessionState) {
 		clearTimeout(session.debounceTimer);
 		session.debounceTimer = undefined;
 	}
-	void pollProjectSession(session, reconcile);
+	pollProjectSessionInBackground(session, reconcile);
+}
+
+function settleProjectSessionReconcileWaiters(session: ProjectSessionState) {
+	for (const waiter of session.reconcileWaiters ?? []) {
+		if ((session.reconcileCompletedEpoch ?? 0) < waiter.targetEpoch) {
+			continue;
+		}
+		session.reconcileWaiters?.delete(waiter);
+		if (session.pending) {
+			waiter.reject(projectSessionReconcilePendingError());
+			continue;
+		}
+		waiter.resolve({
+			generation: session.generation,
+			rootPath: session.rootPath,
+			sessionInstanceId: session.sessionInstanceId
+		});
+	}
+}
+
+function projectSessionReconcilePendingError() {
+	return Object.assign(
+		new Error(
+			'Project reconciliation found an unresolved external-change candidate.'
+		),
+		{code: 'PROJECT_SESSION_RECONCILE_PENDING'}
+	);
+}
+
+function rejectProjectSessionReconcileWaiters(
+	session: ProjectSessionState,
+	reason: unknown,
+	throughEpoch = Number.POSITIVE_INFINITY
+) {
+	for (const waiter of session.reconcileWaiters ?? []) {
+		if (waiter.targetEpoch > throughEpoch) {
+			continue;
+		}
+		session.reconcileWaiters?.delete(waiter);
+		waiter.reject(reason);
+	}
 }
 
 async function pollProjectSession(
@@ -5027,6 +5083,12 @@ async function pollProjectSession(
 		session.pollAfterResolution = true;
 		session.reconcileAfterResolution =
 			session.reconcileAfterResolution || reconcile;
+		if (reconcile) {
+			rejectProjectSessionReconcileWaiters(
+				session,
+				projectSessionReconcilePendingError()
+			);
+		}
 		return;
 	}
 
@@ -5036,11 +5098,21 @@ async function pollProjectSession(
 	}
 
 	const mutationEpoch = session.localMutationEpoch;
+	const reconcileEpoch = reconcile
+		? Math.max(
+				(session.reconcileCompletedEpoch ?? 0) + 1,
+				session.reconcileRequestedEpoch ?? 0
+			)
+		: undefined;
 
 	session.scanning = true;
+	if (reconcileEpoch !== undefined) {
+		session.reconcileStartedEpoch = reconcileEpoch;
+	}
 
 	try {
 		const candidate = await readProjectSessionDelta(session, reconcile);
+		assertCurrentProjectSession(session.rootPath, session);
 
 		if (
 			session.localMutationEpoch !== mutationEpoch ||
@@ -5060,10 +5132,65 @@ async function pollProjectSession(
 		if (candidate && nextSignature !== previousSignature) {
 			notifyProjectSession(session);
 		}
+		if (reconcileEpoch !== undefined) {
+			session.reconcileCompletedEpoch = reconcileEpoch;
+			settleProjectSessionReconcileWaiters(session);
+		}
+	} catch (error) {
+		if (reconcileEpoch !== undefined) {
+			rejectProjectSessionReconcileWaiters(session, error, reconcileEpoch);
+		}
+		throw error;
 	} finally {
+		if (session.reconcileStartedEpoch === reconcileEpoch) {
+			session.reconcileStartedEpoch = undefined;
+		}
 		session.scanning = false;
 		resumeProjectSessionRescan(session);
 	}
+}
+
+function pollProjectSessionInBackground(
+	session: ProjectSessionState,
+	reconcile = false
+) {
+	void pollProjectSession(session, reconcile).catch(error =>
+		warnBestEffortProjectMaintenance('Project session reconciliation', error)
+	);
+}
+
+/** Performance-harness-only full reconciliation barrier. */
+export async function reconcileProjectSessionForPerformance(
+	rootPath: string
+): Promise<NativePerformanceProjectSessionReconcile> {
+	const session = projectSessions.get(projectSessionKey(rootPath));
+
+	if (!session?.baseline) {
+		throw new Error('Project session is not active for reconciliation.');
+	}
+	assertCurrentProjectSession(rootPath, session);
+	if (session.pending) {
+		throw projectSessionReconcilePendingError();
+	}
+	const targetEpoch =
+		Math.max(
+			session.reconcileCompletedEpoch ?? 0,
+			session.reconcileRequestedEpoch ?? 0,
+			session.reconcileStartedEpoch ?? 0
+		) + 1;
+	session.reconcileRequestedEpoch = targetEpoch;
+	const result = new Promise<NativePerformanceProjectSessionReconcile>(
+		(resolve, reject) => {
+			if (!session.reconcileWaiters) {
+				session.reconcileWaiters = new Set();
+			}
+			session.reconcileWaiters.add({reject, resolve, targetEpoch});
+		}
+	);
+
+	requestProjectSessionRescan(session, true);
+	resumeProjectSessionRescan(session);
+	return result;
 }
 
 function scheduleProjectSessionPoll(session: ProjectSessionState) {
@@ -5076,7 +5203,7 @@ function scheduleProjectSessionPoll(session: ProjectSessionState) {
 
 	session.debounceTimer = setTimeout(() => {
 		session.debounceTimer = undefined;
-		void pollProjectSession(session);
+		pollProjectSessionInBackground(session);
 	}, projectSessionWatchDebounceMs);
 }
 
@@ -11416,7 +11543,7 @@ export async function startProjectSession(
 
 	if (!session.interval) {
 		session.interval = setInterval(
-			() => void pollProjectSession(session, true),
+			() => pollProjectSessionInBackground(session, true),
 			session.watcherAvailable
 				? projectSessionReconcileMs
 				: projectSessionFallbackPollMs
@@ -11498,6 +11625,15 @@ export function stopProjectSession(rootPath: string) {
 		resolveWaiter();
 	}
 	session.assetDigestRefreshWaiters?.clear();
+	rejectProjectSessionReconcileWaiters(
+		session,
+		Object.assign(
+			new Error(
+				`Project session stopped during reconciliation for ${rootPath}.`
+			),
+			{code: projectSessionStartCanceledCode}
+		)
+	);
 	finishProjectSessionBaselineCapture(session);
 	projectSessions.delete(key);
 }
@@ -11636,7 +11772,7 @@ function scheduleProjectSessionReconciliation(session: ProjectSessionState) {
 
 	setTimeout(() => {
 		if (projectSessions.get(projectSessionKey(session.rootPath)) === session) {
-			void pollProjectSession(session, reconcile);
+			pollProjectSessionInBackground(session, reconcile);
 		}
 	}, 0);
 }

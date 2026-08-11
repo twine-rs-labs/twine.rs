@@ -111,6 +111,12 @@ export interface NativeProjectSessionStart {
 	storyIds: string[];
 }
 
+export interface NativePerformanceProjectSessionReconcile {
+	generation: number;
+	rootPath: string;
+	sessionInstanceId: string;
+}
+
 export type NativeProjectSessionResolution =
 	'acceptDisk' | 'dismiss' | 'keepApp';
 
@@ -521,6 +527,9 @@ export interface TwineElectronWindow extends Window {
 	twinePerformanceNative?: {
 		checkpoint(name: string, renderer: Record<string, number>): Promise<void>;
 		collectGarbage(): Promise<void>;
+		reconcileProjectSession(
+			rootPath: string
+		): Promise<NativePerformanceProjectSessionReconcile>;
 		reset(): Promise<void>;
 		snapshot(): Promise<unknown>;
 	};

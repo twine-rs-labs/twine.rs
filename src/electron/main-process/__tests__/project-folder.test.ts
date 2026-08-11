@@ -62,6 +62,7 @@ import {
 	projectSessionScratchAssets,
 	projectSessionMemoryDiagnostics,
 	projectSessionSnapshot,
+	reconcileProjectSessionForPerformance,
 	projectFileEntriesMatch,
 	projectFileFingerprint,
 	recoverProjectDeletionTransactions,
@@ -7046,6 +7047,375 @@ describe('project-folder native bridge', () => {
 			[previousFile],
 			[currentFile]
 		);
+	});
+
+	it('waits for a forced full reconciliation and rejects unresolved candidates', async () => {
+		const rootPath = '/native/performance-reconcile.twine.rs';
+		const story = fakeStory(1);
+		const baselineFile = {
+			fingerprint: '1:42',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 42
+		};
+		const changedFile = {...baselineFile, fingerprint: '2:42', mtimeMs: 2};
+
+		loadNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([baselineFile])
+			.mockReturnValueOnce([baselineFile])
+			.mockReturnValueOnce([changedFile]);
+		diffNativeProjectFileManifestMock.mockImplementation((previous, current) =>
+			previous[0].fingerprint === current[0].fingerprint
+				? []
+				: [
+						{
+							change: 'modified',
+							current: changedFile,
+							id: 'modified:twine.toml',
+							kind: 'manifest',
+							message: 'twine.toml changed outside twine.rs.',
+							path: 'twine.toml',
+							previous: baselineFile
+						}
+					]
+		);
+
+		await projectSessionSnapshot(rootPath);
+		await expect(
+			reconcileProjectSessionForPerformance(rootPath)
+		).resolves.toEqual(expect.objectContaining({rootPath}));
+		await expect(
+			reconcileProjectSessionForPerformance(rootPath)
+		).rejects.toMatchObject({
+			code: 'PROJECT_SESSION_RECONCILE_PENDING'
+		});
+		stopProjectSession(rootPath);
+	});
+
+	it('runs a follow-up full reconciliation for a request made during an active scan', async () => {
+		const rootPath = '/native/performance-reconcile-concurrent.twine.rs';
+		const story = fakeStory(1);
+		const file = {
+			fingerprint: '1:42',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 42
+		};
+		const changedFile = {...file, fingerprint: '2:42', mtimeMs: 2};
+		let resolveFirstScan!: (files: (typeof file)[]) => void;
+		let resolveSecondScan!: (files: (typeof file)[]) => void;
+		const firstScan = new Promise<(typeof file)[]>(resolve => {
+			resolveFirstScan = resolve;
+		});
+		const secondScan = new Promise<(typeof file)[]>(resolve => {
+			resolveSecondScan = resolve;
+		});
+
+		loadNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([file])
+			.mockReturnValueOnce(firstScan)
+			.mockReturnValueOnce(secondScan);
+		diffNativeProjectFileManifestMock.mockImplementation((previous, current) =>
+			previous[0].fingerprint === current[0].fingerprint
+				? []
+				: [
+						{
+							change: 'modified',
+							current: changedFile,
+							id: 'modified:twine.toml',
+							kind: 'manifest',
+							message: 'twine.toml changed outside twine.rs.',
+							path: 'twine.toml',
+							previous: file
+						}
+					]
+		);
+
+		try {
+			await projectSessionSnapshot(rootPath);
+			const first = reconcileProjectSessionForPerformance(rootPath);
+			const second = reconcileProjectSessionForPerformance(rootPath);
+			let secondSettled = false;
+
+			void second.then(
+				() => {
+					secondSettled = true;
+				},
+				() => {
+					secondSettled = true;
+				}
+			);
+			resolveFirstScan([file]);
+			await expect(first).resolves.toEqual(expect.objectContaining({rootPath}));
+			expect(secondSettled).toBe(false);
+			expect(nativeProjectFileManifestMock).toHaveBeenCalledTimes(3);
+
+			resolveSecondScan([changedFile]);
+			await expect(second).rejects.toMatchObject({
+				code: 'PROJECT_SESSION_RECONCILE_PENDING'
+			});
+		} finally {
+			stopProjectSession(rootPath);
+		}
+	});
+
+	it('contains a failed background reconciliation and permits a later retry', async () => {
+		const rootPath = '/native/performance-reconcile-error.twine.rs';
+		const story = fakeStory(1);
+		const file = {
+			fingerprint: '1:42',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 42
+		};
+
+		loadNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([file])
+			.mockRejectedValueOnce(new Error('forced reconciliation failed'))
+			.mockReturnValueOnce([file]);
+		diffNativeProjectFileManifestMock.mockReturnValue([]);
+
+		try {
+			await projectSessionSnapshot(rootPath);
+			await expect(
+				reconcileProjectSessionForPerformance(rootPath)
+			).rejects.toThrow('forced reconciliation failed');
+			await expect(
+				reconcileProjectSessionForPerformance(rootPath)
+			).resolves.toEqual(expect.objectContaining({rootPath}));
+		} finally {
+			stopProjectSession(rootPath);
+		}
+	});
+
+	it('keeps a later reconcile request queued when the active scan fails', async () => {
+		const rootPath = '/native/performance-reconcile-later-error.twine.rs';
+		const story = fakeStory(1);
+		const file = {
+			fingerprint: '1:42',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 42
+		};
+		let rejectFirstScan!: (reason: unknown) => void;
+		const firstScan = new Promise<(typeof file)[]>((_resolve, reject) => {
+			rejectFirstScan = reject;
+		});
+
+		loadNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([file])
+			.mockReturnValueOnce(firstScan)
+			.mockReturnValueOnce([file]);
+		diffNativeProjectFileManifestMock.mockReturnValue([]);
+
+		try {
+			await projectSessionSnapshot(rootPath);
+			const first = reconcileProjectSessionForPerformance(rootPath);
+			const second = reconcileProjectSessionForPerformance(rootPath);
+			const firstResult = expect(first).rejects.toThrow(
+				'first reconciliation failed'
+			);
+			const secondResult = expect(second).resolves.toEqual(
+				expect.objectContaining({rootPath})
+			);
+
+			rejectFirstScan(new Error('first reconciliation failed'));
+			await firstResult;
+			await secondResult;
+			expect(nativeProjectFileManifestMock).toHaveBeenCalledTimes(3);
+		} finally {
+			stopProjectSession(rootPath);
+		}
+	});
+
+	it('rejects a forced reconciliation when its session stops', async () => {
+		const rootPath = '/native/performance-reconcile-stop.twine.rs';
+		const story = fakeStory(1);
+		const file = {
+			fingerprint: '1:42',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 42
+		};
+		const delayedScan = new Promise<(typeof file)[]>(() => undefined);
+
+		loadNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([file])
+			.mockReturnValueOnce(delayedScan);
+		diffNativeProjectFileManifestMock.mockReturnValue([]);
+
+		await projectSessionSnapshot(rootPath);
+		const reconciliation = reconcileProjectSessionForPerformance(rootPath);
+
+		stopProjectSession(rootPath);
+		await expect(reconciliation).rejects.toMatchObject({
+			code: 'PROJECT_SESSION_START_CANCELED'
+		});
+	});
+
+	it('rejects a forced reconciliation when an in-flight watcher scan finds a candidate', async () => {
+		jest.useFakeTimers();
+		const rootPath = '/native/performance-reconcile-race.twine.rs';
+		const story = fakeStory(1);
+		const baselineFile = {
+			fingerprint: '1:42',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 42
+		};
+		const changedFile = {...baselineFile, fingerprint: '2:42', mtimeMs: 2};
+		let resolveWatcherScan!: (files: (typeof baselineFile)[]) => void;
+		const watcherScan = new Promise<(typeof baselineFile)[]>(resolve => {
+			resolveWatcherScan = resolve;
+		});
+
+		loadNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([baselineFile])
+			.mockReturnValueOnce(watcherScan);
+		diffNativeProjectFileManifestMock.mockReturnValue([
+			{
+				change: 'modified',
+				current: changedFile,
+				id: 'modified:twine.toml',
+				kind: 'manifest',
+				message: 'twine.toml changed outside twine.rs.',
+				path: 'twine.toml',
+				previous: baselineFile
+			}
+		]);
+
+		try {
+			await startProjectSession(rootPath, jest.fn(), [story.id]);
+			emitProjectWatcherChange();
+			await advanceTimersUntilCalled(nativeProjectFileManifestMock, 2, 150);
+			const reconciliation = reconcileProjectSessionForPerformance(rootPath);
+
+			resolveWatcherScan([changedFile]);
+			await expect(reconciliation).rejects.toMatchObject({
+				code: 'PROJECT_SESSION_RECONCILE_PENDING'
+			});
+		} finally {
+			stopProjectSession(rootPath);
+			jest.useRealTimers();
+		}
+	});
+
+	it('does not resume a queued reconcile after the project session stops', async () => {
+		jest.useFakeTimers();
+		const rootPath = '/native/performance-reconcile-stopped-scan.twine.rs';
+		const story = fakeStory(1);
+		const baselineFile = {
+			fingerprint: '1:42',
+			kind: 'manifest' as const,
+			modifiedAt: '2026-06-21T16:00:01.000Z',
+			mtimeMs: 1,
+			path: 'twine.toml',
+			sizeBytes: 42
+		};
+		const changedFile = {...baselineFile, fingerprint: '2:42', mtimeMs: 2};
+		let resolveWatcherScan!: (files: (typeof baselineFile)[]) => void;
+		const watcherScan = new Promise<(typeof baselineFile)[]>(resolve => {
+			resolveWatcherScan = resolve;
+		});
+		const listener = jest.fn();
+
+		loadNativeProjectFolderMock.mockReturnValue({
+			passageTextLoaded: true,
+			rootPath,
+			stories: [story],
+			storyIds: [story.id]
+		});
+		listNativeProjectAssetsMock.mockReturnValue([]);
+		nativeProjectFileManifestMock
+			.mockReturnValueOnce([baselineFile])
+			.mockReturnValueOnce(watcherScan);
+		diffNativeProjectFileManifestMock.mockReturnValue([
+			{
+				change: 'modified',
+				current: changedFile,
+				id: 'modified:twine.toml',
+				kind: 'manifest',
+				message: 'twine.toml changed outside twine.rs.',
+				path: 'twine.toml',
+				previous: baselineFile
+			}
+		]);
+
+		try {
+			await startProjectSession(rootPath, listener, [story.id]);
+			emitProjectWatcherChange();
+			await advanceTimersUntilCalled(nativeProjectFileManifestMock, 2, 150);
+			const reconciliation = reconcileProjectSessionForPerformance(rootPath);
+			const stoppedResult = expect(reconciliation).rejects.toMatchObject({
+				code: 'PROJECT_SESSION_START_CANCELED'
+			});
+
+			stopProjectSession(rootPath);
+			await stoppedResult;
+			resolveWatcherScan([changedFile]);
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(nativeProjectFileManifestMock).toHaveBeenCalledTimes(2);
+			expect(listener).not.toHaveBeenCalled();
+		} finally {
+			stopProjectSession(rootPath);
+			jest.useRealTimers();
+		}
 	});
 
 	it('reports compatibility-session conflicts for digest-only file changes', async () => {

@@ -582,6 +582,12 @@ if (exposeAppBridge && process.env.TWINE_PERF === '1') {
 		collectGarbage() {
 			return ipcRenderer.invoke('performance-harness-collect-garbage');
 		},
+		reconcileProjectSession(rootPath: string) {
+			return ipcRenderer.invoke(
+				'performance-harness-reconcile-project-session',
+				projectCapability(rootPath)
+			);
+		},
 		reset() {
 			return ipcRenderer.invoke('performance-harness-reset');
 		},

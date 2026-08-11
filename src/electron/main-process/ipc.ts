@@ -79,6 +79,7 @@ import {
 	projectSessionPackageAssetReadPlan,
 	projectSessionScratchAssets,
 	projectSessionMemoryDiagnostics,
+	reconcileProjectSessionForPerformance,
 	projectSessionSnapshot,
 	readProjectFolderHydrationChunk,
 	renameProjectAsset,
@@ -491,6 +492,13 @@ export function initIpc(options: InitIpcOptions = {}) {
 		ipcMain.handle('performance-harness-collect-garbage', async () => {
 			global.gc?.();
 		});
+		ipcMain.handle(
+			'performance-harness-reconcile-project-session',
+			async (event, capability: string) =>
+				reconcileProjectSessionForPerformance(
+					resolveProjectCapability(event, capability)
+				)
+		);
 	}
 
 	void Promise.resolve(cleanupStaleProjectAssetEffects()).catch(error => {

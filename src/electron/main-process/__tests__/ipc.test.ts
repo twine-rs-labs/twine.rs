@@ -53,6 +53,7 @@ import {
 	projectSessionPackageAssetReadPlan,
 	projectSessionScratchAssets,
 	projectSessionSnapshot,
+	reconcileProjectSessionForPerformance,
 	renameProjectAsset,
 	replaceProjectAsset,
 	resolveProjectSessionConflicts,
@@ -74,6 +75,7 @@ import {
 	projectCapabilityField
 } from '../project-capabilities';
 import {storyPreviewWindowManager} from '../story-preview-window-manager';
+import {performanceHarnessEnabled} from '../performance-harness';
 
 jest.mock('../json-file');
 jest.mock('../native');
@@ -85,6 +87,10 @@ jest.mock('../scratch-file');
 jest.mock('../story-directory');
 jest.mock('../story-file');
 jest.mock('../story-formats');
+jest.mock('../performance-harness', () => ({
+	...jest.requireActual('../performance-harness'),
+	performanceHarnessEnabled: jest.fn(() => false)
+}));
 
 describe('initIpc()', () => {
 	const deleteStoryMock = deleteStory as jest.Mock;
@@ -121,6 +127,9 @@ describe('initIpc()', () => {
 	const openProjectFolderMock = openProjectFolder as jest.Mock;
 	const prepareProjectImportMock = prepareProjectImport as jest.Mock;
 	const projectSessionSnapshotMock = projectSessionSnapshot as jest.Mock;
+	const reconcileProjectSessionForPerformanceMock =
+		reconcileProjectSessionForPerformance as jest.Mock;
+	const performanceHarnessEnabledMock = performanceHarnessEnabled as jest.Mock;
 	const projectSessionAssetReadBaselinesMock =
 		projectSessionAssetReadBaselines as jest.Mock;
 	const projectSessionPackageAssetReadPlanMock =
@@ -223,6 +232,12 @@ describe('initIpc()', () => {
 			stories: [],
 			storyIds: []
 		});
+		reconcileProjectSessionForPerformanceMock.mockResolvedValue({
+			generation: 1,
+			rootPath: '/mock/project',
+			sessionInstanceId: 'session-1'
+		});
+		performanceHarnessEnabledMock.mockReturnValue(false);
 		projectSessionAssetReadBaselinesMock.mockImplementation(
 			(_rootPath: string, paths: string[]) =>
 				paths.map(path => ({
@@ -699,6 +714,39 @@ describe('initIpc()', () => {
 		);
 		await revealLibrary[1]();
 		expect(revealStoryDirectoryMock).toHaveBeenCalled();
+	});
+
+	it('gates the reconciliation handler and resolves its project capability', async () => {
+		expect(
+			handleMock.mock.calls.find(
+				call => call[0] === 'performance-harness-reconcile-project-session'
+			)
+		).toBeUndefined();
+
+		performanceHarnessEnabledMock.mockReturnValue(true);
+		initIpc();
+		const reconcile = handleMock.mock.calls
+			.filter(
+				call => call[0] === 'performance-harness-reconcile-project-session'
+			)
+			.at(-1);
+		const sender = {id: 701};
+		const capability = (
+			grantProjectCapability(
+				{sender},
+				{rootPath: '/mock/project', stories: [], storyIds: []}
+			) as Record<string, unknown>
+		)[projectCapabilityField] as string;
+
+		await expect(reconcile?.[1]({sender}, capability)).resolves.toEqual(
+			expect.objectContaining({rootPath: '/mock/project'})
+		);
+		expect(reconcileProjectSessionForPerformanceMock).toHaveBeenCalledWith(
+			'/mock/project'
+		);
+		await expect(
+			reconcile?.[1]({sender: {id: 702}}, capability)
+		).rejects.toThrow();
 	});
 
 	it('reads an exact package inventory with server-owned limits', async () => {
