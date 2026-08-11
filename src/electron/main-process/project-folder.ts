@@ -6424,7 +6424,7 @@ function projectReplacementQuarantinePath(
 	);
 }
 
-async function quarantineAndRemoveReplacementOwnedRoot(
+async function quarantineAndTrashReplacementOwnedRoot(
 	journal: ProjectReplacementJournal,
 	path: string,
 	expected: ProjectReplacementTreeManifest
@@ -6469,10 +6469,13 @@ async function quarantineAndRemoveReplacementOwnedRoot(
 		'Quarantined project replacement data'
 	);
 	stopProjectSession(quarantinePath);
+	// Electron cannot bind Trash disposal to the manifest scan. Keep this final
+	// pathname operation recoverable so a post-verification mutation or path
+	// substitution is never permanently removed by Twine.
 	await projectLifecycleCleanupStep(
-		'Project replacement quarantine cleanup',
+		'Project replacement quarantine trash cleanup',
 		async () => {
-			await remove(quarantinePath);
+			await shell.trashItem(quarantinePath);
 			await syncDirectoryBestEffort(dirname(quarantinePath));
 		}
 	);
@@ -6543,7 +6546,7 @@ async function restoreProjectReplacement(journal: ProjectReplacementJournal) {
 				'Project replacement has no durable provisional manifest; preserving every root for explicit recovery.'
 			);
 		}
-		await quarantineAndRemoveReplacementOwnedRoot(
+		await quarantineAndTrashReplacementOwnedRoot(
 			journal,
 			journal.rootPath,
 			journal.provisionalRootManifest
@@ -6561,7 +6564,7 @@ async function restoreProjectReplacement(journal: ProjectReplacementJournal) {
 				'Incomplete replacement staging cannot be verified automatically; preserving it for explicit recovery.'
 			);
 		}
-		await quarantineAndRemoveReplacementOwnedRoot(
+		await quarantineAndTrashReplacementOwnedRoot(
 			journal,
 			journal.stagingRootPath,
 			journal.provisionalRootManifest
@@ -6619,12 +6622,12 @@ async function finalizeProjectReplacement(
 			`Project replacement ${journal.id} cannot finalize from phase ${journal.phase}.`
 		);
 	}
-	await quarantineAndRemoveReplacementOwnedRoot(
+	await quarantineAndTrashReplacementOwnedRoot(
 		journal,
 		journal.backupRootPath,
 		journal.baselineRootManifest
 	);
-	await quarantineAndRemoveReplacementOwnedRoot(
+	await quarantineAndTrashReplacementOwnedRoot(
 		journal,
 		journal.stagingRootPath,
 		journal.provisionalRootManifest

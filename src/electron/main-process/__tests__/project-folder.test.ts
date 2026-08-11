@@ -9230,7 +9230,7 @@ describe('project-folder native bridge', () => {
 		}
 	);
 
-	it('reverifies a quarantined installed root before rollback removes it', async () => {
+	it('reverifies a quarantined installed root before rollback trashes it', async () => {
 		const original = {...fakeStory(1), id: 'rollback-quarantine-race-story'};
 		const rootPath = '/native/rollback-quarantine-race.twine.rs';
 		const filesystem = configureProjectTransactionFilesystem(rootPath, [
@@ -9260,6 +9260,44 @@ describe('project-folder native bridge', () => {
 		renameFileMock.mockImplementation(rename);
 		await rollbackProjectReplacement(transaction.id);
 		expect(filesystem.directories.has(rootPath)).toBe(true);
+	});
+
+	it('sends a post-verification rollback mutation to recoverable trash', async () => {
+		const original = {
+			...fakeStory(1),
+			id: 'rollback-post-verification-trash-story'
+		};
+		const rootPath = '/native/rollback-post-verification-trash.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const quarantinePath = `/native/.twine-rs-replacement-${transaction.id}.installed.quarantine.twine.rs`;
+		const externalPath = `${quarantinePath}/external-after-final-verification`;
+		const trash = (shell.trashItem as jest.Mock).getMockImplementation()!;
+		const recoverableTrashContents: string[] = [];
+
+		(shell.trashItem as jest.Mock).mockImplementation(async path => {
+			if (String(path) === quarantinePath) {
+				filesystem.directories.add(externalPath);
+				recoverableTrashContents.push(
+					...[...filesystem.directories].filter(
+						entry =>
+							entry === quarantinePath || entry.startsWith(`${quarantinePath}/`)
+					)
+				);
+			}
+			return trash(path);
+		});
+
+		await rollbackProjectReplacement(transaction.id);
+
+		expect(recoverableTrashContents).toContain(externalPath);
+		expect(shell.trashItem).toHaveBeenCalledWith(quarantinePath);
+		expect(removeMock).not.toHaveBeenCalledWith(quarantinePath);
+		expect(filesystem.directories.has(rootPath)).toBe(true);
+		expect(filesystem.directories.has(quarantinePath)).toBe(false);
+		expect(filesystem.json.size).toBe(0);
 	});
 
 	it('blocks commit when the provisional root changed after installation', async () => {
@@ -9325,7 +9363,7 @@ describe('project-folder native bridge', () => {
 		expect(filesystem.json.size).toBe(0);
 	});
 
-	it('reverifies a quarantined replacement backup before committed cleanup removes it', async () => {
+	it('reverifies a quarantined replacement backup before committed cleanup trashes it', async () => {
 		const original = {...fakeStory(1), id: 'backup-quarantine-race-story'};
 		const rootPath = '/native/backup-quarantine-race.twine.rs';
 		const filesystem = configureProjectTransactionFilesystem(rootPath, [
@@ -9358,6 +9396,84 @@ describe('project-folder native bridge', () => {
 		renameFileMock.mockImplementation(rename);
 		await recoverProjectReplacementTransactions();
 		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('sends a post-verification replacement mutation to recoverable trash', async () => {
+		const original = {
+			...fakeStory(1),
+			id: 'backup-post-verification-trash-story'
+		};
+		const rootPath = '/native/backup-post-verification-trash.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const quarantinePath = `/native/.twine-rs-replacement-${transaction.id}.backup.quarantine.twine.rs`;
+		const externalPath = `${quarantinePath}/external-after-final-verification`;
+		const trash = (shell.trashItem as jest.Mock).getMockImplementation()!;
+		const recoverableTrashContents: string[] = [];
+
+		(shell.trashItem as jest.Mock).mockImplementation(async path => {
+			if (String(path) === quarantinePath) {
+				filesystem.directories.add(externalPath);
+				recoverableTrashContents.push(
+					...[...filesystem.directories].filter(
+						entry =>
+							entry === quarantinePath || entry.startsWith(`${quarantinePath}/`)
+					)
+				);
+			}
+			return trash(path);
+		});
+
+		await commitProjectReplacements([transaction.id]);
+
+		expect(recoverableTrashContents).toContain(externalPath);
+		expect(shell.trashItem).toHaveBeenCalledWith(quarantinePath);
+		expect(removeMock).not.toHaveBeenCalledWith(quarantinePath);
+		expect(filesystem.directories.has(quarantinePath)).toBe(false);
+		expect(filesystem.json.size).toBe(0);
+	});
+
+	it('retains recovery state if replacement trash fails after final verification', async () => {
+		const original = {
+			...fakeStory(1),
+			id: 'backup-post-verification-trash-failure-story'
+		};
+		const rootPath = '/native/backup-post-verification-trash-failure.twine.rs';
+		const filesystem = configureProjectTransactionFilesystem(rootPath, [
+			original
+		]);
+		const transaction = await beginProjectReplacement(rootPath, [original]);
+		const quarantinePath = `/native/.twine-rs-replacement-${transaction.id}.backup.quarantine.twine.rs`;
+		const externalPath = `${quarantinePath}/external-after-final-verification`;
+
+		(shell.trashItem as jest.Mock).mockImplementation(async path => {
+			if (String(path) === quarantinePath) {
+				filesystem.directories.add(externalPath);
+				throw Object.assign(new Error('permission denied'), {code: 'EACCES'});
+			}
+		});
+
+		await expect(
+			commitProjectReplacements([transaction.id])
+		).resolves.toBeUndefined();
+		expect(filesystem.directories.has(quarantinePath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(removeMock).not.toHaveBeenCalledWith(quarantinePath);
+		expect(
+			[...filesystem.json.values()].some(
+				(value: any) =>
+					value.id === transaction.id && value.phase === 'cleanup-verified'
+			)
+		).toBe(true);
+
+		await expect(recoverProjectReplacementTransactions()).rejects.toThrow(
+			'changed outside Twine'
+		);
+		expect(filesystem.directories.has(quarantinePath)).toBe(true);
+		expect(filesystem.directories.has(externalPath)).toBe(true);
+		expect(filesystem.json.size).toBeGreaterThan(0);
 	});
 
 	it('rejects a regular file substituted for a replacement backup before cleanup', async () => {
@@ -9437,7 +9553,7 @@ describe('project-folder native bridge', () => {
 			expect.objectContaining({code: 'NATIVE_PROJECT_RECOVERY_REQUIRED'})
 		);
 		expect(filesystem.directories.has(quarantinePath)).toBe(true);
-		expect(removeMock).not.toHaveBeenCalledWith(quarantinePath);
+		expect(shell.trashItem).not.toHaveBeenCalledWith(quarantinePath);
 
 		lstatMock.mockImplementation(readStats);
 		renameFileMock.mockImplementation(rename);
@@ -9453,13 +9569,13 @@ describe('project-folder native bridge', () => {
 		]);
 		const transaction = await beginProjectReplacement(rootPath, [original]);
 		const quarantinePath = `/native/.twine-rs-replacement-${transaction.id}.backup.quarantine.twine.rs`;
-		const removeTree = removeMock.getMockImplementation()!;
+		const trash = (shell.trashItem as jest.Mock).getMockImplementation()!;
 
-		removeMock.mockImplementation(async path => {
+		(shell.trashItem as jest.Mock).mockImplementation(async path => {
 			if (String(path) === quarantinePath) {
 				throw Object.assign(new Error('permission denied'), {code: 'EACCES'});
 			}
-			return removeTree(path);
+			return trash(path);
 		});
 
 		await expect(
@@ -9482,7 +9598,7 @@ describe('project-folder native bridge', () => {
 		expect(filesystem.directories.has(laterEditPath)).toBe(true);
 		expect(filesystem.json.size).toBeGreaterThan(0);
 
-		removeMock.mockImplementation(removeTree);
+		(shell.trashItem as jest.Mock).mockImplementation(trash);
 		await recoverProjectReplacementTransactions();
 		expect(filesystem.directories.has(quarantinePath)).toBe(false);
 		expect(filesystem.json.size).toBe(0);
