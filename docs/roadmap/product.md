@@ -9,14 +9,9 @@ Source of truth: unfinished primary-product behavior
 
 ### Preview and debug depth
 
-- Build the visible debugger inspector and controls on the versioned,
-  read-only runtime adapter foundation. The foundation negotiates bounded
-  variable/state and visited-passage snapshots for supported SugarCube and
-  Snowman versions while preserving current-passage-only Chapbook, Harlowe, and
-  generic fallbacks until those formats expose bounded snapshot hooks.
-- Keep state mutation, evaluation, restart/clear, and additional story-format
-  development hooks outside the read-only protocol until each command has an
-  explicit capability and lifecycle contract.
+- Keep debugger controls for state mutation, evaluation, restart/clear, and
+  additional story-format development hooks outside the read-only protocol
+  until each command has an explicit capability and lifecycle contract.
 - Keep “test from here” behavior consistent across workbench, contents,
   diagnostics, search, and assets.
 

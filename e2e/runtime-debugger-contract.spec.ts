@@ -349,3 +349,73 @@ test('bundled Snowman bounds escaped previews and retains the newest 200 history
 	expect(snapshot?.visitedPassages?.at(-1)).toMatchObject({localId: '205'});
 	expect(normalizeStoryPreviewBridgeMessage(snapshot)).toBeDefined();
 });
+
+test('renders captured variable whitespace exactly while wrapping in a narrow inspector', async ({
+	page
+}) => {
+	const spacedValue = `  ${Array.from(
+		{length: 32},
+		(_, index) => `token-${index}`
+	).join('  ')}  `;
+	const expectedPreview = JSON.stringify(spacedValue);
+
+	await mountStory(page, {
+		format: 'SugarCube',
+		formatId: 'sugarcube-2.37.3',
+		formatVersion: '2.37.3',
+		passageText: `<<set $spaced = ${JSON.stringify(spacedValue)}>>Ready`,
+		sessionId: 'sugarcube-whitespace'
+	});
+	await expect
+		.poll(async () => {
+			const snapshot = (await messages(page)).findLast(
+				({type}) => type === 'debugger-snapshot'
+			);
+
+			return snapshot?.storyVariables?.find(({name}) => name === 'spaced')
+				?.preview;
+		})
+		.toBe(expectedPreview);
+
+	const snapshot = (await messages(page)).findLast(
+		({type}) => type === 'debugger-snapshot'
+	);
+	const capturedPreview = snapshot?.storyVariables?.find(
+		({name}) => name === 'spaced'
+	)?.preview;
+
+	expect(capturedPreview).toBe(expectedPreview);
+	await page.addStyleTag({
+		path: path.join(process.cwd(), 'src', 'routes', 'story-preview-frame.css')
+	});
+	await page.evaluate(preview => {
+		const variables = document.createElement('ul');
+		const row = document.createElement('li');
+		const value = document.createElement('code');
+
+		variables.className = 'story-preview-route__debugger-variables';
+		variables.style.width = '240px';
+		value.className = 'story-preview-route__debugger-variable-preview';
+		value.textContent = preview ?? '';
+		row.append(value);
+		variables.append(row);
+		document.body.append(variables);
+	}, capturedPreview);
+	const preview = page.locator(
+		'.story-preview-route__debugger-variable-preview'
+	);
+	const rendered = await preview.evaluate(element => {
+		const range = document.createRange();
+
+		range.selectNodeContents(element);
+		return {
+			innerText: (element as HTMLElement).innerText,
+			lineFragments: range.getClientRects().length,
+			whiteSpace: getComputedStyle(element).whiteSpace
+		};
+	});
+
+	expect(rendered.innerText).toBe(expectedPreview);
+	expect(rendered.whiteSpace).toBe('break-spaces');
+	expect(rendered.lineFragments).toBeGreaterThan(1);
+});

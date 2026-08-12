@@ -103,6 +103,8 @@ continues independently.
 
 ## Product boundary
 
-This protocol is the foundation for the Debugger v1 inspector. The visible
-variable/history UI and any format-specific control commands remain separate
-follow-up work and must consume only negotiated capabilities.
+The shared preview surface now delivers the visible, collapsible Debugger v1
+inspector. It is read-only and renders only negotiated capabilities, bounded
+snapshot records, section completeness, truncation reasons, and unavailability.
+Format-specific control commands remain deferred follow-up work and must gain
+an explicit capability and lifecycle contract before they are added.

@@ -1332,17 +1332,23 @@ describe('story preview runtime state', () => {
 		expect(resolveRuntimePassage(runtimePassage, lookup)?.id).toBe(expectedId);
 	});
 
-	it('does not promote an unknown raw ID into a stable passage ID', () => {
+	it('preserves unknown display identities without promoting a stable passage ID', () => {
 		expect(
 			resolveRuntimePassage(
-				{id: 'forged', name: 'Unknown', source: 'runtime'},
+				{
+					id: 'forged',
+					name: ' ',
+					rawName: ' Runtime title ',
+					source: 'runtime'
+				},
 				lookup
 			)
 		).toEqual({
 			id: undefined,
 			localId: undefined,
-			name: 'Unknown',
-			rawName: 'Unknown',
+			name: '',
+			rawId: 'forged',
+			rawName: ' Runtime title ',
 			source: 'runtime'
 		});
 	});

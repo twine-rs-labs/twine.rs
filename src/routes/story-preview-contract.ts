@@ -96,6 +96,8 @@ export interface StoryPreviewRuntimePassage {
 	id?: string;
 	localId?: string;
 	name?: string;
+	/** Original runtime ID retained for display; `id` remains descriptor-resolved. */
+	rawId?: string;
 	rawName?: string;
 	source?: string;
 }
@@ -1793,7 +1795,7 @@ export function resolveRuntimePassage(
 		return undefined;
 	}
 
-	const rawName = raw.name;
+	const rawName = raw.rawName ?? raw.name;
 	const normalizedName = raw.name?.trim();
 	const localId = raw.localId?.trim();
 	const id = raw.id?.trim();
@@ -1809,6 +1811,7 @@ export function resolveRuntimePassage(
 		id: match?.id,
 		localId: match?.localId ?? localId,
 		name: match?.name ?? normalizedName,
+		rawId: id,
 		rawName,
 		source: raw.source
 	};
