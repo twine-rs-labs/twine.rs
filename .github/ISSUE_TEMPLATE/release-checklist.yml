@@ -73,7 +73,7 @@ body:
         - [ ] The release manager is named and accepts sole release accountability.
         - [ ] Version, tag, channel, artifact profile, and previous known-good release are selected.
         - [ ] `npm run version:bump -- <version>` synchronized JavaScript and Rust versions.
-        - [ ] `CHANGELOG.md` has a complete dated section for this version.
+        - [ ] `CHANGELOG.md` describes the net user-visible delta from the exact previous release tag, and every `Fixed` item traces to behavior defective in that release.
         - [ ] Known issues and supported targets are recorded.
         - [ ] Project-format, settings-migration, backup, and previous-version reopening decisions are explicit.
         - [ ] Application and project-data rollback instructions are explicit.

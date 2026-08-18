@@ -9,7 +9,11 @@ reconstruct release entries or tags without verifiable source and artifact
 evidence.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and releases use [Semantic Versioning](https://semver.org/).
+and releases use [Semantic Versioning](https://semver.org/). Each section
+prepared for publication describes the net user-visible change from the
+previous published release. Clearly labeled unpublished candidate records are
+historical exceptions; category and baseline rules are defined in
+[`RELEASING.md`](RELEASING.md).
 
 ## [Unreleased]
 
@@ -20,6 +24,33 @@ and releases use [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 ### Security
+
+## [0.2.0-beta.4] - 2026-08-19
+
+### Added
+
+- Added a read-only Runtime Debugger v1 to shared browser and desktop previews,
+  with a copyable runtime console and format-specific current-passage,
+  variable, temporary-variable, and visited-passage inspection that reports
+  unavailable and truncated data explicitly.
+
+### Changed
+
+- Finished the primary workbench transition by moving the remaining story
+  editing tools into integrated panels and drawers and unifying Preview, Play,
+  Proof, Test, and Test From Here on the shared preview route.
+- Hardened the new workbench project lifecycle with buffered-edit flushing,
+  native-save verification, and recoverable project replacement and deletion
+  transactions.
+
+### Fixed
+
+- Fixed interrupted project import, replacement, and deletion paths that could
+  leave project folders or session state inconsistent; project-session
+  restarts now remain isolated to the affected project root.
+- Fixed Chapbook 2.3.1 preview current-passage tracking after passage changes.
+- Corrected Twine RS application attribution, collaborator credits, About
+  links, and Report a Bug destinations.
 
 ## [0.2.0-beta.3] - 2026-08-10
 
@@ -84,14 +115,15 @@ and releases use [Semantic Versioning](https://semver.org/).
   detection so preview passage detection recovers when a story format
   initializes its runtime after the bridge's first startup sample.
 
-## [0.2.0-beta.1] - 2026-08-01
+## 0.2.0-beta.1 candidate - 2026-08-01 (unpublished)
 
-### Changed
+### Disposition
 
 - Unpublished release candidate superseded by 0.2.0-beta.2 after release
   workflow and packaged Linux ARM64 validation exposed release-pipeline and
   preview-startup defects. No draft or public release was created.
 
-[Unreleased]: https://github.com/twine-rs-labs/twine.rs/compare/v0.2.0-beta.3...HEAD
+[Unreleased]: https://github.com/twine-rs-labs/twine.rs/compare/v0.2.0-beta.4...HEAD
+[0.2.0-beta.4]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.4
 [0.2.0-beta.3]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.3
 [0.2.0-beta.2]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.2
