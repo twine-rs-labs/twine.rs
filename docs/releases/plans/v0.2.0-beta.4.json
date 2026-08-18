@@ -1,0 +1,37 @@
+{
+	"$schema": "https://raw.githubusercontent.com/twine-rs-labs/twine.rs/main/docs/releases/release-plan.schema.json",
+	"schemaVersion": 1,
+	"version": "0.2.0-beta.4",
+	"tag": "v0.2.0-beta.4",
+	"releaseDate": "2026-08-19",
+	"channel": "prerelease",
+	"profile": "distributable-unsigned",
+	"releaseManager": "@bransta61",
+	"checklistIssue": "https://github.com/twine-rs-labs/twine.rs/issues/30",
+	"firstRelease": false,
+	"previousKnownGoodVersion": "0.2.0-beta.3",
+	"approvals": {
+		"releaseManager": true
+	},
+	"compatibility": {
+		"projectFormat": "unchanged",
+		"settingsMigration": "none",
+		"previousVersionCanOpenProjects": "yes",
+		"backupRequired": false,
+		"notes": "No project-format or settings migration is introduced by this release. The immutable beta.3 CLI reopened a beta.4-created project and the restored beta.4 backup with matching story, passage, and link summaries. The persistence and project-lifecycle changes are internal; a separate project-folder backup remains recommended before prerelease use."
+	},
+	"rollback": {
+		"application": "Uninstall or discontinue using beta.4 and reinstall the previous known-good beta.3 release. Automatic downgrade is unavailable.",
+		"projectData": "Beta.3 can reopen the unchanged beta.4 project format. If project-data recovery is required, stop editing, restore the separate pre-beta.4 project-folder backup, and reopen that restored project with beta.3.",
+		"tested": true,
+		"evidence": "https://github.com/twine-rs-labs/twine.rs/issues/30#issuecomment-5334292517"
+	},
+	"knownIssues": [
+		"In the current benchmark suite, some latency and memory results at the largest tested project sizes exceed the project’s initial performance targets.",
+		"Advanced Harlowe syntax editing is specific to the bundled Harlowe 3.3.9 format; other Harlowe versions use the generic editor.",
+		"Asset-complete Package export is limited to file-backed desktop projects. Static runtime dependencies are assessed, while dynamic JavaScript dependency discovery is explicitly not evaluated.",
+		"Runtime Debugger v1 is read-only. Variable and visited-passage inspection is adapter- and version-specific; Chapbook, Harlowe, and generic adapters expose current-passage state only.",
+		"Some inherited editing, troubleshooting, installation, and compatibility documentation still requires a final Twine RS-specific audit.",
+		"Cross-platform packaged-app and hosted-CI performance coverage remains incomplete."
+	]
+}

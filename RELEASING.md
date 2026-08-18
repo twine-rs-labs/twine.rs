@@ -80,6 +80,35 @@ them to an exact dated heading:
 ## [0.2.0-beta.1] - 2026-08-01
 ```
 
+Every section prepared for publication describes the net user-visible delta
+from the exact previous published release tag. It is not a commit log,
+pull-request summary, or record of intermediate defects that appeared and were
+repaired while an unreleased feature was being developed. Prepare the section
+by comparing the previous tag with the candidate and tracing every claim to
+both baseline and candidate behavior. A clearly labeled unpublished or
+abandoned candidate entry may instead record why it was superseded; it is a
+historical disposition record and is not classified against a published
+baseline.
+
+Use the categories consistently:
+
+- **Added** is a user-visible capability absent from the previous release.
+- **Changed** is an intentional user-visible behavior, workflow, or support
+  change that does not claim the previous release was defective.
+- **Fixed** corrects behavior that was defective in the previous published
+  release. State the affected behavior, not merely the later commit subject or
+  the mechanism used to repair it.
+- **Security** corrects a security weakness present in the previous published
+  release and should match the reviewed security scope.
+
+If a defect is introduced and repaired entirely between release tags, fold the
+result into the relevant **Added** or **Changed** description; do not list it as
+a separate **Fixed** item. When one implementation series both fixes a
+previously released defect and adds new hardening, split those outcomes into
+separate, accurately classified bullets. Omit internal-only refactors, CI
+repairs, and release-process fixes unless they change the product behavior or
+trust information users need for this release.
+
 The release workflow combines that entry with the release plan's artifact
 profile, supported targets, known issues, migration decision, rollback
 instructions, support link, checksums, and provenance details. GitHub-generated
