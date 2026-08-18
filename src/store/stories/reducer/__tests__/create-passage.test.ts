@@ -62,7 +62,8 @@ describe('Story reducer createPassage action handler', () => {
 	it("doesn't affect other passages in the story", () => {
 		const story = fakeStory(1);
 		const originalPassage = story.passages[0];
-		const passage = fakePassage();
+		originalPassage.name = 'Original passage';
+		const passage = fakePassage({name: 'New passage'});
 
 		expect(createPassage([story], story.id, passage)).toEqual([
 			{
@@ -145,9 +146,14 @@ describe('Story reducer createPassage action handler', () => {
 		const story = fakeStory();
 		const oldDate = new Date('1/1/1980');
 
+		story.passages[0].name = 'Existing passage';
 		story.lastUpdate = oldDate;
 
-		const result = createPassage([story], story.id, fakePassage());
+		const result = createPassage(
+			[story],
+			story.id,
+			fakePassage({name: 'New passage'})
+		);
 
 		expect(result[0].lastUpdate.getTime()).toBeGreaterThan(oldDate.getTime());
 	});
