@@ -28,5 +28,9 @@ describe('<GlobalErrorBoundary>', () => {
 		expect(
 			screen.getByText('Something went wrong', {exact: false})
 		).toBeInTheDocument();
+		expect(screen.getByRole('link', {name: 'report a bug'})).toHaveAttribute(
+			'href',
+			'https://github.com/twine-rs-labs/twine.rs/issues/new'
+		);
 	});
 });

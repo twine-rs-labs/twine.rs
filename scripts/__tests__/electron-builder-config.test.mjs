@@ -4,7 +4,10 @@ import {createRequire} from 'node:module';
 import {test} from 'node:test';
 
 const require = createRequire(import.meta.url);
+const {AppInfo} = require('app-builder-lib/out/appInfo');
+const {readPackageJson} = require('app-builder-lib/out/util/packageMetadata');
 const config = require('../../electron-builder.config.js');
+const packageJsonPath = require.resolve('../../package.json');
 const configPath = require.resolve('../../electron-builder.config.js');
 const {createMacBuildHooks} = require('../electron-builder-hooks.cjs');
 const {afterPack, afterSign} = createMacBuildHooks({
@@ -131,6 +134,14 @@ test('electron-builder config exposes only schema properties', () => {
 	assert.equal(config.mac.identity, null);
 	assert.equal(config.win.signExecutable, false);
 	assert.match(config.directories.output, /^artifacts\/local\//);
+});
+
+test('packaged applications attribute Twine RS to TwineRS Lab', async () => {
+	const metadata = await readPackageJson(packageJsonPath);
+	const appInfo = new AppInfo({config, devMetadata: null, metadata});
+
+	assert.equal(appInfo.companyName, 'TwineRS Lab');
+	assert.match(appInfo.copyright, /^Copyright © \d{4} TwineRS Lab$/);
 });
 
 test('every packaged app includes root compliance artifacts', () => {

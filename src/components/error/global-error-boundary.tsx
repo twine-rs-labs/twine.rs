@@ -1,4 +1,5 @@
 import * as React from 'react';
+import {twineRsBugReportUrl} from '../../util/twine-rs-urls';
 import {useErrorBoundary} from './use-error-boundary';
 import {ErrorMessage} from './error-message';
 import './global-error-boundary.css';
@@ -18,11 +19,7 @@ export const GlobalErrorBoundary: React.FC<React.PropsWithChildren> = ({
 					<p>Please try restarting Twine or reloading the page.</p>
 					<p>
 						If you see this message repeatedly, please{' '}
-						<a
-							href="https://twinery.org/2bugs"
-							rel="noreferrer"
-							target="_blank"
-						>
+						<a href={twineRsBugReportUrl} rel="noreferrer" target="_blank">
 							report a bug
 						</a>
 						.
