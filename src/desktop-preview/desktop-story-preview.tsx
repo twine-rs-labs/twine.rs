@@ -365,6 +365,7 @@ export const DesktopStoryPreview: React.FC<
 				}}
 				debugMetrics={storyPreviewDebugMetrics(descriptor.summary)}
 				missingStoryMessage="The story preview is unavailable."
+				onCopyRuntimeLog={text => api.copyText(text)}
 				onContentLoad={contentLoaded}
 				onRevealGraph={passageId =>
 					void sendCommand({passageId, type: 'revealGraph'})

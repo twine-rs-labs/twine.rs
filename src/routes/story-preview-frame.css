@@ -170,6 +170,33 @@
 	align-items: baseline;
 }
 
+.story-preview-route__runtime-console-list {
+	display: grid;
+	gap: 6px;
+	list-style: none;
+	margin: 8px 0 0;
+	padding: 0;
+}
+
+.story-preview-route__runtime-console-list li {
+	display: grid;
+	gap: 6px;
+	grid-template-columns: auto auto minmax(0, 1fr);
+	min-width: 0;
+}
+
+.story-preview-route__runtime-console-list time,
+.story-preview-route__runtime-console-list strong {
+	font-family: var(--font-mono);
+	font-size: var(--fs-xs);
+}
+
+.story-preview-route__runtime-console-list span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
 .story-preview-route__debugger-variables code {
 	overflow-wrap: anywhere;
 }

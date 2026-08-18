@@ -2,7 +2,7 @@
 
 Status: current
 Owner: Electron and frontend maintainers
-Last verified: 2026-08-11
+Last verified: 2026-08-18
 Source of truth: desktop preview entry, preview IPC, window manager, protocol,
 and shared preview surface
 
@@ -53,6 +53,12 @@ expose filesystem, persistence, project mutation, dialogs, or raw
 `ipcRenderer`. Main retains the latest bounded appearance for each live owner
 and merges it immediately before exposing or committing a generation, including
 updates received before a session or candidate exists.
+
+Its sole clipboard capability is `copyText`, used by the host Runtime Console.
+It accepts only nonempty bounded text through the exact top-level preview-entry
+and live-session gates; child story frames and the ordinary application
+renderer cannot invoke it. Main does not authenticate a physical user gesture;
+the capability is limited to the trusted preview shell instead.
 
 ## Shared surface and commands
 

@@ -16,6 +16,7 @@ import type {
 export const STORY_PREVIEW_BRIDGE_SOURCE = 'twine.rs.preview.bridge';
 
 export const STORY_PREVIEW_RUNTIME_LOG_LIMIT = 12;
+const maxRuntimeTimestamp = 8_640_000_000_000_000;
 
 export const STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE = `
 (function () {
@@ -122,6 +123,50 @@ export interface StoryPreviewRuntimeLogEntry {
 	level: 'error' | 'info' | 'log' | 'warn';
 	message: string;
 	time: number;
+}
+
+/**
+ * Produces the host-owned clipboard representation of the bounded runtime
+ * console. Entries intentionally retain their existing newest-first order.
+ */
+export function serializeStoryPreviewRuntimeLog(
+	logs: StoryPreviewRuntimeLogEntry[]
+): string {
+	if (!Array.isArray(logs) || logs.length > STORY_PREVIEW_RUNTIME_LOG_LIMIT) {
+		throw new TypeError('Invalid runtime log buffer.');
+	}
+
+	return logs
+		.map(log => {
+			if (
+				!log ||
+				typeof log.time !== 'number' ||
+				!Number.isFinite(log.time) ||
+				log.time < 0 ||
+				log.time > maxRuntimeTimestamp ||
+				typeof log.message !== 'string' ||
+				log.message.length > STORY_PREVIEW_BRIDGE_LIMITS.totalLogTextLength
+			) {
+				throw new TypeError('Invalid runtime log entry.');
+			}
+			const level =
+				log.level === 'log'
+					? 'LOG'
+					: log.level === 'info'
+						? 'INFO'
+						: log.level === 'warn'
+							? 'WARNING'
+							: log.level === 'error'
+								? 'ERROR'
+								: undefined;
+
+			if (!level) {
+				throw new TypeError('Invalid runtime log level.');
+			}
+
+			return `[${new Date(log.time).toISOString()}] ${level}: ${JSON.stringify(log.message)}`;
+		})
+		.join('\n');
 }
 
 export interface StoryPreviewDebuggerVariable {
@@ -616,7 +661,8 @@ export function normalizeStoryPreviewBridgeMessage(
 			? undefined
 			: typeof data.time === 'number' &&
 				  Number.isFinite(data.time) &&
-				  data.time >= 0
+				  data.time >= 0 &&
+				  data.time <= maxRuntimeTimestamp
 				? data.time
 				: null;
 
@@ -648,7 +694,7 @@ export function normalizeStoryPreviewBridgeMessage(
 				return undefined;
 			}
 
-			totalTextLength += argument.length;
+			totalTextLength += argument.length + (args.length ? 1 : 0);
 
 			if (totalTextLength > STORY_PREVIEW_BRIDGE_LIMITS.totalLogTextLength) {
 				return undefined;

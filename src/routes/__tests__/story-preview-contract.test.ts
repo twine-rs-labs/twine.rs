@@ -5,6 +5,7 @@ import {
 	normalizeStoryPreviewBridgeMessage,
 	reduceStoryPreviewRuntime,
 	resolveRuntimePassage,
+	serializeStoryPreviewRuntimeLog,
 	STORY_PREVIEW_BRIDGE_LIMITS,
 	STORY_PREVIEW_BRIDGE_SOURCE,
 	STORY_PREVIEW_RUNTIME_LOG_LIMIT
@@ -326,6 +327,108 @@ describe('instrumented runtime passage detection', () => {
 });
 
 describe('normalizeStoryPreviewBridgeMessage()', () => {
+	it('serializes retained runtime logs in input order with canonical levels and escaping', () => {
+		expect(
+			serializeStoryPreviewRuntimeLog([
+				{id: 'a', level: 'log', message: '  <x>\\"\r\n\t  ', time: 0},
+				{id: 'b', level: 'info', message: 'same', time: 0},
+				{id: 'c', level: 'warn', message: 'warning', time: 0},
+				{id: 'd', level: 'error', message: 'error', time: 0}
+			])
+		).toBe(
+			'[1970-01-01T00:00:00.000Z] LOG: "  <x>\\\\\\"\\r\\n\\t  "\n[1970-01-01T00:00:00.000Z] INFO: "same"\n[1970-01-01T00:00:00.000Z] WARNING: "warning"\n[1970-01-01T00:00:00.000Z] ERROR: "error"'
+		);
+		expect(serializeStoryPreviewRuntimeLog([])).toBe('');
+	});
+
+	it('rejects out-of-domain runtime log serialization inputs', () => {
+		expect(() =>
+			serializeStoryPreviewRuntimeLog(
+				Array.from({length: 13}, (_, index) => ({
+					id: String(index),
+					level: 'log' as const,
+					message: '',
+					time: index
+				}))
+			)
+		).toThrow();
+		expect(() =>
+			serializeStoryPreviewRuntimeLog([
+				{id: 'x', level: 'log', message: 'x', time: -1}
+			])
+		).toThrow();
+		for (const time of [NaN, Infinity, 8.64e15 + 1]) {
+			expect(() =>
+				serializeStoryPreviewRuntimeLog([
+					{id: 'x', level: 'log', message: 'x', time}
+				])
+			).toThrow();
+		}
+		expect(
+			serializeStoryPreviewRuntimeLog([
+				{id: 'max', level: 'log', message: '', time: 8.64e15}
+			])
+		).toContain('+275760-09-13T00:00:00.000Z');
+		expect(() =>
+			serializeStoryPreviewRuntimeLog([
+				{id: 'x', level: 'unknown' as any, message: 'x', time: 0}
+			])
+		).toThrow();
+		expect(() =>
+			serializeStoryPreviewRuntimeLog([
+				{
+					id: 'x',
+					level: 'log',
+					message: 'x'.repeat(
+						STORY_PREVIEW_BRIDGE_LIMITS.totalLogTextLength + 1
+					),
+					time: 0
+				}
+			])
+		).toThrow();
+	});
+
+	it('keeps the maximum valid serialized buffer below the Electron IPC ceiling', () => {
+		const text = serializeStoryPreviewRuntimeLog(
+			Array.from({length: 12}, (_, index) => ({
+				id: String(index),
+				level: 'log' as const,
+				message: '\0'.repeat(STORY_PREVIEW_BRIDGE_LIMITS.totalLogTextLength),
+				time: index
+			}))
+		);
+		expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(4 * 1024 * 1024);
+	});
+
+	it('counts inserted console argument separators against the message budget', () => {
+		const args = Array.from({length: 16}, () => 'x'.repeat(2048));
+		expect(
+			normalizeStoryPreviewBridgeMessage({
+				args,
+				level: 'log',
+				sessionId: 'session-1',
+				source: STORY_PREVIEW_BRIDGE_SOURCE,
+				time: 0,
+				type: 'console'
+			})
+		).toBeUndefined();
+	});
+
+	it('accepts the maximum Date timestamp and rejects a later bridge timestamp', () => {
+		const message = {
+			args: [],
+			level: 'log',
+			sessionId: 'session-1',
+			source: STORY_PREVIEW_BRIDGE_SOURCE,
+			type: 'console'
+		};
+		expect(
+			normalizeStoryPreviewBridgeMessage({...message, time: 8.64e15})
+		).toBeDefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage({...message, time: 8.64e15 + 1})
+		).toBeUndefined();
+	});
 	it('copies valid console messages into the bounded contract', () => {
 		const args = ['hello', 'preview'];
 		const normalized = normalizeStoryPreviewBridgeMessage({

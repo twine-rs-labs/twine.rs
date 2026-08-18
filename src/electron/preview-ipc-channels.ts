@@ -12,6 +12,7 @@ export const storyPreviewIpcChannels = Object.freeze({
 	appearance: 'story-preview:appearance',
 	command: 'story-preview:command',
 	commandResult: 'story-preview:command-result',
+	copyText: 'story-preview:copy-text',
 	frameLoaded: 'story-preview:frame-loaded',
 	getInitialState: 'story-preview:get-initial-state',
 	ownerCommand: 'story-preview:owner-command',
@@ -29,6 +30,7 @@ export interface NativeStoryPreviewInitialState {
  * has no project, filesystem, settings, or raw IPC capabilities.
  */
 export interface NativeStoryPreviewBridge {
+	copyText(text: string): Promise<void>;
 	command(
 		command: NativeStoryPreviewCommand
 	): Promise<NativeStoryPreviewCommandResult>;

@@ -15,6 +15,7 @@ const storyPreviewIpcChannels = Object.freeze({
 	appearance: 'story-preview:appearance',
 	command: 'story-preview:command',
 	commandResult: 'story-preview:command-result',
+	copyText: 'story-preview:copy-text',
 	frameLoaded: 'story-preview:frame-loaded',
 	getInitialState: 'story-preview:get-initial-state',
 	ready: 'story-preview:ready',
@@ -22,6 +23,7 @@ const storyPreviewIpcChannels = Object.freeze({
 });
 
 const maxPassageIdLength = 1024;
+const maxCopyTextLength = 4 * 1024 * 1024;
 
 function validGeneration(value: unknown): value is number {
 	return Number.isSafeInteger(value) && (value as number) >= 0;
@@ -98,6 +100,16 @@ function subscribe<T>(channel: string, callback: (value: T) => void) {
 }
 
 const bridge: NativeStoryPreviewBridge = {
+	copyText(text) {
+		if (
+			typeof text !== 'string' ||
+			text.length === 0 ||
+			text.length > maxCopyTextLength
+		) {
+			return Promise.reject(new TypeError('Invalid runtime log text.'));
+		}
+		return ipcRenderer.invoke(storyPreviewIpcChannels.copyText, text);
+	},
 	command(command) {
 		return ipcRenderer.invoke(
 			storyPreviewIpcChannels.command,

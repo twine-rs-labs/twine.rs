@@ -18,6 +18,8 @@ opens the selected proofing format in the same dedicated preview-window shell
 used by Play and Test. Its toolbar provides build health, runtime logs, viewport
 controls, reload, and Source or Graph navigation when the proofing runtime can
 identify a passage. Multiple proof windows can remain open independently.
+The Debugger disclosure also provides a read-only Runtime Console and a copy
+action for its bounded retained log.
 
 Proof output and its opaque desktop address are temporary. Use an exported file
 when you need a durable copy.

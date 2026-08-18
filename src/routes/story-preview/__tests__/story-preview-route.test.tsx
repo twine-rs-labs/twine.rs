@@ -5,7 +5,7 @@ import {CoreProjectHostProvider} from '../../../core';
 import {StoriesContext} from '../../../store/stories';
 import {usePublishing} from '../../../store/use-publishing';
 import {fakeStory} from '../../../test-util';
-import {StoryPreviewRoute} from '../story-preview-route';
+import {browserRuntimeLogCopy, StoryPreviewRoute} from '../story-preview-route';
 
 jest.mock('../../../store/use-publishing');
 
@@ -127,5 +127,27 @@ describe('<StoryPreviewRoute>', () => {
 		await waitFor(() =>
 			expect(document.body.textContent).toContain('mock-error-message')
 		);
+	});
+});
+
+describe('browserRuntimeLogCopy', () => {
+	it('uses supported clipboard writes and propagates rejection', async () => {
+		const writeText = jest.fn().mockRejectedValue(new Error('denied'));
+		Object.defineProperty(navigator, 'clipboard', {
+			configurable: true,
+			value: {writeText}
+		});
+
+		const copy = browserRuntimeLogCopy();
+		await expect(copy?.('runtime log')).rejects.toThrow('denied');
+		expect(writeText).toHaveBeenCalledWith('runtime log');
+	});
+
+	it('is unavailable when clipboard writeText is unsupported', () => {
+		Object.defineProperty(navigator, 'clipboard', {
+			configurable: true,
+			value: undefined
+		});
+		expect(browserRuntimeLogCopy()).toBeUndefined();
 	});
 });

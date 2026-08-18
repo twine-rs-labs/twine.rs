@@ -2,7 +2,7 @@
 
 Status: current
 Owner: frontend and story-format maintainers
-Last verified: 2026-08-11
+Last verified: 2026-08-18
 Source of truth: preview instrumentation, debugger protocol registry, and shared
 preview runtime reducer
 
@@ -102,6 +102,11 @@ map. If an adapter fails, the existing current-passage, log, and error bridge
 continues independently.
 
 ## Product boundary
+
+The host-owned Runtime Console is available before adapter negotiation. It shows
+the bounded newest-first console/error records as text only and can copy the
+committed buffer as timestamped JSON-escaped lines. Copying is not a debugger
+protocol message and does not give story content clipboard access.
 
 The shared preview surface now delivers the visible, collapsible Debugger v1
 inspector. It is read-only and renders only negotiated capabilities, bounded

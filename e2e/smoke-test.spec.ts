@@ -399,6 +399,60 @@ test('publishes the current project to a playable page', async ({
 	await publishedPage.close();
 });
 
+test.describe('runtime console clipboard', () => {
+	test.skip(
+		({browserName}) => browserName !== 'chromium',
+		'Runtime console clipboard acceptance is anchored in Chromium.'
+	);
+
+	test('copies the host-owned runtime console exactly', async ({
+		context,
+		page
+	}) => {
+		await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+			origin: appUrl
+		});
+		await createProject(page, 'Runtime console clipboard');
+		await setPassageText(page, 'Console story.');
+		const [publishedPage] = await Promise.all([
+			context.waitForEvent('page'),
+			page.getByTitle('Play').click()
+		]);
+		const frame = publishedPage.frameLocator('iframe[title="Story preview"]');
+		await expect(
+			frame.locator(':visible:text-is("Console story.")')
+		).toBeVisible();
+		await frame.locator('body').evaluate(() => {
+			const originalNow = Date.now;
+			try {
+				Date.now = () => 0;
+				console.log('<safe>\nline');
+				console.warn('warn');
+				console.error('error');
+			} finally {
+				Date.now = originalNow;
+			}
+		});
+		await publishedPage.getByRole('button', {name: 'Debugger'}).click();
+		const inspector = publishedPage.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		await expect(
+			inspector.getByRole('heading', {name: 'Runtime Console'})
+		).toBeVisible();
+		await expect(inspector).toContainText('<safe>');
+		expect(await inspector.locator('safe').count()).toBe(0);
+		await publishedPage.getByRole('button', {name: 'Copy Runtime Log'}).click();
+		await expect(inspector.getByText('Runtime log copied.')).toBeVisible();
+		expect(
+			await publishedPage.evaluate(() => navigator.clipboard.readText())
+		).toBe(
+			'[1970-01-01T00:00:00.000Z] ERROR: "error"\n[1970-01-01T00:00:00.000Z] WARNING: "warn"\n[1970-01-01T00:00:00.000Z] LOG: "<safe>\\nline"'
+		);
+		await publishedPage.close();
+	});
+});
+
 test('tracks Harlowe passage navigation in a sandboxed browser preview', async ({
 	context,
 	page

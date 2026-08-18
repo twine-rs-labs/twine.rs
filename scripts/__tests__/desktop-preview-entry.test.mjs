@@ -60,6 +60,7 @@ test('sandboxed preview preload has no local runtime dependency', async () => {
 	for (const channel of [
 		'story-preview:appearance',
 		'story-preview:command',
+		'story-preview:copy-text',
 		'story-preview:command-result',
 		'story-preview:frame-loaded',
 		'story-preview:get-initial-state',

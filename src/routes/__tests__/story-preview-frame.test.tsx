@@ -106,6 +106,221 @@ describe('instrumentPreviewHtml()', () => {
 });
 
 describe('<StoryPreviewFrame>', () => {
+	it('keeps a copy operation pending and suppresses stale feedback after log changes', async () => {
+		let resolveCopy!: () => void;
+		const onCopyRuntimeLog = jest.fn(
+			() => new Promise<void>(resolve => (resolveCopy = resolve))
+		);
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy race preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Copy race preview');
+		postBridgeMessage('Copy race preview', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const copy = screen.getByRole('button', {name: 'Copy Runtime Log'});
+		fireEvent.click(copy);
+		fireEvent.click(copy);
+		await waitFor(() => expect(onCopyRuntimeLog).toHaveBeenCalledTimes(1));
+		expect(copy).toBeDisabled();
+		postBridgeMessage('Copy race preview', sessionId, {
+			args: ['B'],
+			level: 'error',
+			type: 'console'
+		});
+		expect(copy).toBeDisabled();
+		await act(async () => resolveCopy());
+		expect(screen.queryByText('Runtime log copied.')).not.toBeInTheDocument();
+		expect(copy).not.toBeDisabled();
+	});
+
+	it('disables unsupported copy and reports current write failures', async () => {
+		const onCopyRuntimeLog = jest.fn().mockRejectedValue(new Error('denied'));
+		const {rerender} = render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				storyExists
+				title="Copy failure preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Copy failure preview');
+		postBridgeMessage('Copy failure preview', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		expect(
+			screen.getByRole('button', {name: 'Copy Runtime Log'})
+		).toBeDisabled();
+		rerender(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy failure preview"
+			/>
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() =>
+			expect(
+				screen.getByText('Could not copy runtime log.')
+			).toBeInTheDocument()
+		);
+	});
+
+	it('suppresses stale copy rejection after reload', async () => {
+		let rejectCopy!: (error: Error) => void;
+		const onCopyRuntimeLog = jest.fn(
+			() => new Promise<void>((_, reject) => (rejectCopy = reject))
+		);
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy rejection preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Copy rejection preview');
+		postBridgeMessage('Copy rejection preview', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() => expect(onCopyRuntimeLog).toHaveBeenCalledTimes(1));
+		fireEvent.click(screen.getByRole('button', {name: 'Reload'}));
+		await act(async () => rejectCopy(new Error('denied')));
+		expect(
+			screen.queryByText('Could not copy runtime log.')
+		).not.toBeInTheDocument();
+	});
+
+	it('renders the pre-negotiation console safely and copies the current buffer exactly', async () => {
+		const onCopyRuntimeLog = jest.fn().mockResolvedValue(undefined);
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Console preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Console preview');
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const inspector = screen.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		expect(inspector).toHaveTextContent(
+			'Waiting for debugger adapter negotiation.'
+		);
+		expect(
+			screen.getByRole('button', {name: 'Copy Runtime Log'})
+		).toBeDisabled();
+		postBridgeMessage('Console preview', sessionId, {
+			args: ['<b>old</b>'],
+			level: 'info',
+			type: 'console'
+		});
+		postBridgeMessage('Console preview', sessionId, {
+			args: ['new'],
+			level: 'warn',
+			type: 'console'
+		});
+		expect(inspector.querySelector('b')).toBeNull();
+		expect(within(inspector).getByText('<b>old</b>')).toBeInTheDocument();
+		expect(within(inspector).getByText('Warning')).toBeInTheDocument();
+		expect(within(inspector).getByText('Info')).toBeInTheDocument();
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() =>
+			expect(onCopyRuntimeLog).toHaveBeenCalledWith(
+				'[1970-01-01T00:00:00.010Z] WARNING: "new"\n[1970-01-01T00:00:00.010Z] INFO: "<b>old</b>"'
+			)
+		);
+		await waitFor(() =>
+			expect(screen.getByText('Runtime log copied.')).toBeInTheDocument()
+		);
+	});
+
+	it('shows failure for a synchronously throwing copy callback', async () => {
+		const onCopyRuntimeLog = jest.fn(() => {
+			throw new Error('denied');
+		});
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Sync copy failure"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Sync copy failure');
+		postBridgeMessage('Sync copy failure', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() =>
+			expect(
+				screen.getByText('Could not copy runtime log.')
+			).toBeInTheDocument()
+		);
+	});
+
+	it('suppresses stale rejection for A after a nonempty B buffer replaces it', async () => {
+		let rejectCopy!: (error: Error) => void;
+		const onCopyRuntimeLog = jest.fn(
+			() => new Promise<void>((_, reject) => (rejectCopy = reject))
+		);
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy rejection B"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Copy rejection B');
+		postBridgeMessage('Copy rejection B', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const copy = screen.getByRole('button', {name: 'Copy Runtime Log'});
+		fireEvent.click(copy);
+		await waitFor(() => expect(onCopyRuntimeLog).toHaveBeenCalledTimes(1));
+		postBridgeMessage('Copy rejection B', sessionId, {
+			args: ['B'],
+			level: 'error',
+			type: 'console'
+		});
+		await act(async () => rejectCopy(new Error('denied')));
+		expect(
+			screen.queryByText('Could not copy runtime log.')
+		).not.toBeInTheDocument();
+		expect(copy).not.toBeDisabled();
+		expect(screen.getAllByText('B')).toHaveLength(2);
+	});
 	it('isolates story code from the application origin', () => {
 		render(
 			<StoryPreviewFrame
@@ -334,7 +549,7 @@ describe('<StoryPreviewFrame>', () => {
 		expect(screen.queryByText('candidate rejection')).not.toBeInTheDocument();
 		expect(
 			screen.queryByRole('button', {name: 'Debugger'})
-		).not.toBeInTheDocument();
+		).toBeInTheDocument();
 		expect(
 			onRuntimeModelChange.mock.calls.some(
 				([model]) => model.debugger.hello !== undefined
@@ -468,6 +683,170 @@ describe('<StoryPreviewFrame>', () => {
 		).toBe(false);
 		expect(
 			screen.queryByRole('button', {name: 'Debugger'})
+		).toBeInTheDocument();
+	});
+
+	it('preserves committed copy feedback on rollback and invalidates it on candidate promotion', async () => {
+		const currentSource = {
+			bridgeSessionId: 'copy-current',
+			htmlBytes: 1,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://copy-current/index.html'
+		};
+		const candidateSource = {
+			bridgeSessionId: 'copy-candidate',
+			htmlBytes: 1,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://copy-candidate/index.html'
+		};
+		const onCopyRuntimeLog = jest.fn().mockResolvedValue(undefined);
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy committed"
+			/>
+		);
+		postBridgeMessage('Copy committed', 'copy-current', {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() =>
+			expect(screen.getByText('Runtime log copied.')).toBeInTheDocument()
+		);
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				stagedContentSource={candidateSource}
+				stagedTitle="Copy candidate"
+				storyExists
+				title="Copy committed"
+			/>
+		);
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy committed"
+			/>
+		);
+		expect(screen.getByText('Runtime log copied.')).toBeInTheDocument();
+		expect(screen.getAllByText('A')).toHaveLength(2);
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				stagedContentSource={candidateSource}
+				stagedTitle="Copy candidate"
+				storyExists
+				title="Copy committed"
+			/>
+		);
+		postBridgeMessage('Copy candidate', 'copy-candidate', {
+			args: ['B'],
+			level: 'error',
+			type: 'console'
+		});
+		rerender(
+			<StoryPreviewFrame
+				contentSource={candidateSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy candidate committed"
+			/>
+		);
+		await waitFor(() => expect(screen.getByText('1 log')).toBeInTheDocument());
+		expect(
+			screen.queryByRole('region', {name: 'Runtime debugger inspector'})
+		).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		expect(screen.queryByText('Runtime log copied.')).not.toBeInTheDocument();
+		expect(screen.getAllByText('B')).toHaveLength(2);
+	});
+
+	it('keeps a committed copy pending across promotion until its stale completion settles', async () => {
+		const currentSource = {
+			bridgeSessionId: 'pending-current',
+			htmlBytes: 1,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://pending-current/index.html'
+		};
+		const candidateSource = {
+			bridgeSessionId: 'pending-candidate',
+			htmlBytes: 1,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://pending-candidate/index.html'
+		};
+		let resolveCopy!: () => void;
+		const onCopyRuntimeLog = jest.fn(
+			() => new Promise<void>(resolve => (resolveCopy = resolve))
+		);
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Pending committed"
+			/>
+		);
+		postBridgeMessage('Pending committed', 'pending-current', {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() => expect(onCopyRuntimeLog).toHaveBeenCalledTimes(1));
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				stagedContentSource={candidateSource}
+				stagedTitle="Pending candidate"
+				storyExists
+				title="Pending committed"
+			/>
+		);
+		postBridgeMessage('Pending candidate', 'pending-candidate', {
+			args: ['B'],
+			level: 'error',
+			type: 'console'
+		});
+		rerender(
+			<StoryPreviewFrame
+				contentSource={candidateSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Pending candidate committed"
+			/>
+		);
+		await waitFor(() => expect(screen.getByText('1 log')).toBeInTheDocument());
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const copy = screen.getByRole('button', {name: 'Copy Runtime Log'});
+		expect(copy).toBeDisabled();
+		await act(async () => resolveCopy());
+		expect(copy).not.toBeDisabled();
+		expect(screen.queryByText('Runtime log copied.')).not.toBeInTheDocument();
+		expect(
+			screen.queryByText('Could not copy runtime log.')
 		).not.toBeInTheDocument();
 	});
 
@@ -768,7 +1147,7 @@ describe('<StoryPreviewFrame>', () => {
 		fireEvent.click(screen.getByRole('button', {name: 'Reload'}));
 		expect(
 			screen.queryByRole('button', {name: 'Debugger'})
-		).not.toBeInTheDocument();
+		).toBeInTheDocument();
 		expect(
 			screen.queryByRole('region', {name: 'Runtime debugger inspector'})
 		).not.toBeInTheDocument();
@@ -937,7 +1316,7 @@ describe('<StoryPreviewFrame>', () => {
 		expect(
 			within(historySection!).getByText('unmapped-history-id', {exact: true})
 		).toBeInTheDocument();
-		expect(within(inspector).queryAllByRole('button')).toHaveLength(0);
+		expect(within(inspector).queryAllByRole('button')).toHaveLength(1);
 		expect(onRevealGraph).not.toHaveBeenCalled();
 		expect(onRevealSource).not.toHaveBeenCalled();
 	});

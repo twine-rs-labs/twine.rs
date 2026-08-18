@@ -24,6 +24,7 @@ import type {
 	StoryPreviewViewportPreset
 } from './story-preview-debug';
 import type {StoryPreviewDebuggerCapability} from './story-preview-debugger-protocol';
+import {serializeStoryPreviewRuntimeLog} from './story-preview-contract';
 import './story-preview-frame.css';
 
 export interface StoryPreviewSrcDocContentSource {
@@ -229,6 +230,7 @@ export interface StoryPreviewFrameProps {
 	html?: string;
 	missingStoryMessage: string;
 	onContentLoad?: () => void;
+	onCopyRuntimeLog?: (text: string) => void | Promise<void>;
 	onRevealGraph?: (passageId?: string) => void;
 	onRevealSource?: (passageId?: string) => void;
 	onRuntimeModelChange?: (model: StoryPreviewRuntimeModel) => void;
@@ -263,6 +265,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		html,
 		missingStoryMessage,
 		onContentLoad,
+		onCopyRuntimeLog,
 		onRevealGraph,
 		onRevealSource,
 		onRuntimeModelChange,
@@ -309,6 +312,9 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	const [viewportPreset, setViewportPreset] =
 		React.useState<StoryPreviewViewportPreset>('fit');
 	const [debuggerExpanded, setDebuggerExpanded] = React.useState(false);
+	const [copyState, setCopyState] = React.useState<
+		'idle' | 'pending' | 'success' | 'error'
+	>('idle');
 	const debuggerPanelId = React.useId();
 	const previewFrame = React.useRef<HTMLIFrameElement>(null);
 	const stagedPreviewFrame = React.useRef<HTMLIFrameElement>(null);
@@ -321,6 +327,10 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		[stagedPassages]
 	);
 	const bridgeSessionIdRef = React.useRef(bridgeSessionId);
+	const copyOperationRef = React.useRef(0);
+	const copyPendingRef = React.useRef(false);
+	const logRevisionRef = React.useRef(0);
+	const previousLogsRef = React.useRef(runtimeModel.logs);
 	const passageLookupRef = React.useRef(passageLookup);
 	const stagedRuntimeRef = React.useRef<
 		| {
@@ -348,6 +358,10 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		}
 	}
 	const runtimeLogs = runtimeModel.logs;
+	if (previousLogsRef.current !== runtimeLogs) {
+		previousLogsRef.current = runtimeLogs;
+		logRevisionRef.current += 1;
+	}
 	const runtimeState = runtimeModel.runtime;
 	const currentPassage = runtimeState.currentPassage;
 	const currentPassageId = currentPassage?.id;
@@ -377,6 +391,10 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 
 	React.useLayoutEffect(() => {
 		setDebuggerExpanded(false);
+		logRevisionRef.current += 1;
+		if (!copyPendingRef.current) {
+			setCopyState('idle');
+		}
 		const stagedRuntime = stagedRuntimeRef.current;
 
 		if (stagedRuntime && stagedRuntime.bridgeSessionId === bridgeSessionId) {
@@ -387,6 +405,57 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 
 		dispatchRuntime({hasContent: !!contentSource, type: 'reset'});
 	}, [bridgeSessionId, reloadKey, sourceIdentity]);
+
+	React.useLayoutEffect(() => {
+		if (!copyPendingRef.current) {
+			setCopyState('idle');
+		}
+	}, [runtimeLogs]);
+
+	const copyRuntimeLog = React.useCallback(() => {
+		if (!onCopyRuntimeLog || !runtimeLogs.length || copyPendingRef.current) {
+			return;
+		}
+		const revision = logRevisionRef.current;
+		const operation = ++copyOperationRef.current;
+		let text: string;
+		try {
+			text = serializeStoryPreviewRuntimeLog(runtimeLogs);
+		} catch {
+			setCopyState('error');
+			return;
+		}
+		copyPendingRef.current = true;
+		setCopyState('pending');
+		Promise.resolve()
+			.then(() => onCopyRuntimeLog(text))
+			.then(
+				() => {
+					if (
+						operation === copyOperationRef.current &&
+						revision === logRevisionRef.current
+					) {
+						setCopyState('success');
+					}
+				},
+				() => {
+					if (
+						operation === copyOperationRef.current &&
+						revision === logRevisionRef.current
+					) {
+						setCopyState('error');
+					}
+				}
+			)
+			.finally(() => {
+				if (operation === copyOperationRef.current) {
+					copyPendingRef.current = false;
+					if (revision !== logRevisionRef.current) {
+						setCopyState('idle');
+					}
+				}
+			});
+	}, [onCopyRuntimeLog, runtimeLogs]);
 
 	React.useLayoutEffect(() => {
 		const stagedRuntime = stagedRuntimeRef.current;
@@ -582,17 +651,15 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 								</span>
 							)}
 						</div>
-						{debuggerHello && (
-							<Button
-								aria-controls={debuggerPanelId}
-								aria-expanded={debuggerExpanded}
-								icon="bug"
-								onClick={() => setDebuggerExpanded(expanded => !expanded)}
-								size="sm"
-							>
-								Debugger
-							</Button>
-						)}
+						<Button
+							aria-controls={debuggerPanelId}
+							aria-expanded={debuggerExpanded}
+							icon="bug"
+							onClick={() => setDebuggerExpanded(expanded => !expanded)}
+							size="sm"
+						>
+							Debugger
+						</Button>
 						<SegmentedControl
 							className="story-preview-route__viewport-control"
 							onChange={value =>
@@ -608,110 +675,176 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 							value={viewportPreset}
 						/>
 					</div>
-					{debuggerHello && debuggerExpanded && (
+					{debuggerExpanded && (
 						<section
 							aria-label="Runtime debugger inspector"
 							className="story-preview-route__debugger"
 							id={debuggerPanelId}
 						>
-							<div className="story-preview-route__debugger-metadata">
-								<span>
-									Format: {debuggerHello.format} {debuggerHello.formatVersion}
-								</span>
-								<span>Adapter: {debuggerHello.id}</span>
-								<span>Reliability: {debuggerHello.reliability}</span>
-							</div>
-							{!debuggerSnapshot ? (
+							<section className="story-preview-route__debugger-section story-preview-route__runtime-console">
+								<header>
+									<h2>Runtime Console</h2>
+									<Button
+										disabled={
+											!onCopyRuntimeLog ||
+											!runtimeLogs.length ||
+											copyState === 'pending'
+										}
+										onClick={copyRuntimeLog}
+										size="sm"
+									>
+										Copy Runtime Log
+									</Button>
+								</header>
+								{copyState === 'success' && (
+									<p className="story-preview-route__debugger-empty">
+										Runtime log copied.
+									</p>
+								)}
+								{copyState === 'error' && (
+									<p className="story-preview-route__debugger-empty">
+										Could not copy runtime log.
+									</p>
+								)}
+								{runtimeLogs.length ? (
+									<ol className="story-preview-route__runtime-console-list">
+										{runtimeLogs.map(log => (
+											<li key={log.id}>
+												<time>
+													{new Date(log.time).toLocaleTimeString([], {
+														hour: '2-digit',
+														minute: '2-digit',
+														second: '2-digit'
+													})}
+												</time>
+												<strong>
+													{log.level === 'log'
+														? 'Log'
+														: log.level === 'info'
+															? 'Info'
+															: log.level === 'warn'
+																? 'Warning'
+																: 'Error'}
+												</strong>
+												<span>{log.message}</span>
+											</li>
+										))}
+									</ol>
+								) : (
+									<p className="story-preview-route__debugger-empty">
+										No runtime log entries.
+									</p>
+								)}
+							</section>
+							{!debuggerHello ? (
 								<p className="story-preview-route__debugger-waiting">
-									Waiting for the first debugger snapshot.
+									Waiting for debugger adapter negotiation.
 								</p>
 							) : (
-								<div className="story-preview-route__debugger-sections">
-									{debuggerHello.capabilities.map(capability => {
-										const status = debuggerSnapshot.sections[capability];
+								<>
+									<div className="story-preview-route__debugger-metadata">
+										<span>
+											Format: {debuggerHello.format}{' '}
+											{debuggerHello.formatVersion}
+										</span>
+										<span>Adapter: {debuggerHello.id}</span>
+										<span>Reliability: {debuggerHello.reliability}</span>
+									</div>
+									{!debuggerSnapshot ? (
+										<p className="story-preview-route__debugger-waiting">
+											Waiting for the first debugger snapshot.
+										</p>
+									) : (
+										<div className="story-preview-route__debugger-sections">
+											{debuggerHello.capabilities.map(capability => {
+												const status = debuggerSnapshot.sections[capability];
 
-										return (
-											<section
-												className="story-preview-route__debugger-section"
-												key={capability}
-											>
-												<header>
-													<h2>{DEBUGGER_CAPABILITY_LABELS[capability]}</h2>
-													<span>{debuggerSectionStatusLabel(status)}</span>
-												</header>
-												{capability === 'currentPassage' && (
-													<div className="story-preview-route__debugger-passage">
-														<span>
-															{debuggerSnapshot.currentPassage
-																? runtimeDebuggerPassageLabel(
-																		debuggerSnapshot.currentPassage
-																	)
-																: status?.state === 'unavailable'
-																	? 'Unavailable.'
-																	: 'None.'}
-														</span>
-														{debuggerSnapshot.currentPassage && (
-															<RuntimeDebuggerPassageActions
-																passage={debuggerSnapshot.currentPassage}
-																onRevealGraph={onRevealGraph}
-																onRevealSource={onRevealSource}
-															/>
+												return (
+													<section
+														className="story-preview-route__debugger-section"
+														key={capability}
+													>
+														<header>
+															<h2>{DEBUGGER_CAPABILITY_LABELS[capability]}</h2>
+															<span>{debuggerSectionStatusLabel(status)}</span>
+														</header>
+														{capability === 'currentPassage' && (
+															<div className="story-preview-route__debugger-passage">
+																<span>
+																	{debuggerSnapshot.currentPassage
+																		? runtimeDebuggerPassageLabel(
+																				debuggerSnapshot.currentPassage
+																			)
+																		: status?.state === 'unavailable'
+																			? 'Unavailable.'
+																			: 'None.'}
+																</span>
+																{debuggerSnapshot.currentPassage && (
+																	<RuntimeDebuggerPassageActions
+																		passage={debuggerSnapshot.currentPassage}
+																		onRevealGraph={onRevealGraph}
+																		onRevealSource={onRevealSource}
+																	/>
+																)}
+															</div>
 														)}
-													</div>
-												)}
-												{capability === 'storyVariables' &&
-													(status?.state === 'unavailable' ? (
-														<p className="story-preview-route__debugger-empty">
-															Unavailable.
-														</p>
-													) : (
-														<RuntimeDebuggerVariables
-															variables={debuggerSnapshot.storyVariables}
-														/>
-													))}
-												{capability === 'temporaryVariables' &&
-													(status?.state === 'unavailable' ? (
-														<p className="story-preview-route__debugger-empty">
-															Unavailable.
-														</p>
-													) : (
-														<RuntimeDebuggerVariables
-															variables={debuggerSnapshot.temporaryVariables}
-														/>
-													))}
-												{capability === 'visitedPassages' &&
-													(status?.state === 'unavailable' ? (
-														<p className="story-preview-route__debugger-empty">
-															Unavailable.
-														</p>
-													) : debuggerSnapshot.visitedPassages?.length ? (
-														<ol className="story-preview-route__debugger-history">
-															{debuggerSnapshot.visitedPassages.map(
-																(passage, index) => (
-																	<li
-																		key={`${passage.id ?? passage.localId ?? passage.name}:${index}`}
-																	>
-																		<span>
-																			{runtimeDebuggerPassageLabel(passage)}
-																		</span>
-																		<RuntimeDebuggerPassageActions
-																			passage={passage}
-																			onRevealGraph={onRevealGraph}
-																			onRevealSource={onRevealSource}
-																		/>
-																	</li>
-																)
-															)}
-														</ol>
-													) : (
-														<p className="story-preview-route__debugger-empty">
-															None.
-														</p>
-													))}
-											</section>
-										);
-									})}
-								</div>
+														{capability === 'storyVariables' &&
+															(status?.state === 'unavailable' ? (
+																<p className="story-preview-route__debugger-empty">
+																	Unavailable.
+																</p>
+															) : (
+																<RuntimeDebuggerVariables
+																	variables={debuggerSnapshot.storyVariables}
+																/>
+															))}
+														{capability === 'temporaryVariables' &&
+															(status?.state === 'unavailable' ? (
+																<p className="story-preview-route__debugger-empty">
+																	Unavailable.
+																</p>
+															) : (
+																<RuntimeDebuggerVariables
+																	variables={
+																		debuggerSnapshot.temporaryVariables
+																	}
+																/>
+															))}
+														{capability === 'visitedPassages' &&
+															(status?.state === 'unavailable' ? (
+																<p className="story-preview-route__debugger-empty">
+																	Unavailable.
+																</p>
+															) : debuggerSnapshot.visitedPassages?.length ? (
+																<ol className="story-preview-route__debugger-history">
+																	{debuggerSnapshot.visitedPassages.map(
+																		(passage, index) => (
+																			<li
+																				key={`${passage.id ?? passage.localId ?? passage.name}:${index}`}
+																			>
+																				<span>
+																					{runtimeDebuggerPassageLabel(passage)}
+																				</span>
+																				<RuntimeDebuggerPassageActions
+																					passage={passage}
+																					onRevealGraph={onRevealGraph}
+																					onRevealSource={onRevealSource}
+																				/>
+																			</li>
+																		)
+																	)}
+																</ol>
+															) : (
+																<p className="story-preview-route__debugger-empty">
+																	None.
+																</p>
+															))}
+													</section>
+												);
+											})}
+										</div>
+									)}
+								</>
 							)}
 						</section>
 					)}

@@ -183,6 +183,7 @@ function testManager(
 	const releaseStagedPackage = jest.fn().mockResolvedValue(undefined);
 	const openExternal = jest.fn().mockResolvedValue(undefined);
 	const focusOwner = jest.fn();
+	const writeClipboardText = jest.fn();
 	let id = 0;
 	const manager = createStoryPreviewWindowManager({
 		createWindow: config => {
@@ -201,7 +202,8 @@ function testManager(
 		replacementTimeoutMs: options.replacementTimeoutMs,
 		releasePackage,
 		releaseStagedPackage,
-		stagePackage: stagePackage as any
+		stagePackage: stagePackage as any,
+		writeClipboardText
 	});
 	const ipcHandlers = new Map<string, IpcHandler>();
 	const ipcListeners = new Map<string, IpcHandler>();
@@ -230,7 +232,8 @@ function testManager(
 		releaseStagedPackage,
 		stagePackage,
 		windowOptions,
-		windows
+		windows,
+		writeClipboardText
 	};
 }
 
@@ -273,6 +276,38 @@ async function openReadyPreview(
 }
 
 describe('story preview window manager', () => {
+	it('limits clipboard writes to the trusted live preview renderer', async () => {
+		const harness = testManager();
+		const {event, window} = await openReadyPreview(harness);
+		const copy = harness.ipcHandlers.get(storyPreviewIpcChannels.copyText)!;
+
+		expect(copy(event, ' \t\n')).toBeUndefined();
+		expect(harness.writeClipboardText).toHaveBeenCalledWith(' \t\n');
+		expect(() => copy(event, '')).toThrow('Runtime log text is invalid');
+		expect(() => copy(event, 'x'.repeat(4 * 1024 * 1024 + 1))).toThrow(
+			'Runtime log text is invalid'
+		);
+		const child = {...event, senderFrame: {url: harness.entryUrl}};
+		expect(() => copy(child, 'x')).toThrow('Blocked preview IPC');
+		const rogue = fakeWebContents(harness.entryUrl);
+		expect(() =>
+			copy({sender: rogue, senderFrame: rogue.mainFrame}, 'x')
+		).toThrow('Unknown story preview renderer');
+		window.webContents.mainFrame.url = 'file:///application/index.html';
+		expect(() =>
+			copy(
+				{sender: window.webContents, senderFrame: window.webContents.mainFrame},
+				'x'
+			)
+		).toThrow('Blocked preview IPC');
+		harness.writeClipboardText.mockImplementationOnce(() => {
+			throw new Error('clipboard unavailable');
+		});
+		window.webContents.mainFrame.url = harness.entryUrl;
+		expect(() => copy(previewEvent(window, harness.entryUrl), 'x')).toThrow(
+			'clipboard unavailable'
+		);
+	});
 	it('creates a hidden dedicated sandboxed window and resolves only after shell and story readiness', async () => {
 		const harness = testManager();
 		const owner = fakeWebContents('file:///app/index.html');

@@ -51,6 +51,7 @@ function previewApi() {
 			generation: 1,
 			status: 'busy'
 		}),
+		copyText: jest.fn().mockResolvedValue(undefined),
 		frameLoaded: jest.fn().mockResolvedValue(undefined),
 		getInitialState: jest.fn().mockResolvedValue({
 			descriptor: descriptor(),

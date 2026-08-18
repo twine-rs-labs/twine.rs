@@ -17,6 +17,8 @@ the runtime can report it, runtime logs, and viewport size. You can reveal the
 current passage in Source or Graph, reload the preview, and switch between fit,
 desktop, tablet, and phone viewport widths. Console messages, runtime errors,
 and unhandled promise rejections appear in the bounded runtime log.
+Open the Debugger disclosure to inspect the host-owned Runtime Console and copy
+its retained entries. Copying does not expose clipboard access to story code.
 
 ## Testing a Story From the Beginning
 

@@ -1041,6 +1041,40 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		await expect(
 			debuggerInspector.getByRole('heading', {name: 'Story variables'})
 		).toHaveCount(0);
+		const priorClipboard = await app.evaluate(({clipboard}) =>
+			clipboard.readText()
+		);
+		try {
+			await storyFrame(preview)
+				.locator('body')
+				.evaluate(() => {
+					const originalNow = Date.now;
+					try {
+						Date.now = () => 0;
+						console.log('play log');
+						console.warn('play warning');
+						console.error('play error');
+					} finally {
+						Date.now = originalNow;
+					}
+				});
+			await expect(debuggerInspector).toContainText('play error');
+			await expect(debuggerInspector).toContainText('play warning');
+			await preview.getByRole('button', {name: 'Copy Runtime Log'}).click();
+			await expect(
+				debuggerInspector.getByText('Runtime log copied.')
+			).toBeVisible();
+			expect(await app.evaluate(({clipboard}) => clipboard.readText())).toBe(
+				'[1970-01-01T00:00:00.000Z] ERROR: "play error"\n[1970-01-01T00:00:00.000Z] WARNING: "play warning"\n[1970-01-01T00:00:00.000Z] LOG: "play log"'
+			);
+		} finally {
+			await app
+				.evaluate(
+					({clipboard}, value) => clipboard.writeText(value),
+					priorClipboard
+				)
+				.catch(() => undefined);
+		}
 		await debuggerToggle.click();
 		await expect(debuggerInspector).toHaveCount(0);
 
@@ -1054,6 +1088,7 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		expect(shellCapabilities).toEqual({
 			previewBridge: [
 				'command',
+				'copyText',
 				'frameLoaded',
 				'getInitialState',
 				'onAppearance',

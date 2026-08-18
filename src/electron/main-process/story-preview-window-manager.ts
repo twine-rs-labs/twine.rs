@@ -3,6 +3,7 @@ import path from 'path';
 import {
 	app,
 	BrowserWindow,
+	clipboard,
 	ipcMain,
 	type BrowserWindowConstructorOptions,
 	type IpcMain,
@@ -163,6 +164,7 @@ interface StoryPreviewWindowManagerDependencies {
 	releasePackage: typeof releaseStoryPreviewPackage;
 	releaseStagedPackage: typeof releaseScratchPreviewPackage;
 	stagePackage: typeof stageScratchPreviewPackage;
+	writeClipboardText(text: string): void;
 }
 
 export interface StoryPreviewWindowManagerOptions extends Partial<StoryPreviewWindowManagerDependencies> {
@@ -563,6 +565,7 @@ export function createStoryPreviewWindowManager(
 		releasePackage: releaseStoryPreviewPackage,
 		releaseStagedPackage: releaseScratchPreviewPackage,
 		stagePackage: stageScratchPreviewPackage,
+		writeClipboardText: text => clipboard.writeText(text),
 		...options
 	};
 	const readyTimeoutMs = options.readyTimeoutMs ?? storyPreviewReadyTimeoutMs;
@@ -1259,6 +1262,18 @@ export function createStoryPreviewWindowManager(
 		};
 	}
 
+	function copyText(event: PreviewIpcEvent, value: unknown): void {
+		sessionForPreview(event);
+		if (
+			typeof value !== 'string' ||
+			value.length === 0 ||
+			Buffer.byteLength(value, 'utf8') > 4 * 1024 * 1024
+		) {
+			throw new Error('Runtime log text is invalid.');
+		}
+		dependencies.writeClipboardText(value);
+	}
+
 	function completeCommand(
 		owner: WebContents,
 		sessionId: string,
@@ -1365,6 +1380,7 @@ export function createStoryPreviewWindowManager(
 		previewIpc.on(storyPreviewIpcChannels.ready, ready);
 		previewIpc.handle(storyPreviewIpcChannels.frameLoaded, frameLoaded);
 		previewIpc.handle(storyPreviewIpcChannels.command, command);
+		previewIpc.handle(storyPreviewIpcChannels.copyText, copyText);
 	}
 
 	async function shutdown() {
