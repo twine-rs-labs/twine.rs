@@ -1,4 +1,11 @@
-import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within
+} from '@testing-library/react';
 import * as React from 'react';
 import {
 	instrumentPreviewHtml,
@@ -99,6 +106,221 @@ describe('instrumentPreviewHtml()', () => {
 });
 
 describe('<StoryPreviewFrame>', () => {
+	it('keeps a copy operation pending and suppresses stale feedback after log changes', async () => {
+		let resolveCopy!: () => void;
+		const onCopyRuntimeLog = jest.fn(
+			() => new Promise<void>(resolve => (resolveCopy = resolve))
+		);
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy race preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Copy race preview');
+		postBridgeMessage('Copy race preview', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const copy = screen.getByRole('button', {name: 'Copy Runtime Log'});
+		fireEvent.click(copy);
+		fireEvent.click(copy);
+		await waitFor(() => expect(onCopyRuntimeLog).toHaveBeenCalledTimes(1));
+		expect(copy).toBeDisabled();
+		postBridgeMessage('Copy race preview', sessionId, {
+			args: ['B'],
+			level: 'error',
+			type: 'console'
+		});
+		expect(copy).toBeDisabled();
+		await act(async () => resolveCopy());
+		expect(screen.queryByText('Runtime log copied.')).not.toBeInTheDocument();
+		expect(copy).not.toBeDisabled();
+	});
+
+	it('disables unsupported copy and reports current write failures', async () => {
+		const onCopyRuntimeLog = jest.fn().mockRejectedValue(new Error('denied'));
+		const {rerender} = render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				storyExists
+				title="Copy failure preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Copy failure preview');
+		postBridgeMessage('Copy failure preview', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		expect(
+			screen.getByRole('button', {name: 'Copy Runtime Log'})
+		).toBeDisabled();
+		rerender(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy failure preview"
+			/>
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() =>
+			expect(
+				screen.getByText('Could not copy runtime log.')
+			).toBeInTheDocument()
+		);
+	});
+
+	it('suppresses stale copy rejection after reload', async () => {
+		let rejectCopy!: (error: Error) => void;
+		const onCopyRuntimeLog = jest.fn(
+			() => new Promise<void>((_, reject) => (rejectCopy = reject))
+		);
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy rejection preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Copy rejection preview');
+		postBridgeMessage('Copy rejection preview', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() => expect(onCopyRuntimeLog).toHaveBeenCalledTimes(1));
+		fireEvent.click(screen.getByRole('button', {name: 'Reload'}));
+		await act(async () => rejectCopy(new Error('denied')));
+		expect(
+			screen.queryByText('Could not copy runtime log.')
+		).not.toBeInTheDocument();
+	});
+
+	it('renders the pre-negotiation console safely and copies the current buffer exactly', async () => {
+		const onCopyRuntimeLog = jest.fn().mockResolvedValue(undefined);
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Console preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Console preview');
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const inspector = screen.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		expect(inspector).toHaveTextContent(
+			'Waiting for debugger adapter negotiation.'
+		);
+		expect(
+			screen.getByRole('button', {name: 'Copy Runtime Log'})
+		).toBeDisabled();
+		postBridgeMessage('Console preview', sessionId, {
+			args: ['<b>old</b>'],
+			level: 'info',
+			type: 'console'
+		});
+		postBridgeMessage('Console preview', sessionId, {
+			args: ['new'],
+			level: 'warn',
+			type: 'console'
+		});
+		expect(inspector.querySelector('b')).toBeNull();
+		expect(within(inspector).getByText('<b>old</b>')).toBeInTheDocument();
+		expect(within(inspector).getByText('Warning')).toBeInTheDocument();
+		expect(within(inspector).getByText('Info')).toBeInTheDocument();
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() =>
+			expect(onCopyRuntimeLog).toHaveBeenCalledWith(
+				'[1970-01-01T00:00:00.010Z] WARNING: "new"\n[1970-01-01T00:00:00.010Z] INFO: "<b>old</b>"'
+			)
+		);
+		await waitFor(() =>
+			expect(screen.getByText('Runtime log copied.')).toBeInTheDocument()
+		);
+	});
+
+	it('shows failure for a synchronously throwing copy callback', async () => {
+		const onCopyRuntimeLog = jest.fn(() => {
+			throw new Error('denied');
+		});
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Sync copy failure"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Sync copy failure');
+		postBridgeMessage('Sync copy failure', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() =>
+			expect(
+				screen.getByText('Could not copy runtime log.')
+			).toBeInTheDocument()
+		);
+	});
+
+	it('suppresses stale rejection for A after a nonempty B buffer replaces it', async () => {
+		let rejectCopy!: (error: Error) => void;
+		const onCopyRuntimeLog = jest.fn(
+			() => new Promise<void>((_, reject) => (rejectCopy = reject))
+		);
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy rejection B"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Copy rejection B');
+		postBridgeMessage('Copy rejection B', sessionId, {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const copy = screen.getByRole('button', {name: 'Copy Runtime Log'});
+		fireEvent.click(copy);
+		await waitFor(() => expect(onCopyRuntimeLog).toHaveBeenCalledTimes(1));
+		postBridgeMessage('Copy rejection B', sessionId, {
+			args: ['B'],
+			level: 'error',
+			type: 'console'
+		});
+		await act(async () => rejectCopy(new Error('denied')));
+		expect(
+			screen.queryByText('Could not copy runtime log.')
+		).not.toBeInTheDocument();
+		expect(copy).not.toBeDisabled();
+		expect(screen.getAllByText('B')).toHaveLength(2);
+	});
 	it('isolates story code from the application origin', () => {
 		render(
 			<StoryPreviewFrame
@@ -227,6 +449,7 @@ describe('<StoryPreviewFrame>', () => {
 	});
 
 	it('buffers candidate runtime messages and promotes them with the frame', async () => {
+		const onRuntimeModelChange = jest.fn();
 		const currentSource = {
 			bridgeSessionId: 'current-session',
 			htmlBytes: 123,
@@ -248,6 +471,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				storyExists
 				title="Committed preview"
 			/>
@@ -257,6 +481,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				stagedContentSource={candidateSource}
 				stagedPassages={candidatePassages}
 				stagedTitle="Candidate preview"
@@ -280,15 +505,62 @@ describe('<StoryPreviewFrame>', () => {
 			type: 'state',
 			viewport: {height: 640, width: 960}
 		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'generic',
+			capabilities: ['currentPassage'],
+			format: 'SugarCube',
+			formatVersion: '2.37.3',
+			protocolVersion: 1,
+			reliability: 'best-effort',
+			type: 'debugger-hello'
+		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'sugarcube-2.37.3',
+			capabilities: [
+				'currentPassage',
+				'storyVariables',
+				'temporaryVariables',
+				'visitedPassages'
+			],
+			format: 'SugarCube',
+			formatVersion: '2.37.3',
+			protocolVersion: 1,
+			reliability: 'exact-version',
+			type: 'debugger-hello'
+		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'sugarcube-2.37.3',
+			currentPassage: {localId: '9', source: 'debugger'},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				temporaryVariables: {state: 'complete'},
+				visitedPassages: {state: 'complete'}
+			},
+			storyVariables: [],
+			temporaryVariables: [],
+			type: 'debugger-snapshot',
+			visitedPassages: [{localId: '9'}]
+		});
 
 		expect(screen.getByText('0 logs')).toBeInTheDocument();
 		expect(screen.queryByText('candidate startup')).not.toBeInTheDocument();
 		expect(screen.queryByText('candidate rejection')).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', {name: 'Debugger'})
+		).toBeInTheDocument();
+		expect(
+			onRuntimeModelChange.mock.calls.some(
+				([model]) => model.debugger.hello !== undefined
+			)
+		).toBe(false);
 
 		rerender(
 			<StoryPreviewFrame
 				contentSource={candidateSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				passages={candidatePassages}
 				storyExists
 				title="Candidate committed preview"
@@ -302,9 +574,25 @@ describe('<StoryPreviewFrame>', () => {
 		expect(screen.getByTitle('Candidate committed preview')).toBe(
 			candidateFrame
 		);
+		await waitFor(() =>
+			expect(
+				onRuntimeModelChange.mock.calls.some(
+					([model]) =>
+						model.debugger.hello?.id === 'sugarcube-2.37.3' &&
+						model.debugger.snapshot?.currentPassage?.id === 'candidate-id'
+				)
+			).toBe(true)
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		expect(
+			within(
+				screen.getByRole('region', {name: 'Runtime debugger inspector'})
+			).getAllByText('Candidate passage')
+		).toHaveLength(2);
 	});
 
 	it('discards buffered candidate messages on rollback', async () => {
+		const onRuntimeModelChange = jest.fn();
 		const currentSource = {
 			bridgeSessionId: 'current-session',
 			htmlBytes: 123,
@@ -323,6 +611,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				stagedContentSource={candidateSource}
 				stagedTitle="Candidate preview"
 				storyExists
@@ -335,10 +624,26 @@ describe('<StoryPreviewFrame>', () => {
 			level: 'error',
 			type: 'console'
 		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'generic',
+			capabilities: ['currentPassage'],
+			format: 'Unknown',
+			formatVersion: '1.0.0',
+			protocolVersion: 1,
+			reliability: 'best-effort',
+			type: 'debugger-hello'
+		});
+		postBridgeMessage('Candidate preview', 'candidate-session', {
+			adapterId: 'generic',
+			protocolVersion: 1,
+			sections: {currentPassage: {state: 'unavailable'}},
+			type: 'debugger-snapshot'
+		});
 		rerender(
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				storyExists
 				title="Committed preview"
 			/>
@@ -347,6 +652,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={currentSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				stagedContentSource={candidateSource}
 				stagedTitle="Retry candidate preview"
 				storyExists
@@ -357,6 +663,7 @@ describe('<StoryPreviewFrame>', () => {
 			<StoryPreviewFrame
 				contentSource={candidateSource}
 				missingStoryMessage="Missing story"
+				onRuntimeModelChange={onRuntimeModelChange}
 				storyExists
 				title="Candidate committed preview"
 			/>
@@ -369,6 +676,178 @@ describe('<StoryPreviewFrame>', () => {
 		);
 		expect(screen.getByText('0 logs')).toBeInTheDocument();
 		expect(screen.queryByText('abandoned startup')).not.toBeInTheDocument();
+		expect(
+			onRuntimeModelChange.mock.calls.some(
+				([model]) => model.debugger.hello !== undefined
+			)
+		).toBe(false);
+		expect(
+			screen.queryByRole('button', {name: 'Debugger'})
+		).toBeInTheDocument();
+	});
+
+	it('preserves committed copy feedback on rollback and invalidates it on candidate promotion', async () => {
+		const currentSource = {
+			bridgeSessionId: 'copy-current',
+			htmlBytes: 1,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://copy-current/index.html'
+		};
+		const candidateSource = {
+			bridgeSessionId: 'copy-candidate',
+			htmlBytes: 1,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://copy-candidate/index.html'
+		};
+		const onCopyRuntimeLog = jest.fn().mockResolvedValue(undefined);
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy committed"
+			/>
+		);
+		postBridgeMessage('Copy committed', 'copy-current', {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() =>
+			expect(screen.getByText('Runtime log copied.')).toBeInTheDocument()
+		);
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				stagedContentSource={candidateSource}
+				stagedTitle="Copy candidate"
+				storyExists
+				title="Copy committed"
+			/>
+		);
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy committed"
+			/>
+		);
+		expect(screen.getByText('Runtime log copied.')).toBeInTheDocument();
+		expect(screen.getAllByText('A')).toHaveLength(2);
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				stagedContentSource={candidateSource}
+				stagedTitle="Copy candidate"
+				storyExists
+				title="Copy committed"
+			/>
+		);
+		postBridgeMessage('Copy candidate', 'copy-candidate', {
+			args: ['B'],
+			level: 'error',
+			type: 'console'
+		});
+		rerender(
+			<StoryPreviewFrame
+				contentSource={candidateSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Copy candidate committed"
+			/>
+		);
+		await waitFor(() => expect(screen.getByText('1 log')).toBeInTheDocument());
+		expect(
+			screen.queryByRole('region', {name: 'Runtime debugger inspector'})
+		).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		expect(screen.queryByText('Runtime log copied.')).not.toBeInTheDocument();
+		expect(screen.getAllByText('B')).toHaveLength(2);
+	});
+
+	it('keeps a committed copy pending across promotion until its stale completion settles', async () => {
+		const currentSource = {
+			bridgeSessionId: 'pending-current',
+			htmlBytes: 1,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://pending-current/index.html'
+		};
+		const candidateSource = {
+			bridgeSessionId: 'pending-candidate',
+			htmlBytes: 1,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://pending-candidate/index.html'
+		};
+		let resolveCopy!: () => void;
+		const onCopyRuntimeLog = jest.fn(
+			() => new Promise<void>(resolve => (resolveCopy = resolve))
+		);
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Pending committed"
+			/>
+		);
+		postBridgeMessage('Pending committed', 'pending-current', {
+			args: ['A'],
+			level: 'log',
+			type: 'console'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Copy Runtime Log'}));
+		await waitFor(() => expect(onCopyRuntimeLog).toHaveBeenCalledTimes(1));
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				stagedContentSource={candidateSource}
+				stagedTitle="Pending candidate"
+				storyExists
+				title="Pending committed"
+			/>
+		);
+		postBridgeMessage('Pending candidate', 'pending-candidate', {
+			args: ['B'],
+			level: 'error',
+			type: 'console'
+		});
+		rerender(
+			<StoryPreviewFrame
+				contentSource={candidateSource}
+				missingStoryMessage="Missing"
+				onCopyRuntimeLog={onCopyRuntimeLog}
+				storyExists
+				title="Pending candidate committed"
+			/>
+		);
+		await waitFor(() => expect(screen.getByText('1 log')).toBeInTheDocument());
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const copy = screen.getByRole('button', {name: 'Copy Runtime Log'});
+		expect(copy).toBeDisabled();
+		await act(async () => resolveCopy());
+		expect(copy).not.toBeDisabled();
+		expect(screen.queryByText('Runtime log copied.')).not.toBeInTheDocument();
+		expect(
+			screen.queryByText('Could not copy runtime log.')
+		).not.toBeInTheDocument();
 	});
 
 	it('reports content loads to the hosting shell', () => {
@@ -524,5 +1003,321 @@ describe('<StoryPreviewFrame>', () => {
 		expect(screen.getByText('Current: Unknown')).toBeInTheDocument();
 		expect(screen.getByRole('button', {name: 'Test Current'})).toBeDisabled();
 		expect(onTestCurrentPassage).not.toHaveBeenCalled();
+	});
+
+	it('shows the negotiated debugger inspector and bounded snapshot text', () => {
+		const onRevealGraph = jest.fn();
+		const onRevealSource = jest.fn();
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				onRevealGraph={onRevealGraph}
+				onRevealSource={onRevealSource}
+				passages={[
+					{id: 'start', localId: '1', name: 'Start'},
+					{id: 'second', localId: '2', name: 'Second'}
+				]}
+				storyExists
+				title="Debugger preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Debugger preview');
+
+		postBridgeMessage('Debugger preview', sessionId, {
+			adapterId: 'sugarcube-2.37.3',
+			capabilities: [
+				'currentPassage',
+				'storyVariables',
+				'temporaryVariables',
+				'visitedPassages'
+			],
+			format: 'SugarCube',
+			formatVersion: '2.37.3',
+			protocolVersion: 1,
+			reliability: 'exact-version',
+			type: 'debugger-hello'
+		});
+
+		const toggle = screen.getByRole('button', {name: 'Debugger'});
+		expect(toggle).toHaveAttribute('aria-expanded', 'false');
+		fireEvent.click(toggle);
+		const inspector = screen.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		expect(toggle).toHaveAttribute('aria-expanded', 'true');
+		expect(
+			within(inspector).getByText('Adapter: sugarcube-2.37.3')
+		).toBeInTheDocument();
+		expect(
+			within(inspector).getByText('Waiting for the first debugger snapshot.')
+		).toBeInTheDocument();
+
+		postBridgeMessage('Debugger preview', sessionId, {
+			adapterId: 'sugarcube-2.37.3',
+			currentPassage: {localId: '2', source: 'debugger'},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				temporaryVariables: {
+					reasons: [
+						'field-limit',
+						'item-limit',
+						'text-budget',
+						'uninspectable'
+					],
+					state: 'truncated'
+				},
+				visitedPassages: {state: 'unavailable'}
+			},
+			storyVariables: [
+				{name: '$unsafe', preview: '<b>not HTML</b>', type: 'string'},
+				{name: '$spaced', preview: '" a  b "', type: 'string'}
+			],
+			temporaryVariables: [
+				{name: '_spacing', preview: '\tline  one\nline two ', type: 'string'}
+			],
+			type: 'debugger-snapshot',
+			visitedPassages: undefined
+		});
+
+		expect(within(inspector).getByText('<b>not HTML</b>')).toBeInTheDocument();
+		expect(inspector.querySelector('b')).toBeNull();
+		expect(
+			Array.from(
+				inspector.querySelectorAll(
+					'.story-preview-route__debugger-variable-preview'
+				),
+				preview => preview.textContent
+			)
+		).toEqual(['<b>not HTML</b>', '" a  b "', '\tline  one\nline two ']);
+		expect(
+			within(inspector).getByText(
+				'Truncated: field-limit, item-limit, text-budget, uninspectable'
+			)
+		).toBeInTheDocument();
+		expect(within(inspector).getByText('Unavailable')).toBeInTheDocument();
+		fireEvent.click(
+			within(inspector).getByRole('button', {name: 'Open Second in Source'})
+		);
+		fireEvent.click(
+			within(inspector).getByRole('button', {name: 'Open Second in Graph'})
+		);
+		expect(onRevealSource).toHaveBeenCalledWith('second');
+		expect(onRevealGraph).toHaveBeenCalledWith('second');
+	});
+
+	it('filters the inspector to negotiated capabilities and clears it on reload', () => {
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				storyExists
+				title="Generic debugger preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Generic debugger preview');
+
+		postBridgeMessage('Generic debugger preview', sessionId, {
+			adapterId: 'generic',
+			capabilities: ['currentPassage'],
+			format: 'Unknown',
+			formatVersion: '1.0.0',
+			protocolVersion: 1,
+			reliability: 'best-effort',
+			type: 'debugger-hello'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		postBridgeMessage('Generic debugger preview', sessionId, {
+			adapterId: 'generic',
+			currentPassage: {name: 'Captured', source: 'debugger'},
+			protocolVersion: 1,
+			sections: {currentPassage: {state: 'complete'}},
+			type: 'debugger-snapshot'
+		});
+
+		const inspector = screen.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		expect(within(inspector).getByText('Current passage')).toBeInTheDocument();
+		expect(
+			within(inspector).queryByText('Story variables')
+		).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole('button', {name: 'Reload'}));
+		expect(
+			screen.queryByRole('button', {name: 'Debugger'})
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole('region', {name: 'Runtime debugger inspector'})
+		).not.toBeInTheDocument();
+	});
+
+	it('offers inspector passage actions only for resolved history entries', () => {
+		const onRevealSource = jest.fn();
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				onRevealSource={onRevealSource}
+				passages={[{id: 'start', localId: '1', name: 'Start'}]}
+				storyExists
+				title="History debugger preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('History debugger preview');
+
+		postBridgeMessage('History debugger preview', sessionId, {
+			adapterId: 'snowman-2.1.1',
+			capabilities: ['currentPassage', 'storyVariables', 'visitedPassages'],
+			format: 'Snowman',
+			formatVersion: '2.1.1',
+			protocolVersion: 1,
+			reliability: 'exact-version',
+			type: 'debugger-hello'
+		});
+		postBridgeMessage('History debugger preview', sessionId, {
+			adapterId: 'snowman-2.1.1',
+			currentPassage: {localId: '1', source: 'debugger'},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				visitedPassages: {state: 'complete'}
+			},
+			storyVariables: [],
+			type: 'debugger-snapshot',
+			visitedPassages: [
+				{localId: '1', source: 'debugger'},
+				{name: 'Unresolved', source: 'debugger'}
+			]
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const inspector = screen.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		expect(within(inspector).getByText('None.')).toBeInTheDocument();
+		const historySection = within(inspector)
+			.getByRole('heading', {name: 'Visited passages'})
+			.closest('section');
+		expect(historySection).not.toBeNull();
+		expect(
+			within(historySection!).getAllByRole('button', {
+				name: 'Open Start in Source'
+			})
+		).toHaveLength(1);
+		fireEvent.click(
+			within(historySection!).getByRole('button', {
+				name: 'Open Start in Source'
+			})
+		);
+		expect(onRevealSource).toHaveBeenCalledWith('start');
+	});
+
+	it('labels unresolved current and history passages by nonblank identity order', () => {
+		const onRevealGraph = jest.fn();
+		const onRevealSource = jest.fn();
+
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				onRevealGraph={onRevealGraph}
+				onRevealSource={onRevealSource}
+				storyExists
+				title="Unresolved debugger passage preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Unresolved debugger passage preview');
+
+		postBridgeMessage('Unresolved debugger passage preview', sessionId, {
+			adapterId: 'snowman-2.1.1',
+			capabilities: ['currentPassage', 'storyVariables', 'visitedPassages'],
+			format: 'Snowman',
+			formatVersion: '2.1.1',
+			protocolVersion: 1,
+			reliability: 'exact-version',
+			type: 'debugger-hello'
+		});
+		postBridgeMessage('Unresolved debugger passage preview', sessionId, {
+			adapterId: 'snowman-2.1.1',
+			currentPassage: {
+				localId: 'unmapped-current-id',
+				name: '   ',
+				rawName: ' Runtime current title ',
+				source: 'debugger'
+			},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				visitedPassages: {state: 'complete'}
+			},
+			storyVariables: [],
+			type: 'debugger-snapshot',
+			visitedPassages: [
+				{
+					id: 'unmapped-named-id',
+					localId: 'unmapped-named-local-id',
+					name: 'Runtime named title',
+					rawName: 'Ignored raw title',
+					source: 'debugger'
+				},
+				{
+					id: 'unmapped-raw-id',
+					localId: 'unmapped-raw-local-id',
+					name: '\t ',
+					rawName: ' Runtime raw title ',
+					source: 'debugger'
+				},
+				{
+					id: 'unmapped-local-fallback-id',
+					localId: 'unmapped-history-local-id',
+					name: ' ',
+					rawName: '\t',
+					source: 'debugger'
+				},
+				{
+					id: 'unmapped-history-id',
+					localId: ' ',
+					name: ' ',
+					rawName: '\t',
+					source: 'debugger'
+				}
+			]
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const inspector = screen.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		const currentSection = within(inspector)
+			.getByRole('heading', {name: 'Current passage'})
+			.closest('section');
+		const historySection = within(inspector)
+			.getByRole('heading', {name: 'Visited passages'})
+			.closest('section');
+
+		expect(currentSection).not.toBeNull();
+		expect(historySection).not.toBeNull();
+		expect(
+			within(currentSection!).getByText('Runtime current title', {exact: true})
+		).toBeInTheDocument();
+		expect(
+			within(historySection!).getByText('Runtime named title', {exact: true})
+		).toBeInTheDocument();
+		expect(
+			within(historySection!).getByText('Runtime raw title', {exact: true})
+		).toBeInTheDocument();
+		expect(
+			within(historySection!).getByText('unmapped-history-local-id', {
+				exact: true
+			})
+		).toBeInTheDocument();
+		expect(
+			within(historySection!).getByText('unmapped-history-id', {exact: true})
+		).toBeInTheDocument();
+		expect(within(inspector).queryAllByRole('button')).toHaveLength(1);
+		expect(onRevealGraph).not.toHaveBeenCalled();
+		expect(onRevealSource).not.toHaveBeenCalled();
 	});
 });

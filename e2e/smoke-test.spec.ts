@@ -13,13 +13,21 @@ async function resetBrowserState(page: Page) {
 async function createProject(
 	page: Page,
 	name = 'E2E Test Story',
-	startPassage = 'Start'
+	startPassage = 'Start',
+	format?: string
 ) {
 	await page.goto(`${appUrl}/#/new-project`);
 	await expect(page).toHaveURL(/#\/new-project$/);
 	await expect(page.getByRole('heading', {name: 'New Project'})).toBeVisible();
 	await page.getByLabel('Project name').fill(name);
 	await page.getByLabel('Start passage').fill(startPassage);
+	if (format) {
+		await page
+			.locator('label')
+			.filter({hasText: 'Story format'})
+			.getByRole('combobox')
+			.selectOption({label: format});
+	}
 	await page
 		.locator('label')
 		.filter({hasText: 'Initial mode'})
@@ -391,6 +399,60 @@ test('publishes the current project to a playable page', async ({
 	await publishedPage.close();
 });
 
+test.describe('runtime console clipboard', () => {
+	test.skip(
+		({browserName}) => browserName !== 'chromium',
+		'Runtime console clipboard acceptance is anchored in Chromium.'
+	);
+
+	test('copies the host-owned runtime console exactly', async ({
+		context,
+		page
+	}) => {
+		await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+			origin: appUrl
+		});
+		await createProject(page, 'Runtime console clipboard');
+		await setPassageText(page, 'Console story.');
+		const [publishedPage] = await Promise.all([
+			context.waitForEvent('page'),
+			page.getByTitle('Play').click()
+		]);
+		const frame = publishedPage.frameLocator('iframe[title="Story preview"]');
+		await expect(
+			frame.locator(':visible:text-is("Console story.")')
+		).toBeVisible();
+		await frame.locator('body').evaluate(() => {
+			const originalNow = Date.now;
+			try {
+				Date.now = () => 0;
+				console.log('<safe>\nline');
+				console.warn('warn');
+				console.error('error');
+			} finally {
+				Date.now = originalNow;
+			}
+		});
+		await publishedPage.getByRole('button', {name: 'Debugger'}).click();
+		const inspector = publishedPage.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		await expect(
+			inspector.getByRole('heading', {name: 'Runtime Console'})
+		).toBeVisible();
+		await expect(inspector).toContainText('<safe>');
+		expect(await inspector.locator('safe').count()).toBe(0);
+		await publishedPage.getByRole('button', {name: 'Copy Runtime Log'}).click();
+		await expect(inspector.getByText('Runtime log copied.')).toBeVisible();
+		expect(
+			await publishedPage.evaluate(() => navigator.clipboard.readText())
+		).toBe(
+			'[1970-01-01T00:00:00.000Z] ERROR: "error"\n[1970-01-01T00:00:00.000Z] WARNING: "warn"\n[1970-01-01T00:00:00.000Z] LOG: "<safe>\\nline"'
+		);
+		await publishedPage.close();
+	});
+});
+
 test('tracks Harlowe passage navigation in a sandboxed browser preview', async ({
 	context,
 	page
@@ -419,6 +481,20 @@ test('tracks Harlowe passage navigation in a sandboxed browser preview', async (
 		publishedPage.getByText('Current: Start', {exact: true})
 	).toBeVisible();
 	await expect(testCurrent).toBeEnabled();
+	const debuggerToggle = publishedPage.getByRole('button', {name: 'Debugger'});
+	await expect(debuggerToggle).toBeVisible();
+	await debuggerToggle.click();
+	const debuggerInspector = publishedPage.getByRole('region', {
+		name: 'Runtime debugger inspector'
+	});
+	await expect(debuggerInspector).toContainText('Format: Harlowe 3.3.9');
+	await expect(debuggerInspector).toContainText('Adapter: harlowe-3.3.9');
+	await expect(
+		debuggerInspector.getByText('Start', {exact: true})
+	).toBeVisible();
+	await expect(
+		debuggerInspector.getByRole('heading', {name: 'Story variables'})
+	).toHaveCount(0);
 	expect(
 		(await previewIframe.getAttribute('sandbox'))?.split(/\s+/)
 	).not.toContain('allow-same-origin');
@@ -431,7 +507,90 @@ test('tracks Harlowe passage navigation in a sandboxed browser preview', async (
 	await expect(
 		publishedPage.getByText('Current: Next', {exact: true})
 	).toBeVisible();
+	await expect(
+		debuggerInspector.getByText('Next', {exact: true})
+	).toBeVisible();
 	await expect(testCurrent).toBeEnabled();
+	await publishedPage.close();
+});
+
+test('preserves and wraps Snowman debugger variables in the real browser inspector', async ({
+	context,
+	page
+}) => {
+	const spacedValue = `  ${Array.from(
+		{length: 32},
+		(_, index) => `token-${index}`
+	).join('  ')}  `;
+	const expectedPreview = JSON.stringify(spacedValue);
+
+	await createProject(
+		page,
+		'Debugger whitespace fidelity',
+		'Start',
+		'Snowman 2.1.1'
+	);
+	await setPassageText(page, 'Whitespace ready.');
+	const [publishedPage] = await Promise.all([
+		context.waitForEvent('page'),
+		page.getByTitle('Play').click()
+	]);
+
+	await publishedPage.setViewportSize({height: 700, width: 520});
+	const previewFrame = publishedPage.frameLocator(
+		'iframe[title="Story preview"]'
+	);
+	await expect(
+		previewFrame
+			.locator('tw-passage.passage')
+			.filter({hasText: /^Whitespace ready\.$/})
+	).toBeVisible();
+	await publishedPage.getByRole('button', {name: 'Debugger'}).click();
+	await previewFrame.locator('body').evaluate((_, value) => {
+		const runtime = window as typeof window & {
+			__twineRsPreviewDebug: {captureState(): void};
+			story: {state: Record<string, unknown>};
+		};
+
+		runtime.story.state.spaced = value;
+		runtime.__twineRsPreviewDebug.captureState();
+	}, spacedValue);
+	const inspector = publishedPage.getByRole('region', {
+		name: 'Runtime debugger inspector'
+	});
+	const variableSection = inspector
+		.getByRole('heading', {name: 'Story variables'})
+		.locator('..')
+		.locator('..');
+	const variableRow = variableSection
+		.locator('.story-preview-route__debugger-variables li')
+		.filter({hasText: 'spaced'});
+	const variablePreview = variableRow.locator(
+		'.story-preview-route__debugger-variable-preview'
+	);
+
+	await expect(variablePreview).toHaveCount(1);
+	const rendered = await variablePreview.evaluate(element => {
+		const range = document.createRange();
+		const inspector = element.closest<HTMLElement>(
+			'.story-preview-route__debugger'
+		);
+
+		range.selectNodeContents(element);
+		return {
+			hasHorizontalOverflow: inspector
+				? inspector.scrollWidth > inspector.clientWidth
+				: true,
+			innerText: (element as HTMLElement).innerText,
+			lineFragments: range.getClientRects().length,
+			whiteSpace: getComputedStyle(element).whiteSpace
+		};
+	});
+
+	expect(rendered.innerText).toBe(expectedPreview);
+	expect(rendered.whiteSpace).toBe('break-spaces');
+	expect(rendered.lineFragments).toBeGreaterThan(1);
+	expect(rendered.hasHorizontalOverflow).toBe(false);
 	await publishedPage.close();
 });
 

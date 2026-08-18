@@ -1026,6 +1026,58 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		await expectRenderedText(preview, 'Start passage version one.');
 		await expectCurrentPassage(preview, 'Start');
 
+		const debuggerToggle = preview.getByRole('button', {name: 'Debugger'});
+		await expect(debuggerToggle).toBeVisible();
+		await debuggerToggle.click();
+		const debuggerInspector = preview.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		await expect(debuggerInspector).toContainText('Format: Harlowe 3.3.9');
+		await expect(debuggerInspector).toContainText('Adapter: harlowe-3.3.9');
+		await expect(debuggerInspector).toContainText('Reliability: best-effort');
+		await expect(
+			debuggerInspector.getByRole('heading', {name: 'Current passage'})
+		).toBeVisible();
+		await expect(
+			debuggerInspector.getByRole('heading', {name: 'Story variables'})
+		).toHaveCount(0);
+		const priorClipboard = await app.evaluate(({clipboard}) =>
+			clipboard.readText()
+		);
+		try {
+			await storyFrame(preview)
+				.locator('body')
+				.evaluate(() => {
+					const originalNow = Date.now;
+					try {
+						Date.now = () => 0;
+						console.log('play log');
+						console.warn('play warning');
+						console.error('play error');
+					} finally {
+						Date.now = originalNow;
+					}
+				});
+			await expect(debuggerInspector).toContainText('play error');
+			await expect(debuggerInspector).toContainText('play warning');
+			await preview.getByRole('button', {name: 'Copy Runtime Log'}).click();
+			await expect(
+				debuggerInspector.getByText('Runtime log copied.')
+			).toBeVisible();
+			expect(await app.evaluate(({clipboard}) => clipboard.readText())).toBe(
+				'[1970-01-01T00:00:00.000Z] ERROR: "play error"\n[1970-01-01T00:00:00.000Z] WARNING: "play warning"\n[1970-01-01T00:00:00.000Z] LOG: "play log"'
+			);
+		} finally {
+			await app
+				.evaluate(
+					({clipboard}, value) => clipboard.writeText(value),
+					priorClipboard
+				)
+				.catch(() => undefined);
+		}
+		await debuggerToggle.click();
+		await expect(debuggerInspector).toHaveCount(0);
+
 		const shellCapabilities = await preview.evaluate(() => ({
 			previewBridge: Object.keys(
 				(window as PreviewTestWindow).twineStoryPreview ?? {}
@@ -1036,6 +1088,7 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		expect(shellCapabilities).toEqual({
 			previewBridge: [
 				'command',
+				'copyText',
 				'frameLoaded',
 				'getInitialState',
 				'onAppearance',
@@ -1640,6 +1693,93 @@ test('copied assets, storage, package origins, cleanup, and protocol lifetime st
 		await expect
 			.poll(() => scratchPreviewRoots(profileRoot), {timeout: 30_000})
 			.toHaveLength(0);
+	} finally {
+		await running?.app.close();
+	}
+});
+
+test('packaged SugarCube debugger preserves and wraps variable whitespace', async ({}, testInfo) => {
+	test.setTimeout(6 * 60 * 1000);
+	const executablePath = await packagedExecutable();
+	const spacedValue = `  ${Array.from(
+		{length: 32},
+		(_, index) => `token-${index}`
+	).join('  ')}  `;
+	const expectedPreview = JSON.stringify(spacedValue);
+	const passageSource = `<<set $spaced = ${JSON.stringify(
+		spacedValue
+	)}>>Whitespace ready.`;
+	let running: RunningApp | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, 'debugger-whitespace');
+		const {app, page} = running;
+
+		await createProject(page, {
+			format: 'SugarCube 2.37.3',
+			name: 'Debugger Whitespace Fidelity'
+		});
+		const projectRoot = await projectRootFromRenderer(page);
+
+		await replaceEditorText(page, passageSource);
+		await waitForSavedText(running, projectRoot, passageSource, testInfo);
+		const preview = await launchPreview(running, () =>
+			page.getByTitle('Play').click()
+		);
+
+		await expectRenderedText(preview, 'Whitespace ready.');
+		await preview.getByRole('button', {name: 'Debugger'}).click();
+		const inspector = preview.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		const variableSection = inspector
+			.getByRole('heading', {name: 'Story variables'})
+			.locator('..')
+			.locator('..');
+		const variableRow = variableSection
+			.locator('.story-preview-route__debugger-variables li')
+			.filter({hasText: 'spaced'});
+		const variablePreview = variableRow.locator(
+			'.story-preview-route__debugger-variable-preview'
+		);
+
+		await expect(variablePreview).toHaveCount(1, {timeout: 60_000});
+		await app.evaluate(
+			({BrowserWindow}, target) => {
+				const previewWindow = BrowserWindow.getAllWindows().find(
+					candidate => candidate.webContents.getURL() === target.url
+				);
+
+				if (!previewWindow) {
+					throw new Error('The debugger preview window is unavailable.');
+				}
+				previewWindow.setContentSize(target.width, target.height);
+			},
+			{height: 700, url: preview.url(), width: 520}
+		);
+		await expect.poll(() => preview.evaluate(() => innerWidth)).toBe(520);
+		const rendered = await variablePreview.evaluate(element => {
+			const range = document.createRange();
+			const inspector = element.closest<HTMLElement>(
+				'.story-preview-route__debugger'
+			);
+
+			range.selectNodeContents(element);
+			return {
+				hasHorizontalOverflow: inspector
+					? inspector.scrollWidth > inspector.clientWidth
+					: true,
+				innerText: (element as HTMLElement).innerText,
+				lineFragments: range.getClientRects().length,
+				whiteSpace: getComputedStyle(element).whiteSpace
+			};
+		});
+
+		expect(rendered.innerText).toBe(expectedPreview);
+		expect(rendered.whiteSpace).toBe('break-spaces');
+		expect(rendered.lineFragments).toBeGreaterThan(1);
+		expect(rendered.hasHorizontalOverflow).toBe(false);
+		await preview.close();
 	} finally {
 		await running?.app.close();
 	}

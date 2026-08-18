@@ -2,7 +2,7 @@
 
 Status: current
 Owner: Electron and frontend maintainers
-Last verified: 2026-07-27
+Last verified: 2026-08-18
 Source of truth: desktop preview entry, preview IPC, window manager, protocol,
 and shared preview surface
 
@@ -54,14 +54,23 @@ expose filesystem, persistence, project mutation, dialogs, or raw
 and merges it immediately before exposing or committing a generation, including
 updates received before a session or candidate exists.
 
+Its sole clipboard capability is `copyText`, used by the host Runtime Console.
+It accepts only nonempty bounded text through the exact top-level preview-entry
+and live-session gates; child story frames and the ordinary application
+renderer cannot invoke it. Main does not authenticate a physical user gesture;
+the capability is limited to the trusted preview shell instead.
+
 ## Shared surface and commands
 
 Browser preview routes and the desktop entry render the same
 `StoryPreviewFrame` surface. Browser content uses `srcDoc`; desktop content uses
 the opaque package URL. The instrumented story reports bounded current-passage,
 viewport, console, error, and unhandled-rejection messages to the surface.
-Candidate-generation messages are reduced into a bounded private runtime model;
-commit promotes that model with the candidate frame, while rollback discards it.
+It also negotiates the additive, read-only Runtime Debugger v1 adapter contract
+described in [`runtime-debugger-protocol.md`](./runtime-debugger-protocol.md).
+Candidate-generation messages, including debugger section completeness, are
+reduced into a bounded private runtime model; commit promotes that model with
+the candidate frame, while rollback discards it.
 
 Source and Graph commands return to the owning editor and focus the referenced
 passage. Test From Start and Test Current return generation-tagged requests to

@@ -1,0 +1,176 @@
+export const STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION = 1;
+
+export const STORY_PREVIEW_DEBUGGER_CAPABILITIES = [
+	'currentPassage',
+	'storyVariables',
+	'temporaryVariables',
+	'visitedPassages'
+] as const;
+
+export type StoryPreviewDebuggerCapability =
+	(typeof STORY_PREVIEW_DEBUGGER_CAPABILITIES)[number];
+
+export const STORY_PREVIEW_DEBUGGER_TRUNCATION_REASONS = [
+	'field-limit',
+	'item-limit',
+	'text-budget',
+	'uninspectable'
+] as const;
+
+export type StoryPreviewDebuggerTruncationReason =
+	(typeof STORY_PREVIEW_DEBUGGER_TRUNCATION_REASONS)[number];
+
+export type StoryPreviewDebuggerAdapterId =
+	| 'sugarcube-2.37.3'
+	| 'snowman-1.5.0'
+	| 'snowman-2.1.1'
+	| 'chapbook-2.3.1'
+	| 'harlowe-3.3.9'
+	| 'generic';
+
+export type StoryPreviewDebuggerCaptureHandler =
+	'current-only' | 'snowman' | 'sugarcube';
+
+export interface StoryPreviewDebuggerAdapterDescriptor {
+	capabilities: readonly StoryPreviewDebuggerCapability[];
+	format: string;
+	formatVersion: string;
+	id: StoryPreviewDebuggerAdapterId;
+	reliability: 'best-effort' | 'exact-version';
+}
+
+export interface StoryPreviewDebuggerAdapterRegistration extends StoryPreviewDebuggerAdapterDescriptor {
+	captureHandler: StoryPreviewDebuggerCaptureHandler;
+}
+
+export const STORY_PREVIEW_DEBUGGER_CAPTURE_COLLECTIONS = {
+	'current-only': [],
+	snowman: ['storyVariables', 'visitedPassages'],
+	sugarcube: ['storyVariables', 'temporaryVariables', 'visitedPassages']
+} as const satisfies Record<
+	StoryPreviewDebuggerCaptureHandler,
+	readonly Exclude<StoryPreviewDebuggerCapability, 'currentPassage'>[]
+>;
+
+function registration(
+	captureHandler: StoryPreviewDebuggerCaptureHandler,
+	format: string,
+	formatVersion: string,
+	id: Exclude<StoryPreviewDebuggerAdapterId, 'generic'>,
+	reliability: StoryPreviewDebuggerAdapterDescriptor['reliability']
+): StoryPreviewDebuggerAdapterRegistration {
+	return {
+		capabilities: [
+			'currentPassage',
+			...STORY_PREVIEW_DEBUGGER_CAPTURE_COLLECTIONS[captureHandler]
+		],
+		captureHandler,
+		format,
+		formatVersion,
+		id,
+		reliability
+	};
+}
+
+export const STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS = {
+	'sugarcube-2.37.3': registration(
+		'sugarcube',
+		'SugarCube',
+		'2.37.3',
+		'sugarcube-2.37.3',
+		'exact-version'
+	),
+	'snowman-1.5.0': registration(
+		'snowman',
+		'Snowman',
+		'1.5.0',
+		'snowman-1.5.0',
+		'exact-version'
+	),
+	'snowman-2.1.1': registration(
+		'snowman',
+		'Snowman',
+		'2.1.1',
+		'snowman-2.1.1',
+		'exact-version'
+	),
+	'chapbook-2.3.1': registration(
+		'current-only',
+		'Chapbook',
+		'2.3.1',
+		'chapbook-2.3.1',
+		'best-effort'
+	),
+	'harlowe-3.3.9': registration(
+		'current-only',
+		'Harlowe',
+		'3.3.9',
+		'harlowe-3.3.9',
+		'best-effort'
+	)
+} satisfies Record<
+	Exclude<StoryPreviewDebuggerAdapterId, 'generic'>,
+	StoryPreviewDebuggerAdapterRegistration
+>;
+
+function descriptorFromRegistration(
+	registration: StoryPreviewDebuggerAdapterRegistration
+): StoryPreviewDebuggerAdapterDescriptor {
+	return {
+		capabilities: registration.capabilities,
+		format: registration.format,
+		formatVersion: registration.formatVersion,
+		id: registration.id,
+		reliability: registration.reliability
+	};
+}
+
+export function selectStoryPreviewDebuggerAdapter(
+	format: string | undefined,
+	formatVersion: string | undefined
+): StoryPreviewDebuggerAdapterDescriptor {
+	for (const adapter of Object.values(
+		STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS
+	)) {
+		if (adapter.format === format && adapter.formatVersion === formatVersion) {
+			return descriptorFromRegistration(adapter);
+		}
+	}
+
+	return {
+		capabilities: ['currentPassage'],
+		format: format ?? '',
+		formatVersion: formatVersion ?? '',
+		id: 'generic',
+		reliability: 'best-effort'
+	};
+}
+
+export function storyPreviewDebuggerAdapter(
+	id: unknown
+): StoryPreviewDebuggerAdapterDescriptor | undefined {
+	if (
+		typeof id !== 'string' ||
+		id === 'generic' ||
+		!Object.prototype.hasOwnProperty.call(
+			STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS,
+			id
+		)
+	) {
+		return undefined;
+	}
+
+	return descriptorFromRegistration(
+		STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS[
+			id as Exclude<StoryPreviewDebuggerAdapterId, 'generic'>
+		]
+	);
+}
+
+export function isStoryPreviewDebuggerAdapterId(
+	value: unknown
+): value is StoryPreviewDebuggerAdapterId {
+	return (
+		value === 'generic' || storyPreviewDebuggerAdapter(value) !== undefined
+	);
+}

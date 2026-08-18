@@ -2,17 +2,16 @@
 
 Status: active
 Owner: product and frontend maintainers
-Last verified: 2026-08-03
+Last verified: 2026-08-11
 Source of truth: unfinished primary-product behavior
 
 ## Outcomes
 
 ### Preview and debug depth
 
-- Extend the shared browser and managed-desktop preview surface beyond its
-  shipped current-passage, console, runtime-error, and command contract with
-  variable/state inspection, visited-passage history, and story-format
-  development hooks.
+- Keep debugger controls for state mutation, evaluation, restart/clear, and
+  additional story-format development hooks outside the read-only protocol
+  until each command has an explicit capability and lifecycle contract.
 - Keep “test from here” behavior consistent across workbench, contents,
   diagnostics, search, and assets.
 

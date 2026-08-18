@@ -36,6 +36,15 @@ const targetPresentation = {
 	test: {label: 'Test', title: 'Story test preview'}
 } as const;
 
+export function browserRuntimeLogCopy():
+	((text: string) => Promise<void>) | undefined {
+	const clipboard = navigator.clipboard;
+
+	return typeof clipboard?.writeText === 'function'
+		? (text: string) => clipboard.writeText(text)
+		: undefined;
+}
+
 /**
  * The single browser/workbench Preview route. Desktop launchers use the
  * managed preview window, while browser launchers open this route with an
@@ -73,6 +82,7 @@ export const StoryPreviewRoute: React.FC = () => {
 		passage => passage.id === startPassageId
 	);
 	const presentation = targetPresentation[target];
+	const onCopyRuntimeLog = React.useMemo(browserRuntimeLogCopy, []);
 
 	React.useEffect(() => {
 		publishStoryRef.current = publishStory;
@@ -169,6 +179,7 @@ export const StoryPreviewRoute: React.FC = () => {
 			error={publishError}
 			html={html}
 			missingStoryMessage={`There is no story with ID "${storyId}".`}
+			onCopyRuntimeLog={onCopyRuntimeLog}
 			onRevealGraph={runtimePassageId =>
 				navigate(
 					`/stories/${encodeURIComponent(storyId)}?mode=graph${passageQuery(

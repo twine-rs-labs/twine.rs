@@ -27,6 +27,7 @@ describe('desktop story preview preload', () => {
 		expect(name).toBe(storyPreviewBridgeName);
 		expect(Object.keys(api).sort()).toEqual([
 			'command',
+			'copyText',
 			'frameLoaded',
 			'getInitialState',
 			'onAppearance',
@@ -54,6 +55,16 @@ describe('desktop story preview preload', () => {
 		expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
 			storyPreviewIpcChannels.command,
 			{generation: 4, passageId: 'passage-1', type: 'revealSource'}
+		);
+
+		await api.copyText(' runtime log ');
+		expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+			storyPreviewIpcChannels.copyText,
+			' runtime log '
+		);
+		await expect(api.copyText('')).rejects.toThrow('Invalid runtime log text');
+		await expect(api.copyText('x'.repeat(4 * 1024 * 1024 + 1))).rejects.toThrow(
+			'Invalid runtime log text'
 		);
 
 		api.ready(4);
