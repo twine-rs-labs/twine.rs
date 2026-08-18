@@ -51,10 +51,17 @@ bundled version. It does not make story values trusted or promise support for a
 different release. Debugger v1 currently has no restart, clear-state, mutation,
 evaluation, or adapter-supplied command capability.
 
+For the registered Chapbook 2.3.1 tuple, the head-injected bridge listens for
+the format's native `state-change` event and copies only the bounded final
+string from a `trail` update into its current-passage cache. It reads the event
+detail and array entries through captured native and own-data-descriptor access
+only. This event capture supports current-passage identity; it does not expose
+trail or history inspection.
+
 Chapbook's public `state.get()`, `state.varNames()`, and `state.saveToObject()`
 APIs cannot provide both accessor-free and traversal-bounded inspection.
-Chapbook variable and trail capabilities therefore remain withdrawn until the
-format supplies a versioned bounded snapshot hook.
+Chapbook variable and trail/history capabilities therefore remain withdrawn
+until the format supplies a versioned bounded snapshot hook.
 
 SugarCube 2.37.3 is the one explicit format-owned accessor boundary. Its
 `State.passage`, `State.variables`, `State.temporary`, and `State.history`

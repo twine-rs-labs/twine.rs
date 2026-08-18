@@ -101,6 +101,225 @@ function debuggerSnapshotTextLength(message: Record<string, any>) {
 }
 
 describe('instrumented runtime passage detection', () => {
+	it('captures Chapbook 2.3.1 current passage from early trail events', () => {
+		jest.useFakeTimers();
+		document.body.innerHTML = `
+			<tw-storydata format="Chapbook" format-version="2.3.1"></tw-storydata>
+			<div id="page"><article>Start</article></div>
+		`;
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const script = /<script>([\s\S]*?)<\/script>/.exec(
+			instrumentPreviewHtml(
+				'<html><head></head><body></body></html>',
+				'chapbook-trail'
+			)
+		)?.[1];
+
+		try {
+			expect(script).toBeDefined();
+			window.eval(script!);
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {
+					detail: {name: 'trail', value: ['Start']}
+				})
+			);
+			jest.advanceTimersByTime(50);
+			document.dispatchEvent(new Event('DOMContentLoaded'));
+			expect(lastPostedState(postMessage)?.currentPassage).toEqual({
+				name: 'Start',
+				source: 'Chapbook state-change'
+			});
+
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {
+					detail: {name: 'trail', value: ['Start', 'Next']}
+				})
+			);
+			jest.advanceTimersByTime(50);
+			expect(lastPostedState(postMessage)?.currentPassage).toEqual({
+				name: 'Next',
+				source: 'Chapbook state-change'
+			});
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+			postMessage.mockRestore();
+		}
+	});
+
+	it('gates Chapbook trail capture exactly and rejects accessor-backed or malformed updates', () => {
+		jest.useFakeTimers();
+		document.body.innerHTML =
+			'<tw-storydata format="Chapbook" format-version="2.3.1"></tw-storydata>';
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+
+		try {
+			installInstrumentedDebugger('Chapbook', '2.3.1', 'chapbook-descriptors');
+			const storyData = document.querySelector('tw-storydata')!;
+			storyData.setAttribute('startnode', '1');
+			storyData.innerHTML =
+				'<tw-passagedata pid="1" name="Start">Start</tw-passagedata>';
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {
+					detail: {name: 'trail', value: ['Start']}
+				})
+			);
+			jest.advanceTimersByTime(50);
+			expect(lastPostedState(postMessage)?.currentPassage).toMatchObject({
+				name: 'Start'
+			});
+
+			storyData.setAttribute('format-version', '2.3.0');
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {
+					detail: {name: 'trail', value: ['Wrong version']}
+				})
+			);
+			jest.advanceTimersByTime(50);
+			(window as any).__twineRsPreviewDebug.captureState();
+			expect(lastPostedState(postMessage)?.currentPassage).toEqual({
+				localId: '1',
+				name: 'Start',
+				source: 'storydata startnode'
+			});
+
+			storyData.setAttribute('format-version', '2.3.1');
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {
+					detail: {name: 'trail', value: ['Start', 'Next']}
+				})
+			);
+			jest.advanceTimersByTime(50);
+			expect(lastPostedState(postMessage)?.currentPassage).toMatchObject({
+				name: 'Next'
+			});
+
+			const nativeDetailEvent = new window.CustomEvent('state-change', {
+				detail: {name: 'trail', value: ['Start', 'Native detail']}
+			});
+			const detailGetter = jest.fn(() => {
+				throw new Error('story-controlled detail getter');
+			});
+			Object.defineProperty(nativeDetailEvent, 'detail', {
+				configurable: true,
+				get: detailGetter
+			});
+			window.dispatchEvent(nativeDetailEvent);
+			jest.advanceTimersByTime(50);
+			expect(detailGetter).not.toHaveBeenCalled();
+			expect(lastPostedState(postMessage)?.currentPassage).toMatchObject({
+				name: 'Native detail'
+			});
+
+			const inheritedNameDetail = Object.assign(
+				Object.create({name: 'trail'}),
+				{value: ['Start', 'Inherited name']}
+			);
+			const stateCountBeforeInheritedName = posted(postMessage, 'state').length;
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {detail: inheritedNameDetail})
+			);
+			jest.advanceTimersByTime(50);
+			expect(posted(postMessage, 'state')).toHaveLength(
+				stateCountBeforeInheritedName
+			);
+			expect(
+				posted(postMessage, 'state').map(
+					message => message.currentPassage?.name
+				)
+			).not.toContain('Inherited name');
+
+			const accessorNameDetail = {value: ['Start', 'Accessor name']};
+			const nameGetter = jest.fn(() => 'trail');
+			Object.defineProperty(accessorNameDetail, 'name', {
+				enumerable: true,
+				get: nameGetter
+			});
+			const stateCountBeforeAccessorName = posted(postMessage, 'state').length;
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {detail: accessorNameDetail})
+			);
+			jest.advanceTimersByTime(50);
+			expect(nameGetter).not.toHaveBeenCalled();
+			expect(posted(postMessage, 'state')).toHaveLength(
+				stateCountBeforeAccessorName
+			);
+			expect(
+				posted(postMessage, 'state').map(
+					message => message.currentPassage?.name
+				)
+			).not.toContain('Accessor name');
+
+			const trail = ['Start', 'Next'];
+			const getter = jest.fn(() => 'forged');
+			Object.defineProperty(trail, '1', {enumerable: true, get: getter});
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {
+					detail: {name: 'trail', value: trail}
+				})
+			);
+			jest.advanceTimersByTime(50);
+			expect(getter).not.toHaveBeenCalled();
+			expect(lastPostedState(postMessage)?.currentPassage).toBeUndefined();
+
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {
+					detail: {name: 'trail', value: ['Start', 'Recovered']}
+				})
+			);
+			jest.advanceTimersByTime(50);
+			expect(lastPostedState(postMessage)?.currentPassage).toMatchObject({
+				name: 'Recovered'
+			});
+
+			const revoked = Proxy.revocable([], {});
+			revoked.revoke();
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {
+					detail: {name: 'trail', value: revoked.proxy}
+				})
+			);
+			jest.advanceTimersByTime(50);
+			expect(lastPostedState(postMessage)?.currentPassage).toBeUndefined();
+
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {
+					detail: {name: 'trail', value: ['Start', 'Before value getter']}
+				})
+			);
+			jest.advanceTimersByTime(50);
+			expect(lastPostedState(postMessage)?.currentPassage).toMatchObject({
+				name: 'Before value getter'
+			});
+
+			const accessorValueDetail = {name: 'trail'};
+			const valueGetter = jest.fn(() => ['Start', 'Accessor value']);
+			Object.defineProperty(accessorValueDetail, 'value', {
+				enumerable: true,
+				get: valueGetter
+			});
+			window.dispatchEvent(
+				new window.CustomEvent('state-change', {detail: accessorValueDetail})
+			);
+			jest.advanceTimersByTime(50);
+			expect(valueGetter).not.toHaveBeenCalled();
+			expect(lastPostedState(postMessage)?.currentPassage).toBeUndefined();
+			expect(
+				posted(postMessage, 'state').map(
+					message => message.currentPassage?.name
+				)
+			).not.toContain('Accessor value');
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+			postMessage.mockRestore();
+		}
+	});
+
 	it('keeps recapturing after a provisional start node until SugarCube exposes live state', () => {
 		jest.useFakeTimers();
 		document.body.innerHTML = `

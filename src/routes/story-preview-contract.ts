@@ -967,6 +967,9 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var pendingStartupState = 0;
 	var startupStateCaptureIndex = 0;
 	var selectedDebuggerAdapter;
+	// A null value means Chapbook emitted a trail update which could not be copied
+	// safely. Keep that distinct from startup, when no trail event has arrived.
+	var chapbookCurrentPassage;
 	var debuggerFloor = Math.floor;
 	var debuggerGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 	var debuggerIsFrozen = Object.isFrozen;
@@ -983,6 +986,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var debuggerReflectApply = Reflect.apply;
 	var debuggerDateGetTime = Date.prototype.getTime;
 	var debuggerRegExpSource = Object.getOwnPropertyDescriptor(RegExp.prototype, 'source').get;
+	var debuggerCustomEventDetail = Object.getOwnPropertyDescriptor(window.CustomEvent.prototype, 'detail').get;
 	var DEBUGGER_SUGARCUBE_STATE_ACCESSORS = {
 		history: 'function(){return _history}',
 		passage: 'function(){return _active.title}',
@@ -1319,6 +1323,53 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		}
 	}
 
+	function isChapbook231Runtime() {
+		var storyData = document.querySelector('tw-storydata');
+		return Boolean(
+			storyData &&
+			storyData.getAttribute('format') === 'Chapbook' &&
+			storyData.getAttribute('format-version') === '2.3.1'
+		);
+	}
+
+	function captureChapbookPassage(event) {
+		if (!isChapbook231Runtime()) return;
+
+		var detail;
+		try {
+			detail = debuggerReflectApply(debuggerCustomEventDetail, event, []);
+		} catch (error) {
+			return;
+		}
+
+		if (!detail || typeof detail !== 'object') return;
+		if (ownDebuggerData(detail, 'name') !== 'trail') return;
+
+		var current;
+		try {
+			var trail = ownDebuggerData(detail, 'value');
+			var length = debuggerIsArray(trail)
+				? ownDebuggerData(trail, 'length')
+				: undefined;
+			current =
+				typeof length === 'number' && debuggerIsFinite(length) && length > 0
+					? ownDebuggerData(trail, debuggerString(debuggerFloor(length) - 1))
+					: undefined;
+		} catch (error) {}
+
+		chapbookCurrentPassage =
+			typeof current === 'string' &&
+			current.length > 0 &&
+			current.length <= ${STORY_PREVIEW_BRIDGE_LIMITS.passageFieldLength}
+				? current
+				: null;
+		queueState();
+	}
+
+	// The bridge runs in the document head, before Chapbook initializes. Listen
+	// immediately so the startup trail assignment is captured as well.
+	window.addEventListener('state-change', captureChapbookPassage);
+
 	function auditedSugarCubeStateData(state, key) {
 		try {
 			var expectedSource = DEBUGGER_SUGARCUBE_STATE_ACCESSORS[key];
@@ -1576,6 +1627,13 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	}
 
 	function readRuntimePassage() {
+		if (isChapbook231Runtime()) {
+			if (chapbookCurrentPassage) {
+				return {name: chapbookCurrentPassage, source: 'Chapbook state-change'};
+			}
+			if (chapbookCurrentPassage === null) return undefined;
+		}
+
 		var passage = ownDebuggerData(window, 'passage');
 		if (passage && typeof passage === 'object') {
 			var passageResult = {
