@@ -1,7 +1,6 @@
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {IconBrandPatreon, IconCode, IconGitFork} from '@tabler/icons-react';
-import {ButtonBar} from '../../components/container/button-bar';
 import {DialogCard} from '../../components/container/dialog-card';
 import {IconLink} from '../../components/control/icon-link';
 import {getAppInfo} from '../../util/app-info';
@@ -47,7 +46,7 @@ export const AboutTwineDialog: React.FC<DialogComponentProps> = props => {
 						</ul>
 					</div>
 				</div>
-				<ButtonBar>
+				<div className="twine-rs-links">
 					<IconLink
 						href="https://www.patreon.com/TwineRSLab"
 						icon={<IconBrandPatreon />}
@@ -59,17 +58,23 @@ export const AboutTwineDialog: React.FC<DialogComponentProps> = props => {
 						icon={<IconCode />}
 						label={t('dialogs.aboutTwine.codeRepo')}
 					/>
+				</div>
+				<div className="upstream-links">
 					<IconLink
 						href="https://github.com/klembot/twinejs"
 						icon={<IconGitFork />}
 						label={t('dialogs.aboutTwine.upstreamRepo')}
 					/>
-				</ButtonBar>
-				<p className="upstream-support">
-					<a href="https://twinery.org/donate" target="_blank" rel="noreferrer">
-						{t('dialogs.aboutTwine.supportUpstreamTwine')}
-					</a>
-				</p>
+					<p className="upstream-support">
+						<a
+							href="https://twinery.org/donate"
+							target="_blank"
+							rel="noreferrer"
+						>
+							{t('dialogs.aboutTwine.supportUpstreamTwine')}
+						</a>
+					</p>
+				</div>
 			</div>
 		</DialogCard>
 	);

@@ -95,7 +95,7 @@ describe('<AppActions>', () => {
 			screen.getByRole('button', {name: 'routeActions.app.reportBug'})
 		);
 		expect(openSpy.mock.calls).toEqual([
-			['https://twinery.org/2bugs', '_blank']
+			['https://github.com/twine-rs-labs/twine.rs/issues/new', '_blank']
 		]);
 	});
 

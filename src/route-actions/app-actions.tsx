@@ -7,6 +7,7 @@ import {
 	useDialogsContext,
 	type DialogsContextProps
 } from '../dialogs';
+import {twineRsBugReportUrl} from '../util/twine-rs-urls';
 
 export interface AppActionsProps {
 	dialogsDispatch?: DialogsContextProps['dispatch'];
@@ -43,7 +44,7 @@ export const AppActions: React.FC<AppActionsProps> = props => {
 			<IconButton
 				icon="bug"
 				label={t('routeActions.app.reportBug')}
-				onClick={() => window.open('https://twinery.org/2bugs', '_blank')}
+				onClick={() => window.open(twineRsBugReportUrl, '_blank')}
 			/>
 		</div>
 	);

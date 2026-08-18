@@ -1,4 +1,4 @@
-import {render, screen} from '@testing-library/react';
+import {render, screen, within} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
 import {AboutTwineDialog} from '../about-twine';
@@ -24,6 +24,19 @@ describe('<AboutTwineDialog>', () => {
 		).toBe('https://www.patreon.com/TwineRSLab');
 	});
 
+	it('credits Twine RS contributors first', () => {
+		const {container} = renderComponent();
+		const codeCredits = container.querySelector('.credits .code');
+
+		expect(codeCredits).not.toBeNull();
+		expect(
+			within(codeCredits as HTMLElement)
+				.getAllByRole('listitem')
+				.slice(0, 2)
+				.map(item => item.textContent)
+		).toEqual(['bransta61', 'aphrodite-games']);
+	});
+
 	it('distinguishes the Twine RS source repository from upstream TwineJS', () => {
 		renderComponent();
 		expect(
@@ -41,6 +54,31 @@ describe('<AboutTwineDialog>', () => {
 				.getByText('dialogs.aboutTwine.supportUpstreamTwine')
 				.getAttribute('href')
 		).toBe('https://twinery.org/donate');
+	});
+
+	it('groups Twine RS links before separate upstream links', () => {
+		const {container} = renderComponent();
+		const twineRsLinks = container.querySelector('.twine-rs-links');
+		const upstreamLinks = container.querySelector('.upstream-links');
+
+		expect(twineRsLinks).not.toBeNull();
+		expect(upstreamLinks).not.toBeNull();
+		expect(
+			within(twineRsLinks as HTMLElement)
+				.getAllByRole('link')
+				.map(link => link.textContent)
+		).toEqual([
+			'dialogs.aboutTwine.supportTwineRs',
+			'dialogs.aboutTwine.codeRepo'
+		]);
+		expect(
+			within(upstreamLinks as HTMLElement)
+				.getAllByRole('link')
+				.map(link => link.textContent)
+		).toEqual([
+			'dialogs.aboutTwine.upstreamRepo',
+			'dialogs.aboutTwine.supportUpstreamTwine'
+		]);
 	});
 
 	it('is accessible', async () => {
