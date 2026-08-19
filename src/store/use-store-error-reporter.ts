@@ -1,3 +1,4 @@
+import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {isElectronRenderer} from '../util/is-electron';
 
@@ -8,8 +9,8 @@ export function useStoreErrorReporter() {
 
 	const {t, ready} = useTranslation('', {useSuspense: false});
 
-	return {
-		reportError(error: Error, messageKey: string) {
+	const reportError = React.useCallback(
+		(error: Error, messageKey: string) => {
 			console.error('Twine store error', error);
 
 			if (ready) {
@@ -27,6 +28,9 @@ export function useStoreErrorReporter() {
 					`An error occurred while saving (${error.message}). Reloading or restarting the application may help.`
 				);
 			}
-		}
-	};
+		},
+		[ready, t]
+	);
+
+	return {reportError};
 }

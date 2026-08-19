@@ -142,14 +142,18 @@ export const FindReplaceWorkbenchPanel: React.FC<{
 			),
 		[hits]
 	);
+	const onHighlightPassagesRef = React.useRef(onHighlightPassages);
+	React.useEffect(() => {
+		onHighlightPassagesRef.current = onHighlightPassages;
+	}, [onHighlightPassages]);
 	React.useEffect(() => {
 		onHighlightPassages?.(matchedPassageIds);
 	}, [matchedPassageIds, onHighlightPassages]);
 	React.useEffect(
 		() => () => {
-			onHighlightPassages?.([]);
+			onHighlightPassagesRef.current?.([]);
 		},
-		[onHighlightPassages]
+		[]
 	);
 	const replaceableHits = hits.filter(hit =>
 		['passageName', 'passageText', 'script', 'stylesheet'].includes(hit.scope)
