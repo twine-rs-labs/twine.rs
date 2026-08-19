@@ -32,6 +32,131 @@ function contextFor(
 }
 
 describe('story workbench panels', () => {
+	it('keeps find highlights through callback rerenders and clears them on query changes and unmount', async () => {
+		const story = fakeStory();
+		const matchingHit = {
+			after: null,
+			before: null,
+			excerpt: 'needle',
+			line: 1,
+			passageId: story.passages[0].id,
+			scope: 'passageText' as const,
+			sourceId: `${story.id}:passage:${story.passages[0].id}`,
+			sourceName: story.passages[0].name,
+			start: 0
+		};
+		const host = {
+			querySearchPageAsync: jest.fn(async (_storyId, options) => ({
+				searchHits: options.query === 'needle' ? [matchingHit] : []
+			})),
+			subscribeToPatches: jest.fn(() => jest.fn())
+		} as unknown as CoreProjectHost;
+		const firstCallback = jest.fn();
+		const latestCallback = jest.fn();
+		const renderPanel = (onHighlightPassages: jest.Mock) => (
+			<MemoryRouter>
+				<FakeStateProvider stories={[story]}>
+					<FindReplaceWorkbenchPanel
+						context={{
+							...contextFor(host, story),
+							onHighlightPassages
+						}}
+						request={{key: 1, query: 'needle'}}
+					/>
+				</FakeStateProvider>
+			</MemoryRouter>
+		);
+		const {rerender, unmount} = render(renderPanel(firstCallback));
+
+		await waitFor(() =>
+			expect(firstCallback).toHaveBeenCalledWith([story.passages[0].id])
+		);
+		const firstCallbackClearCount = firstCallback.mock.calls.filter(
+			([passageIds]) => passageIds.length === 0
+		).length;
+		rerender(renderPanel(latestCallback));
+		expect(latestCallback).toHaveBeenCalledWith([story.passages[0].id]);
+		expect(
+			firstCallback.mock.calls.filter(([passageIds]) => passageIds.length === 0)
+		).toHaveLength(firstCallbackClearCount);
+
+		fireEvent.change(
+			screen.getByRole('textbox', {name: 'dialogs.storySearch.find'}),
+			{target: {value: 'no match'}}
+		);
+		await waitFor(() => expect(latestCallback).toHaveBeenCalledWith([]));
+
+		unmount();
+		expect(latestCallback).toHaveBeenLastCalledWith([]);
+		expect(
+			firstCallback.mock.calls.filter(([passageIds]) => passageIds.length === 0)
+		).toHaveLength(firstCallbackClearCount);
+	});
+
+	it('settles highlight updates when a provider rerender replaces its callback', async () => {
+		const story = fakeStory();
+		const highlightPassages = jest.fn();
+		const host = {
+			querySearchPageAsync: jest.fn(async () => ({
+				searchHits: [
+					{
+						after: null,
+						before: null,
+						excerpt: 'needle',
+						line: 1,
+						passageId: story.passages[0].id,
+						scope: 'passageText' as const,
+						sourceId: `${story.id}:passage:${story.passages[0].id}`,
+						sourceName: story.passages[0].name,
+						start: 0
+					}
+				]
+			})),
+			subscribeToPatches: jest.fn(() => jest.fn())
+		} as unknown as CoreProjectHost;
+		const RerenderingProvider: React.FC = () => {
+			const [, setHighlightedPassageIds] = React.useState<string[]>([]);
+
+			return (
+				<FindReplaceWorkbenchPanel
+					context={{
+						...contextFor(host, story),
+						onHighlightPassages: passageIds => {
+							highlightPassages(passageIds);
+							setHighlightedPassageIds(previous =>
+								previous.length === passageIds.length &&
+								previous.every((id, index) => id === passageIds[index])
+									? previous
+									: passageIds
+							);
+						}
+					}}
+					request={{key: 1, query: 'needle'}}
+				/>
+			);
+		};
+
+		render(
+			<React.StrictMode>
+				<MemoryRouter>
+					<FakeStateProvider stories={[story]}>
+						<RerenderingProvider />
+					</FakeStateProvider>
+				</MemoryRouter>
+			</React.StrictMode>
+		);
+
+		await waitFor(() =>
+			expect(highlightPassages).toHaveBeenCalledWith([story.passages[0].id])
+		);
+		const settledCallCount = highlightPassages.mock.calls.length;
+		await act(async () => {
+			await Promise.resolve();
+			await Promise.resolve();
+		});
+		expect(highlightPassages).toHaveBeenCalledTimes(settledCallCount);
+	});
+
 	it('routes replace-all through the bound project host', async () => {
 		const story = fakeStory();
 		const host = {

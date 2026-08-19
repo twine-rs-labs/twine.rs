@@ -15,3 +15,5 @@ docs/en/book/*
 src/electron/main-process/native/*.node
 target/
 .local/
+.op/
+docs/screenshots/
