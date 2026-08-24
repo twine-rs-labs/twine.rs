@@ -16,8 +16,7 @@ import {
 	Story,
 	useStoriesContext
 } from '../../store/stories';
-import {useStoryLaunch} from '../../store/use-story-launch';
-import {reportStoryLaunchError} from '../../store/report-story-launch-error';
+import {useTestFromHereAction} from '../../store/use-test-from-here-action';
 import {
 	EditorWindowSpec,
 	editorWindowId,
@@ -188,7 +187,11 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 	const location = useLocation();
 	const {dispatch} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
-	const {testStory} = useStoryLaunch();
+	const {
+		pending: testPassagePending,
+		pendingPassageId: testPassagePendingId,
+		run: runTestFromHere
+	} = useTestFromHereAction(story);
 	const [fuzzyFinderOpen, setFuzzyFinderOpen] = React.useState(false);
 	const [graphRevealRequest, setGraphRevealRequest] = React.useState({
 		key: 0,
@@ -368,11 +371,9 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 	);
 	const handleTestPassage = React.useCallback(
 		(passage: Passage) => {
-			void Promise.resolve(testStory(story.id, passage.id)).catch(
-				reportStoryLaunchError
-			);
+			runTestFromHere(passage.id);
 		},
-		[story.id, testStory]
+		[runTestFromHere]
 	);
 	const openWorkbenchPanel = React.useCallback(
 		(
@@ -570,8 +571,11 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 				onOpenEditorWindow={kind => openEditorWindow({kind})}
 				onOpenFuzzyFinder={() => setFuzzyFinderOpen(true)}
 				onOpenWorkbenchPanel={id => openWorkbenchPanel(id)}
+				onTestPassage={handleTestPassage}
 				rightDockCollapsed={workspace.rightDockCollapsed}
 				story={story}
+				testPassagePending={testPassagePending}
+				testPassagePendingId={testPassagePendingId}
 			/>
 			<MainContent grabbable={false} padded={false} ref={mainContent}>
 				<StoryWorkspaceShell
@@ -596,6 +600,8 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 							revealRequestKey={graphRevealRequest.key}
 							selectedPassageId={workspace.selectedPassageId}
 							story={story}
+							testPassagePending={testPassagePending}
+							testPassagePendingId={testPassagePendingId}
 						/>
 					}
 					leftDockCollapsed={workspace.leftDockCollapsed}
@@ -617,6 +623,8 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 					onRevealPassageInGraph={handleRevealPassageInGraph}
 					onSelectPassage={handleChoosePassage}
 					onTestPassage={handleTestPassage}
+					testPassagePending={testPassagePending}
+					testPassagePendingId={testPassagePendingId}
 					overlay={
 						<PassageFuzzyFinder
 							onClose={() => setFuzzyFinderOpen(false)}
@@ -626,6 +634,8 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 							open={fuzzyFinderOpen}
 							setCenter={setCenter}
 							story={story}
+							testPassagePending={testPassagePending}
+							testPassagePendingId={testPassagePendingId}
 						/>
 					}
 					revealRequests={revealRequests}

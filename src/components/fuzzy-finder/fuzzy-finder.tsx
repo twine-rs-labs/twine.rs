@@ -22,7 +22,9 @@ export interface FuzzyFinderProps {
 	results: Array<
 		Omit<FuzzyFinderResultProps, 'onClick'> & {
 			action?: {
+				disabled?: boolean;
 				label: string;
+				loading?: boolean;
 				onClick: () => void;
 			};
 		}
@@ -165,14 +167,23 @@ export const FuzzyFinder = React.forwardRef<HTMLDivElement, FuzzyFinderProps>(
 										{action && (
 											<button
 												aria-label={action.label}
+												aria-busy={action.loading || undefined}
 												className="fuzzy-finder-result-action"
+												disabled={action.disabled || action.loading}
 												onClick={event => {
 													event.stopPropagation();
+													if (action.disabled || action.loading) {
+														return;
+													}
 													action.onClick();
 												}}
 												type="button"
 											>
-												<IconTool />
+												{action.loading ? (
+													<span className="tw-btn__spin" aria-hidden />
+												) : (
+													<IconTool />
+												)}
 											</button>
 										)}
 									</li>

@@ -1,4 +1,4 @@
-import {expect, Locator, Page, test} from '@playwright/test';
+import {BrowserContext, expect, Locator, Page, test} from '@playwright/test';
 
 const appUrl = 'http://127.0.0.1:5173';
 
@@ -65,6 +65,33 @@ async function selectPassage(page: Page, name: string) {
 	await expect(passage).toBeVisible();
 	await passage.click();
 	await expect(page.getByRole('region', {name, exact: true})).toBeVisible();
+}
+
+async function launchTestFromHere(
+	context: BrowserContext,
+	trigger: () => Promise<unknown>
+) {
+	const [preview] = await Promise.all([
+		context.waitForEvent('page'),
+		trigger()
+	]);
+
+	return preview;
+}
+
+async function expectTestAtPassage(
+	preview: Page,
+	passageName: string,
+	marker: string
+) {
+	await expect(
+		preview
+			.frameLocator('iframe[title="Story test preview"]')
+			.locator('tw-passage')
+	).toContainText(marker);
+	await expect(
+		preview.getByText(`Start: ${passageName}`, {exact: true})
+	).toBeVisible();
 }
 
 async function openStoryInTextMode(page: Page, name: string) {
@@ -668,4 +695,73 @@ test('opens the D6 Contents, Diagnostics, and Assets surfaces', async ({
 		page.getByText('<img src="assets/cover.png" alt="">').first()
 	).toBeVisible();
 	await expect(page.getByRole('button', {name: 'Find Usages'})).toBeVisible();
+});
+
+test('launches Test From Here at the selected non-start passage from every authoring surface', async ({
+	context,
+	page
+}) => {
+	test.setTimeout(90 * 1000);
+	const passageName = 'Nonstart';
+	const marker = 'Nonstart Test From Here marker.';
+
+	await createProject(page, 'Test From Here surface matrix');
+	await setPassageText(page, `Start marker. [[Continue->${passageName}]]`);
+	await selectPassage(page, passageName);
+	await setPassageText(
+		page,
+		`${marker} [[Missing destination]] <img src="assets/cover.png">`
+	);
+	await selectPassage(page, 'Missing destination');
+	await page.getByRole('button', {name: 'Delete', exact: true}).click();
+	await selectPassage(page, passageName);
+
+	await page.getByRole('button', {name: 'Go to Passage'}).click();
+	await page.getByLabel('Search by passage name or text').fill(passageName);
+	let preview = await launchTestFromHere(context, () =>
+		page
+			.getByRole('button', {
+				name: `Test "${passageName}" From Here`
+			})
+			.click()
+	);
+	await expectTestAtPassage(preview, passageName, marker);
+	await preview.close();
+	await page.getByRole('button', {name: 'Close', exact: true}).click();
+
+	await page.getByTitle('Contents').click();
+	await expect(page.getByLabel('Contents', {exact: true})).toBeVisible();
+	await page
+		.locator('.contents-route__row')
+		.filter({has: page.getByText(passageName, {exact: true})})
+		.click();
+	preview = await launchTestFromHere(context, () =>
+		page.getByRole('button', {name: 'Test From Here', exact: true}).click()
+	);
+	await expectTestAtPassage(preview, passageName, marker);
+	await preview.close();
+
+	await page.getByTitle('Diagnostics').click();
+	await expect(page.getByLabel('Diagnostics', {exact: true})).toBeVisible();
+	await page
+		.locator('.diagnostics-route__row')
+		.filter({hasText: passageName})
+		.click();
+	preview = await launchTestFromHere(context, () =>
+		page.getByRole('button', {name: 'Test From Here', exact: true}).click()
+	);
+	await expectTestAtPassage(preview, passageName, marker);
+	await preview.close();
+
+	await page.getByTitle('Assets').click();
+	await expect(page.getByLabel('Assets', {exact: true})).toBeVisible();
+	await page.getByRole('button', {name: 'Open folder assets'}).click();
+	await page
+		.getByRole('button', {name: 'Select asset assets/cover.png'})
+		.click();
+	preview = await launchTestFromHere(context, () =>
+		page.getByRole('button', {name: 'Test First Usage'}).click()
+	);
+	await expectTestAtPassage(preview, passageName, marker);
+	await preview.close();
 });

@@ -1,4 +1,11 @@
-import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within
+} from '@testing-library/react';
 import * as React from 'react';
 import {
 	CoreProjectHostProvider,
@@ -83,6 +90,8 @@ function renderComponent(
 		graphView?: StoryGraphWorkspaceView;
 		onGraphOptionsChange?: jest.Mock;
 		onGraphViewChange?: jest.Mock;
+		testPassagePending?: boolean;
+		testPassagePendingId?: string;
 	} = {}
 ) {
 	const {next, start, story} = graphStory(generatedLayout);
@@ -146,6 +155,8 @@ function renderComponent(
 							: initialSelectedPassageId
 					}
 					story={story}
+					testPassagePending={options.testPassagePending}
+					testPassagePendingId={options.testPassagePendingId}
 				/>
 			</TestProviders>
 		);
@@ -473,6 +484,19 @@ describe('<StoryGraphPanel>', () => {
 		fireEvent.click(screen.getByRole('button', {name: 'Test From Here'}));
 
 		expect(onTestPassage).toHaveBeenCalledWith(start);
+	});
+
+	it('disables and marks the selected passage while testing is pending', async () => {
+		const {result, start} = renderComponent(false, undefined, {
+			testPassagePending: true,
+			testPassagePendingId: 'start'
+		});
+
+		await waitForNode(result.container, start.id);
+		const action = screen.getByRole('button', {name: 'Test From Here'});
+
+		expect(action).toBeDisabled();
+		expect(action).toHaveAttribute('aria-busy', 'true');
 	});
 
 	it('passes a buffered measured viewport into graph projection queries', async () => {
@@ -1459,6 +1483,39 @@ describe('<StoryGraphPanel>', () => {
 		fireEvent.click(screen.getByRole('button', {name: 'Edit 2 passages'}));
 
 		expect(onEditPassages).toHaveBeenCalledWith([start, next]);
+	});
+
+	it('tests from the graph context menu and closes it normally', async () => {
+		const {onTestPassage, result, start} = renderComponent();
+		const startNode = await waitForNodeButton(result.container, start.id);
+
+		fireEvent.contextMenu(startNode, {clientX: 200, clientY: 160});
+		const menu = result.container.querySelector(
+			'.story-edit-graph-context-menu'
+		) as HTMLElement;
+		fireEvent.click(within(menu).getByRole('button', {name: 'Test From Here'}));
+
+		expect(onTestPassage).toHaveBeenCalledWith(start);
+		expect(
+			result.container.querySelector('.story-edit-graph-context-menu')
+		).toBeNull();
+	});
+
+	it('reflects pending state in an open graph context menu', async () => {
+		const {result, start} = renderComponent(false, undefined, {
+			testPassagePending: true,
+			testPassagePendingId: 'start'
+		});
+		const startNode = await waitForNodeButton(result.container, start.id);
+
+		fireEvent.contextMenu(startNode, {clientX: 200, clientY: 160});
+		const menu = result.container.querySelector(
+			'.story-edit-graph-context-menu'
+		) as HTMLElement;
+		const action = within(menu).getByRole('button', {name: 'Test From Here'});
+
+		expect(action).toBeDisabled();
+		expect(action).toHaveAttribute('aria-busy', 'true');
 	});
 
 	it('applies the default card size to every selected passage', async () => {

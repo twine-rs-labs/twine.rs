@@ -35,7 +35,10 @@ import type {CoreAssetReference} from '../../core/bindings/CoreAssetReference';
 import type {AssetManagerViewModelEntry} from '../../core/view-models';
 import {fileUrlForPath, projectAssetPath} from '../../core/asset-paths';
 import {selectPassage, Story, useStoriesContext} from '../../store/stories';
-import {useStoryLaunch} from '../../store/use-story-launch';
+import {
+	firstLiveAssetUsagePassage,
+	useTestFromHereAction
+} from '../../store/use-test-from-here-action';
 import {usePrefsContext} from '../../store/prefs';
 import {loadProjectMetadata} from '../../store/project-metadata';
 import {useProjectLibraryService} from '../../store/project-library-service';
@@ -376,11 +379,7 @@ function matchesQuery(asset: AssetManagerViewModelEntry, query: string) {
 }
 
 function firstUsagePassage(story: Story, asset: AssetManagerViewModelEntry) {
-	return asset.firstReference?.passageId
-		? story.passages.find(
-				passage => passage.id === asset.firstReference?.passageId
-			)
-		: undefined;
+	return firstLiveAssetUsagePassage(story, asset.references);
 }
 
 function assetSourceLabel(asset: AssetManagerViewModelEntry) {
@@ -597,11 +596,11 @@ export const AssetsRoute: React.FC = () => {
 	const {storyId = ''} = useParams<'storyId'>();
 	const {dispatch, stories} = useStoriesContext();
 	const {prefs} = usePrefsContext();
-	const {testStory} = useStoryLaunch();
 	const navigate = useNavigate();
 	const coreProjectHost = useCoreProjectHost();
 	const projectLibrary = useProjectLibraryService();
 	const story = storyForId(stories, storyId);
+	const testFromHere = useTestFromHereAction(story);
 	const [folder, setFolder] = React.useState<AssetScope>('All Assets');
 	const [expandedFolders, setExpandedFolders] = React.useState<Set<string>>(
 		() => new Set()
@@ -1076,16 +1075,10 @@ export const AssetsRoute: React.FC = () => {
 	}
 
 	function testFirstUsage(asset: AssetManagerViewModelEntry) {
-		if (!story) {
-			return;
-		}
-
-		const target = firstUsagePassage(story, asset);
+		const target = story ? firstUsagePassage(story, asset) : undefined;
 
 		if (target) {
-			void Promise.resolve(testStory(story.id, target.id)).catch(error =>
-				setAssetError((error as Error).message)
-			);
+			testFromHere.run(target.id);
 		}
 	}
 
@@ -1575,8 +1568,12 @@ export const AssetsRoute: React.FC = () => {
 								</Button>
 								<Button
 									block
-									disabled={!firstUsage}
+									disabled={!firstUsage || testFromHere.pending}
 									icon="tool"
+									loading={
+										!!firstUsage &&
+										testFromHere.pendingPassageId === firstUsage.id
+									}
 									onClick={() => testFirstUsage(selectedAsset)}
 									size="sm"
 									variant="primary"

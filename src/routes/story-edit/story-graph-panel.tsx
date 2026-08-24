@@ -95,6 +95,8 @@ export interface StoryGraphPanelProps {
 	revealRequestKey?: number;
 	selectedPassageId?: string;
 	story: Story;
+	testPassagePending?: boolean;
+	testPassagePendingId?: string;
 }
 
 /**
@@ -1106,7 +1108,9 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		revealPassageId,
 		revealRequestKey,
 		selectedPassageId,
-		story
+		story,
+		testPassagePending = false,
+		testPassagePendingId
 	} = props;
 	const host = useCoreProjectHost();
 	const storyRef = React.useRef(story);
@@ -2949,8 +2953,12 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				<div className="story-edit-graph-toolbar-group">
 					{onTestPassage && (
 						<Button
-							disabled={!soloSelectedPassage}
+							disabled={!soloSelectedPassage || testPassagePending}
 							icon="tool"
+							loading={
+								!!soloSelectedPassage &&
+								testPassagePendingId === soloSelectedPassage.id
+							}
 							onClick={() =>
 								soloSelectedPassage && onTestPassage(soloSelectedPassage)
 							}
@@ -3180,9 +3188,21 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 								</span>
 							</button>
 							{contextMenu.passageIds.length === 1 && onTestPassage && (
-								<button onClick={handleContextTest} type="button">
-									<TablerIcon icon="tool" />
-									<span>Test from here</span>
+								<button
+									aria-busy={
+										testPassagePendingId === contextMenu.passageIds[0] ||
+										undefined
+									}
+									disabled={testPassagePending}
+									onClick={handleContextTest}
+									type="button"
+								>
+									{testPassagePendingId === contextMenu.passageIds[0] ? (
+										<span className="tw-btn__spin" aria-hidden />
+									) : (
+										<TablerIcon icon="tool" />
+									)}
+									<span>Test From Here</span>
 								</button>
 							)}
 						</>

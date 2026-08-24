@@ -14,6 +14,7 @@ export interface IconButtonProps extends Omit<
 	solid?: boolean;
 	size?: 'sm' | 'md';
 	disabled?: boolean;
+	loading?: boolean;
 	tooltipPosition?: TooltipProps['position'];
 }
 
@@ -26,6 +27,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
 			disabled = false,
 			icon,
 			label,
+			loading = false,
 			size = 'md',
 			solid = false,
 			tooltipPosition,
@@ -42,6 +44,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
 			<>
 				<button
 					aria-label={label}
+					aria-busy={loading || undefined}
 					aria-pressed={ariaPressed ?? (active || undefined)}
 					className={classNames(
 						'tw-iconbtn',
@@ -50,12 +53,16 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
 						size === 'sm' && 'tw-iconbtn--sm',
 						className
 					)}
-					disabled={disabled}
+					disabled={disabled || loading}
 					ref={setButton}
 					type={type}
 					{...rest}
 				>
-					<TablerIcon className="tw-ds-icon" icon={icon} />
+					{loading ? (
+						<span className="tw-btn__spin" aria-hidden />
+					) : (
+						<TablerIcon className="tw-ds-icon" icon={icon} />
+					)}
 				</button>
 				<Tooltip anchor={button} label={label} position={tooltipPosition} />
 			</>

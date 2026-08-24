@@ -66,6 +66,17 @@ describe('design-system primitives', () => {
 		expect(button).toHaveClass('tw-iconbtn--solid');
 	});
 
+	it('renders icon buttons with loading state', () => {
+		const {container} = render(
+			<IconButton icon="tool" label="Test From Here" loading />
+		);
+		const button = screen.getByRole('button', {name: 'Test From Here'});
+
+		expect(button).toBeDisabled();
+		expect(button).toHaveAttribute('aria-busy', 'true');
+		expect(container.querySelector('.tw-btn__spin')).toBeInTheDocument();
+	});
+
 	it('shows icon button tooltips on focus', async () => {
 		jest.useFakeTimers();
 		render(
