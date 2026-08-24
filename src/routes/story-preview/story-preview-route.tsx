@@ -207,6 +207,7 @@ export const StoryPreviewRoute: React.FC = () => {
 					: undefined
 			}
 			passages={storyPreviewPassages(story)}
+			previewTarget={target}
 			startPassageName={startPassage?.name}
 			storyExists={storyExists}
 			storyName={story?.name}

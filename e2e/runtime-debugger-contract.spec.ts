@@ -234,6 +234,194 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 	}
 });
 
+test('bundled exact adapters restart cleanly and remount the same artifact', async ({
+	page
+}) => {
+	test.setTimeout(120_000);
+	const cases = [
+		{
+			adapterId: 'sugarcube-2.37.3',
+			format: 'SugarCube',
+			formatVersion: '2.37.3',
+			passageText: '<<set $initial = 1>>Ready'
+		},
+		{
+			adapterId: 'snowman-1.5.0',
+			format: 'Snowman',
+			formatVersion: '1.5.0'
+		},
+		{
+			adapterId: 'snowman-2.1.1',
+			format: 'Snowman',
+			formatVersion: '2.1.1'
+		},
+		{
+			adapterId: 'chapbook-2.3.1',
+			format: 'Chapbook',
+			formatVersion: '2.3.1'
+		},
+		{
+			adapterId: 'harlowe-3.3.9',
+			format: 'Harlowe',
+			formatVersion: '3.3.9'
+		}
+	];
+
+	for (const item of cases) {
+		const sessionId = `restart-${item.adapterId}`;
+		let frame = await mountStory(page, {
+			...item,
+			formatId: item.adapterId,
+			sessionId
+		});
+		await expect
+			.poll(async () =>
+				(await messages(page)).some(
+					message =>
+						message.type === 'debugger-command-hello' &&
+						message.adapterId === item.adapterId
+				)
+			)
+			.toBe(true);
+
+		await frame.evaluate(adapterId => {
+			const runtime = window as typeof window & {
+				SugarCube?: {State: {variables: Record<string, unknown>}};
+				engine?: {state: {set(name: string, value: unknown): void}};
+				story?: {history: number[]; state: Record<string, unknown>};
+				__restartEventCount?: number;
+			};
+
+			if (adapterId === 'sugarcube-2.37.3') {
+				runtime.SugarCube!.State.variables.transient = 42;
+				runtime.__restartEventCount = 0;
+				document.addEventListener(':enginerestart', () => {
+					runtime.__restartEventCount! += 1;
+				});
+				Function.prototype.toString = () => 'tampered';
+			} else if (adapterId.startsWith('snowman-')) {
+				runtime.story!.state.transient = 42;
+				runtime.story!.history.push(99);
+				location.hash = 'saved-continuation';
+				String.prototype.slice = () => {
+					throw new Error('tampered slice');
+				};
+			} else if (adapterId === 'chapbook-2.3.1') {
+				runtime.engine!.state.set('transient', 42);
+				Function.prototype.toString = () => 'tampered';
+			} else {
+				sessionStorage.setItem('Saved Session', 'stale continuation');
+				try {
+					Object.defineProperty(sessionStorage, 'removeItem', {
+						value: () => {
+							throw new Error('tampered storage');
+						}
+					});
+				} catch {
+					// The browser fallback is intentionally frozen by the bridge.
+				}
+			}
+		}, item.adapterId);
+
+		const requestId = `request-${item.adapterId}`;
+		const marker = `twine-rs-restart:${sessionId}:${requestId}`;
+		await page.locator('#runtime-debugger-story').evaluate(
+			(element, request) => {
+				const iframe = element as HTMLIFrameElement;
+
+				iframe.name = request.marker;
+				iframe.contentWindow!.postMessage(request.message, '*');
+			},
+			{
+				marker,
+				message: {
+					adapterId: item.adapterId,
+					command: 'restart',
+					protocolVersion: 1,
+					requestId,
+					sessionId,
+					source: 'twine.rs.preview.host-command'
+				}
+			}
+		);
+		await expect
+			.poll(
+				async () =>
+					(await messages(page)).findLast(
+						message =>
+							message.type === 'debugger-command-result' &&
+							message.requestId === requestId
+					)?.status,
+				{message: `${item.adapterId} should apply restart`}
+			)
+			.toBe('applied');
+
+		if (item.adapterId === 'sugarcube-2.37.3') {
+			expect(
+				await frame.evaluate(
+					() =>
+						(window as typeof window & {__restartEventCount: number})
+							.__restartEventCount
+				)
+			).toBe(1);
+		} else if (item.adapterId === 'chapbook-2.3.1') {
+			expect(
+				await frame.evaluate(() =>
+					(
+						window as typeof window & {
+							engine: {state: {get(name: string): unknown}};
+						}
+					).engine.state.get('transient')
+				)
+			).toBeUndefined();
+		} else {
+			expect(
+				await frame.evaluate(() => sessionStorage.getItem('Saved Session'))
+			).toBeNull();
+		}
+
+		const helloCount = (await messages(page)).filter(
+			message => message.type === 'debugger-hello'
+		).length;
+		await page.locator('#runtime-debugger-story').evaluate(element => {
+			const iframe = element as HTMLIFrameElement;
+			const artifact = iframe.srcdoc;
+
+			iframe.srcdoc = '';
+			iframe.srcdoc = artifact;
+		});
+		await expect
+			.poll(
+				async () =>
+					(await messages(page)).filter(
+						message => message.type === 'debugger-hello'
+					).length
+			)
+			.toBeGreaterThan(helloCount);
+		frame = page.frames().find(candidate => candidate !== page.mainFrame())!;
+
+		if (
+			item.adapterId === 'sugarcube-2.37.3' ||
+			item.adapterId.startsWith('snowman-')
+		) {
+			await expect
+				.poll(async () => {
+					const snapshot = (await messages(page)).findLast(
+						message =>
+							message.type === 'debugger-snapshot' &&
+							message.adapterId === item.adapterId
+					);
+
+					return snapshot?.storyVariables?.some(
+						variable => variable.name === 'transient'
+					);
+				})
+				.toBe(false);
+		}
+		expect(frame).toBeTruthy();
+	}
+});
+
 test('bundled Chapbook capture leaves hostile live state untouched', async ({
 	page
 }) => {

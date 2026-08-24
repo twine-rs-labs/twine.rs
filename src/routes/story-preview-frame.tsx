@@ -1,7 +1,9 @@
 import * as React from 'react';
+import {IconEraser} from '@tabler/icons-react';
 import {Badge} from '../components/design-system/badge';
 import {Button} from '../components/design-system/button';
 import {SegmentedControl} from '../components/design-system/segmented-control';
+import {ConfirmButton} from '../components/control/confirm-button';
 import {ErrorMessage} from '../components/error/error-message';
 import {pluralizedNoun} from '../util/pluralized-noun';
 import {
@@ -24,7 +26,12 @@ import type {
 	StoryPreviewViewportPreset
 } from './story-preview-debug';
 import type {StoryPreviewDebuggerCapability} from './story-preview-debugger-protocol';
-import {serializeStoryPreviewRuntimeLog} from './story-preview-contract';
+import {STORY_PREVIEW_COMMAND_PROTOCOL_VERSION} from './story-preview-debugger-protocol';
+import type {StoryPreviewRestartResultStatus} from './story-preview-debugger-protocol';
+import {
+	serializeStoryPreviewRuntimeLog,
+	STORY_PREVIEW_COMMAND_SOURCE
+} from './story-preview-contract';
 import './story-preview-frame.css';
 
 export interface StoryPreviewSrcDocContentSource {
@@ -43,6 +50,22 @@ export interface StoryPreviewUrlContentSource {
 
 export type StoryPreviewContentSource =
 	StoryPreviewSrcDocContentSource | StoryPreviewUrlContentSource;
+
+export interface StoryPreviewClearStateOperation {
+	generation: number;
+	operationId: string;
+	url: string;
+}
+
+interface PendingClearStateRun {
+	aborted: boolean;
+	cancel?: (operation: StoryPreviewClearStateOperation) => Promise<void>;
+	cancelPromise?: Promise<void>;
+	cancelRequested: boolean;
+	id: number;
+	operation?: StoryPreviewClearStateOperation;
+	terminal: boolean;
+}
 
 const EMPTY_STORY_PREVIEW_PASSAGES: StoryPreviewPassageRef[] = [];
 
@@ -156,7 +179,8 @@ function RuntimeDebuggerVariables({
 export interface StoryPreviewContentHostProps {
 	bridgeSessionId: string;
 	contentSource: StoryPreviewContentSource;
-	frameRef: React.RefObject<HTMLIFrameElement | null>;
+	frameName?: string;
+	frameRef: React.Ref<HTMLIFrameElement>;
 	onLoad?: () => void;
 	reloadKey: number;
 	staging?: boolean;
@@ -173,6 +197,7 @@ export const StoryPreviewContentHost: React.FC<
 > = ({
 	bridgeSessionId,
 	contentSource,
+	frameName,
 	frameRef,
 	onLoad,
 	reloadKey,
@@ -203,6 +228,7 @@ export const StoryPreviewContentHost: React.FC<
 			<iframe
 				className="story-preview-route__frame"
 				key={`${bridgeSessionId}:${reloadKey}`}
+				name={frameName}
 				ref={frameRef}
 				onLoad={onLoad}
 				sandbox={
@@ -229,6 +255,13 @@ export interface StoryPreviewFrameProps {
 	 */
 	html?: string;
 	missingStoryMessage: string;
+	onBeginClearState?: () => Promise<StoryPreviewClearStateOperation>;
+	onCancelClearState?: (
+		operation: StoryPreviewClearStateOperation
+	) => Promise<void>;
+	onCompleteClearState?: (
+		operation: StoryPreviewClearStateOperation
+	) => Promise<void>;
 	onContentLoad?: () => void;
 	onCopyRuntimeLog?: (text: string) => void | Promise<void>;
 	onRevealGraph?: (passageId?: string) => void;
@@ -238,6 +271,8 @@ export interface StoryPreviewFrameProps {
 	onTestCurrentPassage?: (passageId: string) => void;
 	onTestFromStart?: () => void;
 	passages?: StoryPreviewPassageRef[];
+	previewTarget?: 'play' | 'proof' | 'test';
+	runtimeControlsBusy?: boolean;
 	stagedContentSource?: StoryPreviewUrlContentSource;
 	stagedPassages?: StoryPreviewPassageRef[];
 	stagedTitle?: string;
@@ -264,6 +299,9 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		error,
 		html,
 		missingStoryMessage,
+		onBeginClearState,
+		onCancelClearState,
+		onCompleteClearState,
 		onContentLoad,
 		onCopyRuntimeLog,
 		onRevealGraph,
@@ -273,6 +311,8 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		onTestCurrentPassage,
 		onTestFromStart,
 		passages = EMPTY_STORY_PREVIEW_PASSAGES,
+		previewTarget = 'play',
+		runtimeControlsBusy = false,
 		stagedContentSource,
 		stagedPassages = EMPTY_STORY_PREVIEW_PASSAGES,
 		stagedTitle,
@@ -315,8 +355,20 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	const [copyState, setCopyState] = React.useState<
 		'idle' | 'pending' | 'success' | 'error'
 	>('idle');
+	const [contentMounted, setContentMounted] = React.useState(true);
+	const [frameName, setFrameName] = React.useState('');
+	const [cleanupOperation, setCleanupOperation] =
+		React.useState<StoryPreviewClearStateOperation>();
+	const [runtimeControlBusy, setRuntimeControlBusy] = React.useState<
+		'clear-state' | 'restart'
+	>();
+	const [runtimeControlNotice, setRuntimeControlNotice] = React.useState<{
+		message: string;
+		tone: 'error' | 'success' | 'warn';
+	}>();
 	const debuggerPanelId = React.useId();
 	const previewFrame = React.useRef<HTMLIFrameElement>(null);
+	const cleanupFrame = React.useRef<HTMLIFrameElement>(null);
 	const stagedPreviewFrame = React.useRef<HTMLIFrameElement>(null);
 	const passageLookup = React.useMemo(
 		() => createStoryPreviewPassageLookup(passages),
@@ -332,6 +384,33 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	const logRevisionRef = React.useRef(0);
 	const previousLogsRef = React.useRef(runtimeModel.logs);
 	const passageLookupRef = React.useRef(passageLookup);
+	const preserveDebuggerOnRemountRef = React.useRef(false);
+	const detachFrameResolverRef = React.useRef<(() => void) | undefined>(
+		undefined
+	);
+	const pendingRestartRef = React.useRef<
+		| {
+				adapterId: string;
+				frameName: string;
+				requestId: string;
+				timeout: ReturnType<typeof setTimeout>;
+		  }
+		| undefined
+	>(undefined);
+	const pendingCleanupAckRef = React.useRef<
+		| {
+				operationId: string;
+				reject: (error: Error) => void;
+				resolve: () => void;
+				runId: number;
+				timeout: ReturnType<typeof setTimeout>;
+		  }
+		| undefined
+	>(undefined);
+	const clearStateRunIdRef = React.useRef(0);
+	const pendingClearStateRunRef = React.useRef<
+		PendingClearStateRun | undefined
+	>(undefined);
 	const stagedRuntimeRef = React.useRef<
 		| {
 				bridgeSessionId: string;
@@ -388,9 +467,101 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	}, [contentSource]);
 	const publishedHtmlBytes = publishedMetadata?.htmlBytes;
 	const publishedStoryDataCount = publishedMetadata?.storyDataCount;
+	const restartAvailable =
+		runtimeModel.debugger.commands?.capabilities.includes('restart') === true;
+	const controlsDisabled =
+		runtimeControlBusy !== undefined ||
+		runtimeControlsBusy ||
+		testCommandsBusy ||
+		!!stagedContentSource;
+
+	const setPreviewFrameRef = React.useCallback(
+		(element: HTMLIFrameElement | null) => {
+			previewFrame.current = element;
+			if (!element) {
+				const resolve = detachFrameResolverRef.current;
+
+				detachFrameResolverRef.current = undefined;
+				resolve?.();
+			}
+		},
+		[]
+	);
+	const setCleanupFrameRef = React.useCallback(
+		(element: HTMLIFrameElement | null) => {
+			cleanupFrame.current = element;
+		},
+		[]
+	);
+
+	const detachPreviewFrame = React.useCallback(() => {
+		if (!previewFrame.current) {
+			setContentMounted(false);
+			return Promise.resolve();
+		}
+
+		return new Promise<void>(resolve => {
+			detachFrameResolverRef.current = resolve;
+			setContentMounted(false);
+		});
+	}, []);
+
+	const requestClearStateCancellation = React.useCallback(
+		(run: PendingClearStateRun) => {
+			const cancel = run.cancel;
+			const operation = run.operation;
+
+			if (run.terminal || run.cancelRequested || !operation || !cancel) {
+				return run.cancelPromise ?? Promise.resolve();
+			}
+
+			run.cancelRequested = true;
+			run.cancelPromise = Promise.resolve()
+				.then(() => cancel(operation))
+				.catch(() => undefined);
+			return run.cancelPromise;
+		},
+		[]
+	);
+
+	const abortClearStateRun = React.useCallback(
+		(run: PendingClearStateRun, reason: Error) => {
+			if (!run.aborted) {
+				run.aborted = true;
+				const pendingAck = pendingCleanupAckRef.current;
+
+				if (pendingAck?.runId === run.id) {
+					clearTimeout(pendingAck.timeout);
+					pendingCleanupAckRef.current = undefined;
+					pendingAck.reject(reason);
+				}
+				if (pendingClearStateRunRef.current === run) {
+					pendingClearStateRunRef.current = undefined;
+				}
+			}
+
+			void requestClearStateCancellation(run);
+		},
+		[requestClearStateCancellation]
+	);
+
+	const remountPreviewFrame = React.useCallback(
+		(options: {frameName?: string; preserveDebugger?: boolean} = {}) => {
+			preserveDebuggerOnRemountRef.current = options.preserveDebugger === true;
+			setCleanupOperation(undefined);
+			setFrameName(options.frameName ?? '');
+			setContentMounted(true);
+			setReloadKey(current => current + 1);
+		},
+		[]
+	);
 
 	React.useLayoutEffect(() => {
-		setDebuggerExpanded(false);
+		if (preserveDebuggerOnRemountRef.current) {
+			preserveDebuggerOnRemountRef.current = false;
+		} else {
+			setDebuggerExpanded(false);
+		}
 		logRevisionRef.current += 1;
 		if (!copyPendingRef.current) {
 			setCopyState('idle');
@@ -457,6 +628,212 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 			});
 	}, [onCopyRuntimeLog, runtimeLogs]);
 
+	const restartStory = React.useCallback(() => {
+		const commands = runtimeModel.debugger.commands;
+		const frame = previewFrame.current;
+
+		if (
+			controlsDisabled ||
+			!restartAvailable ||
+			!commands ||
+			!frame?.contentWindow ||
+			pendingRestartRef.current
+		) {
+			return;
+		}
+
+		const requestId =
+			globalThis.crypto?.randomUUID?.() ??
+			`${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const restartFrameName = `twine-rs-restart:${bridgeSessionIdRef.current}:${requestId}`;
+		const timeout = setTimeout(() => {
+			const pending = pendingRestartRef.current;
+
+			if (!pending || pending.requestId !== requestId) {
+				return;
+			}
+
+			pendingRestartRef.current = undefined;
+			setRuntimeControlBusy(undefined);
+			setRuntimeControlNotice({
+				message:
+					'Restart timed out. The current artifact was remounted as a precaution.',
+				tone: 'warn'
+			});
+			remountPreviewFrame({
+				frameName: restartFrameName,
+				preserveDebugger: true
+			});
+		}, 2000);
+
+		pendingRestartRef.current = {
+			adapterId: commands.adapterId,
+			frameName: restartFrameName,
+			requestId,
+			timeout
+		};
+		setRuntimeControlBusy('restart');
+		setRuntimeControlNotice(undefined);
+		setFrameName(restartFrameName);
+		frame.name = restartFrameName;
+
+		try {
+			frame.contentWindow.postMessage(
+				{
+					adapterId: commands.adapterId,
+					command: 'restart',
+					protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
+					requestId,
+					sessionId: bridgeSessionIdRef.current,
+					source: STORY_PREVIEW_COMMAND_SOURCE
+				},
+				'*'
+			);
+		} catch {
+			clearTimeout(timeout);
+			pendingRestartRef.current = undefined;
+			setRuntimeControlBusy(undefined);
+			setFrameName('');
+			frame.name = '';
+			setRuntimeControlNotice({
+				message: 'Restart failed before changing the runtime.',
+				tone: 'error'
+			});
+		}
+	}, [
+		controlsDisabled,
+		remountPreviewFrame,
+		restartAvailable,
+		runtimeModel.debugger.commands
+	]);
+
+	const clearStoryState = React.useCallback(async () => {
+		if (
+			controlsDisabled ||
+			previewTarget === 'proof' ||
+			!contentSource ||
+			pendingRestartRef.current
+		) {
+			return;
+		}
+
+		setRuntimeControlBusy('clear-state');
+		setRuntimeControlNotice(undefined);
+		const run: PendingClearStateRun = {
+			aborted: false,
+			cancel: onCancelClearState,
+			cancelRequested: false,
+			id: ++clearStateRunIdRef.current,
+			terminal: false
+		};
+		pendingClearStateRunRef.current = run;
+		const isActive = () =>
+			!run.aborted && pendingClearStateRunRef.current === run;
+
+		try {
+			const begin = onBeginClearState?.();
+			const detached = detachPreviewFrame();
+
+			if (begin) {
+				const operation = await begin;
+
+				run.operation = operation;
+				if (!isActive()) {
+					await requestClearStateCancellation(run);
+					return;
+				}
+				await detached;
+				if (!isActive()) {
+					await requestClearStateCancellation(run);
+					return;
+				}
+				if (!onCompleteClearState || !onCancelClearState) {
+					throw new Error('Clear State lifecycle is unavailable.');
+				}
+
+				await new Promise<void>((resolve, reject) => {
+					const timeout = setTimeout(() => {
+						if (
+							pendingCleanupAckRef.current?.runId === run.id &&
+							pendingCleanupAckRef.current.operationId === operation.operationId
+						) {
+							pendingCleanupAckRef.current = undefined;
+						}
+						reject(new Error('State cleanup page did not respond in time.'));
+					}, 5000);
+
+					pendingCleanupAckRef.current = {
+						operationId: operation.operationId,
+						reject,
+						resolve,
+						runId: run.id,
+						timeout
+					};
+					setCleanupOperation(operation);
+				});
+				if (!isActive()) {
+					return;
+				}
+
+				setCleanupOperation(undefined);
+				await onCompleteClearState(operation);
+				if (!isActive()) {
+					return;
+				}
+				run.terminal = true;
+			} else {
+				await detached;
+				if (!isActive()) {
+					return;
+				}
+			}
+
+			setRuntimeControlNotice({
+				message: 'Story state cleared.',
+				tone: 'success'
+			});
+			remountPreviewFrame({preserveDebugger: true});
+		} catch {
+			if (!isActive()) {
+				return;
+			}
+			const pendingAck = pendingCleanupAckRef.current;
+
+			if (pendingAck?.runId === run.id) {
+				clearTimeout(pendingAck.timeout);
+				pendingCleanupAckRef.current = undefined;
+			}
+			setCleanupOperation(undefined);
+			await requestClearStateCancellation(run);
+			if (!isActive()) {
+				return;
+			}
+			setRuntimeControlNotice({
+				message:
+					'Clear State could not be fully confirmed. The current artifact was remounted.',
+				tone: 'warn'
+			});
+			remountPreviewFrame({preserveDebugger: true});
+		} finally {
+			if (pendingClearStateRunRef.current === run) {
+				pendingClearStateRunRef.current = undefined;
+				if (!run.aborted) {
+					setRuntimeControlBusy(undefined);
+				}
+			}
+		}
+	}, [
+		contentSource,
+		controlsDisabled,
+		detachPreviewFrame,
+		onBeginClearState,
+		onCancelClearState,
+		onCompleteClearState,
+		previewTarget,
+		remountPreviewFrame,
+		requestClearStateCancellation
+	]);
+
 	React.useLayoutEffect(() => {
 		const stagedRuntime = stagedRuntimeRef.current;
 
@@ -469,12 +846,63 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		}
 	}, [bridgeSessionId, stagedContentSource]);
 
+	React.useLayoutEffect(() => {
+		const pendingRestart = pendingRestartRef.current;
+		const pendingClearState = pendingClearStateRunRef.current;
+
+		if (pendingRestart) clearTimeout(pendingRestart.timeout);
+		if (pendingClearState) {
+			abortClearStateRun(
+				pendingClearState,
+				new Error('Preview identity changed during Clear State.')
+			);
+		}
+		pendingRestartRef.current = undefined;
+		setCleanupOperation(undefined);
+		setContentMounted(true);
+		setFrameName('');
+		setRuntimeControlBusy(undefined);
+		setRuntimeControlNotice(undefined);
+	}, [abortClearStateRun, bridgeSessionId, sourceIdentity]);
+
+	React.useLayoutEffect(
+		() => () => {
+			if (pendingRestartRef.current) {
+				clearTimeout(pendingRestartRef.current.timeout);
+			}
+			if (pendingClearStateRunRef.current) {
+				abortClearStateRun(
+					pendingClearStateRunRef.current,
+					new Error('Preview unmounted during Clear State.')
+				);
+			}
+		},
+		[abortClearStateRun]
+	);
+
 	React.useEffect(() => {
 		onRuntimeModelChange?.(runtimeModel);
 	}, [onRuntimeModelChange, runtimeModel]);
 
 	React.useEffect(() => {
 		function handleMessage(event: MessageEvent) {
+			const cleanupAck = pendingCleanupAckRef.current;
+			const cleanupData = event.data;
+
+			if (
+				cleanupAck &&
+				pendingClearStateRunRef.current?.id === cleanupAck.runId &&
+				!pendingClearStateRunRef.current.aborted &&
+				event.source === cleanupFrame.current?.contentWindow &&
+				cleanupData?.type === 'twine-preview-state-cleared' &&
+				cleanupData.operationId === cleanupAck.operationId
+			) {
+				clearTimeout(cleanupAck.timeout);
+				pendingCleanupAckRef.current = undefined;
+				cleanupAck.resolve();
+				return;
+			}
+
 			const message = normalizeStoryPreviewBridgeMessage(event.data);
 
 			if (!message) {
@@ -485,6 +913,61 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 				event.source === previewFrame.current?.contentWindow &&
 				message.sessionId === bridgeSessionIdRef.current
 			) {
+				if (message.type === 'debugger-command-result') {
+					const pending = pendingRestartRef.current;
+
+					if (
+						!pending ||
+						message.command !== 'restart' ||
+						message.requestId !== pending.requestId ||
+						message.adapterId !== pending.adapterId ||
+						message.protocolVersion !== STORY_PREVIEW_COMMAND_PROTOCOL_VERSION
+					) {
+						return;
+					}
+
+					clearTimeout(pending.timeout);
+					pendingRestartRef.current = undefined;
+					setRuntimeControlBusy(undefined);
+					const status = message.status as StoryPreviewRestartResultStatus;
+
+					if (status === 'applied') {
+						setRuntimeControlNotice({
+							message: 'Story restarted from its launch passage.',
+							tone: 'success'
+						});
+						remountPreviewFrame({
+							frameName: pending.frameName,
+							preserveDebugger: true
+						});
+						return;
+					}
+
+					if (status === 'indeterminate') {
+						setRuntimeControlNotice({
+							message:
+								'Restart could not be confirmed. The current artifact was remounted.',
+							tone: 'warn'
+						});
+						remountPreviewFrame({
+							frameName: pending.frameName,
+							preserveDebugger: true
+						});
+						return;
+					}
+
+					setFrameName('');
+					if (previewFrame.current) previewFrame.current.name = '';
+					setRuntimeControlNotice({
+						message:
+							status === 'unavailable'
+								? 'Restart is no longer available for this runtime.'
+								: 'Restart failed before changing the runtime.',
+						tone: 'error'
+					});
+					return;
+				}
+
 				dispatchRuntime({
 					message,
 					now: Date.now(),
@@ -516,7 +999,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		setMessageListenerReady(true);
 
 		return () => window.removeEventListener('message', handleMessage);
-	}, []);
+	}, [remountPreviewFrame]);
 
 	if (error) {
 		return <ErrorMessage>{error.message}</ErrorMessage>;
@@ -567,7 +1050,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 				<div className="story-preview-route__debug-actions">
 					<Button
 						disabled={
-							testCommandsBusy || !currentPassageId || !onTestCurrentPassage
+							controlsDisabled || !currentPassageId || !onTestCurrentPassage
 						}
 						icon="player-play"
 						onClick={() =>
@@ -579,7 +1062,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 						Test Current
 					</Button>
 					<Button
-						disabled={testCommandsBusy || !onTestFromStart}
+						disabled={controlsDisabled || !onTestFromStart}
 						icon="tool"
 						onClick={onTestFromStart}
 						size="sm"
@@ -604,11 +1087,15 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 						Graph
 					</Button>
 					<Button
-						disabled={!contentSource || !!stagedContentSource}
+						disabled={
+							!contentSource ||
+							!!stagedContentSource ||
+							runtimeControlBusy !== undefined
+						}
 						icon="refresh"
 						onClick={() => {
-							setDebuggerExpanded(false);
-							setReloadKey(current => current + 1);
+							setRuntimeControlNotice(undefined);
+							remountPreviewFrame();
 						}}
 						size="sm"
 					>
@@ -736,6 +1223,54 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 									</p>
 								)}
 							</section>
+							{previewTarget !== 'proof' && (
+								<section className="story-preview-route__debugger-section story-preview-route__runtime-controls">
+									<header>
+										<h2>Runtime Controls</h2>
+										<span>
+											{runtimeControlBusy === 'restart'
+												? 'Restarting'
+												: runtimeControlBusy === 'clear-state'
+													? 'Clearing state'
+													: 'Ready'}
+										</span>
+									</header>
+									<div className="story-preview-route__runtime-control-actions">
+										{restartAvailable && (
+											<Button
+												disabled={controlsDisabled}
+												icon="refresh"
+												onClick={restartStory}
+												size="sm"
+											>
+												Restart
+											</Button>
+										)}
+										<ConfirmButton
+											confirmLabel="Clear State"
+											confirmVariant="danger"
+											disabled={controlsDisabled}
+											icon={<IconEraser />}
+											label="Clear State"
+											onConfirm={() => void clearStoryState()}
+											prompt="Clear all stored runtime data and cookies for this preview? Saved progress and format preferences in this preview will be removed. Other previews are not affected."
+										/>
+									</div>
+									{runtimeControlNotice && (
+										<p
+											className="story-preview-route__runtime-control-notice"
+											data-tone={runtimeControlNotice.tone}
+											role={
+												runtimeControlNotice.tone === 'success'
+													? 'status'
+													: 'alert'
+											}
+										>
+											{runtimeControlNotice.message}
+										</p>
+									)}
+								</section>
+							)}
 							{!debuggerHello ? (
 								<p className="story-preview-route__debugger-waiting">
 									Waiting for debugger adapter negotiation.
@@ -851,31 +1386,51 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 				</>
 			)}
 			{contentSource && messageListenerReady ? (
-				<>
-					<StoryPreviewContentHost
-						bridgeSessionId={bridgeSessionId}
-						contentSource={contentSource}
-						frameRef={previewFrame}
-						key={bridgeSessionId}
-						onLoad={onContentLoad}
-						reloadKey={reloadKey}
-						title={title}
-						viewportPreset={viewportPreset}
-					/>
-					{stagedContentSource && (
+				contentMounted ? (
+					<>
 						<StoryPreviewContentHost
-							bridgeSessionId={stagedContentSource.bridgeSessionId}
-							contentSource={stagedContentSource}
-							frameRef={stagedPreviewFrame}
-							key={stagedContentSource.bridgeSessionId}
-							onLoad={onStagedContentLoad}
+							bridgeSessionId={bridgeSessionId}
+							contentSource={contentSource}
+							frameName={frameName}
+							frameRef={setPreviewFrameRef}
+							key={bridgeSessionId}
+							onLoad={onContentLoad}
 							reloadKey={reloadKey}
-							staging
-							title={stagedTitle ?? `${title} candidate`}
+							title={title}
 							viewportPreset={viewportPreset}
 						/>
-					)}
-				</>
+						{stagedContentSource && (
+							<StoryPreviewContentHost
+								bridgeSessionId={stagedContentSource.bridgeSessionId}
+								contentSource={stagedContentSource}
+								frameRef={stagedPreviewFrame}
+								key={stagedContentSource.bridgeSessionId}
+								onLoad={onStagedContentLoad}
+								reloadKey={reloadKey}
+								staging
+								title={stagedTitle ?? `${title} candidate`}
+								viewportPreset={viewportPreset}
+							/>
+						)}
+					</>
+				) : cleanupOperation ? (
+					<div
+						className="story-preview-route__frame-shell"
+						data-viewport={viewportPreset}
+					>
+						<iframe
+							className="story-preview-route__frame"
+							ref={setCleanupFrameRef}
+							sandbox="allow-same-origin allow-scripts"
+							src={cleanupOperation.url}
+							title="Clearing preview state"
+						/>
+					</div>
+				) : (
+					<div className="story-preview-route__loading" role="status">
+						Preparing to clear story state...
+					</div>
+				)
 			) : (
 				<div className="story-preview-route__loading" role="status">
 					Loading story...

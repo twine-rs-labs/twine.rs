@@ -190,6 +190,12 @@ export interface NativeStoryPreviewOwnerCommand {
 	storyId: string;
 }
 
+export interface NativeStoryPreviewClearStateOperation {
+	generation: number;
+	operationId: string;
+	url: string;
+}
+
 export interface NativeStoryPreviewReplacement {
 	descriptor: NativeStoryPreviewDescriptor;
 	generation: number;

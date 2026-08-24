@@ -42,7 +42,31 @@ interface PreviewTestWindow extends Window {
 			}>;
 		}>;
 	};
-	twineStoryPreview?: Record<string, unknown>;
+	twineStoryPreview?: {
+		beginClearState(generation: number): Promise<{
+			generation: number;
+			operationId: string;
+			url: string;
+		}>;
+		command(command: {generation: number; type: 'revealSource'}): Promise<{
+			command: 'revealSource';
+			generation: number;
+			message?: string;
+			status: 'busy' | 'error' | 'success';
+		}>;
+		getInitialState(): Promise<{
+			descriptor: {generation: number};
+			url: string;
+		}>;
+		onCommandResult(
+			callback: (result: {
+				command: 'revealSource';
+				generation: number;
+				message?: string;
+				status: 'error' | 'success';
+			}) => void
+		): () => void;
+	};
 }
 
 function executableName() {
@@ -258,6 +282,96 @@ function storyFrame(preview: Page): FrameLocator {
 
 function storyIframe(preview: Page) {
 	return preview.locator(activeStoryIframeSelector);
+}
+
+async function reloadDuringPendingClearStateBegin(preview: Page) {
+	await preview.evaluate(async () => {
+		const api = (window as PreviewTestWindow).twineStoryPreview;
+
+		if (!api) {
+			throw new Error('The preview bridge is unavailable.');
+		}
+		const initial = await api.getInitialState();
+
+		void api
+			.beginClearState(initial.descriptor.generation)
+			.catch(() => undefined);
+		// IPC invokes from this renderer are ordered. Once this response arrives,
+		// main has entered the preceding begin handler and acquired its lock.
+		await api.getInitialState();
+	});
+	await preview.reload({waitUntil: 'domcontentloaded'});
+	await expect(preview.locator('.story-preview-route')).toBeVisible();
+}
+
+async function reloadDuringPendingClearStateAcknowledgement(preview: Page) {
+	await preview.evaluate(async selector => {
+		const api = (window as PreviewTestWindow).twineStoryPreview;
+		const frame = document.querySelector(selector);
+
+		if (!api || !frame) {
+			throw new Error('The preview bridge or story frame is unavailable.');
+		}
+		const initial = await api.getInitialState();
+		const beginning = api.beginClearState(initial.descriptor.generation);
+
+		frame.remove();
+		await beginning;
+	}, activeStoryIframeSelector);
+	await preview.reload({waitUntil: 'domcontentloaded'});
+	await expect(preview.locator('.story-preview-route')).toBeVisible();
+}
+
+async function revealSourceThroughPreviewBridge(preview: Page) {
+	return preview.evaluate(async () => {
+		const api = (window as PreviewTestWindow).twineStoryPreview;
+
+		if (!api) {
+			throw new Error('The preview bridge is unavailable.');
+		}
+		const initial = await api.getInitialState();
+
+		return new Promise<{message?: string; status: 'error' | 'success'}>(
+			(resolve, reject) => {
+				const timeout = setTimeout(() => {
+					unsubscribe();
+					reject(new Error('The preview command did not complete in time.'));
+				}, 5000);
+				const unsubscribe = api.onCommandResult(result => {
+					if (
+						result.command !== 'revealSource' ||
+						result.generation !== initial.descriptor.generation
+					) {
+						return;
+					}
+
+					clearTimeout(timeout);
+					unsubscribe();
+					resolve({message: result.message, status: result.status});
+				});
+
+				void api
+					.command({
+						generation: initial.descriptor.generation,
+						type: 'revealSource'
+					})
+					.then(result => {
+						if (result.status === 'busy') {
+							return;
+						}
+
+						clearTimeout(timeout);
+						unsubscribe();
+						resolve({message: result.message, status: result.status});
+					})
+					.catch(error => {
+						clearTimeout(timeout);
+						unsubscribe();
+						reject(error);
+					});
+			}
+		);
+	});
 }
 
 async function expectManagedStoryTransition(
@@ -1087,7 +1201,10 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 
 		expect(shellCapabilities).toEqual({
 			previewBridge: [
+				'beginClearState',
+				'cancelClearState',
 				'command',
+				'completeClearState',
 				'copyText',
 				'frameLoaded',
 				'getInitialState',
@@ -1611,6 +1728,21 @@ test('copied assets, storage, package origins, cleanup, and protocol lifetime st
 				.evaluate(() => localStorage.getItem('colliding-key'))
 		).toBe('two');
 
+		await reloadDuringPendingClearStateBegin(previewOne);
+		await expectRenderedText(previewOne, 'Asset preview one.');
+		await reloadDuringPendingClearStateAcknowledgement(previewOne);
+		await expectRenderedText(previewOne, 'Asset preview one.');
+		expect(await revealSourceThroughPreviewBridge(previewOne)).toEqual({
+			message: undefined,
+			status: 'success'
+		});
+		// Restore the second project as the editor's active context after proving
+		// the recovered first preview can issue an owner command.
+		expect(await revealSourceThroughPreviewBridge(previewTwo)).toEqual({
+			message: undefined,
+			status: 'success'
+		});
+
 		await previewOne.getByRole('button', {name: 'Reload'}).click();
 		await expectRenderedText(previewOne, 'Asset preview one.');
 		expect((await previewOrigin(previewOne)).origin).toBe(packageOne.origin);
@@ -1627,6 +1759,164 @@ test('copied assets, storage, package origins, cleanup, and protocol lifetime st
 				.locator('body')
 				.evaluate(() => localStorage.getItem('colliding-key'))
 		).toBe('two');
+
+		await storyFrame(previewOne)
+			.locator('body')
+			.evaluate(() => {
+				sessionStorage.setItem('Saved Session', 'stale continuation');
+				(
+					window as typeof window & {__twineRsRestartProbe?: string}
+				).__twineRsRestartProbe = 'old runtime';
+			});
+		await previewOne.getByRole('button', {name: 'Debugger'}).click();
+		await previewOne.getByRole('button', {name: 'Restart'}).click();
+		await expect
+			.poll(async () => {
+				try {
+					return await storyFrame(previewOne)
+						.locator('body')
+						.evaluate(
+							() =>
+								(
+									window as typeof window & {
+										__twineRsRestartProbe?: string;
+									}
+								).__twineRsRestartProbe ?? 'new runtime'
+						);
+				} catch {
+					return 'remounting';
+				}
+			})
+			.toBe('new runtime');
+		await expect(
+			previewOne.getByText('Story restarted from its launch passage.', {
+				exact: true
+			})
+		).toBeVisible();
+		expect(await previewOrigin(previewOne)).toEqual(packageOne);
+		expect(
+			await storyFrame(previewOne)
+				.locator('body')
+				.evaluate(() => sessionStorage.getItem('Saved Session'))
+		).not.toBe('stale continuation');
+		await previewOne.getByRole('button', {name: 'Debugger'}).click();
+
+		for (const [preview, value] of [
+			[previewOne, 'one'],
+			[previewTwo, 'two']
+		] as const) {
+			await storyFrame(preview)
+				.locator('body')
+				.evaluate(async (_, storedValue) => {
+					sessionStorage.setItem('clear-session', storedValue);
+					document.cookie = `clear-cookie=${storedValue}; path=/`;
+					await new Promise<void>((resolve, reject) => {
+						const request = indexedDB.open('clear-state-database', 1);
+
+						request.onupgradeneeded = () =>
+							request.result.createObjectStore('values');
+						request.onerror = () => reject(request.error);
+						request.onsuccess = () => {
+							const transaction = request.result.transaction(
+								'values',
+								'readwrite'
+							);
+
+							transaction.objectStore('values').put(storedValue, 'value');
+							transaction.oncomplete = () => {
+								request.result.close();
+								resolve();
+							};
+							transaction.onerror = () => reject(transaction.error);
+						};
+					});
+					const cache = await caches.open('clear-state-cache');
+
+					await cache.put(
+						new Request('https://twine.rs.invalid/clear-state-value'),
+						new Response(storedValue)
+					);
+				}, value);
+		}
+		// Electron 43 does not treat the custom preview scheme as cookieable,
+		// even though it is registered as a standard secure scheme. Main still
+		// retains exact-domain cookie cleanup for platform behavior changes.
+		expect(
+			await storyFrame(previewOne)
+				.locator('body')
+				.evaluate(() => document.cookie)
+		).toBe('');
+		expect(
+			await storyFrame(previewTwo)
+				.locator('body')
+				.evaluate(() => document.cookie)
+		).toBe('');
+		await storyFrame(previewOne)
+			.locator('body')
+			.evaluate(() => {
+				const writeLateState = () => {
+					localStorage.setItem('late-clear-writer', 'should-be-cleared');
+					sessionStorage.setItem('late-clear-writer', 'should-be-cleared');
+				};
+
+				addEventListener('pagehide', writeLateState);
+				addEventListener('unload', writeLateState);
+			});
+
+		await previewOne.getByRole('button', {name: 'Debugger'}).click();
+		await previewOne.getByRole('button', {name: 'Clear State'}).click();
+		await previewOne
+			.getByRole('dialog')
+			.getByRole('button', {name: 'Clear State'})
+			.click();
+		await expectRenderedText(previewOne, 'Asset preview one.');
+		await expect(
+			previewOne.getByText('Story state cleared.', {exact: true})
+		).toBeVisible();
+		expect(await previewOrigin(previewOne)).toEqual(packageOne);
+		expect(
+			await storyFrame(previewOne)
+				.locator('body')
+				.evaluate(async () => ({
+					cacheNames: await caches.keys(),
+					cookies: document.cookie,
+					databaseNames: (await indexedDB.databases()).map(
+						database => database.name
+					),
+					lateLocal: localStorage.getItem('late-clear-writer'),
+					lateSession: sessionStorage.getItem('late-clear-writer'),
+					local: localStorage.getItem('colliding-key'),
+					session: sessionStorage.getItem('clear-session')
+				}))
+		).toEqual({
+			cacheNames: [],
+			cookies: '',
+			databaseNames: [],
+			lateLocal: null,
+			lateSession: null,
+			local: null,
+			session: null
+		});
+		expect((await previewOrigin(previewTwo)).origin).toBe(packageTwo.origin);
+		expect(
+			await storyFrame(previewTwo)
+				.locator('body')
+				.evaluate(async () => ({
+					cacheNames: await caches.keys(),
+					cookies: document.cookie,
+					databaseNames: (await indexedDB.databases()).map(
+						database => database.name
+					),
+					local: localStorage.getItem('colliding-key'),
+					session: sessionStorage.getItem('clear-session')
+				}))
+		).toEqual({
+			cacheNames: ['clear-state-cache'],
+			cookies: '',
+			databaseNames: ['clear-state-database'],
+			local: 'two',
+			session: 'two'
+		});
 
 		await previewOne.getByRole('button', {name: 'Test From Start'}).click();
 		const replacement = await waitForReplacement(

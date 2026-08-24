@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-08-03
+Last verified: 2026-08-23
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -41,7 +41,9 @@ migration.
   `twine-preview:` origins, in-place Test Current/Test From Start rebuilding,
   owner-bound cleanup, and the shared browser debug surface for current
   passage, console/runtime failures, viewport presets, reload, Source, and
-  Graph. Packaged acceptance covers Test From Here, Paperthin Proof, copied
+  Graph. Play and Test add negotiated exact-version Restart plus a confirmed,
+  origin-isolated Clear State transaction that remounts the same built artifact;
+  Proof remains read-only. Packaged acceptance covers Test From Here, Paperthin Proof, copied
   assets and byte ranges, per-origin storage and window isolation, cleanup and
   protocol lifetime, and current-passage identity across bundled Chapbook,
   Harlowe, Snowman, and SugarCube.

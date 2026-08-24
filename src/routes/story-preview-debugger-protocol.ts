@@ -1,4 +1,20 @@
 export const STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION = 1;
+export const STORY_PREVIEW_COMMAND_PROTOCOL_VERSION = 1;
+
+export const STORY_PREVIEW_COMMAND_CAPABILITIES = ['restart'] as const;
+
+export type StoryPreviewCommandCapability =
+	(typeof STORY_PREVIEW_COMMAND_CAPABILITIES)[number];
+
+export const STORY_PREVIEW_RESTART_RESULT_STATUSES = [
+	'applied',
+	'unavailable',
+	'failed',
+	'indeterminate'
+] as const;
+
+export type StoryPreviewRestartResultStatus =
+	(typeof STORY_PREVIEW_RESTART_RESULT_STATUSES)[number];
 
 export const STORY_PREVIEW_DEBUGGER_CAPABILITIES = [
 	'currentPassage',
@@ -30,6 +46,9 @@ export type StoryPreviewDebuggerAdapterId =
 
 export type StoryPreviewDebuggerCaptureHandler =
 	'current-only' | 'snowman' | 'sugarcube';
+
+export type StoryPreviewRestartHandler =
+	'chapbook' | 'harlowe' | 'snowman' | 'sugarcube';
 
 export interface StoryPreviewDebuggerAdapterDescriptor {
 	capabilities: readonly StoryPreviewDebuggerCapability[];
@@ -112,6 +131,39 @@ export const STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS = {
 	Exclude<StoryPreviewDebuggerAdapterId, 'generic'>,
 	StoryPreviewDebuggerAdapterRegistration
 >;
+
+/**
+ * Runtime mutation support is deliberately independent of read reliability.
+ * Only these exact bundled tuples may advertise Restart.
+ */
+export const STORY_PREVIEW_RESTART_ADAPTER_REGISTRATIONS = {
+	'sugarcube-2.37.3': 'sugarcube',
+	'snowman-1.5.0': 'snowman',
+	'snowman-2.1.1': 'snowman',
+	'chapbook-2.3.1': 'chapbook',
+	'harlowe-3.3.9': 'harlowe'
+} as const satisfies Record<
+	Exclude<StoryPreviewDebuggerAdapterId, 'generic'>,
+	StoryPreviewRestartHandler
+>;
+
+export function storyPreviewRestartHandler(
+	id: unknown
+): StoryPreviewRestartHandler | undefined {
+	if (
+		typeof id !== 'string' ||
+		!Object.prototype.hasOwnProperty.call(
+			STORY_PREVIEW_RESTART_ADAPTER_REGISTRATIONS,
+			id
+		)
+	) {
+		return undefined;
+	}
+
+	return STORY_PREVIEW_RESTART_ADAPTER_REGISTRATIONS[
+		id as keyof typeof STORY_PREVIEW_RESTART_ADAPTER_REGISTRATIONS
+	];
+}
 
 function descriptorFromRegistration(
 	registration: StoryPreviewDebuggerAdapterRegistration

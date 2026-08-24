@@ -1,5 +1,6 @@
 import type {
 	NativeStoryPreviewAppearanceUpdate,
+	NativeStoryPreviewClearStateOperation,
 	NativeStoryPreviewCommand,
 	NativeStoryPreviewCommandResult,
 	NativeStoryPreviewDescriptor,
@@ -10,9 +11,12 @@ export const storyPreviewBridgeName = 'twineStoryPreview';
 
 export const storyPreviewIpcChannels = Object.freeze({
 	appearance: 'story-preview:appearance',
+	beginClearState: 'story-preview:begin-clear-state',
+	cancelClearState: 'story-preview:cancel-clear-state',
 	command: 'story-preview:command',
 	commandResult: 'story-preview:command-result',
 	copyText: 'story-preview:copy-text',
+	completeClearState: 'story-preview:complete-clear-state',
 	frameLoaded: 'story-preview:frame-loaded',
 	getInitialState: 'story-preview:get-initial-state',
 	ownerCommand: 'story-preview:owner-command',
@@ -30,6 +34,15 @@ export interface NativeStoryPreviewInitialState {
  * has no project, filesystem, settings, or raw IPC capabilities.
  */
 export interface NativeStoryPreviewBridge {
+	beginClearState(
+		generation: number
+	): Promise<NativeStoryPreviewClearStateOperation>;
+	cancelClearState(
+		operation: NativeStoryPreviewClearStateOperation
+	): Promise<void>;
+	completeClearState(
+		operation: NativeStoryPreviewClearStateOperation
+	): Promise<void>;
 	copyText(text: string): Promise<void>;
 	command(
 		command: NativeStoryPreviewCommand

@@ -26,7 +26,10 @@ describe('desktop story preview preload', () => {
 
 		expect(name).toBe(storyPreviewBridgeName);
 		expect(Object.keys(api).sort()).toEqual([
+			'beginClearState',
+			'cancelClearState',
 			'command',
+			'completeClearState',
 			'copyText',
 			'frameLoaded',
 			'getInitialState',
@@ -44,6 +47,27 @@ describe('desktop story preview preload', () => {
 		await expect(api.getInitialState()).resolves.toBe(initialState);
 		expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(
 			storyPreviewIpcChannels.getInitialState
+		);
+
+		await api.beginClearState(4);
+		expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+			storyPreviewIpcChannels.beginClearState,
+			4
+		);
+		const clearOperation = {
+			generation: 4,
+			operationId: 'clear-4',
+			url: 'twine-preview://token/ignored-by-preload'
+		};
+		await api.completeClearState(clearOperation);
+		expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+			storyPreviewIpcChannels.completeClearState,
+			{generation: 4, operationId: 'clear-4'}
+		);
+		await api.cancelClearState(clearOperation);
+		expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+			storyPreviewIpcChannels.cancelClearState,
+			{generation: 4, operationId: 'clear-4'}
 		);
 
 		await api.command({

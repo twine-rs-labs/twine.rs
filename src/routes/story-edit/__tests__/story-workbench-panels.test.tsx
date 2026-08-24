@@ -254,14 +254,16 @@ describe('story workbench panels', () => {
 		);
 	});
 
-	it('routes story metadata changes through the bound project host', () => {
+	it('routes story metadata changes through the bound project host', async () => {
 		const story = fakeStory();
 		const format = fakeLoadedStoryFormat();
 		story.storyFormat = format.name;
 		story.storyFormatVersion = format.version;
 		const host = {
 			applyStoryCommand: jest.fn(() => Promise.resolve()),
-			queryStorySummaryAsync: jest.fn(() => Promise.resolve({graph: {}})),
+			queryStorySummaryAsync: jest.fn(() =>
+				Promise.resolve({characterCount: 314, graph: {}})
+			),
 			subscribeToPatches: jest.fn(() => jest.fn())
 		} as unknown as CoreProjectHost;
 
@@ -270,6 +272,7 @@ describe('story workbench panels', () => {
 				<StoryDetailsWorkbenchPanel context={contextFor(host, story)} />
 			</FakeStateProvider>
 		);
+		await screen.findByText('314');
 		fireEvent.click(
 			screen.getByRole('checkbox', {
 				name: 'dialogs.storyDetails.snapToGrid'

@@ -50,6 +50,15 @@ function postBridgeMessage(
 	});
 }
 
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>(promiseResolve => {
+		resolve = promiseResolve;
+	});
+
+	return {promise, resolve};
+}
+
 describe('instrumentPreviewHtml()', () => {
 	it('injects the preview bridge into an HTML head', () => {
 		const html =
@@ -106,6 +115,208 @@ describe('instrumentPreviewHtml()', () => {
 });
 
 describe('<StoryPreviewFrame>', () => {
+	it('restarts a negotiated exact runtime with one controlled remount', async () => {
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				previewTarget="test"
+				storyExists
+				title="Restart preview"
+			/>
+		);
+		const frame = screen.getByTitle('Restart preview') as HTMLIFrameElement;
+		const sessionId = sessionIdFromFrame('Restart preview');
+		const postMessage = jest.spyOn(frame.contentWindow!, 'postMessage');
+
+		postBridgeMessage('Restart preview', sessionId, {
+			adapterId: 'sugarcube-2.37.3',
+			capabilities: [
+				'currentPassage',
+				'storyVariables',
+				'temporaryVariables',
+				'visitedPassages'
+			],
+			format: 'SugarCube',
+			formatVersion: '2.37.3',
+			protocolVersion: 1,
+			reliability: 'exact-version',
+			type: 'debugger-hello'
+		});
+		postBridgeMessage('Restart preview', sessionId, {
+			adapterId: 'sugarcube-2.37.3',
+			commandCapabilities: ['restart'],
+			protocolVersion: 1,
+			type: 'debugger-command-hello'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Restart'}));
+
+		expect(postMessage).toHaveBeenCalledTimes(1);
+		const request = postMessage.mock.calls[0][0] as Record<string, unknown>;
+		expect(request).toMatchObject({
+			adapterId: 'sugarcube-2.37.3',
+			command: 'restart',
+			protocolVersion: 1,
+			sessionId,
+			source: 'twine.rs.preview.host-command'
+		});
+		expect(frame.name).toContain(`twine-rs-restart:${sessionId}:`);
+
+		postBridgeMessage(
+			'Restart preview',
+			sessionId,
+			{
+				adapterId: 'sugarcube-2.37.3',
+				command: 'restart',
+				protocolVersion: 1,
+				requestId: request.requestId,
+				status: 'applied',
+				type: 'debugger-command-result'
+			},
+			frame.contentWindow
+		);
+
+		await waitFor(() =>
+			expect(screen.getByTitle('Restart preview')).not.toBe(frame)
+		);
+		expect(
+			screen.getByText('Story restarted from its launch passage.')
+		).toBeInTheDocument();
+		expect(screen.getByRole('button', {name: 'Debugger'})).toHaveAttribute(
+			'aria-expanded',
+			'true'
+		);
+	});
+
+	it('confirms Clear State and remounts an opaque browser preview', async () => {
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				previewTarget="play"
+				storyExists
+				title="Clear browser preview"
+			/>
+		);
+		const frame = screen.getByTitle('Clear browser preview');
+
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Clear State'}));
+		const dialog = await screen.findByRole('dialog', {
+			name: 'Clear all stored runtime data and cookies for this preview? Saved progress and format preferences in this preview will be removed. Other previews are not affected.'
+		});
+		fireEvent.click(within(dialog).getByRole('button', {name: 'Clear State'}));
+
+		await waitFor(() =>
+			expect(screen.getByTitle('Clear browser preview')).not.toBe(frame)
+		);
+		expect(screen.getByText('Story state cleared.')).toBeInTheDocument();
+	});
+
+	it('cancels a begin that resolves after preview identity changes and permits another clear', async () => {
+		const firstOperation = {
+			generation: 1,
+			operationId: 'clear-first',
+			url: 'twine-preview://first/__twine-preview-clear-state/first'
+		};
+		const secondOperation = {
+			generation: 2,
+			operationId: 'clear-second',
+			url: 'twine-preview://second/__twine-preview-clear-state/second'
+		};
+		const firstBegin = deferred<typeof firstOperation>();
+		const onBeginClearState = jest
+			.fn()
+			.mockReturnValueOnce(firstBegin.promise)
+			.mockResolvedValueOnce(secondOperation);
+		const onCancelClearState = jest.fn().mockResolvedValue(undefined);
+		const onCompleteClearState = jest.fn().mockResolvedValue(undefined);
+		const props = {
+			missingStoryMessage: 'Missing story',
+			onBeginClearState,
+			onCancelClearState,
+			onCompleteClearState,
+			previewTarget: 'play' as const,
+			storyExists: true,
+			title: 'Identity clear preview'
+		};
+		const {rerender} = render(
+			<StoryPreviewFrame {...props} html="<html><body>First</body></html>" />
+		);
+
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Clear State'}));
+		const firstConfirm = within(await screen.findByRole('dialog')).getByRole(
+			'button',
+			{name: 'Clear State'}
+		);
+		fireEvent.click(firstConfirm);
+		rerender(
+			<StoryPreviewFrame {...props} html="<html><body>Second</body></html>" />
+		);
+		await act(async () => {
+			firstBegin.resolve(firstOperation);
+			await firstBegin.promise;
+		});
+		await waitFor(() =>
+			expect(onCancelClearState).toHaveBeenCalledWith(firstOperation)
+		);
+		expect(onCancelClearState).toHaveBeenCalledTimes(1);
+		expect(onCompleteClearState).not.toHaveBeenCalled();
+		expect(
+			screen.queryByText(
+				'Clear State could not be fully confirmed. The current artifact was remounted.'
+			)
+		).not.toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Clear State'}));
+		fireEvent.click(
+			within(await screen.findByRole('dialog')).getByRole('button', {
+				name: 'Clear State'
+			})
+		);
+		const cleanupFrame = (await screen.findByTitle(
+			'Clearing preview state'
+		)) as HTMLIFrameElement;
+
+		act(() => {
+			window.dispatchEvent(
+				new MessageEvent('message', {
+					data: {
+						operationId: secondOperation.operationId,
+						type: 'twine-preview-state-cleared'
+					},
+					source: cleanupFrame.contentWindow
+				})
+			);
+		});
+		await waitFor(() =>
+			expect(onCompleteClearState).toHaveBeenCalledWith(secondOperation)
+		);
+		expect(onBeginClearState).toHaveBeenCalledTimes(2);
+		expect(onCancelClearState).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not expose Runtime Controls in Proof', () => {
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				previewTarget="proof"
+				storyExists
+				title="Proof preview"
+			/>
+		);
+
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		expect(screen.queryByText('Runtime Controls')).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', {name: 'Clear State'})
+		).not.toBeInTheDocument();
+	});
+
 	it('keeps a copy operation pending and suppresses stale feedback after log changes', async () => {
 		let resolveCopy!: () => void;
 		const onCopyRuntimeLog = jest.fn(
@@ -1316,7 +1527,9 @@ describe('<StoryPreviewFrame>', () => {
 		expect(
 			within(historySection!).getByText('unmapped-history-id', {exact: true})
 		).toBeInTheDocument();
-		expect(within(inspector).queryAllByRole('button')).toHaveLength(1);
+		expect(
+			within(inspector).queryByRole('button', {name: /^Open /})
+		).not.toBeInTheDocument();
 		expect(onRevealGraph).not.toHaveBeenCalled();
 		expect(onRevealSource).not.toHaveBeenCalled();
 	});

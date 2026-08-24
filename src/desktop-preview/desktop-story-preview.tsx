@@ -66,6 +66,11 @@ export const DesktopStoryPreview: React.FC<
 	const [operationError, setOperationError] = React.useState<string>();
 	const [pendingTestGeneration, setPendingTestGeneration] =
 		React.useState<number>();
+	const [pendingOwnerCommandCount, setPendingOwnerCommandCount] =
+		React.useState(0);
+	const pendingOwnerCommandsRef = React.useRef(
+		new Set<NativeStoryPreviewCommand['type']>()
+	);
 	const [preview, setPreview] =
 		React.useState<NativeStoryPreviewInitialState>();
 	const previewRef = React.useRef(preview);
@@ -74,6 +79,17 @@ export const DesktopStoryPreview: React.FC<
 	const candidateRef = React.useRef(candidate);
 	const acknowledgingCandidateGenerationRef = React.useRef<number | undefined>(
 		undefined
+	);
+	const markOwnerCommand = React.useCallback(
+		(command: NativeStoryPreviewCommand['type'], pending: boolean) => {
+			if (pending) {
+				pendingOwnerCommandsRef.current.add(command);
+			} else {
+				pendingOwnerCommandsRef.current.delete(command);
+			}
+			setPendingOwnerCommandCount(pendingOwnerCommandsRef.current.size);
+		},
+		[]
 	);
 
 	React.useEffect(() => {
@@ -118,6 +134,7 @@ export const DesktopStoryPreview: React.FC<
 			}
 
 			setOperationError(resultError(result));
+			markOwnerCommand(result.command, false);
 			if (
 				result.command === 'testCurrent' ||
 				result.command === 'testFromStart'
@@ -199,7 +216,7 @@ export const DesktopStoryPreview: React.FC<
 			unsubscribeCommandResult();
 			unsubscribeReplacement();
 		};
-	}, [api]);
+	}, [api, markOwnerCommand]);
 
 	React.useEffect(() => {
 		if (!preview) {
@@ -220,6 +237,7 @@ export const DesktopStoryPreview: React.FC<
 
 			if (
 				generation === undefined ||
+				pendingOwnerCommandsRef.current.has(command.type) ||
 				(isTestCommand && pendingTestGeneration !== undefined)
 			) {
 				return;
@@ -229,6 +247,7 @@ export const DesktopStoryPreview: React.FC<
 			if (isTestCommand) {
 				setPendingTestGeneration(generation);
 			}
+			markOwnerCommand(command.type, true);
 
 			try {
 				const result = await api.command({
@@ -241,8 +260,12 @@ export const DesktopStoryPreview: React.FC<
 					if (result.status !== 'busy' && isTestCommand) {
 						setPendingTestGeneration(undefined);
 					}
+					if (result.status !== 'busy') {
+						markOwnerCommand(command.type, false);
+					}
 				}
 			} catch (error) {
+				markOwnerCommand(command.type, false);
 				if (isTestCommand) {
 					setPendingTestGeneration(undefined);
 				}
@@ -253,7 +276,7 @@ export const DesktopStoryPreview: React.FC<
 				);
 			}
 		},
-		[api, pendingTestGeneration]
+		[api, markOwnerCommand, pendingTestGeneration]
 	);
 
 	if (initialError) {
@@ -324,6 +347,8 @@ export const DesktopStoryPreview: React.FC<
 					setCandidate(undefined);
 					setPreview(committed);
 					setPendingTestGeneration(undefined);
+					markOwnerCommand('testCurrent', false);
+					markOwnerCommand('testFromStart', false);
 				},
 				error => {
 					if (
@@ -366,6 +391,9 @@ export const DesktopStoryPreview: React.FC<
 				debugMetrics={storyPreviewDebugMetrics(descriptor.summary)}
 				missingStoryMessage="The story preview is unavailable."
 				onCopyRuntimeLog={text => api.copyText(text)}
+				onBeginClearState={() => api.beginClearState(generation)}
+				onCancelClearState={operation => api.cancelClearState(operation)}
+				onCompleteClearState={operation => api.completeClearState(operation)}
 				onContentLoad={contentLoaded}
 				onRevealGraph={passageId =>
 					void sendCommand({passageId, type: 'revealGraph'})
@@ -379,6 +407,8 @@ export const DesktopStoryPreview: React.FC<
 				}
 				onTestFromStart={() => void sendCommand({type: 'testFromStart'})}
 				passages={descriptor.passages}
+				previewTarget={descriptor.target}
+				runtimeControlsBusy={pendingOwnerCommandCount > 0}
 				stagedContentSource={
 					candidate
 						? {

@@ -9,6 +9,8 @@ export const maxStoryPreviewPackages = 64;
 const storyPreviewTokenPattern =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const encodedSeparatorPattern = /%(?:00|2f|5c)/i;
+const stateCleanupPath = '__twine-preview-clear-state';
+const stateCleanupAcknowledgement = 'twine-preview-state-cleared';
 
 interface StoryPreviewPackageFile {
 	bytes: Uint8Array;
@@ -17,8 +19,19 @@ interface StoryPreviewPackageFile {
 }
 
 interface StoryPreviewPackageEntry {
+	cleanupTickets: Set<string>;
 	files: Map<string, StoryPreviewPackageFile>;
 	onRelease?: () => Promise<void> | void;
+}
+
+interface StoryPreviewStateCleanupTicket {
+	operationId: string;
+	packageToken: string;
+}
+
+export interface StoryPreviewStateCleanup {
+	operationId: string;
+	url: string;
 }
 
 interface StoryPreviewRequest {
@@ -28,6 +41,7 @@ interface StoryPreviewRequest {
 }
 
 const previewPackages = new Map<string, StoryPreviewPackageEntry>();
+const stateCleanupTickets = new Map<string, StoryPreviewStateCleanupTicket>();
 let initialized = false;
 
 /** Must run before Electron becomes ready so the origin receives normal web storage. */
@@ -68,6 +82,18 @@ function errorResponse(status: number, message: string, method = 'GET') {
 	return new Response(method === 'HEAD' ? null : responseBody(bytes), {
 		headers: responseHeaders('text/plain; charset=utf-8', bytes.byteLength),
 		status
+	});
+}
+
+function stateCleanupResponse(operationId: string, method: string) {
+	const nonce = randomUUID().replaceAll('-', '');
+	const bytes = Buffer.from(stateCleanupHtml(operationId, nonce), 'utf8');
+
+	return new Response(method === 'HEAD' ? null : responseBody(bytes), {
+		headers: responseHeaders('text/html; charset=utf-8', bytes.byteLength, {
+			'content-security-policy': `base-uri 'none'; default-src 'none'; form-action 'none'; script-src 'nonce-${nonce}'`
+		}),
+		status: 200
 	});
 }
 
@@ -144,6 +170,54 @@ function requestTarget(url: string) {
 	return outputPath
 		? {outputPath, token: parsed.hostname.toLowerCase()}
 		: undefined;
+}
+
+function exactPackageUrl(url: string) {
+	const target = requestTarget(url);
+
+	if (!target || target.outputPath !== 'index.html') {
+		return undefined;
+	}
+
+	const expectedUrl = `${storyPreviewScheme}://${target.token}/index.html`;
+
+	return url === expectedUrl ? target : undefined;
+}
+
+function stateCleanupTicket(url: string) {
+	const target = requestTarget(url);
+
+	if (
+		!target ||
+		!target.outputPath.startsWith(`${stateCleanupPath}/`) ||
+		target.outputPath.split('/').length !== 2
+	) {
+		return undefined;
+	}
+
+	const ticket = target.outputPath.slice(stateCleanupPath.length + 1);
+	const record = stateCleanupTickets.get(ticket);
+
+	if (
+		!record ||
+		record.packageToken !== target.token ||
+		url !==
+			`${storyPreviewScheme}://${target.token}/${stateCleanupPath}/${ticket}`
+	) {
+		return undefined;
+	}
+
+	return {record, ticket};
+}
+
+function stateCleanupHtml(operationId: string, nonce: string) {
+	const serializedOperationId = JSON.stringify(operationId).replace(
+		/[<>&\u2028\u2029]/g,
+		character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
+	);
+	const serializedAcknowledgement = JSON.stringify(stateCleanupAcknowledgement);
+
+	return `<!doctype html><meta charset="utf-8"><script nonce="${nonce}">void async function(){localStorage.clear();sessionStorage.clear();const cacheNames=await caches.keys();await Promise.all(cacheNames.map(name=>caches.delete(name)));const databases=await indexedDB.databases();await Promise.all(databases.map(database=>database.name?new Promise((resolve,reject)=>{const request=indexedDB.deleteDatabase(database.name);request.onsuccess=()=>resolve();request.onerror=()=>reject(request.error);request.onblocked=()=>reject(new Error('IndexedDB cleanup blocked'));}):Promise.resolve()));if(localStorage.length!==0||sessionStorage.length!==0||(await caches.keys()).length!==0||(await indexedDB.databases()).some(database=>database.name))throw new Error('Preview state cleanup incomplete');window.parent.postMessage({type:${serializedAcknowledgement},operationId:${serializedOperationId}},'*');}();</script>`;
 }
 
 function mediaType(outputPath: string) {
@@ -264,6 +338,26 @@ export async function handleStoryPreviewRequest(request: StoryPreviewRequest) {
 	}
 
 	const target = requestTarget(request.url);
+	const isStateCleanupRequest = target?.outputPath.startsWith(
+		`${stateCleanupPath}/`
+	);
+	const cleanup = stateCleanupTicket(request.url);
+
+	if (cleanup) {
+		if (method === 'GET') {
+			stateCleanupTickets.delete(cleanup.ticket);
+			previewPackages
+				.get(cleanup.record.packageToken)
+				?.cleanupTickets.delete(cleanup.ticket);
+		}
+
+		return stateCleanupResponse(cleanup.record.operationId, method);
+	}
+
+	if (isStateCleanupRequest) {
+		return errorResponse(404, 'Preview not found.', method);
+	}
+
 	const entry = target ? previewPackages.get(target.token) : undefined;
 	const file = target ? entry?.files.get(target.outputPath) : undefined;
 
@@ -377,9 +471,60 @@ export function registerStoryPreviewPackage(
 	}
 
 	return registerPackage({
+		cleanupTickets: new Set(),
 		files,
 		onRelease: () => releaseScratchPreviewPackage(stagedPackage)
 	});
+}
+
+/**
+ * Registers a one-use, package-origin cleanup page. The returned URL is only
+ * valid while its package remains live and must be released if it is abandoned.
+ */
+export function registerStoryPreviewStateCleanup(
+	packageUrl: string,
+	operationId: string = randomUUID()
+): StoryPreviewStateCleanup {
+	const target = exactPackageUrl(packageUrl);
+	const entry = target ? previewPackages.get(target.token) : undefined;
+
+	if (!target || !entry) {
+		throw new Error(
+			'State cleanup requires an exact live story preview package URL.'
+		);
+	}
+
+	if (
+		typeof operationId !== 'string' ||
+		operationId.length === 0 ||
+		operationId.length > 128
+	) {
+		throw new Error('State cleanup requires a bounded operation ID.');
+	}
+
+	const ticket = randomUUID();
+
+	entry.cleanupTickets.add(ticket);
+	stateCleanupTickets.set(ticket, {operationId, packageToken: target.token});
+
+	return {
+		operationId,
+		url: `${storyPreviewScheme}://${target.token}/${stateCleanupPath}/${ticket}`
+	};
+}
+
+/** Cancels an unused cleanup page. Cancellation is idempotent. */
+export function releaseStoryPreviewStateCleanup(url: string) {
+	const cleanup = stateCleanupTicket(url);
+
+	if (!cleanup) {
+		return;
+	}
+
+	stateCleanupTickets.delete(cleanup.ticket);
+	previewPackages
+		.get(cleanup.record.packageToken)
+		?.cleanupTickets.delete(cleanup.ticket);
 }
 
 export async function releaseStoryPreviewPackage(url: string) {
@@ -391,6 +536,10 @@ export async function releaseStoryPreviewPackage(url: string) {
 	}
 
 	previewPackages.delete(target.token);
+
+	for (const ticket of entry.cleanupTickets) {
+		stateCleanupTickets.delete(ticket);
+	}
 	await entry.onRelease?.();
 }
 
@@ -403,6 +552,7 @@ export async function resetStoryPreviewPackagesForTests() {
 	const entries = [...previewPackages.values()];
 
 	previewPackages.clear();
+	stateCleanupTickets.clear();
 	await Promise.all(entries.map(entry => entry.onRelease?.()));
 	initialized = false;
 }

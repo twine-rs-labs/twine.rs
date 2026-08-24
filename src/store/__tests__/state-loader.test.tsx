@@ -711,6 +711,7 @@ describe('<StateLoader>', () => {
 
 	it('keeps Electron project sessions closed until native recovery and reload succeed', async () => {
 		(isElectronRenderer as jest.Mock).mockReturnValue(true);
+		const warn = jest.spyOn(console, 'warn').mockReturnValue();
 		const recoveredStories = {nativeStoriesState: true};
 		const loadPrefs = jest.fn(async () => ({nativePrefsState: true}));
 		const loadStoryFormats = jest.fn(async () => ({nativeFormatsState: true}));
@@ -743,6 +744,10 @@ describe('<StateLoader>', () => {
 		).toBeVisible();
 		expect(screen.queryByTestId('native-project-sessions')).toBeNull();
 		expect(storiesDispatchMock).not.toHaveBeenCalled();
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn).toHaveBeenCalledWith(
+			'Could not load stories; continuing with default state: Project library could not be safely loaded: replacement root conflicts with its recovery backup'
+		);
 
 		fireEvent.click(
 			screen.getByRole('button', {name: 'Reveal Project Library'})
