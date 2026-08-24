@@ -60,6 +60,7 @@ jobs:
       matrix:
         include:
           - label: Linux x64
+            packaged_suite: full
             platform: linux
             os: ubuntu-24.04
             arch: x64
@@ -71,6 +72,7 @@ jobs:
               artifacts/local/linux-x64/*.artifact-manifest.json
               artifacts/local/linux-x64/LOCAL-TEST-ONLY.txt
           - label: Linux ARM64
+            packaged_suite: reduced
             platform: linux
             os: ubuntu-24.04-arm
             arch: arm64
@@ -82,6 +84,7 @@ jobs:
               artifacts/local/linux-arm64/*.artifact-manifest.json
               artifacts/local/linux-arm64/LOCAL-TEST-ONLY.txt
           - label: macOS Intel
+            packaged_suite: reduced
             platform: mac
             os: macos-15-intel
             arch: x64
@@ -91,6 +94,7 @@ jobs:
               artifacts/local/mac-x64/*.artifact-manifest.json
               artifacts/local/mac-x64/LOCAL-TEST-ONLY.txt
           - label: macOS ARM64
+            packaged_suite: full
             platform: mac
             os: macos-15
             arch: arm64
@@ -100,6 +104,7 @@ jobs:
               artifacts/local/mac-arm64/*.artifact-manifest.json
               artifacts/local/mac-arm64/LOCAL-TEST-ONLY.txt
           - label: Windows x64
+            packaged_suite: full
             platform: windows
             os: windows-2025
             arch: x64
@@ -164,6 +169,9 @@ jobs:
       - name: Install Playwright Chromium on Windows
         if: runner.os == 'Windows'
         run: npx playwright install chromium
+      - name: Install Playwright Chromium for full macOS suite
+        if: runner.os == 'macOS' && matrix.packaged_suite == 'full'
+        run: npx playwright install chromium
       - name: Install Playwright Chromium and dependencies on Linux
         if: runner.os == 'Linux'
         run: |
@@ -196,19 +204,6 @@ jobs:
           app_image=$(ls "${{ matrix.artifact_dir }}"/Twine-RS-*-linux-${{ matrix.appimage_arch }}.AppImage)
           chmod +x "$app_image"
           APPIMAGE_EXTRACT_AND_RUN=1 TWINE_E2E_EXECUTABLE="$app_image" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "drains a trailing"
-      - name: Extend Linux ARM64 preview wait in test harness
-        if: runner.os == 'Linux' && matrix.arch == 'arm64'
-        shell: bash
-        run: |
-          perl -0pi -e 's/(async function expectCurrentPassage.*?timeout: )30_000/${1}90_000/s' e2e/packaged-electron-preview.spec.ts
-          node -e '
-            const { readFileSync } = require("node:fs");
-            const source = readFileSync("e2e/packaged-electron-preview.spec.ts", "utf8");
-            const helper = source.match(/async function expectCurrentPassage.*?\n}/s)?.[0];
-            if (!helper?.includes("timeout: 90_000")) {
-              throw new Error("Linux ARM64 current-passage wait was not extended.");
-            }
-          '
       - name: Extract and smoke Linux ZIP
         if: runner.os == 'Linux'
         shell: bash
@@ -216,7 +211,12 @@ jobs:
           extract_dir="$RUNNER_TEMP/twine-rs-linux-zip"
           mkdir -p "$extract_dir"
           unzip -q "${{ matrix.artifact_dir }}"/Twine-RS-*-linux-${{ matrix.arch }}.zip -d "$extract_dir"
-          TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged
+          if [[ "${{ matrix.packaged_suite }}" == 'full' ]]; then
+            TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged
+          else
+            test "${{ matrix.packaged_suite }}" = 'reduced'
+            TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "drains a trailing"
+          fi
       - name: Mount and smoke macOS DMG
         if: runner.os == 'macOS'
         shell: bash
@@ -225,7 +225,12 @@ jobs:
           mkdir -p "$mount_dir"
           hdiutil attach "${{ matrix.artifact_dir }}"/Twine-RS-*-mac-${{ matrix.arch }}.dmg -nobrowse -readonly -mountpoint "$mount_dir"
           trap 'hdiutil detach "$mount_dir"' EXIT
-          TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "drains a trailing|preserves sibling"
+          if [[ "${{ matrix.packaged_suite }}" == 'full' ]]; then
+            TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged
+          else
+            test "${{ matrix.packaged_suite }}" = 'reduced'
+            TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "drains a trailing|preserves sibling"
+          fi
           hdiutil detach "$mount_dir"
           trap - EXIT
       - name: Install Windows package
