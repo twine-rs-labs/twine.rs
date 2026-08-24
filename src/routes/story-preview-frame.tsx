@@ -30,12 +30,16 @@ import type {
 import {
 	NO_PREVIEW_FORMAT_ADMISSION,
 	canonicalPreviewFormatAdmission
-} from './story-preview-sugarcube';
+} from './story-preview-format';
 import type {StoryPreviewDebuggerCapability} from './story-preview-debugger-protocol';
-import {STORY_PREVIEW_COMMAND_PROTOCOL_VERSION} from './story-preview-debugger-protocol';
+import {
+	STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
+	STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION
+} from './story-preview-debugger-protocol';
 import type {StoryPreviewRestartResultStatus} from './story-preview-debugger-protocol';
 import {
 	serializeStoryPreviewRuntimeLog,
+	STORY_PREVIEW_BRIDGE_LIMITS,
 	STORY_PREVIEW_COMMAND_SOURCE
 } from './story-preview-contract';
 import './story-preview-frame.css';
@@ -77,6 +81,90 @@ interface PendingClearStateRun {
 	id: number;
 	operation?: StoryPreviewClearStateOperation;
 	terminal: boolean;
+}
+
+interface PreviewFrameLoadReadiness {
+	bootstrapChannelEstablished: boolean;
+	bootstrapChallenge?: string;
+	bootstrapChallengeIssued: boolean;
+	bootstrapPort?: MessagePort;
+	bootstrapReady: boolean;
+	completed: boolean;
+	frameWindow: Window | null;
+	identity: object;
+	loaded: boolean;
+	requiresBootstrap: boolean;
+}
+
+const nativeReflectApply = Reflect.apply;
+const secureRandomValues = globalThis.crypto?.getRandomValues.bind(
+	globalThis.crypto
+);
+
+function createHarloweBootstrapChallenge() {
+	if (!secureRandomValues) return undefined;
+
+	try {
+		const bytes = new Uint8Array(
+			STORY_PREVIEW_BRIDGE_LIMITS.bootstrapChallengeLength / 2
+		);
+
+		secureRandomValues(bytes);
+		return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join(
+			''
+		);
+	} catch {
+		return undefined;
+	}
+}
+
+function previewFrameLoadReadiness(
+	identity: object,
+	requiresBootstrap: boolean
+): PreviewFrameLoadReadiness {
+	return {
+		...(requiresBootstrap
+			? {bootstrapChallenge: createHarloweBootstrapChallenge()}
+			: {}),
+		bootstrapChannelEstablished: false,
+		bootstrapChallengeIssued: false,
+		bootstrapReady: false,
+		completed: false,
+		frameWindow: null,
+		identity,
+		loaded: false,
+		requiresBootstrap
+	};
+}
+
+function previewFrameDocumentLoadReadiness(
+	previous: PreviewFrameLoadReadiness,
+	frameWindow: Window
+) {
+	const readiness = previewFrameLoadReadiness(
+		previous.identity,
+		previous.requiresBootstrap
+	);
+
+	// The bridge captures this channel before story code runs. Its child endpoint
+	// belongs to the current document and is destroyed by native navigation. Keep
+	// the channel across the matching load event, but rotate the challenge and
+	// readiness proof for the loaded document.
+	readiness.bootstrapChannelEstablished = previous.bootstrapChannelEstablished;
+	readiness.bootstrapPort = previous.bootstrapPort;
+	readiness.frameWindow = frameWindow;
+	readiness.loaded = true;
+	return readiness;
+}
+
+function closeHarloweBootstrapPort(
+	readiness: PreviewFrameLoadReadiness | undefined
+) {
+	try {
+		readiness?.bootstrapPort?.close();
+	} catch {
+		// A detached or already-closed document capability needs no cleanup.
+	}
 }
 
 const EMPTY_STORY_PREVIEW_PASSAGES: StoryPreviewPassageRef[] = [];
@@ -305,25 +393,23 @@ function useCanonicalPreviewFormatAdmission(
 			NO_PREVIEW_FORMAT_ADMISSION,
 		[rawAdmission]
 	);
-	const kind = canonical.kind;
-	const adapterId = kind === 'builtin-sha256' ? canonical.adapterId : undefined;
-	const sourceSha256 =
-		kind === 'builtin-sha256' ? canonical.sourceSha256 : undefined;
-	const version = kind === 'builtin-sha256' ? canonical.version : undefined;
+	const stable = React.useRef<PreviewFormatAdmission>(canonical);
+	const previous = stable.current;
+	const sameAdmission =
+		previous.kind === canonical.kind &&
+		(previous.kind === 'none' ||
+			(canonical.kind === 'builtin-sha256' &&
+				previous.adapterId === canonical.adapterId &&
+				previous.format === canonical.format &&
+				previous.sourceSha256 === canonical.sourceSha256 &&
+				previous.version === canonical.version));
 
-	return React.useMemo<PreviewFormatAdmission>(
-		() =>
-			kind === 'builtin-sha256'
-				? {
-						adapterId: adapterId!,
-						format: 'SugarCube',
-						kind,
-						sourceSha256: sourceSha256!,
-						version: version!
-					}
-				: NO_PREVIEW_FORMAT_ADMISSION,
-		[adapterId, kind, sourceSha256, version]
-	);
+	if (!sameAdmission) stable.current = canonical;
+	return stable.current;
+}
+
+function requiresHarloweBootstrap(admission: PreviewFormatAdmission) {
+	return admission.kind === 'builtin-sha256' && admission.format === 'Harlowe';
 }
 
 export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
@@ -388,6 +474,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		() => ({}),
 		[
 			sourceAdmission,
+			sourceBridgeSessionId,
 			sourceGeneration,
 			sourceHtml,
 			sourceRestartEligible,
@@ -451,6 +538,12 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		sourceUrl
 	]);
 	const [reloadKey, setReloadKey] = React.useState(0);
+	const nativeWindowPostMessageRef = React.useRef<
+		typeof globalThis.window.postMessage | undefined
+	>(undefined);
+	if (!nativeWindowPostMessageRef.current) {
+		nativeWindowPostMessageRef.current = globalThis.window?.postMessage;
+	}
 	const currentBridgeContext = React.useMemo<PreviewBridgeContext>(
 		() => ({
 			admission: contentSource?.admission ?? NO_PREVIEW_FORMAT_ADMISSION,
@@ -562,24 +655,38 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		  }
 		| undefined
 	>(undefined);
-
-	bridgeSessionIdRef.current = bridgeSessionId;
-	bridgeContextRef.current = currentBridgeContext;
-	passageLookupRef.current = passageLookup;
-	if (stagedContentSource) {
-		if (stagedRuntimeRef.current?.contextIdentity !== stagedContextIdentity) {
-			stagedRuntimeRef.current = {
-				bridgeSessionId: stagedContentSource.bridgeSessionId,
-				context: stagedBridgeContext!,
-				contextIdentity: stagedContextIdentity!,
-				model: initialStoryPreviewRuntimeModel(true),
-				passages: stagedPassageLookup
-			};
-		} else {
-			stagedRuntimeRef.current!.context = stagedBridgeContext!;
-			stagedRuntimeRef.current!.passages = stagedPassageLookup;
-		}
-	}
+	const currentLoadIdentity = React.useMemo(
+		() => ({}),
+		[sourceContextIdentity, reloadKey]
+	);
+	const stagedLoadIdentity = React.useMemo(
+		() => ({}),
+		[reloadKey, stagedContextIdentity]
+	);
+	const currentLoadReadiness = React.useMemo(
+		() =>
+			previewFrameLoadReadiness(
+				currentLoadIdentity,
+				requiresHarloweBootstrap(
+					contentSource?.admission ?? NO_PREVIEW_FORMAT_ADMISSION
+				)
+			),
+		[currentLoadIdentity, contentSource?.admission]
+	);
+	const stagedLoadReadiness = React.useMemo(
+		() =>
+			previewFrameLoadReadiness(
+				stagedLoadIdentity,
+				requiresHarloweBootstrap(stagedAdmission)
+			),
+		[stagedAdmission, stagedLoadIdentity]
+	);
+	const currentLoadReadinessRef = React.useRef<
+		PreviewFrameLoadReadiness | undefined
+	>(currentLoadReadiness);
+	const stagedLoadReadinessRef = React.useRef<
+		PreviewFrameLoadReadiness | undefined
+	>(stagedLoadReadiness);
 	const runtimeLogs = runtimeModel.logs;
 	if (previousLogsRef.current !== runtimeLogs) {
 		previousLogsRef.current = runtimeLogs;
@@ -618,10 +725,51 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		runtimeControlsBusy ||
 		testCommandsBusy ||
 		!!stagedContentSource;
+	const commitStagedRuntime = React.useCallback(() => {
+		if (!stagedContentSource) return;
+		const stagedRuntime = stagedRuntimeRef.current;
+
+		if (
+			!stagedRuntime ||
+			stagedRuntime.contextIdentity !== stagedContextIdentity
+		) {
+			stagedRuntimeRef.current = {
+				bridgeSessionId: stagedContentSource.bridgeSessionId,
+				context: stagedBridgeContext!,
+				contextIdentity: stagedContextIdentity!,
+				model: initialStoryPreviewRuntimeModel(true),
+				passages: stagedPassageLookup
+			};
+		} else {
+			stagedRuntime.context = stagedBridgeContext!;
+			stagedRuntime.passages = stagedPassageLookup;
+		}
+	}, [
+		stagedBridgeContext,
+		stagedContentSource,
+		stagedContextIdentity,
+		stagedPassageLookup
+	]);
 
 	const setPreviewFrameRef = React.useCallback(
 		(element: HTMLIFrameElement | null) => {
 			previewFrame.current = element;
+			if (element) {
+				const activeReadiness = currentLoadReadinessRef.current;
+				const frameWindow = element.contentWindow;
+
+				if (
+					activeReadiness?.identity !== currentLoadReadiness.identity ||
+					activeReadiness.frameWindow !== frameWindow
+				) {
+					closeHarloweBootstrapPort(activeReadiness);
+					currentLoadReadiness.frameWindow = frameWindow;
+					currentLoadReadinessRef.current = currentLoadReadiness;
+				}
+				bridgeSessionIdRef.current = bridgeSessionId;
+				bridgeContextRef.current = currentBridgeContext;
+				passageLookupRef.current = passageLookup;
+			}
 			if (!element) {
 				const resolve = detachFrameResolverRef.current;
 
@@ -629,8 +777,39 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 				resolve?.();
 			}
 		},
-		[]
+		[bridgeSessionId, currentBridgeContext, currentLoadReadiness, passageLookup]
 	);
+	const setStagedPreviewFrameRef = React.useCallback(
+		(element: HTMLIFrameElement | null) => {
+			stagedPreviewFrame.current = element;
+			if (element) {
+				const activeReadiness = stagedLoadReadinessRef.current;
+				const frameWindow = element.contentWindow;
+
+				if (
+					activeReadiness?.identity !== stagedLoadReadiness.identity ||
+					activeReadiness.frameWindow !== frameWindow
+				) {
+					closeHarloweBootstrapPort(activeReadiness);
+					stagedLoadReadiness.frameWindow = frameWindow;
+					stagedLoadReadinessRef.current = stagedLoadReadiness;
+				}
+				commitStagedRuntime();
+			}
+		},
+		[commitStagedRuntime, stagedLoadReadiness]
+	);
+	React.useLayoutEffect(() => {
+		bridgeSessionIdRef.current = bridgeSessionId;
+		bridgeContextRef.current = currentBridgeContext;
+		passageLookupRef.current = passageLookup;
+		commitStagedRuntime();
+	}, [
+		bridgeSessionId,
+		commitStagedRuntime,
+		currentBridgeContext,
+		passageLookup
+	]);
 	const setCleanupFrameRef = React.useCallback(
 		(element: HTMLIFrameElement | null) => {
 			cleanupFrame.current = element;
@@ -699,7 +878,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		},
 		[]
 	);
-	const handleContentLoad = React.useCallback(() => {
+	const completeContentLoad = React.useCallback(() => {
 		const frame = previewFrame.current;
 		const restartPrefix = `twine-rs-restart:${bridgeSessionIdRef.current}:`;
 
@@ -711,6 +890,205 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		}
 		onContentLoad?.();
 	}, [frameName, onContentLoad]);
+	const completeStagedContentLoad = React.useCallback(() => {
+		onStagedContentLoad?.();
+	}, [onStagedContentLoad]);
+	const completeContentLoadRef = React.useRef(completeContentLoad);
+	const completeStagedContentLoadRef = React.useRef(completeStagedContentLoad);
+
+	React.useLayoutEffect(() => {
+		completeContentLoadRef.current = completeContentLoad;
+		completeStagedContentLoadRef.current = completeStagedContentLoad;
+	}, [completeContentLoad, completeStagedContentLoad]);
+	const completeLoadIfReady = React.useCallback(
+		(
+			readiness: PreviewFrameLoadReadiness | undefined,
+			complete: () => void
+		) => {
+			if (
+				!readiness ||
+				readiness.completed ||
+				!readiness.loaded ||
+				(readiness.requiresBootstrap && !readiness.bootstrapReady)
+			) {
+				return;
+			}
+
+			readiness.completed = true;
+			complete();
+		},
+		[]
+	);
+	const issueHarloweBootstrapChallenge = React.useCallback(
+		(
+			source: MessageEventSource | null,
+			readiness: PreviewFrameLoadReadiness | undefined,
+			context: PreviewBridgeContext
+		) => {
+			if (
+				!readiness?.requiresBootstrap ||
+				readiness.bootstrapChallengeIssued ||
+				!readiness.bootstrapChallenge ||
+				readiness.frameWindow !== source ||
+				!readiness.bootstrapPort ||
+				!source
+			) {
+				return;
+			}
+
+			try {
+				readiness.bootstrapPort.postMessage({
+					adapterId: 'harlowe-3.3.9',
+					bootstrapChallenge: readiness.bootstrapChallenge,
+					protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+					sessionId: context.bridgeSessionId,
+					source: STORY_PREVIEW_COMMAND_SOURCE,
+					type: 'debugger-bootstrap-challenge'
+				});
+				readiness.bootstrapChallengeIssued = true;
+			} catch {
+				// Exact Harlowe readiness remains fail-closed if the private
+				// per-document-load challenge cannot be delivered.
+			}
+		},
+		[]
+	);
+	const establishHarloweBootstrapChannel = React.useCallback(
+		(
+			kind: 'current' | 'staged',
+			source: MessageEventSource | null,
+			readiness: PreviewFrameLoadReadiness | undefined,
+			context: PreviewBridgeContext
+		) => {
+			if (
+				!readiness?.requiresBootstrap ||
+				readiness.bootstrapChannelEstablished ||
+				readiness.frameWindow !== source ||
+				!nativeWindowPostMessageRef.current ||
+				!source ||
+				typeof globalThis.MessageChannel !== 'function'
+			) {
+				return;
+			}
+
+			readiness.bootstrapChannelEstablished = true;
+			const channel = new globalThis.MessageChannel();
+
+			readiness.bootstrapPort = channel.port1;
+			channel.port1.addEventListener('message', event => {
+				const activeReadiness =
+					kind === 'current'
+						? currentLoadReadinessRef.current
+						: stagedLoadReadinessRef.current;
+				const activeFrame =
+					kind === 'current'
+						? previewFrame.current
+						: stagedPreviewFrame.current;
+				const activeContext =
+					kind === 'current'
+						? bridgeContextRef.current
+						: stagedRuntimeRef.current?.context;
+
+				if (
+					activeReadiness?.bootstrapPort !== channel.port1 ||
+					activeReadiness.frameWindow !== activeFrame?.contentWindow ||
+					!activeContext ||
+					event.data?.type !== 'debugger-bootstrap-ready'
+				) {
+					return;
+				}
+				const message = normalizeStoryPreviewBridgeMessage(event.data, {
+					...activeContext,
+					harloweBootstrapChallenge: activeReadiness.bootstrapChallenge
+				});
+
+				if (
+					message?.type !== 'debugger-bootstrap-ready' ||
+					!activeReadiness.bootstrapChallengeIssued
+				) {
+					return;
+				}
+				activeReadiness.bootstrapReady = true;
+				completeLoadIfReady(
+					activeReadiness,
+					kind === 'current'
+						? completeContentLoadRef.current
+						: completeStagedContentLoadRef.current
+				);
+			});
+			channel.port1.start();
+			try {
+				nativeReflectApply(nativeWindowPostMessageRef.current, source, [
+					{
+						adapterId: 'harlowe-3.3.9',
+						protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+						sessionId: context.bridgeSessionId,
+						source: STORY_PREVIEW_COMMAND_SOURCE,
+						type: 'debugger-bootstrap-port'
+					},
+					'*',
+					[channel.port2]
+				]);
+				issueHarloweBootstrapChallenge(source, readiness, context);
+			} catch {
+				closeHarloweBootstrapPort(readiness);
+				readiness.bootstrapPort = undefined;
+				try {
+					channel.port2.close();
+				} catch {
+					// The transferred endpoint is already detached.
+				}
+			}
+		},
+		[completeLoadIfReady, issueHarloweBootstrapChallenge]
+	);
+	const handleContentLoad = React.useCallback(() => {
+		const previous = currentLoadReadinessRef.current;
+		const frameWindow = previewFrame.current?.contentWindow;
+
+		if (previous?.identity !== currentLoadIdentity || !frameWindow) return;
+		const readiness = previewFrameDocumentLoadReadiness(previous, frameWindow);
+
+		currentLoadReadinessRef.current = readiness;
+		issueHarloweBootstrapChallenge(
+			frameWindow,
+			readiness,
+			bridgeContextRef.current
+		);
+		completeLoadIfReady(readiness, completeContentLoad);
+	}, [
+		completeContentLoad,
+		completeLoadIfReady,
+		currentLoadIdentity,
+		issueHarloweBootstrapChallenge
+	]);
+	const handleStagedContentLoad = React.useCallback(() => {
+		const previous = stagedLoadReadinessRef.current;
+		const frameWindow = stagedPreviewFrame.current?.contentWindow;
+		const stagedRuntime = stagedRuntimeRef.current;
+
+		if (
+			previous?.identity !== stagedLoadIdentity ||
+			!frameWindow ||
+			!stagedRuntime
+		) {
+			return;
+		}
+		const readiness = previewFrameDocumentLoadReadiness(previous, frameWindow);
+
+		stagedLoadReadinessRef.current = readiness;
+		issueHarloweBootstrapChallenge(
+			frameWindow,
+			readiness,
+			stagedRuntime.context
+		);
+		completeLoadIfReady(readiness, completeStagedContentLoad);
+	}, [
+		completeLoadIfReady,
+		completeStagedContentLoad,
+		issueHarloweBootstrapChallenge,
+		stagedLoadIdentity
+	]);
 
 	React.useLayoutEffect(() => {
 		if (preserveDebuggerOnRemountRef.current) {
@@ -1023,6 +1401,8 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 
 	React.useLayoutEffect(
 		() => () => {
+			closeHarloweBootstrapPort(currentLoadReadinessRef.current);
+			closeHarloweBootstrapPort(stagedLoadReadinessRef.current);
 			if (pendingRestartRef.current) {
 				clearTimeout(pendingRestartRef.current.timeout);
 			}
@@ -1039,6 +1419,11 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	React.useEffect(() => {
 		onRuntimeModelChange?.(runtimeModel);
 	}, [onRuntimeModelChange, runtimeModel]);
+	const remountPreviewFrameRef = React.useRef(remountPreviewFrame);
+
+	React.useLayoutEffect(() => {
+		remountPreviewFrameRef.current = remountPreviewFrame;
+	}, [remountPreviewFrame]);
 
 	React.useEffect(() => {
 		function handleMessage(event: MessageEvent) {
@@ -1060,12 +1445,26 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 			}
 
 			if (event.source === previewFrame.current?.contentWindow) {
-				const message = normalizeStoryPreviewBridgeMessage(
-					event.data,
-					bridgeContextRef.current
-				);
+				const readiness = currentLoadReadinessRef.current;
+				const message = normalizeStoryPreviewBridgeMessage(event.data, {
+					...bridgeContextRef.current,
+					harloweBootstrapChallenge: readiness?.bootstrapChallenge
+				});
 
 				if (!message) {
+					return;
+				}
+				if (message.type === 'debugger-bootstrap-arm') {
+					establishHarloweBootstrapChannel(
+						'current',
+						event.source,
+						readiness,
+						bridgeContextRef.current
+					);
+					return;
+				}
+				if (message.type === 'debugger-bootstrap-ready') {
+					// Readiness is accepted only over the document-owned MessagePort.
 					return;
 				}
 				if (message.type === 'debugger-command-result') {
@@ -1091,7 +1490,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 							message: 'Story restarted from its launch passage.',
 							tone: 'success'
 						});
-						remountPreviewFrame({
+						remountPreviewFrameRef.current({
 							frameName: pending.frameName,
 							preserveDebugger: true
 						});
@@ -1104,7 +1503,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 								'Restart could not be confirmed. The current artifact was remounted.',
 							tone: 'warn'
 						});
-						remountPreviewFrame({
+						remountPreviewFrameRef.current({
 							frameName: pending.frameName,
 							preserveDebugger: true
 						});
@@ -1138,12 +1537,26 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 				stagedRuntime &&
 				event.source === stagedPreviewFrame.current?.contentWindow
 			) {
-				const message = normalizeStoryPreviewBridgeMessage(
-					event.data,
-					stagedRuntime.context
-				);
+				const readiness = stagedLoadReadinessRef.current;
+				const message = normalizeStoryPreviewBridgeMessage(event.data, {
+					...stagedRuntime.context,
+					harloweBootstrapChallenge: readiness?.bootstrapChallenge
+				});
 
 				if (!message) {
+					return;
+				}
+				if (message.type === 'debugger-bootstrap-arm') {
+					establishHarloweBootstrapChannel(
+						'staged',
+						event.source,
+						readiness,
+						stagedRuntime.context
+					);
+					return;
+				}
+				if (message.type === 'debugger-bootstrap-ready') {
+					// Readiness is accepted only over the document-owned MessagePort.
 					return;
 				}
 				stagedRuntime.model = reduceStoryPreviewRuntime(stagedRuntime.model, {
@@ -1161,7 +1574,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		setMessageListenerReady(true);
 
 		return () => window.removeEventListener('message', handleMessage);
-	}, [remountPreviewFrame]);
+	}, [completeLoadIfReady, establishHarloweBootstrapChannel]);
 
 	if (error) {
 		return <ErrorMessage>{error.message}</ErrorMessage>;
@@ -1555,7 +1968,13 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 							contentSource={contentSource}
 							frameName={frameName}
 							frameRef={setPreviewFrameRef}
-							key={bridgeSessionId}
+							key={
+								requiresHarloweBootstrap(
+									contentSource.admission ?? NO_PREVIEW_FORMAT_ADMISSION
+								) === true
+									? `${bridgeSessionId}:${contentSource.generation ?? 0}`
+									: bridgeSessionId
+							}
 							onLoad={handleContentLoad}
 							reloadKey={reloadKey}
 							title={title}
@@ -1565,9 +1984,13 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 							<StoryPreviewContentHost
 								bridgeSessionId={stagedContentSource.bridgeSessionId}
 								contentSource={stagedContentSource}
-								frameRef={stagedPreviewFrame}
-								key={stagedContentSource.bridgeSessionId}
-								onLoad={onStagedContentLoad}
+								frameRef={setStagedPreviewFrameRef}
+								key={
+									requiresHarloweBootstrap(stagedAdmission) === true
+										? `${stagedContentSource.bridgeSessionId}:${stagedContentSource.generation ?? 0}`
+										: stagedContentSource.bridgeSessionId
+								}
+								onLoad={handleStagedContentLoad}
 								reloadKey={reloadKey}
 								staging
 								title={stagedTitle ?? `${title} candidate`}

@@ -14,7 +14,7 @@ import {
 	storyPreviewPassages
 } from '../story-preview-debug';
 import {storyPreviewRoutePath} from './story-preview-route-path';
-import type {PreviewFormatAdmission} from '../story-preview-sugarcube';
+import type {PreviewFormatAdmission} from '../story-preview-format';
 
 function previewTarget(search: URLSearchParams): NativeStoryPreviewTarget {
 	const target = search.get('target');

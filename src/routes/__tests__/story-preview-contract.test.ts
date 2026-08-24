@@ -11,6 +11,7 @@ import {
 	STORY_PREVIEW_RUNTIME_LOG_LIMIT
 } from '../story-preview-contract';
 import {SUGARCUBE_COMPATIBILITY} from '../story-preview-sugarcube';
+import {HARLOWE_3_3_9_COMPATIBILITY} from '../story-preview-harlowe';
 import type {PreviewBridgeContext} from '../story-preview-contract';
 import {runtimeLogTone} from '../story-preview-debug';
 import {
@@ -47,6 +48,21 @@ function normalizeStoryPreviewBridgeMessage(
 	context = previewBridgeContext(message)
 ) {
 	return normalizeStoryPreviewBridgeMessageProduction(message, context);
+}
+
+function exactHarloweContext(sessionId = 'harlowe-exact-session') {
+	return {
+		admission: {
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			format: 'Harlowe' as const,
+			kind: 'builtin-sha256' as const,
+			sourceSha256: HARLOWE_3_3_9_COMPATIBILITY.sourceSha256,
+			version: HARLOWE_3_3_9_COMPATIBILITY.version
+		},
+		bridgeSessionId: sessionId,
+		generation: 1,
+		sugarCubeRestartEligible: false
+	} satisfies PreviewBridgeContext;
 }
 
 function instrumentPreviewHtml(
@@ -813,9 +829,7 @@ describe('runtime debugger protocol', () => {
 		);
 		expect(changedTuple.admission).toEqual({kind: 'none'});
 		expect(changedTuple.sugarCubeRestartEligible).toBe(false);
-		expect(changedTuple.html).toContain(
-			'var FIXED_SUGARCUBE_ADAPTER = undefined'
-		);
+		expect(changedTuple.html).toContain('var FIXED_READ_ADAPTER = undefined');
 		expect(changedTuple.html).toContain('var ENABLE_SUGARCUBE_RESTART = false');
 		expect(changedTuple.html).not.toContain(
 			'__twineRsPreviewSugarCubeStart(Engine,Config)'
@@ -994,6 +1008,186 @@ describe('runtime debugger protocol', () => {
 		expect(isStoryPreviewDebuggerAdapterId('__proto__')).toBe(false);
 	});
 
+	it('binds exact Harlowe readiness, hello, snapshot, and Restart messages to admission', () => {
+		const bootstrapChallenge = 'a'.repeat(64);
+		const context = {
+			...exactHarloweContext(),
+			harloweBootstrapChallenge: bootstrapChallenge
+		};
+		const envelope = {
+			sessionId: context.bridgeSessionId,
+			source: STORY_PREVIEW_BRIDGE_SOURCE
+		};
+		const readiness = {
+			...envelope,
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			bootstrapChallenge,
+			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+			type: 'debugger-bootstrap-ready'
+		};
+		const arm = {
+			...envelope,
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+			type: 'debugger-bootstrap-arm'
+		};
+		const hello = {
+			...envelope,
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			capabilities: ['currentPassage'],
+			format: 'Harlowe',
+			formatVersion: '3.3.9',
+			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+			reliability: 'exact-version',
+			type: 'debugger-hello'
+		};
+		const snapshot = {
+			...envelope,
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			currentPassage: {name: 'Start'},
+			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+			sections: {currentPassage: {state: 'complete'}},
+			type: 'debugger-snapshot'
+		};
+		const commandHello = {
+			...envelope,
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			commandCapabilities: ['restart'],
+			protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
+			type: 'debugger-command-hello'
+		};
+		const commandResult = {
+			...envelope,
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			command: 'restart',
+			protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
+			requestId: 'harlowe-restart',
+			status: 'applied',
+			type: 'debugger-command-result'
+		};
+
+		expect(
+			normalizeStoryPreviewBridgeMessage(readiness, context)
+		).toBeDefined();
+		expect(normalizeStoryPreviewBridgeMessage(arm, context)).toBeDefined();
+		expect(normalizeStoryPreviewBridgeMessage(hello, context)).toMatchObject({
+			capabilities: ['currentPassage'],
+			reliability: 'exact-version'
+		});
+		expect(normalizeStoryPreviewBridgeMessage(snapshot, context)).toBeDefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(commandHello, context)
+		).toBeDefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(commandResult, context)
+		).toBeDefined();
+
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{...hello, reliability: 'best-effort'},
+				context
+			)
+		).toBeUndefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{
+					...snapshot,
+					sections: {
+						currentPassage: {state: 'complete'},
+						storyVariables: {state: 'complete'}
+					},
+					storyVariables: []
+				},
+				context
+			)
+		).toBeUndefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{...readiness, adapterId: 'generic'},
+				context
+			)
+		).toBeUndefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{...readiness, sessionId: 'wrong-session'},
+				context
+			)
+		).toBeUndefined();
+		for (const forged of [
+			{...readiness, bootstrapChallenge: undefined},
+			{...readiness, bootstrapChallenge: 'b'.repeat(64)},
+			{...readiness, bootstrapChallenge: 'a'.repeat(63)},
+			{...readiness, bootstrapChallenge: 'A'.repeat(64)}
+		]) {
+			expect(
+				normalizeStoryPreviewBridgeMessage(forged, context)
+			).toBeUndefined();
+		}
+		expect(
+			normalizeStoryPreviewBridgeMessage(readiness, {
+				...context,
+				harloweBootstrapChallenge: undefined
+			})
+		).toBeUndefined();
+	});
+
+	it('preserves best-effort Harlowe read and Restart fallback without exact admission', () => {
+		const envelope = {
+			sessionId: 'harlowe-fallback-session',
+			source: STORY_PREVIEW_BRIDGE_SOURCE
+		};
+		const hello = {
+			...envelope,
+			adapterId: 'harlowe-3.3.9',
+			capabilities: ['currentPassage'],
+			format: 'Harlowe',
+			formatVersion: '3.3.9',
+			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+			reliability: 'best-effort',
+			type: 'debugger-hello'
+		};
+		const fallbackContext = previewBridgeContext(hello);
+
+		expect(
+			normalizeStoryPreviewBridgeMessage(hello, fallbackContext)
+		).toBeDefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{
+					...envelope,
+					adapterId: 'harlowe-3.3.9',
+					protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+					sections: {currentPassage: {state: 'unavailable'}},
+					type: 'debugger-snapshot'
+				},
+				fallbackContext
+			)
+		).toBeDefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{
+					...envelope,
+					adapterId: 'harlowe-3.3.9',
+					commandCapabilities: ['restart'],
+					protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
+					type: 'debugger-command-hello'
+				},
+				fallbackContext
+			)
+		).toBeDefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{
+					...envelope,
+					adapterId: 'harlowe-3.3.9',
+					protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+					type: 'debugger-bootstrap-ready'
+				},
+				fallbackContext
+			)
+		).toBeUndefined();
+	});
+
 	it('derives every advertised collection capability from its capture handler', () => {
 		for (const registration of Object.values(
 			STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS
@@ -1027,6 +1221,14 @@ describe('runtime debugger protocol', () => {
 					registration.formatVersion,
 					`conformance-${registration.id}`
 				);
+				if (registration.id === 'harlowe-3.3.9') {
+					expect(
+						Object.prototype.hasOwnProperty.call(
+							window,
+							'__twineRsPreviewHarloweBootstrap'
+						)
+					).toBe(false);
+				}
 				(window as any).passage = {id: 1, name: 'Start'};
 
 				if (registration.captureHandler === 'sugarcube') {

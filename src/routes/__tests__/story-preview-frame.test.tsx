@@ -19,6 +19,7 @@ import {
 	SUGARCUBE_COMPATIBILITY,
 	sugarCubeRestartProfileForAdapter
 } from '../story-preview-sugarcube';
+import {HARLOWE_3_3_9_COMPATIBILITY} from '../story-preview-harlowe';
 
 jest.mock('../story-preview-debug', () => {
 	const actual = jest.requireActual<typeof import('../story-preview-debug')>(
@@ -35,7 +36,90 @@ const actualInstrumentPreviewHtml = jest.requireActual<
 	typeof import('../story-preview-debug')
 >('../story-preview-debug').instrumentPreviewHtml;
 
+class SynchronousTestMessagePort extends EventTarget {
+	closed = false;
+	peer?: SynchronousTestMessagePort;
+
+	close() {
+		this.closed = true;
+	}
+
+	postMessage(message: unknown) {
+		if (this.closed || !this.peer || this.peer.closed) return;
+		this.peer.dispatchEvent(new MessageEvent('message', {data: message}));
+	}
+
+	start() {}
+}
+
+class SynchronousTestMessageChannel {
+	port1: MessagePort;
+	port2: MessagePort;
+
+	constructor() {
+		const port1 = new SynchronousTestMessagePort();
+		const port2 = new SynchronousTestMessagePort();
+
+		port1.peer = port2;
+		port2.peer = port1;
+		this.port1 = port1 as unknown as MessagePort;
+		this.port2 = port2 as unknown as MessagePort;
+	}
+}
+
+const nativeTestMessageChannel = globalThis.MessageChannel;
+const nativeTestWindowPostMessage = window.postMessage;
+let harloweDocumentPorts = new WeakMap<Window, MessagePort>();
+
+beforeAll(() => {
+	Object.defineProperty(globalThis, 'MessageChannel', {
+		configurable: true,
+		value: SynchronousTestMessageChannel,
+		writable: true
+	});
+	Object.defineProperty(window, 'postMessage', {
+		configurable: true,
+		value: function (
+			this: Window,
+			message: unknown,
+			targetOriginOrOptions?: string | WindowPostMessageOptions,
+			transfer?: Transferable[]
+		) {
+			if (transfer?.length) {
+				const event = new MessageEvent('message', {
+					data: message,
+					source: window
+				});
+
+				Object.defineProperty(event, 'ports', {value: transfer});
+				this.dispatchEvent(event);
+				return;
+			}
+
+			return Reflect.apply(nativeTestWindowPostMessage, this, [
+				message,
+				targetOriginOrOptions
+			]);
+		},
+		writable: true
+	});
+});
+
+afterAll(() => {
+	Object.defineProperty(globalThis, 'MessageChannel', {
+		configurable: true,
+		value: nativeTestMessageChannel,
+		writable: true
+	});
+	Object.defineProperty(window, 'postMessage', {
+		configurable: true,
+		value: nativeTestWindowPostMessage,
+		writable: true
+	});
+});
+
 beforeEach(() => {
+	harloweDocumentPorts = new WeakMap();
 	jest
 		.mocked(instrumentPreviewHtml)
 		.mockImplementation(actualInstrumentPreviewHtml);
@@ -52,6 +136,16 @@ function sugarCubeAdmission(version = '2.37.3') {
 		kind: 'builtin-sha256' as const,
 		sourceSha256: compatibility.sourceSha256,
 		version: compatibility.version
+	};
+}
+
+function harloweAdmission() {
+	return {
+		adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+		format: 'Harlowe' as const,
+		kind: 'builtin-sha256' as const,
+		sourceSha256: HARLOWE_3_3_9_COMPATIBILITY.sourceSha256,
+		version: HARLOWE_3_3_9_COMPATIBILITY.version
 	};
 }
 
@@ -94,6 +188,148 @@ function postBridgeMessage(
 			})
 		);
 	});
+}
+
+async function captureHarloweBootstrapChallenge(
+	title: string,
+	trigger: () => void
+) {
+	const bootstrapChallenge = captureHarloweBootstrapChallengeSynchronously(
+		title,
+		trigger
+	);
+
+	await waitFor(() => expect(bootstrapChallenge).toMatch(/^[0-9a-f]{64}$/));
+	return bootstrapChallenge!;
+}
+
+function captureHarloweBootstrapChallengeSynchronously(
+	title: string,
+	trigger: () => void
+) {
+	const frame = screen.getByTitle(title) as HTMLIFrameElement;
+	const frameWindow = frame.contentWindow!;
+	let bootstrapChallenge: string | undefined;
+	const captureChallenge = (event: MessageEvent) => {
+		if (
+			event.data?.source === 'twine.rs.preview.host-command' &&
+			event.data?.type === 'debugger-bootstrap-challenge'
+		) {
+			bootstrapChallenge = event.data.bootstrapChallenge;
+		}
+	};
+	const capturePort = (event: MessageEvent) => {
+		if (
+			event.data?.source !== 'twine.rs.preview.host-command' ||
+			event.data?.type !== 'debugger-bootstrap-port' ||
+			event.ports.length !== 1
+		) {
+			return;
+		}
+		const [port] = event.ports;
+
+		harloweDocumentPorts.set(frameWindow, port);
+		port.addEventListener('message', captureChallenge);
+		port.start();
+	};
+	const existingPort = harloweDocumentPorts.get(frameWindow);
+
+	existingPort?.addEventListener('message', captureChallenge);
+	frameWindow.addEventListener('message', capturePort);
+	trigger();
+	existingPort?.removeEventListener('message', captureChallenge);
+	frameWindow.removeEventListener('message', capturePort);
+	harloweDocumentPorts
+		.get(frameWindow)
+		?.removeEventListener('message', captureChallenge);
+
+	return bootstrapChallenge;
+}
+
+async function armHarloweBootstrap(title: string, sessionId: string) {
+	return captureHarloweBootstrapChallenge(title, () => {
+		postBridgeMessage(title, sessionId, {
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			protocolVersion: 1,
+			type: 'debugger-bootstrap-arm'
+		});
+	});
+}
+
+function postHarloweReadiness(
+	title: string,
+	sessionId: string,
+	bootstrapChallenge: string,
+	source?: MessageEventSource | null,
+	wrapAct = true
+) {
+	const frameWindow = (screen.getByTitle(title) as HTMLIFrameElement)
+		.contentWindow;
+	const readinessSource = source === undefined ? frameWindow : source;
+	const port =
+		readinessSource === frameWindow && frameWindow
+			? harloweDocumentPorts.get(frameWindow)
+			: undefined;
+
+	if (port) {
+		const send = () => {
+			port.postMessage({
+				adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+				bootstrapChallenge,
+				protocolVersion: 1,
+				sessionId,
+				source: STORY_PREVIEW_BRIDGE_SOURCE,
+				time: 10,
+				type: 'debugger-bootstrap-ready'
+			});
+		};
+
+		if (wrapAct) act(send);
+		else send();
+		return;
+	}
+
+	postBridgeMessage(
+		title,
+		sessionId,
+		{
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			bootstrapChallenge,
+			protocolVersion: 1,
+			type: 'debugger-bootstrap-ready'
+		},
+		source
+	);
+}
+
+function destroyHarloweDocumentPort(frame: HTMLIFrameElement) {
+	const frameWindow = frame.contentWindow;
+
+	if (!frameWindow) return undefined;
+	const documentPort = harloweDocumentPorts.get(frameWindow);
+	const parentPort = (
+		documentPort as unknown as SynchronousTestMessagePort | undefined
+	)?.peer;
+
+	documentPort?.close();
+	harloweDocumentPorts.delete(frameWindow);
+	return (sessionId: string, bootstrapChallenge: string) => {
+		act(() => {
+			parentPort?.dispatchEvent(
+				new MessageEvent('message', {
+					data: {
+						adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+						bootstrapChallenge,
+						protocolVersion: 1,
+						sessionId,
+						source: STORY_PREVIEW_BRIDGE_SOURCE,
+						time: 10,
+						type: 'debugger-bootstrap-ready'
+					}
+				})
+			);
+		});
+	};
 }
 
 function deferred<T>() {
@@ -1723,6 +1959,742 @@ describe('<StoryPreviewFrame>', () => {
 		fireEvent.load(screen.getByTitle('Load-aware preview'));
 
 		expect(onContentLoad).toHaveBeenCalledTimes(1);
+	});
+
+	it('waits for closure-correlated Harlowe readiness before reporting a content load', async () => {
+		const onContentLoad = jest.fn();
+
+		render(
+			<StoryPreviewFrame
+				contentSource={{
+					admission: harloweAdmission(),
+					bridgeSessionId: 'harlowe-load-session',
+					generation: 1,
+					htmlBytes: 123,
+					storyDataCount: 1,
+					type: 'url',
+					url: 'twine-preview://harlowe-load/index.html'
+				}}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe load-aware preview"
+			/>
+		);
+
+		fireEvent.load(screen.getByTitle('Harlowe load-aware preview'));
+		expect(onContentLoad).not.toHaveBeenCalled();
+
+		postBridgeMessage(
+			'Harlowe load-aware preview',
+			'harlowe-load-session',
+			{
+				adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+				protocolVersion: 1,
+				type: 'debugger-bootstrap-ready'
+			},
+			window
+		);
+		expect(onContentLoad).not.toHaveBeenCalled();
+
+		postBridgeMessage('Harlowe load-aware preview', 'wrong-session', {
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			protocolVersion: 1,
+			type: 'debugger-bootstrap-ready'
+		});
+		expect(onContentLoad).not.toHaveBeenCalled();
+
+		postBridgeMessage('Harlowe load-aware preview', 'harlowe-load-session', {
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			protocolVersion: 1,
+			type: 'debugger-bootstrap-ready'
+		});
+		expect(onContentLoad).not.toHaveBeenCalled();
+
+		const bootstrapChallenge = await armHarloweBootstrap(
+			'Harlowe load-aware preview',
+			'harlowe-load-session'
+		);
+
+		postBridgeMessage('Harlowe load-aware preview', 'harlowe-load-session', {
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			bootstrapChallenge,
+			protocolVersion: 1,
+			type: 'debugger-bootstrap-ready'
+		});
+		expect(onContentLoad).not.toHaveBeenCalled();
+		postHarloweReadiness(
+			'Harlowe load-aware preview',
+			'harlowe-load-session',
+			'b'.repeat(64)
+		);
+		expect(onContentLoad).not.toHaveBeenCalled();
+		postHarloweReadiness(
+			'Harlowe load-aware preview',
+			'harlowe-load-session',
+			bootstrapChallenge
+		);
+		expect(onContentLoad).toHaveBeenCalledTimes(1);
+
+		postHarloweReadiness(
+			'Harlowe load-aware preview',
+			'harlowe-load-session',
+			bootstrapChallenge
+		);
+		fireEvent.load(screen.getByTitle('Harlowe load-aware preview'));
+		expect(onContentLoad).toHaveBeenCalledTimes(1);
+	});
+
+	it('treats pre-load Harlowe readiness as provisional until the loaded document reattests', async () => {
+		const onContentLoad = jest.fn();
+
+		render(
+			<StoryPreviewFrame
+				contentSource={{
+					admission: harloweAdmission(),
+					bridgeSessionId: 'harlowe-ready-first',
+					generation: 2,
+					htmlBytes: 123,
+					storyDataCount: 1,
+					type: 'url',
+					url: 'twine-preview://harlowe-ready-first/index.html'
+				}}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe ready-first preview"
+			/>
+		);
+
+		const frame = screen.getByTitle(
+			'Harlowe ready-first preview'
+		) as HTMLIFrameElement;
+		const frameWindow = frame.contentWindow;
+		const provisionalChallenge = await armHarloweBootstrap(
+			'Harlowe ready-first preview',
+			'harlowe-ready-first'
+		);
+		postHarloweReadiness(
+			'Harlowe ready-first preview',
+			'harlowe-ready-first',
+			provisionalChallenge
+		);
+		expect(onContentLoad).not.toHaveBeenCalled();
+
+		const loadedDocumentChallenge = await captureHarloweBootstrapChallenge(
+			'Harlowe ready-first preview',
+			() => fireEvent.load(frame)
+		);
+
+		expect(frame.contentWindow).toBe(frameWindow);
+		expect(loadedDocumentChallenge).not.toBe(provisionalChallenge);
+		postHarloweReadiness(
+			'Harlowe ready-first preview',
+			'harlowe-ready-first',
+			provisionalChallenge,
+			frameWindow
+		);
+		expect(onContentLoad).not.toHaveBeenCalled();
+		postHarloweReadiness(
+			'Harlowe ready-first preview',
+			'harlowe-ready-first',
+			loadedDocumentChallenge,
+			frameWindow
+		);
+		expect(onContentLoad).toHaveBeenCalledTimes(1);
+	});
+
+	it('fails closed when the same iframe navigates after a Harlowe challenge is issued', async () => {
+		const onContentLoad = jest.fn();
+
+		render(
+			<StoryPreviewFrame
+				contentSource={{
+					admission: harloweAdmission(),
+					bridgeSessionId: 'harlowe-native-navigation',
+					generation: 3,
+					htmlBytes: 123,
+					storyDataCount: 1,
+					type: 'url',
+					url: 'twine-preview://harlowe-native-navigation/index.html'
+				}}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe native navigation"
+			/>
+		);
+		const frame = screen.getByTitle(
+			'Harlowe native navigation'
+		) as HTMLIFrameElement;
+		const frameWindow = frame.contentWindow;
+
+		fireEvent.load(frame);
+		const oldDocumentChallenge = await armHarloweBootstrap(
+			'Harlowe native navigation',
+			'harlowe-native-navigation'
+		);
+		const replayQueuedReadiness = destroyHarloweDocumentPort(frame);
+		const replacementDocumentChallenge =
+			captureHarloweBootstrapChallengeSynchronously(
+				'Harlowe native navigation',
+				() => fireEvent.load(frame)
+			);
+
+		expect(frame.contentWindow).toBe(frameWindow);
+		expect(replacementDocumentChallenge).toBeUndefined();
+		replayQueuedReadiness?.('harlowe-native-navigation', oldDocumentChallenge);
+		expect(onContentLoad).not.toHaveBeenCalled();
+		postHarloweReadiness(
+			'Harlowe native navigation',
+			'harlowe-native-navigation',
+			oldDocumentChallenge,
+			frameWindow
+		);
+		expect(onContentLoad).not.toHaveBeenCalled();
+		postHarloweReadiness(
+			'Harlowe native navigation',
+			'harlowe-native-navigation',
+			'c'.repeat(64),
+			frameWindow
+		);
+		expect(onContentLoad).not.toHaveBeenCalled();
+	});
+
+	it('does not promote a staged native navigation with the prior document readiness', async () => {
+		const onStagedContentLoad = jest.fn();
+
+		render(
+			<StoryPreviewFrame
+				contentSource={{
+					bridgeSessionId: 'native-navigation-current',
+					htmlBytes: 123,
+					storyDataCount: 1,
+					type: 'url',
+					url: 'twine-preview://native-navigation-current/index.html'
+				}}
+				missingStoryMessage="Missing story"
+				onStagedContentLoad={onStagedContentLoad}
+				stagedContentSource={{
+					admission: harloweAdmission(),
+					bridgeSessionId: 'native-navigation-candidate',
+					generation: 2,
+					htmlBytes: 456,
+					storyDataCount: 1,
+					type: 'url',
+					url: 'twine-preview://native-navigation-candidate/index.html'
+				}}
+				stagedTitle="Native navigation candidate"
+				storyExists
+				title="Native navigation current"
+			/>
+		);
+		const frame = screen.getByTitle(
+			'Native navigation candidate'
+		) as HTMLIFrameElement;
+		const frameWindow = frame.contentWindow;
+
+		fireEvent.load(frame);
+		const oldDocumentChallenge = await armHarloweBootstrap(
+			'Native navigation candidate',
+			'native-navigation-candidate'
+		);
+
+		const replayQueuedReadiness = destroyHarloweDocumentPort(frame);
+		const replacementDocumentChallenge =
+			captureHarloweBootstrapChallengeSynchronously(
+				'Native navigation candidate',
+				() => fireEvent.load(frame)
+			);
+
+		expect(frame.contentWindow).toBe(frameWindow);
+		expect(replacementDocumentChallenge).toBeUndefined();
+		replayQueuedReadiness?.(
+			'native-navigation-candidate',
+			oldDocumentChallenge
+		);
+		expect(onStagedContentLoad).not.toHaveBeenCalled();
+		postHarloweReadiness(
+			'Native navigation candidate',
+			'native-navigation-candidate',
+			oldDocumentChallenge,
+			frameWindow
+		);
+		expect(onStagedContentLoad).not.toHaveBeenCalled();
+		postHarloweReadiness(
+			'Native navigation candidate',
+			'native-navigation-candidate',
+			'd'.repeat(64),
+			frameWindow
+		);
+		expect(onStagedContentLoad).not.toHaveBeenCalled();
+	});
+
+	it('resets exact Harlowe readiness when only the bridge session changes', async () => {
+		const onContentLoad = jest.fn();
+		const source = {
+			admission: harloweAdmission(),
+			bridgeSessionId: 'harlowe-old-session',
+			generation: 4,
+			htmlBytes: 123,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://harlowe-same-url/index.html'
+		};
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={source}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe session replacement"
+			/>
+		);
+
+		fireEvent.load(screen.getByTitle('Harlowe session replacement'));
+		rerender(
+			<StoryPreviewFrame
+				contentSource={{...source, bridgeSessionId: 'harlowe-new-session'}}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe session replacement"
+			/>
+		);
+		const newChallenge = await armHarloweBootstrap(
+			'Harlowe session replacement',
+			'harlowe-new-session'
+		);
+		postHarloweReadiness(
+			'Harlowe session replacement',
+			'harlowe-new-session',
+			newChallenge
+		);
+		expect(onContentLoad).not.toHaveBeenCalled();
+
+		const loadedChallenge = await captureHarloweBootstrapChallenge(
+			'Harlowe session replacement',
+			() => fireEvent.load(screen.getByTitle('Harlowe session replacement'))
+		);
+		expect(loadedChallenge).not.toBe(newChallenge);
+		postHarloweReadiness(
+			'Harlowe session replacement',
+			'harlowe-new-session',
+			loadedChallenge
+		);
+		expect(onContentLoad).toHaveBeenCalledTimes(1);
+
+		rerender(
+			<StoryPreviewFrame
+				contentSource={{...source, bridgeSessionId: 'harlowe-third-session'}}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe session replacement"
+			/>
+		);
+		fireEvent.load(screen.getByTitle('Harlowe session replacement'));
+		expect(onContentLoad).toHaveBeenCalledTimes(1);
+		const thirdChallenge = await armHarloweBootstrap(
+			'Harlowe session replacement',
+			'harlowe-third-session'
+		);
+		postHarloweReadiness(
+			'Harlowe session replacement',
+			'harlowe-third-session',
+			thirdChallenge
+		);
+		expect(onContentLoad).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not inherit pre-load Harlowe readiness across bridge sessions', async () => {
+		const onContentLoad = jest.fn();
+		const source = {
+			admission: harloweAdmission(),
+			bridgeSessionId: 'harlowe-ready-old',
+			generation: 4,
+			htmlBytes: 123,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://harlowe-ready-session/index.html'
+		};
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={source}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe pre-load session replacement"
+			/>
+		);
+
+		const oldChallenge = await armHarloweBootstrap(
+			'Harlowe pre-load session replacement',
+			'harlowe-ready-old'
+		);
+		postHarloweReadiness(
+			'Harlowe pre-load session replacement',
+			'harlowe-ready-old',
+			oldChallenge
+		);
+		rerender(
+			<StoryPreviewFrame
+				contentSource={{...source, bridgeSessionId: 'harlowe-ready-new'}}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe pre-load session replacement"
+			/>
+		);
+		fireEvent.load(screen.getByTitle('Harlowe pre-load session replacement'));
+		expect(onContentLoad).not.toHaveBeenCalled();
+
+		const newChallenge = await armHarloweBootstrap(
+			'Harlowe pre-load session replacement',
+			'harlowe-ready-new'
+		);
+		postHarloweReadiness(
+			'Harlowe pre-load session replacement',
+			'harlowe-ready-new',
+			newChallenge
+		);
+		expect(onContentLoad).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects exact Harlowe readiness from a stale generation window', async () => {
+		const onContentLoad = jest.fn();
+		const source = {
+			admission: harloweAdmission(),
+			bridgeSessionId: 'harlowe-generation-session',
+			generation: 4,
+			htmlBytes: 123,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://harlowe-generation/index.html'
+		};
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={source}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe generation replacement"
+			/>
+		);
+		const staleWindow = (
+			screen.getByTitle('Harlowe generation replacement') as HTMLIFrameElement
+		).contentWindow;
+		const staleChallenge = await armHarloweBootstrap(
+			'Harlowe generation replacement',
+			'harlowe-generation-session'
+		);
+
+		fireEvent.load(screen.getByTitle('Harlowe generation replacement'));
+		rerender(
+			<StoryPreviewFrame
+				contentSource={{...source, generation: 5}}
+				missingStoryMessage="Missing story"
+				onContentLoad={onContentLoad}
+				storyExists
+				title="Harlowe generation replacement"
+			/>
+		);
+		postHarloweReadiness(
+			'Harlowe generation replacement',
+			'harlowe-generation-session',
+			staleChallenge,
+			staleWindow
+		);
+		expect(onContentLoad).not.toHaveBeenCalled();
+
+		const currentChallenge = await armHarloweBootstrap(
+			'Harlowe generation replacement',
+			'harlowe-generation-session'
+		);
+		postHarloweReadiness(
+			'Harlowe generation replacement',
+			'harlowe-generation-session',
+			currentChallenge
+		);
+		expect(onContentLoad).not.toHaveBeenCalled();
+		const loadedChallenge = await captureHarloweBootstrapChallenge(
+			'Harlowe generation replacement',
+			() => fireEvent.load(screen.getByTitle('Harlowe generation replacement'))
+		);
+		expect(loadedChallenge).not.toBe(currentChallenge);
+		postHarloweReadiness(
+			'Harlowe generation replacement',
+			'harlowe-generation-session',
+			loadedChallenge
+		);
+		expect(onContentLoad).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not let rolled-back Harlowe candidate readiness complete staging', async () => {
+		const onStagedContentLoad = jest.fn();
+		const currentSource = {
+			bridgeSessionId: 'committed-session',
+			htmlBytes: 123,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://committed/index.html'
+		};
+		const candidateSource = {
+			admission: harloweAdmission(),
+			bridgeSessionId: 'harlowe-candidate-session',
+			generation: 2,
+			htmlBytes: 456,
+			storyDataCount: 1,
+			type: 'url' as const,
+			url: 'twine-preview://harlowe-candidate/index.html'
+		};
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing story"
+				onStagedContentLoad={onStagedContentLoad}
+				stagedContentSource={candidateSource}
+				stagedTitle="Harlowe candidate preview"
+				storyExists
+				title="Committed preview"
+			/>
+		);
+		const candidateFrame = screen.getByTitle(
+			'Harlowe candidate preview'
+		) as HTMLIFrameElement;
+		const candidateWindow = candidateFrame.contentWindow;
+
+		fireEvent.load(candidateFrame);
+		expect(onStagedContentLoad).not.toHaveBeenCalled();
+		const candidateChallenge = await armHarloweBootstrap(
+			'Harlowe candidate preview',
+			'harlowe-candidate-session'
+		);
+
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing story"
+				onStagedContentLoad={onStagedContentLoad}
+				storyExists
+				title="Committed preview"
+			/>
+		);
+		postHarloweReadiness(
+			'Committed preview',
+			'harlowe-candidate-session',
+			candidateChallenge,
+			candidateWindow
+		);
+
+		expect(onStagedContentLoad).not.toHaveBeenCalled();
+	});
+
+	it('rejects same-session forged staged readiness before and after challenge issuance', async () => {
+		const onStagedContentLoad = jest.fn();
+
+		render(
+			<StoryPreviewFrame
+				contentSource={{
+					bridgeSessionId: 'forged-staged-current',
+					htmlBytes: 123,
+					storyDataCount: 1,
+					type: 'url',
+					url: 'twine-preview://forged-staged-current/index.html'
+				}}
+				missingStoryMessage="Missing story"
+				onStagedContentLoad={onStagedContentLoad}
+				stagedContentSource={{
+					admission: harloweAdmission(),
+					bridgeSessionId: 'forged-staged-candidate',
+					generation: 2,
+					htmlBytes: 456,
+					storyDataCount: 1,
+					type: 'url',
+					url: 'twine-preview://forged-staged-candidate/index.html'
+				}}
+				stagedTitle="Forged staged candidate"
+				storyExists
+				title="Forged staged current"
+			/>
+		);
+		const candidate = screen.getByTitle('Forged staged candidate');
+
+		fireEvent.load(candidate);
+		postBridgeMessage('Forged staged candidate', 'forged-staged-candidate', {
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			bootstrapChallenge: 'f'.repeat(64),
+			protocolVersion: 1,
+			type: 'debugger-bootstrap-ready'
+		});
+		expect(onStagedContentLoad).not.toHaveBeenCalled();
+
+		const bootstrapChallenge = await armHarloweBootstrap(
+			'Forged staged candidate',
+			'forged-staged-candidate'
+		);
+
+		postBridgeMessage('Forged staged candidate', 'forged-staged-candidate', {
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			bootstrapChallenge,
+			protocolVersion: 1,
+			type: 'debugger-bootstrap-ready'
+		});
+		expect(onStagedContentLoad).not.toHaveBeenCalled();
+		postHarloweReadiness(
+			'Forged staged candidate',
+			'forged-staged-candidate',
+			'f'.repeat(64)
+		);
+		expect(onStagedContentLoad).not.toHaveBeenCalled();
+		postHarloweReadiness(
+			'Forged staged candidate',
+			'forged-staged-candidate',
+			bootstrapChallenge
+		);
+		expect(onStagedContentLoad).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps the listener armed when current Harlowe readiness arrives during replacement commit', () => {
+		const onContentLoad = jest.fn();
+		function Harness({generation}: {generation: number}) {
+			const previousGeneration = React.useRef(generation);
+
+			React.useLayoutEffect(() => {
+				if (previousGeneration.current === generation) return;
+				previousGeneration.current = generation;
+				const frame = document.querySelector<HTMLIFrameElement>(
+					'iframe[title="Synchronous current replacement"]'
+				)!;
+				const source = frame.contentWindow;
+
+				frame.dispatchEvent(new Event('load'));
+				const bootstrapChallenge =
+					captureHarloweBootstrapChallengeSynchronously(
+						'Synchronous current replacement',
+						() =>
+							window.dispatchEvent(
+								new MessageEvent('message', {
+									data: {
+										adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+										protocolVersion: 1,
+										sessionId: 'synchronous-current-session',
+										source: STORY_PREVIEW_BRIDGE_SOURCE,
+										type: 'debugger-bootstrap-arm'
+									},
+									source
+								})
+							)
+					);
+
+				expect(bootstrapChallenge).toMatch(/^[0-9a-f]{64}$/);
+				postHarloweReadiness(
+					'Synchronous current replacement',
+					'synchronous-current-session',
+					bootstrapChallenge!,
+					undefined,
+					false
+				);
+			}, [generation]);
+
+			return (
+				<StoryPreviewFrame
+					contentSource={{
+						admission: harloweAdmission(),
+						bridgeSessionId: 'synchronous-current-session',
+						generation,
+						htmlBytes: 123,
+						storyDataCount: 1,
+						type: 'url',
+						url: 'twine-preview://synchronous-current/index.html'
+					}}
+					missingStoryMessage="Missing story"
+					onContentLoad={onContentLoad}
+					storyExists
+					title="Synchronous current replacement"
+				/>
+			);
+		}
+
+		const {rerender} = render(<Harness generation={1} />);
+
+		rerender(<Harness generation={2} />);
+		expect(onContentLoad).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps the listener armed when staged Harlowe readiness arrives during replacement commit', () => {
+		const onStagedContentLoad = jest.fn();
+		function Harness({generation}: {generation: number}) {
+			const previousGeneration = React.useRef(generation);
+
+			React.useLayoutEffect(() => {
+				if (previousGeneration.current === generation) return;
+				previousGeneration.current = generation;
+				const frame = document.querySelector<HTMLIFrameElement>(
+					'iframe[title="Synchronous staged replacement"]'
+				)!;
+				const source = frame.contentWindow;
+
+				frame.dispatchEvent(new Event('load'));
+				const bootstrapChallenge =
+					captureHarloweBootstrapChallengeSynchronously(
+						'Synchronous staged replacement',
+						() =>
+							window.dispatchEvent(
+								new MessageEvent('message', {
+									data: {
+										adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+										protocolVersion: 1,
+										sessionId: 'synchronous-staged-session',
+										source: STORY_PREVIEW_BRIDGE_SOURCE,
+										type: 'debugger-bootstrap-arm'
+									},
+									source
+								})
+							)
+					);
+
+				expect(bootstrapChallenge).toMatch(/^[0-9a-f]{64}$/);
+				postHarloweReadiness(
+					'Synchronous staged replacement',
+					'synchronous-staged-session',
+					bootstrapChallenge!,
+					undefined,
+					false
+				);
+			}, [generation]);
+
+			return (
+				<StoryPreviewFrame
+					contentSource={{
+						bridgeSessionId: 'committed-session',
+						htmlBytes: 123,
+						storyDataCount: 1,
+						type: 'url',
+						url: 'twine-preview://committed/index.html'
+					}}
+					missingStoryMessage="Missing story"
+					onStagedContentLoad={onStagedContentLoad}
+					stagedContentSource={{
+						admission: harloweAdmission(),
+						bridgeSessionId: 'synchronous-staged-session',
+						generation,
+						htmlBytes: 456,
+						storyDataCount: 1,
+						type: 'url',
+						url: 'twine-preview://synchronous-staged/index.html'
+					}}
+					stagedTitle="Synchronous staged replacement"
+					storyExists
+					title="Committed preview"
+				/>
+			);
+		}
+
+		const {rerender} = render(<Harness generation={1} />);
+
+		rerender(<Harness generation={2} />);
+		expect(onStagedContentLoad).toHaveBeenCalledTimes(1);
 	});
 
 	it('surfaces runtime passage state and routes actions to that passage', () => {

@@ -128,6 +128,24 @@ then promotes that already-loaded frame. Commit releases the old package, while
 failure or timeout releases the candidate and preserves the current frame,
 runtime progress, and captured logs.
 
+For an exactly admitted Harlowe 3.3.9 candidate, the shell sends that
+acknowledgement only after both iframe load and matching State
+attestation readiness. The parent transfers an unexposed `MessagePort` to the
+early bridge and sends the exact-load high-entropy challenge only through that
+channel; readiness is authoritative only when it returns through the matching
+parent endpoint. Knowing the public bridge session or reusing the iframe's
+stable `WindowProxy` is insufficient. A pre-load response is provisional. The
+native `load` event rotates the challenge and requires a fresh response from the
+same document-owned channel. Native navigation destroys the child endpoint, so
+the replacement document fails closed even though the `WindowProxy` survives.
+A continuously armed window listener reads current and staged load identities
+from refs and establishes the bridge channel without a React effect gap. Late,
+queued, window-forged, or stale-port readiness therefore cannot complete a new
+candidate. Other formats retain load-only acknowledgement. Main also prevents
+non-same-document navigation from an already loaded exact-Harlowe story frame.
+A candidate attempt rolls back; the shell's Reload control uses a new iframe,
+new channel, and the expected main-owned package URL.
+
 Normal close, preview destruction or crash, owner reload/destruction, and app
 shutdown release the session's packages and scratch roots. Startup and shutdown
 cleanup is not required for correctness: staging opportunistically prunes

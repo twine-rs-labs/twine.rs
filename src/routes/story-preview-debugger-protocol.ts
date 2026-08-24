@@ -2,6 +2,7 @@ import {
 	SUGARCUBE_COMPATIBILITY,
 	type ExactSugarCubeAdapterId
 } from './story-preview-sugarcube';
+import type {PreviewFormatAdmission} from './story-preview-format';
 
 export const STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION = 1;
 export const STORY_PREVIEW_COMMAND_PROTOCOL_VERSION = 1;
@@ -50,7 +51,7 @@ export type StoryPreviewDebuggerAdapterId =
 	| 'generic';
 
 export type StoryPreviewDebuggerCaptureHandler =
-	'current-only' | 'snowman' | 'sugarcube';
+	'current-only' | 'harlowe-state' | 'snowman' | 'sugarcube';
 
 export type StoryPreviewRestartHandler =
 	'chapbook' | 'harlowe' | 'snowman' | 'sugarcube';
@@ -69,6 +70,7 @@ export interface StoryPreviewDebuggerAdapterRegistration extends StoryPreviewDeb
 
 export const STORY_PREVIEW_DEBUGGER_CAPTURE_COLLECTIONS = {
 	'current-only': [],
+	'harlowe-state': [],
 	snowman: ['storyVariables', 'visitedPassages'],
 	sugarcube: ['storyVariables', 'temporaryVariables', 'visitedPassages']
 } as const satisfies Record<
@@ -145,6 +147,14 @@ export const STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS = {
 	StoryPreviewDebuggerAdapterRegistration
 >;
 
+export const HARLOWE_EXACT_DEBUGGER_ADAPTER = registration(
+	'harlowe-state',
+	'Harlowe',
+	'3.3.9',
+	'harlowe-3.3.9',
+	'exact-version'
+);
+
 /**
  * Runtime mutation support is deliberately independent of read reliability.
  * Only these exact bundled tuples may advertise Restart.
@@ -213,6 +223,71 @@ export function selectStoryPreviewDebuggerAdapter(
 		id: 'generic',
 		reliability: 'best-effort'
 	};
+}
+
+/** Resolves an exact read registration solely from host-owned admission. */
+export function readAdapterForAdmission(
+	admission: PreviewFormatAdmission
+): StoryPreviewDebuggerAdapterRegistration | undefined {
+	if (admission.kind !== 'builtin-sha256') {
+		return undefined;
+	}
+	if (admission.format === 'Harlowe') {
+		return admission.adapterId === HARLOWE_EXACT_DEBUGGER_ADAPTER.id
+			? HARLOWE_EXACT_DEBUGGER_ADAPTER
+			: undefined;
+	}
+
+	return STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS[admission.adapterId];
+}
+
+/**
+ * Resolves the non-authoritative fallback profile observed from story markup.
+ * SugarCube exact registrations are never reachable through this path.
+ */
+export function readAdapterForObservedFormat(
+	format: string | undefined,
+	formatVersion: string | undefined
+): StoryPreviewDebuggerAdapterRegistration {
+	const selected = selectStoryPreviewDebuggerAdapter(format, formatVersion);
+
+	if (selected.format === 'SugarCube') {
+		return {
+			capabilities: ['currentPassage'],
+			captureHandler: 'current-only',
+			format: format ?? '',
+			formatVersion: formatVersion ?? '',
+			id: 'generic',
+			reliability: 'best-effort'
+		};
+	}
+
+	if (selected.id === 'generic') {
+		return {...selected, captureHandler: 'current-only'};
+	}
+
+	return STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS[selected.id];
+}
+
+export function admissionAllowsReadAdapter(
+	admission: PreviewFormatAdmission,
+	adapterId: unknown
+) {
+	const exact = readAdapterForAdmission(admission);
+
+	if (exact) {
+		return adapterId === exact.id;
+	}
+	if (admission.kind !== 'none') {
+		return false;
+	}
+
+	return (
+		adapterId === 'generic' ||
+		(typeof adapterId === 'string' &&
+			!adapterId.startsWith('sugarcube-') &&
+			storyPreviewDebuggerAdapter(adapterId) !== undefined)
+	);
 }
 
 export function storyPreviewDebuggerAdapter(

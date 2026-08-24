@@ -11,7 +11,7 @@ import type {CoreAssetInventoryEntry, CoreStorySummary} from '../../core';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
 import type {StoryBuildAsset} from '../../util/build-package';
 import type {StoryFormatProperties} from '../../store/story-formats';
-import type {PreviewFormatAdmission} from '../../routes/story-preview-sugarcube';
+import type {PreviewFormatAdmission} from '../../routes/story-preview-format';
 
 export type ProjectSourceLayout = 'passage-files' | 'single-twee';
 

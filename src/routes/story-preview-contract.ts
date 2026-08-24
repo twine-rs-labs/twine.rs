@@ -6,8 +6,10 @@ import {
 	STORY_PREVIEW_DEBUGGER_TRUNCATION_REASONS,
 	STORY_PREVIEW_RESTART_ADAPTER_REGISTRATIONS,
 	STORY_PREVIEW_RESTART_RESULT_STATUSES,
+	admissionAllowsReadAdapter,
 	isStoryPreviewDebuggerAdapterId,
-	selectStoryPreviewDebuggerAdapter,
+	readAdapterForAdmission,
+	readAdapterForObservedFormat,
 	storyPreviewDebuggerAdapter,
 	storyPreviewRestartHandler
 } from './story-preview-debugger-protocol';
@@ -23,13 +25,16 @@ import {
 	NO_PREVIEW_FORMAT_ADMISSION,
 	canonicalPreviewFormatAdmission,
 	previewFormatAdmissionForHtml,
+	type PreviewFormatAdmission
+} from './story-preview-format';
+import {harloweStateProfileForAdapter} from './story-preview-harlowe';
+import {
 	sugarCubeCompatibilityForAdapter,
 	sugarCubeReadProfileForAdapter,
-	sugarCubeRestartProfileForAdapter,
-	type PreviewFormatAdmission
+	sugarCubeRestartProfileForAdapter
 } from './story-preview-sugarcube';
 
-export type {PreviewFormatAdmission} from './story-preview-sugarcube';
+export type {PreviewFormatAdmission} from './story-preview-format';
 
 export const STORY_PREVIEW_BRIDGE_SOURCE = 'twine.rs.preview.bridge';
 export const STORY_PREVIEW_COMMAND_SOURCE = 'twine.rs.preview.host-command';
@@ -86,6 +91,7 @@ export const STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE = `
 })();`;
 
 export const STORY_PREVIEW_BRIDGE_LIMITS = Object.freeze({
+	bootstrapChallengeLength: 64,
 	hashLength: 2048,
 	logArgumentCount: 16,
 	logArgumentLength: 2048,
@@ -244,6 +250,7 @@ export interface StoryPreviewBridgeMessage {
 	source: typeof STORY_PREVIEW_BRIDGE_SOURCE;
 	time?: number;
 	adapterId?: StoryPreviewDebuggerAdapterId;
+	bootstrapChallenge?: string;
 	capabilities?: StoryPreviewDebuggerCapability[];
 	format?: string;
 	formatVersion?: string;
@@ -255,6 +262,8 @@ export interface StoryPreviewBridgeMessage {
 	temporaryVariables?: StoryPreviewDebuggerVariable[];
 	type:
 		| 'console'
+		| 'debugger-bootstrap-arm'
+		| 'debugger-bootstrap-ready'
 		| 'debugger-command-hello'
 		| 'debugger-command-result'
 		| 'debugger-hello'
@@ -274,6 +283,17 @@ interface CanonicalStoryPreviewBridgeMessageBase {
 
 /** A fully copied and admission-authorized message safe for reducer input. */
 export type CanonicalStoryPreviewBridgeMessage =
+	| (CanonicalStoryPreviewBridgeMessageBase & {
+			adapterId: 'harlowe-3.3.9';
+			bootstrapChallenge: string;
+			protocolVersion: typeof STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION;
+			type: 'debugger-bootstrap-ready';
+	  })
+	| (CanonicalStoryPreviewBridgeMessageBase & {
+			adapterId: 'harlowe-3.3.9';
+			protocolVersion: typeof STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION;
+			type: 'debugger-bootstrap-arm';
+	  })
 	| (CanonicalStoryPreviewBridgeMessageBase & {
 			args: string[];
 			level: StoryPreviewRuntimeLogEntry['level'];
@@ -327,6 +347,7 @@ export interface PreviewBridgeContext {
 	admission: PreviewFormatAdmission;
 	bridgeSessionId: string;
 	generation: number;
+	harloweBootstrapChallenge?: string;
 	sugarCubeRestartEligible: boolean;
 }
 
@@ -545,17 +566,8 @@ function canonicalDebuggerHello(
 	}
 
 	const expected =
-		context.admission.kind === 'builtin-sha256'
-			? storyPreviewDebuggerAdapter(context.admission.adapterId)
-			: value.format === 'SugarCube'
-				? {
-						capabilities: ['currentPassage'] as const,
-						format: value.format,
-						formatVersion: value.formatVersion,
-						id: 'generic' as const,
-						reliability: 'best-effort' as const
-					}
-				: selectStoryPreviewDebuggerAdapter(value.format, value.formatVersion);
+		readAdapterForAdmission(context.admission) ??
+		readAdapterForObservedFormat(value.format, value.formatVersion);
 
 	if (!expected) {
 		return undefined;
@@ -614,23 +626,14 @@ function debuggerSectionStatusFromUnknown(
 	return {reasons, state: 'truncated'};
 }
 
-function debuggerCapabilitiesForAdapter(
-	adapterId: StoryPreviewDebuggerAdapterId
-): readonly StoryPreviewDebuggerCapability[] {
-	return (
-		storyPreviewDebuggerAdapter(adapterId)?.capabilities ?? ['currentPassage']
-	);
-}
-
 function debuggerSectionsFromUnknown(
 	value: unknown,
-	adapterId: StoryPreviewDebuggerAdapterId
+	expected: readonly StoryPreviewDebuggerCapability[]
 ): StoryPreviewDebuggerSections | undefined {
 	if (!isRecord(value)) {
 		return undefined;
 	}
 
-	const expected = debuggerCapabilitiesForAdapter(adapterId);
 	const keys = Object.keys(value);
 	if (
 		keys.length !== expected.length ||
@@ -928,19 +931,73 @@ export function normalizeStoryPreviewBridgeMessage(
 		};
 	}
 
+	if (
+		data.type === 'debugger-bootstrap-arm' ||
+		data.type === 'debugger-bootstrap-ready'
+	) {
+		const expectedChallenge = context.harloweBootstrapChallenge;
+		const bootstrapChallenge =
+			data.type === 'debugger-bootstrap-ready'
+				? boundedString(
+						data.bootstrapChallenge,
+						STORY_PREVIEW_BRIDGE_LIMITS.bootstrapChallengeLength
+					)
+				: undefined;
+		if (
+			admission.kind !== 'builtin-sha256' ||
+			admission.format !== 'Harlowe' ||
+			data.adapterId !== admission.adapterId ||
+			data.protocolVersion !== STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION ||
+			typeof expectedChallenge !== 'string' ||
+			!/^[0-9a-f]{64}$/.test(expectedChallenge) ||
+			(data.type === 'debugger-bootstrap-ready' &&
+				(bootstrapChallenge !== expectedChallenge ||
+					!/^[0-9a-f]{64}$/.test(bootstrapChallenge)))
+		) {
+			return undefined;
+		}
+
+		if (data.type === 'debugger-bootstrap-ready') {
+			return {
+				adapterId: 'harlowe-3.3.9',
+				bootstrapChallenge: bootstrapChallenge!,
+				protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+				sessionId,
+				source: STORY_PREVIEW_BRIDGE_SOURCE,
+				time,
+				type: 'debugger-bootstrap-ready'
+			};
+		}
+
+		return {
+			adapterId: 'harlowe-3.3.9',
+			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+			sessionId,
+			source: STORY_PREVIEW_BRIDGE_SOURCE,
+			time,
+			type: 'debugger-bootstrap-arm'
+		};
+	}
+
 	if (data.type === 'debugger-command-hello') {
 		const compatibility = sugarCubeCompatibilityForAdapter(data.adapterId);
-		const sugarCubeAuthorized = compatibility
+		const adapterAuthorized = compatibility
 			? admission.kind === 'builtin-sha256' &&
+				admission.format === 'SugarCube' &&
 				admission.adapterId === data.adapterId &&
 				context.sugarCubeRestartEligible === true
-			: admission.kind === 'none';
+			: data.adapterId === 'harlowe-3.3.9'
+				? admission.kind === 'none' ||
+					(admission.kind === 'builtin-sha256' &&
+						admission.format === 'Harlowe' &&
+						admission.adapterId === data.adapterId)
+				: admission.kind === 'none';
 
 		if (
 			data.protocolVersion !== STORY_PREVIEW_COMMAND_PROTOCOL_VERSION ||
 			!isStoryPreviewDebuggerAdapterId(data.adapterId) ||
 			!storyPreviewRestartHandler(data.adapterId) ||
-			!sugarCubeAuthorized ||
+			!adapterAuthorized ||
 			!Array.isArray(data.commandCapabilities) ||
 			data.commandCapabilities.length !==
 				STORY_PREVIEW_COMMAND_CAPABILITIES.length ||
@@ -970,11 +1027,17 @@ export function normalizeStoryPreviewBridgeMessage(
 		);
 
 		const compatibility = sugarCubeCompatibilityForAdapter(data.adapterId);
-		const sugarCubeAuthorized = compatibility
+		const adapterAuthorized = compatibility
 			? admission.kind === 'builtin-sha256' &&
+				admission.format === 'SugarCube' &&
 				admission.adapterId === data.adapterId &&
 				context.sugarCubeRestartEligible === true
-			: admission.kind === 'none';
+			: data.adapterId === 'harlowe-3.3.9'
+				? admission.kind === 'none' ||
+					(admission.kind === 'builtin-sha256' &&
+						admission.format === 'Harlowe' &&
+						admission.adapterId === data.adapterId)
+				: admission.kind === 'none';
 
 		if (
 			data.protocolVersion !== STORY_PREVIEW_COMMAND_PROTOCOL_VERSION ||
@@ -982,7 +1045,7 @@ export function normalizeStoryPreviewBridgeMessage(
 			!requestId ||
 			!isStoryPreviewDebuggerAdapterId(data.adapterId) ||
 			!storyPreviewRestartHandler(data.adapterId) ||
-			!sugarCubeAuthorized ||
+			!adapterAuthorized ||
 			!STORY_PREVIEW_RESTART_RESULT_STATUSES.includes(
 				data.status as StoryPreviewRestartResultStatus
 			)
@@ -1004,22 +1067,33 @@ export function normalizeStoryPreviewBridgeMessage(
 	}
 
 	if (data.type === 'debugger-snapshot') {
-		const compatibility = sugarCubeCompatibilityForAdapter(data.adapterId);
-		const adapterAuthorized = compatibility
-			? admission.kind === 'builtin-sha256' &&
-				admission.adapterId === data.adapterId
-			: admission.kind === 'none';
+		const exactAdapter = readAdapterForAdmission(admission);
+		const adapter = exactAdapter
+			? exactAdapter.id === data.adapterId
+				? exactAdapter
+				: undefined
+			: admissionAllowsReadAdapter(admission, data.adapterId)
+				? data.adapterId === 'generic'
+					? {
+							capabilities: ['currentPassage'] as const,
+							format: '',
+							formatVersion: '',
+							id: 'generic' as const,
+							reliability: 'best-effort' as const
+						}
+					: storyPreviewDebuggerAdapter(data.adapterId)
+				: undefined;
 
 		if (
 			data.protocolVersion !== STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION ||
 			!isStoryPreviewDebuggerAdapterId(data.adapterId) ||
-			!adapterAuthorized
+			!adapter
 		) {
 			return undefined;
 		}
 		const adapterId = data.adapterId;
-		const capabilities = debuggerCapabilitiesForAdapter(adapterId);
-		const sections = debuggerSectionsFromUnknown(data.sections, adapterId);
+		const capabilities = adapter.capabilities;
+		const sections = debuggerSectionsFromUnknown(data.sections, capabilities);
 		const currentPassage = runtimePassageFromUnknown(data.currentPassage);
 		const storyVariables = debuggerVariablesFromUnknown(data.storyVariables);
 		const temporaryVariables = debuggerVariablesFromUnknown(
@@ -1150,9 +1224,10 @@ function bridgeScript(
 	admission: PreviewFormatAdmission,
 	enableSugarCubeRestart: boolean
 ) {
-	const admittedAdapter =
-		admission.kind === 'builtin-sha256'
-			? STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS[admission.adapterId]
+	const admittedAdapter = readAdapterForAdmission(admission);
+	const harloweStateProfile =
+		admission.kind === 'builtin-sha256' && admission.format === 'Harlowe'
+			? harloweStateProfileForAdapter(admission.adapterId)
 			: undefined;
 	const sugarCubeReadProfile =
 		admission.kind === 'builtin-sha256'
@@ -1184,7 +1259,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var RESTART_ADAPTER_REGISTRATIONS = ${JSON.stringify(
 		STORY_PREVIEW_RESTART_ADAPTER_REGISTRATIONS
 	)};
-	var FIXED_SUGARCUBE_ADAPTER = ${JSON.stringify(admittedAdapter)};
+	var FIXED_READ_ADAPTER = ${JSON.stringify(admittedAdapter)};
 	var ENABLE_SUGARCUBE_RESTART = ${JSON.stringify(enableSugarCubeRestart)};
 	var DEBUGGER_VARIABLE_LIMIT = ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableCount};
 	var DEBUGGER_HISTORY_LIMIT = ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerVisitedPassageCount};
@@ -1199,6 +1274,9 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var pendingStartupState = 0;
 	var startupStateCaptureIndex = 0;
 	var selectedDebuggerAdapter;
+	var harloweState;
+	var harlowePassageGetter;
+	var harloweBootstrapConsumed = false;
 	var restartCommandBusy = false;
 	// A null value means Chapbook emitted a trail update which could not be copied
 	// safely. Keep that distinct from startup, when no trail event has arrived.
@@ -1217,7 +1295,23 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var debuggerString = String;
 	var debuggerFunctionToString = Function.prototype.toString;
 	var debuggerReflectApply = Reflect.apply;
+	var debuggerAddEventListener = EventTarget.prototype.addEventListener;
 	var debuggerDispatchEvent = EventTarget.prototype.dispatchEvent;
+	var debuggerStopImmediatePropagation = Event.prototype.stopImmediatePropagation;
+	var debuggerMessageEventPortsDescriptor = Object.getOwnPropertyDescriptor(MessageEvent.prototype, 'ports');
+	var debuggerMessageEventPorts = debuggerMessageEventPortsDescriptor
+		? debuggerMessageEventPortsDescriptor.get
+		: undefined;
+	var debuggerMessagePort = typeof MessagePort === 'function' ? MessagePort : undefined;
+	var debuggerMessagePortAddEventListener = debuggerMessagePort
+		? debuggerMessagePort.prototype.addEventListener
+		: undefined;
+	var debuggerMessagePortPostMessage = debuggerMessagePort
+		? debuggerMessagePort.prototype.postMessage
+		: undefined;
+	var debuggerMessagePortStart = debuggerMessagePort
+		? debuggerMessagePort.prototype.start
+		: undefined;
 	var debuggerCustomEvent = window.CustomEvent;
 	var debuggerHistory = window.history;
 	var debuggerHistoryReplaceStateDescriptor = Object.getOwnPropertyDescriptor(History.prototype, 'replaceState');
@@ -1232,9 +1326,13 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var debuggerStorageRemoveItem = Object.getOwnPropertyDescriptor(Storage.prototype, 'removeItem').value;
 	var debuggerDateGetTime = Date.prototype.getTime;
 	var debuggerRegExpSource = Object.getOwnPropertyDescriptor(RegExp.prototype, 'source').get;
+	var debuggerRegExpTest = RegExp.prototype.test;
 	var debuggerCustomEventDetail = Object.getOwnPropertyDescriptor(window.CustomEvent.prototype, 'detail').get;
 	var DEBUGGER_SUGARCUBE_STATE_ACCESSORS = ${JSON.stringify(
 		sugarCubeReadProfile ?? {}
+	)};
+	var DEBUGGER_HARLOWE_STATE_PROFILE = ${JSON.stringify(
+		harloweStateProfile ?? {}
 	)};
 	var SUGARCUBE_RESET_SOURCE = ${JSON.stringify(
 		sugarCubeRestartProfile?.resetSource ?? ''
@@ -1249,6 +1347,11 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		'function yt(){Q("Saving to local storage: "+JSON.stringify(xe())),window.localStorage.setItem(te,JSON.stringify(xe())),Q("Save complete")}'
 	)};
 	var restartFrameNamePrefix = 'twine-rs-restart:' + SESSION + ':';
+	var harloweBootstrapAttested = false;
+	var harloweBootstrapReadyChallenge;
+	var harloweReadinessPort;
+	var harloweReadinessChallenge;
+	var harloweReadinessChallengePattern = /^[0-9a-f]{64}$/;
 	var sugarCubeRestartRemount = false;
 	try {
 		sugarCubeRestartRemount =
@@ -1419,7 +1522,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	}
 
 	function debuggerAdapter() {
-		if (FIXED_SUGARCUBE_ADAPTER) return FIXED_SUGARCUBE_ADAPTER;
+		if (FIXED_READ_ADAPTER) return FIXED_READ_ADAPTER;
 		var storyData = document.querySelector('tw-storydata');
 		var format = storyData ? storyData.getAttribute('format') || '' : '';
 		var formatVersion = storyData ? storyData.getAttribute('format-version') || '' : '';
@@ -1695,6 +1798,185 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		}
 	}
 
+	function acceptHarloweState(state) {
+		if (harloweBootstrapConsumed) return;
+		harloweBootstrapConsumed = true;
+
+		try {
+			if (
+				!FIXED_READ_ADAPTER ||
+				FIXED_READ_ADAPTER.captureHandler !== 'harlowe-state' ||
+				!state ||
+				(typeof state !== 'object' && typeof state !== 'function') ||
+				DEBUGGER_HARLOWE_STATE_PROFILE.stateFrozen !== true ||
+				!debuggerIsFrozen(state)
+			) {
+				return;
+			}
+
+			var passageProfile = ownDebuggerData(
+				DEBUGGER_HARLOWE_STATE_PROFILE,
+				'passage'
+			);
+			var onProfile = ownDebuggerData(DEBUGGER_HARLOWE_STATE_PROFILE, 'on');
+			var passageDescriptor = debuggerGetOwnPropertyDescriptor(state, 'passage');
+			var onDescriptor = debuggerGetOwnPropertyDescriptor(state, 'on');
+			if (
+				!passageProfile ||
+				!onProfile ||
+				!passageDescriptor ||
+				passageDescriptor.configurable !== passageProfile.configurable ||
+				passageDescriptor.enumerable !== passageProfile.enumerable ||
+				typeof passageDescriptor.get !== 'function' ||
+				passageDescriptor.set !== undefined ||
+				debuggerReflectApply(
+					debuggerFunctionToString,
+					passageDescriptor.get,
+					[]
+				) !== passageProfile.getterSource ||
+				!onDescriptor ||
+				!debuggerReflectApply(debuggerHasOwn, onDescriptor, ['value']) ||
+				onDescriptor.configurable !== onProfile.configurable ||
+				onDescriptor.enumerable !== onProfile.enumerable ||
+				onDescriptor.writable !== onProfile.writable ||
+				typeof onDescriptor.value !== 'function' ||
+				debuggerReflectApply(
+					debuggerFunctionToString,
+					onDescriptor.value,
+					[]
+				) !== onProfile.source
+			) {
+				return;
+			}
+
+			var events = ownDebuggerData(
+				ownDebuggerData(DEBUGGER_HARLOWE_STATE_PROFILE, 'events'),
+				'capture'
+			);
+			if (!debuggerIsArray(events)) return;
+			for (var eventIndex = 0; eventIndex < events.length; eventIndex++) {
+				var eventName = ownDebuggerData(events, debuggerString(eventIndex));
+				if (typeof eventName !== 'string') return;
+				debuggerReflectApply(onDescriptor.value, state, [
+					eventName,
+					function () {
+						try { queueState(); } catch (error) {}
+					}
+				]);
+			}
+
+			harloweState = state;
+			harlowePassageGetter = passageDescriptor.get;
+			harloweBootstrapAttested = true;
+			postHarloweBootstrapReady();
+			queueState();
+		} catch (error) {
+			harloweState = undefined;
+			harlowePassageGetter = undefined;
+		}
+	}
+
+	function postHarloweBootstrapReady() {
+		if (
+			!harloweBootstrapAttested ||
+			!harloweReadinessPort ||
+			!debuggerMessagePortPostMessage ||
+			typeof harloweReadinessChallenge !== 'string' ||
+			harloweBootstrapReadyChallenge === harloweReadinessChallenge
+		) {
+			return;
+		}
+		harloweBootstrapReadyChallenge = harloweReadinessChallenge;
+		try {
+			debuggerReflectApply(debuggerMessagePortPostMessage, harloweReadinessPort, [{
+				adapterId: FIXED_READ_ADAPTER.id,
+				bootstrapChallenge: harloweReadinessChallenge,
+				protocolVersion: DEBUGGER_PROTOCOL_VERSION,
+				sessionId: SESSION,
+				source: SOURCE,
+				time: Date.now(),
+				type: 'debugger-bootstrap-ready'
+			}]);
+		} catch (error) {}
+	}
+
+	function acceptHarloweReadinessChallenge(event) {
+		try {
+			var data = event.data;
+			if (
+				!data ||
+				typeof data !== 'object' ||
+				ownDebuggerData(data, 'source') !== COMMAND_SOURCE ||
+				ownDebuggerData(data, 'sessionId') !== SESSION ||
+				ownDebuggerData(data, 'type') !== 'debugger-bootstrap-challenge' ||
+				ownDebuggerData(data, 'adapterId') !== FIXED_READ_ADAPTER.id ||
+				ownDebuggerData(data, 'protocolVersion') !== DEBUGGER_PROTOCOL_VERSION
+			) {
+				return;
+			}
+			var challenge = ownDebuggerData(data, 'bootstrapChallenge');
+			if (
+				typeof challenge !== 'string' ||
+				challenge.length !== ${STORY_PREVIEW_BRIDGE_LIMITS.bootstrapChallengeLength} ||
+				!debuggerReflectApply(debuggerRegExpTest, harloweReadinessChallengePattern, [challenge])
+			) {
+				return;
+			}
+			if (harloweReadinessChallenge === challenge) return;
+			harloweReadinessChallenge = challenge;
+			postHarloweBootstrapReady();
+		} catch (error) {}
+	}
+
+	function acceptHarloweReadinessPort(event) {
+		try {
+			var data = event.data;
+			if (
+				!debuggerMessageEventPorts ||
+				!debuggerMessagePortAddEventListener ||
+				!debuggerMessagePortStart ||
+				event.source !== parent ||
+				!data ||
+				typeof data !== 'object' ||
+				ownDebuggerData(data, 'source') !== COMMAND_SOURCE ||
+				ownDebuggerData(data, 'sessionId') !== SESSION ||
+				ownDebuggerData(data, 'type') !== 'debugger-bootstrap-port' ||
+				ownDebuggerData(data, 'adapterId') !== FIXED_READ_ADAPTER.id ||
+				ownDebuggerData(data, 'protocolVersion') !== DEBUGGER_PROTOCOL_VERSION
+			) {
+				return;
+			}
+			debuggerReflectApply(debuggerStopImmediatePropagation, event, []);
+			if (harloweReadinessPort) return;
+			var ports = debuggerReflectApply(debuggerMessageEventPorts, event, []);
+			var port = ports && ports.length === 1 ? ports[0] : undefined;
+
+			if (!port) return;
+			harloweReadinessPort = port;
+			debuggerReflectApply(debuggerMessagePortAddEventListener, port, [
+				'message',
+				acceptHarloweReadinessChallenge
+			]);
+			debuggerReflectApply(debuggerMessagePortStart, port, []);
+		} catch (error) {}
+	}
+
+	if (FIXED_READ_ADAPTER && FIXED_READ_ADAPTER.captureHandler === 'harlowe-state') {
+		try {
+			Object.defineProperty(window, '__twineRsPreviewHarloweBootstrap', {
+				configurable: false,
+				enumerable: false,
+				value: acceptHarloweState,
+				writable: false
+			});
+			window.addEventListener('message', acceptHarloweReadinessPort, true);
+			post('debugger-bootstrap-arm', {
+				adapterId: FIXED_READ_ADAPTER.id,
+				protocolVersion: DEBUGGER_PROTOCOL_VERSION
+			});
+		} catch (error) {}
+	}
+
 	function debuggerCollectionBudgets(adapter, remaining) {
 		var canonical = ['storyVariables', 'temporaryVariables', 'visitedPassages'];
 		var active = [];
@@ -1783,6 +2065,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 
 	var DEBUGGER_CAPTURE_HANDLERS = {
 		'current-only': captureCurrentOnly,
+		'harlowe-state': captureCurrentOnly,
 		snowman: captureSnowman,
 		sugarcube: captureSugarCube
 	};
@@ -2268,6 +2551,25 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		return name ? {name: name, source: 'SugarCube State'} : undefined;
 	}
 
+	function readExactHarloweDebuggerPassage() {
+		if (!harloweState || typeof harlowePassageGetter !== 'function') {
+			return undefined;
+		}
+
+		try {
+			var passage = debuggerReflectApply(
+				harlowePassageGetter,
+				harloweState,
+				[]
+			);
+			return typeof passage === 'string' && passage.length > 0
+				? {name: passage, source: 'Harlowe State'}
+				: undefined;
+		} catch (error) {
+			return undefined;
+		}
+	}
+
 	function hasStablePassageIdentity(passage) {
 		return Boolean(
 			passage &&
@@ -2281,8 +2583,10 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		var currentPassage = readRuntimePassage();
 		var adapter = selectedDebuggerAdapter || debuggerAdapter();
 		var debuggerCurrentPassage =
-			FIXED_SUGARCUBE_ADAPTER && adapter.captureHandler === 'sugarcube'
+			FIXED_READ_ADAPTER && adapter.captureHandler === 'sugarcube'
 				? readExactSugarCubeDebuggerPassage()
+				: FIXED_READ_ADAPTER && adapter.captureHandler === 'harlowe-state'
+					? readExactHarloweDebuggerPassage()
 				: currentPassage;
 
 		if (hasStablePassageIdentity(currentPassage)) {
@@ -2547,6 +2851,279 @@ function rawStartTagAttribute(opening: string, wantedName: string) {
 	return values.length === 1 ? values[0] : undefined;
 }
 
+const HARLOWE_DEBUGGER_BOOTSTRAP_ID = 'twine-rs-harlowe-debugger-bootstrap';
+
+interface PreviewHtmlScriptStructure {
+	closeEnd: number;
+	closeStart: number;
+	id?: string;
+	openEnd: number;
+	parentStart?: number;
+	role?: string;
+	start: number;
+	type?: string;
+}
+
+interface PreviewHtmlRoleElementStructure {
+	start: number;
+	tag: string;
+}
+
+interface HarlowePreviewHtmlStructure {
+	authorScript: PreviewHtmlScriptStructure;
+	bootstrapScript?: PreviewHtmlScriptStructure;
+	storyDataStart: number;
+}
+
+function rawHarlowePreviewHtmlStructure(
+	html: string,
+	phase: 'post' | 'pre'
+): HarlowePreviewHtmlStructure | undefined {
+	const lowerHtml = html.toLowerCase();
+	const rawTextTags = [
+		'iframe',
+		'noembed',
+		'noframes',
+		'noscript',
+		'script',
+		'style',
+		'textarea',
+		'title',
+		'xmp'
+	];
+	const voidTags = [
+		'area',
+		'base',
+		'br',
+		'col',
+		'embed',
+		'hr',
+		'img',
+		'input',
+		'link',
+		'meta',
+		'param',
+		'source',
+		'track',
+		'wbr'
+	];
+	const suppressedStoryDataTags = [
+		'math',
+		'noscript',
+		'select',
+		'svg',
+		'template'
+	];
+	const stack: Array<{start: number; tag: string}> = [];
+	const roleElements: PreviewHtmlRoleElementStructure[] = [];
+	const scripts: PreviewHtmlScriptStructure[] = [];
+	let cursor = 0;
+	let storyDataStart: number | undefined;
+
+	while (cursor < html.length) {
+		const start = html.indexOf('<', cursor);
+
+		if (start === -1) break;
+		if (lowerHtml.startsWith('<!--', start)) {
+			const commentEnd = lowerHtml.indexOf('-->', start + 4);
+
+			if (commentEnd === -1) return undefined;
+			cursor = commentEnd + 3;
+			continue;
+		}
+		if (lowerHtml.startsWith('<!doctype', start)) {
+			const end = htmlTagEnd(html, start + 9);
+
+			if (
+				end === -1 ||
+				!/^<!doctype\s+html\s*>$/i.test(html.slice(start, end + 1))
+			) {
+				return undefined;
+			}
+			cursor = end + 1;
+			continue;
+		}
+		const match = /^<(\/)?([a-z][a-z0-9:-]*)(?=\s|\/?>)/i.exec(
+			html.slice(start)
+		);
+
+		if (!match) return undefined;
+		const closing = match[1] === '/';
+		const tag = match[2].toLowerCase();
+		const openEnd = htmlTagEnd(html, start + match[0].length);
+
+		if (openEnd === -1) return undefined;
+		if (closing) {
+			if (stack.at(-1)?.tag !== tag) return undefined;
+			stack.pop();
+			cursor = openEnd + 1;
+			continue;
+		}
+		if (tag === 'plaintext' || tag === 'frameset') return undefined;
+		const opening = html.slice(start, openEnd + 1);
+		const suppressedByTemplate = stack.some(item => item.tag === 'template');
+		const suppressedStoryData = stack.some(item =>
+			suppressedStoryDataTags.includes(item.tag)
+		);
+		const selfClosing = /\/\s*>$/.test(html.slice(start, openEnd + 1));
+
+		if (
+			!suppressedByTemplate &&
+			rawStartTagAttribute(opening, 'role') === 'script'
+		) {
+			roleElements.push({start, tag});
+		}
+
+		if (rawTextTags.includes(tag)) {
+			const close = rawClosingTag(html, lowerHtml, tag, openEnd + 1);
+
+			if (!close) return undefined;
+			if (tag === 'script' && !suppressedByTemplate) {
+				scripts.push({
+					closeEnd: close.end,
+					closeStart: close.start,
+					id: rawStartTagAttribute(opening, 'id'),
+					openEnd,
+					parentStart: stack.at(-1)?.start,
+					role: rawStartTagAttribute(opening, 'role'),
+					start,
+					type: rawStartTagAttribute(opening, 'type')
+				});
+			}
+			cursor = close.end + 1;
+			continue;
+		}
+		if (tag === 'tw-storydata' && !suppressedStoryData) {
+			if (storyDataStart !== undefined) return undefined;
+			storyDataStart = start;
+		}
+		if (!selfClosing && !voidTags.includes(tag)) {
+			stack.push({start, tag});
+		}
+		cursor = openEnd + 1;
+	}
+
+	if (stack.length > 0 || storyDataStart === undefined) return undefined;
+	const authorScripts = scripts.filter(
+		script =>
+			script.id === 'twine-user-script' &&
+			script.role === 'script' &&
+			script.type === 'text/twine-javascript' &&
+			script.parentStart === storyDataStart
+	);
+	const bootstrapScripts = scripts.filter(
+		script => script.id === HARLOWE_DEBUGGER_BOOTSTRAP_ID
+	);
+
+	if (authorScripts.length !== 1) return undefined;
+	const authorScript = authorScripts[0];
+	if (phase === 'pre') {
+		return roleElements.length === 1 &&
+			roleElements[0].tag === 'script' &&
+			roleElements[0].start === authorScript.start &&
+			bootstrapScripts.length === 0
+			? {authorScript, storyDataStart}
+			: undefined;
+	}
+
+	if (bootstrapScripts.length !== 1 || roleElements.length !== 2) {
+		return undefined;
+	}
+	const bootstrapScript = bootstrapScripts[0];
+
+	return bootstrapScript.role === 'script' &&
+		bootstrapScript.type === 'text/twine-javascript' &&
+		bootstrapScript.parentStart === storyDataStart &&
+		roleElements[0].tag === 'script' &&
+		roleElements[0].start === bootstrapScript.start &&
+		roleElements[1].tag === 'script' &&
+		roleElements[1].start === authorScript.start &&
+		bootstrapScript.closeEnd + 1 === authorScript.start
+		? {authorScript, bootstrapScript, storyDataStart}
+		: undefined;
+}
+
+function harlowePreviewHtmlStructure(html: string, phase: 'post' | 'pre') {
+	const raw = rawHarlowePreviewHtmlStructure(html, phase);
+
+	if (!raw) return undefined;
+	try {
+		const Parser = globalThis.DOMParser;
+
+		if (typeof Parser !== 'function') return raw;
+		const document = new Parser().parseFromString(html, 'text/html');
+		const storyData = Array.from(
+			document.querySelectorAll('tw-storydata')
+		).filter(
+			element =>
+				element.namespaceURI === 'http://www.w3.org/1999/xhtml' &&
+				!element.closest('math, noscript, select, svg, template')
+		);
+
+		if (storyData.length !== 1) return undefined;
+		const authorScripts = Array.from(
+			document.querySelectorAll(
+				'script#twine-user-script[role="script"][type="text/twine-javascript"]'
+			)
+		).filter(element => element.parentElement === storyData[0]);
+		const roleElements = Array.from(
+			document.querySelectorAll('[role="script"]')
+		).filter(element => !element.parentElement?.closest('noscript, template'));
+		const bootstrapScripts = Array.from(
+			document.querySelectorAll(`script#${HARLOWE_DEBUGGER_BOOTSTRAP_ID}`)
+		).filter(element => !element.parentElement?.closest('noscript, template'));
+
+		if (authorScripts.length !== 1) return undefined;
+		if (phase === 'pre') {
+			return roleElements.length === 1 &&
+				roleElements[0] === authorScripts[0] &&
+				bootstrapScripts.length === 0
+				? raw
+				: undefined;
+		}
+
+		return bootstrapScripts.length === 1 &&
+			roleElements.length === 2 &&
+			roleElements[0] === bootstrapScripts[0] &&
+			roleElements[1] === authorScripts[0] &&
+			bootstrapScripts[0].parentElement === storyData[0] &&
+			authorScripts[0].previousElementSibling === bootstrapScripts[0]
+			? raw
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function harloweBootstrapScript(moduleName: string) {
+	return `<script id="${HARLOWE_DEBUGGER_BOOTSTRAP_ID}" type="text/twine-javascript" role="script">(function(){var state;try{state=require(${JSON.stringify(
+		moduleName
+	)});}catch(error){}try{window.__twineRsPreviewHarloweBootstrap(state);}catch(error){}}());</script>`;
+}
+
+function instrumentHarloweBootstrap(
+	html: string,
+	admission: PreviewFormatAdmission
+) {
+	if (admission.kind !== 'builtin-sha256' || admission.format !== 'Harlowe') {
+		return {enabled: false, html};
+	}
+	const profile = harloweStateProfileForAdapter(admission.adapterId);
+
+	if (!profile) return {enabled: false, html};
+	const structure = harlowePreviewHtmlStructure(html, 'pre');
+
+	if (!structure) return {enabled: false, html};
+	const staged =
+		html.slice(0, structure.authorScript.start) +
+		harloweBootstrapScript(profile.moduleName) +
+		html.slice(structure.authorScript.start);
+
+	return harlowePreviewHtmlStructure(staged, 'post')
+		? {enabled: true, html: staged}
+		: {enabled: false, html};
+}
+
 function rawSugarCubeEngineRegion(html: string) {
 	const lowerHtml = html.toLowerCase();
 	const regions: Array<{contentEnd: number; contentStart: number}> = [];
@@ -2647,6 +3224,17 @@ function instrumentSugarCubeRestart(
 	}
 }
 
+function insertPreviewBridge(source: string, script: string) {
+	if (/<head(\s[^>]*)?>/i.test(source)) {
+		return source.replace(/<head(\s[^>]*)?>/i, match => `${match}${script}`);
+	}
+	if (/<html(\s[^>]*)?>/i.test(source)) {
+		return source.replace(/<html(\s[^>]*)?>/i, match => `${match}${script}`);
+	}
+
+	return `${script}${source}`;
+}
+
 export interface InstrumentedPreviewHtml {
 	admission: PreviewFormatAdmission;
 	html: string;
@@ -2664,8 +3252,16 @@ export function instrumentPreviewHtml(
 	const canonicalAdmission =
 		canonicalPreviewFormatAdmission(options.admission) ??
 		NO_PREVIEW_FORMAT_ADMISSION;
-	const admission = previewFormatAdmissionForHtml(canonicalAdmission, html);
-	const sugarCube = instrumentSugarCubeRestart(html, admission);
+	const admitted = previewFormatAdmissionForHtml(canonicalAdmission, html);
+	const harlowe = instrumentHarloweBootstrap(html, admitted);
+	const admission =
+		admitted.kind === 'builtin-sha256' && admitted.format === 'Harlowe'
+			? harlowe.enabled
+				? admitted
+				: NO_PREVIEW_FORMAT_ADMISSION
+			: admitted;
+	const exactSource = harlowe.enabled ? harlowe.html : html;
+	const sugarCube = instrumentSugarCubeRestart(exactSource, admission);
 	const source = sugarCube.html;
 	const script = bridgeScript(
 		sessionId,
@@ -2674,20 +3270,26 @@ export function instrumentPreviewHtml(
 		admission,
 		sugarCube.enabled
 	);
-	let instrumentedHtml: string;
+	const instrumentedHtml = insertPreviewBridge(source, script);
 
-	if (/<head(\s[^>]*)?>/i.test(source)) {
-		instrumentedHtml = source.replace(
-			/<head(\s[^>]*)?>/i,
-			match => `${match}${script}`
+	if (
+		admission.kind === 'builtin-sha256' &&
+		admission.format === 'Harlowe' &&
+		!harlowePreviewHtmlStructure(instrumentedHtml, 'post')
+	) {
+		const fallbackScript = bridgeScript(
+			sessionId,
+			options.enableHarloweSessionStorageFallback === true &&
+				isHarlowePreviewHtml(html),
+			NO_PREVIEW_FORMAT_ADMISSION,
+			false
 		);
-	} else if (/<html(\s[^>]*)?>/i.test(source)) {
-		instrumentedHtml = source.replace(
-			/<html(\s[^>]*)?>/i,
-			match => `${match}${script}`
-		);
-	} else {
-		instrumentedHtml = `${script}${source}`;
+
+		return {
+			admission: NO_PREVIEW_FORMAT_ADMISSION,
+			html: insertPreviewBridge(html, fallbackScript),
+			sugarCubeRestartEligible: false
+		};
 	}
 
 	return {
@@ -2800,6 +3402,12 @@ export function reduceStoryPreviewRuntime(
 	}
 
 	if (message.type === 'debugger-command-result') {
+		return model;
+	}
+	if (
+		message.type === 'debugger-bootstrap-arm' ||
+		message.type === 'debugger-bootstrap-ready'
+	) {
 		return model;
 	}
 
