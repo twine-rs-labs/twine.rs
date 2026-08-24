@@ -1,8 +1,8 @@
 import {
 	createStoryPreviewPassageLookup,
 	initialStoryPreviewRuntimeModel,
-	instrumentPreviewHtml,
-	normalizeStoryPreviewBridgeMessage,
+	instrumentPreviewHtml as instrumentPreviewHtmlResult,
+	normalizeStoryPreviewBridgeMessage as normalizeStoryPreviewBridgeMessageProduction,
 	reduceStoryPreviewRuntime,
 	resolveRuntimePassage,
 	serializeStoryPreviewRuntimeLog,
@@ -10,6 +10,8 @@ import {
 	STORY_PREVIEW_BRIDGE_SOURCE,
 	STORY_PREVIEW_RUNTIME_LOG_LIMIT
 } from '../story-preview-contract';
+import {SUGARCUBE_COMPATIBILITY} from '../story-preview-sugarcube';
+import type {PreviewBridgeContext} from '../story-preview-contract';
 import {runtimeLogTone} from '../story-preview-debug';
 import {
 	STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
@@ -19,6 +21,39 @@ import {
 	STORY_PREVIEW_DEBUGGER_CAPTURE_COLLECTIONS,
 	STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION
 } from '../story-preview-debugger-protocol';
+
+function previewBridgeContext(message: any): PreviewBridgeContext {
+	const compatibility = SUGARCUBE_COMPATIBILITY.find(
+		entry => entry.adapterId === message?.adapterId
+	);
+	return {
+		admission: compatibility
+			? {
+					adapterId: compatibility.adapterId,
+					format: 'SugarCube',
+					kind: 'builtin-sha256',
+					sourceSha256: compatibility.sourceSha256,
+					version: compatibility.version
+				}
+			: {kind: 'none'},
+		bridgeSessionId: message?.sessionId as string,
+		generation: 1,
+		sugarCubeRestartEligible: true
+	};
+}
+
+function normalizeStoryPreviewBridgeMessage(
+	message: any,
+	context = previewBridgeContext(message)
+) {
+	return normalizeStoryPreviewBridgeMessageProduction(message, context);
+}
+
+function instrumentPreviewHtml(
+	...args: Parameters<typeof instrumentPreviewHtmlResult>
+) {
+	return instrumentPreviewHtmlResult(...args).html;
+}
 
 function lastPostedState(postMessage: jest.SpyInstance) {
 	return postMessage.mock.calls
@@ -39,8 +74,25 @@ function installInstrumentedDebugger(
 	sessionId: string
 ) {
 	document.body.innerHTML = `<tw-storydata format="${format}" format-version="${formatVersion}"></tw-storydata>`;
+	const compatibility = SUGARCUBE_COMPATIBILITY.find(
+		entry => entry.version === formatVersion && format === 'SugarCube'
+	);
 	const script = /<script>([\s\S]*?)<\/script>/.exec(
-		instrumentPreviewHtml('<html><head></head><body></body></html>', sessionId)
+		instrumentPreviewHtml(
+			`<html><head></head><body><tw-storydata format="${format}" format-version="${formatVersion}"></tw-storydata></body></html>`,
+			sessionId,
+			{
+				admission: compatibility
+					? {
+							adapterId: compatibility.adapterId,
+							format: 'SugarCube',
+							kind: 'builtin-sha256',
+							sourceSha256: compatibility.sourceSha256,
+							version: compatibility.version
+						}
+					: {kind: 'none'}
+			}
+		)
 	)?.[1];
 	expect(script).toBeDefined();
 	window.eval(script!);
@@ -51,12 +103,14 @@ function installBundledSugarCubeState({
 	history,
 	passage,
 	temporary,
-	variables
+	variables,
+	version = '2.37.3'
 }: {
 	history: unknown[];
 	passage: string;
 	temporary: Record<string, unknown>;
 	variables: Record<string, unknown>;
+	version?: string;
 }) {
 	(window as any).__twineRsSugarCubeFixture = {
 		history,
@@ -64,9 +118,15 @@ function installBundledSugarCubeState({
 		temporary,
 		variables
 	};
-	window.eval(
-		'(function(){var fixture=window.__twineRsSugarCubeFixture;var _history=fixture.history;var _temporary=fixture.temporary;var _active={title:fixture.passage,variables:fixture.variables};window.SugarCube={State:Object.freeze(Object.defineProperties({}, {history:{get:function(){return _history}},passage:{get:function(){return _active.title}},temporary:{get:function(){return _temporary}},variables:{get:function(){return _active.variables}}}))};})()'
-	);
+	const stateSource = version.startsWith('2.31.')
+		? '(function(){var fixture=window.__twineRsSugarCubeFixture;var H=fixture.history;var K=fixture.temporary;var J={title:fixture.passage,variables:fixture.variables};function m(){return H}function p(){return J.title}function Q(){return K}function h(){return J.variables}window.SugarCube={State:Object.freeze(Object.defineProperties({}, {history:{get:m},passage:{get:p},temporary:{get:Q},variables:{get:h}}))};})()'
+		: /^(2\.32\.|2\.33\.|2\.34\.|2\.35\.)/.test(version)
+			? '(function(){var fixture=window.__twineRsSugarCubeFixture;var $=fixture.history;var Y=fixture.temporary;var H={title:fixture.passage,variables:fixture.variables};function m(){return $}function p(){return H.title}function Q(){return Y}function h(){return H.variables}window.SugarCube={State:Object.freeze(Object.defineProperties({}, {history:{get:m},passage:{get:p},temporary:{get:Q},variables:{get:h}}))};})()'
+			: version.startsWith('2.36.')
+				? '(function(){var fixture=window.__twineRsSugarCubeFixture;var _history=fixture.history;var _tempVariables=fixture.temporary;var _active={title:fixture.passage,variables:fixture.variables};window.SugarCube={State:Object.freeze(Object.defineProperties({}, {history:{get:function(){return _history}},passage:{get:function(){return _active.title}},temporary:{get:function(){return _tempVariables}},variables:{get:function(){return _active.variables}}}))};})()'
+				: '(function(){var fixture=window.__twineRsSugarCubeFixture;var _history=fixture.history;var _temporary=fixture.temporary;var _active={title:fixture.passage,variables:fixture.variables};window.SugarCube={State:Object.freeze(Object.defineProperties({}, {history:{get:function(){return _history}},passage:{get:function(){return _active.title}},temporary:{get:function(){return _temporary}},variables:{get:function(){return _active.variables}}}))};})()';
+
+	window.eval(stateSource);
 }
 
 function debuggerSnapshotTextLength(message: Record<string, any>) {
@@ -333,8 +393,17 @@ describe('instrumented runtime passage detection', () => {
 			.spyOn(window, 'postMessage')
 			.mockImplementation(() => undefined);
 		const instrumented = instrumentPreviewHtml(
-			'<html><head></head><body></body></html>',
-			'late-sugarcube-session'
+			'<html><head></head><body><tw-storydata format="SugarCube" format-version="2.37.3"></tw-storydata></body></html>',
+			'late-sugarcube-session',
+			{
+				admission: {
+					adapterId: 'sugarcube-2.37.3',
+					format: 'SugarCube',
+					kind: 'builtin-sha256',
+					sourceSha256: SUGARCUBE_COMPATIBILITY.at(-1)!.sourceSha256,
+					version: '2.37.3'
+				}
+			}
 		);
 		const script = /<script>([\s\S]*?)<\/script>/.exec(instrumented)?.[1];
 
@@ -668,7 +737,10 @@ describe('normalizeStoryPreviewBridgeMessage()', () => {
 			time: 10,
 			type: 'console'
 		});
-		expect(normalized?.args).not.toBe(args);
+		expect(normalized?.type).toBe('console');
+		if (normalized?.type === 'console') {
+			expect(normalized.args).not.toBe(args);
+		}
 	});
 
 	it.each([
@@ -709,12 +781,24 @@ describe('normalizeStoryPreviewBridgeMessage()', () => {
 
 describe('runtime debugger protocol', () => {
 	it('rewrites only the verified SugarCube 2.37.3 startup call site', () => {
+		const compatibility = SUGARCUBE_COMPATIBILITY.find(
+			entry => entry.version === '2.37.3'
+		)!;
+		const admission = {
+			adapterId: compatibility.adapterId,
+			format: 'SugarCube' as const,
+			kind: 'builtin-sha256' as const,
+			sourceSha256: compatibility.sourceSha256,
+			version: compatibility.version
+		};
 		const startup =
 			'Engine.runUserInit(),UIBar.start(),Engine.start(),DebugBar.start()';
 		const nativeRestart =
-			'restart:{value:function(){LoadScreen.show(),window.scroll(0,0),State.reset(),triggerEvent(":enginerestart"),window.location.reload()}}';
-		const exactHtml = `<html><head></head><body><tw-storydata format="SugarCube" format-version="2.37.3"></tw-storydata><script>${startup};const EngineApi={${nativeRestart}};</script></body></html>`;
-		const instrumented = instrumentPreviewHtml(exactHtml, 'restart-session');
+			'function(){LoadScreen.show(),window.scroll(0,0),State.reset(),triggerEvent(":enginerestart"),window.location.reload()}';
+		const exactHtml = `<html><head></head><body><tw-storydata format="SugarCube" format-version="2.37.3"></tw-storydata><script id="script-sugarcube">${startup};const nativeRestart=${nativeRestart};</script></body></html>`;
+		const instrumented = instrumentPreviewHtml(exactHtml, 'restart-session', {
+			admission
+		});
 
 		expect(instrumented).toContain('var ENABLE_SUGARCUBE_RESTART = true');
 		expect(instrumented).toContain(
@@ -722,14 +806,84 @@ describe('runtime debugger protocol', () => {
 		);
 		expect(instrumented).not.toContain(startup);
 
+		const changedTuple = instrumentPreviewHtmlResult(
+			exactHtml.replace('format-version="2.37.3"', 'format-version="2.31.0"'),
+			'restart-session',
+			{admission}
+		);
+		expect(changedTuple.admission).toEqual({kind: 'none'});
+		expect(changedTuple.sugarCubeRestartEligible).toBe(false);
+		expect(changedTuple.html).toContain(
+			'var FIXED_SUGARCUBE_ADAPTER = undefined'
+		);
+		expect(changedTuple.html).toContain('var ENABLE_SUGARCUBE_RESTART = false');
+		expect(changedTuple.html).not.toContain(
+			'__twineRsPreviewSugarCubeStart(Engine,Config)'
+		);
+		const outsideCollisions = exactHtml.replace(
+			'<body>',
+			`<body><!-- ${startup};${nativeRestart} --><script>const outside = ${JSON.stringify(
+				`${startup};${nativeRestart}`
+			)};</script>`
+		);
+		const collisionResult = instrumentPreviewHtml(
+			outsideCollisions,
+			'restart-session',
+			{admission}
+		);
+
+		expect(collisionResult).toContain('var ENABLE_SUGARCUBE_RESTART = true');
+		const domParserDescriptor = Object.getOwnPropertyDescriptor(
+			globalThis,
+			'DOMParser'
+		);
+
+		try {
+			Object.defineProperty(globalThis, 'DOMParser', {
+				configurable: true,
+				value: undefined
+			});
+			expect(
+				instrumentPreviewHtmlResult(exactHtml, 'main-process-session', {
+					admission
+				})
+			).toMatchObject({sugarCubeRestartEligible: true});
+		} finally {
+			if (domParserDescriptor) {
+				Object.defineProperty(globalThis, 'DOMParser', domParserDescriptor);
+			}
+		}
+
 		for (const unsupported of [
-			exactHtml.replace('2.37.3', '2.37.4'),
 			exactHtml.replace(startup, `${startup};${startup}`),
-			exactHtml.replace(nativeRestart, '')
+			exactHtml.replace(nativeRestart, ''),
+			exactHtml.replace(
+				'id="script-sugarcube"',
+				'id="script-sugarcube" id="other"'
+			),
+			exactHtml.replace(
+				'</body>',
+				`<script id="script-sugarcube">${startup};${nativeRestart}</script></body>`
+			)
 		]) {
-			const result = instrumentPreviewHtml(unsupported, 'restart-session');
+			const result = instrumentPreviewHtml(unsupported, 'restart-session', {
+				admission
+			});
 
 			expect(result).toContain('var ENABLE_SUGARCUBE_RESTART = false');
+			expect(result).toContain(
+				`<script id="script-sugarcube"${
+					unsupported.includes('id="script-sugarcube" id="other"')
+						? ' id="other"'
+						: ''
+				}>${
+					unsupported.includes(`${startup};${startup}`)
+						? `${startup};${startup};const nativeRestart=${nativeRestart};`
+						: unsupported.includes('const nativeRestart=;')
+							? `${startup};const nativeRestart=;`
+							: `${startup};const nativeRestart=${nativeRestart};`
+				}</script>`
+			);
 			expect(result).not.toContain(
 				'__twineRsPreviewSugarCubeStart(Engine,Config)'
 			);
@@ -880,7 +1034,8 @@ describe('runtime debugger protocol', () => {
 						history: ['Start'],
 						passage: 'Start',
 						temporary: {temp: true},
-						variables: {score: 1}
+						variables: {score: 1},
+						version: registration.formatVersion
 					});
 				} else if (registration.captureHandler === 'snowman') {
 					(window as any).story = {
@@ -903,7 +1058,7 @@ describe('runtime debugger protocol', () => {
 					formatVersion: registration.formatVersion,
 					reliability: registration.reliability
 				});
-				if (registration.id === 'sugarcube-2.37.3') {
+				if (registration.captureHandler === 'sugarcube') {
 					expect(commandHello).toBeUndefined();
 				} else {
 					expect(commandHello).toMatchObject({
@@ -949,26 +1104,35 @@ describe('runtime debugger protocol', () => {
 			formatVersion: '2.37.3',
 			reliability: 'exact-version'
 		};
+		const exactContext = previewBridgeContext(sugarCubeHello);
 
-		expect(normalizeStoryPreviewBridgeMessage(sugarCubeHello)).toBeDefined();
 		expect(
-			normalizeStoryPreviewBridgeMessage({
-				...sugarCubeHello,
-				adapterId: 'generic',
-				capabilities: ['currentPassage'],
-				reliability: 'best-effort'
-			})
+			normalizeStoryPreviewBridgeMessage(sugarCubeHello, exactContext)
+		).toBeDefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{
+					...sugarCubeHello,
+					adapterId: 'generic',
+					capabilities: ['currentPassage'],
+					reliability: 'best-effort'
+				},
+				exactContext
+			)
 		).toBeUndefined();
 		expect(
-			normalizeStoryPreviewBridgeMessage({
-				...sugarCubeHello,
-				capabilities: [
-					'currentPassage',
-					'temporaryVariables',
-					'storyVariables',
-					'visitedPassages'
-				]
-			})
+			normalizeStoryPreviewBridgeMessage(
+				{
+					...sugarCubeHello,
+					capabilities: [
+						'currentPassage',
+						'temporaryVariables',
+						'storyVariables',
+						'visitedPassages'
+					]
+				},
+				exactContext
+			)
 		).toBeUndefined();
 		expect(
 			normalizeStoryPreviewBridgeMessage({
@@ -987,18 +1151,21 @@ describe('runtime debugger protocol', () => {
 
 		const lookup = createStoryPreviewPassageLookup([]);
 		const initial = initialStoryPreviewRuntimeModel(true);
-		const poisoned = reduceStoryPreviewRuntime(initial, {
-			message: {
-				...sugarCubeHello,
-				adapterId: 'generic',
-				capabilities: ['currentPassage'],
-				reliability: 'best-effort'
-			} as any,
+		const genericSugarCubeHello = normalizeStoryPreviewBridgeMessage({
+			...envelope,
+			adapterId: 'generic',
+			capabilities: ['currentPassage'],
+			format: 'SugarCube',
+			formatVersion: '2.37.3',
+			reliability: 'best-effort'
+		})!;
+		const genericModel = reduceStoryPreviewRuntime(initial, {
+			message: genericSugarCubeHello,
 			now: 1,
 			passages: lookup,
 			type: 'message'
 		});
-		expect(poisoned).toBe(initial);
+		expect(genericModel.debugger.hello?.id).toBe('generic');
 		const negotiated = reduceStoryPreviewRuntime(initial, {
 			message: normalizeStoryPreviewBridgeMessage(sugarCubeHello)!,
 			now: 2,
@@ -1031,15 +1198,7 @@ describe('runtime debugger protocol', () => {
 		delete (window as any).SugarCube;
 
 		try {
-			const script = /<script>([\s\S]*?)<\/script>/.exec(
-				instrumentPreviewHtml(
-					'<html><head></head><body></body></html>',
-					'debugger'
-				)
-			)?.[1];
-			expect(script).toBeDefined();
-			window.eval(script!);
-			document.dispatchEvent(new Event('DOMContentLoaded'));
+			installInstrumentedDebugger('SugarCube', '2.37.3', 'debugger');
 			expect(posted(postMessage, 'debugger-hello')).toMatchObject([
 				{adapterId: 'sugarcube-2.37.3', protocolVersion: 1}
 			]);
@@ -1092,143 +1251,145 @@ describe('runtime debugger protocol', () => {
 		}
 	});
 
-	it('bounds string previews after JSON escaping', () => {
-		const postMessage = jest
-			.spyOn(window, 'postMessage')
-			.mockImplementation(() => undefined);
-		const escapedValue = '\0'.repeat(512);
-		delete (window as any).SugarCube;
-
-		try {
-			installInstrumentedDebugger(
-				'SugarCube',
-				'2.37.3',
-				'escaped-string-preview'
-			);
-			installBundledSugarCubeState({
-				history: ['Start'],
-				passage: 'Start',
-				temporary: {},
-				variables: {escaped: escapedValue}
-			});
-			(window as any).__twineRsPreviewDebug.captureState();
-
-			const snapshot = posted(postMessage, 'debugger-snapshot').at(-1);
-			const hello = normalizeStoryPreviewBridgeMessage(
-				posted(postMessage, 'debugger-hello').at(-1)
-			);
-			const normalizedSnapshot = normalizeStoryPreviewBridgeMessage(snapshot);
-			const encodedPreview = JSON.stringify(escapedValue);
-			expect(encodedPreview.length).toBeGreaterThan(
-				STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength
-			);
-			expect(snapshot.storyVariables).toEqual([
-				{
-					name: 'escaped',
-					preview: encodedPreview.slice(
-						0,
-						STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength
-					),
-					type: 'string'
-				}
-			]);
-			expect(snapshot.storyVariables[0].preview).toHaveLength(
-				STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength
-			);
-			expect(snapshot.sections.storyVariables).toEqual({
-				reasons: ['field-limit'],
-				state: 'truncated'
-			});
-			expect(debuggerSnapshotTextLength(snapshot)).toBeLessThanOrEqual(
-				STORY_PREVIEW_BRIDGE_LIMITS.debuggerTotalTextLength
-			);
-			expect(hello).toBeDefined();
-			expect(normalizedSnapshot).toBeDefined();
-
-			const lookup = createStoryPreviewPassageLookup([]);
-			const negotiated = reduceStoryPreviewRuntime(
-				initialStoryPreviewRuntimeModel(true),
-				{message: hello!, now: 1, passages: lookup, type: 'message'}
-			);
-			const captured = reduceStoryPreviewRuntime(negotiated, {
-				message: normalizedSnapshot!,
-				now: 2,
-				passages: lookup,
-				type: 'message'
-			});
-			expect(
-				captured.debugger.snapshot?.storyVariables?.[0].preview
-			).toHaveLength(STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength);
-		} finally {
+	it.each(['2.31.0', '2.37.3'])(
+		'bounds %s string previews after JSON escaping',
+		version => {
+			const postMessage = jest
+				.spyOn(window, 'postMessage')
+				.mockImplementation(() => undefined);
+			const escapedValue = '\0'.repeat(512);
 			delete (window as any).SugarCube;
-			delete (window as any).__twineRsSugarCubeFixture;
-			postMessage.mockRestore();
-		}
-	});
 
-	it('rejects lookalike SugarCube accessors and never reads runtime accessors or object coercions', () => {
-		document.body.innerHTML =
-			'<tw-storydata format="SugarCube" format-version="2.37.3"></tw-storydata>';
-		const postMessage = jest
-			.spyOn(window, 'postMessage')
-			.mockImplementation(() => undefined);
-		const getter = jest.fn(() => 'must not run');
-		const toString = jest.fn(() => 'must not run');
-		delete (window as any).passage;
-		delete (window as any).State;
-		delete (window as any).SugarCube;
+			try {
+				installInstrumentedDebugger('SugarCube', version, `escaped-${version}`);
+				installBundledSugarCubeState({
+					history: ['Start'],
+					passage: 'Start',
+					temporary: {},
+					variables: {escaped: escapedValue},
+					version
+				});
+				(window as any).__twineRsPreviewDebug.captureState();
 
-		try {
-			installInstrumentedDebugger(
-				'SugarCube',
-				'2.37.3',
-				'forged-sugarcube-accessor'
-			);
-			const state = Object.freeze(
-				Object.defineProperties(
-					{},
+				const snapshot = posted(postMessage, 'debugger-snapshot').at(-1);
+				const hello = normalizeStoryPreviewBridgeMessage(
+					posted(postMessage, 'debugger-hello').at(-1)
+				);
+				const normalizedSnapshot = normalizeStoryPreviewBridgeMessage(snapshot);
+				const encodedPreview = JSON.stringify(escapedValue);
+				expect(encodedPreview.length).toBeGreaterThan(
+					STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength
+				);
+				expect(snapshot.storyVariables).toEqual([
 					{
-						history: {get: getter},
-						passage: {get: getter},
-						temporary: {get: getter},
-						variables: {get: getter}
+						name: 'escaped',
+						preview: encodedPreview.slice(
+							0,
+							STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength
+						),
+						type: 'string'
 					}
-				)
-			);
-			(window as any).SugarCube = {State: state};
-			(window as any).State = Object.defineProperty({}, 'passage', {
-				get: getter
-			});
-			(window as any).passage = Object.defineProperties(
-				{},
-				{
-					id: {get: getter},
-					name: {get: getter},
-					pid: {value: {toString}},
-					title: {get: getter}
-				}
-			);
+				]);
+				expect(snapshot.storyVariables[0].preview).toHaveLength(
+					STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength
+				);
+				expect(snapshot.sections.storyVariables).toEqual({
+					reasons: ['field-limit'],
+					state: 'truncated'
+				});
+				expect(debuggerSnapshotTextLength(snapshot)).toBeLessThanOrEqual(
+					STORY_PREVIEW_BRIDGE_LIMITS.debuggerTotalTextLength
+				);
+				expect(hello).toBeDefined();
+				expect(normalizedSnapshot).toBeDefined();
 
-			(window as any).__twineRsPreviewDebug.captureState();
-			const snapshot = posted(postMessage, 'debugger-snapshot').at(-1);
+				const lookup = createStoryPreviewPassageLookup([]);
+				const negotiated = reduceStoryPreviewRuntime(
+					initialStoryPreviewRuntimeModel(true),
+					{message: hello!, now: 1, passages: lookup, type: 'message'}
+				);
+				const captured = reduceStoryPreviewRuntime(negotiated, {
+					message: normalizedSnapshot!,
+					now: 2,
+					passages: lookup,
+					type: 'message'
+				});
+				expect(
+					captured.debugger.snapshot?.storyVariables?.[0].preview
+				).toHaveLength(STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength);
+			} finally {
+				delete (window as any).SugarCube;
+				delete (window as any).__twineRsSugarCubeFixture;
+				postMessage.mockRestore();
+			}
+		}
+	);
 
-			expect(snapshot).toMatchObject({
-				sections: {
-					currentPassage: {state: 'unavailable'},
-					storyVariables: {state: 'unavailable'},
-					temporaryVariables: {state: 'unavailable'},
-					visitedPassages: {state: 'unavailable'}
-				}
-			});
-			expect(getter).not.toHaveBeenCalled();
-			expect(toString).not.toHaveBeenCalled();
-		} finally {
+	it.each(['2.31.0', '2.37.3'])(
+		'rejects lookalike SugarCube %s accessors without reading accessors or coercions',
+		version => {
+			document.body.innerHTML = `<tw-storydata format="SugarCube" format-version="${version}"></tw-storydata>`;
+			const postMessage = jest
+				.spyOn(window, 'postMessage')
+				.mockImplementation(() => undefined);
+			const getter = jest.fn(() => 'must not run');
+			const toString = jest.fn(() => 'must not run');
 			delete (window as any).passage;
 			delete (window as any).State;
 			delete (window as any).SugarCube;
-			postMessage.mockRestore();
+
+			try {
+				installInstrumentedDebugger(
+					'SugarCube',
+					version,
+					`forged-sugarcube-accessor-${version}`
+				);
+				const state = Object.freeze(
+					Object.defineProperties(
+						{},
+						{
+							history: {get: getter},
+							passage: {get: getter},
+							temporary: {get: getter},
+							variables: {get: getter}
+						}
+					)
+				);
+				(window as any).SugarCube = {State: state};
+				(window as any).State = Object.defineProperty({}, 'passage', {
+					get: getter
+				});
+				(window as any).passage = Object.defineProperties(
+					{},
+					{
+						id: {get: getter},
+						name: {get: getter},
+						pid: {value: {toString}},
+						title: {get: getter}
+					}
+				);
+
+				(window as any).__twineRsPreviewDebug.captureState();
+				const snapshot = posted(postMessage, 'debugger-snapshot').at(-1);
+
+				expect(snapshot).toMatchObject({
+					sections: {
+						currentPassage: {state: 'unavailable'},
+						storyVariables: {state: 'unavailable'},
+						temporaryVariables: {state: 'unavailable'},
+						visitedPassages: {state: 'unavailable'}
+					}
+				});
+				expect(getter).not.toHaveBeenCalled();
+				expect(toString).not.toHaveBeenCalled();
+			} finally {
+				delete (window as any).passage;
+				delete (window as any).State;
+				delete (window as any).SugarCube;
+				postMessage.mockRestore();
+			}
 		}
-	});
+	);
 
 	it('retains the newest Snowman history IDs in chronological order', () => {
 		document.body.innerHTML =
@@ -1385,76 +1546,75 @@ describe('runtime debugger protocol', () => {
 		}
 	});
 
-	it('applies one source-side text budget across the entire snapshot', () => {
-		document.body.innerHTML =
-			'<tw-storydata format="SugarCube" format-version="2.37.3"></tw-storydata>';
-		const postMessage = jest
-			.spyOn(window, 'postMessage')
-			.mockImplementation(() => undefined);
-		const variables = Object.fromEntries(
-			Array.from({length: 100}, (_, index) => [
-				`variable-${index}`,
-				'x'.repeat(1000)
-			])
-		);
-		const oversizedPassageName = 'Passage'.repeat(20_000);
-		delete (window as any).SugarCube;
-
-		try {
-			const script = /<script>([\s\S]*?)<\/script>/.exec(
-				instrumentPreviewHtml(
-					'<html><head></head><body></body></html>',
-					'debugger-budget'
-				)
-			)?.[1];
-			expect(script).toBeDefined();
-			window.eval(script!);
-			document.dispatchEvent(new Event('DOMContentLoaded'));
-
-			installBundledSugarCubeState({
-				history: Array(200).fill(oversizedPassageName),
-				passage: oversizedPassageName,
-				temporary: variables,
-				variables
-			});
-			(window as any).__twineRsPreviewDebug.captureState();
-			const snapshot = posted(postMessage, 'debugger-snapshot').at(-1);
-
-			expect(snapshot).toBeDefined();
-			expect(snapshot.currentPassage.name).toHaveLength(
-				STORY_PREVIEW_BRIDGE_LIMITS.passageFieldLength
+	it.each(['2.31.0', '2.37.3'])(
+		'applies one source-side text budget across the entire %s snapshot',
+		version => {
+			document.body.innerHTML = `<tw-storydata format="SugarCube" format-version="${version}"></tw-storydata>`;
+			const postMessage = jest
+				.spyOn(window, 'postMessage')
+				.mockImplementation(() => undefined);
+			const variables = Object.fromEntries(
+				Array.from({length: 100}, (_, index) => [
+					`variable-${index}`,
+					'x'.repeat(1000)
+				])
 			);
-			expect(snapshot.sections).toEqual({
-				currentPassage: {
-					reasons: ['field-limit'],
-					state: 'truncated'
-				},
-				storyVariables: {
-					reasons: ['field-limit', 'text-budget'],
-					state: 'truncated'
-				},
-				temporaryVariables: {
-					reasons: ['field-limit', 'text-budget'],
-					state: 'truncated'
-				},
-				visitedPassages: {
-					reasons: ['field-limit', 'text-budget'],
-					state: 'truncated'
-				}
-			});
-			expect(debuggerSnapshotTextLength(snapshot)).toBeLessThanOrEqual(
-				STORY_PREVIEW_BRIDGE_LIMITS.debuggerTotalTextLength
-			);
-			expect(normalizeStoryPreviewBridgeMessage(snapshot)).toBeDefined();
-			expect(
-				snapshot.storyVariables.length + snapshot.temporaryVariables.length
-			).toBeLessThan(200);
-		} finally {
+			const oversizedPassageName = 'Passage'.repeat(20_000);
 			delete (window as any).SugarCube;
-			delete (window as any).__twineRsSugarCubeFixture;
-			postMessage.mockRestore();
+
+			try {
+				installInstrumentedDebugger(
+					'SugarCube',
+					version,
+					`debugger-budget-${version}`
+				);
+
+				installBundledSugarCubeState({
+					history: Array(200).fill(oversizedPassageName),
+					passage: oversizedPassageName,
+					temporary: variables,
+					variables,
+					version
+				});
+				(window as any).__twineRsPreviewDebug.captureState();
+				const snapshot = posted(postMessage, 'debugger-snapshot').at(-1);
+
+				expect(snapshot).toBeDefined();
+				expect(snapshot.currentPassage.name).toHaveLength(
+					STORY_PREVIEW_BRIDGE_LIMITS.passageFieldLength
+				);
+				expect(snapshot.sections).toEqual({
+					currentPassage: {
+						reasons: ['field-limit'],
+						state: 'truncated'
+					},
+					storyVariables: {
+						reasons: ['field-limit', 'text-budget'],
+						state: 'truncated'
+					},
+					temporaryVariables: {
+						reasons: ['field-limit', 'text-budget'],
+						state: 'truncated'
+					},
+					visitedPassages: {
+						reasons: ['field-limit', 'text-budget'],
+						state: 'truncated'
+					}
+				});
+				expect(debuggerSnapshotTextLength(snapshot)).toBeLessThanOrEqual(
+					STORY_PREVIEW_BRIDGE_LIMITS.debuggerTotalTextLength
+				);
+				expect(normalizeStoryPreviewBridgeMessage(snapshot)).toBeDefined();
+				expect(
+					snapshot.storyVariables.length + snapshot.temporaryVariables.length
+				).toBeLessThan(200);
+			} finally {
+				delete (window as any).SugarCube;
+				delete (window as any).__twineRsSugarCubeFixture;
+				postMessage.mockRestore();
+			}
 		}
-	});
+	);
 
 	it('marks variable item-limit truncation at limit plus one', () => {
 		const postMessage = jest

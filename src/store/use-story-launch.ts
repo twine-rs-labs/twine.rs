@@ -12,10 +12,7 @@ import {
 	replaceKnownAssetInventoryForStory,
 	type CoreAssetInventoryEntry
 } from '../core';
-import {
-	instrumentPreviewHtml,
-	storyPreviewPassages
-} from '../routes/story-preview-contract';
+import {storyPreviewPassages} from '../routes/story-preview-contract';
 import {usePrefsContext} from './prefs';
 import {useComputedTheme} from './prefs/use-computed-theme';
 import type {StoryBuildPackage} from '../util/build-package';
@@ -182,13 +179,13 @@ export function useNativeStoryPreviewPreparation() {
 				passage => passage.id === launchPassageId
 			);
 			const htmlBytes = new Blob([preview.build.html]).size;
-
 			return {
 				build: preview.build,
 				projectRoot,
 				request: {
 					assets: previewAssetRequests(projectRoot, preview.build.assets),
 					descriptor: {
+						admission: preview.admission,
 						appearance: {...appearanceRef.current},
 						bridgeSessionId,
 						htmlBytes,
@@ -203,10 +200,7 @@ export function useNativeStoryPreviewPreparation() {
 						summary: preview.summary,
 						target
 					},
-					instrumentedHtml: instrumentPreviewHtml(
-						preview.build.html,
-						bridgeSessionId
-					)
+					html: preview.build.html
 				}
 			};
 		},

@@ -1303,6 +1303,7 @@ describe('initIpc()', () => {
 		};
 		const bytes = new Uint8Array([1, 2, 3]);
 		const descriptor = {
+			admission: {kind: 'none' as const},
 			appearance: {
 				highContrast: false,
 				reducedMotion: false,
@@ -1319,7 +1320,8 @@ describe('initIpc()', () => {
 		const managedDescriptor = {
 			...descriptor,
 			generation: 1,
-			sessionId: 'preview-session'
+			sessionId: 'preview-session',
+			sugarCubeRestartEligible: false
 		};
 		const openPreviewMock = jest
 			.spyOn(storyPreviewWindowManager, 'open')
@@ -1351,7 +1353,7 @@ describe('initIpc()', () => {
 					{
 						assets,
 						descriptor,
-						instrumentedHtml: '<html></html>'
+						html: '<html></html>'
 					},
 					'/mock/project'
 				)

@@ -43,10 +43,13 @@ migration.
   passage, console/runtime failures, viewport presets, reload, Source, and
   Graph. Play and Test add negotiated exact-version Restart plus a confirmed,
   origin-isolated Clear State transaction that remounts the same built artifact;
-  Proof remains read-only. Packaged acceptance covers Test From Here, Paperthin Proof, copied
-  assets and byte ranges, per-origin storage and window isolation, cleanup and
-  protocol lifetime, and current-passage identity across bundled Chapbook,
-  Harlowe, Snowman, and SugarCube.
+  Proof remains read-only. All 15 bundled SugarCube v2 sources from 2.31.0
+  through 2.37.3 use digest-authenticated, host-owned exact admission, audited
+  version profiles for four read sections, and statically plus dynamically
+  attested Restart. Packaged acceptance covers Test From Here, Paperthin Proof,
+  copied assets and byte ranges, per-origin storage and window isolation,
+  cleanup and protocol lifetime, and current-passage identity across bundled
+  Chapbook, Harlowe, Snowman, and SugarCube profile representatives.
 - Rust import/export, graph, storage, search, and CLI crates.
 - Segregated local, deliberately unsigned, and signed desktop artifact profiles
   with target-native trust manifests, checksum-bound assembly, and a

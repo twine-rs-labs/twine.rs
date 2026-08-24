@@ -11,6 +11,7 @@ import type {CoreAssetInventoryEntry, CoreStorySummary} from '../../core';
 import type {CoreExternalDelta} from '../../core/bindings/CoreExternalDelta';
 import type {StoryBuildAsset} from '../../util/build-package';
 import type {StoryFormatProperties} from '../../store/story-formats';
+import type {PreviewFormatAdmission} from '../../routes/story-preview-sugarcube';
 
 export type ProjectSourceLayout = 'passage-files' | 'single-twee';
 
@@ -137,6 +138,7 @@ export interface NativeStoryPreviewPassageRef {
 }
 
 export interface NativeStoryPreviewDescriptor {
+	admission: PreviewFormatAdmission;
 	appearance: NativeStoryPreviewAppearance;
 	bridgeSessionId: string;
 	generation: number;
@@ -147,19 +149,21 @@ export interface NativeStoryPreviewDescriptor {
 	storyDataCount: number;
 	storyId: string;
 	storyName: string;
+	sugarCubeRestartEligible: boolean;
 	summary?: CoreStorySummary;
 	target: NativeStoryPreviewTarget;
 }
 
 export type NativeStoryPreviewDescriptorInput = Omit<
 	NativeStoryPreviewDescriptor,
-	'generation' | 'sessionId'
->;
+	'admission' | 'generation' | 'sessionId' | 'sugarCubeRestartEligible'
+> &
+	Partial<Pick<NativeStoryPreviewDescriptor, 'admission'>>;
 
 export interface NativeStoryPreviewLaunchRequest {
 	assets?: Array<Pick<StoryBuildAsset, 'outputPath' | 'path'>>;
 	descriptor: NativeStoryPreviewDescriptorInput;
-	instrumentedHtml: string;
+	html: string;
 }
 
 /**

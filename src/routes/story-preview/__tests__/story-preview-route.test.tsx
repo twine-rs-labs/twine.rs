@@ -33,11 +33,19 @@ describe('<StoryPreviewRoute>', () => {
 	}
 
 	function mockPublishing() {
-		const proofStory = jest.fn(async () => 'mock-proofed-story');
-		const publishStory = jest.fn(async () => 'mock-published-story');
+		const buildStoryPreviewPackage = jest.fn(
+			async (_storyId: string, target: string) => ({
+				admission: {kind: 'none'},
+				build: {
+					html:
+						target === 'proof' ? 'mock-proofed-story' : 'mock-published-story'
+				},
+				summary: undefined
+			})
+		);
 
-		usePublishingMock.mockReturnValue({proofStory, publishStory});
-		return {proofStory, publishStory};
+		usePublishingMock.mockReturnValue({buildStoryPreviewPackage});
+		return {buildStoryPreviewPackage};
 	}
 
 	it.each([
@@ -56,7 +64,7 @@ describe('<StoryPreviewRoute>', () => {
 	])(
 		'renders the $target target through the canonical preview route',
 		async ({expectedLabel, expectedTitle, route, target}) => {
-			const {publishStory} = mockPublishing();
+			const {buildStoryPreviewPackage} = mockPublishing();
 
 			renderComponent(route);
 			await waitFor(() =>
@@ -65,22 +73,20 @@ describe('<StoryPreviewRoute>', () => {
 				).toContain('mock-published-story')
 			);
 			expect(screen.getByText(expectedLabel)).toBeInTheDocument();
-			expect(publishStory).toHaveBeenCalledWith(
+			expect(buildStoryPreviewPackage).toHaveBeenCalledWith(
 				'123',
-				target === 'test'
-					? {buildTarget: 'test', formatOptions: 'debug', startId: undefined}
-					: {buildTarget: 'play'}
+				target,
+				target === 'test' ? {formatOptions: 'debug', startId: undefined} : {}
 			);
 		}
 	);
 
 	it('keeps Test From Here on the canonical route with an explicit start passage', async () => {
-		const {publishStory} = mockPublishing();
+		const {buildStoryPreviewPackage} = mockPublishing();
 
 		renderComponent('/stories/123/preview?target=test&passage=456');
 		await waitFor(() =>
-			expect(publishStory).toHaveBeenCalledWith('123', {
-				buildTarget: 'test',
+			expect(buildStoryPreviewPackage).toHaveBeenCalledWith('123', 'test', {
 				formatOptions: 'debug',
 				startId: '456',
 				startMode: 'afterStartup'
@@ -89,10 +95,10 @@ describe('<StoryPreviewRoute>', () => {
 	});
 
 	it('returns Test From Start to the story start instead of the requested passage', async () => {
-		const {publishStory} = mockPublishing();
+		const {buildStoryPreviewPackage} = mockPublishing();
 
 		renderComponent('/stories/123/preview?target=test&passage=456');
-		await waitFor(() => expect(publishStory).toHaveBeenCalled());
+		await waitFor(() => expect(buildStoryPreviewPackage).toHaveBeenCalled());
 		fireEvent.click(screen.getByRole('button', {name: 'Test From Start'}));
 
 		await waitFor(() =>
@@ -101,15 +107,14 @@ describe('<StoryPreviewRoute>', () => {
 	});
 
 	it('uses proofing format query parameters on the same route', async () => {
-		const {proofStory} = mockPublishing();
+		const {buildStoryPreviewPackage} = mockPublishing();
 
 		renderComponent(
 			'/stories/123/preview?target=proof&proofingFormatName=Paperthin&proofingFormatVersion=1.0.0'
 		);
 		await waitFor(() =>
-			expect(proofStory).toHaveBeenCalledWith('123', {
-				name: 'Paperthin',
-				version: '1.0.0'
+			expect(buildStoryPreviewPackage).toHaveBeenCalledWith('123', 'proof', {
+				proofingFormat: {name: 'Paperthin', version: '1.0.0'}
 			})
 		);
 		expect(screen.getByText('Proof')).toBeInTheDocument();
@@ -117,8 +122,7 @@ describe('<StoryPreviewRoute>', () => {
 
 	it('shows publishing failures in the shared preview surface', async () => {
 		usePublishingMock.mockReturnValue({
-			proofStory: jest.fn(),
-			publishStory: jest.fn(async () => {
+			buildStoryPreviewPackage: jest.fn(async () => {
 				throw new Error('mock-error-message');
 			})
 		});

@@ -353,9 +353,8 @@ async function managedStoryPreviewBuild(
 	if (
 		!request ||
 		typeof request !== 'object' ||
-		typeof request.instrumentedHtml !== 'string' ||
-		Buffer.byteLength(request.instrumentedHtml, 'utf8') >
-			maxScratchPreviewBytes ||
+		typeof request.html !== 'string' ||
+		Buffer.byteLength(request.html, 'utf8') > maxScratchPreviewBytes ||
 		!request.descriptor ||
 		typeof request.descriptor !== 'object'
 	) {
@@ -367,7 +366,7 @@ async function managedStoryPreviewBuild(
 	if (assets.length === 0) {
 		return {
 			descriptor: request.descriptor,
-			html: request.instrumentedHtml
+			html: request.html
 		};
 	}
 	if (!capability) {
@@ -418,7 +417,7 @@ async function managedStoryPreviewBuild(
 			};
 		}),
 		descriptor: request.descriptor,
-		html: request.instrumentedHtml
+		html: request.html
 	};
 }
 

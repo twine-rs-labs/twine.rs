@@ -1,6 +1,7 @@
 import {expect, Frame, Page, test} from '@playwright/test';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
+import {JSDOM} from 'jsdom';
 import {
 	instrumentPreviewHtml,
 	normalizeStoryPreviewBridgeMessage,
@@ -8,13 +9,41 @@ import {
 	type StoryPreviewBridgeMessage
 } from '../src/routes/story-preview-contract';
 import type {StoryPreviewDebuggerCapability} from '../src/routes/story-preview-debugger-protocol';
+import {
+	NO_PREVIEW_FORMAT_ADMISSION,
+	SUGARCUBE_COMPATIBILITY,
+	type PreviewFormatAdmission
+} from '../src/routes/story-preview-sugarcube';
 
 const appUrl = 'http://127.0.0.1:5173';
 
-test.skip(
-	({browserName}) => browserName !== 'chromium',
-	'Bundled runtime debugger conformance is anchored in Chromium.'
-);
+const CROSS_BROWSER_SUGARCUBE_VERSIONS = new Set([
+	'2.31.0',
+	'2.32.0',
+	'2.33.1',
+	'2.35.0',
+	'2.36.0',
+	'2.37.3'
+]);
+
+function admissionForFormat(
+	format: string,
+	formatVersion: string
+): PreviewFormatAdmission {
+	const entry = SUGARCUBE_COMPATIBILITY.find(
+		candidate => format === 'SugarCube' && candidate.version === formatVersion
+	);
+
+	return entry
+		? {
+				adapterId: entry.adapterId,
+				format: 'SugarCube',
+				kind: 'builtin-sha256',
+				sourceSha256: entry.sourceSha256,
+				version: entry.version
+			}
+		: NO_PREVIEW_FORMAT_ADMISSION;
+}
 
 function formatSource(id: string) {
 	const raw = readFileSync(
@@ -95,11 +124,32 @@ async function mountStory(
 		sessionId: string;
 	}
 ): Promise<Frame> {
-	const html = instrumentPreviewHtml(
-		publishedStory(formatId, format, formatVersion, passageText),
-		sessionId,
-		{enableHarloweSessionStorageFallback: true}
-	);
+	const originalDOMParser = globalThis.DOMParser;
+	Object.defineProperty(globalThis, 'DOMParser', {
+		configurable: true,
+		value: new JSDOM('').window.DOMParser
+	});
+	let html: string;
+
+	try {
+		html = instrumentPreviewHtml(
+			publishedStory(formatId, format, formatVersion, passageText),
+			sessionId,
+			{
+				admission: admissionForFormat(format, formatVersion),
+				enableHarloweSessionStorageFallback: true
+			}
+		).html;
+	} finally {
+		if (originalDOMParser) {
+			Object.defineProperty(globalThis, 'DOMParser', {
+				configurable: true,
+				value: originalDOMParser
+			});
+		} else {
+			delete (globalThis as {DOMParser?: typeof DOMParser}).DOMParser;
+		}
+	}
 
 	await page.goto(appUrl);
 	await page.evaluate(() => {
@@ -150,12 +200,17 @@ function observedSnapshot(
 }
 
 test('bundled adapters negotiate canonical descriptors and usable sections', async ({
+	browserName,
 	page
 }) => {
-	test.setTimeout(90_000);
+	test.setTimeout(300_000);
 	const cases = [
-		{
-			adapterId: 'sugarcube-2.37.3',
+		...SUGARCUBE_COMPATIBILITY.filter(
+			entry =>
+				browserName === 'chromium' ||
+				CROSS_BROWSER_SUGARCUBE_VERSIONS.has(entry.version)
+		).map(entry => ({
+			adapterId: entry.adapterId,
 			capabilities: [
 				'currentPassage',
 				'storyVariables',
@@ -163,9 +218,9 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 				'visitedPassages'
 			] as StoryPreviewDebuggerCapability[],
 			format: 'SugarCube',
-			formatVersion: '2.37.3',
+			formatVersion: entry.version,
 			passageText: '<<set $alpha = 1>><<set _temp = 2>>Ready'
-		},
+		})),
 		{
 			adapterId: 'snowman-1.5.0',
 			capabilities: [
@@ -224,7 +279,7 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 			protocolVersion: 1
 		});
 		expect(Object.keys(snapshot?.sections ?? {})).toEqual(item.capabilities);
-		if (item.adapterId === 'sugarcube-2.37.3') {
+		if (item.format === 'SugarCube') {
 			expect(snapshot).toMatchObject({
 				storyVariables: [{name: 'alpha', preview: '1', type: 'number'}],
 				temporaryVariables: [{name: 'temp', preview: '2', type: 'number'}],
@@ -235,16 +290,21 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 });
 
 test('bundled exact adapters restart cleanly and remount the same artifact', async ({
+	browserName,
 	page
 }) => {
-	test.setTimeout(120_000);
+	test.setTimeout(360_000);
 	const cases = [
-		{
-			adapterId: 'sugarcube-2.37.3',
+		...SUGARCUBE_COMPATIBILITY.filter(
+			entry =>
+				browserName === 'chromium' ||
+				CROSS_BROWSER_SUGARCUBE_VERSIONS.has(entry.version)
+		).map(entry => ({
+			adapterId: entry.adapterId,
 			format: 'SugarCube',
-			formatVersion: '2.37.3',
+			formatVersion: entry.version,
 			passageText: '<<set $initial = 1>>Ready'
-		},
+		})),
 		{
 			adapterId: 'snowman-1.5.0',
 			format: 'Snowman',
@@ -292,7 +352,7 @@ test('bundled exact adapters restart cleanly and remount the same artifact', asy
 				__restartEventCount?: number;
 			};
 
-			if (adapterId === 'sugarcube-2.37.3') {
+			if (adapterId.startsWith('sugarcube-')) {
 				runtime.SugarCube!.State.variables.transient = 42;
 				runtime.__restartEventCount = 0;
 				document.addEventListener(':enginerestart', () => {
@@ -356,7 +416,7 @@ test('bundled exact adapters restart cleanly and remount the same artifact', asy
 			)
 			.toBe('applied');
 
-		if (item.adapterId === 'sugarcube-2.37.3') {
+		if (item.adapterId.startsWith('sugarcube-')) {
 			expect(
 				await frame.evaluate(
 					() =>
@@ -401,7 +461,7 @@ test('bundled exact adapters restart cleanly and remount the same artifact', asy
 		frame = page.frames().find(candidate => candidate !== page.mainFrame())!;
 
 		if (
-			item.adapterId === 'sugarcube-2.37.3' ||
+			item.adapterId.startsWith('sugarcube-') ||
 			item.adapterId.startsWith('snowman-')
 		) {
 			await expect
@@ -535,7 +595,14 @@ test('bundled Snowman bounds escaped previews and retains the newest 200 history
 	expect(snapshot?.visitedPassages).toHaveLength(200);
 	expect(snapshot?.visitedPassages?.[0]).toMatchObject({localId: '6'});
 	expect(snapshot?.visitedPassages?.at(-1)).toMatchObject({localId: '205'});
-	expect(normalizeStoryPreviewBridgeMessage(snapshot)).toBeDefined();
+	expect(
+		normalizeStoryPreviewBridgeMessage(snapshot, {
+			admission: NO_PREVIEW_FORMAT_ADMISSION,
+			bridgeSessionId: 'snowman-history',
+			generation: 0,
+			sugarCubeRestartEligible: false
+		})
+	).toBeDefined();
 });
 
 test('renders captured variable whitespace exactly while wrapping in a narrow inspector', async ({

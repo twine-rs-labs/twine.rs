@@ -2,9 +2,9 @@
 
 Status: current
 Owner: frontend and story-format maintainers
-Last verified: 2026-08-23
-Source of truth: preview instrumentation, debugger protocol registry, and shared
-preview runtime reducer
+Last verified: 2026-08-24
+Source of truth: SugarCube compatibility matrix, preview build admission,
+instrumentation, debugger protocol registry, and shared preview runtime reducer
 
 The shared browser and managed-desktop preview surface has an additive,
 read-only Runtime Debugger v1 protocol. It extends the existing current-passage,
@@ -20,17 +20,40 @@ classification. The host accepts the first valid hello for a preview runtime
 model and ignores snapshots received before negotiation, messages for another
 adapter or protocol version, and later handshakes.
 
-For every hello, the host recomputes the canonical descriptor from its bounded
-format metadata and requires the adapter ID, ordered capabilities, and
-reliability to match exactly. This applies to generic adapters too, so a known
-format tuple cannot negotiate a generic downgrade.
+Exact SugarCube negotiation is authorized before the frame exists. The host
+uses this one-way authority chain:
 
-The existing frame-window and opaque bridge-session checks correlate messages
-with the expected preview instance before reduction. They do not authenticate
-the instrumentation against the story: story code shares the emitting realm.
-Negotiated state belongs to that runtime model: a reload clears it, a desktop
-candidate generation buffers it privately, commit promotes it with the
-candidate frame, and rollback discards it.
+```text
+canonical built-in record -> immutable loaded-source snapshot -> synchronous build
+-> source SHA and structural tuple validation -> exact admission
+-> static Restart eligibility -> per-frame context -> message normalization
+```
+
+The source snapshot retains the selected record identity and loaded
+`name`/`version`/`source`; the build clone and SHA use those same values. A
+non-executing HTML parse requires exactly one effective `tw-storydata` tuple.
+The authoritative literal rows, including every adapter ID, canonical URL,
+source digest, and read/Restart profile assignment, live in
+[`story-preview-sugarcube.ts`](../../src/routes/story-preview-sugarcube.ts).
+The exact adapter is admitted only when the selected non-user-added record is
+the unique canonical and installed built-in, its URL and loaded identity match,
+and the decoded UTF-8 source SHA matches the literal compatibility matrix.
+Missing, malformed, ambiguous, changed, user-added, or unbundled inputs become
+generic.
+
+Serialized admission has an exact own-field schema and is validated again at
+the browser/Electron boundary. Runtime DOM attributes, story-supplied adapter
+IDs, and command messages cannot create, change, or revoke admission. Once an
+exact SugarCube build is admitted, its hello uses the host-selected descriptor;
+an unadmitted SugarCube tuple always stays generic.
+
+Messages are handled frame-first: Clear State acknowledgements are separate;
+the event source is identified as current, staged, or unknown; unknown sources
+are rejected; then that frame's host context is used for one canonicalization
+step. Reducers accept only canonical messages and enforce ordering and
+correlation, never adapter admission. Current and staged frames have independent
+admission, generation, and Restart eligibility. Commit promotes the candidate
+context with its model; rollback discards both.
 
 ## Adapter contract
 
@@ -38,13 +61,16 @@ Adapter selection matches both story-format name and version. Unknown or older
 versions use the generic best-effort adapter; they never inherit the promises of
 a nearby version.
 
-| Adapter                 | Reliability   | Read capabilities                                                       |
-| ----------------------- | ------------- | ----------------------------------------------------------------------- |
-| SugarCube 2.37.3        | Exact version | Current passage, story variables, temporary variables, visited passages |
-| Snowman 1.5.0 and 2.1.1 | Exact version | Current passage, story variables, visited passages                      |
-| Chapbook 2.3.1          | Best effort   | Current passage only                                                    |
-| Harlowe 3.3.9           | Best effort   | Current passage only                                                    |
-| Generic                 | Best effort   | Current passage only                                                    |
+| Adapter                                                                | Reliability                           | Read capabilities                                                       |
+| ---------------------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------- |
+| SugarCube 2.31.0, 2.31.1                                               | Exact version, read profile 2.31      | Current passage, story variables, temporary variables, visited passages |
+| SugarCube 2.32.0, 2.33.0-2.33.4, 2.34.0, 2.34.1, 2.35.0                | Exact version, read profile 2.32-2.35 | Current passage, story variables, temporary variables, visited passages |
+| SugarCube 2.36.0, 2.36.1                                               | Exact version, read profile 2.36      | Current passage, story variables, temporary variables, visited passages |
+| SugarCube 2.37.0, 2.37.3                                               | Exact version, read profile 2.37      | Current passage, story variables, temporary variables, visited passages |
+| Snowman 1.5.0 and 2.1.1                                                | Exact version                         | Current passage, story variables, visited passages                      |
+| Chapbook 2.3.1                                                         | Best effort                           | Current passage only                                                    |
+| Harlowe 3.3.9                                                          | Best effort                           | Current passage only                                                    |
+| Generic, including SugarCube 1, user-added SugarCube, and unbundled v2 | Best effort                           | Current passage only                                                    |
 
 Exact-version means the adapter targets a verified runtime surface for that
 bundled version. It does not make story values trusted or promise support for a
@@ -63,13 +89,15 @@ APIs cannot provide both accessor-free and traversal-bounded inspection.
 Chapbook variable and trail/history capabilities therefore remain withdrawn
 until the format supplies a versioned bounded snapshot hook.
 
-SugarCube 2.37.3 is the one explicit format-owned accessor boundary. Its
-`State.passage`, `State.variables`, `State.temporary`, and `State.history`
-getters are frozen and non-configurable in the bundled runtime and return the
-engine's existing roots without walking story values. The exact adapter checks
-those descriptors and their bundled getter implementations before invoking
-them. A missing or changed check makes the affected section `unavailable`; it
-does not fall back to an arbitrary accessor.
+Each admitted SugarCube version has an explicit audited getter profile for
+`State.passage`, `State.variables`, `State.temporary`, and `State.history`.
+There is no semver inference. Each getter is checked independently as an own,
+non-enumerable, non-configurable getter on a frozen `State`, using captured
+intrinsics and its exact bundled function source. Only then is that getter
+invoked. A missing or changed getter makes only its section `unavailable`;
+exact current-passage inspection does not fall back to visible DOM or legacy
+runtime discovery. Read drift does not change the admitted adapter and does not
+disable an independently valid Restart profile.
 
 ## Snapshot safety
 
@@ -111,11 +139,11 @@ continues independently.
 ## Runtime command protocol
 
 Play and Test previews negotiate an additive Runtime Command v1 protocol after
-the debugger hello. Restart is advertised only for the exact bundled
-SugarCube 2.37.3, Snowman 1.5.0 and 2.1.1, Chapbook 2.3.1, and Harlowe 3.3.9
-tuples. Unknown tuples do not inherit a nearby command implementation. Each
-request and result is correlated to the live frame window, bridge session,
-adapter, protocol version, and bounded request identifier.
+the debugger hello. Restart is available to all 15 admitted SugarCube versions,
+Snowman 1.5.0 and 2.1.1, Chapbook 2.3.1, and Harlowe 3.3.9. Unknown tuples do not
+inherit a nearby implementation. Each request and result is correlated to the
+live frame window, bridge session, generation, adapter, protocol version, and
+bounded request identifier.
 
 Restart asks the format adapter to discard its active continuation surface,
 then the host remounts the same built artifact at its launch passage. The host
@@ -127,20 +155,57 @@ trusted.
 
 The exact adapters use only audited version-specific surfaces:
 
-- SugarCube verifies its frozen `State.reset` implementation, dispatches one
-  native-shaped `:enginerestart` event, and uses a one-remount marker to suppress
-  autoload without deleting explicit save slots;
+- SugarCube first requires exactly one structurally identified
+  `script#script-sugarcube` region with one profile-specific startup fragment
+  and native Restart integrity fragment. Only the startup fragment is patched.
+  Static mismatch leaves the engine region unchanged and exact reads enabled,
+  but disables command negotiation. At command time, the adapter verifies own,
+  frozen, non-enumerable, non-writable, non-configurable `State.reset` and
+  `Engine.restart` functions against the profile. `Engine.restart` is never
+  invoked. The adapter calls `State.reset`, then synchronously dispatches one
+  `CustomEvent(':enginerestart')` on `document` with `detail: null`, bubbling and
+  cancelable true, and composed false;
 - Snowman removes its hash continuation when the document URL permits it, or
   delegates that scrub to the required remount for an opaque `srcDoc` frame;
 - Chapbook verifies its frozen `reset` and `saveToStorage` functions before
   clearing the active state;
 - Harlowe removes the exact `Saved Session` continuation key.
 
-The command channel is still cooperative rather than an authentication
-boundary: story code shares the instrumented realm. Captured native references,
-own-data descriptors, exact function signatures, and host-side correlation
-limit accidental or prototype-tampered execution, but they do not make hostile
-story JavaScript trusted.
+SugarCube command hello/results are accepted only when that frame's host
+context contains matching exact admission and static eligibility. A forged
+message cannot restore failed eligibility. `unavailable` and `failed` leave the
+frame mounted; `applied` and `indeterminate` remount; timeout performs a
+precautionary remount. Late, duplicate, stale-generation, wrong-session, and
+wrong-request results are ignored.
+
+For managed Electron previews, the renderer sends the raw immutable build and
+admission descriptor. Main validates the descriptor, instruments that exact
+HTML, derives static Restart eligibility from the engine region it stages, and
+returns only the main-owned eligibility in the generation descriptor.
+
+The narrow Restart marker belongs to a correlated Twine.rs remount. The bridge
+clears `window.name` before SugarCube startup, and the parent clears both its
+stored frame name and the live iframe name on the remounted frame's first load,
+even if bridge negotiation fails. Later ordinary Reload therefore uses native
+autoload again. Story-authored names and story-initiated reloads are outside
+this marker-integrity boundary. Restart removes the active continuation while
+preserving explicit saves where the origin supports persistence. Browser
+sandboxed `srcDoc` uses opaque/document-lifetime storage behavior; packaged
+Electron uses stable per-package `twine-preview://` Web Storage. Cookie fallback
+and degraded storage backends remain out of scope.
+
+## Runtime coverage matrix
+
+Artifact authentication and build admission cover all 15 bundled versions.
+Real-artifact runtime and instrumentation cover all 15 in Chromium. Firefox
+and WebKit cover profile representatives 2.31.0, 2.32.0, 2.33.1, 2.35.0,
+2.36.0, and 2.37.3. Offline PWA coverage exercises exact admission and static
+negotiation for 2.31.0 and 2.37.3 under the documented
+opaque/degraded-storage boundary. Packaged Electron covers all six profile
+representatives, with Play and non-start Test From Here at the 2.31 and 2.37
+endpoints. Adding a future SugarCube release requires an explicit matrix row,
+canonical source digest, audited read and Restart profile assignment, and
+real-artifact coverage.
 
 Clear State is host-owned and therefore is not an adapter command. Browser
 `srcDoc` previews have an opaque origin and are cleared by detaching and

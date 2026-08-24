@@ -47,6 +47,11 @@ import {
 	packageExportInputs
 } from './package-publishing';
 import {workbenchBufferCoordinator} from '../util/workbench-buffer-coordinator';
+import {
+	previewFormatAdmissionForBuild,
+	snapshotPreviewStoryFormat,
+	type PreviewFormatAdmission
+} from '../routes/story-preview-sugarcube';
 
 export const referencedMediaEmbeddingLimits = {
 	maxFileBytes: 25 * 1024 * 1024,
@@ -82,6 +87,7 @@ export type BuildStoryPreviewPackageOptions = PublishOptions & {
 };
 
 export interface StoryPreviewBuild {
+	admission: PreviewFormatAdmission;
 	build: StoryBuildPackage;
 	revision: number;
 	story: StoryWithDocuments;
@@ -510,30 +516,45 @@ export function usePublishing(): UsePublishingProps {
 			const snapshot = await completeStorySnapshotForPreview(storyId);
 			const inventory =
 				assetInventory ?? (await assetInventoryForStory(storyId));
-			const formatProperties =
+			const selectedProofingFormat = proofingFormat ?? prefs.proofingFormat;
+			const format =
 				target === 'proof'
-					? await loadProofFormatProperties(proofingFormat)
-					: await storyFormatsDispatch(
-							loadFormatProperties(
-								formatWithNameAndVersion(
-									formats,
-									snapshot.story.storyFormat,
-									snapshot.story.storyFormatVersion
-								)
-							)
+					? formatWithNameAndVersion(
+							formats,
+							selectedProofingFormat.name,
+							selectedProofingFormat.version
+						)
+					: formatWithNameAndVersion(
+							formats,
+							snapshot.story.storyFormat,
+							snapshot.story.storyFormatVersion
 						);
+			const formatProperties = await storyFormatsDispatch(
+				loadFormatProperties(format)
+			);
 
 			if (!formatProperties) {
 				throw new Error(`Couldn't load story format properties`);
 			}
+			const formatSnapshot = snapshotPreviewStoryFormat(
+				formats,
+				format,
+				formatProperties
+			);
+			const build = createStoryBuildPackage(snapshot.story, getAppInfo(), {
+				...publishOptions,
+				assetInventory: inventory,
+				formatProperties: formatSnapshot.buildProperties,
+				target
+			});
+			const admission = await previewFormatAdmissionForBuild(
+				formatSnapshot,
+				build.html
+			);
 
 			return {
-				build: createStoryBuildPackage(snapshot.story, getAppInfo(), {
-					...publishOptions,
-					assetInventory: inventory,
-					formatProperties,
-					target
-				}),
+				admission,
+				build,
 				revision: snapshot.revision,
 				story: snapshot.story,
 				summary: snapshot.summary
@@ -543,7 +564,8 @@ export function usePublishing(): UsePublishingProps {
 			assetInventoryForStory,
 			completeStorySnapshotForPreview,
 			formats,
-			loadProofFormatProperties,
+			prefs.proofingFormat.name,
+			prefs.proofingFormat.version,
 			storyFormatsDispatch
 		]
 	);

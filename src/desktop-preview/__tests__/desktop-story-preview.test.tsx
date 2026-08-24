@@ -21,6 +21,7 @@ function descriptor(
 	overrides: Partial<NativeStoryPreviewDescriptor> = {}
 ): NativeStoryPreviewDescriptor {
 	return {
+		admission: {kind: 'none'},
 		appearance: {
 			highContrast: false,
 			reducedMotion: false,
@@ -36,6 +37,7 @@ function descriptor(
 		storyId: 'story-1',
 		storyName: 'Story',
 		target: 'play',
+		sugarCubeRestartEligible: false,
 		...overrides
 	};
 }
