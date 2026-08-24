@@ -2,7 +2,7 @@
 
 Status: current
 Owner: Electron and frontend maintainers
-Last verified: 2026-08-18
+Last verified: 2026-08-23
 Source of truth: desktop preview entry, preview IPC, window manager, protocol,
 and shared preview surface
 
@@ -48,11 +48,12 @@ Preview IPC has two exact trust gates:
   and results only from the WebContents that owns the session.
 
 The preview API exposes descriptor reads, generation-tagged commands and
-acknowledgements, appearance updates, and content replacement. It does not
-expose filesystem, persistence, project mutation, dialogs, or raw
-`ipcRenderer`. Main retains the latest bounded appearance for each live owner
-and merges it immediately before exposing or committing a generation, including
-updates received before a session or candidate exists.
+acknowledgements, appearance updates, content replacement, and the bounded
+begin/cancel/complete Clear State lifecycle. It does not expose filesystem,
+project mutation, dialogs, arbitrary persistence access, or raw `ipcRenderer`.
+Main retains the latest bounded appearance for each live owner and merges it
+immediately before exposing or committing a generation, including updates
+received before a session or candidate exists.
 
 Its sole clipboard capability is `copyText`, used by the host Runtime Console.
 It accepts only nonempty bounded text through the exact top-level preview-entry
@@ -72,11 +73,50 @@ Candidate-generation messages, including debugger section completeness, are
 reduced into a bounded private runtime model; commit promotes that model with
 the candidate frame, while rollback discards it.
 
+Play and Test expose host-owned Runtime Controls inside the Debugger. Restart
+uses the separately negotiated format command and remounts the same committed
+package URL without advancing its generation. Clear State is confirmed and
+destructive: it removes runtime storage and cookies owned by this preview
+origin, including saved progress and format preferences, then remounts the same
+artifact. Proof exposes neither control.
+
 Source and Graph commands return to the owning editor and focus the referenced
 passage. Test From Start and Test Current return generation-tagged requests to
 the owner, which performs a fresh one-snapshot test build and asks main to
 replace the content in place. Preview input never supplies a filesystem path or
 overrides Test From Start's committed launch passage.
+
+## Clear State transaction
+
+Clear State is serialized against replacement staging, candidate commit,
+owner-command execution, another clear operation, and session close. Main locks
+the current generation before waiting for the direct story frame to detach.
+Once detached, it registers a one-use same-origin cleanup document. The shell
+loads that document in a temporary sandboxed frame so the document can clear
+and verify local storage, session storage, Cache Storage, and enumerated
+IndexedDB databases before acknowledging the exact operation identifier. This
+same-origin pass is required because Electron's origin-filtered session cleanup
+does not reliably remove persistent data for a custom scheme.
+
+After that acknowledgement, main clears origin-scoped Cache Storage, file
+systems, IndexedDB, local storage, service-worker, Web SQL, and related storage
+data through Electron's session API. Cookies are enumerated and removed only
+when their normalized domain exactly matches the current package host; each
+cookie's name and path are retained for removal. Cookies and downloads are not
+included in the broad session-data request. Main revalidates session,
+generation, URL, operation, and lock ownership after asynchronous boundaries.
+
+The cleanup URL is invalidated after completion, cancellation, package release,
+or protocol reset. Main gives each operation a bounded lease and owns one
+identity-checked terminal path: completion, explicit cancellation, lease
+expiry, preview-shell navigation, or session close can release only that exact
+operation and its cleanup document. Renderer identity changes and teardown
+reject any cleanup acknowledgement waiter and best-effort cancel an operation
+that has already begun; late begin, acknowledgement, completion, or timeout
+continuations cannot remount an obsolete artifact or update the replacement
+shell. Completion and failure both release the lock, and a live shell remounts
+the same committed package URL. A failure is reported as not-fully-confirmed
+rather than claiming that a partial destructive operation was rolled back.
 
 ## Ownership and cleanup
 

@@ -1,6 +1,7 @@
 import {contextBridge, ipcRenderer} from 'electron';
 import type {
 	NativeStoryPreviewAppearanceUpdate,
+	NativeStoryPreviewClearStateOperation,
 	NativeStoryPreviewCommand,
 	NativeStoryPreviewCommandResult,
 	NativeStoryPreviewReplacementResult
@@ -13,8 +14,11 @@ import type {NativeStoryPreviewBridge} from '../preview-ipc-channels';
 const storyPreviewBridgeName = 'twineStoryPreview';
 const storyPreviewIpcChannels = Object.freeze({
 	appearance: 'story-preview:appearance',
+	beginClearState: 'story-preview:begin-clear-state',
+	cancelClearState: 'story-preview:cancel-clear-state',
 	command: 'story-preview:command',
 	commandResult: 'story-preview:command-result',
+	completeClearState: 'story-preview:complete-clear-state',
 	copyText: 'story-preview:copy-text',
 	frameLoaded: 'story-preview:frame-loaded',
 	getInitialState: 'story-preview:get-initial-state',
@@ -24,6 +28,7 @@ const storyPreviewIpcChannels = Object.freeze({
 
 const maxPassageIdLength = 1024;
 const maxCopyTextLength = 4 * 1024 * 1024;
+const maxOperationIdLength = 128;
 
 function validGeneration(value: unknown): value is number {
 	return Number.isSafeInteger(value) && (value as number) >= 0;
@@ -88,6 +93,28 @@ function validGenerationValue(generation: unknown) {
 	}
 }
 
+function copyClearStateOperation(value: unknown) {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		throw new TypeError('Invalid Clear State operation.');
+	}
+
+	const operation = value as Partial<NativeStoryPreviewClearStateOperation>;
+
+	if (
+		!validGeneration(operation.generation) ||
+		typeof operation.operationId !== 'string' ||
+		operation.operationId.length === 0 ||
+		operation.operationId.length > maxOperationIdLength
+	) {
+		throw new TypeError('Invalid Clear State operation.');
+	}
+
+	return {
+		generation: operation.generation,
+		operationId: operation.operationId
+	};
+}
+
 function subscribe<T>(channel: string, callback: (value: T) => void) {
 	if (typeof callback !== 'function') {
 		throw new TypeError('A story preview listener must be a function.');
@@ -100,6 +127,25 @@ function subscribe<T>(channel: string, callback: (value: T) => void) {
 }
 
 const bridge: NativeStoryPreviewBridge = {
+	beginClearState(generation) {
+		validGenerationValue(generation);
+		return ipcRenderer.invoke(
+			storyPreviewIpcChannels.beginClearState,
+			generation
+		);
+	},
+	cancelClearState(operation) {
+		return ipcRenderer.invoke(
+			storyPreviewIpcChannels.cancelClearState,
+			copyClearStateOperation(operation)
+		);
+	},
+	completeClearState(operation) {
+		return ipcRenderer.invoke(
+			storyPreviewIpcChannels.completeClearState,
+			copyClearStateOperation(operation)
+		);
+	},
 	copyText(text) {
 		if (
 			typeof text !== 'string' ||

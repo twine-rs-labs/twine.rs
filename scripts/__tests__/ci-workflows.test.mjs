@@ -181,6 +181,65 @@ test('packaged CI retains complete native evidence', () => {
 	assert.doesNotMatch(source, /workflow_dispatch:/);
 	assert.match(source, /pull_request:/);
 	assert.match(source, /merge_group:\n\s+types: \[checks_requested\]/);
+	for (const [label, suite] of [
+		['Linux x64', 'full'],
+		['Linux ARM64', 'reduced'],
+		['macOS Intel', 'reduced'],
+		['macOS ARM64', 'full'],
+		['Windows x64', 'full']
+	]) {
+		assert.ok(
+			source.includes(
+				`- label: ${label}\n            packaged_suite: ${suite}`
+			),
+			`${label} should run the ${suite} packaged suite`
+		);
+	}
+	assert.equal(
+		(source.match(/test "\$\{\{ matrix\.packaged_suite }}" = 'reduced'/g) ?? [])
+			.length,
+		2
+	);
+	assert.doesNotMatch(source, /Extend Linux ARM64 preview wait/);
+	assert.ok(
+		source.includes(
+			`- name: Install Playwright Chromium for full macOS suite
+        if: runner.os == 'macOS' && matrix.packaged_suite == 'full'
+        run: npx playwright install chromium`
+		),
+		'full macOS packaged suites should install standalone Chromium'
+	);
+	assert.ok(
+		stepRun(source, 'package-installable', 'Exercise Linux AppImage').includes(
+			'npm run e2e:electron:packaged -- --grep "drains a trailing"'
+		)
+	);
+	assert.ok(
+		stepRun(
+			source,
+			'package-installable',
+			'Extract and smoke Linux ZIP'
+		).includes(
+			`if [[ "\${{ matrix.packaged_suite }}" == 'full' ]]; then
+  TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged
+else
+  test "\${{ matrix.packaged_suite }}" = 'reduced'
+  TWINE_E2E_EXECUTABLE="$extract_dir/twine-rs" xvfb-run --auto-servernum npm run e2e:electron:packaged -- --grep "drains a trailing"`
+		)
+	);
+	assert.ok(
+		stepRun(
+			source,
+			'package-installable',
+			'Mount and smoke macOS DMG'
+		).includes(
+			`if [[ "\${{ matrix.packaged_suite }}" == 'full' ]]; then
+  TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged
+else
+  test "\${{ matrix.packaged_suite }}" = 'reduced'
+  TWINE_E2E_EXECUTABLE="$mount_dir/Twine RS.app/Contents/MacOS/Twine RS" npm run e2e:electron:packaged -- --grep "drains a trailing|preserves sibling"`
+		)
+	);
 });
 
 test('targeted packaged smoke grep alternatives match current test titles', () => {
@@ -191,6 +250,13 @@ test('targeted packaged smoke grep alternatives match current test titles', () =
 	const testTitles = [...packagedTests.matchAll(/\btest\('([^']+)'/g)].map(
 		match => match[1]
 	);
+	assert.deepEqual(
+		testTitles.filter(title => /drains a trailing/.test(title)),
+		[
+			'packaged desktop drains a trailing legacy editor save before exit',
+			'packaged desktop drains a trailing native project save before exit'
+		]
+	);
 	const selectors = [
 		...['packaged-electron-smoke.yml', 'release-candidate.yml', 'release.yml']
 			.flatMap(name => [
@@ -199,7 +265,7 @@ test('targeted packaged smoke grep alternatives match current test titles', () =
 			.map(match => match[1])
 	];
 
-	assert.equal(selectors.length, 5);
+	assert.equal(selectors.length, 6);
 	for (const selector of selectors) {
 		for (const alternative of selector.split('|')) {
 			assert.ok(

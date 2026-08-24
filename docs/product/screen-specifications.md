@@ -738,9 +738,13 @@ User needs to be able to:
 Visible UI elements:
 
 - Runtime preview frame.
-- Debug strip: `Restart`, `Back`, `Current Passage`, `Visited`, `Variables`, `Console`, `Open Source`, `Reveal Graph`.
-- Viewport controls: responsive sizes, zoom, reload.
-- Error overlay linking to source spans.
+- Preview strip: current passage, runtime log summary, `Debugger`, responsive
+  viewport presets, and `Reload`.
+- Debugger sections for Runtime Console, negotiated variables and visited
+  passages, and Play/Test-only Runtime Controls.
+- `Restart` only when the exact story-format adapter negotiates it; confirmed
+  `Clear State` for every Play/Test preview; neither control in Proof.
+- Source and graph navigation plus Test Current/Test From Start actions.
 
 Primary labels/actions:
 

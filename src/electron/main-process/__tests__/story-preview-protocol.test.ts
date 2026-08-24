@@ -4,9 +4,11 @@ import {
 	initStoryPreviewProtocol,
 	maxStoryPreviewPackages,
 	registerStoryPreviewPackage,
+	registerStoryPreviewStateCleanup,
 	registerStoryPreviewScheme,
 	registeredStoryPreviewPackageCount,
 	releaseStoryPreviewPackage,
+	releaseStoryPreviewStateCleanup,
 	resetStoryPreviewPackagesForTests,
 	storyPreviewScheme
 } from '../story-preview-protocol';
@@ -112,6 +114,90 @@ describe('story preview protocol', () => {
 		const releasedResponse = await handler({url});
 
 		expect(releasedResponse.status).toBe(404);
+	});
+
+	it('serves a one-use package-origin state cleanup page without package data', async () => {
+		const url = registerHtmlPackage('<html><body>private story</body></html>');
+		const cleanup = registerStoryPreviewStateCleanup(url, 'clear-preview-42');
+
+		expect(cleanup).toEqual({
+			operationId: 'clear-preview-42',
+			url: expect.stringMatching(
+				/^twine-preview:\/\/[0-9a-f-]+\/__twine-preview-clear-state\/[0-9a-f-]+$/
+			)
+		});
+
+		const head = await handleStoryPreviewRequest({
+			method: 'HEAD',
+			url: cleanup.url
+		});
+
+		expect(head.status).toBe(200);
+		expect(await head.text()).toBe('');
+		expect(head.headers.get('cache-control')).toBe('no-store');
+		expect(head.headers.get('x-content-type-options')).toBe('nosniff');
+		expect(head.headers.get('content-security-policy')).toMatch(
+			/^base-uri 'none'; default-src 'none'; form-action 'none'; script-src 'nonce-[0-9a-f]+'$/
+		);
+		expect(
+			await handleStoryPreviewRequest({url: `${cleanup.url}?retry=1`})
+		).toMatchObject({status: 404});
+
+		const response = await handleStoryPreviewRequest({url: cleanup.url});
+		const html = await response.text();
+
+		expect(response.status).toBe(200);
+		expect(html).toContain('localStorage.clear()');
+		expect(html).toContain('sessionStorage.clear()');
+		expect(html).toContain('caches.delete(name)');
+		expect(html).toContain('indexedDB.deleteDatabase(database.name)');
+		expect(html).toContain('Preview state cleanup incomplete');
+		expect(html).toContain('twine-preview-state-cleared');
+		expect(html).toContain('clear-preview-42');
+		expect(html).not.toContain('private story');
+		expect((await handleStoryPreviewRequest({url: cleanup.url})).status).toBe(
+			404
+		);
+	});
+
+	it('fails closed for invalid, cancelled, and released state cleanup tickets', async () => {
+		const url = registerHtmlPackage('<html><body>private story</body></html>');
+
+		expect(() => registerStoryPreviewStateCleanup(`${url}?retry=1`)).toThrow(
+			'exact live story preview package URL'
+		);
+		expect(() =>
+			registerStoryPreviewStateCleanup(url, 'x'.repeat(129))
+		).toThrow('bounded operation ID');
+		expect(() =>
+			registerStoryPreviewStateCleanup(
+				url.replace('/index.html', '/assets/preview.html')
+			)
+		).toThrow('exact live story preview package URL');
+
+		const cancelled = registerStoryPreviewStateCleanup(url, 'cancelled');
+		releaseStoryPreviewStateCleanup(cancelled.url);
+		expect(await handleStoryPreviewRequest({url: cancelled.url})).toMatchObject(
+			{status: 404}
+		);
+
+		const released = registerStoryPreviewStateCleanup(url, 'released');
+		await releaseStoryPreviewPackage(url);
+		expect(await handleStoryPreviewRequest({url: released.url})).toMatchObject({
+			status: 404
+		});
+	});
+
+	it('invalidates state cleanup tickets during test package reset', async () => {
+		const cleanup = registerStoryPreviewStateCleanup(
+			registerHtmlPackage('<html></html>')
+		);
+
+		await resetStoryPreviewPackagesForTests();
+
+		expect(await handleStoryPreviewRequest({url: cleanup.url})).toMatchObject({
+			status: 404
+		});
 	});
 
 	it('serves exact staged assets with query-independent allowlist lookup', async () => {

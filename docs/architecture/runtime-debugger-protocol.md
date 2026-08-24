@@ -2,7 +2,7 @@
 
 Status: current
 Owner: frontend and story-format maintainers
-Last verified: 2026-08-18
+Last verified: 2026-08-23
 Source of truth: preview instrumentation, debugger protocol registry, and shared
 preview runtime reducer
 
@@ -48,8 +48,8 @@ a nearby version.
 
 Exact-version means the adapter targets a verified runtime surface for that
 bundled version. It does not make story values trusted or promise support for a
-different release. Debugger v1 currently has no restart, clear-state, mutation,
-evaluation, or adapter-supplied command capability.
+different release. Debugger v1 remains read-only; runtime commands use a
+separate protocol and capability negotiation.
 
 For the registered Chapbook 2.3.1 tuple, the head-injected bridge listens for
 the format's native `state-change` event and copies only the bounded final
@@ -108,6 +108,46 @@ Adapter registrations derive capabilities from an exhaustive capture-handler
 map. If an adapter fails, the existing current-passage, log, and error bridge
 continues independently.
 
+## Runtime command protocol
+
+Play and Test previews negotiate an additive Runtime Command v1 protocol after
+the debugger hello. Restart is advertised only for the exact bundled
+SugarCube 2.37.3, Snowman 1.5.0 and 2.1.1, Chapbook 2.3.1, and Harlowe 3.3.9
+tuples. Unknown tuples do not inherit a nearby command implementation. Each
+request and result is correlated to the live frame window, bridge session,
+adapter, protocol version, and bounded request identifier.
+
+Restart asks the format adapter to discard its active continuation surface,
+then the host remounts the same built artifact at its launch passage. The host
+accepts only `applied`, `unavailable`, `failed`, or `indeterminate` results.
+`failed` and `unavailable` are pre-mutation outcomes and leave the current frame
+mounted. An `applied` result remounts normally. An `indeterminate` result or
+timeout also remounts, with a warning, because the old runtime can no longer be
+trusted.
+
+The exact adapters use only audited version-specific surfaces:
+
+- SugarCube verifies its frozen `State.reset` implementation, dispatches one
+  native-shaped `:enginerestart` event, and uses a one-remount marker to suppress
+  autoload without deleting explicit save slots;
+- Snowman removes its hash continuation when the document URL permits it, or
+  delegates that scrub to the required remount for an opaque `srcDoc` frame;
+- Chapbook verifies its frozen `reset` and `saveToStorage` functions before
+  clearing the active state;
+- Harlowe removes the exact `Saved Session` continuation key.
+
+The command channel is still cooperative rather than an authentication
+boundary: story code shares the instrumented realm. Captured native references,
+own-data descriptors, exact function signatures, and host-side correlation
+limit accidental or prototype-tampered execution, but they do not make hostile
+story JavaScript trusted.
+
+Clear State is host-owned and therefore is not an adapter command. Browser
+`srcDoc` previews have an opaque origin and are cleared by detaching and
+remounting the same artifact. Managed desktop previews use a two-phase
+generation-bound operation described in
+[`desktop-preview-sessions.md`](./desktop-preview-sessions.md).
+
 ## Product boundary
 
 The host-owned Runtime Console is available before adapter negotiation. It shows
@@ -115,8 +155,10 @@ the bounded newest-first console/error records as text only and can copy the
 committed buffer as timestamped JSON-escaped lines. Copying is not a debugger
 protocol message and does not give story content clipboard access.
 
-The shared preview surface now delivers the visible, collapsible Debugger v1
-inspector. It is read-only and renders only negotiated capabilities, bounded
-snapshot records, section completeness, truncation reasons, and unavailability.
-Format-specific control commands remain deferred follow-up work and must gain
-an explicit capability and lifecycle contract before they are added.
+The shared preview surface delivers the visible, collapsible Debugger inspector.
+It renders only negotiated read capabilities, bounded snapshot records, section
+completeness, truncation reasons, and unavailability. Play and Test also expose
+Runtime Controls: Restart appears only after command negotiation, while the
+confirmed Clear State action is host-owned. Proof remains read-only and exposes
+neither control. State mutation, arbitrary evaluation, and additional
+format-specific development hooks remain deferred.

@@ -2,14 +2,14 @@
 
 Status: active
 Owner: product and frontend maintainers
-Last verified: 2026-08-11
+Last verified: 2026-08-23
 Source of truth: unfinished primary-product behavior
 
 ## Outcomes
 
 ### Preview and debug depth
 
-- Keep debugger controls for state mutation, evaluation, restart/clear, and
+- Keep debugger controls for state mutation, arbitrary evaluation, and
   additional story-format development hooks outside the read-only protocol
   until each command has an explicit capability and lifecycle contract.
 - Keep “test from here” behavior consistent across workbench, contents,

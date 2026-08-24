@@ -1,19 +1,27 @@
 import {
+	STORY_PREVIEW_COMMAND_CAPABILITIES,
+	STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
 	STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS,
 	STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
 	STORY_PREVIEW_DEBUGGER_TRUNCATION_REASONS,
+	STORY_PREVIEW_RESTART_ADAPTER_REGISTRATIONS,
+	STORY_PREVIEW_RESTART_RESULT_STATUSES,
 	isStoryPreviewDebuggerAdapterId,
 	selectStoryPreviewDebuggerAdapter,
-	storyPreviewDebuggerAdapter
+	storyPreviewDebuggerAdapter,
+	storyPreviewRestartHandler
 } from './story-preview-debugger-protocol';
 import type {
+	StoryPreviewCommandCapability,
 	StoryPreviewDebuggerAdapterDescriptor,
 	StoryPreviewDebuggerAdapterId,
 	StoryPreviewDebuggerCapability,
-	StoryPreviewDebuggerTruncationReason
+	StoryPreviewDebuggerTruncationReason,
+	StoryPreviewRestartResultStatus
 } from './story-preview-debugger-protocol';
 
 export const STORY_PREVIEW_BRIDGE_SOURCE = 'twine.rs.preview.bridge';
+export const STORY_PREVIEW_COMMAND_SOURCE = 'twine.rs.preview.host-command';
 
 export const STORY_PREVIEW_RUNTIME_LOG_LIMIT = 12;
 const maxRuntimeTimestamp = 8_640_000_000_000_000;
@@ -80,6 +88,7 @@ export const STORY_PREVIEW_BRIDGE_LIMITS = Object.freeze({
 	debuggerVariableCount: 100,
 	debuggerVisitedPassageCount: 200,
 	debuggerTotalTextLength: 32768,
+	commandRequestIdLength: 128,
 	sessionIdLength: 256,
 	sourceLength: 256,
 	totalLogTextLength: 32768,
@@ -202,6 +211,11 @@ export interface StoryPreviewDebuggerSnapshot {
 }
 
 export interface StoryPreviewRuntimeDebuggerState {
+	commands?: {
+		adapterId: StoryPreviewDebuggerAdapterId;
+		capabilities: StoryPreviewCommandCapability[];
+		protocolVersion: typeof STORY_PREVIEW_COMMAND_PROTOCOL_VERSION;
+	};
 	hello?: StoryPreviewDebuggerHello;
 	snapshot?: StoryPreviewDebuggerSnapshot;
 }
@@ -210,6 +224,8 @@ export type StoryPreviewViewportPreset = 'desktop' | 'fit' | 'phone' | 'tablet';
 
 export interface StoryPreviewBridgeMessage {
 	args?: string[];
+	command?: 'restart';
+	commandCapabilities?: StoryPreviewCommandCapability[];
 	currentPassage?: StoryPreviewRuntimePassage;
 	level?: StoryPreviewRuntimeLogEntry['level'];
 	message?: string;
@@ -221,18 +237,31 @@ export interface StoryPreviewBridgeMessage {
 	format?: string;
 	formatVersion?: string;
 	protocolVersion?: typeof STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION;
+	requestId?: string;
 	reliability?: StoryPreviewDebuggerAdapterDescriptor['reliability'];
 	sections?: StoryPreviewDebuggerSections;
 	storyVariables?: StoryPreviewDebuggerVariable[];
 	temporaryVariables?: StoryPreviewDebuggerVariable[];
 	type:
 		| 'console'
+		| 'debugger-command-hello'
+		| 'debugger-command-result'
 		| 'debugger-hello'
 		| 'debugger-snapshot'
 		| 'runtime-error'
 		| 'state';
 	visitedPassages?: StoryPreviewRuntimePassage[];
 	viewport?: StoryPreviewRuntimeViewport;
+	status?: StoryPreviewRestartResultStatus;
+}
+
+export interface StoryPreviewRestartCommandRequest {
+	adapterId: StoryPreviewDebuggerAdapterId;
+	command: 'restart';
+	protocolVersion: typeof STORY_PREVIEW_COMMAND_PROTOCOL_VERSION;
+	requestId: string;
+	sessionId: string;
+	source: typeof STORY_PREVIEW_COMMAND_SOURCE;
 }
 
 export interface StoryPreviewRuntimeModel {
@@ -802,6 +831,65 @@ export function normalizeStoryPreviewBridgeMessage(
 		};
 	}
 
+	if (data.type === 'debugger-command-hello') {
+		if (
+			data.protocolVersion !== STORY_PREVIEW_COMMAND_PROTOCOL_VERSION ||
+			!isStoryPreviewDebuggerAdapterId(data.adapterId) ||
+			!storyPreviewRestartHandler(data.adapterId) ||
+			!Array.isArray(data.commandCapabilities) ||
+			data.commandCapabilities.length !==
+				STORY_PREVIEW_COMMAND_CAPABILITIES.length ||
+			data.commandCapabilities.some(
+				(capability, index) =>
+					capability !== STORY_PREVIEW_COMMAND_CAPABILITIES[index]
+			)
+		) {
+			return undefined;
+		}
+
+		return {
+			adapterId: data.adapterId,
+			commandCapabilities: [...STORY_PREVIEW_COMMAND_CAPABILITIES],
+			protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
+			sessionId,
+			source: STORY_PREVIEW_BRIDGE_SOURCE,
+			time,
+			type: 'debugger-command-hello'
+		};
+	}
+
+	if (data.type === 'debugger-command-result') {
+		const requestId = boundedString(
+			data.requestId,
+			STORY_PREVIEW_BRIDGE_LIMITS.commandRequestIdLength
+		);
+
+		if (
+			data.protocolVersion !== STORY_PREVIEW_COMMAND_PROTOCOL_VERSION ||
+			data.command !== 'restart' ||
+			!requestId ||
+			!isStoryPreviewDebuggerAdapterId(data.adapterId) ||
+			!storyPreviewRestartHandler(data.adapterId) ||
+			!STORY_PREVIEW_RESTART_RESULT_STATUSES.includes(
+				data.status as StoryPreviewRestartResultStatus
+			)
+		) {
+			return undefined;
+		}
+
+		return {
+			adapterId: data.adapterId,
+			command: 'restart',
+			protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
+			requestId,
+			sessionId,
+			source: STORY_PREVIEW_BRIDGE_SOURCE,
+			status: data.status as StoryPreviewRestartResultStatus,
+			time,
+			type: 'debugger-command-result'
+		};
+	}
+
 	if (data.type === 'debugger-snapshot') {
 		if (
 			data.protocolVersion !== STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION ||
@@ -937,13 +1025,15 @@ export function createStoryPreviewPassageLookup(
 
 function bridgeScript(
 	sessionId: string,
-	enableHarloweSessionStorageFallback: boolean
+	enableHarloweSessionStorageFallback: boolean,
+	enableSugarCubeRestart: boolean
 ) {
 	return `
 <script>
 ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 (function () {
 	var SOURCE = ${JSON.stringify(STORY_PREVIEW_BRIDGE_SOURCE)};
+	var COMMAND_SOURCE = ${JSON.stringify(STORY_PREVIEW_COMMAND_SOURCE)};
 	var SESSION = ${JSON.stringify(sessionId)};
 	var ENABLE_HARLOWE_SESSION_STORAGE_FALLBACK = ${JSON.stringify(
 		enableHarloweSessionStorageFallback
@@ -952,9 +1042,14 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var MAX_ARGUMENT_LENGTH = ${STORY_PREVIEW_BRIDGE_LIMITS.logArgumentLength};
 	var MAX_MESSAGE_LENGTH = ${STORY_PREVIEW_BRIDGE_LIMITS.logMessageLength};
 	var DEBUGGER_PROTOCOL_VERSION = ${STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION};
+	var COMMAND_PROTOCOL_VERSION = ${STORY_PREVIEW_COMMAND_PROTOCOL_VERSION};
 	var DEBUGGER_ADAPTER_REGISTRATIONS = ${JSON.stringify(
 		STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS
 	)};
+	var RESTART_ADAPTER_REGISTRATIONS = ${JSON.stringify(
+		STORY_PREVIEW_RESTART_ADAPTER_REGISTRATIONS
+	)};
+	var ENABLE_SUGARCUBE_RESTART = ${JSON.stringify(enableSugarCubeRestart)};
 	var DEBUGGER_VARIABLE_LIMIT = ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableCount};
 	var DEBUGGER_HISTORY_LIMIT = ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerVisitedPassageCount};
 	var DEBUGGER_PREVIEW_LIMIT = ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength};
@@ -963,10 +1058,12 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var MAX_FORMAT_SESSION_LENGTH = 1024 * 1024;
 	var STARTUP_STATE_CAPTURE_DELAYS = [250, 500, 1000, 2000, 4000];
 	var harloweSessionStorage;
+	var harloweSessionStorageIsFallback = false;
 	var pendingState = 0;
 	var pendingStartupState = 0;
 	var startupStateCaptureIndex = 0;
 	var selectedDebuggerAdapter;
+	var restartCommandBusy = false;
 	// A null value means Chapbook emitted a trail update which could not be copied
 	// safely. Keep that distinct from startup, when no trail event has arrived.
 	var chapbookCurrentPassage;
@@ -984,6 +1081,19 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var debuggerString = String;
 	var debuggerFunctionToString = Function.prototype.toString;
 	var debuggerReflectApply = Reflect.apply;
+	var debuggerDispatchEvent = EventTarget.prototype.dispatchEvent;
+	var debuggerCustomEvent = window.CustomEvent;
+	var debuggerHistory = window.history;
+	var debuggerHistoryReplaceStateDescriptor = Object.getOwnPropertyDescriptor(History.prototype, 'replaceState');
+	var debuggerHistoryReplaceState = debuggerHistoryReplaceStateDescriptor
+		? debuggerHistoryReplaceStateDescriptor.value
+		: debuggerHistory.replaceState;
+	var debuggerLocation = window.location;
+	var debuggerLocationHref = function () { return debuggerLocation.href; };
+	var debuggerStringIndexOf = String.prototype.indexOf;
+	var debuggerStringSlice = String.prototype.slice;
+	var debuggerStorageGetItem = Object.getOwnPropertyDescriptor(Storage.prototype, 'getItem').value;
+	var debuggerStorageRemoveItem = Object.getOwnPropertyDescriptor(Storage.prototype, 'removeItem').value;
 	var debuggerDateGetTime = Date.prototype.getTime;
 	var debuggerRegExpSource = Object.getOwnPropertyDescriptor(RegExp.prototype, 'source').get;
 	var debuggerCustomEventDetail = Object.getOwnPropertyDescriptor(window.CustomEvent.prototype, 'detail').get;
@@ -993,6 +1103,24 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		temporary: 'function(){return _temporary}',
 		variables: 'function(){return _active.variables}'
 	};
+	var SUGARCUBE_RESET_SOURCE = 'function(){session.delete("state"),_history=[],_active=momentCreate(),_activeIndex=-1,_expired=[],_prng=null===_prng?null:prngCreate(_prng.seed),tempVariablesClear()}';
+	var CHAPBOOK_RESET_SOURCE = ${JSON.stringify(
+		'function bt(){function n(e,t){Object.keys(e).forEach(r=>{const i=t===""?r:`${t}.${r}`;if(typeof e[r]=="object"&&!Array.isArray(e[r]))n(e[r],i);else{const s=e[r];delete e[r],Wi(window,t),window.dispatchEvent(new CustomEvent("state-change",{detail:{name:i,value:p(i),previous:s}}))}})}n(ce,""),window.dispatchEvent(new CustomEvent("state-reset")),p("config.state.autosave")&&yt()}'
+	)};
+	var CHAPBOOK_SAVE_SOURCE = ${JSON.stringify(
+		'function yt(){Q("Saving to local storage: "+JSON.stringify(xe())),window.localStorage.setItem(te,JSON.stringify(xe())),Q("Save complete")}'
+	)};
+	var restartFrameNamePrefix = 'twine-rs-restart:' + SESSION + ':';
+	var sugarCubeRestartRemount = false;
+	try {
+		sugarCubeRestartRemount =
+			ENABLE_SUGARCUBE_RESTART &&
+			typeof window.name === 'string' &&
+			debuggerReflectApply(debuggerStringSlice, window.name, [0, restartFrameNamePrefix.length]) === restartFrameNamePrefix &&
+			window.name.length > restartFrameNamePrefix.length &&
+			window.name.length <= restartFrameNamePrefix.length + ${STORY_PREVIEW_BRIDGE_LIMITS.commandRequestIdLength};
+		if (sugarCubeRestartRemount) window.name = '';
+	} catch (error) {}
 
 	function createMemorySessionStorage() {
 		var keys = [];
@@ -1058,6 +1186,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 			}
 		});
 
+		Object.freeze(storage);
 		return storage;
 	}
 
@@ -1087,10 +1216,44 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 				value: fallback
 			});
 			harloweSessionStorage = fallback;
+			harloweSessionStorageIsFallback = true;
 		} catch (error) {}
 	}
 
 	installHarloweSessionStorageFallback();
+
+	function sugarCubeStart(engine, config) {
+		var start = ownDebuggerData(engine, 'start');
+		if (typeof start !== 'function') {
+			throw new Error('SugarCube startup is unavailable.');
+		}
+		if (!sugarCubeRestartRemount) {
+			return debuggerReflectApply(start, engine, []);
+		}
+
+		var saves = ownDebuggerData(config, 'saves');
+		if (!saves || (typeof saves !== 'object' && typeof saves !== 'function')) {
+			throw new Error('SugarCube autoload configuration is unavailable.');
+		}
+		var configuredAutoload = saves.autoload;
+		saves.autoload = null;
+		try {
+			return debuggerReflectApply(start, engine, []);
+		} finally {
+			saves.autoload = configuredAutoload;
+		}
+	}
+
+	if (ENABLE_SUGARCUBE_RESTART) {
+		try {
+			Object.defineProperty(window, '__twineRsPreviewSugarCubeStart', {
+				configurable: false,
+				enumerable: false,
+				value: sugarCubeStart,
+				writable: false
+			});
+		} catch (error) {}
+	}
 
 	function bounded(value, limit) {
 		value = String(value);
@@ -1521,6 +1684,191 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		} catch (error) {}
 	}
 
+	function verifiedOwnFunction(object, key, expectedSource) {
+		if (!object || (typeof object !== 'object' && typeof object !== 'function')) {
+			return;
+		}
+		var descriptor = debuggerGetOwnPropertyDescriptor(object, key);
+		if (
+			!descriptor ||
+			!debuggerReflectApply(debuggerHasOwn, descriptor, ['value']) ||
+			typeof descriptor.value !== 'function'
+		) {
+			return;
+		}
+		try {
+			if (
+				expectedSource &&
+				debuggerReflectApply(debuggerFunctionToString, descriptor.value, []) !== expectedSource
+			) {
+				return;
+			}
+		} catch (error) {
+			return;
+		}
+		return descriptor.value;
+	}
+
+	function restartSugarCube() {
+		if (!ENABLE_SUGARCUBE_RESTART) return 'unavailable';
+		var sugarCube = ownDebuggerData(window, 'SugarCube');
+		var state = ownDebuggerData(sugarCube, 'State');
+		if (!state || !debuggerIsFrozen(state)) return 'unavailable';
+		var reset = verifiedOwnFunction(state, 'reset', SUGARCUBE_RESET_SOURCE);
+		if (!reset) return 'unavailable';
+
+		var mutationStarted = false;
+		try {
+			mutationStarted = true;
+			debuggerReflectApply(reset, state, []);
+			var restartEvent = new debuggerCustomEvent(':enginerestart', {
+				bubbles: true,
+				cancelable: true,
+				composed: false
+			});
+			debuggerReflectApply(debuggerDispatchEvent, document, [restartEvent]);
+			return 'applied';
+		} catch (error) {
+			return mutationStarted ? 'indeterminate' : 'failed';
+		}
+	}
+
+	function restartSnowman() {
+		if (typeof debuggerHistoryReplaceState !== 'function') return 'unavailable';
+		var mutationStarted = false;
+		try {
+			var href = debuggerReflectApply(debuggerLocationHref, undefined, []);
+			var hashIndex = debuggerReflectApply(debuggerStringIndexOf, href, ['#']);
+			if (hashIndex >= 0) {
+				// A new srcDoc browsing context cannot inherit the old document hash.
+				// History.replaceState is forbidden for about:srcdoc, so let the host
+				// remount perform the exact same scrub there.
+				if (
+					debuggerReflectApply(debuggerStringSlice, href, [0, hashIndex]) ===
+					'about:srcdoc'
+				) return 'applied';
+				mutationStarted = true;
+				debuggerReflectApply(debuggerHistoryReplaceState, debuggerHistory, [
+					null,
+					'',
+					debuggerReflectApply(debuggerStringSlice, href, [0, hashIndex])
+				]);
+			}
+			return 'applied';
+		} catch (error) {
+			return mutationStarted ? 'indeterminate' : 'failed';
+		}
+	}
+
+	function restartChapbook() {
+		var engine = ownDebuggerData(window, 'engine');
+		var state = ownDebuggerData(engine, 'state');
+		if (!state || !debuggerIsFrozen(state)) return 'unavailable';
+		var reset = verifiedOwnFunction(state, 'reset', CHAPBOOK_RESET_SOURCE);
+		var save = verifiedOwnFunction(state, 'saveToStorage', CHAPBOOK_SAVE_SOURCE);
+		if (!reset || !save) return 'unavailable';
+
+		var mutationStarted = false;
+		try {
+			mutationStarted = true;
+			debuggerReflectApply(reset, state, []);
+			debuggerReflectApply(save, state, []);
+			return 'applied';
+		} catch (error) {
+			return mutationStarted ? 'indeterminate' : 'failed';
+		}
+	}
+
+	function restartHarlowe() {
+		var storage;
+		try {
+			storage = harloweSessionStorage || window.sessionStorage;
+		} catch (error) {
+			return 'failed';
+		}
+		if (!storage) return 'unavailable';
+
+		var mutationStarted = false;
+		try {
+			mutationStarted = true;
+			if (storage === harloweSessionStorage && harloweSessionStorageIsFallback) {
+				storage.removeItem('Saved Session');
+				if (storage.getItem('Saved Session') !== null) return 'indeterminate';
+			} else {
+				debuggerReflectApply(debuggerStorageRemoveItem, storage, ['Saved Session']);
+				if (
+					debuggerReflectApply(debuggerStorageGetItem, storage, ['Saved Session']) !== null
+				) return 'indeterminate';
+			}
+			return 'applied';
+		} catch (error) {
+			return mutationStarted ? 'indeterminate' : 'failed';
+		}
+	}
+
+	var RESTART_HANDLERS = {
+		chapbook: restartChapbook,
+		harlowe: restartHarlowe,
+		snowman: restartSnowman,
+		sugarcube: restartSugarCube
+	};
+
+	function handleRestartCommand(event) {
+		if (event.isTrusted !== true || event.source !== parent) return;
+		var data = event.data;
+		if (
+			!data ||
+			typeof data !== 'object' ||
+			data.source !== COMMAND_SOURCE ||
+			data.sessionId !== SESSION ||
+			data.command !== 'restart' ||
+			data.protocolVersion !== COMMAND_PROTOCOL_VERSION ||
+			!selectedDebuggerAdapter ||
+			data.adapterId !== selectedDebuggerAdapter.id ||
+			typeof data.requestId !== 'string' ||
+			data.requestId.length === 0 ||
+			data.requestId.length > ${STORY_PREVIEW_BRIDGE_LIMITS.commandRequestIdLength} ||
+			restartCommandBusy
+		) {
+			return;
+		}
+
+		var handlerName = ownDebuggerData(
+			RESTART_ADAPTER_REGISTRATIONS,
+			selectedDebuggerAdapter.id
+		);
+		var handler = ownDebuggerData(RESTART_HANDLERS, handlerName);
+		if (
+			typeof handler !== 'function' ||
+			(handlerName === 'sugarcube' && !ENABLE_SUGARCUBE_RESTART)
+		) {
+			post('debugger-command-result', {
+				adapterId: selectedDebuggerAdapter.id,
+				command: 'restart',
+				protocolVersion: COMMAND_PROTOCOL_VERSION,
+				requestId: data.requestId,
+				status: 'unavailable'
+			});
+			return;
+		}
+
+		restartCommandBusy = true;
+		var status = 'failed';
+		try {
+			status = debuggerReflectApply(handler, undefined, []);
+		} catch (error) {}
+		post('debugger-command-result', {
+			adapterId: selectedDebuggerAdapter.id,
+			command: 'restart',
+			protocolVersion: COMMAND_PROTOCOL_VERSION,
+			requestId: data.requestId,
+			status: status
+		});
+		restartCommandBusy = false;
+	}
+
+	window.addEventListener('message', handleRestartCommand);
+
 	function visible(element) {
 		if (!element || element.closest('tw-storydata')) {
 			return false;
@@ -1834,6 +2182,20 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 			protocolVersion: DEBUGGER_PROTOCOL_VERSION,
 			reliability: selectedDebuggerAdapter.reliability
 		});
+		var restartHandler = ownDebuggerData(
+			RESTART_ADAPTER_REGISTRATIONS,
+			selectedDebuggerAdapter.id
+		);
+		if (
+			typeof restartHandler === 'string' &&
+			(restartHandler !== 'sugarcube' || ENABLE_SUGARCUBE_RESTART)
+		) {
+			post('debugger-command-hello', {
+				adapterId: selectedDebuggerAdapter.id,
+				commandCapabilities: ['restart'],
+				protocolVersion: COMMAND_PROTOCOL_VERSION
+			});
+		}
 		if (document.body) {
 			new MutationObserver(queueState).observe(document.body, {
 				attributes: true,
@@ -1869,26 +2231,88 @@ function isHarlowePreviewHtml(html: string) {
 	);
 }
 
+const sugarCubeStartupFragment =
+	'Engine.runUserInit(),UIBar.start(),Engine.start(),DebugBar.start()';
+const sugarCubeRestartFragment =
+	'restart:{value:function(){LoadScreen.show(),window.scroll(0,0),State.reset(),triggerEvent(":enginerestart"),window.location.reload()}}';
+
+function previewFormatTuple(
+	html: string,
+	format: string,
+	formatVersion: string
+) {
+	const storyData = /<tw-storydata\b[^>]*>/i.exec(html)?.[0];
+
+	if (!storyData) {
+		return false;
+	}
+
+	const attribute = (name: string) =>
+		new RegExp(
+			`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`,
+			'i'
+		).exec(storyData);
+	const formatMatch = attribute('format');
+	const versionMatch = attribute('format-version');
+	const value = (match: RegExpExecArray | null) =>
+		match ? (match[1] ?? match[2] ?? match[3] ?? '') : undefined;
+
+	return value(formatMatch) === format && value(versionMatch) === formatVersion;
+}
+
+function exactOccurrenceCount(source: string, fragment: string) {
+	let count = 0;
+	let offset = 0;
+
+	while ((offset = source.indexOf(fragment, offset)) !== -1) {
+		count += 1;
+		offset += fragment.length;
+	}
+
+	return count;
+}
+
+function instrumentSugarCubeRestart(html: string) {
+	if (
+		!previewFormatTuple(html, 'SugarCube', '2.37.3') ||
+		exactOccurrenceCount(html, sugarCubeStartupFragment) !== 1 ||
+		exactOccurrenceCount(html, sugarCubeRestartFragment) !== 1
+	) {
+		return {enabled: false, html};
+	}
+
+	return {
+		enabled: true,
+		html: html.replace(
+			sugarCubeStartupFragment,
+			'Engine.runUserInit(),UIBar.start(),window.__twineRsPreviewSugarCubeStart(Engine,Config),DebugBar.start()'
+		)
+	};
+}
+
 export function instrumentPreviewHtml(
 	html: string,
 	sessionId: string,
 	options: {enableHarloweSessionStorageFallback?: boolean} = {}
 ) {
+	const sugarCube = instrumentSugarCubeRestart(html);
+	const source = sugarCube.html;
 	const script = bridgeScript(
 		sessionId,
 		options.enableHarloweSessionStorageFallback === true &&
-			isHarlowePreviewHtml(html)
+			isHarlowePreviewHtml(source),
+		sugarCube.enabled
 	);
 
-	if (/<head(\s[^>]*)?>/i.test(html)) {
-		return html.replace(/<head(\s[^>]*)?>/i, match => `${match}${script}`);
+	if (/<head(\s[^>]*)?>/i.test(source)) {
+		return source.replace(/<head(\s[^>]*)?>/i, match => `${match}${script}`);
 	}
 
-	if (/<html(\s[^>]*)?>/i.test(html)) {
-		return html.replace(/<html(\s[^>]*)?>/i, match => `${match}${script}`);
+	if (/<html(\s[^>]*)?>/i.test(source)) {
+		return source.replace(/<html(\s[^>]*)?>/i, match => `${match}${script}`);
 	}
 
-	return `${script}${html}`;
+	return `${script}${source}`;
 }
 
 export function resolveRuntimePassage(
@@ -1957,6 +2381,37 @@ export function reduceStoryPreviewRuntime(
 				hello
 			}
 		};
+	}
+
+	if (message.type === 'debugger-command-hello') {
+		const hello = model.debugger.hello;
+
+		if (
+			model.debugger.commands ||
+			!hello ||
+			hello.id !== message.adapterId ||
+			message.protocolVersion !== STORY_PREVIEW_COMMAND_PROTOCOL_VERSION ||
+			message.commandCapabilities?.length !== 1 ||
+			message.commandCapabilities[0] !== 'restart'
+		) {
+			return model;
+		}
+
+		return {
+			...model,
+			debugger: {
+				...model.debugger,
+				commands: {
+					adapterId: message.adapterId,
+					capabilities: ['restart'],
+					protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION
+				}
+			}
+		};
+	}
+
+	if (message.type === 'debugger-command-result') {
+		return model;
 	}
 
 	if (message.type === 'debugger-snapshot') {

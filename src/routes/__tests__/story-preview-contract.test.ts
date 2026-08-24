@@ -12,6 +12,7 @@ import {
 } from '../story-preview-contract';
 import {runtimeLogTone} from '../story-preview-debug';
 import {
+	STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
 	isStoryPreviewDebuggerAdapterId,
 	selectStoryPreviewDebuggerAdapter,
 	STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS,
@@ -707,6 +708,116 @@ describe('normalizeStoryPreviewBridgeMessage()', () => {
 });
 
 describe('runtime debugger protocol', () => {
+	it('rewrites only the verified SugarCube 2.37.3 startup call site', () => {
+		const startup =
+			'Engine.runUserInit(),UIBar.start(),Engine.start(),DebugBar.start()';
+		const nativeRestart =
+			'restart:{value:function(){LoadScreen.show(),window.scroll(0,0),State.reset(),triggerEvent(":enginerestart"),window.location.reload()}}';
+		const exactHtml = `<html><head></head><body><tw-storydata format="SugarCube" format-version="2.37.3"></tw-storydata><script>${startup};const EngineApi={${nativeRestart}};</script></body></html>`;
+		const instrumented = instrumentPreviewHtml(exactHtml, 'restart-session');
+
+		expect(instrumented).toContain('var ENABLE_SUGARCUBE_RESTART = true');
+		expect(instrumented).toContain(
+			'Engine.runUserInit(),UIBar.start(),window.__twineRsPreviewSugarCubeStart(Engine,Config),DebugBar.start()'
+		);
+		expect(instrumented).not.toContain(startup);
+
+		for (const unsupported of [
+			exactHtml.replace('2.37.3', '2.37.4'),
+			exactHtml.replace(startup, `${startup};${startup}`),
+			exactHtml.replace(nativeRestart, '')
+		]) {
+			const result = instrumentPreviewHtml(unsupported, 'restart-session');
+
+			expect(result).toContain('var ENABLE_SUGARCUBE_RESTART = false');
+			expect(result).not.toContain(
+				'__twineRsPreviewSugarCubeStart(Engine,Config)'
+			);
+		}
+	});
+
+	it('negotiates Restart only after a matching debugger hello', () => {
+		const lookup = createStoryPreviewPassageLookup([]);
+		const hello = normalizeStoryPreviewBridgeMessage({
+			adapterId: 'harlowe-3.3.9',
+			capabilities: ['currentPassage'],
+			format: 'Harlowe',
+			formatVersion: '3.3.9',
+			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
+			reliability: 'best-effort',
+			sessionId: 'session-1',
+			source: STORY_PREVIEW_BRIDGE_SOURCE,
+			type: 'debugger-hello'
+		})!;
+		const commandHello = normalizeStoryPreviewBridgeMessage({
+			adapterId: 'harlowe-3.3.9',
+			commandCapabilities: ['restart'],
+			protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
+			sessionId: 'session-1',
+			source: STORY_PREVIEW_BRIDGE_SOURCE,
+			type: 'debugger-command-hello'
+		})!;
+		expect(commandHello).toBeDefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage({
+				...commandHello,
+				adapterId: 'generic'
+			})
+		).toBeUndefined();
+
+		let model = initialStoryPreviewRuntimeModel(true);
+		model = reduceStoryPreviewRuntime(model, {
+			message: commandHello,
+			now: 1,
+			passages: lookup,
+			type: 'message'
+		});
+		expect(model.debugger.commands).toBeUndefined();
+		model = reduceStoryPreviewRuntime(model, {
+			message: hello,
+			now: 2,
+			passages: lookup,
+			type: 'message'
+		});
+		model = reduceStoryPreviewRuntime(model, {
+			message: commandHello,
+			now: 3,
+			passages: lookup,
+			type: 'message'
+		});
+		expect(model.debugger.commands).toEqual({
+			adapterId: 'harlowe-3.3.9',
+			capabilities: ['restart'],
+			protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION
+		});
+	});
+
+	it('normalizes only bounded correlated Restart results', () => {
+		const result = {
+			adapterId: 'snowman-2.1.1',
+			command: 'restart',
+			protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION,
+			requestId: 'request-1',
+			sessionId: 'session-1',
+			source: STORY_PREVIEW_BRIDGE_SOURCE,
+			status: 'applied',
+			type: 'debugger-command-result'
+		};
+
+		expect(normalizeStoryPreviewBridgeMessage(result)).toMatchObject(result);
+		expect(
+			normalizeStoryPreviewBridgeMessage({...result, status: 'success'})
+		).toBeUndefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage({
+				...result,
+				requestId: 'x'.repeat(
+					STORY_PREVIEW_BRIDGE_LIMITS.commandRequestIdLength + 1
+				)
+			})
+		).toBeUndefined();
+	});
+
 	it.each([
 		['SugarCube', '2.37.3', 'sugarcube-2.37.3'],
 		['Snowman', '1.5.0', 'snowman-1.5.0'],
@@ -780,6 +891,9 @@ describe('runtime debugger protocol', () => {
 
 				(window as any).__twineRsPreviewDebug.captureState();
 				const hello = posted(postMessage, 'debugger-hello').at(-1);
+				const commandHello = posted(postMessage, 'debugger-command-hello').at(
+					-1
+				);
 				const snapshot = posted(postMessage, 'debugger-snapshot').at(-1);
 
 				expect(hello).toMatchObject({
@@ -789,6 +903,15 @@ describe('runtime debugger protocol', () => {
 					formatVersion: registration.formatVersion,
 					reliability: registration.reliability
 				});
+				if (registration.id === 'sugarcube-2.37.3') {
+					expect(commandHello).toBeUndefined();
+				} else {
+					expect(commandHello).toMatchObject({
+						adapterId: registration.id,
+						commandCapabilities: ['restart'],
+						protocolVersion: STORY_PREVIEW_COMMAND_PROTOCOL_VERSION
+					});
+				}
 				expect(Object.keys(snapshot.sections)).toEqual(
 					registration.capabilities
 				);

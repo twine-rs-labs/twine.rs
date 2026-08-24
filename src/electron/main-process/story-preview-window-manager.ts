@@ -7,11 +7,13 @@ import {
 	ipcMain,
 	type BrowserWindowConstructorOptions,
 	type IpcMain,
+	type Session,
 	type WebContents
 } from 'electron';
 import type {
 	NativeStoryPreviewAppearance,
 	NativeStoryPreviewAppearanceUpdate,
+	NativeStoryPreviewClearStateOperation,
 	NativeStoryPreviewCommand,
 	NativeStoryPreviewCommandResult,
 	NativeStoryPreviewDescriptor,
@@ -34,12 +36,16 @@ import {
 } from './scratch-file';
 import {
 	registerStoryPreviewPackage,
-	releaseStoryPreviewPackage
+	registerStoryPreviewStateCleanup,
+	releaseStoryPreviewPackage,
+	releaseStoryPreviewStateCleanup
 } from './story-preview-protocol';
 
 export const maxManagedStoryPreviewWindows = 32;
 export const storyPreviewReadyTimeoutMs = 15_000;
 export const storyPreviewReplacementTimeoutMs = 15_000;
+export const storyPreviewClearStateTimeoutMs = 5_000;
+export const storyPreviewClearStateLeaseTimeoutMs = 30_000;
 export const maxStoryPreviewDescriptorBytes = 64 * 1024 * 1024;
 export const maxStoryPreviewPassages = 100_000;
 
@@ -126,8 +132,18 @@ interface PreviewCandidate extends PreviewGeneration {
 	timeout: ReturnType<typeof setTimeout>;
 }
 
+interface PreviewClearStateOperation {
+	abort: Deferred<void>;
+	cleanupUrl?: string;
+	generation: number;
+	id: string;
+	timeout?: ReturnType<typeof setTimeout>;
+	url: string;
+}
+
 interface PreviewSession {
 	candidate?: PreviewCandidate;
+	clearState?: PreviewClearStateOperation;
 	closed: boolean;
 	current: PreviewGeneration;
 	id: string;
@@ -161,13 +177,21 @@ interface StoryPreviewWindowManagerDependencies {
 	previewEntryUrl(): string;
 	randomId(): string;
 	registerPackage: typeof registerStoryPreviewPackage;
+	registerStateCleanup: typeof registerStoryPreviewStateCleanup;
 	releasePackage: typeof releaseStoryPreviewPackage;
+	releaseStateCleanup: typeof releaseStoryPreviewStateCleanup;
 	releaseStagedPackage: typeof releaseScratchPreviewPackage;
 	stagePackage: typeof stageScratchPreviewPackage;
+	waitForFrameDetach(
+		contents: WebContents,
+		url: string,
+		timeoutMs: number
+	): Promise<void>;
 	writeClipboardText(text: string): void;
 }
 
 export interface StoryPreviewWindowManagerOptions extends Partial<StoryPreviewWindowManagerDependencies> {
+	clearStateLeaseTimeoutMs?: number;
 	readyTimeoutMs?: number;
 	replacementTimeoutMs?: number;
 }
@@ -539,6 +563,110 @@ function sameOrigin(left: string, right: string) {
 	}
 }
 
+function storyPreviewOrigin(url: string) {
+	let parsed: URL;
+
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new Error('Story preview origin is invalid.');
+	}
+
+	if (
+		parsed.protocol !== 'twine-preview:' ||
+		!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+			parsed.hostname
+		) ||
+		parsed.username !== '' ||
+		parsed.password !== '' ||
+		parsed.port !== ''
+	) {
+		throw new Error('Story preview origin is invalid.');
+	}
+
+	return {
+		hostname: parsed.hostname.toLowerCase(),
+		origin: `twine-preview://${parsed.hostname.toLowerCase()}`
+	};
+}
+
+export async function waitForStoryPreviewFrameDetach(
+	contents: WebContents,
+	url: string,
+	timeoutMs: number
+) {
+	const startedAt = Date.now();
+
+	while (true) {
+		if (contents.isDestroyed()) {
+			throw new Error('Story preview closed while detaching its story frame.');
+		}
+
+		const mainFrame = contents.mainFrame;
+		const hasLiveStoryFrame = (mainFrame.frames ?? []).some(
+			frame =>
+				frame.parent === mainFrame &&
+				frame.detached !== true &&
+				sameOrigin(frame.url, url)
+		);
+
+		if (!hasLiveStoryFrame) {
+			return;
+		}
+		if (Date.now() - startedAt >= timeoutMs) {
+			throw new Error('Story preview frame did not detach in time.');
+		}
+
+		await new Promise(resolve => setTimeout(resolve, 25));
+	}
+}
+
+async function clearStoryPreviewOriginData(
+	session: Session,
+	url: string,
+	revalidate: () => void
+) {
+	const {hostname, origin} = storyPreviewOrigin(url);
+
+	await session.clearData({
+		dataTypes: [
+			'backgroundFetch',
+			'cache',
+			'fileSystems',
+			'indexedDB',
+			'localStorage',
+			'serviceWorkers',
+			'webSQL'
+		],
+		originMatchingMode: 'origin-in-all-contexts',
+		origins: [origin]
+	});
+	revalidate();
+
+	const cookies = await session.cookies.get({domain: hostname});
+	revalidate();
+
+	for (const cookie of cookies) {
+		const normalizedDomain = (cookie.domain ?? '')
+			.replace(/^\./, '')
+			.toLowerCase();
+
+		if (normalizedDomain !== hostname) {
+			continue;
+		}
+
+		const cookiePath = cookie.path?.startsWith('/')
+			? cookie.path
+			: `/${cookie.path ?? ''}`;
+
+		await session.cookies.remove(`${origin}${cookiePath}`, cookie.name);
+		revalidate();
+	}
+
+	await session.cookies.flushStore();
+	revalidate();
+}
+
 function mainNavigationStarted(args: any[]) {
 	const details = args[0];
 
@@ -562,15 +690,20 @@ export function createStoryPreviewWindowManager(
 		previewEntryUrl: previewRendererEntryUrl,
 		randomId: randomUUID,
 		registerPackage: registerStoryPreviewPackage,
+		registerStateCleanup: registerStoryPreviewStateCleanup,
 		releasePackage: releaseStoryPreviewPackage,
+		releaseStateCleanup: releaseStoryPreviewStateCleanup,
 		releaseStagedPackage: releaseScratchPreviewPackage,
 		stagePackage: stageScratchPreviewPackage,
+		waitForFrameDetach: waitForStoryPreviewFrameDetach,
 		writeClipboardText: text => clipboard.writeText(text),
 		...options
 	};
 	const readyTimeoutMs = options.readyTimeoutMs ?? storyPreviewReadyTimeoutMs;
 	const replacementTimeoutMs =
 		options.replacementTimeoutMs ?? storyPreviewReplacementTimeoutMs;
+	const clearStateLeaseTimeoutMs =
+		options.clearStateLeaseTimeoutMs ?? storyPreviewClearStateLeaseTimeoutMs;
 	const sessionsById = new Map<string, PreviewSession>();
 	const sessionsByPreview = new Map<WebContents, PreviewSession>();
 	const owners = new Map<WebContents, OwnerState>();
@@ -627,6 +760,28 @@ export function createStoryPreviewWindowManager(
 		}
 	}
 
+	function finalizeClearStateOperation(
+		session: PreviewSession,
+		operation: PreviewClearStateOperation,
+		reason: Error
+	) {
+		if (session.clearState !== operation) {
+			return false;
+		}
+
+		session.clearState = undefined;
+		if (operation.timeout) {
+			clearTimeout(operation.timeout);
+			operation.timeout = undefined;
+		}
+		if (operation.cleanupUrl) {
+			dependencies.releaseStateCleanup(operation.cleanupUrl);
+			operation.cleanupUrl = undefined;
+		}
+		operation.abort.reject(reason);
+		return true;
+	}
+
 	async function closeSession(
 		session: PreviewSession,
 		destroyWindow: boolean,
@@ -653,6 +808,9 @@ export function createStoryPreviewWindowManager(
 			session.candidate.completion.reject(reason);
 			urls.push(session.candidate.url);
 			session.candidate = undefined;
+		}
+		if (session.clearState) {
+			finalizeClearStateOperation(session, session.clearState, reason);
 		}
 
 		session.pendingCommands.clear();
@@ -826,6 +984,15 @@ export function createStoryPreviewWindowManager(
 				true,
 				new Error('Story preview renderer crashed.')
 			);
+		});
+		session.window.webContents.on('did-start-navigation', (...args: any[]) => {
+			if (mainNavigationStarted(args) && session.clearState) {
+				finalizeClearStateOperation(
+					session,
+					session.clearState,
+					new Error('Story preview shell reloaded during Clear State.')
+				);
+			}
 		});
 		session.window.webContents.on(
 			'did-fail-load',
@@ -1078,6 +1245,9 @@ export function createStoryPreviewWindowManager(
 		if (session.replacing) {
 			throw new Error('A story preview replacement is already pending.');
 		}
+		if (session.clearState) {
+			throw new Error('Clear State is already pending for this story preview.');
+		}
 
 		session.replacing = true;
 		const generation = expectedGeneration + 1;
@@ -1187,6 +1357,156 @@ export function createStoryPreviewWindowManager(
 		await commitCandidate(session, candidate);
 	}
 
+	function assertClearStateOperation(
+		session: PreviewSession,
+		operation: PreviewClearStateOperation
+	) {
+		if (
+			session.closed ||
+			sessionsById.get(session.id) !== session ||
+			session.clearState !== operation ||
+			session.current.descriptor.generation !== operation.generation ||
+			session.current.url !== operation.url ||
+			session.replacing ||
+			session.candidate ||
+			session.pendingCommands.size !== 0
+		) {
+			throw new Error('Clear State operation is stale or no longer safe.');
+		}
+	}
+
+	function requestedClearStateOperation(
+		session: PreviewSession,
+		value: unknown
+	) {
+		if (
+			!isRecord(value) ||
+			!validNonnegativeInteger(value.generation) ||
+			!validString(value.operationId, 128)
+		) {
+			throw new Error('Clear State operation is invalid.');
+		}
+
+		const operation = session.clearState;
+
+		if (
+			!operation ||
+			operation.generation !== value.generation ||
+			operation.id !== value.operationId
+		) {
+			throw new Error('Clear State operation is stale or unsolicited.');
+		}
+
+		assertClearStateOperation(session, operation);
+		return operation;
+	}
+
+	async function beginClearState(
+		event: PreviewIpcEvent,
+		generation: unknown
+	): Promise<NativeStoryPreviewClearStateOperation> {
+		const session = sessionForPreview(event);
+
+		if (
+			!validNonnegativeInteger(generation) ||
+			generation !== session.current.descriptor.generation
+		) {
+			throw new Error('Clear State belongs to a stale preview generation.');
+		}
+		if (session.current.descriptor.target === 'proof') {
+			throw new Error('Clear State is unavailable in Proof previews.');
+		}
+		if (
+			session.clearState ||
+			session.replacing ||
+			session.candidate ||
+			session.pendingCommands.size !== 0
+		) {
+			throw new Error('The story preview is busy.');
+		}
+
+		const operation: PreviewClearStateOperation = {
+			abort: deferred<void>(),
+			generation,
+			id: dependencies.randomId(),
+			url: session.current.url
+		};
+
+		session.clearState = operation;
+		operation.timeout = setTimeout(() => {
+			finalizeClearStateOperation(
+				session,
+				operation,
+				new Error('Clear State operation lease expired.')
+			);
+		}, clearStateLeaseTimeoutMs);
+		operation.timeout.unref?.();
+		try {
+			await Promise.race([
+				dependencies.waitForFrameDetach(
+					session.window.webContents,
+					operation.url,
+					storyPreviewClearStateTimeoutMs
+				),
+				operation.abort.promise
+			]);
+			assertClearStateOperation(session, operation);
+			const cleanup = dependencies.registerStateCleanup(
+				operation.url,
+				operation.id
+			);
+
+			operation.cleanupUrl = cleanup.url;
+			return {
+				generation: operation.generation,
+				operationId: operation.id,
+				url: cleanup.url
+			};
+		} catch (error) {
+			finalizeClearStateOperation(
+				session,
+				operation,
+				error instanceof Error ? error : new Error(String(error))
+			);
+			throw error;
+		}
+	}
+
+	async function completeClearState(event: PreviewIpcEvent, value: unknown) {
+		const session = sessionForPreview(event);
+		const operation = requestedClearStateOperation(session, value);
+
+		if (!operation.cleanupUrl) {
+			throw new Error('Clear State cleanup page is unavailable.');
+		}
+
+		try {
+			await clearStoryPreviewOriginData(
+				session.window.webContents.session,
+				operation.url,
+				() => assertClearStateOperation(session, operation)
+			);
+			assertClearStateOperation(session, operation);
+		} finally {
+			finalizeClearStateOperation(
+				session,
+				operation,
+				new Error('Clear State operation completed.')
+			);
+		}
+	}
+
+	function cancelClearState(event: PreviewIpcEvent, value: unknown) {
+		const session = sessionForPreview(event);
+		const operation = requestedClearStateOperation(session, value);
+
+		finalizeClearStateOperation(
+			session,
+			operation,
+			new Error('Clear State operation cancelled.')
+		);
+	}
+
 	function command(
 		event: PreviewIpcEvent,
 		value: unknown
@@ -1223,6 +1543,12 @@ export function createStoryPreviewWindowManager(
 		}
 
 		const key = commandKey(validated.command);
+		if (session.clearState) {
+			return commandError(
+				validated.command,
+				'The story preview is clearing its state.'
+			);
+		}
 
 		if (session.pendingCommands.has(key)) {
 			return commandError(
@@ -1377,6 +1703,15 @@ export function createStoryPreviewWindowManager(
 		const previewIpc = previewIpcRegistrar(ipc, dependencies.previewEntryUrl());
 
 		previewIpc.handle(storyPreviewIpcChannels.getInitialState, initialState);
+		previewIpc.handle(storyPreviewIpcChannels.beginClearState, beginClearState);
+		previewIpc.handle(
+			storyPreviewIpcChannels.cancelClearState,
+			cancelClearState
+		);
+		previewIpc.handle(
+			storyPreviewIpcChannels.completeClearState,
+			completeClearState
+		);
 		previewIpc.on(storyPreviewIpcChannels.ready, ready);
 		previewIpc.handle(storyPreviewIpcChannels.frameLoaded, frameLoaded);
 		previewIpc.handle(storyPreviewIpcChannels.command, command);

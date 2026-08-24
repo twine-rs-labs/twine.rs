@@ -59,7 +59,10 @@ test('sandboxed preview preload has no local runtime dependency', async () => {
 	assert.match(preload, /const storyPreviewBridgeName = 'twineStoryPreview'/);
 	for (const channel of [
 		'story-preview:appearance',
+		'story-preview:begin-clear-state',
+		'story-preview:cancel-clear-state',
 		'story-preview:command',
+		'story-preview:complete-clear-state',
 		'story-preview:copy-text',
 		'story-preview:command-result',
 		'story-preview:frame-loaded',

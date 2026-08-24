@@ -1,4 +1,11 @@
-import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {
+	act,
+	fireEvent,
+	render,
+	screen,
+	waitFor,
+	within
+} from '@testing-library/react';
 import * as React from 'react';
 import type {
 	NativeStoryPreviewAppearanceUpdate,
@@ -46,12 +53,19 @@ function previewApi() {
 		replacement: jest.fn()
 	};
 	const api: NativeStoryPreviewBridge = {
+		beginClearState: jest.fn().mockResolvedValue({
+			generation: 1,
+			operationId: 'clear-1',
+			url: 'twine-preview://00000000-0000-4000-8000-000000000001/__twine-preview-clear-state/00000000-0000-4000-8000-000000000002'
+		}),
+		cancelClearState: jest.fn().mockResolvedValue(undefined),
 		command: jest.fn().mockResolvedValue({
 			command: 'revealSource',
 			generation: 1,
 			status: 'busy'
 		}),
 		copyText: jest.fn().mockResolvedValue(undefined),
+		completeClearState: jest.fn().mockResolvedValue(undefined),
 		frameLoaded: jest.fn().mockResolvedValue(undefined),
 		getInitialState: jest.fn().mockResolvedValue({
 			descriptor: descriptor(),
@@ -105,7 +119,130 @@ function postRuntimeLog(frame: HTMLElement, message: string) {
 	});
 }
 
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>(promiseResolve => {
+		resolve = promiseResolve;
+	});
+
+	return {promise, resolve};
+}
+
 describe('<DesktopStoryPreview>', () => {
+	it('runs the two-phase Clear State lifecycle and remounts the same generation', async () => {
+		const fixture = previewApi();
+
+		render(<DesktopStoryPreview api={fixture.api} />);
+		const originalFrame = await screen.findByTitle('Story story preview');
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Clear State'}));
+		const dialog = await screen.findByRole('dialog');
+
+		fireEvent.click(within(dialog).getByRole('button', {name: 'Clear State'}));
+		const cleanupFrame = await screen.findByTitle('Clearing preview state');
+
+		expect(fixture.api.beginClearState).toHaveBeenCalledWith(1);
+		expect(screen.queryByTitle('Story story preview')).not.toBeInTheDocument();
+		act(() => {
+			window.dispatchEvent(
+				new MessageEvent('message', {
+					data: {
+						operationId: 'clear-1',
+						type: 'twine-preview-state-cleared'
+					},
+					source: (cleanupFrame as HTMLIFrameElement).contentWindow
+				})
+			);
+		});
+
+		await waitFor(() =>
+			expect(fixture.api.completeClearState).toHaveBeenCalledWith(
+				expect.objectContaining({generation: 1, operationId: 'clear-1'})
+			)
+		);
+		const remounted = await screen.findByTitle('Story story preview');
+
+		expect(remounted).not.toBe(originalFrame);
+		expect(remounted).toHaveAttribute(
+			'src',
+			'twine-preview://00000000-0000-4000-8000-000000000001/index.html'
+		);
+	});
+
+	it('cancels a late Clear State begin exactly once after unmount', async () => {
+		const fixture = previewApi();
+		const operation = {
+			generation: 1,
+			operationId: 'clear-pending',
+			url: 'twine-preview://pending/__twine-preview-clear-state/pending'
+		};
+		const beginning = deferred<typeof operation>();
+
+		(fixture.api.beginClearState as jest.Mock).mockReturnValueOnce(
+			beginning.promise
+		);
+		const {unmount} = render(<DesktopStoryPreview api={fixture.api} />);
+
+		await screen.findByTitle('Story story preview');
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Clear State'}));
+		fireEvent.click(
+			within(await screen.findByRole('dialog')).getByRole('button', {
+				name: 'Clear State'
+			})
+		);
+		await waitFor(() =>
+			expect(fixture.api.beginClearState).toHaveBeenCalledTimes(1)
+		);
+
+		unmount();
+		await act(async () => {
+			beginning.resolve(operation);
+			await beginning.promise;
+		});
+		await waitFor(() =>
+			expect(fixture.api.cancelClearState).toHaveBeenCalledWith(operation)
+		);
+		expect(fixture.api.cancelClearState).toHaveBeenCalledTimes(1);
+		expect(fixture.api.completeClearState).not.toHaveBeenCalled();
+	});
+
+	it('rejects the cleanup waiter and cancels once when unmounted before acknowledgement', async () => {
+		const fixture = previewApi();
+		const {unmount} = render(<DesktopStoryPreview api={fixture.api} />);
+
+		await screen.findByTitle('Story story preview');
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Clear State'}));
+		fireEvent.click(
+			within(await screen.findByRole('dialog')).getByRole('button', {
+				name: 'Clear State'
+			})
+		);
+		const cleanupFrame = (await screen.findByTitle(
+			'Clearing preview state'
+		)) as HTMLIFrameElement;
+		const cleanupWindow = cleanupFrame.contentWindow;
+
+		unmount();
+		await waitFor(() =>
+			expect(fixture.api.cancelClearState).toHaveBeenCalledTimes(1)
+		);
+		act(() => {
+			window.dispatchEvent(
+				new MessageEvent('message', {
+					data: {
+						operationId: 'clear-1',
+						type: 'twine-preview-state-cleared'
+					},
+					source: cleanupWindow
+				})
+			);
+		});
+		expect(fixture.api.cancelClearState).toHaveBeenCalledTimes(1);
+		expect(fixture.api.completeClearState).not.toHaveBeenCalled();
+	});
+
 	it('loads the narrow bridge state, applies appearance, and routes commands', async () => {
 		const fixture = previewApi();
 		const {unmount} = render(<DesktopStoryPreview api={fixture.api} />);
@@ -327,5 +464,39 @@ describe('<DesktopStoryPreview>', () => {
 			status: 'success'
 		});
 		await waitFor(() => expect(testFromStart).toBeEnabled());
+	});
+
+	it('releases the originating test command when its replacement commits before the old-generation result', async () => {
+		const fixture = previewApi();
+
+		render(<DesktopStoryPreview api={fixture.api} />);
+		const testFromStart = await screen.findByRole('button', {
+			name: 'Test From Start'
+		});
+
+		fireEvent.click(testFromStart);
+		await waitFor(() => expect(testFromStart).toBeDisabled());
+		fixture.replacement({
+			generation: 2,
+			replacement: {
+				descriptor: descriptor({
+					bridgeSessionId: 'bridge-2',
+					generation: 2,
+					target: 'test'
+				}),
+				generation: 2,
+				url: 'twine-preview://00000000-0000-4000-8000-000000000002/index.html'
+			},
+			status: 'success'
+		});
+		fireEvent.load(await screen.findByTitle('Story candidate story preview'));
+
+		await waitFor(() => expect(testFromStart).toBeEnabled());
+		fixture.commandResult({
+			command: 'testFromStart',
+			generation: 1,
+			status: 'success'
+		});
+		expect(testFromStart).toBeEnabled();
 	});
 });

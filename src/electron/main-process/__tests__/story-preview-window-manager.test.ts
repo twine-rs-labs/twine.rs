@@ -43,7 +43,12 @@ function emitter() {
 
 function fakeWebContents(url = 'file:///preview.html') {
 	const events = emitter();
-	const mainFrame = {url};
+	const mainFrame = {frames: [] as any[], url};
+	const cookies = {
+		flushStore: jest.fn().mockResolvedValue(undefined),
+		get: jest.fn().mockResolvedValue([]),
+		remove: jest.fn().mockResolvedValue(undefined)
+	};
 
 	return {
 		...events,
@@ -51,6 +56,8 @@ function fakeWebContents(url = 'file:///preview.html') {
 		mainFrame,
 		send: jest.fn(),
 		session: {
+			clearData: jest.fn().mockResolvedValue(undefined),
+			cookies,
 			on: jest.fn(),
 			setPermissionCheckHandler: jest.fn(),
 			setPermissionRequestHandler: jest.fn()
@@ -59,9 +66,15 @@ function fakeWebContents(url = 'file:///preview.html') {
 	} as unknown as WebContents &
 		ReturnType<typeof emitter> & {
 			isDestroyed: jest.Mock;
-			mainFrame: {url: string};
+			mainFrame: {frames: any[]; url: string};
 			send: jest.Mock;
 			session: {
+				clearData: jest.Mock;
+				cookies: {
+					flushStore: jest.Mock;
+					get: jest.Mock;
+					remove: jest.Mock;
+				};
 				on: jest.Mock;
 				setPermissionCheckHandler: jest.Mock;
 				setPermissionRequestHandler: jest.Mock;
@@ -153,6 +166,7 @@ async function flushPromises() {
 
 function testManager(
 	options: {
+		clearStateLeaseTimeoutMs?: number;
 		linkMode?: 'block' | 'system';
 		replacementTimeoutMs?: number;
 	} = {}
@@ -180,12 +194,24 @@ function testManager(
 			)}/index.html`
 	);
 	const releasePackage = jest.fn().mockResolvedValue(undefined);
+	const registerStateCleanup = jest.fn(
+		(url: string, operationId = 'clear') => ({
+			operationId,
+			url: url.replace(
+				'/index.html',
+				'/__twine-preview-clear-state/00000000-0000-4000-8000-000000000099'
+			)
+		})
+	);
+	const releaseStateCleanup = jest.fn();
 	const releaseStagedPackage = jest.fn().mockResolvedValue(undefined);
 	const openExternal = jest.fn().mockResolvedValue(undefined);
 	const focusOwner = jest.fn();
 	const writeClipboardText = jest.fn();
+	const waitForFrameDetach = jest.fn().mockResolvedValue(undefined);
 	let id = 0;
 	const manager = createStoryPreviewWindowManager({
+		clearStateLeaseTimeoutMs: options.clearStateLeaseTimeoutMs,
 		createWindow: config => {
 			windowOptions.push(config);
 			const window = fakeWindow(entryUrl);
@@ -199,10 +225,13 @@ function testManager(
 		previewEntryUrl: () => entryUrl,
 		randomId: () => `session-${++id}`,
 		registerPackage: registerPackage as any,
+		registerStateCleanup,
 		replacementTimeoutMs: options.replacementTimeoutMs,
 		releasePackage,
+		releaseStateCleanup,
 		releaseStagedPackage,
 		stagePackage: stagePackage as any,
+		waitForFrameDetach,
 		writeClipboardText
 	});
 	const ipcHandlers = new Map<string, IpcHandler>();
@@ -228,11 +257,14 @@ function testManager(
 		manager,
 		openExternal,
 		registerPackage,
+		registerStateCleanup,
 		releasePackage,
+		releaseStateCleanup,
 		releaseStagedPackage,
 		stagePackage,
 		windowOptions,
 		windows,
+		waitForFrameDetach,
 		writeClipboardText
 	};
 }
@@ -384,6 +416,299 @@ describe('story preview window manager', () => {
 				senderFrame: first.window.webContents.mainFrame
 			})
 		).toThrow();
+	});
+
+	it('clears only the exact current preview origin and path-scoped cookies', async () => {
+		const harness = testManager();
+		const {event, launch, window} = await openReadyPreview(harness);
+		const hostname = new URL(launch.url).hostname;
+
+		window.webContents.session.cookies.get.mockResolvedValue([
+			{name: 'root', domain: hostname, path: '/'},
+			{name: 'nested', domain: `.${hostname}`, path: '/nested'},
+			{name: 'sibling', domain: `child.${hostname}`, path: '/'}
+		]);
+		const begin = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.beginClearState
+		)!;
+		const complete = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.completeClearState
+		)!;
+		const operation = await begin(event, 1);
+
+		expect(harness.waitForFrameDetach).toHaveBeenCalledWith(
+			window.webContents,
+			launch.url,
+			5000
+		);
+		expect(operation).toEqual({
+			generation: 1,
+			operationId: 'session-2',
+			url: launch.url.replace(
+				'/index.html',
+				'/__twine-preview-clear-state/00000000-0000-4000-8000-000000000099'
+			)
+		});
+
+		await complete(event, {
+			generation: operation.generation,
+			operationId: operation.operationId
+		});
+		expect(window.webContents.session.clearData).toHaveBeenCalledWith({
+			dataTypes: [
+				'backgroundFetch',
+				'cache',
+				'fileSystems',
+				'indexedDB',
+				'localStorage',
+				'serviceWorkers',
+				'webSQL'
+			],
+			originMatchingMode: 'origin-in-all-contexts',
+			origins: [`twine-preview://${hostname}`]
+		});
+		expect(window.webContents.session.cookies.remove.mock.calls).toEqual([
+			[`twine-preview://${hostname}/`, 'root'],
+			[`twine-preview://${hostname}/nested`, 'nested']
+		]);
+		expect(window.webContents.session.cookies.flushStore).toHaveBeenCalledTimes(
+			1
+		);
+		expect(
+			harness.ipcHandlers.get(storyPreviewIpcChannels.getInitialState)!(event)
+		).toEqual(launch);
+		await expect(
+			complete(event, {
+				generation: operation.generation,
+				operationId: operation.operationId
+			})
+		).rejects.toThrow('stale or unsolicited');
+	});
+
+	it('locks Clear State against commands and replacement until cancellation', async () => {
+		const harness = testManager();
+		const {event, launch, owner} = await openReadyPreview(harness);
+		const begin = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.beginClearState
+		)!;
+		const cancel = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.cancelClearState
+		)!;
+		const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+		const operation = await begin(event, 1);
+
+		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual(
+			expect.objectContaining({status: 'error'})
+		);
+		await expect(
+			harness.manager.replace(owner, launch.descriptor.sessionId, 1, build())
+		).rejects.toThrow('Clear State is already pending');
+
+		cancel(event, {
+			generation: operation.generation,
+			operationId: operation.operationId
+		});
+		expect(harness.releaseStateCleanup).toHaveBeenCalledWith(operation.url);
+		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual({
+			command: 'testFromStart',
+			generation: 1,
+			status: 'busy'
+		});
+	});
+
+	it('releases a pending Clear State begin when the preview shell reloads', async () => {
+		const harness = testManager();
+		const {event, launch, owner, window} = await openReadyPreview(harness);
+		const begin = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.beginClearState
+		)!;
+		const cancel = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.cancelClearState
+		)!;
+		const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+
+		harness.waitForFrameDetach.mockReturnValueOnce(
+			new Promise<void>(() => undefined)
+		);
+		const beginning = begin(event, 1);
+		const rejected = expect(beginning).rejects.toThrow(
+			'preview shell reloaded'
+		);
+
+		await flushPromises();
+		window.webContents.emit('did-start-navigation', {
+			isMainFrame: true,
+			isSameDocument: false
+		});
+		await rejected;
+		expect(harness.releaseStateCleanup).not.toHaveBeenCalled();
+
+		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual({
+			command: 'testFromStart',
+			generation: 1,
+			status: 'busy'
+		});
+		harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+			command: 'testFromStart',
+			generation: 1,
+			status: 'success'
+		});
+
+		const nextOperation = await begin(event, 1);
+
+		cancel(event, nextOperation);
+		expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(1);
+	});
+
+	it('releases an acknowledged Clear State operation exactly once on shell reload', async () => {
+		const harness = testManager();
+		const {event, launch, owner, window} = await openReadyPreview(harness);
+		const begin = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.beginClearState
+		)!;
+		const cancel = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.cancelClearState
+		)!;
+		const complete = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.completeClearState
+		)!;
+		const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+		const operation = await begin(event, 1);
+
+		window.webContents.emit('did-start-navigation', {
+			isMainFrame: true,
+			isSameDocument: false
+		});
+		expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(1);
+		expect(harness.releaseStateCleanup).toHaveBeenCalledWith(operation.url);
+
+		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual({
+			command: 'testFromStart',
+			generation: 1,
+			status: 'busy'
+		});
+		harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+			command: 'testFromStart',
+			generation: 1,
+			status: 'success'
+		});
+		const replacing = harness.manager.replace(
+			owner,
+			launch.descriptor.sessionId,
+			1,
+			build({descriptor: descriptor({bridgeSessionId: 'bridge-2'})})
+		);
+
+		await flushPromises();
+		await harness.ipcHandlers.get(storyPreviewIpcChannels.frameLoaded)!(
+			event,
+			2
+		);
+		await expect(replacing).resolves.toEqual(
+			expect.objectContaining({
+				descriptor: expect.objectContaining({generation: 2})
+			})
+		);
+		const nextOperation = await begin(event, 2);
+
+		await expect(complete(event, operation)).rejects.toThrow(
+			'stale or unsolicited'
+		);
+		expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(1);
+		expect(command(event, {generation: 2, type: 'testFromStart'})).toEqual(
+			expect.objectContaining({status: 'error'})
+		);
+		cancel(event, nextOperation);
+		expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(2);
+	});
+
+	it('expires the exact Clear State lease without disturbing a newer operation', async () => {
+		jest.useFakeTimers();
+
+		try {
+			const harness = testManager({clearStateLeaseTimeoutMs: 10});
+			const {event} = await openReadyPreview(harness);
+			const begin = harness.ipcHandlers.get(
+				storyPreviewIpcChannels.beginClearState
+			)!;
+			const cancel = harness.ipcHandlers.get(
+				storyPreviewIpcChannels.cancelClearState
+			)!;
+			let finishOldDetach!: () => void;
+
+			harness.waitForFrameDetach.mockReturnValueOnce(
+				new Promise<void>(resolve => {
+					finishOldDetach = resolve;
+				})
+			);
+			const expired = begin(event, 1);
+			const rejected = expect(expired).rejects.toThrow('lease expired');
+
+			await flushPromises();
+			jest.advanceTimersByTime(10);
+			await rejected;
+			const current = await begin(event, 1);
+
+			finishOldDetach();
+			await flushPromises();
+			expect(harness.releaseStateCleanup).not.toHaveBeenCalled();
+			cancel(event, current);
+			expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(1);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('releases an acknowledged Clear State operation exactly once on close', async () => {
+		const harness = testManager();
+		const {event, launch, owner, window} = await openReadyPreview(harness);
+		const begin = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.beginClearState
+		)!;
+		const complete = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.completeClearState
+		)!;
+		const operation = await begin(event, 1);
+
+		await harness.manager.close(owner, launch.descriptor.sessionId);
+		expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(1);
+		expect(harness.releaseStateCleanup).toHaveBeenCalledWith(operation.url);
+		window.webContents.emit('did-start-navigation', {
+			isMainFrame: true,
+			isSameDocument: false
+		});
+		await expect(complete(event, operation)).rejects.toThrow(
+			'Unknown story preview renderer'
+		);
+		expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects Clear State in Proof and releases its lock after detach failure', async () => {
+		const proofHarness = testManager();
+		const proof = await openReadyPreview(
+			proofHarness,
+			undefined,
+			build({descriptor: descriptor({target: 'proof'})})
+		);
+		await expect(
+			proofHarness.ipcHandlers.get(storyPreviewIpcChannels.beginClearState)!(
+				proof.event,
+				1
+			)
+		).rejects.toThrow('unavailable in Proof');
+
+		const harness = testManager();
+		const preview = await openReadyPreview(harness);
+		harness.waitForFrameDetach.mockRejectedValueOnce(
+			new Error('detach timeout')
+		);
+		const begin = harness.ipcHandlers.get(
+			storyPreviewIpcChannels.beginClearState
+		)!;
+		await expect(begin(preview.event, 1)).rejects.toThrow('detach timeout');
+		await expect(begin(preview.event, 1)).resolves.toEqual(
+			expect.objectContaining({generation: 1})
+		);
 	});
 
 	it('routes only validated generation commands to the owner', async () => {
