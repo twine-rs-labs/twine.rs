@@ -2,7 +2,7 @@
 
 Status: active
 Owner: product and frontend maintainers
-Last verified: 2026-08-23
+Last verified: 2026-08-24
 Source of truth: unfinished primary-product behavior
 
 ## Outcomes
@@ -12,8 +12,6 @@ Source of truth: unfinished primary-product behavior
 - Keep debugger controls for state mutation, arbitrary evaluation, and
   additional story-format development hooks outside the read-only protocol
   until each command has an explicit capability and lifecycle contract.
-- Keep “test from here” behavior consistent across workbench, contents,
-  diagnostics, search, and assets.
 
 ### Build and export depth
 

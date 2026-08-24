@@ -44,7 +44,8 @@ The details panel provides:
 - _Copy Snippet_ to copy story-format markup;
 - _Insert into Passage_ to add the snippet to story source;
 - _Find Usages_ to reveal the first indexed reference;
-- _Test First Usage_ to test from the first passage that uses the asset; and
+- _Test First Usage_ to test from the first indexed asset reference whose
+  passage still exists; and
 - _Reveal in Folder_ to show a file-backed asset in the system file manager.
 
 Use project-relative URLs in story source. For example, an imported file at

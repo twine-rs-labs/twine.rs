@@ -560,6 +560,17 @@ describe('<DiagnosticsRoute>', () => {
 		expect(mockTestStory).toHaveBeenCalledWith(story.id, story.passages[0].id);
 	});
 
+	it('disables and marks the diagnostic test action while launch is pending', async () => {
+		mockTestStory.mockReturnValueOnce(new Promise<void>(() => {}));
+		renderComponent();
+		const action = await screen.findByRole('button', {name: 'Test From Here'});
+
+		fireEvent.click(action);
+
+		expect(action).toBeDisabled();
+		expect(action).toHaveAttribute('aria-busy', 'true');
+	});
+
 	it('reports failures when testing a selected diagnostic', async () => {
 		const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
 		const consoleSpy = jest

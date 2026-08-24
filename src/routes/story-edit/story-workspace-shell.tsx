@@ -52,6 +52,7 @@ import {
 	Story,
 	useStoriesContext
 } from '../../store/stories';
+import {firstLiveAssetUsagePassage} from '../../store/use-test-from-here-action';
 import {
 	markPerformance,
 	measurePerformance,
@@ -105,6 +106,8 @@ export interface StoryWorkspaceShellProps {
 	searchRequests?: Map<string, {key: number; query?: string}>;
 	selectedPassageId?: string;
 	story: Story;
+	testPassagePending?: boolean;
+	testPassagePendingId?: string;
 }
 
 type NavigatorTab = 'passages' | 'contents' | 'assets';
@@ -494,6 +497,8 @@ const AssetManager: React.FC<{
 	selection: WorkbenchSelection;
 	selectedPassageCharacterCount: number;
 	story: Story;
+	testPassagePending?: boolean;
+	testPassagePendingId?: string;
 }> = ({
 	assets,
 	host,
@@ -501,7 +506,9 @@ const AssetManager: React.FC<{
 	onTestPassage,
 	selection,
 	selectedPassageCharacterCount,
-	story
+	story,
+	testPassagePending = false,
+	testPassagePendingId
 }) => {
 	const navigate = useNavigate();
 	const selectedPassage = selection.passage;
@@ -529,19 +536,6 @@ const AssetManager: React.FC<{
 					target
 				})
 			);
-		}
-	}
-
-	function testFirstUsage(path: string) {
-		const asset = assets.entries.find(entry => entry.path === path);
-		const passage = asset?.firstReference?.passageId
-			? story.passages.find(
-					passage => passage.id === asset.firstReference?.passageId
-				)
-			: undefined;
-
-		if (passage) {
-			onTestPassage?.(passage);
 		}
 	}
 
@@ -573,6 +567,10 @@ const AssetManager: React.FC<{
 							: asset.unused
 								? 'Unused'
 								: 'Used';
+						const testPassage = firstLiveAssetUsagePassage(
+							story,
+							asset.references
+						);
 
 						return (
 							<li className="story-edit-asset-item" key={asset.id}>
@@ -652,13 +650,16 @@ const AssetManager: React.FC<{
 										Usages
 									</Button>
 									<Button
-										disabled={!asset.firstReference?.passageId}
+										disabled={!testPassage || testPassagePending}
 										icon="tool"
-										onClick={() => testFirstUsage(asset.path)}
+										loading={
+											!!testPassage && testPassagePendingId === testPassage.id
+										}
+										onClick={() => testPassage && onTestPassage?.(testPassage)}
 										size="sm"
 										variant="ghost"
 									>
-										Test Usage
+										Test First Usage
 									</Button>
 								</div>
 							</li>
@@ -874,6 +875,8 @@ const Inspector: React.FC<{
 	onTestPassage?: (passage: Passage) => void;
 	selection: WorkbenchSelection;
 	story: Story;
+	testPassagePending?: boolean;
+	testPassagePendingId?: string;
 }> = props => {
 	const {
 		assets,
@@ -886,7 +889,9 @@ const Inspector: React.FC<{
 		onSelectPassage,
 		onTestPassage,
 		selection,
-		story
+		story,
+		testPassagePending = false,
+		testPassagePendingId
 	} = props;
 	const {passage} = selection;
 	const {t} = useTranslation();
@@ -912,7 +917,9 @@ const Inspector: React.FC<{
 				<section className="story-edit-inspector-run">
 					<Button
 						block
+						disabled={testPassagePending}
 						icon="tool"
+						loading={testPassagePendingId === passage.id}
 						onClick={() => onTestPassage(passage)}
 						size="sm"
 						variant="primary"
@@ -1102,7 +1109,11 @@ const Inspector: React.FC<{
 											)}
 											{diagnosticPassage && onTestPassage && (
 												<Button
+													disabled={testPassagePending}
 													icon="tool"
+													loading={
+														testPassagePendingId === diagnosticPassage.id
+													}
 													onClick={() => onTestPassage(diagnosticPassage)}
 													size="sm"
 													variant="ghost"
@@ -1334,7 +1345,9 @@ export const StoryWorkspaceShell: React.FC<
 		rightDockCollapsed,
 		searchRequests,
 		selectedPassageId,
-		story
+		story,
+		testPassagePending = false,
+		testPassagePendingId
 	} = props;
 	const coreProjectHost = useCoreProjectHost();
 	const navigate = useNavigate();
@@ -1904,6 +1917,8 @@ export const StoryWorkspaceShell: React.FC<
 									: 0
 							}
 							story={story}
+							testPassagePending={testPassagePending}
+							testPassagePendingId={testPassagePendingId}
 						/>
 					)}
 				</DockPanel>
@@ -1929,6 +1944,8 @@ export const StoryWorkspaceShell: React.FC<
 						selectedPassageId={selectedPassageId}
 						selections={dockSelections}
 						story={story}
+						testPassagePending={testPassagePending}
+						testPassagePendingId={testPassagePendingId}
 						windows={dockWindows}
 					/>
 				</div>
@@ -1957,6 +1974,8 @@ export const StoryWorkspaceShell: React.FC<
 						onTestPassage={onTestPassage}
 						selection={selection}
 						story={story}
+						testPassagePending={testPassagePending}
+						testPassagePendingId={testPassagePendingId}
 					/>
 				</DockPanel>
 			</aside>

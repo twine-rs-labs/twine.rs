@@ -54,6 +54,8 @@ export interface EditorWindowProps {
 	selection?: WorkbenchSelection;
 	spec: EditorWindowSpec;
 	story: Story;
+	testPassagePending?: boolean;
+	testPassagePendingId?: string;
 }
 
 function languageForPassage(passage: Passage): SourceEditorLanguage {
@@ -233,7 +235,9 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		searchRequest,
 		selection,
 		spec,
-		story
+		story,
+		testPassagePending = false,
+		testPassagePendingId
 	} = props;
 	const {t} = useTranslation();
 	const coreProjectHost = useCoreProjectHost();
@@ -1074,8 +1078,10 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 					</Badge>
 					{onTestPassage && (
 						<IconButton
+							disabled={testPassagePending}
 							icon="tool"
 							label={t('routes.storyEdit.toolbar.testFromHere')}
+							loading={testPassagePendingId === passage.id}
 							onClick={() => onTestPassage(passage)}
 							size="sm"
 						/>

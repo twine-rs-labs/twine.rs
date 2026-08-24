@@ -370,6 +370,37 @@ describe('<AssetsRoute>', () => {
 		expect(mockTestStory).toHaveBeenCalledWith(story.id, story.passages[0].id);
 	});
 
+	it('disables and marks the asset test action while launch is pending', async () => {
+		mockTestStory.mockReturnValueOnce(new Promise<void>(() => {}));
+		renderComponent();
+
+		await openAssetsFolder();
+		fireEvent.click(assetCard('assets/cover.png'));
+		const action = screen.getByRole('button', {name: 'Test First Usage'});
+		fireEvent.click(action);
+
+		expect(action).toBeDisabled();
+		expect(action).toHaveAttribute('aria-busy', 'true');
+	});
+
+	it('reports asset test launch failures through the shared reporter', async () => {
+		const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+		jest.spyOn(console, 'error').mockImplementation(() => {});
+		mockTestStory.mockRejectedValueOnce(new Error('Preview launch failed'));
+		renderComponent();
+
+		await openAssetsFolder();
+		fireEvent.click(assetCard('assets/cover.png'));
+		fireEvent.click(screen.getByRole('button', {name: 'Test First Usage'}));
+
+		await waitFor(() =>
+			expect(alertSpy).toHaveBeenCalledWith(
+				'Could not open story preview (Preview launch failed).'
+			)
+		);
+		expect(screen.queryByText('Preview launch failed')).toBeNull();
+	});
+
 	it('imports a host-known asset into the inventory and marks it unused', async () => {
 		renderComponent();
 

@@ -17,8 +17,7 @@ import type {DiagnosticsViewModelItem} from '../../core/view-models';
 import type {CoreDiagnosticSeverity} from '../../core/bindings/CoreDiagnosticSeverity';
 import type {CoreDiagnosticsPage} from '../../core/bindings/CoreDiagnosticsPage';
 import {selectPassage, Story, useStoriesContext} from '../../store/stories';
-import {useStoryLaunch} from '../../store/use-story-launch';
-import {reportStoryLaunchError} from '../../store/report-story-launch-error';
+import {useTestFromHereAction} from '../../store/use-test-from-here-action';
 import {
 	sourceNavigationTargetFromSourceId,
 	sourceTarget
@@ -126,9 +125,9 @@ export const DiagnosticsRoute: React.FC = () => {
 	const {storyId = ''} = useParams<'storyId'>();
 	const {dispatch, stories} = useStoriesContext();
 	const navigate = useNavigate();
-	const {testStory} = useStoryLaunch();
 	const coreProjectHost = useCoreProjectHost();
 	const story = storyForId(stories, storyId);
+	const testFromHere = useTestFromHereAction(story);
 	const [severity, setSeverity] = React.useState<SeverityFilter>('all');
 	const [visibility, setVisibility] =
 		React.useState<VisibilityFilter>('active');
@@ -388,10 +387,8 @@ export const DiagnosticsRoute: React.FC = () => {
 	}
 
 	function testSelectedPassage() {
-		if (story && selectedPassage) {
-			void Promise.resolve(testStory(story.id, selectedPassage.id)).catch(
-				reportStoryLaunchError
-			);
+		if (selectedPassage) {
+			testFromHere.run(selectedPassage.id);
 		}
 	}
 
@@ -814,8 +811,12 @@ export const DiagnosticsRoute: React.FC = () => {
 						<div className="diagnostics-route__actions">
 							<Button
 								block
-								disabled={!selectedPassage}
+								disabled={!selectedPassage || testFromHere.pending}
 								icon="tool"
+								loading={
+									!!selectedPassage &&
+									testFromHere.pendingPassageId === selectedPassage.id
+								}
 								onClick={testSelectedPassage}
 								size="sm"
 								variant="primary"

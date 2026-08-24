@@ -114,10 +114,35 @@ describe('PassageFuzzyFinder', () => {
 				renderComponent({onTestPassage}, story);
 				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
 				fireEvent.click(
-					await screen.findByRole('button', {name: 'Test "a name" from here'})
+					await screen.findByRole('button', {name: 'Test "a name" From Here'})
 				);
 
 				expect(onTestPassage).toHaveBeenCalledWith(story.passages[0]);
+			});
+
+			it('disables and marks the matching result while a launch is pending', async () => {
+				const onTestPassage = jest.fn();
+				const story = fakeStory(1);
+
+				story.passages[0].name = 'a name';
+				story.passages[0].text = 'text';
+				renderComponent(
+					{
+						onTestPassage,
+						testPassagePending: true,
+						testPassagePendingId: story.passages[0].id
+					},
+					story
+				);
+				fireEvent.change(screen.getByRole('textbox'), {target: {value: 'a'}});
+				const action = await screen.findByRole('button', {
+					name: 'Test "a name" From Here'
+				});
+
+				expect(action).toBeDisabled();
+				expect(action).toHaveAttribute('aria-busy', 'true');
+				fireEvent.click(action);
+				expect(onTestPassage).not.toHaveBeenCalled();
 			});
 		});
 	});

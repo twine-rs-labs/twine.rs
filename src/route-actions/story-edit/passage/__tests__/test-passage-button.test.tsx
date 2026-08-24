@@ -1,35 +1,15 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {fireEvent, render, screen} from '@testing-library/react';
 import {axe} from 'jest-axe';
+import type {ComponentProps} from 'react';
 import * as React from 'react';
-import {useStoriesContext} from '../../../../store/stories';
-import {
-	FakeStateProvider,
-	FakeStateProviderProps,
-	fakeStory
-} from '../../../../test-util';
-import {
-	TestPassageButton,
-	TestPassageButtonProps
-} from '../test-passage-button';
-
-const TestTestPassageButton: React.FC<
-	Partial<TestPassageButtonProps>
-> = props => {
-	const {stories} = useStoriesContext();
-
-	return <TestPassageButton story={stories[0]} {...props} />;
-};
+import {fakePassage} from '../../../../test-util';
+import {TestPassageButton} from '../test-passage-button';
 
 describe('<TestPassageButton>', () => {
 	function renderComponent(
-		props?: Partial<TestPassageButtonProps>,
-		contexts?: FakeStateProviderProps
+		props?: Partial<ComponentProps<typeof TestPassageButton>>
 	) {
-		return render(
-			<FakeStateProvider {...contexts}>
-				<TestTestPassageButton {...props} />
-			</FakeStateProvider>
-		);
+		return render(<TestPassageButton {...props} />);
 	}
 
 	it('is disabled when the passage prop is undefined', () => {
@@ -41,27 +21,34 @@ describe('<TestPassageButton>', () => {
 		).toBeDisabled();
 	});
 
-	it('tests the story from the passage when clicked', async () => {
-		const replace = jest.fn();
-		const openSpy = jest.spyOn(window, 'open').mockReturnValue({
-			close: jest.fn(),
-			location: {replace}
-		} as any);
-		const story = fakeStory();
+	it('delegates testing to the route-owned action', () => {
+		const onTestPassage = jest.fn();
+		const passage = fakePassage();
 
-		renderComponent({passage: story.passages[0]}, {stories: [story]});
-		expect(openSpy).not.toHaveBeenCalled();
+		renderComponent({onTestPassage, passage});
 		fireEvent.click(
 			screen.getByRole('button', {
 				name: 'routes.storyEdit.toolbar.testFromHere'
 			})
 		);
-		expect(openSpy).toHaveBeenCalledWith('about:blank', '_blank');
-		await waitFor(() =>
-			expect(replace).toHaveBeenCalledWith(
-				`http://localhost/#/stories/${story.id}/preview?target=test&passage=${story.passages[0].id}`
-			)
-		);
+		expect(onTestPassage).toHaveBeenCalledWith(passage);
+	});
+
+	it('shows matching pending state and disables the action', () => {
+		const passage = fakePassage();
+
+		renderComponent({
+			onTestPassage: jest.fn(),
+			passage,
+			pending: true,
+			pendingPassageId: passage.id
+		});
+		const button = screen.getByRole('button', {
+			name: 'routes.storyEdit.toolbar.testFromHere'
+		});
+
+		expect(button).toBeDisabled();
+		expect(button).toHaveAttribute('aria-busy', 'true');
 	});
 
 	it('is accessible', async () => {

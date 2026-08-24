@@ -578,6 +578,57 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 	});
 
+	it('tests the first live asset usage through the shared workbench action', async () => {
+		const onTestPassage = jest.fn();
+		const {start} = await renderComponent('text', {onTestPassage});
+
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.leftDock'
+				})
+			).getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {name: 'Test First Usage'})
+		);
+
+		expect(onTestPassage).toHaveBeenCalledWith(start);
+	});
+
+	it('shows pending state on matching workbench test actions', async () => {
+		const onTestPassage = jest.fn();
+		const {start} = await renderComponent('text', {
+			onTestPassage,
+			testPassagePending: true,
+			testPassagePendingId: 'start'
+		});
+		const inspectorActions = await screen.findAllByRole('button', {
+			name: 'routes.storyEdit.toolbar.testFromHere'
+		});
+
+		for (const action of inspectorActions) {
+			expect(action).toBeDisabled();
+			expect(action).toHaveAttribute('aria-busy', 'true');
+		}
+
+		fireEvent.click(
+			within(
+				screen.getByRole('complementary', {
+					name: 'routes.storyEdit.workspace.leftDock'
+				})
+			).getByRole('tab', {name: 'routes.storyEdit.workspace.assets'})
+		);
+		const assetAction = await screen.findByRole('button', {
+			name: 'Test First Usage'
+		});
+
+		expect(assetAction).toBeDisabled();
+		expect(assetAction).toHaveAttribute('aria-busy', 'true');
+		expect(onTestPassage).not.toHaveBeenCalled();
+		expect(start.id).toBe('start');
+	});
+
 	it('keeps asset management in the full asset route', async () => {
 		await renderComponent('text');
 

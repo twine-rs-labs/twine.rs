@@ -16,11 +16,22 @@ export interface PassageActionsProps {
 	getCenter: () => Point;
 	onEditPassages: (passages: Passage[]) => void;
 	onOpenFuzzyFinder: () => void;
+	onTestPassage?: (passage: Passage) => void;
 	story: Story;
+	testPassagePending?: boolean;
+	testPassagePendingId?: string;
 }
 
 export const PassageActions: React.FC<PassageActionsProps> = props => {
-	const {getCenter, onEditPassages, onOpenFuzzyFinder, story} = props;
+	const {
+		getCenter,
+		onEditPassages,
+		onOpenFuzzyFinder,
+		onTestPassage,
+		story,
+		testPassagePending,
+		testPassagePendingId
+	} = props;
 	const coreProjectHost = useCoreProjectHost();
 	const selectedPassages = React.useMemo(
 		() => story.passages.filter(passage => passage.selected),
@@ -55,7 +66,12 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 				story={story}
 			/>
 			<DeletePassagesButton passages={selectedPassages} story={story} />
-			<TestPassageButton passage={soloSelectedPassage} story={story} />
+			<TestPassageButton
+				onTestPassage={onTestPassage}
+				passage={soloSelectedPassage}
+				pending={testPassagePending}
+				pendingPassageId={testPassagePendingId}
+			/>
 			<StartAtPassageButton passage={soloSelectedPassage} story={story} />
 			<GoToPassageButton onOpenFuzzyFinder={onOpenFuzzyFinder} />
 			<SelectAllPassagesButton story={story} />

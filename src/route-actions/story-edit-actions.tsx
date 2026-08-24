@@ -30,8 +30,11 @@ export interface StoryEditActionsProps {
 	onOpenWorkbenchPanel?: (
 		id: 'find-replace' | 'story-details' | 'passage-tags'
 	) => void;
+	onTestPassage?: (passage: Passage) => void;
 	rightDockCollapsed?: boolean;
 	story: Story;
+	testPassagePending?: boolean;
+	testPassagePendingId?: string;
 }
 
 export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
@@ -48,8 +51,11 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 		onOpenFuzzyFinder,
 		onOpenEditorWindow,
 		onOpenWorkbenchPanel,
+		onTestPassage,
 		rightDockCollapsed = false,
-		story
+		story,
+		testPassagePending = false,
+		testPassagePendingId
 	} = props;
 	const {t} = useTranslation();
 	const appShell = useAppShellContext();
@@ -171,7 +177,10 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 					getCenter={getCenter}
 					onEditPassages={onEditPassages}
 					onOpenFuzzyFinder={onOpenFuzzyFinder}
+					onTestPassage={onTestPassage}
 					story={story}
+					testPassagePending={testPassagePending}
+					testPassagePendingId={testPassagePendingId}
 				/>
 			),
 			[t('common.story')]: (
@@ -196,7 +205,10 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 			onOpenEditorWindow,
 			onOpenFuzzyFinder,
 			onOpenWorkbenchPanel,
+			onTestPassage,
 			story,
+			testPassagePending,
+			testPassagePendingId,
 			t
 		]
 	);

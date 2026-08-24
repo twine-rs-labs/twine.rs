@@ -31,6 +31,8 @@ export interface EditorDockProps {
 	selectedPassageId?: string;
 	selections: Map<string, WorkbenchSelection>;
 	story: Story;
+	testPassagePending?: boolean;
+	testPassagePendingId?: string;
 	windows: EditorWindowSpec[];
 }
 
@@ -75,7 +77,9 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 		searchRequests,
 		selectedPassageId,
 		selections,
-		story
+		story,
+		testPassagePending = false,
+		testPassagePendingId
 	} = props;
 	const {t} = useTranslation();
 	const [openMenu, setOpenMenu] = React.useState(false);
@@ -253,6 +257,8 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 									selection={selections.get(id)}
 									spec={spec}
 									story={story}
+									testPassagePending={testPassagePending}
+									testPassagePendingId={testPassagePendingId}
 								/>
 							</div>
 						);

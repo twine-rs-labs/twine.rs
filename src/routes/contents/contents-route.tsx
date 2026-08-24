@@ -28,8 +28,7 @@ import {selectPassage, Story, useStoriesContext} from '../../store/stories';
 import {loadProjectMetadata} from '../../store/project-metadata';
 import {useProjectStoryHydration} from '../../store/project-hydration';
 import {useProjectLibraryService} from '../../store/project-library-service';
-import {useStoryLaunch} from '../../store/use-story-launch';
-import {reportStoryLaunchError} from '../../store/report-story-launch-error';
+import {useTestFromHereAction} from '../../store/use-test-from-here-action';
 import {
 	markPerformance,
 	markPerformanceAfterPaint,
@@ -374,10 +373,10 @@ export const ContentsRoute: React.FC = () => {
 	const {storyId = ''} = useParams<'storyId'>();
 	const {dispatch, stories} = useStoriesContext();
 	const navigate = useNavigate();
-	const {testStory} = useStoryLaunch();
 	const coreProjectHost = useCoreProjectHost();
 	const projectLibrary = useProjectLibraryService();
 	const story = storyForId(stories, storyId);
+	const testFromHere = useTestFromHereAction(story);
 	const [filter, setFilter] = React.useState<ContentsFilter>('all');
 	const [query, setQuery] = React.useState('');
 	const [sort, setSort] = React.useState<ContentsSort>('Group');
@@ -798,10 +797,8 @@ export const ContentsRoute: React.FC = () => {
 	}
 
 	function testSelectedPassage() {
-		if (story && selectedPassage) {
-			void Promise.resolve(testStory(story.id, selectedPassage.id)).catch(
-				reportStoryLaunchError
-			);
+		if (selectedPassage) {
+			testFromHere.run(selectedPassage.id);
 		}
 	}
 
@@ -1108,8 +1105,12 @@ export const ContentsRoute: React.FC = () => {
 						<div className="contents-route__actions">
 							<Button
 								block
-								disabled={!selectedPassage}
+								disabled={!selectedPassage || testFromHere.pending}
 								icon="tool"
+								loading={
+									!!selectedPassage &&
+									testFromHere.pendingPassageId === selectedPassage.id
+								}
 								onClick={testSelectedPassage}
 								size="sm"
 								variant="primary"

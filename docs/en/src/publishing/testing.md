@@ -45,8 +45,10 @@ context:
   inspector.
 - In Graph or Split mode, select a passage node and choose _Test From Here_ from
   the graph toolbar.
-- In search results, diagnostics, contents, or asset usage views, use the
-  passage-specific test action for the selected result or first usage.
+- In search results, choose _Test “Passage Name” From Here_. Diagnostics and
+  Contents use _Test From Here_ for the selected entry's live passage.
+- In the standalone or Workbench asset manager, choose _Test First Usage_ to
+  use the first indexed asset reference whose passage still exists.
 - In a preview window, choose _Test From Start_ to rebuild the current story in
   test mode at that preview generation's launch passage. For Play and an
   ordinary Test this is the story's saved start; after Test From Here or Test

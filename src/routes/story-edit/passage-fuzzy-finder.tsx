@@ -16,6 +16,8 @@ export interface PassageFuzzyFinderProps {
 	open?: boolean;
 	setCenter: (value: Point) => void;
 	story: Story;
+	testPassagePending?: boolean;
+	testPassagePendingId?: string;
 }
 
 export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
@@ -26,7 +28,9 @@ export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
 		onTestPassage,
 		open,
 		setCenter,
-		story
+		story,
+		testPassagePending = false,
+		testPassagePendingId
 	} = props;
 	const {dispatch} = useStoriesContext();
 	const coreProjectHost = useCoreProjectHost();
@@ -97,14 +101,16 @@ export const PassageFuzzyFinder: React.FC<PassageFuzzyFinderProps> = props => {
 			matches.map(match => ({
 				action: onTestPassage
 					? {
-							label: `Test "${match.passage.name}" from here`,
+							disabled: testPassagePending,
+							label: `Test "${match.passage.name}" From Here`,
+							loading: testPassagePendingId === match.passage.id,
 							onClick: () => onTestPassage(match.passage)
 						}
 					: undefined,
 				detail: match.detail,
 				heading: match.passage.name
 			})),
-		[matches, onTestPassage]
+		[matches, onTestPassage, testPassagePending, testPassagePendingId]
 	);
 	useHotkeys('p', onOpen);
 	const {t} = useTranslation();
