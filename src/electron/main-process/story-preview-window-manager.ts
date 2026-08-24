@@ -40,7 +40,7 @@ import {
 	releaseStoryPreviewPackage,
 	releaseStoryPreviewStateCleanup
 } from './story-preview-protocol';
-import {canonicalPreviewFormatAdmission} from '../../routes/story-preview-sugarcube';
+import {canonicalPreviewFormatAdmission} from '../../routes/story-preview-format';
 import {instrumentPreviewHtml} from '../../routes/story-preview-contract';
 
 export const maxManagedStoryPreviewWindows = 32;
@@ -930,6 +930,25 @@ export function createStoryPreviewWindowManager(
 		);
 	}
 
+	function exactHarloweGenerationForFrame(
+		session: PreviewSession,
+		frameUrl: string | undefined
+	) {
+		if (!frameUrl) return undefined;
+		const generation =
+			session.candidate && sameOrigin(frameUrl, session.candidate.url)
+				? session.candidate
+				: sameOrigin(frameUrl, session.current.url)
+					? session.current
+					: undefined;
+		const admission = generation?.descriptor.admission;
+
+		return admission?.kind === 'builtin-sha256' &&
+			admission.format === 'Harlowe'
+			? generation
+			: undefined;
+	}
+
 	function installWindowPolicy(session: PreviewSession) {
 		const contents = session.window.webContents;
 
@@ -946,6 +965,33 @@ export function createStoryPreviewWindowManager(
 			// Restrict only the direct app-owned story iframe. Descendant frames
 			// remain browser-compatible for HTTPS embeds.
 			if (details.frame?.parent === contents.mainFrame) {
+				const exactHarloweGeneration = exactHarloweGenerationForFrame(
+					session,
+					details.frame.url
+				);
+
+				// A WebFrameMain and its renderer-visible WindowProxy survive native
+				// document navigation. Exact Harlowe authority cannot follow that
+				// stable frame identity, so managed previews remount through the shell
+				// instead of allowing story-controlled document replacement.
+				if (exactHarloweGeneration && details.isSameDocument !== true) {
+					details.preventDefault();
+					if (!allowsPackageNavigation(session, details.url)) {
+						maybeOpenExternal(details.url);
+					}
+					const candidate = session.candidate;
+
+					if (candidate === exactHarloweGeneration) {
+						void rollbackCandidate(
+							session,
+							candidate,
+							new Error(
+								'Replacement story preview attempted a native document navigation.'
+							)
+						);
+					}
+					return;
+				}
 				if (!allowsPackageNavigation(session, details.url)) {
 					details.preventDefault();
 					maybeOpenExternal(details.url);

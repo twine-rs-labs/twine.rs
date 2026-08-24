@@ -182,3 +182,214 @@ test('bundled SugarCube profile endpoints retain exact admission offline', async
 		await preview.close();
 	}
 });
+
+test('bundled Harlowe retains exact debugger admission offline', async ({
+	context,
+	page
+}) => {
+	test.setTimeout(120_000);
+	await installServiceWorker(page);
+	await context.setOffline(true);
+	await page.goto(`${appUrl}/#/new-project`);
+	await expect(page.getByRole('heading', {name: 'New Project'})).toBeVisible();
+	await page.getByLabel('Project name').fill('Offline exact Harlowe');
+	await page
+		.locator('label')
+		.filter({hasText: 'Story format'})
+		.getByRole('combobox')
+		.selectOption({label: 'Harlowe 3.3.9'});
+	await page
+		.getByRole('tab')
+		.filter({hasText: /^Text$/})
+		.click();
+	await page.getByRole('button', {name: 'Create Project'}).click();
+	await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
+	await setPassageText(page, 'Offline exact Harlowe marker.');
+	await context.addInitScript(() => {
+		if (window !== window.top) return;
+		const target = window as typeof window & {
+			__harloweBootstrapMessages?: unknown[];
+		};
+		const NativeMessageChannel = window.MessageChannel;
+
+		target.__harloweBootstrapMessages = [];
+		window.MessageChannel = function () {
+			const channel = new NativeMessageChannel();
+
+			channel.port1.addEventListener('message', event => {
+				if (
+					event.data?.source === 'twine.rs.preview.bridge' &&
+					event.data?.type === 'debugger-bootstrap-ready'
+				) {
+					target.__harloweBootstrapMessages!.push(event.data);
+				}
+			});
+			channel.port1.start();
+			return channel;
+		} as typeof MessageChannel;
+		window.addEventListener('message', event => {
+			if (
+				event.data?.source === 'twine.rs.preview.bridge' &&
+				event.data?.type === 'debugger-bootstrap-arm'
+			) {
+				target.__harloweBootstrapMessages!.push(event.data);
+			}
+		});
+	});
+
+	const [preview] = await Promise.all([
+		context.waitForEvent('page'),
+		page
+			.getByRole('button', {name: 'Test From Here', exact: true})
+			.first()
+			.click()
+	]);
+	const storyBody = preview
+		.frameLocator('iframe[title="Story test preview"]')
+		.locator('body');
+
+	await expect(storyBody).toContainText('Offline exact Harlowe marker.', {
+		timeout: 20_000
+	});
+	await preview.getByRole('button', {name: 'Debugger'}).click();
+	const inspector = preview.getByRole('region', {
+		name: 'Runtime debugger inspector'
+	});
+
+	await expect(inspector).toContainText('Adapter: harlowe-3.3.9');
+	await expect(inspector).toContainText('Reliability: exact-version');
+	await expect(inspector.getByText('Start', {exact: true})).toBeVisible();
+	expect(
+		await preview.evaluate(() => {
+			const messages = (
+				window as typeof window & {
+					__harloweBootstrapMessages?: Array<{
+						bootstrapChallenge?: string;
+						type?: string;
+					}>;
+				}
+			).__harloweBootstrapMessages;
+
+			return {
+				arm: messages?.find(
+					message => message.type === 'debugger-bootstrap-arm'
+				),
+				ready: messages?.find(
+					message => message.type === 'debugger-bootstrap-ready'
+				)
+			};
+		})
+	).toEqual({
+		arm: expect.not.objectContaining({bootstrapChallenge: expect.anything()}),
+		ready: expect.objectContaining({
+			bootstrapChallenge: expect.stringMatching(/^[0-9a-f]{64}$/)
+		})
+	});
+	const bootstrapBeforeNavigation = await preview.evaluate(() => {
+		const messages = (
+			window as typeof window & {
+				__harloweBootstrapMessages?: Array<{
+					bootstrapChallenge?: string;
+					type?: string;
+				}>;
+			}
+		).__harloweBootstrapMessages;
+
+		return {
+			armCount:
+				messages?.filter(message => message.type === 'debugger-bootstrap-arm')
+					.length ?? 0,
+			readyChallenges:
+				messages
+					?.filter(message => message.type === 'debugger-bootstrap-ready')
+					.map(message => message.bootstrapChallenge)
+					.filter((value): value is string => typeof value === 'string') ?? []
+		};
+	});
+
+	await preview.evaluate(() => {
+		const frame = document.querySelector<HTMLIFrameElement>(
+			'iframe[title="Story test preview"]'
+		);
+
+		if (!frame) throw new Error('The Harlowe preview frame is unavailable.');
+		const target = window as typeof window & {
+			__harloweWindowBeforeNavigation?: Window | null;
+		};
+
+		target.__harloweWindowBeforeNavigation = frame.contentWindow;
+		frame.srcdoc = frame.srcdoc;
+	});
+	await expect(storyBody).toContainText('Offline exact Harlowe marker.', {
+		timeout: 20_000
+	});
+	await preview.waitForTimeout(1000);
+	const bootstrapAfterNavigation = await preview.evaluate(() => {
+		const target = window as typeof window & {
+			__harloweBootstrapMessages?: Array<{
+				bootstrapChallenge?: string;
+				type?: string;
+			}>;
+			__harloweWindowBeforeNavigation?: Window | null;
+		};
+		const frame = document.querySelector<HTMLIFrameElement>(
+			'iframe[title="Story test preview"]'
+		);
+		const challenges =
+			target.__harloweBootstrapMessages
+				?.filter(message => message.type === 'debugger-bootstrap-ready')
+				.map(message => message.bootstrapChallenge)
+				.filter((value): value is string => typeof value === 'string') ?? [];
+
+		return {
+			armCount:
+				target.__harloweBootstrapMessages?.filter(
+					message => message.type === 'debugger-bootstrap-arm'
+				).length ?? 0,
+			readyChallenges: challenges,
+			sameWindow:
+				frame?.contentWindow === target.__harloweWindowBeforeNavigation
+		};
+	});
+
+	expect(bootstrapAfterNavigation.sameWindow).toBe(true);
+	expect(bootstrapAfterNavigation.armCount).toBeGreaterThan(
+		bootstrapBeforeNavigation.armCount
+	);
+	expect(bootstrapAfterNavigation.readyChallenges).toEqual(
+		bootstrapBeforeNavigation.readyChallenges
+	);
+
+	await preview.getByRole('button', {name: 'Reload'}).click();
+	await expect(storyBody).toContainText('Offline exact Harlowe marker.', {
+		timeout: 20_000
+	});
+	await expect
+		.poll(() =>
+			preview.evaluate(before => {
+				const messages = (
+					window as typeof window & {
+						__harloweBootstrapMessages?: Array<{
+							bootstrapChallenge?: string;
+							type?: string;
+						}>;
+					}
+				).__harloweBootstrapMessages;
+
+				return (
+					messages
+						?.filter(message => message.type === 'debugger-bootstrap-ready')
+						.map(message => message.bootstrapChallenge)
+						.filter(
+							(value): value is string =>
+								typeof value === 'string' &&
+								!before.readyChallenges.includes(value)
+						).length ?? 0
+				);
+			}, bootstrapBeforeNavigation)
+		)
+		.toBeGreaterThan(0);
+	await preview.getByRole('button', {name: 'Debugger'}).click();
+	await expect(inspector).toContainText('Adapter: harlowe-3.3.9');
+	await preview.close();
+});

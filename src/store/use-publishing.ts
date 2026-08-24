@@ -51,7 +51,7 @@ import {
 	previewFormatAdmissionForBuild,
 	snapshotPreviewStoryFormat,
 	type PreviewFormatAdmission
-} from '../routes/story-preview-sugarcube';
+} from '../routes/story-preview-format';
 
 export const referencedMediaEmbeddingLimits = {
 	maxFileBytes: 25 * 1024 * 1024,

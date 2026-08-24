@@ -11,9 +11,10 @@ import {
 import type {StoryPreviewDebuggerCapability} from '../src/routes/story-preview-debugger-protocol';
 import {
 	NO_PREVIEW_FORMAT_ADMISSION,
-	SUGARCUBE_COMPATIBILITY,
 	type PreviewFormatAdmission
-} from '../src/routes/story-preview-sugarcube';
+} from '../src/routes/story-preview-format';
+import {HARLOWE_3_3_9_COMPATIBILITY} from '../src/routes/story-preview-harlowe';
+import {SUGARCUBE_COMPATIBILITY} from '../src/routes/story-preview-sugarcube';
 
 const appUrl = 'http://127.0.0.1:5173';
 
@@ -34,15 +35,29 @@ function admissionForFormat(
 		candidate => format === 'SugarCube' && candidate.version === formatVersion
 	);
 
-	return entry
-		? {
-				adapterId: entry.adapterId,
-				format: 'SugarCube',
-				kind: 'builtin-sha256',
-				sourceSha256: entry.sourceSha256,
-				version: entry.version
-			}
-		: NO_PREVIEW_FORMAT_ADMISSION;
+	if (entry) {
+		return {
+			adapterId: entry.adapterId,
+			format: 'SugarCube',
+			kind: 'builtin-sha256',
+			sourceSha256: entry.sourceSha256,
+			version: entry.version
+		};
+	}
+	if (
+		format === 'Harlowe' &&
+		formatVersion === HARLOWE_3_3_9_COMPATIBILITY.version
+	) {
+		return {
+			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+			format: 'Harlowe',
+			kind: 'builtin-sha256',
+			sourceSha256: HARLOWE_3_3_9_COMPATIBILITY.sourceSha256,
+			version: HARLOWE_3_3_9_COMPATIBILITY.version
+		};
+	}
+
+	return NO_PREVIEW_FORMAT_ADMISSION;
 }
 
 function formatSource(id: string) {
@@ -76,7 +91,8 @@ function publishedStory(
 	formatId: string,
 	format: string,
 	formatVersion: string,
-	passageText = 'Ready'
+	passageText = 'Ready',
+	extraBeforeAuthor = ''
 ) {
 	const name = `Runtime Debugger ${formatId}`;
 	const storyData = [
@@ -86,6 +102,7 @@ function publishedStory(
 		' ifid="11111111-2222-4333-8444-555555555555"',
 		' options="" tags="" zoom="1" hidden>',
 		'<style role="stylesheet" id="twine-user-stylesheet" type="text/twine-css"></style>',
+		extraBeforeAuthor,
 		'<script role="script" id="twine-user-script" type="text/twine-javascript"></script>',
 		'<tw-passagedata pid="1" name="Start" tags="" position="0,0" size="100,100">',
 		escapePassageText(passageText),
@@ -159,11 +176,53 @@ async function mountStory(
 	await page.setContent('<iframe id="runtime-debugger-story"></iframe>');
 	await page.evaluate(() => {
 		const target = window as typeof window & {
+			__runtimeDebuggerChannels: MessagePort[];
 			__runtimeDebuggerMessages: StoryPreviewBridgeMessage[];
 		};
+		const nativePostMessage = window.postMessage;
+		const nativeReflectApply = Reflect.apply;
+		target.__runtimeDebuggerChannels = [];
 		target.__runtimeDebuggerMessages = [];
 		window.addEventListener('message', event => {
 			target.__runtimeDebuggerMessages.push(event.data);
+			if (
+				event.data?.source === 'twine.rs.preview.bridge' &&
+				event.data?.type === 'debugger-bootstrap-arm' &&
+				event.source
+			) {
+				const bytes = new Uint8Array(32);
+
+				crypto.getRandomValues(bytes);
+				const bootstrapChallenge = Array.from(bytes, value =>
+					value.toString(16).padStart(2, '0')
+				).join('');
+				const channel = new MessageChannel();
+
+				target.__runtimeDebuggerChannels.push(channel.port1);
+				channel.port1.addEventListener('message', portEvent => {
+					target.__runtimeDebuggerMessages.push(portEvent.data);
+				});
+				channel.port1.start();
+				nativeReflectApply(nativePostMessage, event.source, [
+					{
+						adapterId: event.data.adapterId,
+						protocolVersion: event.data.protocolVersion,
+						sessionId: event.data.sessionId,
+						source: 'twine.rs.preview.host-command',
+						type: 'debugger-bootstrap-port'
+					},
+					'*',
+					[channel.port2]
+				]);
+				channel.port1.postMessage({
+					adapterId: event.data.adapterId,
+					bootstrapChallenge,
+					protocolVersion: event.data.protocolVersion,
+					sessionId: event.data.sessionId,
+					source: 'twine.rs.preview.host-command',
+					type: 'debugger-bootstrap-challenge'
+				});
+			}
 		});
 	});
 	await page.locator('#runtime-debugger-story').evaluate((element, srcDoc) => {
@@ -183,6 +242,87 @@ async function mountStory(
 
 	return frame;
 }
+
+test('foreign-content tree adoption is excluded from exact Harlowe admission', async ({
+	browserName,
+	page
+}) => {
+	test.skip(browserName !== 'chromium', 'Chromium parser contract probe.');
+	const fixtures = [
+		'<svg><noscript><div role="script" id="foreign-svg">SVG</div></noscript></svg>',
+		'<math><noscript><section><div role="script" id="foreign-math">MathML</div></section></noscript></math>'
+	];
+	const domParserDescriptor = Object.getOwnPropertyDescriptor(
+		globalThis,
+		'DOMParser'
+	);
+
+	try {
+		Object.defineProperty(globalThis, 'DOMParser', {
+			configurable: true,
+			value: undefined
+		});
+		for (const [index, fixture] of fixtures.entries()) {
+			const source = publishedStory(
+				'harlowe-3.3.9',
+				'Harlowe',
+				'3.3.9',
+				'Ready',
+				fixture
+			);
+			const sessionId = `foreign-harlowe-${index}`;
+			const exact = instrumentPreviewHtml(source, sessionId, {
+				admission: admissionForFormat('Harlowe', '3.3.9'),
+				enableHarloweSessionStorageFallback: true
+			});
+			const generic = instrumentPreviewHtml(source, sessionId, {
+				admission: NO_PREVIEW_FORMAT_ADMISSION,
+				enableHarloweSessionStorageFallback: true
+			});
+
+			expect(exact.admission).toEqual({kind: 'none'});
+			expect(exact.html).toBe(generic.html);
+			expect(exact.html).not.toContain(
+				'id="twine-rs-harlowe-debugger-bootstrap"'
+			);
+		}
+	} finally {
+		if (domParserDescriptor) {
+			Object.defineProperty(globalThis, 'DOMParser', domParserDescriptor);
+		} else {
+			delete (globalThis as {DOMParser?: typeof DOMParser}).DOMParser;
+		}
+	}
+
+	await page.goto(appUrl);
+	const adopted = await page.evaluate(() =>
+		['svg', 'math'].map(kind => {
+			const parsed = new DOMParser().parseFromString(
+				`<tw-storydata><${kind}><noscript><section><div role="script" id="probe-${kind}">x</div></section></noscript></${kind}><script role="script" id="twine-user-script" type="text/twine-javascript"></script></tw-storydata>`,
+				'text/html'
+			);
+			const probe = parsed.querySelector(`#probe-${kind}`);
+
+			return {
+				closestNoscript: Boolean(probe?.parentElement?.closest('noscript')),
+				kind,
+				namespace: probe?.namespaceURI,
+				parent: probe?.parentElement?.tagName,
+				roleCount: parsed.querySelectorAll('[role="script"]').length
+			};
+		})
+	);
+
+	expect(adopted).toEqual(
+		['svg', 'math'].map(kind => ({
+			closestNoscript: false,
+			kind,
+			namespace: 'http://www.w3.org/1999/xhtml',
+			parent: 'TW-STORYDATA',
+			roleCount: 2
+		}))
+	);
+});
 
 function observedSnapshot(
 	items: StoryPreviewBridgeMessage[],
@@ -278,6 +418,18 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 			formatVersion: item.formatVersion,
 			protocolVersion: 1
 		});
+		if (item.format === 'Harlowe') {
+			expect(hello?.reliability).toBe('exact-version');
+			expect(captured).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({type: 'debugger-bootstrap-arm'}),
+					expect.objectContaining({
+						bootstrapChallenge: expect.stringMatching(/^[0-9a-f]{64}$/),
+						type: 'debugger-bootstrap-ready'
+					})
+				])
+			);
+		}
 		expect(Object.keys(snapshot?.sections ?? {})).toEqual(item.capabilities);
 		if (item.format === 'SugarCube') {
 			expect(snapshot).toMatchObject({

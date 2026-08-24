@@ -27,6 +27,14 @@ type RunningApp = {
 };
 
 interface PreviewTestWindow extends Window {
+	blockHarloweCandidateArm?: boolean;
+	blockedHarloweArmCount?: number;
+	blockedNativeHarloweReadyCount?: number;
+	candidateHarloweSnapshotCount?: number;
+	forgedHarloweReadinessCount?: number;
+	nativeHarloweNavigationAttemptCount?: number;
+	replayedStaleHarloweReadinessCount?: number;
+	replayStaleHarloweReadiness?: boolean;
 	twinePerformance?: {
 		snapshot(): Promise<unknown>;
 	};
@@ -1089,6 +1097,94 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		running = await launchPackagedApp(executablePath, 'play-debug');
 		const {app, page} = running;
 
+		await app.context().addInitScript(() => {
+			if (window !== window.top) return;
+			const target = window as PreviewTestWindow;
+			const NativeMessageChannel = window.MessageChannel;
+			let candidateSessionId: string | undefined;
+			let candidateWindow: Window | null = null;
+
+			window.MessageChannel = function () {
+				const channel = new NativeMessageChannel();
+
+				channel.port1.addEventListener('message', event => {
+					const stagedFrame = document.querySelector<HTMLIFrameElement>(
+						'.story-preview-route__frame-shell--staging iframe.story-preview-route__frame'
+					);
+
+					if (
+						!target.replayStaleHarloweReadiness ||
+						!stagedFrame ||
+						event.data?.source !== 'twine.rs.preview.bridge' ||
+						event.data?.type !== 'debugger-bootstrap-ready'
+					) {
+						return;
+					}
+
+					target.blockedNativeHarloweReadyCount! += 1;
+					event.stopImmediatePropagation();
+					const staleCandidateReady = event.data;
+
+					target.nativeHarloweNavigationAttemptCount! += 1;
+					stagedFrame.src = stagedFrame.src;
+					setTimeout(() => {
+						channel.port1.dispatchEvent(
+							new MessageEvent('message', {data: staleCandidateReady})
+						);
+						target.replayedStaleHarloweReadinessCount! += 1;
+					}, 0);
+				});
+				channel.port1.start();
+				return channel;
+			} as typeof MessageChannel;
+
+			window.addEventListener(
+				'message',
+				(event: MessageEvent) => {
+					const committedFrame = document.querySelector<HTMLIFrameElement>(
+						'.story-preview-route__frame-shell:not(.story-preview-route__frame-shell--staging) iframe.story-preview-route__frame'
+					);
+					if (!target.blockHarloweCandidateArm) return;
+
+					if (
+						candidateWindow &&
+						event.source === candidateWindow &&
+						event.data?.source === 'twine.rs.preview.bridge' &&
+						event.data?.type === 'debugger-snapshot' &&
+						event.data?.sections?.currentPassage?.state === 'complete'
+					) {
+						target.candidateHarloweSnapshotCount! += 1;
+						window.dispatchEvent(
+							new MessageEvent('message', {
+								data: {
+									adapterId: 'harlowe-3.3.9',
+									bootstrapChallenge: 'f'.repeat(64),
+									protocolVersion: 1,
+									sessionId: candidateSessionId,
+									source: 'twine.rs.preview.bridge',
+									type: 'debugger-bootstrap-ready'
+								},
+								source: candidateWindow
+							})
+						);
+						target.forgedHarloweReadinessCount! += 1;
+					}
+					if (
+						committedFrame &&
+						event.source !== committedFrame.contentWindow &&
+						event.data?.source === 'twine.rs.preview.bridge' &&
+						event.data?.type === 'debugger-bootstrap-arm'
+					) {
+						candidateSessionId = event.data.sessionId;
+						candidateWindow = event.source as Window;
+						target.blockedHarloweArmCount! += 1;
+						event.stopImmediatePropagation();
+					}
+				},
+				true
+			);
+		});
+
 		await createProject(page, {
 			format: 'Harlowe 3.3.9',
 			name: 'Managed Play Debug',
@@ -1148,7 +1244,7 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		});
 		await expect(debuggerInspector).toContainText('Format: Harlowe 3.3.9');
 		await expect(debuggerInspector).toContainText('Adapter: harlowe-3.3.9');
-		await expect(debuggerInspector).toContainText('Reliability: best-effort');
+		await expect(debuggerInspector).toContainText('Reliability: exact-version');
 		await expect(
 			debuggerInspector.getByRole('heading', {name: 'Current passage'})
 		).toBeVisible();
@@ -1292,6 +1388,126 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 
 		const firstPackage = await previewOrigin(preview);
 		const previewCount = previewPages(app).length;
+		await preview.evaluate(() => {
+			const target = window as PreviewTestWindow;
+
+			target.blockHarloweCandidateArm = true;
+			target.blockedHarloweArmCount = 0;
+			target.candidateHarloweSnapshotCount = 0;
+			target.forgedHarloweReadinessCount = 0;
+			const committedFrame = document.querySelector<HTMLIFrameElement>(
+				'.story-preview-route__frame-shell:not(.story-preview-route__frame-shell--staging) iframe.story-preview-route__frame'
+			);
+
+			if (!committedFrame) {
+				throw new Error('The committed Harlowe frame is unavailable.');
+			}
+		});
+
+		await preview.getByRole('button', {name: 'Test Current'}).click();
+		const blockedCandidate = preview.locator(
+			'.story-preview-route__frame-shell--staging iframe.story-preview-route__frame'
+		);
+
+		await expect(blockedCandidate).toHaveCount(1);
+		const blockedCandidateUrl = await blockedCandidate.getAttribute('src');
+
+		expect(blockedCandidateUrl).not.toBeNull();
+		await expect
+			.poll(() =>
+				preview.evaluate(
+					() => (window as PreviewTestWindow).blockedHarloweArmCount ?? 0
+				)
+			)
+			.toBeGreaterThan(0);
+		await expect
+			.poll(() =>
+				preview.evaluate(
+					() => (window as PreviewTestWindow).candidateHarloweSnapshotCount ?? 0
+				)
+			)
+			.toBeGreaterThan(0);
+		await expect
+			.poll(() =>
+				preview.evaluate(
+					() => (window as PreviewTestWindow).forgedHarloweReadinessCount ?? 0
+				)
+			)
+			.toBeGreaterThan(0);
+		await expect
+			.poll(() => protocolStatus(app, blockedCandidateUrl!), {timeout: 30_000})
+			.toBe(404);
+		expect(await previewOrigin(preview)).toEqual(firstPackage);
+		await expectRenderedText(preview, 'Next passage version one.');
+		await expect(blockedCandidate).toHaveCount(0);
+		await preview.evaluate(() => {
+			const target = window as PreviewTestWindow;
+
+			target.blockHarloweCandidateArm = false;
+			delete target.blockedHarloweArmCount;
+			delete target.candidateHarloweSnapshotCount;
+			delete target.forgedHarloweReadinessCount;
+		});
+
+		await preview.evaluate(() => {
+			const target = window as PreviewTestWindow;
+
+			target.replayStaleHarloweReadiness = true;
+			target.blockedNativeHarloweReadyCount = 0;
+			target.nativeHarloweNavigationAttemptCount = 0;
+			target.replayedStaleHarloweReadinessCount = 0;
+		});
+		await preview.getByRole('button', {name: 'Test Current'}).click();
+		const navigatedCandidate = preview.locator(
+			'.story-preview-route__frame-shell--staging iframe.story-preview-route__frame'
+		);
+
+		await expect(navigatedCandidate).toHaveCount(1);
+		const navigatedCandidateUrl = await navigatedCandidate.getAttribute('src');
+
+		expect(navigatedCandidateUrl).not.toBeNull();
+		await expect
+			.poll(() =>
+				preview.evaluate(
+					() =>
+						(window as PreviewTestWindow).blockedNativeHarloweReadyCount ?? 0
+				)
+			)
+			.toBeGreaterThan(0);
+		await expect
+			.poll(() =>
+				preview.evaluate(
+					() =>
+						(window as PreviewTestWindow).nativeHarloweNavigationAttemptCount ??
+						0
+				)
+			)
+			.toBeGreaterThan(0);
+		await expect
+			.poll(() =>
+				preview.evaluate(
+					() =>
+						(window as PreviewTestWindow).replayedStaleHarloweReadinessCount ??
+						0
+				)
+			)
+			.toBeGreaterThan(0);
+		await expect
+			.poll(() => protocolStatus(app, navigatedCandidateUrl!), {
+				timeout: 30_000
+			})
+			.toBe(404);
+		expect(await previewOrigin(preview)).toEqual(firstPackage);
+		await expectRenderedText(preview, 'Next passage version one.');
+		await expect(navigatedCandidate).toHaveCount(0);
+		await preview.evaluate(() => {
+			const target = window as PreviewTestWindow;
+
+			target.replayStaleHarloweReadiness = false;
+			delete target.blockedNativeHarloweReadyCount;
+			delete target.nativeHarloweNavigationAttemptCount;
+			delete target.replayedStaleHarloweReadinessCount;
+		});
 
 		await preview.getByRole('button', {name: 'Test Current'}).click();
 		const currentReplacement = await waitForReplacement(

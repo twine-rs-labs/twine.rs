@@ -15,9 +15,10 @@ that remains for later prereleases and stable releases.
 
 ## Priority order
 
-1. [Performance optimization](./performance.md)
-2. [Product depth and legacy retirement](./product.md)
-3. [Post-beta release validation](./release.md)
+1. [Exact-version Harlowe 3.3.9 debugger read support](./harlowe-debugger-exact-support.md)
+2. [Performance optimization](./performance.md)
+3. [Product depth and legacy retirement](./product.md)
+4. [Post-beta release validation](./release.md)
 
 The order is deliberate. The Rust ownership and benchmark foundations now
 exist, so profiling and measured optimization should precede another large

@@ -1,4 +1,6 @@
 import type {WebContents} from 'electron';
+import {readFileSync} from 'node:fs';
+import path from 'node:path';
 import {storyPreviewIpcChannels} from '../../preview-ipc-channels';
 import type {
 	NativeStoryPreviewCommandResult,
@@ -13,6 +15,7 @@ import {
 	SUGARCUBE_COMPATIBILITY,
 	sugarCubeRestartProfileForAdapter
 } from '../../../routes/story-preview-sugarcube';
+import {HARLOWE_3_3_9_COMPATIBILITY} from '../../../routes/story-preview-harlowe';
 
 type Listener = (...args: any[]) => void;
 type IpcHandler = (...args: any[]) => any;
@@ -190,6 +193,41 @@ function exactSugarCubeBuild(version = '2.31.0') {
 			}
 		}),
 		html: `<html><head></head><body><tw-storydata format="SugarCube" format-version="${version}"></tw-storydata><script id="script-sugarcube">${restartProfile.engineRestartSource};${restartProfile.startupFragment}</script></body></html>`
+	});
+}
+
+function exactHarloweBuild(bridgeSessionId = 'bridge-1') {
+	const raw = readFileSync(
+		path.resolve('public/story-formats/harlowe-3.3.9/format.js'),
+		'utf8'
+	);
+	let properties: {source?: unknown} | undefined;
+
+	new Function('window', raw)({
+		storyFormat(value: {source?: unknown}) {
+			properties = value;
+		}
+	});
+	if (typeof properties?.source !== 'string') {
+		throw new Error('Bundled Harlowe fixture has no source.');
+	}
+	const storyData =
+		'<tw-storydata name="Story" startnode="1" creator="twine.rs" creator-version="0.2.0" format="Harlowe" format-version="3.3.9" ifid="00000000-0000-4000-8000-000000000001" options="" tags="" zoom="1" hidden><style role="stylesheet" id="twine-user-stylesheet" type="text/twine-css"></style><script role="script" id="twine-user-script" type="text/twine-javascript"></script><tw-passagedata pid="1" name="Start" tags="" position="0,0" size="100,100">Story</tw-passagedata></tw-storydata>';
+
+	return build({
+		descriptor: descriptor({
+			admission: {
+				adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
+				format: 'Harlowe',
+				kind: 'builtin-sha256',
+				sourceSha256: HARLOWE_3_3_9_COMPATIBILITY.sourceSha256,
+				version: HARLOWE_3_3_9_COMPATIBILITY.version
+			},
+			bridgeSessionId
+		}),
+		html: properties.source
+			.replace(/{{STORY_NAME}}/g, 'Story')
+			.replace(/{{STORY_DATA}}/g, storyData)
 	});
 }
 
@@ -1149,6 +1187,63 @@ describe('story preview window manager', () => {
 		expect(harness.openExternal).toHaveBeenCalledWith(
 			'https://example.com/popup'
 		);
+	});
+
+	it('blocks exact Harlowe native document navigation and rolls back a candidate', async () => {
+		const harness = testManager();
+		const preview = await openReadyPreview(
+			harness,
+			undefined,
+			exactHarloweBuild()
+		);
+		const replacing = harness.manager.replace(
+			preview.owner,
+			preview.launch.descriptor.sessionId,
+			1,
+			exactHarloweBuild('bridge-2')
+		);
+
+		await flushPromises();
+		const replacement = preview.window.webContents.send.mock.calls.findLast(
+			([channel]) => channel === storyPreviewIpcChannels.replacement
+		)?.[1].replacement;
+
+		expect(replacement.descriptor.admission).toEqual(
+			exactHarloweBuild('bridge-2').descriptor.admission
+		);
+		const navigate = preview.window.webContents.listeners.get(
+			'will-frame-navigate'
+		)![0];
+		const candidateFrame = {
+			parent: preview.window.webContents.mainFrame,
+			url: replacement.url
+		};
+		const navigation = {
+			frame: candidateFrame,
+			isMainFrame: false,
+			isSameDocument: false,
+			preventDefault: jest.fn(),
+			url: replacement.url
+		};
+		const rejected = expect(replacing).rejects.toThrow(
+			'native document navigation'
+		);
+
+		navigate(navigation);
+		expect(navigation.preventDefault).toHaveBeenCalledTimes(1);
+		await rejected;
+		expect(harness.releasePackage).toHaveBeenCalledWith(replacement.url);
+		await expect(
+			harness.ipcHandlers.get(storyPreviewIpcChannels.frameLoaded)!(
+				preview.event,
+				2
+			)
+		).rejects.toThrow('stale generation');
+		expect(
+			harness.ipcHandlers.get(storyPreviewIpcChannels.getInitialState)!(
+				preview.event
+			)
+		).toMatchObject({descriptor: {generation: 1}, url: preview.launch.url});
 	});
 
 	it('broadcasts appearance without rebuilding or exposing another owner', async () => {

@@ -516,6 +516,7 @@ test('tracks Harlowe passage navigation in a sandboxed browser preview', async (
 	});
 	await expect(debuggerInspector).toContainText('Format: Harlowe 3.3.9');
 	await expect(debuggerInspector).toContainText('Adapter: harlowe-3.3.9');
+	await expect(debuggerInspector).toContainText('Reliability: exact-version');
 	await expect(
 		debuggerInspector.getByText('Start', {exact: true})
 	).toBeVisible();

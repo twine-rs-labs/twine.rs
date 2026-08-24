@@ -2,8 +2,8 @@
 
 Status: current
 Owner: frontend and story-format maintainers
-Last verified: 2026-08-24
-Source of truth: SugarCube compatibility matrix, preview build admission,
+Last verified: 2026-08-25
+Source of truth: format compatibility matrices, preview build admission,
 instrumentation, debugger protocol registry, and shared preview runtime reducer
 
 The shared browser and managed-desktop preview surface has an additive,
@@ -20,8 +20,8 @@ classification. The host accepts the first valid hello for a preview runtime
 model and ignores snapshots received before negotiation, messages for another
 adapter or protocol version, and later handshakes.
 
-Exact SugarCube negotiation is authorized before the frame exists. The host
-uses this one-way authority chain:
+Exact SugarCube and Harlowe negotiation begins with host authorization before
+the frame exists. The host uses this one-way authority chain:
 
 ```text
 canonical built-in record -> immutable loaded-source snapshot -> synchronous build
@@ -33,19 +33,35 @@ The source snapshot retains the selected record identity and loaded
 `name`/`version`/`source`; the build clone and SHA use those same values. A
 non-executing HTML parse requires exactly one effective `tw-storydata` tuple.
 The authoritative literal rows, including every adapter ID, canonical URL,
-source digest, and read/Restart profile assignment, live in
-[`story-preview-sugarcube.ts`](../../src/routes/story-preview-sugarcube.ts).
+source digest, and read-profile assignment, live in the format-specific
+[`story-preview-sugarcube.ts`](../../src/routes/story-preview-sugarcube.ts) and
+[`story-preview-harlowe.ts`](../../src/routes/story-preview-harlowe.ts)
+modules; cross-format admission is exposed by
+[`story-preview-format.ts`](../../src/routes/story-preview-format.ts).
 The exact adapter is admitted only when the selected non-user-added record is
 the unique canonical and installed built-in, its URL and loaded identity match,
 and the decoded UTF-8 source SHA matches the literal compatibility matrix.
 Missing, malformed, ambiguous, changed, user-added, or unbundled inputs become
-generic.
+generic. Active serialized SVG or MathML is also outside exact admission for
+every adapter because the lightweight Electron scanner cannot reproduce HTML's
+foreign-content breakout and integration-point rules. Escaped foreign-looking
+story text and foreign markup inside inert templates remain admissible.
 
-Serialized admission has an exact own-field schema and is validated again at
-the browser/Electron boundary. Runtime DOM attributes, story-supplied adapter
-IDs, and command messages cannot create, change, or revoke admission. Once an
-exact SugarCube build is admitted, its hello uses the host-selected descriptor;
-an unadmitted SugarCube tuple always stays generic.
+Harlowe additionally requires structural bootstrap placement and runtime State
+attestation before its exact descriptor becomes ready. Both raw and DOM checks
+count every effective document-wide `[role=script]` HTML element that Harlowe
+would evaluate. Descendants in template content and descendants parsed as raw
+text inside ordinary HTML `noscript` elements are excluded; a role-bearing
+`template` or `noscript` element itself still counts. The shared foreign-content
+exclusion prevents apparent SVG/MathML descendants from being adopted into an
+unaccounted effective HTML position. The canonical author and generated
+bootstrap remain exact direct-child script elements. Serialized admission has
+an exact own-field schema and is validated again at the browser/Electron
+boundary. Runtime DOM attributes, story-supplied adapter IDs, and command
+messages cannot create, change, or revoke admission. Once an exact build is
+admitted, its hello uses the host-selected descriptor. An unadmitted SugarCube
+tuple always stays generic; an unadmitted Harlowe 3.3.9 tuple retains its
+existing best-effort current-passage and Restart behavior.
 
 Messages are handled frame-first: Clear State acknowledgements are separate;
 the event source is identified as current, staged, or unknown; unknown sources
@@ -69,7 +85,8 @@ a nearby version.
 | SugarCube 2.37.0, 2.37.3                                               | Exact version, read profile 2.37      | Current passage, story variables, temporary variables, visited passages |
 | Snowman 1.5.0 and 2.1.1                                                | Exact version                         | Current passage, story variables, visited passages                      |
 | Chapbook 2.3.1                                                         | Best effort                           | Current passage only                                                    |
-| Harlowe 3.3.9                                                          | Best effort                           | Current passage only                                                    |
+| Admitted bundled Harlowe 3.3.9                                         | Exact version, State profile 3.3.9    | Current passage only                                                    |
+| Unadmitted or altered Harlowe 3.3.9                                    | Best effort                           | Current passage only                                                    |
 | Generic, including SugarCube 1, user-added SugarCube, and unbundled v2 | Best effort                           | Current passage only                                                    |
 
 Exact-version means the adapter targets a verified runtime surface for that
@@ -98,6 +115,30 @@ invoked. A missing or changed getter makes only its section `unavailable`;
 exact current-passage inspection does not fall back to visible DOM or legacy
 runtime discovery. Read drift does not change the admitted adapter and does not
 disable an independently valid Restart profile.
+
+The admitted bundled Harlowe 3.3.9 artifact receives one inert Story
+JavaScript bootstrap immediately before its canonical author script. That
+bootstrap requires the private `state` module and invokes a non-writable,
+non-configurable, one-shot bridge callback. The bridge accepts State only when
+the object is frozen and its own `passage` getter and `on` function match the
+checked-in descriptor flags and exact bundled function sources. It retains
+State and the passage getter only inside the bridge closure, registers the
+audited `forward`, `back`, and `load` events through captured intrinsics, and
+then marks State attested. In response to the early bridge arm, the parent
+transfers a private `MessagePort` which the bridge consumes before story
+listeners can observe it. The parent creates a high-entropy challenge for each
+actual iframe document load and sends it only over that port; the attestation
+closure must return readiness over the same port. A readiness response received
+while the document is still parsing is provisional: the iframe `load` event
+rotates the challenge, and only the loaded document's fresh response can
+acknowledge that load. Native navigation destroys the document-owned endpoint,
+so the preserved `WindowProxy` cannot receive the new challenge or return
+readiness. Window messages, public session, adapter, and protocol values are
+non-authoritative. Empty startup passage is a valid ready state whose
+current-passage section remains unavailable until the first forward. Exact
+reads never fall back to DOM, session storage, startnode, or generic discovery;
+redirects still rely on the existing render observation to schedule a new
+capture.
 
 ## Snapshot safety
 
@@ -182,6 +223,22 @@ For managed Electron previews, the renderer sends the raw immutable build and
 admission descriptor. Main validates the descriptor, instruments that exact
 HTML, derives static Restart eligibility from the engine region it stages, and
 returns only the main-owned eligibility in the generation descriptor.
+Exact Harlowe current and candidate frames acknowledge load only after both the
+iframe load event and matching challenge-correlated runtime attestation
+readiness over the bridge's private `MessagePort`. One continuously armed
+parent window listener reads the active current and staged load records through
+refs and establishes each bridge channel; the channel listener remains attached
+through the matching load. Every native iframe `load` creates a fresh
+document-load record and challenge even when navigation preserves the same
+iframe element and `WindowProxy`. A native document replacement destroys the
+child endpoint and therefore cannot reattest; session, generation, React
+reload, and candidate replacement create a new containing identity and channel.
+Until acknowledgement, Electron retains the
+committed package and descriptor; a missing or failed readiness signal follows
+the existing candidate timeout and rollback path. Main also prevents an
+already-loaded exact-Harlowe story frame from replacing its document through
+native navigation; an attempted candidate navigation rolls that candidate back.
+The shell-owned Reload path remounts the expected URL in a new iframe instead.
 
 The narrow Restart marker belongs to a correlated Twine.rs remount. The bridge
 clears `window.name` before SugarCube startup, and the parent clears both its
@@ -196,16 +253,20 @@ and degraded storage backends remain out of scope.
 
 ## Runtime coverage matrix
 
-Artifact authentication and build admission cover all 15 bundled versions.
+Artifact authentication and build admission cover all 15 bundled SugarCube
+versions and bundled Harlowe 3.3.9.
 Real-artifact runtime and instrumentation cover all 15 in Chromium. Firefox
 and WebKit cover profile representatives 2.31.0, 2.32.0, 2.33.1, 2.35.0,
 2.36.0, and 2.37.3. Offline PWA coverage exercises exact admission and static
 negotiation for 2.31.0 and 2.37.3 under the documented
 opaque/degraded-storage boundary. Packaged Electron covers all six profile
 representatives, with Play and non-start Test From Here at the 2.31 and 2.37
-endpoints. Adding a future SugarCube release requires an explicit matrix row,
-canonical source digest, audited read and Restart profile assignment, and
-real-artifact coverage.
+endpoints. Offline PWA and packaged Electron coverage also exercise exact
+Harlowe admission, attestation, current-passage navigation, and candidate
+readiness. Adding a future SugarCube or Harlowe release requires an explicit
+matrix row, canonical decoded-source digest, an audited executable profile,
+hostile-descriptor tests, and real-artifact browser and packaged-runtime
+coverage; nearby versions never inherit the 3.3.9 profile.
 
 Clear State is host-owned and therefore is not an adapter command. Browser
 `srcDoc` previews have an opaque origin and are cleared by detaching and

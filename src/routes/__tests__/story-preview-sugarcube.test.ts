@@ -11,9 +11,9 @@ import {
 	previewFormatAdmissionForHtml,
 	previewFormatAdmissionForBuild,
 	snapshotPreviewStoryFormat,
-	structuralPreviewFormatTuple,
-	SUGARCUBE_COMPATIBILITY
-} from '../story-preview-sugarcube';
+	structuralPreviewFormatTuple
+} from '../story-preview-format';
+import {SUGARCUBE_COMPATIBILITY} from '../story-preview-sugarcube';
 
 type LoadedStoryFormat = Extract<StoryFormat, {loadState: 'loaded'}>;
 
@@ -465,6 +465,50 @@ describe('SugarCube preview serialization and structure boundaries', () => {
 		});
 	});
 
+	it.each([true, false])(
+		'excludes active foreign-content markup from exact admission with DOMParser=%s',
+		useDom => {
+			const nativeDOMParser = globalThis.DOMParser;
+			const tuple =
+				'<tw-storydata format="SugarCube" format-version="2.31.0"></tw-storydata>';
+			const activeForeign = [
+				'<svg><circle></circle></svg>',
+				'<math><mi>x</mi></math>',
+				`<svg><noscript><div>${tuple}</div></noscript></svg>`,
+				`<math><noscript><section>${tuple}</section></noscript></math>`
+			];
+
+			try {
+				if (!useDom) {
+					Object.defineProperty(globalThis, 'DOMParser', {
+						configurable: true,
+						value: undefined
+					});
+				}
+				for (const foreign of activeForeign) {
+					expect(
+						structuralPreviewFormatTuple(
+							storyData('2.31.0').replace('</body>', `${foreign}</body>`)
+						)
+					).toBeUndefined();
+				}
+				expect(
+					structuralPreviewFormatTuple(
+						storyData('2.31.0').replace(
+							'</body>',
+							'<template><svg><circle></circle></svg><math><mi>x</mi></math></template></body>'
+						)
+					)
+				).toEqual({format: 'SugarCube', version: '2.31.0'});
+			} finally {
+				Object.defineProperty(globalThis, 'DOMParser', {
+					configurable: true,
+					value: nativeDOMParser
+				});
+			}
+		}
+	);
+
 	it('binds exact admission to one matching structural tuple', () => {
 		const compatibility = SUGARCUBE_COMPATIBILITY[0];
 		const admission = {
@@ -566,9 +610,7 @@ describe('SugarCube preview serialization and structure boundaries', () => {
 				admission: {kind: 'none'},
 				sugarCubeRestartEligible: false
 			});
-			expect(instrumented.html).toContain(
-				'var FIXED_SUGARCUBE_ADAPTER = undefined'
-			);
+			expect(instrumented.html).toContain('var FIXED_READ_ADAPTER = undefined');
 		} finally {
 			if (domParserDescriptor) {
 				Object.defineProperty(globalThis, 'DOMParser', domParserDescriptor);
