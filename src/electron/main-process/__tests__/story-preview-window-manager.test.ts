@@ -9,6 +9,10 @@ import {
 	type ManagedStoryPreviewBuild,
 	maxManagedStoryPreviewWindows
 } from '../story-preview-window-manager';
+import {
+	SUGARCUBE_COMPATIBILITY,
+	sugarCubeRestartProfileForAdapter
+} from '../../../routes/story-preview-sugarcube';
 
 type Listener = (...args: any[]) => void;
 type IpcHandler = (...args: any[]) => any;
@@ -101,6 +105,7 @@ function descriptor(
 	overrides: Partial<ManagedStoryPreviewBuild['descriptor']> = {}
 ): ManagedStoryPreviewBuild['descriptor'] {
 	return {
+		admission: {kind: 'none'},
 		appearance: {
 			highContrast: false,
 			reducedMotion: false,
@@ -158,6 +163,36 @@ function build(
 	};
 }
 
+function exactSugarCubeBuild(version = '2.31.0') {
+	const compatibility = SUGARCUBE_COMPATIBILITY.find(
+		entry => entry.version === version
+	);
+
+	if (!compatibility) {
+		throw new Error(`Missing SugarCube ${version} compatibility fixture.`);
+	}
+	const restartProfile = sugarCubeRestartProfileForAdapter(
+		compatibility.adapterId
+	);
+
+	if (!restartProfile) {
+		throw new Error(`Missing SugarCube ${version} Restart fixture.`);
+	}
+
+	return build({
+		descriptor: descriptor({
+			admission: {
+				adapterId: compatibility.adapterId,
+				format: 'SugarCube',
+				kind: 'builtin-sha256',
+				sourceSha256: compatibility.sourceSha256,
+				version: compatibility.version
+			}
+		}),
+		html: `<html><head></head><body><tw-storydata format="SugarCube" format-version="${version}"></tw-storydata><script id="script-sugarcube">${restartProfile.engineRestartSource};${restartProfile.startupFragment}</script></body></html>`
+	});
+}
+
 async function flushPromises() {
 	await Promise.resolve();
 	await Promise.resolve();
@@ -176,7 +211,9 @@ function testManager(
 	const windowOptions: unknown[] = [];
 	const staged: Array<{files: never[]; id: number}> = [];
 	let nextStageGate: Promise<void> | undefined;
-	const stagePackage = jest.fn(async () => {
+	const stagePackage = jest.fn(async (_html: string, _assets: unknown[]) => {
+		void _html;
+		void _assets;
 		const gate = nextStageGate;
 
 		nextStageGate = undefined;
@@ -1224,6 +1261,153 @@ describe('story preview window manager', () => {
 			descriptor: {appearance}
 		});
 	});
+
+	it('derives exact Restart eligibility from the HTML main stages', async () => {
+		const harness = testManager();
+		const initialBuild = exactSugarCubeBuild();
+		const preview = await openReadyPreview(harness, undefined, initialBuild);
+		const compatibility = SUGARCUBE_COMPATIBILITY[0];
+		const restartProfile = sugarCubeRestartProfileForAdapter(
+			compatibility.adapterId
+		)!;
+		const stagedInitialHtml = harness.stagePackage.mock.calls[0][0] as string;
+
+		expect(preview.launch.descriptor.sugarCubeRestartEligible).toBe(true);
+		expect(preview.launch.descriptor.admission).toEqual(
+			initialBuild.descriptor.admission
+		);
+		expect(stagedInitialHtml).toContain('bridge-1');
+		expect(stagedInitialHtml).toContain(restartProfile.startupReplacement);
+		expect(stagedInitialHtml).not.toContain(restartProfile.startupFragment);
+		const mismatchedReplacement = exactSugarCubeBuild();
+
+		const replacing = harness.manager.replace(
+			preview.owner,
+			preview.launch.descriptor.sessionId,
+			1,
+			build({
+				descriptor: mismatchedReplacement.descriptor,
+				html: mismatchedReplacement.html.replace(
+					'format-version="2.31.0"',
+					'format-version="2.37.3"'
+				)
+			})
+		);
+
+		await flushPromises();
+		const replacement = preview.window.webContents.send.mock.calls.findLast(
+			([channel]) => channel === storyPreviewIpcChannels.replacement
+		)?.[1];
+
+		expect(replacement.replacement.descriptor.sugarCubeRestartEligible).toBe(
+			false
+		);
+		expect(replacement.replacement.descriptor.admission).toEqual({
+			kind: 'none'
+		});
+		expect(harness.stagePackage.mock.calls[1][0]).toContain('bridge-1');
+		expect(harness.stagePackage.mock.calls[1][0]).toContain(
+			'ENABLE_SUGARCUBE_RESTART = false'
+		);
+		expect(harness.stagePackage.mock.calls[1][0]).not.toContain(
+			restartProfile.startupReplacement
+		);
+		await harness.ipcHandlers.get(storyPreviewIpcChannels.frameLoaded)!(
+			preview.event,
+			2
+		);
+		await expect(replacing).resolves.toMatchObject({
+			descriptor: {
+				admission: {kind: 'none'},
+				sugarCubeRestartEligible: false
+			}
+		});
+
+		await expect(
+			harness.manager.open(
+				fakeWebContents('file:///app/index.html'),
+				build({
+					descriptor: {
+						...descriptor(),
+						sugarCubeRestartEligible: true
+					} as never
+				})
+			)
+		).rejects.toThrow('descriptor');
+	});
+
+	it.each([
+		[
+			'a different version',
+			(html: string) =>
+				html.replace('format-version="2.31.0"', 'format-version="2.37.3"')
+		],
+		[
+			'a duplicate',
+			(html: string) =>
+				html.replace(
+					'</tw-storydata>',
+					'</tw-storydata><tw-storydata format="SugarCube" format-version="2.31.0"></tw-storydata>'
+				)
+		],
+		[
+			'no',
+			(html: string) =>
+				html.replace(
+					'<tw-storydata format="SugarCube" format-version="2.31.0"></tw-storydata>',
+					''
+				)
+		],
+		[
+			'only an inert template',
+			(html: string) =>
+				html.replace(
+					'<tw-storydata format="SugarCube" format-version="2.31.0"></tw-storydata>',
+					'<template><tw-storydata format="SugarCube" format-version="2.31.0"></tw-storydata></template>'
+				)
+		],
+		[
+			'only a scripted noscript',
+			(html: string) =>
+				html.replace(
+					'<tw-storydata format="SugarCube" format-version="2.31.0"></tw-storydata>',
+					'<noscript><tw-storydata format="SugarCube" format-version="2.31.0"></tw-storydata></noscript>'
+				)
+		],
+		[
+			'only a frameset child',
+			(html: string) =>
+				html.replace(
+					'<body><tw-storydata format="SugarCube" format-version="2.31.0"></tw-storydata>',
+					'<frameset><tw-storydata format="SugarCube" format-version="2.31.0"></tw-storydata></frameset>'
+				)
+		]
+	] as const)(
+		'downgrades exact admission before staging initial HTML with %s structural tuple',
+		async (_label, transformHtml) => {
+			const harness = testManager();
+			const exactBuild = exactSugarCubeBuild();
+			const preview = await openReadyPreview(
+				harness,
+				undefined,
+				build({
+					descriptor: exactBuild.descriptor,
+					html: transformHtml(exactBuild.html)
+				})
+			);
+			const restartProfile = sugarCubeRestartProfileForAdapter(
+				SUGARCUBE_COMPATIBILITY[0].adapterId
+			)!;
+			const stagedHtml = harness.stagePackage.mock.calls[0][0] as string;
+
+			expect(preview.launch.descriptor).toMatchObject({
+				admission: {kind: 'none'},
+				sugarCubeRestartEligible: false
+			});
+			expect(stagedHtml).toContain('ENABLE_SUGARCUBE_RESTART = false');
+			expect(stagedHtml).not.toContain(restartProfile.startupReplacement);
+		}
+	);
 
 	it('rejects malformed descriptors before staging and enforces the live cap', async () => {
 		const harness = testManager();

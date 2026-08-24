@@ -220,7 +220,9 @@ describe('useStoryLaunch', () => {
 							storyName: 'Live story',
 							target
 						}),
-						instrumentedHtml: expect.stringContaining('preview-bridge-id')
+						html: expect.stringContaining(
+							`<tw-storydata>${target}</tw-storydata>`
+						)
 					},
 					undefined
 				);

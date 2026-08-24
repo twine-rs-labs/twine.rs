@@ -2075,6 +2075,55 @@ test('packaged SugarCube debugger preserves and wraps variable whitespace', asyn
 	}
 });
 
+test('packaged SugarCube endpoint profiles support non-start Test From Here', async ({}, testInfo) => {
+	test.setTimeout(6 * 60 * 1000);
+	const executablePath = await packagedExecutable();
+	let running: RunningApp | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, 'sugarcube-test-from');
+		const {page} = running;
+
+		for (const version of ['2.31.0', '2.37.3']) {
+			await createProject(page, {
+				format: `SugarCube ${version}`,
+				name: `SugarCube Test From ${version}`,
+				startPassage: 'Saved Start'
+			});
+			const projectRoot = await projectRootFromRenderer(page);
+
+			await replaceEditorText(page, 'The saved start remains unchanged.');
+			await waitForSavedText(
+				running,
+				projectRoot,
+				'The saved start remains unchanged.',
+				testInfo
+			);
+			const marker = `Non-start SugarCube ${version} launch.`;
+			await createPassage(page, 'Nonstart', marker);
+			await waitForSavedText(running, projectRoot, marker, testInfo);
+			const savedStartBefore = await persistedStartUuid(page);
+			const preview = await launchPreview(running, () =>
+				page
+					.getByRole('region', {name: 'Nonstart'})
+					.getByRole('button', {name: 'Test From Here'})
+					.click()
+			);
+
+			await expectRenderedText(preview, marker);
+			await expectCurrentPassage(preview, 'Nonstart');
+			await preview.getByRole('button', {name: 'Debugger'}).click();
+			await expect(
+				preview.getByRole('region', {name: 'Runtime debugger inspector'})
+			).toContainText(`Adapter: sugarcube-${version}`);
+			expect(await persistedStartUuid(page)).toBe(savedStartBefore);
+			await preview.close();
+		}
+	} finally {
+		await running?.app.close();
+	}
+});
+
 test('current passage resolves to a stable ID in every bundled format family', async ({}, testInfo) => {
 	test.setTimeout(8 * 60 * 1000);
 	const executablePath = await packagedExecutable();
@@ -2082,6 +2131,11 @@ test('current passage resolves to a stable ID in every bundled format family', a
 		'Chapbook 2.3.1',
 		'Harlowe 3.3.9',
 		'Snowman 2.1.1',
+		'SugarCube 2.31.0',
+		'SugarCube 2.32.0',
+		'SugarCube 2.33.1',
+		'SugarCube 2.35.0',
+		'SugarCube 2.36.0',
 		'SugarCube 2.37.3'
 	];
 	const linkSource = (format: string) =>
@@ -2123,6 +2177,22 @@ test('current passage resolves to a stable ID in every bundled format family', a
 				await expectRenderedText(preview, marker);
 				await expectCurrentPassage(preview, 'Next');
 			});
+			if (format.startsWith('SugarCube ')) {
+				await preview.getByRole('button', {name: 'Debugger'}).click();
+				const inspector = preview.getByRole('region', {
+					name: 'Runtime debugger inspector'
+				});
+				const adapterId = format.replace('SugarCube ', 'sugarcube-');
+
+				await expect(inspector).toContainText(`Adapter: ${adapterId}`);
+				await inspector.getByRole('button', {name: 'Restart'}).click();
+				await expect(
+					preview.getByText('Story restarted from its launch passage.', {
+						exact: true
+					})
+				).toBeVisible();
+				await expectCurrentPassage(preview, 'Start');
+			}
 			await preview.close();
 		}
 	} finally {

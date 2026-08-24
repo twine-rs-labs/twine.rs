@@ -59,7 +59,7 @@ describe('StoryPreviewOwnerController', () => {
 		});
 		preparePreview.mockResolvedValue({
 			projectRoot: '/project',
-			request: {descriptor: {}, instrumentedHtml: '<html></html>'}
+			request: {descriptor: {}, html: '<html></html>'}
 		});
 		replaceStoryPreview.mockResolvedValue({generation: 2});
 		reportStoryPreviewCommandResult.mockResolvedValue(undefined);

@@ -633,7 +633,7 @@ test('opens the M6 Build and Formats surfaces', async ({page}) => {
 		page.locator('.build-route__format-title', {hasText: 'Playable HTML'})
 	).toBeVisible();
 	await expect(
-		page.locator('.build-route__format-title', {hasText: 'Archive (.zip)'})
+		page.locator('.build-route__format-title', {hasText: 'Package (.zip)'})
 	).toBeVisible();
 
 	await page.getByRole('button', {name: 'Inspect output'}).click();

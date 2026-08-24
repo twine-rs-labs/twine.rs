@@ -136,6 +136,7 @@
 		"dist:signed": "node scripts/run-release-profile.mjs signed",
 		"browser:cli": "playwright cli",
 		"e2e": "playwright test",
+		"e2e:serve": "vite preview --host 127.0.0.1 --port 5173 --strictPort",
 		"e2e:pwa": "playwright test --config playwright.pwa.config.ts",
 		"e2e:electron:packaged": "playwright test --config playwright.packaged-electron.config.ts",
 		"electron:install": "install-electron",

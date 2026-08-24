@@ -40,6 +40,8 @@ import {
 	releaseStoryPreviewPackage,
 	releaseStoryPreviewStateCleanup
 } from './story-preview-protocol';
+import {canonicalPreviewFormatAdmission} from '../../routes/story-preview-sugarcube';
+import {instrumentPreviewHtml} from '../../routes/story-preview-contract';
 
 export const maxManagedStoryPreviewWindows = 32;
 export const storyPreviewReadyTimeoutMs = 15_000;
@@ -77,6 +79,7 @@ const storySummaryGraphCountFields = [
 	'unreachablePassages'
 ] as const;
 const storyPreviewDescriptorFields = [
+	'admission',
 	'appearance',
 	'bridgeSessionId',
 	'htmlBytes',
@@ -359,6 +362,11 @@ function cloneAndValidateDescriptor(
 			'Story preview descriptor is invalid or exceeds its limit.'
 		);
 	}
+	const admission = canonicalPreviewFormatAdmission(input.admission);
+
+	if (!admission) {
+		throw new Error('Story preview format admission is invalid.');
+	}
 
 	const passageIds = new Set<string>();
 	const localIds = new Set<string>();
@@ -391,6 +399,7 @@ function cloneAndValidateDescriptor(
 	}
 
 	const descriptor: NativeStoryPreviewDescriptor = {
+		admission,
 		appearance: {
 			highContrast: input.appearance.highContrast,
 			reducedMotion: input.appearance.reducedMotion,
@@ -416,6 +425,7 @@ function cloneAndValidateDescriptor(
 		storyDataCount: input.storyDataCount,
 		storyId: input.storyId,
 		storyName: input.storyName,
+		sugarCubeRestartEligible: false,
 		...(input.summary
 			? {
 					summary: {
@@ -1091,13 +1101,23 @@ export function createStoryPreviewWindowManager(
 		sessionId: string,
 		generation: number
 	): Promise<PreviewGeneration> {
-		const descriptor = cloneAndValidateDescriptor(
+		const baseDescriptor = cloneAndValidateDescriptor(
 			build.descriptor,
 			sessionId,
 			generation
 		);
-		const staged = await dependencies.stagePackage(
+		const instrumented = instrumentPreviewHtml(
 			build.html,
+			baseDescriptor.bridgeSessionId,
+			{admission: baseDescriptor.admission}
+		);
+		const descriptor: NativeStoryPreviewDescriptor = {
+			...baseDescriptor,
+			admission: instrumented.admission,
+			sugarCubeRestartEligible: instrumented.sugarCubeRestartEligible
+		};
+		const staged = await dependencies.stagePackage(
+			instrumented.html,
 			build.assets ?? []
 		);
 		let url: string;

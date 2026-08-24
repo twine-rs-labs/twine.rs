@@ -16,6 +16,8 @@ import {
 	runtimePassageLabel
 } from './story-preview-debug';
 import type {
+	PreviewBridgeContext,
+	PreviewFormatAdmission,
 	StoryPreviewDebuggerSectionStatus,
 	StoryPreviewDebuggerVariable,
 	StoryPreviewDebugMetric,
@@ -25,6 +27,10 @@ import type {
 	StoryPreviewRuntimePassage,
 	StoryPreviewViewportPreset
 } from './story-preview-debug';
+import {
+	NO_PREVIEW_FORMAT_ADMISSION,
+	canonicalPreviewFormatAdmission
+} from './story-preview-sugarcube';
 import type {StoryPreviewDebuggerCapability} from './story-preview-debugger-protocol';
 import {STORY_PREVIEW_COMMAND_PROTOCOL_VERSION} from './story-preview-debugger-protocol';
 import type {StoryPreviewRestartResultStatus} from './story-preview-debugger-protocol';
@@ -35,15 +41,21 @@ import {
 import './story-preview-frame.css';
 
 export interface StoryPreviewSrcDocContentSource {
+	admission?: PreviewFormatAdmission;
 	bridgeSessionId?: string;
+	generation?: number;
 	html: string;
+	sugarCubeRestartEligible?: boolean;
 	type: 'srcDoc';
 }
 
 export interface StoryPreviewUrlContentSource {
+	admission?: PreviewFormatAdmission;
 	bridgeSessionId: string;
+	generation?: number;
 	htmlBytes: number;
 	storyDataCount: number;
+	sugarCubeRestartEligible?: boolean;
 	type: 'url';
 	url: string;
 }
@@ -205,17 +217,8 @@ export const StoryPreviewContentHost: React.FC<
 	title,
 	viewportPreset
 }) => {
-	const sourceHtml =
+	const srcDoc =
 		contentSource.type === 'srcDoc' ? contentSource.html : undefined;
-	const srcDoc = React.useMemo(
-		() =>
-			sourceHtml === undefined
-				? undefined
-				: instrumentPreviewHtml(sourceHtml, bridgeSessionId, {
-						enableHarloweSessionStorageFallback: true
-					}),
-		[bridgeSessionId, sourceHtml]
-	);
 
 	return (
 		<div
@@ -246,6 +249,7 @@ export const StoryPreviewContentHost: React.FC<
 };
 
 export interface StoryPreviewFrameProps {
+	admission?: PreviewFormatAdmission;
 	contentSource?: StoryPreviewContentSource;
 	debugMetrics?: StoryPreviewDebugMetric[];
 	error?: Error;
@@ -292,8 +296,39 @@ function storyDataCount(source: string) {
 	return source.match(/<tw-storydata\b/g)?.length ?? 0;
 }
 
+function useCanonicalPreviewFormatAdmission(
+	rawAdmission: PreviewFormatAdmission | undefined
+) {
+	const canonical = React.useMemo(
+		() =>
+			canonicalPreviewFormatAdmission(rawAdmission) ??
+			NO_PREVIEW_FORMAT_ADMISSION,
+		[rawAdmission]
+	);
+	const kind = canonical.kind;
+	const adapterId = kind === 'builtin-sha256' ? canonical.adapterId : undefined;
+	const sourceSha256 =
+		kind === 'builtin-sha256' ? canonical.sourceSha256 : undefined;
+	const version = kind === 'builtin-sha256' ? canonical.version : undefined;
+
+	return React.useMemo<PreviewFormatAdmission>(
+		() =>
+			kind === 'builtin-sha256'
+				? {
+						adapterId: adapterId!,
+						format: 'SugarCube',
+						kind,
+						sourceSha256: sourceSha256!,
+						version: version!
+					}
+				: NO_PREVIEW_FORMAT_ADMISSION,
+		[adapterId, kind, sourceSha256, version]
+	);
+}
+
 export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	const {
+		admission: shorthandAdmission,
 		contentSource: explicitContentSource,
 		debugMetrics = [],
 		error,
@@ -323,26 +358,131 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		testCommandsBusy = false,
 		title
 	} = props;
-	const contentSource = React.useMemo<StoryPreviewContentSource | undefined>(
+	const rawContentSource = React.useMemo<StoryPreviewContentSource | undefined>(
 		() =>
 			explicitContentSource ??
-			(html === undefined ? undefined : {html, type: 'srcDoc'}),
-		[explicitContentSource, html]
+			(html === undefined
+				? undefined
+				: {admission: shorthandAdmission, html, type: 'srcDoc'}),
+		[explicitContentSource, html, shorthandAdmission]
 	);
-	const sourceBridgeSessionId = contentSource?.bridgeSessionId;
-	const sourceIdentity =
-		contentSource?.type === 'url'
-			? contentSource.url
-			: contentSource?.type === 'srcDoc'
-				? contentSource.html
-				: undefined;
+	const sourceType = rawContentSource?.type;
+	const sourceHtml =
+		rawContentSource?.type === 'srcDoc' ? rawContentSource.html : undefined;
+	const sourceUrl =
+		rawContentSource?.type === 'url' ? rawContentSource.url : undefined;
+	const sourceBridgeSessionId = rawContentSource?.bridgeSessionId;
+	const sourceGeneration = rawContentSource?.generation;
+	const sourceRestartEligible =
+		rawContentSource?.sugarCubeRestartEligible === true;
+	const sourceHtmlBytes =
+		rawContentSource?.type === 'url' ? rawContentSource.htmlBytes : undefined;
+	const sourceStoryDataCount =
+		rawContentSource?.type === 'url'
+			? rawContentSource.storyDataCount
+			: undefined;
+	const sourceAdmission = useCanonicalPreviewFormatAdmission(
+		rawContentSource?.admission
+	);
+	const sourceContextIdentity = React.useMemo(
+		() => ({}),
+		[
+			sourceAdmission,
+			sourceGeneration,
+			sourceHtml,
+			sourceRestartEligible,
+			sourceType,
+			sourceUrl
+		]
+	);
 	const bridgeSessionId = React.useMemo(
 		() =>
 			sourceBridgeSessionId ??
 			`preview-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-		[sourceBridgeSessionId, sourceIdentity]
+		[sourceBridgeSessionId, sourceContextIdentity]
 	);
+	const contentSource = React.useMemo<
+		StoryPreviewContentSource | undefined
+	>(() => {
+		if (!sourceType) {
+			return undefined;
+		}
+		if (sourceType === 'url') {
+			return {
+				admission: sourceAdmission,
+				bridgeSessionId: sourceBridgeSessionId!,
+				...(sourceGeneration === undefined
+					? {}
+					: {generation: sourceGeneration}),
+				htmlBytes: sourceHtmlBytes!,
+				storyDataCount: sourceStoryDataCount!,
+				sugarCubeRestartEligible:
+					sourceAdmission.kind === 'builtin-sha256' && sourceRestartEligible,
+				type: 'url',
+				url: sourceUrl!
+			};
+		}
+
+		const instrumented = instrumentPreviewHtml(sourceHtml!, bridgeSessionId, {
+			admission: sourceAdmission,
+			enableHarloweSessionStorageFallback: true
+		});
+
+		return {
+			admission: instrumented.admission,
+			...(sourceBridgeSessionId === undefined
+				? {}
+				: {bridgeSessionId: sourceBridgeSessionId}),
+			...(sourceGeneration === undefined ? {} : {generation: sourceGeneration}),
+			html: instrumented.html,
+			sugarCubeRestartEligible: instrumented.sugarCubeRestartEligible,
+			type: 'srcDoc'
+		};
+	}, [
+		bridgeSessionId,
+		sourceAdmission,
+		sourceBridgeSessionId,
+		sourceGeneration,
+		sourceHtml,
+		sourceHtmlBytes,
+		sourceRestartEligible,
+		sourceStoryDataCount,
+		sourceType,
+		sourceUrl
+	]);
 	const [reloadKey, setReloadKey] = React.useState(0);
+	const currentBridgeContext = React.useMemo<PreviewBridgeContext>(
+		() => ({
+			admission: contentSource?.admission ?? NO_PREVIEW_FORMAT_ADMISSION,
+			bridgeSessionId,
+			generation: contentSource?.generation ?? 0,
+			sugarCubeRestartEligible: contentSource?.sugarCubeRestartEligible === true
+		}),
+		[bridgeSessionId, contentSource]
+	);
+	const stagedAdmission = useCanonicalPreviewFormatAdmission(
+		stagedContentSource?.admission
+	);
+	const stagedBridgeContext = React.useMemo(
+		() =>
+			stagedContentSource
+				? ({
+						admission: stagedAdmission,
+						bridgeSessionId: stagedContentSource.bridgeSessionId,
+						generation: stagedContentSource.generation ?? 0,
+						sugarCubeRestartEligible:
+							stagedAdmission.kind === 'builtin-sha256' &&
+							stagedContentSource.sugarCubeRestartEligible === true
+					} satisfies PreviewBridgeContext)
+				: undefined,
+		[
+			stagedAdmission,
+			stagedContentSource?.bridgeSessionId,
+			stagedContentSource?.generation,
+			stagedContentSource?.sugarCubeRestartEligible
+		]
+	);
+	const stagedContextIdentity = stagedBridgeContext;
 	const [messageListenerReady, setMessageListenerReady] = React.useState(false);
 	const [runtimeModel, dispatchRuntime] = React.useReducer(
 		reduceStoryPreviewRuntime,
@@ -379,6 +519,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		[stagedPassages]
 	);
 	const bridgeSessionIdRef = React.useRef(bridgeSessionId);
+	const bridgeContextRef = React.useRef(currentBridgeContext);
 	const copyOperationRef = React.useRef(0);
 	const copyPendingRef = React.useRef(false);
 	const logRevisionRef = React.useRef(0);
@@ -414,6 +555,8 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	const stagedRuntimeRef = React.useRef<
 		| {
 				bridgeSessionId: string;
+				context: PreviewBridgeContext;
+				contextIdentity: PreviewBridgeContext;
 				model: StoryPreviewRuntimeModel;
 				passages: StoryPreviewPassageLookup;
 		  }
@@ -421,19 +564,20 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	>(undefined);
 
 	bridgeSessionIdRef.current = bridgeSessionId;
+	bridgeContextRef.current = currentBridgeContext;
 	passageLookupRef.current = passageLookup;
 	if (stagedContentSource) {
-		if (
-			stagedRuntimeRef.current?.bridgeSessionId !==
-			stagedContentSource.bridgeSessionId
-		) {
+		if (stagedRuntimeRef.current?.contextIdentity !== stagedContextIdentity) {
 			stagedRuntimeRef.current = {
 				bridgeSessionId: stagedContentSource.bridgeSessionId,
+				context: stagedBridgeContext!,
+				contextIdentity: stagedContextIdentity!,
 				model: initialStoryPreviewRuntimeModel(true),
 				passages: stagedPassageLookup
 			};
 		} else {
-			stagedRuntimeRef.current.passages = stagedPassageLookup;
+			stagedRuntimeRef.current!.context = stagedBridgeContext!;
+			stagedRuntimeRef.current!.passages = stagedPassageLookup;
 		}
 	}
 	const runtimeLogs = runtimeModel.logs;
@@ -449,22 +593,22 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 	const debuggerSnapshot = runtimeModel.debugger.snapshot;
 	const runtimeViewport = runtimeState.viewport;
 	const publishedMetadata = React.useMemo(() => {
-		if (contentSource?.type === 'url') {
+		if (sourceType === 'url') {
 			return {
-				htmlBytes: contentSource.htmlBytes,
-				storyDataCount: contentSource.storyDataCount
+				htmlBytes: sourceHtmlBytes!,
+				storyDataCount: sourceStoryDataCount!
 			};
 		}
 
-		if (contentSource?.type === 'srcDoc') {
+		if (sourceType === 'srcDoc') {
 			return {
-				htmlBytes: byteLength(contentSource.html),
-				storyDataCount: storyDataCount(contentSource.html)
+				htmlBytes: byteLength(sourceHtml!),
+				storyDataCount: storyDataCount(sourceHtml!)
 			};
 		}
 
 		return undefined;
-	}, [contentSource]);
+	}, [sourceHtml, sourceHtmlBytes, sourceStoryDataCount, sourceType]);
 	const publishedHtmlBytes = publishedMetadata?.htmlBytes;
 	const publishedStoryDataCount = publishedMetadata?.storyDataCount;
 	const restartAvailable =
@@ -555,6 +699,18 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		},
 		[]
 	);
+	const handleContentLoad = React.useCallback(() => {
+		const frame = previewFrame.current;
+		const restartPrefix = `twine-rs-restart:${bridgeSessionIdRef.current}:`;
+
+		if (frameName.startsWith(restartPrefix)) {
+			setFrameName('');
+			if (frame) {
+				frame.name = '';
+			}
+		}
+		onContentLoad?.();
+	}, [frameName, onContentLoad]);
 
 	React.useLayoutEffect(() => {
 		if (preserveDebuggerOnRemountRef.current) {
@@ -575,7 +731,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		}
 
 		dispatchRuntime({hasContent: !!contentSource, type: 'reset'});
-	}, [bridgeSessionId, reloadKey, sourceIdentity]);
+	}, [bridgeSessionId, reloadKey, sourceContextIdentity]);
 
 	React.useLayoutEffect(() => {
 		if (!copyPendingRef.current) {
@@ -863,7 +1019,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 		setFrameName('');
 		setRuntimeControlBusy(undefined);
 		setRuntimeControlNotice(undefined);
-	}, [abortClearStateRun, bridgeSessionId, sourceIdentity]);
+	}, [abortClearStateRun, bridgeSessionId, sourceContextIdentity]);
 
 	React.useLayoutEffect(
 		() => () => {
@@ -903,16 +1059,15 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 				return;
 			}
 
-			const message = normalizeStoryPreviewBridgeMessage(event.data);
+			if (event.source === previewFrame.current?.contentWindow) {
+				const message = normalizeStoryPreviewBridgeMessage(
+					event.data,
+					bridgeContextRef.current
+				);
 
-			if (!message) {
-				return;
-			}
-
-			if (
-				event.source === previewFrame.current?.contentWindow &&
-				message.sessionId === bridgeSessionIdRef.current
-			) {
+				if (!message) {
+					return;
+				}
 				if (message.type === 'debugger-command-result') {
 					const pending = pendingRestartRef.current;
 
@@ -981,9 +1136,16 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 
 			if (
 				stagedRuntime &&
-				event.source === stagedPreviewFrame.current?.contentWindow &&
-				message.sessionId === stagedRuntime.bridgeSessionId
+				event.source === stagedPreviewFrame.current?.contentWindow
 			) {
+				const message = normalizeStoryPreviewBridgeMessage(
+					event.data,
+					stagedRuntime.context
+				);
+
+				if (!message) {
+					return;
+				}
 				stagedRuntime.model = reduceStoryPreviewRuntime(stagedRuntime.model, {
 					message,
 					now: Date.now(),
@@ -1394,7 +1556,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 							frameName={frameName}
 							frameRef={setPreviewFrameRef}
 							key={bridgeSessionId}
-							onLoad={onContentLoad}
+							onLoad={handleContentLoad}
 							reloadKey={reloadKey}
 							title={title}
 							viewportPreset={viewportPreset}

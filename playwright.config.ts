@@ -1,6 +1,11 @@
 import type {PlaywrightTestConfig} from '@playwright/test';
 import {devices} from '@playwright/test';
 
+const buildCommand =
+	process.env.TWINE_E2E_USE_EXISTING_BUILD === '1'
+		? ''
+		: 'npm run build:web && ';
+
 /**
  * Read environment variables from file.
  * https://github.com/motdotla/dotenv
@@ -104,10 +109,11 @@ const config: PlaywrightTestConfig = {
 	/* Folder for test artifacts such as screenshots, videos, traces, etc. */
 	// outputDir: 'test-results/',
 
-	/* Run your local dev server before starting the tests */
+	/* Serve a deterministic production build without filesystem watchers. */
 	webServer: {
-		command: 'npm run start -- --host 127.0.0.1',
-		reuseExistingServer: !process.env.CI,
+		command: `${buildCommand}npm run e2e:serve`,
+		reuseExistingServer: false,
+		timeout: 120_000,
 		url: 'http://127.0.0.1:5173'
 	}
 };

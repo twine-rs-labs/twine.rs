@@ -1,3 +1,8 @@
+import {
+	SUGARCUBE_COMPATIBILITY,
+	type ExactSugarCubeAdapterId
+} from './story-preview-sugarcube';
+
 export const STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION = 1;
 export const STORY_PREVIEW_COMMAND_PROTOCOL_VERSION = 1;
 
@@ -37,7 +42,7 @@ export type StoryPreviewDebuggerTruncationReason =
 	(typeof STORY_PREVIEW_DEBUGGER_TRUNCATION_REASONS)[number];
 
 export type StoryPreviewDebuggerAdapterId =
-	| 'sugarcube-2.37.3'
+	| ExactSugarCubeAdapterId
 	| 'snowman-1.5.0'
 	| 'snowman-2.1.1'
 	| 'chapbook-2.3.1'
@@ -92,13 +97,21 @@ function registration(
 }
 
 export const STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS = {
-	'sugarcube-2.37.3': registration(
-		'sugarcube',
-		'SugarCube',
-		'2.37.3',
-		'sugarcube-2.37.3',
-		'exact-version'
-	),
+	...(Object.fromEntries(
+		SUGARCUBE_COMPATIBILITY.map(entry => [
+			entry.adapterId,
+			registration(
+				'sugarcube',
+				'SugarCube',
+				entry.version,
+				entry.adapterId,
+				'exact-version'
+			)
+		])
+	) as Record<
+		ExactSugarCubeAdapterId,
+		StoryPreviewDebuggerAdapterRegistration
+	>),
 	'snowman-1.5.0': registration(
 		'snowman',
 		'Snowman',
@@ -137,7 +150,11 @@ export const STORY_PREVIEW_DEBUGGER_ADAPTER_REGISTRATIONS = {
  * Only these exact bundled tuples may advertise Restart.
  */
 export const STORY_PREVIEW_RESTART_ADAPTER_REGISTRATIONS = {
-	'sugarcube-2.37.3': 'sugarcube',
+	...(Object.fromEntries(
+		SUGARCUBE_COMPATIBILITY.filter(
+			entry => entry.restartProfileId !== undefined
+		).map(entry => [entry.adapterId, 'sugarcube' as const])
+	) as Record<ExactSugarCubeAdapterId, 'sugarcube'>),
 	'snowman-1.5.0': 'snowman',
 	'snowman-2.1.1': 'snowman',
 	'chapbook-2.3.1': 'chapbook',

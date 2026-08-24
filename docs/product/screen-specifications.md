@@ -742,8 +742,11 @@ Visible UI elements:
   viewport presets, and `Reload`.
 - Debugger sections for Runtime Console, negotiated variables and visited
   passages, and Play/Test-only Runtime Controls.
-- `Restart` only when the exact story-format adapter negotiates it; confirmed
-  `Clear State` for every Play/Test preview; neither control in Proof.
+- `Restart` only when the host-admitted exact story-format adapter negotiates
+  it. For bundled SugarCube v2, source-digest admission and static engine-region
+  eligibility are required; a static mismatch keeps exact read sections but
+  withholds Restart. Confirmed `Clear State` remains available for every
+  Play/Test preview; neither control appears in Proof.
 - Source and graph navigation plus Test Current/Test From Start actions.
 
 Primary labels/actions:

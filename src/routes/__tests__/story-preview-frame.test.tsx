@@ -15,6 +15,52 @@ import {
 } from '../story-preview-debug';
 import {StoryPreviewFrame} from '../story-preview-frame';
 import {fakePassage, fakeStory} from '../../test-util';
+import {
+	SUGARCUBE_COMPATIBILITY,
+	sugarCubeRestartProfileForAdapter
+} from '../story-preview-sugarcube';
+
+jest.mock('../story-preview-debug', () => {
+	const actual = jest.requireActual<typeof import('../story-preview-debug')>(
+		'../story-preview-debug'
+	);
+
+	return {
+		...actual,
+		instrumentPreviewHtml: jest.fn(actual.instrumentPreviewHtml)
+	};
+});
+
+const actualInstrumentPreviewHtml = jest.requireActual<
+	typeof import('../story-preview-debug')
+>('../story-preview-debug').instrumentPreviewHtml;
+
+beforeEach(() => {
+	jest
+		.mocked(instrumentPreviewHtml)
+		.mockImplementation(actualInstrumentPreviewHtml);
+});
+
+function sugarCubeAdmission(version = '2.37.3') {
+	const compatibility = SUGARCUBE_COMPATIBILITY.find(
+		entry => entry.version === version
+	)!;
+
+	return {
+		adapterId: compatibility.adapterId,
+		format: 'SugarCube' as const,
+		kind: 'builtin-sha256' as const,
+		sourceSha256: compatibility.sourceSha256,
+		version: compatibility.version
+	};
+}
+
+function restartEligibleSugarCubeHtml(version = '2.37.3') {
+	const admission = sugarCubeAdmission(version);
+	const profile = sugarCubeRestartProfileForAdapter(admission.adapterId)!;
+
+	return `<html><head></head><body><tw-storydata format="SugarCube" format-version="${version}"></tw-storydata><script id="script-sugarcube">${profile.startupFragment};const nativeRestart=${profile.engineRestartSource};</script></body></html>`;
+}
 
 function sessionIdFromFrame(title: string) {
 	const srcDoc = screen.getByTitle(title).getAttribute('srcdoc') ?? '';
@@ -59,27 +105,58 @@ function deferred<T>() {
 	return {promise, resolve};
 }
 
+function negotiateSugarCubeRestart(
+	title: string,
+	sessionId: string,
+	version = '2.37.3'
+) {
+	postBridgeMessage(title, sessionId, {
+		adapterId: `sugarcube-${version}`,
+		capabilities: [
+			'currentPassage',
+			'storyVariables',
+			'temporaryVariables',
+			'visitedPassages'
+		],
+		format: 'SugarCube',
+		formatVersion: version,
+		protocolVersion: 1,
+		reliability: 'exact-version',
+		type: 'debugger-hello'
+	});
+	postBridgeMessage(title, sessionId, {
+		adapterId: `sugarcube-${version}`,
+		commandCapabilities: ['restart'],
+		protocolVersion: 1,
+		type: 'debugger-command-hello'
+	});
+}
+
 describe('instrumentPreviewHtml()', () => {
 	it('injects the preview bridge into an HTML head', () => {
 		const html =
 			'<html><head><title>Story</title></head><body>Story</body></html>';
 		const result = instrumentPreviewHtml(html, 'session-1');
 
-		expect(result.indexOf('<script>')).toBeGreaterThan(
-			result.indexOf('<head>')
+		expect(result.html.indexOf('<script>')).toBeGreaterThan(
+			result.html.indexOf('<head>')
 		);
-		expect(result.indexOf('<script>')).toBeLessThan(result.indexOf('<title>'));
-		expect(result).toContain('twine.rs.preview.bridge');
-		expect(result).toContain('var SESSION = "session-1"');
-		expect(result).toContain("['log', 'info', 'warn', 'error']");
-		expect(result).toContain("window.addEventListener('error'");
-		expect(result).toContain("window.addEventListener('unhandledrejection'");
-		expect(result).toContain("storage.getItem('Saved Session')");
-		expect(result).toContain(
+		expect(result.html.indexOf('<script>')).toBeLessThan(
+			result.html.indexOf('<title>')
+		);
+		expect(result.html).toContain('twine.rs.preview.bridge');
+		expect(result.html).toContain('var SESSION = "session-1"');
+		expect(result.html).toContain("['log', 'info', 'warn', 'error']");
+		expect(result.html).toContain("window.addEventListener('error'");
+		expect(result.html).toContain(
+			"window.addEventListener('unhandledrejection'"
+		);
+		expect(result.html).toContain("storage.getItem('Saved Session')");
+		expect(result.html).toContain(
 			'var ENABLE_HARLOWE_SESSION_STORAGE_FALLBACK = false'
 		);
-		expect(result).toContain("'Harlowe session'");
-		expect(result).toContain('<body>Story</body>');
+		expect(result.html).toContain("'Harlowe session'");
+		expect(result.html).toContain('<body>Story</body>');
 	});
 
 	it('observes nonfatal view-transition readiness failures', () => {
@@ -115,10 +192,129 @@ describe('instrumentPreviewHtml()', () => {
 });
 
 describe('<StoryPreviewFrame>', () => {
+	it('keeps expensive srcDoc instrumentation stable across runtime renders and semantic clones', () => {
+		const instrumentPreviewHtmlMock = jest.mocked(instrumentPreviewHtml);
+		const html = restartEligibleSugarCubeHtml();
+		const source = {
+			admission: sugarCubeAdmission(),
+			bridgeSessionId: 'stable-instrumentation-session',
+			generation: 1,
+			html,
+			sugarCubeRestartEligible: true,
+			type: 'srcDoc' as const
+		};
+		const props = {
+			missingStoryMessage: 'Missing story',
+			storyExists: true,
+			title: 'Stable instrumentation preview'
+		};
+
+		instrumentPreviewHtmlMock.mockClear();
+		const {rerender} = render(
+			<StoryPreviewFrame {...props} contentSource={source} />
+		);
+		expect(instrumentPreviewHtmlMock).toHaveBeenCalledTimes(1);
+
+		postBridgeMessage(props.title, source.bridgeSessionId, {
+			args: ['runtime log'],
+			level: 'log',
+			type: 'console'
+		});
+		postBridgeMessage(props.title, source.bridgeSessionId, {
+			currentPassage: {localId: '1', source: 'runtime'},
+			type: 'state',
+			viewport: {height: 640, width: 960}
+		});
+		expect(instrumentPreviewHtmlMock).toHaveBeenCalledTimes(1);
+
+		rerender(
+			<StoryPreviewFrame
+				{...props}
+				contentSource={{
+					...source,
+					admission: {...source.admission}
+				}}
+			/>
+		);
+		expect(instrumentPreviewHtmlMock).toHaveBeenCalledTimes(1);
+
+		rerender(
+			<StoryPreviewFrame
+				{...props}
+				contentSource={{...source, admission: {...source.admission}}}
+				stagedContentSource={{
+					admission: sugarCubeAdmission(),
+					bridgeSessionId: 'candidate-session',
+					generation: 2,
+					htmlBytes: 100,
+					storyDataCount: 1,
+					sugarCubeRestartEligible: true,
+					type: 'url',
+					url: 'twine-preview://candidate/index.html'
+				}}
+				stagedTitle="Stable instrumentation candidate"
+			/>
+		);
+		postBridgeMessage('Stable instrumentation candidate', 'candidate-session', {
+			args: ['candidate log'],
+			level: 'warn',
+			type: 'console'
+		});
+		expect(instrumentPreviewHtmlMock).toHaveBeenCalledTimes(1);
+
+		rerender(
+			<StoryPreviewFrame
+				{...props}
+				contentSource={{...source, generation: 2}}
+			/>
+		);
+		expect(instrumentPreviewHtmlMock).toHaveBeenCalledTimes(2);
+
+		rerender(
+			<StoryPreviewFrame
+				{...props}
+				contentSource={{
+					...source,
+					generation: 2,
+					sugarCubeRestartEligible: false
+				}}
+			/>
+		);
+		expect(instrumentPreviewHtmlMock).toHaveBeenCalledTimes(3);
+
+		rerender(
+			<StoryPreviewFrame
+				{...props}
+				contentSource={{
+					...source,
+					admission: sugarCubeAdmission('2.36.0'),
+					generation: 2,
+					sugarCubeRestartEligible: false
+				}}
+			/>
+		);
+		expect(instrumentPreviewHtmlMock).toHaveBeenCalledTimes(4);
+
+		rerender(
+			<StoryPreviewFrame
+				{...props}
+				contentSource={{
+					...source,
+					admission: sugarCubeAdmission('2.36.0'),
+					generation: 2,
+					html: restartEligibleSugarCubeHtml('2.36.0'),
+					sugarCubeRestartEligible: false
+				}}
+			/>
+		);
+		expect(instrumentPreviewHtmlMock).toHaveBeenCalledTimes(5);
+	});
+
 	it('restarts a negotiated exact runtime with one controlled remount', async () => {
 		render(
 			<StoryPreviewFrame
-				html="<html><body>Story</body></html>"
+				admission={sugarCubeAdmission()}
+				html={restartEligibleSugarCubeHtml()}
 				missingStoryMessage="Missing story"
 				previewTarget="test"
 				storyExists
@@ -180,6 +376,11 @@ describe('<StoryPreviewFrame>', () => {
 		await waitFor(() =>
 			expect(screen.getByTitle('Restart preview')).not.toBe(frame)
 		);
+		const remountedFrame = screen.getByTitle(
+			'Restart preview'
+		) as HTMLIFrameElement;
+
+		expect(remountedFrame.name).toBe('');
 		expect(
 			screen.getByText('Story restarted from its launch passage.')
 		).toBeInTheDocument();
@@ -187,6 +388,243 @@ describe('<StoryPreviewFrame>', () => {
 			'aria-expanded',
 			'true'
 		);
+	});
+
+	it.each([
+		['failed', 'Restart failed before changing the runtime.'],
+		['unavailable', 'Restart is no longer available for this runtime.']
+	] as const)(
+		'keeps the frame mounted when Restart reports %s',
+		async (status, notice) => {
+			render(
+				<StoryPreviewFrame
+					admission={sugarCubeAdmission()}
+					html={restartEligibleSugarCubeHtml()}
+					missingStoryMessage="Missing story"
+					previewTarget="test"
+					storyExists
+					title="Restart failure preview"
+				/>
+			);
+			const frame = screen.getByTitle(
+				'Restart failure preview'
+			) as HTMLIFrameElement;
+			const sessionId = sessionIdFromFrame('Restart failure preview');
+			const postMessage = jest.spyOn(frame.contentWindow!, 'postMessage');
+
+			negotiateSugarCubeRestart('Restart failure preview', sessionId);
+			fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+			fireEvent.click(screen.getByRole('button', {name: 'Restart'}));
+			const request = postMessage.mock.calls[0][0] as Record<string, unknown>;
+
+			postBridgeMessage(
+				'Restart failure preview',
+				sessionId,
+				{
+					adapterId: 'sugarcube-2.37.3',
+					command: 'restart',
+					protocolVersion: 1,
+					requestId: request.requestId,
+					status,
+					type: 'debugger-command-result'
+				},
+				frame.contentWindow
+			);
+
+			expect(screen.getByTitle('Restart failure preview')).toBe(frame);
+			expect(frame.name).toBe('');
+			expect(screen.getByText(notice)).toBeInTheDocument();
+
+			postBridgeMessage(
+				'Restart failure preview',
+				sessionId,
+				{
+					adapterId: 'sugarcube-2.37.3',
+					command: 'restart',
+					protocolVersion: 1,
+					requestId: request.requestId,
+					status: 'applied',
+					type: 'debugger-command-result'
+				},
+				frame.contentWindow
+			);
+			expect(screen.getByTitle('Restart failure preview')).toBe(frame);
+		}
+	);
+
+	it('remounts on indeterminate Restart and ignores wrong or late results', async () => {
+		jest.useFakeTimers();
+		try {
+			render(
+				<StoryPreviewFrame
+					admission={sugarCubeAdmission()}
+					html={restartEligibleSugarCubeHtml()}
+					missingStoryMessage="Missing story"
+					previewTarget="test"
+					storyExists
+					title="Indeterminate Restart preview"
+				/>
+			);
+			const frame = screen.getByTitle(
+				'Indeterminate Restart preview'
+			) as HTMLIFrameElement;
+			const sessionId = sessionIdFromFrame('Indeterminate Restart preview');
+			const postMessage = jest.spyOn(frame.contentWindow!, 'postMessage');
+
+			negotiateSugarCubeRestart('Indeterminate Restart preview', sessionId);
+			fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+			fireEvent.click(screen.getByRole('button', {name: 'Restart'}));
+			const request = postMessage.mock.calls[0][0] as Record<string, unknown>;
+			const result = {
+				adapterId: 'sugarcube-2.37.3',
+				command: 'restart',
+				protocolVersion: 1,
+				requestId: request.requestId,
+				status: 'indeterminate',
+				type: 'debugger-command-result'
+			};
+
+			postBridgeMessage(
+				'Indeterminate Restart preview',
+				'wrong-session',
+				result,
+				frame.contentWindow
+			);
+			postBridgeMessage(
+				'Indeterminate Restart preview',
+				sessionId,
+				{...result, requestId: 'wrong-request'},
+				frame.contentWindow
+			);
+			expect(screen.getByTitle('Indeterminate Restart preview')).toBe(frame);
+
+			postBridgeMessage(
+				'Indeterminate Restart preview',
+				sessionId,
+				result,
+				frame.contentWindow
+			);
+			const remounted = screen.getByTitle('Indeterminate Restart preview');
+
+			expect(remounted).not.toBe(frame);
+			fireEvent.load(remounted);
+			expect(
+				screen.getByText(
+					'Restart could not be confirmed. The current artifact was remounted.'
+				)
+			).toBeInTheDocument();
+			postBridgeMessage(
+				'Indeterminate Restart preview',
+				sessionId,
+				{...result, status: 'applied'},
+				frame.contentWindow
+			);
+			expect(screen.getByTitle('Indeterminate Restart preview')).toBe(
+				remounted
+			);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('remounts after an unanswered Restart timeout', () => {
+		jest.useFakeTimers();
+		try {
+			render(
+				<StoryPreviewFrame
+					admission={sugarCubeAdmission()}
+					html={restartEligibleSugarCubeHtml()}
+					missingStoryMessage="Missing story"
+					previewTarget="test"
+					storyExists
+					title="Restart timeout preview"
+				/>
+			);
+			const frame = screen.getByTitle('Restart timeout preview');
+			const sessionId = sessionIdFromFrame('Restart timeout preview');
+
+			negotiateSugarCubeRestart('Restart timeout preview', sessionId);
+			fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+			fireEvent.click(screen.getByRole('button', {name: 'Restart'}));
+			act(() => jest.advanceTimersByTime(1999));
+			expect(screen.getByTitle('Restart timeout preview')).toBe(frame);
+			act(() => jest.advanceTimersByTime(1));
+			const remounted = screen.getByTitle('Restart timeout preview');
+
+			expect(remounted).not.toBe(frame);
+			fireEvent.load(remounted);
+			expect(
+				screen.getByText(
+					'Restart timed out. The current artifact was remounted as a precaution.'
+				)
+			).toBeInTheDocument();
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('cancels a pending Restart when the preview generation changes', () => {
+		const source = {
+			admission: sugarCubeAdmission(),
+			bridgeSessionId: 'generation-session',
+			generation: 1,
+			htmlBytes: 123,
+			storyDataCount: 1,
+			sugarCubeRestartEligible: true,
+			type: 'url' as const,
+			url: 'twine-preview://generation/index.html'
+		};
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={source}
+				missingStoryMessage="Missing story"
+				previewTarget="test"
+				storyExists
+				title="Generation Restart preview"
+			/>
+		);
+		const oldFrame = screen.getByTitle(
+			'Generation Restart preview'
+		) as HTMLIFrameElement;
+		const postMessage = jest.spyOn(oldFrame.contentWindow!, 'postMessage');
+
+		negotiateSugarCubeRestart(
+			'Generation Restart preview',
+			'generation-session'
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Restart'}));
+		const request = postMessage.mock.calls[0][0] as Record<string, unknown>;
+
+		rerender(
+			<StoryPreviewFrame
+				contentSource={{...source, generation: 2}}
+				missingStoryMessage="Missing story"
+				previewTarget="test"
+				storyExists
+				title="Generation Restart preview"
+			/>
+		);
+		const newFrame = screen.getByTitle('Generation Restart preview');
+
+		expect(newFrame).toBe(oldFrame);
+		postBridgeMessage(
+			'Generation Restart preview',
+			'generation-session',
+			{
+				adapterId: 'sugarcube-2.37.3',
+				command: 'restart',
+				protocolVersion: 1,
+				requestId: request.requestId,
+				status: 'applied',
+				type: 'debugger-command-result'
+			},
+			oldFrame.contentWindow
+		);
+		expect(screen.getByTitle('Generation Restart preview')).toBe(newFrame);
+		expect(
+			screen.queryByText('Story restarted from its launch passage.')
+		).not.toBeInTheDocument();
 	});
 
 	it('confirms Clear State and remounts an opaque browser preview', async () => {
@@ -659,6 +1097,206 @@ describe('<StoryPreviewFrame>', () => {
 		expect(screen.queryByText('Current: Start')).not.toBeInTheDocument();
 	});
 
+	it('keeps exact admission and Restart eligibility isolated per frame', () => {
+		const currentAdmission = sugarCubeAdmission('2.31.0');
+		const candidateAdmission = sugarCubeAdmission('2.37.3');
+		const currentSource = {
+			admission: currentAdmission,
+			bridgeSessionId: 'exact-current-session',
+			generation: 1,
+			htmlBytes: 123,
+			storyDataCount: 1,
+			sugarCubeRestartEligible: true,
+			type: 'url' as const,
+			url: 'twine-preview://exact-current/index.html'
+		};
+		const candidateSource = {
+			admission: candidateAdmission,
+			bridgeSessionId: 'exact-candidate-session',
+			generation: 2,
+			htmlBytes: 456,
+			storyDataCount: 1,
+			sugarCubeRestartEligible: false,
+			type: 'url' as const,
+			url: 'twine-preview://exact-candidate/index.html'
+		};
+		const passages = [
+			{id: 'current-id', localId: '1', name: 'Current exact'},
+			{id: 'candidate-id', localId: '9', name: 'Candidate exact'}
+		];
+		const exactHello = (version: string) => ({
+			adapterId: `sugarcube-${version}`,
+			capabilities: [
+				'currentPassage',
+				'storyVariables',
+				'temporaryVariables',
+				'visitedPassages'
+			],
+			format: 'SugarCube',
+			formatVersion: version,
+			protocolVersion: 1,
+			reliability: 'exact-version',
+			type: 'debugger-hello'
+		});
+		const exactSnapshot = (version: string, localId: string) => ({
+			adapterId: `sugarcube-${version}`,
+			currentPassage: {localId, source: 'debugger'},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				temporaryVariables: {state: 'complete'},
+				visitedPassages: {state: 'complete'}
+			},
+			storyVariables: [],
+			temporaryVariables: [],
+			type: 'debugger-snapshot',
+			visitedPassages: [{localId}]
+		});
+		const {rerender} = render(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing story"
+				passages={passages}
+				previewTarget="test"
+				storyExists
+				title="Current exact preview"
+			/>
+		);
+
+		postBridgeMessage(
+			'Current exact preview',
+			'exact-current-session',
+			exactHello('2.31.0')
+		);
+		postBridgeMessage(
+			'Current exact preview',
+			'exact-current-session',
+			exactSnapshot('2.31.0', '1')
+		);
+		postBridgeMessage('Current exact preview', 'exact-current-session', {
+			adapterId: 'sugarcube-2.31.0',
+			commandCapabilities: ['restart'],
+			protocolVersion: 1,
+			type: 'debugger-command-hello'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		expect(screen.getByRole('button', {name: 'Restart'})).toBeInTheDocument();
+
+		rerender(
+			<StoryPreviewFrame
+				contentSource={currentSource}
+				missingStoryMessage="Missing story"
+				passages={passages}
+				previewTarget="test"
+				stagedContentSource={candidateSource}
+				stagedPassages={passages}
+				stagedTitle="Candidate exact preview"
+				storyExists
+				title="Current exact preview"
+			/>
+		);
+		const candidateFrame = screen.getByTitle('Candidate exact preview');
+
+		postBridgeMessage(
+			'Candidate exact preview',
+			'exact-candidate-session',
+			exactHello('2.31.0')
+		);
+		postBridgeMessage(
+			'Candidate exact preview',
+			'exact-candidate-session',
+			exactSnapshot('2.31.0', '1')
+		);
+		postBridgeMessage('Candidate exact preview', 'exact-candidate-session', {
+			adapterId: 'sugarcube-2.31.0',
+			commandCapabilities: ['restart'],
+			protocolVersion: 1,
+			type: 'debugger-command-hello'
+		});
+		postBridgeMessage('Candidate exact preview', 'exact-candidate-session', {
+			adapterId: 'sugarcube-2.31.0',
+			command: 'restart',
+			protocolVersion: 1,
+			requestId: 'borrowed-request',
+			status: 'applied',
+			type: 'debugger-command-result'
+		});
+		postBridgeMessage(
+			'Candidate exact preview',
+			'exact-candidate-session',
+			exactHello('2.37.3')
+		);
+		postBridgeMessage(
+			'Candidate exact preview',
+			'exact-candidate-session',
+			exactSnapshot('2.37.3', '9')
+		);
+		postBridgeMessage('Candidate exact preview', 'exact-candidate-session', {
+			adapterId: 'sugarcube-2.37.3',
+			commandCapabilities: ['restart'],
+			protocolVersion: 1,
+			type: 'debugger-command-hello'
+		});
+
+		rerender(
+			<StoryPreviewFrame
+				contentSource={candidateSource}
+				missingStoryMessage="Missing story"
+				passages={passages}
+				previewTarget="test"
+				storyExists
+				title="Candidate exact committed"
+			/>
+		);
+
+		expect(screen.getByTitle('Candidate exact committed')).toBe(candidateFrame);
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const inspector = screen.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+
+		expect(
+			within(inspector).getByText('Adapter: sugarcube-2.37.3')
+		).toBeInTheDocument();
+		expect(within(inspector).getAllByText('Candidate exact')).toHaveLength(2);
+		expect(
+			screen.queryByRole('button', {name: 'Restart'})
+		).not.toBeInTheDocument();
+
+		postBridgeMessage(
+			'Candidate exact committed',
+			'exact-candidate-session',
+			exactHello('2.31.0')
+		);
+		postBridgeMessage(
+			'Candidate exact committed',
+			'exact-candidate-session',
+			exactSnapshot('2.31.0', '1')
+		);
+		postBridgeMessage('Candidate exact committed', 'exact-candidate-session', {
+			adapterId: 'sugarcube-2.31.0',
+			commandCapabilities: ['restart'],
+			protocolVersion: 1,
+			type: 'debugger-command-hello'
+		});
+		postBridgeMessage('Candidate exact committed', 'exact-candidate-session', {
+			adapterId: 'sugarcube-2.31.0',
+			command: 'restart',
+			protocolVersion: 1,
+			requestId: 'late-borrowed-request',
+			status: 'applied',
+			type: 'debugger-command-result'
+		});
+		expect(
+			within(inspector).getByText('Adapter: sugarcube-2.37.3')
+		).toBeInTheDocument();
+		expect(within(inspector).getAllByText('Candidate exact')).toHaveLength(2);
+		expect(
+			screen.queryByRole('button', {name: 'Restart'})
+		).not.toBeInTheDocument();
+	});
+
 	it('buffers candidate runtime messages and promotes them with the frame', async () => {
 		const onRuntimeModelChange = jest.fn();
 		const currentSource = {
@@ -789,17 +1427,19 @@ describe('<StoryPreviewFrame>', () => {
 			expect(
 				onRuntimeModelChange.mock.calls.some(
 					([model]) =>
-						model.debugger.hello?.id === 'sugarcube-2.37.3' &&
-						model.debugger.snapshot?.currentPassage?.id === 'candidate-id'
+						model.debugger.hello?.id === 'generic' &&
+						model.runtime.currentPassage?.id === 'candidate-id'
 				)
 			).toBe(true)
 		);
 		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const inspector = within(
+			screen.getByRole('region', {name: 'Runtime debugger inspector'})
+		);
+		expect(inspector.getByText('Adapter: generic')).toBeInTheDocument();
 		expect(
-			within(
-				screen.getByRole('region', {name: 'Runtime debugger inspector'})
-			).getAllByText('Candidate passage')
-		).toHaveLength(2);
+			inspector.getByText('Waiting for the first debugger snapshot.')
+		).toBeInTheDocument();
 	});
 
 	it('discards buffered candidate messages on rollback', async () => {
@@ -1221,7 +1861,8 @@ describe('<StoryPreviewFrame>', () => {
 		const onRevealSource = jest.fn();
 		render(
 			<StoryPreviewFrame
-				html="<html><body>Story</body></html>"
+				admission={sugarCubeAdmission()}
+				html='<html><body><tw-storydata format="SugarCube" format-version="2.37.3"></tw-storydata></body></html>'
 				missingStoryMessage="Missing story"
 				onRevealGraph={onRevealGraph}
 				onRevealSource={onRevealSource}

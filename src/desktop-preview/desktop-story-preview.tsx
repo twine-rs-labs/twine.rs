@@ -382,9 +382,12 @@ export const DesktopStoryPreview: React.FC<
 			)}
 			<StoryPreviewFrame
 				contentSource={{
+					admission: descriptor.admission,
 					bridgeSessionId: descriptor.bridgeSessionId,
+					generation: descriptor.generation,
 					htmlBytes: descriptor.htmlBytes,
 					storyDataCount: descriptor.storyDataCount,
+					sugarCubeRestartEligible: descriptor.sugarCubeRestartEligible,
 					type: 'url',
 					url
 				}}
@@ -412,9 +415,13 @@ export const DesktopStoryPreview: React.FC<
 				stagedContentSource={
 					candidate
 						? {
+								admission: candidate.descriptor.admission,
 								bridgeSessionId: candidate.descriptor.bridgeSessionId,
+								generation: candidate.descriptor.generation,
 								htmlBytes: candidate.descriptor.htmlBytes,
 								storyDataCount: candidate.descriptor.storyDataCount,
+								sugarCubeRestartEligible:
+									candidate.descriptor.sugarCubeRestartEligible,
 								type: 'url',
 								url: candidate.url
 							}

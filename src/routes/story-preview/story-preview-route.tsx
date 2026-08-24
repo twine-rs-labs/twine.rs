@@ -14,6 +14,7 @@ import {
 	storyPreviewPassages
 } from '../story-preview-debug';
 import {storyPreviewRoutePath} from './story-preview-route-path';
+import type {PreviewFormatAdmission} from '../story-preview-sugarcube';
 
 function previewTarget(search: URLSearchParams): NativeStoryPreviewTarget {
 	const target = search.get('target');
@@ -53,14 +54,14 @@ export function browserRuntimeLogCopy():
 export const StoryPreviewRoute: React.FC = () => {
 	const [publishError, setPublishError] = React.useState<Error>();
 	const [html, setHtml] = React.useState<string>();
+	const [admission, setAdmission] = React.useState<PreviewFormatAdmission>();
 	const [summary, setSummary] = React.useState<CoreStorySummary>();
 	const {storyId = ''} = useParams<'storyId'>();
 	const location = useLocation();
 	const navigate = useNavigate();
 	const coreProjectHost = useCoreProjectHost();
-	const {proofStory, publishStory} = usePublishing();
-	const publishStoryRef = React.useRef(publishStory);
-	const proofStoryRef = React.useRef(proofStory);
+	const {buildStoryPreviewPackage} = usePublishing();
+	const buildStoryPreviewPackageRef = React.useRef(buildStoryPreviewPackage);
 	const {stories} = useStoriesContext();
 	const story = stories.find(candidate => candidate.id === storyId);
 	const storyExists = !!story;
@@ -85,9 +86,8 @@ export const StoryPreviewRoute: React.FC = () => {
 	const onCopyRuntimeLog = React.useMemo(browserRuntimeLogCopy, []);
 
 	React.useEffect(() => {
-		publishStoryRef.current = publishStory;
-		proofStoryRef.current = proofStory;
-	}, [proofStory, publishStory]);
+		buildStoryPreviewPackageRef.current = buildStoryPreviewPackage;
+	}, [buildStoryPreviewPackage]);
 
 	React.useEffect(() => {
 		let active = true;
@@ -116,29 +116,31 @@ export const StoryPreviewRoute: React.FC = () => {
 
 		async function load() {
 			try {
-				const published =
-					target === 'proof'
-						? selectedProofingFormat
-							? await proofStoryRef.current(storyId, selectedProofingFormat)
-							: await proofStoryRef.current(storyId)
-						: await publishStoryRef.current(
-								storyId,
-								target === 'test'
-									? {
-											buildTarget: 'test',
-											formatOptions: 'debug',
-											...(requestedPassageId
-												? {
-														startId: requestedPassageId,
-														startMode: 'afterStartup' as const
-													}
-												: {startId: undefined})
-										}
-									: {buildTarget: 'play'}
-							);
+				const published = await buildStoryPreviewPackageRef.current(
+					storyId,
+					target,
+					{
+						...(target === 'proof' && selectedProofingFormat
+							? {proofingFormat: selectedProofingFormat}
+							: {}),
+						...(target === 'test'
+							? {
+									formatOptions: 'debug',
+									...(requestedPassageId
+										? {
+												startId: requestedPassageId,
+												startMode: 'afterStartup' as const
+											}
+										: {startId: undefined})
+								}
+							: {})
+					}
+				);
 
 				if (active) {
-					setHtml(published);
+					setAdmission(published.admission);
+					setHtml(published.build.html);
+					setSummary(published.summary);
 				}
 			} catch (error) {
 				if (active) {
@@ -148,6 +150,7 @@ export const StoryPreviewRoute: React.FC = () => {
 		}
 
 		setHtml(undefined);
+		setAdmission(undefined);
 		setPublishError(undefined);
 		if (storyExists) {
 			void load();
@@ -175,6 +178,7 @@ export const StoryPreviewRoute: React.FC = () => {
 
 	return (
 		<StoryPreviewFrame
+			admission={admission}
 			debugMetrics={storyPreviewDebugMetrics(summary)}
 			error={publishError}
 			html={html}
