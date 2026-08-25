@@ -16,9 +16,11 @@ export const app = {
 
 export class BrowserWindow {
 	static instances: BrowserWindow[] = [];
+	static options: any[] = [];
 
-	constructor() {
+	constructor(options?: any) {
 		BrowserWindow.instances.push(this);
+		BrowserWindow.options.push(options);
 		const session = {
 			on: jest.fn(),
 			setBluetoothPairingHandler: jest.fn(),
@@ -31,6 +33,7 @@ export class BrowserWindow {
 			isDestroyed: jest.fn(() => false),
 			on: jest.fn(),
 			once: jest.fn(),
+			openDevTools: jest.fn(),
 			removeListener: jest.fn(),
 			send: jest.fn(),
 			session,
@@ -41,6 +44,7 @@ export class BrowserWindow {
 	loadURL() {}
 	on() {}
 	once() {}
+	show() {}
 
 	static getFocusedWindow = jest.fn();
 }

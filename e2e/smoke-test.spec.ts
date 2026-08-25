@@ -485,7 +485,10 @@ test('tracks Harlowe passage navigation in a sandboxed browser preview', async (
 	page
 }) => {
 	await createProject(page, 'Harlowe passage telemetry');
-	await setPassageText(page, 'Start marker. [[Continue->Next]]');
+	await setPassageText(
+		page,
+		'(set:$alpha to 1)Start marker. [[Continue->Next]]'
+	);
 	await selectPassage(page, 'Next');
 	await setPassageText(page, 'Next marker.');
 
@@ -514,15 +517,23 @@ test('tracks Harlowe passage navigation in a sandboxed browser preview', async (
 	const debuggerInspector = publishedPage.getByRole('region', {
 		name: 'Runtime debugger inspector'
 	});
+	const currentPassageSection = debuggerInspector
+		.getByRole('heading', {name: 'Current passage'})
+		.locator('..')
+		.locator('..');
 	await expect(debuggerInspector).toContainText('Format: Harlowe 3.3.9');
 	await expect(debuggerInspector).toContainText('Adapter: harlowe-3.3.9');
 	await expect(debuggerInspector).toContainText('Reliability: exact-version');
 	await expect(
-		debuggerInspector.getByText('Start', {exact: true})
+		currentPassageSection.getByText('Start', {exact: true})
 	).toBeVisible();
 	await expect(
 		debuggerInspector.getByRole('heading', {name: 'Story variables'})
-	).toHaveCount(0);
+	).toBeVisible();
+	await expect(debuggerInspector).toContainText('alpha');
+	await expect(
+		debuggerInspector.getByRole('heading', {name: 'Visited passages'})
+	).toBeVisible();
 	expect(
 		(await previewIframe.getAttribute('sandbox'))?.split(/\s+/)
 	).not.toContain('allow-same-origin');
@@ -536,7 +547,7 @@ test('tracks Harlowe passage navigation in a sandboxed browser preview', async (
 		publishedPage.getByText('Current: Next', {exact: true})
 	).toBeVisible();
 	await expect(
-		debuggerInspector.getByText('Next', {exact: true})
+		currentPassageSection.getByText('Next', {exact: true})
 	).toBeVisible();
 	await expect(testCurrent).toBeEnabled();
 	await publishedPage.close();

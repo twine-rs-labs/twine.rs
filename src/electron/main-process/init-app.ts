@@ -27,6 +27,7 @@ import {initStoryPreviewWindowManager} from './story-preview-window-manager';
 import {openExternalUrl} from './external-url';
 import {setCommandLineOpenRequestNotifier} from './command-line';
 import {installPermissionPolicy} from './permission-policy';
+import {backgroundWindowForE2E, showWindowWhenReady} from './window-activation';
 
 let mainWindow: BrowserWindow | null;
 let authoringRendererEstablished = false;
@@ -51,6 +52,7 @@ async function createWindow() {
 		show: false,
 		title: 'Twine RS',
 		webPreferences: {
+			...(backgroundWindowForE2E() ? {backgroundThrottling: false} : {}),
 			contextIsolation: true,
 			nodeIntegration: false,
 			nodeIntegrationInSubFrames: false,
@@ -89,7 +91,7 @@ async function createWindow() {
 			mainWindow!.webContents.insertCSS(userCss);
 		}
 
-		mainWindow!.show();
+		showWindowWhenReady(mainWindow!);
 
 		if (!app.isPackaged && !performanceHarnessEnabled()) {
 			mainWindow!.webContents.openDevTools();

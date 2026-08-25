@@ -17,10 +17,12 @@ export type ExactHarloweAdapterId =
  */
 export const HARLOWE_3_3_9_STATE_PROFILE = {
 	capabilityDependencies: {
-		currentPassage: ['state.passage', 'state.on']
+		currentPassage: ['state.passage', 'state.on'],
+		storyVariables: ['state.variables', 'varRef.on'],
+		visitedPassages: ['state.timeline', 'state.pastLength']
 	},
 	events: {
-		capture: ['forward', 'back', 'load']
+		capture: ['forward', 'back', 'load', 'forgetUndos']
 	},
 	moduleName: 'state',
 	on: {
@@ -35,6 +37,35 @@ export const HARLOWE_3_3_9_STATE_PROFILE = {
 		enumerable: true,
 		getterSource: 'get passage(){return d.passage}',
 		setter: false
+	},
+	pastLength: {
+		configurable: false,
+		enumerable: true,
+		getterSource: 'get pastLength(){return p}',
+		setter: false
+	},
+	timeline: {
+		configurable: false,
+		enumerable: true,
+		getterSource: 'get timeline(){return u}',
+		setter: false
+	},
+	variables: {
+		configurable: false,
+		enumerable: true,
+		getterSource: 'get variables(){return i.variables}',
+		setter: false
+	},
+	varRef: {
+		moduleName: 'internaltypes/varref',
+		on: {
+			configurable: false,
+			enumerable: true,
+			source:
+				'function(e,t){if(e in S)return"function"!=typeof t||S[e].includes(t)||S[e].push(t),c;n("VarRef.on","invalid event name")}',
+			writable: false
+		},
+		stateFrozen: true
 	},
 	stateFrozen: true
 } as const;

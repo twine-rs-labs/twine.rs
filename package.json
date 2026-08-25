@@ -139,6 +139,7 @@
 		"e2e:serve": "vite preview --host 127.0.0.1 --port 5173 --strictPort",
 		"e2e:pwa": "playwright test --config playwright.pwa.config.ts",
 		"e2e:electron:packaged": "playwright test --config playwright.packaged-electron.config.ts",
+		"e2e:electron:packaged:hidden": "playwright test --config playwright.packaged-electron-hidden.config.ts",
 		"electron:install": "install-electron",
 		"package:electron:dir": "electron-builder --config electron-builder.config.js --dir --publish=never",
 		"package:electron:artifacts": "electron-builder --config electron-builder.config.js --publish=never",

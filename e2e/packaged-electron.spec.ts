@@ -1,4 +1,5 @@
 import {expect, test, type TestInfo} from '@playwright/test';
+import {execFile} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {
 	_electron as electron,
@@ -25,6 +26,11 @@ import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import extractZip from 'extract-zip';
+import {
+	environmentForPackagedElectronWindowMode,
+	resolvePackagedElectronWindowMode,
+	windowModeForTest
+} from './packaged-electron-window-mode.mjs';
 
 type DialogState = {
 	calls: Array<{properties?: string[]; title?: string}>;
@@ -37,6 +43,9 @@ type RunningPackagedApp = {
 	page: Page;
 	rendererLogs: string[];
 };
+
+const packagedAppCloseTimeoutMs = 30_000;
+const packagedAppCleanupTimeoutMs = 10_000;
 
 function waitForCompletedDownload(app: ElectronApplication, savePath: string) {
 	return app.evaluate(
@@ -149,7 +158,7 @@ async function packagedExecutable() {
 }
 
 function isolatedEnvironment(root: string) {
-	return {
+	const environment = {
 		...process.env,
 		...(process.platform === 'win32'
 			? {}
@@ -164,6 +173,14 @@ function isolatedEnvironment(root: string) {
 		TWINE_PERF: '1',
 		TWINE_PERF_USER_DATA: path.join(root, 'user-data')
 	};
+
+	return environmentForPackagedElectronWindowMode(
+		windowModeForTest(
+			resolvePackagedElectronWindowMode(process.env),
+			test.info().tags
+		),
+		environment
+	);
 }
 
 async function prepareIsolatedEnvironment(root: string) {
@@ -191,6 +208,250 @@ function appendMainProcessLog(
 	}
 	if (logs.length > 500) {
 		logs.splice(0, logs.length - 500);
+	}
+}
+
+function packagedAppShutdownError(error: unknown) {
+	return {
+		message: error instanceof Error ? error.message : String(error),
+		stack: error instanceof Error ? error.stack : undefined
+	};
+}
+
+async function attachPackagedAppShutdownDiagnostics(
+	testInfo: TestInfo,
+	running: RunningPackagedApp,
+	error: unknown
+) {
+	const process = running.app.process();
+	const pages = running.app.windows().map(page => ({
+		closed: page.isClosed(),
+		url: page.isClosed() ? undefined : page.url()
+	}));
+	const diagnostics = {
+		error: packagedAppShutdownError(error),
+		mainProcessLogs: running.mainProcessLogs,
+		pages,
+		process: {
+			connected: process.connected,
+			exitCode: process.exitCode,
+			killed: process.killed,
+			pid: process.pid,
+			signalCode: process.signalCode
+		},
+		rendererLogs: running.rendererLogs
+	};
+
+	console.error(
+		'Packaged app shutdown diagnostics:',
+		JSON.stringify(
+			{
+				...diagnostics,
+				mainProcessLogs: diagnostics.mainProcessLogs.slice(-50),
+				rendererLogs: diagnostics.rendererLogs.slice(-50)
+			},
+			null,
+			2
+		)
+	);
+
+	await testInfo.attach('packaged-app-shutdown-diagnostics', {
+		body: Buffer.from(JSON.stringify(diagnostics, null, 2)),
+		contentType: 'application/json'
+	});
+}
+
+async function waitForPackagedAppClose(
+	running: RunningPackagedApp,
+	timeout: number
+) {
+	await running.app.waitForEvent('close', {timeout});
+}
+
+async function withPackagedAppTimeout<T>(
+	operation: Promise<T>,
+	timeout: number,
+	message: string
+) {
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+	try {
+		return await Promise.race([
+			operation,
+			new Promise<never>((_resolve, reject) => {
+				timeoutId = setTimeout(() => reject(new Error(message)), timeout);
+			})
+		]);
+	} finally {
+		if (timeoutId !== undefined) {
+			clearTimeout(timeoutId);
+		}
+	}
+}
+
+async function waitForChildProcessExit(
+	process: ReturnType<ElectronApplication['process']>,
+	timeout: number
+) {
+	if (process.exitCode !== null || process.signalCode !== null) {
+		return;
+	}
+
+	await new Promise<void>((resolve, reject) => {
+		const timeoutId = setTimeout(() => {
+			process.off('exit', onExit);
+			reject(
+				new Error(
+					`Electron child process did not exit within ${timeout} ms after cleanup.`
+				)
+			);
+		}, timeout);
+		const onExit = () => {
+			clearTimeout(timeoutId);
+			resolve();
+		};
+
+		process.once('exit', onExit);
+	});
+}
+
+function forceKillPackagedAppProcessTree(
+	childProcess: ReturnType<ElectronApplication['process']>
+) {
+	const pid = childProcess.pid;
+
+	if (!pid) {
+		return Promise.reject(
+			new Error('Electron child process has no PID for forced cleanup.')
+		);
+	}
+	if (process.platform === 'win32') {
+		return new Promise<void>((resolve, reject) => {
+			execFile(
+				'taskkill',
+				['/PID', String(pid), '/T', '/F'],
+				{timeout: packagedAppCleanupTimeoutMs, windowsHide: true},
+				error => {
+					if (
+						error &&
+						childProcess.exitCode === null &&
+						childProcess.signalCode === null
+					) {
+						reject(error);
+					} else {
+						resolve();
+					}
+				}
+			);
+		});
+	}
+
+	try {
+		process.kill(-pid, 'SIGKILL');
+		return Promise.resolve();
+	} catch (error) {
+		if (
+			error &&
+			typeof error === 'object' &&
+			'code' in error &&
+			error.code === 'ESRCH'
+		) {
+			return Promise.resolve();
+		}
+
+		return Promise.reject(error);
+	}
+}
+
+async function closePackagedAppForTest(
+	running: RunningPackagedApp,
+	testInfo: TestInfo
+) {
+	try {
+		await withPackagedAppTimeout(
+			running.app.close(),
+			packagedAppCloseTimeoutMs,
+			`Electron app.close() did not finish within ${packagedAppCloseTimeoutMs} ms.`
+		);
+	} catch (error) {
+		await attachPackagedAppShutdownDiagnostics(testInfo, running, error);
+		throw error;
+	}
+}
+
+async function closePackagedWindowAndWaitForApp(
+	running: RunningPackagedApp,
+	testInfo: TestInfo
+) {
+	try {
+		const appClosed = waitForPackagedAppClose(
+			running,
+			packagedAppCloseTimeoutMs
+		);
+
+		await withPackagedAppTimeout(
+			Promise.all([
+				running.app.evaluate(({BrowserWindow}) => {
+					BrowserWindow.getAllWindows()[0]?.close();
+				}),
+				appClosed
+			]),
+			packagedAppCloseTimeoutMs,
+			`Electron window close did not finish within ${packagedAppCloseTimeoutMs} ms.`
+		);
+	} catch (error) {
+		await attachPackagedAppShutdownDiagnostics(testInfo, running, error);
+		throw error;
+	}
+}
+
+async function cleanupPackagedApp(running: RunningPackagedApp) {
+	try {
+		await withPackagedAppTimeout(
+			running.app.close(),
+			packagedAppCleanupTimeoutMs,
+			`Electron app cleanup did not finish within ${packagedAppCleanupTimeoutMs} ms.`
+		);
+		return;
+	} catch {
+		const process = running.app.process();
+
+		if (process.exitCode === null && process.signalCode === null) {
+			const appClosed = waitForPackagedAppClose(
+				running,
+				packagedAppCleanupTimeoutMs
+			);
+			const processExited = waitForChildProcessExit(
+				process,
+				packagedAppCleanupTimeoutMs
+			);
+			const shutdownObserved = Promise.allSettled([appClosed, processExited]);
+			let killError: unknown;
+
+			console.warn(
+				`Force-killing Electron process tree ${process.pid ?? 'unknown'} after graceful test cleanup timed out.`
+			);
+			try {
+				await forceKillPackagedAppProcessTree(process);
+			} catch (error) {
+				killError = error;
+			}
+			await shutdownObserved;
+
+			if (
+				killError &&
+				process.exitCode === null &&
+				process.signalCode === null
+			) {
+				throw killError;
+			}
+		}
+
+		if (process.exitCode === null && process.signalCode === null) {
+			throw new Error(
+				`Electron process ${process.pid ?? 'unknown'} remained alive after forced test cleanup.`
+			);
+		}
 	}
 }
 
@@ -499,7 +760,7 @@ async function attachDuplicateProjectDiagnostics(
 	});
 }
 
-test('packaged desktop drains a trailing legacy editor save before exit', async () => {
+test('packaged desktop drains a trailing legacy editor save before exit', async ({}, testInfo) => {
 	const executablePath = await packagedExecutable();
 	const profileRoot = await mkdtemp(
 		path.join(os.tmpdir(), 'twine-rs-packaged-shutdown-legacy-save-')
@@ -533,23 +794,20 @@ test('packaged desktop drains a trailing legacy editor save before exit', async 
 			.getByRole('tab', {name: 'Text'})
 			.click();
 		await replaceEditorText(page, 'Trailing legacy editor save');
-		const appClosed = running.app.waitForEvent('close');
-
-		await running.app.evaluate(({BrowserWindow}) => {
-			BrowserWindow.getAllWindows()[0]?.close();
-		});
-		await appClosed;
+		await closePackagedWindowAndWaitForApp(running, testInfo);
 		running = undefined;
 
 		await expect(readFile(storyPath, 'utf8')).resolves.toContain(
 			'Trailing legacy editor save'
 		);
 	} finally {
-		await running?.app.close();
+		if (running) {
+			await cleanupPackagedApp(running);
+		}
 	}
 });
 
-test('packaged desktop drains a trailing native project save before exit', async () => {
+test('packaged desktop drains a trailing native project save before exit', async ({}, testInfo) => {
 	const executablePath = await packagedExecutable();
 	const profileRoot = await mkdtemp(
 		path.join(os.tmpdir(), 'twine-rs-packaged-shutdown-save-')
@@ -559,6 +817,32 @@ test('packaged desktop drains a trailing native project save before exit', async
 	try {
 		running = await launchPackagedApp(executablePath, profileRoot);
 		const {page} = running;
+		const windowMode = windowModeForTest(
+			resolvePackagedElectronWindowMode(process.env),
+			testInfo.tags
+		);
+		if (windowMode === 'hidden') {
+			await expect
+				.poll(() =>
+					running.app.evaluate(({BrowserWindow}) => {
+						const window = BrowserWindow.getAllWindows()[0];
+						return {
+							focused: window?.isFocused() ?? null,
+							visible: window?.isVisible() ?? null
+						};
+					})
+				)
+				.toEqual({focused: false, visible: false});
+		} else {
+			await expect
+				.poll(() =>
+					running.app.evaluate(
+						({BrowserWindow}) =>
+							BrowserWindow.getAllWindows()[0]?.isVisible() ?? null
+					)
+				)
+				.toBe(true);
+		}
 
 		await page.getByTitle('New Project').click();
 		await page.getByLabel('Project name').fill('Shutdown Save');
@@ -568,19 +852,16 @@ test('packaged desktop drains a trailing native project save before exit', async
 		const projectRoot = await projectRootFromRenderer(page);
 
 		await replaceEditorText(page, 'Trailing editor save');
-		const appClosed = running.app.waitForEvent('close');
-
-		await running.app.evaluate(({BrowserWindow}) => {
-			BrowserWindow.getAllWindows()[0]?.close();
-		});
-		await appClosed;
+		await closePackagedWindowAndWaitForApp(running, testInfo);
 		running = undefined;
 
 		await expect(savedProjectSource(projectRoot)).resolves.toContain(
 			'Trailing editor save'
 		);
 	} finally {
-		await running?.app.close();
+		if (running) {
+			await cleanupPackagedApp(running);
+		}
 	}
 });
 
@@ -1779,7 +2060,7 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			testInfo
 		);
 
-		await app.close();
+		await closePackagedAppForTest(running, testInfo);
 		running = undefined;
 
 		running = await launchPackagedApp(executablePath, openProfile);
@@ -1839,7 +2120,9 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			{properties: ['openDirectory'], title: 'Open Project Folder'}
 		]);
 	} finally {
-		await running?.app.close();
+		if (running) {
+			await cleanupPackagedApp(running);
+		}
 	}
 });
 

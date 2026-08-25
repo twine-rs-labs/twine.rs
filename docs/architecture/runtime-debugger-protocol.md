@@ -77,17 +77,17 @@ Adapter selection matches both story-format name and version. Unknown or older
 versions use the generic best-effort adapter; they never inherit the promises of
 a nearby version.
 
-| Adapter                                                                | Reliability                           | Read capabilities                                                       |
-| ---------------------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------- |
-| SugarCube 2.31.0, 2.31.1                                               | Exact version, read profile 2.31      | Current passage, story variables, temporary variables, visited passages |
-| SugarCube 2.32.0, 2.33.0-2.33.4, 2.34.0, 2.34.1, 2.35.0                | Exact version, read profile 2.32-2.35 | Current passage, story variables, temporary variables, visited passages |
-| SugarCube 2.36.0, 2.36.1                                               | Exact version, read profile 2.36      | Current passage, story variables, temporary variables, visited passages |
-| SugarCube 2.37.0, 2.37.3                                               | Exact version, read profile 2.37      | Current passage, story variables, temporary variables, visited passages |
-| Snowman 1.5.0 and 2.1.1                                                | Exact version                         | Current passage, story variables, visited passages                      |
-| Chapbook 2.3.1                                                         | Best effort                           | Current passage only                                                    |
-| Admitted bundled Harlowe 3.3.9                                         | Exact version, State profile 3.3.9    | Current passage only                                                    |
-| Unadmitted or altered Harlowe 3.3.9                                    | Best effort                           | Current passage only                                                    |
-| Generic, including SugarCube 1, user-added SugarCube, and unbundled v2 | Best effort                           | Current passage only                                                    |
+| Adapter                                                                | Reliability                                   | Read capabilities                                                       |
+| ---------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------- |
+| SugarCube 2.31.0, 2.31.1                                               | Exact version, read profile 2.31              | Current passage, story variables, temporary variables, visited passages |
+| SugarCube 2.32.0, 2.33.0-2.33.4, 2.34.0, 2.34.1, 2.35.0                | Exact version, read profile 2.32-2.35         | Current passage, story variables, temporary variables, visited passages |
+| SugarCube 2.36.0, 2.36.1                                               | Exact version, read profile 2.36              | Current passage, story variables, temporary variables, visited passages |
+| SugarCube 2.37.0, 2.37.3                                               | Exact version, read profile 2.37              | Current passage, story variables, temporary variables, visited passages |
+| Snowman 1.5.0 and 2.1.1                                                | Exact version                                 | Current passage, story variables, visited passages                      |
+| Chapbook 2.3.1                                                         | Best effort                                   | Current passage only                                                    |
+| Admitted bundled Harlowe 3.3.9                                         | Exact version, State and VarRef profile 3.3.9 | Current passage, story variables, visited passages                      |
+| Unadmitted or altered Harlowe 3.3.9                                    | Best effort                                   | Current passage only                                                    |
+| Generic, including SugarCube 1, user-added SugarCube, and unbundled v2 | Best effort                                   | Current passage only                                                    |
 
 Exact-version means the adapter targets a verified runtime surface for that
 bundled version. It does not make story values trusted or promise support for a
@@ -118,13 +118,14 @@ disable an independently valid Restart profile.
 
 The admitted bundled Harlowe 3.3.9 artifact receives one inert Story
 JavaScript bootstrap immediately before its canonical author script. That
-bootstrap requires the private `state` module and invokes a non-writable,
-non-configurable, one-shot bridge callback. The bridge accepts State only when
-the object is frozen and its own `passage` getter and `on` function match the
-checked-in descriptor flags and exact bundled function sources. It retains
-State and the passage getter only inside the bridge closure, registers the
-audited `forward`, `back`, and `load` events through captured intrinsics, and
-then marks State attested. In response to the early bridge arm, the parent
+bootstrap requires the private `state` and `internaltypes/varref` modules and
+invokes a non-writable, non-configurable, one-shot bridge callback. The bridge
+accepts State only when the object is frozen and its own `passage` getter and
+`on` function match the checked-in descriptor flags and exact bundled function
+sources. It retains State and the attested getters only inside the bridge
+closure, registers the audited `forward`, `back`, `load`, and `forgetUndos`
+events through captured intrinsics, and then marks State attested. In response
+to the early bridge arm, the parent
 transfers a private `MessagePort` which the bridge consumes before story
 listeners can observe it. The parent creates a high-entropy challenge for each
 actual iframe document load and sends it only over that port; the attestation
@@ -138,7 +139,15 @@ non-authoritative. Empty startup passage is a valid ready state whose
 current-passage section remains unavailable until the first forward. Exact
 reads never fall back to DOM, session storage, startnode, or generic discovery;
 redirects still rely on the existing render observation to schedule a new
-capture.
+capture. State `variables`, `timeline`, and `pastLength` getters are attested
+independently of the `passage`/`on` readiness gate. The private VarRef module is
+also attested independently: if it drifts, story-variable capture is unavailable
+while current passage and independently valid history remain available. Its
+`set` and `delete` events queue the normal coalesced capture, including nested
+mutations; arbitrary direct writes to private State objects have no immediate
+observation guarantee. History reads only committed timeline indices
+`0..pastLength`, excludes redo moments, keeps the newest 200, and rereads after
+`forward`, `back`, `load` (deferred), and `forgetUndos` operations.
 
 ## Snapshot safety
 
@@ -150,9 +159,18 @@ receive conservative type placeholders without recursive traversal. Visited
 passages contain bounded passage identity fields that the host resolves against
 the published story descriptor before treating them as stable application IDs.
 
-Enumerable variable roots are traversed for at most the item limit plus the
-sentinel that detects truncation, without first materializing the complete key
-set. Story values, current-passage fields, and history indices are read only
+Harlowe variable roots are enumerated with a captured
+`Object.getOwnPropertyNames` intrinsic, so only own string-key candidates are
+considered and a non-extensible root never requires prototype traversal. Only
+the first item-limit candidates receive descriptor and value processing; an
+additional returned name establishes truncation, and metadata candidates count
+toward that bound before filtering. The intrinsic still asks a same-realm
+Proxy's `ownKeys` trap to prepare a complete own-key list before the bridge can
+apply its cap; the trap may allocate arbitrary work or throw, making only that
+section unavailable. The bridge does not claim to bound work performed inside
+same-realm Proxy traps.
+
+Story values, current-passage fields, and history indices are read only
 from own data descriptors; ordinary accessors, object coercions, and `toJSON`
 are never invoked. BigInts use a fixed label, and complex values are not
 recursively inspected. History is read from the newest bounded suffix and
@@ -261,10 +279,12 @@ and WebKit cover profile representatives 2.31.0, 2.32.0, 2.33.1, 2.35.0,
 negotiation for 2.31.0 and 2.37.3 under the documented
 opaque/degraded-storage boundary. Packaged Electron covers all six profile
 representatives, with Play and non-start Test From Here at the 2.31 and 2.37
-endpoints. Offline PWA and packaged Electron coverage also exercise exact
-Harlowe admission, attestation, current-passage navigation, and candidate
-readiness. Adding a future SugarCube or Harlowe release requires an explicit
-matrix row, canonical decoded-source digest, an audited executable profile,
+endpoints. Browser, offline PWA, and packaged Electron coverage also exercise
+exact Harlowe admission, State and VarRef attestation, story variables,
+populated visited history, the 200-moment bound with canonical truncation
+status, current-passage navigation, and candidate readiness. Adding a future
+SugarCube or Harlowe release requires an explicit matrix row, canonical
+decoded-source digest, an audited executable profile,
 hostile-descriptor tests, and real-artifact browser and packaged-runtime
 coverage; nearby versions never inherit the 3.3.9 profile.
 

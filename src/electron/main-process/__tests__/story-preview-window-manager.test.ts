@@ -17,6 +17,10 @@ import {
 } from '../../../routes/story-preview-sugarcube';
 import {HARLOWE_3_3_9_COMPATIBILITY} from '../../../routes/story-preview-harlowe';
 
+jest.mock('../performance-harness', () => ({
+	performanceHarnessEnabled: () => process.env.TWINE_PERF === '1'
+}));
+
 type Listener = (...args: any[]) => void;
 type IpcHandler = (...args: any[]) => any;
 
@@ -473,6 +477,68 @@ describe('story preview window manager', () => {
 		expect(window.webContents.session.on).not.toHaveBeenCalled();
 	});
 
+	it('keeps a ready preview hidden for the exact E2E opt-in', async () => {
+		const previousBackground = process.env.TWINE_E2E_BACKGROUND_WINDOW;
+		const previousPerformance = process.env.TWINE_PERF;
+		process.env.TWINE_E2E_BACKGROUND_WINDOW = '1';
+		process.env.TWINE_PERF = '1';
+		try {
+			const harness = testManager();
+			const {window} = await openReadyPreview(harness);
+
+			expect(window.show).not.toHaveBeenCalled();
+			expect(harness.windowOptions[0]).toEqual(
+				expect.objectContaining({
+					webPreferences: expect.objectContaining({
+						backgroundThrottling: false
+					})
+				})
+			);
+		} finally {
+			if (previousBackground === undefined) {
+				delete process.env.TWINE_E2E_BACKGROUND_WINDOW;
+			} else {
+				process.env.TWINE_E2E_BACKGROUND_WINDOW = previousBackground;
+			}
+			if (previousPerformance === undefined) {
+				delete process.env.TWINE_PERF;
+			} else {
+				process.env.TWINE_PERF = previousPerformance;
+			}
+		}
+	});
+
+	it('keeps normal preview activation for the lone background flag', async () => {
+		const previousBackground = process.env.TWINE_E2E_BACKGROUND_WINDOW;
+		const previousPerformance = process.env.TWINE_PERF;
+		process.env.TWINE_E2E_BACKGROUND_WINDOW = '1';
+		delete process.env.TWINE_PERF;
+		try {
+			const harness = testManager();
+			const {window} = await openReadyPreview(harness);
+
+			expect(window.show).toHaveBeenCalledTimes(1);
+			expect(harness.windowOptions[0]).toEqual(
+				expect.objectContaining({
+					webPreferences: expect.not.objectContaining({
+						backgroundThrottling: false
+					})
+				})
+			);
+		} finally {
+			if (previousBackground === undefined) {
+				delete process.env.TWINE_E2E_BACKGROUND_WINDOW;
+			} else {
+				process.env.TWINE_E2E_BACKGROUND_WINDOW = previousBackground;
+			}
+			if (previousPerformance === undefined) {
+				delete process.env.TWINE_PERF;
+			} else {
+				process.env.TWINE_PERF = previousPerformance;
+			}
+		}
+	});
+
 	it('derives preview identity from the sender and rejects another preview', async () => {
 		const harness = testManager();
 		const first = await openReadyPreview(harness);
@@ -888,6 +954,59 @@ describe('story preview window manager', () => {
 				status: 'error'
 			})
 		).not.toThrow();
+	});
+
+	it('suppresses owner focus for E2E reveal commands while forwarding completion', async () => {
+		const previousBackground = process.env.TWINE_E2E_BACKGROUND_WINDOW;
+		const previousPerformance = process.env.TWINE_PERF;
+		process.env.TWINE_E2E_BACKGROUND_WINDOW = '1';
+		process.env.TWINE_PERF = '1';
+		try {
+			const harness = testManager();
+			const {event, launch, owner, window} = await openReadyPreview(harness);
+			const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+			const completion: NativeStoryPreviewCommandResult = {
+				command: 'revealGraph',
+				generation: 1,
+				status: 'success'
+			};
+
+			expect(
+				command(event, {
+					generation: 1,
+					passageId: 'passage-2',
+					type: 'revealGraph'
+				})
+			).toEqual(expect.objectContaining({status: 'busy'}));
+			expect(harness.focusOwner).not.toHaveBeenCalled();
+			expect(owner.send).toHaveBeenCalledWith(
+				storyPreviewIpcChannels.ownerCommand,
+				expect.objectContaining({
+					command: expect.objectContaining({type: completion.command})
+				})
+			);
+
+			harness.manager.completeCommand(
+				owner,
+				launch.descriptor.sessionId,
+				completion
+			);
+			expect(window.webContents.send).toHaveBeenLastCalledWith(
+				storyPreviewIpcChannels.commandResult,
+				completion
+			);
+		} finally {
+			if (previousBackground === undefined) {
+				delete process.env.TWINE_E2E_BACKGROUND_WINDOW;
+			} else {
+				process.env.TWINE_E2E_BACKGROUND_WINDOW = previousBackground;
+			}
+			if (previousPerformance === undefined) {
+				delete process.env.TWINE_PERF;
+			} else {
+				process.env.TWINE_PERF = previousPerformance;
+			}
+		}
 	});
 
 	it('commits a replacement only after the matching frame-load acknowledgement', async () => {

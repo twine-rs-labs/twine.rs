@@ -9,6 +9,7 @@ import {
 	createStoryDirectory,
 	initStoryDirectory
 } from '../story-directory';
+import {getUserCss} from '../user-css';
 
 jest.mock('electron');
 jest.mock('../app-prefs');
@@ -17,6 +18,11 @@ jest.mock('../ipc');
 jest.mock('../locales');
 jest.mock('../menu-bar');
 jest.mock('../story-directory');
+jest.mock('../user-css');
+jest.mock('../performance-harness', () => ({
+	...jest.requireActual('../performance-harness'),
+	performanceHarnessEnabled: () => process.env.TWINE_PERF === '1'
+}));
 
 describe('initApp', () => {
 	const initIpcMock = initIpc as jest.Mock;
@@ -31,10 +37,96 @@ describe('initApp', () => {
 	const storyWritesReadyForQuitMock = storyWritesReadyForQuit as jest.Mock;
 	const setCommandLineOpenRequestNotifierMock =
 		setCommandLineOpenRequestNotifier as jest.Mock;
+	const getUserCssMock = getUserCss as jest.Mock;
 
 	beforeEach(() => {
 		jest.spyOn(global, 'setInterval');
 		storyWritesReadyForQuitMock.mockReturnValue(false);
+		getUserCssMock.mockResolvedValue(undefined);
+	});
+
+	it('keeps the ready main window hidden for the exact E2E opt-in', async () => {
+		const previousBackground = process.env.TWINE_E2E_BACKGROUND_WINDOW;
+		const previousPerformance = process.env.TWINE_PERF;
+		process.env.TWINE_E2E_BACKGROUND_WINDOW = '1';
+		process.env.TWINE_PERF = '1';
+		try {
+			const windowOnce = jest.spyOn(BrowserWindow.prototype, 'once');
+			await initApp();
+			const window = (
+				BrowserWindow as unknown as {instances: BrowserWindow[]}
+			).instances.at(-1) as BrowserWindow;
+			const show = jest.spyOn(window, 'show');
+			const readyToShow = (windowOnce.mock.calls as any[]).find(
+				([event]) => event === 'ready-to-show'
+			)?.[1] as () => Promise<void>;
+
+			await readyToShow();
+
+			expect(show).not.toHaveBeenCalled();
+			expect(
+				(BrowserWindow as unknown as {options: any[]}).options.at(-1)
+			).toEqual(
+				expect.objectContaining({
+					webPreferences: expect.objectContaining({
+						backgroundThrottling: false
+					})
+				})
+			);
+		} finally {
+			if (previousBackground === undefined) {
+				delete process.env.TWINE_E2E_BACKGROUND_WINDOW;
+			} else {
+				process.env.TWINE_E2E_BACKGROUND_WINDOW = previousBackground;
+			}
+			if (previousPerformance === undefined) {
+				delete process.env.TWINE_PERF;
+			} else {
+				process.env.TWINE_PERF = previousPerformance;
+			}
+		}
+	});
+
+	it('keeps normal window activation for the lone background flag', async () => {
+		const previousBackground = process.env.TWINE_E2E_BACKGROUND_WINDOW;
+		const previousPerformance = process.env.TWINE_PERF;
+		process.env.TWINE_E2E_BACKGROUND_WINDOW = '1';
+		delete process.env.TWINE_PERF;
+		try {
+			const windowOnce = jest.spyOn(BrowserWindow.prototype, 'once');
+			await initApp();
+			const window = (
+				BrowserWindow as unknown as {instances: BrowserWindow[]}
+			).instances.at(-1) as BrowserWindow;
+			const show = jest.spyOn(window, 'show');
+			const readyToShow = (windowOnce.mock.calls as any[]).find(
+				([event]) => event === 'ready-to-show'
+			)?.[1] as () => Promise<void>;
+
+			await readyToShow();
+
+			expect(show).toHaveBeenCalledTimes(1);
+			expect(
+				(BrowserWindow as unknown as {options: any[]}).options.at(-1)
+			).toEqual(
+				expect.objectContaining({
+					webPreferences: expect.not.objectContaining({
+						backgroundThrottling: false
+					})
+				})
+			);
+		} finally {
+			if (previousBackground === undefined) {
+				delete process.env.TWINE_E2E_BACKGROUND_WINDOW;
+			} else {
+				process.env.TWINE_E2E_BACKGROUND_WINDOW = previousBackground;
+			}
+			if (previousPerformance === undefined) {
+				delete process.env.TWINE_PERF;
+			} else {
+				process.env.TWINE_PERF = previousPerformance;
+			}
+		}
 	});
 
 	it('initializes locales', async () => {
