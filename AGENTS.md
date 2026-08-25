@@ -1,3 +1,9 @@
+## Commit messages
+
+- Use Conventional Commits for every commit. Format the subject as
+  `<type>[optional scope]: <description>`, and use the specification's `!` or
+  `BREAKING CHANGE:` footer for breaking changes.
+
 ## Browser validation
 
 - For ad-hoc real-browser navigation, inspection, snapshots, screenshots,
@@ -30,6 +36,23 @@
 
 - Do not install or update browser tooling unless the local CLI is unavailable
   or the task explicitly requires a newer standalone CLI.
+
+### Packaged Electron window modes
+
+- `npm run e2e:electron:packaged` is the canonical acceptance command. It runs
+  every packaged Electron test with visible windows, and GitHub CI must use this
+  visible variant.
+- For local runs, prefer `npm run e2e:electron:packaged:hidden` when visible app
+  windows would interrupt the developer's workflow. This hidden-window variant
+  is supplementary evidence, not a stronger or equivalent replacement for the
+  canonical visible acceptance run: hiding windows changes activation, focus,
+  pointer input, animation, view-transition, native-dialog, and compositor
+  behavior.
+- Mark tests that depend on those visible-window behaviors with the exact
+  `@visible-window` title tag. Tagged tests must remain visible in both variants,
+  including local hidden runs; do not remove or bypass the tag to avoid local
+  interruptions. Keep other packaged Electron tests hidden in the local hidden
+  variant unless the behavior under test requires visibility.
 
 ## Changelog preparation
 

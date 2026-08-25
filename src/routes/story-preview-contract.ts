@@ -100,6 +100,7 @@ export const STORY_PREVIEW_BRIDGE_LIMITS = Object.freeze({
 	debuggerFormatLength: 128,
 	debuggerFormatVersionLength: 64,
 	debuggerVariableNameLength: 256,
+	debuggerVariableScopeLength: 256,
 	debuggerVariableTypeLength: 64,
 	debuggerPreviewLength: 2048,
 	debuggerVariableCount: 100,
@@ -198,6 +199,7 @@ export function serializeStoryPreviewRuntimeLog(
 export interface StoryPreviewDebuggerVariable {
 	name: string;
 	preview: string;
+	scope?: string;
 	type: string;
 }
 
@@ -390,6 +392,7 @@ export type StoryPreviewRuntimeAction =
 	  };
 
 type UnknownRecord = Record<string, unknown>;
+const nonDataField = Symbol('non-data-field');
 
 function isRecord(value: unknown): value is UnknownRecord {
 	return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -653,8 +656,21 @@ function debuggerSectionsFromUnknown(
 	return sections;
 }
 
+function ownDataField(value: UnknownRecord, key: string): unknown {
+	try {
+		const descriptor = Object.getOwnPropertyDescriptor(value, key);
+		if (!descriptor) {
+			return undefined;
+		}
+		return Object.hasOwn(descriptor, 'value') ? descriptor.value : nonDataField;
+	} catch {
+		return nonDataField;
+	}
+}
+
 function debuggerVariablesFromUnknown(
-	value: unknown
+	value: unknown,
+	options: {allowScope: boolean; requireScope: boolean}
 ): StoryPreviewDebuggerVariable[] | undefined | null {
 	if (value === undefined) {
 		return undefined;
@@ -673,25 +689,41 @@ function debuggerVariablesFromUnknown(
 			return null;
 		}
 		const name = boundedString(
-			item.name,
+			ownDataField(item, 'name'),
 			STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableNameLength
 		);
 		const type = boundedString(
-			item.type,
+			ownDataField(item, 'type'),
 			STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableTypeLength
 		);
 		const preview = boundedString(
-			item.preview,
+			ownDataField(item, 'preview'),
 			STORY_PREVIEW_BRIDGE_LIMITS.debuggerPreviewLength
+		);
+		const rawScope = ownDataField(item, 'scope');
+		const scope = optionalBoundedString(
+			rawScope,
+			STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableScopeLength
 		);
 		if (!name || !type || preview === undefined) {
 			return null;
 		}
-		totalTextLength += name.length + type.length + preview.length;
+		if (
+			scope === null ||
+			rawScope === nonDataField ||
+			(options.requireScope && scope === undefined) ||
+			(!options.allowScope && scope !== undefined)
+		) {
+			return null;
+		}
+		totalTextLength +=
+			name.length + type.length + preview.length + (scope?.length ?? 0);
 		if (totalTextLength > STORY_PREVIEW_BRIDGE_LIMITS.debuggerTotalTextLength) {
 			return null;
 		}
-		variables.push({name, preview, type});
+		variables.push(
+			scope === undefined ? {name, preview, type} : {name, preview, scope, type}
+		);
 	}
 	return variables;
 }
@@ -705,7 +737,8 @@ function debuggerVariableTextLength(
 				total +
 				variable.name.length +
 				variable.type.length +
-				variable.preview.length,
+				variable.preview.length +
+				(variable.scope?.length ?? 0),
 			0
 		) ?? 0
 	);
@@ -1093,11 +1126,17 @@ export function normalizeStoryPreviewBridgeMessage(
 		}
 		const adapterId = data.adapterId;
 		const capabilities = adapter.capabilities;
+		const isExactHarlowe =
+			adapterId === 'harlowe-3.3.9' && adapter.reliability === 'exact-version';
 		const sections = debuggerSectionsFromUnknown(data.sections, capabilities);
 		const currentPassage = runtimePassageFromUnknown(data.currentPassage);
-		const storyVariables = debuggerVariablesFromUnknown(data.storyVariables);
+		const storyVariables = debuggerVariablesFromUnknown(data.storyVariables, {
+			allowScope: false,
+			requireScope: false
+		});
 		const temporaryVariables = debuggerVariablesFromUnknown(
-			data.temporaryVariables
+			data.temporaryVariables,
+			{allowScope: isExactHarlowe, requireScope: isExactHarlowe}
 		);
 		const visitedPassages = debuggerPassagesFromUnknown(data.visitedPassages);
 		if (
@@ -1282,6 +1321,11 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var lastExactHarlowePassage;
 	var harloweStateGetters = {};
 	var harloweVarRefOn;
+	var debuggerSet = Set;
+	var harloweTemporaryAdmittedKeys = new Set();
+	var harloweTemporaryObservedRows = new Map();
+	var harloweTemporaryReasons = [];
+	var harloweTemporaryCount = 0;
 	var harloweBootstrapConsumed = false;
 	var restartCommandBusy = false;
 	// A null value means Chapbook emitted a trail update which could not be copied
@@ -1298,8 +1342,18 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var debuggerIndexOf = Array.prototype.indexOf;
 	var debuggerHasOwn = Object.prototype.hasOwnProperty;
 	var debuggerMapHas = Map.prototype.has;
+	var debuggerMapGet = Map.prototype.get;
+	var debuggerMapSet = Map.prototype.set;
+	var debuggerMapClear = Map.prototype.clear;
+	var debuggerMapForEach = Map.prototype.forEach;
 	var debuggerSetHas = Set.prototype.has;
+	var debuggerSetAdd = Set.prototype.add;
+	var debuggerSetClear = Set.prototype.clear;
+	var debuggerGetPrototypeOf = Object.getPrototypeOf;
+	var debuggerSetPrototypeOf = Object.setPrototypeOf;
+	var debuggerArraySlice = Array.prototype.slice;
 	var debuggerString = String;
+	var debuggerStringSlice = String.prototype.slice;
 	var debuggerFunctionToString = Function.prototype.toString;
 	var debuggerReflectApply = Reflect.apply;
 	var debuggerAddEventListener = EventTarget.prototype.addEventListener;
@@ -1576,7 +1630,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		var result = debuggerString(value);
 		if (result.length > limit) {
 			addDebuggerReason(reasons, 'field-limit');
-			return result.slice(0, limit);
+			return debuggerReflectApply(debuggerStringSlice, result, [0, limit]);
 		}
 		return result;
 	}
@@ -1812,14 +1866,88 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		return descriptor.get;
 	}
 
+	function clearHarloweTemporaryVariables() {
+		try {
+			debuggerReflectApply(debuggerSetClear, harloweTemporaryAdmittedKeys, []);
+			debuggerReflectApply(debuggerMapClear, harloweTemporaryObservedRows, []);
+			harloweTemporaryReasons = [];
+			harloweTemporaryCount = 0;
+		} catch (error) {}
+	}
+
+	function harloweTemporaryMetadata(store) {
+		var seen = new debuggerSet();
+		var current = store;
+		try {
+			for (var depth = 0; depth < 64; depth += 1) {
+				if (!current || (typeof current !== 'object' && typeof current !== 'function')) return;
+				if (debuggerReflectApply(debuggerSetHas, seen, [current])) return {invalid: true};
+				debuggerReflectApply(debuggerSetAdd, seen, [current]);
+				var descriptor = debuggerGetOwnPropertyDescriptor(current, 'TwineScript_VariableStore');
+				if (descriptor) {
+					if (!debuggerReflectApply(debuggerHasOwn, descriptor, ['value'])) return {invalid: true};
+					var metadata = descriptor.value;
+					if (!metadata || (typeof metadata !== 'object' && typeof metadata !== 'function')) return {invalid: true};
+					var type = ownDebuggerData(metadata, 'type');
+					var name = ownDebuggerData(metadata, 'name');
+					if (typeof type !== 'string') return {invalid: true};
+					if (type !== 'temp') return {type: type};
+					if (typeof name !== 'string') return {invalid: true};
+					return {name: name, type: type};
+				}
+				current = debuggerReflectApply(debuggerGetPrototypeOf, Object, [current]);
+			}
+			return {invalid: true};
+		} catch (error) {
+			return {invalid: true};
+		}
+	}
+
+	function observeHarloweTemporaryVariable(store, name, value) {
+		try {
+			var metadata = harloweTemporaryMetadata(store);
+			if (!metadata) return;
+			if (metadata.invalid) {
+				addDebuggerReason(harloweTemporaryReasons, 'uninspectable');
+				return;
+			}
+			if (metadata.type !== 'temp' || debuggerReflectApply(debuggerRegExpTest, /#\\d+$/, [metadata.name]) || typeof name !== 'string') return;
+			var scope = boundedDebuggerText(metadata.name, ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableScopeLength}, harloweTemporaryReasons);
+			var boundedName = boundedDebuggerText(name, ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableNameLength}, harloweTemporaryReasons);
+			var tuple = [scope, boundedName];
+			debuggerReflectApply(debuggerSetPrototypeOf, Object, [tuple, null]);
+			var key = debuggerReflectApply(debuggerJsonStringify, JSON, [tuple]);
+			if (!key) { addDebuggerReason(harloweTemporaryReasons, 'uninspectable'); return; }
+			if (!debuggerReflectApply(debuggerSetHas, harloweTemporaryAdmittedKeys, [key])) {
+				if (harloweTemporaryCount >= DEBUGGER_VARIABLE_LIMIT) {
+					addDebuggerReason(harloweTemporaryReasons, 'item-limit');
+					return;
+				}
+				debuggerReflectApply(debuggerSetAdd, harloweTemporaryAdmittedKeys, [key]);
+				harloweTemporaryCount += 1;
+			}
+			debuggerReflectApply(debuggerMapSet, harloweTemporaryObservedRows, [key, {
+				name: boundedName,
+				scope: scope,
+				value: value
+			}]);
+		} catch (error) {
+			addDebuggerReason(harloweTemporaryReasons, 'uninspectable');
+		}
+	}
+
 	function attestHarloweVarRef(varRef) {
 		try {
 			var varRefProfile = ownDebuggerData(DEBUGGER_HARLOWE_STATE_PROFILE, 'varRef');
 			var varRefOnProfile = varRefProfile && ownDebuggerData(varRefProfile, 'on');
 			var descriptor = varRef && debuggerGetOwnPropertyDescriptor(varRef, 'on');
 			if (!varRefProfile || varRefProfile.stateFrozen !== true || !debuggerIsFrozen(varRef) || !varRefOnProfile || !descriptor || !debuggerReflectApply(debuggerHasOwn, descriptor, ['value']) || descriptor.configurable !== varRefOnProfile.configurable || descriptor.enumerable !== varRefOnProfile.enumerable || descriptor.writable !== varRefOnProfile.writable || typeof descriptor.value !== 'function' || debuggerReflectApply(debuggerFunctionToString, descriptor.value, []) !== varRefOnProfile.source) return;
-			debuggerReflectApply(descriptor.value, varRef, ['set', queueState]);
-			debuggerReflectApply(descriptor.value, varRef, ['delete', queueState]);
+			debuggerReflectApply(descriptor.value, varRef, ['set', function (store, name, value) {
+				try { observeHarloweTemporaryVariable(store, name, value); queueState(); } catch (error) {}
+			}]);
+			debuggerReflectApply(descriptor.value, varRef, ['delete', function () {
+				try { queueState(); } catch (error) {}
+			}]);
 			harloweVarRefOn = descriptor.value;
 		} catch (error) {}
 	}
@@ -1901,6 +2029,20 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 						}
 					]);
 				})(eventName);
+			}
+			var clearEvents = ownDebuggerData(
+				ownDebuggerData(DEBUGGER_HARLOWE_STATE_PROFILE, 'events'),
+				'clearTemporaryVariables'
+			);
+			if (!debuggerIsArray(clearEvents)) return;
+			for (var clearIndex = 0; clearIndex < clearEvents.length; clearIndex++) {
+				var clearEventName = ownDebuggerData(clearEvents, debuggerString(clearIndex));
+				if (typeof clearEventName !== 'string') return;
+				(function (capturedClearEventName) {
+					debuggerReflectApply(onDescriptor.value, state, [capturedClearEventName, function () {
+						try { clearHarloweTemporaryVariables(); queueState(); } catch (error) {}
+					}]);
+				})(clearEventName);
 			}
 
 			harloweState = state;
@@ -2019,6 +2161,11 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 				adapterId: FIXED_READ_ADAPTER.id,
 				protocolVersion: DEBUGGER_PROTOCOL_VERSION
 			});
+		} catch (error) {}
+		try {
+			debuggerReflectApply(debuggerAddEventListener, window, ['pagehide', function () {
+				try { clearHarloweTemporaryVariables(); queueState(); } catch (error) {}
+			}]);
 		} catch (error) {}
 	}
 
@@ -2169,8 +2316,29 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		} catch (error) {}
 	}
 
+	function harloweTemporaryVariables(budget) {
+		var variables = [];
+		var reasons = debuggerReflectApply(debuggerArraySlice, harloweTemporaryReasons, []);
+		try {
+			debuggerReflectApply(debuggerMapForEach, harloweTemporaryObservedRows, [function (row) {
+				var scope = boundedDebuggerText(row.scope, ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableScopeLength}, reasons);
+				var name = boundedDebuggerText(row.name, ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableNameLength}, reasons);
+				var variable = {name: name, scope: scope, type: typeof row.value, preview: safePreview(row.value, reasons)};
+				if (!takeDebuggerText(budget, variable.name.length + variable.scope.length + variable.type.length + variable.preview.length)) {
+					addDebuggerReason(reasons, 'text-budget');
+					return;
+				}
+				variables.push(variable);
+			}]);
+		} catch (error) {
+			addDebuggerReason(reasons, 'uninspectable');
+		}
+		return {items: variables, status: debuggerSectionStatus(reasons)};
+	}
+
 	function captureHarlowe(snapshot, sections, budgets) {
 		applyDebuggerCollection(snapshot, sections, 'storyVariables', harloweVarRefOn ? harloweVariables(budgets.storyVariables) : undefined);
+		applyDebuggerCollection(snapshot, sections, 'temporaryVariables', harloweVarRefOn ? harloweTemporaryVariables(budgets.temporaryVariables) : undefined);
 		applyDebuggerCollection(snapshot, sections, 'visitedPassages', harloweVisitedPassages(budgets.visitedPassages));
 	}
 
@@ -2351,6 +2519,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	}
 
 	function restartHarlowe() {
+		try { clearHarloweTemporaryVariables(); queueState(); } catch (error) {}
 		var storage;
 		try {
 			storage = harloweSessionStorage || window.sessionStorage;

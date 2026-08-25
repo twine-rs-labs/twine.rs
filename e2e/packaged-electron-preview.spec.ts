@@ -1738,7 +1738,7 @@ test('packaged Harlowe bounds committed visited history at 200 moments', async (
 		});
 		const projectRoot = await projectRootFromRenderer(page);
 		const source =
-			'(set:$alpha to 1)Packaged Harlowe history marker. [[Repeat->Start]]';
+			'(set:$alpha to 1)(set:_passage to "packaged")(if:visits is 1)[(set:_firstTurn to "packaged first")](else:)[(set:_nextTurn to "packaged next")]Packaged Harlowe history marker. [[Repeat->Start]]';
 
 		await replaceEditorText(page, source, 'Start');
 		await waitForSavedText(running, projectRoot, source, testInfo);
@@ -1760,10 +1760,27 @@ test('packaged Harlowe bounds committed visited history at 200 moments', async (
 
 		await expect(inspector).toContainText('Adapter: harlowe-3.3.9');
 		await expect(inspector.getByText('alpha', {exact: true})).toBeVisible();
-		await debuggerToggle.click();
-		await expect(inspector).toHaveCount(0);
-		await followStoryLinkRepeatedly(preview, 'Repeat', 200);
-		await debuggerToggle.click();
+		const temporaryVariablesSection = inspector
+			.getByRole('heading', {name: 'Temporary variables'})
+			.locator('..')
+			.locator('..');
+		await expect(
+			temporaryVariablesSection.getByText('passage', {exact: true})
+		).toBeVisible();
+		await expect(
+			temporaryVariablesSection.getByText('this passage', {exact: true})
+		).toBeVisible();
+		await expect(
+			temporaryVariablesSection.getByText('firstTurn', {exact: true})
+		).toBeVisible();
+		await followStoryLinkRepeatedly(preview, 'Repeat', 1);
+		await expect(
+			temporaryVariablesSection.getByText('nextTurn', {exact: true})
+		).toBeVisible();
+		await expect(
+			temporaryVariablesSection.getByText('firstTurn', {exact: true})
+		).toHaveCount(0);
+		await followStoryLinkRepeatedly(preview, 'Repeat', 199);
 		await expect(
 			visitedPassagesSection.getByText('Truncated: item-limit', {
 				exact: true

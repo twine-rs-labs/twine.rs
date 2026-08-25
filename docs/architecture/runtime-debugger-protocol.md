@@ -85,7 +85,7 @@ a nearby version.
 | SugarCube 2.37.0, 2.37.3                                               | Exact version, read profile 2.37              | Current passage, story variables, temporary variables, visited passages |
 | Snowman 1.5.0 and 2.1.1                                                | Exact version                                 | Current passage, story variables, visited passages                      |
 | Chapbook 2.3.1                                                         | Best effort                                   | Current passage only                                                    |
-| Admitted bundled Harlowe 3.3.9                                         | Exact version, State and VarRef profile 3.3.9 | Current passage, story variables, visited passages                      |
+| Admitted bundled Harlowe 3.3.9                                         | Exact version, State and VarRef profile 3.3.9 | Current passage, story variables, temporary variables, visited passages |
 | Unadmitted or altered Harlowe 3.3.9                                    | Best effort                                   | Current passage only                                                    |
 | Generic, including SugarCube 1, user-added SugarCube, and unbundled v2 | Best effort                                   | Current passage only                                                    |
 
@@ -141,18 +141,35 @@ reads never fall back to DOM, session storage, startnode, or generic discovery;
 redirects still rely on the existing render observation to schedule a new
 capture. State `variables`, `timeline`, and `pastLength` getters are attested
 independently of the `passage`/`on` readiness gate. The private VarRef module is
-also attested independently: if it drifts, story-variable capture is unavailable
-while current passage and independently valid history remain available. Its
-`set` and `delete` events queue the normal coalesced capture, including nested
-mutations; arbitrary direct writes to private State objects have no immediate
-observation guarantee. History reads only committed timeline indices
+also attested independently: if it drifts, story-variable and temporary-variable
+capture is unavailable while current passage and independently valid history
+remain available. Its `set` and `delete` events queue the normal coalesced
+capture, including nested mutations; arbitrary direct writes to private State
+objects have no immediate observation guarantee. Harlowe temporary variables
+are assignments observed during this turn; scope names are supplied by Harlowe.
+The bridge captures the native `Set` constructor and methods at bootstrap. It
+discovers `TwineScript_VariableStore` through a descriptor-only, cycle-aware
+prototype walk capped at 64 links using that captured constructor, records only
+`temp` stores, and excludes internal labels ending in `#<digits>`. Scope and
+name are bounded before the structured `JSON.stringify([scope, name])` identity
+is admitted. It keeps at most 100 admitted rows: deletion does not remove a row,
+and raw aliases which collapse to one bounded identity are one logical row whose
+latest set wins even after the item cap; a distinct bounded identity after that
+cap records `item-limit`. An admitted row can update after an overflow.
+Observations clear synchronously on
+`beforeForward`, `beforeBack`, `beforeLoad`, `load`, Restart, and page teardown;
+redirect and `forgetUndos` retain them. History reads only committed timeline indices
 `0..pastLength`, excludes redo moments, keeps the newest 200, and rereads after
 `forward`, `back`, `load` (deferred), and `forgetUndos` operations.
 
 ## Snapshot safety
 
 Snapshots contain detached display records, never live story objects. Variable
-records contain only a bounded name, type label, and preview string. Primitive
+records contain only a bounded name, type label, and preview string; exact
+Harlowe temporary rows additionally carry a bounded scope label. Scope is
+required only for those rows and forbidden for story variables and every
+non-Harlowe adapter. All DTO fields are copied from own data descriptors.
+Primitive
 values receive bounded previews, with string previews bounded again after JSON
 escaping; objects, arrays, functions, maps, sets, and other complex values
 receive conservative type placeholders without recursive traversal. Visited
