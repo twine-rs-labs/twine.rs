@@ -26,6 +26,11 @@ import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import extractZip from 'extract-zip';
+import {
+	environmentForPackagedElectronWindowMode,
+	resolvePackagedElectronWindowMode,
+	windowModeForTest
+} from './packaged-electron-window-mode.mjs';
 
 type DialogState = {
 	calls: Array<{properties?: string[]; title?: string}>;
@@ -153,7 +158,7 @@ async function packagedExecutable() {
 }
 
 function isolatedEnvironment(root: string) {
-	return {
+	const environment = {
 		...process.env,
 		...(process.platform === 'win32'
 			? {}
@@ -168,6 +173,14 @@ function isolatedEnvironment(root: string) {
 		TWINE_PERF: '1',
 		TWINE_PERF_USER_DATA: path.join(root, 'user-data')
 	};
+
+	return environmentForPackagedElectronWindowMode(
+		windowModeForTest(
+			resolvePackagedElectronWindowMode(process.env),
+			test.info().tags
+		),
+		environment
+	);
 }
 
 async function prepareIsolatedEnvironment(root: string) {
@@ -804,6 +817,32 @@ test('packaged desktop drains a trailing native project save before exit', async
 	try {
 		running = await launchPackagedApp(executablePath, profileRoot);
 		const {page} = running;
+		const windowMode = windowModeForTest(
+			resolvePackagedElectronWindowMode(process.env),
+			testInfo.tags
+		);
+		if (windowMode === 'hidden') {
+			await expect
+				.poll(() =>
+					running.app.evaluate(({BrowserWindow}) => {
+						const window = BrowserWindow.getAllWindows()[0];
+						return {
+							focused: window?.isFocused() ?? null,
+							visible: window?.isVisible() ?? null
+						};
+					})
+				)
+				.toEqual({focused: false, visible: false});
+		} else {
+			await expect
+				.poll(() =>
+					running.app.evaluate(
+						({BrowserWindow}) =>
+							BrowserWindow.getAllWindows()[0]?.isVisible() ?? null
+					)
+				)
+				.toBe(true);
+		}
 
 		await page.getByTitle('New Project').click();
 		await page.getByLabel('Project name').fill('Shutdown Save');

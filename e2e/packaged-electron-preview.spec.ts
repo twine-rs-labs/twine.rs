@@ -17,6 +17,11 @@ import {
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {
+	environmentForPackagedElectronWindowMode,
+	resolvePackagedElectronWindowMode,
+	windowModeForTest
+} from './packaged-electron-window-mode.mjs';
 
 type RunningApp = {
 	app: ElectronApplication;
@@ -117,7 +122,7 @@ async function packagedExecutable() {
 }
 
 function isolatedEnvironment(root: string) {
-	return {
+	const environment = {
 		...process.env,
 		...(process.platform === 'win32'
 			? {}
@@ -132,6 +137,14 @@ function isolatedEnvironment(root: string) {
 		TWINE_PERF: '1',
 		TWINE_PERF_USER_DATA: path.join(root, 'user-data')
 	};
+
+	return environmentForPackagedElectronWindowMode(
+		windowModeForTest(
+			resolvePackagedElectronWindowMode(process.env),
+			test.info().tags
+		),
+		environment
+	);
 }
 
 async function prepareIsolatedEnvironment(root: string) {
@@ -1065,6 +1078,18 @@ async function browserWindowId(app: ElectronApplication, page: Page) {
 	);
 }
 
+async function browserWindowState(app: ElectronApplication, page: Page) {
+	return app.evaluate(({BrowserWindow}, targetUrl) => {
+		const window = BrowserWindow.getAllWindows().find(
+			candidate => candidate.webContents.getURL() === targetUrl
+		);
+		return {
+			focused: window?.isFocused() ?? null,
+			visible: window?.isVisible() ?? null
+		};
+	}, page.url());
+}
+
 const silentWav = (() => {
 	const sampleRate = 8000;
 	const samples = Buffer.alloc(sampleRate / 10, 128);
@@ -1088,7 +1113,7 @@ const silentWav = (() => {
 
 test.describe.configure({mode: 'serial'});
 
-test('Play exposes debug state and replaces fresh Test builds in the same window', async ({}, testInfo) => {
+test('Play exposes debug state and replaces fresh Test builds in the same window @visible-window', async ({}, testInfo) => {
 	test.setTimeout(6 * 60 * 1000);
 	const executablePath = await packagedExecutable();
 	let running: RunningApp | undefined;
@@ -1215,6 +1240,9 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		const preview = await launchPreview(running, () =>
 			page.getByTitle('Play').click()
 		);
+		await expect
+			.poll(async () => (await browserWindowState(app, preview)).visible)
+			.toBe(true);
 		const ownerWindowId = await browserWindowId(app, page);
 		const previewWindowId = await browserWindowId(app, preview);
 
@@ -2400,7 +2428,7 @@ test('packaged SugarCube endpoint profiles support non-start Test From Here', as
 	}
 });
 
-test('current passage resolves to a stable ID in every bundled format family', async ({}, testInfo) => {
+test('current passage resolves to a stable ID in every bundled format family @visible-window', async ({}, testInfo) => {
 	test.setTimeout(8 * 60 * 1000);
 	const executablePath = await packagedExecutable();
 	const formats = [

@@ -42,6 +42,11 @@ import {
 } from './story-preview-protocol';
 import {canonicalPreviewFormatAdmission} from '../../routes/story-preview-format';
 import {instrumentPreviewHtml} from '../../routes/story-preview-contract';
+import {
+	backgroundWindowForE2E,
+	showWindowWhenReady,
+	shouldFocusOwnerWindow
+} from './window-activation';
 
 export const maxManagedStoryPreviewWindows = 32;
 export const storyPreviewReadyTimeoutMs = 15_000;
@@ -114,7 +119,7 @@ interface PreviewWindowLike {
 	isDestroyed?(): boolean;
 	loadURL(url: string): Promise<void> | void;
 	once(event: string, listener: (...args: any[]) => void): unknown;
-	show?(): void;
+	show(): void;
 	webContents: WebContents;
 }
 
@@ -1016,7 +1021,7 @@ export function createStoryPreviewWindowManager(
 
 		clearTimeout(session.readyTimeout);
 		session.ready.resolve();
-		session.window.show?.();
+		showWindowWhenReady(session.window);
 	}
 
 	function attachPreviewLifecycle(session: PreviewSession) {
@@ -1227,6 +1232,7 @@ export function createStoryPreviewWindowManager(
 				show: false,
 				title: `${initial.descriptor.storyName} — Preview`,
 				webPreferences: {
+					...(backgroundWindowForE2E() ? {backgroundThrottling: false} : {}),
 					contextIsolation: true,
 					nodeIntegration: false,
 					nodeIntegrationInSubFrames: false,
@@ -1632,8 +1638,9 @@ export function createStoryPreviewWindowManager(
 
 		try {
 			if (
-				validated.command.type === 'revealGraph' ||
-				validated.command.type === 'revealSource'
+				shouldFocusOwnerWindow() &&
+				(validated.command.type === 'revealGraph' ||
+					validated.command.type === 'revealSource')
 			) {
 				dependencies.focusOwner(session.owner);
 			}
