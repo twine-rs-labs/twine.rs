@@ -19,10 +19,17 @@ export const HARLOWE_3_3_9_STATE_PROFILE = {
 	capabilityDependencies: {
 		currentPassage: ['state.passage', 'state.on'],
 		storyVariables: ['state.variables', 'varRef.on'],
+		temporaryVariables: ['state.on', 'varRef.on'],
 		visitedPassages: ['state.timeline', 'state.pastLength']
 	},
 	events: {
-		capture: ['forward', 'back', 'load', 'forgetUndos']
+		capture: ['forward', 'back', 'load', 'forgetUndos'],
+		clearTemporaryVariables: [
+			'beforeForward',
+			'beforeBack',
+			'beforeLoad',
+			'load'
+		]
 	},
 	moduleName: 'state',
 	on: {

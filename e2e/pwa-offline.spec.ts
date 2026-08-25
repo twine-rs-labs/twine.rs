@@ -46,6 +46,65 @@ async function setPassageText(page: Page, text: string) {
 	await page.waitForTimeout(450);
 }
 
+async function followStoryLinkRepeatedly(
+	page: Page,
+	label: string,
+	count: number
+) {
+	await page
+		.frameLocator('iframe[title="Story test preview"]')
+		.locator('body')
+		.evaluate(
+			async (body, options) => {
+				const matchingLinks = () =>
+					Array.from(
+						body.querySelectorAll<HTMLElement>('tw-passage tw-link')
+					).filter(link => link.textContent?.trim() === options.label);
+
+				for (let index = 0; index < options.count; index += 1) {
+					const link = matchingLinks().at(-1);
+
+					if (!link) {
+						throw new Error(
+							`Missing ${options.label} link after ${index} of ${options.count} navigations.`
+						);
+					}
+
+					await new Promise<void>((resolve, reject) => {
+						let settled = false;
+						const finish = (error?: Error) => {
+							if (settled) return;
+
+							settled = true;
+							observer.disconnect();
+							window.clearTimeout(timeout);
+							error ? reject(error) : resolve();
+						};
+						const replacementReady = () =>
+							matchingLinks().some(candidate => candidate !== link);
+						const observer = new MutationObserver(() => {
+							if (replacementReady()) finish();
+						});
+						const timeout = window.setTimeout(
+							() =>
+								finish(
+									new Error(
+										`Timed out after ${index} of ${options.count} ${options.label} navigations.`
+									)
+								),
+							10_000
+						);
+
+						observer.observe(body, {childList: true, subtree: true});
+						link.click();
+						if (replacementReady()) finish();
+					});
+				}
+			},
+			{count, label}
+		);
+}
+
 test('a fresh install can create and test a project offline', async ({
 	context,
 	page
@@ -206,7 +265,7 @@ test('bundled Harlowe retains exact debugger admission offline', async ({
 	await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
 	await setPassageText(
 		page,
-		'(set:$alpha to 1)Offline exact Harlowe marker. [[Repeat->Start]]'
+		'(set:$alpha to 1)(set:_passage to "offline")(if:visits is 1)[(set:_firstTurn to "offline first")](else:)[(set:_nextTurn to "offline next")]Offline exact Harlowe marker. [[Repeat->Start]]'
 	);
 	await context.addInitScript(() => {
 		if (window !== window.top) return;
@@ -265,6 +324,24 @@ test('bundled Harlowe retains exact debugger admission offline', async ({
 	await expect(inspector).toContainText('Adapter: harlowe-3.3.9');
 	await expect(inspector).toContainText('Reliability: exact-version');
 	await expect(inspector).toContainText('alpha');
+	const temporaryVariablesSection = inspector
+		.getByRole('heading', {name: 'Temporary variables'})
+		.locator('..')
+		.locator('..');
+	await expect(
+		temporaryVariablesSection.getByText('passage', {exact: true})
+	).toBeVisible();
+	await expect(
+		temporaryVariablesSection.getByText('this passage', {exact: true})
+	).toBeVisible();
+	await expect(
+		temporaryVariablesSection.getByText('firstTurn', {exact: true})
+	).toBeVisible();
+	await expect(
+		inspector.getByText(
+			'Harlowe temporary variables are assignments observed during this turn; scope names are supplied by Harlowe.'
+		)
+	).toBeVisible();
 	await expect(
 		inspector.getByRole('heading', {name: 'Visited passages'})
 	).toBeVisible();
@@ -276,12 +353,14 @@ test('bundled Harlowe retains exact debugger admission offline', async ({
 		.locator('..')
 		.locator('..');
 
-	for (let index = 0; index < 200; index += 1) {
-		await storyFrame
-			.locator('tw-passage tw-link')
-			.filter({hasText: /^Repeat$/})
-			.click();
-	}
+	await followStoryLinkRepeatedly(preview, 'Repeat', 1);
+	await expect(
+		temporaryVariablesSection.getByText('nextTurn', {exact: true})
+	).toBeVisible();
+	await expect(
+		temporaryVariablesSection.getByText('firstTurn', {exact: true})
+	).toHaveCount(0);
+	await followStoryLinkRepeatedly(preview, 'Repeat', 199);
 	await expect(
 		visitedPassagesSection.getByText('Truncated: item-limit', {exact: true})
 	).toBeVisible({timeout: 20_000});
@@ -351,6 +430,15 @@ test('bundled Harlowe retains exact debugger admission offline', async ({
 	await expect(storyBody).toContainText('Offline exact Harlowe marker.', {
 		timeout: 20_000
 	});
+	await expect(
+		temporaryVariablesSection.getByText('passage', {exact: true})
+	).toBeVisible();
+	await expect(
+		temporaryVariablesSection.getByText('firstTurn', {exact: true})
+	).toBeVisible();
+	await expect(
+		temporaryVariablesSection.getByText('nextTurn', {exact: true})
+	).toHaveCount(0);
 	await preview.waitForTimeout(1000);
 	const bootstrapAfterNavigation = await preview.evaluate(() => {
 		const target = window as typeof window & {

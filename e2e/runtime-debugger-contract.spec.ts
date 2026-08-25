@@ -343,6 +343,42 @@ function observedSnapshot(
 	);
 }
 
+async function followHarloweStoryLink(frame: Frame, label: string) {
+	await frame.locator('body').evaluate(async (body, expectedLabel) => {
+		const matchingLinks = () =>
+			Array.from(
+				body.querySelectorAll<HTMLElement>('tw-passage tw-link')
+			).filter(link => link.textContent?.trim() === expectedLabel);
+		const link = matchingLinks().at(-1);
+
+		if (!link) throw new Error(`Missing ${expectedLabel} story link.`);
+		await new Promise<void>((resolve, reject) => {
+			let settled = false;
+			const finish = (error?: Error) => {
+				if (settled) return;
+
+				settled = true;
+				observer.disconnect();
+				window.clearTimeout(timeout);
+				error ? reject(error) : resolve();
+			};
+			const replacementReady = () =>
+				matchingLinks().some(candidate => candidate !== link);
+			const observer = new MutationObserver(() => {
+				if (replacementReady()) finish();
+			});
+			const timeout = window.setTimeout(
+				() => finish(new Error(`Timed out following ${expectedLabel}.`)),
+				10_000
+			);
+
+			observer.observe(body, {childList: true, subtree: true});
+			link.click();
+			if (replacementReady()) finish();
+		});
+	}, label);
+}
+
 test('bundled adapters negotiate canonical descriptors and usable sections', async ({
 	browserName,
 	page
@@ -396,11 +432,13 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 			capabilities: [
 				'currentPassage',
 				'storyVariables',
+				'temporaryVariables',
 				'visitedPassages'
 			] as StoryPreviewDebuggerCapability[],
 			format: 'Harlowe',
 			formatVersion: '3.3.9',
-			passageText: '(set:$alpha to 1)Ready'
+			passageText:
+				'(set:$alpha to 1)(set:_passage to "passage")(if:visits is 1)[[(set:_unnamed to "unnamed")]|named>[(set:_named to "named")](print:"(set:_expression to \'expression\')")](else:)[(set:_nextTurn to "next turn")]Ready [[Repeat->Start]]'
 		}
 	];
 
@@ -450,8 +488,57 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 		if (item.format === 'Harlowe') {
 			expect(snapshot).toMatchObject({
 				storyVariables: [{name: 'alpha', preview: '1', type: 'number'}],
+				temporaryVariables: [
+					{
+						name: 'passage',
+						preview: '"passage"',
+						scope: 'this passage',
+						type: 'string'
+					},
+					{
+						name: 'unnamed',
+						preview: '"unnamed"',
+						scope: 'an unnamed hook',
+						type: 'string'
+					},
+					{
+						name: 'named',
+						preview: '"named"',
+						scope: '?named',
+						type: 'string'
+					},
+					{
+						name: 'expression',
+						preview: '"expression"',
+						scope: 'a macro expression',
+						type: 'string'
+					}
+				],
 				visitedPassages: [{name: 'Start'}]
 			});
+			await followHarloweStoryLink(frame, 'Repeat');
+			await expect
+				.poll(async () => {
+					const latest = observedSnapshot(
+						await messages(page),
+						item.capabilities
+					);
+					return latest?.temporaryVariables;
+				})
+				.toEqual([
+					{
+						name: 'passage',
+						preview: '"passage"',
+						scope: 'this passage',
+						type: 'string'
+					},
+					{
+						name: 'nextTurn',
+						preview: '"next turn"',
+						scope: 'an unnamed hook',
+						type: 'string'
+					}
+				]);
 			const deserialised = await frame.evaluate(() => {
 				const runtime = window as typeof window & {
 					__runtimeDebuggerHarloweDeserialise(source: string): true | Error;
@@ -502,6 +589,7 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 						variable: loaded?.storyVariables?.find(
 							variable => variable.name === 'alpha'
 						)?.preview,
+						temporaryVariables: loaded?.temporaryVariables,
 						visitedCount: loaded?.visitedPassages?.length
 					};
 				})
@@ -510,6 +598,7 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 					lastVisited: 'Start',
 					status: {reasons: ['item-limit'], state: 'truncated'},
 					variable: '7',
+					temporaryVariables: [],
 					visitedCount: 200
 				});
 		}
@@ -550,7 +639,8 @@ test('bundled exact adapters restart cleanly and remount the same artifact', asy
 		{
 			adapterId: 'harlowe-3.3.9',
 			format: 'Harlowe',
-			formatVersion: '3.3.9'
+			formatVersion: '3.3.9',
+			passageText: '(set:_beforeRestart to "before")Ready'
 		}
 	];
 
@@ -609,6 +699,20 @@ test('bundled exact adapters restart cleanly and remount the same artifact', asy
 				}
 			}
 		}, item.adapterId);
+		if (item.adapterId === 'harlowe-3.3.9') {
+			await expect
+				.poll(async () =>
+					observedSnapshot(await messages(page), [
+						'currentPassage',
+						'storyVariables',
+						'temporaryVariables',
+						'visitedPassages'
+					] as StoryPreviewDebuggerCapability[])?.temporaryVariables?.some(
+						variable => variable.name === 'beforeRestart'
+					)
+				)
+				.toBe(true);
+		}
 
 		const requestId = `request-${item.adapterId}`;
 		const marker = `twine-rs-restart:${sessionId}:${requestId}`;
@@ -642,6 +746,19 @@ test('bundled exact adapters restart cleanly and remount the same artifact', asy
 				{message: `${item.adapterId} should apply restart`}
 			)
 			.toBe('applied');
+		if (item.adapterId === 'harlowe-3.3.9') {
+			await expect
+				.poll(
+					async () =>
+						observedSnapshot(await messages(page), [
+							'currentPassage',
+							'storyVariables',
+							'temporaryVariables',
+							'visitedPassages'
+						] as StoryPreviewDebuggerCapability[])?.temporaryVariables
+				)
+				.toEqual([]);
+		}
 
 		if (item.adapterId.startsWith('sugarcube-')) {
 			expect(

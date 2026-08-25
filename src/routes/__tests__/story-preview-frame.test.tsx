@@ -2977,6 +2977,109 @@ describe('<StoryPreviewFrame>', () => {
 		).not.toBeInTheDocument();
 	});
 
+	it('renders exact Harlowe temporary scopes and explains empty and unavailable observations', () => {
+		const title = 'Harlowe scoped debugger preview';
+		const sessionId = 'harlowe-scoped-debugger';
+
+		render(
+			<StoryPreviewFrame
+				contentSource={{
+					admission: harloweAdmission(),
+					bridgeSessionId: sessionId,
+					generation: 1,
+					htmlBytes: 123,
+					storyDataCount: 1,
+					type: 'url',
+					url: 'twine-preview://harlowe-scoped/index.html'
+				}}
+				missingStoryMessage="Missing story"
+				storyExists
+				title={title}
+			/>
+		);
+		postBridgeMessage(title, sessionId, {
+			adapterId: 'harlowe-3.3.9',
+			capabilities: [
+				'currentPassage',
+				'storyVariables',
+				'temporaryVariables',
+				'visitedPassages'
+			],
+			format: 'Harlowe',
+			formatVersion: '3.3.9',
+			protocolVersion: 1,
+			reliability: 'exact-version',
+			type: 'debugger-hello'
+		});
+		fireEvent.click(screen.getByRole('button', {name: 'Debugger'}));
+		const inspector = screen.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		const explanation =
+			'Harlowe temporary variables are assignments observed during this turn; scope names are supplied by Harlowe.';
+
+		postBridgeMessage(title, sessionId, {
+			adapterId: 'harlowe-3.3.9',
+			currentPassage: {name: 'Start'},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				temporaryVariables: {state: 'complete'},
+				visitedPassages: {state: 'complete'}
+			},
+			storyVariables: [],
+			temporaryVariables: [],
+			type: 'debugger-snapshot',
+			visitedPassages: [{name: 'Start'}]
+		});
+		expect(within(inspector).getByText(explanation)).toBeInTheDocument();
+
+		postBridgeMessage(title, sessionId, {
+			adapterId: 'harlowe-3.3.9',
+			currentPassage: {name: 'Start'},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				temporaryVariables: {state: 'complete'},
+				visitedPassages: {state: 'complete'}
+			},
+			storyVariables: [],
+			temporaryVariables: [
+				{name: 'same', preview: '1', scope: '?named', type: 'number'},
+				{
+					name: 'same',
+					preview: '2',
+					scope: 'an unnamed hook',
+					type: 'number'
+				}
+			],
+			type: 'debugger-snapshot',
+			visitedPassages: [{name: 'Start'}]
+		});
+		expect(within(inspector).getAllByText('same')).toHaveLength(2);
+		expect(within(inspector).getByText('?named')).toBeInTheDocument();
+		expect(within(inspector).getByText('an unnamed hook')).toBeInTheDocument();
+
+		postBridgeMessage(title, sessionId, {
+			adapterId: 'harlowe-3.3.9',
+			currentPassage: {name: 'Start'},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				temporaryVariables: {state: 'unavailable'},
+				visitedPassages: {state: 'complete'}
+			},
+			storyVariables: [],
+			type: 'debugger-snapshot',
+			visitedPassages: [{name: 'Start'}]
+		});
+		expect(within(inspector).getByText(explanation)).toBeInTheDocument();
+		expect(within(inspector).getByText('Unavailable.')).toBeInTheDocument();
+	});
+
 	it('offers inspector passage actions only for resolved history entries', () => {
 		const onRevealSource = jest.fn();
 		render(

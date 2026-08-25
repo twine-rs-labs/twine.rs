@@ -1147,7 +1147,12 @@ describe('runtime debugger protocol', () => {
 		const hello = {
 			...envelope,
 			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
-			capabilities: ['currentPassage', 'storyVariables', 'visitedPassages'],
+			capabilities: [
+				'currentPassage',
+				'storyVariables',
+				'temporaryVariables',
+				'visitedPassages'
+			],
 			format: 'Harlowe',
 			formatVersion: '3.3.9',
 			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
@@ -1162,6 +1167,7 @@ describe('runtime debugger protocol', () => {
 			sections: {
 				currentPassage: {state: 'complete'},
 				storyVariables: {state: 'unavailable'},
+				temporaryVariables: {state: 'unavailable'},
 				visitedPassages: {state: 'unavailable'}
 			},
 			type: 'debugger-snapshot'
@@ -1188,7 +1194,12 @@ describe('runtime debugger protocol', () => {
 		).toBeDefined();
 		expect(normalizeStoryPreviewBridgeMessage(arm, context)).toBeDefined();
 		expect(normalizeStoryPreviewBridgeMessage(hello, context)).toMatchObject({
-			capabilities: ['currentPassage', 'storyVariables', 'visitedPassages'],
+			capabilities: [
+				'currentPassage',
+				'storyVariables',
+				'temporaryVariables',
+				'visitedPassages'
+			],
 			reliability: 'exact-version'
 		});
 		expect(normalizeStoryPreviewBridgeMessage(snapshot, context)).toBeDefined();
@@ -1245,6 +1256,125 @@ describe('runtime debugger protocol', () => {
 				...context,
 				harloweBootstrapChallenge: undefined
 			})
+		).toBeUndefined();
+	});
+
+	it('requires descriptor-safe scoped temporary rows only for exact Harlowe', () => {
+		const envelope = {
+			adapterId: 'harlowe-3.3.9',
+			currentPassage: {name: 'Start'},
+			protocolVersion: 1,
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				temporaryVariables: {state: 'complete'},
+				visitedPassages: {state: 'complete'}
+			},
+			sessionId: 'harlowe-scope',
+			source: STORY_PREVIEW_BRIDGE_SOURCE,
+			storyVariables: [],
+			temporaryVariables: [
+				{name: 'value', preview: '1', scope: 'this passage', type: 'number'}
+			],
+			type: 'debugger-snapshot' as const,
+			visitedPassages: [{name: 'Start'}]
+		};
+		const context = exactHarloweContext(envelope.sessionId);
+		expect(normalizeStoryPreviewBridgeMessage(envelope, context)).toBeDefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{
+					...envelope,
+					temporaryVariables: [{name: 'value', preview: '1', type: 'number'}]
+				},
+				context
+			)
+		).toBeUndefined();
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{
+					...envelope,
+					storyVariables: [
+						{name: 'global', preview: '1', scope: 'bad', type: 'number'}
+					]
+				},
+				context
+			)
+		).toBeUndefined();
+		const accessor = {name: 'value', preview: '1', type: 'number'};
+		Object.defineProperty(accessor, 'scope', {
+			get: () => {
+				throw new Error('must not read getter');
+			}
+		});
+		expect(
+			normalizeStoryPreviewBridgeMessage(
+				{...envelope, temporaryVariables: [accessor]},
+				context
+			)
+		).toBeUndefined();
+
+		for (const field of ['name', 'preview', 'scope', 'type'] as const) {
+			const getter = jest.fn(() => {
+				throw new Error('must not read getter');
+			});
+			const item = {
+				name: 'value',
+				preview: '1',
+				scope: 'this passage',
+				type: 'number'
+			};
+
+			Object.defineProperty(item, field, {get: getter});
+			expect(
+				normalizeStoryPreviewBridgeMessage(
+					{...envelope, temporaryVariables: [item]},
+					context
+				)
+			).toBeUndefined();
+			expect(getter).not.toHaveBeenCalled();
+		}
+
+		const sugarCubeEnvelope = {
+			...envelope,
+			adapterId: 'sugarcube-2.37.3',
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'complete'},
+				temporaryVariables: {state: 'complete'},
+				visitedPassages: {state: 'complete'}
+			},
+			sessionId: 'sugarcube-forbidden-scope'
+		};
+		expect(
+			normalizeStoryPreviewBridgeMessage({
+				...sugarCubeEnvelope,
+				temporaryVariables: [
+					{name: 'temp', preview: '1', scope: 'bad', type: 'number'}
+				]
+			})
+		).toBeUndefined();
+
+		const combinedBudgetEnvelope = {
+			...envelope,
+			storyVariables: Array.from({length: 16}, (_, index) => ({
+				name: `story-${index}`,
+				preview: 'x'.repeat(2000),
+				type: 'string'
+			})),
+			temporaryVariables: [
+				{
+					name: 'temp',
+					preview: 'x'.repeat(512),
+					scope: 's'.repeat(
+						STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableScopeLength
+					),
+					type: 'string'
+				}
+			]
+		};
+		expect(
+			normalizeStoryPreviewBridgeMessage(combinedBudgetEnvelope, context)
 		).toBeUndefined();
 	});
 

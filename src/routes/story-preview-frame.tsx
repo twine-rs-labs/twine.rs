@@ -253,26 +253,47 @@ function RuntimeDebuggerPassageActions({
 }
 
 function RuntimeDebuggerVariables({
+	showHarloweTemporaryExplanation = false,
 	variables
 }: {
+	showHarloweTemporaryExplanation?: boolean;
 	variables: StoryPreviewDebuggerVariable[] | undefined;
 }) {
 	if (!variables?.length) {
-		return <p className="story-preview-route__debugger-empty">None.</p>;
+		return (
+			<>
+				{showHarloweTemporaryExplanation && (
+					<p className="story-preview-route__debugger-temporary-explanation">
+						Harlowe temporary variables are assignments observed during this
+						turn; scope names are supplied by Harlowe.
+					</p>
+				)}
+				<p className="story-preview-route__debugger-empty">None.</p>
+			</>
+		);
 	}
 
 	return (
-		<ul className="story-preview-route__debugger-variables">
-			{variables.map(variable => (
-				<li key={variable.name}>
-					<code>{variable.name}</code>
-					<span>{variable.type}</span>
-					<code className="story-preview-route__debugger-variable-preview">
-						{variable.preview}
-					</code>
-				</li>
-			))}
-		</ul>
+		<>
+			{showHarloweTemporaryExplanation && (
+				<p className="story-preview-route__debugger-temporary-explanation">
+					Harlowe temporary variables are assignments observed during this turn;
+					scope names are supplied by Harlowe.
+				</p>
+			)}
+			<ul className="story-preview-route__debugger-variables">
+				{variables.map(variable => (
+					<li key={JSON.stringify([variable.scope ?? null, variable.name])}>
+						{variable.scope !== undefined && <code>{variable.scope}</code>}
+						<code>{variable.name}</code>
+						<span>{variable.type}</span>
+						<code className="story-preview-route__debugger-variable-preview">
+							{variable.preview}
+						</code>
+					</li>
+				))}
+			</ul>
+		</>
 	);
 }
 
@@ -1910,11 +1931,25 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 															))}
 														{capability === 'temporaryVariables' &&
 															(status?.state === 'unavailable' ? (
-																<p className="story-preview-route__debugger-empty">
-																	Unavailable.
-																</p>
+																<>
+																	{debuggerSnapshot.adapterId ===
+																		'harlowe-3.3.9' && (
+																		<p className="story-preview-route__debugger-temporary-explanation">
+																			Harlowe temporary variables are
+																			assignments observed during this turn;
+																			scope names are supplied by Harlowe.
+																		</p>
+																	)}
+																	<p className="story-preview-route__debugger-empty">
+																		Unavailable.
+																	</p>
+																</>
 															) : (
 																<RuntimeDebuggerVariables
+																	showHarloweTemporaryExplanation={
+																		debuggerSnapshot.adapterId ===
+																		'harlowe-3.3.9'
+																	}
 																	variables={
 																		debuggerSnapshot.temporaryVariables
 																	}

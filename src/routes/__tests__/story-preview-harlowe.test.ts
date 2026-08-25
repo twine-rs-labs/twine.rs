@@ -12,6 +12,7 @@ import type {
 } from '../../store/story-formats/story-formats.types';
 import {
 	instrumentPreviewHtml,
+	STORY_PREVIEW_BRIDGE_LIMITS,
 	STORY_PREVIEW_COMMAND_SOURCE
 } from '../story-preview-contract';
 import {
@@ -210,7 +211,7 @@ const EXACT_STATE_DEFINITION = `var State=Object.freeze(${EXACT_STATE_OBJECT_SOU
 const EXACT_STATE_FIXTURE_SOURCE = `
 (function(){
 	var d={passage:"Start"};
-	var l={forward:[],back:[],load:[],forgetUndos:[]};
+	var l={forward:[],back:[],load:[],forgetUndos:[],beforeForward:[],beforeBack:[],beforeLoad:[]};
 	var i={variables:{gold:1}};
 	var u=[{passage:"Start"}];
 	var p=0;
@@ -220,7 +221,7 @@ const EXACT_STATE_FIXTURE_SOURCE = `
 	${EXACT_STATE_DEFINITION}
 	var S={set:[],delete:[]};
 	var c=Object.freeze({on:function(e,t){if(e in S)return"function"!=typeof t||S[e].includes(t)||S[e].push(t),c;n("VarRef.on","invalid event name")}});
-	window.__harloweFixture={State:State,VarRef:c,listeners:l,varRefListeners:S,failPassageRead:function(){Object.defineProperty(d,"passage",{configurable:true,get:function(){throw new Error("blocked passage")}})},setPassage:function(value){Object.defineProperty(d,"passage",{configurable:true,enumerable:true,value:value,writable:true})},setVariable:function(value){i.variables.gold=value;S.set.forEach(function(listener){listener()})},setVariables:function(value){i.variables=value;S.set.forEach(function(listener){listener()})},setNestedVariable:function(){i.variables.nested.value+=1;S.set.forEach(function(listener){listener()})},deleteVariable:function(name){delete i.variables[name];S.delete.forEach(function(listener){listener()})},setTimeline:function(value){u=value},setPastLength:function(value){p=value},emit:function(event){l[event].forEach(function(listener){listener()})}};
+	window.__harloweFixture={State:State,VarRef:c,listeners:l,varRefListeners:S,failPassageRead:function(){Object.defineProperty(d,"passage",{configurable:true,get:function(){throw new Error("blocked passage")}})},setPassage:function(value){Object.defineProperty(d,"passage",{configurable:true,enumerable:true,value:value,writable:true})},setVariable:function(value){i.variables.gold=value;S.set.forEach(function(listener){listener()})},setTemporary:function(store,name,value){S.set.forEach(function(listener){listener(store,name,value)})},deleteTemporary:function(store,name){S.delete.forEach(function(listener){listener(store,name)})},setVariables:function(value){i.variables=value;S.set.forEach(function(listener){listener()})},setNestedVariable:function(){i.variables.nested.value+=1;S.set.forEach(function(listener){listener()})},deleteVariable:function(name){delete i.variables[name];S.delete.forEach(function(listener){listener()})},setTimeline:function(value){u=value},setPastLength:function(value){p=value},emit:function(event){l[event].forEach(function(listener){listener()})}};
 }());`;
 
 describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
@@ -236,9 +237,18 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 			capabilityDependencies: {
 				currentPassage: ['state.passage', 'state.on'],
 				storyVariables: ['state.variables', 'varRef.on'],
+				temporaryVariables: ['state.on', 'varRef.on'],
 				visitedPassages: ['state.timeline', 'state.pastLength']
 			},
-			events: {capture: ['forward', 'back', 'load', 'forgetUndos']},
+			events: {
+				capture: ['forward', 'back', 'load', 'forgetUndos'],
+				clearTemporaryVariables: [
+					'beforeForward',
+					'beforeBack',
+					'beforeLoad',
+					'load'
+				]
+			},
 			moduleName: 'state',
 			on: {
 				configurable: false,
@@ -1426,10 +1436,17 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 				currentPassage: {name: 'Start'},
 				sections: {
 					storyVariables: {state: 'unavailable'},
+					temporaryVariables: {state: 'unavailable'},
 					visitedPassages: {state: 'complete'}
 				},
 				visitedPassages: [{name: 'Start'}]
 			});
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)?.temporaryVariables
+			).toBeUndefined();
 		} finally {
 			frame.remove();
 			postMessage.mockRestore();
@@ -1729,6 +1746,342 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 		}
 	});
 
+	it('records bounded temporary assignments by Harlowe scope for the current turn', async () => {
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const frame = installExactHarloweBridge('harlowe-temporary-rows');
+		const runtime = frame.contentWindow as Window & {
+			eval(source: string): unknown;
+			__harloweFixture: {
+				State: object;
+				VarRef: object;
+				setTemporary(store: object, name: string, value: unknown): void;
+				deleteTemporary(store: object, name: string): void;
+				emit(event: string): void;
+				setPassage(value: string): void;
+			};
+			__twineRsPreviewDebug: {captureState(): void};
+			__twineRsPreviewHarloweBootstrap(state: object, varRef: object): void;
+		};
+		const snapshot = () =>
+			postMessage.mock.calls
+				.map(([message]) => message)
+				.filter(message => message?.type === 'debugger-snapshot')
+				.at(-1);
+
+		try {
+			runtime.eval(EXACT_STATE_FIXTURE_SOURCE);
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
+			runtime.eval(
+				'window.Set=function hostileSet(){throw new Error("replaced")};'
+			);
+			const temporaryStore = runtime.eval(
+				'Object.create({TwineScript_VariableStore:{type:"temp",name:"this passage"}})'
+			) as object;
+			runtime.__harloweFixture.setTemporary(temporaryStore, 'score', 1);
+			runtime.__harloweFixture.setTemporary(temporaryStore, 'score', 2);
+			runtime.__harloweFixture.deleteTemporary(temporaryStore, 'score');
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				temporaryVariables: [
+					{name: 'score', preview: '2', scope: 'this passage', type: 'number'}
+				]
+			});
+			runtime.__harloweFixture.emit('beforeForward');
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({temporaryVariables: []});
+
+			const internalStore = runtime.eval(
+				'Object.create({TwineScript_VariableStore:{type:"temp",name:"macro call #1"}})'
+			) as object;
+			runtime.__harloweFixture.setTemporary(internalStore, 'hidden', true);
+			for (let index = 0; index < 101; index += 1) {
+				runtime.__harloweFixture.setTemporary(
+					temporaryStore,
+					`v${index}`,
+					index
+				);
+			}
+			runtime.__harloweFixture.setTemporary(temporaryStore, 'v0', 999);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					temporaryVariables: {reasons: ['item-limit'], state: 'truncated'}
+				}
+			});
+			expect(snapshot()?.temporaryVariables).toHaveLength(100);
+			expect(snapshot()?.temporaryVariables?.[0]).toMatchObject({
+				name: 'v0',
+				preview: '999'
+			});
+			runtime.__harloweFixture.emit('forgetUndos');
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()?.temporaryVariables).toHaveLength(100);
+			for (const event of ['beforeBack', 'beforeLoad', 'load']) {
+				runtime.__harloweFixture.emit(event);
+				runtime.__twineRsPreviewDebug.captureState();
+				expect(snapshot()).toMatchObject({temporaryVariables: []});
+				runtime.__harloweFixture.setTemporary(temporaryStore, event, true);
+			}
+			const hostileStore = runtime.eval(
+				'new Proxy({}, {getPrototypeOf:function(){throw new Error("blocked")}})'
+			) as object;
+			runtime.__harloweFixture.setTemporary(hostileStore, 'blocked', true);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					temporaryVariables: {
+						reasons: ['uninspectable'],
+						state: 'truncated'
+					}
+				}
+			});
+			runtime.__harloweFixture.emit('beforeForward');
+			const labels = [
+				'this passage',
+				'?named',
+				'an unnamed hook',
+				'a macro expression',
+				'a speculative scope',
+				'an unknown scope'
+			];
+			for (const [index, label] of labels.entries()) {
+				const store = runtime.eval(
+					`Object.create({TwineScript_VariableStore:{type:"temp",name:${JSON.stringify(label)}}})`
+				) as object;
+				runtime.__harloweFixture.setTemporary(store, 'same', index);
+			}
+			const firstCollision = runtime.eval(
+				'Object.create({TwineScript_VariableStore:{type:"temp",name:"a:b"}})'
+			) as object;
+			const secondCollision = runtime.eval(
+				'Object.create({TwineScript_VariableStore:{type:"temp",name:"a"}})'
+			) as object;
+			runtime.__harloweFixture.setTemporary(firstCollision, 'c', 1);
+			runtime.__harloweFixture.setTemporary(secondCollision, 'b:c', 2);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()?.temporaryVariables).toEqual(
+				expect.arrayContaining(
+					labels.map((scope, index) =>
+						expect.objectContaining({
+							name: 'same',
+							preview: String(index),
+							scope
+						})
+					)
+				)
+			);
+			expect(snapshot()?.temporaryVariables).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({name: 'c', scope: 'a:b'}),
+					expect.objectContaining({name: 'b:c', scope: 'a'})
+				])
+			);
+
+			runtime.__harloweFixture.emit('beforeForward');
+			const snapshotsBeforeIgnoredMetadata = postMessage.mock.calls.filter(
+				([message]) => message?.type === 'debugger-snapshot'
+			).length;
+			runtime.__harloweFixture.setTemporary({}, 'missing', true);
+			const nonTemporaryStore = runtime.eval(
+				'({TwineScript_VariableStore:{type:"global"}})'
+			) as object;
+			runtime.__harloweFixture.setTemporary(nonTemporaryStore, 'global', true);
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			expect(
+				postMessage.mock.calls.filter(
+					([message]) => message?.type === 'debugger-snapshot'
+				).length
+			).toBeGreaterThan(snapshotsBeforeIgnoredMetadata);
+			expect(snapshot()).toMatchObject({
+				sections: {temporaryVariables: {state: 'complete'}},
+				temporaryVariables: []
+			});
+
+			const accessorStore = runtime.eval(`
+				window.__harloweTemporaryGetterCalls=0;
+				var metadata={type:"temp"};
+				Object.defineProperty(metadata,"name",{get:function(){window.__harloweTemporaryGetterCalls+=1;throw new Error("read")}});
+				var store={};
+				Object.defineProperty(store,"TwineScript_VariableStore",{get:function(){window.__harloweTemporaryGetterCalls+=1;throw new Error("read")}});
+				window.__harloweMetadataWithAccessor=Object.create({TwineScript_VariableStore:metadata});
+				store;
+			`) as object;
+			runtime.__harloweFixture.setTemporary(accessorStore, 'accessor', true);
+			runtime.__harloweFixture.setTemporary(
+				(runtime as unknown as {__harloweMetadataWithAccessor: object})
+					.__harloweMetadataWithAccessor,
+				'accessor-name',
+				true
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(
+				(runtime as unknown as {__harloweTemporaryGetterCalls: number})
+					.__harloweTemporaryGetterCalls
+			).toBe(0);
+			expect(snapshot()).toMatchObject({
+				sections: {
+					temporaryVariables: {
+						reasons: ['uninspectable'],
+						state: 'truncated'
+					}
+				}
+			});
+
+			runtime.__harloweFixture.emit('beforeForward');
+			const withinDepth = runtime.eval(`
+				var store={TwineScript_VariableStore:{type:"temp",name:"within depth"}};
+				for(var index=0;index<63;index+=1)store=Object.create(store);
+				store;
+			`) as object;
+			const overDepth = runtime.eval(`
+				var store={TwineScript_VariableStore:{type:"temp",name:"over depth"}};
+				for(var index=0;index<64;index+=1)store=Object.create(store);
+				store;
+			`) as object;
+			const cyclicStore = runtime.eval(
+				'var cyclic;cyclic=new Proxy({},{getPrototypeOf:function(){return cyclic}});cyclic;'
+			) as object;
+			runtime.__harloweFixture.setTemporary(withinDepth, 'visible', true);
+			runtime.__harloweFixture.setTemporary(overDepth, 'hidden', true);
+			runtime.__harloweFixture.setTemporary(cyclicStore, 'cyclic', true);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()?.temporaryVariables).toEqual([
+				expect.objectContaining({name: 'visible', scope: 'within depth'})
+			]);
+			expect(snapshot()).toMatchObject({
+				sections: {
+					temporaryVariables: {
+						reasons: ['uninspectable'],
+						state: 'truncated'
+					}
+				}
+			});
+
+			runtime.__harloweFixture.emit('beforeForward');
+			const longScope = 's'.repeat(
+				STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableScopeLength + 1
+			);
+			const longName = 'n'.repeat(
+				STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableNameLength + 1
+			);
+			const longStore = runtime.eval(
+				`({TwineScript_VariableStore:{type:"temp",name:${JSON.stringify(longScope)}}})`
+			) as object;
+			runtime.__harloweFixture.setTemporary(longStore, longName, true);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					temporaryVariables: {
+						reasons: ['field-limit'],
+						state: 'truncated'
+					}
+				},
+				temporaryVariables: [
+					{
+						name: longName.slice(
+							0,
+							STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableNameLength
+						),
+						scope: longScope.slice(
+							0,
+							STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableScopeLength
+						)
+					}
+				]
+			});
+
+			runtime.__harloweFixture.emit('beforeForward');
+			const scopePrefix = 'p'.repeat(
+				STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableScopeLength
+			);
+			const namePrefix = 'q'.repeat(
+				STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableNameLength
+			);
+			const firstBoundedAlias = runtime.eval(
+				`({TwineScript_VariableStore:{type:"temp",name:${JSON.stringify(`${scopePrefix}-one`)}}})`
+			) as object;
+			const secondBoundedAlias = runtime.eval(
+				`({TwineScript_VariableStore:{type:"temp",name:${JSON.stringify(`${scopePrefix}-two`)}}})`
+			) as object;
+			runtime.__harloweFixture.setTemporary(
+				firstBoundedAlias,
+				`${namePrefix}-one`,
+				1
+			);
+			runtime.__harloweFixture.setTemporary(
+				secondBoundedAlias,
+				`${namePrefix}-two`,
+				2
+			);
+			runtime.__harloweFixture.deleteTemporary(
+				secondBoundedAlias,
+				`${namePrefix}-two`
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					temporaryVariables: {
+						reasons: ['field-limit'],
+						state: 'truncated'
+					}
+				},
+				temporaryVariables: [
+					{
+						name: namePrefix,
+						preview: '2',
+						scope: scopePrefix,
+						type: 'number'
+					}
+				]
+			});
+			expect(snapshot()?.temporaryVariables).toHaveLength(1);
+
+			runtime.__harloweFixture.emit('beforeForward');
+			for (let index = 0; index < 30; index += 1) {
+				runtime.__harloweFixture.setTemporary(
+					temporaryStore,
+					`budget-${index}`,
+					'x'.repeat(512)
+				);
+			}
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					temporaryVariables: {
+						reasons: ['text-budget'],
+						state: 'truncated'
+					}
+				}
+			});
+
+			runtime.__harloweFixture.emit('beforeForward');
+			runtime.__harloweFixture.setTemporary(
+				temporaryStore,
+				'redirect-retained',
+				true
+			);
+			runtime.__harloweFixture.setPassage('Redirected');
+			runtime.document.body.append(runtime.document.createElement('tw-hook'));
+			await Promise.resolve();
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()?.temporaryVariables).toEqual([
+				expect.objectContaining({name: 'redirect-retained'})
+			]);
+			const RuntimeEvent = (runtime as unknown as {Event: typeof Event}).Event;
+			runtime.dispatchEvent(new RuntimeEvent('pagehide'));
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({temporaryVariables: []});
+		} finally {
+			frame.remove();
+			postMessage.mockRestore();
+		}
+	});
+
 	it('treats empty startup passage as ready and captures the first forward passage', async () => {
 		const postMessage = jest
 			.spyOn(window, 'postMessage')
@@ -1874,7 +2227,7 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 		[
 			'listener registration failure',
 			EXACT_STATE_FIXTURE_SOURCE.replace(
-				'var l={forward:[],back:[],load:[],forgetUndos:[]};',
+				'var l={forward:[],back:[],load:[],forgetUndos:[],beforeForward:[],beforeBack:[],beforeLoad:[]};',
 				'var l={back:[],load:[]};Object.defineProperty(l,"forward",{get:function(){throw new Error("blocked")}});'
 			)
 		]
