@@ -220,7 +220,7 @@ const EXACT_STATE_FIXTURE_SOURCE = `
 	${EXACT_STATE_DEFINITION}
 	var S={set:[],delete:[]};
 	var c=Object.freeze({on:function(e,t){if(e in S)return"function"!=typeof t||S[e].includes(t)||S[e].push(t),c;n("VarRef.on","invalid event name")}});
-	window.__harloweFixture={State:State,VarRef:c,listeners:l,varRefListeners:S,setPassage:function(value){d.passage=value},setVariable:function(value){i.variables.gold=value;S.set.forEach(function(listener){listener()})},setVariables:function(value){i.variables=value;S.set.forEach(function(listener){listener()})},setNestedVariable:function(){i.variables.nested.value+=1;S.set.forEach(function(listener){listener()})},deleteVariable:function(name){delete i.variables[name];S.delete.forEach(function(listener){listener()})},setTimeline:function(value){u=value},setPastLength:function(value){p=value},emit:function(event){l[event].forEach(function(listener){listener()})}};
+	window.__harloweFixture={State:State,VarRef:c,listeners:l,varRefListeners:S,failPassageRead:function(){Object.defineProperty(d,"passage",{configurable:true,get:function(){throw new Error("blocked passage")}})},setPassage:function(value){Object.defineProperty(d,"passage",{configurable:true,enumerable:true,value:value,writable:true})},setVariable:function(value){i.variables.gold=value;S.set.forEach(function(listener){listener()})},setVariables:function(value){i.variables=value;S.set.forEach(function(listener){listener()})},setNestedVariable:function(){i.variables.nested.value+=1;S.set.forEach(function(listener){listener()})},deleteVariable:function(name){delete i.variables[name];S.delete.forEach(function(listener){listener()})},setTimeline:function(value){u=value},setPastLength:function(value){p=value},emit:function(event){l[event].forEach(function(listener){listener()})}};
 }());`;
 
 describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
@@ -1035,9 +1035,21 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 				visitedPassages: [{name: 'Loaded'}]
 			});
 
+			runtime.sessionStorage.setItem(
+				'Saved Session',
+				JSON.stringify([{passage: 'Start'}])
+			);
 			runtime.__harloweFixture.setPassage('Next');
 			runtime.__harloweFixture.listeners.forward[0]();
 			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'state')
+					.at(-1)
+			).toMatchObject({
+				currentPassage: {name: 'Next', source: 'Harlowe State'}
+			});
 			expect(
 				postMessage.mock.calls
 					.map(([message]) => message)
@@ -1066,6 +1078,270 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 					.filter(message => message?.type === 'debugger-snapshot')
 					.at(-1)?.visitedPassages
 			).toHaveLength(1);
+		} finally {
+			frame.remove();
+			postMessage.mockRestore();
+		}
+	});
+
+	it('captures exact Harlowe state that settles after a sustained load burst', async () => {
+		const sessionId = 'harlowe-late-load-settle';
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const frame = installExactHarloweBridge(sessionId);
+		const runtime = frame.contentWindow as Window & {
+			eval(source: string): unknown;
+			__harloweFixture: {
+				State: object;
+				VarRef: object;
+				emit(event: string): void;
+				setPassage(value: string): void;
+				setPastLength(value: number): void;
+				setTimeline(value: Array<{passage: string}>): void;
+			};
+			__twineRsPreviewDebug: {captureState(): void};
+			__twineRsPreviewHarloweBootstrap(state: object, varRef?: object): void;
+		};
+		const snapshots = () =>
+			postMessage.mock.calls
+				.map(([message]) => message)
+				.filter(
+					message =>
+						message?.type === 'debugger-snapshot' &&
+						message.sessionId === sessionId
+				);
+
+		try {
+			runtime.eval(EXACT_STATE_FIXTURE_SOURCE);
+			const readinessConnection = issueHarloweBootstrapChallenge(
+				frame,
+				sessionId
+			);
+
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
+			await waitForHarloweReadinessCount(readinessConnection, 1);
+			runtime.__harloweFixture.setPassage('Before late settle');
+			runtime.__harloweFixture.setTimeline([{passage: 'Before late settle'}]);
+			runtime.__harloweFixture.setPastLength(0);
+			runtime.__twineRsPreviewDebug.captureState();
+
+			for (let index = 0; index < 7; index += 1) {
+				runtime.__harloweFixture.emit('load');
+				if (index < 6) {
+					await new Promise<void>(resolve => runtime.setTimeout(resolve, 40));
+				}
+			}
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			runtime.__harloweFixture.setPassage('Late settled');
+			runtime.__harloweFixture.setTimeline([{passage: 'Late settled'}]);
+			runtime.__harloweFixture.setPastLength(0);
+			expect(snapshots().at(-1)).toMatchObject({
+				currentPassage: {name: 'Before late settle'}
+			});
+
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 200));
+			expect(snapshots().at(-1)).toMatchObject({
+				currentPassage: {name: 'Late settled'},
+				visitedPassages: [{name: 'Late settled'}]
+			});
+		} finally {
+			frame.remove();
+			postMessage.mockRestore();
+		}
+	});
+
+	it('publishes exact passage identity before pending timers and preserves the last valid host identity', async () => {
+		const sessionId = 'harlowe-immediate-passage';
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const frame = installExactHarloweBridge(sessionId);
+		const runtime = frame.contentWindow as Window & {
+			eval(source: string): unknown;
+			__harloweFixture: {
+				State: object;
+				VarRef: object;
+				emit(event: string): void;
+				failPassageRead(): void;
+				setPassage(value: string): void;
+				setVariable(value: number): void;
+			};
+			__twineRsPreviewDebug: {captureState(): void};
+			__twineRsPreviewHarloweBootstrap(state: object, varRef: object): void;
+		};
+		const messages = (type: string) =>
+			postMessage.mock.calls
+				.map(([message]) => message)
+				.filter(
+					message => message?.type === type && message.sessionId === sessionId
+				);
+
+		try {
+			runtime.eval(EXACT_STATE_FIXTURE_SOURCE);
+			const snapshotsBeforeBootstrap = messages('debugger-snapshot').length;
+
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
+			expect(messages('state').at(-1)).toMatchObject({
+				currentPassage: {name: 'Start', source: 'Harlowe State'}
+			});
+			expect(messages('debugger-snapshot')).toHaveLength(
+				snapshotsBeforeBootstrap
+			);
+
+			runtime.sessionStorage.setItem(
+				'Saved Session',
+				JSON.stringify([{passage: 'Start'}])
+			);
+			runtime.__harloweFixture.setVariable(2);
+			runtime.document.body.click();
+			const snapshotsBeforeForward = messages('debugger-snapshot').length;
+
+			runtime.__harloweFixture.setPassage('Next');
+			runtime.__harloweFixture.emit('forward');
+			expect(messages('state').at(-1)).toMatchObject({
+				currentPassage: {name: 'Next', source: 'Harlowe State'}
+			});
+			const nextStatesAfterForward = messages('state').filter(
+				message => message.currentPassage?.name === 'Next'
+			).length;
+
+			runtime.document.body.append(runtime.document.createElement('tw-hook'));
+			await Promise.resolve();
+			expect(
+				messages('state').filter(
+					message => message.currentPassage?.name === 'Next'
+				)
+			).toHaveLength(nextStatesAfterForward + 1);
+			runtime.document.body.append(runtime.document.createElement('tw-hook'));
+			await Promise.resolve();
+			expect(
+				messages('state').filter(
+					message => message.currentPassage?.name === 'Next'
+				)
+			).toHaveLength(nextStatesAfterForward + 1);
+			expect(messages('debugger-snapshot')).toHaveLength(
+				snapshotsBeforeForward
+			);
+
+			runtime.__harloweFixture.failPassageRead();
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(messages('state').at(-1)).toMatchObject({
+				currentPassage: {name: 'Next', source: 'Harlowe State'}
+			});
+			expect(messages('debugger-snapshot').at(-1)).toMatchObject({
+				sections: {currentPassage: {state: 'unavailable'}}
+			});
+			expect(messages('debugger-snapshot').at(-1)).not.toHaveProperty(
+				'currentPassage'
+			);
+		} finally {
+			frame.remove();
+			postMessage.mockRestore();
+		}
+	});
+
+	it('republishes exact passage identity from a DOM mutation without waiting for a timer', async () => {
+		const sessionId = 'harlowe-mutation-passage';
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const frame = installExactHarloweBridge(sessionId);
+		const runtime = frame.contentWindow as Window & {
+			eval(source: string): unknown;
+			__harloweFixture: {
+				State: object;
+				VarRef: object;
+				setPassage(value: string): void;
+			};
+			__twineRsPreviewHarloweBootstrap(state: object, varRef: object): void;
+		};
+		const messages = (type: string) =>
+			postMessage.mock.calls
+				.map(([message]) => message)
+				.filter(
+					message => message?.type === type && message.sessionId === sessionId
+				);
+
+		try {
+			runtime.eval(EXACT_STATE_FIXTURE_SOURCE);
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
+			runtime.sessionStorage.setItem(
+				'Saved Session',
+				JSON.stringify([{passage: 'Start'}])
+			);
+			const snapshotsBeforeMutation = messages('debugger-snapshot').length;
+
+			runtime.__harloweFixture.setPassage('Next');
+			runtime.document.body.append(runtime.document.createElement('tw-hook'));
+			await Promise.resolve();
+
+			expect(messages('state').at(-1)).toMatchObject({
+				currentPassage: {name: 'Next', source: 'Harlowe State'}
+			});
+			expect(messages('debugger-snapshot')).toHaveLength(
+				snapshotsBeforeMutation
+			);
+		} finally {
+			frame.remove();
+			postMessage.mockRestore();
+		}
+	});
+
+	it('defers load passage publication until Harlowe assigns the restored passage', async () => {
+		const sessionId = 'harlowe-deferred-load-passage';
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const frame = installExactHarloweBridge(sessionId);
+		const runtime = frame.contentWindow as Window & {
+			eval(source: string): unknown;
+			__harloweFixture: {
+				State: object;
+				VarRef: object;
+				emit(event: string): void;
+				setPassage(value: string): void;
+			};
+			__twineRsPreviewHarloweBootstrap(state: object, varRef: object): void;
+		};
+		const messages = (type: string) =>
+			postMessage.mock.calls
+				.map(([message]) => message)
+				.filter(
+					message => message?.type === type && message.sessionId === sessionId
+				);
+
+		try {
+			runtime.eval(EXACT_STATE_FIXTURE_SOURCE);
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
+			expect(messages('state').at(-1)).toMatchObject({
+				currentPassage: {name: 'Start', source: 'Harlowe State'}
+			});
+			const stateCountBeforeLoad = messages('state').length;
+
+			runtime.__harloweFixture.emit('load');
+			expect(messages('state')).toHaveLength(stateCountBeforeLoad);
+
+			runtime.__harloweFixture.setPassage('Loaded');
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			expect(messages('state').at(-1)).toMatchObject({
+				currentPassage: {name: 'Loaded', source: 'Harlowe State'}
+			});
+			expect(messages('debugger-snapshot').at(-1)).toMatchObject({
+				currentPassage: {name: 'Loaded', source: 'Harlowe State'}
+			});
 		} finally {
 			frame.remove();
 			postMessage.mockRestore();

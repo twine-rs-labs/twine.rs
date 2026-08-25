@@ -497,6 +497,46 @@ describe('instrumented runtime passage detection', () => {
 		}
 	});
 
+	it('publishes a changed runtime passage from a DOM mutation before timers run', async () => {
+		jest.useFakeTimers();
+		document.body.innerHTML =
+			'<tw-storydata format="Snowman" format-version="2.1.1"></tw-storydata>';
+		(window as any).passage = {id: 1, name: 'Start'};
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const sessionId = 'mutation-runtime-passage';
+		const stateMessages = () =>
+			posted(postMessage, 'state').filter(
+				message => message.sessionId === sessionId
+			);
+
+		try {
+			installInstrumentedDebugger('Snowman', '2.1.1', sessionId);
+			jest.clearAllTimers();
+			expect(stateMessages().at(-1)?.currentPassage).toMatchObject({
+				localId: '1',
+				name: 'Start'
+			});
+
+			(window as any).passage = {id: 2, name: 'Next'};
+			document.body.append(document.createElement('div'));
+			await Promise.resolve();
+
+			expect(stateMessages().at(-1)?.currentPassage).toEqual({
+				localId: '2',
+				name: 'Next',
+				source: 'runtime'
+			});
+			expect(jest.getTimerCount()).toBeGreaterThan(0);
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+			delete (window as any).passage;
+			postMessage.mockRestore();
+		}
+	});
+
 	it('stops startup recapture when passage identity remains unavailable', () => {
 		jest.useFakeTimers();
 		document.body.innerHTML = '<div class="passage"></div>';
@@ -525,6 +565,79 @@ describe('instrumented runtime passage detection', () => {
 			expect(
 				postMessage.mock.calls.filter(([message]) => message?.type === 'state')
 			).toHaveLength(captureCount);
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+			postMessage.mockRestore();
+		}
+	});
+
+	it('coalesces delayed post-click captures while retaining leading and trailing samples', () => {
+		jest.useFakeTimers();
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const sessionId = 'coalesced-runtime-tick';
+		const stateMessages = () =>
+			posted(postMessage, 'state').filter(
+				message => message.sessionId === sessionId
+			);
+
+		try {
+			installInstrumentedDebugger('Unknown', '1.0.0', sessionId);
+			jest.clearAllTimers();
+			const initialCount = stateMessages().length;
+
+			for (let index = 0; index < 5; index += 1) {
+				document.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+			}
+
+			jest.advanceTimersByTime(49);
+			expect(stateMessages()).toHaveLength(initialCount);
+			jest.advanceTimersByTime(1);
+			expect(stateMessages()).toHaveLength(initialCount + 1);
+			jest.advanceTimersByTime(199);
+			expect(stateMessages()).toHaveLength(initialCount + 1);
+			jest.advanceTimersByTime(1);
+			expect(stateMessages()).toHaveLength(initialCount + 3);
+		} finally {
+			jest.clearAllTimers();
+			jest.useRealTimers();
+			postMessage.mockRestore();
+		}
+	});
+
+	it('keeps a bounded trailing capture live during continuous click activity', () => {
+		jest.useFakeTimers();
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const sessionId = 'continuous-runtime-tick';
+		const stateMessages = () =>
+			posted(postMessage, 'state').filter(
+				message => message.sessionId === sessionId
+			);
+
+		try {
+			installInstrumentedDebugger('Unknown', '1.0.0', sessionId);
+			jest.clearAllTimers();
+			const initialCount = stateMessages().length;
+
+			document.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+			for (let index = 0; index < 6; index += 1) {
+				jest.advanceTimersByTime(40);
+				document.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+			}
+			expect(stateMessages()).toHaveLength(initialCount);
+
+			jest.advanceTimersByTime(10);
+			expect(stateMessages()).toHaveLength(initialCount + 1);
+			jest.advanceTimersByTime(40);
+			expect(stateMessages()).toHaveLength(initialCount + 2);
+			jest.advanceTimersByTime(199);
+			expect(stateMessages()).toHaveLength(initialCount + 2);
+			jest.advanceTimersByTime(1);
+			expect(stateMessages()).toHaveLength(initialCount + 3);
 		} finally {
 			jest.clearAllTimers();
 			jest.useRealTimers();

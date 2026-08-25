@@ -1271,11 +1271,15 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var harloweSessionStorage;
 	var harloweSessionStorageIsFallback = false;
 	var pendingState = 0;
+	var pendingRuntimeState = 0;
+	var pendingRuntimeMaxState = 0;
 	var pendingStartupState = 0;
 	var startupStateCaptureIndex = 0;
+	var lastMutationPassageIdentity;
 	var selectedDebuggerAdapter;
 	var harloweState;
 	var harlowePassageGetter;
+	var lastExactHarlowePassage;
 	var harloweStateGetters = {};
 	var harloweVarRefOn;
 	var harloweBootstrapConsumed = false;
@@ -1823,6 +1827,8 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	function acceptHarloweState(state, varRef) {
 		if (harloweBootstrapConsumed) return;
 		harloweBootstrapConsumed = true;
+		harloweBootstrapAttested = false;
+		lastExactHarlowePassage = undefined;
 
 		try {
 			if (
@@ -1884,8 +1890,13 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 						capturedEventName,
 						function () {
 							try {
-								if (capturedEventName === 'load') queueStateAfterRuntimeTick();
-								else queueState();
+								if (capturedEventName === 'load') {
+									// Harlowe emits load before assigning the restored passage.
+									queueStateAfterRuntimeTick();
+								} else {
+									publishExactHarlowePassageNow();
+									queueState();
+								}
 							} catch (error) {}
 						}
 					]);
@@ -1896,12 +1907,15 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 			harlowePassageGetter = passageDescriptor.get;
 			harloweStateGetters = {pastLength: attestedHarloweGetter(state, 'pastLength'), timeline: attestedHarloweGetter(state, 'timeline'), variables: attestedHarloweGetter(state, 'variables')};
 			harloweBootstrapAttested = true;
+			publishExactHarlowePassageNow();
 			postHarloweBootstrapReady();
 			queueState();
 			attestHarloweVarRef(varRef);
 		} catch (error) {
+			harloweBootstrapAttested = false;
 			harloweState = undefined;
 			harlowePassageGetter = undefined;
+			lastExactHarlowePassage = undefined;
 			harloweStateGetters = {};
 			harloweVarRefOn = undefined;
 		}
@@ -2667,6 +2681,16 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		}
 	}
 
+	function readAndRememberExactHarlowePassage() {
+		var passage = readExactHarloweDebuggerPassage();
+
+		if (hasStablePassageIdentity(passage)) {
+			lastExactHarlowePassage = passage;
+		}
+
+		return passage;
+	}
+
 	function hasStablePassageIdentity(passage) {
 		return Boolean(
 			passage &&
@@ -2675,22 +2699,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		);
 	}
 
-	function captureState() {
-		pendingState = 0;
-		var currentPassage = readRuntimePassage();
-		var adapter = selectedDebuggerAdapter || debuggerAdapter();
-		var debuggerCurrentPassage =
-			FIXED_READ_ADAPTER && adapter.captureHandler === 'sugarcube'
-				? readExactSugarCubeDebuggerPassage()
-				: FIXED_READ_ADAPTER && adapter.captureHandler === 'harlowe-state'
-					? readExactHarloweDebuggerPassage()
-				: currentPassage;
-
-		if (hasStablePassageIdentity(currentPassage)) {
-			clearTimeout(pendingStartupState);
-			pendingStartupState = 0;
-		}
-
+	function postRuntimeState(currentPassage) {
 		post('state', {
 			currentPassage: currentPassage,
 			viewport: {
@@ -2701,6 +2710,85 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 				width: innerWidth
 			}
 		});
+	}
+
+	function publishExactHarlowePassageNow() {
+		var passage = readAndRememberExactHarlowePassage();
+
+		if (hasStablePassageIdentity(passage)) {
+			postRuntimeState(passage);
+		}
+	}
+
+	function readHostRuntimePassage() {
+		var adapter = selectedDebuggerAdapter || debuggerAdapter();
+		var exactHarloweAdapter =
+			FIXED_READ_ADAPTER && adapter.captureHandler === 'harlowe-state';
+		var exactHarlowePassage = exactHarloweAdapter
+			? readAndRememberExactHarlowePassage()
+			: undefined;
+
+		return exactHarloweAdapter && harloweBootstrapAttested
+			? exactHarlowePassage || lastExactHarlowePassage
+			: readRuntimePassage();
+	}
+
+	function mutationPassageIdentity(passage) {
+		return passage
+			? debuggerString(passage.localId || '') + '\\u0000' +
+				debuggerString(passage.name || '') + '\\u0000' +
+				debuggerString(passage.source || '')
+			: '';
+	}
+
+	function capturePassageAfterMutation() {
+		try {
+			var passage = readHostRuntimePassage();
+			var identity = mutationPassageIdentity(passage);
+
+			// DOM mutation delivery is microtask-based. Publish one independent
+			// confirmation for each changed, stable identity so hidden renderers do
+			// not depend on either a format callback or a later timer reaching the
+			// preview host. Keep this cache separate from other publishers on purpose,
+			// and keep the delayed full snapshot for debugger collections and viewport.
+			if (hasStablePassageIdentity(passage) && identity !== lastMutationPassageIdentity) {
+				lastMutationPassageIdentity = identity;
+				clearTimeout(pendingStartupState);
+				pendingStartupState = 0;
+				postRuntimeState(passage);
+			}
+			queueState();
+		} catch (error) {
+			// A story teardown can invalidate the document while a mutation record is
+			// still queued. The bridge must remain inert in that case.
+		}
+	}
+
+	function captureState() {
+		pendingState = 0;
+		var adapter = selectedDebuggerAdapter || debuggerAdapter();
+		var exactHarloweAdapter =
+			FIXED_READ_ADAPTER && adapter.captureHandler === 'harlowe-state';
+		var exactHarlowePassage = exactHarloweAdapter
+			? readAndRememberExactHarlowePassage()
+			: undefined;
+		var currentPassage =
+			exactHarloweAdapter && harloweBootstrapAttested
+				? exactHarlowePassage || lastExactHarlowePassage
+				: readRuntimePassage();
+		var debuggerCurrentPassage =
+			FIXED_READ_ADAPTER && adapter.captureHandler === 'sugarcube'
+				? readExactSugarCubeDebuggerPassage()
+				: exactHarloweAdapter
+					? exactHarlowePassage
+					: currentPassage;
+
+		if (hasStablePassageIdentity(currentPassage)) {
+			clearTimeout(pendingStartupState);
+			pendingStartupState = 0;
+		}
+
+		postRuntimeState(currentPassage);
 		captureDebuggerSnapshot(
 			adapter,
 			debuggerCurrentPassage
@@ -2714,9 +2802,28 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		pendingState = setTimeout(captureState, 50);
 	}
 
+	function captureRuntimeStateAtMaxWait() {
+		pendingRuntimeMaxState = 0;
+		captureState();
+	}
+
+	function captureRuntimeStateAfterIdle() {
+		pendingRuntimeState = 0;
+		clearTimeout(pendingRuntimeMaxState);
+		pendingRuntimeMaxState = 0;
+		captureState();
+	}
+
 	function queueStateAfterRuntimeTick() {
 		queueState();
-		setTimeout(captureState, 250);
+		clearTimeout(pendingRuntimeState);
+		pendingRuntimeState = setTimeout(captureRuntimeStateAfterIdle, 250);
+		if (!pendingRuntimeMaxState) {
+			pendingRuntimeMaxState = setTimeout(
+				captureRuntimeStateAtMaxWait,
+				250
+			);
+		}
 	}
 
 	function captureStartupState() {
@@ -2789,7 +2896,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 			});
 		}
 		if (document.body) {
-			new MutationObserver(queueState).observe(document.body, {
+			new MutationObserver(capturePassageAfterMutation).observe(document.body, {
 				attributes: true,
 				childList: true,
 				subtree: true

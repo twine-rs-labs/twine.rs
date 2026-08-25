@@ -305,6 +305,74 @@ function storyIframe(preview: Page) {
 	return preview.locator(activeStoryIframeSelector);
 }
 
+async function followStoryLinkRepeatedly(
+	preview: Page,
+	label: string,
+	count: number
+) {
+	await storyFrame(preview)
+		.locator('body')
+		.evaluate(
+			async (body, options) => {
+				const matchingLinks = () =>
+					Array.from(
+						body.querySelectorAll<HTMLElement>('tw-passage tw-link')
+					).filter(link => link.textContent?.trim() === options.label);
+
+				for (let index = 0; index < options.count; index += 1) {
+					const link = matchingLinks().at(-1);
+
+					if (!link) {
+						throw new Error(
+							`Missing ${options.label} link after ${index} of ${options.count} navigations.`
+						);
+					}
+
+					await new Promise<void>((resolve, reject) => {
+						let settled = false;
+						const finish = (error?: Error) => {
+							if (settled) {
+								return;
+							}
+
+							settled = true;
+							observer.disconnect();
+							window.clearTimeout(timeout);
+							if (error) {
+								reject(error);
+							} else {
+								resolve();
+							}
+						};
+						const replacementReady = () =>
+							matchingLinks().some(candidate => candidate !== link);
+						const observer = new MutationObserver(() => {
+							if (replacementReady()) {
+								finish();
+							}
+						});
+						const timeout = window.setTimeout(
+							() =>
+								finish(
+									new Error(
+										`Timed out after ${index} of ${options.count} ${options.label} navigations.`
+									)
+								),
+							10_000
+						);
+
+						observer.observe(body, {childList: true, subtree: true});
+						link.click();
+						if (replacementReady()) {
+							finish();
+						}
+					});
+				}
+			},
+			{count, label}
+		);
+}
+
 async function reloadDuringPendingClearStateBegin(preview: Page) {
 	await preview.evaluate(async () => {
 		const api = (window as PreviewTestWindow).twineStoryPreview;
@@ -1003,20 +1071,82 @@ async function persistedStartUuid(page: Page) {
 }
 
 async function expectRenderedText(preview: Page, text: string) {
-	await expect(
-		storyFrame(preview).locator(':visible').filter({hasText: text}).last()
-	).toBeVisible({timeout: 60_000});
+	await expect
+		.poll(() => storyFrame(preview).locator('body').innerText(), {
+			timeout: 60_000
+		})
+		.toContain(text);
 }
 
 async function expectCurrentPassage(preview: Page, name: string) {
-	await expect(
-		preview
-			.locator('.story-preview-route__runtime-main')
-			.getByText(`Current: ${name}`, {exact: true})
-	).toBeVisible({timeout: 90_000});
+	const runtimeMain = preview.locator('.story-preview-route__runtime-main');
+
+	try {
+		await expect(
+			runtimeMain.getByText(`Current: ${name}`, {exact: true})
+		).toBeVisible({timeout: 90_000});
+	} catch (error) {
+		const beforeCapture = await runtimeMain
+			.getByText(/^Current:/)
+			.allTextContents()
+			.catch(() => []);
+		const frameDiagnostic = await storyFrame(preview)
+			.locator('body')
+			.evaluate(() => {
+				const debug = (
+					window as Window & {
+						__twineRsPreviewDebug?: {captureState(): void};
+					}
+				).__twineRsPreviewDebug;
+
+				debug?.captureState();
+				return {
+					captureAvailable: typeof debug?.captureState === 'function',
+					visibilityState: document.visibilityState
+				};
+			})
+			.catch(() => ({
+				captureAvailable: false,
+				visibilityState: 'unavailable'
+			}));
+
+		await preview.waitForTimeout(250);
+		const afterCapture = await runtimeMain
+			.getByText(/^Current:/)
+			.allTextContents()
+			.catch(() => []);
+
+		throw new Error(
+			`${error instanceof Error ? error.message : String(error)}
+Current passage before forced capture: ${beforeCapture.join(' | ') || '(none)'}
+Current passage after forced capture: ${afterCapture.join(' | ') || '(none)'}
+Story frame visibility: ${frameDiagnostic.visibilityState}
+Forced bridge capture available: ${frameDiagnostic.captureAvailable}`
+		);
+	}
 	await expect(
 		preview.getByRole('button', {name: 'Test Current'})
 	).toBeEnabled();
+}
+
+async function preserveStaleHarloweSession(preview: Page, passageName: string) {
+	await storyFrame(preview)
+		.locator('body')
+		.evaluate((body, name) => {
+			const staleSession = JSON.stringify([{passage: name}]);
+			const preserve = () =>
+				window.sessionStorage.setItem('Saved Session', staleSession);
+			const observer = new MutationObserver(() => {
+				preserve();
+				window.setTimeout(preserve, 0);
+			});
+
+			preserve();
+			observer.observe(body, {childList: true, subtree: true});
+			window.addEventListener('pagehide', () => observer.disconnect(), {
+				once: true
+			});
+		}, passageName);
 }
 
 async function waitForReplacement(
@@ -1374,6 +1504,7 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		).toBeVisible();
 		await preview.getByRole('tab', {name: 'Fit'}).click();
 
+		await preserveStaleHarloweSession(preview, 'Start');
 		await storyFrame(preview).getByText('Continue', {exact: true}).click();
 		await expectRenderedText(preview, 'Next passage version one.');
 		await expectCurrentPassage(preview, 'Next');
@@ -1616,7 +1747,9 @@ test('packaged Harlowe bounds committed visited history at 200 moments', async (
 			page.getByTitle('Play').click()
 		);
 		await expectRenderedText(preview, 'Packaged Harlowe history marker.');
-		await preview.getByRole('button', {name: 'Debugger'}).click();
+		const debuggerToggle = preview.getByRole('button', {name: 'Debugger'});
+
+		await debuggerToggle.click();
 		const inspector = preview.getByRole('region', {
 			name: 'Runtime debugger inspector'
 		});
@@ -1627,12 +1760,10 @@ test('packaged Harlowe bounds committed visited history at 200 moments', async (
 
 		await expect(inspector).toContainText('Adapter: harlowe-3.3.9');
 		await expect(inspector.getByText('alpha', {exact: true})).toBeVisible();
-		for (let index = 0; index < 200; index += 1) {
-			await storyFrame(preview)
-				.locator('tw-passage tw-link')
-				.filter({hasText: /^Repeat$/})
-				.click();
-		}
+		await debuggerToggle.click();
+		await expect(inspector).toHaveCount(0);
+		await followStoryLinkRepeatedly(preview, 'Repeat', 200);
+		await debuggerToggle.click();
 		await expect(
 			visitedPassagesSection.getByText('Truncated: item-limit', {
 				exact: true
