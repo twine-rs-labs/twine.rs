@@ -1034,7 +1034,7 @@ describe('runtime debugger protocol', () => {
 		const hello = {
 			...envelope,
 			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
-			capabilities: ['currentPassage'],
+			capabilities: ['currentPassage', 'storyVariables', 'visitedPassages'],
 			format: 'Harlowe',
 			formatVersion: '3.3.9',
 			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
@@ -1046,7 +1046,11 @@ describe('runtime debugger protocol', () => {
 			adapterId: HARLOWE_3_3_9_COMPATIBILITY.adapterId,
 			currentPassage: {name: 'Start'},
 			protocolVersion: STORY_PREVIEW_DEBUGGER_PROTOCOL_VERSION,
-			sections: {currentPassage: {state: 'complete'}},
+			sections: {
+				currentPassage: {state: 'complete'},
+				storyVariables: {state: 'unavailable'},
+				visitedPassages: {state: 'unavailable'}
+			},
 			type: 'debugger-snapshot'
 		};
 		const commandHello = {
@@ -1071,7 +1075,7 @@ describe('runtime debugger protocol', () => {
 		).toBeDefined();
 		expect(normalizeStoryPreviewBridgeMessage(arm, context)).toBeDefined();
 		expect(normalizeStoryPreviewBridgeMessage(hello, context)).toMatchObject({
-			capabilities: ['currentPassage'],
+			capabilities: ['currentPassage', 'storyVariables', 'visitedPassages'],
 			reliability: 'exact-version'
 		});
 		expect(normalizeStoryPreviewBridgeMessage(snapshot, context)).toBeDefined();

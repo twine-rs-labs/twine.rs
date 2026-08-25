@@ -1276,6 +1276,8 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var selectedDebuggerAdapter;
 	var harloweState;
 	var harlowePassageGetter;
+	var harloweStateGetters = {};
+	var harloweVarRefOn;
 	var harloweBootstrapConsumed = false;
 	var restartCommandBusy = false;
 	// A null value means Chapbook emitted a trail update which could not be copied
@@ -1283,6 +1285,7 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 	var chapbookCurrentPassage;
 	var debuggerFloor = Math.floor;
 	var debuggerGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+	var debuggerGetOwnPropertyNames = Object.getOwnPropertyNames;
 	var debuggerIsFrozen = Object.isFrozen;
 	var debuggerIsFinite = Number.isFinite;
 	var debuggerJsonStringify = JSON.stringify;
@@ -1798,7 +1801,26 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		}
 	}
 
-	function acceptHarloweState(state) {
+	function attestedHarloweGetter(state, key) {
+		var profile = ownDebuggerData(DEBUGGER_HARLOWE_STATE_PROFILE, key);
+		var descriptor = debuggerGetOwnPropertyDescriptor(state, key);
+		if (!profile || !descriptor || descriptor.configurable !== profile.configurable || descriptor.enumerable !== profile.enumerable || typeof descriptor.get !== 'function' || descriptor.set !== undefined || debuggerReflectApply(debuggerFunctionToString, descriptor.get, []) !== profile.getterSource) return;
+		return descriptor.get;
+	}
+
+	function attestHarloweVarRef(varRef) {
+		try {
+			var varRefProfile = ownDebuggerData(DEBUGGER_HARLOWE_STATE_PROFILE, 'varRef');
+			var varRefOnProfile = varRefProfile && ownDebuggerData(varRefProfile, 'on');
+			var descriptor = varRef && debuggerGetOwnPropertyDescriptor(varRef, 'on');
+			if (!varRefProfile || varRefProfile.stateFrozen !== true || !debuggerIsFrozen(varRef) || !varRefOnProfile || !descriptor || !debuggerReflectApply(debuggerHasOwn, descriptor, ['value']) || descriptor.configurable !== varRefOnProfile.configurable || descriptor.enumerable !== varRefOnProfile.enumerable || descriptor.writable !== varRefOnProfile.writable || typeof descriptor.value !== 'function' || debuggerReflectApply(debuggerFunctionToString, descriptor.value, []) !== varRefOnProfile.source) return;
+			debuggerReflectApply(descriptor.value, varRef, ['set', queueState]);
+			debuggerReflectApply(descriptor.value, varRef, ['delete', queueState]);
+			harloweVarRefOn = descriptor.value;
+		} catch (error) {}
+	}
+
+	function acceptHarloweState(state, varRef) {
 		if (harloweBootstrapConsumed) return;
 		harloweBootstrapConsumed = true;
 
@@ -1857,22 +1879,31 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 			for (var eventIndex = 0; eventIndex < events.length; eventIndex++) {
 				var eventName = ownDebuggerData(events, debuggerString(eventIndex));
 				if (typeof eventName !== 'string') return;
-				debuggerReflectApply(onDescriptor.value, state, [
-					eventName,
-					function () {
-						try { queueState(); } catch (error) {}
-					}
-				]);
+				(function (capturedEventName) {
+					debuggerReflectApply(onDescriptor.value, state, [
+						capturedEventName,
+						function () {
+							try {
+								if (capturedEventName === 'load') queueStateAfterRuntimeTick();
+								else queueState();
+							} catch (error) {}
+						}
+					]);
+				})(eventName);
 			}
 
 			harloweState = state;
 			harlowePassageGetter = passageDescriptor.get;
+			harloweStateGetters = {pastLength: attestedHarloweGetter(state, 'pastLength'), timeline: attestedHarloweGetter(state, 'timeline'), variables: attestedHarloweGetter(state, 'variables')};
 			harloweBootstrapAttested = true;
 			postHarloweBootstrapReady();
 			queueState();
+			attestHarloweVarRef(varRef);
 		} catch (error) {
 			harloweState = undefined;
 			harlowePassageGetter = undefined;
+			harloweStateGetters = {};
+			harloweVarRefOn = undefined;
 		}
 	}
 
@@ -2063,9 +2094,75 @@ ${STORY_PREVIEW_VIEW_TRANSITION_GUARD_SOURCE}
 		);
 	}
 
+	function readHarloweStateData(key) {
+		var getter = harloweStateGetters[key];
+		if (!harloweState || typeof getter !== 'function') return;
+		try { return debuggerReflectApply(getter, harloweState, []); } catch (error) {}
+	}
+
+	function harloweVariables(budget) {
+		var value = readHarloweStateData('variables');
+		var variables = [];
+		var reasons = [];
+		try {
+			if (!value || (typeof value !== 'object' && typeof value !== 'function')) return;
+			// A same-realm Proxy can still perform arbitrary ownKeys work or reject
+			// native enumeration before this bridge-owned candidate bound applies.
+			var keys = debuggerReflectApply(debuggerGetOwnPropertyNames, null, [value]);
+			var length = keys.length;
+			if (length > DEBUGGER_VARIABLE_LIMIT) {
+				length = DEBUGGER_VARIABLE_LIMIT;
+				addDebuggerReason(reasons, 'item-limit');
+			}
+			for (var keyIndex = 0; keyIndex < length; keyIndex += 1) {
+				var key = keys[keyIndex];
+				var descriptor = debuggerGetOwnPropertyDescriptor(value, key);
+				if (!descriptor) { addDebuggerReason(reasons, 'uninspectable'); continue; }
+				if (descriptor.enumerable !== true) continue;
+				if (debuggerReflectApply(debuggerStringIndexOf, key, ['TwineScript_']) === 0) continue;
+				if (!debuggerReflectApply(debuggerHasOwn, descriptor, ['value'])) { addDebuggerReason(reasons, 'uninspectable'); continue; }
+				var name = boundedDebuggerText(key, ${STORY_PREVIEW_BRIDGE_LIMITS.debuggerVariableNameLength}, reasons);
+				var variable = {name: name, type: typeof descriptor.value, preview: safePreview(descriptor.value, reasons)};
+				if (!takeDebuggerText(budget, variable.name.length + variable.type.length + variable.preview.length)) { addDebuggerReason(reasons, 'text-budget'); continue; }
+				variables.push(variable);
+			}
+		} catch (error) { return; }
+		return {items: variables, status: debuggerSectionStatus(reasons)};
+	}
+
+	function harloweVisitedPassages(budget) {
+		try {
+			var timeline = readHarloweStateData('timeline');
+			var pastLength = readHarloweStateData('pastLength');
+			var reasons = [];
+			if (!debuggerIsArray(timeline) || typeof pastLength !== 'number' || !debuggerIsFinite(pastLength) || debuggerFloor(pastLength) !== pastLength) return;
+			var length = ownDebuggerData(timeline, 'length', reasons);
+			if (typeof length !== 'number' || !debuggerIsFinite(length) || debuggerFloor(length) !== length || length < 0 || pastLength < -1 || pastLength >= length) return;
+			if (pastLength === -1) return;
+			var first = pastLength >= DEBUGGER_HISTORY_LIMIT ? pastLength - DEBUGGER_HISTORY_LIMIT + 1 : 0;
+			if (first > 0) addDebuggerReason(reasons, 'item-limit');
+			var passages = [];
+			for (var index = first; index <= pastLength; index++) {
+				var moment = ownDebuggerData(timeline, debuggerString(index), reasons);
+				if (!moment || (typeof moment !== 'object' && typeof moment !== 'function')) return;
+				var name = ownDebuggerData(moment, 'passage', reasons);
+				if (typeof name !== 'string' || name.length === 0) return;
+				var passage = {name: boundedDebuggerText(name, ${STORY_PREVIEW_BRIDGE_LIMITS.passageFieldLength}, reasons), source: 'Harlowe timeline'};
+				if (!takeDebuggerText(budget, debuggerPassageTextLength(passage))) { addDebuggerReason(reasons, 'text-budget'); continue; }
+				passages.push(passage);
+			}
+			return {items: passages, status: debuggerSectionStatus(reasons)};
+		} catch (error) {}
+	}
+
+	function captureHarlowe(snapshot, sections, budgets) {
+		applyDebuggerCollection(snapshot, sections, 'storyVariables', harloweVarRefOn ? harloweVariables(budgets.storyVariables) : undefined);
+		applyDebuggerCollection(snapshot, sections, 'visitedPassages', harloweVisitedPassages(budgets.visitedPassages));
+	}
+
 	var DEBUGGER_CAPTURE_HANDLERS = {
 		'current-only': captureCurrentOnly,
-		'harlowe-state': captureCurrentOnly,
+		'harlowe-state': captureHarlowe,
 		snowman: captureSnowman,
 		sugarcube: captureSugarCube
 	};
@@ -3095,10 +3192,8 @@ function harlowePreviewHtmlStructure(html: string, phase: 'post' | 'pre') {
 	}
 }
 
-function harloweBootstrapScript(moduleName: string) {
-	return `<script id="${HARLOWE_DEBUGGER_BOOTSTRAP_ID}" type="text/twine-javascript" role="script">(function(){var state;try{state=require(${JSON.stringify(
-		moduleName
-	)});}catch(error){}try{window.__twineRsPreviewHarloweBootstrap(state);}catch(error){}}());</script>`;
+function harloweBootstrapScript(moduleName: string, varRefModuleName: string) {
+	return `<script id="${HARLOWE_DEBUGGER_BOOTSTRAP_ID}" type="text/twine-javascript" role="script">(function(){var state,varRef;try{state=require(${JSON.stringify(moduleName)});varRef=require(${JSON.stringify(varRefModuleName)});}catch(error){}try{window.__twineRsPreviewHarloweBootstrap(state,varRef);}catch(error){}}());</script>`;
 }
 
 function instrumentHarloweBootstrap(
@@ -3116,7 +3211,7 @@ function instrumentHarloweBootstrap(
 	if (!structure) return {enabled: false, html};
 	const staged =
 		html.slice(0, structure.authorScript.start) +
-		harloweBootstrapScript(profile.moduleName) +
+		harloweBootstrapScript(profile.moduleName, profile.varRef.moduleName) +
 		html.slice(structure.authorScript.start);
 
 	return harlowePreviewHtmlStructure(staged, 'post')

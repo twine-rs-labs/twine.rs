@@ -205,16 +205,22 @@ function issueHarloweBootstrapChallenge(
 }
 
 const EXACT_STATE_OBJECT_SOURCE =
-	'{get passage(){return d.passage},on:function(e,t){if(e in l)return"function"!=typeof t||l[e].includes(t)||l[e].push(t),a;y.impossible("State.on","invalid event name")}}';
+	'{get passage(){return d.passage},get variables(){return i.variables},get pastLength(){return p},get timeline(){return u},on:function(e,t){if(e in l)return"function"!=typeof t||l[e].includes(t)||l[e].push(t),a;y.impossible("State.on","invalid event name")}}';
 const EXACT_STATE_DEFINITION = `var State=Object.freeze(${EXACT_STATE_OBJECT_SOURCE});`;
 const EXACT_STATE_FIXTURE_SOURCE = `
 (function(){
 	var d={passage:"Start"};
-	var l={forward:[],back:[],load:[]};
+	var l={forward:[],back:[],load:[],forgetUndos:[]};
+	var i={variables:{gold:1}};
+	var u=[{passage:"Start"}];
+	var p=0;
 	var a={};
 	var y={impossible:function(){}};
+	var n=function(){};
 	${EXACT_STATE_DEFINITION}
-	window.__harloweFixture={State:State,listeners:l,setPassage:function(value){d.passage=value}};
+	var S={set:[],delete:[]};
+	var c=Object.freeze({on:function(e,t){if(e in S)return"function"!=typeof t||S[e].includes(t)||S[e].push(t),c;n("VarRef.on","invalid event name")}});
+	window.__harloweFixture={State:State,VarRef:c,listeners:l,varRefListeners:S,setPassage:function(value){d.passage=value},setVariable:function(value){i.variables.gold=value;S.set.forEach(function(listener){listener()})},setVariables:function(value){i.variables=value;S.set.forEach(function(listener){listener()})},setNestedVariable:function(){i.variables.nested.value+=1;S.set.forEach(function(listener){listener()})},deleteVariable:function(name){delete i.variables[name];S.delete.forEach(function(listener){listener()})},setTimeline:function(value){u=value},setPastLength:function(value){p=value},emit:function(event){l[event].forEach(function(listener){listener()})}};
 }());`;
 
 describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
@@ -228,9 +234,11 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 		expect(digest).toBe(HARLOWE_3_3_9_COMPATIBILITY.sourceSha256);
 		expect(HARLOWE_3_3_9_STATE_PROFILE).toEqual({
 			capabilityDependencies: {
-				currentPassage: ['state.passage', 'state.on']
+				currentPassage: ['state.passage', 'state.on'],
+				storyVariables: ['state.variables', 'varRef.on'],
+				visitedPassages: ['state.timeline', 'state.pastLength']
 			},
-			events: {capture: ['forward', 'back', 'load']},
+			events: {capture: ['forward', 'back', 'load', 'forgetUndos']},
 			moduleName: 'state',
 			on: {
 				configurable: false,
@@ -245,7 +253,36 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 				getterSource: 'get passage(){return d.passage}',
 				setter: false
 			},
-			stateFrozen: true
+			pastLength: {
+				configurable: false,
+				enumerable: true,
+				getterSource: 'get pastLength(){return p}',
+				setter: false
+			},
+			stateFrozen: true,
+			timeline: {
+				configurable: false,
+				enumerable: true,
+				getterSource: 'get timeline(){return u}',
+				setter: false
+			},
+			varRef: {
+				moduleName: 'internaltypes/varref',
+				on: {
+					configurable: false,
+					enumerable: true,
+					source:
+						'function(e,t){if(e in S)return"function"!=typeof t||S[e].includes(t)||S[e].push(t),c;n("VarRef.on","invalid event name")}',
+					writable: false
+				},
+				stateFrozen: true
+			},
+			variables: {
+				configurable: false,
+				enumerable: true,
+				getterSource: 'get variables(){return i.variables}',
+				setter: false
+			}
 		});
 	});
 
@@ -454,9 +491,11 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 		expect(bootstrap.parentElement).toBe(story);
 		expect(author.previousElementSibling).toBe(bootstrap);
 		expect(bootstrap.getAttribute('type')).toBe('text/twine-javascript');
-		expect(bootstrap.textContent).toContain('try{state=require("state");}');
 		expect(bootstrap.textContent).toContain(
-			'try{window.__twineRsPreviewHarloweBootstrap(state);}'
+			'state=require("state");varRef=require("internaltypes/varref");'
+		);
+		expect(bootstrap.textContent).toContain(
+			'try{window.__twineRsPreviewHarloweBootstrap(state,varRef);}'
 		);
 		expect(result.html).toContain('"captureHandler":"harlowe-state"');
 	});
@@ -801,11 +840,20 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 			eval(source: string): unknown;
 			__harloweFixture: {
 				State: object;
+				VarRef: object;
 				listeners: Record<string, Array<() => void>>;
+				varRefListeners: Record<string, Array<() => void>>;
 				setPassage(value: string): void;
+				setVariable(value: number): void;
+				setVariables(value: object): void;
+				setNestedVariable(): void;
+				deleteVariable(name: string): void;
+				setTimeline(value: Array<{passage: string}>): void;
+				setPastLength(value: number): void;
+				emit(event: string): void;
 			};
 			__twineRsPreviewDebug: {captureState(): void};
-			__twineRsPreviewHarloweBootstrap(state: object): void;
+			__twineRsPreviewHarloweBootstrap(state: object, varRef?: object): void;
 		};
 
 		try {
@@ -828,8 +876,19 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 				enumerable: false,
 				writable: false
 			});
-			runtime.__twineRsPreviewHarloweBootstrap(runtime.__harloweFixture.State);
-			runtime.__twineRsPreviewHarloweBootstrap(runtime.__harloweFixture.State);
+			expect(
+				runtime.eval(
+					'Function.prototype.toString.call(window.__harloweFixture.VarRef.on)'
+				)
+			).toBe(HARLOWE_3_3_9_STATE_PROFILE.varRef.on.source);
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
 			await waitForHarloweReadinessCount(readinessConnection, 1);
 			expect(harloweReadinessMessages(readinessConnection)[0]).toMatchObject({
 				bootstrapChallenge: HARLOWE_BOOTSTRAP_CHALLENGE
@@ -855,6 +914,8 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 			await settleHarloweReadinessPort();
 			expect(harloweReadinessMessages(readinessConnection)).toHaveLength(2);
 			expect(runtime.__harloweFixture.listeners.forward).toHaveLength(1);
+			expect(runtime.__harloweFixture.varRefListeners.set).toHaveLength(1);
+			expect(runtime.__harloweFixture.varRefListeners.delete).toHaveLength(1);
 
 			runtime.__twineRsPreviewDebug.captureState();
 			expect(
@@ -865,7 +926,113 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 			).toMatchObject({
 				adapterId: 'harlowe-3.3.9',
 				currentPassage: {name: 'Start', source: 'Harlowe State'},
-				sections: {currentPassage: {state: 'complete'}}
+				sections: {
+					currentPassage: {state: 'complete'},
+					storyVariables: {state: 'complete'},
+					visitedPassages: {state: 'complete'}
+				},
+				storyVariables: [{name: 'gold', preview: '1', type: 'number'}],
+				visitedPassages: [{name: 'Start'}]
+			});
+
+			runtime.__harloweFixture.setVariable(2);
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)
+			).toMatchObject({storyVariables: [{name: 'gold', preview: '2'}]});
+			runtime.__harloweFixture.setVariables({
+				nested: {value: 1},
+				removed: true
+			});
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			const beforeNestedMutation = postMessage.mock.calls.filter(
+				([message]) => message?.type === 'debugger-snapshot'
+			).length;
+
+			runtime.__harloweFixture.setNestedVariable();
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			expect(
+				postMessage.mock.calls.filter(
+					([message]) => message?.type === 'debugger-snapshot'
+				).length
+			).toBeGreaterThan(beforeNestedMutation);
+			const beforeDelete = postMessage.mock.calls.filter(
+				([message]) => message?.type === 'debugger-snapshot'
+			).length;
+
+			runtime.__harloweFixture.deleteVariable('removed');
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			expect(
+				postMessage.mock.calls.filter(
+					([message]) => message?.type === 'debugger-snapshot'
+				).length
+			).toBeGreaterThan(beforeDelete);
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)?.storyVariables
+			).toEqual([{name: 'nested', preview: '[object]', type: 'object'}]);
+
+			runtime.__harloweFixture.setTimeline([
+				{passage: 'Start'},
+				{passage: 'Next'},
+				{passage: 'Redo'}
+			]);
+			runtime.__harloweFixture.setPastLength(1);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)
+			).toMatchObject({visitedPassages: [{name: 'Start'}, {name: 'Next'}]});
+			runtime.__harloweFixture.setPastLength(0);
+			runtime.__harloweFixture.emit('back');
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)
+			).toMatchObject({visitedPassages: [{name: 'Start'}]});
+			runtime.__harloweFixture.setPastLength(1);
+			runtime.__harloweFixture.emit('forward');
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)
+			).toMatchObject({visitedPassages: [{name: 'Start'}, {name: 'Next'}]});
+
+			runtime.__harloweFixture.setTimeline([{passage: 'Next'}]);
+			runtime.__harloweFixture.setPastLength(0);
+			runtime.__harloweFixture.listeners.forgetUndos[0]();
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)
+			).toMatchObject({visitedPassages: [{name: 'Next'}]});
+
+			runtime.__harloweFixture.emit('load');
+			runtime.__harloweFixture.setVariables({loaded: true});
+			runtime.__harloweFixture.setTimeline([{passage: 'Loaded'}]);
+			runtime.__harloweFixture.setPastLength(0);
+			await new Promise<void>(resolve => runtime.setTimeout(resolve, 275));
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)
+			).toMatchObject({
+				storyVariables: [{name: 'loaded'}],
+				visitedPassages: [{name: 'Loaded'}]
 			});
 
 			runtime.__harloweFixture.setPassage('Next');
@@ -879,6 +1046,8 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 			).toMatchObject({currentPassage: {name: 'Next'}});
 
 			runtime.__harloweFixture.setPassage('Redirected');
+			runtime.__harloweFixture.setTimeline([{passage: 'Redirected'}]);
+			runtime.__harloweFixture.setPastLength(0);
 			runtime.document.body.append(runtime.document.createElement('tw-hook'));
 			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
 			expect(
@@ -886,7 +1055,17 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 					.map(([message]) => message)
 					.filter(message => message?.type === 'debugger-snapshot')
 					.at(-1)
-			).toMatchObject({currentPassage: {name: 'Redirected'}});
+			).toMatchObject({
+				currentPassage: {name: 'Redirected'},
+				storyVariables: [{name: 'loaded'}],
+				visitedPassages: [{name: 'Redirected'}]
+			});
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)?.visitedPassages
+			).toHaveLength(1);
 		} finally {
 			frame.remove();
 			postMessage.mockRestore();
@@ -938,6 +1117,342 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 		}
 	});
 
+	it('keeps State readiness and history when VarRef attestation drifts', () => {
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const frame = installExactHarloweBridge('harlowe-varref-drift');
+		const runtime = frame.contentWindow as Window & {
+			eval(source: string): unknown;
+			__harloweFixture: {State: object; VarRef: object};
+			__twineRsPreviewDebug: {captureState(): void};
+			__twineRsPreviewHarloweBootstrap(state: object, varRef: object): void;
+		};
+
+		try {
+			runtime.eval(
+				EXACT_STATE_FIXTURE_SOURCE.replace(
+					'n("VarRef.on","invalid event name")',
+					'n("VarRef.on","drifted")'
+				)
+			);
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(
+				postMessage.mock.calls
+					.map(([message]) => message)
+					.filter(message => message?.type === 'debugger-snapshot')
+					.at(-1)
+			).toMatchObject({
+				currentPassage: {name: 'Start'},
+				sections: {
+					storyVariables: {state: 'unavailable'},
+					visitedPassages: {state: 'complete'}
+				},
+				visitedPassages: [{name: 'Start'}]
+			});
+		} finally {
+			frame.remove();
+			postMessage.mockRestore();
+		}
+	});
+
+	it.each([
+		[
+			'variables',
+			'get variables(){return i.variables}',
+			'get variables(){return i.driftedVariables}',
+			{
+				sections: {
+					storyVariables: {state: 'unavailable'},
+					visitedPassages: {state: 'complete'}
+				},
+				visitedPassages: [{name: 'Start'}]
+			}
+		],
+		[
+			'timeline',
+			'get timeline(){return u}',
+			'get timeline(){return i.driftedTimeline}',
+			{
+				sections: {
+					storyVariables: {state: 'complete'},
+					visitedPassages: {state: 'unavailable'}
+				},
+				storyVariables: [{name: 'gold'}]
+			}
+		],
+		[
+			'pastLength',
+			'get pastLength(){return p}',
+			'get pastLength(){return p+0}',
+			{
+				sections: {
+					storyVariables: {state: 'complete'},
+					visitedPassages: {state: 'unavailable'}
+				},
+				storyVariables: [{name: 'gold'}]
+			}
+		]
+	] as const)(
+		'isolates %s getter drift from State readiness and sibling capabilities',
+		(_label, exactSource, driftedSource, expected) => {
+			const postMessage = jest
+				.spyOn(window, 'postMessage')
+				.mockImplementation(() => undefined);
+			const frame = installExactHarloweBridge(`harlowe-${_label}-drift`);
+			const runtime = frame.contentWindow as Window & {
+				eval(source: string): unknown;
+				__harloweFixture: {State: object; VarRef: object};
+				__twineRsPreviewDebug: {captureState(): void};
+				__twineRsPreviewHarloweBootstrap(state: object, varRef: object): void;
+			};
+
+			try {
+				runtime.eval(
+					EXACT_STATE_FIXTURE_SOURCE.replace(exactSource, driftedSource)
+				);
+				runtime.__twineRsPreviewHarloweBootstrap(
+					runtime.__harloweFixture.State,
+					runtime.__harloweFixture.VarRef
+				);
+				runtime.__twineRsPreviewDebug.captureState();
+				expect(
+					postMessage.mock.calls
+						.map(([message]) => message)
+						.filter(message => message?.type === 'debugger-snapshot')
+						.at(-1)
+				).toMatchObject({
+					currentPassage: {name: 'Start'},
+					...expected,
+					sections: {
+						currentPassage: {state: 'complete'},
+						...expected.sections
+					}
+				});
+			} finally {
+				frame.remove();
+				postMessage.mockRestore();
+			}
+		}
+	);
+
+	it('bounds Harlowe variable and timeline snapshots and recovers after hostile data', () => {
+		const postMessage = jest
+			.spyOn(window, 'postMessage')
+			.mockImplementation(() => undefined);
+		const frame = installExactHarloweBridge('harlowe-bounds');
+		const runtime = frame.contentWindow as Window & {
+			eval(source: string): unknown;
+			__harloweFixture: {State: object; VarRef: object};
+			__twineRsPreviewDebug: {captureState(): void};
+			__twineRsPreviewHarloweBootstrap(state: object, varRef: object): void;
+		};
+		const snapshot = () =>
+			postMessage.mock.calls
+				.map(([message]) => message)
+				.filter(message => message?.type === 'debugger-snapshot')
+				.at(-1);
+
+		try {
+			runtime.eval(EXACT_STATE_FIXTURE_SOURCE);
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
+
+			runtime.eval(
+				'window.__harloweFixture.setVariables(Object.assign(Object.create({inherited:1}),{own:1,TwineScript_ObjectName:"metadata"}));'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({storyVariables: [{name: 'own'}]});
+			runtime.eval(
+				'var accessor={safe:1};Object.defineProperty(accessor,"blocked",{enumerable:true,get:function(){throw new Error("read")}});window.__harloweFixture.setVariables(accessor);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				storyVariables: [{name: 'safe'}],
+				sections: {
+					storyVariables: {state: 'truncated', reasons: ['uninspectable']}
+				}
+			});
+			runtime.eval(
+				'window.__harloweFixture.setVariables(new Proxy({},{ownKeys:function(){throw new Error("blocked")}}));'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				currentPassage: {name: 'Start'},
+				sections: {storyVariables: {state: 'unavailable'}}
+			});
+			runtime.eval(
+				'var budget={};for(var index=0;index<100;index+=1)budget["b"+index]="x".repeat(200);window.__harloweFixture.setVariables(budget);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					storyVariables: {state: 'truncated', reasons: ['text-budget']}
+				}
+			});
+
+			runtime.eval(
+				'var many={};for(var index=0;index<101;index+=1)many["v"+index]=index;window.__harloweFixture.setVariables(many);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					storyVariables: {state: 'truncated', reasons: ['item-limit']}
+				}
+			});
+			runtime.eval(
+				'var huge={};for(var index=0;index<10000;index+=1)huge["h"+index]=index;var descriptorReads=0;window.__harloweDescriptorReads=function(){return descriptorReads};window.__harloweFixture.setVariables(new Proxy(huge,{getOwnPropertyDescriptor:function(target,key){descriptorReads+=1;return Object.getOwnPropertyDescriptor(target,key)}}));'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					storyVariables: {state: 'truncated', reasons: ['item-limit']}
+				}
+			});
+			expect(runtime.eval('window.__harloweDescriptorReads()')).toBe(100);
+			runtime.eval(
+				'var prototypeOwnKeys=0;var hostilePrototype=new Proxy({inherited:1},{ownKeys:function(){prototypeOwnKeys+=1;throw new Error("prototype traversed")}});var inheritedDescriptorReads=0;var inheritedRoot=Object.create(hostilePrototype);inheritedRoot.own=1;Object.preventExtensions(inheritedRoot);window.__harloweInheritedRootExtensible=function(){return Object.isExtensible(inheritedRoot)};window.__harlowePrototypeOwnKeys=function(){return prototypeOwnKeys};window.__harloweInheritedDescriptorReads=function(){return inheritedDescriptorReads};window.__harloweFixture.setVariables(new Proxy(inheritedRoot,{getOwnPropertyDescriptor:function(target,key){inheritedDescriptorReads+=1;return Object.getOwnPropertyDescriptor(target,key)}}));'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				storyVariables: [{name: 'own'}],
+				sections: {storyVariables: {state: 'complete'}}
+			});
+			expect(runtime.eval('window.__harloweInheritedDescriptorReads()')).toBe(
+				1
+			);
+			expect(runtime.eval('window.__harloweInheritedRootExtensible()')).toBe(
+				false
+			);
+			expect(runtime.eval('window.__harlowePrototypeOwnKeys()')).toBe(0);
+			runtime.eval(
+				'var metadataStorm={};for(var index=0;index<10000;index+=1)metadataStorm["TwineScript_"+index]=index;metadataStorm.normal=1;var metadataDescriptorReads=0;var metadataOwnKeysCalls=0;window.__harloweMetadataDescriptorReads=function(){return metadataDescriptorReads};window.__harloweMetadataOwnKeysCalls=function(){return metadataOwnKeysCalls};window.__harloweFixture.setVariables(new Proxy(metadataStorm,{ownKeys:function(target){metadataOwnKeysCalls+=1;return Reflect.ownKeys(target)},getOwnPropertyDescriptor:function(target,key){metadataDescriptorReads+=1;return Object.getOwnPropertyDescriptor(target,key)}}));'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					storyVariables: {state: 'truncated', reasons: ['item-limit']}
+				},
+				storyVariables: []
+			});
+			expect(runtime.eval('window.__harloweMetadataDescriptorReads()')).toBe(
+				100
+			);
+			expect(runtime.eval('window.__harloweMetadataOwnKeysCalls()')).toBe(1);
+			runtime.eval(
+				'window.__harloweFixture.setTimeline(new Array(1));window.__harloweFixture.setPastLength(0);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {visitedPassages: {state: 'unavailable'}}
+			});
+			runtime.eval(
+				'window.__harloweFixture.setTimeline([{passage:"Valid"}]);window.__harloweFixture.setPastLength(9);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {visitedPassages: {state: 'unavailable'}}
+			});
+			runtime.eval(
+				'window.__harloweFixture.setTimeline(new Proxy([],{getOwnPropertyDescriptor:function(){throw new Error("blocked")}}));window.__harloweFixture.setPastLength(0);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				currentPassage: {name: 'Start'},
+				sections: {visitedPassages: {state: 'unavailable'}}
+			});
+			runtime.eval(
+				'var timelineIndexGetterCalls=0;var indexAccessor=[];Object.defineProperty(indexAccessor,"0",{enumerable:true,get:function(){timelineIndexGetterCalls+=1;return {passage:"blocked"}}});window.__harloweTimelineIndexGetterCalls=function(){return timelineIndexGetterCalls};window.__harloweFixture.setTimeline(indexAccessor);window.__harloweFixture.setPastLength(0);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {visitedPassages: {state: 'unavailable'}}
+			});
+			expect(runtime.eval('window.__harloweTimelineIndexGetterCalls()')).toBe(
+				0
+			);
+			runtime.eval(
+				'var timelineIndexDescriptorReads=0;window.__harloweTimelineIndexDescriptorReads=function(){return timelineIndexDescriptorReads};window.__harloweFixture.setTimeline(new Proxy([{passage:"blocked"}],{getOwnPropertyDescriptor:function(target,key){if(key==="0"){timelineIndexDescriptorReads+=1;throw new Error("blocked index")};return Object.getOwnPropertyDescriptor(target,key)}}));window.__harloweFixture.setPastLength(0);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {visitedPassages: {state: 'unavailable'}}
+			});
+			expect(
+				runtime.eval('window.__harloweTimelineIndexDescriptorReads()')
+			).toBe(1);
+			runtime.eval(
+				'var passageGetterCalls=0;var accessorMoment={};Object.defineProperty(accessorMoment,"passage",{enumerable:true,get:function(){passageGetterCalls+=1;return "blocked"}});window.__harlowePassageGetterCalls=function(){return passageGetterCalls};window.__harloweFixture.setTimeline([accessorMoment]);window.__harloweFixture.setPastLength(0);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {visitedPassages: {state: 'unavailable'}}
+			});
+			expect(runtime.eval('window.__harlowePassageGetterCalls()')).toBe(0);
+			runtime.eval(
+				'var passageDescriptorReads=0;window.__harlowePassageDescriptorReads=function(){return passageDescriptorReads};var hostileMoment=new Proxy({passage:"blocked"},{getOwnPropertyDescriptor:function(target,key){if(key==="passage"){passageDescriptorReads+=1;throw new Error("blocked passage")};return Object.getOwnPropertyDescriptor(target,key)}});window.__harloweFixture.setTimeline([hostileMoment]);window.__harloweFixture.setPastLength(0);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {visitedPassages: {state: 'unavailable'}}
+			});
+			expect(runtime.eval('window.__harlowePassageDescriptorReads()')).toBe(1);
+
+			runtime.eval(
+				'var moments=[];for(var index=0;index<201;index+=1)moments.push({passage:"P"+index});window.__harloweFixture.setTimeline(moments);window.__harloweFixture.setPastLength(200);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					visitedPassages: {state: 'truncated', reasons: ['item-limit']}
+				}
+			});
+			expect(snapshot()?.visitedPassages).toHaveLength(200);
+			expect(snapshot()?.visitedPassages?.[0]).toMatchObject({name: 'P1'});
+
+			runtime.eval(
+				'window.__harloweFixture.setTimeline([{passage:"x".repeat(2048)}]);window.__harloweFixture.setPastLength(0);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					visitedPassages: {state: 'truncated', reasons: ['field-limit']}
+				}
+			});
+			runtime.eval(
+				'var textMoments=[];for(var index=0;index<20;index+=1)textMoments.push({passage:"P"+index+"x".repeat(1000)});window.__harloweFixture.setTimeline(textMoments);window.__harloweFixture.setPastLength(19);'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					visitedPassages: {state: 'truncated', reasons: ['text-budget']}
+				}
+			});
+
+			runtime.eval(
+				'window.__harloweFixture.setTimeline([{passage:"Recovered"}]);window.__harloweFixture.setPastLength(0);window.__harloweFixture.setVariables({ok:true});'
+			);
+			runtime.__twineRsPreviewDebug.captureState();
+			expect(snapshot()).toMatchObject({
+				sections: {
+					storyVariables: {state: 'complete'},
+					visitedPassages: {state: 'complete'}
+				},
+				storyVariables: [{name: 'ok'}],
+				visitedPassages: [{name: 'Recovered'}]
+			});
+		} finally {
+			frame.remove();
+			postMessage.mockRestore();
+		}
+	});
+
 	it('treats empty startup passage as ready and captures the first forward passage', async () => {
 		const postMessage = jest
 			.spyOn(window, 'postMessage')
@@ -947,11 +1462,14 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 			eval(source: string): unknown;
 			__harloweFixture: {
 				State: object;
+				VarRef: object;
 				listeners: Record<string, Array<() => void>>;
 				setPassage(value: string): void;
+				setTimeline(value: Array<{passage: string}>): void;
+				setPastLength(value: number): void;
 			};
 			__twineRsPreviewDebug: {captureState(): void};
-			__twineRsPreviewHarloweBootstrap(state: object): void;
+			__twineRsPreviewHarloweBootstrap(state: object, varRef: object): void;
 		};
 
 		try {
@@ -960,8 +1478,13 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 					'var d={passage:"Start"};',
 					'var d={passage:""};'
 				)
+					.replace('var u=[{passage:"Start"}];', 'var u=[];')
+					.replace('var p=0;', 'var p=-1;')
 			);
-			runtime.__twineRsPreviewHarloweBootstrap(runtime.__harloweFixture.State);
+			runtime.__twineRsPreviewHarloweBootstrap(
+				runtime.__harloweFixture.State,
+				runtime.__harloweFixture.VarRef
+			);
 			const readinessConnection = issueHarloweBootstrapChallenge(
 				frame,
 				'harlowe-empty-startup'
@@ -973,9 +1496,18 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 					.map(([message]) => message)
 					.filter(message => message?.type === 'debugger-snapshot')
 					.at(-1)
-			).toMatchObject({sections: {currentPassage: {state: 'unavailable'}}});
+			).toMatchObject({
+				sections: {
+					currentPassage: {state: 'unavailable'},
+					storyVariables: {state: 'complete'},
+					visitedPassages: {state: 'unavailable'}
+				},
+				storyVariables: [{name: 'gold'}]
+			});
 
 			runtime.__harloweFixture.setPassage('Start');
+			runtime.__harloweFixture.setTimeline([{passage: 'Start'}]);
+			runtime.__harloweFixture.setPastLength(0);
 			runtime.__harloweFixture.listeners.forward[0]();
 			await new Promise<void>(resolve => runtime.setTimeout(resolve, 75));
 			expect(
@@ -985,7 +1517,13 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 					.at(-1)
 			).toMatchObject({
 				currentPassage: {name: 'Start'},
-				sections: {currentPassage: {state: 'complete'}}
+				sections: {
+					currentPassage: {state: 'complete'},
+					storyVariables: {state: 'complete'},
+					visitedPassages: {state: 'complete'}
+				},
+				storyVariables: [{name: 'gold'}],
+				visitedPassages: [{name: 'Start'}]
 			});
 		} finally {
 			frame.remove();
@@ -1060,7 +1598,7 @@ describe('bundled Harlowe 3.3.9 exact debugger profile', () => {
 		[
 			'listener registration failure',
 			EXACT_STATE_FIXTURE_SOURCE.replace(
-				'var l={forward:[],back:[],load:[]};',
+				'var l={forward:[],back:[],load:[],forgetUndos:[]};',
 				'var l={back:[],load:[]};Object.defineProperty(l,"forward",{get:function(){throw new Error("blocked")}});'
 			)
 		]

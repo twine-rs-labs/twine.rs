@@ -95,6 +95,10 @@ function publishedStory(
 	extraBeforeAuthor = ''
 ) {
 	const name = `Runtime Debugger ${formatId}`;
+	const authorScript =
+		format === 'Harlowe'
+			? 'var debuggerState=require("state"),debuggerSection=require("section").create();debuggerSection.stack=[{tempVariables:Object.create(require("internaltypes/varscope"))}];window.__runtimeDebuggerHarloweDeserialise=function(source){return debuggerState.deserialise(debuggerSection,source);};'
+			: '';
 	const storyData = [
 		`<tw-storydata name="${name}" startnode="1" creator="twine.rs"`,
 		` creator-version="0.2.0" format="${format}"`,
@@ -103,7 +107,7 @@ function publishedStory(
 		' options="" tags="" zoom="1" hidden>',
 		'<style role="stylesheet" id="twine-user-stylesheet" type="text/twine-css"></style>',
 		extraBeforeAuthor,
-		'<script role="script" id="twine-user-script" type="text/twine-javascript"></script>',
+		`<script role="script" id="twine-user-script" type="text/twine-javascript">${authorScript}</script>`,
 		'<tw-passagedata pid="1" name="Start" tags="" position="0,0" size="100,100">',
 		escapePassageText(passageText),
 		'</tw-passagedata></tw-storydata>'
@@ -389,14 +393,19 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 		},
 		{
 			adapterId: 'harlowe-3.3.9',
-			capabilities: ['currentPassage'] as StoryPreviewDebuggerCapability[],
+			capabilities: [
+				'currentPassage',
+				'storyVariables',
+				'visitedPassages'
+			] as StoryPreviewDebuggerCapability[],
 			format: 'Harlowe',
-			formatVersion: '3.3.9'
+			formatVersion: '3.3.9',
+			passageText: '(set:$alpha to 1)Ready'
 		}
 	];
 
 	for (const item of cases) {
-		await mountStory(page, {
+		const frame = await mountStory(page, {
 			...item,
 			formatId: item.adapterId,
 			sessionId: `adapter-${item.adapterId}`
@@ -437,6 +446,72 @@ test('bundled adapters negotiate canonical descriptors and usable sections', asy
 				temporaryVariables: [{name: 'temp', preview: '2', type: 'number'}],
 				visitedPassages: [{name: 'Start'}]
 			});
+		}
+		if (item.format === 'Harlowe') {
+			expect(snapshot).toMatchObject({
+				storyVariables: [{name: 'alpha', preview: '1', type: 'number'}],
+				visitedPassages: [{name: 'Start'}]
+			});
+			const deserialised = await frame.evaluate(() => {
+				const runtime = window as typeof window & {
+					__runtimeDebuggerHarloweDeserialise(source: string): true | Error;
+				};
+				const savedSession = sessionStorage.getItem('Saved Session');
+
+				if (!savedSession) {
+					throw new Error('Harlowe did not save its startup session.');
+				}
+				const turns = JSON.parse(savedSession) as Array<{
+					passage: string;
+					variables: Record<string, unknown>;
+				}>;
+				const startupTurn = turns.at(-1);
+
+				if (!startupTurn) {
+					throw new Error('Harlowe saved no startup turn.');
+				}
+
+				// Harlowe save data stores variable values as Harlowe source text.
+				// Repeated valid Start moments exercise the real deserialisation and
+				// committed-history bound without inventing passages outside the story.
+				const expandedTurns = Array.from({length: 201}, (_, index) => ({
+					...startupTurn,
+					variables: {
+						...startupTurn.variables,
+						alpha: index === 200 ? '7' : '1'
+					}
+				}));
+				return runtime.__runtimeDebuggerHarloweDeserialise(
+					JSON.stringify(expandedTurns)
+				);
+			});
+
+			expect(deserialised).toBe(true);
+			await expect
+				.poll(async () => {
+					const loaded = (await messages(page)).findLast(
+						message =>
+							message.type === 'debugger-snapshot' &&
+							message.adapterId === 'harlowe-3.3.9'
+					);
+
+					return {
+						firstVisited: loaded?.visitedPassages?.at(0)?.name,
+						lastVisited: loaded?.visitedPassages?.at(-1)?.name,
+						status: loaded?.sections?.visitedPassages,
+						variable: loaded?.storyVariables?.find(
+							variable => variable.name === 'alpha'
+						)?.preview,
+						visitedCount: loaded?.visitedPassages?.length
+					};
+				})
+				.toEqual({
+					firstVisited: 'Start',
+					lastVisited: 'Start',
+					status: {reasons: ['item-limit'], state: 'truncated'},
+					variable: '7',
+					visitedCount: 200
+				});
 		}
 	}
 });

@@ -70,7 +70,7 @@ export interface StoryPreviewDebuggerAdapterRegistration extends StoryPreviewDeb
 
 export const STORY_PREVIEW_DEBUGGER_CAPTURE_COLLECTIONS = {
 	'current-only': [],
-	'harlowe-state': [],
+	'harlowe-state': ['storyVariables', 'visitedPassages'],
 	snowman: ['storyVariables', 'visitedPassages'],
 	sugarcube: ['storyVariables', 'temporaryVariables', 'visitedPassages']
 } as const satisfies Record<

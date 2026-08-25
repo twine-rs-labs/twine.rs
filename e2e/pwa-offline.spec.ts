@@ -187,7 +187,7 @@ test('bundled Harlowe retains exact debugger admission offline', async ({
 	context,
 	page
 }) => {
-	test.setTimeout(120_000);
+	test.setTimeout(240_000);
 	await installServiceWorker(page);
 	await context.setOffline(true);
 	await page.goto(`${appUrl}/#/new-project`);
@@ -204,7 +204,10 @@ test('bundled Harlowe retains exact debugger admission offline', async ({
 		.click();
 	await page.getByRole('button', {name: 'Create Project'}).click();
 	await expect(page).toHaveURL(/#\/stories\/[^/]+$/);
-	await setPassageText(page, 'Offline exact Harlowe marker.');
+	await setPassageText(
+		page,
+		'(set:$alpha to 1)Offline exact Harlowe marker. [[Repeat->Start]]'
+	);
 	await context.addInitScript(() => {
 		if (window !== window.top) return;
 		const target = window as typeof window & {
@@ -244,9 +247,8 @@ test('bundled Harlowe retains exact debugger admission offline', async ({
 			.first()
 			.click()
 	]);
-	const storyBody = preview
-		.frameLocator('iframe[title="Story test preview"]')
-		.locator('body');
+	const storyFrame = preview.frameLocator('iframe[title="Story test preview"]');
+	const storyBody = storyFrame.locator('body');
 
 	await expect(storyBody).toContainText('Offline exact Harlowe marker.', {
 		timeout: 20_000
@@ -255,10 +257,36 @@ test('bundled Harlowe retains exact debugger admission offline', async ({
 	const inspector = preview.getByRole('region', {
 		name: 'Runtime debugger inspector'
 	});
+	const currentPassageSection = inspector
+		.getByRole('heading', {name: 'Current passage'})
+		.locator('..')
+		.locator('..');
 
 	await expect(inspector).toContainText('Adapter: harlowe-3.3.9');
 	await expect(inspector).toContainText('Reliability: exact-version');
-	await expect(inspector.getByText('Start', {exact: true})).toBeVisible();
+	await expect(inspector).toContainText('alpha');
+	await expect(
+		inspector.getByRole('heading', {name: 'Visited passages'})
+	).toBeVisible();
+	await expect(
+		currentPassageSection.getByText('Start', {exact: true})
+	).toBeVisible();
+	const visitedPassagesSection = inspector
+		.getByRole('heading', {name: 'Visited passages'})
+		.locator('..')
+		.locator('..');
+
+	for (let index = 0; index < 200; index += 1) {
+		await storyFrame
+			.locator('tw-passage tw-link')
+			.filter({hasText: /^Repeat$/})
+			.click();
+	}
+	await expect(
+		visitedPassagesSection.getByText('Truncated: item-limit', {exact: true})
+	).toBeVisible({timeout: 20_000});
+	await expect(visitedPassagesSection.locator('li')).toHaveCount(200);
+	await expect(inspector).toContainText('alpha');
 	expect(
 		await preview.evaluate(() => {
 			const messages = (

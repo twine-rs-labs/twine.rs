@@ -1202,13 +1202,13 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		await selectPassage(page, 'Start');
 		await replaceEditorText(
 			page,
-			'Start passage version one. [[Continue->Next]]',
+			'(set:$alpha to 1)Start passage version one. [[Continue->Next]]',
 			'Start'
 		);
 		await waitForSavedText(
 			running,
 			projectRoot,
-			'Start passage version one. [[Continue->Next]]',
+			'(set:$alpha to 1)Start passage version one. [[Continue->Next]]',
 			testInfo
 		);
 
@@ -1250,7 +1250,13 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		).toBeVisible();
 		await expect(
 			debuggerInspector.getByRole('heading', {name: 'Story variables'})
-		).toHaveCount(0);
+		).toBeVisible();
+		await expect(
+			debuggerInspector.getByRole('heading', {name: 'Visited passages'})
+		).toBeVisible();
+		await expect(
+			debuggerInspector.getByText('alpha', {exact: true})
+		).toBeVisible();
 		const priorClipboard = await app.evaluate(({clipboard}) =>
 			clipboard.readText()
 		);
@@ -1552,6 +1558,60 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		expect(await browserWindowId(app, preview)).toBe(previewWindowId);
 		expect(startReplacement.origin).not.toBe(secondPackage.origin);
 		await expect(preview.getByText('Start: Next', {exact: true})).toBeVisible();
+	} finally {
+		await running?.app.close();
+	}
+});
+
+test('packaged Harlowe bounds committed visited history at 200 moments', async ({}, testInfo) => {
+	test.setTimeout(3 * 60 * 1000);
+	const executablePath = await packagedExecutable();
+	let running: RunningApp | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, 'harlowe-history-bound');
+		const {page} = running;
+
+		await createProject(page, {
+			format: 'Harlowe 3.3.9',
+			name: 'Managed Harlowe History Bound',
+			startPassage: 'Start'
+		});
+		const projectRoot = await projectRootFromRenderer(page);
+		const source =
+			'(set:$alpha to 1)Packaged Harlowe history marker. [[Repeat->Start]]';
+
+		await replaceEditorText(page, source, 'Start');
+		await waitForSavedText(running, projectRoot, source, testInfo);
+
+		const preview = await launchPreview(running, () =>
+			page.getByTitle('Play').click()
+		);
+		await expectRenderedText(preview, 'Packaged Harlowe history marker.');
+		await preview.getByRole('button', {name: 'Debugger'}).click();
+		const inspector = preview.getByRole('region', {
+			name: 'Runtime debugger inspector'
+		});
+		const visitedPassagesSection = inspector
+			.getByRole('heading', {name: 'Visited passages'})
+			.locator('..')
+			.locator('..');
+
+		await expect(inspector).toContainText('Adapter: harlowe-3.3.9');
+		await expect(inspector.getByText('alpha', {exact: true})).toBeVisible();
+		for (let index = 0; index < 200; index += 1) {
+			await storyFrame(preview)
+				.locator('tw-passage tw-link')
+				.filter({hasText: /^Repeat$/})
+				.click();
+		}
+		await expect(
+			visitedPassagesSection.getByText('Truncated: item-limit', {
+				exact: true
+			})
+		).toBeVisible({timeout: 20_000});
+		await expect(visitedPassagesSection.locator('li')).toHaveCount(200);
+		await expect(inspector.getByText('alpha', {exact: true})).toBeVisible();
 	} finally {
 		await running?.app.close();
 	}
