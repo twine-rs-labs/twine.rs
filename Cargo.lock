@@ -1125,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "twine_cli"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -1138,7 +1138,7 @@ dependencies = [
 
 [[package]]
 name = "twine_core"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "regex",
  "serde",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "twine_export"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "serde_json",
  "thiserror",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "twine_graph"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "twine_model"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "indexmap",
  "serde",
@@ -1184,7 +1184,7 @@ dependencies = [
 
 [[package]]
 name = "twine_native"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
@@ -1206,7 +1206,7 @@ dependencies = [
 
 [[package]]
 name = "twine_parse"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "twine_search"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "serde",
  "twine_model",
@@ -1224,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "twine_store"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "rayon",
  "serde",
@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "twine_wasm"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "serde",
  "serde-wasm-bindgen",

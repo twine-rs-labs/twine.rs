@@ -19,6 +19,16 @@ historical exceptions; category and baseline rules are defined in
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Security
+
+## [0.2.0-beta.5] - 2026-08-26
+
+### Added
+
 - Added Play/Test Runtime Controls with exact-version restart support for the
   bundled SugarCube, Snowman, Chapbook, and Harlowe adapters, plus confirmed,
   preview-isolated Clear State behavior in browser and managed desktop previews.
@@ -28,9 +38,18 @@ historical exceptions; category and baseline rules are defined in
 
 ### Changed
 
+- Expanded Runtime Debugger inspection from one exact SugarCube release and
+  best-effort Harlowe passage tracking to authenticated exact profiles for all
+  bundled SugarCube 2 releases and bundled Harlowe 3.3.9, including variables,
+  temporary variables, and visited-passage history where supported.
+- Standardized Test From Here across story, passage finder, graph, contents,
+  diagnostics, and asset-entry actions with shared launch behavior and visible
+  pending state.
+
 ### Fixed
 
-### Security
+- Fixed Find/Replace passage highlights clearing and reapplying during unrelated
+  rerenders, which could keep the panel in an update loop.
 
 ## [0.2.0-beta.4] - 2026-08-19
 
@@ -130,7 +149,8 @@ historical exceptions; category and baseline rules are defined in
   workflow and packaged Linux ARM64 validation exposed release-pipeline and
   preview-startup defects. No draft or public release was created.
 
-[Unreleased]: https://github.com/twine-rs-labs/twine.rs/compare/v0.2.0-beta.4...HEAD
+[Unreleased]: https://github.com/twine-rs-labs/twine.rs/compare/v0.2.0-beta.5...HEAD
+[0.2.0-beta.5]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.5
 [0.2.0-beta.4]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.4
 [0.2.0-beta.3]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.3
 [0.2.0-beta.2]: https://github.com/twine-rs-labs/twine.rs/releases/tag/v0.2.0-beta.2
