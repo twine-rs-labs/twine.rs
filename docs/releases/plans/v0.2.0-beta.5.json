@@ -1,0 +1,37 @@
+{
+	"$schema": "https://raw.githubusercontent.com/twine-rs-labs/twine.rs/main/docs/releases/release-plan.schema.json",
+	"schemaVersion": 1,
+	"version": "0.2.0-beta.5",
+	"tag": "v0.2.0-beta.5",
+	"releaseDate": "2026-08-26",
+	"channel": "prerelease",
+	"profile": "distributable-unsigned",
+	"releaseManager": "@bransta61",
+	"checklistIssue": "https://github.com/twine-rs-labs/twine.rs/issues/40",
+	"firstRelease": false,
+	"previousKnownGoodVersion": "0.2.0-beta.4",
+	"approvals": {
+		"releaseManager": true
+	},
+	"compatibility": {
+		"projectFormat": "unchanged",
+		"settingsMigration": "none",
+		"previousVersionCanOpenProjects": "yes",
+		"backupRequired": false,
+		"notes": "No project-format or settings migration is introduced by this release. The immutable beta.4 CLI reopened a beta.5-created project and the restored beta.5 backup with matching story, passage, and link summaries. The preview, debugger, and editor-navigation changes do not alter persisted project data; a separate project-folder backup remains recommended before prerelease use."
+	},
+	"rollback": {
+		"application": "Uninstall or discontinue using beta.5 and reinstall the previous known-good beta.4 release. Automatic downgrade is unavailable.",
+		"projectData": "Beta.4 can reopen the unchanged beta.5 project format. If project-data recovery is required, stop editing, restore the separate pre-beta.5 project-folder backup, and reopen that restored project with beta.4.",
+		"tested": true,
+		"evidence": "https://github.com/twine-rs-labs/twine.rs/issues/40#issuecomment-5427403660"
+	},
+	"knownIssues": [
+		"In the current benchmark suite, some latency and memory results at the largest tested project sizes exceed the project's initial performance targets.",
+		"Advanced Harlowe syntax editing is specific to the bundled Harlowe 3.3.9 format; other Harlowe versions use the generic editor.",
+		"Asset-complete Package export is limited to file-backed desktop projects. Static runtime dependencies are assessed, while dynamic JavaScript dependency discovery is explicitly not evaluated.",
+		"Runtime Debugger inspection remains exact-version and read-only. Runtime Controls are limited to Restart and Clear State; adapter support varies, and Chapbook plus generic adapters expose current-passage state only.",
+		"Some inherited editing, troubleshooting, installation, and compatibility documentation still requires a final Twine RS-specific audit.",
+		"Cross-platform packaged-app and hosted-CI performance coverage remains incomplete."
+	]
+}
