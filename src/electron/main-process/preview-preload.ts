@@ -29,6 +29,7 @@ const storyPreviewIpcChannels = Object.freeze({
 const maxPassageIdLength = 1024;
 const maxCopyTextLength = 4 * 1024 * 1024;
 const maxOperationIdLength = 128;
+const maxRequestIdLength = 128;
 
 function validGeneration(value: unknown): value is number {
 	return Number.isSafeInteger(value) && (value as number) >= 0;
@@ -42,6 +43,14 @@ function validPassageId(value: unknown): value is string {
 	);
 }
 
+function validRequestId(value: unknown): value is string {
+	return (
+		typeof value === 'string' &&
+		value.length > 0 &&
+		value.length <= maxRequestIdLength
+	);
+}
+
 function copyCommand(value: unknown): NativeStoryPreviewCommand {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) {
 		throw new TypeError('Invalid story preview command.');
@@ -52,6 +61,10 @@ function copyCommand(value: unknown): NativeStoryPreviewCommand {
 	if (!validGeneration(command.generation)) {
 		throw new TypeError('Invalid story preview generation.');
 	}
+	if (!validRequestId(command.requestId)) {
+		throw new TypeError('Invalid story preview request.');
+	}
+	const request = {requestId: command.requestId};
 
 	switch (command.type) {
 		case 'revealGraph':
@@ -65,13 +78,14 @@ function copyCommand(value: unknown): NativeStoryPreviewCommand {
 
 			return {
 				generation: command.generation,
+				...request,
 				...(command.passageId === undefined
 					? {}
 					: {passageId: command.passageId}),
 				type: command.type
 			};
 		case 'testFromStart':
-			return {generation: command.generation, type: command.type};
+			return {generation: command.generation, ...request, type: command.type};
 		case 'testCurrent':
 			if (!validPassageId(command.passageId)) {
 				throw new TypeError('Invalid story preview passage.');
@@ -79,6 +93,7 @@ function copyCommand(value: unknown): NativeStoryPreviewCommand {
 
 			return {
 				generation: command.generation,
+				...request,
 				passageId: command.passageId,
 				type: command.type
 			};

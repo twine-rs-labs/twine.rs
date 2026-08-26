@@ -3,11 +3,12 @@ import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {storyPreviewIpcChannels} from '../../preview-ipc-channels';
 import type {
-	NativeStoryPreviewCommandResult,
+	NativeStoryPreviewOwnerCommandResult,
 	NativeStoryPreviewDescriptor
 } from '../../shared';
 import {
 	createStoryPreviewWindowManager,
+	maxStoryPreviewPendingCommands,
 	type ManagedStoryPreviewBuild,
 	maxManagedStoryPreviewWindows
 } from '../story-preview-window-manager';
@@ -20,6 +21,17 @@ import {HARLOWE_3_3_9_COMPATIBILITY} from '../../../routes/story-preview-harlowe
 jest.mock('../performance-harness', () => ({
 	performanceHarnessEnabled: () => process.env.TWINE_PERF === '1'
 }));
+
+function ownerDispatch(
+	owner: WebContents & {send: jest.Mock},
+	requestId: string
+) {
+	const command = owner.send.mock.calls
+		.map(([, value]) => value)
+		.findLast(value => value?.command?.requestId === requestId);
+	if (!command) throw new Error(`Missing owner dispatch for ${requestId}.`);
+	return command.dispatchId as string;
+}
 
 type Listener = (...args: any[]) => void;
 type IpcHandler = (...args: any[]) => any;
@@ -245,6 +257,7 @@ function testManager(
 	options: {
 		clearStateLeaseTimeoutMs?: number;
 		linkMode?: 'block' | 'system';
+		ownerCommandLeaseTimeoutMs?: number;
 		replacementTimeoutMs?: number;
 	} = {}
 ) {
@@ -291,6 +304,7 @@ function testManager(
 	let id = 0;
 	const manager = createStoryPreviewWindowManager({
 		clearStateLeaseTimeoutMs: options.clearStateLeaseTimeoutMs,
+		ownerCommandLeaseTimeoutMs: options.ownerCommandLeaseTimeoutMs,
 		createWindow: config => {
 			windowOptions.push(config);
 			const window = fakeWindow(entryUrl);
@@ -638,9 +652,13 @@ describe('story preview window manager', () => {
 		const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
 		const operation = await begin(event, 1);
 
-		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual(
-			expect.objectContaining({status: 'error'})
-		);
+		expect(
+			command(event, {
+				generation: 1,
+				requestId: 'clear-state-command',
+				type: 'testFromStart'
+			})
+		).toEqual(expect.objectContaining({status: 'error'}));
 		await expect(
 			harness.manager.replace(owner, launch.descriptor.sessionId, 1, build())
 		).rejects.toThrow('Clear State is already pending');
@@ -650,9 +668,16 @@ describe('story preview window manager', () => {
 			operationId: operation.operationId
 		});
 		expect(harness.releaseStateCleanup).toHaveBeenCalledWith(operation.url);
-		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual({
+		expect(
+			command(event, {
+				generation: 1,
+				requestId: 'after-clear-state',
+				type: 'testFromStart'
+			})
+		).toEqual({
 			command: 'testFromStart',
 			generation: 1,
+			requestId: 'after-clear-state',
 			status: 'busy'
 		});
 	});
@@ -684,14 +709,23 @@ describe('story preview window manager', () => {
 		await rejected;
 		expect(harness.releaseStateCleanup).not.toHaveBeenCalled();
 
-		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual({
+		expect(
+			command(event, {
+				generation: 1,
+				requestId: 'after-shell-reload',
+				type: 'testFromStart'
+			})
+		).toEqual({
 			command: 'testFromStart',
 			generation: 1,
+			requestId: 'after-shell-reload',
 			status: 'busy'
 		});
 		harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
 			command: 'testFromStart',
+			dispatchId: ownerDispatch(owner, 'after-shell-reload'),
 			generation: 1,
+			requestId: 'after-shell-reload',
 			status: 'success'
 		});
 
@@ -723,14 +757,23 @@ describe('story preview window manager', () => {
 		expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(1);
 		expect(harness.releaseStateCleanup).toHaveBeenCalledWith(operation.url);
 
-		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual({
+		expect(
+			command(event, {
+				generation: 1,
+				requestId: 'after-acknowledged-clear',
+				type: 'testFromStart'
+			})
+		).toEqual({
 			command: 'testFromStart',
 			generation: 1,
+			requestId: 'after-acknowledged-clear',
 			status: 'busy'
 		});
 		harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
 			command: 'testFromStart',
+			dispatchId: ownerDispatch(owner, 'after-acknowledged-clear'),
 			generation: 1,
+			requestId: 'after-acknowledged-clear',
 			status: 'success'
 		});
 		const replacing = harness.manager.replace(
@@ -756,9 +799,13 @@ describe('story preview window manager', () => {
 			'stale or unsolicited'
 		);
 		expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(1);
-		expect(command(event, {generation: 2, type: 'testFromStart'})).toEqual(
-			expect.objectContaining({status: 'error'})
-		);
+		expect(
+			command(event, {
+				generation: 2,
+				requestId: 'replacement-clear-lock',
+				type: 'testFromStart'
+			})
+		).toEqual(expect.objectContaining({status: 'error'}));
 		cancel(event, nextOperation);
 		expect(harness.releaseStateCleanup).toHaveBeenCalledTimes(2);
 	});
@@ -861,6 +908,7 @@ describe('story preview window manager', () => {
 			command(event, {
 				generation: 1,
 				passageId: 'passage-2',
+				requestId: 'invalid-start-passage',
 				type: 'testFromStart'
 			})
 		).toEqual(expect.objectContaining({status: 'error'}));
@@ -868,26 +916,43 @@ describe('story preview window manager', () => {
 			command(event, {
 				generation: 1,
 				passageId: 'missing',
+				requestId: 'missing-current-passage',
 				type: 'testCurrent'
 			})
 		).toEqual(expect.objectContaining({status: 'error'}));
-		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual({
+		expect(
+			command(event, {
+				generation: 1,
+				requestId: 'valid-test-start',
+				type: 'testFromStart'
+			})
+		).toEqual({
 			command: 'testFromStart',
 			generation: 1,
+			requestId: 'valid-test-start',
 			status: 'busy'
 		});
 		expect(owner.send).toHaveBeenCalledWith(
 			storyPreviewIpcChannels.ownerCommand,
-			{
-				command: {generation: 1, type: 'testFromStart'},
+			expect.objectContaining({
+				command: {
+					generation: 1,
+					requestId: 'valid-test-start',
+					type: 'testFromStart'
+				},
+				dispatchId: expect.any(String),
 				passageId: 'passage-1',
 				sessionId: launch.descriptor.sessionId,
 				storyId: 'story-1'
-			}
+			})
 		);
-		expect(command(event, {generation: 1, type: 'testFromStart'})).toEqual(
-			expect.objectContaining({status: 'error'})
-		);
+		expect(
+			command(event, {
+				generation: 1,
+				requestId: 'valid-test-start',
+				type: 'testFromStart'
+			})
+		).toEqual(expect.objectContaining({status: 'error'}));
 	});
 
 	it('focuses the owner for reveal commands and forwards completion', async () => {
@@ -897,20 +962,49 @@ describe('story preview window manager', () => {
 		const result = command(event, {
 			generation: 1,
 			passageId: 'passage-2',
+			requestId: 'request-1',
 			type: 'revealSource'
 		});
 
 		expect(result).toEqual({
 			command: 'revealSource',
 			generation: 1,
+			requestId: 'request-1',
 			status: 'busy'
 		});
-		expect(harness.focusOwner).toHaveBeenCalledWith(owner);
-		const completion: NativeStoryPreviewCommandResult = {
+		expect(harness.focusOwner).not.toHaveBeenCalled();
+		const completion: NativeStoryPreviewOwnerCommandResult = {
 			command: 'revealSource',
+			dispatchId: ownerDispatch(owner, 'request-1'),
 			generation: 1,
+			requestId: 'request-1',
 			status: 'success'
 		};
+
+		expect(() =>
+			harness.manager.completeCommand(
+				owner,
+				launch.descriptor.sessionId,
+				completion
+			)
+		).toThrow('before owner acceptance');
+		harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+			command: 'revealSource',
+			dispatchId: ownerDispatch(owner, 'request-1'),
+			generation: 1,
+			requestId: 'request-1',
+			status: 'accepted'
+		});
+		expect(harness.focusOwner).toHaveBeenCalledWith(owner);
+		expect(() =>
+			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+				command: 'revealSource',
+				dispatchId: ownerDispatch(owner, 'request-1'),
+				generation: 1,
+				requestId: 'request-1',
+				status: 'accepted'
+			})
+		).toThrow('already accepted');
 
 		harness.manager.completeCommand(
 			owner,
@@ -919,7 +1013,12 @@ describe('story preview window manager', () => {
 		);
 		expect(window.webContents.send).toHaveBeenLastCalledWith(
 			storyPreviewIpcChannels.commandResult,
-			completion
+			expect.objectContaining({
+				command: completion.command,
+				generation: completion.generation,
+				requestId: completion.requestId,
+				status: completion.status
+			})
 		);
 		expect(() =>
 			harness.manager.completeCommand(
@@ -933,27 +1032,501 @@ describe('story preview window manager', () => {
 			command(event, {
 				generation: 1,
 				passageId: 'passage-2',
+				requestId: 'request-3',
 				type: 'revealSource'
 			})
 		).toEqual(expect.objectContaining({status: 'busy'}));
 		expect(() =>
 			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
 				command: 'revealSource',
+				dispatchId: ownerDispatch(owner, 'request-3'),
 				generation: 1,
 				message: 'x'.repeat(4097),
 				operation: 'command',
+				requestId: 'request-3',
 				status: 'error'
 			})
 		).toThrow('command error');
 		expect(() =>
 			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
 				command: 'revealSource',
+				dispatchId: ownerDispatch(owner, 'request-3'),
 				generation: 1,
 				message: 'The replacement failed.',
 				operation: 'command',
+				requestId: 'request-3',
 				status: 'error'
 			})
 		).not.toThrow();
+	});
+
+	it('correlates concurrent same-type commands by exact request identity', async () => {
+		const harness = testManager();
+		const {event, launch, owner, window} = await openReadyPreview(harness);
+		const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+
+		for (const requestId of ['source-a', 'source-b']) {
+			expect(
+				command(event, {
+					generation: 1,
+					passageId: 'passage-2',
+					requestId,
+					type: 'revealSource'
+				})
+			).toEqual(expect.objectContaining({requestId, status: 'busy'}));
+		}
+
+		expect(() =>
+			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+				command: 'revealGraph',
+				dispatchId: ownerDispatch(owner, 'source-a'),
+				generation: 1,
+				requestId: 'source-a',
+				status: 'accepted'
+			})
+		).toThrow('stale or unsolicited');
+		expect(() =>
+			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+				command: 'revealSource',
+				dispatchId: ownerDispatch(owner, 'source-a'),
+				generation: 2,
+				requestId: 'source-a',
+				status: 'accepted'
+			})
+		).toThrow('stale or unsolicited');
+
+		for (const requestId of ['source-b', 'source-a']) {
+			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+				command: 'revealSource',
+				dispatchId: ownerDispatch(owner, requestId),
+				generation: 1,
+				requestId,
+				status: 'accepted'
+			});
+			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+				command: 'revealSource',
+				dispatchId: ownerDispatch(owner, requestId),
+				generation: 1,
+				requestId,
+				status: 'success'
+			});
+		}
+
+		expect(window.webContents.send).toHaveBeenCalledWith(
+			storyPreviewIpcChannels.commandResult,
+			expect.objectContaining({requestId: 'source-a', status: 'success'})
+		);
+		expect(window.webContents.send).toHaveBeenCalledWith(
+			storyPreviewIpcChannels.commandResult,
+			expect.objectContaining({requestId: 'source-b', status: 'success'})
+		);
+	});
+
+	it('bounds owner commands and expires exact pending entries without accepting late completion', async () => {
+		jest.useFakeTimers();
+		try {
+			const harness = testManager({ownerCommandLeaseTimeoutMs: 50});
+			const {event, launch, owner, window} = await openReadyPreview(harness);
+			const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+
+			for (let index = 0; index < maxStoryPreviewPendingCommands; index++) {
+				expect(
+					command(event, {
+						generation: 1,
+						passageId: 'passage-2',
+						requestId: `lease-${index}`,
+						type: 'revealSource'
+					})
+				).toEqual(expect.objectContaining({status: 'busy'}));
+			}
+			expect(
+				command(event, {
+					generation: 1,
+					passageId: 'passage-2',
+					requestId: 'overflow',
+					type: 'revealSource'
+				})
+			).toEqual(expect.objectContaining({status: 'error'}));
+			expect(owner.send).toHaveBeenCalledTimes(maxStoryPreviewPendingCommands);
+
+			jest.advanceTimersByTime(50);
+			const expiredDispatch = ownerDispatch(owner, 'lease-0');
+			expect(owner.send).toHaveBeenCalledWith(
+				storyPreviewIpcChannels.ownerCommandCancellation,
+				expect.objectContaining({
+					dispatchId: expiredDispatch,
+					sessionId: launch.descriptor.sessionId
+				})
+			);
+			expect(window.webContents.send).toHaveBeenCalledWith(
+				storyPreviewIpcChannels.commandResult,
+				expect.objectContaining({
+					operation: 'command',
+					requestId: 'lease-0',
+					status: 'error'
+				})
+			);
+			expect(() =>
+				harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+					command: 'revealSource',
+					dispatchId: ownerDispatch(owner, 'lease-0'),
+					generation: 1,
+					requestId: 'lease-0',
+					status: 'accepted'
+				})
+			).toThrow('stale or unsolicited');
+			expect(
+				command(event, {
+					generation: 1,
+					passageId: 'passage-2',
+					requestId: 'lease-0',
+					type: 'revealSource'
+				})
+			).toEqual(
+				expect.objectContaining({requestId: 'lease-0', status: 'busy'})
+			);
+			const replacementDispatch = ownerDispatch(owner, 'lease-0');
+			expect(replacementDispatch).not.toBe(expiredDispatch);
+			expect(() =>
+				harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+					command: 'revealSource',
+					dispatchId: expiredDispatch,
+					generation: 1,
+					requestId: 'lease-0',
+					status: 'accepted'
+				})
+			).toThrow('stale or unsolicited');
+			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+				command: 'revealSource',
+				dispatchId: replacementDispatch,
+				generation: 1,
+				requestId: 'lease-0',
+				status: 'accepted'
+			});
+			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+				command: 'revealSource',
+				dispatchId: replacementDispatch,
+				generation: 1,
+				requestId: 'lease-0',
+				status: 'success'
+			});
+			const begin = harness.ipcHandlers.get(
+				storyPreviewIpcChannels.beginClearState
+			)!;
+			const cancel = harness.ipcHandlers.get(
+				storyPreviewIpcChannels.cancelClearState
+			)!;
+			const clearState = await begin(event, 1);
+
+			cancel(event, clearState);
+			expect(
+				command(event, {
+					generation: 1,
+					passageId: 'passage-2',
+					requestId: 'recovered',
+					type: 'revealSource'
+				})
+			).toEqual(expect.objectContaining({status: 'busy'}));
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('cancels pending owner-command leases when the session closes', async () => {
+		jest.useFakeTimers();
+		try {
+			const harness = testManager({ownerCommandLeaseTimeoutMs: 50});
+			const {event, launch, owner, window} = await openReadyPreview(harness);
+			const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+
+			expect(
+				command(event, {
+					generation: 1,
+					passageId: 'passage-2',
+					requestId: 'close-before-command-expiry',
+					type: 'revealSource'
+				})
+			).toEqual(expect.objectContaining({status: 'busy'}));
+			const dispatchId = ownerDispatch(owner, 'close-before-command-expiry');
+			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+				command: 'revealSource',
+				dispatchId,
+				generation: 1,
+				requestId: 'close-before-command-expiry',
+				status: 'accepted'
+			});
+			const commandResultsBeforeClose =
+				window.webContents.send.mock.calls.filter(
+					([channel]) => channel === storyPreviewIpcChannels.commandResult
+				).length;
+
+			await harness.manager.close(owner, launch.descriptor.sessionId);
+			expect(owner.send).toHaveBeenCalledWith(
+				storyPreviewIpcChannels.ownerCommandCancellation,
+				expect.objectContaining({
+					dispatchId,
+					requestId: 'close-before-command-expiry',
+					sessionId: launch.descriptor.sessionId
+				})
+			);
+			jest.advanceTimersByTime(50);
+
+			expect(
+				window.webContents.send.mock.calls.filter(
+					([channel]) => channel === storyPreviewIpcChannels.commandResult
+				)
+			).toHaveLength(commandResultsBeforeClose);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('starts a fresh completion lease when a reveal is accepted', async () => {
+		jest.useFakeTimers();
+		try {
+			const harness = testManager({ownerCommandLeaseTimeoutMs: 50});
+			const {event, launch, owner, window} = await openReadyPreview(harness);
+			const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+
+			command(event, {
+				generation: 1,
+				passageId: 'passage-2',
+				requestId: 'accepted-near-expiry',
+				type: 'revealGraph'
+			});
+			const dispatchId = ownerDispatch(owner, 'accepted-near-expiry');
+			jest.advanceTimersByTime(49);
+			const completionDeadline = harness.manager.completeCommand(
+				owner,
+				launch.descriptor.sessionId,
+				{
+					command: 'revealGraph',
+					dispatchId,
+					generation: 1,
+					requestId: 'accepted-near-expiry',
+					status: 'accepted'
+				}
+			);
+
+			expect(completionDeadline).toBe(Date.now() + 50);
+			jest.advanceTimersByTime(1);
+			expect(owner.send).not.toHaveBeenCalledWith(
+				storyPreviewIpcChannels.ownerCommandCancellation,
+				expect.objectContaining({dispatchId})
+			);
+			expect(window.webContents.send).not.toHaveBeenCalledWith(
+				storyPreviewIpcChannels.commandResult,
+				expect.objectContaining({requestId: 'accepted-near-expiry'})
+			);
+
+			jest.advanceTimersByTime(49);
+			expect(owner.send).toHaveBeenCalledWith(
+				storyPreviewIpcChannels.ownerCommandCancellation,
+				expect.objectContaining({
+					dispatchId,
+					requestId: 'accepted-near-expiry'
+				})
+			);
+			expect(window.webContents.send).toHaveBeenCalledWith(
+				storyPreviewIpcChannels.commandResult,
+				expect.objectContaining({
+					requestId: 'accepted-near-expiry',
+					status: 'error'
+				})
+			);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it.each([
+		{status: 'accepted' as const, type: 'revealSource' as const},
+		{status: 'success' as const, type: 'testCurrent' as const}
+	])(
+		'fails closed when a delayed event loop reports an expired $status result',
+		async ({status, type}) => {
+			jest.useFakeTimers();
+			const clock = jest.spyOn(Date, 'now');
+			try {
+				const harness = testManager({ownerCommandLeaseTimeoutMs: 50});
+				const {event, launch, owner, window} = await openReadyPreview(harness);
+				const command = harness.ipcHandlers.get(
+					storyPreviewIpcChannels.command
+				)!;
+				const now = Date.now();
+				command(event, {
+					generation: 1,
+					...(type === 'testCurrent' ? {passageId: 'passage-2'} : {}),
+					requestId: `delayed-${status}`,
+					type
+				});
+				const dispatchId = ownerDispatch(owner, `delayed-${status}`);
+				clock.mockReturnValue(now + 50);
+
+				expect(() =>
+					harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+						command: type,
+						dispatchId,
+						generation: 1,
+						requestId: `delayed-${status}`,
+						status
+					})
+				).toThrow('has expired');
+				expect(owner.send).toHaveBeenCalledWith(
+					storyPreviewIpcChannels.ownerCommandCancellation,
+					expect.objectContaining({dispatchId})
+				);
+				expect(window.webContents.send).toHaveBeenCalledWith(
+					storyPreviewIpcChannels.commandResult,
+					expect.objectContaining({
+						requestId: `delayed-${status}`,
+						status: 'error'
+					})
+				);
+			} finally {
+				clock.mockRestore();
+				jest.useRealTimers();
+			}
+		}
+	);
+
+	it('rejects a command replacement whose lease expires during staging', async () => {
+		jest.useFakeTimers();
+		try {
+			const harness = testManager({ownerCommandLeaseTimeoutMs: 50});
+			const {event, launch, owner, window} = await openReadyPreview(harness);
+			const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+			let finishStage!: () => void;
+			const stageGate = new Promise<void>(resolve => (finishStage = resolve));
+
+			command(event, {
+				generation: 1,
+				passageId: 'passage-2',
+				requestId: 'staging-test-current',
+				type: 'testCurrent'
+			});
+			const dispatchId = ownerDispatch(owner, 'staging-test-current');
+			harness.blockNextStage(stageGate);
+			const replacing = harness.manager.replace(
+				owner,
+				launch.descriptor.sessionId,
+				1,
+				build({descriptor: descriptor({target: 'test'})}),
+				dispatchId
+			);
+			await flushPromises();
+			jest.advanceTimersByTime(50);
+			finishStage();
+			await expect(replacing).rejects.toThrow('stale or unsolicited');
+			expect(window.webContents.send).not.toHaveBeenCalledWith(
+				storyPreviewIpcChannels.replacement,
+				expect.objectContaining({status: 'success'})
+			);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('fails closed when a delayed event loop crosses a replacement command deadline', async () => {
+		jest.useFakeTimers();
+		const clock = jest.spyOn(Date, 'now');
+		try {
+			const harness = testManager({ownerCommandLeaseTimeoutMs: 50});
+			const {event, launch, owner, window} = await openReadyPreview(harness);
+			const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+			let finishStage!: () => void;
+			const stageGate = new Promise<void>(resolve => (finishStage = resolve));
+			const now = Date.now();
+			command(event, {
+				generation: 1,
+				passageId: 'passage-2',
+				requestId: 'expired-before-replacement',
+				type: 'testCurrent'
+			});
+			const expiredDispatch = ownerDispatch(
+				owner,
+				'expired-before-replacement'
+			);
+			clock.mockReturnValue(now + 50);
+			await expect(
+				harness.manager.replace(
+					owner,
+					launch.descriptor.sessionId,
+					1,
+					build({descriptor: descriptor({target: 'test'})}),
+					expiredDispatch
+				)
+			).rejects.toThrow('has expired');
+			clock.mockReturnValue(now);
+
+			command(event, {
+				generation: 1,
+				passageId: 'passage-2',
+				requestId: 'delayed-replacement',
+				type: 'testCurrent'
+			});
+			const dispatchId = ownerDispatch(owner, 'delayed-replacement');
+			harness.blockNextStage(stageGate);
+			const replacing = harness.manager.replace(
+				owner,
+				launch.descriptor.sessionId,
+				1,
+				build({descriptor: descriptor({target: 'test'})}),
+				dispatchId
+			);
+			await flushPromises();
+			clock.mockReturnValue(now + 50);
+			finishStage();
+			await expect(replacing).rejects.toThrow('has expired');
+			expect(window.webContents.send).not.toHaveBeenCalledWith(
+				storyPreviewIpcChannels.replacement,
+				expect.objectContaining({status: 'success'})
+			);
+		} finally {
+			clock.mockRestore();
+			jest.useRealTimers();
+		}
+	});
+
+	it('rolls back a command replacement candidate when its lease expires', async () => {
+		jest.useFakeTimers();
+		try {
+			const harness = testManager({ownerCommandLeaseTimeoutMs: 50});
+			const {event, launch, owner, window} = await openReadyPreview(harness);
+			const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
+
+			command(event, {
+				generation: 1,
+				passageId: 'passage-2',
+				requestId: 'candidate-test-current',
+				type: 'testCurrent'
+			});
+			const dispatchId = ownerDispatch(owner, 'candidate-test-current');
+			const replacing = harness.manager.replace(
+				owner,
+				launch.descriptor.sessionId,
+				1,
+				build({descriptor: descriptor({target: 'test'})}),
+				dispatchId
+			);
+			await flushPromises();
+			expect(window.webContents.send).toHaveBeenCalledWith(
+				storyPreviewIpcChannels.replacement,
+				expect.objectContaining({status: 'success'})
+			);
+
+			jest.advanceTimersByTime(50);
+			await expect(replacing).rejects.toThrow('did not complete');
+			expect(window.webContents.send).toHaveBeenCalledWith(
+				storyPreviewIpcChannels.replacement,
+				expect.objectContaining({operation: 'replacement', status: 'error'})
+			);
+			await expect(
+				harness.ipcHandlers.get(storyPreviewIpcChannels.frameLoaded)!(event, 2)
+			).rejects.toThrow('stale generation');
+		} finally {
+			jest.useRealTimers();
+		}
 	});
 
 	it('suppresses owner focus for E2E reveal commands while forwarding completion', async () => {
@@ -965,19 +1538,21 @@ describe('story preview window manager', () => {
 			const harness = testManager();
 			const {event, launch, owner, window} = await openReadyPreview(harness);
 			const command = harness.ipcHandlers.get(storyPreviewIpcChannels.command)!;
-			const completion: NativeStoryPreviewCommandResult = {
-				command: 'revealGraph',
-				generation: 1,
-				status: 'success'
-			};
-
 			expect(
 				command(event, {
 					generation: 1,
 					passageId: 'passage-2',
+					requestId: 'request-2',
 					type: 'revealGraph'
 				})
 			).toEqual(expect.objectContaining({status: 'busy'}));
+			const completion: NativeStoryPreviewOwnerCommandResult = {
+				command: 'revealGraph',
+				dispatchId: ownerDispatch(owner, 'request-2'),
+				generation: 1,
+				requestId: 'request-2',
+				status: 'success'
+			};
 			expect(harness.focusOwner).not.toHaveBeenCalled();
 			expect(owner.send).toHaveBeenCalledWith(
 				storyPreviewIpcChannels.ownerCommand,
@@ -985,6 +1560,14 @@ describe('story preview window manager', () => {
 					command: expect.objectContaining({type: completion.command})
 				})
 			);
+			harness.manager.completeCommand(owner, launch.descriptor.sessionId, {
+				command: 'revealGraph',
+				dispatchId: ownerDispatch(owner, 'request-2'),
+				generation: 1,
+				requestId: 'request-2',
+				status: 'accepted'
+			});
+			expect(harness.focusOwner).not.toHaveBeenCalled();
 
 			harness.manager.completeCommand(
 				owner,
@@ -993,7 +1576,12 @@ describe('story preview window manager', () => {
 			);
 			expect(window.webContents.send).toHaveBeenLastCalledWith(
 				storyPreviewIpcChannels.commandResult,
-				completion
+				expect.objectContaining({
+					command: completion.command,
+					generation: completion.generation,
+					requestId: completion.requestId,
+					status: completion.status
+				})
 			);
 		} finally {
 			if (previousBackground === undefined) {

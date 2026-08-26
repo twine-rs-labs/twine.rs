@@ -2505,4 +2505,28 @@ describe('story preview runtime state', () => {
 			})
 		).toEqual(initialStoryPreviewRuntimeModel(true));
 	});
+
+	it('fails closed for duplicate passage identities while retaining unique ones', () => {
+		const first = {id: 'duplicate-id', localId: 'first', name: 'Duplicate'};
+		const second = {id: 'duplicate-id', localId: 'second', name: 'Duplicate'};
+		const third = {id: 'third', localId: 'second', name: 'Third'};
+		const lookup = createStoryPreviewPassageLookup([first, second, third]);
+
+		expect(lookup.byId.get('duplicate-id')).toBeUndefined();
+		expect(lookup.byName.get('Duplicate')).toBeUndefined();
+		expect(lookup.byLocalId.get('second')).toBeUndefined();
+		expect(lookup.byLocalId.get('first')).toBe(first);
+		expect(lookup.byId.get('third')).toBe(third);
+		expect(lookup.byName.get('Third')).toBe(third);
+	});
+
+	it('keeps a unique companion display identity but withholds an ambiguous action ID', () => {
+		const first = {id: 'duplicate-id', localId: 'first', name: 'First'};
+		const second = {id: 'duplicate-id', localId: 'second', name: 'Second'};
+		const lookup = createStoryPreviewPassageLookup([first, second]);
+
+		expect(resolveRuntimePassage({name: 'First'}, lookup)).toEqual(
+			expect.objectContaining({id: undefined, localId: 'first', name: 'First'})
+		);
+	});
 });

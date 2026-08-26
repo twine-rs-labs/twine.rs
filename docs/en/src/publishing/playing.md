@@ -11,8 +11,10 @@ the workspace rail, or run _Play Story_ from the command palette.
 
 Play starts at the story's configured start passage and doesn't include the
 story format's test-mode features. The preview toolbar still reports build
-health and runtime messages, lets you reveal the current passage in Source or
-Graph, and offers viewport and reload controls. Use [Test](testing.md) when you
+health and runtime messages, and offers viewport and reload controls. When the
+runtime identifies a passage, choose _Edit Passage_ in the toolbar or _Edit
+Text_ beside a Debugger entry to open it in the text editor. Choose _Reveal in
+Graph_ to select and reframe it in Graph mode. Use [Test](testing.md) when you
 need the story format's debugging mode or want to start at another passage.
 
 Browser Twine opens the preview in an app-owned tab. The desktop app opens an

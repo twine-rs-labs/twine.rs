@@ -1,4 +1,5 @@
 import * as React from 'react';
+import {v4 as uuid} from '@lukeed/uuid';
 import type {
 	NativeStoryPreviewCommand,
 	NativeStoryPreviewCommandResult,
@@ -20,7 +21,7 @@ type PreviewWindow = Window & {
 type PreviewCommandWithoutGeneration =
 	NativeStoryPreviewCommand extends infer Command
 		? Command extends {generation: number}
-			? Omit<Command, 'generation'>
+			? Omit<Command, 'generation' | 'requestId'>
 			: never
 		: never;
 
@@ -69,7 +70,7 @@ export const DesktopStoryPreview: React.FC<
 	const [pendingOwnerCommandCount, setPendingOwnerCommandCount] =
 		React.useState(0);
 	const pendingOwnerCommandsRef = React.useRef(
-		new Set<NativeStoryPreviewCommand['type']>()
+		new Map<string, NativeStoryPreviewCommand['type']>()
 	);
 	const [preview, setPreview] =
 		React.useState<NativeStoryPreviewInitialState>();
@@ -81,11 +82,15 @@ export const DesktopStoryPreview: React.FC<
 		undefined
 	);
 	const markOwnerCommand = React.useCallback(
-		(command: NativeStoryPreviewCommand['type'], pending: boolean) => {
+		(
+			requestId: string,
+			command: NativeStoryPreviewCommand['type'],
+			pending: boolean
+		) => {
 			if (pending) {
-				pendingOwnerCommandsRef.current.add(command);
+				pendingOwnerCommandsRef.current.set(requestId, command);
 			} else {
-				pendingOwnerCommandsRef.current.delete(command);
+				pendingOwnerCommandsRef.current.delete(requestId);
 			}
 			setPendingOwnerCommandCount(pendingOwnerCommandsRef.current.size);
 		},
@@ -133,8 +138,14 @@ export const DesktopStoryPreview: React.FC<
 				return;
 			}
 
+			if (
+				pendingOwnerCommandsRef.current.get(result.requestId) !== result.command
+			) {
+				return;
+			}
+
 			setOperationError(resultError(result));
-			markOwnerCommand(result.command, false);
+			markOwnerCommand(result.requestId, result.command, false);
 			if (
 				result.command === 'testCurrent' ||
 				result.command === 'testFromStart'
@@ -237,7 +248,7 @@ export const DesktopStoryPreview: React.FC<
 
 			if (
 				generation === undefined ||
-				pendingOwnerCommandsRef.current.has(command.type) ||
+				pendingOwnerCommandsRef.current.size !== 0 ||
 				(isTestCommand && pendingTestGeneration !== undefined)
 			) {
 				return;
@@ -247,25 +258,31 @@ export const DesktopStoryPreview: React.FC<
 			if (isTestCommand) {
 				setPendingTestGeneration(generation);
 			}
-			markOwnerCommand(command.type, true);
+			const requestId = uuid();
+			markOwnerCommand(requestId, command.type, true);
 
 			try {
 				const result = await api.command({
 					...command,
-					generation
+					generation,
+					requestId
 				} as NativeStoryPreviewCommand);
 
-				if (result.generation === previewRef.current?.descriptor.generation) {
+				if (
+					result.generation === previewRef.current?.descriptor.generation &&
+					result.requestId === requestId &&
+					result.command === command.type
+				) {
 					setOperationError(resultError(result));
 					if (result.status !== 'busy' && isTestCommand) {
 						setPendingTestGeneration(undefined);
 					}
 					if (result.status !== 'busy') {
-						markOwnerCommand(command.type, false);
+						markOwnerCommand(requestId, command.type, false);
 					}
 				}
 			} catch (error) {
-				markOwnerCommand(command.type, false);
+				markOwnerCommand(requestId, command.type, false);
 				if (isTestCommand) {
 					setPendingTestGeneration(undefined);
 				}
@@ -347,8 +364,8 @@ export const DesktopStoryPreview: React.FC<
 					setCandidate(undefined);
 					setPreview(committed);
 					setPendingTestGeneration(undefined);
-					markOwnerCommand('testCurrent', false);
-					markOwnerCommand('testFromStart', false);
+					pendingOwnerCommandsRef.current.clear();
+					setPendingOwnerCommandCount(0);
 				},
 				error => {
 					if (

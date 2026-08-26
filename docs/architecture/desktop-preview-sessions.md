@@ -2,7 +2,7 @@
 
 Status: current
 Owner: Electron and frontend maintainers
-Last verified: 2026-08-23
+Last verified: 2026-08-26
 Source of truth: desktop preview entry, preview IPC, window manager, protocol,
 and shared preview surface
 
@@ -85,6 +85,22 @@ passage. Test From Start and Test Current return generation-tagged requests to
 the owner, which performs a fresh one-snapshot test build and asks main to
 replace the content in place. Preview input never supplies a filesystem path or
 overrides Test From Start's committed launch passage.
+
+### Reveal transaction
+
+A Source or Graph reveal is a correlated owner transaction. Electron main
+accepts it only for the live session and generation, leases the accepted work,
+and reports success only after the editor acknowledges that the requested text
+selection or graph framing was applied. Browser previews use the same bounded
+accept/commit handshake with the owning editor before falling back to ordinary
+same-tab navigation.
+
+Cancellation, deadline expiry, stale identity, owner teardown, or a missing
+terminal acknowledgement rejects the exact request and fences later route
+commits. If rejected work already changed editor state, rollback restores only
+fields, buffers, and graph transforms whose monotonic interaction revisions are
+still owned by that request. Later user navigation, same-value ABA interaction,
+or text editing therefore takes ownership and is preserved.
 
 ## Clear State transaction
 

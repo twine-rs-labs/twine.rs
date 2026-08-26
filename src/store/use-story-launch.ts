@@ -18,6 +18,10 @@ import {useComputedTheme} from './prefs/use-computed-theme';
 import type {StoryBuildPackage} from '../util/build-package';
 import {storyPreviewRoutePath} from '../routes/story-preview/story-preview-route-path';
 import {workbenchBufferCoordinator} from '../util/workbench-buffer-coordinator';
+import {
+	registerBrowserPreviewOwner,
+	unregisterBrowserPreviewOwner
+} from '../routes/browser-preview-owner-registry';
 
 export interface UseStoryLaunchProps {
 	playStory: (storyId: string) => Promise<void>;
@@ -66,12 +70,23 @@ async function openBrowserPreviewAfterFlush(storyId: string, path: string) {
 			'The browser blocked the preview window. Allow popups and try again.'
 		);
 	}
+	const ownerToken = uuid();
+	registerBrowserPreviewOwner({
+		preview: previewWindow,
+		storyId,
+		token: ownerToken
+	});
 	try {
 		await workbenchBufferCoordinator.flushStory(storyId);
+		const separator = path.includes('?') ? '&' : '?';
 		previewWindow.location.replace(
-			new URL(`#${path}`, window.location.href).href
+			new URL(
+				`#${path}${separator}ownerToken=${encodeURIComponent(ownerToken)}`,
+				window.location.href
+			).href
 		);
 	} catch (error) {
+		unregisterBrowserPreviewOwner(ownerToken);
 		previewWindow.close();
 		throw error;
 	}

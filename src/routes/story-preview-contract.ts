@@ -1238,16 +1238,31 @@ export function createStoryPreviewPassageLookup(
 	const byLocalId = new Map<string, StoryPreviewPassageRef>();
 	const byName = new Map<string, StoryPreviewPassageRef>();
 
+	// Runtime metadata may carry any one of these identities. A duplicate must
+	// never choose an arbitrary passage, but an unambiguous companion identity
+	// remains safe to use.
+	function addUnique(
+		lookup: Map<string, StoryPreviewPassageRef>,
+		ambiguous: Set<string>,
+		key: string,
+		passage: StoryPreviewPassageRef
+	) {
+		if (ambiguous.has(key)) return;
+		if (lookup.has(key)) {
+			lookup.delete(key);
+			ambiguous.add(key);
+			return;
+		}
+		lookup.set(key, passage);
+	}
+
+	const ambiguousIds = new Set<string>();
+	const ambiguousLocalIds = new Set<string>();
+	const ambiguousNames = new Set<string>();
 	for (const passage of passages) {
-		if (!byId.has(passage.id)) {
-			byId.set(passage.id, passage);
-		}
-		if (!byLocalId.has(passage.localId)) {
-			byLocalId.set(passage.localId, passage);
-		}
-		if (!byName.has(passage.name)) {
-			byName.set(passage.name, passage);
-		}
+		addUnique(byId, ambiguousIds, passage.id, passage);
+		addUnique(byLocalId, ambiguousLocalIds, passage.localId, passage);
+		addUnique(byName, ambiguousNames, passage.name, passage);
 	}
 
 	return {
@@ -3691,7 +3706,7 @@ export function resolveRuntimePassage(
 		(normalizedName ? lookup.byName.get(normalizedName) : undefined);
 
 	return {
-		id: match?.id,
+		id: match && lookup.byId.get(match.id) === match ? match.id : undefined,
 		localId: match?.localId ?? localId,
 		name: match?.name ?? normalizedName,
 		rawId: id,

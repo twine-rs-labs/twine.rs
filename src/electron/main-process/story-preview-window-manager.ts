@@ -53,6 +53,8 @@ export const storyPreviewReadyTimeoutMs = 15_000;
 export const storyPreviewReplacementTimeoutMs = 15_000;
 export const storyPreviewClearStateTimeoutMs = 5_000;
 export const storyPreviewClearStateLeaseTimeoutMs = 30_000;
+export const maxStoryPreviewPendingCommands = 32;
+export const storyPreviewOwnerCommandLeaseTimeoutMs = 15_000;
 export const maxStoryPreviewDescriptorBytes = 64 * 1024 * 1024;
 export const maxStoryPreviewPassages = 100_000;
 
@@ -136,6 +138,7 @@ interface PreviewGeneration {
 }
 
 interface PreviewCandidate extends PreviewGeneration {
+	commandDispatchId?: string;
 	completion: Deferred<ManagedStoryPreviewLaunch>;
 	timeout: ReturnType<typeof setTimeout>;
 }
@@ -157,7 +160,18 @@ interface PreviewSession {
 	id: string;
 	initialFrameLoaded: boolean;
 	owner: WebContents;
-	pendingCommands: Set<string>;
+	pendingCommands: Map<
+		string,
+		{
+			accepted: boolean;
+			deadline: number;
+			dispatchId: string;
+			generation: number;
+			requestId: string;
+			timeout?: ReturnType<typeof setTimeout>;
+			type: NativeStoryPreviewCommand['type'];
+		}
+	>;
 	ready: Deferred<void>;
 	readyTimeout: ReturnType<typeof setTimeout>;
 	replacing: boolean;
@@ -200,6 +214,7 @@ interface StoryPreviewWindowManagerDependencies {
 
 export interface StoryPreviewWindowManagerOptions extends Partial<StoryPreviewWindowManagerDependencies> {
 	clearStateLeaseTimeoutMs?: number;
+	ownerCommandLeaseTimeoutMs?: number;
 	readyTimeoutMs?: number;
 	replacementTimeoutMs?: number;
 }
@@ -477,18 +492,19 @@ function cloneAndValidateDescriptor(
 }
 
 function commandKey(
-	command: Pick<NativeStoryPreviewCommand, 'generation' | 'type'>
+	command: Pick<NativeStoryPreviewOwnerCommand, 'dispatchId'>
 ) {
-	return `${command.generation}:${command.type}`;
+	return command.dispatchId;
 }
 
 function commandError(
-	command: Pick<NativeStoryPreviewCommand, 'generation' | 'type'>,
+	command: Pick<NativeStoryPreviewCommand, 'generation' | 'type' | 'requestId'>,
 	message: string
 ): NativeStoryPreviewCommandResult {
 	return {
 		command: command.type,
 		generation: command.generation,
+		requestId: command.requestId,
 		message,
 		operation: 'command',
 		status: 'error'
@@ -514,6 +530,10 @@ function validateCommand(
 
 	const generation = value.generation as number;
 	const type = value.type as NativeStoryPreviewCommand['type'];
+	if (!validString(value.requestId, 128)) {
+		throw new Error('Story preview command request is invalid.');
+	}
+	const requestId = value.requestId as string;
 
 	if (generation !== session.current.descriptor.generation) {
 		throw new Error('Story preview command belongs to a stale generation.');
@@ -530,7 +550,7 @@ function validateCommand(
 		}
 		passageId = session.current.descriptor.launchPassage?.id;
 		return {
-			command: {generation, type},
+			command: {generation, requestId, type},
 			passageId
 		};
 	}
@@ -552,8 +572,8 @@ function validateCommand(
 	return {
 		command:
 			type === 'testCurrent'
-				? {generation, passageId: passageId!, type}
-				: {generation, passageId, type},
+				? {generation, passageId: passageId!, requestId, type}
+				: {generation, passageId, requestId, type},
 		passageId
 	};
 }
@@ -719,6 +739,9 @@ export function createStoryPreviewWindowManager(
 		options.replacementTimeoutMs ?? storyPreviewReplacementTimeoutMs;
 	const clearStateLeaseTimeoutMs =
 		options.clearStateLeaseTimeoutMs ?? storyPreviewClearStateLeaseTimeoutMs;
+	const ownerCommandLeaseTimeoutMs =
+		options.ownerCommandLeaseTimeoutMs ??
+		storyPreviewOwnerCommandLeaseTimeoutMs;
 	const sessionsById = new Map<string, PreviewSession>();
 	const sessionsByPreview = new Map<WebContents, PreviewSession>();
 	const owners = new Map<WebContents, OwnerState>();
@@ -734,6 +757,73 @@ export function createStoryPreviewWindowManager(
 		}
 
 		return session;
+	}
+
+	function cancelOwnerCommand(
+		session: PreviewSession,
+		pending: PreviewSession['pendingCommands'] extends Map<string, infer T>
+			? T
+			: never,
+		message: string
+	) {
+		const candidate = session.candidate;
+
+		if (candidate?.commandDispatchId === pending.dispatchId) {
+			void rollbackCandidate(session, candidate, new Error(message));
+		}
+		if (!session.owner.isDestroyed()) {
+			try {
+				session.owner.send(storyPreviewIpcChannels.ownerCommandCancellation, {
+					command: pending.type,
+					dispatchId: pending.dispatchId,
+					generation: pending.generation,
+					message,
+					requestId: pending.requestId,
+					sessionId: session.id
+				});
+			} catch {
+				// Owner teardown must not prevent preview-session cleanup.
+			}
+		}
+	}
+
+	function expireOwnerCommand(
+		session: PreviewSession,
+		key: string,
+		pending: PreviewSession['pendingCommands'] extends Map<string, infer T>
+			? T
+			: never
+	) {
+		if (session.pendingCommands.get(key) !== pending) return false;
+		const message =
+			'The story preview owner did not complete the command in time.';
+		if (pending.timeout) clearTimeout(pending.timeout);
+		cancelOwnerCommand(session, pending, message);
+		session.pendingCommands.delete(key);
+		session.window.webContents.send(
+			storyPreviewIpcChannels.commandResult,
+			commandError(
+				{
+					generation: pending.generation,
+					requestId: pending.requestId,
+					type: pending.type
+				},
+				message
+			)
+		);
+		return true;
+	}
+
+	function isOwnerCommandLive(
+		session: PreviewSession,
+		key: string,
+		pending: PreviewSession['pendingCommands'] extends Map<string, infer T>
+			? T
+			: never
+	) {
+		if (Date.now() < pending.deadline) return true;
+		expireOwnerCommand(session, key, pending);
+		return false;
 	}
 
 	function sessionForPreview(event: PreviewIpcEvent) {
@@ -828,6 +918,10 @@ export function createStoryPreviewWindowManager(
 			finalizeClearStateOperation(session, session.clearState, reason);
 		}
 
+		for (const pending of session.pendingCommands.values()) {
+			if (pending.timeout) clearTimeout(pending.timeout);
+			cancelOwnerCommand(session, pending, reason.message);
+		}
 		session.pendingCommands.clear();
 		if (
 			destroyWindow &&
@@ -1256,7 +1350,7 @@ export function createStoryPreviewWindowManager(
 			id: sessionId,
 			initialFrameLoaded: false,
 			owner,
-			pendingCommands: new Set(),
+			pendingCommands: new Map(),
 			ready,
 			readyTimeout: setTimeout(() => {
 				void closeSession(
@@ -1302,9 +1396,31 @@ export function createStoryPreviewWindowManager(
 		owner: WebContents,
 		sessionId: string,
 		expectedGeneration: number,
-		build: ManagedStoryPreviewBuild
+		build: ManagedStoryPreviewBuild,
+		commandDispatchId?: string
 	): Promise<ManagedStoryPreviewLaunch> {
 		const session = assertOwner(owner, sessionId);
+		const assertCommandDispatch = () => {
+			if (commandDispatchId === undefined) return;
+			if (!validString(commandDispatchId, 128)) {
+				throw new Error('Story preview replacement command is invalid.');
+			}
+			const pending = session.pendingCommands.get(commandDispatchId);
+			if (
+				!pending ||
+				pending.dispatchId !== commandDispatchId ||
+				(pending.type !== 'testCurrent' && pending.type !== 'testFromStart')
+			) {
+				throw new Error(
+					'Story preview replacement command is stale or unsolicited.'
+				);
+			}
+			if (!isOwnerCommandLive(session, commandDispatchId, pending)) {
+				throw new Error('Story preview replacement command has expired.');
+			}
+		};
+
+		assertCommandDispatch();
 
 		if (
 			!Number.isSafeInteger(expectedGeneration) ||
@@ -1336,11 +1452,19 @@ export function createStoryPreviewWindowManager(
 			await releaseUrl(next.url);
 			throw new Error('Story preview closed while staging its replacement.');
 		}
+		try {
+			assertCommandDispatch();
+		} catch (error) {
+			session.replacing = false;
+			await releaseUrl(next.url);
+			throw error;
+		}
 		mergeLatestOwnerAppearance(owner, next);
 
 		const completion = deferred<ManagedStoryPreviewLaunch>();
 		const candidate: PreviewCandidate = {
 			...next,
+			...(commandDispatchId ? {commandDispatchId} : {}),
 			completion,
 			timeout: setTimeout(() => {
 				void rollbackCandidate(
@@ -1594,6 +1718,9 @@ export function createStoryPreviewWindowManager(
 						generation: Number.isSafeInteger(value.generation)
 							? (value.generation as number)
 							: session.current.descriptor.generation,
+						requestId: validString(value.requestId, 128)
+							? value.requestId
+							: 'invalid-request',
 						type: [
 							'revealGraph',
 							'revealSource',
@@ -1605,6 +1732,7 @@ export function createStoryPreviewWindowManager(
 					}
 				: {
 						generation: session.current.descriptor.generation,
+						requestId: 'invalid-request',
 						type: 'revealSource' as const
 					};
 
@@ -1614,7 +1742,9 @@ export function createStoryPreviewWindowManager(
 			);
 		}
 
-		const key = commandKey(validated.command);
+		const duplicateRequest = [...session.pendingCommands.values()].some(
+			pending => pending.requestId === validated.command.requestId
+		);
 		if (session.clearState) {
 			return commandError(
 				validated.command,
@@ -1622,31 +1752,47 @@ export function createStoryPreviewWindowManager(
 			);
 		}
 
-		if (session.pendingCommands.has(key)) {
+		if (duplicateRequest) {
 			return commandError(
 				validated.command,
 				'This story preview command is already running.'
 			);
 		}
+		if (session.pendingCommands.size >= maxStoryPreviewPendingCommands) {
+			return commandError(
+				validated.command,
+				'Too many story preview commands are already running.'
+			);
+		}
 
 		const envelope: NativeStoryPreviewOwnerCommand = {
 			command: validated.command,
+			dispatchId: randomUUID(),
 			passageId: validated.passageId,
 			sessionId: session.id,
 			storyId: session.current.descriptor.storyId
 		};
 
+		const key = commandKey(envelope);
 		try {
-			if (
-				shouldFocusOwnerWindow() &&
-				(validated.command.type === 'revealGraph' ||
-					validated.command.type === 'revealSource')
-			) {
-				dependencies.focusOwner(session.owner);
-			}
-			session.pendingCommands.add(key);
+			const pending = {
+				accepted: false,
+				deadline: Date.now() + ownerCommandLeaseTimeoutMs,
+				dispatchId: envelope.dispatchId,
+				generation: validated.command.generation,
+				requestId: validated.command.requestId,
+				timeout: undefined as ReturnType<typeof setTimeout> | undefined,
+				type: validated.command.type
+			};
+			pending.timeout = setTimeout(() => {
+				expireOwnerCommand(session, key, pending);
+			}, ownerCommandLeaseTimeoutMs);
+			pending.timeout.unref?.();
+			session.pendingCommands.set(key, pending);
 			session.owner.send(storyPreviewIpcChannels.ownerCommand, envelope);
 		} catch (error) {
+			const pending = session.pendingCommands.get(key);
+			if (pending?.timeout) clearTimeout(pending.timeout);
 			session.pendingCommands.delete(key);
 			return commandError(
 				validated.command,
@@ -1657,6 +1803,7 @@ export function createStoryPreviewWindowManager(
 		return {
 			command: validated.command.type,
 			generation: validated.command.generation,
+			requestId: validated.command.requestId,
 			status: 'busy'
 		};
 	}
@@ -1686,41 +1833,90 @@ export function createStoryPreviewWindowManager(
 			!['revealGraph', 'revealSource', 'testCurrent', 'testFromStart'].includes(
 				value.command as string
 			) ||
-			!['error', 'success'].includes(value.status as string)
+			!['accepted', 'error', 'success'].includes(value.status as string)
 		) {
 			throw new Error('Story preview command result is invalid.');
 		}
 
-		const key = commandKey({
-			generation: value.generation as number,
-			type: value.command as NativeStoryPreviewCommand['type']
-		});
+		if (!validString(value.requestId, 128)) {
+			throw new Error('Story preview command result request is invalid.');
+		}
+		const requestId = value.requestId as string;
+		if (!validString(value.dispatchId, 128)) {
+			throw new Error('Story preview command result dispatch is invalid.');
+		}
+		const dispatchId = value.dispatchId as string;
+		const commandType = value.command as NativeStoryPreviewCommand['type'];
+		const generation = value.generation as number;
+		const key = commandKey({dispatchId});
+		const pending = session.pendingCommands.get(key);
 
-		if (!session.pendingCommands.has(key)) {
+		if (
+			!pending ||
+			pending.dispatchId !== dispatchId ||
+			pending.generation !== generation ||
+			pending.requestId !== requestId ||
+			pending.type !== commandType
+		) {
 			throw new Error('Story preview command result is stale or unsolicited.');
+		}
+		if (!isOwnerCommandLive(session, key, pending)) {
+			throw new Error('Story preview command result has expired.');
 		}
 
 		let result: NativeStoryPreviewCommandResult;
+
+		if (value.status === 'accepted') {
+			if (commandType !== 'revealGraph' && commandType !== 'revealSource') {
+				throw new Error('Only reveal commands can be accepted.');
+			}
+			if (pending.accepted) {
+				throw new Error('Story preview reveal was already accepted.');
+			}
+			pending.accepted = true;
+			if (pending.timeout) clearTimeout(pending.timeout);
+			pending.deadline = Date.now() + ownerCommandLeaseTimeoutMs;
+			pending.timeout = setTimeout(() => {
+				expireOwnerCommand(session, key, pending);
+			}, ownerCommandLeaseTimeoutMs);
+			pending.timeout.unref?.();
+			if (shouldFocusOwnerWindow()) {
+				dependencies.focusOwner(session.owner);
+			}
+			return pending.deadline;
+		}
+		if (
+			(commandType === 'revealGraph' || commandType === 'revealSource') &&
+			value.status === 'success' &&
+			!pending.accepted
+		) {
+			throw new Error(
+				'Story preview reveal completed before owner acceptance.'
+			);
+		}
 
 		if (value.status === 'error') {
 			if (!validString(value.message, 4096) || value.operation !== 'command') {
 				throw new Error('Story preview command error is invalid.');
 			}
 			result = {
-				command: value.command as NativeStoryPreviewCommand['type'],
-				generation: value.generation as number,
+				command: commandType,
+				generation,
+				requestId,
 				message: value.message,
 				operation: 'command',
 				status: 'error'
 			};
 		} else {
 			result = {
-				command: value.command as NativeStoryPreviewCommand['type'],
-				generation: value.generation as number,
+				command: commandType,
+				generation,
+				requestId,
 				status: 'success'
 			};
 		}
 
+		if (pending.timeout) clearTimeout(pending.timeout);
 		session.pendingCommands.delete(key);
 		session.window.webContents.send(
 			storyPreviewIpcChannels.commandResult,

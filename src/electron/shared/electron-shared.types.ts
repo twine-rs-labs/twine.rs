@@ -174,24 +174,40 @@ export type NativeStoryPreviewCommand =
 	| {
 			generation: number;
 			passageId?: string;
+			/** Opaque renderer-generated correlation ID. */
+			requestId: string;
 			type: 'revealGraph' | 'revealSource';
 	  }
 	| {
 			generation: number;
+			requestId: string;
 			type: 'testFromStart';
 	  }
 	| {
 			generation: number;
 			passageId: string;
+			requestId: string;
 			type: 'testCurrent';
 	  };
 
 export interface NativeStoryPreviewOwnerCommand {
 	command: NativeStoryPreviewCommand;
+	/** Opaque main-process dispatch identity for this owner delivery. */
+	dispatchId: string;
 	/** Main-resolved passage, including the stored launch fallback. */
 	passageId?: string;
 	sessionId: string;
 	storyId: string;
+}
+
+/** Main-process revocation for one exact owner delivery. */
+export interface NativeStoryPreviewOwnerCommandCancellation {
+	command: NativeStoryPreviewCommand['type'];
+	dispatchId: string;
+	generation: number;
+	message: string;
+	requestId: string;
+	sessionId: string;
 }
 
 export interface NativeStoryPreviewClearStateOperation {
@@ -216,13 +232,28 @@ export type NativeStoryPreviewCommandResult =
 	| {
 			command: NativeStoryPreviewCommand['type'];
 			generation: number;
+			requestId: string;
 			status: 'busy' | 'success';
 	  }
 	| (NativeStoryPreviewErrorResult & {
 			command: NativeStoryPreviewCommand['type'];
+			requestId: string;
 			operation: 'command';
 			status: 'error';
 	  });
+
+export type NativeStoryPreviewOwnerCommandResult =
+	| (NativeStoryPreviewCommandResult & {dispatchId: string})
+	| {
+			command: Extract<
+				NativeStoryPreviewCommand['type'],
+				'revealGraph' | 'revealSource'
+			>;
+			generation: number;
+			dispatchId: string;
+			requestId: string;
+			status: 'accepted';
+	  };
 
 export type NativeStoryPreviewReplacementResult =
 	| {
@@ -620,6 +651,11 @@ export interface TwineElectronWindow extends Window {
 		onStoryPreviewCommand(
 			callback: (command: NativeStoryPreviewOwnerCommand) => void
 		): () => void;
+		onStoryPreviewCommandCancellation(
+			callback: (
+				cancellation: NativeStoryPreviewOwnerCommandCancellation
+			) => void
+		): () => void;
 		onPersistenceQuitCancelled(callback: (nonce: string) => void): () => void;
 		onPersistenceQuitRequested(callback: (nonce: string) => void): () => void;
 		openStoryPreview(
@@ -630,12 +666,13 @@ export interface TwineElectronWindow extends Window {
 			sessionId: string,
 			expectedGeneration: number,
 			request: NativeStoryPreviewLaunchRequest,
-			projectRoot?: string
+			projectRoot?: string,
+			commandDispatchId?: string
 		): Promise<NativeStoryPreviewDescriptor>;
 		reportStoryPreviewCommandResult(
 			sessionId: string,
-			result: NativeStoryPreviewCommandResult
-		): Promise<void>;
+			result: NativeStoryPreviewOwnerCommandResult
+		): Promise<number | undefined>;
 		updateStoryPreviewAppearance(
 			appearance: NativeStoryPreviewAppearance
 		): Promise<void>;

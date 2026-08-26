@@ -90,6 +90,11 @@ function renderComponent(
 		graphView?: StoryGraphWorkspaceView;
 		onGraphOptionsChange?: jest.Mock;
 		onGraphViewChange?: jest.Mock;
+		onRevealApplied?: jest.Mock;
+		onRevealRollback?: jest.Mock;
+		isRevealRequestActive?: () => boolean;
+		revealPassageId?: string;
+		revealRequestKey?: number;
 		testPassagePending?: boolean;
 		testPassagePendingId?: string;
 	} = {}
@@ -140,6 +145,9 @@ function renderComponent(
 					onEditPassages={onEditPassages}
 					onGraphOptionsChange={options.onGraphOptionsChange}
 					onGraphViewChange={options.onGraphViewChange}
+					onRevealApplied={options.onRevealApplied}
+					onRevealRollback={options.onRevealRollback}
+					isRevealRequestActive={options.isRevealRequestActive}
 					onSelect={(passage, solo) => {
 						onSelect(passage, solo);
 
@@ -154,6 +162,8 @@ function renderComponent(
 							? selectedPassageId
 							: initialSelectedPassageId
 					}
+					revealPassageId={options.revealPassageId}
+					revealRequestKey={options.revealRequestKey}
 					story={story}
 					testPassagePending={options.testPassagePending}
 					testPassagePendingId={options.testPassagePendingId}
@@ -1382,6 +1392,56 @@ describe('<StoryGraphPanel>', () => {
 		widthSpy.mockRestore();
 		heightSpy.mockRestore();
 		rectSpy.mockRestore();
+	});
+
+	it('acknowledges an explicit reveal once after its centering transform commits', async () => {
+		const onRevealApplied = jest.fn();
+		const {result, start} = renderComponent(false, undefined, {
+			onRevealApplied,
+			revealPassageId: 'start',
+			revealRequestKey: 1
+		});
+
+		await waitFor(() => expect(onRevealApplied).toHaveBeenCalledTimes(1));
+		expect(onRevealApplied).toHaveBeenCalledWith(start.id, 1);
+		expect(worldView(result.container)).toEqual(
+			expect.objectContaining({k: expect.any(Number)})
+		);
+
+		result.rerender(<div />);
+		expect(onRevealApplied).toHaveBeenCalledTimes(1);
+	});
+
+	it('restores a centered reveal view when acknowledgement loses liveness', async () => {
+		jest.useFakeTimers();
+		const onGraphViewChange = jest.fn();
+		let rollback: (() => void) | undefined;
+		const onRevealRollback = jest.fn((_key, action: () => void) => {
+			rollback = action;
+		});
+		const onRevealApplied = jest.fn();
+		const {result} = renderComponent(false, undefined, {
+			graphView: {k: 1, x: 80, y: 60},
+			isRevealRequestActive: () => {
+				if (!rollback) return true;
+				rollback();
+				return false;
+			},
+			onGraphViewChange,
+			onRevealApplied,
+			onRevealRollback,
+			revealPassageId: 'start',
+			revealRequestKey: 44
+		});
+		const baseline = worldView(result.container);
+		await waitFor(() => expect(onRevealRollback).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(worldView(result.container)).toEqual(baseline));
+		expect(onRevealApplied).not.toHaveBeenCalled();
+		expect(onGraphViewChange).toHaveBeenLastCalledWith(baseline);
+		act(() => jest.advanceTimersByTime(400));
+		result.unmount();
+		expect(onGraphViewChange).toHaveBeenLastCalledWith(baseline);
+		jest.useRealTimers();
 	});
 
 	it('keeps the live zoom when the story prop refreshes before graph view persistence', async () => {

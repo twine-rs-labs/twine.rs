@@ -480,7 +480,7 @@ test.describe('runtime console clipboard', () => {
 	});
 });
 
-test('tracks Harlowe passage navigation in a sandboxed browser preview', async ({
+test('tracks Harlowe navigation and owner reveals in a sandboxed browser preview', async ({
 	context,
 	page
 }) => {
@@ -550,6 +550,52 @@ test('tracks Harlowe passage navigation in a sandboxed browser preview', async (
 		currentPassageSection.getByText('Next', {exact: true})
 	).toBeVisible();
 	await expect(testCurrent).toBeEnabled();
+	const previewUrl = publishedPage.url();
+
+	await publishedPage.getByRole('button', {name: 'Edit Passage'}).click();
+	await expect(page).toHaveURL(/mode=text&passage=/);
+	await expect(
+		page.getByRole('region', {name: 'Next', exact: true})
+	).toHaveClass(/is-active/);
+	expect(publishedPage.url()).toBe(previewUrl);
+	await expect(previewFrame.locator('tw-passage')).toContainText(
+		'Next marker.'
+	);
+
+	await publishedPage.getByRole('button', {name: 'Reveal in Graph'}).click();
+	await expect(page).toHaveURL(/mode=graph&passage=/);
+	const selectedGraphNode = page.locator(
+		'.story-edit-graph-node[data-selected="true"]'
+	);
+
+	await expect(selectedGraphNode).toHaveCount(1);
+	await expect
+		.poll(async () =>
+			selectedGraphNode.evaluate(node => {
+				const viewport = node.closest('.story-edit-graph-viewport');
+
+				if (!viewport) {
+					return Number.POSITIVE_INFINITY;
+				}
+				const nodeBounds = node.getBoundingClientRect();
+				const viewportBounds = viewport.getBoundingClientRect();
+
+				return Math.max(
+					Math.abs(
+						nodeBounds.left +
+							nodeBounds.width / 2 -
+							(viewportBounds.left + viewportBounds.width / 2)
+					),
+					Math.abs(
+						nodeBounds.top +
+							nodeBounds.height / 2 -
+							(viewportBounds.top + viewportBounds.height / 2)
+					)
+				);
+			})
+		)
+		.toBeLessThan(3);
+	expect(publishedPage.url()).toBe(previewUrl);
 	await publishedPage.close();
 });
 

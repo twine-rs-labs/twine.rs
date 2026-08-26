@@ -6,9 +6,10 @@ import {contextBridge, ipcRenderer, webUtils} from 'electron';
 import {Story, StoryWithDocuments} from '../../store/stories/stories.types';
 import type {
 	NativeStoryPreviewAppearance,
-	NativeStoryPreviewCommandResult,
+	NativeStoryPreviewOwnerCommandResult,
 	NativeStoryPreviewLaunchRequest,
 	NativeStoryPreviewOwnerCommand,
+	NativeStoryPreviewOwnerCommandCancellation,
 	NativeProjectPackageAssetPayloadIpcResult,
 	ProjectStoryReplacement,
 	ProjectSourceLayout,
@@ -311,6 +312,20 @@ const bridge = {
 		return () =>
 			ipcRenderer.removeListener('story-preview:owner-command', listener);
 	},
+	onStoryPreviewCommandCancellation(
+		callback: (cancellation: NativeStoryPreviewOwnerCommandCancellation) => void
+	) {
+		const listener = (
+			_event: Electron.IpcRendererEvent,
+			cancellation: NativeStoryPreviewOwnerCommandCancellation
+		) => callback(cancellation);
+		ipcRenderer.on('story-preview:owner-command-cancellation', listener);
+		return () =>
+			ipcRenderer.removeListener(
+				'story-preview:owner-command-cancellation',
+				listener
+			);
+	},
 	openStoryPreview(
 		request: NativeStoryPreviewLaunchRequest,
 		projectRoot?: string
@@ -325,19 +340,21 @@ const bridge = {
 		sessionId: string,
 		expectedGeneration: number,
 		request: NativeStoryPreviewLaunchRequest,
-		projectRoot?: string
+		projectRoot?: string,
+		commandDispatchId?: string
 	) {
 		return ipcRenderer.invoke(
 			'story-preview:replace',
 			sessionId,
 			expectedGeneration,
 			request,
-			projectRoot ? projectCapability(projectRoot) : undefined
+			projectRoot ? projectCapability(projectRoot) : undefined,
+			commandDispatchId
 		);
 	},
 	reportStoryPreviewCommandResult(
 		sessionId: string,
-		result: NativeStoryPreviewCommandResult
+		result: NativeStoryPreviewOwnerCommandResult
 	) {
 		return ipcRenderer.invoke(
 			'story-preview:owner-command-result',

@@ -20,6 +20,7 @@ export const storyPreviewIpcChannels = Object.freeze({
 	frameLoaded: 'story-preview:frame-loaded',
 	getInitialState: 'story-preview:get-initial-state',
 	ownerCommand: 'story-preview:owner-command',
+	ownerCommandCancellation: 'story-preview:owner-command-cancellation',
 	ready: 'story-preview:ready',
 	replacement: 'story-preview:replacement'
 });

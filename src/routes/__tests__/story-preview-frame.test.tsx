@@ -2736,13 +2736,75 @@ describe('<StoryPreviewFrame>', () => {
 		expect(screen.getByText('Current: Lighthouse')).toBeInTheDocument();
 		expect(screen.getByText('390 x 700')).toBeInTheDocument();
 
-		fireEvent.click(screen.getByRole('button', {name: 'Source'}));
-		fireEvent.click(screen.getByRole('button', {name: 'Graph'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Edit Passage'}));
+		fireEvent.click(screen.getByRole('button', {name: 'Reveal in Graph'}));
 		fireEvent.click(screen.getByRole('button', {name: 'Test Current'}));
 
 		expect(onRevealSource).toHaveBeenCalledWith('lighthouse');
 		expect(onRevealGraph).toHaveBeenCalledWith('lighthouse');
 		expect(onTestCurrentPassage).toHaveBeenCalledWith('lighthouse');
+	});
+
+	it('disables reveal actions when the runtime passage cannot be resolved', () => {
+		const onRevealGraph = jest.fn();
+		const onRevealSource = jest.fn();
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				onRevealGraph={onRevealGraph}
+				onRevealSource={onRevealSource}
+				passages={[{id: 'known', localId: '1', name: 'Known'}]}
+				storyExists
+				title="Unknown runtime preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Unknown runtime preview');
+		postBridgeMessage('Unknown runtime preview', sessionId, {
+			currentPassage: {name: 'Missing', source: 'runtime'},
+			type: 'state',
+			viewport: {height: 700, width: 390}
+		});
+		const source = screen.getByRole('button', {name: 'Edit Passage'});
+		const graph = screen.getByRole('button', {name: 'Reveal in Graph'});
+		expect(source).toBeDisabled();
+		expect(graph).toBeDisabled();
+		fireEvent.click(source);
+		fireEvent.click(graph);
+		expect(onRevealSource).not.toHaveBeenCalled();
+		expect(onRevealGraph).not.toHaveBeenCalled();
+	});
+
+	it('disables and guards all reveal controls while an owner command is pending', () => {
+		const story = fakeStory();
+		const onRevealGraph = jest.fn();
+		const onRevealSource = jest.fn();
+		render(
+			<StoryPreviewFrame
+				html="<html><body>Story</body></html>"
+				missingStoryMessage="Missing story"
+				onRevealGraph={onRevealGraph}
+				onRevealSource={onRevealSource}
+				passages={storyPreviewPassages(story)}
+				runtimeControlsBusy
+				storyExists
+				title="Busy runtime preview"
+			/>
+		);
+		const sessionId = sessionIdFromFrame('Busy runtime preview');
+		postBridgeMessage('Busy runtime preview', sessionId, {
+			currentPassage: {name: story.passages[0].name, source: 'runtime'},
+			type: 'state',
+			viewport: {height: 700, width: 390}
+		});
+
+		for (const name of ['Edit Passage', 'Reveal in Graph']) {
+			const control = screen.getByRole('button', {name});
+			expect(control).toBeDisabled();
+			fireEvent.click(control);
+		}
+		expect(onRevealSource).not.toHaveBeenCalled();
+		expect(onRevealGraph).not.toHaveBeenCalled();
 	});
 
 	it('shows captured runtime log output', () => {
@@ -2923,10 +2985,10 @@ describe('<StoryPreviewFrame>', () => {
 		).toBeInTheDocument();
 		expect(within(inspector).getByText('Unavailable')).toBeInTheDocument();
 		fireEvent.click(
-			within(inspector).getByRole('button', {name: 'Open Second in Source'})
+			within(inspector).getByRole('button', {name: 'Edit text for Second'})
 		);
 		fireEvent.click(
-			within(inspector).getByRole('button', {name: 'Open Second in Graph'})
+			within(inspector).getByRole('button', {name: 'Reveal Second in Graph'})
 		);
 		expect(onRevealSource).toHaveBeenCalledWith('second');
 		expect(onRevealGraph).toHaveBeenCalledWith('second');
@@ -3130,12 +3192,12 @@ describe('<StoryPreviewFrame>', () => {
 		expect(historySection).not.toBeNull();
 		expect(
 			within(historySection!).getAllByRole('button', {
-				name: 'Open Start in Source'
+				name: 'Edit text for Start'
 			})
 		).toHaveLength(1);
 		fireEvent.click(
 			within(historySection!).getByRole('button', {
-				name: 'Open Start in Source'
+				name: 'Edit text for Start'
 			})
 		);
 		expect(onRevealSource).toHaveBeenCalledWith('start');

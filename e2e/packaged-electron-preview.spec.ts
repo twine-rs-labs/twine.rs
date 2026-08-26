@@ -61,10 +61,15 @@ interface PreviewTestWindow extends Window {
 			operationId: string;
 			url: string;
 		}>;
-		command(command: {generation: number; type: 'revealSource'}): Promise<{
+		command(command: {
+			generation: number;
+			requestId: string;
+			type: 'revealSource';
+		}): Promise<{
 			command: 'revealSource';
 			generation: number;
 			message?: string;
+			requestId: string;
 			status: 'busy' | 'error' | 'success';
 		}>;
 		getInitialState(): Promise<{
@@ -76,6 +81,7 @@ interface PreviewTestWindow extends Window {
 				command: 'revealSource';
 				generation: number;
 				message?: string;
+				requestId: string;
 				status: 'error' | 'success';
 			}) => void
 		): () => void;
@@ -381,7 +387,6 @@ async function reloadDuringPendingClearStateBegin(preview: Page) {
 			throw new Error('The preview bridge is unavailable.');
 		}
 		const initial = await api.getInitialState();
-
 		void api
 			.beginClearState(initial.descriptor.generation)
 			.catch(() => undefined);
@@ -419,6 +424,7 @@ async function revealSourceThroughPreviewBridge(preview: Page) {
 			throw new Error('The preview bridge is unavailable.');
 		}
 		const initial = await api.getInitialState();
+		const requestId = crypto.randomUUID();
 
 		return new Promise<{message?: string; status: 'error' | 'success'}>(
 			(resolve, reject) => {
@@ -429,7 +435,8 @@ async function revealSourceThroughPreviewBridge(preview: Page) {
 				const unsubscribe = api.onCommandResult(result => {
 					if (
 						result.command !== 'revealSource' ||
-						result.generation !== initial.descriptor.generation
+						result.generation !== initial.descriptor.generation ||
+						result.requestId !== requestId
 					) {
 						return;
 					}
@@ -442,6 +449,7 @@ async function revealSourceThroughPreviewBridge(preview: Page) {
 				void api
 					.command({
 						generation: initial.descriptor.generation,
+						requestId,
 						type: 'revealSource'
 					})
 					.then(result => {
@@ -1530,7 +1538,7 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 			});
 		await expect(latestLog).toContainText('managed-preview-rejection');
 
-		await preview.getByRole('button', {name: 'Source'}).click();
+		await preview.getByRole('button', {name: 'Edit Passage'}).click();
 		await expect(page).toHaveURL(/mode=text&passage=/);
 		await expect(
 			page.getByRole('region', {name: 'Next', exact: true})
@@ -1547,9 +1555,40 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 			testInfo
 		);
 
-		await preview.getByRole('button', {name: 'Graph'}).click();
+		await preview.getByRole('button', {name: 'Reveal in Graph'}).click();
 		await expect(page).toHaveURL(/mode=graph&passage=/);
 		await expect(page.getByLabel('Story graph')).toBeVisible();
+		const selectedGraphNode = page.locator(
+			'.story-edit-graph-node[data-selected="true"]'
+		);
+
+		await expect(selectedGraphNode).toHaveCount(1);
+		await expect
+			.poll(async () =>
+				selectedGraphNode.evaluate(node => {
+					const viewport = node.closest('.story-edit-graph-viewport');
+
+					if (!viewport) {
+						return Number.POSITIVE_INFINITY;
+					}
+					const nodeBounds = node.getBoundingClientRect();
+					const viewportBounds = viewport.getBoundingClientRect();
+
+					return Math.max(
+						Math.abs(
+							nodeBounds.left +
+								nodeBounds.width / 2 -
+								(viewportBounds.left + viewportBounds.width / 2)
+						),
+						Math.abs(
+							nodeBounds.top +
+								nodeBounds.height / 2 -
+								(viewportBounds.top + viewportBounds.height / 2)
+						)
+					);
+				})
+			)
+			.toBeLessThan(3);
 
 		const firstPackage = await previewOrigin(preview);
 		const previewCount = previewPages(app).length;
@@ -1688,7 +1727,7 @@ test('Play exposes debug state and replaces fresh Test builds in the same window
 		await expect(preview.getByText('Start: Next', {exact: true})).toBeVisible();
 		await expectCurrentPassage(preview, 'Next');
 
-		await preview.getByRole('button', {name: 'Source'}).click();
+		await preview.getByRole('button', {name: 'Edit Passage'}).click();
 		await expect(page).toHaveURL(/mode=text&passage=/);
 		await expect(
 			page.getByRole('region', {name: 'Next', exact: true})

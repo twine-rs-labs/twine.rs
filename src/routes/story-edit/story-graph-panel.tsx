@@ -88,6 +88,15 @@ export interface StoryGraphPanelProps {
 	onGraphViewChange?: React.Dispatch<
 		React.SetStateAction<StoryGraphWorkspaceView | undefined>
 	>;
+	onRevealRollback?: (
+		requestKey: number,
+		rollback: () => void,
+		previousView: StoryGraphWorkspaceView,
+		appliedView: StoryGraphWorkspaceView,
+		isAppliedViewCurrent: () => boolean
+	) => void;
+	isRevealRequestActive?: () => boolean;
+	onRevealApplied?: (passageId: string, requestKey: number) => void;
 	onSelect: (passage: Passage, exclusive: boolean) => void;
 	onSelectIds: (passageIds: string[], additive: boolean) => void;
 	onTestPassage?: (passage: Passage) => void;
@@ -1102,11 +1111,14 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		onEditPassages,
 		onGraphOptionsChange,
 		onGraphViewChange,
+		onRevealRollback,
+		isRevealRequestActive,
 		onSelect,
 		onSelectIds,
 		onTestPassage,
 		revealPassageId,
 		revealRequestKey,
+		onRevealApplied,
 		selectedPassageId,
 		story,
 		testPassagePending = false,
@@ -1132,6 +1144,14 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	const visibleZoom = view.k;
 	const panningViewRef = React.useRef<GraphView | undefined>(undefined);
 	const viewRef = React.useRef(view);
+	const viewportInteraction = React.useRef({revision: 0, storyId: story.id});
+	if (viewportInteraction.current.storyId !== story.id) {
+		viewportInteraction.current = {revision: 0, storyId: story.id};
+	}
+	const markViewportInteraction = React.useCallback(() => {
+		viewportInteraction.current.revision += 1;
+		return viewportInteraction.current.revision;
+	}, []);
 	const renderedView = panningViewRef.current ?? view;
 	viewRef.current = renderedView;
 	const persistZoomFrame = React.useRef<number | undefined>(undefined);
@@ -1306,6 +1326,10 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			? asyncProjection.projection
 			: emptyGraphProjection();
 
+	const pendingRevealCompletion = React.useRef<
+		{passageId: string; requestKey: number; view: GraphView} | undefined
+	>(undefined);
+	const [revealViewCommit, setRevealViewCommit] = React.useState(0);
 	React.useEffect(() => {
 		let active = true;
 
@@ -1643,6 +1667,8 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	// point under it pinned. This is the cursor-anchored zoom formula.
 	const zoomToPoint = React.useCallback(
 		(localX: number, localY: number, nextK: number) => {
+			if (clampZoom(nextK) === viewRef.current.k) return;
+			markViewportInteraction();
 			setView(current => {
 				const k = clampZoom(nextK);
 
@@ -1658,7 +1684,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				return {k, x: localX - worldX * k, y: localY - worldY * k};
 			});
 		},
-		[persistZoom]
+		[markViewportInteraction, persistZoom]
 	);
 
 	const zoomAtViewportCenter = React.useCallback(
@@ -1702,6 +1728,9 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	}, [readViewport, updateViewport]);
 
 	React.useEffect(() => {
+		// Do not let an asynchronously restored workspace view overwrite the
+		// correlated centering transform between its write and acknowledgement.
+		if (pendingRevealCompletion.current) return;
 		const nextView = initialGraphView(storyZoomSeed.current.zoom, graphView);
 
 		setView(current => (sameGraphView(current, nextView) ? current : nextView));
@@ -1905,7 +1934,7 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 	// and to the right" jiggle). The view only moves on an EXPLICIT reveal
 	// request (Reveal in graph / fuzzy finder), which re-anchors the transform
 	// directly — never a scroll side-effect.
-	React.useEffect(() => {
+	React.useLayoutEffect(() => {
 		const element = viewportRef.current;
 		const node = selectedPassageId
 			? displayNodeById.get(selectedPassageId)
@@ -1917,32 +1946,100 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 				? passageRect(selectedPassage)
 				: undefined;
 		const bounds = node?.bounds ?? fallbackBounds;
-		const forceReveal =
-			revealPassageId === selectedPassageId &&
-			revealRequestKey !== undefined &&
-			lastRevealRequestKey.current !== revealRequestKey;
-
-		if (!forceReveal || !element || !bounds) {
+		if (
+			!element ||
+			!bounds ||
+			revealPassageId === undefined ||
+			revealPassageId !== selectedPassageId ||
+			revealRequestKey === undefined ||
+			lastRevealRequestKey.current === revealRequestKey ||
+			(isRevealRequestActive && !isRevealRequestActive())
+		) {
 			return;
 		}
 
 		lastRevealRequestKey.current = revealRequestKey;
 		lastAutoCenteredSelection.current = selectedPassageId;
-
 		const centerPoint = center(bounds);
 
-		setView(current => ({
-			...current,
-			x: element.clientWidth / 2 - centerPoint.left * current.k,
-			y: element.clientHeight / 2 - centerPoint.top * current.k
-		}));
+		const previousView = viewRef.current;
+		const appliedView = {
+			...previousView,
+			x: element.clientWidth / 2 - centerPoint.left * previousView.k,
+			y: element.clientHeight / 2 - centerPoint.top * previousView.k
+		};
+		pendingRevealCompletion.current = {
+			passageId: revealPassageId,
+			requestKey: revealRequestKey,
+			view: appliedView
+		};
+		const revealViewportRevision = markViewportInteraction();
+		onGraphViewChange?.(appliedView);
+		if (revealRequestKey !== undefined) {
+			onRevealRollback?.(
+				revealRequestKey,
+				() => {
+					if (
+						viewportInteraction.current.revision !== revealViewportRevision ||
+						!sameGraphView(viewRef.current, appliedView)
+					)
+						return;
+					if (persistGraphViewFrame.current !== undefined) {
+						window.clearTimeout(persistGraphViewFrame.current);
+						persistGraphViewFrame.current = undefined;
+					}
+					viewRef.current = previousView;
+					setView(previousView);
+					onGraphViewChange?.(previousView);
+				},
+				previousView,
+				appliedView,
+				() =>
+					viewportInteraction.current.revision === revealViewportRevision &&
+					sameGraphView(viewRef.current, appliedView)
+			);
+		}
+		setView(appliedView);
+		// A centered transform can equal the existing view. Record a committed
+		// layout turn separately so acknowledgement still happens only after the
+		// expected transform has been observed by the follow-up effect.
+		setRevealViewCommit(current => current + 1);
 	}, [
 		displayNodeById,
+		markViewportInteraction,
+		isRevealRequestActive,
 		orientation,
+		onRevealRollback,
 		revealPassageId,
 		revealRequestKey,
 		selectedPassage,
 		selectedPassageId
+	]);
+
+	React.useLayoutEffect(() => {
+		const completion = pendingRevealCompletion.current;
+
+		if (
+			!completion ||
+			completion.passageId !== revealPassageId ||
+			completion.requestKey !== revealRequestKey ||
+			!sameGraphView(view, completion.view)
+		)
+			return;
+		if (isRevealRequestActive && !isRevealRequestActive()) {
+			pendingRevealCompletion.current = undefined;
+			return;
+		}
+
+		pendingRevealCompletion.current = undefined;
+		onRevealApplied?.(completion.passageId, completion.requestKey);
+	}, [
+		isRevealRequestActive,
+		onRevealApplied,
+		revealPassageId,
+		revealRequestKey,
+		revealViewCommit,
+		view
 	]);
 
 	function canvasPointFromEvent(event: {clientX: number; clientY: number}) {
@@ -1990,11 +2087,15 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 			)
 		);
 
-		setView({
+		const nextView = {
 			k,
 			x: (rect.width - displayBounds.width * k) / 2 - displayBounds.left * k,
 			y: (rect.height - displayBounds.height * k) / 2 - displayBounds.top * k
-		});
+		};
+		if (!sameGraphView(viewRef.current, nextView)) {
+			markViewportInteraction();
+			setView(nextView);
+		}
 		persistZoom(k);
 	}
 
@@ -2156,6 +2257,9 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		pan.currentLeft = nextX;
 		pan.currentTop = nextY;
 		const nextView = {...viewRef.current, x: nextX, y: nextY};
+		if (!sameGraphView(viewRef.current, nextView)) {
+			markViewportInteraction();
+		}
 
 		panningViewRef.current = nextView;
 		viewRef.current = nextView;
@@ -2232,7 +2336,8 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 		// Shift + wheel pans horizontally (trackpads send deltaX too).
 		if (event.shiftKey && !event.ctrlKey && !event.metaKey) {
 			const delta = event.deltaX || event.deltaY;
-
+			if (delta === 0) return;
+			markViewportInteraction();
 			setView(current => ({...current, x: current.x - delta}));
 			return;
 		}
@@ -2299,11 +2404,16 @@ export const StoryGraphPanel: React.FC<StoryGraphPanelProps> = props => {
 
 		// Center the viewport on the clicked world point by re-anchoring the
 		// transform — no scrolling.
-		setView(current => ({
+		const current = viewRef.current;
+		const next = {
 			...current,
 			x: viewportElement.clientWidth / 2 - logicalLeft * current.k,
 			y: viewportElement.clientHeight / 2 - logicalTop * current.k
-		}));
+		};
+		if (!sameGraphView(current, next)) {
+			markViewportInteraction();
+			setView(next);
+		}
 	}
 
 	function handleMinimapPointerDown(event: React.PointerEvent<HTMLDivElement>) {

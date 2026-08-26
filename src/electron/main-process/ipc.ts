@@ -1450,14 +1450,16 @@ export function initIpc(options: InitIpcOptions = {}) {
 			sessionId: string,
 			expectedGeneration: number,
 			request: NativeStoryPreviewLaunchRequest,
-			capability
+			capability,
+			commandDispatchId?: string
 		) =>
 			(
 				await storyPreviewWindowManager.replace(
 					event.sender,
 					sessionId,
 					expectedGeneration,
-					await managedStoryPreviewBuild(event, request, capability)
+					await managedStoryPreviewBuild(event, request, capability),
+					commandDispatchId
 				)
 			).descriptor
 	);

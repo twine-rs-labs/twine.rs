@@ -74,11 +74,17 @@ describe('desktop story preview preload', () => {
 			extra: 'discarded',
 			generation: 4,
 			passageId: 'passage-1',
+			requestId: 'request-1',
 			type: 'revealSource'
 		} as never);
 		expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
 			storyPreviewIpcChannels.command,
-			{generation: 4, passageId: 'passage-1', type: 'revealSource'}
+			{
+				generation: 4,
+				passageId: 'passage-1',
+				requestId: 'request-1',
+				type: 'revealSource'
+			}
 		);
 
 		await api.copyText(' runtime log ');
@@ -122,8 +128,23 @@ describe('desktop story preview preload', () => {
 		);
 
 		expect(() =>
-			api.command({generation: 4, passageId: '', type: 'testCurrent'})
+			api.command({
+				generation: 4,
+				passageId: '',
+				requestId: 'request-1',
+				type: 'testCurrent'
+			})
 		).toThrow('Invalid story preview passage');
+		expect(() =>
+			api.command({generation: 4, type: 'testFromStart'} as never)
+		).toThrow('Invalid story preview request');
+		expect(() =>
+			api.command({
+				generation: 4,
+				requestId: 'x'.repeat(129),
+				type: 'testFromStart'
+			})
+		).toThrow('Invalid story preview request');
 		expect(() => api.ready(-1)).toThrow('Invalid story preview generation');
 	});
 

@@ -16,10 +16,12 @@ application default in [Settings](../customizing/preferences.md) or from the
 Browser Twine opens proof output in an app-owned preview tab. The desktop app
 opens the selected proofing format in the same dedicated preview-window shell
 used by Play and Test. Its toolbar provides build health, runtime logs, viewport
-controls, reload, and Source or Graph navigation when the proofing runtime can
-identify a passage. Multiple proof windows can remain open independently.
-The Debugger disclosure also provides a read-only Runtime Console and a copy
-action for its bounded retained log.
+controls, and reload. When the proofing runtime identifies a passage, choose
+_Edit Passage_ to open it in the text editor or _Reveal in Graph_ to select and
+reframe it in Graph mode. Multiple proof windows can remain open independently.
+The Debugger disclosure also provides a read-only Runtime Console, a copy action
+for its bounded retained log, and _Edit Text_ and _Reveal in Graph_ actions for
+identified Current Passage and Visited Passages entries.
 
 Proof output and its opaque desktop address are temporary. Use an exported file
 when you need a durable copy.
