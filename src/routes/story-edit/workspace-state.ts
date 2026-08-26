@@ -69,8 +69,16 @@ export interface StoryEditWorkspaceState {
 	graphView?: StoryGraphWorkspaceView;
 	leftDockCollapsed: boolean;
 	mode: StoryEditMode;
+	persistenceLease: StoryEditWorkspacePersistenceLease;
 	rightDockCollapsed: boolean;
 	selectedPassageId?: string;
+	/** A monotonic, story-local ownership ledger for rollback-sensitive state. */
+	getRevisionSnapshot: () => StoryEditWorkspaceRevisionSnapshot;
+	isRevisionSnapshotCurrent: (
+		snapshot: StoryEditWorkspaceRevisionSnapshot,
+		fields?: StoryEditWorkspaceRevisionField[]
+	) => boolean;
+	markPassageSelectionInteraction: () => number;
 	setActiveWindowId: React.Dispatch<React.SetStateAction<string | undefined>>;
 	setBottomDrawerOpen: (value: boolean) => void;
 	setBottomDrawerPanelId: (value: string) => void;
@@ -90,9 +98,88 @@ export interface StoryEditWorkspaceState {
 	setSelectedPassageId: (value: string | undefined) => void;
 }
 
+export const storyEditWorkspaceRevisionFields = [
+	'interaction',
+	'mode',
+	'selectedPassageId',
+	'activeWindowId',
+	'editorWindows',
+	'graphView',
+	'passageSelection'
+] as const;
+
+export type StoryEditWorkspaceRevisionField =
+	(typeof storyEditWorkspaceRevisionFields)[number];
+export type StoryEditWorkspaceRevisionSnapshot = Record<
+	StoryEditWorkspaceRevisionField,
+	number
+>;
+
+const workspaceRevisions = new Map<
+	string,
+	StoryEditWorkspaceRevisionSnapshot
+>();
+
+function revisionLedger(storyId: string): StoryEditWorkspaceRevisionSnapshot {
+	let ledger = workspaceRevisions.get(storyId);
+	if (!ledger) {
+		ledger = Object.fromEntries(
+			storyEditWorkspaceRevisionFields.map(field => [field, 0])
+		) as StoryEditWorkspaceRevisionSnapshot;
+		workspaceRevisions.set(storyId, ledger);
+	}
+	return ledger;
+}
+
+/** Advance a field synchronously before React or persistence effects run. */
+export function bumpStoryEditWorkspaceRevision(
+	storyId: string,
+	field: StoryEditWorkspaceRevisionField
+) {
+	const ledger = revisionLedger(storyId);
+	ledger[field] += 1;
+	if (field !== 'interaction') ledger.interaction += 1;
+	return ledger[field];
+}
+
+export function storyEditWorkspaceRevisionSnapshot(
+	storyId: string
+): StoryEditWorkspaceRevisionSnapshot {
+	return {...revisionLedger(storyId)};
+}
+
+export function isStoryEditWorkspaceRevisionSnapshotCurrent(
+	storyId: string,
+	snapshot: StoryEditWorkspaceRevisionSnapshot,
+	fields: readonly StoryEditWorkspaceRevisionField[] = storyEditWorkspaceRevisionFields
+) {
+	const current = revisionLedger(storyId);
+	return fields.every(field => current[field] === snapshot[field]);
+}
+
+function advanceWorkspaceInstanceRevisions(storyId: string) {
+	for (const field of storyEditWorkspaceRevisionFields) {
+		bumpStoryEditWorkspaceRevision(storyId, field);
+	}
+}
+
+export interface StoryEditWorkspacePersistenceLease {
+	active: boolean;
+}
+
 const projectStorageKey = (storyId: string) =>
 	`twine-story-edit-workspace-${storyId}`;
 const workspaceStorageKey = 'twine-story-edit-workspace';
+
+/**
+ * Fences every queued write owned by the currently mounted workspace instance.
+ * A later mount owns a distinct lease and can persist normally.
+ */
+export function invalidateStoryEditWorkspacePersistence(
+	lease: StoryEditWorkspacePersistenceLease
+) {
+	lease.active = false;
+}
 
 function isMode(value: unknown): value is StoryEditMode {
 	return storyEditModes.includes(value as StoryEditMode);
@@ -377,6 +464,13 @@ function graphViewEqual(
 	);
 }
 
+function editorWindowsEqual(
+	left: EditorWindowSpec[] | undefined,
+	right: EditorWindowSpec[] | undefined
+) {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export function initialModeForStory(
 	story: Story,
 	projectMode?: StoryEditMode,
@@ -458,12 +552,18 @@ export function useStoryEditScrollMemory(
 
 export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 	const {prefs} = usePrefsContext();
+	// A remount is a new owner even when it returns to the same story and values.
+	React.useMemo(() => advanceWorkspaceInstanceRevisions(story.id), [story.id]);
 	const initialProjectWorkspace = React.useMemo(
 		() => readProjectWorkspaceForStory(story),
 		[story.id]
 	);
 	const initialWorkspace = React.useMemo(readWorkspace, []);
-	const [mode, setMode] = React.useState<StoryEditMode>(
+	const persistenceLease = React.useMemo<StoryEditWorkspacePersistenceLease>(
+		() => ({active: true}),
+		[story.id]
+	);
+	const [mode, setModeState] = React.useState<StoryEditMode>(
 		initialModeForStory(
 			story,
 			initialProjectWorkspace.mode,
@@ -472,7 +572,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 			(initialProjectWorkspace.editorWindows?.length ?? 0) > 0
 		)
 	);
-	const [selectedPassageId, setSelectedPassageId] = React.useState<
+	const [selectedPassageId, setSelectedPassageIdState] = React.useState<
 		string | undefined
 	>(() =>
 		firstAvailablePassageId(story, initialProjectWorkspace.selectedPassageId)
@@ -493,16 +593,72 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		React.useState<EditorDockLayout>(
 			() => initialProjectWorkspace.editorDockLayout ?? 'tile'
 		);
-	const [editorWindows, setEditorWindows] = React.useState<
+	const [editorWindows, setEditorWindowsState] = React.useState<
 		EditorWindowSpec[] | undefined
 	>(() => initialProjectWorkspace.editorWindows);
-	const [activeWindowId, setActiveWindowId] = React.useState<
+	const [activeWindowId, setActiveWindowIdState] = React.useState<
 		string | undefined
 	>(() => initialProjectWorkspace.activeWindowId);
 	const [graphView, setGraphViewState] = React.useState<
 		StoryGraphWorkspaceView | undefined
 	>(() => initialProjectWorkspace.graphView);
 	const graphViewRef = React.useRef(graphView);
+	const modeRef = React.useRef(mode);
+	const selectedPassageIdRef = React.useRef(selectedPassageId);
+	const editorWindowsRef = React.useRef(editorWindows);
+	const activeWindowIdRef = React.useRef(activeWindowId);
+	modeRef.current = mode;
+	selectedPassageIdRef.current = selectedPassageId;
+	editorWindowsRef.current = editorWindows;
+	activeWindowIdRef.current = activeWindowId;
+	const setMode = React.useCallback(
+		(next: StoryEditMode) => {
+			if (modeRef.current === next) return;
+			modeRef.current = next;
+			bumpStoryEditWorkspaceRevision(story.id, 'mode');
+			setModeState(next);
+		},
+		[story.id]
+	);
+	const setSelectedPassageId = React.useCallback<
+		React.Dispatch<React.SetStateAction<string | undefined>>
+	>(
+		value => {
+			const current = selectedPassageIdRef.current;
+			const next = typeof value === 'function' ? value(current) : value;
+			if (current === next) return;
+			selectedPassageIdRef.current = next;
+			bumpStoryEditWorkspaceRevision(story.id, 'selectedPassageId');
+			setSelectedPassageIdState(next);
+		},
+		[story.id]
+	);
+	const setEditorWindows = React.useCallback<
+		React.Dispatch<React.SetStateAction<EditorWindowSpec[] | undefined>>
+	>(
+		value => {
+			const current = editorWindowsRef.current;
+			const next = typeof value === 'function' ? value(current) : value;
+			if (editorWindowsEqual(current, next)) return;
+			editorWindowsRef.current = next;
+			bumpStoryEditWorkspaceRevision(story.id, 'editorWindows');
+			setEditorWindowsState(next);
+		},
+		[story.id]
+	);
+	const setActiveWindowId = React.useCallback<
+		React.Dispatch<React.SetStateAction<string | undefined>>
+	>(
+		value => {
+			const current = activeWindowIdRef.current;
+			const next = typeof value === 'function' ? value(current) : value;
+			if (current === next) return;
+			activeWindowIdRef.current = next;
+			bumpStoryEditWorkspaceRevision(story.id, 'activeWindowId');
+			setActiveWindowIdState(next);
+		},
+		[story.id]
+	);
 	const [graphOptions, setGraphOptionsState] =
 		React.useState<StoryGraphWorkspaceOptions>(
 			() => initialProjectWorkspace.graphOptions ?? {}
@@ -520,6 +676,9 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		React.Dispatch<React.SetStateAction<StoryGraphWorkspaceView | undefined>>
 	>(
 		value => {
+			if (!persistenceLease.active) {
+				return;
+			}
 			const current = graphViewRef.current;
 			const next = typeof value === 'function' ? value(current) : value;
 
@@ -528,6 +687,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 			}
 
 			graphViewRef.current = next;
+			bumpStoryEditWorkspaceRevision(story.id, 'graphView');
 			const projectWorkspace = readProjectWorkspace(story.id);
 
 			writeJson(projectStorageKey(story.id), {
@@ -535,6 +695,22 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 				graphView: next
 			});
 		},
+		[persistenceLease, story.id]
+	);
+	const getRevisionSnapshot = React.useCallback(
+		() => storyEditWorkspaceRevisionSnapshot(story.id),
+		[story.id]
+	);
+	const isRevisionSnapshotCurrent = React.useCallback(
+		(
+			snapshot: StoryEditWorkspaceRevisionSnapshot,
+			fields?: StoryEditWorkspaceRevisionField[]
+		) =>
+			isStoryEditWorkspaceRevisionSnapshotCurrent(story.id, snapshot, fields),
+		[story.id]
+	);
+	const markPassageSelectionInteraction = React.useCallback(
+		() => bumpStoryEditWorkspaceRevision(story.id, 'passageSelection'),
 		[story.id]
 	);
 
@@ -577,6 +753,9 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 	}, [editorWindows]);
 
 	React.useEffect(() => {
+		if (!persistenceLease.active) {
+			return;
+		}
 		const projectWorkspace = readProjectWorkspace(story.id);
 
 		writeJson(projectStorageKey(story.id), {
@@ -595,6 +774,7 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		editorWindows,
 		graphOptions,
 		mode,
+		persistenceLease,
 		selectedPassageId,
 		story.id
 	]);
@@ -626,8 +806,12 @@ export function useStoryEditWorkspace(story: Story): StoryEditWorkspaceState {
 		editorWindows,
 		graphOptions,
 		graphView,
+		getRevisionSnapshot,
+		isRevisionSnapshotCurrent,
 		leftDockCollapsed,
 		mode,
+		markPassageSelectionInteraction,
+		persistenceLease,
 		rightDockCollapsed,
 		selectedPassageId,
 		setActiveWindowId,

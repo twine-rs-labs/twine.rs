@@ -16,7 +16,10 @@ import {
 import {Point, Rect} from '../../util/geometry';
 import {snapToGraphGrid} from './graph-grid';
 
-export function usePassageChangeHandlers(story: Story) {
+export function usePassageChangeHandlers(
+	story: Story,
+	onSelectionInteraction?: () => void
+) {
 	const selectedPassages = React.useMemo(
 		() => story.passages.filter(passage => passage.selected),
 		[story.passages]
@@ -25,8 +28,11 @@ export function usePassageChangeHandlers(story: Story) {
 	const coreProjectHost = useCoreProjectHost();
 
 	const handleDeselectPassage = React.useCallback(
-		(passage: Passage) => storiesDispatch(deselectPassage(story, passage)),
-		[story, storiesDispatch]
+		(passage: Passage) => {
+			onSelectionInteraction?.();
+			storiesDispatch(deselectPassage(story, passage));
+		},
+		[onSelectionInteraction, story, storiesDispatch]
 	);
 
 	const handleCreatePassage = React.useCallback(
@@ -79,13 +85,16 @@ export function usePassageChangeHandlers(story: Story) {
 	);
 
 	const handleSelectPassage = React.useCallback(
-		(passage: Passage, exclusive: boolean) =>
-			storiesDispatch(selectPassage(story, passage, exclusive)),
-		[story, storiesDispatch]
+		(passage: Passage, exclusive: boolean) => {
+			onSelectionInteraction?.();
+			storiesDispatch(selectPassage(story, passage, exclusive));
+		},
+		[onSelectionInteraction, story, storiesDispatch]
 	);
 
 	const handleSelectPassageIds = React.useCallback(
 		(passageIds: string[], additive: boolean) => {
+			onSelectionInteraction?.();
 			storiesDispatch(
 				selectPassagesById(
 					story,
@@ -94,11 +103,12 @@ export function usePassageChangeHandlers(story: Story) {
 				)
 			);
 		},
-		[selectedPassages, story, storiesDispatch]
+		[onSelectionInteraction, selectedPassages, story, storiesDispatch]
 	);
 
 	const handleSelectRect = React.useCallback(
 		(rect: Rect, additive: boolean) => {
+			onSelectionInteraction?.();
 			// The rect we receive is in screen coordinates--we need to convert to
 			// logical ones.
 			const logicalRect: Rect = {
@@ -117,7 +127,7 @@ export function usePassageChangeHandlers(story: Story) {
 				)
 			);
 		},
-		[selectedPassages, story, storiesDispatch]
+		[onSelectionInteraction, selectedPassages, story, storiesDispatch]
 	);
 
 	return {

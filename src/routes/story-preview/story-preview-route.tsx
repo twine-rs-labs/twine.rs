@@ -1,4 +1,5 @@
 import * as React from 'react';
+import {v4 as uuid} from '@lukeed/uuid';
 import {useLocation, useNavigate, useParams} from 'react-router';
 import {useCoreProjectHost} from '../../core';
 import type {CoreStorySummary} from '../../core';
@@ -15,6 +16,15 @@ import {
 } from '../story-preview-debug';
 import {storyPreviewRoutePath} from './story-preview-route-path';
 import type {PreviewFormatAdmission} from '../story-preview-format';
+import {
+	browserPreviewOwnerAcceptanceTimeoutMs,
+	browserPreviewOwnerProtocol,
+	isBrowserPreviewRevealResult,
+	type BrowserPreviewRevealRequest
+} from '../browser-preview-owner-registry';
+
+const browserRevealAcceptanceTimeoutMs = browserPreviewOwnerAcceptanceTimeoutMs;
+const browserRevealFinalTimeoutMs = 15_000;
 
 function previewTarget(search: URLSearchParams): NativeStoryPreviewTarget {
 	const target = search.get('target');
@@ -71,6 +81,7 @@ export const StoryPreviewRoute: React.FC = () => {
 	);
 	const target = previewTarget(search);
 	const requestedPassageId = search.get('passage') ?? undefined;
+	const ownerToken = search.get('ownerToken') ?? undefined;
 	const selectedProofingFormat = React.useMemo(
 		() => proofingFormat(search),
 		[search]
@@ -84,6 +95,8 @@ export const StoryPreviewRoute: React.FC = () => {
 	);
 	const presentation = targetPresentation[target];
 	const onCopyRuntimeLog = React.useMemo(browserRuntimeLogCopy, []);
+	const [ownerRevealBusy, setOwnerRevealBusy] = React.useState(false);
+	const ownerRevealBusyRef = React.useRef(false);
 
 	React.useEffect(() => {
 		buildStoryPreviewPackageRef.current = buildStoryPreviewPackage;
@@ -167,13 +180,128 @@ export const StoryPreviewRoute: React.FC = () => {
 		target
 	]);
 
-	const passageQuery = React.useCallback(
-		(passageId?: string) => {
-			const targetId = passageId ?? startPassage?.id;
+	const reveal = React.useCallback(
+		(mode: 'graph' | 'text', passageId?: string) => {
+			if (!passageId || ownerRevealBusyRef.current) {
+				return;
+			}
+			ownerRevealBusyRef.current = true;
+			setOwnerRevealBusy(true);
+			const finish = () => {
+				ownerRevealBusyRef.current = false;
+				setOwnerRevealBusy(false);
+			};
+			let fallbackAvailable = true;
+			const fallback = () => {
+				if (!fallbackAvailable) {
+					return;
+				}
+				fallbackAvailable = false;
+				finish();
+				navigate(
+					`/stories/${encodeURIComponent(
+						storyId
+					)}?mode=${mode}&passage=${encodeURIComponent(passageId)}`
+				);
+			};
+			const opener = window.opener;
 
-			return targetId ? `&passage=${encodeURIComponent(targetId)}` : '';
+			if (
+				!ownerToken ||
+				!opener ||
+				opener.closed ||
+				typeof MessageChannel === 'undefined'
+			) {
+				fallback();
+				return;
+			}
+
+			try {
+				const channel = new MessageChannel();
+				const requestId = `browser-reveal-${uuid()}`;
+				const acceptanceDeadline =
+					Date.now() + browserRevealAcceptanceTimeoutMs;
+				let accepted = false;
+				let finalTimeout: ReturnType<typeof setTimeout> | undefined;
+				const acceptanceTimeout = setTimeout(() => {
+					channel.port1.postMessage({
+						requestId,
+						source: browserPreviewOwnerProtocol.source,
+						type: 'cancel',
+						version: browserPreviewOwnerProtocol.version
+					});
+					channel.port1.close();
+					fallback();
+				}, browserRevealAcceptanceTimeoutMs);
+
+				channel.port1.onmessage = event => {
+					if (
+						!isBrowserPreviewRevealResult(event.data) ||
+						event.data.requestId !== requestId
+					) {
+						return;
+					}
+					if (event.data.status === 'accepted') {
+						if (accepted || Date.now() >= acceptanceDeadline) {
+							channel.port1.postMessage({
+								requestId,
+								source: browserPreviewOwnerProtocol.source,
+								type: 'cancel',
+								version: browserPreviewOwnerProtocol.version
+							});
+							channel.port1.close();
+							fallback();
+							return;
+						}
+						accepted = true;
+						fallbackAvailable = false;
+						clearTimeout(acceptanceTimeout);
+						channel.port1.postMessage({
+							requestId,
+							source: browserPreviewOwnerProtocol.source,
+							type: 'commit',
+							version: browserPreviewOwnerProtocol.version
+						});
+						finalTimeout = setTimeout(() => {
+							channel.port1.postMessage({
+								requestId,
+								source: browserPreviewOwnerProtocol.source,
+								type: 'cancel',
+								version: browserPreviewOwnerProtocol.version
+							});
+							channel.port1.close();
+							finish();
+						}, browserRevealFinalTimeoutMs);
+						return;
+					}
+					clearTimeout(acceptanceTimeout);
+					if (finalTimeout) {
+						clearTimeout(finalTimeout);
+					}
+					// Both success and a valid rejection are authoritative. Only an
+					// unavailable owner transport falls back to self-navigation.
+					fallbackAvailable = false;
+					channel.port1.close();
+					finish();
+				};
+				const request: BrowserPreviewRevealRequest = {
+					acceptanceDeadline,
+					mode,
+					passageId,
+					requestId,
+					source: browserPreviewOwnerProtocol.source,
+					storyId,
+					token: ownerToken,
+					type: 'reveal',
+					version: browserPreviewOwnerProtocol.version
+				};
+
+				opener.postMessage(request, window.location.origin, [channel.port2]);
+			} catch {
+				fallback();
+			}
 		},
-		[startPassage?.id]
+		[navigate, ownerToken, storyId]
 	);
 
 	return (
@@ -184,20 +312,8 @@ export const StoryPreviewRoute: React.FC = () => {
 			html={html}
 			missingStoryMessage={`There is no story with ID "${storyId}".`}
 			onCopyRuntimeLog={onCopyRuntimeLog}
-			onRevealGraph={runtimePassageId =>
-				navigate(
-					`/stories/${encodeURIComponent(storyId)}?mode=graph${passageQuery(
-						runtimePassageId
-					)}`
-				)
-			}
-			onRevealSource={runtimePassageId =>
-				navigate(
-					`/stories/${encodeURIComponent(storyId)}?mode=text${passageQuery(
-						runtimePassageId
-					)}`
-				)
-			}
+			onRevealGraph={runtimePassageId => reveal('graph', runtimePassageId)}
+			onRevealSource={runtimePassageId => reveal('text', runtimePassageId)}
 			onTestCurrentPassage={runtimePassageId =>
 				navigate(
 					storyPreviewRoutePath(storyId, 'test', {
@@ -212,6 +328,7 @@ export const StoryPreviewRoute: React.FC = () => {
 			}
 			passages={storyPreviewPassages(story)}
 			previewTarget={target}
+			runtimeControlsBusy={ownerRevealBusy}
 			startPassageName={startPassage?.name}
 			storyExists={storyExists}
 			storyName={story?.name}

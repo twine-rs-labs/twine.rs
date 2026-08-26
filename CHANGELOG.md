@@ -22,6 +22,9 @@ historical exceptions; category and baseline rules are defined in
 - Added Play/Test Runtime Controls with exact-version restart support for the
   bundled SugarCube, Snowman, Chapbook, and Harlowe adapters, plus confirmed,
   preview-isolated Clear State behavior in browser and managed desktop previews.
+- Added _Edit Passage_/_Edit Text_ and _Reveal in Graph_ actions for identified
+  runtime passages in browser and managed desktop Play, Test, and Proof
+  previews.
 
 ### Changed
 

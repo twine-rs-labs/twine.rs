@@ -6,6 +6,7 @@ import {saveProjectMetadata} from '../project-metadata';
 import {useComputedTheme} from '../prefs/use-computed-theme';
 import {usePrefsContext} from '../prefs';
 import {workbenchBufferCoordinator} from '../../util/workbench-buffer-coordinator';
+import {browserPreviewOwner} from '../../routes/browser-preview-owner-registry';
 
 jest.mock('../use-publishing');
 jest.mock('../../util/is-electron');
@@ -91,15 +92,19 @@ describe('useStoryLaunch', () => {
 			expect(
 				openSpy.mock.results.map(({value}) => value.location.replace.mock.calls)
 			).toEqual([
-				[['http://localhost/#/stories/mock-story-id/preview?target=play']],
 				[
 					[
-						'http://localhost/#/stories/mock-story-id/preview?target=proof&proofingFormatName=Paper&proofingFormatVersion=1.0.0'
+						'http://localhost/#/stories/mock-story-id/preview?target=play&ownerToken=bridge-id'
 					]
 				],
 				[
 					[
-						'http://localhost/#/stories/mock-story-id/preview?target=test&passage=current-id'
+						'http://localhost/#/stories/mock-story-id/preview?target=proof&proofingFormatName=Paper&proofingFormatVersion=1.0.0&ownerToken=bridge-id'
+					]
+				],
+				[
+					[
+						'http://localhost/#/stories/mock-story-id/preview?target=test&passage=current-id&ownerToken=bridge-id'
 					]
 				]
 			]);
@@ -124,7 +129,7 @@ describe('useStoryLaunch', () => {
 			finishFlush();
 			await launch;
 			expect(previewWindow.location.replace).toHaveBeenCalledWith(
-				'http://localhost/#/stories/mock-story-id/preview?target=test&passage=current-id'
+				'http://localhost/#/stories/mock-story-id/preview?target=test&passage=current-id&ownerToken=bridge-id'
 			);
 		});
 
@@ -141,6 +146,7 @@ describe('useStoryLaunch', () => {
 
 			expect(previewWindow.location.replace).not.toHaveBeenCalled();
 			expect(previewWindow.close).toHaveBeenCalledTimes(1);
+			expect(browserPreviewOwner('bridge-id')).toBeUndefined();
 		});
 	});
 

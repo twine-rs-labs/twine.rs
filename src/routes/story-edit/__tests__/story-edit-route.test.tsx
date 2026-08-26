@@ -7,11 +7,12 @@ import {
 	createMemoryRouter,
 	MemoryRouter,
 	RouterProvider,
-	useNavigate
+	useNavigate,
+	useParams
 } from 'react-router';
 import {AppShell} from '../../../components/app-shell';
 import {StoreCoreProjectHost} from '../../../core/project-host';
-import {Story} from '../../../store/stories';
+import {selectPassage, Story, useStoriesContext} from '../../../store/stories';
 import {useStoryFormatsContext} from '../../../store/story-formats';
 import {
 	fakeLoadedStoryFormat,
@@ -25,11 +26,50 @@ import {
 } from '../../../test-util';
 import {InnerStoryEditRoute} from '../story-edit-route';
 import {rendererQuitQuiescence} from '../../../util/renderer-quit-quiescence';
+import {workbenchBufferCoordinator} from '../../../util/workbench-buffer-coordinator';
+import {
+	registerStoryEditReveal,
+	rejectStoryEditReveal
+} from '../../story-edit-reveal';
+import * as storyEditReveal from '../../story-edit-reveal';
 
 const HistoryBackButton: React.FC = () => {
 	const navigate = useNavigate();
 
 	return <button onClick={() => navigate(-1)}>History back</button>;
+};
+
+const HistoryForwardButton: React.FC = () => {
+	const navigate = useNavigate();
+
+	return <button onClick={() => navigate(1)}>History forward</button>;
+};
+
+const OtherStorySelectionControl: React.FC = () => {
+	const {storyId} = useParams<'storyId'>();
+	const {dispatch, stories} = useStoriesContext();
+	const otherStory = stories.find(story => story.id !== storyId);
+	const selectedIds =
+		otherStory?.passages
+			.filter(passage => passage.selected)
+			.map(passage => passage.id)
+			.join(',') ?? '';
+
+	return (
+		<>
+			<button
+				onClick={() => {
+					const passage = otherStory?.passages.at(-1);
+					if (otherStory && passage) {
+						dispatch(selectPassage(otherStory, passage, true));
+					}
+				}}
+			>
+				Select other story last passage
+			</button>
+			<div data-testid="other-story-selection">{selectedIds}</div>
+		</>
+	);
 };
 
 const FormatDiagnosticInspector: React.FC = () => {
@@ -58,6 +98,8 @@ const TestStoryEditRoute: React.FC = () => {
 			</AppShell>
 			<LocationInspector />
 			<HistoryBackButton />
+			<HistoryForwardButton />
+			<OtherStorySelectionControl />
 		</>
 	);
 };
@@ -93,7 +135,7 @@ describe('<StoryEditRoute>', () => {
 			>
 				<FakeStateProvider
 					{...contexts}
-					stories={[story]}
+					stories={contexts?.stories ?? [story]}
 					storyFormats={storyFormats}
 				>
 					<TestStoryEditRoute />
@@ -999,6 +1041,892 @@ describe('<StoryEditRoute>', () => {
 		expect(
 			screen.getByLabelText('routes.storyEdit.toolbar.stylesheet')
 		).toBeInTheDocument();
+	});
+
+	it('acknowledges a correlated source reveal only after committed editor state', async () => {
+		const story = fakeStory(1);
+		const flush = jest
+			.spyOn(workbenchBufferCoordinator, 'flushStory')
+			.mockResolvedValue(undefined);
+		const applied = registerStoryEditReveal('source-reveal-request');
+
+		const {container} = await renderComponent(
+			story,
+			undefined,
+			story =>
+				`/stories/${story.id}?mode=text&passage=${story.passages[0].id}&revealRequest=source-reveal-request`
+		);
+
+		await expect(applied).resolves.toBeUndefined();
+		expect(flush).toHaveBeenCalledWith(story.id);
+		expect(
+			container.querySelector(
+				`[data-testid="story-editor-window-${story.passages[0].id}"]`
+			)
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole('tab', {name: 'routes.storyEdit.workspace.textMode'})
+		).toHaveAttribute('aria-selected', 'true');
+	});
+
+	it('acknowledges a correlated graph reveal with its passage selected', async () => {
+		const story = fakeStory(1);
+		const consoleError = jest.spyOn(console, 'error').mockImplementation();
+		story.passages[0].left = 125;
+		story.passages[0].top = 125;
+		jest
+			.spyOn(workbenchBufferCoordinator, 'flushStory')
+			.mockResolvedValue(undefined);
+		const applied = registerStoryEditReveal('graph-reveal-request');
+
+		const {container} = await renderComponent(
+			story,
+			undefined,
+			story =>
+				`/stories/${story.id}?mode=graph&passage=${story.passages[0].id}&revealRequest=graph-reveal-request`
+		);
+
+		await expect(applied).resolves.toBeUndefined();
+		expect(
+			container.querySelector(
+				`.story-edit-graph-node[data-passage-id="${story.passages[0].id}"]`
+			)
+		).toHaveAttribute('data-selected', 'true');
+		expect(
+			screen.getByRole('tab', {name: 'routes.storyEdit.workspace.graphMode'})
+		).toHaveAttribute('aria-selected', 'true');
+		expect(
+			consoleError.mock.calls.some(call =>
+				call.some(value =>
+					String(value).includes('flushSync was called from inside a lifecycle')
+				)
+			)
+		).toBe(false);
+	});
+
+	it.each(['', 'inactive-reveal'])(
+		'ignores an inactive supplied reveal URL (%s) before editor actions',
+		async requestId => {
+			const story = fakeStory(1);
+			const flush = jest.spyOn(workbenchBufferCoordinator, 'flushStory');
+			const {container} = await renderComponent(
+				story,
+				undefined,
+				candidate =>
+					`/stories/${candidate.id}?mode=text&passage=${candidate.passages[0].id}&revealRequest=${requestId}`
+			);
+			expect(flush).not.toHaveBeenCalled();
+			expect(
+				container.querySelector('[data-testid^="story-editor-window-"]')
+			).not.toBeInTheDocument();
+		}
+	);
+
+	it('ignores a reveal URL whose rendezvous expired before route processing', async () => {
+		const story = fakeStory(1);
+		jest.useFakeTimers();
+		const expired = registerStoryEditReveal(
+			'expired-before-route',
+			Date.now() + 1
+		);
+		const rejected = expect(expired).rejects.toThrow('did not apply');
+		act(() => jest.advanceTimersByTime(1));
+		await rejected;
+		jest.useRealTimers();
+
+		const flush = jest.spyOn(workbenchBufferCoordinator, 'flushStory');
+		const {container} = await renderComponent(
+			story,
+			undefined,
+			candidate =>
+				`/stories/${candidate.id}?mode=text&passage=${candidate.passages[0].id}&revealRequest=expired-before-route`
+		);
+
+		expect(flush).not.toHaveBeenCalled();
+		expect(
+			container.querySelector('[data-testid^="story-editor-window-"]')
+		).not.toBeInTheDocument();
+	});
+
+	it('rejects a correlated reveal when dirty editor buffers cannot flush', async () => {
+		const story = fakeStory(1);
+		jest
+			.spyOn(workbenchBufferCoordinator, 'flushStory')
+			.mockRejectedValue(new Error('save failed'));
+		const applied = registerStoryEditReveal('failed-reveal-request');
+		const rejected = expect(applied).rejects.toThrow('save failed');
+
+		const {container} = await renderComponent(
+			story,
+			undefined,
+			story =>
+				`/stories/${story.id}?mode=text&passage=${story.passages[0].id}&revealRequest=failed-reveal-request`
+		);
+
+		await rejected;
+		expect(
+			container.querySelector(
+				`[data-testid="story-editor-window-${story.passages[0].id}"]`
+			)
+		).not.toBeInTheDocument();
+	});
+
+	it.each(['text', 'graph'] as const)(
+		'rejects a deferred %s reveal when its live passage is deleted during flush',
+		async mode => {
+			const story = fakeStory(1);
+			let finishFlush!: () => void;
+			const pendingFlush = new Promise<void>(resolve => {
+				finishFlush = resolve;
+			});
+			jest
+				.spyOn(workbenchBufferCoordinator, 'flushStory')
+				.mockReturnValueOnce(pendingFlush);
+			const requestId = `deleted-during-flush-${mode}`;
+			const applied = registerStoryEditReveal(requestId);
+			const rejected = expect(applied).rejects.toThrow(
+				'no longer exists uniquely'
+			);
+
+			const {container} = await renderComponent(
+				story,
+				undefined,
+				story =>
+					`/stories/${story.id}?mode=${mode}&passage=${story.passages[0].id}&revealRequest=${requestId}`
+			);
+			await waitFor(() =>
+				expect(workbenchBufferCoordinator.flushStory).toHaveBeenCalledWith(
+					story.id
+				)
+			);
+			story.passages.splice(0, 1);
+			await act(async () => {
+				finishFlush();
+				await pendingFlush;
+			});
+			await rejected;
+			expect(
+				container.querySelector('[data-testid^="story-editor-window-"]')
+			).not.toBeInTheDocument();
+			expect(
+				container.querySelector('.story-edit-graph-node[data-selected="true"]')
+			).not.toBeInTheDocument();
+		}
+	);
+
+	it.each(['text', 'graph'] as const)(
+		'cancels a deferred %s reveal before it can commit route state',
+		async mode => {
+			const story = fakeStory(1);
+			let finishFlush!: () => void;
+			const pendingFlush = new Promise<void>(
+				resolve => (finishFlush = resolve)
+			);
+			jest
+				.spyOn(workbenchBufferCoordinator, 'flushStory')
+				.mockReturnValueOnce(pendingFlush);
+			const requestId = `cancelled-during-flush-${mode}`;
+			const applied = registerStoryEditReveal(requestId);
+			const rejected = expect(applied).rejects.toThrow('cancelled');
+			const {container} = await renderComponent(
+				story,
+				undefined,
+				candidate =>
+					`/stories/${candidate.id}?mode=${mode}&passage=${candidate.passages[0].id}&revealRequest=${requestId}`
+			);
+			await waitFor(() =>
+				expect(workbenchBufferCoordinator.flushStory).toHaveBeenCalled()
+			);
+			rejectStoryEditReveal(requestId, new Error('cancelled'));
+			await act(async () => {
+				finishFlush();
+				await pendingFlush;
+			});
+			await rejected;
+			expect(
+				container.querySelector('[data-testid^="story-editor-window-"]')
+			).not.toBeInTheDocument();
+			expect(
+				container.querySelector('.story-edit-graph-node[data-selected="true"]')
+			).not.toBeInTheDocument();
+		}
+	);
+
+	it.each(['text', 'graph'] as const)(
+		'does not commit a %s reveal whose deadline expires immediately after flush',
+		async mode => {
+			const story = fakeStory(1);
+			let finishFlush!: () => void;
+			const pendingFlush = new Promise<void>(resolve => {
+				finishFlush = resolve;
+			});
+			const now = Date.now();
+			const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+			try {
+				jest
+					.spyOn(workbenchBufferCoordinator, 'flushStory')
+					.mockReturnValueOnce(pendingFlush);
+				const requestId = `expired-after-flush-${mode}`;
+				const applied = registerStoryEditReveal(requestId, now + 10_000);
+				const rejected = expect(applied).rejects.toThrow('has expired');
+				const {container} = await renderComponent(
+					story,
+					undefined,
+					candidate =>
+						`/stories/${candidate.id}?mode=${mode}&passage=${candidate.passages[0].id}&revealRequest=${requestId}`
+				);
+				await waitFor(() =>
+					expect(workbenchBufferCoordinator.flushStory).toHaveBeenCalledWith(
+						story.id
+					)
+				);
+				await act(async () => {
+					finishFlush();
+					// Model a throttled event loop: wall time advances before the
+					// rendezvous timeout callback can run.
+					clock.mockReturnValue(now + 10_000);
+					await Promise.resolve();
+				});
+				await rejected;
+				expect(
+					container.querySelector('[data-testid^="story-editor-window-"]')
+				).not.toBeInTheDocument();
+				expect(
+					container.querySelector(
+						'.story-edit-graph-node[data-selected="true"]'
+					)
+				).not.toBeInTheDocument();
+				expect(
+					screen.getByRole('tab', {
+						name: 'routes.storyEdit.workspace.graphMode'
+					})
+				).toHaveAttribute('aria-selected', 'true');
+			} finally {
+				clock.mockRestore();
+			}
+		}
+	);
+
+	it.each(['text', 'graph'] as const)(
+		'rolls back %s route state when the deadline crosses after writes but before acknowledgement',
+		async mode => {
+			const story = fakeStory(2);
+			const baselineMode = mode === 'text' ? 'graph' : 'text';
+			const baselinePassage = story.passages[1];
+			const baselineWindow = {
+				kind: 'passage' as const,
+				passageId: baselinePassage.id
+			};
+			const baselineGraphView = {k: 1.25, x: -240, y: 135};
+			for (const passage of story.passages) {
+				passage.selected = passage.id === baselinePassage.id;
+			}
+			window.localStorage.setItem(
+				'twine-story-edit-workspace',
+				JSON.stringify({mode: baselineMode})
+			);
+			window.localStorage.setItem(
+				`twine-story-edit-workspace-${story.id}`,
+				JSON.stringify({
+					activeWindowId: `passage:${baselinePassage.id}`,
+					editorWindows: [baselineWindow],
+					graphView: baselineGraphView,
+					mode: baselineMode,
+					selectedPassageId: baselinePassage.id
+				})
+			);
+			const now = Date.now();
+			const deadline = now + 10_000;
+			const clock = jest.spyOn(Date, 'now').mockReturnValue(now);
+			const originalArm = storyEditReveal.armStoryEditRevealRollback;
+			const arm = jest.spyOn(storyEditReveal, 'armStoryEditRevealRollback');
+			arm.mockImplementation(requestId => {
+				// This is the precise route boundary: every correlated setter has
+				// been issued, but no layout-effect acknowledgement has run.
+				const armed = originalArm(requestId);
+				clock.mockReturnValue(deadline);
+				return armed;
+			});
+			try {
+				jest
+					.spyOn(workbenchBufferCoordinator, 'flushStory')
+					.mockResolvedValue(undefined);
+				const requestId = `expired-at-arm-${mode}`;
+				const applied = registerStoryEditReveal(requestId, deadline);
+				const rejected = expect(applied).rejects.toThrow('expired');
+				const {container} = await renderComponent(
+					story,
+					undefined,
+					candidate =>
+						`/stories/${candidate.id}?mode=${mode}&passage=${candidate.passages[0].id}&revealRequest=${requestId}`
+				);
+				await rejected;
+				await waitFor(() =>
+					expect(
+						container.querySelector(
+							`[data-testid="story-editor-window-${story.passages[0].id}"]`
+						)
+					).not.toBeInTheDocument()
+				);
+				await waitFor(() =>
+					expect(
+						screen.getByRole('tab', {
+							name: `routes.storyEdit.workspace.${baselineMode}Mode`
+						})
+					).toHaveAttribute('aria-selected', 'true')
+				);
+				if (baselineMode === 'text') {
+					expect(
+						container.querySelector(
+							`[data-testid="story-editor-window-${baselinePassage.id}"]`
+						)
+					).toBeInTheDocument();
+				}
+				expect(
+					screen.getByTestId(`passage-${baselinePassage.id}`)
+				).toHaveAttribute('data-selected', 'true');
+				expect(
+					screen.getByTestId(`passage-${story.passages[0].id}`)
+				).toHaveAttribute('data-selected', 'false');
+				await waitFor(() => {
+					const projectWorkspace = JSON.parse(
+						window.localStorage.getItem(
+							`twine-story-edit-workspace-${story.id}`
+						) ?? '{}'
+					);
+					expect(projectWorkspace).toEqual(
+						expect.objectContaining({
+							activeWindowId: `passage:${baselinePassage.id}`,
+							editorWindows: [baselineWindow],
+							graphView: baselineGraphView,
+							mode: baselineMode,
+							selectedPassageId: baselinePassage.id
+						})
+					);
+					expect(
+						JSON.parse(
+							window.localStorage.getItem('twine-story-edit-workspace') ?? '{}'
+						)
+					).toEqual(expect.objectContaining({mode: baselineMode}));
+				});
+			} finally {
+				arm.mockRestore();
+				clock.mockRestore();
+			}
+		}
+	);
+
+	it('preserves post-settlement text-mode ABA interactions after terminal rejection', async () => {
+		const story = fakeStory(2);
+		const target = story.passages[0];
+		const baselinePassage = story.passages[1];
+		const baselineWindow = {
+			kind: 'passage' as const,
+			passageId: baselinePassage.id
+		};
+		story.passages.forEach(
+			passage => (passage.selected = passage.id === baselinePassage.id)
+		);
+		window.localStorage.setItem(
+			'twine-story-edit-workspace',
+			JSON.stringify({mode: 'graph'})
+		);
+		window.localStorage.setItem(
+			`twine-story-edit-workspace-${story.id}`,
+			JSON.stringify({
+				activeWindowId: `passage:${baselinePassage.id}`,
+				editorWindows: [baselineWindow],
+				mode: 'graph',
+				selectedPassageId: baselinePassage.id
+			})
+		);
+		jest
+			.spyOn(workbenchBufferCoordinator, 'flushStory')
+			.mockResolvedValue(undefined);
+		const requestId = 'post-settlement-text-aba';
+		const applied = registerStoryEditReveal(requestId);
+		const {container} = await renderComponent(
+			story,
+			undefined,
+			candidate =>
+				`/stories/${candidate.id}?mode=text&passage=${target.id}&revealRequest=${requestId}`
+		);
+
+		await expect(applied).resolves.toBeUndefined();
+		fireEvent.click(
+			screen.getByRole('tab', {name: 'routes.storyEdit.workspace.graphMode'})
+		);
+		await waitFor(() =>
+			expect(
+				screen.getByRole('tab', {
+					name: 'routes.storyEdit.workspace.graphMode'
+				})
+			).toHaveAttribute('aria-selected', 'true')
+		);
+		fireEvent.click(
+			screen.getByRole('tab', {name: 'routes.storyEdit.workspace.textMode'})
+		);
+		await waitFor(() =>
+			expect(
+				screen.getByRole('tab', {
+					name: 'routes.storyEdit.workspace.textMode'
+				})
+			).toHaveAttribute('aria-selected', 'true')
+		);
+		const baselineEditor = container
+			.querySelector(
+				`[data-testid="story-editor-window-${baselinePassage.id}"]`
+			)
+			?.closest('.story-edit-editor-window') as HTMLElement;
+		fireEvent.pointerDown(baselineEditor);
+		await waitFor(() =>
+			expect(
+				container
+					.querySelector(
+						`[data-testid="story-editor-window-${baselinePassage.id}"]`
+					)
+					?.closest('.story-edit-editor-window')
+			).toHaveClass('is-active')
+		);
+		const targetEditor = container
+			.querySelector(`[data-testid="story-editor-window-${target.id}"]`)
+			?.closest('.story-edit-editor-window') as HTMLElement;
+		fireEvent.pointerDown(targetEditor);
+		await waitFor(() =>
+			expect(
+				container
+					.querySelector(`[data-testid="story-editor-window-${target.id}"]`)
+					?.closest('.story-edit-editor-window')
+			).toHaveClass('is-active')
+		);
+
+		expect(
+			rejectStoryEditReveal(requestId, new Error('terminal rejection'))
+		).toBe(true);
+		await act(async () => Promise.resolve());
+
+		expect(
+			screen.getByRole('tab', {name: 'routes.storyEdit.workspace.textMode'})
+		).toHaveAttribute('aria-selected', 'true');
+		expect(
+			container.querySelector(
+				`[data-testid="story-editor-window-${target.id}"]`
+			)
+		).toBeInTheDocument();
+	});
+
+	it('preserves an edited reveal-opened buffer after terminal rejection', async () => {
+		const story = fakeStory(2);
+		const target = story.passages[0];
+		const baselinePassage = story.passages[1];
+		target.text = 'Before reveal edit';
+		story.passages.forEach(
+			passage => (passage.selected = passage.id === baselinePassage.id)
+		);
+		window.localStorage.setItem(
+			'twine-story-edit-workspace',
+			JSON.stringify({mode: 'graph'})
+		);
+		window.localStorage.setItem(
+			`twine-story-edit-workspace-${story.id}`,
+			JSON.stringify({
+				activeWindowId: `passage:${baselinePassage.id}`,
+				editorWindows: [{kind: 'passage', passageId: baselinePassage.id}],
+				mode: 'graph',
+				selectedPassageId: baselinePassage.id
+			})
+		);
+		jest
+			.spyOn(workbenchBufferCoordinator, 'flushStory')
+			.mockResolvedValue(undefined);
+		const requestId = 'post-settlement-edited-buffer';
+		const applied = registerStoryEditReveal(requestId);
+		const {container} = await renderComponent(
+			story,
+			undefined,
+			candidate =>
+				`/stories/${candidate.id}?mode=text&passage=${target.id}&revealRequest=${requestId}`
+		);
+
+		await expect(applied).resolves.toBeUndefined();
+		const content = await waitFor(() => {
+			const candidate = container.querySelector(
+				`[data-testid="story-editor-window-${target.id}"] .cm-content`
+			);
+			expect(candidate).toBeInstanceOf(HTMLElement);
+			return candidate as HTMLElement;
+		});
+		const view = EditorView.findFromDOM(content);
+		if (!view) throw new Error('Live story editor view was not available');
+		act(() => {
+			view.dispatch({
+				changes: {
+					from: 0,
+					insert: 'Edited after settlement',
+					to: view.state.doc.length
+				}
+			});
+		});
+
+		expect(
+			rejectStoryEditReveal(requestId, new Error('terminal rejection'))
+		).toBe(true);
+		await act(async () => Promise.resolve());
+
+		expect(
+			container.querySelector(
+				`[data-testid="story-editor-window-${target.id}"]`
+			)
+		).toBeInTheDocument();
+		expect(
+			screen.getByRole('tab', {name: 'routes.storyEdit.workspace.textMode'})
+		).toHaveAttribute('aria-selected', 'true');
+		expect(view.state.doc.toString()).toBe('Edited after settlement');
+	});
+
+	it('preserves a post-settlement graph-view ABA interaction after terminal rejection', async () => {
+		const story = fakeStory(1);
+		const target = story.passages[0];
+		const baselineGraphView = {k: 1.15, x: 75, y: -40};
+		target.left = 125;
+		target.top = 125;
+		window.localStorage.setItem(
+			`twine-story-edit-workspace-${story.id}`,
+			JSON.stringify({graphView: baselineGraphView})
+		);
+		jest
+			.spyOn(workbenchBufferCoordinator, 'flushStory')
+			.mockResolvedValue(undefined);
+		const requestId = 'post-settlement-graph-aba';
+		const applied = registerStoryEditReveal(requestId);
+		const {container} = await renderComponent(
+			story,
+			undefined,
+			candidate =>
+				`/stories/${candidate.id}?mode=graph&passage=${target.id}&revealRequest=${requestId}`
+		);
+
+		await expect(applied).resolves.toBeUndefined();
+		const viewport = container.querySelector(
+			'.story-edit-graph-viewport'
+		) as HTMLElement;
+		const canvas = container.querySelector(
+			'.story-edit-graph-canvas'
+		) as HTMLElement;
+		expect(viewport).toBeInstanceOf(HTMLElement);
+		expect(canvas).toBeInstanceOf(HTMLElement);
+		const appliedTransform = canvas.style.transform;
+		fireEvent.wheel(viewport, {deltaY: 50, shiftKey: true});
+		fireEvent.wheel(viewport, {deltaY: -50, shiftKey: true});
+		await waitFor(() => expect(canvas.style.transform).toBe(appliedTransform));
+
+		expect(
+			rejectStoryEditReveal(requestId, new Error('terminal rejection'))
+		).toBe(true);
+		await act(async () => Promise.resolve());
+
+		expect(canvas.style.transform).toBe(appliedTransform);
+		await waitFor(() =>
+			expect(
+				JSON.parse(
+					window.localStorage.getItem(
+						`twine-story-edit-workspace-${story.id}`
+					) ?? '{}'
+				).graphView
+			).not.toEqual(baselineGraphView)
+		);
+	});
+
+	it.each(['text', 'graph'] as const)(
+		'restores only story A persistence when an applied %s reveal is rejected after navigating to story B',
+		async mode => {
+			const storyA = fakeStory(3);
+			const storyB = fakeStory(2);
+			storyA.passages[0].left = 125;
+			storyA.passages[0].top = 125;
+			const baselinePassage = storyA.passages[1];
+			storyA.passages.forEach(
+				(passage, index) => (passage.selected = index === 1)
+			);
+			const baseline = {
+				activeWindowId: `passage:${baselinePassage.id}`,
+				editorWindows: [{kind: 'passage', passageId: baselinePassage.id}],
+				graphView: {k: 1.1, x: -120, y: 80},
+				mode: mode === 'text' ? 'graph' : 'text',
+				selectedPassageId: baselinePassage.id,
+				unrelatedMarker: 'preserved'
+			};
+			window.localStorage.setItem(
+				`twine-story-edit-workspace-${storyA.id}`,
+				JSON.stringify(baseline)
+			);
+			const flush = jest
+				.spyOn(workbenchBufferCoordinator, 'flushStory')
+				.mockResolvedValue(undefined);
+			const requestId = `cross-story-${mode}`;
+			const applied = registerStoryEditReveal(requestId);
+			await renderComponent(storyA, {stories: [storyA, storyB]}, () => [
+				`/stories/${storyB.id}`,
+				`/stories/${storyA.id}?mode=${mode}&passage=${storyA.passages[0].id}&revealRequest=${requestId}`
+			]);
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${storyA.id}`
+			);
+			await waitFor(() => expect(flush).toHaveBeenCalledWith(storyA.id), {
+				timeout: 1000
+			});
+			await expect(applied).resolves.toBeUndefined();
+			let storyBGraphTransform: string | undefined;
+			if (mode === 'graph') {
+				const storyACanvas = document.querySelector(
+					'.story-edit-graph-canvas'
+				) as HTMLElement;
+				const match = storyACanvas.style.transform.match(
+					/translate\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px\s*\)\s*scale\(\s*([\d.]+)\s*\)/
+				);
+				expect(match).not.toBeNull();
+				storyBGraphTransform = storyACanvas.style.transform;
+				window.localStorage.setItem(
+					`twine-story-edit-workspace-${storyB.id}`,
+					JSON.stringify({
+						graphView: {
+							k: Number(match![3]),
+							x: Number(match![1]),
+							y: Number(match![2])
+						},
+						mode: 'graph'
+					})
+				);
+			}
+			fireEvent.click(screen.getByRole('button', {name: 'History back'}));
+			await waitFor(
+				() =>
+					expect(screen.getByTestId('location')).toHaveAttribute(
+						'data-pathname',
+						`/stories/${storyB.id}`
+					),
+				{timeout: 1000}
+			);
+			if (storyBGraphTransform) {
+				await waitFor(() =>
+					expect(
+						(document.querySelector('.story-edit-graph-canvas') as HTMLElement)
+							.style.transform
+					).toBe(storyBGraphTransform)
+				);
+				fireEvent.click(
+					screen.getByRole('button', {
+						name: 'Select other story last passage'
+					})
+				);
+				await waitFor(() =>
+					expect(screen.getByTestId('other-story-selection')).toHaveTextContent(
+						storyA.passages[2].id
+					)
+				);
+				const currentStoryAWorkspace = JSON.parse(
+					window.localStorage.getItem(
+						`twine-story-edit-workspace-${storyA.id}`
+					) ?? '{}'
+				);
+				window.localStorage.setItem(
+					`twine-story-edit-workspace-${storyA.id}`,
+					JSON.stringify({
+						...currentStoryAWorkspace,
+						selectedPassageId: storyA.passages[2].id
+					})
+				);
+			}
+			const storyBStorage = window.localStorage.getItem(
+				`twine-story-edit-workspace-${storyB.id}`
+			);
+			const globalWorkspace = window.localStorage.getItem(
+				'twine-story-edit-workspace'
+			);
+			expect(
+				rejectStoryEditReveal(requestId, new Error('terminal rejection'))
+			).toBe(true);
+			await waitFor(
+				() =>
+					expect(
+						JSON.parse(
+							window.localStorage.getItem(
+								`twine-story-edit-workspace-${storyA.id}`
+							) ?? '{}'
+						)
+					).toEqual(
+						expect.objectContaining({
+							...baseline,
+							...(mode === 'graph'
+								? {selectedPassageId: storyA.passages[2].id}
+								: {})
+						})
+					),
+				{timeout: 1000}
+			);
+			expect(
+				window.localStorage.getItem(`twine-story-edit-workspace-${storyB.id}`)
+			).toBe(storyBStorage);
+			expect(window.localStorage.getItem('twine-story-edit-workspace')).toBe(
+				globalWorkspace
+			);
+			if (storyBGraphTransform) {
+				expect(screen.getByTestId('other-story-selection')).toHaveTextContent(
+					storyA.passages[2].id
+				);
+				expect(
+					(document.querySelector('.story-edit-graph-canvas') as HTMLElement)
+						.style.transform
+				).toBe(storyBGraphTransform);
+			}
+		}
+	);
+
+	it('does not fence a newer story A workspace when an older applied reveal is rejected', async () => {
+		const storyA = fakeStory(3);
+		const storyB = fakeStory(1);
+		storyA.passages[0].left = 125;
+		storyA.passages[0].top = 125;
+		const baselinePassage = storyA.passages[1];
+		storyA.passages.forEach(
+			(passage, index) => (passage.selected = index === 1)
+		);
+		window.localStorage.setItem(
+			`twine-story-edit-workspace-${storyA.id}`,
+			JSON.stringify({
+				activeWindowId: `passage:${baselinePassage.id}`,
+				editorWindows: [{kind: 'passage', passageId: baselinePassage.id}],
+				mode: 'graph',
+				selectedPassageId: baselinePassage.id
+			})
+		);
+		const flush = jest
+			.spyOn(workbenchBufferCoordinator, 'flushStory')
+			.mockResolvedValue(undefined);
+		const requestId = 'cross-story-remount';
+		const applied = registerStoryEditReveal(requestId);
+		await renderComponent(storyA, {stories: [storyA, storyB]}, () => [
+			`/stories/${storyB.id}`,
+			`/stories/${storyA.id}?mode=text&passage=${storyA.passages[0].id}&revealRequest=${requestId}`
+		]);
+		await expect(applied).resolves.toBeUndefined();
+
+		fireEvent.click(screen.getByRole('button', {name: 'History back'}));
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${storyB.id}`
+			)
+		);
+		fireEvent.click(screen.getByRole('button', {name: 'History forward'}));
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${storyA.id}`
+			)
+		);
+		expect(flush).toHaveBeenCalledTimes(1);
+
+		fireEvent.click(
+			screen.getByRole('tab', {name: 'routes.storyEdit.workspace.graphMode'})
+		);
+		await waitFor(() => {
+			expect(
+				JSON.parse(
+					window.localStorage.getItem(
+						`twine-story-edit-workspace-${storyA.id}`
+					) ?? '{}'
+				)
+			).toEqual(
+				expect.objectContaining({
+					mode: 'graph'
+				})
+			);
+		});
+
+		expect(
+			rejectStoryEditReveal(requestId, new Error('terminal rejection'))
+		).toBe(true);
+		await waitFor(() =>
+			expect(
+				JSON.parse(
+					window.localStorage.getItem(
+						`twine-story-edit-workspace-${storyA.id}`
+					) ?? '{}'
+				)
+			).toEqual(
+				expect.objectContaining({
+					mode: 'graph'
+				})
+			)
+		);
+
+		fireEvent.click(
+			screen.getByRole('tab', {name: 'routes.storyEdit.workspace.textMode'})
+		);
+		await waitFor(() =>
+			expect(
+				JSON.parse(
+					window.localStorage.getItem(
+						`twine-story-edit-workspace-${storyA.id}`
+					) ?? '{}'
+				).mode
+			).toBe('text')
+		);
+	});
+
+	it('cancels a pending correlated reveal when same-route navigation supersedes it', async () => {
+		const story = fakeStory(2);
+		let finishFlush!: () => void;
+		const pendingFlush = new Promise<void>(resolve => {
+			finishFlush = resolve;
+		});
+		const flush = jest
+			.spyOn(workbenchBufferCoordinator, 'flushStory')
+			.mockReturnValueOnce(pendingFlush)
+			.mockResolvedValue(undefined);
+		const applied = registerStoryEditReveal('superseded-reveal-request');
+		const rejected = expect(applied).rejects.toThrow(
+			'superseded by navigation'
+		);
+		const oldPassage = story.passages[0];
+		const newerPassage = story.passages[1];
+
+		const {container} = await renderComponent(story, undefined, story => [
+			`/stories/${story.id}?mode=graph&passage=${newerPassage.id}`,
+			`/stories/${story.id}?mode=text&passage=${oldPassage.id}&revealRequest=superseded-reveal-request`
+		]);
+
+		await waitFor(() => expect(flush).toHaveBeenCalledWith(story.id));
+		fireEvent.click(screen.getByRole('button', {name: 'History back'}));
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-search',
+				`?mode=graph&passage=${newerPassage.id}`
+			)
+		);
+		await act(async () => {
+			finishFlush();
+			await pendingFlush;
+			await Promise.resolve();
+		});
+		await rejected;
+
+		expect(
+			container.querySelector(
+				`[data-testid="story-editor-window-${oldPassage.id}"]`
+			)
+		).not.toBeInTheDocument();
+		await waitFor(() =>
+			expect(screen.getByTestId(`passage-${newerPassage.id}`)).toHaveAttribute(
+				'data-selected',
+				'true'
+			)
+		);
+		expect(
+			screen.getByRole('tab', {name: 'routes.storyEdit.workspace.graphMode'})
+		).toHaveAttribute('aria-selected', 'true');
 	});
 
 	it('opens story search for variable source route queries', async () => {

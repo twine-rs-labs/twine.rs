@@ -5,6 +5,7 @@ import {defaults as prefsDefaults} from '../../../store/prefs/defaults';
 import {fakePassage, fakeStory} from '../../../test-util';
 import {
 	initialModeForStory,
+	invalidateStoryEditWorkspacePersistence,
 	preferredModeForStory,
 	readProjectWorkspaceForStory,
 	setStoryEditScrollMemory,
@@ -145,6 +146,83 @@ describe('story edit workspace state', () => {
 			x: -80,
 			y: 45
 		});
+	});
+
+	it('advances rollback ownership revisions only for actual workspace writes', () => {
+		const story = fakeStory(2);
+		const wrapper: React.FC<React.PropsWithChildren> = ({children}) =>
+			React.createElement(
+				PrefsContext.Provider,
+				{value: {dispatch: jest.fn(), prefs: prefsDefaults()}},
+				children
+			);
+		const {result} = renderHook(() => useStoryEditWorkspace(story), {wrapper});
+		const initial = result.current.getRevisionSnapshot();
+
+		act(() => result.current.setMode(result.current.mode));
+		expect(result.current.getRevisionSnapshot().mode).toBe(initial.mode);
+
+		act(() =>
+			result.current.setMode(result.current.mode === 'text' ? 'graph' : 'text')
+		);
+		const afterMode = result.current.getRevisionSnapshot();
+		expect(afterMode.mode).toBeGreaterThan(initial.mode);
+		expect(afterMode.interaction).toBeGreaterThan(initial.interaction);
+		expect(result.current.isRevisionSnapshotCurrent(initial, ['mode'])).toBe(
+			false
+		);
+		expect(
+			result.current.isRevisionSnapshotCurrent(initial, ['editorWindows'])
+		).toBe(true);
+		expect(
+			result.current.isRevisionSnapshotCurrent(initial, [
+				'editorWindows',
+				'interaction'
+			])
+		).toBe(false);
+	});
+
+	it('fences delayed writes from an invalidated workspace instance', () => {
+		const story = fakeStory(2);
+		const key = `twine-story-edit-workspace-${story.id}`;
+		const wrapper: React.FC<React.PropsWithChildren> = ({children}) =>
+			React.createElement(
+				PrefsContext.Provider,
+				{value: {dispatch: jest.fn(), prefs: prefsDefaults()}},
+				children
+			);
+		const oldWorkspace = renderHook(() => useStoryEditWorkspace(story), {
+			wrapper
+		});
+
+		invalidateStoryEditWorkspacePersistence(
+			oldWorkspace.result.current.persistenceLease
+		);
+		window.localStorage.setItem(
+			key,
+			JSON.stringify({mode: 'graph', selectedPassageId: story.passages[0].id})
+		);
+		act(() => {
+			oldWorkspace.result.current.setSelectedPassageId(story.passages[1].id);
+			oldWorkspace.result.current.setGraphView({k: 1.4, x: 20, y: 30});
+		});
+
+		expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual({
+			mode: 'graph',
+			selectedPassageId: story.passages[0].id
+		});
+
+		oldWorkspace.unmount();
+		const newWorkspace = renderHook(() => useStoryEditWorkspace(story), {
+			wrapper
+		});
+		act(() =>
+			newWorkspace.result.current.setSelectedPassageId(story.passages[1].id)
+		);
+
+		expect(
+			JSON.parse(window.localStorage.getItem(key)!).selectedPassageId
+		).toBe(story.passages[1].id);
 	});
 
 	it('persists the active bottom-drawer panel as workspace-only state', () => {

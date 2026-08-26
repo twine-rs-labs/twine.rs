@@ -118,4 +118,30 @@ describe('WorkbenchBufferCoordinator', () => {
 		expect(coordinator.hasPendingChanges('first')).toBe(true);
 		expect(coordinator.hasPendingChanges('second')).toBe(false);
 	});
+
+	it('requires both the registered buffer identity and revision to match a snapshot', () => {
+		const coordinator = new WorkbenchBufferCoordinator();
+		let revision = 1;
+		const first = {
+			bufferId: 'passage:start',
+			flush: jest.fn(),
+			hasPendingChanges: () => false,
+			revision: () => revision,
+			storyId: 'first'
+		};
+		const unregister = coordinator.register(first);
+		const snapshot = coordinator.captureSnapshot('first', 'passage:start');
+
+		expect(
+			coordinator.isSnapshotCurrent('first', 'passage:start', snapshot)
+		).toBe(true);
+		unregister();
+		coordinator.register({...first, revision: () => revision});
+		expect(
+			coordinator.isSnapshotCurrent('first', 'passage:start', snapshot)
+		).toBe(false);
+		expect(coordinator.isSnapshotRevisionCurrent(snapshot)).toBe(true);
+		revision++;
+		expect(coordinator.isSnapshotRevisionCurrent(snapshot)).toBe(false);
+	});
 });

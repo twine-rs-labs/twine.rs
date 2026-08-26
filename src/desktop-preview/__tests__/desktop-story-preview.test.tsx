@@ -61,11 +61,12 @@ function previewApi() {
 			url: 'twine-preview://00000000-0000-4000-8000-000000000001/__twine-preview-clear-state/00000000-0000-4000-8000-000000000002'
 		}),
 		cancelClearState: jest.fn().mockResolvedValue(undefined),
-		command: jest.fn().mockResolvedValue({
-			command: 'revealSource',
-			generation: 1,
-			status: 'busy'
-		}),
+		command: jest.fn(async (command: any) => ({
+			command: command.type,
+			generation: command.generation,
+			requestId: command.requestId,
+			status: 'busy' as const
+		})),
 		copyText: jest.fn().mockResolvedValue(undefined),
 		completeClearState: jest.fn().mockResolvedValue(undefined),
 		frameLoaded: jest.fn().mockResolvedValue(undefined),
@@ -114,6 +115,24 @@ function postRuntimeLog(frame: HTMLElement, message: string) {
 					source: STORY_PREVIEW_BRIDGE_SOURCE,
 					time: 10,
 					type: 'console'
+				},
+				source: (frame as HTMLIFrameElement).contentWindow
+			})
+		);
+	});
+}
+
+function postRuntimeState(frame: HTMLElement) {
+	act(() => {
+		window.dispatchEvent(
+			new MessageEvent('message', {
+				data: {
+					currentPassage: {localId: '1', name: 'Start', source: 'runtime'},
+					sessionId: 'bridge-1',
+					source: STORY_PREVIEW_BRIDGE_SOURCE,
+					time: 10,
+					type: 'state',
+					viewport: {height: 700, width: 390}
 				},
 				source: (frame as HTMLIFrameElement).contentWindow
 			})
@@ -262,10 +281,13 @@ describe('<DesktopStoryPreview>', () => {
 			expect(fixture.api.frameLoaded).toHaveBeenCalledWith(1)
 		);
 
-		fireEvent.click(screen.getByRole('button', {name: 'Source'}));
+		postRuntimeState(frame);
+		fireEvent.click(screen.getByRole('button', {name: 'Edit Passage'}));
 		await waitFor(() =>
 			expect(fixture.api.command).toHaveBeenCalledWith({
 				generation: 1,
+				passageId: 'passage-1',
+				requestId: expect.any(String),
 				type: 'revealSource'
 			})
 		);
@@ -459,10 +481,21 @@ describe('<DesktopStoryPreview>', () => {
 		await waitFor(() => expect(testFromStart).toBeDisabled());
 		fireEvent.click(testFromStart);
 		expect(fixture.api.command).toHaveBeenCalledTimes(1);
+		const requestId = (fixture.api.command as jest.Mock).mock.calls[0][0]
+			.requestId;
 
 		fixture.commandResult({
 			command: 'testFromStart',
 			generation: 1,
+			requestId: 'stale-request',
+			status: 'success'
+		});
+		expect(testFromStart).toBeDisabled();
+
+		fixture.commandResult({
+			command: 'testFromStart',
+			generation: 1,
+			requestId,
 			status: 'success'
 		});
 		await waitFor(() => expect(testFromStart).toBeEnabled());
@@ -478,6 +511,8 @@ describe('<DesktopStoryPreview>', () => {
 
 		fireEvent.click(testFromStart);
 		await waitFor(() => expect(testFromStart).toBeDisabled());
+		const requestId = (fixture.api.command as jest.Mock).mock.calls[0][0]
+			.requestId;
 		fixture.replacement({
 			generation: 2,
 			replacement: {
@@ -497,6 +532,7 @@ describe('<DesktopStoryPreview>', () => {
 		fixture.commandResult({
 			command: 'testFromStart',
 			generation: 1,
+			requestId,
 			status: 'success'
 		});
 		expect(testFromStart).toBeEnabled();

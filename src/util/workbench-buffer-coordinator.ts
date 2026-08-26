@@ -6,6 +6,11 @@ export interface WorkbenchDirtyBuffer {
 	storyId: string;
 }
 
+export interface WorkbenchBufferSnapshot {
+	buffer: WorkbenchDirtyBuffer;
+	revision: number;
+}
+
 /**
  * Coordinates the workbench's renderer-local editor buffers with operations
  * that consume or retire a Rust project session. A flush is stable only when
@@ -41,6 +46,29 @@ export class WorkbenchBufferCoordinator {
 				(storyId === undefined || buffer.storyId === storyId) &&
 				buffer.hasPendingChanges()
 		);
+	}
+
+	/** Captures both registration identity and edit revision for ABA-safe rollback. */
+	captureSnapshot(storyId: string, bufferId: string) {
+		const buffer = this.buffers.get(`${storyId}:${bufferId}`);
+		return buffer ? {buffer, revision: buffer.revision()} : undefined;
+	}
+
+	isSnapshotCurrent(
+		storyId: string,
+		bufferId: string,
+		snapshot: WorkbenchBufferSnapshot | undefined
+	) {
+		return (
+			!!snapshot &&
+			this.buffers.get(`${storyId}:${bufferId}`) === snapshot.buffer &&
+			snapshot.buffer.revision() === snapshot.revision
+		);
+	}
+
+	/** Checks edit ownership after the buffer has intentionally unmounted. */
+	isSnapshotRevisionCurrent(snapshot: WorkbenchBufferSnapshot | undefined) {
+		return !!snapshot && snapshot.buffer.revision() === snapshot.revision;
 	}
 
 	private async flushBuffer(buffer: WorkbenchDirtyBuffer) {

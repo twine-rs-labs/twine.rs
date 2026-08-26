@@ -20,6 +20,7 @@ import {StoryEditRoute} from './story-edit';
 import {StoryListRoute} from './story-list';
 import {StoryPreviewRoute} from './story-preview';
 import {StoryPreviewOwnerController} from './story-preview-owner-controller';
+import {BrowserStoryPreviewOwnerController} from './browser-story-preview-owner-controller';
 
 const UnmatchedRoute: React.FC = () => {
 	const location = useLocation();
@@ -34,6 +35,7 @@ const RootRoute: React.FC = () => (
 	<>
 		<CommandLineOpenSync />
 		<StoryPreviewOwnerController />
+		<BrowserStoryPreviewOwnerController />
 		<AppShell>
 			<Outlet />
 		</AppShell>

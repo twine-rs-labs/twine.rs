@@ -215,8 +215,10 @@ function runtimeDebuggerPassageLabel(passage: StoryPreviewRuntimePassage) {
 function RuntimeDebuggerPassageActions({
 	passage,
 	onRevealGraph,
-	onRevealSource
+	onRevealSource,
+	controlsDisabled
 }: {
+	controlsDisabled: boolean;
 	passage: StoryPreviewRuntimePassage;
 	onRevealGraph?: (passageId?: string) => void;
 	onRevealSource?: (passageId?: string) => void;
@@ -230,22 +232,28 @@ function RuntimeDebuggerPassageActions({
 		<span className="story-preview-route__debugger-passage-actions">
 			{onRevealSource && (
 				<Button
-					aria-label={`Open ${passageLabel} in Source`}
+					aria-label={`Edit text for ${passageLabel}`}
 					icon="file-text"
-					onClick={() => onRevealSource(passage.id)}
+					disabled={controlsDisabled}
+					onClick={() => {
+						if (!controlsDisabled) onRevealSource(passage.id);
+					}}
 					size="sm"
 				>
-					Source
+					Edit Text
 				</Button>
 			)}
 			{onRevealGraph && (
 				<Button
-					aria-label={`Open ${passageLabel} in Graph`}
+					aria-label={`Reveal ${passageLabel} in Graph`}
 					icon="binary-tree"
-					onClick={() => onRevealGraph(passage.id)}
+					disabled={controlsDisabled}
+					onClick={() => {
+						if (!controlsDisabled) onRevealGraph(passage.id);
+					}}
 					size="sm"
 				>
-					Graph
+					Reveal in Graph
 				</Button>
 			)}
 		</span>
@@ -1667,20 +1675,26 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 						Test From Start
 					</Button>
 					<Button
-						disabled={!onRevealSource}
+						disabled={controlsDisabled || !currentPassageId || !onRevealSource}
 						icon="file-text"
-						onClick={() => onRevealSource?.(currentPassageId)}
+						onClick={() => {
+							if (!controlsDisabled && currentPassageId)
+								onRevealSource?.(currentPassageId);
+						}}
 						size="sm"
 					>
-						Source
+						Edit Passage
 					</Button>
 					<Button
-						disabled={!onRevealGraph}
+						disabled={controlsDisabled || !currentPassageId || !onRevealGraph}
 						icon="binary-tree"
-						onClick={() => onRevealGraph?.(currentPassageId)}
+						onClick={() => {
+							if (!controlsDisabled && currentPassageId)
+								onRevealGraph?.(currentPassageId);
+						}}
 						size="sm"
 					>
-						Graph
+						Reveal in Graph
 					</Button>
 					<Button
 						disabled={
@@ -1912,6 +1926,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 																</span>
 																{debuggerSnapshot.currentPassage && (
 																	<RuntimeDebuggerPassageActions
+																		controlsDisabled={controlsDisabled}
 																		passage={debuggerSnapshot.currentPassage}
 																		onRevealGraph={onRevealGraph}
 																		onRevealSource={onRevealSource}
@@ -1971,6 +1986,7 @@ export const StoryPreviewFrame: React.FC<StoryPreviewFrameProps> = props => {
 																					{runtimeDebuggerPassageLabel(passage)}
 																				</span>
 																				<RuntimeDebuggerPassageActions
+																					controlsDisabled={controlsDisabled}
 																					passage={passage}
 																					onRevealGraph={onRevealGraph}
 																					onRevealSource={onRevealSource}
