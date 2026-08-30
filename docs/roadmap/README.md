@@ -16,15 +16,15 @@ belong in `../archive/completed-plans/`.
 
 ## Priority order
 
-1. [Safe project-wide navigation and refactoring](./safe-project-refactoring.md)
-2. [Product depth and legacy retirement](./product.md)
-3. [Post-beta release validation](./release.md)
+1. [Performance](./performance.md)
+2. [Safe project-wide navigation and refactoring](./safe-project-refactoring.md)
+3. [Product depth and legacy retirement](./product.md)
+4. [Post-beta release validation](./release.md)
 
-[Performance](./performance.md) remains a regression-monitoring track, not a
-current optimization priority. The beta.5 comparison produced only marginal
-threshold misses and no concrete, repeatable owner that justifies foreseeable
-implementation work. Resume optimization only for a material reproducible
-regression or an evidence-selected owner with a bounded remedy.
+Performance is an active blocking track. Marginal budget misses are not
+normalized away: they remain failed regression evidence until a clean candidate
+passes, and evidence-selected owners receive bounded optimization work. Safe
+refactoring proceeds only while its own 10k/50k performance gates remain green.
 
 Release validation moves ahead of product work whenever a release candidate is
 being prepared. A current actionable dependency or security finding can also

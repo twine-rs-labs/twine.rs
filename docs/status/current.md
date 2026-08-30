@@ -13,8 +13,8 @@ and local release-mode Electron performance harness are implemented.
 
 `v0.2.0-beta.5` is the current tagged prerelease. The product remains prerelease
 software and still misses several large-project performance targets. The
-current phase prioritizes safe product depth and post-beta release validation,
-not another ownership migration.
+current phase prioritizes evidence-selected large-project performance work and
+safe project-wide refactoring, followed by product depth and release validation.
 
 ## Implemented foundations
 
@@ -157,9 +157,11 @@ The complete local 10k and 50k benchmark runs verify:
   suites with structural invariants intact. It recorded two marginal regression
   threshold misses: 10k edit-paint p95 was 31.50 ms against a 30.70 ms computed
   limit, and 50k resident-memory p50 was 1,152.44 MiB against a 1,148.54 MiB
-  computed limit. These results remain monitoring evidence rather than accepted
-  baselines; neither miss identifies a concrete optimization owner or makes
-  performance an active product priority.
+  computed limit. These results remain failed regression evidence rather than
+  accepted baselines. Follow-up reproduction has identified bounded owners in
+  the ordinary edit path and in the 50k safe-refactor planning/apply path;
+  performance therefore remains active until clean candidate runs pass their
+  blocking gates.
 - The user manual still contains inherited Twine task and compatibility
   chapters. Current launcher, project-folder, conflict-review, workbench,
   asset, build, Settings, and Story Formats workflows are documented.
@@ -168,10 +170,7 @@ The complete local 10k and 50k benchmark runs verify:
 
 Only unfinished outcomes belong in the active roadmap:
 
-1. [`Safe project-wide navigation and refactoring`](../roadmap/safe-project-refactoring.md)
-2. [`Product-depth and legacy retirement`](../roadmap/product.md)
-3. [`Post-beta release validation`](../roadmap/release.md)
-
-[`Performance`](../roadmap/performance.md) remains monitored but deferred until
-a material reproducible regression or an evidence-selected optimization owner
-appears.
+1. [`Performance`](../roadmap/performance.md)
+2. [`Safe project-wide navigation and refactoring`](../roadmap/safe-project-refactoring.md)
+3. [`Product-depth and legacy retirement`](../roadmap/product.md)
+4. [`Post-beta release validation`](../roadmap/release.md)
