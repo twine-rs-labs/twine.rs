@@ -34,9 +34,11 @@ a link to a new passage, keep typing and the completions list will disappear.
 ## Renaming Links
 
 If you change your mind about a passage name, you don't need to manually edit
-links in other passages. When you [rename a passage](renaming.md), Twine will update
-links to passages for you. It won't, however, update any references to a passage
-that use story format-specific functionality, like code.
+standard links in other passages. When you [rename a passage](renaming.md),
+Twine shows every detected standard-link occurrence in a review and updates the
+reviewed links when you apply it. The coverage notice is important: references
+that use story format-specific functionality, such as code, may not be detected
+and are not changed speculatively.
 
 ## Image-Based Links
 

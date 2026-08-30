@@ -105,6 +105,32 @@
 			"emptyName": "Please enter a name.",
 			"nameAlreadyUsed": "Another passage in this story has this name."
 		},
+		"renamePassageReview": {
+			"title": "Review Passage Rename",
+			"planning": "Planning safe rename…",
+			"planningProgress": "Planning safe rename: {{scanned}} of {{total}} passages scanned.",
+			"rename": "Rename {{beforeName}} to {{afterName}}",
+			"affectedEntities": "{{count}} affected entities",
+			"changes": "{{count}} changes",
+			"expires": "This review expires: {{date}}",
+			"standardLinksOnly": "Standard Twine links are covered. Format-specific references may be missed or unchanged.",
+			"loadingChanges": "Loading review changes…",
+			"visibleChanges": "Showing changes {{start}}–{{end}} of {{total}}.",
+			"before": "Before",
+			"after": "After",
+			"utf16Offsets": "UTF-16 offsets",
+			"apply": "Apply Rename",
+			"retry": "Retry review",
+			"previous": "Previous",
+			"coverage": {
+				"standard-links-only": "Standard Twine links only",
+				"standard-links-and-exact-format-provider": "Standard links and exact format provider",
+				"provider-unavailable": "Format provider unavailable",
+				"provider-version-mismatch": "Format provider version mismatch",
+				"provider-partial-capability": "Format provider has partial capability",
+				"unknown": "Coverage status unavailable"
+			}
+		},
 		"renameStoryButton": {
 			"emptyName": "Please enter a name.",
 			"nameAlreadyUsed": "Another story has this name."

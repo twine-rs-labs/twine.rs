@@ -1668,6 +1668,36 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			'Packaged save survived the native bridge.',
 			testInfo
 		);
+		await tabWithText(page, 'Passage').click();
+		await page.getByRole('button', {name: 'Rename', exact: true}).click();
+		const renamePrompt = page.getByRole('dialog', {
+			name: 'What should “Start” be renamed to?'
+		});
+		await renamePrompt.getByRole('textbox').fill('Packaged Start');
+		await renamePrompt.getByRole('button', {name: 'Save'}).click();
+		const renameReview = page.getByRole('dialog', {
+			name: 'Review Passage Rename'
+		});
+		await expect(renameReview.getByText('Rename passage')).toBeVisible();
+		await renameReview.getByRole('button', {name: 'Apply Rename'}).click();
+		await expect(renameReview).toHaveCount(0);
+		await expect(
+			page.getByRole('region', {name: 'Packaged Start', exact: true})
+		).toBeVisible();
+		await expect
+			.poll(() =>
+				page.evaluate(async rootPath => {
+					const bridge = (window as PackagedProjectWindow).twineElectron;
+
+					if (!bridge) {
+						throw new Error('Desktop project bridge is unavailable.');
+					}
+					const hydrated = await bridge.hydrateProjectFolder(rootPath);
+
+					return hydrated.stories[0]?.passages[0]?.name;
+				}, projectRoot)
+			)
+			.toBe('Packaged Start');
 
 		const siblingSave = await page.evaluate(
 			async ({

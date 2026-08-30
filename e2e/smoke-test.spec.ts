@@ -214,6 +214,106 @@ test('persists embedded source-editor passage edits', async ({page}) => {
 	);
 });
 
+test('reviews a passage rename before applying its standard-link edits atomically', async ({
+	page
+}) => {
+	await createProject(page, 'Reviewed passage rename smoke');
+	await setPassageText(page, 'Start [[Next]] and [[Again->Next]].');
+	await selectPassage(page, 'Next');
+	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
+	await page.getByRole('button', {name: 'Rename', exact: true}).click();
+
+	const renamePrompt = page.getByRole('dialog', {
+		name: 'What should “Next” be renamed to?'
+	});
+	await renamePrompt.getByRole('textbox').fill('Continue');
+	await renamePrompt.getByRole('button', {name: 'Save'}).click();
+
+	const review = page.getByRole('dialog', {name: 'Review Passage Rename'});
+	await expect(review).toBeVisible();
+	await expect(
+		review.getByText(
+			'Standard Twine links are covered. Format-specific references may be missed or unchanged.'
+		)
+	).toBeVisible();
+	await expect(review.getByText('Rename passage')).toBeVisible();
+	await expect(review.getByText('Edit source text')).toHaveCount(2);
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Next$/})
+	).toBeVisible();
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Continue$/})
+	).toHaveCount(0);
+
+	await setPassageText(
+		page,
+		'Editing stays available while rename review is open.'
+	);
+	await expect(review).toBeVisible();
+	await review.getByRole('button', {name: 'Apply Rename'}).click();
+	await expect(review.getByRole('alert')).toContainText(
+		'stale-project-revision'
+	);
+	await review.getByRole('button', {name: 'Retry review'}).click();
+	await expect(review.getByText('Rename passage')).toBeVisible();
+	await review.getByRole('button', {name: 'Apply Rename'}).click();
+	await expect(review).toHaveCount(0);
+	await expect(
+		page.getByRole('button', {name: 'Rename', exact: true})
+	).toBeFocused();
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Continue$/})
+	).toBeVisible();
+	await selectPassage(page, 'Start');
+	const startEditor = page.getByRole('region', {name: 'Start', exact: true});
+	await expect(startEditor).toContainText(
+		'Start [[Continue]] and [[Again->Continue]].'
+	);
+
+	await page.getByRole('button', {name: /^Undo /}).click();
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Next$/})
+	).toBeVisible();
+	await expect(startEditor).toContainText(
+		'Start [[Next]] and [[Again->Next]].'
+	);
+
+	await page.getByRole('button', {name: /^Redo /}).click();
+	await expect(
+		page.getByRole('listitem').filter({hasText: /^Continue$/})
+	).toBeVisible();
+	await expect(startEditor).toContainText(
+		'Start [[Continue]] and [[Again->Continue]].'
+	);
+
+	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
+	await page.getByRole('button', {name: 'Rename', exact: true}).click();
+	const escapePrompt = page.getByRole('dialog', {
+		name: 'What should “Start” be renamed to?'
+	});
+	await escapePrompt.getByRole('textbox').fill('Home');
+	await escapePrompt.getByRole('button', {name: 'Save'}).click();
+	await expect(review).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(review).toHaveCount(0);
+	await expect(
+		page.getByRole('button', {name: 'Rename', exact: true})
+	).toBeFocused();
+
+	await page.getByRole('button', {name: 'Rename', exact: true}).click();
+	const cancelPrompt = page.getByRole('dialog', {
+		name: 'What should “Start” be renamed to?'
+	});
+	await cancelPrompt.getByRole('textbox').fill('Beginning');
+	await cancelPrompt.getByRole('button', {name: 'Save'}).click();
+	await expect(review).toBeVisible();
+	await review.getByRole('button', {name: 'Cancel'}).click();
+	await expect(review).toHaveCount(0);
+	await expect(
+		page.getByRole('button', {name: 'Rename', exact: true})
+	).toBeFocused();
+});
+
 test('keeps colliding passage IDs scoped to their projects', async ({page}) => {
 	await createProject(page, 'Passage collision first');
 	await page.getByRole('button', {name: 'New', exact: true}).click();

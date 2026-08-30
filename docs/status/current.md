@@ -137,12 +137,15 @@ The complete local 10k and 50k benchmark runs verify:
   families still use scoped full indexes or broad session deltas. They are not
   part of the large-story default startup/edit/watcher path and remain targeted
   optimization work.
-- Passage rename, project-wide replace, backlinks, Diagnostics quick fixes, and
-  the command palette have working foundations, but they do not yet form one
-  revision-pinned Safe Refactor workflow. Rename and replace lack an exact
-  reviewed apply plan, general definition/reference navigation is incomplete,
-  Fix All Safe is not one atomic batch, and authoring commands are not exposed
-  consistently through the palette.
+- Passage rename now uses a revision-pinned, Rust-owned review plan for the
+  passage name and every detected standard Twine-link occurrence. Its detail
+  review is paged and grouped by affected passage, and confirmed apply, undo,
+  and redo remain one project transaction. Format-specific semantic references
+  are still reported as unsupported coverage and are not rewritten
+  speculatively. Project-wide replace does not yet use the reviewed apply plan,
+  general definition/reference navigation is incomplete, Fix All Safe is not
+  one atomic batch, and authoring commands are not exposed consistently through
+  the palette.
 - Some inherited compatibility UI remains outside the primary workbench.
 - Native Harlowe editing is intentionally exact-version: bundled Harlowe 1.2.4
   and 2.1.0, user-added Harlowe builds, and future Harlowe dialects use the

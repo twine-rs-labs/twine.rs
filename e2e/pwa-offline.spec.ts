@@ -158,6 +158,22 @@ test('a fresh install can create and test a project offline', async ({
 	const marker = 'Fresh-install offline story format loaded.';
 
 	await setPassageText(page, marker);
+	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
+	await page.getByRole('button', {name: 'Rename', exact: true}).click();
+	const renamePrompt = page.getByRole('dialog', {
+		name: 'What should “Start” be renamed to?'
+	});
+	await renamePrompt.getByRole('textbox').fill('Offline Start');
+	await renamePrompt.getByRole('button', {name: 'Save'}).click();
+	const renameReview = page.getByRole('dialog', {
+		name: 'Review Passage Rename'
+	});
+	await expect(renameReview.getByText('Rename passage')).toBeVisible();
+	await renameReview.getByRole('button', {name: 'Apply Rename'}).click();
+	await expect(renameReview).toHaveCount(0);
+	await expect(
+		page.getByRole('region', {name: 'Offline Start', exact: true})
+	).toBeVisible();
 
 	const [testPage] = await Promise.all([
 		context.waitForEvent('page'),

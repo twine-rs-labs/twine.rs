@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {RenamePassageButton} from '../../../components/passage/rename-passage-button';
-import {renamePassageCommand, useCoreProjectHost} from '../../../core';
+import {PassageRenameReview} from '../../../components/passage/passage-rename-review';
 import {Passage, Story} from '../../../store/stories';
 import {Point} from '../../../util/geometry';
 import {CreatePassageButton} from './create-passage-button';
@@ -11,6 +11,7 @@ import {SelectAllPassagesButton} from './select-all-passages-button';
 import {DeselectAllPassagesButton} from './deselect-all-passages-button';
 import {StartAtPassageButton} from './start-at-passage-button';
 import {TestPassageButton} from './test-passage-button';
+import {usePassageRenameReview} from './use-passage-rename-review';
 
 export interface PassageActionsProps {
 	getCenter: () => Point;
@@ -32,7 +33,16 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 		testPassagePending,
 		testPassagePendingId
 	} = props;
-	const coreProjectHost = useCoreProjectHost();
+	const [renameReview, setRenameReview] = React.useState<
+		| {
+				afterName: string;
+				passage: Passage;
+				passageId: string;
+				storyId: string;
+		  }
+		| undefined
+	>();
+	const renameTriggerRef = React.useRef<HTMLSpanElement>(null);
 	const selectedPassages = React.useMemo(
 		() => story.passages.filter(passage => passage.selected),
 		[story.passages]
@@ -41,15 +51,54 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 		() => (selectedPassages.length === 1 ? selectedPassages[0] : undefined),
 		[selectedPassages]
 	);
+	const restoreRenameFocus = React.useCallback(() => {
+		window.requestAnimationFrame(() =>
+			renameTriggerRef.current?.querySelector('button')?.focus()
+		);
+	}, []);
+	const handleReviewApplied = React.useCallback(() => {
+		setRenameReview(undefined);
+		restoreRenameFocus();
+	}, [restoreRenameFocus]);
+	const reviewController = usePassageRenameReview(
+		renameReview,
+		handleReviewApplied
+	);
+	const closeRenameReview = React.useCallback(() => {
+		reviewController.closeBoundary();
+		setRenameReview(undefined);
+		restoreRenameFocus();
+	}, [restoreRenameFocus, reviewController.closeBoundary]);
+
+	React.useEffect(() => {
+		if (
+			renameReview &&
+			(renameReview.storyId !== story.id ||
+				renameReview.passage.id !== soloSelectedPassage?.id ||
+				!story.passages.some(passage => passage.id === renameReview.passage.id))
+		) {
+			reviewController.closeBoundary();
+			setRenameReview(undefined);
+		}
+	}, [
+		renameReview,
+		reviewController.closeBoundary,
+		soloSelectedPassage?.id,
+		story.id,
+		story.passages
+	]);
 
 	function handleRename(name: string, passage?: Passage) {
 		if (!passage) {
 			throw new Error('Passage is unset');
 		}
 
-		coreProjectHost.applyStoryCommand(
-			renamePassageCommand(story.id, passage.id, name, true)
-		);
+		setRenameReview({
+			afterName: name,
+			passage,
+			passageId: passage.id,
+			storyId: story.id
+		});
 	}
 
 	return (
@@ -60,11 +109,13 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 				passages={selectedPassages}
 				story={story}
 			/>
-			<RenamePassageButton
-				onRename={name => handleRename(name, soloSelectedPassage)}
-				passage={soloSelectedPassage}
-				story={story}
-			/>
+			<span ref={renameTriggerRef}>
+				<RenamePassageButton
+					onRename={name => handleRename(name, soloSelectedPassage)}
+					passage={soloSelectedPassage}
+					story={story}
+				/>
+			</span>
 			<DeletePassagesButton passages={selectedPassages} story={story} />
 			<TestPassageButton
 				onTestPassage={onTestPassage}
@@ -79,6 +130,25 @@ export const PassageActions: React.FC<PassageActionsProps> = props => {
 				story={story}
 				selectedPassages={selectedPassages}
 			/>
+			{renameReview?.storyId === story.id && (
+				<PassageRenameReview
+					afterName={renameReview.afterName}
+					applying={reviewController.applying}
+					cursor={reviewController.cursor}
+					error={reviewController.error}
+					onApply={reviewController.handleApply}
+					onClose={closeRenameReview}
+					onNextPage={reviewController.handleNextPage}
+					onPreviousPage={reviewController.handlePreviousPage}
+					onRetry={reviewController.handleRetry}
+					page={reviewController.page}
+					passage={renameReview.passage}
+					progress={reviewController.progress}
+					showPreviousPage={reviewController.showPreviousPage}
+					story={story}
+					summary={reviewController.summary}
+				/>
+			)}
 		</div>
 	);
 };

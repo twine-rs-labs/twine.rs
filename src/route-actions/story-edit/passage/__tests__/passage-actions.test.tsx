@@ -10,7 +10,34 @@ import {
 } from '../../../../test-util';
 import {PassageActions, PassageActionsProps} from '../passage-actions';
 
+const mockCloseBoundary = jest.fn();
+
 jest.mock('../../../../components/passage/rename-passage-button');
+jest.mock('../../../../components/passage/passage-rename-review', () => ({
+	PassageRenameReview: ({
+		afterName,
+		onClose
+	}: {
+		afterName: string;
+		onClose: () => void;
+	}) => (
+		<div data-testid="passage-rename-review">
+			{afterName}
+			<button onClick={onClose}>close review</button>
+		</div>
+	)
+}));
+jest.mock('../use-passage-rename-review', () => ({
+	usePassageRenameReview: () => ({
+		applying: false,
+		closeBoundary: mockCloseBoundary,
+		handleApply: jest.fn(),
+		handleNextPage: jest.fn(),
+		handlePreviousPage: jest.fn(),
+		handleRetry: jest.fn(),
+		showPreviousPage: false
+	})
+}));
 
 const TestPassageActions: React.FC<Partial<PassageActionsProps>> = props => {
 	const {stories} = useStoriesContext();
@@ -56,7 +83,7 @@ describe('<PassageActions>', () => {
 		).toBeInTheDocument();
 	});
 
-	it('displays a passage rename button that renames a passage', async () => {
+	it('opens a passage rename review instead of immediately renaming a passage', async () => {
 		const story = fakeStory(1);
 
 		story.passages[0].selected = true;
@@ -64,9 +91,32 @@ describe('<PassageActions>', () => {
 		fireEvent.click(
 			screen.getByText(`mock-rename-passage-button-${story.passages[0].id}`)
 		);
+		expect(screen.getByTestId('passage-rename-review')).toHaveTextContent(
+			'mock-new-passage-name'
+		);
 		expect(
 			screen.getByTestId(`passage-${story.passages[0].id}`).dataset.name
-		).toBe('mock-new-passage-name');
+		).toBe(story.passages[0].name);
+	});
+
+	it('releases review ownership and restores focus after review closes', async () => {
+		const story = fakeStory(1);
+		story.passages[0].selected = true;
+		const requestAnimationFrameSpy = jest
+			.spyOn(window, 'requestAnimationFrame')
+			.mockImplementation(callback => {
+				callback(0);
+				return 1;
+			});
+		await renderComponent({story}, {stories: [story]});
+		const renameButton = screen.getByText(
+			`mock-rename-passage-button-${story.passages[0].id}`
+		);
+		fireEvent.click(renameButton);
+		fireEvent.click(screen.getByRole('button', {name: 'close review'}));
+		expect(mockCloseBoundary).toHaveBeenCalled();
+		expect(renameButton).toHaveFocus();
+		requestAnimationFrameSpy.mockRestore();
 	});
 
 	it('displays a passage delete button', async () => {
