@@ -28,6 +28,15 @@ import type {PatchBatch} from '../bindings/PatchBatch';
 import type {ProjectSnapshot} from '../bindings/ProjectSnapshot';
 import type {PassageSnapshot} from '../bindings/PassageSnapshot';
 import type {StoryCommand} from '../bindings/StoryCommand';
+import type {RefactorPlanApplyRequest} from '../bindings/RefactorPlanApplyRequest';
+import type {RefactorPlanApplyResult} from '../bindings/RefactorPlanApplyResult';
+import type {RefactorPlanCursor} from '../bindings/RefactorPlanCursor';
+import type {RefactorPlanDetailResult} from '../bindings/RefactorPlanDetailResult';
+import type {RefactorRuntimeState} from '../bindings/RefactorRuntimeState';
+import type {PlanPassageRenameRequest} from '../bindings/PlanPassageRenameRequest';
+import type {PlanPassageRenameBeginResult} from '../bindings/PlanPassageRenameBeginResult';
+import type {PlanPassageRenameResult} from '../bindings/PlanPassageRenameResult';
+import type {RefactorPlanningTaskHandle} from '../bindings/RefactorPlanningTaskHandle';
 import type {CoreBridgeMetric} from './performance';
 
 export interface WasmMutationStageTimings {
@@ -40,6 +49,7 @@ export interface WasmMutationStageTimings {
 	lookupAndDeltaMs: number;
 	operation: string;
 	patchFinalizeMs: number;
+	projectMutationMs: number;
 	readModelMs: number;
 	revision: number;
 	savepointMs: number;
@@ -67,6 +77,11 @@ export interface WasmWorkerMetricBase {
 		parsedSourceCount: number;
 		passageCount: number;
 		projectDocumentBytes: number;
+		refactorPlanningTaskBytes: number;
+		refactorPlanningTaskCount: number;
+		refactorPlanStoreBytes: number;
+		refactorPlanStoreEntryCount: number;
+		refactorPlanStoreFingerprint: string;
 		readModelCacheStoryCount: number;
 		readModelFullBuildCount: number;
 		readModelIncrementalUpdateCount: number;
@@ -80,6 +95,12 @@ export interface WasmWorkerMetricBase {
 	traceId?: string;
 	workerReceivedAt: number;
 	workerReceivedAtEpochMs: number;
+	/**
+	 * Dedicated Worker V8 heap observed with `wasmMemoryBytes` immediately
+	 * before this response is posted. It is intentionally a pair, not an
+	 * independently accumulated maximum.
+	 */
+	workerJsHeapUsedBytes?: number;
 	workerRespondedAt: number;
 	workerRespondedAtEpochMs: number;
 	wasmMemoryBytes?: number;
@@ -109,9 +130,56 @@ export type WasmWorkerRequest =
 	  }
 	| {
 			id: number;
+			kind: 'abortProjectBootstrap';
+			sessionId: string;
+	  }
+	| {
+			id: number;
 			kind: 'apply';
 			command: StoryCommand;
 			history: 'record' | 'skip';
+			revision: number;
+			sessionId: string;
+	  }
+	| {
+			id: number;
+			kind: 'syncRefactorRuntime';
+			revision: number;
+			runtime: RefactorRuntimeState;
+			sessionId: string;
+	  }
+	| {
+			id: number;
+			kind: 'beginPassageRenamePlan';
+			request: PlanPassageRenameRequest;
+			refactorRuntimeEpoch: number;
+			revision: number;
+			sessionId: string;
+	  }
+	| {
+			id: number;
+			kind: 'continuePassageRenamePlan';
+			sessionId: string;
+			task: RefactorPlanningTaskHandle;
+	  }
+	| {
+			id: number;
+			kind: 'cancelPassageRenamePlan';
+			sessionId: string;
+			task: RefactorPlanningTaskHandle;
+	  }
+	| {
+			applyRequest: RefactorPlanApplyRequest;
+			id: number;
+			kind: 'applyRefactorPlan';
+			refactorRuntimeEpoch: number;
+			revision: number;
+			sessionId: string;
+	  }
+	| {
+			cursor: RefactorPlanCursor;
+			id: number;
+			kind: 'queryRefactorPlanDetail';
 			revision: number;
 			sessionId: string;
 	  }
@@ -278,6 +346,13 @@ export type WasmWorkerRequest =
 			kind: 'status';
 			revision: number;
 			sessionId: string;
+	  }
+	| {
+			/** Narrow TWINE_PERF-only ownership probe; never a product operation. */
+			action: 'release' | 'retain';
+			bytes?: number;
+			id: number;
+			kind: 'performanceProbeWorkerJs';
 	  };
 
 export type WasmWorkerMutationResult = {
@@ -290,7 +365,44 @@ export type WasmWorkerExternalIngestResult = CoreExternalIngestResult & {
 	revision: number;
 };
 
+export type WasmWorkerRefactorApplyResult =
+	| (Extract<RefactorPlanApplyResult, {type: 'applied'}> & {
+			revision: number;
+			status: CoreSessionStatus;
+	  })
+	| (Extract<RefactorPlanApplyResult, {type: 'failure'}> & {
+			revision: number;
+	  });
+
 export type WasmWorkerSuccess =
+	| {
+			id: number;
+			kind: 'syncRefactorRuntime';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: {refactorRuntimeEpoch: number};
+	  }
+	| {
+			id: number;
+			kind: 'beginPassageRenamePlan';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: PlanPassageRenameBeginResult;
+	  }
+	| {
+			id: number;
+			kind: 'continuePassageRenamePlan';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: PlanPassageRenameResult;
+	  }
+	| {
+			id: number;
+			kind: 'cancelPassageRenamePlan';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: {cancelled: boolean};
+	  }
 	| {
 			id: number;
 			kind: 'appendProjectBootstrap' | 'beginProjectBootstrap';
@@ -307,10 +419,31 @@ export type WasmWorkerSuccess =
 	  }
 	| {
 			id: number;
+			kind: 'abortProjectBootstrap';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: {aborted: boolean};
+	  }
+	| {
+			id: number;
 			kind: 'apply';
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: WasmWorkerMutationResult;
+	  }
+	| {
+			id: number;
+			kind: 'applyRefactorPlan';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: WasmWorkerRefactorApplyResult;
+	  }
+	| {
+			id: number;
+			kind: 'queryRefactorPlanDetail';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: RefactorPlanDetailResult;
 	  }
 	| {
 			id: number;
@@ -465,6 +598,13 @@ export type WasmWorkerSuccess =
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: CoreSessionStatus;
+	  }
+	| {
+			id: number;
+			kind: 'performanceProbeWorkerJs';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: {allocatedBytes: number; retained: boolean};
 	  };
 
 export type WasmWorkerFailure = {

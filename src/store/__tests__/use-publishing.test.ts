@@ -1,4 +1,4 @@
-import type {CoreProjectHost} from '../../core/project-host';
+import type {CoreProjectHost} from '../../test-util/core-project-host-runtime';
 import {fakeStory} from '../../test-util';
 import {
 	currentStoryPreviewMetadata,

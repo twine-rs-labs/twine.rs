@@ -3,12 +3,14 @@
 import {spawnSync} from 'node:child_process';
 import {
 	access,
+	cp,
 	mkdir,
 	mkdtemp,
 	readFile,
 	readdir,
 	rm,
-	stat
+	stat,
+	writeFile
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,8 +23,10 @@ import {
 import {
 	currentGitProvenance,
 	decideElectronPhaseContinuation,
+	isElectronPerformancePhase,
 	mergeRawPerformanceReports,
 	preserveFirstNonzeroStatus,
+	requiresRefactorPerformancePreflight,
 	validateElectronPhaseReport,
 	writeJson
 } from './performance-tools.mjs';
@@ -52,14 +56,30 @@ const validPhases = [
 	'diagnostic',
 	'interaction',
 	'memory-detail',
+	'refactor',
 	...completePhases
 ];
+
+function redactBrokerSecrets(value) {
+	return value.replace(/\b[a-f0-9]{64}\b/gi, '[redacted-broker-token]');
+}
 
 if (!Number.isInteger(size) || size <= 0) {
 	throw new Error('--size must be a positive integer.');
 }
-if (!validPhases.includes(requestedPhase)) {
+if (!isElectronPerformancePhase(requestedPhase)) {
 	throw new Error(`--phase must be one of: ${validPhases.join(', ')}.`);
+}
+if (requiresRefactorPerformancePreflight(requestedPhase)) {
+	const preflight = spawnSync('npm', ['run', 'typecheck:e2e-performance'], {
+		cwd: repoRoot,
+		stdio: 'inherit'
+	});
+	if (preflight.status !== 0) {
+		throw new Error(
+			'Refactor performance preflight failed: typecheck:e2e-performance must pass before Electron launches.'
+		);
+	}
 }
 if (
 	(disableHarloweEditorExtensions || profileEdit) &&
@@ -110,6 +130,7 @@ const report = path.join(
 const editTrace = report.replace(/\.json$/, '.edit-trace.json.gz');
 const editCpuProfile = report.replace(/\.json$/, '.edit.cpuprofile');
 const checkpoint = report.replace(/\.json$/, '.checkpoint.json');
+const failureDiagnostics = report.replace(/\.json$/, '.failure');
 const main = path.join(
 	repoRoot,
 	'electron-build',
@@ -357,7 +378,7 @@ try {
 			'test',
 			'--config',
 			'playwright.electron.config.ts',
-			...(profileEdit ? ['--retries=0'] : [])
+			...(profileEdit || phase === 'refactor' ? ['--retries=0'] : [])
 		];
 		const result = spawnSync(
 			process.platform === 'win32' ? 'npx.cmd' : 'npx',
@@ -386,9 +407,21 @@ try {
 					TWINE_PERF_SMOKE: smoke ? '1' : '0',
 					TWINE_PERF_SIZE: String(size)
 				},
-				stdio: 'inherit'
+				stdio: 'pipe'
 			}
 		);
+		const stdout = redactBrokerSecrets(result.stdout ?? '');
+		const stderr = redactBrokerSecrets(result.stderr ?? '');
+		await writeFile(
+			path.join(runRoot, `${phase}.playwright.stdout.log`),
+			stdout
+		);
+		await writeFile(
+			path.join(runRoot, `${phase}.playwright.stderr.log`),
+			stderr
+		);
+		if (stdout) process.stdout.write(stdout);
+		if (stderr) process.stderr.write(stderr);
 		const exitCode = result.status ?? 1;
 		checkpointState.launches = await readLaunchTrace();
 		const phaseSourceFixtureUnchanged =
@@ -475,6 +508,14 @@ try {
 	const launches = await readLaunchTrace();
 
 	checkpointState.launches = launches;
+	const retainDiagnostics = runStatus !== 0 || measurementStatus !== 0;
+	if (retainDiagnostics) {
+		await cp(runRoot, failureDiagnostics, {
+			errorOnExist: false,
+			recursive: true
+		});
+		checkpointState.failureDiagnostics = failureDiagnostics;
+	}
 	await rm(runRoot, {force: true, recursive: true});
 	runRootRemoved = await access(runRoot).then(
 		() => false,

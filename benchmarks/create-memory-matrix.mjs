@@ -44,7 +44,7 @@ async function latestStartupReports() {
 			report.phase === 'startup' &&
 			!report.smoke &&
 			report.test?.status === 'passed' &&
-			report.environment?.metricContracts?.memoryAttribution === 1
+			report.environment?.metricContracts?.memoryAttribution === 2
 		) {
 			candidates.push({file, report});
 		}

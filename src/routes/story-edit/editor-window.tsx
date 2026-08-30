@@ -88,6 +88,8 @@ interface ResolvedBuffer {
 	memoryKey: string;
 	name: string;
 	passage?: Passage;
+	sourceId: string;
+	sourceKind: 'passage' | 'script' | 'stylesheet';
 	value: string;
 }
 
@@ -248,6 +250,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		story.storyFormatVersion
 	);
 	const [editor, setEditor] = React.useState<SourceEditorHandle>();
+	const editorRef = React.useRef<SourceEditorHandle | undefined>(undefined);
 	const [readyBufferId, setReadyBufferId] = React.useState<string>();
 	const [adapterFailure, setAdapterFailure] = React.useState<Error>();
 	const [bufferSaveError, setBufferSaveError] = React.useState<Error>();
@@ -281,6 +284,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				language: 'javascript',
 				memoryKey: `${story.id}:script`,
 				name: t('routes.storyEdit.toolbar.javaScript'),
+				sourceId: story.id,
+				sourceKind: 'script',
 				value: scriptDocument.document?.text ?? story.script
 			};
 		}
@@ -291,6 +296,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				language: 'css',
 				memoryKey: `${story.id}:stylesheet`,
 				name: t('routes.storyEdit.toolbar.stylesheet'),
+				sourceId: story.id,
+				sourceKind: 'stylesheet',
 				value: stylesheetDocument.document?.text ?? story.stylesheet
 			};
 		}
@@ -301,6 +308,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			memoryKey: passage ? `${story.id}:${passage.id}` : `${story.id}:passage`,
 			name: passage?.name ?? t('routes.storyEdit.workspace.noPassages'),
 			passage,
+			sourceId: passage?.id ?? '',
+			sourceKind: 'passage',
 			value: passageDocument.document?.text ?? ''
 		};
 	}, [
@@ -465,6 +474,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			rendererQuitQuiescence.registerBuffer({
 				closeAdmission() {
 					acceptingTextChanges.current = false;
+					editorRef.current?.setReadOnly?.(true);
 					setQuitReadOnly(true);
 				},
 				flush: flushPendingText,
@@ -479,16 +489,49 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 	React.useLayoutEffect(
 		() =>
 			workbenchBufferCoordinator.register({
+				applyRefactorTextEdits(edits) {
+					const current = editorRef.current?.getSnapshot().document;
+					if (
+						current === undefined ||
+						edits.some(
+							edit => current.slice(edit.start, edit.end) !== edit.expectedText
+						)
+					)
+						return false;
+					editorRef.current?.applyAuthoritativeEdits(
+						edits.map(edit => ({
+							from: edit.start,
+							to: edit.end,
+							insert: edit.replacementText
+						}))
+					);
+					return true;
+				},
 				bufferId: buffer.id,
+				closeAdmission() {
+					acceptingTextChanges.current = false;
+					editorRef.current?.setReadOnly?.(true);
+					setQuitReadOnly(true);
+				},
 				flush: flushPendingText,
 				hasPendingChanges: () =>
 					pendingText.current !== undefined ||
 					pendingCommit.current !== undefined ||
 					failedPersistenceText.current !== undefined,
+				isComposing: () => editorRef.current?.isComposing?.() ?? false,
 				revision: () => editRevision.current,
-				storyId: story.id
+				reopenAdmission() {
+					if (!rendererQuitQuiescence.isDraining) {
+						acceptingTextChanges.current = true;
+						editorRef.current?.setReadOnly?.(false);
+						setQuitReadOnly(false);
+					}
+				},
+				storyId: story.id,
+				sourceId: buffer.sourceId,
+				sourceKind: buffer.sourceKind
 			}),
-		[buffer.id, flushPendingText, story.id]
+		[buffer.id, buffer.sourceId, buffer.sourceKind, flushPendingText, story.id]
 	);
 
 	// Flush any pending edit when the buffer changes or the window closes.
@@ -656,10 +699,12 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 			? formatIntegration.codeMirror
 			: undefined;
 	const handleEditorRef = React.useCallback(
-		(instance: SourceEditorHandle | null) =>
+		(instance: SourceEditorHandle | null) => {
+			editorRef.current = instance ?? undefined;
 			setEditor(current =>
 				current === (instance ?? undefined) ? current : (instance ?? undefined)
-			),
+			);
+		},
 		[]
 	);
 

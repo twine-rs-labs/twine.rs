@@ -5,7 +5,7 @@ import type {CoreSessionStatus} from '../../../core/bindings/CoreSessionStatus';
 import {
 	CoreProjectHost,
 	CoreProjectHostContext
-} from '../../../core/project-host';
+} from '../../../test-util/core-project-host-runtime';
 import {UndoRedoButtons} from '../undo-redo-buttons';
 
 function testHost() {

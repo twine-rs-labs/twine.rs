@@ -1,5 +1,5 @@
 import type {CoreDocumentPage} from './bindings/CoreDocumentPage';
-import type {CoreProjectHost} from './project-host';
+import type {CoreProjectHost} from './project-host-public';
 import type {Story, StoryWithDocuments} from '../store/stories';
 
 export interface MaterializedStorySnapshot {

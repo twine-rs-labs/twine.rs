@@ -24,6 +24,7 @@ const historyTranslation: Record<CoreHistoryKind, string> = {
 	renamePassage: 'renamePassage',
 	renameStory: 'renameStory',
 	renameTag: 'renameTag',
+	refactor: 'changeStoryDetails',
 	replaceAsset: 'changeStoryDetails',
 	saveLayout: 'movePassage',
 	setStartPassage: 'changeStoryDetails',

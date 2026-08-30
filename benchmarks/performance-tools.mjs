@@ -21,6 +21,26 @@ export const completeElectronPhases = [
 	'watcher'
 ];
 
+export const focusedElectronPerformancePhases = [
+	'diagnostic',
+	'interaction',
+	'memory-detail',
+	'refactor'
+];
+
+export function isElectronPerformancePhase(phase) {
+	return (
+		phase === 'all' ||
+		completeElectronPhases.includes(phase) ||
+		focusedElectronPerformancePhases.includes(phase)
+	);
+}
+
+/** Refactor runs compile their shared Electron snapshot contract before launch. */
+export function requiresRefactorPerformancePreflight(phase) {
+	return phase === 'refactor';
+}
+
 function isRecord(value) {
 	return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -588,8 +608,46 @@ function metricValue(report, name, stat) {
 	return report.aggregates?.[name]?.[stat];
 }
 
+function hasRefactorEvidence(report) {
+	return (
+		!report.probeOnly &&
+		(report.phase === 'refactor' ||
+			report.phases?.refactor !== undefined ||
+			report.diagnostics?.phases?.refactor !== undefined)
+	);
+}
+
+function hasCleanGitProvenance(report) {
+	const git = report.environment?.git;
+
+	return (
+		git?.dirty === false &&
+		typeof git.revision === 'string' &&
+		git.revision.length > 0 &&
+		typeof git.worktreeFingerprint === 'string' &&
+		git.worktreeFingerprint.length > 0
+	);
+}
+
+/**
+ * Resolve a metric limit for the fixture represented by a report. Existing
+ * scalar targets remain valid so older benchmark contracts retain meaning.
+ */
+export function metricTargetForReport(report, budget) {
+	const size = report.fixture?.passageCount;
+	const sizeTarget =
+		Number.isInteger(size) && budget.targets
+			? budget.targets[String(size)]
+			: undefined;
+
+	return sizeTarget ?? budget.target;
+}
+
 export function evaluatePerformanceReport(report, budgets, baseline) {
 	const checks = [];
+	const appliesToReport = budget =>
+		!report.probeOnly &&
+		(!Array.isArray(budget.phases) || budget.phases.includes(report.phase));
 
 	for (const assertion of report.assertions ?? []) {
 		checks.push({
@@ -602,28 +660,47 @@ export function evaluatePerformanceReport(report, budgets, baseline) {
 	}
 
 	for (const [name, budget] of Object.entries(budgets.metrics ?? {})) {
+		if (!appliesToReport(budget)) continue;
 		const actual = metricValue(report, name, budget.stat);
+		const target = metricTargetForReport(report, budget);
 
 		if (actual === undefined) {
 			checks.push({
-				blocking: false,
-				detail: 'Metric was not captured by this scenario.',
+				blocking: budget.enforceTarget === true,
+				detail:
+					budget.enforceTarget === true
+						? 'Required metric was not captured by this scenario.'
+						: 'Metric was not captured by this scenario.',
 				kind: 'target',
 				name,
-				passed: true,
+				passed: budget.enforceTarget !== true,
 				status: 'missing'
 			});
 			continue;
 		}
+		if (target === undefined && !budget.baselineMetric) {
+			checks.push({
+				blocking: budget.enforceTarget === true,
+				detail: `No target is configured for fixture size ${String(
+					report.fixture?.passageCount
+				)}.`,
+				kind: 'target',
+				name,
+				passed: budget.enforceTarget !== true,
+				status: 'missing-target'
+			});
+			continue;
+		}
+		if (target === undefined) continue;
 
 		checks.push({
 			actual,
 			blocking: budget.enforceTarget === true,
-			detail: `${budget.stat} ${actual.toFixed(2)}; target ≤ ${budget.target}`,
+			detail: `${budget.stat} ${actual.toFixed(2)}; target ≤ ${target}`,
 			kind: 'target',
-			limit: budget.target,
+			limit: target,
 			name,
-			passed: actual <= budget.target
+			passed: actual <= target
 		});
 	}
 
@@ -637,24 +714,68 @@ export function evaluatePerformanceReport(report, budgets, baseline) {
 				: 'mismatched';
 	}
 
+	const baselineAccepted =
+		baselineStatus === 'matched' &&
+		baseline?.environment?.git?.dirty === false &&
+		baseline.phase === 'all' &&
+		baseline.test?.status === 'passed' &&
+		baseline.evaluation?.passed === true;
+
 	if (baselineStatus === 'matched') {
 		for (const [name, budget] of Object.entries(budgets.metrics ?? {})) {
-			const metricNamespace = name.split('.')[0];
+			if (!appliesToReport(budget)) continue;
+			if (budget.baselineMetric && !baselineAccepted) continue;
+			const metricNamespace =
+				budget.baselineContract ??
+				(budget.baselineMetric ?? name).split('.')[0];
 			const reportContract =
 				report.environment?.metricContracts?.[metricNamespace];
 			const baselineContract =
 				baseline.environment?.metricContracts?.[metricNamespace];
 
 			if (
-				(reportContract !== undefined || baselineContract !== undefined) &&
-				reportContract !== baselineContract
+				(budget.baselineContract &&
+					(reportContract === undefined || baselineContract === undefined)) ||
+				((reportContract !== undefined || baselineContract !== undefined) &&
+					reportContract !== baselineContract)
 			) {
 				continue;
 			}
 			const actual = metricValue(report, name, budget.stat);
-			const previous = metricValue(baseline, name, budget.stat);
+			const previous = metricValue(
+				baseline,
+				budget.baselineMetric ?? name,
+				budget.stat
+			);
 
-			if (actual === undefined || previous === undefined) {
+			if (actual === undefined) {
+				continue;
+			}
+			if (previous === undefined && budget.baselineMetric) {
+				checks.push({
+					blocking: true,
+					detail: `Required matching baseline metric is absent: ${budget.baselineMetric}.`,
+					kind: 'baseline',
+					name,
+					passed: false
+				});
+				continue;
+			}
+			if (previous === undefined) continue;
+			if (budget.baselineMetric) {
+				const limit = previous + budget.baselineOffset;
+				checks.push({
+					actual,
+					baseline: previous,
+					blocking: true,
+					detail: `${budget.stat} ${actual.toFixed(2)}; baseline ${previous.toFixed(
+						2
+					)} + ${budget.baselineOffset.toFixed(2)}`,
+					kind: 'baseline-relative',
+					limit,
+					name,
+					passed: actual <= limit
+				});
 				continue;
 			}
 
@@ -675,6 +796,78 @@ export function evaluatePerformanceReport(report, budgets, baseline) {
 				passed: actual <= limit
 			});
 		}
+	}
+
+	for (const [name, budget] of Object.entries(budgets.metrics ?? {})) {
+		if (
+			!appliesToReport(budget) ||
+			budget.enforceTarget !== true ||
+			!budget.baselineMetric
+		) {
+			continue;
+		}
+		const alreadyChecked = checks.some(
+			check =>
+				check.name === name &&
+				(check.kind === 'baseline' || check.kind === 'baseline-relative')
+		);
+
+		if (alreadyChecked) continue;
+		let detail;
+		if (!baseline) {
+			detail = 'A clean accepted baseline is required for this gate.';
+		} else if (baselineStatus !== 'matched') {
+			detail = 'The available baseline does not match this machine or fixture.';
+		} else if (
+			baseline.environment?.git?.dirty !== false ||
+			baseline.phase !== 'all' ||
+			baseline.test?.status !== 'passed' ||
+			baseline.evaluation?.passed !== true
+		) {
+			detail =
+				'The matching baseline is not a clean accepted all-phase report.';
+		} else {
+			const namespace =
+				budget.baselineContract ?? budget.baselineMetric.split('.')[0];
+			const reportContract = report.environment?.metricContracts?.[namespace];
+			const baselineContract =
+				baseline.environment?.metricContracts?.[namespace];
+			if (
+				(budget.baselineContract &&
+					(reportContract === undefined || baselineContract === undefined)) ||
+				reportContract !== baselineContract
+			) {
+				detail = `The matching baseline has a missing or different ${namespace} metric contract.`;
+			} else if (
+				metricValue(report, name, budget.stat) === undefined ||
+				metricValue(baseline, budget.baselineMetric, budget.stat) === undefined
+			) {
+				detail = `Required matching baseline metric is absent: ${budget.baselineMetric}.`;
+			}
+		}
+		if (detail) {
+			checks.push({
+				blocking: true,
+				detail,
+				kind: 'baseline',
+				name,
+				passed: false
+			});
+		}
+	}
+
+	// Passage-rename evidence is only eligible to pass when it can be
+	// attributed to one clean, identified worktree. This deliberately does not
+	// change diagnostic or historical non-refactor report policy.
+	if (hasRefactorEvidence(report)) {
+		checks.push({
+			blocking: true,
+			detail:
+				'Passage-rename refactor evidence requires a clean, identified Git worktree.',
+			kind: 'provenance',
+			name: 'refactor-clean-git-provenance',
+			passed: hasCleanGitProvenance(report)
+		});
 	}
 
 	return {
@@ -724,6 +917,11 @@ export function referenceCandidateErrors(
 				: 'Smoke reports cannot be used as references.'
 		);
 	}
+	if (hasRefactorEvidence(report) && !hasCleanGitProvenance(report)) {
+		errors.push(
+			'Refactor candidate/reference evidence requires a clean, identified Git worktree.'
+		);
+	}
 	if (report.phase !== 'all' || report.test?.status !== 'passed') {
 		errors.push(
 			baselineCandidate
@@ -737,6 +935,9 @@ export function referenceCandidateErrors(
 		}
 	}
 	for (const [name, budget] of Object.entries(budgets.metrics ?? {})) {
+		if (Array.isArray(budget.phases) && !budget.phases.includes(report.phase)) {
+			continue;
+		}
 		if (metricValue(report, name, budget.stat) === undefined) {
 			errors.push(
 				`Missing ${baselineCandidate ? 'baseline' : 'reference'} metric: ${name}.`
@@ -881,9 +1082,14 @@ export function markdownReport(report) {
 	];
 
 	for (const [name, aggregate] of Object.entries(report.aggregates)) {
-		const target = report.budgets.metrics[name]?.target;
+		const target = metricTargetForReport(
+			report,
+			report.budgets.metrics[name] ?? {}
+		);
 		const regression = report.evaluation.checks.find(
-			check => check.kind === 'regression' && check.name === name
+			check =>
+				(check.kind === 'regression' || check.kind === 'baseline-relative') &&
+				check.name === name
 		);
 		const baseline = regression?.baseline;
 		const statistic = report.budgets.metrics[name]?.stat;
@@ -906,6 +1112,18 @@ export function markdownReport(report) {
 	}
 
 	lines.push('', '## Invariants', '');
+
+	const baselineRelative = report.evaluation.checks.filter(
+		check => check.kind === 'baseline-relative' || check.kind === 'baseline'
+	);
+	if (baselineRelative.length > 0) {
+		lines.push('', '## Baseline-relative gates', '');
+		for (const check of baselineRelative) {
+			lines.push(
+				`- ${check.passed ? 'PASS' : 'FAIL'} — ${check.name}: ${check.detail}`
+			);
+		}
+	}
 
 	for (const assertion of report.assertions) {
 		lines.push(

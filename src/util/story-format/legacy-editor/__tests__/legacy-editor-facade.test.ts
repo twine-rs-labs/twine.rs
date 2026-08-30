@@ -12,6 +12,7 @@ import {
 
 function fakeHandle(snapshot: SourceEditorSnapshot): SourceEditorHandle {
 	return {
+		applyAuthoritativeEdits: jest.fn(),
 		applyEdits: jest.fn(),
 		focus: jest.fn(),
 		getSnapshot: jest.fn(() => snapshot),

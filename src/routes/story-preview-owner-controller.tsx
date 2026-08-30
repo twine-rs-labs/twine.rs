@@ -6,7 +6,7 @@ import type {
 	NativeStoryPreviewOwnerCommandResult,
 	TwineElectronWindow
 } from '../electron/shared';
-import {useCoreProjectHost} from '../core/project-host';
+import {useCoreProjectHost} from '../core/project-host-public';
 import {usePrefsContext} from '../store/prefs';
 import {useComputedTheme} from '../store/prefs/use-computed-theme';
 import {useStoriesContext} from '../store/stories';

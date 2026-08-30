@@ -121,4 +121,67 @@ describe('Electron performance harness isolation', () => {
 			harness.mainPerformanceHarnessSnapshot(processMemory).processMemory
 		).toEqual(processMemory);
 	});
+
+	it('keeps repeated checkpoint high-water branches as coherent observations', () => {
+		process.env.TWINE_PERF = '1';
+		process.env.TWINE_PERF_USER_DATA = join(
+			tmpdir(),
+			'twine-rs-perf-test',
+			'user-data'
+		);
+		const harness = loadHarness();
+
+		harness.recordMemoryCheckpoint(
+			'refactor-plan-high-water',
+			{
+				rendererPrivateKiB: 8,
+				usedJSHeapSize: 10,
+				workerHeapCdpUsedBytes: 20,
+				workerWasmMemoryBytes: 20
+			},
+			{private: 100, residentSet: 0, shared: 0}
+		);
+		harness.recordMemoryCheckpoint(
+			'refactor-plan-high-water',
+			{
+				rendererPrivateKiB: 4,
+				usedJSHeapSize: 30,
+				workerHeapCdpUsedBytes: 10,
+				workerWasmMemoryBytes: 15
+			},
+			{private: 120, residentSet: 0, shared: 0}
+		);
+		const checkpoints =
+			harness.mainPerformanceHarnessSnapshot().memoryCheckpoints;
+
+		expect(checkpoints).toHaveLength(1);
+		expect(checkpoints[0]).toEqual(
+			expect.objectContaining({
+				renderer: {
+					rendererPrivateKiB: 4,
+					usedJSHeapSize: 30,
+					workerHeapCdpUsedBytes: 10,
+					workerWasmMemoryBytes: 15
+				},
+				ownedHighWater: {
+					jsHeapBytes: 30,
+					milestone: 'refactor-plan-high-water',
+					sampleCount: 2,
+					totalBytes: 55,
+					wasmBytes: 15,
+					workerCdpUsedBytes: 10
+				},
+				processPrivateHighWater: {
+					mainPrivateBytes: 120 * 1024,
+					milestone: 'refactor-plan-high-water',
+					rendererPrivateBytes: 4 * 1024,
+					sampleCount: 2,
+					totalBytes: 124 * 1024
+				},
+				sampleCount: 2
+			})
+		);
+		expect(checkpoints[0].ownedHighWater.totalBytes).not.toBe(60);
+		expect(checkpoints[0]).not.toHaveProperty('appMetrics');
+	});
 });

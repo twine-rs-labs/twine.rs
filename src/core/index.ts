@@ -38,7 +38,33 @@ import {
 } from '../store/stories';
 import {storyToSnapshot} from './project-snapshot';
 
-export * from './project-host';
+// Do not re-export the concrete host runtime. Product code receives the
+// capability facade through these safe hooks and provider instead.
+export {
+	CoreProjectHostProvider,
+	coreProjectHostPerformanceHarness,
+	coreProjectHostPerformanceSnapshot,
+	coreSessionIdForStory,
+	emptyGraphProjection,
+	emptyStoryIndex,
+	knownAssetInventoryForStory,
+	knownAssetInventoryScanCompleteForStory,
+	replaceKnownAssetInventoryForStory,
+	subscribeKnownAssetInventory,
+	useCoreProjectHost,
+	useCoreProjectSession,
+	useKnownAssetInventoryForStory,
+	useKnownAssetInventoryVersion
+} from './project-host-public';
+export type {
+	CoreCommandHistoryOptions,
+	CoreCommandOptions,
+	CorePersistenceTarget,
+	CoreProjectHost,
+	CoreProjectPatchListener,
+	CoreProjectSession,
+	StoryIndexQuery
+} from './project-host-public';
 export * from './passage-document';
 export * from './materialize-story';
 export * from './bootstrap-stories';

@@ -13,6 +13,9 @@ import {
 	decideElectronPhaseContinuation,
 	evaluatePerformanceReport,
 	latestReport,
+	isElectronPerformancePhase,
+	requiresRefactorPerformancePreflight,
+	metricTargetForReport,
 	machineFingerprint,
 	mergeRawPerformanceReports,
 	performanceBaselinePath,
@@ -724,6 +727,304 @@ test('blocks invariants and matching-baseline regressions but reports targets', 
 	assert.equal(
 		result.checks.find(check => check.kind === 'regression').limit,
 		25
+	);
+});
+
+test('uses size-specific blocking targets and rejects required missing metrics', () => {
+	const budget = {
+		baselineContract: 'editAttribution',
+		category: 'electron',
+		enforceTarget: true,
+		stat: 'p95',
+		targets: {10000: 250, 50000: 1000}
+	};
+	const report = {
+		aggregates: {'refactor.summaryGenerationMs': {p95: 251}},
+		assertions: [],
+		fixture: {passageCount: 10000},
+		phase: 'refactor'
+	};
+
+	assert.equal(metricTargetForReport(report, budget), 250);
+	const result = evaluatePerformanceReport(
+		report,
+		{metrics: {'refactor.summaryGenerationMs': budget}, regressions: {}},
+		undefined
+	);
+	assert.equal(result.passed, false);
+	assert.equal(result.checks[0].limit, 250);
+	const missing = evaluatePerformanceReport(
+		{...report, aggregates: {}},
+		{metrics: {'refactor.summaryGenerationMs': budget}, regressions: {}},
+		undefined
+	);
+	assert.equal(missing.passed, false);
+	assert.equal(missing.checks[0].status, 'missing');
+});
+
+test('accepts the focused refactor phase without expanding all-phase coverage', () => {
+	assert.equal(isElectronPerformancePhase('refactor'), true);
+	assert.equal(isElectronPerformancePhase('all'), true);
+	assert.equal(isElectronPerformancePhase('refactor-all'), false);
+	assert.equal(completeElectronPhases.includes('refactor'), false);
+	assert.equal(requiresRefactorPerformancePreflight('refactor'), true);
+	assert.equal(requiresRefactorPerformancePreflight('all'), false);
+	assert.equal(requiresRefactorPerformancePreflight('query'), false);
+});
+
+test('generated refactor fixture targets resolve and have a standard backlink', async () => {
+	for (const size of [10_000, 50_000]) {
+		const root = path.resolve('benchmarks/fixtures/generated');
+		const manifest = JSON.parse(
+			await readFile(
+				path.join(root, 'projects', `story-${size}.perf.json`),
+				'utf8'
+			)
+		);
+		const source = JSON.parse(
+			await readFile(
+				path.join(root, 'sources', `story-${size}.story.json`),
+				'utf8'
+			)
+		);
+		const target = manifest.refactorTarget;
+		assert.ok(target);
+		const passage = source.passages.find(item => item.id === target.passageId);
+		assert.equal(passage?.name, target.beforeName);
+		assert.ok(
+			source.passages.some(item =>
+				item.text.includes(`->${target.beforeName}]]`)
+			)
+		);
+	}
+});
+
+test('blocks refactor typing when a matching accepted baseline lacks edit paint', () => {
+	const result = evaluatePerformanceReport(
+		{
+			aggregates: {'refactor.editPaintMs': {p95: 20}},
+			assertions: [],
+			environment: {fingerprint: 'same', metricContracts: {editAttribution: 1}},
+			phase: 'refactor'
+		},
+		{
+			metrics: {
+				'refactor.editPaintMs': {
+					baselineContract: 'editAttribution',
+					baselineMetric: 'edit.paintMs',
+					baselineOffset: 5,
+					category: 'electron',
+					enforceTarget: true,
+					stat: 'p95'
+				}
+			},
+			regressions: {electron: {floor: 5, percent: 15}}
+		},
+		{
+			aggregates: {},
+			environment: {
+				fingerprint: 'same',
+				git: {dirty: false},
+				metricContracts: {editAttribution: 1}
+			},
+			evaluation: {passed: true},
+			phase: 'all',
+			test: {status: 'passed'}
+		}
+	);
+
+	assert.equal(result.passed, false);
+	assert.match(result.checks[0].detail, /baseline metric is absent/);
+});
+
+test('requires a clean accepted matching baseline for baseline-relative gates', () => {
+	const budget = {
+		baselineContract: 'editAttribution',
+		baselineMetric: 'edit.paintMs',
+		baselineOffset: 5,
+		category: 'electron',
+		enforceTarget: true,
+		stat: 'p95'
+	};
+	const report = {
+		aggregates: {'refactor.editPaintMs': {p95: 20}},
+		assertions: [],
+		environment: {
+			fingerprint: 'same',
+			git: {
+				dirty: false,
+				revision: 'refactor-revision',
+				worktreeFingerprint: 'refactor-worktree'
+			},
+			metricContracts: {editAttribution: 2}
+		},
+		phase: 'refactor'
+	};
+	const accepted = {
+		aggregates: {'edit.paintMs': {p95: 16}},
+		environment: {
+			fingerprint: 'same',
+			git: {dirty: false},
+			metricContracts: {editAttribution: 1}
+		},
+		evaluation: {passed: true},
+		phase: 'all',
+		test: {status: 'passed'}
+	};
+	const evaluate = baseline =>
+		evaluatePerformanceReport(
+			report,
+			{metrics: {'refactor.editPaintMs': budget}, regressions: {}},
+			baseline
+		);
+
+	assert.equal(evaluate(undefined).passed, false);
+	assert.equal(
+		evaluate({
+			...accepted,
+			environment: {...accepted.environment, fingerprint: 'other'}
+		}).passed,
+		false
+	);
+	assert.equal(
+		evaluate({
+			...accepted,
+			environment: {...accepted.environment, metricContracts: {}}
+		}).passed,
+		false
+	);
+	assert.equal(
+		evaluate({
+			...accepted,
+			environment: {...accepted.environment, git: {dirty: true}}
+		}).passed,
+		false
+	);
+	assert.equal(
+		evaluate({...accepted, evaluation: {passed: false}}).passed,
+		false
+	);
+	assert.equal(
+		evaluate({
+			...accepted,
+			environment: {
+				...accepted.environment,
+				metricContracts: {editAttribution: 3}
+			}
+		}).passed,
+		false
+	);
+	assert.equal(evaluate({...accepted, aggregates: {}}).passed, false);
+	const matchingOne = evaluatePerformanceReport(
+		{
+			...report,
+			environment: {
+				fingerprint: 'same',
+				git: report.environment.git,
+				metricContracts: {editAttribution: 1}
+			}
+		},
+		{metrics: {'refactor.editPaintMs': budget}, regressions: {}},
+		{
+			...accepted,
+			environment: {
+				...accepted.environment,
+				metricContracts: {editAttribution: 1}
+			}
+		}
+	);
+	assert.equal(matchingOne.passed, true);
+	const happy = evaluate({
+		...accepted,
+		environment: {
+			...accepted.environment,
+			metricContracts: {editAttribution: 2}
+		}
+	});
+	assert.equal(happy.passed, true);
+	assert.equal(
+		happy.checks.some(check => check.kind === 'baseline-relative'),
+		true
+	);
+});
+
+test('blocks dirty refactor evidence while keeping dirty diagnostic reports useful', () => {
+	const cleanGit = {
+		dirty: false,
+		revision: 'clean-revision',
+		worktreeFingerprint: 'clean-worktree'
+	};
+	const dirtyGit = {...cleanGit, dirty: true};
+	const budgets = {metrics: {}, regressions: {}};
+	const dirtyRefactor = {
+		aggregates: {},
+		assertions: [],
+		environment: {fingerprint: 'machine', git: dirtyGit},
+		phase: 'refactor'
+	};
+	const dirtyEvaluation = evaluatePerformanceReport(
+		dirtyRefactor,
+		budgets,
+		undefined
+	);
+
+	assert.equal(dirtyEvaluation.passed, false);
+	assert.deepEqual(
+		dirtyEvaluation.checks.find(
+			check => check.name === 'refactor-clean-git-provenance'
+		),
+		{
+			blocking: true,
+			detail:
+				'Passage-rename refactor evidence requires a clean, identified Git worktree.',
+			kind: 'provenance',
+			name: 'refactor-clean-git-provenance',
+			passed: false
+		}
+	);
+	assert.equal(
+		evaluatePerformanceReport(
+			{...dirtyRefactor, environment: {fingerprint: 'machine', git: cleanGit}},
+			budgets,
+			undefined
+		).passed,
+		true
+	);
+	assert.equal(
+		evaluatePerformanceReport(
+			{...dirtyRefactor, phase: 'diagnostic'},
+			budgets,
+			undefined
+		).passed,
+		true
+	);
+
+	const invariant = {
+		blocking: true,
+		kind: 'invariant',
+		name: 'all-phase-complete',
+		passed: true
+	};
+	const refactorCandidate = {
+		aggregates: {},
+		assertions: [{name: invariant.name, passed: true}],
+		environment: {fingerprint: 'machine', git: dirtyGit},
+		evaluation: {checks: [invariant], passed: true},
+		kind: 'twine-electron-performance',
+		phase: 'all',
+		phases: Object.fromEntries(
+			[...completeElectronPhases, 'refactor'].map(phase => [
+				phase,
+				{status: 'passed'}
+			])
+		),
+		schemaVersion: performanceReportSchemaVersion,
+		smoke: false,
+		test: {status: 'passed'}
+	};
+	assert.match(
+		referenceCandidateErrors(refactorCandidate, budgets).join(' '),
+		/Refactor candidate\/reference evidence requires a clean, identified Git worktree/
 	);
 });
 

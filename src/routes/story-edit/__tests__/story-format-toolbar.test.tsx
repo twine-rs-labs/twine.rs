@@ -123,6 +123,33 @@ function testIntegration(
 }
 
 describe('<StoryFormatToolbar>', () => {
+	it('blocks legacy toolbar callbacks during admission closure without a local echo, then resumes them', async () => {
+		let editor: SourceEditorHandle | undefined;
+		const onFailure = jest.fn();
+		const integration = testIntegration('admission', legacyEditor =>
+			legacyEditor.replaceRange('changed', {ch: 0, line: 0})
+		);
+		render(
+			<FakeStateProvider>
+				<Harness
+					integration={integration}
+					onFailure={onFailure}
+					onHandle={instance => {
+						editor = instance;
+					}}
+				/>
+			</FakeStateProvider>
+		);
+		await waitFor(() => expect(editor).toBeTruthy());
+		act(() => editor!.setInputAdmission!(false));
+		fireEvent.click(await screen.findByRole('button', {name: 'Run'}));
+		expect(editor!.getSnapshot().document).toBe('word');
+		expect(onFailure).not.toHaveBeenCalled();
+		act(() => editor!.setInputAdmission!(true));
+		fireEvent.click(screen.getByRole('button', {name: 'Run'}));
+		expect(editor!.getSnapshot().document).toBe('changedword');
+	});
+
 	it('runs the real Chapbook 1.2.3 toolbar against a live CM6 view', async () => {
 		let editor: SourceEditorHandle | undefined;
 

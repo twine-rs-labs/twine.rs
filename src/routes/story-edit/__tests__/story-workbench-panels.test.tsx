@@ -4,7 +4,7 @@ import {MemoryRouter} from 'react-router';
 import type {
 	CoreProjectHost,
 	CoreProjectPatchListener
-} from '../../../core/project-host';
+} from '../../../test-util/core-project-host-runtime';
 import {projectSnapshotFromStories} from '../../../core';
 import {
 	fakeLoadedStoryFormat,

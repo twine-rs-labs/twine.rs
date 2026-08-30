@@ -4,6 +4,7 @@ import {tmpdir} from 'os';
 import {isAbsolute, join, relative, resolve} from 'path';
 import {performance} from 'perf_hooks';
 import {getHeapStatistics} from 'v8';
+import {sampleWorkerHeapCdpFromBroker} from './worker-heap-cdp-broker-client';
 
 export interface NativeWatcherPerformanceMetric {
 	assetChanges: number;
@@ -32,15 +33,113 @@ const timings: Array<{name: string; timeMs: number}> = [
 ];
 const watcherMetrics: NativeWatcherPerformanceMetric[] = [];
 const watcherTraceEvents: NativeWatcherTraceEvent[] = [];
-const memoryCheckpoints: Array<{
-	appMetrics: ReturnType<typeof app.getAppMetrics>;
+interface MemoryCheckpoint {
 	mainHeap: ReturnType<typeof getHeapStatistics>;
 	mainMemory: NodeJS.MemoryUsage;
 	mainProcessMemory?: Electron.ProcessMemoryInfo;
 	name: string;
+	ownedHighWater: {
+		jsHeapBytes: number;
+		milestone: string;
+		sampleCount: number;
+		totalBytes?: number;
+		wasmBytes?: number;
+		workerCdpUsedBytes?: number;
+	};
+	processPrivateHighWater: {
+		mainPrivateBytes: number;
+		milestone: string;
+		rendererPrivateBytes: number;
+		sampleCount: number;
+		totalBytes: number;
+	};
+	processWorkingSetKiBByRole: Record<string, number>;
 	recordedAtEpochMs: number;
-	renderer: Record<string, number>;
-}> = [];
+	renderer: Record<string, number | string | undefined>;
+	sampleCount: number;
+}
+
+const maxMemoryCheckpointRecords = 64;
+const memoryCheckpoints = new Map<string, MemoryCheckpoint>();
+/** The largest allowed gap between the worker response and its CDP heap read. */
+export const maxWorkerHeapCdpResponseDriftMs = 5_000;
+
+export async function sampleWorkerHeapCdp() {
+	if (!enabled) {
+		throw new Error('The Electron performance harness is disabled.');
+	}
+	return sampleWorkerHeapCdpFromBroker();
+}
+
+function processWorkingSetKiBByRole() {
+	const byRole: Record<string, number> = {};
+
+	for (const metric of app.getAppMetrics()) {
+		const role = metric.type;
+		byRole[role] = (byRole[role] ?? 0) + (metric.memory?.workingSetSize ?? 0);
+	}
+	return byRole;
+}
+
+function ownedMemoryObservation(
+	milestone: string,
+	sampleCount: number,
+	renderer: Record<string, number | string | undefined>
+) {
+	const jsHeapCandidate = renderer.usedJSHeapSize;
+	const jsHeapBytes = typeof jsHeapCandidate === 'number' ? jsHeapCandidate : 0;
+	const workerCdpHeapCandidate = renderer.workerHeapCdpUsedBytes;
+	const workerCdpUsedBytes =
+		typeof workerCdpHeapCandidate === 'number'
+			? workerCdpHeapCandidate
+			: undefined;
+	const wasmCandidate = renderer.workerWasmMemoryBytes;
+	const wasmBytes =
+		typeof wasmCandidate === 'number' ? wasmCandidate : undefined;
+	const totalBytes =
+		workerCdpUsedBytes !== undefined && wasmBytes !== undefined
+			? jsHeapBytes + workerCdpUsedBytes + wasmBytes
+			: undefined;
+
+	return {
+		jsHeapBytes,
+		milestone,
+		sampleCount,
+		totalBytes,
+		wasmBytes,
+		workerCdpUsedBytes
+	};
+}
+
+function processPrivateObservation(
+	milestone: string,
+	sampleCount: number,
+	mainProcessMemory: Electron.ProcessMemoryInfo | undefined,
+	renderer: Record<string, number | string | undefined>
+) {
+	const mainPrivateBytes = (mainProcessMemory?.private ?? 0) * 1024;
+	const rendererPrivateKiB = renderer.rendererPrivateKiB;
+	const rendererPrivateBytes =
+		(typeof rendererPrivateKiB === 'number' ? rendererPrivateKiB : 0) * 1024;
+
+	return {
+		mainPrivateBytes,
+		milestone,
+		rendererPrivateBytes,
+		sampleCount,
+		totalBytes: mainPrivateBytes + rendererPrivateBytes
+	};
+}
+
+function coherentHighWater<T extends {totalBytes?: number}>(
+	previous: T | undefined,
+	current: T
+) {
+	if (current.totalBytes === undefined) return previous ?? current;
+	if (previous?.totalBytes === undefined) return current;
+
+	return current.totalBytes >= previous.totalBytes ? current : previous;
+}
 
 export function performanceEpochNow() {
 	return performance.timeOrigin + performance.now();
@@ -165,27 +264,57 @@ export function recordWatcherTraceEvent(
 export function resetMainPerformanceHarness() {
 	watcherMetrics.length = 0;
 	watcherTraceEvents.length = 0;
-	memoryCheckpoints.length = 0;
+	memoryCheckpoints.clear();
 }
 
 export function recordMemoryCheckpoint(
 	name: string,
-	renderer: Record<string, number> = {},
+	renderer: Record<string, number | string | undefined> = {},
 	mainProcessMemory?: Electron.ProcessMemoryInfo
 ) {
 	if (!enabled) {
 		return;
 	}
 
-	memoryCheckpoints.push({
-		appMetrics: app.getAppMetrics(),
+	const previous = memoryCheckpoints.get(name);
+	const sampleCount = (previous?.sampleCount ?? 0) + 1;
+	const current: MemoryCheckpoint = {
 		mainHeap: getHeapStatistics(),
 		mainMemory: process.memoryUsage(),
 		mainProcessMemory,
 		name,
+		ownedHighWater: ownedMemoryObservation(name, sampleCount, renderer),
+		processPrivateHighWater: processPrivateObservation(
+			name,
+			sampleCount,
+			mainProcessMemory,
+			renderer
+		),
+		processWorkingSetKiBByRole: processWorkingSetKiBByRole(),
 		recordedAtEpochMs: performanceEpochNow(),
-		renderer
-	});
+		renderer,
+		sampleCount
+	};
+	const reduced: MemoryCheckpoint = previous
+		? {
+				...current,
+				// Keep whole observations, not fieldwise maxima: (JS=30, WASM=15)
+				// must never be reported as a synthetic (JS=30, WASM=20) sample.
+				ownedHighWater: coherentHighWater(
+					previous.ownedHighWater,
+					current.ownedHighWater
+				),
+				processPrivateHighWater: coherentHighWater(
+					previous.processPrivateHighWater,
+					current.processPrivateHighWater
+				)
+			}
+		: current;
+
+	if (!previous && memoryCheckpoints.size >= maxMemoryCheckpointRecords) {
+		memoryCheckpoints.delete(memoryCheckpoints.keys().next().value!);
+	}
+	memoryCheckpoints.set(name, reduced);
 }
 
 export function mainPerformanceHarnessSnapshot(
@@ -197,7 +326,7 @@ export function mainPerformanceHarnessSnapshot(
 
 	return {
 		appMetrics: app.getAppMetrics(),
-		memoryCheckpoints: [...memoryCheckpoints],
+		memoryCheckpoints: [...memoryCheckpoints.values()],
 		memory: process.memoryUsage(),
 		processMemory,
 		timings: [...timings],

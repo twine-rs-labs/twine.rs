@@ -29,7 +29,7 @@ function report(passageCount, privateMiB, knownOwnerMiB) {
 		environment: {
 			fingerprint: 'machine',
 			git: {dirty: false, revision: 'abc123'},
-			metricContracts: {memory: 3, memoryAttribution: 1}
+			metricContracts: {memory: 4, memoryAttribution: 2}
 		},
 		evaluation: {passed: true},
 		fixture: {passageCount},

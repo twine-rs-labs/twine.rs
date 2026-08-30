@@ -1,5 +1,5 @@
 {
-	"schemaVersion": 1,
+	"schemaVersion": 2,
 	"metrics": {
 		"startup.shellMs": {
 			"category": "electron",
@@ -54,6 +54,79 @@
 			"enforceTarget": false,
 			"stat": "p50",
 			"target": 600
+		},
+		"refactor.summaryGenerationMs": {
+			"category": "electron",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "p95",
+			"targets": {"10000": 250, "50000": 1000}
+		},
+		"refactor.detailPageMs": {
+			"category": "electron",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "p95",
+			"targets": {"10000": 50, "50000": 100}
+		},
+		"refactor.atomicCommitMs": {
+			"category": "electron",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "p95",
+			"targets": {"10000": 1000, "50000": 5000}
+		},
+		"refactor.peakIncrementalMemoryMiB": {
+			"baselineContract": "refactorMemory",
+			"category": "memory",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "max",
+			"targets": {"10000": 64, "50000": 128}
+		},
+		"refactor.retainedFrontendMiB": {
+			"category": "memory",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "max",
+			"targets": {"10000": 8, "50000": 16}
+		},
+		"refactor.summaryBytes": {
+			"category": "electron",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "max",
+			"target": 65536
+		},
+		"refactor.detailPageBytes": {
+			"category": "electron",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "max",
+			"target": 262144
+		},
+		"refactor.planStoreMiB": {
+			"category": "memory",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "max",
+			"targets": {"10000": 64, "50000": 128}
+		},
+		"refactor.editPaintMs": {
+			"baselineContract": "editAttribution",
+			"baselineMetric": "edit.paintMs",
+			"baselineOffset": 5,
+			"category": "electron",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "p95"
+		},
+		"refactor.longTaskMs": {
+			"category": "electron",
+			"enforceTarget": true,
+			"phases": ["refactor"],
+			"stat": "max",
+			"target": 50
 		}
 	},
 	"regressions": {

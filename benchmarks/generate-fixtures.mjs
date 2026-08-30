@@ -439,6 +439,15 @@ async function writeFixture(count, options) {
 		files: files.map(file => path.relative(rootDir, file)),
 		linkCounts,
 		passageCount: count,
+		// This target is away from the boundaries and is referenced by both the
+		// preceding next link and the seventh preceding branch link. The Electron
+		// refactor phase consumes this manifest value, never UI ordering.
+		refactorTarget: {
+			afterName: passageName(Math.floor(count / 2)).toLowerCase(),
+			beforeName: passageName(Math.floor(count / 2)),
+			passageId: deterministicId('passage', Math.floor(count / 2)),
+			storyId: deterministicId('story', count)
+		},
 		storyFormat: story.storyFormat,
 		storyFormatVersion: story.storyFormatVersion
 	};

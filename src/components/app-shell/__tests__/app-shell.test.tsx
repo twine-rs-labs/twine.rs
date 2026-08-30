@@ -5,9 +5,9 @@ import {
 	CoreProjectHostProvider,
 	diagnosticDismissalsChangedEvent,
 	diagnosticIdentity,
-	saveDismissedDiagnosticIds,
-	StoreCoreProjectHost
+	saveDismissedDiagnosticIds
 } from '../../../core';
+import {StoreCoreProjectHost} from '../../../test-util/core-project-host-runtime';
 import type {CoreDiagnostic} from '../../../core/bindings/CoreDiagnostic';
 import type {CoreDiagnosticsPage} from '../../../core/bindings/CoreDiagnosticsPage';
 import type {CoreDiagnosticsSummary} from '../../../core/bindings/CoreDiagnosticsSummary';

@@ -148,9 +148,14 @@ partial evidence and cannot be accepted as complete baselines.
 
 Normal edit, graph, and query phases record both `memory.live.*` before forced
 collection and `memory.retained.*` afterward. The canonical `memory.*` values
-use the retained checkpoint under memory contract 3. Renderer residual subtracts
-renderer JS heap and worker WASM from Tab working set; main residual subtracts
-main JS heap and external memory from Browser working set. Logical owners such
+use the retained checkpoint under memory contract 5. Renderer residual subtracts
+renderer JS heap, dedicated-worker CDP `Runtime.getHeapUsage.usedSize`, and worker
+WASM from Tab working set; main residual subtracts main JS heap and external
+memory from Browser working set. The observer attaches only in `TWINE_PERF=1`
+before the authoring page loads, accepts exactly one bundled
+`twine-wasm-worker-*.js` target, and rejects unsupported, ambiguous, detached,
+or timestamp-drifted samples. `totalSize` and any worker `performance.memory`
+value are diagnostics only; backing storage is never added. Logical owners such
 as cached payloads, project documents, and Rust caches are nested breakdowns and
 must not be added to those top-level values again.
 
@@ -225,6 +230,14 @@ digest, and perform no TOML parse. The watcher ignores generated cache paths.
 Startup and memory metrics carry explicit measurement-contract versions. When
 checkpoint semantics change, matching-machine reports remain visible but are
 not compared against incompatible historical startup or memory values.
+
+The blocking refactor peak is one coherent tuple: renderer-window JS plus the
+dedicated worker's CDP heap `usedSize` and WASM linear memory from one latest
+worker response. The CDP sample timestamp and worker-response timestamp must
+remain within the declared 5-second drift bound. Yielded planner chunks are
+sampled locally, but only the first and terminal chunks cross the awaited native
+checkpoint boundary; this is an intentional near-boundary sampling limit, not
+permission to combine maxima from different responses.
 
 For the passage text fast path, the diagnostic also requires `incremental` save
 mode and one touched project path. Its save-stage metrics distinguish native

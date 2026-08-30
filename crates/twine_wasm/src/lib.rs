@@ -5,8 +5,10 @@ use twine_core::{
     CoreAssetInventoryEntry, CoreAssetsQuery, CoreBacklinksQuery, CoreContentsQuery,
     CoreDiagnosticsQuery, CoreDiagnosticsSummaryQuery, CoreDocumentQuery, CoreExternalDelta,
     CoreExternalIngestMode, CoreGraphProjectionOptions, CoreSearchQuery, CoreSourceKind,
-    CoreStoryIndexOptions, PassageSnapshot, ProjectSession, ProjectSnapshot, StoryCommand,
-    StorySnapshot,
+    CoreStoryIndexOptions, PassageSnapshot, PlanPassageRenameBeginResult, PlanPassageRenameRequest,
+    ProjectSession, ProjectSnapshot, RefactorPlanApplyRequest, RefactorPlanApplyResult,
+    RefactorPlanCursor, RefactorPlanDetailResult, RefactorPlanningTaskHandle, RefactorRuntimeState,
+    StoryCommand, StorySnapshot,
 };
 use twine_model::{
     GraphLayout, GraphPosition, LibraryMetadata, Passage, PassageId, PassageIndex, PassageLayout,
@@ -17,6 +19,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 pub struct TwineWasmProjectSession {
     session: ProjectSession,
+    refactor_runtime: Option<RefactorRuntimeState>,
 }
 
 /// Incrementally assembles the initial project snapshot inside WASM so large
@@ -50,6 +53,7 @@ impl TwineWasmProjectBootstrap {
     pub fn finish(self) -> TwineWasmProjectSession {
         TwineWasmProjectSession {
             session: ProjectSession::new(project_from_snapshot(self.snapshot)),
+            refactor_runtime: None,
         }
     }
 }
@@ -62,6 +66,7 @@ impl TwineWasmProjectSession {
 
         Ok(Self {
             session: ProjectSession::new(project_from_snapshot(snapshot)),
+            refactor_runtime: None,
         })
     }
 
@@ -146,6 +151,55 @@ impl TwineWasmProjectSession {
 
     pub fn performance_diagnostics(&self) -> Result<JsValue, JsValue> {
         to_js(&self.session.performance_diagnostics())
+    }
+
+    pub fn query_refactor_plan_detail(&mut self, cursor: JsValue) -> Result<JsValue, JsValue> {
+        let cursor = from_js::<RefactorPlanCursor>(cursor)?;
+        to_js(&query_refactor_plan_detail_result(
+            &mut self.session,
+            &cursor,
+        ))
+    }
+
+    pub fn sync_refactor_runtime(&mut self, runtime: JsValue) -> Result<(), JsValue> {
+        self.refactor_runtime = Some(from_js::<RefactorRuntimeState>(runtime)?);
+        Ok(())
+    }
+
+    pub fn begin_passage_rename_plan(&mut self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_js::<PlanPassageRenameRequest>(request)?;
+        let result = match self.refactor_runtime.clone() {
+            Some(runtime) => match self.session.begin_passage_rename_plan(request, runtime) {
+                Ok(task) => PlanPassageRenameBeginResult::Begun { task },
+                Err(failure) => PlanPassageRenameBeginResult::Failure { failure },
+            },
+            None => PlanPassageRenameBeginResult::Failure {
+                failure: missing_refactor_runtime_failure(),
+            },
+        };
+        to_js(&result)
+    }
+
+    pub fn continue_passage_rename_plan(&mut self, task: JsValue) -> Result<JsValue, JsValue> {
+        let task = from_js::<RefactorPlanningTaskHandle>(task)?;
+        to_js(&self.session.continue_passage_rename_plan(&task))
+    }
+
+    pub fn cancel_passage_rename_plan(&mut self, task: JsValue) -> Result<bool, JsValue> {
+        let task = from_js::<RefactorPlanningTaskHandle>(task)?;
+        Ok(self.session.cancel_passage_rename_plan(&task))
+    }
+
+    pub fn apply_refactor_plan(&mut self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_js::<RefactorPlanApplyRequest>(request)?;
+        let runtime = self.refactor_runtime.as_ref().ok_or_else(|| {
+            JsValue::from_str("Refactor runtime has not been synchronized for this session.")
+        })?;
+        to_js(&apply_refactor_plan_result(
+            &mut self.session,
+            &request,
+            &runtime,
+        ))
     }
 
     pub fn query_graph_projection(
@@ -349,6 +403,13 @@ impl TwineWasmProjectSession {
     }
 }
 
+fn missing_refactor_runtime_failure() -> twine_core::RefactorPlanFailure {
+    twine_core::RefactorPlanFailure {
+        code: twine_core::RefactorPlanFailureCode::StaleProjectRevision,
+        message: "Refactor runtime has not been synchronized for this session.".into(),
+    }
+}
+
 #[wasm_bindgen]
 pub fn query_graph_projection(
     snapshot: JsValue,
@@ -388,6 +449,27 @@ where
 
 fn core_error(error: twine_core::CoreError) -> JsValue {
     JsValue::from_str(&error.to_string())
+}
+
+fn query_refactor_plan_detail_result(
+    session: &mut ProjectSession,
+    cursor: &RefactorPlanCursor,
+) -> RefactorPlanDetailResult {
+    match session.refactor_plan_detail_page(cursor) {
+        Ok(page) => RefactorPlanDetailResult::Page { page },
+        Err(failure) => RefactorPlanDetailResult::Failure { failure },
+    }
+}
+
+fn apply_refactor_plan_result(
+    session: &mut ProjectSession,
+    request: &RefactorPlanApplyRequest,
+    runtime: &RefactorRuntimeState,
+) -> RefactorPlanApplyResult {
+    match session.apply_refactor_plan_with_receipt(request, runtime) {
+        Ok((batch, receipt)) => RefactorPlanApplyResult::Applied { batch, receipt },
+        Err(failure) => RefactorPlanApplyResult::Failure { failure },
+    }
 }
 
 fn project_from_snapshot(snapshot: ProjectSnapshot) -> Project {
@@ -471,6 +553,7 @@ fn passage_from_snapshot(snapshot: PassageSnapshot, story_id: &StoryId) -> Passa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use twine_core::{PlanPassageRenameRequest, RefactorPlanSelection};
 
     fn snapshot() -> ProjectSnapshot {
         ProjectSnapshot {
@@ -547,5 +630,52 @@ mod tests {
 
         assert_eq!(graph.stats.links, 1);
         assert_eq!(index.tag_entries[0].color, Some("red".into()));
+    }
+
+    #[test]
+    fn refactor_boundary_uses_operation_specific_public_types() {
+        let mut session = ProjectSession::new(project_from_snapshot(snapshot()));
+        let runtime = RefactorRuntimeState {
+            project_revision: 1,
+            buffers: Vec::new(),
+            external: None,
+            provider: None,
+        };
+        let task = session
+            .begin_passage_rename_plan(
+                PlanPassageRenameRequest {
+                    story_id: "story-1".into(),
+                    passage_id: "next".into(),
+                    after_name: "After".into(),
+                },
+                runtime.clone(),
+            )
+            .expect("plan task");
+        let summary = loop {
+            match session.continue_passage_rename_plan(&task) {
+                twine_core::PlanPassageRenameResult::Pending { .. } => continue,
+                twine_core::PlanPassageRenameResult::Complete { summary } => break summary,
+                result => panic!("unexpected planning result: {result:?}"),
+            }
+        };
+        let result = apply_refactor_plan_result(
+            &mut session,
+            &RefactorPlanApplyRequest {
+                plan_id: summary.plan_id,
+                expected_project_revision: 1,
+                selection: RefactorPlanSelection::All,
+            },
+            &runtime,
+        );
+
+        assert!(matches!(result, RefactorPlanApplyResult::Applied { .. }));
+        assert_eq!(session.revision(), 2);
+        assert_eq!(
+            session.project().stories[0]
+                .passage_by_id(&PassageId::new("next"))
+                .unwrap()
+                .name,
+            "After"
+        );
     }
 }

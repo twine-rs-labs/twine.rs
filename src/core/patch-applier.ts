@@ -64,6 +64,7 @@ export function applyProjectPatchBatch(
 			case 'passageCreated':
 			case 'passageDeleted':
 			case 'passageUpdated':
+			case 'projectMetadataUpdated':
 			case 'projectSnapshotReplaced':
 			case 'startPassageChanged':
 			case 'storyCreated':
@@ -136,6 +137,9 @@ export function projectPatchBatchStoryActions(
 				});
 				break;
 			}
+
+			case 'projectMetadataUpdated':
+				break;
 
 			case 'projectSnapshotReplaced':
 				actions.push({

@@ -111,6 +111,7 @@ export interface SourceEditorDocumentChange {
 }
 
 export interface SourceEditorHandle {
+	applyAuthoritativeEdits: (edits: SourceEditorEdit[]) => void;
 	applyEdits: (
 		edits: SourceEditorEdit[],
 		selections?: SourceEditorSelection[],
@@ -119,11 +120,15 @@ export interface SourceEditorHandle {
 	focus: () => void;
 	getSnapshot: () => SourceEditorSnapshot;
 	isAlive: () => boolean;
+	isComposing?: () => boolean;
+	isCompositionActive?: () => boolean;
 	runCommand: (command: SourceEditorCommand) => boolean;
 	setSelections: (
 		selections: SourceEditorSelection[],
 		mainSelectionIndex?: number
 	) => void;
+	setReadOnly?: (readOnly: boolean) => void;
+	setInputAdmission?: (admitted: boolean) => void;
 	subscribe: (listener: (snapshot: SourceEditorSnapshot) => void) => () => void;
 	subscribeDocumentChanges: (
 		listener: (change: SourceEditorDocumentChange) => void
@@ -902,7 +907,8 @@ function baseExtensions(
 		compartments.wrapping.of(EditorView.lineWrapping),
 		// Dynamic extensions are installed after the base view is live so a bad
 		// third-party extension cannot prevent the generic editor from mounting.
-		compartments.dynamic.of([])
+		compartments.dynamic.of([]),
+		EditorState.allowMultipleSelections.of(true)
 	];
 }
 
@@ -933,6 +939,9 @@ export const SourceEditor = React.forwardRef<
 	const documentRef = React.useRef(props.value);
 	const valueRef = React.useRef(props.value);
 	const onChange = React.useRef(props.onChange);
+	// This is intentionally independent of CodeMirror's read-only extension:
+	// imperative callers and legacy facades can dispatch transactions directly.
+	const inputAdmitted = React.useRef(!props.readOnly);
 	const onDynamicExtensionError = React.useRef(props.onDynamicExtensionError);
 	const compartments = React.useRef(createCompartments()).current;
 	const subscribers = React.useRef(
@@ -991,10 +1000,22 @@ export const SourceEditor = React.forwardRef<
 	React.useImperativeHandle(
 		forwardedRef,
 		() => ({
-			applyEdits(edits, selections, mainSelectionIndex = 0) {
+			applyAuthoritativeEdits(edits) {
 				const view = viewRef.current;
 
 				if (!view) {
+					return;
+				}
+
+				view.dispatch({
+					annotations: controlledValueSync.of(true),
+					changes: edits
+				});
+			},
+			applyEdits(edits, selections, mainSelectionIndex = 0) {
+				const view = viewRef.current;
+
+				if (!view || !inputAdmitted.current) {
 					return;
 				}
 
@@ -1029,10 +1050,16 @@ export const SourceEditor = React.forwardRef<
 			isAlive() {
 				return viewRef.current !== undefined;
 			},
+			isComposing() {
+				return viewRef.current?.compositionStarted ?? false;
+			},
+			isCompositionActive() {
+				return viewRef.current?.compositionStarted ?? false;
+			},
 			runCommand(command) {
 				const view = viewRef.current;
 
-				if (!view) {
+				if (!view || !inputAdmitted.current) {
 					return false;
 				}
 
@@ -1051,6 +1078,22 @@ export const SourceEditor = React.forwardRef<
 							EditorSelection.range(range.anchor, range.head)
 						),
 						Math.max(0, Math.min(mainSelectionIndex, selections.length - 1))
+					)
+				});
+			},
+			setReadOnly(readOnly) {
+				inputAdmitted.current = !readOnly;
+				viewRef.current?.dispatch({
+					effects: compartments.readOnly.reconfigure(
+						EditorState.readOnly.of(readOnly)
+					)
+				});
+			},
+			setInputAdmission(admitted) {
+				inputAdmitted.current = admitted;
+				viewRef.current?.dispatch({
+					effects: compartments.readOnly.reconfigure(
+						EditorState.readOnly.of(!admitted)
 					)
 				});
 			},
@@ -1219,6 +1262,7 @@ export const SourceEditor = React.forwardRef<
 
 	React.useEffect(() => {
 		const view = viewRef.current;
+		inputAdmitted.current = !(props.readOnly ?? false);
 
 		view?.dispatch({
 			effects: compartments.theme.reconfigure(

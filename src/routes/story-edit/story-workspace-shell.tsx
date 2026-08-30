@@ -37,7 +37,7 @@ import type {CoreBacklinksPage} from '../../core/bindings/CoreBacklinksPage';
 import type {CorePassageLocalFacts} from '../../core/bindings/CorePassageLocalFacts';
 import type {CoreWorkbenchDockModel} from '../../core/bindings/CoreWorkbenchDockModel';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
-import type {CoreProjectHost} from '../../core/project-host';
+import type {CoreProjectHost} from '../../core/project-host-public';
 import type {TwineElectronWindow} from '../../electron/shared';
 import {loadProjectMetadata} from '../../store/project-metadata';
 import {
@@ -1355,6 +1355,21 @@ export const StoryWorkspaceShell: React.FC<
 	const [patchVersion, setPatchVersion] = React.useState(0);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
 	const hydratingStories = React.useRef(new Set<string>());
+	const hydrationOwners = React.useRef(
+		new Map<
+			string,
+			{
+				abandoned: boolean;
+				coreLeaseAcquired: boolean;
+				coreAbortRequested: boolean;
+				coreLease?: symbol;
+				nativeHydrationId?: string;
+				phase: 'native-begin' | 'core-begin' | 'streaming';
+				tokens: Set<symbol>;
+			}
+		>()
+	);
+	const [hydrationAttempt, setHydrationAttempt] = React.useState(0);
 	const storiesRef = React.useRef(stories);
 	storiesRef.current = stories;
 	const highlightExtensionPassages = React.useCallback(
@@ -1421,11 +1436,92 @@ export const StoryWorkspaceShell: React.FC<
 		const projectRoot = projectMetadata.rootPath;
 		const hydrateKey = `${projectMetadata.rootPath}:${story.id}`;
 
-		if (!bridge || hydratingStories.current.has(hydrateKey)) {
+		if (!bridge) {
 			return;
 		}
 
+		const token = Symbol('project-hydration-owner');
+		const existingOwner = hydrationOwners.current.get(hydrateKey);
+
+		if (existingOwner) {
+			existingOwner.abandoned = false;
+			existingOwner.tokens.add(token);
+			recordPerformanceHarnessEvent('renderer-project-hydration-ownership', {
+				event: 'attached',
+				phase: existingOwner.phase,
+				rootPath: projectRoot,
+				storyId: story.id
+			});
+			return () => {
+				existingOwner.tokens.delete(token);
+				void Promise.resolve().then(() => {
+					if (existingOwner.tokens.size > 0) return;
+					existingOwner.abandoned = true;
+					if (
+						existingOwner.coreLeaseAcquired &&
+						!existingOwner.coreAbortRequested
+					) {
+						existingOwner.coreAbortRequested = true;
+						recordPerformanceHarnessEvent('renderer-project-hydration-abort', {
+							phase: existingOwner.phase,
+							rootPath: projectRoot,
+							storyId: story.id
+						});
+						void (
+							existingOwner.coreLease
+								? coreProjectHost.abortHydratedProject(
+										story.id,
+										existingOwner.coreLease
+									)
+								: coreProjectHost.abortHydratedProject(story.id)
+						).catch(() => undefined);
+					}
+				});
+			};
+		}
+
+		const owner = {
+			abandoned: false,
+			coreAbortRequested: false,
+			coreLeaseAcquired: false,
+			coreLease: undefined as symbol | undefined,
+			replacementLease: undefined as symbol | undefined,
+			phase: 'native-begin' as 'native-begin' | 'core-begin' | 'streaming',
+			nativeHydrationId: undefined as string | undefined,
+			tokens: new Set([token])
+		};
+		hydrationOwners.current.set(hydrateKey, owner);
+		const abortCoreHydration = () =>
+			owner.coreLease
+				? coreProjectHost.abortHydratedProject(story.id, owner.coreLease)
+				: coreProjectHost.abortHydratedProject(story.id);
+		const appendCoreHydration = (
+			storyId: string,
+			passages: PassageWithText[]
+		) =>
+			owner.coreLease
+				? coreProjectHost.appendHydratedProjectPassages(
+						storyId,
+						passages,
+						owner.coreLease
+					)
+				: coreProjectHost.appendHydratedProjectPassages(storyId, passages);
+		const finishCoreHydration = () =>
+			owner.coreLease
+				? coreProjectHost.finishHydratedProject(story.id, owner.coreLease)
+				: coreProjectHost.finishHydratedProject(story.id);
+		const abortProjectReplacement = () =>
+			owner.replacementLease
+				? coreProjectHost.abortProjectReplacement(
+						story.id,
+						owner.replacementLease
+					)
+				: Promise.resolve();
 		hydratingStories.current.add(hydrateKey);
+		recordPerformanceHarnessEvent('renderer-project-hydration-start', {
+			rootPath: projectRoot,
+			storyId: story.id
+		});
 		const projectStoryIds = stories
 			.filter(candidate => {
 				const metadata = loadProjectMetadata(candidate.id);
@@ -1438,29 +1534,68 @@ export const StoryWorkspaceShell: React.FC<
 				!!bridge.readProjectFolderHydrationChunk &&
 				!!bridge.finishProjectFolderHydration;
 			let result;
+			let coreHydrationComplete = false;
+			let primaryError: unknown;
+			let cleanupError: unknown;
 			let hydrationChunkCount = 0;
-			if (canStream) {
-				const start = await bridge.beginProjectFolderHydration(
-					projectRoot,
-					projectStoryIds
-				);
-				const metadataStories = start.stories.map(candidate => ({
-					...candidate,
-					passages: [] as Passage[]
-				}));
-				const metadataById = new Map(
-					metadataStories.map(candidate => [candidate.id, candidate])
-				);
-				await coreProjectHost.beginHydratedProject(story.id, start.stories);
-				let cursor = 0;
-				let done = false;
-				try {
+			try {
+				owner.replacementLease =
+					await coreProjectHost.acquireProjectReplacement(story.id);
+				if (owner.abandoned) return;
+				if (canStream) {
+					const start = await bridge.beginProjectFolderHydration(
+						projectRoot,
+						projectStoryIds
+					);
+					owner.nativeHydrationId = start.hydrationId;
+					if (owner.abandoned) return;
+					const metadataStories = start.stories.map(candidate => ({
+						...candidate,
+						passages: [] as Passage[]
+					}));
+					const metadataById = new Map(
+						metadataStories.map(candidate => [candidate.id, candidate])
+					);
+					owner.phase = 'core-begin';
+					const coreLease = await coreProjectHost.beginHydratedProject(
+						story.id,
+						start.stories,
+						owner.replacementLease
+					);
+					owner.replacementLease = undefined;
+					owner.coreLease =
+						typeof coreLease === 'symbol' ? coreLease : undefined;
+					owner.coreLeaseAcquired = true;
+					recordPerformanceHarnessEvent(
+						'renderer-project-hydration-ownership',
+						{
+							event: 'core-lease-acquired',
+							rootPath: projectRoot,
+							storyId: story.id
+						}
+					);
+					if (owner.abandoned) {
+						owner.coreAbortRequested = true;
+						recordPerformanceHarnessEvent('renderer-project-hydration-abort', {
+							phase: owner.phase,
+							rootPath: projectRoot,
+							storyId: story.id
+						});
+						await abortCoreHydration();
+						return;
+					}
+					owner.phase = 'streaming';
+					let cursor = 0;
+					let done = false;
 					while (!done) {
 						const chunk = await bridge.readProjectFolderHydrationChunk(
 							start.hydrationId,
 							cursor,
 							1000
 						);
+						if (owner.coreAbortRequested) {
+							throw new Error('Project hydration was superseded.');
+						}
 						hydrationChunkCount++;
 						const byStory = new Map<string, PassageWithText[]>();
 						for (const {passage, storyId} of chunk.passages) {
@@ -1472,100 +1607,173 @@ export const StoryWorkspaceShell: React.FC<
 							metadataById.get(storyId)?.passages.push(metadataPassage);
 						}
 						for (const [storyId, passages] of byStory) {
-							await coreProjectHost.appendHydratedProjectPassages(
-								storyId,
-								passages
-							);
+							await appendCoreHydration(storyId, passages);
+							if (owner.coreAbortRequested) {
+								throw new Error('Project hydration was superseded.');
+							}
 						}
 						cursor = chunk.nextCursor;
 						done = chunk.done;
 					}
-					await coreProjectHost.finishHydratedProject(story.id);
-				} finally {
-					await bridge.finishProjectFolderHydration(start.hydrationId);
+					await finishCoreHydration();
+					coreHydrationComplete = true;
+					if (owner.coreAbortRequested) {
+						throw new Error('Project hydration was superseded.');
+					}
+					result = {
+						...start,
+						passageTextLoaded: true,
+						stories: metadataStories
+					};
+				} else {
+					result = await bridge.hydrateProjectFolder(
+						projectRoot,
+						projectStoryIds
+					);
+					if (owner.abandoned) return;
 				}
-				result = {
-					...start,
-					passageTextLoaded: true,
-					stories: metadataStories
-				};
-			} else {
-				result = await bridge.hydrateProjectFolder(
-					projectRoot,
-					projectStoryIds
-				);
-			}
 
-			recordPerformanceHarnessEvent('native-project-hydrated', {
-				...result.loadPerformanceTimings,
-				hydrationChunkCount,
-				hydrationMode: canStream ? 'streamed' : 'full',
-				graphLayoutLoaded: result.graphLayoutLoaded,
-				passageTextLoaded: result.passageTextLoaded,
-				rootPath: result.rootPath,
-				storySourcesLoaded: result.storySourcesLoaded,
-				storyCount: result.stories.length
-			});
-			if (result.stories.length > 0) {
-				if (!canStream) {
-					await coreProjectHost.initializeHydratedProject(
-						story.id,
-						result.stories
+				recordPerformanceHarnessEvent('native-project-hydrated', {
+					...result.loadPerformanceTimings,
+					hydrationChunkCount,
+					hydrationMode: canStream ? 'streamed' : 'full',
+					graphLayoutLoaded: result.graphLayoutLoaded,
+					passageTextLoaded: result.passageTextLoaded,
+					rootPath: result.rootPath,
+					storySourcesLoaded: result.storySourcesLoaded,
+					storyCount: result.stories.length
+				});
+				if (result.stories.length > 0) {
+					if (!canStream) {
+						await coreProjectHost.initializeHydratedProject(
+							story.id,
+							result.stories,
+							owner.replacementLease
+						);
+						owner.replacementLease = undefined;
+						coreHydrationComplete = true;
+					}
+					if (owner.abandoned) return;
+					const metadataStories = result.stories.map(candidate => ({
+						...candidate,
+						passages: candidate.passages.map(passage => ({
+							...passage,
+							text: ''
+						}))
+					}));
+					const mergeStarted = performance.now();
+					const hydratedStories = mergeProjectStories(
+						storiesRef.current,
+						metadataStories,
+						{preserveExistingText: false}
+					);
+					recordPerformanceHarnessEvent('renderer-project-hydration-merged', {
+						durationMs: performance.now() - mergeStarted,
+						passageCount: hydratedStories.reduce(
+							(total, candidate) => total + candidate.passages.length,
+							0
+						)
+					});
+
+					const dispatchStarted = performance.now();
+					storiesRef.current = hydratedStories;
+					storiesDispatch({
+						state: hydratedStories,
+						type: 'init'
+					});
+					if (owner.abandoned) return;
+					recordPerformanceHarnessEvent(
+						'renderer-project-hydration-dispatched',
+						{
+							durationMs: performance.now() - dispatchStarted
+						}
+					);
+					for (const hydratedStory of result.stories) {
+						markProjectStoryHydration(hydratedStory.id, {
+							passageTextLoaded: true,
+							rootPath: projectMetadata.rootPath
+						});
+					}
+					markPerformance('all-passages-ready');
+					measurePerformance(
+						'open-to-hydrated',
+						'open-start',
+						'all-passages-ready'
 					);
 				}
-				const metadataStories = result.stories.map(candidate => ({
-					...candidate,
-					passages: candidate.passages.map(passage => ({
-						...passage,
-						text: ''
-					}))
-				}));
-				const mergeStarted = performance.now();
-				const hydratedStories = mergeProjectStories(
-					storiesRef.current,
-					metadataStories,
-					{preserveExistingText: false}
-				);
-				recordPerformanceHarnessEvent('renderer-project-hydration-merged', {
-					durationMs: performance.now() - mergeStarted,
-					passageCount: hydratedStories.reduce(
-						(total, candidate) => total + candidate.passages.length,
-						0
-					)
-				});
-
-				const dispatchStarted = performance.now();
-				storiesRef.current = hydratedStories;
-				storiesDispatch({
-					state: hydratedStories,
-					type: 'init'
-				});
-				recordPerformanceHarnessEvent('renderer-project-hydration-dispatched', {
-					durationMs: performance.now() - dispatchStarted
-				});
-				for (const hydratedStory of result.stories) {
-					markProjectStoryHydration(hydratedStory.id, {
-						passageTextLoaded: true,
-						rootPath: projectMetadata.rootPath
-					});
+			} catch (error) {
+				primaryError = error;
+			} finally {
+				try {
+					if (
+						owner.coreLeaseAcquired &&
+						!coreHydrationComplete &&
+						!owner.coreAbortRequested
+					) {
+						owner.coreAbortRequested = true;
+						recordPerformanceHarnessEvent('renderer-project-hydration-abort', {
+							phase: owner.phase,
+							rootPath: projectRoot,
+							storyId: story.id
+						});
+						await abortCoreHydration();
+					}
+					if (owner.replacementLease) {
+						await abortProjectReplacement();
+						owner.replacementLease = undefined;
+					}
+				} catch (error) {
+					cleanupError = error;
 				}
-				markPerformance('all-passages-ready');
-				measurePerformance(
-					'open-to-hydrated',
-					'open-start',
-					'all-passages-ready'
-				);
+				try {
+					if (owner.nativeHydrationId) {
+						await bridge.finishProjectFolderHydration(owner.nativeHydrationId);
+					}
+				} catch (error) {
+					cleanupError ??= error;
+				}
+				hydratingStories.current.delete(hydrateKey);
+				if (hydrationOwners.current.get(hydrateKey) === owner) {
+					hydrationOwners.current.delete(hydrateKey);
+				}
+				recordPerformanceHarnessEvent('renderer-project-hydration-terminal', {
+					abandoned: owner.abandoned,
+					coreLeaseAcquired: owner.coreLeaseAcquired,
+					rootPath: projectRoot,
+					storyId: story.id
+				});
+				if (owner.tokens.size > 0 && owner.coreAbortRequested) {
+					setHydrationAttempt(attempt => attempt + 1);
+				}
 			}
+			if (primaryError) throw primaryError;
+			if (cleanupError) throw cleanupError;
 		})().catch(error =>
 			console.warn(`Could not hydrate project folder story: ${error}`)
 		);
+		return () => {
+			owner.tokens.delete(token);
+			void Promise.resolve().then(() => {
+				if (owner.tokens.size > 0) return;
+				owner.abandoned = true;
+				if (!owner.coreLeaseAcquired || owner.coreAbortRequested) return;
+				owner.coreAbortRequested = true;
+				recordPerformanceHarnessEvent('renderer-project-hydration-abort', {
+					phase: owner.phase,
+					rootPath: projectRoot,
+					storyId: story.id
+				});
+				void abortCoreHydration().catch(() => undefined);
+			});
+		};
 	}, [
 		coreProjectHost,
 		passageTextLoaded,
 		projectMetadata,
 		stories,
 		storiesDispatch,
-		story.id
+		story.id,
+		hydrationAttempt
 	]);
 
 	React.useEffect(

@@ -114,9 +114,11 @@ import type {
 } from '../shared';
 import {
 	mainPerformanceHarnessSnapshot,
+	maxWorkerHeapCdpResponseDriftMs,
 	recordMemoryCheckpoint,
 	performanceHarnessEnabled,
-	resetMainPerformanceHarness
+	resetMainPerformanceHarness,
+	sampleWorkerHeapCdp
 } from './performance-harness';
 import {storyPreviewWindowManager} from './story-preview-window-manager';
 
@@ -482,10 +484,62 @@ export function initIpc(options: InitIpcOptions = {}) {
 		);
 		ipcMain.handle(
 			'performance-harness-checkpoint',
-			async (_event, name: string, renderer: Record<string, number>) => {
+			async (
+				event,
+				name: string,
+				renderer: Record<string, number | string | undefined>
+			) => {
+				const workerHeap = await sampleWorkerHeapCdp();
+				const workerResponseAtEpochMs = renderer.workerResponseAtEpochMs;
+				const workerWasmMemoryBytes = renderer.workerWasmMemoryBytes;
+				if (
+					typeof renderer.usedJSHeapSize !== 'number' ||
+					!Number.isFinite(renderer.usedJSHeapSize) ||
+					typeof workerResponseAtEpochMs !== 'number' ||
+					!Number.isFinite(workerResponseAtEpochMs) ||
+					typeof workerWasmMemoryBytes !== 'number' ||
+					!Number.isFinite(workerWasmMemoryBytes)
+				) {
+					throw new Error(
+						'Performance checkpoint requires one renderer heap and one latest worker WASM response tuple.'
+					);
+				}
+				if (
+					!Number.isFinite(workerHeap.usedSize) ||
+					!Number.isFinite(workerHeap.totalSize) ||
+					workerHeap.usedSize < 0 ||
+					workerHeap.totalSize < 0 ||
+					workerHeap.usedSize > workerHeap.totalSize
+				) {
+					throw new Error(
+						'Worker heap CDP sample requires finite non-negative usedSize no greater than totalSize.'
+					);
+				}
+				const workerHeapResponseDriftMs = Math.abs(
+					workerHeap.sampledAtEpochMs - workerResponseAtEpochMs
+				);
+				if (workerHeapResponseDriftMs > maxWorkerHeapCdpResponseDriftMs) {
+					throw new Error(
+						`Worker CDP sample drift ${workerHeapResponseDriftMs.toFixed(
+							1
+						)}ms exceeds ${maxWorkerHeapCdpResponseDriftMs}ms.`
+					);
+				}
 				const processMemory = await process.getProcessMemoryInfo();
 
-				recordMemoryCheckpoint(name, renderer, processMemory);
+				recordMemoryCheckpoint(
+					name,
+					{
+						...renderer,
+						workerHeapCdpResponseDriftMs: workerHeapResponseDriftMs,
+						workerHeapCdpSampledAtEpochMs: workerHeap.sampledAtEpochMs,
+						workerHeapCdpTargetId: workerHeap.targetId,
+						workerHeapCdpTargetUrl: workerHeap.targetUrl,
+						workerHeapCdpTotalSize: workerHeap.totalSize,
+						workerHeapCdpUsedBytes: workerHeap.usedSize
+					},
+					processMemory
+				);
 			}
 		);
 		ipcMain.handle('performance-harness-collect-garbage', async () => {

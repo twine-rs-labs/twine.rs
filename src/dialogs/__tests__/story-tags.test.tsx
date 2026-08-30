@@ -1,7 +1,8 @@
 import {act, fireEvent, render, screen, within} from '@testing-library/react';
 import {axe} from 'jest-axe';
 import * as React from 'react';
-import {CoreProjectHostProvider, StoreCoreProjectHost} from '../../core';
+import {CoreProjectHostProvider} from '../../core';
+import {StoreCoreProjectHost} from '../../test-util/core-project-host-runtime';
 import {PrefsContext, PrefsContextProps} from '../../store/prefs';
 import {StoriesContext, StoriesContextProps} from '../../store/stories';
 import {fakePrefs, fakeStory} from '../../test-util';

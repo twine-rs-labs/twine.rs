@@ -11,7 +11,7 @@ import {
 	useParams
 } from 'react-router';
 import {AppShell} from '../../../components/app-shell';
-import {StoreCoreProjectHost} from '../../../core/project-host';
+import {StoreCoreProjectHost} from '../../../test-util/core-project-host-runtime';
 import {selectPassage, Story, useStoriesContext} from '../../../store/stories';
 import {useStoryFormatsContext} from '../../../store/story-formats';
 import {

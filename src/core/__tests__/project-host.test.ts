@@ -26,10 +26,12 @@ import {
 	applyStoryTagRenameAcrossHosts,
 	coreProjectHostPerformanceSnapshot,
 	CoreProjectHost,
+	CoreProjectHostContext,
 	CoreProjectHostProvider,
 	ProjectScopedCoreProjectHost,
 	StoreCoreProjectHost,
-	useCoreProjectHost
+	useCoreProjectHost,
+	useCoreProjectSession
 } from '../project-host';
 import {reducer as storiesReducer} from '../../store/stories/reducer';
 import {
@@ -66,6 +68,10 @@ import {
 	readStoredPassageTexts,
 	storageManifestKey
 } from '../../store/persistence/local-storage/stories/storage';
+import {workbenchBufferCoordinator} from '../../util/workbench-buffer-coordinator';
+import * as rendererPerformance from '../../util/performance';
+import {rendererQuitQuiescence} from '../../util/renderer-quit-quiescence';
+import {MAX_PASSAGE_RENAME_REQUEST_STRING_BYTES_V1} from '../refactor-limits';
 
 describe('StoreCoreProjectHost asset commands', () => {
 	function batch(patches: PatchBatch['patches'], label = 'Rust Command') {
@@ -131,6 +137,14 @@ describe('StoreCoreProjectHost asset commands', () => {
 					status: status(revision + 1)
 				})
 			),
+			applyRefactorPlan: jest.fn(),
+			beginPassageRenamePlan: jest.fn(),
+			beginProjectBootstrap: jest.fn(),
+			appendProjectBootstrap: jest.fn(),
+			abortProjectBootstrap: jest.fn(),
+			cancelPassageRenamePlan: jest.fn(),
+			continuePassageRenamePlan: jest.fn(),
+			syncRefactorRuntime: jest.fn(),
 			cachedGraphProjection: jest.fn(),
 			cachedStoryIndex: jest.fn(),
 			enabled: true,
@@ -140,6 +154,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 			queryGraphProjection: jest.fn(),
 			queryStoryIndex: jest.fn(),
 			redo: jest.fn(),
+			finishProjectBootstrap: jest.fn(),
 			replaceProject: jest.fn().mockResolvedValue(undefined),
 			undo: jest.fn()
 		};
@@ -186,6 +201,40 @@ describe('StoreCoreProjectHost asset commands', () => {
 		);
 	});
 
+	it('marks the scoped worker response and patch dispatch for a mutation token', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const previousNative = (window as any).twinePerformanceNative;
+		const mark = jest.spyOn(rendererPerformance, 'markPerformance');
+
+		(window as any).twinePerformanceNative = {};
+		rendererPerformance.resetRendererPerformance();
+		try {
+			await context.host.applyStoryCommand(
+				updatePassageTextCommand(context.story.id, context.start.id, 'updated')
+			);
+			const event = rendererPerformance
+				.performanceEventSnapshot()
+				.find(candidate => candidate.name === 'mutation-applied');
+			const token = event?.detail?.performanceToken;
+
+			if (typeof token !== 'string') {
+				throw new Error('Mutation event did not carry a performance token.');
+			}
+			for (const name of [
+				`mutation-submit-${token}`,
+				`mutation-worker-response-${token}`,
+				`mutation-patch-dispatch-${token}`
+			]) {
+				expect(mark).toHaveBeenCalledWith(name);
+			}
+		} finally {
+			mark.mockRestore();
+			rendererPerformance.resetRendererPerformance();
+			(window as any).twinePerformanceNative = previousNative;
+		}
+	});
+
 	it('applies external disk patches without scheduling frontend persistence', async () => {
 		const wasmClient = fakeWasmClient(async () => batch([]));
 		const context = hostWithStory({wasmClient});
@@ -230,6 +279,275 @@ describe('StoreCoreProjectHost asset commands', () => {
 			}),
 			'undoChange.externalChanges'
 		);
+	});
+
+	it('rejects refactor apply when a buffer changes during runtime synchronization', async () => {
+		const order: string[] = [];
+		let bufferRevision = 5;
+		let syncCount = 0;
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		wasmClient.syncRefactorRuntime = jest.fn(
+			async (
+				_sessionId: string,
+				runtime: {buffers: Array<{bufferId: string; registrationId: string}>}
+			) => {
+				expect(runtime.buffers).toEqual([
+					expect.objectContaining({
+						bufferId: 'passage:start',
+						registrationId: expect.stringContaining('buffer-registration-')
+					})
+				]);
+				if (syncCount++ === 0) bufferRevision++;
+				return syncCount;
+			}
+		);
+		wasmClient.applyRefactorPlan = jest.fn(
+			async (_sessionId: string, _request: unknown, epoch: number) => {
+				order.push('wasm');
+				expect(epoch).toBe(2);
+				return {
+					batch: batch([
+						{
+							changes: {
+								layout: null,
+								name: null,
+								tags: null,
+								text: 'after refactor'
+							},
+							passage_id: 'start',
+							story_id: context.story.id,
+							type: 'passageUpdated'
+						}
+					]),
+					revision: 2,
+					status: {
+						canRedo: false,
+						canUndo: true,
+						dirty: true,
+						redoKind: null,
+						revision: 2,
+						undoKind: 'refactor'
+					},
+					type: 'applied'
+				};
+			}
+		);
+		const unregister = workbenchBufferCoordinator.register({
+			bufferId: 'passage:start',
+			closeAdmission: () => {
+				order.push('close');
+			},
+			flush: () => {
+				order.push('flush');
+			},
+			hasPendingChanges: () => false,
+			reopenAdmission: () => {
+				order.push('reopen');
+			},
+			revision: () => bufferRevision,
+			storyId: context.story.id
+		});
+
+		try {
+			await expect(
+				context.host.applyRefactorPlan(context.story.id, {
+					expectedProjectRevision: 1,
+					planId: 'plan-1',
+					selection: {type: 'all'}
+				})
+			).resolves.toEqual({
+				failure: {
+					code: 'buffer-changed',
+					message: 'Workbench buffers changed while preparing refactor runtime.'
+				},
+				type: 'failure'
+			});
+			expect(wasmClient.syncRefactorRuntime).toHaveBeenCalledTimes(1);
+			expect(wasmClient.applyRefactorPlan).not.toHaveBeenCalled();
+			expect(order).toEqual(['close', 'flush', 'reopen']);
+		} finally {
+			unregister();
+		}
+	});
+
+	it('returns cancelled when an abort follows a pending plan chunk and an unrelated mutation', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const controller = new AbortController();
+
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.beginPassageRenamePlan = jest.fn().mockResolvedValue({
+			task: {taskId: 'task-1'},
+			type: 'begun'
+		});
+		wasmClient.continuePassageRenamePlan = jest.fn(async () => {
+			await context.host.applyStoryCommand(
+				updatePassageTextCommand(
+					context.story.id,
+					context.start.id,
+					'unrelated'
+				)
+			);
+			return {
+				progress: {scannedPassageCount: 64, totalPassageCount: 129},
+				task: {taskId: 'task-1'},
+				type: 'pending'
+			};
+		});
+		wasmClient.cancelPassageRenamePlan = jest.fn().mockResolvedValue(true);
+
+		await expect(
+			context.host.planPassageRename(
+				context.story.id,
+				{
+					afterName: 'Renamed',
+					passageId: context.start.id,
+					storyId: context.story.id
+				},
+				{
+					onProgress: () => controller.abort(),
+					signal: controller.signal
+				}
+			)
+		).resolves.toEqual({type: 'cancelled'});
+		expect(wasmClient.cancelPassageRenamePlan).toHaveBeenCalledWith('library', {
+			taskId: 'task-1'
+		});
+	});
+
+	it('awaits pending planner backpressure, yields a task, then observes cancellation', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const controller = new AbortController();
+		let releasePending: (() => void) | undefined;
+		const scheduler = (globalThis as any).scheduler;
+		const yieldTask = jest.fn().mockResolvedValue(undefined);
+
+		(globalThis as any).scheduler = {yield: yieldTask};
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.beginPassageRenamePlan.mockResolvedValue({
+			task: {taskId: 'task-1'},
+			type: 'begun'
+		});
+		wasmClient.continuePassageRenamePlan.mockResolvedValue({
+			progress: {scannedPassageCount: 128, totalPassageCount: 256},
+			task: {taskId: 'task-1'},
+			type: 'pending'
+		});
+		wasmClient.cancelPassageRenamePlan.mockResolvedValue(true);
+
+		try {
+			const planning = context.host.planPassageRename(
+				context.story.id,
+				{
+					afterName: 'Renamed',
+					passageId: context.start.id,
+					storyId: context.story.id
+				},
+				{
+					signal: controller.signal,
+					onProgress: () =>
+						new Promise<void>(resolve => {
+							releasePending = resolve;
+						})
+				}
+			);
+			await waitFor(() =>
+				expect(wasmClient.continuePassageRenamePlan).toHaveBeenCalledTimes(1)
+			);
+			expect(yieldTask).not.toHaveBeenCalled();
+			controller.abort();
+			releasePending?.();
+			await expect(planning).resolves.toEqual({type: 'cancelled'});
+			expect(yieldTask).toHaveBeenCalledTimes(1);
+			expect(wasmClient.continuePassageRenamePlan).toHaveBeenCalledTimes(1);
+		} finally {
+			(globalThis as any).scheduler = scheduler;
+		}
+	});
+
+	it('cancels a begun planner task when progress fails so a later plan can run', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const request = {
+			afterName: 'Renamed',
+			passageId: context.start.id,
+			storyId: context.story.id
+		};
+
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.beginPassageRenamePlan.mockResolvedValue({
+			task: {taskId: 'task-1'},
+			type: 'begun'
+		});
+		wasmClient.continuePassageRenamePlan
+			.mockResolvedValueOnce({
+				progress: {scannedPassageCount: 128, totalPassageCount: 256},
+				task: {taskId: 'task-1'},
+				type: 'pending'
+			})
+			.mockResolvedValueOnce({
+				summary: {planId: 'plan-2'},
+				type: 'complete'
+			});
+		wasmClient.cancelPassageRenamePlan.mockResolvedValue(true);
+
+		await expect(
+			context.host.planPassageRename(context.story.id, request, {
+				onProgress: () => Promise.reject(new Error('progress failed'))
+			})
+		).rejects.toThrow('progress failed');
+		expect(wasmClient.cancelPassageRenamePlan).toHaveBeenCalledTimes(1);
+		await expect(
+			context.host.planPassageRename(context.story.id, request)
+		).resolves.toEqual({summary: {planId: 'plan-2'}, type: 'complete'});
+	});
+
+	it('cancels a begun planner task when its task yield fails', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const scheduler = (globalThis as any).scheduler;
+		const request = {
+			afterName: 'Renamed',
+			passageId: context.start.id,
+			storyId: context.story.id
+		};
+
+		(globalThis as any).scheduler = {
+			yield: jest
+				.fn()
+				.mockRejectedValueOnce(new Error('yield failed'))
+				.mockResolvedValue(undefined)
+		};
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.beginPassageRenamePlan.mockResolvedValue({
+			task: {taskId: 'task-1'},
+			type: 'begun'
+		});
+		wasmClient.continuePassageRenamePlan
+			.mockResolvedValueOnce({
+				progress: {scannedPassageCount: 128, totalPassageCount: 256},
+				task: {taskId: 'task-1'},
+				type: 'pending'
+			})
+			.mockResolvedValueOnce({
+				summary: {planId: 'plan-2'},
+				type: 'complete'
+			});
+		wasmClient.cancelPassageRenamePlan.mockResolvedValue(true);
+
+		try {
+			await expect(
+				context.host.planPassageRename(context.story.id, request)
+			).rejects.toThrow('yield failed');
+			expect(wasmClient.cancelPassageRenamePlan).toHaveBeenCalledTimes(1);
+			await expect(
+				context.host.planPassageRename(context.story.id, request)
+			).resolves.toEqual({summary: {planId: 'plan-2'}, type: 'complete'});
+		} finally {
+			(globalThis as any).scheduler = scheduler;
+		}
 	});
 
 	async function flushCommand() {
@@ -804,7 +1122,10 @@ describe('StoreCoreProjectHost asset commands', () => {
 		window.localStorage.clear();
 	});
 
-	function localPersistenceHarness(story: StoryWithDocuments) {
+	function localPersistenceHarness(
+		story: StoryWithDocuments,
+		wasmClient?: any
+	) {
 		window.localStorage.clear();
 		let stories: StoriesState = [story];
 		let remainingManifestFailures = 0;
@@ -849,7 +1170,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 			hostRef.current?.update(stories, dispatch);
 		};
 		const dispatch = jest.fn(applyAction);
-		const host = new StoreCoreProjectHost(stories, dispatch);
+		const host = new StoreCoreProjectHost(stories, dispatch, {wasmClient});
 
 		hostRef.current = host;
 		return {
@@ -857,14 +1178,21 @@ describe('StoreCoreProjectHost asset commands', () => {
 				setItem.mockRestore();
 				window.localStorage.clear();
 			},
+			dispatch,
 			host,
+			get stories() {
+				return stories;
+			},
 			setManifestFailures(count: number) {
 				remainingManifestFailures = count;
 			}
 		};
 	}
 
-	function electronPersistenceHarness(story: StoryWithDocuments) {
+	function electronPersistenceHarness(
+		story: StoryWithDocuments,
+		wasmClient?: any
+	) {
 		window.localStorage.clear();
 		const rootPath = `/native/${story.id}.twine.rs`;
 		let stories: StoriesState = [story];
@@ -873,6 +1201,9 @@ describe('StoreCoreProjectHost asset commands', () => {
 		let durableStylesheet = story.stylesheet;
 		const durablePassageText = new Map(
 			story.passages.map(passage => [passage.id, passage.text])
+		);
+		const durablePassageName = new Map(
+			story.passages.map(passage => [passage.id, passage.name])
 		);
 		const hostRef: {current?: StoreCoreProjectHost} = {};
 
@@ -894,6 +1225,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 				}
 				for (const passage of savedStory.passages) {
 					durablePassageText.set(passage.id, passage.text);
+					durablePassageName.set(passage.id, passage.name);
 				}
 				for (const update of options?.documentUpdates ?? []) {
 					if (update.type === 'script') {
@@ -918,6 +1250,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 						stylesheet: durableStylesheet,
 						passages: story.passages.map(passage => ({
 							...passage,
+							name: durablePassageName.get(passage.id) ?? passage.name,
 							text: durablePassageText.get(passage.id) ?? ''
 						}))
 					},
@@ -954,7 +1287,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 			hostRef.current?.update(stories, dispatch);
 		};
 		const dispatch = jest.fn(applyAction);
-		const host = new StoreCoreProjectHost(stories, dispatch);
+		const host = new StoreCoreProjectHost(stories, dispatch, {wasmClient});
 
 		hostRef.current = host;
 		return {
@@ -963,6 +1296,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 				delete (window as TwineElectronWindow).twineElectron;
 				window.localStorage.clear();
 			},
+			dispatch,
 			host,
 			load: loadElectronStories,
 			setSaveFailures(count: number) {
@@ -1051,6 +1385,614 @@ describe('StoreCoreProjectHost asset commands', () => {
 
 		setItem.mockRestore();
 		window.localStorage.clear();
+	});
+
+	it('keeps a committed refactor intact while browser persistence retries its exact batch', async () => {
+		const story = {...fakeStory(0), id: 'refactor-local-retry'};
+		const start = fakePassage({
+			id: 'refactor-local-start',
+			name: 'Start',
+			story: story.id,
+			text: '[[Target]]'
+		});
+		const target = fakePassage({
+			id: 'refactor-local-target',
+			name: 'Target',
+			story: story.id,
+			text: 'before'
+		});
+		const wasmClient = fakeWasmClient(async () => batch([]));
+
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.applyRefactorPlan.mockResolvedValue({
+			batch: batch([
+				{
+					changes: {layout: null, name: 'Renamed', tags: null, text: null},
+					passage_id: target.id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				},
+				{
+					changes: {layout: null, name: null, tags: null, text: '[[Renamed]]'},
+					passage_id: start.id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				}
+			]),
+			revision: 2,
+			status: {
+				canRedo: false,
+				canUndo: true,
+				dirty: true,
+				redoKind: null,
+				revision: 2,
+				undoKind: 'refactor'
+			},
+			type: 'applied'
+		});
+		const harness = localPersistenceHarness(
+			{...story, passages: [start, target]},
+			wasmClient
+		);
+
+		try {
+			harness.setManifestFailures(1);
+			await expect(
+				harness.host.applyRefactorPlan(story.id, {
+					expectedProjectRevision: 1,
+					planId: 'refactor-plan',
+					selection: {type: 'all'}
+				})
+			).rejects.toThrow('manifest unavailable');
+			expect(wasmClient.applyRefactorPlan).toHaveBeenCalledTimes(1);
+			expect(
+				harness.stories[0].passages.find(passage => passage.id === target.id)
+			).toEqual(expect.objectContaining({name: 'Renamed'}));
+			expect(readStoredPassageTexts(story.id).get(start.id)).toBe('[[Target]]');
+
+			await expect(
+				harness.host.retryStoryPersistence({
+					passageId: start.id,
+					storyId: story.id,
+					type: 'passageText'
+				})
+			).resolves.toBe(true);
+			await expect(
+				harness.host.retryStoryPersistence({
+					passageId: start.id,
+					storyId: story.id,
+					type: 'passageText'
+				})
+			).resolves.toBe(false);
+			expect(wasmClient.applyRefactorPlan).toHaveBeenCalledTimes(1);
+			expect(readStoredPassageTexts(story.id).get(start.id)).toBe(
+				'[[Renamed]]'
+			);
+			const [loaded] = await loadLocalStories();
+			expect(loaded.passages.find(passage => passage.id === target.id)).toEqual(
+				expect.objectContaining({name: 'Renamed'})
+			);
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it('retries a committed refactor through the Electron persistence receipt without reapplying it', async () => {
+		const story = {...fakeStory(0), id: 'refactor-electron-retry'};
+		const start = fakePassage({
+			id: 'refactor-electron-start',
+			name: 'Start',
+			story: story.id,
+			text: '[[Target]]'
+		});
+		const target = fakePassage({
+			id: 'refactor-electron-target',
+			name: 'Target',
+			story: story.id,
+			text: 'before'
+		});
+		const wasmClient = fakeWasmClient(async () => batch([]));
+
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.applyRefactorPlan.mockResolvedValue({
+			batch: batch([
+				{
+					changes: {layout: null, name: 'Renamed', tags: null, text: null},
+					passage_id: target.id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				},
+				{
+					changes: {layout: null, name: null, tags: null, text: '[[Renamed]]'},
+					passage_id: start.id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				}
+			]),
+			revision: 2,
+			status: {
+				canRedo: false,
+				canUndo: true,
+				dirty: true,
+				redoKind: null,
+				revision: 2,
+				undoKind: 'refactor'
+			},
+			type: 'applied'
+		});
+		const harness = electronPersistenceHarness(
+			{...story, passages: [start, target]},
+			wasmClient
+		);
+
+		try {
+			harness.setSaveFailures(1);
+			await expect(
+				harness.host.applyRefactorPlan(story.id, {
+					expectedProjectRevision: 1,
+					planId: 'refactor-plan',
+					selection: {type: 'all'}
+				})
+			).rejects.toThrow('native save unavailable');
+			expect(wasmClient.applyRefactorPlan).toHaveBeenCalledTimes(1);
+			let [loaded] = await harness.load();
+			expect(
+				(
+					loaded.passages.find(
+						passage => passage.id === start.id
+					) as unknown as {
+						text: string;
+					}
+				)?.text
+			).toBe('[[Target]]');
+
+			await expect(
+				harness.host.retryStoryPersistence({
+					passageId: start.id,
+					storyId: story.id,
+					type: 'passageText'
+				})
+			).resolves.toBe(true);
+			expect(wasmClient.applyRefactorPlan).toHaveBeenCalledTimes(1);
+			[loaded] = await harness.load();
+			expect(
+				(
+					loaded.passages.find(
+						passage => passage.id === start.id
+					) as unknown as {
+						text: string;
+					}
+				)?.text
+			).toBe('[[Renamed]]');
+			expect(loaded.passages.find(passage => passage.id === target.id)).toEqual(
+				expect.objectContaining({name: 'Renamed'})
+			);
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it('retries a rename-only refactor from its passage metadata receipt without reapplying it', async () => {
+		const story = {...fakeStory(0), id: 'refactor-local-rename-only'};
+		const target = fakePassage({
+			id: 'refactor-local-rename-only-target',
+			name: 'Target',
+			story: story.id,
+			text: 'before'
+		});
+		const wasmClient = fakeWasmClient(async () => batch([]));
+
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.applyRefactorPlan.mockResolvedValue({
+			batch: batch([
+				{
+					changes: {layout: null, name: 'Renamed', tags: null, text: null},
+					passage_id: target.id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				}
+			]),
+			revision: 2,
+			status: {
+				canRedo: false,
+				canUndo: true,
+				dirty: true,
+				redoKind: null,
+				revision: 2,
+				undoKind: 'refactor'
+			},
+			type: 'applied'
+		});
+		const harness = localPersistenceHarness(
+			{...story, passages: [target]},
+			wasmClient
+		);
+		const metadataTarget = {
+			passageId: target.id,
+			storyId: story.id,
+			type: 'passageMetadata' as const
+		};
+
+		try {
+			harness.setManifestFailures(1);
+			await expect(
+				harness.host.applyRefactorPlan(story.id, {
+					expectedProjectRevision: 1,
+					planId: 'rename-only-plan',
+					selection: {type: 'all'}
+				})
+			).rejects.toThrow('manifest unavailable');
+
+			await expect(
+				harness.host.retryStoryPersistence(metadataTarget)
+			).resolves.toBe(true);
+			const retryAction = harness.dispatch.mock.calls.at(-1)?.[0];
+			expect(retryAction).toEqual(
+				expect.objectContaining({
+					actions: [],
+					persistenceHints: [metadataTarget],
+					type: 'applyCorePatchBatch'
+				})
+			);
+			expect(wasmClient.applyRefactorPlan).toHaveBeenCalledTimes(1);
+			const [loaded] = await loadLocalStories();
+			expect(loaded.passages[0]).toEqual(
+				expect.objectContaining({name: 'Renamed'})
+			);
+			await expect(
+				harness.host.retryStoryPersistence(metadataTarget)
+			).resolves.toBe(false);
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it.each(['passage text', 'passage metadata'] as const)(
+		'retries a grouped refactor from its %s alias with every still-current target',
+		async alias => {
+			const story = {...fakeStory(0), id: `refactor-grouped-${alias}`};
+			const start = fakePassage({
+				id: `refactor-grouped-start-${alias}`,
+				name: 'Start',
+				story: story.id,
+				text: '[[Target]]'
+			});
+			const target = fakePassage({
+				id: `refactor-grouped-target-${alias}`,
+				name: 'Target',
+				story: story.id,
+				text: 'before'
+			});
+			const wasmClient = fakeWasmClient(async () => batch([]));
+			wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+			wasmClient.applyRefactorPlan.mockResolvedValue({
+				batch: batch([
+					{
+						changes: {layout: null, name: 'Renamed', tags: null, text: null},
+						passage_id: target.id,
+						story_id: story.id,
+						type: 'passageUpdated'
+					},
+					{
+						changes: {
+							layout: null,
+							name: null,
+							tags: null,
+							text: '[[Renamed]]'
+						},
+						passage_id: start.id,
+						story_id: story.id,
+						type: 'passageUpdated'
+					}
+				]),
+				revision: 2,
+				status: {
+					canRedo: false,
+					canUndo: true,
+					dirty: true,
+					redoKind: null,
+					revision: 2,
+					undoKind: 'refactor'
+				},
+				type: 'applied'
+			});
+			const harness = localPersistenceHarness(
+				{...story, passages: [start, target]},
+				wasmClient
+			);
+			const textTarget = {
+				passageId: start.id,
+				storyId: story.id,
+				type: 'passageText' as const
+			};
+			const metadataTarget = {
+				passageId: target.id,
+				storyId: story.id,
+				type: 'passageMetadata' as const
+			};
+
+			try {
+				harness.setManifestFailures(1);
+				await expect(
+					harness.host.applyRefactorPlan(story.id, {
+						expectedProjectRevision: 1,
+						planId: `grouped-${alias}`,
+						selection: {type: 'all'}
+					})
+				).rejects.toThrow('manifest unavailable');
+				await expect(
+					harness.host.retryStoryPersistence(
+						alias === 'passage text' ? textTarget : metadataTarget
+					)
+				).resolves.toBe(true);
+				expect(harness.dispatch.mock.calls.at(-1)?.[0]).toEqual(
+					expect.objectContaining({
+						actions: [],
+						documentUpdates: [
+							expect.objectContaining({
+								passageId: start.id,
+								text: '[[Renamed]]',
+								type: 'passageText'
+							})
+						],
+						persistenceHints: expect.arrayContaining([
+							textTarget,
+							metadataTarget
+						])
+					})
+				);
+				const [loaded] = await loadLocalStories();
+				expect(
+					(loaded.passages.find(passage => passage.id === start.id) as any).text
+				).toBe('[[Renamed]]');
+				expect(
+					loaded.passages.find(passage => passage.id === target.id)
+				).toEqual(expect.objectContaining({name: 'Renamed'}));
+				await expect(
+					harness.host.retryStoryPersistence(textTarget)
+				).resolves.toBe(false);
+				await expect(
+					harness.host.retryStoryPersistence(metadataTarget)
+				).resolves.toBe(false);
+			} finally {
+				harness.cleanup();
+			}
+		}
+	);
+
+	it('retries only the remaining grouped refactor target after a newer text save succeeds', async () => {
+		const story = {...fakeStory(0), id: 'refactor-grouped-partial-success'};
+		const start = fakePassage({
+			id: 'refactor-partial-start',
+			name: 'Start',
+			story: story.id,
+			text: '[[Target]]'
+		});
+		const target = fakePassage({
+			id: 'refactor-partial-target',
+			name: 'Target',
+			story: story.id,
+			text: 'before'
+		});
+		const wasmClient = fakeWasmClient(async command =>
+			command.type === 'updatePassageText'
+				? batch([
+						{
+							changes: {
+								layout: null,
+								name: null,
+								tags: null,
+								text: command.text
+							},
+							passage_id: command.passage_id,
+							story_id: command.story_id,
+							type: 'passageUpdated'
+						}
+					])
+				: batch([])
+		);
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.applyRefactorPlan.mockResolvedValue({
+			batch: batch([
+				{
+					changes: {layout: null, name: 'Renamed', tags: null, text: null},
+					passage_id: target.id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				},
+				{
+					changes: {layout: null, name: null, tags: null, text: '[[Renamed]]'},
+					passage_id: start.id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				}
+			]),
+			revision: 2,
+			status: {
+				canRedo: false,
+				canUndo: true,
+				dirty: true,
+				redoKind: null,
+				revision: 2,
+				undoKind: 'refactor'
+			},
+			type: 'applied'
+		});
+		const harness = localPersistenceHarness(
+			{...story, passages: [start, target]},
+			wasmClient
+		);
+		const textTarget = {
+			passageId: start.id,
+			storyId: story.id,
+			type: 'passageText' as const
+		};
+		const metadataTarget = {
+			passageId: target.id,
+			storyId: story.id,
+			type: 'passageMetadata' as const
+		};
+
+		try {
+			harness.setManifestFailures(1);
+			await expect(
+				harness.host.applyRefactorPlan(story.id, {
+					expectedProjectRevision: 1,
+					planId: 'partial-success',
+					selection: {type: 'all'}
+				})
+			).rejects.toThrow('manifest unavailable');
+			await harness.host.applyStoryCommandPersisted(
+				updatePassageTextCommand(story.id, start.id, 'newer durable text')
+			);
+
+			await expect(
+				harness.host.retryStoryPersistence(metadataTarget)
+			).resolves.toBe(true);
+			expect(harness.dispatch.mock.calls.at(-1)?.[0]).toEqual(
+				expect.objectContaining({
+					actions: [],
+					documentUpdates: [],
+					persistenceHints: [metadataTarget]
+				})
+			);
+			const [loaded] = await loadLocalStories();
+			expect(
+				(loaded.passages.find(passage => passage.id === start.id) as any).text
+			).toBe('newer durable text');
+			expect(loaded.passages.find(passage => passage.id === target.id)).toEqual(
+				expect.objectContaining({name: 'Renamed'})
+			);
+			await expect(
+				harness.host.retryStoryPersistence(textTarget)
+			).resolves.toBe(false);
+			await expect(
+				harness.host.retryStoryPersistence(metadataTarget)
+			).resolves.toBe(false);
+		} finally {
+			harness.cleanup();
+		}
+	});
+
+	it('lets a newer same-story full save clear grouped aliases without letting an older revision clear a newer receipt', async () => {
+		const story = {...fakeStory(0), id: 'refactor-grouped-full-success'};
+		const start = fakePassage({
+			id: 'refactor-full-start',
+			name: 'Start',
+			story: story.id,
+			text: '[[Target]]'
+		});
+		const target = fakePassage({
+			id: 'refactor-full-target',
+			name: 'Target',
+			story: story.id,
+			text: 'before'
+		});
+		const wasmClient = fakeWasmClient(async command => {
+			if (command.type === 'updateStoryScript') {
+				return batch([
+					{
+						changes: {name: null},
+						story_id: command.story_id,
+						type: 'projectMetadataUpdated'
+					}
+				]);
+			}
+			if (command.type === 'updatePassageText') {
+				return batch([
+					{
+						changes: {layout: null, name: null, tags: null, text: command.text},
+						passage_id: command.passage_id,
+						story_id: command.story_id,
+						type: 'passageUpdated'
+					}
+				]);
+			}
+			return batch([]);
+		});
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.applyRefactorPlan.mockResolvedValue({
+			batch: batch([
+				{
+					changes: {layout: null, name: 'Renamed', tags: null, text: null},
+					passage_id: target.id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				},
+				{
+					changes: {layout: null, name: null, tags: null, text: '[[Renamed]]'},
+					passage_id: start.id,
+					story_id: story.id,
+					type: 'passageUpdated'
+				}
+			]),
+			revision: 2,
+			status: {
+				canRedo: false,
+				canUndo: true,
+				dirty: true,
+				redoKind: null,
+				revision: 2,
+				undoKind: 'refactor'
+			},
+			type: 'applied'
+		});
+		const harness = localPersistenceHarness(
+			{...story, passages: [start, target]},
+			wasmClient
+		);
+		const textTarget = {
+			passageId: start.id,
+			storyId: story.id,
+			type: 'passageText' as const
+		};
+		const metadataTarget = {
+			passageId: target.id,
+			storyId: story.id,
+			type: 'passageMetadata' as const
+		};
+
+		try {
+			harness.setManifestFailures(1);
+			await expect(
+				harness.host.applyRefactorPlan(story.id, {
+					expectedProjectRevision: 1,
+					planId: 'full-success',
+					selection: {type: 'all'}
+				})
+			).rejects.toThrow('manifest unavailable');
+			await harness.host.applyStoryCommandPersisted(
+				updateStoryScriptCommand(story.id, story.script)
+			);
+
+			await expect(
+				harness.host.retryStoryPersistence(textTarget)
+			).resolves.toBe(false);
+			await expect(
+				harness.host.retryStoryPersistence(metadataTarget)
+			).resolves.toBe(false);
+			harness.setManifestFailures(1);
+			await expect(
+				harness.host.applyStoryCommandPersisted(
+					updatePassageTextCommand(story.id, start.id, 'newer retry text')
+				)
+			).rejects.toThrow('manifest unavailable');
+			const failed = (harness.host as any).failedPersistenceByTarget as Map<
+				string,
+				unknown
+			>;
+			(harness.host as any).clearFailedPersistenceTargets([textTarget], 2);
+			expect(failed.size).toBe(1);
+			await expect(
+				harness.host.retryStoryPersistence(textTarget)
+			).resolves.toBe(true);
+			const [loaded] = await loadLocalStories();
+			expect(
+				(loaded.passages.find(passage => passage.id === start.id) as any).text
+			).toBe('newer retry text');
+		} finally {
+			harness.cleanup();
+		}
 	});
 
 	it('retains a failed passage receipt when a sibling passage persists', async () => {
@@ -1476,6 +2418,126 @@ describe('StoreCoreProjectHost asset commands', () => {
 		host.dispose();
 	});
 
+	it('drains a scoped refactor apply before disposing its shared worker', async () => {
+		const story = fakeStory(1);
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = [
+			...((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		][0];
+		let resolveApply!: (value: any) => void;
+		const pending = new Promise<any>(resolve => {
+			resolveApply = resolve;
+		});
+		jest.spyOn(storeHost, 'applyRefactorPlan').mockReturnValue(pending);
+		const dispose = jest.spyOn((host as any).client, 'dispose');
+		const apply = host.applyRefactorPlan(story.id, {
+			expectedProjectRevision: 1,
+			planId: 'pending-plan',
+			selection: {type: 'all'}
+		});
+
+		await Promise.resolve();
+		host.dispose();
+		expect(dispose).not.toHaveBeenCalled();
+		resolveApply({
+			failure: {code: 'buffer-changed', message: 'stale'},
+			type: 'failure'
+		});
+		await expect(apply).resolves.toEqual(
+			expect.objectContaining({type: 'failure'})
+		);
+		await Promise.resolve();
+		expect(dispose).toHaveBeenCalledTimes(1);
+	});
+
+	it('defers obsolete session retirement until an admitted refactor apply settles', async () => {
+		const story = fakeStory(1);
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = [
+			...((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		][0];
+		let resolveApply!: (value: any) => void;
+		jest.spyOn(storeHost, 'applyRefactorPlan').mockReturnValue(
+			new Promise(resolve => {
+				resolveApply = resolve;
+			})
+		);
+		const apply = host.applyRefactorPlan(story.id, {
+			expectedProjectRevision: 1,
+			planId: 'retire-plan',
+			selection: {type: 'all'}
+		});
+		await Promise.resolve();
+		host.update([], jest.fn());
+		expect((host as any).hosts.size).toBe(1);
+		resolveApply({
+			failure: {code: 'buffer-changed', message: 'stale'},
+			type: 'failure'
+		});
+		await apply;
+		await waitFor(() => expect((host as any).hosts.size).toBe(0));
+		host.dispose();
+	});
+
+	it('does not retire a session reintroduced while an admitted refactor apply drains', async () => {
+		const story = fakeStory(1);
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = [
+			...((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		][0];
+		let resolveApply!: (value: any) => void;
+		jest.spyOn(storeHost, 'applyRefactorPlan').mockReturnValue(
+			new Promise(resolve => {
+				resolveApply = resolve;
+			})
+		);
+		const removeSession = jest.spyOn((host as any).client, 'removeSession');
+		const apply = host.applyRefactorPlan(story.id, {
+			expectedProjectRevision: 1,
+			planId: 'reintroduced-plan',
+			selection: {type: 'all'}
+		});
+
+		await Promise.resolve();
+		host.update([], jest.fn());
+		host.update([story], jest.fn());
+		resolveApply({
+			failure: {code: 'buffer-changed', message: 'stale'},
+			type: 'failure'
+		});
+		await apply;
+		await waitFor(() => expect((host as any).hosts.size).toBe(1));
+		expect(removeSession).not.toHaveBeenCalled();
+		host.dispose();
+	});
+
+	it('finalizes scoped disposal after an admitted refactor apply rejects', async () => {
+		const story = fakeStory(1);
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = [
+			...((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		][0];
+		let rejectApply!: (reason: Error) => void;
+		jest.spyOn(storeHost, 'applyRefactorPlan').mockReturnValue(
+			new Promise((_resolve, reject) => {
+				rejectApply = reject;
+			})
+		);
+		const dispose = jest.spyOn((host as any).client, 'dispose');
+		const apply = host.applyRefactorPlan(story.id, {
+			expectedProjectRevision: 1,
+			planId: 'rejected-plan',
+			selection: {type: 'all'}
+		});
+
+		await Promise.resolve();
+		host.dispose();
+		expect(dispose).not.toHaveBeenCalled();
+		rejectApply(new Error('worker stopped'));
+		await expect(apply).rejects.toThrow('worker stopped');
+		await waitFor(() => expect(dispose).toHaveBeenCalledTimes(1));
+	});
+
 	it('captures native storage kind on a story deletion patch', async () => {
 		const wasmClient = fakeWasmClient(async command =>
 			batch([
@@ -1533,6 +2595,149 @@ describe('StoreCoreProjectHost asset commands', () => {
 		replaceKnownAssetInventoryForStory(context.story.id, []);
 		await applying;
 		expect(wasmClient.replaceProject).toHaveBeenCalledTimes(1);
+	});
+
+	it('aborts a failed stream, clears readiness, and permits bootstrap retry or snapshot recovery', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({text: 'partial body', wasmClient});
+		wasmClient.appendProjectBootstrap.mockRejectedValueOnce(
+			new Error('append failed')
+		);
+		await context.host.beginHydratedProject(context.story.id, context.stories);
+		const recoveryStories = context.stories.map(story => ({
+			...story,
+			passages: story.passages.map(passage => ({...passage}))
+		}));
+		await expect(
+			context.host.appendHydratedProjectPassages(context.story.id, [
+				context.start
+			])
+		).rejects.toThrow('append failed');
+		await context.host.abortHydratedProject(context.story.id);
+		expect(wasmClient.abortProjectBootstrap).toHaveBeenCalledWith('library');
+		expect((context.host as any).wasmProjectReplaceRevision).toBe(-1);
+		await expect(
+			context.host.beginHydratedProject(context.story.id, context.stories)
+		).resolves.toBeUndefined();
+
+		wasmClient.replaceProject.mockRejectedValueOnce(
+			new Error('recover failed')
+		);
+		await expect(
+			context.host.recoverFromSnapshot(
+				context.story.id,
+				recoveryStories as any,
+				[]
+			)
+		).rejects.toThrow('recover failed');
+		expect((context.host as any).wasmProjectReplaceRevision).toBe(-1);
+		wasmClient.replaceProject.mockResolvedValueOnce(undefined);
+		await expect(
+			context.host.recoverFromSnapshot(
+				context.story.id,
+				recoveryStories as any,
+				[]
+			)
+		).resolves.toBeUndefined();
+	});
+
+	it('keeps streamed hydration stages on their captured session after root rebinding', async () => {
+		const story = {...fakeStory(0), id: 'leased-hydration'};
+		const dispatch = jest.fn();
+		const host = new ProjectScopedCoreProjectHost([story], dispatch);
+		const original = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		jest.spyOn(original, 'beginHydratedProject').mockResolvedValue();
+		const append = jest
+			.spyOn(original, 'appendHydratedProjectPassages')
+			.mockResolvedValue();
+		const abort = jest
+			.spyOn(original, 'abortHydratedProject')
+			.mockResolvedValue();
+		await host.beginHydratedProject(story.id, [story]);
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/rebound.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		try {
+			host.update([story], dispatch);
+			const replacement = Array.from(
+				((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+			).find(candidate => candidate !== original)!;
+			const replacementAppend = jest.spyOn(
+				replacement,
+				'appendHydratedProjectPassages'
+			);
+			await host.appendHydratedProjectPassages(story.id, []);
+			expect(append).toHaveBeenCalledWith(story.id, []);
+			expect(replacementAppend).not.toHaveBeenCalled();
+			await host.abortHydratedProject(story.id);
+			expect(abort).toHaveBeenCalledWith(story.id);
+			await expect(
+				host.appendHydratedProjectPassages(story.id, [])
+			).rejects.toThrow('no longer active');
+		} finally {
+			deleteProjectMetadata(story.id);
+			host.dispose();
+		}
+	});
+
+	it('rejects a stale hydration lease after root rebinding without touching the replacement stream', async () => {
+		const story = {...fakeStory(0), id: 'stale-hydration-lease'};
+		const dispatch = jest.fn();
+		const host = new ProjectScopedCoreProjectHost([story], dispatch);
+		const original = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		jest.spyOn(original, 'beginHydratedProject').mockResolvedValue();
+		const originalAbort = jest
+			.spyOn(original, 'abortHydratedProject')
+			.mockResolvedValue();
+		const firstLease = await host.beginHydratedProject(story.id, [story]);
+		expect(firstLease).toEqual(expect.any(Symbol));
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/rebound-lease.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		try {
+			host.update([story], dispatch);
+			const replacement = Array.from(
+				((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+			).find(candidate => candidate !== original)!;
+			jest.spyOn(replacement, 'beginHydratedProject').mockResolvedValue();
+			const replacementAppend = jest
+				.spyOn(replacement, 'appendHydratedProjectPassages')
+				.mockResolvedValue();
+			const replacementFinish = jest
+				.spyOn(replacement, 'finishHydratedProject')
+				.mockResolvedValue();
+			const replacementAbort = jest
+				.spyOn(replacement, 'abortHydratedProject')
+				.mockResolvedValue();
+			const replacementLease = await host.beginHydratedProject(story.id, [
+				story
+			]);
+			originalAbort.mockClear();
+			replacementAbort.mockClear();
+
+			await expect(
+				host.appendHydratedProjectPassages(story.id, [], firstLease)
+			).rejects.toThrow('no longer active');
+			await host.abortHydratedProject(story.id, firstLease);
+			expect(replacementAbort).not.toHaveBeenCalled();
+			expect(originalAbort).not.toHaveBeenCalled();
+
+			await host.appendHydratedProjectPassages(story.id, [], replacementLease);
+			await host.finishHydratedProject(story.id, replacementLease);
+			expect(replacementAppend).toHaveBeenCalledWith(story.id, []);
+			expect(replacementFinish).toHaveBeenCalledWith(story.id);
+		} finally {
+			deleteProjectMetadata(story.id);
+			host.dispose();
+		}
 	});
 
 	it('overlays refreshed native metadata onto a stale Rust asset page', async () => {
@@ -2022,6 +3227,1122 @@ describe('StoreCoreProjectHost asset commands', () => {
 		await expect(rollback).resolves.toBe(false);
 		expect(wasmClient.undo).not.toHaveBeenCalled();
 	});
+
+	it('owns refactor review DTOs at the project host boundary and releases them on close or session replacement', async () => {
+		const story = fakeStory(0);
+		const dispatch = jest.fn();
+		const host = new ProjectScopedCoreProjectHost([story], dispatch);
+		const storeHost = [
+			...((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		][0];
+		const summary = {
+			planDigest: 'digest-1',
+			planId: 'plan-1',
+			projectRevision: 1
+		};
+		const page = {changes: [{changeId: 'change-1'}]};
+
+		jest
+			.spyOn(storeHost, 'planPassageRename')
+			.mockResolvedValue({summary, type: 'complete'} as any);
+		jest
+			.spyOn(storeHost, 'queryRefactorPlanDetailAsync')
+			.mockResolvedValue({page, type: 'page'} as any);
+
+		await host.planPassageRename(story.id, {
+			afterName: 'Renamed',
+			passageId: 'passage-1',
+			storyId: story.id
+		});
+		await host.queryRefactorPlanDetailAsync(story.id, {
+			planDigest: 'digest-1',
+			planId: 'plan-1',
+			position: 0
+		});
+		expect(host.refactorReviewSnapshot(story.id)).toEqual({
+			encodedBytes: expect.any(Number),
+			pageCount: 1,
+			summaryCount: 1
+		});
+		expect(host.performanceDiagnostics().refactorReview).toEqual(
+			expect.objectContaining({ownerCount: 1, pageCount: 1, summaryCount: 1})
+		);
+
+		host.closeRefactorReview(story.id);
+		expect(host.refactorReviewSnapshot(story.id)).toEqual({
+			encodedBytes: 0,
+			pageCount: 0,
+			summaryCount: 0
+		});
+
+		await host.planPassageRename(story.id, {
+			afterName: 'Renamed',
+			passageId: 'passage-1',
+			storyId: story.id
+		});
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/refactor-review.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		try {
+			host.update([story], dispatch);
+			expect(host.refactorReviewSnapshot(story.id)).toEqual({
+				encodedBytes: 0,
+				pageCount: 0,
+				summaryCount: 0
+			});
+		} finally {
+			deleteProjectMetadata(story.id);
+			host.dispose();
+		}
+
+		const disposableStory = {...fakeStory(1), id: 'dispose-review-story'};
+		const disposableHost = new ProjectScopedCoreProjectHost(
+			[disposableStory],
+			dispatch
+		);
+		const disposableStoreHost = [
+			...(
+				(disposableHost as any).hosts as Map<string, StoreCoreProjectHost>
+			).values()
+		][0];
+		jest
+			.spyOn(disposableStoreHost, 'planPassageRename')
+			.mockResolvedValue({summary, type: 'complete'} as any);
+		await disposableHost.planPassageRename(disposableStory.id, {
+			afterName: 'Renamed',
+			passageId: 'passage-1',
+			storyId: disposableStory.id
+		});
+		expect(
+			disposableHost.refactorReviewSnapshot(disposableStory.id).summaryCount
+		).toBe(1);
+		disposableHost.dispose();
+		expect(disposableHost.refactorReviewSnapshot(disposableStory.id)).toEqual({
+			encodedBytes: 0,
+			pageCount: 0,
+			summaryCount: 0
+		});
+	});
+
+	it('cancels pending planner/detail work on review close without publishing late DTOs', async () => {
+		const story = {...fakeStory(0), id: 'late-review'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let resolvePlan!: (value: any) => void;
+		let resolveDetail!: (value: any) => void;
+		jest
+			.spyOn(storeHost, 'planPassageRename')
+			.mockImplementation(
+				() => new Promise(resolve => (resolvePlan = resolve))
+			);
+		jest
+			.spyOn(storeHost, 'queryRefactorPlanDetailAsync')
+			.mockImplementation(
+				() => new Promise(resolve => (resolveDetail = resolve))
+			);
+		const plan = host.planPassageRename(story.id, {
+			afterName: 'Renamed',
+			passageId: 'p',
+			storyId: story.id
+		});
+		const detail = host.queryRefactorPlanDetailAsync(story.id, {
+			planDigest: 'd',
+			planId: 'p',
+			position: 0
+		});
+		await Promise.resolve();
+		host.closeRefactorReview(story.id);
+		resolvePlan({summary: {planId: 'late'}, type: 'complete'});
+		resolveDetail({page: {changes: []}, type: 'page'});
+		await expect(plan).resolves.toEqual({type: 'cancelled'});
+		await expect(detail).resolves.toMatchObject({
+			failure: {code: 'plan-evicted'}
+		});
+		expect(host.refactorReviewSnapshot(story.id)).toEqual({
+			encodedBytes: 0,
+			pageCount: 0,
+			summaryCount: 0
+		});
+		host.dispose();
+	});
+
+	it('gates planner and detail admission for a direct snapshot replacement and releases only after terminal drain', async () => {
+		const story = {...fakeStory(0), id: 'replacement-gate-direct'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let releaseRecovery!: () => void;
+		const recover = jest
+			.spyOn(storeHost, 'recoverFromSnapshot')
+			.mockImplementation(
+				() => new Promise<void>(resolve => (releaseRecovery = resolve))
+			);
+		const plan = jest
+			.spyOn(storeHost, 'planPassageRename')
+			.mockResolvedValue({type: 'cancelled'} as any);
+		const detail = jest.spyOn(storeHost, 'queryRefactorPlanDetailAsync');
+		const recovery = host.recoverFromSnapshot(story.id, [story] as any, []);
+
+		await waitFor(() => expect(recover).toHaveBeenCalledTimes(1));
+		await expect(
+			host.planPassageRename(story.id, {
+				afterName: 'R',
+				passageId: 'p',
+				storyId: story.id
+			})
+		).resolves.toEqual({type: 'cancelled'});
+		await expect(
+			host.queryRefactorPlanDetailAsync(story.id, {
+				planDigest: 'd',
+				planId: 'p',
+				position: 0
+			})
+		).resolves.toMatchObject({failure: {code: 'plan-evicted'}});
+		expect(plan).not.toHaveBeenCalled();
+		expect(detail).not.toHaveBeenCalled();
+
+		releaseRecovery();
+		await recovery;
+		await host.planPassageRename(story.id, {
+			afterName: 'R',
+			passageId: 'p',
+			storyId: story.id
+		});
+		expect(plan).toHaveBeenCalledTimes(1);
+		expect((host as any).replacementGateOwners.size).toBe(0);
+		host.dispose();
+	});
+
+	it('drains an admitted apply before reserving replacement and rejects later applies without Store work', async () => {
+		const story = {...fakeStory(0), id: 'replacement-gate-apply'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let finishApply!: (result: any) => void;
+		const applyStore = jest
+			.spyOn(storeHost, 'applyRefactorPlan')
+			.mockImplementation(
+				() => new Promise(resolve => (finishApply = resolve)) as any
+			);
+		const firstApply = host.applyRefactorPlan(story.id, {
+			expectedProjectRevision: 1,
+			planId: 'admitted-plan',
+			selection: {type: 'all'}
+		});
+		await waitFor(() => expect(applyStore).toHaveBeenCalledTimes(1));
+		const reserve = host.acquireProjectReplacement(story.id);
+		await Promise.resolve();
+		expect((host as any).replacementGateOwnersByStory.get(story.id)?.size).toBe(
+			1
+		);
+		expect(applyStore).toHaveBeenCalledTimes(1);
+		await expect(
+			host.applyRefactorPlan(story.id, {
+				expectedProjectRevision: 1,
+				planId: 'evicted-plan',
+				selection: {type: 'all'}
+			})
+		).resolves.toMatchObject({
+			failure: {code: 'plan-evicted'},
+			type: 'failure'
+		});
+		expect(applyStore).toHaveBeenCalledTimes(1);
+		finishApply({
+			failure: {code: 'buffer-changed', message: 'stale'},
+			type: 'failure'
+		});
+		await firstApply;
+		const lease = await reserve;
+		await host.abortProjectReplacement(story.id, lease);
+		expect((host as any).replacementGateOwnersByStory.size).toBe(0);
+		host.dispose();
+	});
+
+	it('holds a story gate across a metadata root rebind until an old-session apply settles', async () => {
+		const story = {...fakeStory(0), id: 'replacement-rebind-apply'};
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/rebind-old.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const oldHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let finishApply!: (result: any) => void;
+		jest
+			.spyOn(oldHost, 'applyRefactorPlan')
+			.mockImplementation(
+				() => new Promise(resolve => (finishApply = resolve)) as any
+			);
+		const admitted = host.applyRefactorPlan(story.id, {
+			expectedProjectRevision: 1,
+			planId: 'old-session-plan',
+			selection: {type: 'all'}
+		});
+		await waitFor(() => expect(oldHost.applyRefactorPlan).toHaveBeenCalled());
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/rebind-new.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		await expect(
+			host.applyRefactorPlan(story.id, {
+				expectedProjectRevision: 1,
+				planId: 'new-session-plan',
+				selection: {type: 'all'}
+			})
+		).resolves.toMatchObject({failure: {code: 'plan-evicted'}});
+		expect((host as any).replacementGateOwnersByStory.get(story.id)?.size).toBe(
+			1
+		);
+		finishApply({
+			failure: {code: 'buffer-changed', message: 'stale'},
+			type: 'failure'
+		});
+		await admitted;
+		await waitFor(() =>
+			expect((host as any).replacementGateOwnersByStory.size).toBe(0)
+		);
+		host.dispose();
+	});
+
+	it('rebinds from the successfully persisted old-session patch only after its save settles', async () => {
+		const story = {...fakeStory(1), id: 'replacement-rebind-persisted'};
+		const dispatch = jest.fn();
+		let releasePersistence!: () => void;
+		const persistence = new Promise<void>(resolve => {
+			releasePersistence = resolve;
+		});
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/rebind-persisted-old.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		const host = new ProjectScopedCoreProjectHost(
+			[story],
+			(action, annotation) => {
+				dispatch(action, annotation);
+				if (
+					typeof action !== 'function' &&
+					action.type === 'applyCorePatchBatch' &&
+					action.persistenceToken
+				) {
+					bindPersistenceCompletion(action.persistenceToken, {
+						completion: persistence,
+						persisted: true
+					});
+				}
+			}
+		);
+		const oldHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		const oldSessionId = (host as any).storySessions.get(story.id);
+		(oldHost as any).wasmClient.applySync = jest.fn().mockReturnValue({
+			batch: {
+				label: 'Persisted rename',
+				patches: [
+					{
+						changes: {
+							layout: null,
+							name: 'Applied before root rebind',
+							tags: null,
+							text: null
+						},
+						passage_id: story.passages[0].id,
+						story_id: story.id,
+						type: 'passageUpdated'
+					}
+				],
+				transactionId: BigInt(1)
+			},
+			revision: 2,
+			status: {
+				canRedo: false,
+				canUndo: true,
+				dirty: true,
+				redoKind: null,
+				revision: 2,
+				undoKind: 'editPassage'
+			}
+		});
+
+		try {
+			const persisted = host.applyStoryCommandPersisted(
+				updatePassageTextCommand(
+					story.id,
+					story.passages[0].id,
+					'applied before root rebind'
+				)
+			);
+			await waitFor(() =>
+				expect(dispatch).toHaveBeenCalledWith(
+					expect.objectContaining({
+						actions: [
+							expect.objectContaining({
+								props: expect.objectContaining({
+									name: 'Applied before root rebind'
+								})
+							})
+						],
+						type: 'applyCorePatchBatch'
+					}),
+					expect.anything()
+				)
+			);
+
+			saveProjectMetadata(story.id, {
+				rootPath: '/native/rebind-persisted-new.twine.rs',
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+			host.update((host as any).stories, (host as any).dispatch);
+
+			expect(
+				(host as any).replacementGateOwnersByStory.get(story.id)?.size
+			).toBe(1);
+			expect((host as any).storySessions.get(story.id)).toBe(oldSessionId);
+			expect((host as any).hostForStory(story.id)).toBe(oldHost);
+			expect((host as any).hosts.size).toBe(1);
+
+			releasePersistence();
+			await persisted;
+			await waitFor(() =>
+				expect((host as any).hostForStory(story.id)).not.toBe(oldHost)
+			);
+			const rebound = (host as any).hostForStory(
+				story.id
+			) as StoreCoreProjectHost;
+			expect((rebound as any).stories[0].passages[0]).toEqual(
+				expect.objectContaining({name: 'Applied before root rebind'})
+			);
+			expect((host as any).replacementGateOwnersByStory.size).toBe(0);
+		} finally {
+			deleteProjectMetadata(story.id);
+			host.dispose();
+		}
+	});
+
+	it('drains pre-existing planner work before replacing and suppresses its late review DTO', async () => {
+		const story = {...fakeStory(0), id: 'replacement-gate-pending'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let signal: AbortSignal | undefined;
+		let resolvePlan!: (value: any) => void;
+		jest
+			.spyOn(storeHost, 'planPassageRename')
+			.mockImplementation((_storyId, _request, options) => {
+				signal = options?.signal;
+				return new Promise(resolve => (resolvePlan = resolve));
+			});
+		const recover = jest
+			.spyOn(storeHost, 'recoverFromSnapshot')
+			.mockResolvedValue();
+		const planning = host.planPassageRename(story.id, {
+			afterName: 'R',
+			passageId: 'p',
+			storyId: story.id
+		});
+		await Promise.resolve();
+		const recovery = host.recoverFromSnapshot(story.id, [story] as any, []);
+
+		await waitFor(() => expect(signal?.aborted).toBe(true));
+		expect(recover).not.toHaveBeenCalled();
+		resolvePlan({summary: {planId: 'late'}, type: 'complete'});
+		await expect(planning).resolves.toEqual({type: 'cancelled'});
+		await recovery;
+		expect(host.refactorReviewSnapshot(story.id)).toEqual({
+			encodedBytes: 0,
+			pageCount: 0,
+			summaryCount: 0
+		});
+		host.dispose();
+	});
+
+	it('rejects commands that synchronously discover a metadata-root rebind until it releases', async () => {
+		for (const method of [
+			'applyStoryCommand',
+			'applyStoryCommandPersisted'
+		] as const) {
+			const story = {
+				...fakeStory(1),
+				id: `metadata-rebind-command-${method}`
+			};
+			const oldRoot = `/native/${method}-old.twine.rs`;
+			const newRoot = `/native/${method}-new.twine.rs`;
+			saveProjectMetadata(story.id, {
+				rootPath: oldRoot,
+				status: 'file-backed',
+				storageKind: 'electron-project-folder'
+			});
+			const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+			const oldHost = Array.from(
+				((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+			)[0];
+			const apply = jest
+				.spyOn(StoreCoreProjectHost.prototype, method)
+				.mockResolvedValue({} as PatchBatch);
+			const command = updatePassageTextCommand(
+				story.id,
+				story.passages[0].id,
+				'after root rebind'
+			);
+
+			try {
+				saveProjectMetadata(story.id, {
+					rootPath: newRoot,
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				await expect(host[method](command)).rejects.toMatchObject({
+					code: 'CORE_PROJECT_REPLACEMENT_IN_PROGRESS'
+				});
+				const newHost = Array.from(
+					((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+				).find(candidate => candidate !== oldHost)!;
+				expect(newHost).toBeDefined();
+				expect(apply).not.toHaveBeenCalled();
+				await waitFor(() =>
+					expect((host as any).replacementGateOwners.size).toBe(0)
+				);
+
+				await host[method](command);
+				expect(apply).toHaveBeenCalledTimes(1);
+				expect(apply.mock.instances).toEqual([newHost]);
+			} finally {
+				apply.mockRestore();
+				deleteProjectMetadata(story.id);
+				host.dispose();
+			}
+		}
+	});
+
+	it('rejects a late persisted command until direct full hydration completes', async () => {
+		const story = {...fakeStory(1), id: 'replacement-gate-full-command'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let finishHydration!: () => void;
+		const initialize = jest
+			.spyOn(storeHost, 'initializeHydratedProject')
+			.mockImplementation(
+				() => new Promise<void>(resolve => (finishHydration = resolve))
+			);
+		const applyPersisted = jest
+			.spyOn(storeHost, 'applyStoryCommandPersisted')
+			.mockResolvedValue({} as PatchBatch);
+		const command = updatePassageTextCommand(
+			story.id,
+			story.passages[0].id,
+			'late persisted command'
+		);
+
+		const replacementLease = await host.acquireProjectReplacement(story.id);
+		const hydration = host.initializeHydratedProject(
+			story.id,
+			[story],
+			replacementLease
+		);
+		await waitFor(() => expect(initialize).toHaveBeenCalledTimes(1));
+		await expect(
+			host.applyStoryCommandPersisted(command)
+		).rejects.toMatchObject({code: 'CORE_PROJECT_REPLACEMENT_IN_PROGRESS'});
+		expect(applyPersisted).not.toHaveBeenCalled();
+
+		finishHydration();
+		await hydration;
+		expect((host as any).replacementGateOwners.size).toBe(0);
+		await host.applyStoryCommandPersisted(command);
+		expect(applyPersisted).toHaveBeenCalledTimes(1);
+		host.dispose();
+	});
+
+	it('rejects a late persisted command until snapshot conflict recovery completes', async () => {
+		const story = {...fakeStory(1), id: 'replacement-gate-recovery-command'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let finishRecovery!: () => void;
+		const recover = jest
+			.spyOn(storeHost, 'recoverFromSnapshot')
+			.mockImplementation(
+				() => new Promise<void>(resolve => (finishRecovery = resolve))
+			);
+		const applyPersisted = jest
+			.spyOn(storeHost, 'applyStoryCommandPersisted')
+			.mockResolvedValue({} as PatchBatch);
+		const command = updatePassageTextCommand(
+			story.id,
+			story.passages[0].id,
+			'late persisted command'
+		);
+
+		const replacementLease = await host.acquireProjectReplacement(story.id);
+		const recovery = host.recoverFromSnapshot(
+			story.id,
+			[story] as any,
+			[],
+			replacementLease
+		);
+		await waitFor(() => expect(recover).toHaveBeenCalledTimes(1));
+		await expect(
+			host.applyStoryCommandPersisted(command)
+		).rejects.toMatchObject({code: 'CORE_PROJECT_REPLACEMENT_IN_PROGRESS'});
+		expect(applyPersisted).not.toHaveBeenCalled();
+
+		finishRecovery();
+		await recovery;
+		expect((host as any).replacementGateOwners.size).toBe(0);
+		await host.applyStoryCommandPersisted(command);
+		expect(applyPersisted).toHaveBeenCalledTimes(1);
+		host.dispose();
+	});
+
+	it('holds the replacement gate through a streamed lease and releases it after finish or abort', async () => {
+		for (const terminal of ['finish', 'abort'] as const) {
+			const story = {...fakeStory(1), id: `replacement-gate-${terminal}`};
+			const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+			const storeHost = Array.from(
+				((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+			)[0];
+			jest.spyOn(storeHost, 'beginHydratedProject').mockResolvedValue();
+			jest
+				.spyOn(storeHost, 'planPassageRename')
+				.mockResolvedValue({type: 'cancelled'} as any);
+			const applyPersisted = jest
+				.spyOn(storeHost, 'applyStoryCommandPersisted')
+				.mockResolvedValue({} as PatchBatch);
+			const command = updatePassageTextCommand(
+				story.id,
+				story.passages[0].id,
+				'late persisted command'
+			);
+
+			await host.beginHydratedProject(story.id, [story]);
+			expect((host as any).replacementGateOwners.size).toBe(1);
+			await expect(
+				host.planPassageRename(story.id, {
+					afterName: 'R',
+					passageId: 'p',
+					storyId: story.id
+				})
+			).resolves.toEqual({type: 'cancelled'});
+			expect(storeHost.planPassageRename).not.toHaveBeenCalled();
+			await expect(
+				host.applyStoryCommandPersisted(command)
+			).rejects.toMatchObject({code: 'CORE_PROJECT_REPLACEMENT_IN_PROGRESS'});
+			expect(applyPersisted).not.toHaveBeenCalled();
+
+			if (terminal === 'finish') {
+				jest.spyOn(storeHost, 'finishHydratedProject').mockResolvedValue();
+				await host.finishHydratedProject(story.id);
+			} else {
+				jest.spyOn(storeHost, 'abortHydratedProject').mockResolvedValue();
+				await host.abortHydratedProject(story.id);
+			}
+			expect((host as any).replacementGateOwners.size).toBe(0);
+			await host.planPassageRename(story.id, {
+				afterName: 'R',
+				passageId: 'p',
+				storyId: story.id
+			});
+			expect(storeHost.planPassageRename).toHaveBeenCalledTimes(1);
+			await host.applyStoryCommandPersisted(command);
+			expect(applyPersisted).toHaveBeenCalledTimes(1);
+			host.dispose();
+		}
+	});
+
+	it('cleans every sibling gate owner for streamed terminals and ignores a stale terminal lease', async () => {
+		for (const terminal of ['finish', 'abort'] as const) {
+			const first = {...fakeStory(0), id: `streamed-siblings-${terminal}-one`};
+			const second = {...fakeStory(0), id: `streamed-siblings-${terminal}-two`};
+			for (const story of [first, second]) {
+				saveProjectMetadata(story.id, {
+					rootPath: `/native/streamed-siblings-${terminal}.twine.rs`,
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+			}
+			const host = new ProjectScopedCoreProjectHost([first, second], jest.fn());
+			const storeHost = Array.from(
+				((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+			)[0];
+			jest.spyOn(storeHost, 'beginHydratedProject').mockResolvedValue();
+			jest.spyOn(storeHost, 'abortHydratedProject').mockResolvedValue();
+			jest.spyOn(storeHost, 'finishHydratedProject').mockResolvedValue();
+
+			try {
+				const firstLease = await host.beginHydratedProject(first.id, [first]);
+				expect(
+					(host as any).replacementGateOwnersByStory.get(first.id)?.size
+				).toBe(1);
+				expect(
+					(host as any).replacementGateOwnersByStory.get(second.id)?.size
+				).toBe(1);
+
+				const currentLease = await host.beginHydratedProject(first.id, [first]);
+				await host.abortHydratedProject(first.id, firstLease);
+				expect(
+					(host as any).replacementGateOwnersByStory.get(first.id)?.size
+				).toBe(1);
+				expect(
+					(host as any).replacementGateOwnersByStory.get(second.id)?.size
+				).toBe(1);
+
+				if (terminal === 'finish') {
+					await host.finishHydratedProject(first.id, currentLease);
+				} else {
+					await host.abortHydratedProject(first.id, currentLease);
+				}
+				expect((host as any).hydratedProjectLeases.size).toBe(0);
+				expect((host as any).replacementGateOwnersByStory.size).toBe(0);
+			} finally {
+				deleteProjectMetadata(first.id);
+				deleteProjectMetadata(second.id);
+				host.dispose();
+			}
+		}
+	});
+
+	it('replaces an active stream before beginning a second pre-acquired reservation', async () => {
+		for (const terminal of ['finish', 'abort'] as const) {
+			const story = {
+				...fakeStory(1),
+				id: `overlapping-stream-reservations-${terminal}`
+			};
+			const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+			const storeHost = Array.from(
+				((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+			)[0];
+			const begin = jest
+				.spyOn(storeHost, 'beginHydratedProject')
+				.mockResolvedValue();
+			const abort = jest
+				.spyOn(storeHost, 'abortHydratedProject')
+				.mockResolvedValue();
+			jest.spyOn(storeHost, 'finishHydratedProject').mockResolvedValue();
+
+			const firstReservation = await host.acquireProjectReplacement(story.id);
+			const secondReservation = await host.acquireProjectReplacement(story.id);
+			const firstLease = await host.beginHydratedProject(
+				story.id,
+				[story],
+				firstReservation
+			);
+			const secondLease = await host.beginHydratedProject(
+				story.id,
+				[story],
+				secondReservation
+			);
+
+			expect(abort).toHaveBeenCalledTimes(1);
+			expect(abort.mock.invocationCallOrder[0]).toBeLessThan(
+				begin.mock.invocationCallOrder[1]
+			);
+			expect((host as any).replacementGateOwners.size).toBe(1);
+
+			if (terminal === 'finish') {
+				await host.finishHydratedProject(story.id, secondLease);
+			} else {
+				await host.abortHydratedProject(story.id, secondLease);
+			}
+			expect((host as any).hydratedProjectLeases.size).toBe(0);
+			expect((host as any).replacementGateOwners.size).toBe(0);
+
+			await host.abortHydratedProject(story.id, firstLease);
+			expect((host as any).replacementGateOwners.size).toBe(0);
+			expect(abort).toHaveBeenCalledTimes(terminal === 'abort' ? 2 : 1);
+			host.dispose();
+		}
+	});
+
+	it('drains a pre-admitted global story tag rename before reserving any affected session', async () => {
+		const first = {...fakeStory(0), id: 'global-rename-drain-first'};
+		const second = {...fakeStory(0), id: 'global-rename-drain-second'};
+		const host = new ProjectScopedCoreProjectHost([first, second], jest.fn());
+		const [firstHost, secondHost] = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		);
+		let finishFirst!: (batch: PatchBatch) => void;
+		let finishSecond!: (batch: PatchBatch) => void;
+		const applyFirst = jest
+			.spyOn(firstHost, 'applyStoryCommand')
+			.mockImplementation(
+				() => new Promise<PatchBatch>(resolve => (finishFirst = resolve))
+			);
+		const applySecond = jest
+			.spyOn(secondHost, 'applyStoryCommand')
+			.mockImplementation(
+				() => new Promise<PatchBatch>(resolve => (finishSecond = resolve))
+			);
+		const rename = host.applyStoryCommand(renameStoryTagCommand('old', 'new'));
+
+		await waitFor(() => expect(applyFirst).toHaveBeenCalledTimes(1));
+		let acquired = false;
+		const reservation = host
+			.acquireProjectReplacement(second.id)
+			.then(lease => {
+				acquired = true;
+				return lease;
+			});
+		await waitFor(() =>
+			expect(
+				(host as any).replacementGateOwnersByStory.get(second.id)?.size
+			).toBe(1)
+		);
+		expect(acquired).toBe(false);
+
+		finishFirst({} as PatchBatch);
+		await waitFor(() => expect(applySecond).toHaveBeenCalledTimes(1));
+		finishSecond({} as PatchBatch);
+		await rename;
+		const lease = await reservation;
+		await host.abortProjectReplacement(second.id, lease);
+		expect((host as any).replacementGateOwners.size).toBe(0);
+		host.dispose();
+	});
+
+	it('drains a pending planner before deleting its last session', async () => {
+		const story = {...fakeStory(0), id: 'delete-pending-planner'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let planningSignal: AbortSignal | undefined;
+		let resolvePlan!: (value: any) => void;
+		jest
+			.spyOn(storeHost, 'planPassageRename')
+			.mockImplementation((_storyId, _request, options) => {
+				planningSignal = options?.signal;
+				return new Promise(resolve => (resolvePlan = resolve));
+			});
+		const removeSession = jest.spyOn((host as any).client, 'removeSession');
+		const planning = host.planPassageRename(story.id, {
+			afterName: 'R',
+			passageId: 'p',
+			storyId: story.id
+		});
+		await Promise.resolve();
+		const deleting = host.deleteProjectStories([story.id], {
+			history: 'skip',
+			persistence: 'skip'
+		});
+		await waitFor(() => expect(planningSignal?.aborted).toBe(true));
+		expect((host as any).hosts.size).toBe(1);
+		expect(removeSession).not.toHaveBeenCalled();
+		resolvePlan({type: 'cancelled'});
+		await expect(planning).resolves.toEqual({type: 'cancelled'});
+		await deleting;
+		expect((host as any).hosts.size).toBe(0);
+		expect(removeSession).toHaveBeenCalledTimes(1);
+		host.dispose();
+	});
+
+	it('drains pending planners before explicit retirement and disposal', async () => {
+		for (const action of ['retire', 'dispose'] as const) {
+			const story = {...fakeStory(0), id: `pending-${action}`};
+			const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+			const storeHost = Array.from(
+				((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+			)[0];
+			let planningSignal: AbortSignal | undefined;
+			let release!: (value: any) => void;
+			jest
+				.spyOn(storeHost, 'planPassageRename')
+				.mockImplementation((_storyId, _request, options) => {
+					planningSignal = options?.signal;
+					return new Promise(resolve => (release = resolve));
+				});
+			const removeSession = jest.spyOn((host as any).client, 'removeSession');
+			const disposeClient = jest.spyOn((host as any).client, 'dispose');
+			const planning = host.planPassageRename(story.id, {
+				afterName: 'R',
+				passageId: 'p',
+				storyId: story.id
+			});
+			await Promise.resolve();
+			const finished =
+				action === 'retire'
+					? host.retireProjectStories([story.id])
+					: (host.dispose(), undefined);
+			await waitFor(() => expect(planningSignal?.aborted).toBe(true));
+			expect((host as any).hosts.size).toBe(1);
+			expect(removeSession).not.toHaveBeenCalled();
+			expect(disposeClient).not.toHaveBeenCalled();
+			release({type: 'cancelled'});
+			await expect(planning).resolves.toEqual({type: 'cancelled'});
+			if (finished) await finished;
+			if (action === 'retire') {
+				expect(removeSession).toHaveBeenCalledTimes(1);
+			} else {
+				await waitFor(() => expect(disposeClient).toHaveBeenCalledTimes(1));
+			}
+			host.dispose();
+		}
+	});
+
+	it('drains an admitted apply before retirement removes its session', async () => {
+		const story = {...fakeStory(0), id: 'retire-pending-apply'};
+		const dispatch = jest.fn();
+		const host = new ProjectScopedCoreProjectHost([story], dispatch);
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let settle!: (result: any) => void;
+		jest
+			.spyOn(storeHost, 'applyRefactorPlan')
+			.mockImplementation(
+				() => new Promise(resolve => (settle = resolve)) as any
+			);
+		const remove = jest.spyOn((host as any).client, 'removeSession');
+		const apply = host.applyRefactorPlan(story.id, {
+			expectedProjectRevision: 1,
+			planId: 'retire-pending',
+			selection: {type: 'all'}
+		});
+		await waitFor(() => expect(storeHost.applyRefactorPlan).toHaveBeenCalled());
+		const retire = host.retireProjectStories([story.id]);
+		await Promise.resolve();
+		expect(dispatch).not.toHaveBeenCalled();
+		expect(remove).not.toHaveBeenCalled();
+		settle({
+			failure: {code: 'buffer-changed', message: 'stale'},
+			type: 'failure'
+		});
+		await apply;
+		await retire;
+		expect(dispatch).toHaveBeenCalledWith(
+			{storyIds: [story.id], type: 'retireProjectStories'},
+			undefined
+		);
+		expect(remove).toHaveBeenCalledTimes(1);
+		expect((host as any).replacementGateOwnersByStory.size).toBe(0);
+		host.dispose();
+	});
+
+	it('does not retire a session when its pending persisted apply rejects', async () => {
+		const story = {...fakeStory(1), id: 'retire-rejected-persisted-apply'};
+		const persistenceError = new Error('save failed');
+		let rejectPersistence!: (reason: Error) => void;
+		const persistence = new Promise<void>((_resolve, reject) => {
+			rejectPersistence = reject;
+		});
+		const dispatch = jest.fn((action: StoriesActionOrThunk) => {
+			if (
+				typeof action !== 'function' &&
+				action.type === 'applyCorePatchBatch' &&
+				action.persistenceToken
+			) {
+				bindPersistenceCompletion(action.persistenceToken, {
+					completion: persistence,
+					persisted: true
+				});
+			}
+		});
+		const host = new ProjectScopedCoreProjectHost([story], dispatch);
+		const remove = jest.spyOn((host as any).client, 'removeSession');
+
+		const apply = host.applyStoryCommandPersisted(
+			updatePassageTextCommand(story.id, story.passages[0].id, 'will reject')
+		);
+		await waitFor(() =>
+			expect(dispatch).toHaveBeenCalledWith(
+				expect.objectContaining({
+					persistenceToken: expect.any(String),
+					type: 'applyCorePatchBatch'
+				}),
+				expect.any(String)
+			)
+		);
+		const retire = host.retireProjectStories([story.id]);
+		await Promise.resolve();
+		expect(dispatch).not.toHaveBeenCalledWith(
+			{storyIds: [story.id], type: 'retireProjectStories'},
+			undefined
+		);
+		expect(remove).not.toHaveBeenCalled();
+		rejectPersistence(persistenceError);
+		await expect(apply).rejects.toBe(persistenceError);
+		await expect(retire).rejects.toBe(persistenceError);
+		expect(remove).not.toHaveBeenCalled();
+		expect((host as any).replacementGateOwnersByStory.size).toBe(0);
+		host.dispose();
+	});
+
+	it('preserves a session reintroduced while a planner lifecycle drain is pending', async () => {
+		const story = {...fakeStory(0), id: 'reintroduced-pending-planner'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let planningSignal: AbortSignal | undefined;
+		let resolvePlan!: (value: any) => void;
+		jest
+			.spyOn(storeHost, 'planPassageRename')
+			.mockImplementation((_storyId, _request, options) => {
+				planningSignal = options?.signal;
+				return new Promise(resolve => (resolvePlan = resolve));
+			});
+		const removeSession = jest.spyOn((host as any).client, 'removeSession');
+		const planning = host.planPassageRename(story.id, {
+			afterName: 'R',
+			passageId: 'p',
+			storyId: story.id
+		});
+
+		await Promise.resolve();
+		host.update([], jest.fn());
+		await waitFor(() => expect(planningSignal?.aborted).toBe(true));
+		host.update([story], jest.fn());
+		resolvePlan({summary: {planId: 'late'}, type: 'complete'});
+		await expect(planning).resolves.toEqual({type: 'cancelled'});
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect((host as any).hosts.get(`story:${story.id}`)).toBe(storeHost);
+		expect(removeSession).not.toHaveBeenCalled();
+		expect(host.refactorReviewSnapshot(story.id)).toEqual({
+			encodedBytes: 0,
+			pageCount: 0,
+			summaryCount: 0
+		});
+		host.dispose();
+	});
+
+	it('freezes planner admission during renderer quit and reopens it after cancellation', async () => {
+		const story = {...fakeStory(0), id: 'quit-planner'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		let planningSignal: AbortSignal | undefined;
+		let release!: (value: any) => void;
+		const plan = jest
+			.spyOn(storeHost, 'planPassageRename')
+			.mockImplementationOnce((_storyId, _request, options) => {
+				planningSignal = options?.signal;
+				return new Promise(resolve => (release = resolve));
+			})
+			.mockResolvedValue({type: 'cancelled'} as any);
+		const pending = host.planPassageRename(story.id, {
+			afterName: 'R',
+			passageId: 'p',
+			storyId: story.id
+		});
+		await Promise.resolve();
+		const draining = rendererQuitQuiescence.drain();
+		await waitFor(() => expect(planningSignal?.aborted).toBe(true));
+		await expect(
+			host.planPassageRename(story.id, {
+				afterName: 'R',
+				passageId: 'p',
+				storyId: story.id
+			})
+		).resolves.toEqual({type: 'cancelled'});
+		expect(plan).toHaveBeenCalledTimes(1);
+		release({type: 'cancelled'});
+		await expect(pending).resolves.toEqual({type: 'cancelled'});
+		await draining;
+		rendererQuitQuiescence.cancel();
+		await expect(
+			host.planPassageRename(story.id, {
+				afterName: 'R',
+				passageId: 'p',
+				storyId: story.id
+			})
+		).resolves.toEqual({type: 'cancelled'});
+		expect(plan).toHaveBeenCalledTimes(2);
+		host.dispose();
+	});
+
+	it('rejects an oversized public rename request before routing it to a session', async () => {
+		const story = {...fakeStory(0), id: 'rename-limit-story'};
+		const host = new ProjectScopedCoreProjectHost([story], jest.fn());
+		const storeHost = Array.from(
+			((host as any).hosts as Map<string, StoreCoreProjectHost>).values()
+		)[0];
+		const plan = jest.spyOn(storeHost, 'planPassageRename');
+		const fixedBytes = new TextEncoder().encode(story.id).byteLength + 1;
+		const exactRequest = {
+			afterName: 'x'.repeat(
+				MAX_PASSAGE_RENAME_REQUEST_STRING_BYTES_V1 - fixedBytes
+			),
+			passageId: 'p',
+			storyId: story.id
+		};
+		plan.mockResolvedValue({type: 'cancelled'});
+		try {
+			await host.planPassageRename(story.id, exactRequest);
+			expect(plan).toHaveBeenCalledTimes(1);
+			await expect(
+				host.planPassageRename(story.id, {
+					...exactRequest,
+					afterName: `${exactRequest.afterName}x`
+				})
+			).resolves.toMatchObject({
+				failure: {code: 'plan-too-large'},
+				type: 'failure'
+			});
+			expect(plan).toHaveBeenCalledTimes(1);
+		} finally {
+			host.dispose();
+		}
+	});
+
+	it('keeps provider disposal ABA-safe across scoped host replacement and disposal', async () => {
+		const story = {...fakeStory(0), id: 'provider-host-story'};
+		const dispatch = jest.fn();
+		const host = new ProjectScopedCoreProjectHost([story], dispatch);
+		const first = await host.registerRefactorSemanticProvider(story.id, {
+			capabilityRevision: 1,
+			formatVersion: 'test',
+			identifier: 'provider-a'
+		});
+		const second = await host.registerRefactorSemanticProvider(story.id, {
+			capabilityRevision: 2,
+			formatVersion: 'test',
+			identifier: 'provider-b'
+		});
+		const session = [...((host as any).hosts as Map<string, any>).values()][0];
+
+		await first();
+		expect(
+			session.refactorRuntime.runtimeState(story.id, 1, []).provider
+		).toEqual(expect.objectContaining({identifier: 'provider-b'}));
+		saveProjectMetadata(story.id, {
+			rootPath: '/native/provider-replacement.twine.rs',
+			status: 'file-backed',
+			storageKind: 'electron-project-folder'
+		});
+		try {
+			host.update([story], dispatch);
+			const replacement = [
+				...((host as any).hosts as Map<string, any>).values()
+			].find(candidate => candidate !== session);
+			expect(
+				replacement.refactorRuntime.runtimeState(story.id, 1, []).provider
+			).toBeNull();
+			await second();
+			expect(
+				replacement.refactorRuntime.runtimeState(story.id, 1, []).provider
+			).toBeNull();
+		} finally {
+			deleteProjectMetadata(story.id);
+			host.dispose();
+		}
+	});
 });
 
 describe('global story tag rename', () => {
@@ -2117,11 +4438,6 @@ describe('global story tag rename', () => {
 });
 
 describe('useCoreProjectHost', () => {
-	type HostWithDiagnostics = CoreProjectHost & {
-		performanceDiagnostics(): {
-			sessions: Array<{sessionId: string; storyIds: string[]}>;
-		};
-	};
 	const CaptureHost: React.FC<{
 		onHost: (host: CoreProjectHost) => void;
 	}> = ({onHost}) => {
@@ -2130,10 +4446,12 @@ describe('useCoreProjectHost', () => {
 		React.useLayoutEffect(() => onHost(host), [host, onHost]);
 		return null;
 	};
-	const hostStoryIds = (host: CoreProjectHost) =>
-		(host as HostWithDiagnostics)
-			.performanceDiagnostics()
-			.sessions.flatMap(session => session.storyIds);
+	const hostStoryIds = (host: CoreProjectHost) => {
+		void host;
+		return coreProjectHostPerformanceSnapshot().hosts.flatMap(snapshot =>
+			snapshot.sessions.flatMap(session => session.storyIds)
+		);
+	};
 	const providerTree = (
 		stories: StoriesState,
 		dispatch: (action: StoriesActionOrThunk) => void,
@@ -2148,6 +4466,97 @@ describe('useCoreProjectHost', () => {
 	it('requires an explicit provider', () => {
 		expect(() => renderHook(() => useCoreProjectHost())).toThrow(
 			'useCoreProjectHost must be used within a CoreProjectHostProvider.'
+		);
+	});
+
+	it('returns a frozen story-scoped capability facade', () => {
+		const stories = [fakeStory()];
+		const wrapper: React.FC<React.PropsWithChildren> = ({children}) =>
+			providerTree(stories, jest.fn(), children);
+		const {result} = renderHook(() => useCoreProjectSession(stories[0].id), {
+			wrapper
+		});
+
+		expect(Object.isFrozen(result.current)).toBe(true);
+	});
+
+	it('forwards replacement and hydration leases through the story-scoped facade', async () => {
+		const story = fakeStory();
+		const replacementLease = Symbol('replacement');
+		const hydrationLease = Symbol('hydration');
+		const mockedHost = {
+			abortHydratedProject: jest.fn().mockResolvedValue(undefined),
+			acquireProjectReplacement: jest.fn().mockResolvedValue(replacementLease),
+			appendHydratedProjectPassages: jest.fn().mockResolvedValue(undefined),
+			beginHydratedProject: jest.fn().mockResolvedValue(hydrationLease),
+			finishHydratedProject: jest.fn().mockResolvedValue(undefined),
+			initializeHydratedProject: jest.fn().mockResolvedValue(undefined),
+			recoverFromSnapshot: jest.fn().mockResolvedValue(undefined)
+		} as unknown as CoreProjectHost;
+		const wrapper: React.FC<React.PropsWithChildren> = ({children}) =>
+			React.createElement(
+				CoreProjectHostContext.Provider,
+				{value: mockedHost},
+				children
+			);
+		const {result} = renderHook(() => useCoreProjectSession(story.id), {
+			wrapper
+		});
+
+		await result.current.acquireProjectReplacement(story.id);
+		await result.current.beginHydratedProject(
+			story.id,
+			[story],
+			replacementLease
+		);
+		await result.current.initializeHydratedProject(
+			story.id,
+			[story],
+			replacementLease
+		);
+		await result.current.recoverFromSnapshot(
+			story.id,
+			[story],
+			[],
+			replacementLease
+		);
+		await result.current.appendHydratedProjectPassages(
+			story.id,
+			[story.passages[0]],
+			hydrationLease
+		);
+		await result.current.finishHydratedProject(story.id, hydrationLease);
+		await result.current.abortHydratedProject(story.id, hydrationLease);
+
+		expect(mockedHost.acquireProjectReplacement).toHaveBeenCalledWith(story.id);
+		expect(mockedHost.beginHydratedProject).toHaveBeenCalledWith(
+			story.id,
+			[story],
+			replacementLease
+		);
+		expect(mockedHost.initializeHydratedProject).toHaveBeenCalledWith(
+			story.id,
+			[story],
+			replacementLease
+		);
+		expect(mockedHost.recoverFromSnapshot).toHaveBeenCalledWith(
+			story.id,
+			[story],
+			[],
+			replacementLease
+		);
+		expect(mockedHost.appendHydratedProjectPassages).toHaveBeenCalledWith(
+			story.id,
+			[story.passages[0]],
+			hydrationLease
+		);
+		expect(mockedHost.finishHydratedProject).toHaveBeenCalledWith(
+			story.id,
+			hydrationLease
+		);
+		expect(mockedHost.abortHydratedProject).toHaveBeenCalledWith(
+			story.id,
+			hydrationLease
 		);
 	});
 
@@ -2553,20 +4962,16 @@ describe('useCoreProjectHost', () => {
 			})
 		).rejects.toThrow('could not be restored');
 		expect(hostStoryIds(capturedHost!)).toEqual([first.id, second.id]);
-		const firstHost = (
-			capturedHost as ProjectScopedCoreProjectHost as any
-		).hosts.get(`story:${first.id}`) as StoreCoreProjectHost;
-
 		await expect(
-			firstHost.admitProjectStories([first], {
+			capturedHost!.admitProjectStories([first], {
 				history: 'skip',
 				persistence: 'skip'
 			})
-		).rejects.toThrow('already belongs to this core project session');
+		).rejects.toThrow('already bound to a core project session');
 		expect(bootstrapStory(first.id)).toEqual(
 			expect.objectContaining({id: first.id})
 		);
-		(capturedHost as ProjectScopedCoreProjectHost).update([second], dispatch);
+		rendered.rerender(providerTree([second], dispatch));
 		expect(hostStoryIds(capturedHost!)).toEqual([first.id, second.id]);
 
 		apply.mockRestore();
@@ -2625,16 +5030,15 @@ describe('useCoreProjectHost', () => {
 			);
 		const rendered = render(tree(jest.fn()));
 		const initialHost = capturedHost;
-		const initialSessions = (
-			initialHost as HostWithDiagnostics
-		).performanceDiagnostics().sessions;
+		const initialSessions =
+			coreProjectHostPerformanceSnapshot().hosts[0].sessions;
 
 		rendered.rerender(tree(jest.fn()));
 
 		expect(capturedHost).toBe(initialHost);
-		expect(
-			(capturedHost as HostWithDiagnostics).performanceDiagnostics().sessions
-		).toEqual(initialSessions);
+		expect(coreProjectHostPerformanceSnapshot().hosts[0].sessions).toEqual(
+			initialSessions
+		);
 		expect(coreProjectHostPerformanceSnapshot().workerClients).toBe(
 			initialHostCount + 1
 		);
@@ -2693,6 +5097,20 @@ describe('useCoreProjectHost', () => {
 			passageTextLoaded: true,
 			rootPath: newRoot
 		});
+		await expect(
+			capturedHost!.applyStoryCommand(
+				replaceStoryCommand(story.id, replacement)
+			)
+		).rejects.toMatchObject({code: 'CORE_PROJECT_REPLACEMENT_IN_PROGRESS'});
+		expect(dispatch).not.toHaveBeenCalled();
+		await waitFor(() =>
+			expect(coreProjectHostPerformanceSnapshot().hosts[0].sessions).toEqual([
+				expect.objectContaining({
+					sessionId: `project:${newRoot}`,
+					storyIds: [story.id]
+				})
+			])
+		);
 		await capturedHost!.applyStoryCommand(
 			replaceStoryCommand(story.id, replacement)
 		);
@@ -2720,9 +5138,7 @@ describe('useCoreProjectHost', () => {
 			}
 		]);
 
-		expect(
-			(capturedHost as HostWithDiagnostics).performanceDiagnostics().sessions
-		).toEqual([
+		expect(coreProjectHostPerformanceSnapshot().hosts[0].sessions).toEqual([
 			expect.objectContaining({
 				sessionId: `project:${newRoot}`,
 				storyIds: [story.id]

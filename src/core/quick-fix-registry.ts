@@ -2,7 +2,7 @@ import type {CoreDiagnostic} from './bindings/CoreDiagnostic';
 import type {CoreQuickFix} from './bindings/CoreQuickFix';
 import type {StoryCommand} from './bindings/StoryCommand';
 import {createPassageCommand, updatePassageTextCommand} from './index';
-import type {CoreProjectHost} from './project-host';
+import type {CoreProjectHost} from './project-host-public';
 import type {Story} from '../store/stories';
 
 export interface RegisteredQuickFixAction {

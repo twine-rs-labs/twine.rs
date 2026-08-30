@@ -9,9 +9,13 @@ import * as React from 'react';
 import {MemoryRouter} from 'react-router';
 import {
 	CoreProjectHostProvider,
+	ProjectScopedCoreProjectHost,
 	StoreCoreProjectHost
-} from '../../../core/project-host';
-import {markProjectStoryHydration} from '../../../store/project-hydration';
+} from '../../../test-util/core-project-host-runtime';
+import {
+	markProjectStoryHydration,
+	projectStoryHydration
+} from '../../../store/project-hydration';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {StoriesContext} from '../../../store/stories';
 import {fakePassage, fakeStory, waitForMockPromises} from '../../../test-util';
@@ -83,6 +87,7 @@ async function renderComponent(
 		) => void;
 		deferWorkspaceQueries?: boolean;
 		onOpenFindReplace?: jest.Mock;
+		strictMode?: boolean;
 		storyDispatch?: jest.Mock;
 	}
 ) {
@@ -113,7 +118,7 @@ async function renderComponent(
 
 	context?.configureStory?.(story);
 
-	render(
+	const tree = (
 		<MemoryRouter>
 			<StoriesContext.Provider
 				value={{
@@ -145,6 +150,9 @@ async function renderComponent(
 			</StoriesContext.Provider>
 		</MemoryRouter>
 	);
+	const rendered = render(
+		context?.strictMode ? <React.StrictMode>{tree}</React.StrictMode> : tree
+	);
 
 	const waitForQueries = async () => {
 		await waitForMockPromises(queryBacklinks);
@@ -164,6 +172,7 @@ async function renderComponent(
 		start,
 		story,
 		storyDispatch,
+		unmount: rendered.unmount,
 		waitForQueries
 	};
 }
@@ -429,6 +438,205 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 	});
 
+	it('does not begin native full hydration before replacement admission drains', async () => {
+		let releaseReservation!: (lease: symbol) => void;
+		const reservation = new Promise<symbol>(resolve => {
+			releaseReservation = resolve;
+		});
+		jest
+			.spyOn(
+				ProjectScopedCoreProjectHost.prototype,
+				'acquireProjectReplacement'
+			)
+			.mockReturnValue(reservation);
+		const hydrateProjectFolder = jest.fn(async () => ({
+			passageTextLoaded: true,
+			rootPath: '/native/ordered-project.twine.rs',
+			stories: [],
+			storyIds: []
+		}));
+		(window as any).twineElectron = {hydrateProjectFolder};
+		const {story} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/ordered-project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/ordered-project.twine.rs'
+				});
+			}
+		});
+		await Promise.resolve();
+		expect(hydrateProjectFolder).not.toHaveBeenCalled();
+		releaseReservation(Symbol('replacement'));
+		await waitFor(() =>
+			expect(hydrateProjectFolder).toHaveBeenCalledWith(
+				'/native/ordered-project.twine.rs',
+				[story.id]
+			)
+		);
+	});
+
+	it('does not begin native streamed hydration before replacement admission drains', async () => {
+		let releaseReservation!: (lease: symbol) => void;
+		jest
+			.spyOn(
+				ProjectScopedCoreProjectHost.prototype,
+				'acquireProjectReplacement'
+			)
+			.mockReturnValue(
+				new Promise<symbol>(resolve => (releaseReservation = resolve))
+			);
+		const beginProjectFolderHydration = jest.fn(async () => ({
+			hydrationId: 'stream',
+			passageTextLoaded: true,
+			rootPath: '/native/ordered-stream.twine.rs',
+			stories: []
+		}));
+		(window as any).twineElectron = {
+			beginProjectFolderHydration,
+			finishProjectFolderHydration: jest.fn(async () => {}),
+			readProjectFolderHydrationChunk: jest.fn(async () => ({
+				done: true,
+				nextCursor: 0,
+				passages: []
+			}))
+		};
+		const {story} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/ordered-stream.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/ordered-stream.twine.rs'
+				});
+			}
+		});
+		await Promise.resolve();
+		expect(beginProjectFolderHydration).not.toHaveBeenCalled();
+		releaseReservation(Symbol('stream-replacement'));
+		await waitFor(() =>
+			expect(beginProjectFolderHydration).toHaveBeenCalledWith(
+				'/native/ordered-stream.twine.rs',
+				[story.id]
+			)
+		);
+	});
+
+	it('retains one deferred native stream across a pre-Core effect replay', async () => {
+		const source = storyWithLinkedPassages().story;
+		let releaseBegin!: (result: any) => void;
+		const beginCore = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'beginHydratedProject')
+			.mockResolvedValue();
+		const finishCore = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'finishHydratedProject')
+			.mockResolvedValue();
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'appendHydratedProjectPassages')
+			.mockResolvedValue();
+		const finishLease = jest.fn(async () => undefined);
+		const beginNative = jest.fn(
+			() => new Promise(resolve => (releaseBegin = resolve))
+		);
+		(window as any).twineElectron = {
+			beginProjectFolderHydration: beginNative,
+			finishProjectFolderHydration: finishLease,
+			readProjectFolderHydrationChunk: jest.fn(async () => ({
+				done: true,
+				nextCursor: source.passages.length,
+				passages: source.passages.map(passage => ({
+					passage,
+					storyId: source.id
+				}))
+			}))
+		};
+		const {story} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			strictMode: true,
+			configureStory: currentStory => {
+				source.id = currentStory.id;
+				source.passages = source.passages.map(passage => ({
+					...passage,
+					story: currentStory.id
+				}));
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+		await waitFor(() => expect(beginNative).toHaveBeenCalledTimes(1));
+		releaseBegin({
+			hydrationId: 'deferred-lease',
+			passageCount: source.passages.length,
+			rootPath: '/native/project.twine.rs',
+			stories: [{...source, passages: []}],
+			storyIds: [source.id]
+		});
+		await waitFor(() => expect(finishCore).toHaveBeenCalledTimes(1));
+		expect(beginCore).toHaveBeenCalledTimes(1);
+		expect(finishLease).toHaveBeenCalledWith('deferred-lease');
+		expect(projectStoryHydration(story.id)?.passageTextLoaded).toBe(true);
+	});
+
+	it('closes a deferred native lease on unmount before Core hydration begins', async () => {
+		let releaseBegin!: (result: any) => void;
+		const beginCore = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'beginHydratedProject'
+		);
+		const finishLease = jest.fn(async () => undefined);
+		const beginNative = jest.fn(
+			() => new Promise(resolve => (releaseBegin = resolve))
+		);
+		(window as any).twineElectron = {
+			beginProjectFolderHydration: beginNative,
+			finishProjectFolderHydration: finishLease,
+			readProjectFolderHydrationChunk: jest.fn()
+		};
+		const {story, unmount} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+		await waitFor(() => expect(beginNative).toHaveBeenCalledTimes(1));
+		unmount();
+		releaseBegin({
+			hydrationId: 'unmounted-lease',
+			passageCount: 0,
+			rootPath: '/native/project.twine.rs',
+			stories: [],
+			storyIds: [story.id]
+		});
+		await waitFor(() =>
+			expect(finishLease).toHaveBeenCalledWith('unmounted-lease')
+		);
+		expect(beginCore).not.toHaveBeenCalled();
+	});
+
 	it('streams project-folder passage bodies into the core session', async () => {
 		const source = storyWithLinkedPassages().story;
 		const begin = jest
@@ -491,6 +699,128 @@ describe('<StoryWorkspaceShell>', () => {
 			])
 		);
 		expect(finishLease).toHaveBeenCalledWith('lease-1');
+	});
+
+	it('aborts a partial core bootstrap and finishes its native lease after a read or append failure', async () => {
+		const source = storyWithLinkedPassages().story;
+		const abort = jest
+			.spyOn(ProjectScopedCoreProjectHost.prototype, 'abortHydratedProject')
+			.mockResolvedValue();
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'beginHydratedProject')
+			.mockResolvedValue();
+		const append = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'appendHydratedProjectPassages')
+			.mockResolvedValueOnce()
+			.mockRejectedValueOnce(new Error('append failed'));
+		const finishLease = jest.fn(async () => undefined);
+		let read = 0;
+		(window as any).twineElectron = {
+			beginProjectFolderHydration: jest.fn(async () => ({
+				hydrationId: 'failed-lease',
+				passageCount: source.passages.length,
+				rootPath: '/native/project.twine.rs',
+				stories: [{...source, passages: []}],
+				storyIds: [source.id]
+			})),
+			finishProjectFolderHydration: finishLease,
+			hydrateProjectFolder: jest.fn(),
+			readProjectFolderHydrationChunk: jest.fn(async () => {
+				const passage = source.passages[read++];
+				return {
+					done: read === source.passages.length,
+					nextCursor: read,
+					passages: [{passage, storyId: source.id}]
+				};
+			})
+		};
+		await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				source.id = currentStory.id;
+				source.passages = source.passages.map(passage => ({
+					...passage,
+					story: currentStory.id
+				}));
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+		await waitFor(() => expect(finishLease).toHaveBeenCalled());
+		expect(append.mock.calls.length).toBeGreaterThanOrEqual(2);
+		expect(abort).toHaveBeenCalled();
+		expect(finishLease).toHaveBeenCalledWith('failed-lease');
+	});
+
+	it('aborts a superseded stream without merging or routing a late chunk', async () => {
+		const source = storyWithLinkedPassages().story;
+		let releaseRead!: (chunk: any) => void;
+		const append = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'appendHydratedProjectPassages'
+		);
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'beginHydratedProject')
+			.mockResolvedValue();
+		const abort = jest
+			.spyOn(ProjectScopedCoreProjectHost.prototype, 'abortHydratedProject')
+			.mockResolvedValue();
+		const finishLease = jest.fn(async () => undefined);
+		(window as any).twineElectron = {
+			beginProjectFolderHydration: jest.fn(async () => ({
+				hydrationId: 'superseded-lease',
+				passageCount: source.passages.length,
+				rootPath: '/native/project.twine.rs',
+				stories: [{...source, passages: []}],
+				storyIds: [source.id]
+			})),
+			finishProjectFolderHydration: finishLease,
+			hydrateProjectFolder: jest.fn(),
+			readProjectFolderHydrationChunk: jest.fn(
+				() => new Promise(resolve => (releaseRead = resolve))
+			)
+		};
+		const {story, unmount} = await renderComponent('graph', undefined, {
+			deferWorkspaceQueries: true,
+			configureStory: currentStory => {
+				source.id = currentStory.id;
+				saveProjectMetadata(currentStory.id, {
+					rootPath: '/native/project.twine.rs',
+					status: 'file-backed',
+					storageKind: 'electron-project-folder'
+				});
+				markProjectStoryHydration(currentStory.id, {
+					passageTextLoaded: false,
+					rootPath: '/native/project.twine.rs'
+				});
+			}
+		});
+		await waitFor(() =>
+			expect(
+				(window as any).twineElectron.readProjectFolderHydrationChunk
+			).toHaveBeenCalled()
+		);
+		unmount();
+		await waitFor(() =>
+			expect(abort).toHaveBeenCalledWith(story.id, expect.any(Symbol))
+		);
+		releaseRead({
+			done: true,
+			nextCursor: 1,
+			passages: [{passage: source.passages[0], storyId: story.id}]
+		});
+		await waitFor(() =>
+			expect(finishLease).toHaveBeenCalledWith('superseded-lease')
+		);
+		expect(append).not.toHaveBeenCalled();
+		expect(projectStoryHydration(story.id)?.passageTextLoaded).toBe(false);
 	});
 
 	it('opens indexed story sources from the contents navigator', async () => {

@@ -6,7 +6,7 @@ import {usePrefsContext} from '../../store/prefs';
 import {useComputedTheme} from '../../store/prefs/use-computed-theme';
 import {useStoriesContext} from '../../store/stories';
 import {useNativeStoryPreviewPreparation} from '../../store/use-story-launch';
-import {useCoreProjectHost} from '../../core/project-host';
+import {useCoreProjectHost} from '../../core/project-host-public';
 import {
 	armStoryEditRevealRollback,
 	finalizeStoryEditReveal,
@@ -25,7 +25,7 @@ jest.mock('../../store/prefs');
 jest.mock('../../store/prefs/use-computed-theme');
 jest.mock('../../store/stories');
 jest.mock('../../store/use-story-launch');
-jest.mock('../../core/project-host');
+jest.mock('../../core/project-host-public');
 jest.mock('react-router', () => ({
 	...jest.requireActual('react-router'),
 	useNavigate: jest.fn()

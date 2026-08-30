@@ -5,6 +5,7 @@ import type {
 } from './twine-wasm-protocol';
 import type {TwineWasmProjectSession as TwineWasmProjectSessionType} from './pkg/twine_wasm';
 import type {TwineWasmProjectBootstrap as TwineWasmProjectBootstrapType} from './pkg/twine_wasm';
+import {isPassageRenameRequestTooLarge} from '../refactor-limits';
 
 let wasmReady: Promise<void> | undefined;
 let SessionConstructor:
@@ -13,9 +14,22 @@ let BootstrapConstructor:
 	(new (snapshot: unknown) => TwineWasmProjectBootstrapType) | undefined;
 let wasmMemoryBytes = 0;
 let wasmMemory: WebAssembly.Memory | undefined;
+let performanceProbeWorkerJsRetained:
+	Array<{index: number; label: string; payload: string}> | undefined;
+let nextRefactorRuntimeEpoch = 0;
+let nextSessionInstanceId = 0;
 const sessions = new Map<
 	string,
-	{revision: number; session: TwineWasmProjectSessionType}
+	{
+		instanceId: number;
+		refactorRuntimeEpoch: number;
+		revision: number;
+		session: TwineWasmProjectSessionType;
+	}
+>();
+const refactorPlanningTaskOwners = new Map<
+	string,
+	{instanceId: number; sessionId: string}
 >();
 const bootstraps = new Map<
 	string,
@@ -34,6 +48,63 @@ function epochNow() {
 	return typeof performance !== 'undefined'
 		? performance.timeOrigin + performance.now()
 		: Date.now();
+}
+
+// `Performance.memory` is Chromium-specific and is omitted by the standard
+// Worker lib. Keep the non-standard surface local so the production metric
+// remains explicit rather than treating an unsupported API as zero bytes.
+type WorkerPerformanceWithMemory = Performance & {
+	memory?: {usedJSHeapSize?: number};
+};
+
+function workerJsHeapUsedBytes() {
+	const bytes = (performance as WorkerPerformanceWithMemory).memory
+		?.usedJSHeapSize;
+
+	return typeof bytes === 'number' && Number.isFinite(bytes)
+		? bytes
+		: undefined;
+}
+
+function workerMemoryObservation() {
+	wasmMemoryBytes = wasmMemory?.buffer.byteLength ?? wasmMemoryBytes;
+
+	return {
+		wasmMemoryBytes: wasmMemory ? wasmMemoryBytes : undefined,
+		workerJsHeapUsedBytes: workerJsHeapUsedBytes()
+	};
+}
+
+function retainPerformanceProbeWorkerJs(bytes: number) {
+	const targetBytes = Math.max(1, Math.min(bytes, 32 * 1024 * 1024));
+	const chunkBytes = 64 * 1024;
+	const count = Math.ceil(targetBytes / chunkBytes);
+
+	// Keep ordinary strings and object headers live. A Uint8Array-only probe
+	// would primarily exercise backing stores rather than the worker JS heap
+	// that this contract owns.
+	performanceProbeWorkerJsRetained = Array.from({length: count}, (_, index) => {
+		const payloadBytes = Math.min(chunkBytes, targetBytes - index * chunkBytes);
+		const label = `twine-perf-worker-js-${index}`;
+		const payloadSource = `${label}:${'x'.repeat(
+			Math.max(0, payloadBytes - label.length - 1)
+		)}`;
+
+		return {
+			index,
+			label,
+			// JSON parsing materializes a flat string. Keeping the repeat/concat rope
+			// alone lets V8 represent this 8 MiB ownership probe compactly instead of
+			// exercising the worker JavaScript heap it is meant to attribute.
+			payload: JSON.parse(JSON.stringify(payloadSource)) as string
+		};
+	});
+
+	// Report the retained string payload, not object/header bookkeeping.
+	return performanceProbeWorkerJsRetained.reduce(
+		(total, entry) => total + entry.payload.length,
+		0
+	);
 }
 
 function byteSize(value: unknown) {
@@ -77,6 +148,39 @@ function ensureSession(sessionId: string, revision: number) {
 	return entry;
 }
 
+function cancelPlanningTasksForSession(sessionId: string) {
+	const entry = sessions.get(sessionId);
+	for (const [taskId, owner] of refactorPlanningTaskOwners) {
+		if (owner.sessionId !== sessionId) continue;
+		try {
+			if (entry && owner.instanceId === entry.instanceId) {
+				entry.session.cancel_passage_rename_plan({taskId});
+			}
+		} finally {
+			refactorPlanningTaskOwners.delete(taskId);
+		}
+	}
+}
+
+function taskSession(sessionId: string, taskId: string) {
+	const owner = refactorPlanningTaskOwners.get(taskId);
+	const entry = sessions.get(sessionId);
+
+	return owner?.sessionId === sessionId &&
+		owner.instanceId === entry?.instanceId
+		? entry
+		: undefined;
+}
+
+function ensureRefactorRuntimeEpoch(
+	entry: {refactorRuntimeEpoch: number},
+	epoch: number
+) {
+	if (entry.refactorRuntimeEpoch !== epoch) {
+		throw new Error('WASM refactor runtime epoch is stale.');
+	}
+}
+
 async function handleRequest(
 	request: WasmWorkerRequest
 ): Promise<WasmWorkerResponse> {
@@ -103,12 +207,24 @@ async function handleRequest(
 					throw new Error('WASM core module did not expose ProjectBootstrap.');
 				}
 				bootstraps.get(request.sessionId)?.bootstrap.free();
+				const priorSession = sessions.get(request.sessionId);
+				if (priorSession) {
+					cancelPlanningTasksForSession(request.sessionId);
+					priorSession.refactorRuntimeEpoch = ++nextRefactorRuntimeEpoch;
+				}
 				bootstraps.set(request.sessionId, {
 					assets: request.assets,
 					bootstrap: new BootstrapConstructor(request.snapshot),
 					revision: request.revision
 				});
 				result = {accepted: true};
+				break;
+			}
+			case 'abortProjectBootstrap': {
+				const bootstrap = bootstraps.get(request.sessionId);
+				bootstrap?.bootstrap.free();
+				bootstraps.delete(request.sessionId);
+				result = {aborted: !!bootstrap};
 				break;
 			}
 			case 'appendProjectBootstrap': {
@@ -131,8 +247,11 @@ async function handleRequest(
 				nextSession.set_revision(request.revision);
 				nextSession.set_asset_inventory(entry.assets);
 				bootstraps.delete(request.sessionId);
+				cancelPlanningTasksForSession(request.sessionId);
 				sessions.get(request.sessionId)?.session.free();
 				sessions.set(request.sessionId, {
+					instanceId: ++nextSessionInstanceId,
+					refactorRuntimeEpoch: ++nextRefactorRuntimeEpoch,
 					revision: request.revision,
 					session: nextSession
 				});
@@ -152,8 +271,13 @@ async function handleRequest(
 
 					nextSession.set_revision(request.revision);
 					nextSession.set_asset_inventory(request.assets);
+					bootstraps.get(request.sessionId)?.bootstrap.free();
+					bootstraps.delete(request.sessionId);
+					cancelPlanningTasksForSession(request.sessionId);
 					sessions.get(request.sessionId)?.session.free();
 					sessions.set(request.sessionId, {
+						instanceId: ++nextSessionInstanceId,
+						refactorRuntimeEpoch: ++nextRefactorRuntimeEpoch,
 						revision: request.revision,
 						session: nextSession
 					});
@@ -177,6 +301,91 @@ async function handleRequest(
 					revision: entry.revision,
 					status: entry.session.status()
 				};
+				break;
+			}
+
+			case 'applyRefactorPlan': {
+				const entry = ensureSession(request.sessionId, request.revision);
+				ensureRefactorRuntimeEpoch(entry, request.refactorRuntimeEpoch);
+				rustStartedAtEpochMs = epochNow();
+				const outcome = entry.session.apply_refactor_plan(request.applyRequest);
+				rustFinishedAtEpochMs = epochNow();
+
+				if (outcome.type === 'applied') {
+					entry.revision = entry.session.revision();
+					result = {
+						...outcome,
+						revision: entry.revision,
+						status: entry.session.status()
+					};
+				} else {
+					result = {...outcome, revision: entry.revision};
+				}
+				break;
+			}
+
+			case 'syncRefactorRuntime': {
+				const entry = ensureSession(request.sessionId, request.revision);
+				rustStartedAtEpochMs = epochNow();
+				entry.session.sync_refactor_runtime(request.runtime);
+				rustFinishedAtEpochMs = epochNow();
+				entry.refactorRuntimeEpoch = ++nextRefactorRuntimeEpoch;
+				result = {refactorRuntimeEpoch: entry.refactorRuntimeEpoch};
+				break;
+			}
+
+			case 'beginPassageRenamePlan': {
+				if (isPassageRenameRequestTooLarge(request.request)) {
+					result = {
+						failure: {
+							code: 'plan-too-large',
+							message: 'Passage rename request strings exceed the 64 KiB limit.'
+						},
+						type: 'failure'
+					};
+					break;
+				}
+				const entry = ensureSession(request.sessionId, request.revision);
+				ensureRefactorRuntimeEpoch(entry, request.refactorRuntimeEpoch);
+				rustStartedAtEpochMs = epochNow();
+				result = entry.session.begin_passage_rename_plan(request.request);
+				if ((result as {type?: string}).type === 'begun') {
+					refactorPlanningTaskOwners.set(
+						(result as {task: {taskId: string}}).task.taskId,
+						{instanceId: entry.instanceId, sessionId: request.sessionId}
+					);
+				}
+				rustFinishedAtEpochMs = epochNow();
+				break;
+			}
+
+			case 'continuePassageRenamePlan': {
+				const entry = taskSession(request.sessionId, request.task.taskId);
+				if (!entry) {
+					result = {type: 'cancelled'};
+					break;
+				}
+				rustStartedAtEpochMs = epochNow();
+				result = entry.session.continue_passage_rename_plan(request.task);
+				rustFinishedAtEpochMs = epochNow();
+				if ((result as {type?: string}).type !== 'pending') {
+					refactorPlanningTaskOwners.delete(request.task.taskId);
+				}
+				break;
+			}
+
+			case 'cancelPassageRenamePlan': {
+				const entry = taskSession(request.sessionId, request.task.taskId);
+				if (!entry) {
+					result = {cancelled: false};
+					break;
+				}
+				rustStartedAtEpochMs = epochNow();
+				result = {
+					cancelled: entry.session.cancel_passage_rename_plan(request.task)
+				};
+				rustFinishedAtEpochMs = epochNow();
+				refactorPlanningTaskOwners.delete(request.task.taskId);
 				break;
 			}
 
@@ -301,6 +510,14 @@ async function handleRequest(
 				).session.query_search_page(request.storyId, request.options);
 				break;
 
+			case 'queryRefactorPlanDetail': {
+				const entry = ensureSession(request.sessionId, request.revision);
+				rustStartedAtEpochMs = epochNow();
+				result = entry.session.query_refactor_plan_detail(request.cursor);
+				rustFinishedAtEpochMs = epochNow();
+				break;
+			}
+
 			case 'queryDiagnosticsPage':
 				result = ensureSession(
 					request.sessionId,
@@ -365,6 +582,7 @@ async function handleRequest(
 				const removed = sessions.get(request.sessionId);
 				const bootstrap = bootstraps.get(request.sessionId);
 
+				cancelPlanningTasksForSession(request.sessionId);
 				removed?.session.free();
 				bootstrap?.bootstrap.free();
 				sessions.delete(request.sessionId);
@@ -379,16 +597,29 @@ async function handleRequest(
 					request.revision
 				).session.status();
 				break;
+
+			case 'performanceProbeWorkerJs':
+				if (request.action === 'retain') {
+					result = {
+						allocatedBytes: retainPerformanceProbeWorkerJs(
+							request.bytes ?? 8 * 1024 * 1024
+						),
+						retained: true
+					};
+				} else {
+					performanceProbeWorkerJsRetained = undefined;
+					result = {allocatedBytes: 0, retained: false};
+				}
+				break;
 		}
 
 		computeMs = now() - computeStartedAt;
 		computeFinishedAtEpochMs = epochNow();
-		wasmMemoryBytes = wasmMemory?.buffer.byteLength ?? wasmMemoryBytes;
 
 		const responseBytes = byteSize(result);
-		const diagnostics = sessions
-			.get(request.sessionId)
-			?.session.performance_diagnostics() as
+		const diagnostics = (
+			'sessionId' in request ? sessions.get(request.sessionId) : undefined
+		)?.session.performance_diagnostics() as
 			| (NonNullable<WasmWorkerMetricBase['readModel']> & {
 					lastMutation?: WasmWorkerMetricBase['mutationStages'];
 			  })
@@ -407,6 +638,12 @@ async function handleRequest(
 					parsedSourceCount: diagnostics.parsedSourceCount,
 					passageCount: diagnostics.passageCount,
 					projectDocumentBytes: diagnostics.projectDocumentBytes,
+					refactorPlanningTaskBytes: diagnostics.refactorPlanningTaskBytes,
+					refactorPlanningTaskCount: diagnostics.refactorPlanningTaskCount,
+					refactorPlanStoreBytes: diagnostics.refactorPlanStoreBytes,
+					refactorPlanStoreEntryCount: diagnostics.refactorPlanStoreEntryCount,
+					refactorPlanStoreFingerprint:
+						diagnostics.refactorPlanStoreFingerprint,
 					readModelCacheStoryCount: diagnostics.readModelCacheStoryCount,
 					readModelFullBuildCount: diagnostics.readModelFullBuildCount,
 					readModelIncrementalUpdateCount:
@@ -417,6 +654,10 @@ async function handleRequest(
 					undoEntryCount: diagnostics.undoEntryCount
 				}
 			: undefined;
+		// Sample both dedicated-worker owners together at the response boundary.
+		// Do not move this above diagnostics serialization: the emitted tuple must
+		// describe the response that the client is about to receive.
+		const memory = workerMemoryObservation();
 		const workerRespondedAt = now();
 		const workerRespondedAtEpochMs = epochNow();
 		const metrics: WasmWorkerMetricBase = {
@@ -438,7 +679,7 @@ async function handleRequest(
 			workerReceivedAt,
 			workerReceivedAtEpochMs,
 			workerRespondedAt,
-			wasmMemoryBytes,
+			...memory,
 			workerRespondedAtEpochMs
 		};
 
@@ -454,6 +695,7 @@ async function handleRequest(
 		computeFinishedAtEpochMs = epochNow();
 		const workerRespondedAt = now();
 		const workerRespondedAtEpochMs = epochNow();
+		const memory = workerMemoryObservation();
 		const metrics: WasmWorkerMetricBase = {
 			computeMs,
 			computeFinishedAtEpochMs,
@@ -467,6 +709,7 @@ async function handleRequest(
 				request.kind === 'ingestExternalDelta' ? request.delta.id : undefined,
 			workerReceivedAt,
 			workerReceivedAtEpochMs,
+			...memory,
 			workerRespondedAt,
 			workerRespondedAtEpochMs
 		};
@@ -481,8 +724,50 @@ async function handleRequest(
 	}
 }
 
-self.onmessage = (event: MessageEvent<WasmWorkerRequest>) => {
-	void handleRequest(event.data).then(response => {
-		self.postMessage(response);
-	});
-};
+/** Test seam for exercising the production request dispatcher with generated WASM. */
+export const handleWasmWorkerRequestForTest = handleRequest;
+
+/** Test-only retained-owner diagnostic for session replacement/removal coverage. */
+export function refactorPlanningTaskOwnerCountForTest() {
+	return refactorPlanningTaskOwners.size;
+}
+
+/** Test-only dependency injection for request-dispatch tests without a Worker global. */
+export function configureWasmWorkerForTest(bindings: {
+	BootstrapConstructor?: typeof BootstrapConstructor;
+	SessionConstructor?: typeof SessionConstructor;
+	reset?: boolean;
+}) {
+	if (bindings.reset) {
+		sessions.clear();
+		bootstraps.clear();
+		refactorPlanningTaskOwners.clear();
+		nextRefactorRuntimeEpoch = 0;
+		nextSessionInstanceId = 0;
+		wasmReady = undefined;
+		SessionConstructor = undefined;
+		BootstrapConstructor = undefined;
+		wasmMemory = undefined;
+		wasmMemoryBytes = 0;
+		performanceProbeWorkerJsRetained = undefined;
+		return;
+	}
+	wasmReady = Promise.resolve();
+	SessionConstructor = bindings.SessionConstructor;
+	BootstrapConstructor = bindings.BootstrapConstructor;
+}
+
+const workerGlobal =
+	typeof self !== 'undefined' &&
+	typeof (self as {document?: unknown}).document === 'undefined' &&
+	'postMessage' in self
+		? self
+		: undefined;
+
+if (workerGlobal) {
+	workerGlobal.onmessage = (event: MessageEvent<WasmWorkerRequest>) => {
+		void handleRequest(event.data).then(response => {
+			workerGlobal.postMessage(response);
+		});
+	};
+}

@@ -1,6 +1,6 @@
 import {render, screen} from '@testing-library/react';
 import * as React from 'react';
-import {StoreCoreProjectHost} from '../../core/project-host';
+import {StoreCoreProjectHost} from '../../test-util/core-project-host-runtime';
 import {Routes} from '..';
 import {PrefsContext, PrefsContextProps} from '../../store/prefs';
 import {FakeStateProvider, fakePrefs} from '../../test-util';

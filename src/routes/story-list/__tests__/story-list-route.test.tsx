@@ -3,7 +3,7 @@ import {axe} from 'jest-axe';
 import * as React from 'react';
 import {MemoryRouter} from 'react-router';
 import {saveAs} from 'file-saver';
-import {StoreCoreProjectHost} from '../../../core/project-host';
+import {StoreCoreProjectHost} from '../../../test-util/core-project-host-runtime';
 import {metadataStory} from '../../../core/bootstrap-stories';
 import {
 	loadProjectMetadata,

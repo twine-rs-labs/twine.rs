@@ -7,7 +7,7 @@ import {
 } from '../../../core';
 import type {CoreDiagnostic} from '../../../core/bindings/CoreDiagnostic';
 import type {CoreDiagnosticsPage} from '../../../core/bindings/CoreDiagnosticsPage';
-import {StoreCoreProjectHost} from '../../../core/project-host';
+import {StoreCoreProjectHost} from '../../../test-util/core-project-host-runtime';
 import {
 	FakeStateProvider,
 	fakePassage,

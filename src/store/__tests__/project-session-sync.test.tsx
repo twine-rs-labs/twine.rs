@@ -11,8 +11,12 @@ import {
 	loadProjectMetadata,
 	subscribeProjectMetadata
 } from '../project-metadata';
-import {ProjectSessionSync} from '../project-session-sync';
+import {
+	captureAndRecoverProjectSnapshot,
+	ProjectSessionSync
+} from '../project-session-sync';
 import {StoriesContext} from '../stories';
+import {useRefactorRuntimeWriter} from '../../core/refactor-runtime-writer';
 
 let mockProjectMetadataRevision = 0;
 const mockProjectMetadataListeners = new Set<() => void>();
@@ -30,6 +34,9 @@ jest.mock('../project-metadata', () => ({
 		mockProjectMetadataListeners.add(listener);
 		return () => mockProjectMetadataListeners.delete(listener);
 	})
+}));
+jest.mock('../../core/refactor-runtime-writer', () => ({
+	useRefactorRuntimeWriter: jest.fn()
 }));
 
 describe('<ProjectSessionSync>', () => {
@@ -49,6 +56,82 @@ describe('<ProjectSessionSync>', () => {
 		delete (window as any).twineElectron;
 		mockProjectMetadataListeners.clear();
 		mockProjectMetadataRevision = 0;
+	});
+
+	it('orders recovery capture behind the replacement lease and aborts only failures', async () => {
+		let releaseLease!: (lease: symbol) => void;
+		const lease = Symbol('recovery-lease');
+		const acquireProjectReplacement = jest.fn(
+			() => new Promise<symbol>(resolve => (releaseLease = resolve))
+		);
+		const abortProjectReplacement = jest.fn(async () => {});
+		const recoverFromSnapshot = jest.fn(async () => {});
+		const hydrateProjectFolder = jest.fn(async () => ({
+			stories: [fakeStory()]
+		}));
+		const listProjectAssets = jest.fn(async () => []);
+		const recovery = captureAndRecoverProjectSnapshot({
+			coreHost: {
+				abortProjectReplacement,
+				acquireProjectReplacement,
+				recoverFromSnapshot
+			} as any,
+			hydrateProjectFolder: hydrateProjectFolder as any,
+			listProjectAssets: listProjectAssets as any,
+			rootPath: '/recovery',
+			storyId: 'story',
+			storyIds: ['story']
+		});
+		await Promise.resolve();
+		expect(hydrateProjectFolder).not.toHaveBeenCalled();
+		expect(listProjectAssets).not.toHaveBeenCalled();
+		releaseLease(lease);
+		await recovery;
+		expect(recoverFromSnapshot).toHaveBeenCalledWith(
+			'story',
+			expect.any(Array),
+			expect.any(Array),
+			lease
+		);
+		expect(abortProjectReplacement).not.toHaveBeenCalled();
+
+		const failingHydrate = jest.fn(async () => {
+			throw new Error('capture failed');
+		});
+		await expect(
+			captureAndRecoverProjectSnapshot({
+				coreHost: {
+					abortProjectReplacement,
+					acquireProjectReplacement: jest.fn(async () => lease),
+					recoverFromSnapshot
+				} as any,
+				hydrateProjectFolder: failingHydrate as any,
+				listProjectAssets: listProjectAssets as any,
+				rootPath: '/recovery',
+				storyId: 'story',
+				storyIds: ['story']
+			})
+		).rejects.toThrow('capture failed');
+		expect(abortProjectReplacement).toHaveBeenCalledTimes(1);
+		expect(abortProjectReplacement).toHaveBeenLastCalledWith('story', lease);
+
+		await expect(
+			captureAndRecoverProjectSnapshot({
+				coreHost: {
+					abortProjectReplacement,
+					acquireProjectReplacement: jest.fn(async () => lease),
+					recoverFromSnapshot: jest.fn(async () => {
+						throw new Error('recovery failed');
+					})
+				} as any,
+				hydrateProjectFolder: hydrateProjectFolder as any,
+				listProjectAssets: listProjectAssets as any,
+				rootPath: '/recovery',
+				storyId: 'story',
+				storyIds: ['story']
+			})
+		).rejects.toThrow('recovery failed');
+		expect(abortProjectReplacement).toHaveBeenCalledTimes(2);
 	});
 
 	function start(
@@ -94,6 +177,20 @@ describe('<ProjectSessionSync>', () => {
 			scannedAt: new Date(0).toISOString(),
 			sessionInstanceId: options.sessionInstanceId ?? `session:${rootPath}`
 		};
+	}
+
+	function coreHost(overrides: Record<string, unknown> = {}) {
+		const host = {
+			clearRefactorExternalSession: jest.fn(async () => {}),
+			recordRefactorExternalSession: jest.fn(async () => {}),
+			...overrides
+		};
+		(useRefactorRuntimeWriter as jest.Mock).mockReturnValue({
+			clearExternalSession: host.clearRefactorExternalSession,
+			recordExternalSession: host.recordRefactorExternalSession,
+			registerSemanticProvider: jest.fn()
+		});
+		return host;
 	}
 
 	function renderTwoRoots(
@@ -148,10 +245,12 @@ describe('<ProjectSessionSync>', () => {
 				storageKind: 'electron-project-folder'
 			})
 		);
-		(useCoreProjectHost as jest.Mock).mockReturnValue({
-			ensureSessionReady: jest.fn(async () => {}),
-			ingestExternalDelta
-		});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({
+				ensureSessionReady: jest.fn(async () => {}),
+				ingestExternalDelta
+			})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(
 				(listener: (delta: NativeProjectSessionDelta) => void) => {
@@ -237,13 +336,14 @@ describe('<ProjectSessionSync>', () => {
 			.mockResolvedValueOnce(start);
 		const stopProjectSession = jest.fn(async () => {});
 		const unsubscribe = jest.fn();
+		const runtimeHost = coreHost({ensureSessionReady});
 
 		(loadProjectMetadata as jest.Mock).mockReturnValue({
 			rootPath,
 			status: 'file-backed',
 			storageKind: 'electron-project-folder'
 		});
-		(useCoreProjectHost as jest.Mock).mockReturnValue({ensureSessionReady});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(runtimeHost);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(() => unsubscribe),
 			startProjectSession,
@@ -277,12 +377,20 @@ describe('<ProjectSessionSync>', () => {
 			startProjectSession.mock.invocationCallOrder[1]
 		);
 		await waitFor(() => expect(ensureSessionReady).toHaveBeenCalledTimes(1));
+		expect(runtimeHost.recordRefactorExternalSession).toHaveBeenCalledWith(
+			[story.id],
+			{generation: 1, sessionInstanceId: start.sessionInstanceId}
+		);
 
 		expect(ensureSessionReady).toHaveBeenCalledTimes(1);
 		expect(screen.queryByRole('status')).toBeNull();
 
 		unmount();
 		await waitFor(() => expect(stopProjectSession).toHaveBeenCalledTimes(2));
+		expect(runtimeHost.clearRefactorExternalSession).toHaveBeenCalledWith(
+			[story.id],
+			start.sessionInstanceId
+		);
 	});
 
 	it('moves synchronization to a metadata root change without a story update', async () => {
@@ -304,10 +412,12 @@ describe('<ProjectSessionSync>', () => {
 			status: 'file-backed',
 			storageKind: 'electron-project-folder'
 		}));
-		(useCoreProjectHost as jest.Mock).mockReturnValue({
-			ensureSessionReady,
-			ingestExternalDelta
-		});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({
+				ensureSessionReady,
+				ingestExternalDelta
+			})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(
 				(listener: (delta: NativeProjectSessionDelta) => void) => {
@@ -367,7 +477,9 @@ describe('<ProjectSessionSync>', () => {
 			storageKind: 'electron-project-folder',
 			updatedAt
 		}));
-		(useCoreProjectHost as jest.Mock).mockReturnValue({ensureSessionReady});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({ensureSessionReady})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(() => jest.fn()),
 			startProjectSession,
@@ -410,7 +522,9 @@ describe('<ProjectSessionSync>', () => {
 			status: 'file-backed',
 			storageKind: 'electron-project-folder'
 		});
-		(useCoreProjectHost as jest.Mock).mockReturnValue({ensureSessionReady});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({ensureSessionReady})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(() => jest.fn()),
 			startProjectSession,
@@ -463,7 +577,9 @@ describe('<ProjectSessionSync>', () => {
 			status: 'file-backed',
 			storageKind: 'electron-project-folder'
 		});
-		(useCoreProjectHost as jest.Mock).mockReturnValue({ensureSessionReady});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({ensureSessionReady})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(() => jest.fn()),
 			startProjectSession,
@@ -520,7 +636,9 @@ describe('<ProjectSessionSync>', () => {
 			status: 'file-backed',
 			storageKind: 'electron-project-folder'
 		});
-		(useCoreProjectHost as jest.Mock).mockReturnValue({ensureSessionReady});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({ensureSessionReady})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(() => jest.fn()),
 			startProjectSession,
@@ -601,10 +719,12 @@ describe('<ProjectSessionSync>', () => {
 				updatedAt: storyId === firstStory.id ? firstUpdatedAt : 'unchanged'
 			})
 		);
-		(useCoreProjectHost as jest.Mock).mockReturnValue({
-			ensureSessionReady,
-			ingestExternalDelta
-		});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({
+				ensureSessionReady,
+				ingestExternalDelta
+			})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(
 				(listener: (change: NativeProjectSessionDelta) => void) => {
@@ -708,10 +828,12 @@ describe('<ProjectSessionSync>', () => {
 				updatedAt: 'unchanged'
 			})
 		);
-		(useCoreProjectHost as jest.Mock).mockReturnValue({
-			ensureSessionReady,
-			ingestExternalDelta
-		});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({
+				ensureSessionReady,
+				ingestExternalDelta
+			})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(
 				(listener: (change: NativeProjectSessionDelta) => void) => {
@@ -792,10 +914,12 @@ describe('<ProjectSessionSync>', () => {
 				storageKind: 'electron-project-folder'
 			})
 		);
-		(useCoreProjectHost as jest.Mock).mockReturnValue({
-			ensureSessionReady,
-			ingestExternalDelta
-		});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({
+				ensureSessionReady,
+				ingestExternalDelta
+			})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(
 				(listener: (change: NativeProjectSessionDelta) => void) => {
@@ -893,10 +1017,12 @@ describe('<ProjectSessionSync>', () => {
 				storageKind: 'electron-project-folder'
 			})
 		);
-		(useCoreProjectHost as jest.Mock).mockReturnValue({
-			ensureSessionReady: jest.fn(async () => {}),
-			ingestExternalDelta
-		});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(
+			coreHost({
+				ensureSessionReady: jest.fn(async () => {}),
+				ingestExternalDelta
+			})
+		);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(
 				(listener: (change: NativeProjectSessionDelta) => void) => {
@@ -968,16 +1094,17 @@ describe('<ProjectSessionSync>', () => {
 		const resolveProjectSessionConflicts = jest.fn(async (path: string) =>
 			start(path)
 		);
+		const runtimeHost = coreHost({
+			ensureSessionReady: jest.fn(async () => {}),
+			ingestExternalDelta
+		});
 
 		(loadProjectMetadata as jest.Mock).mockReturnValue({
 			rootPath,
 			status: 'file-backed',
 			storageKind: 'electron-project-folder'
 		});
-		(useCoreProjectHost as jest.Mock).mockReturnValue({
-			ensureSessionReady: jest.fn(async () => {}),
-			ingestExternalDelta
-		});
+		(useCoreProjectHost as jest.Mock).mockReturnValue(runtimeHost);
 		(window as any).twineElectron = {
 			onProjectSessionChanged: jest.fn(
 				(listener: (change: NativeProjectSessionDelta) => void) => {
@@ -1011,6 +1138,10 @@ describe('<ProjectSessionSync>', () => {
 				undefined,
 				'start-delta'
 			)
+		);
+		expect(runtimeHost.recordRefactorExternalSession).toHaveBeenCalledWith(
+			[story.id],
+			{generation: 2, sessionInstanceId: `session:${rootPath}`}
 		);
 		rendered.unmount();
 	});

@@ -1,6 +1,6 @@
 import type * as React from 'react';
 import type {WorkbenchSelection} from '../../core';
-import type {CoreProjectHost} from '../../core/project-host';
+import type {CoreProjectHost} from '../../core/project-host-public';
 import type {Passage, Story} from '../../store/stories';
 import type {EditorWindowSpec} from './editor-window-spec';
 

@@ -11,7 +11,10 @@ import {
 	type StoryHtmlBuildTarget,
 	type StoryBuildTarget
 } from '../util/build-package';
-import {type CoreProjectHost, useCoreProjectHost} from '../core/project-host';
+import {
+	type CoreProjectHost,
+	useCoreProjectHost
+} from '../core/project-host-public';
 import {
 	materializeStoryFromSession,
 	materializeStorySnapshotFromSession
