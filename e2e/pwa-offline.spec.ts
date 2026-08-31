@@ -157,7 +157,29 @@ test('a fresh install can create and test a project offline', async ({
 
 	const marker = 'Fresh-install offline story format loaded.';
 
-	await setPassageText(page, marker);
+	await setPassageText(page, `${marker} [[Next]] [[Again->Next]].`);
+	const nextPassage = page
+		.getByRole('listitem')
+		.filter({has: page.getByText('Next', {exact: true})})
+		.getByRole('button');
+	await expect(nextPassage).toBeVisible();
+	await nextPassage.click();
+	await page.getByRole('button', {name: 'Find References'}).click();
+	const references = page.getByRole('dialog', {name: 'References to Next'});
+	await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(2);
+	await references
+		.getByRole('button', {name: 'Reveal in Source'})
+		.first()
+		.click();
+	await expect(
+		page.getByRole('region', {name: 'Start', exact: true})
+	).toBeVisible();
+	await expect(page).toHaveURL(/offset=\d+&end=\d+/);
+	await page
+		.getByRole('listitem')
+		.filter({has: page.getByText('Start', {exact: true})})
+		.getByRole('button')
+		.click();
 	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
 	await page.getByRole('button', {name: 'Rename', exact: true}).click();
 	const renamePrompt = page.getByRole('dialog', {
@@ -202,8 +224,8 @@ test('a fresh install can create and test a project offline', async ({
 	const [testPage] = await Promise.all([
 		context.waitForEvent('page'),
 		page
+			.getByRole('region', {name: 'Offline Start', exact: true})
 			.getByRole('button', {name: 'Test From Here', exact: true})
-			.first()
 			.click()
 	]);
 

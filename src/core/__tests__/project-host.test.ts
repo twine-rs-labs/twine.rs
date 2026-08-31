@@ -659,6 +659,26 @@ describe('StoreCoreProjectHost asset commands', () => {
 		};
 	}
 
+	it('rejects semantic navigation when the Rust worker is unavailable', async () => {
+		const wasmClient = {
+			...fakeWasmClient(async () => batch([])),
+			enabled: false
+		};
+		const {host, start, story} = hostWithStory({wasmClient});
+
+		await expect(
+			host.queryPassageReferencesPageAsync(story.id, start.id)
+		).rejects.toThrow('Rust semantic navigation is unavailable.');
+		await expect(
+			host.queryDefinitionAsync({
+				expectedRevision: host.sessionStatus().revision,
+				name: start.name,
+				storyId: story.id,
+				symbolKind: 'passage'
+			})
+		).rejects.toThrow('Rust semantic navigation is unavailable.');
+	});
+
 	it('releases bootstrap passage bodies after async session initialization', async () => {
 		const wasmClient = fakeWasmClient(async () => batch([]));
 		const context = hostWithStory({text: 'Bootstrap body', wasmClient});

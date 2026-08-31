@@ -12,6 +12,7 @@ import {
 	TablerIcon
 } from '../../components/design-system';
 import {VisibleWhitespace} from '../../components/visible-whitespace';
+import {PassageReferencesDialog} from '../../components/passage/passage-references-dialog';
 import {
 	assetManagerViewModel,
 	contentsViewModel,
@@ -35,10 +36,15 @@ import type {PatchBatch} from '../../core/bindings/PatchBatch';
 import type {CoreStoryIndex} from '../../core/bindings/CoreStoryIndex';
 import type {CoreBacklinksPage} from '../../core/bindings/CoreBacklinksPage';
 import type {CorePassageLocalFacts} from '../../core/bindings/CorePassageLocalFacts';
+import type {CorePassageLocation} from '../../core/bindings/CorePassageLocation';
 import type {CoreWorkbenchDockModel} from '../../core/bindings/CoreWorkbenchDockModel';
 import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {CoreProjectHost} from '../../core/project-host-public';
 import type {TwineElectronWindow} from '../../electron/shared';
+import {
+	type WorkbenchStoryMutationBarrier,
+	workbenchBufferCoordinator
+} from '../../util/workbench-buffer-coordinator';
 import {loadProjectMetadata} from '../../store/project-metadata';
 import {
 	markProjectStoryHydration,
@@ -101,7 +107,7 @@ export interface StoryWorkspaceShellProps {
 	onSelectPassage: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
 	overlay?: React.ReactNode;
-	revealRequests?: Map<string, {key: number; position?: number}>;
+	revealRequests?: Map<string, {end?: number; key: number; position?: number}>;
 	rightDockCollapsed: boolean;
 	searchRequests?: Map<string, {key: number; query?: string}>;
 	selectedPassageId?: string;
@@ -870,6 +876,9 @@ const Inspector: React.FC<{
 	extensions: readonly StoryWorkbenchInspectorExtension[];
 	host: CoreProjectHost;
 	index: CoreStoryIndex;
+	definitionStatus?: string;
+	onFindReferences: (passage: Passage) => void;
+	onGoToDefinition: (name: string) => void;
 	onRevealPassageInGraph: (passage: Passage) => void;
 	onSelectPassage: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
@@ -880,11 +889,14 @@ const Inspector: React.FC<{
 }> = props => {
 	const {
 		assets,
+		definitionStatus,
 		diagnostics,
 		extensionContext,
 		extensions,
 		host,
 		index,
+		onFindReferences,
+		onGoToDefinition,
 		onRevealPassageInGraph,
 		onSelectPassage,
 		onTestPassage,
@@ -913,19 +925,21 @@ const Inspector: React.FC<{
 
 	return (
 		<div className="story-edit-inspector">
-			{passage && onTestPassage && (
+			{passage && (
 				<section className="story-edit-inspector-run">
-					<Button
-						block
-						disabled={testPassagePending}
-						icon="tool"
-						loading={testPassagePendingId === passage.id}
-						onClick={() => onTestPassage(passage)}
-						size="sm"
-						variant="primary"
-					>
-						{t('routes.storyEdit.toolbar.testFromHere')}
-					</Button>
+					{onTestPassage && (
+						<Button
+							block
+							disabled={testPassagePending}
+							icon="tool"
+							loading={testPassagePendingId === passage.id}
+							onClick={() => onTestPassage(passage)}
+							size="sm"
+							variant="primary"
+						>
+							{t('routes.storyEdit.toolbar.testFromHere')}
+						</Button>
+					)}
 					<Button
 						block
 						icon="focus-2"
@@ -934,6 +948,15 @@ const Inspector: React.FC<{
 						variant="ghost"
 					>
 						{t('routes.storyEdit.workspace.revealInGraph')}
+					</Button>
+					<Button
+						block
+						icon="search"
+						onClick={() => onFindReferences(passage)}
+						size="sm"
+						variant="ghost"
+					>
+						{t('routes.storyEdit.workspace.findReferences')}
 					</Button>
 				</section>
 			)}
@@ -954,17 +977,18 @@ const Inspector: React.FC<{
 								color={linkedPassage ? 'var(--sem-link)' : 'var(--sem-error)'}
 								key={`${link.sourceId}:${link.targetName}`}
 								label={link.targetName}
-								onClick={
-									linkedPassage
-										? () => onSelectPassage(linkedPassage)
-										: undefined
-								}
-								sub={linkedPassage ? t('common.passage') : 'broken'}
+								onClick={() => onGoToDefinition(link.targetName)}
+								sub={t('routes.storyEdit.workspace.goToDefinition')}
 							/>
 						);
 					})
 				) : (
 					<OutlineItem label={t('routes.storyEdit.workspace.noLinks')} muted />
+				)}
+				{definitionStatus && (
+					<p aria-live="polite" className="story-edit-definition-status">
+						{definitionStatus}
+					</p>
 				)}
 			</OutlineSection>
 
@@ -1354,6 +1378,19 @@ export const StoryWorkspaceShell: React.FC<
 	const {dispatch: storiesDispatch, stories} = useStoriesContext();
 	const [patchVersion, setPatchVersion] = React.useState(0);
 	const [dismissalsVersion, setDismissalsVersion] = React.useState(0);
+	const [referenceTargetId, setReferenceTargetId] = React.useState<string>();
+	const [definitionStatus, setDefinitionStatus] = React.useState<string>();
+	const definitionRequestGeneration = React.useRef(0);
+	const referenceRevealGeneration = React.useRef(0);
+	const semanticNavigationMounted = React.useRef(true);
+	const semanticNavigationStoryId = React.useRef(story.id);
+	const referenceTargetIdRef = React.useRef(referenceTargetId);
+	if (semanticNavigationStoryId.current !== story.id) {
+		semanticNavigationStoryId.current = story.id;
+		definitionRequestGeneration.current += 1;
+		referenceRevealGeneration.current += 1;
+	}
+	referenceTargetIdRef.current = referenceTargetId;
 	const hydratingStories = React.useRef(new Set<string>());
 	const hydrationOwners = React.useRef(
 		new Map<
@@ -1372,6 +1409,18 @@ export const StoryWorkspaceShell: React.FC<
 	const [hydrationAttempt, setHydrationAttempt] = React.useState(0);
 	const storiesRef = React.useRef(stories);
 	storiesRef.current = stories;
+	React.useEffect(() => {
+		semanticNavigationMounted.current = true;
+		return () => {
+			semanticNavigationMounted.current = false;
+			definitionRequestGeneration.current += 1;
+			referenceRevealGeneration.current += 1;
+		};
+	}, []);
+	React.useEffect(() => {
+		setDefinitionStatus(undefined);
+		setReferenceTargetId(undefined);
+	}, [story.id]);
 	const highlightExtensionPassages = React.useCallback(
 		(passageIds: string[]) => {
 			const currentStory = storiesRef.current.find(
@@ -2008,8 +2057,182 @@ export const StoryWorkspaceShell: React.FC<
 		[backlinkPage, dockWindows, passageFacts, selection.passage?.id, story]
 	);
 	const {t} = useTranslation();
+
+	function currentReferencePassage(location: CorePassageLocation) {
+		const currentStory = storiesRef.current.find(
+			candidate => candidate.id === location.storyId
+		);
+		if (
+			location.storyId !== story.id ||
+			location.revision !== coreProjectHost.sessionStatus(story.id).revision ||
+			location.span.encoding !== 'utf16-code-units' ||
+			!currentStory
+		) {
+			return undefined;
+		}
+
+		return currentStory.passages.find(
+			passage => passage.id === location.passageId
+		);
+	}
+
+	function closePassageReferences() {
+		referenceRevealGeneration.current += 1;
+		referenceTargetIdRef.current = undefined;
+		setReferenceTargetId(undefined);
+	}
+
+	function handleLocalBufferChange() {
+		if (referenceTargetIdRef.current) {
+			closePassageReferences();
+		}
+	}
+
+	async function revealReference(
+		location: CorePassageLocation,
+		reveal: (sourcePassage: Passage) => void
+	) {
+		const generation = ++referenceRevealGeneration.current;
+		const requestStoryId = story.id;
+		const targetId = referenceTargetIdRef.current;
+		let barrier: WorkbenchStoryMutationBarrier | undefined;
+		try {
+			barrier =
+				await workbenchBufferCoordinator.acquireStoryMutationBarrier(
+					requestStoryId
+				);
+			const ownsRequest =
+				semanticNavigationMounted.current &&
+				semanticNavigationStoryId.current === requestStoryId &&
+				generation === referenceRevealGeneration.current &&
+				targetId !== undefined &&
+				targetId === referenceTargetIdRef.current;
+			const currentStory = storiesRef.current.find(
+				candidate => candidate.id === requestStoryId
+			);
+			const sourcePassages =
+				currentStory?.passages.filter(
+					passage => passage.id === location.passageId
+				) ?? [];
+			if (
+				!ownsRequest ||
+				!barrier.isCurrent() ||
+				location.storyId !== requestStoryId ||
+				location.revision !==
+					coreProjectHost.sessionStatus(requestStoryId).revision ||
+				location.span.encoding !== 'utf16-code-units' ||
+				!currentStory?.passages.some(passage => passage.id === targetId) ||
+				sourcePassages.length !== 1
+			) {
+				throw new Error(t('routes.storyEdit.workspace.definitionStale'));
+			}
+
+			reveal(sourcePassages[0]);
+			closePassageReferences();
+		} catch (reason) {
+			if (
+				reason instanceof Error &&
+				reason.message === t('routes.storyEdit.workspace.definitionStale')
+			) {
+				throw reason;
+			}
+			throw new Error(t('components.passageReferences.revealFailed'));
+		} finally {
+			barrier?.release();
+		}
+	}
+
+	function handleRevealReferenceInSource(location: CorePassageLocation) {
+		return revealReference(location, sourcePassage => {
+			onSelectPassage(sourcePassage);
+			onOpenEditorWindow?.({kind: 'passage', passageId: sourcePassage.id});
+			navigate(
+				sourceTarget(story, {
+					endOffset: location.span.end,
+					offset: location.span.start,
+					target: {kind: 'passage', passageId: sourcePassage.id}
+				})
+			);
+		});
+	}
+
+	function handleRevealReferenceInGraph(location: CorePassageLocation) {
+		return revealReference(location, onRevealPassageInGraph);
+	}
+
+	function handleGoToDefinition(name: string) {
+		const generation = ++definitionRequestGeneration.current;
+		const requestStoryId = story.id;
+		const expectedRevision =
+			coreProjectHost.sessionStatus(requestStoryId).revision;
+		setDefinitionStatus(undefined);
+		void coreProjectHost
+			.queryDefinitionAsync({
+				expectedRevision,
+				name,
+				storyId: requestStoryId,
+				symbolKind: 'passage'
+			})
+			.then(result => {
+				if (
+					generation !== definitionRequestGeneration.current ||
+					!semanticNavigationMounted.current ||
+					semanticNavigationStoryId.current !== requestStoryId
+				)
+					return;
+
+				switch (result.type) {
+					case 'unique': {
+						const location = result.location;
+						const passage = currentReferencePassage(location);
+						if (!passage || location.passageName !== name) {
+							setDefinitionStatus(
+								t('routes.storyEdit.workspace.definitionStale')
+							);
+							return;
+						}
+						onSelectPassage(passage);
+						return;
+					}
+					case 'ambiguous':
+						setDefinitionStatus(
+							t('routes.storyEdit.workspace.definitionAmbiguous', {
+								count: result.totalCount,
+								name
+							})
+						);
+						return;
+					case 'not_found':
+						setDefinitionStatus(
+							t('routes.storyEdit.workspace.definitionNotFound', {name})
+						);
+						return;
+					case 'unsupported':
+						setDefinitionStatus(
+							t('routes.storyEdit.workspace.definitionUnsupported')
+						);
+						return;
+					case 'stale':
+						setDefinitionStatus(
+							t('routes.storyEdit.workspace.definitionStale')
+						);
+				}
+			})
+			.catch(() => {
+				if (
+					generation === definitionRequestGeneration.current &&
+					semanticNavigationMounted.current &&
+					semanticNavigationStoryId.current === requestStoryId
+				) {
+					setDefinitionStatus(t('routes.storyEdit.workspace.definitionFailed'));
+				}
+			});
+	}
 	const showGraph = mode === 'graph' || mode === 'split';
 	const showText = mode === 'text' || mode === 'split';
+	const referenceTarget = referenceTargetId
+		? story.passages.find(passage => passage.id === referenceTargetId)
+		: undefined;
 
 	function handleOpenContentsSource(entry: ContentsViewModelEntry) {
 		if (entry.core.kind === 'variable') {
@@ -2072,6 +2295,16 @@ export const StoryWorkspaceShell: React.FC<
 				'right-dock-collapsed': rightDockCollapsed
 			})}
 		>
+			{referenceTarget && (
+				<PassageReferencesDialog
+					host={coreProjectHost}
+					onClose={closePassageReferences}
+					onRevealInGraph={handleRevealReferenceInGraph}
+					onRevealInSource={handleRevealReferenceInSource}
+					story={story}
+					target={referenceTarget}
+				/>
+			)}
 			{openProgress && <StoryOpenProgress state={openProgress} />}
 			<aside
 				aria-label={t('routes.storyEdit.workspace.leftDock')}
@@ -2142,6 +2375,7 @@ export const StoryWorkspaceShell: React.FC<
 						onChangeLayout={onChangeEditorDockLayout}
 						onClose={spec => onCloseEditorWindow?.(spec)}
 						onFocus={id => onFocusEditorWindow?.(id)}
+						onLocalBufferChange={handleLocalBufferChange}
 						onOpen={spec => onOpenEditorWindow?.(spec)}
 						onReorder={(from, to) => onReorderEditorWindows?.(from, to)}
 						onRevealPassageInGraph={onRevealPassageInGraph}
@@ -2172,11 +2406,17 @@ export const StoryWorkspaceShell: React.FC<
 				>
 					<Inspector
 						assets={assets}
+						definitionStatus={definitionStatus}
 						diagnostics={diagnostics}
 						extensionContext={extensionContext}
 						extensions={inspectorExtensions}
 						host={coreProjectHost}
 						index={index}
+						onFindReferences={passage => {
+							referenceRevealGeneration.current += 1;
+							setReferenceTargetId(passage.id);
+						}}
+						onGoToDefinition={handleGoToDefinition}
 						onRevealPassageInGraph={onRevealPassageInGraph}
 						onSelectPassage={onSelectPassage}
 						onTestPassage={onTestPassage}

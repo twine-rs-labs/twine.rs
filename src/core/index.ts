@@ -12,10 +12,21 @@ import type {CoreDiagnosticsSummary} from './bindings/CoreDiagnosticsSummary';
 import type {CoreDiagnosticsSummaryQuery} from './bindings/CoreDiagnosticsSummaryQuery';
 import type {CoreDocumentPage} from './bindings/CoreDocumentPage';
 import type {CoreDocumentQuery} from './bindings/CoreDocumentQuery';
+import type {CoreDefinitionQuery} from './bindings/CoreDefinitionQuery';
+import type {CoreDefinitionResult} from './bindings/CoreDefinitionResult';
+import type {CoreDefinitionSymbolKind} from './bindings/CoreDefinitionSymbolKind';
 import type {CorePassageFacts} from './bindings/CorePassageFacts';
 import type {CorePassageLocalFacts} from './bindings/CorePassageLocalFacts';
 import type {CorePassageDocument} from './bindings/CorePassageDocument';
+import type {CorePassageLocation} from './bindings/CorePassageLocation';
+import type {CorePassageReference} from './bindings/CorePassageReference';
+import type {CorePassageReferenceCoverage} from './bindings/CorePassageReferenceCoverage';
+import type {CorePassageReferencesPage} from './bindings/CorePassageReferencesPage';
+import type {CorePassageReferencesQuery} from './bindings/CorePassageReferencesQuery';
+import type {CoreSemanticProvenance} from './bindings/CoreSemanticProvenance';
 import type {CoreSourceDocument} from './bindings/CoreSourceDocument';
+import type {CoreSourceRangeEncoding} from './bindings/CoreSourceRangeEncoding';
+import type {CoreSourceSpan} from './bindings/CoreSourceSpan';
 import type {CoreRect} from './bindings/CoreRect';
 import type {CoreSearchPage} from './bindings/CoreSearchPage';
 import type {CoreSearchQuery} from './bindings/CoreSearchQuery';
@@ -89,10 +100,21 @@ export type {
 	CoreDiagnosticsSummaryQuery,
 	CoreDocumentPage,
 	CoreDocumentQuery,
+	CoreDefinitionQuery,
+	CoreDefinitionResult,
+	CoreDefinitionSymbolKind,
 	CorePassageFacts,
 	CorePassageLocalFacts,
 	CorePassageDocument,
+	CorePassageLocation,
+	CorePassageReference,
+	CorePassageReferenceCoverage,
+	CorePassageReferencesPage,
+	CorePassageReferencesQuery,
+	CoreSemanticProvenance,
 	CoreSourceDocument,
+	CoreSourceRangeEncoding,
+	CoreSourceSpan,
 	CoreRect,
 	CoreSearchPage,
 	CoreSearchQuery,

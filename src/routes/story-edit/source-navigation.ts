@@ -15,6 +15,7 @@ export interface SourceNavigationSearch {
 }
 
 export interface SourceNavigationOptions {
+	endOffset?: number | null;
 	line?: number | null;
 	mode?: 'graph' | 'split' | 'text';
 	offset?: number | null;
@@ -120,7 +121,14 @@ export function resolveSourceNavigationTarget(
 
 export function sourceTarget(
 	story: Story,
-	{line, mode = 'text', offset, search, target}: SourceNavigationOptions
+	{
+		endOffset,
+		line,
+		mode = 'text',
+		offset,
+		search,
+		target
+	}: SourceNavigationOptions
 ) {
 	const query = new URLSearchParams({mode});
 
@@ -138,6 +146,10 @@ export function sourceTarget(
 
 	if (typeof offset === 'number' && Number.isFinite(offset)) {
 		query.set('offset', String(Math.max(0, Math.trunc(offset))));
+	}
+
+	if (typeof endOffset === 'number' && Number.isFinite(endOffset)) {
+		query.set('end', String(Math.max(0, Math.trunc(endOffset))));
 	}
 
 	if (typeof line === 'number' && Number.isFinite(line)) {

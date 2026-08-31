@@ -1,6 +1,7 @@
 import type {CoreAssetInventoryEntry} from '../core/bindings/CoreAssetInventoryEntry';
 import type {CoreAssetsQuery} from '../core/bindings/CoreAssetsQuery';
 import type {CoreContentsQuery} from '../core/bindings/CoreContentsQuery';
+import type {CoreDefinitionQuery} from '../core/bindings/CoreDefinitionQuery';
 import type {CoreDocumentQuery} from '../core/bindings/CoreDocumentQuery';
 import type {CoreSearchQuery} from '../core/bindings/CoreSearchQuery';
 import type {CoreRect} from '../core/bindings/CoreRect';
@@ -31,6 +32,39 @@ function cloneSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
 
 function cloneStorySnapshot(story: StorySnapshot): StorySnapshot {
 	return JSON.parse(JSON.stringify(story));
+}
+
+function standardLinkOccurrences(text: string) {
+	const occurrences: Array<{end: number; start: number; target: string}> = [];
+	const matcher = /\[\[([\s\S]*?)\]\]/g;
+
+	for (const match of text.matchAll(matcher)) {
+		const content = match[1];
+		const setterless = content.split('][')[0];
+		let target = setterless;
+		let relativeStart = 0;
+		const forward = setterless.lastIndexOf('->');
+		const reverse = setterless.indexOf('<-');
+		const pipe = setterless.lastIndexOf('|');
+
+		if (forward >= 0) {
+			relativeStart = forward + 2;
+			target = setterless.slice(relativeStart);
+		} else if (reverse >= 0) {
+			target = setterless.slice(0, reverse);
+		} else if (pipe >= 0) {
+			relativeStart = pipe + 1;
+			target = setterless.slice(relativeStart);
+		}
+
+		const trimmed = target.trim();
+		if (!trimmed || match.index === undefined) continue;
+		const leadingWhitespace = target.length - target.trimStart().length;
+		const start = match.index + 2 + relativeStart + leadingWhitespace;
+		occurrences.push({end: start + trimmed.length, start, target: trimmed});
+	}
+
+	return occurrences;
 }
 
 function emptyMetadataPatch(): StoryMetadataPatch {
@@ -642,6 +676,104 @@ export class TestCoreSessionClient {
 				storyId,
 				totalCount: facts.backlinks.length
 			};
+		}
+	);
+	queryPassageReferencesPage = jest.fn(
+		async (
+			_sessionId: string,
+			storyId: string,
+			passageId: string,
+			options: {cursor: string | null; limit: number}
+		) => {
+			const story = this.story(storyId);
+			const target = story.passages.find(passage => passage.id === passageId);
+			const coverage =
+				target &&
+				story.passages.filter(passage => passage.name === target.name)
+					.length === 1
+					? ('standard-links-only' as const)
+					: ('ambiguous-passage-name' as const);
+			const references =
+				target && coverage === 'standard-links-only'
+					? story.passages.flatMap(source =>
+							standardLinkOccurrences(source.text)
+								.filter(occurrence => occurrence.target === target.name)
+								.map(occurrence => ({
+									location: {
+										passageId: source.id,
+										passageName: source.name,
+										provenance: {
+											capabilityRevision: 1,
+											formatName: null,
+											formatVersion: null,
+											providerIdentifier: 'twine-core.standard-links'
+										},
+										resultKey: `twine-core.standard-links:${storyId}:${passageId}:${source.id}:${occurrence.start}:${occurrence.end}`,
+										revision: this.revision,
+										span: {
+											encoding: 'utf16-code-units' as const,
+											end: occurrence.end,
+											start: occurrence.start
+										},
+										storyId
+									}
+								}))
+						)
+					: [];
+			const offset = options.cursor
+				? Number(options.cursor.split(':').at(-1))
+				: 0;
+			const end = Math.min(
+				offset + Math.max(1, options.limit),
+				references.length
+			);
+			return {
+				coverage,
+				nextCursor:
+					end < references.length ? `${this.revision}:test:${end}` : null,
+				passageId,
+				references: references.slice(offset, end),
+				revision: this.revision,
+				storyId,
+				totalCount: references.length
+			};
+		}
+	);
+	queryDefinition = jest.fn(
+		async (_sessionId: string, query: CoreDefinitionQuery) => {
+			if (query.expectedRevision !== this.revision) {
+				return {type: 'stale'} as const;
+			}
+			if (query.symbolKind !== 'passage') {
+				return {type: 'unsupported', symbolKind: query.symbolKind} as const;
+			}
+			const matches = this.story(query.storyId).passages.filter(
+				passage => passage.name === query.name
+			);
+			const locations = matches.slice(0, 50).map(passage => ({
+				passageId: passage.id,
+				passageName: passage.name,
+				provenance: {
+					capabilityRevision: 1,
+					formatName: null,
+					formatVersion: null,
+					providerIdentifier: 'twine-core.passage-index'
+				},
+				resultKey: `twine-core.passage-index:${query.storyId}:${passage.id}`,
+				revision: this.revision,
+				span: {encoding: 'utf16-code-units' as const, end: 0, start: 0},
+				storyId: query.storyId
+			}));
+
+			if (locations.length === 0) return {type: 'not_found'} as const;
+			if (locations.length === 1) {
+				return {location: locations[0], type: 'unique'} as const;
+			}
+			return {
+				locations,
+				totalCount: matches.length,
+				type: 'ambiguous'
+			} as const;
 		}
 	);
 	queryStorySummary = jest.fn(async (_sessionId: string, storyId: string) => {

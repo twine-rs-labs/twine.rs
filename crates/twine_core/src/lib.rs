@@ -24,7 +24,7 @@ use twine_model::{
     GraphLayout, GraphPosition, PROJECT_SCHEMA_VERSION, Passage, PassageId, PassageIndex,
     PassageLayout, Project, Story, StoryId,
 };
-use twine_parse::{LinkParseOptions, parse_standard_links};
+use twine_parse::{LinkParseOptions, parse_standard_link_occurrences, parse_standard_links};
 use web_atoms::{C1_REPLACEMENTS, NAMED_ENTITIES};
 use web_time::Instant;
 
@@ -43,6 +43,8 @@ const MAX_HISTORY_ENTRIES: usize = 200;
 const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_BACKLINK_CACHE_ENTRIES: usize = 16;
 const MAX_BACKLINK_CACHE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BACKLINK_REFERENCE_OCCURRENCES: usize = 100_000;
+const MAX_DEFINITION_AMBIGUOUS_LOCATIONS: usize = 50;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1032,6 +1034,138 @@ pub struct CoreBacklinksPage {
     pub total_count: usize,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreSourceRangeEncoding {
+    #[default]
+    Utf16CodeUnits,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreSourceSpan {
+    pub encoding: CoreSourceRangeEncoding,
+    pub end: usize,
+    pub start: usize,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreSemanticProvenance {
+    pub capability_revision: u32,
+    #[serde(default)]
+    pub format_name: Option<String>,
+    #[serde(default)]
+    pub format_version: Option<String>,
+    pub provider_identifier: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageLocation {
+    pub passage_id: String,
+    pub passage_name: String,
+    pub provenance: CoreSemanticProvenance,
+    pub result_key: String,
+    pub revision: u32,
+    pub span: CoreSourceSpan,
+    pub story_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageReference {
+    pub location: CorePassageLocation,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageReferencesQuery {
+    pub cursor: Option<String>,
+    #[serde(default = "default_backlinks_page_limit")]
+    pub limit: usize,
+}
+
+impl Default for CorePassageReferencesQuery {
+    fn default() -> Self {
+        Self {
+            cursor: None,
+            limit: default_backlinks_page_limit(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CorePassageReferencesPage {
+    pub coverage: CorePassageReferenceCoverage,
+    pub next_cursor: Option<String>,
+    pub passage_id: String,
+    pub references: Vec<CorePassageReference>,
+    pub revision: u32,
+    pub story_id: String,
+    pub total_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CorePassageReferenceCoverage {
+    #[default]
+    StandardLinksOnly,
+    AmbiguousPassageName,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreDefinitionSymbolKind {
+    Passage,
+    Variable,
+    Hook,
+    Macro,
+    Custom,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct CoreDefinitionQuery {
+    pub expected_revision: u32,
+    pub story_id: String,
+    pub symbol_kind: CoreDefinitionSymbolKind,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreDefinitionResult {
+    Unique {
+        location: CorePassageLocation,
+    },
+    Ambiguous {
+        locations: Vec<CorePassageLocation>,
+        total_count: usize,
+    },
+    NotFound,
+    Unsupported {
+        symbol_kind: CoreDefinitionSymbolKind,
+    },
+    Stale,
+}
+
 /// A revision-bound passage body. Persisted text stays session-owned; callers
 /// request only the document they are actively displaying.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
@@ -1909,6 +2043,9 @@ pub enum CoreError {
     #[error("passage not found: {0}")]
     PassageNotFound(String),
 
+    #[error("passage references exceed the supported result capacity: {0}")]
+    PassageReferencesTooLarge(String),
+
     #[error("story not found: {0}")]
     StoryNotFound(String),
 
@@ -2721,9 +2858,19 @@ struct GraphSessionCache {
 #[derive(Clone, Debug)]
 struct BacklinkCacheEntry {
     byte_size: usize,
+    reference_capacity_exceeded: bool,
+    reference_coverage: CorePassageReferenceCoverage,
+    reference_occurrences: Vec<BacklinkOccurrence>,
     revision: u64,
     source_ranks: Vec<usize>,
     target_name: String,
+}
+
+#[derive(Clone, Debug)]
+struct BacklinkOccurrence {
+    source_rank: usize,
+    target_start: usize,
+    target_end: usize,
 }
 
 /// Source-metadata-only Contents records. Building this catalog never parses a
@@ -6690,6 +6837,16 @@ impl ProjectSession {
                     .retain(|(cached_story_id, _)| cached_story_id != story_id);
                 continue;
             }
+            if self.backlink_cache.get(story_id).is_some_and(|entries| {
+                entries
+                    .values()
+                    .any(|entry| entry.reference_capacity_exceeded)
+            }) {
+                self.backlink_cache.remove(story_id);
+                self.backlink_cache_lru
+                    .retain(|(cached_story_id, _)| cached_story_id != story_id);
+                continue;
+            }
 
             let changed_source_ids = passages
                 .iter()
@@ -6723,12 +6880,25 @@ impl ProjectSession {
                     .get(story_id)
                     .expect("backlink cache exists")
                     .iter()
-                    .map(|(id, entry)| (id.clone(), entry.target_name.clone()))
+                    .map(|(id, entry)| {
+                        (
+                            id.clone(),
+                            entry.target_name.clone(),
+                            entry.reference_coverage,
+                        )
+                    })
                     .collect::<Vec<_>>();
                 let target_ids = target_entries
                     .iter()
-                    .map(|(target_id, _)| target_id.clone())
+                    .map(|(target_id, _, _)| target_id.clone())
                     .collect::<BTreeSet<_>>();
+                let reference_targets = target_entries
+                    .iter()
+                    .filter(|(_, _, coverage)| {
+                        *coverage == CorePassageReferenceCoverage::StandardLinksOnly
+                    })
+                    .map(|(target_id, target_name, _)| (target_name.clone(), target_id.clone()))
+                    .collect::<BTreeMap<_, _>>();
                 let changed_sources = changed_source_ids
                     .iter()
                     .filter_map(|source_id| {
@@ -6742,7 +6912,8 @@ impl ProjectSession {
                     .iter()
                     .map(|(rank, _)| *rank)
                     .collect::<BTreeSet<_>>();
-                let mut additions = BTreeMap::<PassageId, Vec<usize>>::new();
+                let mut additions =
+                    BTreeMap::<PassageId, (Vec<usize>, Vec<BacklinkOccurrence>, bool)>::new();
 
                 for (source_rank, source) in changed_sources {
                     for edge in passage_link_edges(story, source) {
@@ -6750,14 +6921,39 @@ impl ProjectSession {
                             continue;
                         };
                         if edge.source != target_id && target_ids.contains(&target_id) {
-                            additions.entry(target_id).or_default().push(source_rank);
+                            additions.entry(target_id).or_default().0.push(source_rank);
                         }
+                    }
+                    for occurrence in parse_standard_link_occurrences(
+                        &source.text,
+                        LinkParseOptions {
+                            internal_only: true,
+                        },
+                    ) {
+                        let Some(target_id) = reference_targets.get(&occurrence.target) else {
+                            continue;
+                        };
+                        let addition = additions.entry(target_id.clone()).or_default();
+                        if addition.2 {
+                            continue;
+                        }
+                        if addition.1.len() >= MAX_BACKLINK_REFERENCE_OCCURRENCES {
+                            addition.1.clear();
+                            addition.1.shrink_to_fit();
+                            addition.2 = true;
+                            continue;
+                        }
+                        addition.1.push(BacklinkOccurrence {
+                            source_rank,
+                            target_start: occurrence.target_range.start,
+                            target_end: occurrence.target_range.end,
+                        });
                     }
                 }
                 (
                     target_entries
                         .into_iter()
-                        .map(|(target_id, target_name)| {
+                        .map(|(target_id, target_name, _)| {
                             let additions = additions.remove(&target_id).unwrap_or_default();
                             (target_id, target_name, additions)
                         })
@@ -6774,14 +6970,37 @@ impl ProjectSession {
                     entry
                         .source_ranks
                         .retain(|source_rank| !changed_ranks.contains(source_rank));
-                    entry.source_ranks.extend(additions);
+                    entry.source_ranks.extend(additions.0);
                     entry.source_ranks.sort_unstable();
-                    entry.byte_size = entry.source_ranks.len() * std::mem::size_of::<usize>();
+                    entry
+                        .reference_occurrences
+                        .retain(|occurrence| !changed_ranks.contains(&occurrence.source_rank));
+                    if additions.2
+                        || entry.reference_occurrences.len() + additions.1.len()
+                            > MAX_BACKLINK_REFERENCE_OCCURRENCES
+                    {
+                        entry.reference_occurrences.clear();
+                        entry.reference_occurrences.shrink_to_fit();
+                        entry.reference_capacity_exceeded = true;
+                    } else {
+                        entry.reference_occurrences.extend(additions.1);
+                        entry.reference_occurrences.sort_by_key(|occurrence| {
+                            (
+                                occurrence.source_rank,
+                                occurrence.target_start,
+                                occurrence.target_end,
+                            )
+                        });
+                    }
+                    entry.byte_size = entry.source_ranks.len() * std::mem::size_of::<usize>()
+                        + entry.reference_occurrences.len()
+                            * std::mem::size_of::<BacklinkOccurrence>();
                     entry.revision = revision;
                     entry.target_name = target_name;
                 }
             }
         }
+        self.prune_backlink_cache();
     }
 
     fn replace_all_text(
@@ -8869,12 +9088,33 @@ impl ProjectSession {
             return Ok(());
         }
 
-        let (target_name, source_ranks, scanned_sources) = {
+        let (
+            target_name,
+            source_ranks,
+            reference_capacity_exceeded,
+            reference_coverage,
+            reference_occurrences,
+            scanned_sources,
+        ) = {
             let story = self.story(story_id.as_ref())?;
             let target = story
                 .passage_by_id(passage_id)
                 .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+            let reference_coverage = if story
+                .passages
+                .iter()
+                .filter(|passage| passage.name == target.name)
+                .take(2)
+                .count()
+                == 1
+            {
+                CorePassageReferenceCoverage::StandardLinksOnly
+            } else {
+                CorePassageReferenceCoverage::AmbiguousPassageName
+            };
             let mut source_ranks = Vec::new();
+            let mut reference_occurrences = Vec::new();
+            let mut reference_capacity_exceeded = false;
 
             for (rank, source) in story.passages.iter().enumerate() {
                 source_ranks.extend(
@@ -8885,10 +9125,43 @@ impl ProjectSession {
                         })
                         .map(|_| rank),
                 );
+                if reference_coverage == CorePassageReferenceCoverage::StandardLinksOnly
+                    && !reference_capacity_exceeded
+                {
+                    for occurrence in parse_standard_link_occurrences(
+                        &source.text,
+                        LinkParseOptions {
+                            internal_only: true,
+                        },
+                    )
+                    .into_iter()
+                    .filter(|occurrence| occurrence.target == target.name)
+                    {
+                        if reference_occurrences.len() >= MAX_BACKLINK_REFERENCE_OCCURRENCES {
+                            reference_occurrences.clear();
+                            reference_occurrences.shrink_to_fit();
+                            reference_capacity_exceeded = true;
+                            break;
+                        }
+                        reference_occurrences.push(BacklinkOccurrence {
+                            source_rank: rank,
+                            target_start: occurrence.target_range.start,
+                            target_end: occurrence.target_range.end,
+                        });
+                    }
+                }
             }
-            (target.name.clone(), source_ranks, story.passage_count())
+            (
+                target.name.clone(),
+                source_ranks,
+                reference_capacity_exceeded,
+                reference_coverage,
+                reference_occurrences,
+                story.passage_count(),
+            )
         };
-        let byte_size = source_ranks.len() * std::mem::size_of::<usize>();
+        let byte_size = source_ranks.len() * std::mem::size_of::<usize>()
+            + reference_occurrences.len() * std::mem::size_of::<BacklinkOccurrence>();
 
         self.backlink_scan_count += 1;
         self.backlink_scanned_source_count += scanned_sources;
@@ -8899,6 +9172,9 @@ impl ProjectSession {
                 passage_id.clone(),
                 BacklinkCacheEntry {
                     byte_size,
+                    reference_capacity_exceeded,
+                    reference_coverage,
+                    reference_occurrences,
                     revision,
                     source_ranks,
                     target_name,
@@ -8962,7 +9238,7 @@ impl ProjectSession {
             .backlink_cache
             .get(&story_id)
             .and_then(|entries| entries.get(&passage_id))
-            .expect("backlink cache was initialized");
+            .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
         let total_count = entry.source_ranks.len();
         let target_name = entry.target_name.clone();
         let (source_ranks, next_cursor) = read_model_page_refs(
@@ -8991,6 +9267,138 @@ impl ProjectSession {
             revision,
             story_id: story_id.as_ref().to_owned(),
             total_count,
+        })
+    }
+
+    pub fn passage_references_page(
+        &mut self,
+        story_id: &str,
+        target_passage_id: &str,
+        query: CorePassageReferencesQuery,
+    ) -> Result<CorePassageReferencesPage, CoreError> {
+        let story_id = StoryId::new(story_id);
+        let passage_id = PassageId::new(target_passage_id);
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        let cursor_fingerprint = read_model_query_fingerprint(&query, |query| query.cursor = None)
+            ^ fingerprint(&(story_id.as_ref(), passage_id.as_ref()));
+        let offset = read_model_page_offset(query.cursor.as_deref(), revision, cursor_fingerprint)?;
+        self.ensure_backlink_cache(&story_id, &passage_id)?;
+        let entry = self
+            .backlink_cache
+            .get(&story_id)
+            .and_then(|entries| entries.get(&passage_id))
+            .ok_or_else(|| CoreError::PassageNotFound(passage_id.as_ref().to_owned()))?;
+        if entry.reference_capacity_exceeded {
+            return Err(CoreError::PassageReferencesTooLarge(
+                passage_id.as_ref().to_owned(),
+            ));
+        }
+        let story = self.story(story_id.as_ref())?;
+        let total_count = entry.reference_occurrences.len();
+        let limit = query.limit.clamp(1, MAX_READ_MODEL_PAGE_LIMIT);
+        let offset = offset.min(total_count);
+        let end = (offset + limit).min(total_count);
+        let next_cursor =
+            (end < total_count).then(|| format!("{revision}:{cursor_fingerprint}:{end}"));
+        let page_occurrences = entry.reference_occurrences[offset..end].to_vec();
+        let references = page_occurrences
+            .iter()
+            .filter_map(|occurrence| {
+                let source = story.passages.get_at(occurrence.source_rank)?;
+                let start = utf16_len(&source.text[..occurrence.target_start]);
+                let end = utf16_len(&source.text[..occurrence.target_end]);
+                Some(CorePassageReference {
+                    location: CorePassageLocation {
+                        passage_id: source.id.as_ref().to_owned(),
+                        passage_name: source.name.clone(),
+                        provenance: standard_links_provenance(),
+                        result_key: format!(
+                            "twine-core.standard-links:{}:{}:{}:{}:{}",
+                            story_id.as_ref(),
+                            passage_id.as_ref(),
+                            source.id.as_ref(),
+                            occurrence.target_start,
+                            occurrence.target_end
+                        ),
+                        revision,
+                        span: CoreSourceSpan {
+                            encoding: CoreSourceRangeEncoding::Utf16CodeUnits,
+                            start,
+                            end,
+                        },
+                        story_id: story_id.as_ref().to_owned(),
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(CorePassageReferencesPage {
+            coverage: entry.reference_coverage,
+            next_cursor,
+            passage_id: passage_id.as_ref().to_owned(),
+            references,
+            revision,
+            story_id: story_id.as_ref().to_owned(),
+            total_count,
+        })
+    }
+
+    pub fn definition(
+        &self,
+        query: CoreDefinitionQuery,
+    ) -> Result<CoreDefinitionResult, CoreError> {
+        let revision = self.revision().min(u32::MAX as u64) as u32;
+        if query.expected_revision != revision {
+            return Ok(CoreDefinitionResult::Stale);
+        }
+        if query.symbol_kind != CoreDefinitionSymbolKind::Passage {
+            return Ok(CoreDefinitionResult::Unsupported {
+                symbol_kind: query.symbol_kind,
+            });
+        }
+        let story = self.story(&query.story_id)?;
+        let mut total_count = 0;
+        let mut locations = Vec::new();
+        for passage in story
+            .passages
+            .iter()
+            .filter(|passage| passage.name == query.name)
+        {
+            total_count += 1;
+            if locations.len() >= MAX_DEFINITION_AMBIGUOUS_LOCATIONS {
+                continue;
+            }
+            locations.push(CorePassageLocation {
+                passage_id: passage.id.as_ref().to_owned(),
+                passage_name: passage.name.clone(),
+                provenance: CoreSemanticProvenance {
+                    capability_revision: 1,
+                    format_name: None,
+                    format_version: None,
+                    provider_identifier: "twine-core.passage-index".into(),
+                },
+                result_key: format!(
+                    "twine-core.passage-index:{}:{}",
+                    story.id.as_ref(),
+                    passage.id.as_ref()
+                ),
+                revision,
+                span: CoreSourceSpan {
+                    encoding: CoreSourceRangeEncoding::Utf16CodeUnits,
+                    start: 0,
+                    end: 0,
+                },
+                story_id: story.id.as_ref().to_owned(),
+            });
+        }
+        Ok(match total_count {
+            0 => CoreDefinitionResult::NotFound,
+            1 => CoreDefinitionResult::Unique {
+                location: locations.into_iter().next().expect("one location"),
+            },
+            _ => CoreDefinitionResult::Ambiguous {
+                locations,
+                total_count,
+            },
         })
     }
 
@@ -10116,6 +10524,15 @@ fn core_passage_link_fact(edge: &LinkEdge) -> CorePassageLinkFact {
             .as_ref()
             .map(|target| target.as_ref().to_owned()),
         target_name: edge.target_name.clone(),
+    }
+}
+
+fn standard_links_provenance() -> CoreSemanticProvenance {
+    CoreSemanticProvenance {
+        capability_revision: 1,
+        format_name: None,
+        format_version: None,
+        provider_identifier: "twine-core.standard-links".into(),
     }
 }
 
@@ -19187,6 +19604,255 @@ mod tests {
             },
         );
         assert_eq!(stale, Err(CoreError::StaleReadModelCursor));
+    }
+
+    #[test]
+    fn passage_references_keep_every_occurrence_utf16_span_and_stale_cursor() {
+        let mut session = session();
+        let source = session
+            .project
+            .stories
+            .iter_mut()
+            .find(|story| story.id.as_ref() == "story-1")
+            .expect("story")
+            .passage_by_id_mut(&PassageId::new("a"))
+            .expect("source");
+        source.text = "😀[[ Next ]]\r\n[[Next]][[Next]] e\u{301} [[Next]] Ж[[Next]]".into();
+
+        let first = session
+            .passage_references_page(
+                "story-1",
+                "b",
+                CorePassageReferencesQuery {
+                    cursor: None,
+                    limit: 2,
+                },
+            )
+            .expect("references");
+        assert_eq!(first.total_count, 5);
+        assert_eq!(
+            first.coverage,
+            CorePassageReferenceCoverage::StandardLinksOnly
+        );
+        assert_eq!(first.references.len(), 2);
+        assert_eq!(first.references[0].location.span.start, 5);
+        assert_eq!(first.references[0].location.span.end, 9);
+        assert_eq!(
+            first.references[0].location.provenance.provider_identifier,
+            "twine-core.standard-links"
+        );
+        assert_ne!(
+            first.references[0].location.result_key,
+            first.references[1].location.result_key
+        );
+        assert!(session.graph_cache.is_empty());
+        assert!(session.read_model_cache.is_empty());
+
+        let repeated = session
+            .passage_references_page(
+                "story-1",
+                "b",
+                CorePassageReferencesQuery {
+                    cursor: None,
+                    limit: 2,
+                },
+            )
+            .expect("repeated first page");
+        assert_eq!(repeated.references, first.references);
+        assert_eq!(repeated.next_cursor, first.next_cursor);
+
+        let second = session
+            .passage_references_page(
+                "story-1",
+                "b",
+                CorePassageReferencesQuery {
+                    cursor: first.next_cursor.clone(),
+                    limit: 2,
+                },
+            )
+            .expect("second page");
+        assert_eq!(second.references.len(), 2);
+        assert_eq!(session.backlink_scan_count, 1);
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "[[Next]]".into(),
+            })
+            .expect("mutation");
+        assert_eq!(
+            session.passage_references_page(
+                "story-1",
+                "b",
+                CorePassageReferencesQuery {
+                    cursor: first.next_cursor,
+                    limit: 2
+                },
+            ),
+            Err(CoreError::StaleReadModelCursor)
+        );
+    }
+
+    #[test]
+    fn passage_references_do_not_guess_between_duplicate_names() {
+        let mut session = session();
+        let story = session
+            .project
+            .stories
+            .iter_mut()
+            .find(|story| story.id.as_ref() == "story-1")
+            .expect("story");
+        story
+            .passage_by_id_mut(&PassageId::new("b"))
+            .expect("next")
+            .text = "[[Next]] [[Next]]".into();
+        story.passages.push(passage("duplicate", "Next", "", 800.0));
+
+        let references = session
+            .passage_references_page("story-1", "b", CorePassageReferencesQuery::default())
+            .expect("references");
+        assert_eq!(
+            references.coverage,
+            CorePassageReferenceCoverage::AmbiguousPassageName
+        );
+        assert_eq!(references.total_count, 0);
+        assert!(references.references.is_empty());
+        let duplicate_references = session
+            .passage_references_page(
+                "story-1",
+                "duplicate",
+                CorePassageReferencesQuery::default(),
+            )
+            .expect("duplicate references");
+        assert_eq!(
+            duplicate_references.coverage,
+            CorePassageReferenceCoverage::AmbiguousPassageName
+        );
+        assert!(duplicate_references.references.is_empty());
+
+        let ambiguous = session
+            .definition(CoreDefinitionQuery {
+                expected_revision: session.revision() as u32,
+                story_id: "story-1".into(),
+                symbol_kind: CoreDefinitionSymbolKind::Passage,
+                name: "Next".into(),
+            })
+            .expect("definition");
+        assert!(
+            matches!(ambiguous, CoreDefinitionResult::Ambiguous { ref locations, total_count: 2 } if locations.len() == 2 && locations[0].passage_id == "b")
+        );
+        assert!(matches!(
+            session
+                .definition(CoreDefinitionQuery {
+                    expected_revision: session.revision() as u32,
+                    story_id: "story-1".into(),
+                    symbol_kind: CoreDefinitionSymbolKind::Passage,
+                    name: "Missing".into(),
+                })
+                .expect("not found"),
+            CoreDefinitionResult::NotFound
+        ));
+        assert_eq!(
+            session
+                .definition(CoreDefinitionQuery {
+                    expected_revision: session.revision() as u32,
+                    story_id: "story-1".into(),
+                    symbol_kind: CoreDefinitionSymbolKind::Variable,
+                    name: "$score".into()
+                })
+                .expect("unsupported"),
+            CoreDefinitionResult::Unsupported {
+                symbol_kind: CoreDefinitionSymbolKind::Variable
+            }
+        );
+        assert_eq!(
+            session
+                .definition(CoreDefinitionQuery {
+                    expected_revision: u32::MAX,
+                    story_id: "story-1".into(),
+                    symbol_kind: CoreDefinitionSymbolKind::Passage,
+                    name: "Missing".into()
+                })
+                .expect("stale"),
+            CoreDefinitionResult::Stale
+        );
+    }
+
+    #[test]
+    fn passage_references_reject_oversized_results_without_poisoning_the_session() {
+        let mut session = session();
+        let occurrence_count =
+            MAX_BACKLINK_CACHE_BYTES / std::mem::size_of::<BacklinkOccurrence>() + 1;
+        let source = session
+            .project
+            .stories
+            .iter_mut()
+            .find(|story| story.id.as_ref() == "story-1")
+            .expect("story")
+            .passage_by_id_mut(&PassageId::new("a"))
+            .expect("source");
+        source.text = "[[Next]]".repeat(occurrence_count);
+
+        assert_eq!(
+            session.passage_references_page("story-1", "b", CorePassageReferencesQuery::default(),),
+            Err(CoreError::PassageReferencesTooLarge("b".into()))
+        );
+        assert_eq!(
+            session
+                .backlinks_page("story-1", "b", CoreBacklinksQuery::default())
+                .expect("ordinary backlinks remain available")
+                .total_count,
+            1
+        );
+
+        session
+            .apply(StoryCommand::UpdatePassageText {
+                story_id: "story-1".into(),
+                passage_id: "a".into(),
+                text: "[[Next]]".into(),
+            })
+            .expect("shrink source");
+        let recovered = session
+            .passage_references_page("story-1", "b", CorePassageReferencesQuery::default())
+            .expect("references recover after the source shrinks");
+        assert_eq!(recovered.total_count, 1);
+    }
+
+    #[test]
+    fn ambiguous_definitions_bound_locations_and_report_the_full_count() {
+        let mut session = session();
+        let story = session
+            .project
+            .stories
+            .iter_mut()
+            .find(|story| story.id.as_ref() == "story-1")
+            .expect("story");
+        for index in 0..MAX_DEFINITION_AMBIGUOUS_LOCATIONS + 10 {
+            story.passages.push(passage(
+                &format!("duplicate-{index}"),
+                "Next",
+                "",
+                800.0 + index as f64,
+            ));
+        }
+
+        let result = session
+            .definition(CoreDefinitionQuery {
+                expected_revision: session.revision() as u32,
+                story_id: "story-1".into(),
+                symbol_kind: CoreDefinitionSymbolKind::Passage,
+                name: "Next".into(),
+            })
+            .expect("definition");
+        assert!(matches!(
+            result,
+            CoreDefinitionResult::Ambiguous {
+                ref locations,
+                total_count
+            } if locations.len() == MAX_DEFINITION_AMBIGUOUS_LOCATIONS
+                && total_count == MAX_DEFINITION_AMBIGUOUS_LOCATIONS + 11
+        ));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import {
+	act,
 	fireEvent,
 	render,
 	screen,
@@ -19,18 +20,26 @@ import {
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {StoriesContext} from '../../../store/stories';
 import {fakePassage, fakeStory, waitForMockPromises} from '../../../test-util';
+import {workbenchBufferCoordinator} from '../../../util/workbench-buffer-coordinator';
 import {StoryWorkspaceShell} from '../story-workspace-shell';
 import {StoryEditMode} from '../workspace-state';
 
 jest.mock('../editor-dock', () => ({
 	EditorDock: ({
 		onClose,
+		onLocalBufferChange,
 		windows
 	}: {
 		onClose?: (spec: any) => void;
+		onLocalBufferChange?: () => void;
 		windows: any[];
 	}) => (
 		<div data-testid="editor-dock">
+			{onLocalBufferChange && (
+				<button onClick={onLocalBufferChange}>
+					simulate-local-buffer-change
+				</button>
+			)}
 			{windows.map(spec => {
 				const id =
 					spec.kind === 'passage' ? `passage:${spec.passageId}` : spec.kind;
@@ -315,6 +324,199 @@ describe('<StoryWorkspaceShell>', () => {
 		fireEvent.click(nextButton);
 		expect(onSelectPassage).toHaveBeenCalledWith(next);
 		expect(screen.getAllByText('Missing').length).toBeGreaterThan(0);
+	});
+
+	it('finds standard passage-link references and reveals the exact source passage', async () => {
+		const {next, onOpenEditorWindow, onSelectPassage, start} =
+			await renderComponent('text', {selectedPassageId: 'next'});
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'routes.storyEdit.workspace.findReferences'
+			})
+		);
+		expect(
+			await screen.findByRole('dialog', {
+				name: 'components.passageReferences.title'
+			})
+		).toBeInTheDocument();
+		expect(
+			await screen.findByRole('heading', {name: start.name})
+		).toBeVisible();
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'components.passageReferences.revealInSource'
+			})
+		);
+		await waitFor(() => expect(onSelectPassage).toHaveBeenCalledWith(start));
+		expect(onOpenEditorWindow).toHaveBeenCalledWith({
+			kind: 'passage',
+			passageId: start.id
+		});
+		expect(
+			screen.queryByRole('dialog', {
+				name: 'components.passageReferences.title'
+			})
+		).not.toBeInTheDocument();
+		expect(next.name).toBe('Next');
+	});
+
+	it('invalidates visible references as soon as a local editor changes', async () => {
+		await renderComponent('text', {selectedPassageId: 'next'});
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'routes.storyEdit.workspace.findReferences'
+			})
+		);
+		expect(
+			await screen.findByRole('dialog', {
+				name: 'components.passageReferences.title'
+			})
+		).toBeInTheDocument();
+
+		fireEvent.click(
+			screen.getByRole('button', {name: 'simulate-local-buffer-change'})
+		);
+		expect(
+			screen.queryByRole('dialog', {
+				name: 'components.passageReferences.title'
+			})
+		).not.toBeInTheDocument();
+	});
+
+	it('does not reveal a reference while an editor is composing', async () => {
+		const {onSelectPassage, story} = await renderComponent('text', {
+			selectedPassageId: 'next'
+		});
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: 'routes.storyEdit.workspace.findReferences'
+			})
+		);
+		expect(
+			await screen.findByRole('button', {
+				name: 'components.passageReferences.revealInSource'
+			})
+		).toBeInTheDocument();
+		const unregister = workbenchBufferCoordinator.register({
+			bufferId: 'composing-reveal-source',
+			flush: jest.fn(),
+			hasPendingChanges: () => true,
+			isComposing: () => true,
+			revision: () => 1,
+			storyId: story.id
+		});
+
+		try {
+			fireEvent.click(
+				screen.getByRole('button', {
+					name: 'components.passageReferences.revealInSource'
+				})
+			);
+			expect(
+				await screen.findByText('components.passageReferences.revealFailed')
+			).toBeInTheDocument();
+			expect(onSelectPassage).not.toHaveBeenCalled();
+		} finally {
+			unregister();
+		}
+	});
+
+	it('goes to a passage definition only when the exact name is unique', async () => {
+		const {next, onSelectPassage} = await renderComponent('text');
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /Next.*routes\.storyEdit\.workspace\.goToDefinition/
+			})
+		);
+		await waitFor(() => expect(onSelectPassage).toHaveBeenCalledWith(next));
+	});
+
+	it('reports ambiguous definitions without selecting a passage', async () => {
+		const {onSelectPassage} = await renderComponent('text', undefined, {
+			configureStory: story => {
+				story.passages.push(
+					fakePassage({
+						id: 'next-duplicate',
+						name: 'Next',
+						story: story.id,
+						text: ''
+					})
+				);
+			}
+		});
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /Next.*routes\.storyEdit\.workspace\.goToDefinition/
+			})
+		);
+		expect(
+			await screen.findByText('routes.storyEdit.workspace.definitionAmbiguous')
+		).toBeInTheDocument();
+		expect(onSelectPassage).not.toHaveBeenCalled();
+	});
+
+	it('drops a late definition result after the workspace unmounts', async () => {
+		let resolveDefinition!: (value: {
+			location: {
+				passageId: string;
+				passageName: string;
+				provenance: {
+					capabilityRevision: number;
+					formatName: null;
+					formatVersion: null;
+					providerIdentifier: string;
+				};
+				resultKey: string;
+				revision: number;
+				span: {encoding: 'utf16-code-units'; end: number; start: number};
+				storyId: string;
+			};
+			type: 'unique';
+		}) => void;
+		const queryDefinition = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDefinitionAsync')
+			.mockImplementation(
+				() =>
+					new Promise(resolve => {
+						resolveDefinition = resolve;
+					})
+			);
+		const {next, onSelectPassage, story, unmount} =
+			await renderComponent('text');
+
+		fireEvent.click(
+			screen.getByRole('button', {
+				name: /Next.*routes\.storyEdit\.workspace\.goToDefinition/
+			})
+		);
+		await waitFor(() => expect(queryDefinition).toHaveBeenCalledTimes(1));
+		unmount();
+		await act(async () => {
+			resolveDefinition({
+				location: {
+					passageId: next.id,
+					passageName: next.name,
+					provenance: {
+						capabilityRevision: 1,
+						formatName: null,
+						formatVersion: null,
+						providerIdentifier: 'twine-core.passage-index'
+					},
+					resultKey: 'late-definition',
+					revision: 1,
+					span: {encoding: 'utf16-code-units', end: 0, start: 0},
+					storyId: story.id
+				},
+				type: 'unique'
+			});
+		});
+
+		expect(onSelectPassage).not.toHaveBeenCalled();
 	});
 
 	it('renders named workbench drawer panels with the bound session context', async () => {
@@ -1052,15 +1254,15 @@ describe('<StoryWorkspaceShell>', () => {
 
 		await waitFor(() =>
 			expect(
-				screen.getByRole('button', {
+				screen.getAllByRole('button', {
 					name: 'routes.storyEdit.workspace.revealInGraph'
 				})
-			).toBeInTheDocument()
+			).toHaveLength(2)
 		);
 		fireEvent.click(
-			screen.getByRole('button', {
+			screen.getAllByRole('button', {
 				name: 'routes.storyEdit.workspace.revealInGraph'
-			})
+			})[1]
 		);
 
 		expect(onRevealPassageInGraph).toHaveBeenCalledWith(start);

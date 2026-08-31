@@ -26,6 +26,7 @@ export const twinewasmprojectsession_performance_diagnostics: (a: number) => [nu
 export const twinewasmprojectsession_query_assets_page: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_backlinks_page: (a: number, b: number, c: number, d: number, e: number, f: any) => [number, number, number];
 export const twinewasmprojectsession_query_contents_page: (a: number, b: number, c: number, d: any) => [number, number, number];
+export const twinewasmprojectsession_query_definition: (a: number, b: any) => [number, number, number];
 export const twinewasmprojectsession_query_diagnostics_page: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_diagnostics_summary: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_document_page: (a: number, b: number, c: number, d: any) => [number, number, number];
@@ -33,6 +34,7 @@ export const twinewasmprojectsession_query_graph_projection: (a: number, b: numb
 export const twinewasmprojectsession_query_passage_document: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const twinewasmprojectsession_query_passage_facts: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const twinewasmprojectsession_query_passage_local_facts: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+export const twinewasmprojectsession_query_passage_references_page: (a: number, b: number, c: number, d: number, e: number, f: any) => [number, number, number];
 export const twinewasmprojectsession_query_refactor_plan_detail: (a: number, b: any) => [number, number, number];
 export const twinewasmprojectsession_query_search_page: (a: number, b: number, c: number, d: any) => [number, number, number];
 export const twinewasmprojectsession_query_source_document: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];

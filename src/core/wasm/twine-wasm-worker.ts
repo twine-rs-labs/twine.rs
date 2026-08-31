@@ -617,6 +617,24 @@ async function handleRequest(
 				);
 				break;
 
+			case 'queryPassageReferencesPage':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_passage_references_page(
+					request.storyId,
+					request.passageId,
+					request.options
+				);
+				break;
+
+			case 'queryDefinition':
+				result = ensureSession(
+					request.sessionId,
+					request.revision
+				).session.query_definition(request.query);
+				break;
+
 			case 'queryPassageDocument':
 				result = ensureSession(
 					request.sessionId,

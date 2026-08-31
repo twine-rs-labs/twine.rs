@@ -15,7 +15,7 @@ export const performanceFixtureVariants = {
 
 // Bump whenever the fixture's measured ownership contract changes. Reports
 // produced from an earlier fixture are not comparable to this one.
-export const performanceFixtureMeasurementContractVersion = 2;
+export const performanceFixtureMeasurementContractVersion = 3;
 
 export const chapbookFixtureVariableLineCount = 4096;
 

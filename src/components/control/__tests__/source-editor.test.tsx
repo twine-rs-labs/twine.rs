@@ -73,6 +73,27 @@ describe('<SourceEditor>', () => {
 		);
 	});
 
+	it('reveals an exact half-open source range', async () => {
+		const editor = React.createRef<SourceEditorHandle>();
+
+		render(
+			<SourceEditor
+				id="range-editor"
+				label="Reference source"
+				onChange={jest.fn()}
+				ref={editor}
+				revealPosition={{end: 9, key: 1, position: 3}}
+				value="0123456789"
+			/>
+		);
+
+		await waitFor(() =>
+			expect(editor.current?.getSnapshot().selections).toEqual([
+				{anchor: 3, head: 9}
+			])
+		);
+	});
+
 	it.each([
 		{
 			initialDocument: '[[Hal',

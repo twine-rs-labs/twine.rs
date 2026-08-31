@@ -145,9 +145,19 @@ The complete local 10k and 50k benchmark runs verify:
   speculatively. Find/Replace now uses the same immutable plan boundary across
   passage names, passage text, Story JavaScript, and Story Stylesheet sources,
   with paged details, compact exclusions, grouped name/link rewrites, stale
-  rejection, and one atomic undo transaction. General definition/reference
-  navigation is incomplete, Fix All Safe is not one atomic batch, and authoring
-  commands are not exposed consistently through the palette.
+  rejection, and one atomic undo transaction. Find References now pages every
+  detected standard passage-link occurrence with revision-pinned UTF-16 source
+  spans, stable result keys, explicit coverage provenance, and reveal-in-source
+  or reveal-in-graph actions. Queries and reveals cross the IME-aware editor
+  mutation barrier, and duplicate passage names produce explicit ambiguous
+  coverage rather than guessed references. Go to Definition selects a passage
+  only when its exact name has one definition; duplicate names, missing names,
+  unsupported symbol kinds, and stale revisions return typed, bounded,
+  non-guessing outcomes. The 10k/50k refactor gates now directly probe paged
+  references, cache reuse, exact definitions, response bounds, and worker-only
+  ownership.
+  Format-specific definition/reference providers, Fix All Safe as one atomic
+  batch, and consistent command-palette exposure remain incomplete.
 - Some inherited compatibility UI remains outside the primary workbench.
 - Native Harlowe editing is intentionally exact-version: bundled Harlowe 1.2.4
   and 2.1.0, user-added Harlowe builds, and future Harlowe dialects use the

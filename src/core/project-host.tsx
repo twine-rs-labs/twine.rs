@@ -5,6 +5,8 @@ import type {CoreAssetsQuery} from './bindings/CoreAssetsQuery';
 import {mergeKnownAssetInventory} from './asset-inventory';
 import type {CoreBacklinksPage} from './bindings/CoreBacklinksPage';
 import type {CoreBacklinksQuery} from './bindings/CoreBacklinksQuery';
+import type {CoreDefinitionQuery} from './bindings/CoreDefinitionQuery';
+import type {CoreDefinitionResult} from './bindings/CoreDefinitionResult';
 import type {CoreContentsPage} from './bindings/CoreContentsPage';
 import type {CoreContentsQuery} from './bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from './bindings/CoreDiagnosticsPage';
@@ -19,6 +21,8 @@ import type {CoreGraphProjection} from './bindings/CoreGraphProjection';
 import type {CorePassageFacts} from './bindings/CorePassageFacts';
 import type {CorePassageLocalFacts} from './bindings/CorePassageLocalFacts';
 import type {CorePassageDocument} from './bindings/CorePassageDocument';
+import type {CorePassageReferencesPage} from './bindings/CorePassageReferencesPage';
+import type {CorePassageReferencesQuery} from './bindings/CorePassageReferencesQuery';
 import type {CoreSourceDocument} from './bindings/CoreSourceDocument';
 import type {CoreSearchPage} from './bindings/CoreSearchPage';
 import type {CoreSearchQuery} from './bindings/CoreSearchQuery';
@@ -423,6 +427,14 @@ export interface CoreProjectHost {
 		passageId: string,
 		options?: Partial<CoreBacklinksQuery>
 	): Promise<CoreBacklinksPage>;
+	queryPassageReferencesPageAsync(
+		storyId: string,
+		passageId: string,
+		options?: Partial<CorePassageReferencesQuery>
+	): Promise<CorePassageReferencesPage>;
+	queryDefinitionAsync(
+		query: CoreDefinitionQuery
+	): Promise<CoreDefinitionResult>;
 	queryPassageDocumentAsync(
 		storyId: string,
 		passageId: string
@@ -549,6 +561,8 @@ type CoreProjectSessionClient = Pick<
 	| 'queryDocumentPage'
 	| 'queryAssetsPage'
 	| 'queryBacklinksPage'
+	| 'queryPassageReferencesPage'
+	| 'queryDefinition'
 	| 'queryPassageFacts'
 	| 'queryPassageLocalFacts'
 	| 'queryPassageDocument'
@@ -609,6 +623,10 @@ const defaultAssetsQuery: CoreAssetsQuery = {
 	query: null
 };
 const defaultBacklinksQuery: CoreBacklinksQuery = {cursor: null, limit: 8};
+const defaultPassageReferencesQuery: CorePassageReferencesQuery = {
+	cursor: null,
+	limit: 50
+};
 const defaultSearchQuery: CoreSearchQuery = {
 	cursor: null,
 	fuzzy: false,
@@ -3516,6 +3534,34 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		} satisfies CoreBacklinksPage;
 	}
 
+	async queryPassageReferencesPageAsync(
+		storyId: string,
+		passageId: string,
+		options: Partial<CorePassageReferencesQuery> = {}
+	) {
+		if (this.wasmClient.enabled) {
+			const revision = await this.ensureWasmProjectSession();
+			return this.wasmClient.queryPassageReferencesPage(
+				this.sessionId,
+				storyId,
+				passageId,
+				{...defaultPassageReferencesQuery, ...options},
+				revision
+			);
+		}
+
+		throw new Error('Rust semantic navigation is unavailable.');
+	}
+
+	async queryDefinitionAsync(query: CoreDefinitionQuery) {
+		if (this.wasmClient.enabled) {
+			const revision = await this.ensureWasmProjectSession();
+			return this.wasmClient.queryDefinition(this.sessionId, query, revision);
+		}
+
+		throw new Error('Rust semantic navigation is unavailable.');
+	}
+
 	async queryPassageDocumentAsync(storyId: string, passageId: string) {
 		const revision = await this.ensureWasmProjectSession();
 		return this.wasmClient.queryPassageDocument(
@@ -5322,6 +5368,28 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		);
 	}
 
+	queryPassageReferencesPageAsync(
+		storyId: string,
+		passageId: string,
+		options?: Partial<CorePassageReferencesQuery>
+	) {
+		const host = this.hostForStory(storyId);
+		if (!host) {
+			return Promise.reject(new Error(`No core session for story ${storyId}.`));
+		}
+		return host.queryPassageReferencesPageAsync(storyId, passageId, options);
+	}
+
+	queryDefinitionAsync(query: CoreDefinitionQuery) {
+		const host = this.hostForStory(query.storyId);
+		if (!host) {
+			return Promise.reject(
+				new Error(`No core session for story ${query.storyId}.`)
+			);
+		}
+		return host.queryDefinitionAsync(query);
+	}
+
 	queryPassageDocumentAsync(storyId: string, passageId: string) {
 		const host = this.hostForStory(storyId);
 		if (!host) {
@@ -5817,6 +5885,18 @@ export function coreProjectHostPerformanceHarness() {
 			storyId: string,
 			options?: Partial<CoreDiagnosticsSummaryQuery>
 		) => performanceHarnessHost!.queryDiagnosticsSummaryAsync(storyId, options),
+		queryDefinitionAsync: (query: CoreDefinitionQuery) =>
+			performanceHarnessHost!.queryDefinitionAsync(query),
+		queryPassageReferencesPageAsync: (
+			storyId: string,
+			passageId: string,
+			options?: Partial<CorePassageReferencesQuery>
+		) =>
+			performanceHarnessHost!.queryPassageReferencesPageAsync(
+				storyId,
+				passageId,
+				options
+			),
 		queryRefactorPlanDetailAsync: (
 			storyId: string,
 			cursor: RefactorPlanCursor
@@ -5865,6 +5945,8 @@ const coreProjectHostFacadeMethods: ReadonlyArray<keyof CoreProjectHost> = [
 	'planProjectReplace',
 	'queryAssetsPageAsync',
 	'queryBacklinksPageAsync',
+	'queryPassageReferencesPageAsync',
+	'queryDefinitionAsync',
 	'queryContentsPageAsync',
 	'queryDiagnosticsPageAsync',
 	'queryDiagnosticsSummaryAsync',
@@ -5992,6 +6074,13 @@ export function useCoreProjectSession(storyId: string | undefined) {
 					host.queryPassageLocalFactsAsync(queryStoryId, passageId),
 				queryBacklinksPageAsync: (queryStoryId, passageId, options) =>
 					host.queryBacklinksPageAsync(queryStoryId, passageId, options),
+				queryPassageReferencesPageAsync: (queryStoryId, passageId, options) =>
+					host.queryPassageReferencesPageAsync(
+						queryStoryId,
+						passageId,
+						options
+					),
+				queryDefinitionAsync: query => host.queryDefinitionAsync(query),
 				queryPassageDocumentAsync: (queryStoryId, passageId) =>
 					host.queryPassageDocumentAsync(queryStoryId, passageId),
 				querySourceDocumentAsync: (queryStoryId, kind) =>

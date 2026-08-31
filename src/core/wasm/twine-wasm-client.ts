@@ -3,6 +3,8 @@ import type {CoreAssetsPage} from '../bindings/CoreAssetsPage';
 import type {CoreAssetsQuery} from '../bindings/CoreAssetsQuery';
 import type {CoreBacklinksPage} from '../bindings/CoreBacklinksPage';
 import type {CoreBacklinksQuery} from '../bindings/CoreBacklinksQuery';
+import type {CoreDefinitionQuery} from '../bindings/CoreDefinitionQuery';
+import type {CoreDefinitionResult} from '../bindings/CoreDefinitionResult';
 import type {CoreContentsPage} from '../bindings/CoreContentsPage';
 import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
@@ -18,6 +20,8 @@ import type {CoreGraphProjectionOptions} from '../bindings/CoreGraphProjectionOp
 import type {CorePassageFacts} from '../bindings/CorePassageFacts';
 import type {CorePassageLocalFacts} from '../bindings/CorePassageLocalFacts';
 import type {CorePassageDocument} from '../bindings/CorePassageDocument';
+import type {CorePassageReferencesPage} from '../bindings/CorePassageReferencesPage';
+import type {CorePassageReferencesQuery} from '../bindings/CorePassageReferencesQuery';
 import type {CoreSourceDocument} from '../bindings/CoreSourceDocument';
 import type {CoreSearchPage} from '../bindings/CoreSearchPage';
 import type {CoreSearchQuery} from '../bindings/CoreSearchQuery';
@@ -100,6 +104,8 @@ type ReadModelWorkerRequest = Extract<
 			| 'queryPassageFacts'
 			| 'queryPassageLocalFacts'
 			| 'queryBacklinksPage'
+			| 'queryPassageReferencesPage'
+			| 'queryDefinition'
 			| 'queryPassageDocument'
 			| 'querySourceDocument'
 			| 'querySearchPage'
@@ -1089,6 +1095,49 @@ export class WasmCoreWorkerClient {
 				revision,
 				sessionId,
 				storyId
+			}
+		);
+	}
+
+	async queryPassageReferencesPage(
+		sessionId: string,
+		storyId: string,
+		passageId: string,
+		options: CorePassageReferencesQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CorePassageReferencesPage>(
+			sessionId,
+			storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'queryPassageReferencesPage',
+				options,
+				passageId,
+				revision,
+				sessionId,
+				storyId
+			}
+		);
+	}
+
+	async queryDefinition(
+		sessionId: string,
+		query: CoreDefinitionQuery,
+		revision: number
+	) {
+		return this.queryReadModel<CoreDefinitionResult>(
+			sessionId,
+			query.storyId,
+			revision,
+			{
+				id: 0,
+				kind: 'queryDefinition',
+				query,
+				revision,
+				sessionId,
+				storyId: query.storyId
 			}
 		);
 	}

@@ -6,6 +6,8 @@ import type {CoreAssetsPage} from '../bindings/CoreAssetsPage';
 import type {CoreAssetsQuery} from '../bindings/CoreAssetsQuery';
 import type {CoreBacklinksPage} from '../bindings/CoreBacklinksPage';
 import type {CoreBacklinksQuery} from '../bindings/CoreBacklinksQuery';
+import type {CoreDefinitionQuery} from '../bindings/CoreDefinitionQuery';
+import type {CoreDefinitionResult} from '../bindings/CoreDefinitionResult';
 import type {CoreContentsPage} from '../bindings/CoreContentsPage';
 import type {CoreContentsQuery} from '../bindings/CoreContentsQuery';
 import type {CoreDiagnosticsPage} from '../bindings/CoreDiagnosticsPage';
@@ -17,6 +19,8 @@ import type {CoreDocumentQuery} from '../bindings/CoreDocumentQuery';
 import type {CorePassageFacts} from '../bindings/CorePassageFacts';
 import type {CorePassageLocalFacts} from '../bindings/CorePassageLocalFacts';
 import type {CorePassageDocument} from '../bindings/CorePassageDocument';
+import type {CorePassageReferencesPage} from '../bindings/CorePassageReferencesPage';
+import type {CorePassageReferencesQuery} from '../bindings/CorePassageReferencesQuery';
 import type {CoreSourceDocument} from '../bindings/CoreSourceDocument';
 import type {CoreSearchPage} from '../bindings/CoreSearchPage';
 import type {CoreSearchQuery} from '../bindings/CoreSearchQuery';
@@ -337,6 +341,23 @@ export type WasmWorkerRequest =
 	  }
 	| {
 			id: number;
+			kind: 'queryPassageReferencesPage';
+			options: CorePassageReferencesQuery;
+			passageId: string;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
+			kind: 'queryDefinition';
+			query: CoreDefinitionQuery;
+			revision: number;
+			sessionId: string;
+			storyId: string;
+	  }
+	| {
+			id: number;
 			kind: 'queryPassageDocument';
 			passageId: string;
 			revision: number;
@@ -607,6 +628,20 @@ export type WasmWorkerSuccess =
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: CoreBacklinksPage;
+	  }
+	| {
+			id: number;
+			kind: 'queryPassageReferencesPage';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CorePassageReferencesPage;
+	  }
+	| {
+			id: number;
+			kind: 'queryDefinition';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: CoreDefinitionResult;
 	  }
 	| {
 			id: number;

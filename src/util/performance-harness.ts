@@ -6,6 +6,10 @@ import {
 } from '../core';
 import type {PlanProjectReplaceRequest} from '../core/bindings/PlanProjectReplaceRequest';
 import type {PlanProjectReplaceResult} from '../core/bindings/PlanProjectReplaceResult';
+import type {CoreDefinitionQuery} from '../core/bindings/CoreDefinitionQuery';
+import type {CoreDefinitionResult} from '../core/bindings/CoreDefinitionResult';
+import type {CorePassageReferencesPage} from '../core/bindings/CorePassageReferencesPage';
+import type {CorePassageReferencesQuery} from '../core/bindings/CorePassageReferencesQuery';
 import type {RefactorPlanApplyRequest} from '../core/bindings/RefactorPlanApplyRequest';
 import type {RefactorPlanApplyResult} from '../core/bindings/RefactorPlanApplyResult';
 import type {RefactorPlanCursor} from '../core/bindings/RefactorPlanCursor';
@@ -61,6 +65,11 @@ export interface RefactorPlanOperation {
 	terminalCheckpoint: Promise<void>;
 }
 
+interface PerformanceQueryResult<T> {
+	metric: ReturnType<typeof coreBridgeMetricsSnapshot>[number];
+	result: T;
+}
+
 export interface TwinePerformanceHarness {
 	checkpoint(name: string): Promise<void>;
 	collectRetainedMemory(name?: string): Promise<void>;
@@ -74,6 +83,16 @@ export interface TwinePerformanceHarness {
 	>;
 	reset(): Promise<void>;
 	selectEditorText(id: string, query: string): boolean;
+	queries: {
+		definition(
+			query: CoreDefinitionQuery
+		): Promise<PerformanceQueryResult<CoreDefinitionResult>>;
+		passageReferences(
+			storyId: string,
+			passageId: string,
+			options: Partial<CorePassageReferencesQuery>
+		): Promise<PerformanceQueryResult<CorePassageReferencesPage>>;
+	};
 	refactor: {
 		apply(
 			storyId: string,
@@ -165,6 +184,26 @@ function rendererCheckpointSnapshot() {
 	};
 }
 
+async function measuredCoreQuery<T>(
+	kind: 'queryDefinition' | 'queryPassageReferencesPage',
+	query: () => Promise<T>
+): Promise<PerformanceQueryResult<T>> {
+	const previous = coreBridgeMetricsSnapshot()
+		.filter(metric => metric.kind === kind)
+		.at(-1);
+	const result = await query();
+	const metric = coreBridgeMetricsSnapshot()
+		.filter(candidate => candidate.kind === kind)
+		.at(-1);
+
+	if (!metric || metric === previous) {
+		throw new Error(
+			`Performance query ${kind} did not cross the worker bridge.`
+		);
+	}
+	return {metric, result};
+}
+
 async function rendererHeapAfterGarbageCollection() {
 	const collect = (globalThis as typeof globalThis & {gc?: () => void}).gc;
 
@@ -196,6 +235,20 @@ export function installPerformanceHarness() {
 	let nativeRefactorPendingChunkObservations = 0;
 
 	harnessWindow.twinePerformance = {
+		queries: {
+			definition: query =>
+				measuredCoreQuery('queryDefinition', () =>
+					coreProjectHostPerformanceHarness().queryDefinitionAsync(query)
+				),
+			passageReferences: (storyId, passageId, options) =>
+				measuredCoreQuery('queryPassageReferencesPage', () =>
+					coreProjectHostPerformanceHarness().queryPassageReferencesPageAsync(
+						storyId,
+						passageId,
+						options
+					)
+				)
+		},
 		worker: {
 			diagnostics: storyId =>
 				coreProjectHostPerformanceHarness().queryDiagnosticsSummaryAsync(

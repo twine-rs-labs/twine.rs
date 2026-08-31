@@ -298,7 +298,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		requestId: undefined as string | undefined
 	});
 	const [revealRequests, setRevealRequests] = React.useState(
-		() => new Map<string, {key: number; position?: number}>()
+		() => new Map<string, {end?: number; key: number; position?: number}>()
 	);
 	const [searchRequests, setSearchRequests] = React.useState(
 		() => new Map<string, {key: number; query?: string}>()
@@ -766,6 +766,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 					)
 				: undefined;
 		const offsetValue = search.get('offset');
+		const endValue = search.get('end');
 		const lineValue = search.get('line');
 		const revealPosition = resolvedTarget
 			? resolvedTarget.kind === 'passage'
@@ -777,6 +778,10 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 				? hasStoryEditReveal(revealRequest)
 					? uniqueStoryPassage(storyRef.current, resolvedTarget.passageId)
 					: undefined
+				: undefined;
+		const revealEnd =
+			resolvedTarget?.kind === 'passage'
+				? parsedInteger(endValue, 0)
 				: undefined;
 
 		const apply = async () => {
@@ -1152,6 +1157,10 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 							const previous = current.get(windowId);
 
 							next.set(windowId, {
+								end:
+									revealEnd !== undefined && revealEnd >= revealPosition
+										? revealEnd
+										: undefined,
 								key: (previous?.key ?? 0) + 1,
 								position: revealPosition
 							});

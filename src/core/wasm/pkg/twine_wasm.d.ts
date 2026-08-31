@@ -34,6 +34,7 @@ export class TwineWasmProjectSession {
     query_assets_page(story_id: string, query: any): any;
     query_backlinks_page(story_id: string, passage_id: string, query: any): any;
     query_contents_page(story_id: string, query: any): any;
+    query_definition(query: any): any;
     query_diagnostics_page(story_id: string, query: any): any;
     query_diagnostics_summary(story_id: string, query: any): any;
     query_document_page(story_id: string, query: any): any;
@@ -41,6 +42,7 @@ export class TwineWasmProjectSession {
     query_passage_document(story_id: string, passage_id: string): any;
     query_passage_facts(story_id: string, passage_id: string): any;
     query_passage_local_facts(story_id: string, passage_id: string): any;
+    query_passage_references_page(story_id: string, passage_id: string, query: any): any;
     query_refactor_plan_detail(cursor: any): any;
     query_search_page(story_id: string, query: any): any;
     query_source_document(story_id: string, kind: string): any;
@@ -90,6 +92,7 @@ export interface InitOutput {
     readonly twinewasmprojectsession_query_assets_page: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_backlinks_page: (a: number, b: number, c: number, d: number, e: number, f: any) => [number, number, number];
     readonly twinewasmprojectsession_query_contents_page: (a: number, b: number, c: number, d: any) => [number, number, number];
+    readonly twinewasmprojectsession_query_definition: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_query_diagnostics_page: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_diagnostics_summary: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_document_page: (a: number, b: number, c: number, d: any) => [number, number, number];
@@ -97,6 +100,7 @@ export interface InitOutput {
     readonly twinewasmprojectsession_query_passage_document: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly twinewasmprojectsession_query_passage_facts: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly twinewasmprojectsession_query_passage_local_facts: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+    readonly twinewasmprojectsession_query_passage_references_page: (a: number, b: number, c: number, d: number, e: number, f: any) => [number, number, number];
     readonly twinewasmprojectsession_query_refactor_plan_detail: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_query_search_page: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_source_document: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];

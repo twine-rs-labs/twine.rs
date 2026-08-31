@@ -29,6 +29,8 @@ export interface CoreBridgeMetric {
 		| 'queryPassageFacts'
 		| 'queryPassageLocalFacts'
 		| 'queryBacklinksPage'
+		| 'queryPassageReferencesPage'
+		| 'queryDefinition'
 		| 'queryPassageDocument'
 		| 'queryRefactorPlanDetail'
 		| 'querySourceDocument'

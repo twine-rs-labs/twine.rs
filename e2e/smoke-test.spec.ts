@@ -314,6 +314,43 @@ test('reviews a passage rename before applying its standard-link edits atomicall
 	).toBeFocused();
 });
 
+test('finds passage references and navigates only exact definitions', async ({
+	page
+}) => {
+	await createProject(page, 'Passage navigation smoke');
+	await setPassageText(page, '😀 [[ Next ]] and [[Again->Next]].');
+	await selectPassage(page, 'Next');
+
+	await page.getByRole('button', {name: 'Find References'}).click();
+	const references = page.getByRole('dialog', {name: 'References to Next'});
+	await expect(references).toBeVisible();
+	await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(2);
+	await expect(
+		references.getByText(
+			'Results cover standard Twine passage links. Format-specific references are not included unless an exact provider reports them.'
+		)
+	).toBeVisible();
+	await references
+		.getByRole('button', {name: 'Reveal in Source'})
+		.first()
+		.click();
+	await expect(references).toHaveCount(0);
+	await expect(
+		page.getByRole('region', {name: 'Start', exact: true})
+	).toBeVisible();
+	await expect(page).toHaveURL(/offset=\d+&end=\d+/);
+
+	const definition = page
+		.getByRole('button')
+		.filter({hasText: 'Next'})
+		.filter({hasText: 'Go to Definition'});
+	await expect(definition).toHaveCount(1);
+	await definition.click();
+	await expect(
+		page.getByRole('region', {name: 'Next', exact: true})
+	).toBeVisible();
+});
+
 test('reviews story-wide replacement, stale-retries, and applies compact exclusions atomically', async ({
 	page
 }) => {

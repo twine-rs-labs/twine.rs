@@ -46,10 +46,11 @@ export interface EditorWindowProps {
 	onDragEnd?: (event: React.DragEvent<HTMLDivElement>) => void;
 	onDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
 	onFocus: () => void;
+	onLocalBufferChange?: () => void;
 	onRevealPassageInGraph?: (passage: Passage) => void;
 	onSelectPassage?: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
-	revealRequest?: {key: number; position?: number};
+	revealRequest?: {end?: number; key: number; position?: number};
 	searchRequest?: {key: number; query?: string};
 	selection?: WorkbenchSelection;
 	spec: EditorWindowSpec;
@@ -230,6 +231,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		onDragEnd,
 		onDragStart,
 		onFocus,
+		onLocalBufferChange,
 		onRevealPassageInGraph,
 		onSelectPassage,
 		onTestPassage,
@@ -581,6 +583,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 
 			currentLocalText.current = text;
 			editRevision.current++;
+			onLocalBufferChange?.();
 			setLocalText(text);
 			expectedText.current = text;
 			pendingText.current = text;
@@ -595,7 +598,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 				void commitBufferedText(text).catch(() => undefined);
 			}, 300);
 		},
-		[commitBufferedText, passage, spec.kind]
+		[commitBufferedText, onLocalBufferChange, passage, spec.kind]
 	);
 
 	const handleClose = React.useCallback(async () => {
@@ -1190,6 +1193,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 							revealRequest?.position !== undefined
 								? {
 										key: revealRequest.key,
+										end: revealRequest.end,
 										position: revealRequest.position
 									}
 								: undefined

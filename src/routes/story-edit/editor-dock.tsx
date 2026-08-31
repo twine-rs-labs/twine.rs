@@ -21,12 +21,13 @@ export interface EditorDockProps {
 	onChangeLayout: (layout: EditorDockLayout) => void;
 	onClose: (spec: EditorWindowSpec) => void;
 	onFocus: (id: string) => void;
+	onLocalBufferChange?: () => void;
 	onOpen: (spec: EditorWindowSpec) => void;
 	onReorder: (from: number, to: number) => void;
 	onRevealPassageInGraph?: (passage: Passage) => void;
 	onSelectPassage?: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
-	revealRequests?: Map<string, {key: number; position?: number}>;
+	revealRequests?: Map<string, {end?: number; key: number; position?: number}>;
 	searchRequests?: Map<string, {key: number; query?: string}>;
 	selectedPassageId?: string;
 	selections: Map<string, WorkbenchSelection>;
@@ -68,6 +69,7 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 		onChangeLayout,
 		onClose,
 		onFocus,
+		onLocalBufferChange,
 		onOpen,
 		onReorder,
 		onRevealPassageInGraph,
@@ -249,6 +251,7 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 										setOverIndex(undefined);
 									}}
 									onFocus={() => onFocus(id)}
+									onLocalBufferChange={onLocalBufferChange}
 									onRevealPassageInGraph={onRevealPassageInGraph}
 									onSelectPassage={onSelectPassage}
 									onTestPassage={onTestPassage}

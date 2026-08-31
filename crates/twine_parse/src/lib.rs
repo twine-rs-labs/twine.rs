@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    ops::Range,
+};
 use thiserror::Error;
 use twine_model::{Passage, PassageId, Story, StoryId};
 
@@ -18,6 +21,14 @@ pub struct ParsedLink {
     pub target: String,
 }
 
+/// One standard Twine link occurrence, including the precise byte span of its
+/// trimmed destination text in the source document.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ParsedLinkOccurrence {
+    pub target: String,
+    pub target_range: Range<usize>,
+}
+
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("invalid Twee header: {0}")]
@@ -28,9 +39,28 @@ pub enum ParseError {
 }
 
 pub fn parse_standard_links(text: &str, options: LinkParseOptions) -> Vec<ParsedLink> {
-    let mut cursor = 0;
     let mut links = Vec::new();
     let mut seen = HashSet::new();
+
+    for occurrence in parse_standard_link_occurrences(text, options) {
+        if seen.insert(occurrence.target.clone()) {
+            links.push(ParsedLink {
+                target: occurrence.target,
+            });
+        }
+    }
+
+    links
+}
+
+/// Parses every standard Twine link occurrence in source order. Unlike
+/// [`parse_standard_links`], repeated and self references are retained.
+pub fn parse_standard_link_occurrences(
+    text: &str,
+    options: LinkParseOptions,
+) -> Vec<ParsedLinkOccurrence> {
+    let mut cursor = 0;
+    let mut links = Vec::new();
 
     while let Some(start_offset) = text[cursor..].find("[[") {
         let content_start = cursor + start_offset + 2;
@@ -39,14 +69,18 @@ pub fn parse_standard_links(text: &str, options: LinkParseOptions) -> Vec<Parsed
         };
         let content_end = content_start + end_offset;
         let tag_content = &text[content_start..content_end];
-        let target = extract_link_target(remove_setter(tag_content)).trim();
+        let setterless = remove_setter(tag_content);
+        let target = extract_link_target(setterless);
+        let trimmed = target.trim();
 
-        if !target.is_empty()
-            && (!options.internal_only || is_internal_link(target))
-            && seen.insert(target.to_owned())
-        {
-            links.push(ParsedLink {
-                target: target.to_owned(),
+        if !trimmed.is_empty() && (!options.internal_only || is_internal_link(trimmed)) {
+            let target_start =
+                content_start + (target.as_ptr() as usize - tag_content.as_ptr() as usize);
+            let leading_whitespace = target.len() - target.trim_start().len();
+            links.push(ParsedLinkOccurrence {
+                target: trimmed.to_owned(),
+                target_range: (target_start + leading_whitespace)
+                    ..(target_start + leading_whitespace + trimmed.len()),
             });
         }
 
@@ -1216,6 +1250,56 @@ mod tests {
     #[test]
     fn preserves_first_seen_order_and_removes_duplicates() {
         assert_eq!(targets("[[b]][[a]][[b]]"), ["b", "a"]);
+    }
+
+    #[test]
+    fn preserves_standard_link_occurrences_and_utf8_target_ranges() {
+        let text = "[[ display | Ж😀 ]] [[Ж😀]] [[https://example.com]]";
+        let occurrences = parse_standard_link_occurrences(text, LinkParseOptions::default());
+
+        assert_eq!(
+            occurrences
+                .iter()
+                .map(|occurrence| occurrence.target.as_str())
+                .collect::<Vec<_>>(),
+            ["Ж😀", "Ж😀", "https://example.com"]
+        );
+        assert_eq!(&text[occurrences[0].target_range.clone()], "Ж😀");
+        assert_eq!(&text[occurrences[1].target_range.clone()], "Ж😀");
+        assert!(occurrences[0].target_range.start < occurrences[1].target_range.start);
+        assert_eq!(
+            parse_standard_link_occurrences(
+                text,
+                LinkParseOptions {
+                    internal_only: true
+                },
+            )
+            .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn locates_targets_for_every_standard_link_shape() {
+        let text = "[[ direct ]] [[label->arrow]] [[reverse<-label]] [[label|pipe]] [[set][x=1]]";
+        let occurrences = parse_standard_link_occurrences(text, LinkParseOptions::default());
+
+        assert_eq!(
+            occurrences
+                .iter()
+                .map(|occurrence| (
+                    occurrence.target.as_str(),
+                    &text[occurrence.target_range.clone()]
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("direct", "direct"),
+                ("arrow", "arrow"),
+                ("reverse", "reverse"),
+                ("pipe", "pipe"),
+                ("set", "set"),
+            ]
+        );
     }
 
     #[test]

@@ -124,6 +124,30 @@ function successfulResponse(request: WasmWorkerRequest): WasmWorkerSuccess {
 					text: `${request.sourceKind} body `.repeat(512)
 				}
 			} as WasmWorkerSuccess;
+		case 'queryPassageReferencesPage':
+			return {
+				id: request.id,
+				kind: request.kind,
+				metrics: workerMetrics,
+				ok: true,
+				result: {
+					coverage: 'standard-links-only',
+					nextCursor: null,
+					passageId: request.passageId,
+					references: [],
+					revision: request.revision,
+					storyId: request.storyId,
+					totalCount: 0
+				}
+			} as WasmWorkerSuccess;
+		case 'queryDefinition':
+			return {
+				id: request.id,
+				kind: request.kind,
+				metrics: workerMetrics,
+				ok: true,
+				result: {type: 'not_found'}
+			} as WasmWorkerSuccess;
 		case 'queryStoryWordCount':
 			return {
 				id: request.id,
@@ -202,6 +226,57 @@ describe('WasmCoreWorkerClient', () => {
 			workerJsHeapUsedBytes: undefined,
 			workerMemoryObservation: undefined
 		});
+	});
+
+	it('routes reference and definition queries through typed worker requests', async () => {
+		const client = new WasmCoreWorkerClient();
+		const send = jest.fn(async (request: WasmWorkerRequest) =>
+			successfulResponse(request)
+		);
+		(client as unknown as TestableWasmCoreWorkerClient).send = send;
+
+		await expect(
+			client.queryPassageReferencesPage(
+				'session-a',
+				'story-a',
+				'passage-a',
+				{cursor: null, limit: 50},
+				7
+			)
+		).resolves.toEqual(
+			expect.objectContaining({
+				passageId: 'passage-a',
+				revision: 7,
+				storyId: 'story-a'
+			})
+		);
+		await expect(
+			client.queryDefinition(
+				'session-a',
+				{
+					expectedRevision: 7,
+					name: 'Start',
+					storyId: 'story-a',
+					symbolKind: 'passage'
+				},
+				7
+			)
+		).resolves.toEqual({type: 'not_found'});
+		expect(send).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({
+				kind: 'queryPassageReferencesPage',
+				passageId: 'passage-a',
+				storyId: 'story-a'
+			})
+		);
+		expect(send).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				kind: 'queryDefinition',
+				query: expect.objectContaining({expectedRevision: 7, name: 'Start'})
+			})
+		);
 	});
 
 	it('retains one response WASM tuple without requiring worker performance.memory', () => {

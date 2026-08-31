@@ -3,9 +3,10 @@
 use std::collections::BTreeMap;
 use twine_core::{
     CoreAssetInventoryEntry, CoreAssetsQuery, CoreBacklinksQuery, CoreContentsQuery,
-    CoreDiagnosticsQuery, CoreDiagnosticsSummaryQuery, CoreDocumentQuery, CoreExternalDelta,
-    CoreExternalIngestMode, CoreGraphProjectionOptions, CoreSearchQuery, CoreSourceKind,
-    CoreStoryIndexOptions, PassageSnapshot, PlanPassageRenameBeginResult, PlanPassageRenameRequest,
+    CoreDefinitionQuery, CoreDiagnosticsQuery, CoreDiagnosticsSummaryQuery, CoreDocumentQuery,
+    CoreExternalDelta, CoreExternalIngestMode, CoreGraphProjectionOptions,
+    CorePassageReferencesQuery, CoreSearchQuery, CoreSourceKind, CoreStoryIndexOptions,
+    PassageSnapshot, PlanPassageRenameBeginResult, PlanPassageRenameRequest,
     PlanProjectReplaceBeginResult, PlanProjectReplaceRequest, ProjectSession, ProjectSnapshot,
     RefactorPlanApplyRequest, RefactorPlanApplyResult, RefactorPlanCursor,
     RefactorPlanDetailResult, RefactorPlanningTaskHandle, RefactorRuntimeState, StoryCommand,
@@ -376,6 +377,26 @@ impl TwineWasmProjectSession {
                 .backlinks_page(&story_id, &passage_id, query)
                 .map_err(core_error)?,
         )
+    }
+
+    pub fn query_passage_references_page(
+        &mut self,
+        story_id: String,
+        passage_id: String,
+        query: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let query = from_js::<CorePassageReferencesQuery>(query)?;
+        to_js(
+            &self
+                .session
+                .passage_references_page(&story_id, &passage_id, query)
+                .map_err(core_error)?,
+        )
+    }
+
+    pub fn query_definition(&self, query: JsValue) -> Result<JsValue, JsValue> {
+        let query = from_js::<CoreDefinitionQuery>(query)?;
+        to_js(&self.session.definition(query).map_err(core_error)?)
     }
 
     pub fn query_passage_document(

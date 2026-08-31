@@ -213,6 +213,8 @@ const diagnostics: {
 		checkpoints: PerformanceSnapshot[];
 		commitSamples: number;
 		detailSamples: number;
+		m3DefinitionSamples: number;
+		m3ReferenceSamples: number;
 		operation: 'project-replace';
 		summarySamples: number;
 		typingCompositorSettles: RefactorTypingCompositorSettle[];
@@ -4116,6 +4118,160 @@ interface RefactorFixtureTarget {
 	storyId: string;
 }
 
+interface M3QueryFixtureTarget {
+	definitionNames: string[];
+	passageId: string;
+	passageName: string;
+	storyId: string;
+}
+
+function recordM3BridgeSample(
+	prefix: string,
+	metric: {computeMs: number; responseBytes: number; roundTripMs: number}
+) {
+	addSample(`${prefix}ComputeMs`, metric.computeMs);
+	addSample(`${prefix}ResponseBytes`, metric.responseBytes);
+	addSample(`${prefix}RoundTripMs`, metric.roundTripMs);
+}
+
+async function measureM3Queries(page: Page, target: M3QueryFixtureTarget) {
+	const before = await snapshot(page);
+	const baselineReadModel = before.renderer.core.hosts[0]?.client?.readModel;
+	const expectedBacklinkScanCount =
+		(baselineReadModel?.backlinkScanCount ?? 0) + 1;
+	const expectedBacklinkScannedSourceCount =
+		(baselineReadModel?.backlinkScannedSourceCount ?? 0) + passageCount;
+	const first = await page.evaluate(
+		async target =>
+			(window as any).twinePerformance.queries.passageReferences(
+				target.storyId,
+				target.passageId,
+				{cursor: null, limit: 50}
+			),
+		target
+	);
+	recordM3BridgeSample('refactor.m3.referencesCold', first.metric);
+	assertInvariant(
+		'refactor-m3-references-cold-page-bounded',
+		first.result.storyId === target.storyId &&
+			first.result.passageId === target.passageId &&
+			first.result.coverage === 'standard-links-only' &&
+			first.result.totalCount === passageCount &&
+			first.result.references.length === 50 &&
+			first.result.nextCursor !== null &&
+			new Set(
+				first.result.references.map(
+					(reference: any) => reference.location.resultKey
+				)
+			).size === first.result.references.length &&
+			first.metric.responseBytes <= 64 * 1024,
+		JSON.stringify(first)
+	);
+	assertInvariant(
+		'refactor-m3-references-cold-scans-once-without-full-indexes',
+		first.metric.kind === 'queryPassageReferencesPage' &&
+			first.metric.readModel?.backlinkScanCount === expectedBacklinkScanCount &&
+			first.metric.readModel.backlinkScannedSourceCount ===
+				expectedBacklinkScannedSourceCount &&
+			first.metric.readModel.graphCacheStoryCount === 0 &&
+			first.metric.readModel.readModelCacheStoryCount === 0,
+		JSON.stringify(first.metric.readModel)
+	);
+
+	const second = await page.evaluate(
+		async ({cursor, target}) =>
+			(window as any).twinePerformance.queries.passageReferences(
+				target.storyId,
+				target.passageId,
+				{cursor, limit: 50}
+			),
+		{cursor: first.result.nextCursor, target}
+	);
+	const firstKeys = new Set(
+		first.result.references.map(
+			(reference: any) => reference.location.resultKey
+		)
+	);
+	assertInvariant(
+		'refactor-m3-references-next-page-reuses-scan',
+		second.result.references.length === 50 &&
+			second.result.nextCursor !== first.result.nextCursor &&
+			second.result.references.every(
+				(reference: any) => !firstKeys.has(reference.location.resultKey)
+			) &&
+			second.metric.readModel?.backlinkScanCount ===
+				expectedBacklinkScanCount &&
+			(second.metric.readModel.backlinkCacheHitCount ?? 0) >= 1,
+		JSON.stringify(second)
+	);
+
+	for (let index = 0; index < 20; index++) {
+		const references = await page.evaluate(
+			async ({index, target}) =>
+				(window as any).twinePerformance.queries.passageReferences(
+					target.storyId,
+					target.passageId,
+					{cursor: null, limit: 51 + index}
+				),
+			{index, target}
+		);
+		assertInvariant(
+			`refactor-m3-references-warm-${index}-bounded`,
+			references.result.references.length === 51 + index &&
+				references.result.totalCount === passageCount &&
+				references.metric.readModel?.backlinkScanCount ===
+					expectedBacklinkScanCount &&
+				references.metric.responseBytes <= 96 * 1024,
+			JSON.stringify(references)
+		);
+		recordM3BridgeSample('refactor.m3.referencesWarm', references.metric);
+
+		const definition = await page.evaluate(
+			async ({expectedRevision, index, target}) =>
+				(window as any).twinePerformance.queries.definition({
+					expectedRevision,
+					name: target.definitionNames[index],
+					storyId: target.storyId,
+					symbolKind: 'passage'
+				}),
+			{expectedRevision: first.result.revision, index, target}
+		);
+		assertInvariant(
+			`refactor-m3-definition-${index}-unique-bounded`,
+			definition.result.type === 'unique' &&
+				definition.result.location.passageName ===
+					target.definitionNames[index] &&
+				definition.result.location.revision === first.result.revision &&
+				definition.metric.kind === 'queryDefinition' &&
+				definition.metric.responseBytes <= 16 * 1024,
+			JSON.stringify(definition)
+		);
+		recordM3BridgeSample('refactor.m3.definition', definition.metric);
+	}
+
+	const after = await snapshot(page);
+	const client = after.renderer.core.hosts[0]?.client;
+	assertInvariant(
+		'refactor-m3-queries-stay-worker-owned-and-idle',
+		after.renderer.core.hosts[0]?.mode === 'wasm-worker' &&
+			after.renderer.core.workerClients === 1 &&
+			after.renderer.core.activeSessions === 1 &&
+			client?.pendingRequestCount === 0 &&
+			client.sessionQueueCount === 0 &&
+			client.readModel?.graphCacheStoryCount === 0 &&
+			client.readModel.readModelCacheStoryCount === 0 &&
+			client.readModel.backlinkScanCount === expectedBacklinkScanCount &&
+			client.readModel.backlinkScannedSourceCount ===
+				expectedBacklinkScannedSourceCount,
+		JSON.stringify(client)
+	);
+	assertInvariant(
+		'refactor-m3-query-samples-complete',
+		(samples['refactor.m3.referencesWarmComputeMs']?.length ?? 0) === 20 &&
+			(samples['refactor.m3.definitionComputeMs']?.length ?? 0) === 20
+	);
+}
+
 function refactorStoreSnapshot(current: PerformanceSnapshot) {
 	const readModel = current.renderer.core.hosts[0]?.client?.readModel;
 
@@ -4755,7 +4911,11 @@ async function verifyWorkerJsMemoryProbe(page: Page, storyId: string) {
 	);
 }
 
-async function measureRefactor(page: Page, target: RefactorFixtureTarget) {
+async function measureRefactor(
+	page: Page,
+	target: RefactorFixtureTarget,
+	m3QueryTarget: M3QueryFixtureTarget
+) {
 	const checkpoints: PerformanceSnapshot[] = [];
 	const warmups = 3;
 	const measured = 20;
@@ -4777,6 +4937,7 @@ async function measureRefactor(page: Page, target: RefactorFixtureTarget) {
 	};
 	await startEditLongTaskObservation(page);
 	try {
+		await measureM3Queries(page, m3QueryTarget);
 		// This retained-worker probe is a structural measurement-integrity check,
 		// not a refactor sample. It runs before the baseline so its deliberately
 		// retained allocation cannot contribute to the 64/128 MiB budget.
@@ -5325,6 +5486,8 @@ async function measureRefactor(page: Page, target: RefactorFixtureTarget) {
 		checkpoints,
 		commitSamples: 0,
 		detailSamples: measured,
+		m3DefinitionSamples: measured,
+		m3ReferenceSamples: measured,
 		operation: 'project-replace',
 		summarySamples: measured,
 		typingCompositorSettles
@@ -6384,15 +6547,17 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				'utf8'
 			)
 		) as {
+			m3QueryTarget?: M3QueryFixtureTarget;
 			performanceFixtureMeasurementContractVersion?: number;
 			refactorTarget?: RefactorFixtureTarget;
 		};
 		assertInvariant(
 			'refactor-fixture-measurement-contract-current',
-			fixtureManifest.performanceFixtureMeasurementContractVersion === 2,
+			fixtureManifest.performanceFixtureMeasurementContractVersion === 3,
 			String(fixtureManifest.performanceFixtureMeasurementContractVersion)
 		);
 		const target = fixtureManifest.refactorTarget;
+		const m3QueryTarget = fixtureManifest.m3QueryTarget;
 		assertInvariant(
 			'refactor-fixture-target-present',
 			!!target &&
@@ -6403,6 +6568,17 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 		);
 		if (!target)
 			throw new Error('Fixture lacks the deterministic refactor target.');
+		assertInvariant(
+			'refactor-fixture-m3-query-target-present',
+			!!m3QueryTarget &&
+				m3QueryTarget.storyId === target.storyId &&
+				m3QueryTarget.passageId.length > 0 &&
+				m3QueryTarget.passageName.length > 0 &&
+				m3QueryTarget.definitionNames.length === 20,
+			JSON.stringify(m3QueryTarget)
+		);
+		if (!m3QueryTarget)
+			throw new Error('Fixture lacks the deterministic M3 query target.');
 		const running = await launchFixture();
 		try {
 			if (refactorProbeOnly) {
@@ -6413,7 +6589,7 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				await verifyWorkerJsMemoryProbe(running.page, target.storyId);
 				assertInvariant('refactor-100-worker-heap-probe-only', true);
 			} else {
-				await measureRefactor(running.page, target);
+				await measureRefactor(running.page, target, m3QueryTarget);
 			}
 		} finally {
 			await closeFixture(running);

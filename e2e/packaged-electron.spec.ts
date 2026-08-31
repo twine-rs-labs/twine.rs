@@ -878,6 +878,65 @@ async function replaceEditorText(page: Page, text: string) {
 	await page.keyboard.press('Tab');
 }
 
+test('packaged desktop finds passage references and exact definitions', async ({}, testInfo) => {
+	const executablePath = await packagedExecutable();
+	const profileRoot = await mkdtemp(
+		path.join(os.tmpdir(), 'twine-rs-packaged-navigation-')
+	);
+	let running: RunningPackagedApp | undefined;
+
+	try {
+		running = await launchPackagedApp(executablePath, profileRoot);
+		const {page} = running;
+
+		await page.getByTitle('New Project').click();
+		await page.getByLabel('Project name').fill('Packaged Navigation');
+		await tabWithText(page, 'Text').click();
+		await page.getByRole('button', {name: 'Create Project'}).click();
+		await replaceEditorText(page, '😀 [[ Next ]] and [[Again->Next]].');
+
+		const nextPassage = page
+			.getByRole('listitem')
+			.filter({has: page.getByText('Next', {exact: true})})
+			.getByRole('button');
+		await expect(nextPassage).toBeVisible();
+		await nextPassage.click();
+		await page.getByRole('button', {name: 'Find References'}).click();
+		const references = page.getByRole('dialog', {name: 'References to Next'});
+
+		await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(
+			2
+		);
+		await references
+			.getByRole('button', {name: 'Reveal in Source'})
+			.first()
+			.click();
+		await expect(
+			page.getByRole('region', {name: 'Start', exact: true})
+		).toBeVisible();
+		await expect(page).toHaveURL(/offset=\d+&end=\d+/);
+
+		const definition = page
+			.getByRole('button')
+			.filter({hasText: 'Next'})
+			.filter({hasText: 'Go to Definition'});
+		await expect(definition).toHaveCount(1);
+		await definition.click();
+		await expect(
+			page.getByRole('region', {name: 'Next', exact: true})
+		).toBeVisible();
+	} catch (error) {
+		if (running) {
+			await attachPackagedAppShutdownDiagnostics(testInfo, running, error);
+		}
+		throw error;
+	} finally {
+		if (running) {
+			await cleanupPackagedApp(running);
+		}
+	}
+});
+
 test('packaged desktop duplicates a project from the launcher and preserves it across restart and source deletion', async ({}, testInfo) => {
 	const executablePath = await packagedExecutable();
 	const profileRoot = await mkdtemp(

@@ -10,11 +10,13 @@ jest.mock('../editor-window', () => ({
 		active,
 		onDragEnd,
 		onDragStart,
+		onLocalBufferChange,
 		spec
 	}: {
 		active: boolean;
 		onDragEnd?: (event: React.DragEvent<HTMLDivElement>) => void;
 		onDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
+		onLocalBufferChange?: () => void;
 		spec: EditorWindowSpec;
 	}) => (
 		<div
@@ -23,7 +25,13 @@ jest.mock('../editor-window', () => ({
 			draggable={!!onDragStart}
 			onDragEnd={onDragEnd}
 			onDragStart={onDragStart}
-		/>
+		>
+			{onLocalBufferChange && (
+				<button onClick={onLocalBufferChange}>
+					change-{editorWindowId(spec)}
+				</button>
+			)}
+		</div>
 	)
 }));
 
@@ -86,5 +94,13 @@ describe('<EditorDock>', () => {
 		);
 
 		expect(onChangeLayout).toHaveBeenCalledWith('tile');
+	});
+
+	it('forwards immediate local-buffer invalidation to every editor', () => {
+		const onLocalBufferChange = jest.fn();
+		renderDock({onLocalBufferChange});
+
+		fireEvent.click(screen.getByRole('button', {name: 'change-passage:start'}));
+		expect(onLocalBufferChange).toHaveBeenCalledTimes(1);
 	});
 });

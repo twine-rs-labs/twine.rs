@@ -150,7 +150,7 @@ export interface SourceEditorProps {
 	placeholderText?: string;
 	readOnly?: boolean;
 	replaceGenericTwineSyntax?: boolean;
-	revealPosition?: {key: number; position: number};
+	revealPosition?: {end?: number; key: number; position: number};
 	searchQuery?: string;
 	searchRequestKey?: number | string;
 	selfLinkName?: string;
@@ -1408,15 +1408,27 @@ export const SourceEditor = React.forwardRef<
 			0,
 			Math.min(Math.trunc(position), view.state.doc.length)
 		);
+		const requestedEnd = props.revealPosition?.end;
+		const clampedEnd =
+			requestedEnd === undefined
+				? clampedPosition
+				: Math.max(
+						clampedPosition,
+						Math.min(Math.trunc(requestedEnd), view.state.doc.length)
+					);
 
 		view.dispatch({
 			effects: EditorView.scrollIntoView(clampedPosition, {
 				y: 'center'
 			}),
-			selection: {anchor: clampedPosition}
+			selection: {anchor: clampedPosition, head: clampedEnd}
 		});
 		view.focus();
-	}, [props.revealPosition?.key, props.revealPosition?.position]);
+	}, [
+		props.revealPosition?.end,
+		props.revealPosition?.key,
+		props.revealPosition?.position
+	]);
 
 	const codeFont = (props.language ?? 'twine') !== 'twine';
 	const fontFamily = codeFont
