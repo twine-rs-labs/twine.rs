@@ -1,12 +1,14 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import * as React from 'react';
 import {MemoryRouter, useNavigate} from 'react-router';
 import {
+	diagnosticIdentity,
 	replaceKnownAssetInventoryForStory,
 	type CoreAssetInventoryEntry
 } from '../../../core';
 import type {CoreDiagnostic} from '../../../core/bindings/CoreDiagnostic';
 import type {CoreDiagnosticsPage} from '../../../core/bindings/CoreDiagnosticsPage';
+import type {RefactorPlanSummary} from '../../../core/bindings/RefactorPlanSummary';
 import {StoreCoreProjectHost} from '../../../test-util/core-project-host-runtime';
 import {
 	FakeStateProvider,
@@ -17,6 +19,7 @@ import {
 	TestRoute
 } from '../../../test-util';
 import {DiagnosticsRoute} from '../diagnostics-route';
+import {diagnosticFixReviewNavigationState} from '../diagnostic-fix-navigation';
 
 const mockTestStory = jest.fn();
 
@@ -43,6 +46,22 @@ function coreDiagnostic(
 		severity,
 		sourceId: 'story.twee',
 		start: 0
+	};
+}
+
+function automaticDiagnostic(code: string, command: string): CoreDiagnostic {
+	return {
+		...coreDiagnostic(code),
+		end: code.length,
+		message: `${code} automatic diagnostic`,
+		quickFixes: [
+			{
+				applicability: 'automatic',
+				command,
+				title: `Fix ${code}`
+			}
+		],
+		start: code.length
 	};
 }
 
@@ -208,6 +227,27 @@ function missingAsset(path: string): CoreAssetInventoryEntry {
 	};
 }
 
+function diagnosticFixSummary(): RefactorPlanSummary {
+	return {
+		affectedEntityCount: 1,
+		changeCount: 1,
+		coverage: 'deterministic-safe-fixes',
+		expiresAtEpochMs: Date.now() + 60_000,
+		firstDetailCursor: {planDigest: 'digest', planId: 'plan', position: 0},
+		operationKind: 'diagnostic-fixes',
+		planDigest: 'digest',
+		planId: 'plan',
+		projectRevision: 1,
+		selectionCapabilities: {
+			all: true,
+			exclusions: false,
+			groups: false,
+			only: false
+		},
+		validationFailures: []
+	};
+}
+
 describe('<DiagnosticsRoute>', () => {
 	beforeEach(() => {
 		window.localStorage.clear();
@@ -248,6 +288,11 @@ describe('<DiagnosticsRoute>', () => {
 		expect(
 			screen.getAllByText(/Broken link to "Missing"/).length
 		).toBeGreaterThan(0);
+		expect(
+			screen.getByText(
+				/Change link target\. This fix requires additional input\./
+			)
+		).toBeInTheDocument();
 		expect(screen.queryByText('unreachable-passage')).not.toBeInTheDocument();
 		expect(screen.queryByText(/story-format macros/)).not.toBeInTheDocument();
 		expect(screen.getAllByText('warning').length).toBeGreaterThan(0);
@@ -536,17 +581,276 @@ describe('<DiagnosticsRoute>', () => {
 		expect(screen.getAllByText('broken-link').length).toBeGreaterThan(0);
 	});
 
-	it('runs executable quick fixes through the core host', async () => {
-		const {result} = renderComponent();
+	it('reviews a Rust-planned quick fix before applying the whole plan', async () => {
+		const summary = diagnosticFixSummary();
+		const plan = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'planDiagnosticFixes')
+			.mockResolvedValue({summary, type: 'complete'});
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryRefactorPlanDetailAsync')
+			.mockResolvedValue({
+				page: {
+					changes: [
+						{
+							affectedEntity: {
+								entityId: 'passage-2',
+								kind: 'passage',
+								storyId: 'story-id'
+							},
+							after: {
+								passage: {
+									id: 'passage-2',
+									layout: null,
+									name: 'Missing',
+									storyId: 'story-id',
+									tags: [],
+									text: ''
+								},
+								type: 'passage'
+							},
+							before: null,
+							changeId: 'change-1',
+							dependencies: [],
+							description: 'Create passage "Missing"',
+							groupId: null,
+							kind: 'add-passage',
+							location: null
+						}
+					],
+					nextCursor: null
+				},
+				type: 'page'
+			});
+		const apply = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'applyRefactorPlan')
+			.mockResolvedValue({
+				batch: {} as never,
+				receipt: {} as never,
+				type: 'applied'
+			});
 
+		renderComponent();
 		fireEvent.click(
-			await screen.findByRole('button', {name: 'Create "Missing"'})
+			await screen.findByRole('button', {name: 'Review Create "Missing"'})
+		);
+
+		expect(
+			await screen.findByRole('dialog', {name: 'Review Diagnostic Fixes'})
+		).toBeInTheDocument();
+		expect(plan).toHaveBeenCalledWith('story-id', {
+			selection: {
+				fixes: [
+					{
+						diagnosticId: expect.any(String),
+						quickFixCommand: 'create-passage:Missing'
+					}
+				],
+				type: 'only'
+			},
+			storyId: 'story-id'
+		});
+		fireEvent.click(await screen.findByRole('button', {name: 'Apply Fixes'}));
+		await waitFor(() =>
+			expect(apply).toHaveBeenCalledWith('story-id', {
+				expectedProjectRevision: 1,
+				planId: 'plan',
+				selection: {type: 'all'}
+			})
+		);
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('dialog', {name: 'Review Diagnostic Fixes'})
+			).not.toBeInTheDocument()
+		);
+	});
+
+	it('opens the exact contextual diagnostic and command from transient navigation state', async () => {
+		const first = automaticDiagnostic('FIRST', 'create-passage:First');
+		const second = automaticDiagnostic('SECOND', 'create-passage:Second');
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDiagnosticsPageAsync')
+			.mockResolvedValue({
+				diagnostics: [first, second],
+				nextCursor: null,
+				revision: 1,
+				storyId: 'story-id',
+				totalCount: 2
+			});
+		const plan = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'planDiagnosticFixes')
+			.mockResolvedValue({
+				failure: {code: 'invalid-plan', message: 'Captured exact request.'},
+				type: 'failure'
+			});
+		const {story} = diagnosticStory();
+
+		render(
+			<FakeStateProvider stories={[story]}>
+				<MemoryRouter
+					initialEntries={[
+						{
+							pathname: `/stories/${story.id}/diagnostics`,
+							state: diagnosticFixReviewNavigationState(
+								second,
+								'create-passage:Second'
+							)
+						}
+					]}
+				>
+					<TestRoute path="/stories/:storyId/diagnostics">
+						<DiagnosticsRoute />
+					</TestRoute>
+				</MemoryRouter>
+			</FakeStateProvider>
 		);
 
 		await waitFor(() =>
-			expect(
-				result.container.querySelector('[data-name="Missing"]')
-			).toBeTruthy()
+			expect(plan).toHaveBeenCalledWith('story-id', {
+				selection: {
+					fixes: [
+						{
+							diagnosticId: diagnosticIdentity(second),
+							quickFixCommand: 'create-passage:Second'
+						}
+					],
+					type: 'only'
+				},
+				storyId: 'story-id'
+			})
+		);
+		expect(plan).not.toHaveBeenCalledWith(
+			'story-id',
+			expect.objectContaining({
+				selection: expect.objectContaining({
+					fixes: expect.arrayContaining([
+						expect.objectContaining({
+							quickFixCommand: 'create-passage:First'
+						})
+					])
+				})
+			})
+		);
+	});
+
+	it('does not fall back to another fix when contextual route state is stale', async () => {
+		const available = automaticDiagnostic(
+			'AVAILABLE',
+			'create-passage:Available'
+		);
+		jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDiagnosticsPageAsync')
+			.mockResolvedValue({
+				diagnostics: [available],
+				nextCursor: null,
+				revision: 1,
+				storyId: 'story-id',
+				totalCount: 1
+			});
+		const plan = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'planDiagnosticFixes'
+		);
+		const {story} = diagnosticStory();
+		const stale = automaticDiagnostic('STALE', 'create-passage:Stale');
+
+		render(
+			<FakeStateProvider stories={[story]}>
+				<MemoryRouter
+					initialEntries={[
+						{
+							pathname: `/stories/${story.id}/diagnostics`,
+							state: diagnosticFixReviewNavigationState(
+								stale,
+								'create-passage:Stale'
+							)
+						}
+					]}
+				>
+					<TestRoute path="/stories/:storyId/diagnostics">
+						<DiagnosticsRoute />
+					</TestRoute>
+				</MemoryRouter>
+			</FakeStateProvider>
+		);
+
+		expect((await screen.findAllByText('AVAILABLE')).length).toBeGreaterThan(0);
+		await waitFor(() => expect(plan).not.toHaveBeenCalled());
+	});
+
+	it('stops contextual page discovery after a load error until explicit retry', async () => {
+		const available = automaticDiagnostic(
+			'AVAILABLE',
+			'create-passage:Available'
+		);
+		const target = automaticDiagnostic('TARGET', 'create-passage:Target');
+		const queryDiagnostics = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'queryDiagnosticsPageAsync')
+			.mockResolvedValueOnce({
+				diagnostics: [available],
+				nextCursor: 'page-2',
+				revision: 1,
+				storyId: 'story-id',
+				totalCount: 2
+			})
+			.mockRejectedValueOnce(new Error('Worker unavailable'));
+		const plan = jest.spyOn(
+			StoreCoreProjectHost.prototype,
+			'planDiagnosticFixes'
+		);
+		const {story} = diagnosticStory();
+
+		render(
+			<FakeStateProvider stories={[story]}>
+				<MemoryRouter
+					initialEntries={[
+						{
+							pathname: `/stories/${story.id}/diagnostics`,
+							state: diagnosticFixReviewNavigationState(
+								target,
+								'create-passage:Target'
+							)
+						}
+					]}
+				>
+					<TestRoute path="/stories/:storyId/diagnostics">
+						<DiagnosticsRoute />
+					</TestRoute>
+				</MemoryRouter>
+			</FakeStateProvider>
+		);
+
+		expect(await screen.findByRole('alert')).toHaveTextContent(
+			'Could not load more diagnostics: Worker unavailable'
+		);
+		await act(async () => Promise.resolve());
+		expect(queryDiagnostics).toHaveBeenCalledTimes(2);
+		expect(plan).not.toHaveBeenCalled();
+		expect(
+			screen.getByRole('button', {name: 'Load more diagnostics'})
+		).toBeEnabled();
+	});
+
+	it('plans Fix All Safe from the complete non-dismissed set, not the visible filter', async () => {
+		const plan = jest
+			.spyOn(StoreCoreProjectHost.prototype, 'planDiagnosticFixes')
+			.mockResolvedValue({
+				failure: {code: 'invalid-plan', message: 'No automatic fixes.'},
+				type: 'failure'
+			});
+		renderComponent();
+		await screen.findByRole('button', {name: 'Review Create "Missing"'});
+		fireEvent.change(screen.getByLabelText('Filter diagnostics'), {
+			target: {value: 'nothing matches this'}
+		});
+		expect(screen.getByText('No matching diagnostics')).toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole('button', {name: 'Fix All Safe'}));
+
+		await waitFor(() =>
+			expect(plan).toHaveBeenCalledWith('story-id', {
+				selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+				storyId: 'story-id'
+			})
 		);
 	});
 

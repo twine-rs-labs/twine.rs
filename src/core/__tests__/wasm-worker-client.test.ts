@@ -195,6 +195,38 @@ function successfulResponse(request: WasmWorkerRequest): WasmWorkerSuccess {
 					type: 'failure'
 				}
 			} as WasmWorkerSuccess;
+		case 'planDiagnosticFixes':
+			return {
+				id: request.id,
+				kind: request.kind,
+				metrics: workerMetrics,
+				ok: true,
+				result: {
+					summary: {
+						affectedEntityCount: 1,
+						changeCount: 1,
+						coverage: 'full',
+						expiresAtEpochMs: 1,
+						firstDetailCursor: {
+							planDigest: 'digest',
+							planId: 'plan',
+							position: 0
+						},
+						operationKind: 'diagnostic-fixes',
+						planDigest: 'digest',
+						planId: 'plan',
+						projectRevision: request.revision,
+						selectionCapabilities: {
+							all: true,
+							exclusions: false,
+							groups: false,
+							only: false
+						},
+						validationFailures: []
+					},
+					type: 'complete'
+				}
+			} as WasmWorkerSuccess;
 		default:
 			throw new Error(`Unexpected request in test: ${request.kind}`);
 	}
@@ -663,6 +695,66 @@ describe('WasmCoreWorkerClient', () => {
 			'cancelProjectReplacePlan'
 		]);
 		expect(send.mock.calls[0][0]).not.toHaveProperty('changes');
+	});
+
+	it('waits for mutations and posts bounded diagnostic-fix planning requests', async () => {
+		const client = new WasmCoreWorkerClient();
+		const onWorkerMetric = jest.fn();
+		const send = jest.fn(async (request: WasmWorkerRequest) =>
+			successfulResponse(request)
+		);
+		(client as unknown as TestableWasmCoreWorkerClient).send = send;
+
+		await expect(
+			client.planDiagnosticFixes(
+				'session-a',
+				{
+					storyId: 'story',
+					selection: {type: 'allSafe', excludedDiagnosticIds: []},
+					hugeUnknown: 'x'.repeat(5 * 1024 * 1024)
+				} as any,
+				2,
+				4,
+				{onWorkerMetric}
+			)
+		).resolves.toMatchObject({type: 'complete'});
+		expect(send).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: 'planDiagnosticFixes',
+				refactorRuntimeEpoch: 2,
+				revision: 4,
+				sessionId: 'session-a'
+			}),
+			{onWorkerMetric}
+		);
+		expect((send.mock.calls[0][0] as any).request).toEqual({
+			selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+			storyId: 'story'
+		});
+		expect((send.mock.calls[0][0] as any).request).not.toHaveProperty(
+			'hugeUnknown'
+		);
+		await expect(
+			client.planDiagnosticFixes(
+				'session-a',
+				{
+					storyId: 'story',
+					selection: {
+						type: 'only',
+						fixes: new Array(50_001).fill({
+							diagnosticId: 'd',
+							quickFixCommand: 'fix'
+						})
+					}
+				},
+				2,
+				4
+			)
+		).resolves.toMatchObject({
+			type: 'failure',
+			failure: {code: 'selection-too-large'}
+		});
+		expect(send).toHaveBeenCalledTimes(1);
 	});
 
 	it('retains only the latest diagnostics summary dismissal-set cache entry', async () => {

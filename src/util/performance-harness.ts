@@ -5,15 +5,19 @@ import {
 	resetCoreBridgeMetrics
 } from '../core';
 import type {PlanProjectReplaceRequest} from '../core/bindings/PlanProjectReplaceRequest';
+import type {PlanDiagnosticFixesRequest} from '../core/bindings/PlanDiagnosticFixesRequest';
+import type {PlanDiagnosticFixesResult} from '../core/bindings/PlanDiagnosticFixesResult';
 import type {PlanProjectReplaceResult} from '../core/bindings/PlanProjectReplaceResult';
 import type {CoreDefinitionQuery} from '../core/bindings/CoreDefinitionQuery';
 import type {CoreDefinitionResult} from '../core/bindings/CoreDefinitionResult';
+import type {CoreDiagnosticsPage} from '../core/bindings/CoreDiagnosticsPage';
 import type {CorePassageReferencesPage} from '../core/bindings/CorePassageReferencesPage';
 import type {CorePassageReferencesQuery} from '../core/bindings/CorePassageReferencesQuery';
 import type {RefactorPlanApplyRequest} from '../core/bindings/RefactorPlanApplyRequest';
 import type {RefactorPlanApplyResult} from '../core/bindings/RefactorPlanApplyResult';
 import type {RefactorPlanCursor} from '../core/bindings/RefactorPlanCursor';
 import type {RefactorPlanDetailResult} from '../core/bindings/RefactorPlanDetailResult';
+import type {CoreBridgeMetric} from '../core/wasm/performance';
 import type {TwineElectronWindow} from '../electron/shared';
 import {
 	performanceEventSnapshot,
@@ -57,6 +61,11 @@ export interface TwinePerformanceSnapshot {
 
 export interface RefactorModelCommitOperation {
 	result: Promise<RefactorPlanApplyResult>;
+	workerResponseCheckpoint: Promise<void>;
+}
+
+export interface RefactorWorkerResponseOperation<T> {
+	result: Promise<T>;
 	workerResponseCheckpoint: Promise<void>;
 }
 
@@ -107,6 +116,11 @@ export interface TwinePerformanceHarness {
 			storyId: string,
 			cursor: RefactorPlanCursor
 		): Promise<RefactorPlanDetailResult>;
+		detailObserved(
+			storyId: string,
+			cursor: RefactorPlanCursor,
+			workerResponseCheckpointName: string
+		): RefactorWorkerResponseOperation<RefactorPlanDetailResult>;
 		plan(
 			storyId: string,
 			request: PlanProjectReplaceRequest,
@@ -115,9 +129,29 @@ export interface TwinePerformanceHarness {
 				signal?: AbortSignal;
 			}
 		): RefactorPlanOperation;
+		planDiagnosticFixes(
+			storyId: string,
+			request: PlanDiagnosticFixesRequest,
+			options?: {
+				onPlanningStarted?: () => void;
+				onWorkerMetric?: (metric: CoreBridgeMetric) => void;
+			}
+		): Promise<PlanDiagnosticFixesResult>;
+		planDiagnosticFixesObserved(
+			storyId: string,
+			request: PlanDiagnosticFixesRequest,
+			workerResponseCheckpointName: string,
+			options?: {
+				onPlanningStarted?: () => void;
+				onWorkerMetric?: (metric: CoreBridgeMetric) => void;
+			}
+		): RefactorWorkerResponseOperation<PlanDiagnosticFixesResult>;
+		undo(storyId: string): Promise<unknown>;
+		undoModelCommit(storyId: string): Promise<unknown>;
 	};
 	worker: {
 		diagnostics(storyId: string): Promise<unknown>;
+		diagnosticsPage(storyId: string): Promise<CoreDiagnosticsPage>;
 		probeJsHeap(
 			action: 'release' | 'retain',
 			bytes?: number
@@ -233,6 +267,82 @@ export function installPerformanceHarness() {
 	}
 	let localRefactorPendingChunkObservations = 0;
 	let nativeRefactorPendingChunkObservations = 0;
+	const observeWorkerResponse = <T>(
+		workerResponseCheckpointName: string,
+		invoke: (
+			onWorkerMetric: (metric: CoreBridgeMetric) => void,
+			rejectObservation: (error: Error) => void
+		) => Promise<T>
+	): RefactorWorkerResponseOperation<T> => {
+		let workerResponseObserved = false;
+		let settleCheckpoint!: () => void;
+		let rejectCheckpoint!: (error: Error) => void;
+		const workerResponseCheckpoint = new Promise<void>((resolve, reject) => {
+			settleCheckpoint = resolve;
+			rejectCheckpoint = reject;
+		});
+		const rejectObservation = (error: Error) => rejectCheckpoint(error);
+		const onWorkerMetric = (metric: CoreBridgeMetric) => {
+			if (workerResponseObserved) {
+				rejectCheckpoint(
+					new Error(
+						`Worker response checkpoint "${workerResponseCheckpointName}" was observed more than once.`
+					)
+				);
+				return;
+			}
+			workerResponseObserved = true;
+			if (
+				typeof metric.workerRespondedAtEpochMs !== 'number' ||
+				typeof metric.wasmMemoryBytes !== 'number'
+			) {
+				rejectCheckpoint(
+					new Error(
+						`Worker response checkpoint "${workerResponseCheckpointName}" requires a response epoch and WASM memory tuple.`
+					)
+				);
+				return;
+			}
+			try {
+				const renderer = {
+					...rendererCheckpointSnapshot(),
+					workerResponseAtEpochMs: metric.workerRespondedAtEpochMs,
+					workerWasmMemoryBytes: metric.wasmMemoryBytes
+				};
+				// Start native/CDP sampling in the response delivery callback, but let
+				// callers await it outside the measured operation latency.
+				void native
+					.checkpoint(workerResponseCheckpointName, renderer)
+					.then(settleCheckpoint, rejectCheckpoint);
+			} catch (error) {
+				rejectCheckpoint(
+					error instanceof Error ? error : new Error(String(error))
+				);
+			}
+		};
+		const result = invoke(onWorkerMetric, rejectObservation);
+		void result.then(
+			() => {
+				if (!workerResponseObserved) {
+					rejectCheckpoint(
+						new Error(
+							`Worker response checkpoint "${workerResponseCheckpointName}" was never observed.`
+						)
+					);
+				}
+			},
+			() => {
+				if (!workerResponseObserved) {
+					rejectCheckpoint(
+						new Error(
+							`Worker response checkpoint "${workerResponseCheckpointName}" was never observed.`
+						)
+					);
+				}
+			}
+		);
+		return {result, workerResponseCheckpoint};
+	};
 
 	harnessWindow.twinePerformance = {
 		queries: {
@@ -259,6 +369,11 @@ export function installPerformanceHarness() {
 						dismissedIds: [`twine-perf-baseline-${performance.now()}`]
 					}
 				),
+			diagnosticsPage: storyId =>
+				coreProjectHostPerformanceHarness().queryDiagnosticsPageAsync(storyId, {
+					cursor: null,
+					limit: 250
+				}),
 			probeJsHeap: (action, bytes) =>
 				coreProjectHostPerformanceHarness().performanceProbeWorkerJs(
 					action,
@@ -275,89 +390,83 @@ export function installPerformanceHarness() {
 		refactor: {
 			apply: (storyId, request) =>
 				coreProjectHostPerformanceHarness().applyRefactorPlan(storyId, request),
-			applyModelCommit: (storyId, request, workerResponseCheckpointName) => {
-				let workerResponseObserved = false;
-				let settleCheckpoint!: () => void;
-				let rejectCheckpoint!: (error: Error) => void;
-				const workerResponseCheckpoint = new Promise<void>(
-					(resolve, reject) => {
-						settleCheckpoint = resolve;
-						rejectCheckpoint = reject;
-					}
-				);
-				const result = coreProjectHostPerformanceHarness().applyModelCommit(
-					storyId,
-					request,
-					{
-						onWorkerMetric: metric => {
-							if (workerResponseObserved) {
-								rejectCheckpoint(
-									new Error(
-										`Worker response checkpoint "${workerResponseCheckpointName}" was observed more than once.`
-									)
-								);
-								return;
-							}
-							workerResponseObserved = true;
-							if (
-								typeof metric.workerRespondedAtEpochMs !== 'number' ||
-								typeof metric.wasmMemoryBytes !== 'number'
-							) {
-								rejectCheckpoint(
-									new Error(
-										`Worker response checkpoint "${workerResponseCheckpointName}" requires a response epoch and WASM memory tuple.`
-									)
-								);
-								return;
-							}
-							// Snapshot renderer owners in the response callback, before the
-							// model-commit promise continues into renderer reconciliation.
-							try {
-								const renderer = {
-									...rendererCheckpointSnapshot(),
-									workerResponseAtEpochMs: metric.workerRespondedAtEpochMs,
-									workerWasmMemoryBytes: metric.wasmMemoryBytes
-								};
-								// Do not await native sampling from the worker-response delivery
-								// path: its IPC/CDP work must not delay refactor reconciliation.
-								void native
-									.checkpoint(workerResponseCheckpointName, renderer)
-									.then(settleCheckpoint, rejectCheckpoint);
-							} catch (error) {
-								rejectCheckpoint(
-									error instanceof Error ? error : new Error(String(error))
-								);
-							}
-						}
-					}
-				);
-				void result.then(
-					() => {
-						if (!workerResponseObserved) {
-							rejectCheckpoint(
-								new Error(
-									`Worker response checkpoint "${workerResponseCheckpointName}" was never observed.`
-								)
-							);
-						}
-					},
-					() => {
-						if (!workerResponseObserved) {
-							rejectCheckpoint(
-								new Error(
-									`Worker response checkpoint "${workerResponseCheckpointName}" was never observed.`
-								)
-							);
-						}
-					}
-				);
-				return {result, workerResponseCheckpoint};
-			},
+			applyModelCommit: (storyId, request, workerResponseCheckpointName) =>
+				observeWorkerResponse(workerResponseCheckpointName, onWorkerMetric =>
+					coreProjectHostPerformanceHarness().applyModelCommit(
+						storyId,
+						request,
+						{onWorkerMetric}
+					)
+				),
 			detail: (storyId, cursor) =>
 				coreProjectHostPerformanceHarness().queryRefactorPlanDetailAsync(
 					storyId,
 					cursor
 				),
+			detailObserved: (storyId, cursor, workerResponseCheckpointName) => {
+				const previous = coreBridgeMetricsSnapshot()
+					.filter(metric => metric.kind === 'queryRefactorPlanDetail')
+					.at(-1);
+
+				return observeWorkerResponse(
+					workerResponseCheckpointName,
+					(onWorkerMetric, rejectObservation) => {
+						const result =
+							coreProjectHostPerformanceHarness().queryRefactorPlanDetailAsync(
+								storyId,
+								cursor
+							);
+						void result.then(
+							() => {
+								const metric = coreBridgeMetricsSnapshot()
+									.filter(
+										candidate => candidate.kind === 'queryRefactorPlanDetail'
+									)
+									.at(-1);
+								if (!metric || metric === previous) {
+									rejectObservation(
+										new Error(
+											`Worker response checkpoint "${workerResponseCheckpointName}" did not observe a new detail response.`
+										)
+									);
+									return;
+								}
+								onWorkerMetric(metric);
+							},
+							() => undefined
+						);
+						return result;
+					}
+				);
+			},
+			planDiagnosticFixes: (storyId, request, options) =>
+				coreProjectHostPerformanceHarness().planDiagnosticFixes(
+					storyId,
+					request,
+					options
+				),
+			planDiagnosticFixesObserved: (
+				storyId,
+				request,
+				workerResponseCheckpointName,
+				options
+			) =>
+				observeWorkerResponse(workerResponseCheckpointName, onWorkerMetric =>
+					coreProjectHostPerformanceHarness().planDiagnosticFixes(
+						storyId,
+						request,
+						{
+							onPlanningStarted: options?.onPlanningStarted,
+							onWorkerMetric: metric => {
+								onWorkerMetric(metric);
+								options?.onWorkerMetric?.(metric);
+							}
+						}
+					)
+				),
+			undo: storyId => coreProjectHostPerformanceHarness().undo(storyId),
+			undoModelCommit: storyId =>
+				coreProjectHostPerformanceHarness().undoModelCommit(storyId),
 			plan: (storyId, request, options) => {
 				let pendingCount = 0;
 				let localHighWater: RendererCheckpointValues | undefined;

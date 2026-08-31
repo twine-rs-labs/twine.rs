@@ -70,6 +70,149 @@ function validatePhase(report, overrides = {}) {
 	});
 }
 
+function refactorOperations({
+	core = false,
+	m3Definition = false,
+	m3References = false,
+	m4 = false,
+	memory = false,
+	typing = false
+} = {}) {
+	return {
+		...(core ? {refactorCore: 'project-replace'} : {}),
+		...(m3References
+			? {refactorM3PassageReferences: 'passage-references'}
+			: {}),
+		...(m3Definition ? {refactorM3Definition: 'passage-definition'} : {}),
+		...(m4 ? {refactorM4DiagnosticFixes: 'diagnostic-fixes'} : {}),
+		...(typing ? {refactorTyping: 'typing-responsiveness'} : {}),
+		...(memory ? {refactorMemory: 'memory-observation'} : {})
+	};
+}
+
+function m4ResponseBoundaryCheckpoint(name, totalBytes, sampleCount) {
+	const jsHeapBytes = 100;
+	const workerCdpUsedBytes = 200;
+	const wasmBytes = totalBytes - jsHeapBytes - workerCdpUsedBytes;
+
+	return {
+		main: {
+			memoryCheckpoints: [
+				{
+					name,
+					ownedHighWater: {
+						jsHeapBytes,
+						milestone: name,
+						sampleCount: sampleCount === 1 ? 1 : 7,
+						totalBytes,
+						wasmBytes,
+						workerCdpResponseDriftMs: 5,
+						workerCdpSampledAtEpochMs: 1_005,
+						workerCdpUsedBytes,
+						workerResponseAtEpochMs: 1_000
+					},
+					renderer: {
+						usedJSHeapSize: jsHeapBytes,
+						workerHeapCdpResponseDriftMs: 5,
+						workerHeapCdpSampledAtEpochMs: 1_005,
+						workerHeapCdpUsedBytes: workerCdpUsedBytes,
+						workerResponseAtEpochMs: 1_000,
+						workerWasmMemoryBytes: wasmBytes
+					},
+					sampleCount
+				}
+			]
+		}
+	};
+}
+
+function refactorPhaseReport({
+	core = true,
+	m3Definition = false,
+	m3References = false,
+	m4 = true,
+	memory = false,
+	typing = false
+} = {}) {
+	const families = {core, m3Definition, m3References, m4, memory, typing};
+	const operations = refactorOperations(families);
+	const baselineBytes = 1_000 * 1024 * 1024;
+	const planBytes = 1_040 * 1024 * 1024;
+	const detailBytes = 1_080 * 1024 * 1024;
+	const samples = {
+		...(core ? {'refactor.summaryGenerationMs': [10]} : {}),
+		...(m3References
+			? {
+					'refactor.m3.referencesColdComputeMs': [10],
+					'refactor.m3.referencesWarmRoundTripMs': [10]
+				}
+			: {}),
+		...(m3Definition ? {'refactor.m3.definitionResponseBytes': [10]} : {}),
+		...(m4
+			? {
+					'refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB': [80],
+					'refactor.m4.allSafe.planMs': [10]
+				}
+			: {}),
+		...(typing ? {'refactor.editPaintMs': [10]} : {}),
+		...(memory
+			? {
+					'refactor.memory.postClose.residentMiB': [10],
+					'refactor.memory.postCommit.private.mainMiB': [10],
+					'refactor.processPrivateIncrementalMiB': [10],
+					'refactor.processPrivateMainIncrementalMiB': [10],
+					'refactor.processPrivateRendererIncrementalMiB': [10]
+				}
+			: {})
+	};
+
+	return phaseReport({
+		configuration: {refactor: {operation: 'multi-operation', operations}},
+		diagnostics: {
+			refactor: {
+				checkpoints: [
+					m4ResponseBoundaryCheckpoint(
+						'refactor-m4-all-safe-response-boundary-baseline',
+						baselineBytes,
+						1
+					),
+					m4ResponseBoundaryCheckpoint(
+						'refactor-m4-all-safe-plan-response-boundary',
+						planBytes,
+						20
+					),
+					m4ResponseBoundaryCheckpoint(
+						'refactor-m4-all-safe-detail-response-boundary',
+						detailBytes,
+						20
+					)
+				],
+				operation: 'multi-operation',
+				operations
+			}
+		},
+		environment: {
+			fingerprint: 'machine',
+			git: {
+				dirty: false,
+				revision: 'abc123',
+				worktreeFingerprint: 'worktree-one'
+			},
+			metricContracts: {refactorOperations: operations}
+		},
+		phase: 'refactor',
+		samples
+	});
+}
+
+function validateRefactorPhase(report) {
+	return validateElectronPhaseReport(report, {
+		fixtureVariant: 'default',
+		phase: 'refactor',
+		size: 100
+	});
+}
+
 test('fingerprints tracked, staged, and untracked worktree contents', async () => {
 	const directory = await mkdtemp(path.join(tmpdir(), 'twine-perf-git-'));
 	const git = args => execFileSync('git', args, {cwd: directory});
@@ -226,6 +369,221 @@ test('merges independently checkpointed benchmark phases', () => {
 	assert.equal(merged.diagnostics.watcher.trace, true);
 	assert.equal(merged.test.status, 'passed');
 	assert.equal(merged.measurement, undefined);
+});
+
+test('accepts refactor reports with every declared operation identity', () => {
+	const report = refactorPhaseReport({
+		core: true,
+		m3Definition: true,
+		m3References: true,
+		m4: true,
+		memory: true,
+		typing: true
+	});
+
+	assert.deepEqual(report.configuration.refactor.operations, {
+		refactorCore: 'project-replace',
+		refactorM3PassageReferences: 'passage-references',
+		refactorM3Definition: 'passage-definition',
+		refactorM4DiagnosticFixes: 'diagnostic-fixes',
+		refactorTyping: 'typing-responsiveness',
+		refactorMemory: 'memory-observation'
+	});
+	assert.equal(validateRefactorPhase(report).valid, true);
+});
+
+test('accepts retained M4 evidence after the phase report is merged', () => {
+	const merged = mergeRawPerformanceReports([refactorPhaseReport()], {
+		refactor: {status: 'passed'}
+	});
+
+	assert.equal(validateRefactorPhase(merged).valid, true);
+});
+
+test('rejects missing, mismatched, and extra refactor operation identities', () => {
+	const missing = refactorPhaseReport();
+	delete missing.configuration.refactor;
+	assert.equal(validateRefactorPhase(missing).valid, false);
+
+	const mismatched = refactorPhaseReport();
+	mismatched.diagnostics.refactor.operations.refactorM4DiagnosticFixes =
+		'project-replace';
+	assert.equal(validateRefactorPhase(mismatched).valid, false);
+
+	for (const selectMap of [
+		report => report.configuration.refactor.operations,
+		report => report.diagnostics.refactor.operations,
+		report => report.environment.metricContracts.refactorOperations
+	]) {
+		const report = refactorPhaseReport();
+		selectMap(report).unexpected = 'not-an-operation';
+		assert.equal(validateRefactorPhase(report).valid, false);
+	}
+});
+
+test('attributes M3 reference and definition metrics to their own operations', () => {
+	const report = refactorPhaseReport({
+		core: false,
+		m3Definition: true,
+		m3References: true,
+		m4: false
+	});
+
+	assert.deepEqual(report.configuration.refactor.operations, {
+		refactorM3PassageReferences: 'passage-references',
+		refactorM3Definition: 'passage-definition'
+	});
+	assert.equal(validateRefactorPhase(report).valid, true);
+
+	for (const operations of [
+		report.configuration.refactor.operations,
+		report.diagnostics.refactor.operations,
+		report.environment.metricContracts.refactorOperations
+	]) {
+		operations.refactorM3PassageReferences = 'project-replace';
+	}
+	assert.equal(validateRefactorPhase(report).valid, false);
+});
+
+test('rejects unknown refactor metric families and validates merged diagnostics maps', () => {
+	const unknown = refactorPhaseReport({core: true, m4: false});
+	unknown.samples['refactor.m3.futureQueryMs'] = [10];
+	const unknownValidation = validateRefactorPhase(unknown);
+	assert.equal(unknownValidation.valid, false);
+	assert.match(
+		unknownValidation.errors.join(' '),
+		/refactor\.m3\.futureQueryMs has no declared operation family/
+	);
+
+	const merged = mergeRawPerformanceReports(
+		[
+			refactorPhaseReport({
+				core: false,
+				m3References: true,
+				m4: false
+			})
+		],
+		{refactor: {status: 'passed'}}
+	);
+	merged.diagnostics.phases.refactor.refactor.operations.unexpected =
+		'not-an-operation';
+	assert.equal(validateRefactorPhase(merged).valid, false);
+});
+
+test('keeps core-owned refactor memory metrics separate from support observations', () => {
+	const core = refactorPhaseReport({core: true, m4: false});
+	Object.assign(core.samples, {
+		'refactor.peakIncrementalMemoryMiB': [10],
+		'refactor.planStoreMiB': [10],
+		'refactor.retainedFrontendMiB': [10]
+	});
+	assert.deepEqual(core.configuration.refactor.operations, {
+		refactorCore: 'project-replace'
+	});
+	assert.equal(validateRefactorPhase(core).valid, true);
+
+	const supportingMemory = refactorPhaseReport({
+		core: false,
+		m4: false,
+		memory: true
+	});
+	assert.deepEqual(supportingMemory.configuration.refactor.operations, {
+		refactorMemory: 'memory-observation'
+	});
+	assert.equal(validateRefactorPhase(supportingMemory).valid, true);
+
+	supportingMemory.samples['refactor.memory.postPlan.residentMiB'] = [10];
+	assert.equal(validateRefactorPhase(supportingMemory).valid, false);
+});
+
+test('accepts core-only refactor reports without M4 checkpoint evidence', () => {
+	const report = refactorPhaseReport({core: true, m4: false});
+	report.diagnostics.refactor.checkpoints = [];
+
+	assert.equal(validateRefactorPhase(report).valid, true);
+});
+
+test('leaves non-refactor reports compatible with existing raw report contracts', () => {
+	assert.equal(
+		validatePhase(phaseReport({samples: {'refactor.m4.allSafe.planMs': [10]}}))
+			.valid,
+		true
+	);
+});
+
+test('requires zero-sample refactor probes to omit operation identity maps', () => {
+	const probe = phaseReport({
+		configuration: {baselineCompatible: true},
+		diagnostics: {},
+		environment: {
+			fingerprint: 'machine',
+			git: {
+				dirty: false,
+				revision: 'abc123',
+				worktreeFingerprint: 'worktree-one'
+			},
+			metricContracts: {}
+		},
+		phase: 'refactor',
+		probeOnly: true,
+		samples: {}
+	});
+
+	assert.equal(validateRefactorPhase(probe).valid, true);
+
+	const operations = refactorOperations({
+		core: true,
+		m3Definition: true,
+		m3References: true,
+		m4: true,
+		memory: true,
+		typing: true
+	});
+	probe.configuration.refactor = {operation: 'multi-operation', operations};
+	probe.diagnostics.refactor = {operation: 'multi-operation', operations};
+	probe.environment.metricContracts.refactorOperation = 'multi-operation';
+	probe.environment.metricContracts.refactorOperations = operations;
+
+	const validation = validateRefactorPhase(probe);
+	assert.equal(validation.valid, false);
+	assert.match(
+		validation.errors.join(' '),
+		/zero-sample refactor report must omit operation identity maps/
+	);
+});
+
+test('rejects missing or malformed M4 response-boundary evidence', () => {
+	const missing = refactorPhaseReport();
+	missing.diagnostics.refactor.checkpoints = [];
+	assert.equal(validateRefactorPhase(missing).valid, false);
+
+	const wrongCount = refactorPhaseReport();
+	wrongCount.diagnostics.refactor.checkpoints[1].main.memoryCheckpoints[0].sampleCount = 19;
+	assert.equal(validateRefactorPhase(wrongCount).valid, false);
+
+	const missingDeliveryTuple = refactorPhaseReport();
+	delete missingDeliveryTuple.diagnostics.refactor.checkpoints[2].main
+		.memoryCheckpoints[0].ownedHighWater.workerResponseAtEpochMs;
+	assert.equal(validateRefactorPhase(missingDeliveryTuple).valid, false);
+});
+
+test('rejects M4 response-boundary samples that do not match retained evidence', () => {
+	const report = refactorPhaseReport();
+	report.samples['refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB'] = [
+		79
+	];
+
+	assert.equal(validateRefactorPhase(report).valid, false);
+});
+
+test('rejects the legacy M4 peak-memory key', () => {
+	const report = refactorPhaseReport();
+	delete report.samples[
+		'refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB'
+	];
+	report.samples['refactor.m4.allSafe.peakIncrementalMemoryMiB'] = [80];
+
+	assert.equal(validateRefactorPhase(report).valid, false);
 });
 
 test('continues after valid passing and assertion-failed phase reports', () => {
@@ -789,6 +1147,11 @@ test('generated refactor fixture targets resolve and have a standard backlink', 
 		);
 		const target = manifest.refactorTarget;
 		assert.ok(target);
+		assert.deepEqual(manifest.m4DiagnosticFixTarget, {
+			expectedChangeCount: manifest.linkCounts.broken,
+			selection: 'allSafe',
+			storyId: target.storyId
+		});
 		const passage = source.passages.find(item => item.id === target.passageId);
 		assert.equal(passage?.name, target.beforeName);
 		assert.ok(
@@ -797,6 +1160,42 @@ test('generated refactor fixture targets resolve and have a standard backlink', 
 			)
 		);
 	}
+});
+
+test('blocks refactor reports that omit the required M4 operation metrics', () => {
+	const result = evaluatePerformanceReport(
+		{
+			aggregates: {},
+			assertions: [],
+			environment: {
+				git: {
+					dirty: false,
+					revision: 'm4',
+					worktreeFingerprint: 'm4-worktree'
+				},
+				metricContracts: {refactorM4DiagnosticFixes: 1}
+			},
+			fixture: {passageCount: 10_000},
+			phase: 'refactor'
+		},
+		{
+			metrics: {
+				'refactor.m4.allSafe.planMs': {
+					baselineContract: 'refactorM4DiagnosticFixes',
+					category: 'electron',
+					enforceTarget: true,
+					phases: ['refactor'],
+					stat: 'p95',
+					targets: {10000: 250}
+				}
+			},
+			regressions: {}
+		}
+	);
+
+	assert.equal(result.passed, false);
+	assert.equal(result.checks[0].name, 'refactor.m4.allSafe.planMs');
+	assert.equal(result.checks[0].status, 'missing');
 });
 
 test('blocks refactor typing when a matching accepted baseline lacks edit paint', () => {

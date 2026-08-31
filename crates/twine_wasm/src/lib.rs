@@ -6,11 +6,11 @@ use twine_core::{
     CoreDefinitionQuery, CoreDiagnosticsQuery, CoreDiagnosticsSummaryQuery, CoreDocumentQuery,
     CoreExternalDelta, CoreExternalIngestMode, CoreGraphProjectionOptions,
     CorePassageReferencesQuery, CoreSearchQuery, CoreSourceKind, CoreStoryIndexOptions,
-    PassageSnapshot, PlanPassageRenameBeginResult, PlanPassageRenameRequest,
-    PlanProjectReplaceBeginResult, PlanProjectReplaceRequest, ProjectSession, ProjectSnapshot,
-    RefactorPlanApplyRequest, RefactorPlanApplyResult, RefactorPlanCursor,
-    RefactorPlanDetailResult, RefactorPlanningTaskHandle, RefactorRuntimeState, StoryCommand,
-    StorySnapshot,
+    PassageSnapshot, PlanDiagnosticFixesRequest, PlanDiagnosticFixesResult,
+    PlanPassageRenameBeginResult, PlanPassageRenameRequest, PlanProjectReplaceBeginResult,
+    PlanProjectReplaceRequest, ProjectSession, ProjectSnapshot, RefactorPlanApplyRequest,
+    RefactorPlanApplyResult, RefactorPlanCursor, RefactorPlanDetailResult,
+    RefactorPlanningTaskHandle, RefactorRuntimeState, StoryCommand, StorySnapshot,
 };
 use twine_model::{
     GraphLayout, GraphPosition, LibraryMetadata, Passage, PassageId, PassageIndex, PassageLayout,
@@ -176,6 +176,17 @@ impl TwineWasmProjectSession {
                 Err(failure) => PlanPassageRenameBeginResult::Failure { failure },
             },
             None => PlanPassageRenameBeginResult::Failure {
+                failure: missing_refactor_runtime_failure(),
+            },
+        };
+        to_js(&result)
+    }
+
+    pub fn plan_diagnostic_fixes(&mut self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_js::<PlanDiagnosticFixesRequest>(request)?;
+        let result = match self.refactor_runtime.clone() {
+            Some(runtime) => self.session.plan_diagnostic_fixes(request, runtime),
+            None => PlanDiagnosticFixesResult::Failure {
                 failure: missing_refactor_runtime_failure(),
             },
         };
@@ -599,6 +610,10 @@ fn passage_from_snapshot(snapshot: PassageSnapshot, story_id: &StoryId) -> Passa
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_arch = "wasm32")]
+    use twine_core::{
+        PlanDiagnosticFixesRequest, PlanDiagnosticFixesResult, PlanDiagnosticFixesSelection,
+    };
     use twine_core::{PlanPassageRenameRequest, RefactorPlanSelection};
 
     fn snapshot() -> ProjectSnapshot {
@@ -777,5 +792,42 @@ mod tests {
                 .text,
             "[[After]]"
         );
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    fn wasm_diagnostic_fix_planning_uses_the_synchronized_runtime() {
+        let mut snapshot = snapshot();
+        snapshot.stories[0].passages[0].text = "[[Missing]]".into();
+        let mut session = TwineWasmProjectSession::new(
+            serde_wasm_bindgen::to_value(&snapshot).expect("snapshot value"),
+        )
+        .expect("wasm session");
+        let runtime = RefactorRuntimeState {
+            project_revision: 1,
+            buffers: Vec::new(),
+            external: None,
+            provider: None,
+        };
+        session
+            .sync_refactor_runtime(serde_wasm_bindgen::to_value(&runtime).expect("runtime value"))
+            .expect("synchronized runtime");
+        let result = session
+            .plan_diagnostic_fixes(
+                serde_wasm_bindgen::to_value(&PlanDiagnosticFixesRequest {
+                    story_id: "story-1".into(),
+                    selection: PlanDiagnosticFixesSelection::AllSafe {
+                        excluded_diagnostic_ids: Vec::new(),
+                    },
+                })
+                .expect("request value"),
+            )
+            .expect("planning result value");
+        let result = serde_wasm_bindgen::from_value::<PlanDiagnosticFixesResult>(result)
+            .expect("planning result");
+        assert!(matches!(
+            result,
+            PlanDiagnosticFixesResult::Complete { summary } if summary.change_count == 1
+        ));
     }
 }

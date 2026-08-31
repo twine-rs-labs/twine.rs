@@ -43,6 +43,13 @@ class TestSession {
 
 	sync_refactor_runtime() {}
 
+	plan_diagnostic_fixes(request: unknown) {
+		return {
+			summary: {operationKind: 'diagnostic-fixes', request},
+			type: 'complete'
+		};
+	}
+
 	begin_passage_rename_plan() {
 		TestSession.beginCalls++;
 		return {task: {taskId: 'task-1'}, type: 'begun'};
@@ -150,6 +157,34 @@ describe('WASM worker refactor cancellation', () => {
 				rustStartedAtEpochMs: expect.any(Number)
 			})
 		);
+		const diagnosticPlan = await request({
+			kind: 'planDiagnosticFixes',
+			refactorRuntimeEpoch: epoch,
+			request: {
+				selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+				storyId: 'story',
+				hugeUnknown: 'not forwarded to wasm'
+			},
+			revision: 1,
+			sessionId: 'refactor-cancel'
+		});
+		expect(diagnosticPlan).toMatchObject({
+			metrics: {
+				rustFinishedAtEpochMs: expect.any(Number),
+				rustStartedAtEpochMs: expect.any(Number)
+			},
+			ok: true,
+			result: {
+				summary: {
+					operationKind: 'diagnostic-fixes',
+					request: {
+						selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+						storyId: 'story'
+					}
+				},
+				type: 'complete'
+			}
+		});
 		const begun = await request({
 			kind: 'beginPassageRenamePlan',
 			refactorRuntimeEpoch: epoch,

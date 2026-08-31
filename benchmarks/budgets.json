@@ -58,6 +58,7 @@
 		"refactor.summaryGenerationMs": {
 			"category": "electron",
 			"enforceTarget": true,
+			"operation": "project-replace",
 			"phases": ["refactor"],
 			"stat": "p95",
 			"targets": {"10000": 250, "50000": 1000}
@@ -65,6 +66,7 @@
 		"refactor.detailPageMs": {
 			"category": "electron",
 			"enforceTarget": true,
+			"operation": "project-replace",
 			"phases": ["refactor"],
 			"stat": "p95",
 			"targets": {"10000": 50, "50000": 100}
@@ -73,6 +75,7 @@
 			"baselineContract": "refactorAtomicCommit",
 			"category": "electron",
 			"enforceTarget": true,
+			"operation": "project-replace",
 			"phases": ["refactor"],
 			"stat": "p95",
 			"targets": {"10000": 1000, "50000": 5000}
@@ -81,6 +84,7 @@
 			"baselineContract": "refactorMemory",
 			"category": "memory",
 			"enforceTarget": true,
+			"operation": "project-replace",
 			"phases": ["refactor"],
 			"stat": "max",
 			"targets": {"10000": 64, "50000": 128}
@@ -88,6 +92,7 @@
 		"refactor.retainedFrontendMiB": {
 			"category": "memory",
 			"enforceTarget": true,
+			"operation": "project-replace",
 			"phases": ["refactor"],
 			"stat": "max",
 			"targets": {"10000": 8, "50000": 16}
@@ -95,6 +100,7 @@
 		"refactor.summaryBytes": {
 			"category": "electron",
 			"enforceTarget": true,
+			"operation": "project-replace",
 			"phases": ["refactor"],
 			"stat": "max",
 			"target": 65536
@@ -102,6 +108,7 @@
 		"refactor.detailPageBytes": {
 			"category": "electron",
 			"enforceTarget": true,
+			"operation": "project-replace",
 			"phases": ["refactor"],
 			"stat": "max",
 			"target": 262144
@@ -109,6 +116,7 @@
 		"refactor.planStoreMiB": {
 			"category": "memory",
 			"enforceTarget": true,
+			"operation": "project-replace",
 			"phases": ["refactor"],
 			"stat": "max",
 			"targets": {"10000": 64, "50000": 128}
@@ -119,12 +127,105 @@
 			"baselineOffset": 5,
 			"category": "electron",
 			"enforceTarget": true,
+			"operation": "typing-responsiveness",
 			"phases": ["refactor"],
 			"stat": "p95"
 		},
 		"refactor.longTaskMs": {
 			"category": "electron",
 			"enforceTarget": true,
+			"operation": "typing-responsiveness",
+			"phases": ["refactor"],
+			"stat": "max",
+			"target": 50
+		},
+		"refactor.m4.allSafe.planMs": {
+			"baselineContract": "refactorM4DiagnosticFixes",
+			"category": "electron",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
+			"phases": ["refactor"],
+			"stat": "p95",
+			"targets": {"10000": 250, "50000": 1000}
+		},
+		"refactor.m4.allSafe.detailPageMs": {
+			"baselineContract": "refactorM4DiagnosticFixes",
+			"category": "electron",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
+			"phases": ["refactor"],
+			"stat": "p95",
+			"targets": {"10000": 50, "50000": 100}
+		},
+		"refactor.m4.allSafe.atomicCommitMs": {
+			"baselineContract": "refactorM4DiagnosticFixes",
+			"category": "electron",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
+			"phases": ["refactor"],
+			"stat": "p95",
+			"targets": {"10000": 1000, "50000": 5000}
+		},
+		"refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB": {
+			"baselineContract": "refactorM4DiagnosticFixes",
+			"category": "memory",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
+			"phases": ["refactor"],
+			"stat": "max",
+			"targets": {"10000": 64, "50000": 128}
+		},
+		"refactor.m4.allSafe.retainedFrontendMiB": {
+			"baselineContract": "refactorM4DiagnosticFixes",
+			"category": "memory",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
+			"phases": ["refactor"],
+			"stat": "max",
+			"targets": {"10000": 8, "50000": 16}
+		},
+		"refactor.m4.allSafe.planStoreMiB": {
+			"baselineContract": "refactorM4DiagnosticFixes",
+			"category": "memory",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
+			"phases": ["refactor"],
+			"stat": "max",
+			"targets": {"10000": 64, "50000": 128}
+		},
+		"refactor.m4.allSafe.summaryBytes": {
+			"baselineContract": "refactorM4DiagnosticFixes",
+			"category": "electron",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
+			"phases": ["refactor"],
+			"stat": "max",
+			"target": 65536
+		},
+		"refactor.m4.allSafe.detailPageBytes": {
+			"baselineContract": "refactorM4DiagnosticFixes",
+			"category": "electron",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
+			"phases": ["refactor"],
+			"stat": "max",
+			"target": 262144
+		},
+		"refactor.m4.allSafe.editPaintMs": {
+			"baselineContract": "editAttribution",
+			"baselineMetric": "edit.paintMs",
+			"baselineOffset": 5,
+			"category": "electron",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
+			"phases": ["refactor"],
+			"stat": "p95"
+		},
+		"refactor.m4.allSafe.longTaskMs": {
+			"baselineContract": "refactorM4DiagnosticFixes",
+			"category": "electron",
+			"enforceTarget": true,
+			"operation": "diagnostic-fixes",
 			"phases": ["refactor"],
 			"stat": "max",
 			"target": 50

@@ -878,7 +878,7 @@ async function replaceEditorText(page: Page, text: string) {
 	await page.keyboard.press('Tab');
 }
 
-test('packaged desktop finds passage references and exact definitions', async ({}, testInfo) => {
+test('packaged desktop navigates definitions and applies reviewed diagnostic fixes', async ({}, testInfo) => {
 	const executablePath = await packagedExecutable();
 	const profileRoot = await mkdtemp(
 		path.join(os.tmpdir(), 'twine-rs-packaged-navigation-')
@@ -924,6 +924,31 @@ test('packaged desktop finds passage references and exact definitions', async ({
 		await definition.click();
 		await expect(
 			page.getByRole('region', {name: 'Next', exact: true})
+		).toBeVisible();
+		await replaceEditorText(page, 'Next passage. [[Packaged Missing]].');
+		const missingPassage = page
+			.getByRole('listitem')
+			.filter({has: page.getByText('Packaged Missing', {exact: true})})
+			.getByRole('button');
+		await expect(missingPassage).toBeVisible();
+		await missingPassage.click();
+		await page.getByRole('tab', {name: 'Passage', exact: true}).click();
+		await page.getByRole('button', {name: 'Delete', exact: true}).click();
+		await page.getByTitle('Diagnostics').click();
+		await expect(page.getByText('broken-link').first()).toBeVisible();
+		await page.getByRole('button', {name: 'Fix All Safe'}).click();
+		const fixReview = page.getByRole('dialog', {
+			name: 'Review Diagnostic Fixes'
+		});
+		await expect(fixReview.getByText('Add passage')).toBeVisible();
+		await expect(
+			fixReview.getByText('Packaged Missing', {exact: true})
+		).toBeVisible();
+		await fixReview.getByRole('button', {name: 'Apply Fixes'}).click();
+		await expect(fixReview).toHaveCount(0);
+		await page.getByTitle('Contents').click();
+		await expect(
+			page.getByText('Packaged Missing', {exact: true}).first()
 		).toBeVisible();
 	} catch (error) {
 		if (running) {

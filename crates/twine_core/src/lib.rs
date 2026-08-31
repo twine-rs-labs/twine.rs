@@ -572,8 +572,35 @@ pub struct CoreDiagnostic {
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub struct CoreQuickFix {
+    pub applicability: CoreQuickFixApplicability,
     pub command: String,
     pub title: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum CoreQuickFixApplicability {
+    Automatic,
+    Manual,
+}
+
+impl CoreQuickFix {
+    fn automatic_broken_link_create_passage(target: &str) -> Self {
+        Self {
+            applicability: CoreQuickFixApplicability::Automatic,
+            command: format!("create-passage:{target}"),
+            title: format!("Create \"{target}\""),
+        }
+    }
+
+    fn manual(command: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            applicability: CoreQuickFixApplicability::Manual,
+            command: command.into(),
+            title: title.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
@@ -3238,8 +3265,8 @@ struct CompactExternalPlan {
     project_layouts: BTreeMap<usize, GraphLayout>,
 }
 
-#[cfg(test)]
 fn diagnostic_identity(diagnostic: &CoreDiagnostic) -> String {
+    #[cfg(test)]
     DIAGNOSTIC_IDENTITY_SERIALIZATIONS.with(|count| count.set(count.get() + 1));
 
     serde_json::to_string(&(
@@ -3552,6 +3579,172 @@ impl ProjectSession {
 
     pub fn cancel_project_replace_plan(&mut self, task: &RefactorPlanningTaskHandle) -> bool {
         self.refactor_planning_tasks.cancel(&task.task_id)
+    }
+
+    /// Produces an opaque Rust-owned refactor plan for the current automatic
+    /// diagnostic fixes. Request commands are descriptive selectors only and
+    /// are matched against the current read model before materialization.
+    pub fn plan_diagnostic_fixes(
+        &mut self,
+        request: PlanDiagnosticFixesRequest,
+        runtime: RefactorRuntimeState,
+    ) -> PlanDiagnosticFixesResult {
+        let result = (|| {
+            let current_revision = self.refactor_revision()?;
+            if runtime.project_revision != current_revision {
+                return Err(RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::StaleProjectRevision,
+                    message: "Planning runtime state does not match the project revision.".into(),
+                });
+            }
+
+            let request_bytes = serde_json::to_vec(&request)
+                .map_err(|_| diagnostic_fix_invalid_plan("Diagnostic fix request is invalid."))?
+                .len();
+            if request_bytes > MAX_REFACTOR_SELECTION_BYTES {
+                return Err(RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::SelectionTooLarge,
+                    message: "Diagnostic fix request exceeds the 4 MiB limit.".into(),
+                });
+            }
+
+            let selected_id_count = match &request.selection {
+                PlanDiagnosticFixesSelection::Only { fixes } => fixes.len(),
+                PlanDiagnosticFixesSelection::AllSafe {
+                    excluded_diagnostic_ids,
+                } => excluded_diagnostic_ids.len(),
+            };
+            if selected_id_count > MAX_REFACTOR_SELECTION_IDS {
+                return Err(RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::SelectionTooLarge,
+                    message: "Diagnostic fix selection exceeds the 50,000 id limit.".into(),
+                });
+            }
+
+            let diagnostics = self
+                .read_model(&request.story_id)
+                .map_err(|error| diagnostic_fix_invalid_plan(&error.to_string()))?
+                .diagnostics
+                .clone();
+            let story = self
+                .story(&request.story_id)
+                .map_err(|error| diagnostic_fix_invalid_plan(&error.to_string()))?
+                .clone();
+            let selected = match &request.selection {
+                PlanDiagnosticFixesSelection::Only { fixes } => {
+                    if fixes.is_empty() {
+                        return Err(diagnostic_fix_invalid_plan(
+                            "Diagnostic fix selection must not be empty.",
+                        ));
+                    }
+                    let mut seen = BTreeSet::new();
+                    let mut selected = Vec::with_capacity(fixes.len());
+                    for fix in fixes {
+                        if !seen.insert(fix.clone()) {
+                            return Err(diagnostic_fix_invalid_plan(
+                                "Diagnostic fix selections must be unique.",
+                            ));
+                        }
+                        let matching_diagnostics = diagnostics
+                            .iter()
+                            .filter(|diagnostic| {
+                                diagnostic_identity(diagnostic) == fix.diagnostic_id
+                            })
+                            .collect::<Vec<_>>();
+                        let [diagnostic] = matching_diagnostics.as_slice() else {
+                            return Err(diagnostic_fix_invalid_plan(
+                                "Diagnostic fix selection is stale, unknown, or ambiguous.",
+                            ));
+                        };
+                        let matching_quick_fixes = diagnostic
+                            .quick_fixes
+                            .iter()
+                            .filter(|quick_fix| quick_fix.command == fix.quick_fix_command)
+                            .collect::<Vec<_>>();
+                        let [quick_fix] = matching_quick_fixes.as_slice() else {
+                            return Err(diagnostic_fix_invalid_plan(
+                                "Diagnostic quick-fix selection is stale, unknown, or ambiguous.",
+                            ));
+                        };
+                        if quick_fix.applicability != CoreQuickFixApplicability::Automatic {
+                            return Err(diagnostic_fix_invalid_plan(
+                                "Diagnostic quick-fix selection is not automatic.",
+                            ));
+                        }
+                        selected.push((*diagnostic, *quick_fix));
+                    }
+                    selected
+                }
+                PlanDiagnosticFixesSelection::AllSafe {
+                    excluded_diagnostic_ids,
+                } => {
+                    let excluded = excluded_diagnostic_ids.iter().collect::<BTreeSet<_>>();
+                    diagnostics
+                        .iter()
+                        .filter(|diagnostic| !excluded.contains(&diagnostic_identity(diagnostic)))
+                        .flat_map(|diagnostic| {
+                            diagnostic
+                                .quick_fixes
+                                .iter()
+                                .filter(move |quick_fix| {
+                                    quick_fix.applicability == CoreQuickFixApplicability::Automatic
+                                })
+                                .map(move |quick_fix| (diagnostic, quick_fix))
+                        })
+                        .collect()
+                }
+            };
+
+            let mut targets = BTreeSet::new();
+            let mut changes = Vec::new();
+            for (_diagnostic, quick_fix) in selected {
+                let target = automatic_broken_link_target(quick_fix).ok_or_else(|| {
+                    diagnostic_fix_invalid_plan(
+                        "Automatic diagnostic quick-fix cannot be materialized.",
+                    )
+                })?;
+                if !targets.insert(target.to_owned()) {
+                    continue;
+                }
+                let passage = Passage {
+                    custom_attributes: BTreeMap::new(),
+                    id: PassageId::new(next_diagnostic_fix_passage_id(&story, &changes)),
+                    layout: None,
+                    metadata: BTreeMap::new(),
+                    name: target.to_owned(),
+                    source_pid: None,
+                    story: story.id.clone(),
+                    tags: Vec::new(),
+                    text: String::new(),
+                };
+                changes.push(CanonicalPlanDraftChange {
+                    key: format!("diagnostic-fix-{:08}", changes.len()),
+                    group_key: None,
+                    dependencies: Vec::new(),
+                    change: CanonicalPlanChange::AddPassage {
+                        story_id: story.id.as_ref().to_owned(),
+                        passage,
+                        layout: None,
+                    },
+                });
+            }
+            if changes.is_empty() {
+                return Err(diagnostic_fix_invalid_plan(
+                    "Diagnostic fix selection does not produce any changes.",
+                ));
+            }
+            self.plan_refactor(CanonicalPlanDraft {
+                operation_kind: "diagnostic-fixes".into(),
+                coverage: "deterministic-safe-fixes".into(),
+                preconditions: runtime,
+                changes,
+            })
+        })();
+
+        match result {
+            Ok(summary) => PlanDiagnosticFixesResult::Complete { summary },
+            Err(failure) => PlanDiagnosticFixesResult::Failure { failure },
+        }
     }
 
     pub fn refactor_plan_detail_page(
@@ -8157,10 +8350,10 @@ impl ProjectSession {
                 line: 1,
                 message: format!("Search regular expression is invalid: {error}"),
                 passage_id: None,
-                quick_fixes: vec![CoreQuickFix {
-                    command: "disable-regex-search".into(),
-                    title: "Turn off regular expressions".into(),
-                }],
+                quick_fixes: vec![CoreQuickFix::manual(
+                    "disable-regex-search",
+                    "Turn off regular expressions",
+                )],
                 severity: CoreDiagnosticSeverity::Error,
                 source_id: metadata_source_id.clone(),
                 start: 0,
@@ -8280,14 +8473,10 @@ impl ProjectSession {
                         message: format!("Broken link to \"{}\"", broken_link.target_name),
                         passage_id: Some(broken_link.source.as_ref().to_owned()),
                         quick_fixes: vec![
-                            CoreQuickFix {
-                                command: format!("create-passage:{}", broken_link.target_name),
-                                title: format!("Create \"{}\"", broken_link.target_name),
-                            },
-                            CoreQuickFix {
-                                command: "rename-link-target".into(),
-                                title: "Change link target".into(),
-                            },
+                            CoreQuickFix::automatic_broken_link_create_passage(
+                                &broken_link.target_name,
+                            ),
+                            CoreQuickFix::manual("rename-link-target", "Change link target"),
                         ],
                         severity: CoreDiagnosticSeverity::Warning,
                         source_id: broken_link.source.as_ref().to_owned(),
@@ -8303,10 +8492,7 @@ impl ProjectSession {
                     line: 1,
                     message: format!("Duplicate passage name \"{}\"", duplicate.name),
                     passage_id: Some(duplicate.passage_id.clone()),
-                    quick_fixes: vec![CoreQuickFix {
-                        command: "rename-passage".into(),
-                        title: "Rename passage".into(),
-                    }],
+                    quick_fixes: vec![CoreQuickFix::manual("rename-passage", "Rename passage")],
                     severity: CoreDiagnosticSeverity::Error,
                     source_id: duplicate.passage_id,
                     start: 0,
@@ -8320,10 +8506,10 @@ impl ProjectSession {
                     line: 1,
                     message: "Story start passage is missing".into(),
                     passage_id: None,
-                    quick_fixes: vec![CoreQuickFix {
-                        command: "set-start-passage".into(),
-                        title: "Choose a start passage".into(),
-                    }],
+                    quick_fixes: vec![CoreQuickFix::manual(
+                        "set-start-passage",
+                        "Choose a start passage",
+                    )],
                     severity: CoreDiagnosticSeverity::Error,
                     source_id: metadata_source_id.clone(),
                     start: 0,
@@ -8544,14 +8730,10 @@ impl ProjectSession {
                     message: format!("Broken link to \"{}\"", broken_link.target_name),
                     passage_id: Some(broken_link.source.as_ref().to_owned()),
                     quick_fixes: vec![
-                        CoreQuickFix {
-                            command: format!("create-passage:{}", broken_link.target_name),
-                            title: format!("Create \"{}\"", broken_link.target_name),
-                        },
-                        CoreQuickFix {
-                            command: "rename-link-target".into(),
-                            title: "Change link target".into(),
-                        },
+                        CoreQuickFix::automatic_broken_link_create_passage(
+                            &broken_link.target_name,
+                        ),
+                        CoreQuickFix::manual("rename-link-target", "Change link target"),
                     ],
                     severity: CoreDiagnosticSeverity::Warning,
                     source_id: broken_link.source.as_ref().to_owned(),
@@ -8565,10 +8747,7 @@ impl ProjectSession {
                     line: 1,
                     message: format!("Duplicate passage name \"{}\"", duplicate.name),
                     passage_id: Some(duplicate.passage_id.clone()),
-                    quick_fixes: vec![CoreQuickFix {
-                        command: "rename-passage".into(),
-                        title: "Rename passage".into(),
-                    }],
+                    quick_fixes: vec![CoreQuickFix::manual("rename-passage", "Rename passage")],
                     severity: CoreDiagnosticSeverity::Error,
                     source_id: duplicate.passage_id,
                     start: 0,
@@ -8581,10 +8760,10 @@ impl ProjectSession {
                     line: 1,
                     message: "Story start passage is missing".into(),
                     passage_id: None,
-                    quick_fixes: vec![CoreQuickFix {
-                        command: "set-start-passage".into(),
-                        title: "Choose a start passage".into(),
-                    }],
+                    quick_fixes: vec![CoreQuickFix::manual(
+                        "set-start-passage",
+                        "Choose a start passage",
+                    )],
                     severity: CoreDiagnosticSeverity::Error,
                     source_id: metadata_source_id.clone(),
                     start: 0,
@@ -9023,14 +9202,8 @@ impl ProjectSession {
                     message: format!("Broken link to \"{}\"", edge.target_name),
                     passage_id: Some(passage_id.as_ref().to_owned()),
                     quick_fixes: vec![
-                        CoreQuickFix {
-                            command: format!("create-passage:{}", edge.target_name),
-                            title: format!("Create \"{}\"", edge.target_name),
-                        },
-                        CoreQuickFix {
-                            command: "rename-link-target".into(),
-                            title: "Change link target".into(),
-                        },
+                        CoreQuickFix::automatic_broken_link_create_passage(&edge.target_name),
+                        CoreQuickFix::manual("rename-link-target", "Change link target"),
                     ],
                     severity: CoreDiagnosticSeverity::Warning,
                     source_id: passage_id.as_ref().to_owned(),
@@ -9045,10 +9218,7 @@ impl ProjectSession {
                 line: 1,
                 message: format!("Duplicate passage name \"{passage_name}\""),
                 passage_id: Some(passage_id.as_ref().to_owned()),
-                quick_fixes: vec![CoreQuickFix {
-                    command: "rename-passage".into(),
-                    title: "Rename passage".into(),
-                }],
+                quick_fixes: vec![CoreQuickFix::manual("rename-passage", "Rename passage")],
                 severity: CoreDiagnosticSeverity::Error,
                 source_id: passage_id.as_ref().to_owned(),
                 start: 0,
@@ -10555,6 +10725,41 @@ fn next_passage_id(story: &Story) -> String {
         }
 
         suffix += 1;
+    }
+}
+
+fn automatic_broken_link_target(quick_fix: &CoreQuickFix) -> Option<&str> {
+    (quick_fix.applicability == CoreQuickFixApplicability::Automatic)
+        .then(|| quick_fix.command.strip_prefix("create-passage:"))
+        .flatten()
+        .filter(|target| !target.is_empty())
+}
+
+fn next_diagnostic_fix_passage_id(story: &Story, changes: &[CanonicalPlanDraftChange]) -> String {
+    let mut suffix = story.passage_count() + changes.len() + 1;
+    loop {
+        let candidate = format!("passage-{suffix}");
+        let exists_in_story = story
+            .passages
+            .iter()
+            .any(|passage| passage.id.as_ref() == candidate);
+        let exists_in_changes = changes.iter().any(|change| {
+            matches!(
+                &change.change,
+                CanonicalPlanChange::AddPassage { passage, .. } if passage.id.as_ref() == candidate
+            )
+        });
+        if !exists_in_story && !exists_in_changes {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn diagnostic_fix_invalid_plan(message: &str) -> RefactorPlanFailure {
+    RefactorPlanFailure {
+        code: RefactorPlanFailureCode::InvalidPlan,
+        message: message.into(),
     }
 }
 
@@ -14097,10 +14302,10 @@ fn asset_diagnostics(
                 line: location.map_or(1, |reference| reference.line),
                 message: format!("Referenced asset \"{}\" is missing", asset.path),
                 passage_id: location.and_then(|reference| reference.passage_id.clone()),
-                quick_fixes: vec![CoreQuickFix {
-                    command: format!("import-asset:{}", asset.path),
-                    title: "Import or relink asset".into(),
-                }],
+                quick_fixes: vec![CoreQuickFix::manual(
+                    format!("import-asset:{}", asset.path),
+                    "Import or relink asset",
+                )],
                 severity: CoreDiagnosticSeverity::Error,
                 source_id: location
                     .map(|reference| reference.source_id.clone())
@@ -14116,10 +14321,10 @@ fn asset_diagnostics(
                 line: 1,
                 message: format!("Asset \"{}\" is not referenced", asset.path),
                 passage_id: None,
-                quick_fixes: vec![CoreQuickFix {
-                    command: format!("delete-asset:{}", asset.path),
-                    title: "Delete unused asset".into(),
-                }],
+                quick_fixes: vec![CoreQuickFix::manual(
+                    format!("delete-asset:{}", asset.path),
+                    "Delete unused asset",
+                )],
                 severity: CoreDiagnosticSeverity::Info,
                 source_id: format!("{}:assets", story.id.as_ref()),
                 start: 0,
@@ -14536,10 +14741,10 @@ fn refresh_read_model_aggregates(
             line: 1,
             message: "Story start passage is missing".into(),
             passage_id: None,
-            quick_fixes: vec![CoreQuickFix {
-                command: "set-start-passage".into(),
-                title: "Choose a start passage".into(),
-            }],
+            quick_fixes: vec![CoreQuickFix::manual(
+                "set-start-passage",
+                "Choose a start passage",
+            )],
             severity: CoreDiagnosticSeverity::Error,
             source_id: metadata_source_id.clone(),
             start: 0,
@@ -14574,14 +14779,8 @@ fn refresh_read_model_aggregates(
                 message: format!("Broken link to \"{}\"", broken_link.target_name),
                 passage_id: Some(broken_link.source.as_ref().to_owned()),
                 quick_fixes: vec![
-                    CoreQuickFix {
-                        command: format!("create-passage:{}", broken_link.target_name),
-                        title: format!("Create \"{}\"", broken_link.target_name),
-                    },
-                    CoreQuickFix {
-                        command: "rename-link-target".into(),
-                        title: "Change link target".into(),
-                    },
+                    CoreQuickFix::automatic_broken_link_create_passage(&broken_link.target_name),
+                    CoreQuickFix::manual("rename-link-target", "Change link target"),
                 ],
                 severity: CoreDiagnosticSeverity::Warning,
                 source_id: broken_link.source.as_ref().to_owned(),
@@ -15331,6 +15530,305 @@ mod tests {
         assert_eq!(session.project, before);
         session.redo().expect("single redo");
         assert_eq!(session.project, applied);
+    }
+
+    #[test]
+    fn diagnostic_quick_fixes_expose_rust_owned_automatic_applicability() {
+        let mut session = session();
+        let diagnostics = session
+            .diagnostics_page("story-1", CoreDiagnosticsQuery::default())
+            .expect("diagnostics")
+            .diagnostics;
+        let broken_link = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "broken-link")
+            .expect("broken link diagnostic");
+
+        assert_eq!(
+            broken_link.quick_fixes[0].applicability,
+            CoreQuickFixApplicability::Automatic
+        );
+        assert_eq!(
+            broken_link.quick_fixes[1].applicability,
+            CoreQuickFixApplicability::Manual
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .flat_map(|diagnostic| &diagnostic.quick_fixes)
+                .all(|quick_fix| quick_fix.command.starts_with("create-passage:")
+                    || quick_fix.applicability == CoreQuickFixApplicability::Manual)
+        );
+        assert_eq!(
+            serde_json::to_value(PlanDiagnosticFixesSelection::AllSafe {
+                excluded_diagnostic_ids: vec!["diagnostic".into()],
+            })
+            .expect("serialize diagnostic selection"),
+            serde_json::json!({
+                "type": "allSafe",
+                "excludedDiagnosticIds": ["diagnostic"]
+            })
+        );
+    }
+
+    #[test]
+    fn diagnostic_fix_planning_resolves_only_current_automatic_descriptors() {
+        let mut session = session();
+        let runtime = refactor_runtime(&session);
+        let diagnostics = session
+            .diagnostics_page("story-1", CoreDiagnosticsQuery::default())
+            .expect("diagnostics")
+            .diagnostics;
+        let broken_link = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "broken-link")
+            .expect("broken link diagnostic");
+        let automatic = broken_link.quick_fixes[0].clone();
+        let manual = broken_link.quick_fixes[1].clone();
+        let selection = DiagnosticFixSelection {
+            diagnostic_id: diagnostic_identity(broken_link),
+            quick_fix_command: automatic.command,
+        };
+        let before = session.project.clone();
+
+        let summary = match session.plan_diagnostic_fixes(
+            PlanDiagnosticFixesRequest {
+                story_id: "story-1".into(),
+                selection: PlanDiagnosticFixesSelection::Only {
+                    fixes: vec![selection.clone()],
+                },
+            },
+            runtime.clone(),
+        ) {
+            PlanDiagnosticFixesResult::Complete { summary } => summary,
+            result => panic!("expected complete plan, got {result:?}"),
+        };
+        assert_eq!(
+            session.project, before,
+            "planning must not mutate the project"
+        );
+        assert_eq!(session.revision(), runtime.project_revision as u64);
+        assert_eq!(summary.operation_kind, "diagnostic-fixes");
+        assert_eq!(summary.coverage, "deterministic-safe-fixes");
+        assert_eq!(summary.change_count, 1);
+        let detail = session
+            .refactor_plan_detail_page(&summary.first_detail_cursor)
+            .expect("plan detail");
+        assert!(matches!(
+            detail.changes[0].after,
+            Some(RefactorPlanValue::Passage { ref passage }) if passage.name == "Missing"
+        ));
+
+        for fixes in [
+            vec![DiagnosticFixSelection {
+                diagnostic_id: selection.diagnostic_id.clone(),
+                quick_fix_command: manual.command,
+            }],
+            vec![DiagnosticFixSelection {
+                diagnostic_id: "[\"broken-link\",\"forged\",null,0,0,\"forged\"]".into(),
+                quick_fix_command: "create-passage:Injected".into(),
+            }],
+            vec![selection.clone(), selection.clone()],
+        ] {
+            assert!(matches!(
+                session.plan_diagnostic_fixes(
+                    PlanDiagnosticFixesRequest {
+                        story_id: "story-1".into(),
+                        selection: PlanDiagnosticFixesSelection::Only { fixes },
+                    },
+                    runtime.clone(),
+                ),
+                PlanDiagnosticFixesResult::Failure {
+                    failure: RefactorPlanFailure {
+                        code: RefactorPlanFailureCode::InvalidPlan,
+                        ..
+                    }
+                }
+            ));
+        }
+        assert!(matches!(
+            session.plan_diagnostic_fixes(
+                PlanDiagnosticFixesRequest {
+                    story_id: "story-1".into(),
+                    selection: PlanDiagnosticFixesSelection::Only { fixes: Vec::new() },
+                },
+                runtime,
+            ),
+            PlanDiagnosticFixesResult::Failure {
+                failure: RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::InvalidPlan,
+                    ..
+                }
+            }
+        ));
+        assert_eq!(
+            session.project, before,
+            "invalid requests cannot inject changes"
+        );
+    }
+
+    #[test]
+    fn diagnostic_fix_only_rejects_ambiguous_current_diagnostic_identities() {
+        let mut session = session();
+        let runtime = refactor_runtime(&session);
+        let diagnostic = session
+            .read_model("story-1")
+            .expect("read model")
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "broken-link")
+            .expect("broken link")
+            .clone();
+        let selection = DiagnosticFixSelection {
+            diagnostic_id: diagnostic_identity(&diagnostic),
+            quick_fix_command: diagnostic.quick_fixes[0].command.clone(),
+        };
+        session
+            .read_model_cache
+            .get_mut(&StoryId::new("story-1"))
+            .expect("cached read model")
+            .diagnostics
+            .push(diagnostic);
+
+        assert!(matches!(
+            session.plan_diagnostic_fixes(
+                PlanDiagnosticFixesRequest {
+                    story_id: "story-1".into(),
+                    selection: PlanDiagnosticFixesSelection::Only {
+                        fixes: vec![selection],
+                    },
+                },
+                runtime,
+            ),
+            PlanDiagnosticFixesResult::Failure {
+                failure: RefactorPlanFailure {
+                    code: RefactorPlanFailureCode::InvalidPlan,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn diagnostic_fix_all_safe_deduplicates_exclusions_and_applies_atomically() {
+        let mut session = session();
+        session.project.stories[0]
+            .passage_by_id_mut(&PassageId::new("b"))
+            .expect("fixture passage")
+            .text = "[[Missing]] [[Other]] [[Missing]]".into();
+        let runtime = refactor_runtime(&session);
+        let diagnostics = session
+            .diagnostics_page("story-1", CoreDiagnosticsQuery::default())
+            .expect("diagnostics")
+            .diagnostics;
+        let missing_id = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("Missing"))
+            .map(diagnostic_identity)
+            .expect("missing diagnostic");
+        let before = session.project.clone();
+        let all_safe = match session.plan_diagnostic_fixes(
+            PlanDiagnosticFixesRequest {
+                story_id: "story-1".into(),
+                selection: PlanDiagnosticFixesSelection::AllSafe {
+                    excluded_diagnostic_ids: Vec::new(),
+                },
+            },
+            runtime.clone(),
+        ) {
+            PlanDiagnosticFixesResult::Complete { summary } => summary,
+            result => panic!("expected complete all-safe plan, got {result:?}"),
+        };
+        assert_eq!(
+            all_safe.change_count, 2,
+            "two Missing diagnostics must produce one creation plus Other"
+        );
+        let summary = match session.plan_diagnostic_fixes(
+            PlanDiagnosticFixesRequest {
+                story_id: "story-1".into(),
+                selection: PlanDiagnosticFixesSelection::AllSafe {
+                    excluded_diagnostic_ids: vec![missing_id],
+                },
+            },
+            runtime.clone(),
+        ) {
+            PlanDiagnosticFixesResult::Complete { summary } => summary,
+            result => panic!("expected complete plan, got {result:?}"),
+        };
+        assert_eq!(
+            summary.change_count, 1,
+            "only Other remains after exclusion"
+        );
+        assert_eq!(
+            session.project, before,
+            "planning must not mutate the project"
+        );
+
+        let batch = session
+            .apply_refactor_plan(
+                &RefactorPlanApplyRequest {
+                    plan_id: summary.plan_id,
+                    expected_project_revision: runtime.project_revision,
+                    selection: RefactorPlanSelection::All,
+                },
+                &runtime,
+            )
+            .expect("atomic apply");
+        assert_eq!(session.undo_stack.len(), 1);
+        assert_eq!(session.undo_stack[0].kind, CoreHistoryKind::Refactor);
+        assert_eq!(
+            batch
+                .patches
+                .iter()
+                .filter(|patch| matches!(patch, Patch::PassageCreated { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("Other")
+                .is_some()
+        );
+        assert!(
+            session.project.stories[0]
+                .passage_by_name("Missing")
+                .is_none()
+        );
+        let applied = session.project.clone();
+        session.undo().expect("undo diagnostic fixes");
+        assert_eq!(session.project, before);
+        session.redo().expect("redo diagnostic fixes");
+        assert_eq!(session.project, applied);
+    }
+
+    #[test]
+    fn diagnostic_fix_planning_enforces_request_limits_before_materialization() {
+        let mut session = session();
+        let runtime = refactor_runtime(&session);
+        for selection in [
+            PlanDiagnosticFixesSelection::AllSafe {
+                excluded_diagnostic_ids: vec![String::new(); MAX_REFACTOR_SELECTION_IDS + 1],
+            },
+            PlanDiagnosticFixesSelection::AllSafe {
+                excluded_diagnostic_ids: vec!["x".repeat(MAX_REFACTOR_SELECTION_BYTES)],
+            },
+        ] {
+            assert!(matches!(
+                session.plan_diagnostic_fixes(
+                    PlanDiagnosticFixesRequest {
+                        story_id: "story-1".into(),
+                        selection,
+                    },
+                    runtime.clone(),
+                ),
+                PlanDiagnosticFixesResult::Failure {
+                    failure: RefactorPlanFailure {
+                        code: RefactorPlanFailureCode::SelectionTooLarge,
+                        ..
+                    }
+                }
+            ));
+        }
     }
 
     #[test]

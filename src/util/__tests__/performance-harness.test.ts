@@ -14,6 +14,14 @@ function deferred<T>() {
 	return {promise, reject, resolve};
 }
 
+function workerMetric(kind: 'planDiagnosticFixes' | 'queryRefactorPlanDetail') {
+	return {
+		kind,
+		wasmMemoryBytes: 456,
+		workerRespondedAtEpochMs: 123
+	} as any;
+}
+
 describe('performance harness model commits', () => {
 	let harnessWindow: TwinePerformanceWindow;
 	let native: NonNullable<TwinePerformanceWindow['twinePerformanceNative']>;
@@ -194,5 +202,125 @@ describe('performance harness refactor plans', () => {
 		await expect(operation.result).resolves.toEqual({type: 'cancelled'});
 		await expect(operation.terminalCheckpoint).resolves.toBeUndefined();
 		expect(native.checkpoint).not.toHaveBeenCalled();
+	});
+});
+
+describe('performance harness diagnostic-fix observations', () => {
+	let harnessWindow: TwinePerformanceWindow;
+	let native: NonNullable<TwinePerformanceWindow['twinePerformanceNative']>;
+	let performanceHarness: jest.SpyInstance;
+
+	beforeEach(() => {
+		harnessWindow = window as TwinePerformanceWindow;
+		native = {
+			checkpoint: jest.fn(() => Promise.resolve()),
+			collectGarbage: jest.fn(() => Promise.resolve()),
+			reconcileProjectSession: jest.fn(),
+			reset: jest.fn(() => Promise.resolve()),
+			snapshot: jest.fn(() => Promise.resolve({}))
+		};
+		harnessWindow.twinePerformanceNative = native;
+		performanceHarness = jest.spyOn(core, 'coreProjectHostPerformanceHarness');
+		core.resetCoreBridgeMetrics();
+	});
+
+	afterEach(() => {
+		performanceHarness.mockRestore();
+		core.resetCoreBridgeMetrics();
+		delete harnessWindow.twinePerformance;
+		delete harnessWindow.twinePerformanceNative;
+	});
+
+	it('captures diagnostic planning at the exact worker response without delaying its result', async () => {
+		const planning = deferred<any>();
+		const checkpoint = deferred<void>();
+		const onWorkerMetric = jest.fn();
+		const planDiagnosticFixes = jest.fn((...args: unknown[]) => {
+			void args;
+			return planning.promise;
+		});
+		(native.checkpoint as jest.Mock).mockReturnValue(checkpoint.promise);
+		performanceHarness.mockReturnValue({planDiagnosticFixes});
+		installPerformanceHarness();
+
+		const operation =
+			harnessWindow.twinePerformance!.refactor.planDiagnosticFixesObserved(
+				'story-a',
+				{} as any,
+				'm4-plan-high-water',
+				{onWorkerMetric}
+			);
+		const options = planDiagnosticFixes.mock.calls[0]?.[2] as
+			{onWorkerMetric?: (metric: Record<string, unknown>) => void} | undefined;
+		const metric = workerMetric('planDiagnosticFixes');
+		options!.onWorkerMetric!(metric);
+		planning.resolve({type: 'failure'});
+
+		await expect(operation.result).resolves.toEqual({type: 'failure'});
+		expect(onWorkerMetric).toHaveBeenCalledWith(metric);
+		expect(native.checkpoint).toHaveBeenCalledWith(
+			'm4-plan-high-water',
+			expect.objectContaining({
+				workerResponseAtEpochMs: 123,
+				workerWasmMemoryBytes: 456
+			})
+		);
+		let checkpointSettled = false;
+		void operation.workerResponseCheckpoint.then(() => {
+			checkpointSettled = true;
+		});
+		await Promise.resolve();
+		expect(checkpointSettled).toBe(false);
+		checkpoint.resolve();
+		await expect(operation.workerResponseCheckpoint).resolves.toBeUndefined();
+	});
+
+	it('captures detail DTO delivery from its new bridge response', async () => {
+		const detail = deferred<any>();
+		const checkpoint = deferred<void>();
+		performanceHarness.mockReturnValue({
+			queryRefactorPlanDetailAsync: jest.fn(() => detail.promise)
+		});
+		(native.checkpoint as jest.Mock).mockReturnValue(checkpoint.promise);
+		installPerformanceHarness();
+
+		const operation = harnessWindow.twinePerformance!.refactor.detailObserved(
+			'story-a',
+			{} as any,
+			'm4-detail-high-water'
+		);
+		core.recordCoreBridgeMetric(workerMetric('queryRefactorPlanDetail'));
+		detail.resolve({type: 'failure'});
+
+		await expect(operation.result).resolves.toEqual({type: 'failure'});
+		expect(native.checkpoint).toHaveBeenCalledWith(
+			'm4-detail-high-water',
+			expect.objectContaining({
+				workerResponseAtEpochMs: 123,
+				workerWasmMemoryBytes: 456
+			})
+		);
+		checkpoint.resolve();
+		await expect(operation.workerResponseCheckpoint).resolves.toBeUndefined();
+	});
+
+	it('rejects a detail checkpoint without a new response metric', async () => {
+		performanceHarness.mockReturnValue({
+			queryRefactorPlanDetailAsync: jest.fn(() =>
+				Promise.resolve({type: 'failure'})
+			)
+		});
+		installPerformanceHarness();
+
+		const operation = harnessWindow.twinePerformance!.refactor.detailObserved(
+			'story-a',
+			{} as any,
+			'm4-detail-high-water'
+		);
+
+		await operation.result;
+		await expect(operation.workerResponseCheckpoint).rejects.toThrow(
+			'did not observe a new detail response'
+		);
 	});
 });

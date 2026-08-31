@@ -900,6 +900,8 @@ test('opens the D6 Contents, Diagnostics, and Assets surfaces', async ({
 		page,
 		'Set $score. Go to [[Missing]]. Portrait: <img src="assets/cover.png">'
 	);
+	await selectPassage(page, 'Missing');
+	await page.getByRole('button', {name: 'Delete', exact: true}).click();
 
 	await page.getByTitle('Contents').click();
 	await expect(page).toHaveURL(/#\/stories\/[^/]+\/contents$/);
@@ -923,6 +925,19 @@ test('opens the D6 Contents, Diagnostics, and Assets surfaces', async ({
 		page.getByRole('button', {name: 'Recheck Project'})
 	).toBeVisible();
 	await expect(page.getByRole('button', {name: 'Fix All Safe'})).toBeVisible();
+	await page.getByRole('button', {name: 'Fix All Safe'}).click();
+	const fixReview = page.getByRole('dialog', {
+		name: 'Review Diagnostic Fixes'
+	});
+	await expect(fixReview.getByText('1 changes', {exact: true})).toBeVisible();
+	await expect(fixReview.getByText('Add passage')).toBeVisible();
+	await expect(fixReview.getByText('Missing', {exact: true})).toBeVisible();
+	await fixReview.getByRole('button', {name: 'Apply Fixes'}).click();
+	await expect(fixReview).toHaveCount(0);
+	await expect(page.getByText('broken-link')).toHaveCount(0);
+
+	await page.getByTitle('Contents').click();
+	await expect(page.getByText('Missing', {exact: true}).first()).toBeVisible();
 
 	await page.getByTitle('Assets').click();
 	await expect(page).toHaveURL(/#\/stories\/[^/]+\/assets$/);

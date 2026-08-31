@@ -246,6 +246,25 @@ selection, atomic commit, cancellation, and typing while replacement planning.
 Passage-rename correctness remains covered by its Rust, boundary, React, and
 browser acceptance suites.
 
+Refactor reports identify every measured metric family explicitly. Project
+replace planning/review/commit metrics are `project-replace`; M3 reference
+queries are `passage-references`; M3 definition queries are
+`passage-definition`; M4 safe diagnostic fixes are `diagnostic-fixes`; typing
+responsiveness support metrics are `typing-responsiveness`; and memory support
+metrics are `memory-observation`. The exact selected `multi-operation` map is
+recorded in configuration, direct or merged refactor diagnostics, and
+metric-contract provenance. Unknown `refactor.*` families, missing identities,
+mismatches, and extra identities invalidate the phase report. Probe-only
+zero-sample refactor reports omit all three operation-identity surfaces. M4
+`refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB` is an explicitly
+bounded response-boundary maximum: it is the greater retained plan or detail
+response-boundary tuple minus the retained M4 baseline tuple, in MiB. Each
+tuple combines renderer JavaScript, the CDP worker used-size sample, and the
+WASM byte count at a worker-response boundary; its response-to-CDP timestamp
+drift is retained and must be at most five seconds. It is not a continuous
+worker-JavaScript maximum. The plan and detail response-boundary checkpoints
+each retain evidence for the 20 measured samples.
+
 `refactor.atomicCommitMs` is the model-commit gate: it includes runtime
 synchronization, WASM application, receipt delivery, renderer reconciliation,
 history, and review closure, while intentionally skipping project-folder

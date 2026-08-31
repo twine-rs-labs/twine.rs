@@ -44,7 +44,10 @@ interface MemoryCheckpoint {
 		sampleCount: number;
 		totalBytes?: number;
 		wasmBytes?: number;
+		workerCdpResponseDriftMs?: number;
+		workerCdpSampledAtEpochMs?: number;
 		workerCdpUsedBytes?: number;
+		workerResponseAtEpochMs?: number;
 	};
 	processPrivateHighWater: {
 		mainPrivateBytes: number;
@@ -107,7 +110,19 @@ function ownedMemoryObservation(
 		sampleCount,
 		totalBytes,
 		wasmBytes,
-		workerCdpUsedBytes
+		workerCdpResponseDriftMs:
+			typeof renderer.workerHeapCdpResponseDriftMs === 'number'
+				? renderer.workerHeapCdpResponseDriftMs
+				: undefined,
+		workerCdpSampledAtEpochMs:
+			typeof renderer.workerHeapCdpSampledAtEpochMs === 'number'
+				? renderer.workerHeapCdpSampledAtEpochMs
+				: undefined,
+		workerCdpUsedBytes,
+		workerResponseAtEpochMs:
+			typeof renderer.workerResponseAtEpochMs === 'number'
+				? renderer.workerResponseAtEpochMs
+				: undefined
 	};
 }
 

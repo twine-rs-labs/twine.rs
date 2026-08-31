@@ -41,6 +41,8 @@ import type {PlanPassageRenameRequest} from './bindings/PlanPassageRenameRequest
 import type {PlanPassageRenameResult} from './bindings/PlanPassageRenameResult';
 import type {PlanProjectReplaceRequest} from './bindings/PlanProjectReplaceRequest';
 import type {PlanProjectReplaceResult} from './bindings/PlanProjectReplaceResult';
+import type {PlanDiagnosticFixesRequest} from './bindings/PlanDiagnosticFixesRequest';
+import type {PlanDiagnosticFixesResult} from './bindings/PlanDiagnosticFixesResult';
 import type {GraphProjectionQuery} from './graph-projection';
 import {
 	assetKindForPath,
@@ -74,6 +76,7 @@ import {
 	subscribeProjectStoryHydration
 } from '../store/project-hydration';
 import {normalizeStoryIndexOptions} from './story-index';
+import {validateDiagnosticFixesRequest} from './refactor-limits';
 import type {CoreBridgeMetric, CoreBridgeMode} from './wasm/performance';
 import {
 	CoreSessionMutationResult,
@@ -329,7 +332,11 @@ export interface CoreProjectHost {
 		storyId: string,
 		request: RefactorPlanApplyRequest
 	): Promise<RefactorPlanApplyResult>;
-	/** Release the bounded review DTOs for this story after the M1 review closes. */
+	planDiagnosticFixes(
+		storyId: string,
+		request: PlanDiagnosticFixesRequest
+	): Promise<PlanDiagnosticFixesResult>;
+	/** Release the bounded refactor-review DTOs for this story after review closes. */
 	closeRefactorReview(storyId: string): void;
 	planPassageRename(
 		storyId: string,
@@ -573,6 +580,7 @@ type CoreProjectSessionClient = Pick<
 	| 'undo'
 > & {
 	applyRefactorPlan?: WasmCoreWorkerClient['applyRefactorPlan'];
+	planDiagnosticFixes?: WasmCoreWorkerClient['planDiagnosticFixes'];
 	syncRefactorRuntime?: WasmCoreWorkerClient['syncRefactorRuntime'];
 	beginPassageRenamePlan?: WasmCoreWorkerClient['beginPassageRenamePlan'];
 	continuePassageRenamePlan?: WasmCoreWorkerClient['continuePassageRenamePlan'];
@@ -1687,6 +1695,96 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		return result!;
 	}
 
+	async planDiagnosticFixes(
+		storyId: string,
+		request: PlanDiagnosticFixesRequest,
+		options?: {
+			onPlanningStarted?: () => void;
+			onWorkerMetric?: (metric: CoreBridgeMetric) => void;
+		}
+	): Promise<PlanDiagnosticFixesResult> {
+		if (request.storyId !== storyId)
+			return {
+				failure: {
+					code: 'invalid-plan',
+					message: 'Diagnostic fix request does not match its routed story.'
+				},
+				type: 'failure'
+			};
+		const validation = validateDiagnosticFixesRequest(request);
+		if (!validation.valid)
+			return {
+				failure: {
+					code: validation.code,
+					message:
+						validation.code === 'selection-too-large'
+							? 'Diagnostic fix selection exceeds the 50,000 ID or 4 MiB limit.'
+							: 'Diagnostic fix request is invalid.'
+				},
+				type: 'failure'
+			};
+		if (
+			!this.wasmClient.syncRefactorRuntime ||
+			!this.wasmClient.planDiagnosticFixes
+		)
+			throw new Error(
+				'The Rust diagnostic-fix planning boundary is unavailable.'
+			);
+		let barrier: WorkbenchStoryMutationBarrier;
+		try {
+			barrier = await workbenchBufferCoordinator.acquireStoriesMutationBarrier([
+				...this.sessionOwnedDocumentStories
+			]);
+		} catch {
+			return {
+				failure: {
+					code: 'buffer-changed',
+					message: 'Workbench buffers could not be flushed for refactoring.'
+				},
+				type: 'failure'
+			};
+		}
+		const runtimeLease = await this.refactorRuntime.acquireLease();
+		let barrierReleased = false;
+		try {
+			return await this.enqueueMutation(async () => {
+				const synchronized = await this.syncStableRefactorRuntime(
+					storyId,
+					barrier
+				);
+				if ('failure' in synchronized)
+					return {failure: synchronized.failure, type: 'failure'};
+				// The stable snapshot and its revision are now Rust-owned. Reopen editor
+				// admission while the worker materializes the immutable plan; any accepted
+				// edit queues behind this operation and conservatively stales the plan.
+				barrier.release();
+				barrierReleased = true;
+				const workerOptions = options?.onWorkerMetric
+					? {onWorkerMetric: options.onWorkerMetric}
+					: undefined;
+				const planning = workerOptions
+					? this.wasmClient.planDiagnosticFixes!(
+							this.sessionId,
+							validation.request,
+							synchronized.epoch,
+							synchronized.revision,
+							workerOptions
+						)
+					: this.wasmClient.planDiagnosticFixes!(
+							this.sessionId,
+							validation.request,
+							synchronized.epoch,
+							synchronized.revision
+						);
+				options?.onPlanningStarted?.();
+				return planning;
+			});
+		} finally {
+			if (!barrierReleased) barrier.release();
+			runtimeLease.release();
+		}
+	}
+
 	async planPassageRename(
 		storyId: string,
 		request: PlanPassageRenameRequest,
@@ -2538,6 +2636,17 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		return batch;
 	}
 
+	// Performance-only companion to applyModelCommit(): preserve Rust history,
+	// revision, and renderer reconciliation without serializing a full project
+	// folder sidecar for the benchmark fixture.
+	async undoModelCommit() {
+		if (!this.wasmClient.enabled) {
+			return undefined;
+		}
+
+		return this.enqueueMutation(() => this.undoThroughWasm('skip'));
+	}
+
 	rollbackTransaction(transactionId: number) {
 		return this.enqueueMutation(async () => {
 			const revision = await this.ensureWasmProjectSession();
@@ -2550,7 +2659,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		});
 	}
 
-	private async undoThroughWasm() {
+	private async undoThroughWasm(persistence?: 'save' | 'skip') {
 		let effectToken = this.undoEffects[this.undoEffects.length - 1];
 		let nativeApplied = false;
 
@@ -2572,7 +2681,10 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					result.batch,
 					undefined,
 					result.revision,
-					result.status
+					result.status,
+					undefined,
+					persistence,
+					persistence === 'skip' ? false : undefined
 				);
 				return result.batch;
 			}
@@ -4523,6 +4635,68 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 			: Promise.resolve(async () => {});
 	}
 
+	planDiagnosticFixes(
+		storyId: string,
+		request: PlanDiagnosticFixesRequest,
+		options?: {
+			onPlanningStarted?: () => void;
+			onWorkerMetric?: (metric: CoreBridgeMetric) => void;
+		}
+	) {
+		if (request.storyId !== storyId)
+			return Promise.resolve({
+				failure: {
+					code: 'invalid-plan',
+					message: 'Diagnostic fix request does not match its routed story.'
+				},
+				type: 'failure'
+			} satisfies PlanDiagnosticFixesResult);
+		const validation = validateDiagnosticFixesRequest(request);
+		if (!validation.valid)
+			return Promise.resolve({
+				failure: {
+					code: validation.code,
+					message:
+						validation.code === 'selection-too-large'
+							? 'Diagnostic fix selection exceeds the 50,000 ID or 4 MiB limit.'
+							: 'Diagnostic fix request is invalid.'
+				},
+				type: 'failure'
+			} satisfies PlanDiagnosticFixesResult);
+		const host = this.hostForStory(storyId);
+		if (
+			!host ||
+			this.replacementGateHeldForStory(storyId) ||
+			this.replacementGateHeld(host)
+		)
+			return Promise.resolve({
+				failure: {
+					code: 'plan-evicted',
+					message: 'This project is being replaced; retry the refactor review.'
+				},
+				type: 'failure'
+			} satisfies PlanDiagnosticFixesResult);
+		return this.trackRefactorLifecycleOperation<PlanDiagnosticFixesResult>(
+			storyId,
+			host,
+			() =>
+				options
+					? host.planDiagnosticFixes(storyId, validation.request, options)
+					: host.planDiagnosticFixes(storyId, validation.request),
+			() => ({
+				failure: {
+					code: 'plan-evicted',
+					message: 'This project is no longer available.'
+				},
+				type: 'failure'
+			}),
+			result => {
+				if (result.type === 'complete')
+					this.refactorReviewForStory(storyId).captureSummary(result.summary);
+			}
+		);
+	}
+
 	planPassageRename(
 		storyId: string,
 		request: PlanPassageRenameRequest,
@@ -5137,6 +5311,14 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		return this.admitMutation(
 			async () =>
 				this.hostForStory(storyId)?.undo() ?? Promise.resolve(undefined)
+		);
+	}
+
+	undoModelCommit(storyId?: string) {
+		return this.admitMutation(
+			async () =>
+				this.hostForStory(storyId)?.undoModelCommit() ??
+				Promise.resolve(undefined)
 		);
 	}
 
@@ -5871,6 +6053,14 @@ export function coreProjectHostPerformanceHarness() {
 				signal?: AbortSignal;
 			}
 		) => performanceHarnessHost!.planPassageRename(storyId, request, options),
+		planDiagnosticFixes: (
+			storyId: string,
+			request: PlanDiagnosticFixesRequest,
+			options?: {
+				onPlanningStarted?: () => void;
+				onWorkerMetric?: (metric: CoreBridgeMetric) => void;
+			}
+		) => performanceHarnessHost!.planDiagnosticFixes(storyId, request, options),
 		planProjectReplace: (
 			storyId: string,
 			request: PlanProjectReplaceRequest,
@@ -5885,6 +6075,10 @@ export function coreProjectHostPerformanceHarness() {
 			storyId: string,
 			options?: Partial<CoreDiagnosticsSummaryQuery>
 		) => performanceHarnessHost!.queryDiagnosticsSummaryAsync(storyId, options),
+		queryDiagnosticsPageAsync: (
+			storyId: string,
+			options?: Partial<CoreDiagnosticsQuery>
+		) => performanceHarnessHost!.queryDiagnosticsPageAsync(storyId, options),
 		queryDefinitionAsync: (query: CoreDefinitionQuery) =>
 			performanceHarnessHost!.queryDefinitionAsync(query),
 		queryPassageReferencesPageAsync: (
@@ -5902,7 +6096,10 @@ export function coreProjectHostPerformanceHarness() {
 			cursor: RefactorPlanCursor
 		) => performanceHarnessHost!.queryRefactorPlanDetailAsync(storyId, cursor),
 		refactorReviewSnapshot: (storyId: string) =>
-			performanceHarnessHost!.refactorReviewSnapshot(storyId)
+			performanceHarnessHost!.refactorReviewSnapshot(storyId),
+		undo: (storyId: string) => performanceHarnessHost!.undo(storyId),
+		undoModelCommit: (storyId: string) =>
+			performanceHarnessHost!.undoModelCommit(storyId)
 	};
 }
 
@@ -5942,6 +6139,7 @@ const coreProjectHostFacadeMethods: ReadonlyArray<keyof CoreProjectHost> = [
 	'initializeHydratedProject',
 	'isDirty',
 	'planPassageRename',
+	'planDiagnosticFixes',
 	'planProjectReplace',
 	'queryAssetsPageAsync',
 	'queryBacklinksPageAsync',
@@ -6012,6 +6210,8 @@ export function useCoreProjectSession(storyId: string | undefined) {
 					host.applyStoryCommandPersisted(command, options),
 				applyRefactorPlan: (refactorStoryId, request) =>
 					host.applyRefactorPlan(refactorStoryId, request),
+				planDiagnosticFixes: (refactorStoryId, request) =>
+					host.planDiagnosticFixes(refactorStoryId, request),
 				closeRefactorReview: reviewStoryId =>
 					host.closeRefactorReview(reviewStoryId),
 				retryStoryPersistence: target => host.retryStoryPersistence(target),

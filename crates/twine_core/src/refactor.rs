@@ -66,6 +66,46 @@ pub struct PlanProjectReplaceRequest {
     pub use_regexes: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct DiagnosticFixSelection {
+    pub diagnostic_id: String,
+    pub quick_fix_command: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type"
+)]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum PlanDiagnosticFixesSelection {
+    Only {
+        fixes: Vec<DiagnosticFixSelection>,
+    },
+    AllSafe {
+        excluded_diagnostic_ids: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct PlanDiagnosticFixesRequest {
+    pub story_id: String,
+    pub selection: PlanDiagnosticFixesSelection,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase", tag = "type")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum PlanDiagnosticFixesResult {
+    Complete { summary: RefactorPlanSummary },
+    Failure { failure: RefactorPlanFailure },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "../../../src/core/bindings/")]

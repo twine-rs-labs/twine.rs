@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-08-30
+Last verified: 2026-08-31
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -154,10 +154,17 @@ The complete local 10k and 50k benchmark runs verify:
   only when its exact name has one definition; duplicate names, missing names,
   unsupported symbol kinds, and stale revisions return typed, bounded,
   non-guessing outcomes. The 10k/50k refactor gates now directly probe paged
-  references, cache reuse, exact definitions, response bounds, and worker-only
-  ownership.
-  Format-specific definition/reference providers, Fix All Safe as one atomic
-  batch, and consistent command-palette exposure remain incomplete.
+  references, cache reuse, exact definitions, response bounds, reviewed
+  diagnostic-fix planning/apply/undo, and worker-only ownership. Deterministic
+  broken-link passage creation now uses the same Rust-owned immutable plan,
+  paged detail review, stale validation, atomic apply, and single undo boundary.
+  Fix All Safe plans against the complete non-dismissed diagnostic set rather
+  than the currently loaded or filtered page, deduplicates identical creations,
+  and fails the whole request if a selected descriptor is stale, ambiguous, or
+  cannot be materialized. Rename/relink, start-passage, asset, and other fixes
+  that still require user or filesystem input remain visibly manual.
+  Format-specific definition/reference providers and consistent
+  command-palette exposure remain incomplete.
 - Some inherited compatibility UI remains outside the primary workbench.
 - Native Harlowe editing is intentionally exact-version: bundled Harlowe 1.2.4
   and 2.1.0, user-added Harlowe builds, and future Harlowe dialects use the

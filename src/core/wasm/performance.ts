@@ -8,6 +8,7 @@ export interface CoreBridgeMetric {
 		| 'acknowledgeSaved'
 		| 'apply'
 		| 'applyRefactorPlan'
+		| 'planDiagnosticFixes'
 		| 'syncRefactorRuntime'
 		| 'beginPassageRenamePlan'
 		| 'continuePassageRenamePlan'

@@ -428,8 +428,16 @@ function diagnosticsForStory(story: Story): CoreDiagnostic[] {
 					message: `Broken link to "${link}"`,
 					passageId: passage.id,
 					quickFixes: [
-						{command: `create-passage:${link}`, title: `Create "${link}"`},
-						{command: 'rename-link-target', title: 'Change link target'}
+						{
+							applicability: 'automatic',
+							command: `create-passage:${link}`,
+							title: `Create "${link}"`
+						},
+						{
+							applicability: 'manual',
+							command: 'rename-link-target',
+							title: 'Change link target'
+						}
 					],
 					severity: 'warning',
 					sourceId: passage.id,
@@ -448,7 +456,13 @@ function diagnosticsForStory(story: Story): CoreDiagnostic[] {
 					line: 1,
 					message: `Duplicate passage name "${passage.name}"`,
 					passageId: passage.id,
-					quickFixes: [{command: 'rename-passage', title: 'Rename passage'}],
+					quickFixes: [
+						{
+							applicability: 'manual',
+							command: 'rename-passage',
+							title: 'Rename passage'
+						}
+					],
 					severity: 'error',
 					sourceId: passage.id,
 					start: 0
@@ -465,7 +479,11 @@ function diagnosticsForStory(story: Story): CoreDiagnostic[] {
 			message: 'Story start passage is missing',
 			passageId: null,
 			quickFixes: [
-				{command: 'set-start-passage', title: 'Choose a start passage'}
+				{
+					applicability: 'manual',
+					command: 'set-start-passage',
+					title: 'Choose a start passage'
+				}
 			],
 			severity: 'error',
 			sourceId: `${story.id}:metadata`,
@@ -745,6 +763,7 @@ function assetDiagnostics(
 				passageId: location.passageId,
 				quickFixes: [
 					{
+						applicability: 'manual',
 						command: `import-asset:${asset.path}`,
 						title: 'Import or relink asset'
 					}
@@ -764,6 +783,7 @@ function assetDiagnostics(
 				passageId: null,
 				quickFixes: [
 					{
+						applicability: 'manual',
 						command: `delete-asset:${asset.path}`,
 						title: 'Delete unused asset'
 					}
@@ -950,7 +970,11 @@ function invalidRegexDiagnostic(story: Story, query: string): CoreDiagnostic {
 		message: 'Search regular expression is invalid',
 		passageId: null,
 		quickFixes: [
-			{command: 'disable-regex-search', title: 'Turn off regular expressions'}
+			{
+				applicability: 'manual',
+				command: 'disable-regex-search',
+				title: 'Turn off regular expressions'
+			}
 		],
 		severity: 'error' as CoreDiagnosticSeverity,
 		sourceId: `${story.id}:metadata`,

@@ -31,6 +31,7 @@ export class TwineWasmProjectSession {
     ingest_external_delta(delta: any, force: boolean): any;
     constructor(snapshot: any);
     performance_diagnostics(): any;
+    plan_diagnostic_fixes(request: any): any;
     query_assets_page(story_id: string, query: any): any;
     query_backlinks_page(story_id: string, passage_id: string, query: any): any;
     query_contents_page(story_id: string, query: any): any;
@@ -89,6 +90,7 @@ export interface InitOutput {
     readonly twinewasmprojectsession_ingest_external_delta: (a: number, b: any, c: number) => [number, number, number];
     readonly twinewasmprojectsession_new: (a: any) => [number, number, number];
     readonly twinewasmprojectsession_performance_diagnostics: (a: number) => [number, number, number];
+    readonly twinewasmprojectsession_plan_diagnostic_fixes: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_query_assets_page: (a: number, b: number, c: number, d: any) => [number, number, number];
     readonly twinewasmprojectsession_query_backlinks_page: (a: number, b: number, c: number, d: number, e: number, f: any) => [number, number, number];
     readonly twinewasmprojectsession_query_contents_page: (a: number, b: number, c: number, d: any) => [number, number, number];

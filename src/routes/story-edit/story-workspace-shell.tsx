@@ -38,9 +38,10 @@ import type {CoreBacklinksPage} from '../../core/bindings/CoreBacklinksPage';
 import type {CorePassageLocalFacts} from '../../core/bindings/CorePassageLocalFacts';
 import type {CorePassageLocation} from '../../core/bindings/CorePassageLocation';
 import type {CoreWorkbenchDockModel} from '../../core/bindings/CoreWorkbenchDockModel';
-import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
+import {quickFixDescriptionsForDiagnostic} from '../../core/quick-fix-registry';
 import type {CoreProjectHost} from '../../core/project-host-public';
 import type {TwineElectronWindow} from '../../electron/shared';
+import type {CoreDiagnostic} from '../../core/bindings/CoreDiagnostic';
 import {
 	type WorkbenchStoryMutationBarrier,
 	workbenchBufferCoordinator
@@ -78,6 +79,7 @@ import type {
 	StoryWorkbenchExtensionContext,
 	StoryWorkbenchInspectorExtension
 } from './workbench-extensions';
+import {diagnosticFixReviewNavigationState} from '../diagnostics/diagnostic-fix-navigation';
 
 export interface StoryWorkspaceShellProps {
 	activeBottomDrawerPanelId?: string;
@@ -874,11 +876,11 @@ const Inspector: React.FC<{
 	diagnostics: DiagnosticsViewModel;
 	extensionContext: StoryWorkbenchExtensionContext;
 	extensions: readonly StoryWorkbenchInspectorExtension[];
-	host: CoreProjectHost;
 	index: CoreStoryIndex;
 	definitionStatus?: string;
 	onFindReferences: (passage: Passage) => void;
 	onGoToDefinition: (name: string) => void;
+	onOpenDiagnostics: (diagnostic: CoreDiagnostic, command: string) => void;
 	onRevealPassageInGraph: (passage: Passage) => void;
 	onSelectPassage: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
@@ -893,10 +895,10 @@ const Inspector: React.FC<{
 		diagnostics,
 		extensionContext,
 		extensions,
-		host,
 		index,
 		onFindReferences,
 		onGoToDefinition,
+		onOpenDiagnostics,
 		onRevealPassageInGraph,
 		onSelectPassage,
 		onTestPassage,
@@ -1073,11 +1075,7 @@ const Inspector: React.FC<{
 										passage => passage.id === item.core.passageId
 									)
 								: undefined;
-							const actions = quickFixActionsForDiagnostic(
-								host,
-								story,
-								item.core
-							);
+							const actions = quickFixDescriptionsForDiagnostic(item.core);
 
 							return (
 								<div
@@ -1145,17 +1143,24 @@ const Inspector: React.FC<{
 													{t('routes.storyEdit.toolbar.testFromHere')}
 												</Button>
 											)}
-											{actions.map(action => (
-												<Button
-													disabled={!action.enabled}
-													key={action.command}
-													onClick={action.apply}
-													size="sm"
-													variant="ghost"
-												>
-													{action.title}
-												</Button>
-											))}
+											{actions.map(action =>
+												action.applicability === 'automatic' ? (
+													<Button
+														key={action.command}
+														onClick={() =>
+															onOpenDiagnostics(item.core, action.command)
+														}
+														size="sm"
+														variant="ghost"
+													>
+														Review {action.title}
+													</Button>
+												) : (
+													<span key={action.command}>
+														Manual: {action.title}
+													</span>
+												)
+											)}
 										</div>
 									)}
 								</div>
@@ -2410,13 +2415,17 @@ export const StoryWorkspaceShell: React.FC<
 						diagnostics={diagnostics}
 						extensionContext={extensionContext}
 						extensions={inspectorExtensions}
-						host={coreProjectHost}
 						index={index}
 						onFindReferences={passage => {
 							referenceRevealGeneration.current += 1;
 							setReferenceTargetId(passage.id);
 						}}
 						onGoToDefinition={handleGoToDefinition}
+						onOpenDiagnostics={(diagnostic, command) =>
+							navigate(`/stories/${story.id}/diagnostics`, {
+								state: diagnosticFixReviewNavigationState(diagnostic, command)
+							})
+						}
 						onRevealPassageInGraph={onRevealPassageInGraph}
 						onSelectPassage={onSelectPassage}
 						onTestPassage={onTestPassage}

@@ -453,6 +453,11 @@ async function writeFixture(count, options) {
 			passageName: passageName(Math.max(1, Math.floor(count / 2))),
 			storyId: deterministicId('story', count)
 		},
+		m4DiagnosticFixTarget: {
+			expectedChangeCount: linkCounts.broken,
+			selection: 'allSafe',
+			storyId: deterministicId('story', count)
+		},
 		passageCount: count,
 		// This target is away from the boundaries. The Electron refactor phase
 		// consumes this manifest value, never UI ordering.

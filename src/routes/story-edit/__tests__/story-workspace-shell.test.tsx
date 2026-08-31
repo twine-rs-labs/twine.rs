@@ -19,7 +19,12 @@ import {
 } from '../../../store/project-hydration';
 import {saveProjectMetadata} from '../../../store/project-metadata';
 import {StoriesContext} from '../../../store/stories';
-import {fakePassage, fakeStory, waitForMockPromises} from '../../../test-util';
+import {
+	fakePassage,
+	fakeStory,
+	LocationInspector,
+	waitForMockPromises
+} from '../../../test-util';
 import {workbenchBufferCoordinator} from '../../../util/workbench-buffer-coordinator';
 import {StoryWorkspaceShell} from '../story-workspace-shell';
 import {StoryEditMode} from '../workspace-state';
@@ -157,6 +162,7 @@ async function renderComponent(
 					/>
 				</CoreProjectHostProvider>
 			</StoriesContext.Provider>
+			<LocationInspector />
 		</MemoryRouter>
 	);
 	const rendered = render(
@@ -1206,44 +1212,45 @@ describe('<StoryWorkspaceShell>', () => {
 		);
 	});
 
-	it('dispatches executable diagnostic quick fixes', async () => {
+	it('routes executable diagnostic descriptors to plan review without mutating', async () => {
 		const {story, storyDispatch, waitForQueries} = await renderComponent(
 			'text',
 			{
 				bottomDrawerOpen: true
+			},
+			{
+				configureStory: configuredStory => {
+					configuredStory.passages[0].text += ' Then [[Second Missing]].';
+				}
 			}
 		);
 
 		await waitFor(() =>
 			expect(
-				screen.getByRole('button', {name: /Create "Missing"/})
+				screen.getByRole('button', {name: /Review Create "Second Missing"/})
 			).toBeInTheDocument()
 		);
-		fireEvent.click(screen.getByRole('button', {name: /Create "Missing"/}));
+		storyDispatch.mockClear();
+		fireEvent.click(
+			screen.getByRole('button', {name: /Review Create "Second Missing"/})
+		);
 		await waitFor(() =>
-			expect(storyDispatch).toHaveBeenCalledWith(
-				expect.objectContaining({
-					actions: [
-						{
-							type: 'createPassage',
-							props: expect.objectContaining({
-								name: 'Missing',
-								tags: []
-							}),
-							storyId: story.id
-						}
-					],
-					documentUpdates: [
-						expect.objectContaining({
-							storyId: story.id,
-							text: '',
-							type: 'passageText'
-						})
-					],
-					type: 'applyCorePatchBatch'
-				})
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-pathname',
+				`/stories/${story.id}/diagnostics`
 			)
 		);
+		expect(
+			JSON.parse(
+				screen.getByTestId('location').getAttribute('data-state') ?? '{}'
+			)
+		).toMatchObject({
+			diagnosticFixReview: {
+				diagnosticId: expect.stringContaining('Second Missing'),
+				quickFixCommand: 'create-passage:Second Missing'
+			}
+		});
+		expect(storyDispatch).not.toHaveBeenCalled();
 		await waitForQueries();
 	});
 

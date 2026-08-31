@@ -7,7 +7,8 @@ import type {TwineWasmProjectSession as TwineWasmProjectSessionType} from './pkg
 import type {TwineWasmProjectBootstrap as TwineWasmProjectBootstrapType} from './pkg/twine_wasm';
 import {
 	isPassageRenameRequestTooLarge,
-	isProjectReplaceRequestTooLarge
+	isProjectReplaceRequestTooLarge,
+	validateDiagnosticFixesRequest
 } from '../refactor-limits';
 
 let wasmReady: Promise<void> | undefined;
@@ -51,6 +52,18 @@ function epochNow() {
 	return typeof performance !== 'undefined'
 		? performance.timeOrigin + performance.now()
 		: Date.now();
+}
+
+function errorMessage(error: unknown) {
+	if (error instanceof Error) return error.message;
+	if (typeof error === 'string') return error;
+	try {
+		const encoded = JSON.stringify(error);
+		if (encoded && encoded !== '{}') return encoded;
+	} catch {
+		/* fall through to the platform string representation */
+	}
+	return String(error);
 }
 
 // `Performance.memory` is Chromium-specific and is omitted by the standard
@@ -324,6 +337,29 @@ async function handleRequest(
 				} else {
 					result = {...outcome, revision: entry.revision};
 				}
+				break;
+			}
+
+			case 'planDiagnosticFixes': {
+				const validation = validateDiagnosticFixesRequest(request.request);
+				if (!validation.valid) {
+					result = {
+						failure: {
+							code: validation.code,
+							message:
+								validation.code === 'selection-too-large'
+									? 'Diagnostic fix selection exceeds the 50,000 ID or 4 MiB limit.'
+									: 'Diagnostic fix request is invalid.'
+						},
+						type: 'failure'
+					};
+					break;
+				}
+				const entry = ensureSession(request.sessionId, request.revision);
+				ensureRefactorRuntimeEpoch(entry, request.refactorRuntimeEpoch);
+				rustStartedAtEpochMs = epochNow();
+				result = entry.session.plan_diagnostic_fixes(validation.request);
+				rustFinishedAtEpochMs = epochNow();
 				break;
 			}
 
@@ -786,7 +822,7 @@ async function handleRequest(
 		};
 
 		return {
-			error: (error as Error).message,
+			error: errorMessage(error),
 			id: request.id,
 			kind: request.kind,
 			metrics,

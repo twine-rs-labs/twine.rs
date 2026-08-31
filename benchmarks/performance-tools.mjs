@@ -45,6 +45,295 @@ function isRecord(value) {
 	return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+const refactorCoreOperation = 'project-replace';
+const refactorM3PassageReferencesOperation = 'passage-references';
+const refactorM3DefinitionOperation = 'passage-definition';
+const refactorM4Operation = 'diagnostic-fixes';
+const refactorTypingOperation = 'typing-responsiveness';
+const refactorMemoryOperation = 'memory-observation';
+const refactorM4MetricPrefix = 'refactor.m4.allSafe.';
+const refactorM4MeasuredSamples = 20;
+const mib = 1024 * 1024;
+const m4ResponseBoundaryToleranceMiB = 0.000001;
+
+const refactorMetricFamilies = [
+	{
+		matches: name =>
+			[
+				'refactor.summaryGenerationMs',
+				'refactor.summaryBytes',
+				'refactor.detailPageMs',
+				'refactor.detailPageBytes',
+				'refactor.atomicCommitMs',
+				'refactor.peakIncrementalMemoryMiB',
+				'refactor.retainedFrontendMiB',
+				'refactor.planStoreMiB'
+			].includes(name),
+		operation: refactorCoreOperation,
+		provenanceKey: 'refactorCore'
+	},
+	{
+		matches: name =>
+			name.startsWith('refactor.m3.referencesCold') ||
+			name.startsWith('refactor.m3.referencesWarm'),
+		operation: refactorM3PassageReferencesOperation,
+		provenanceKey: 'refactorM3PassageReferences'
+	},
+	{
+		matches: name => name.startsWith('refactor.m3.definition'),
+		operation: refactorM3DefinitionOperation,
+		provenanceKey: 'refactorM3Definition'
+	},
+	{
+		matches: name => name.startsWith(refactorM4MetricPrefix),
+		operation: refactorM4Operation,
+		provenanceKey: 'refactorM4DiagnosticFixes'
+	},
+	{
+		matches: name =>
+			[
+				'refactor.editPaintMs',
+				'refactor.editWorkerMs',
+				'refactor.editPatchDispatchMs',
+				'refactor.editFrameWaitMs',
+				'refactor.longTaskMs'
+			].includes(name),
+		operation: refactorTypingOperation,
+		provenanceKey: 'refactorTyping'
+	},
+	{
+		matches: name =>
+			[
+				'refactor.processPrivateIncrementalMiB',
+				'refactor.processPrivateMainIncrementalMiB',
+				'refactor.processPrivateRendererIncrementalMiB'
+			].includes(name) ||
+			name.startsWith('refactor.memory.postClose.') ||
+			name.startsWith('refactor.memory.postCommit.'),
+		operation: refactorMemoryOperation,
+		provenanceKey: 'refactorMemory'
+	}
+];
+
+function reportMetricNames(report) {
+	return Object.keys(report.samples ?? {});
+}
+
+function refactorMetricFamilySelection(report) {
+	const selected = new Map();
+	const unknown = [];
+
+	for (const name of reportMetricNames(report)) {
+		if (!name.startsWith('refactor.')) continue;
+		const family = refactorMetricFamilies.find(candidate =>
+			candidate.matches(name)
+		);
+		if (family) {
+			selected.set(family.provenanceKey, family.operation);
+		} else {
+			unknown.push(name);
+		}
+	}
+
+	return {operations: Object.fromEntries(selected), unknown};
+}
+
+function refactorDiagnostics(report) {
+	return (
+		report.diagnostics?.refactor ??
+		report.diagnostics?.phases?.refactor?.refactor
+	);
+}
+
+function hasExactOperationMap(actual, expected) {
+	return (
+		isRecord(actual) &&
+		Object.keys(actual).length === Object.keys(expected).length &&
+		Object.entries(expected).every(
+			([name, operation]) => actual[name] === operation
+		)
+	);
+}
+
+function refactorOperationIdentityErrors(report, selection) {
+	if (
+		Object.keys(selection.operations).length === 0 &&
+		selection.unknown.length === 0
+	) {
+		const diagnosticsIdentity = refactorDiagnostics(report);
+		const metricContracts = report.environment?.metricContracts;
+		const unexpectedIdentity =
+			report.configuration?.refactor !== undefined ||
+			diagnosticsIdentity?.operation !== undefined ||
+			diagnosticsIdentity?.operations !== undefined ||
+			metricContracts?.refactorOperation !== undefined ||
+			metricContracts?.refactorOperations !== undefined;
+
+		return unexpectedIdentity
+			? ['The zero-sample refactor report must omit operation identity maps.']
+			: [];
+	}
+
+	const expected = selection.operations;
+	const identities = [
+		['configuration.refactor', report.configuration?.refactor],
+		['diagnostics.refactor', refactorDiagnostics(report)]
+	];
+	const errors = selection.unknown.map(
+		name => `The refactor metric ${name} has no declared operation family.`
+	);
+
+	for (const [label, identity] of identities) {
+		if (!isRecord(identity) || identity.operation !== 'multi-operation') {
+			errors.push(`The ${label} operation identity is missing or malformed.`);
+			continue;
+		}
+		if (!isRecord(identity.operations)) {
+			errors.push(`The ${label} operation map is missing or malformed.`);
+			continue;
+		}
+		if (!hasExactOperationMap(identity.operations, expected)) {
+			errors.push(
+				`The ${label} operation map is missing, mismatched, or contains unexpected identities.`
+			);
+		}
+	}
+	const metricOperations =
+		report.environment?.metricContracts?.refactorOperations;
+	if (!isRecord(metricOperations)) {
+		errors.push(
+			'The environment.metricContracts.refactorOperations map is missing or malformed.'
+		);
+	} else {
+		if (!hasExactOperationMap(metricOperations, expected)) {
+			errors.push(
+				'The environment.metricContracts.refactorOperations map is missing, mismatched, or contains unexpected identities.'
+			);
+		}
+	}
+
+	return errors;
+}
+
+function m4ResponseBoundaryEvidenceErrors(report) {
+	const checkpoints = refactorDiagnostics(report)?.checkpoints;
+	const checkpointNames = [
+		'refactor-m4-all-safe-response-boundary-baseline',
+		'refactor-m4-all-safe-plan-response-boundary',
+		'refactor-m4-all-safe-detail-response-boundary'
+	];
+	const errors = [];
+	const evidence = new Map();
+
+	if (!Array.isArray(checkpoints)) {
+		return ['The M4 response-boundary evidence is missing or malformed.'];
+	}
+	for (const snapshot of checkpoints) {
+		for (const checkpoint of snapshot?.main?.memoryCheckpoints ?? []) {
+			if (
+				checkpointNames.includes(checkpoint?.name) &&
+				!evidence.has(checkpoint.name)
+			) {
+				evidence.set(checkpoint.name, checkpoint);
+			}
+		}
+	}
+
+	for (const name of checkpointNames) {
+		const checkpoint = evidence.get(name);
+		const responseBoundaryTuple = checkpoint?.ownedHighWater;
+		const tupleValid =
+			isRecord(responseBoundaryTuple) &&
+			responseBoundaryTuple.milestone === name &&
+			Number.isInteger(responseBoundaryTuple.sampleCount) &&
+			responseBoundaryTuple.sampleCount >= 1 &&
+			Number.isInteger(checkpoint.sampleCount) &&
+			responseBoundaryTuple.sampleCount <= checkpoint.sampleCount &&
+			['jsHeapBytes', 'workerCdpUsedBytes', 'wasmBytes', 'totalBytes'].every(
+				key =>
+					Number.isFinite(responseBoundaryTuple[key]) &&
+					responseBoundaryTuple[key] >= 0
+			) &&
+			[
+				'workerCdpResponseDriftMs',
+				'workerCdpSampledAtEpochMs',
+				'workerResponseAtEpochMs'
+			].every(
+				key =>
+					Number.isFinite(responseBoundaryTuple[key]) &&
+					responseBoundaryTuple[key] >= 0
+			) &&
+			responseBoundaryTuple.workerCdpResponseDriftMs <= 5_000 &&
+			Math.abs(
+				Math.abs(
+					responseBoundaryTuple.workerCdpSampledAtEpochMs -
+						responseBoundaryTuple.workerResponseAtEpochMs
+				) - responseBoundaryTuple.workerCdpResponseDriftMs
+			) <= 1 &&
+			Math.abs(
+				responseBoundaryTuple.totalBytes -
+					(responseBoundaryTuple.jsHeapBytes +
+						responseBoundaryTuple.workerCdpUsedBytes +
+						responseBoundaryTuple.wasmBytes)
+			) <= 1;
+
+		if (!tupleValid) {
+			errors.push(
+				`The M4 ${name} response-boundary tuple is missing or malformed.`
+			);
+			continue;
+		}
+		const expectedSampleCount =
+			name === 'refactor-m4-all-safe-response-boundary-baseline'
+				? 1
+				: refactorM4MeasuredSamples;
+		if (checkpoint.sampleCount !== expectedSampleCount) {
+			errors.push(
+				`The M4 ${name} response-boundary sample count is incorrect.`
+			);
+		}
+	}
+
+	if (errors.length > 0) return errors;
+
+	const responseBoundarySamples =
+		report.samples?.[
+			'refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB'
+		];
+	if (
+		!Array.isArray(responseBoundarySamples) ||
+		responseBoundarySamples.length !== 1 ||
+		!Number.isFinite(responseBoundarySamples[0])
+	) {
+		return [
+			'The M4 response-boundary incremental-memory metric must contain one finite sample.'
+		];
+	}
+	const baselineBytes = evidence.get(
+		'refactor-m4-all-safe-response-boundary-baseline'
+	).ownedHighWater.totalBytes;
+	const responseBoundaryBytes = Math.max(
+		evidence.get('refactor-m4-all-safe-plan-response-boundary').ownedHighWater
+			.totalBytes,
+		evidence.get('refactor-m4-all-safe-detail-response-boundary').ownedHighWater
+			.totalBytes
+	);
+	const expectedResponseBoundaryIncrementalMemory =
+		Math.max(0, responseBoundaryBytes - baselineBytes) / mib;
+
+	if (
+		Math.abs(
+			responseBoundarySamples[0] - expectedResponseBoundaryIncrementalMemory
+		) > m4ResponseBoundaryToleranceMiB
+	) {
+		errors.push(
+			'The M4 response-boundary incremental-memory sample does not match retained response-boundary evidence.'
+		);
+	}
+
+	return errors;
+}
+
 const gitFingerprintMaxBytes = 128 * 1024 * 1024;
 
 function gitOutput(repoRoot, args) {
@@ -183,6 +472,17 @@ export function validateElectronPhaseReport(
 
 	if (!samplesValid) {
 		errors.push('The phase report samples are malformed.');
+	}
+
+	const refactorMetricSelection =
+		report.phase === 'refactor'
+			? refactorMetricFamilySelection(report)
+			: {operations: {}, unknown: []};
+	errors.push(
+		...refactorOperationIdentityErrors(report, refactorMetricSelection)
+	);
+	if (refactorMetricSelection.operations.refactorM4DiagnosticFixes) {
+		errors.push(...m4ResponseBoundaryEvidenceErrors(report));
 	}
 
 	const assertionsValid =

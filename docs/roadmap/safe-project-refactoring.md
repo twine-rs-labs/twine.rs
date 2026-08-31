@@ -57,18 +57,19 @@ precondition still holds.
 
 ### V1 10k/50k feature gates
 
-| Gate                                                     |                                                                                                          10k fixture |                                 50k fixture |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------: | ------------------------------------------: |
-| Serialized summary DTO                                   |                                                                                                       at most 64 KiB |                              at most 64 KiB |
-| One detail page                                          |                                                                                      at most 200 changes and 256 KiB |             at most 200 changes and 256 KiB |
-| Live plan store                                          |                                                                           at most 8 plans, 10-minute TTL, and 64 MiB | at most 8 plans, 10-minute TTL, and 128 MiB |
-| Selection expression                                     |                                                                                         at most 50,000 IDs and 4 MiB |                at most 50,000 IDs and 4 MiB |
-| Summary generation p95                                   |                                                                                                       at most 250 ms |                            at most 1,000 ms |
-| Detail-page fetch p95                                    |                                                                                                        at most 50 ms |                              at most 100 ms |
-| Atomic model commit p95                                  |                                                                                                     at most 1,000 ms |                            at most 5,000 ms |
-| Peak incremental Rust/WASM plus JavaScript memory        |                                                                                                       at most 64 MiB |                             at most 128 MiB |
-| Retained frontend review model after close and forced GC |                                                                                                        at most 8 MiB |                              at most 16 MiB |
-| Typing while planning                                    | edit-paint p95 no more than 5 ms above the accepted fixture baseline; zero attributable main-thread tasks over 50 ms |                                        same |
+| Gate                                                              |                                                                                                          10k fixture |                                 50k fixture |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------: | ------------------------------------------: |
+| Serialized summary DTO                                            |                                                                                                       at most 64 KiB |                              at most 64 KiB |
+| One detail page                                                   |                                                                                      at most 200 changes and 256 KiB |             at most 200 changes and 256 KiB |
+| Live plan store                                                   |                                                                           at most 8 plans, 10-minute TTL, and 64 MiB | at most 8 plans, 10-minute TTL, and 128 MiB |
+| Selection expression                                              |                                                                                         at most 50,000 IDs and 4 MiB |                at most 50,000 IDs and 4 MiB |
+| Summary generation p95                                            |                                                                                                       at most 250 ms |                            at most 1,000 ms |
+| Detail-page fetch p95                                             |                                                                                                        at most 50 ms |                              at most 100 ms |
+| Atomic model commit p95                                           |                                                                                                     at most 1,000 ms |                            at most 5,000 ms |
+| Core project-replace incremental Rust/WASM plus JavaScript memory |                                                                                                       at most 64 MiB |                             at most 128 MiB |
+| M4 response-boundary incremental tuple maximum                    |                                                                                                       at most 64 MiB |                             at most 128 MiB |
+| Retained frontend review model after close and forced GC          |                                                                                                        at most 8 MiB |                              at most 16 MiB |
+| Typing while planning                                             | edit-paint p95 no more than 5 ms above the accepted fixture baseline; zero attributable main-thread tasks over 50 ms |                                        same |
 
 - Add `perf:electron:10k:refactor` and `perf:electron:50k:refactor` commands,
   backed by a `refactor` phase in the existing Electron harness and versioned
@@ -76,7 +77,12 @@ precondition still holds.
 - Collect at least 3 warmups plus 20 measured summary and detail-page samples,
   10 isolated atomic-commit samples from reset fixture state, and 20 edit-paint
   windows while planning. Report p50, p95, maximum, serialized bytes, plan-store
-  bytes, retained frontend bytes, and peak incremental memory.
+  bytes, retained frontend bytes, and incremental memory. The M4 safe-fix
+  memory gate is the greater retained plan/detail response-boundary tuple minus
+  the retained M4 baseline tuple. Each tuple is renderer JavaScript, a CDP
+  worker used-size sample, and WASM bytes at the worker response boundary, with
+  recorded response-to-CDP drift at most five seconds. It is not a continuous
+  worker-JavaScript maximum.
 - Both fixture commands must pass every structural assertion and table gate.
   Failure blocks the feature slice and the result is not eligible to become an
   accepted baseline.

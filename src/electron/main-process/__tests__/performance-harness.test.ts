@@ -136,7 +136,10 @@ describe('Electron performance harness isolation', () => {
 			{
 				rendererPrivateKiB: 8,
 				usedJSHeapSize: 10,
+				workerHeapCdpResponseDriftMs: 5,
+				workerHeapCdpSampledAtEpochMs: 1_005,
 				workerHeapCdpUsedBytes: 20,
+				workerResponseAtEpochMs: 1_000,
 				workerWasmMemoryBytes: 20
 			},
 			{private: 100, residentSet: 0, shared: 0}
@@ -146,10 +149,26 @@ describe('Electron performance harness isolation', () => {
 			{
 				rendererPrivateKiB: 4,
 				usedJSHeapSize: 30,
+				workerHeapCdpResponseDriftMs: 10,
+				workerHeapCdpSampledAtEpochMs: 2_010,
 				workerHeapCdpUsedBytes: 10,
+				workerResponseAtEpochMs: 2_000,
 				workerWasmMemoryBytes: 15
 			},
 			{private: 120, residentSet: 0, shared: 0}
+		);
+		harness.recordMemoryCheckpoint(
+			'refactor-plan-high-water',
+			{
+				rendererPrivateKiB: 2,
+				usedJSHeapSize: 5,
+				workerHeapCdpResponseDriftMs: 15,
+				workerHeapCdpSampledAtEpochMs: 3_015,
+				workerHeapCdpUsedBytes: 5,
+				workerResponseAtEpochMs: 3_000,
+				workerWasmMemoryBytes: 5
+			},
+			{private: 80, residentSet: 0, shared: 0}
 		);
 		const checkpoints =
 			harness.mainPerformanceHarnessSnapshot().memoryCheckpoints;
@@ -158,10 +177,13 @@ describe('Electron performance harness isolation', () => {
 		expect(checkpoints[0]).toEqual(
 			expect.objectContaining({
 				renderer: {
-					rendererPrivateKiB: 4,
-					usedJSHeapSize: 30,
-					workerHeapCdpUsedBytes: 10,
-					workerWasmMemoryBytes: 15
+					rendererPrivateKiB: 2,
+					usedJSHeapSize: 5,
+					workerHeapCdpResponseDriftMs: 15,
+					workerHeapCdpSampledAtEpochMs: 3_015,
+					workerHeapCdpUsedBytes: 5,
+					workerResponseAtEpochMs: 3_000,
+					workerWasmMemoryBytes: 5
 				},
 				ownedHighWater: {
 					jsHeapBytes: 30,
@@ -169,7 +191,10 @@ describe('Electron performance harness isolation', () => {
 					sampleCount: 2,
 					totalBytes: 55,
 					wasmBytes: 15,
-					workerCdpUsedBytes: 10
+					workerCdpResponseDriftMs: 10,
+					workerCdpSampledAtEpochMs: 2_010,
+					workerCdpUsedBytes: 10,
+					workerResponseAtEpochMs: 2_000
 				},
 				processPrivateHighWater: {
 					mainPrivateBytes: 120 * 1024,
@@ -178,7 +203,7 @@ describe('Electron performance harness isolation', () => {
 					sampleCount: 2,
 					totalBytes: 124 * 1024
 				},
-				sampleCount: 2
+				sampleCount: 3
 			})
 		);
 		expect(checkpoints[0].ownedHighWater.totalBytes).not.toBe(60);

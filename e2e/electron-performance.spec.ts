@@ -79,7 +79,10 @@ interface PerformanceSnapshot {
 				sampleCount: number;
 				totalBytes?: number;
 				wasmBytes?: number;
+				workerCdpResponseDriftMs?: number;
+				workerCdpSampledAtEpochMs?: number;
 				workerCdpUsedBytes?: number;
+				workerResponseAtEpochMs?: number;
 			};
 			processPrivateHighWater: {
 				mainPrivateBytes: number;
@@ -191,6 +194,14 @@ const mainPath = path.resolve(
 );
 const samples: Record<string, number[]> = {};
 const assertions: Array<{detail?: string; name: string; passed: boolean}> = [];
+const refactorOperations = {
+	refactorCore: 'project-replace',
+	refactorM3PassageReferences: 'passage-references',
+	refactorM3Definition: 'passage-definition',
+	refactorM4DiagnosticFixes: 'diagnostic-fixes',
+	refactorTyping: 'typing-responsiveness',
+	refactorMemory: 'memory-observation'
+} as const;
 const diagnostics: {
 	bridgeMetrics: PerformanceSnapshot['renderer']['bridgeMetrics'];
 	editConfiguration?: {
@@ -213,9 +224,14 @@ const diagnostics: {
 		checkpoints: PerformanceSnapshot[];
 		commitSamples: number;
 		detailSamples: number;
+		m4CommitSamples: number;
+		m4DetailSamples: number;
+		m4SummarySamples: number;
+		m4TypingSamples: number;
 		m3DefinitionSamples: number;
 		m3ReferenceSamples: number;
-		operation: 'project-replace';
+		operation: 'multi-operation';
+		operations: typeof refactorOperations;
 		summarySamples: number;
 		typingCompositorSettles: RefactorTypingCompositorSettle[];
 	};
@@ -4125,6 +4141,12 @@ interface M3QueryFixtureTarget {
 	storyId: string;
 }
 
+interface M4DiagnosticFixFixtureTarget {
+	expectedChangeCount: number;
+	selection: 'allSafe';
+	storyId: string;
+}
+
 function recordM3BridgeSample(
 	prefix: string,
 	metric: {computeMs: number; responseBytes: number; roundTripMs: number}
@@ -4270,6 +4292,432 @@ async function measureM3Queries(page: Page, target: M3QueryFixtureTarget) {
 		(samples['refactor.m3.referencesWarmComputeMs']?.length ?? 0) === 20 &&
 			(samples['refactor.m3.definitionComputeMs']?.length ?? 0) === 20
 	);
+}
+
+async function measureM4DiagnosticFixes(
+	page: Page,
+	target: M4DiagnosticFixFixtureTarget
+) {
+	const warmups = 3;
+	const measured = 20;
+	await startEditLongTaskObservation(page);
+	await page
+		.getByRole('group', {name: 'Workspace Mode'})
+		.getByRole('tab', {name: 'Text'})
+		.click();
+	const content = page
+		.locator('.story-edit-editor-window')
+		.first()
+		.locator('[data-testid^="story-editor-window-"]')
+		.first()
+		.locator('.cm-content');
+	await expect(content).toBeVisible({timeout: 60_000});
+	// Establish an operation-local baseline from a current worker response in a
+	// fresh M4 fixture session. This prevents earlier refactor workloads or a
+	// stale response tuple from becoming the comparator.
+	await page.evaluate(
+		storyId => (window as any).twinePerformance.worker.diagnostics(storyId),
+		target.storyId
+	);
+	await recordMemoryDetailCheckpoint(
+		page,
+		'refactor-m4-all-safe-response-boundary-baseline'
+	);
+	const memoryBaseline = await snapshot(page);
+	const refactorDiagnostics = diagnostics.refactor;
+	if (!refactorDiagnostics) {
+		throw new Error(
+			'M4 diagnostics require the completed core refactor phase.'
+		);
+	}
+	refactorDiagnostics.checkpoints.push(memoryBaseline);
+	const baselineCheckpoint = memoryBaseline.main.memoryCheckpoints.find(
+		checkpoint =>
+			checkpoint.name === 'refactor-m4-all-safe-response-boundary-baseline'
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-response-boundary-baseline-current-coherent',
+		baselineCheckpoint?.sampleCount === 1 &&
+			baselineCheckpoint.ownedHighWater.sampleCount === 1 &&
+			typeof baselineCheckpoint.ownedHighWater.totalBytes === 'number' &&
+			typeof baselineCheckpoint.ownedHighWater.wasmBytes === 'number' &&
+			typeof baselineCheckpoint.ownedHighWater.workerCdpUsedBytes ===
+				'number' &&
+			typeof baselineCheckpoint.ownedHighWater.workerResponseAtEpochMs ===
+				'number' &&
+			typeof baselineCheckpoint.ownedHighWater.workerCdpSampledAtEpochMs ===
+				'number' &&
+			typeof baselineCheckpoint.renderer.workerResponseAtEpochMs === 'number' &&
+			typeof baselineCheckpoint.renderer.workerHeapCdpSampledAtEpochMs ===
+				'number',
+		JSON.stringify(baselineCheckpoint)
+	);
+	let maxPlanStoreBytes = 0;
+
+	for (let index = 0; index < warmups + measured; index++) {
+		await content.click();
+		await page.keyboard.press('End');
+		const beforeRevision = await currentRevision(page);
+		await page.evaluate(
+			({index, target, warmups}) => {
+				const harness = (window as any).twinePerformance;
+				const probe = {
+					active: true,
+					activeBeforeInput: false,
+					checkpointOutcome: undefined as Promise<{error?: string}> | undefined,
+					editorInputDispatched: false,
+					inputStartedAt: undefined as number | undefined,
+					promise: undefined as Promise<unknown> | undefined,
+					startedAt: performance.now()
+				};
+				(window as any).__twineM4PlanProbe = probe;
+				let workerMetric: any;
+				const request = {
+					selection: {excludedDiagnosticIds: [], type: target.selection},
+					storyId: target.storyId
+				};
+				const options = {
+					onPlanningStarted: () => {
+						queueMicrotask(() => {
+							const editor = document.querySelector<HTMLElement>(
+								'.story-edit-editor-window [data-testid^="story-editor-window-"] .cm-content'
+							);
+							probe.activeBeforeInput = probe.active;
+							probe.inputStartedAt = performance.now();
+							editor?.focus();
+							probe.editorInputDispatched = Boolean(
+								editor &&
+								document.execCommand(
+									'insertText',
+									false,
+									` m4-all-safe-typing-${target.expectedChangeCount}`
+								)
+							);
+						});
+					},
+					onWorkerMetric: (metric: any) => (workerMetric = metric)
+				};
+				const operation =
+					index >= warmups
+						? harness.refactor.planDiagnosticFixesObserved(
+								target.storyId,
+								request,
+								'refactor-m4-all-safe-plan-response-boundary',
+								options
+							)
+						: {
+								result: harness.refactor.planDiagnosticFixes(
+									target.storyId,
+									request,
+									options
+								),
+								workerResponseCheckpoint: Promise.resolve()
+							};
+				probe.checkpointOutcome = operation.workerResponseCheckpoint.then(
+					() => ({}),
+					(error: unknown) => ({error: String(error)})
+				);
+				probe.promise = operation.result
+					.then((result: any) => ({
+						activeBeforeInput: probe.activeBeforeInput,
+						durationMs: performance.now() - probe.startedAt,
+						editorInputDispatched: probe.editorInputDispatched,
+						finishedAt: performance.now(),
+						inputStartedAt: probe.inputStartedAt,
+						result,
+						serializedBytes: new TextEncoder().encode(JSON.stringify(result))
+							.byteLength,
+						workerMetric
+					}))
+					.finally(() => {
+						probe.active = false;
+					});
+			},
+			{index, target, warmups}
+		);
+		await page.waitForFunction(
+			() =>
+				typeof (window as any).__twineM4PlanProbe?.inputStartedAt === 'number',
+			undefined,
+			{timeout: 60_000}
+		);
+		const revision = await waitForRevisionAfter(page, beforeRevision);
+		const inputStartedAt = await page.evaluate(
+			() => (window as any).__twineM4PlanProbe.inputStartedAt as number
+		);
+		const editTiming = await waitForMutationPaintForRevision(page, {
+			inputStartedAt,
+			revision
+		});
+		const planned = await page.evaluate(async () => {
+			const probe = (window as any).__twineM4PlanProbe;
+			return probe.promise;
+		});
+		const checkpointOutcome = await page.evaluate(async () => {
+			const probe = (window as any).__twineM4PlanProbe;
+			const outcome = await probe.checkpointOutcome;
+			delete (window as any).__twineM4PlanProbe;
+			return outcome;
+		});
+		if (checkpointOutcome.error) {
+			throw new Error(checkpointOutcome.error);
+		}
+		const longTasks = await mutationWindowLongTasks(page, {
+			duration: planned.durationMs,
+			startTime: planned.finishedAt - planned.durationMs
+		});
+		addSample(
+			'refactor.m4.allSafe.longTaskMs',
+			Math.max(0, ...longTasks.map(task => task.duration))
+		);
+		assertInvariant(
+			`refactor-m4-all-safe-plan-${index}-complete-bounded`,
+			planned.activeBeforeInput &&
+				planned.editorInputDispatched &&
+				planned.result.type === 'complete' &&
+				planned.result.summary.operationKind === 'diagnostic-fixes' &&
+				planned.result.summary.coverage === 'deterministic-safe-fixes' &&
+				planned.result.summary.changeCount === target.expectedChangeCount &&
+				planned.serializedBytes <= 64 * 1024 &&
+				planned.workerMetric?.kind === 'planDiagnosticFixes' &&
+				typeof planned.workerMetric.rustStartedAtEpochMs === 'number' &&
+				typeof planned.workerMetric.rustFinishedAtEpochMs === 'number',
+			JSON.stringify(planned)
+		);
+		assertInvariant(
+			`refactor-m4-all-safe-typing-${index}-measured-during-plan`,
+			planned.finishedAt >= inputStartedAt && revision === beforeRevision + 1,
+			JSON.stringify({
+				beforeRevision,
+				finishedAt: planned.finishedAt,
+				inputStartedAt,
+				revision
+			})
+		);
+		for (const task of longTasks) {
+			assertInvariant(
+				`refactor-m4-all-safe-plan-${index}-long-task-limit`,
+				task.duration <= 50,
+				`${task.duration.toFixed(2)}ms`
+			);
+		}
+		if (index >= warmups) {
+			addSample('refactor.m4.allSafe.planMs', planned.durationMs);
+			addSample('refactor.m4.allSafe.summaryBytes', planned.serializedBytes);
+			addSample('refactor.m4.allSafe.editPaintMs', editTiming.paint.duration);
+		}
+		await page.evaluate(
+			storyId => (window as any).twinePerformance.review.closeReview(storyId),
+			target.storyId
+		);
+		const undo = page.getByRole('button', {name: /^Undo/});
+		await expect(undo).toBeEnabled();
+		await undo.click();
+		const undoRevision = await waitForRevisionAfter(page, revision);
+		await waitForRevisionEvent(page, ['undo-applied'], undoRevision);
+		await waitForPersistenceIdle(page);
+	}
+
+	const postPlan = await snapshot(page);
+	refactorDiagnostics.checkpoints.push(postPlan);
+	const postPlanStore = refactorStoreSnapshot(postPlan);
+	maxPlanStoreBytes = Math.max(
+		maxPlanStoreBytes,
+		postPlanStore?.refactorPlanStoreBytes ?? 0
+	);
+	const planResponseBoundary = postPlan.main.memoryCheckpoints.find(
+		checkpoint =>
+			checkpoint.name === 'refactor-m4-all-safe-plan-response-boundary'
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-plan-response-boundary-retained',
+		planResponseBoundary?.sampleCount === measured &&
+			planResponseBoundary.ownedHighWater.sampleCount >= 1 &&
+			planResponseBoundary.ownedHighWater.sampleCount <= measured &&
+			typeof planResponseBoundary.ownedHighWater.totalBytes === 'number' &&
+			typeof planResponseBoundary.ownedHighWater.wasmBytes === 'number' &&
+			typeof planResponseBoundary.ownedHighWater.workerCdpUsedBytes ===
+				'number' &&
+			typeof planResponseBoundary.ownedHighWater.workerResponseAtEpochMs ===
+				'number' &&
+			typeof planResponseBoundary.ownedHighWater.workerCdpSampledAtEpochMs ===
+				'number',
+		JSON.stringify(planResponseBoundary)
+	);
+
+	await page.evaluate(
+		storyId => (window as any).twinePerformance.review.closeReview(storyId),
+		target.storyId
+	);
+	const heapBeforeDetail = await page.evaluate(() =>
+		(window as any).twinePerformance.rendererHeapAfterGarbageCollection()
+	);
+	const detailPlan = await page.evaluate(async target => {
+		const harness = (window as any).twinePerformance;
+		return harness.refactor.planDiagnosticFixes(target.storyId, {
+			selection: {excludedDiagnosticIds: [], type: target.selection},
+			storyId: target.storyId
+		});
+	}, target);
+	assertInvariant(
+		'refactor-m4-all-safe-detail-plan-complete',
+		detailPlan.type === 'complete' &&
+			detailPlan.summary.changeCount === target.expectedChangeCount,
+		JSON.stringify(detailPlan)
+	);
+	if (detailPlan.type === 'complete') {
+		for (let index = 0; index < warmups + measured; index++) {
+			const detail = await page.evaluate(
+				async ({cursor, measuredSample, storyId}) => {
+					const harness = (window as any).twinePerformance;
+					const startedAt = performance.now();
+					const operation = measuredSample
+						? harness.refactor.detailObserved(
+								storyId,
+								cursor,
+								'refactor-m4-all-safe-detail-response-boundary'
+							)
+						: {
+								result: harness.refactor.detail(storyId, cursor),
+								workerResponseCheckpoint: Promise.resolve()
+							};
+					const result = await operation.result;
+					const durationMs = performance.now() - startedAt;
+					const checkpointError = await operation.workerResponseCheckpoint.then(
+						() => undefined,
+						(error: unknown) => String(error)
+					);
+					return {
+						checkpointError,
+						durationMs,
+						result,
+						serializedBytes: new TextEncoder().encode(JSON.stringify(result))
+							.byteLength
+					};
+				},
+				{
+					cursor: detailPlan.summary.firstDetailCursor,
+					measuredSample: index >= warmups,
+					storyId: target.storyId
+				}
+			);
+			if (detail.checkpointError) throw new Error(detail.checkpointError);
+			assertInvariant(
+				`refactor-m4-all-safe-detail-${index}-canonical-bounded`,
+				detail.result.type === 'page' &&
+					detail.result.page.changes.length > 0 &&
+					detail.result.page.changes.length <= 200 &&
+					detail.result.page.changes.every(
+						(change: any) => change.kind === 'add-passage'
+					) &&
+					detail.serializedBytes <= 256 * 1024,
+				JSON.stringify(detail)
+			);
+			if (index >= warmups) {
+				addSample('refactor.m4.allSafe.detailPageMs', detail.durationMs);
+				addSample(
+					'refactor.m4.allSafe.detailPageBytes',
+					detail.serializedBytes
+				);
+			}
+		}
+	}
+	const postDetail = await snapshot(page);
+	refactorDiagnostics.checkpoints.push(postDetail);
+	const postDetailStore = refactorStoreSnapshot(postDetail);
+	maxPlanStoreBytes = Math.max(
+		maxPlanStoreBytes,
+		postDetailStore?.refactorPlanStoreBytes ?? 0
+	);
+	const detailResponseBoundary = postDetail.main.memoryCheckpoints.find(
+		checkpoint =>
+			checkpoint.name === 'refactor-m4-all-safe-detail-response-boundary'
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-detail-response-boundary-retained',
+		detailResponseBoundary?.sampleCount === measured &&
+			detailResponseBoundary.ownedHighWater.sampleCount >= 1 &&
+			detailResponseBoundary.ownedHighWater.sampleCount <= measured &&
+			typeof detailResponseBoundary.ownedHighWater.totalBytes === 'number' &&
+			typeof detailResponseBoundary.ownedHighWater.wasmBytes === 'number' &&
+			typeof detailResponseBoundary.ownedHighWater.workerCdpUsedBytes ===
+				'number' &&
+			typeof detailResponseBoundary.ownedHighWater.workerResponseAtEpochMs ===
+				'number' &&
+			typeof detailResponseBoundary.ownedHighWater.workerCdpSampledAtEpochMs ===
+				'number',
+		JSON.stringify(detailResponseBoundary)
+	);
+	const baselineResponseBoundaryBytes =
+		baselineCheckpoint?.ownedHighWater.totalBytes;
+	const maxResponseBoundaryBytes = Math.max(
+		planResponseBoundary?.ownedHighWater.totalBytes ?? Number.NaN,
+		detailResponseBoundary?.ownedHighWater.totalBytes ?? Number.NaN
+	);
+	addSample(
+		'refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB',
+		typeof baselineResponseBoundaryBytes !== 'number' ||
+			!Number.isFinite(maxResponseBoundaryBytes)
+			? undefined
+			: Math.max(0, maxResponseBoundaryBytes - baselineResponseBoundaryBytes) /
+					(1024 * 1024)
+	);
+	addSample(
+		'refactor.m4.allSafe.planStoreMiB',
+		maxPlanStoreBytes / (1024 * 1024)
+	);
+	await page.evaluate(
+		storyId => (window as any).twinePerformance.review.closeReview(storyId),
+		target.storyId
+	);
+	const heapAfterClose = await page.evaluate(() =>
+		(window as any).twinePerformance.rendererHeapAfterGarbageCollection()
+	);
+	addSample(
+		'refactor.m4.allSafe.retainedFrontendMiB',
+		Math.max(
+			0,
+			(heapAfterClose.usedJSHeapSize - heapBeforeDetail.usedJSHeapSize) /
+				1024 /
+				1024
+		)
+	);
+	const detailBridgeMetric = (await snapshot(page)).renderer.bridgeMetrics
+		.filter(metric => metric.kind === 'queryRefactorPlanDetail')
+		.at(-1);
+	assertInvariant(
+		'refactor-m4-detail-worker-operation-observed',
+		detailBridgeMetric?.kind === 'queryRefactorPlanDetail' &&
+			typeof detailBridgeMetric.rustStartedAtEpochMs === 'number' &&
+			typeof detailBridgeMetric.rustFinishedAtEpochMs === 'number',
+		JSON.stringify(detailBridgeMetric)
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-measured-samples-complete',
+		[
+			'refactor.m4.allSafe.planMs',
+			'refactor.m4.allSafe.summaryBytes',
+			'refactor.m4.allSafe.detailPageMs',
+			'refactor.m4.allSafe.detailPageBytes',
+			'refactor.m4.allSafe.editPaintMs'
+		].every(name => (samples[name]?.length ?? 0) === measured),
+		JSON.stringify(
+			Object.fromEntries(
+				Object.entries(samples).filter(([name]) =>
+					name.startsWith('refactor.m4')
+				)
+			)
+		)
+	);
+	assertInvariant(
+		'refactor-m4-all-safe-response-boundary-memory-sample-complete',
+		(samples['refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB']
+			?.length ?? 0) === 1,
+		JSON.stringify(
+			samples['refactor.m4.allSafe.responseBoundaryIncrementalMemoryMiB']
+		)
+	);
+	await stopEditLongTaskObservation(page);
 }
 
 function refactorStoreSnapshot(current: PerformanceSnapshot) {
@@ -4923,21 +5371,25 @@ async function measureRefactor(
 	const refactorBridgeKindsWithRustTiming = new Set<string>();
 	let refactorReplaceProjectObserved = false;
 	let typingCompositorSettles: RefactorTypingCompositorSettle[] = [];
+	const captureRefactorBridgeOperation = (metric: any) => {
+		refactorBridgeKinds.add(metric.kind);
+		if (
+			metric.rustStartedAtEpochMs !== undefined &&
+			metric.rustFinishedAtEpochMs !== undefined
+		) {
+			refactorBridgeKindsWithRustTiming.add(metric.kind);
+		}
+		refactorReplaceProjectObserved ||= metric.kind === 'replaceProject';
+	};
 	const captureRefactorBridgeOperations = (current: PerformanceSnapshot) => {
 		for (const metric of current.renderer.bridgeMetrics) {
-			refactorBridgeKinds.add(metric.kind);
-			if (
-				metric.rustStartedAtEpochMs !== undefined &&
-				metric.rustFinishedAtEpochMs !== undefined
-			) {
-				refactorBridgeKindsWithRustTiming.add(metric.kind);
-			}
-			refactorReplaceProjectObserved ||= metric.kind === 'replaceProject';
+			captureRefactorBridgeOperation(metric);
 		}
 	};
 	await startEditLongTaskObservation(page);
 	try {
 		await measureM3Queries(page, m3QueryTarget);
+		captureRefactorBridgeOperations(await snapshot(page));
 		// This retained-worker probe is a structural measurement-integrity check,
 		// not a refactor sample. It runs before the baseline so its deliberately
 		// retained allocation cannot contribute to the 64/128 MiB budget.
@@ -5326,30 +5778,6 @@ async function measureRefactor(
 			JSON.stringify({afterCancellationTask, beforeCancellationTask})
 		);
 		assertInvariant(
-			'refactor-bridge-operations-observed',
-			[
-				'syncRefactorRuntime',
-				'beginProjectReplacePlan',
-				'continueProjectReplacePlan',
-				'queryRefactorPlanDetail',
-				'applyRefactorPlan',
-				'cancelProjectReplacePlan'
-			].every(kind => refactorBridgeKinds.has(kind)),
-			JSON.stringify([...refactorBridgeKinds])
-		);
-		assertInvariant(
-			'refactor-project-replace-wasm-call-timing-observed',
-			[
-				'syncRefactorRuntime',
-				'beginProjectReplacePlan',
-				'continueProjectReplacePlan',
-				'queryRefactorPlanDetail',
-				'applyRefactorPlan',
-				'cancelProjectReplacePlan'
-			].every(kind => refactorBridgeKindsWithRustTiming.has(kind)),
-			JSON.stringify([...refactorBridgeKindsWithRustTiming])
-		);
-		assertInvariant(
 			'refactor-operation-is-project-replace',
 			summaries.length === warmups + measured &&
 				summaries.every(summary => summary.operationKind === 'project-replace'),
@@ -5456,6 +5884,30 @@ async function measureRefactor(
 		recordRefactorMemoryObservation(baseline, retained);
 		captureMemory(retained, 'refactor.memory.postClose');
 		assertInvariant(
+			'refactor-bridge-operations-observed',
+			[
+				'syncRefactorRuntime',
+				'beginProjectReplacePlan',
+				'continueProjectReplacePlan',
+				'queryRefactorPlanDetail',
+				'applyRefactorPlan',
+				'cancelProjectReplacePlan'
+			].every(kind => refactorBridgeKinds.has(kind)),
+			JSON.stringify([...refactorBridgeKinds])
+		);
+		assertInvariant(
+			'refactor-wasm-call-timing-observed',
+			[
+				'syncRefactorRuntime',
+				'beginProjectReplacePlan',
+				'continueProjectReplacePlan',
+				'queryRefactorPlanDetail',
+				'applyRefactorPlan',
+				'cancelProjectReplacePlan'
+			].every(kind => refactorBridgeKindsWithRustTiming.has(kind)),
+			JSON.stringify([...refactorBridgeKindsWithRustTiming])
+		);
+		assertInvariant(
 			'refactor-summary-measured-samples-complete',
 			(samples['refactor.summaryGenerationMs']?.length ?? 0) === measured,
 			String(samples['refactor.summaryGenerationMs']?.length ?? 0)
@@ -5486,9 +5938,14 @@ async function measureRefactor(
 		checkpoints,
 		commitSamples: 0,
 		detailSamples: measured,
+		m4CommitSamples: 0,
+		m4DetailSamples: measured,
+		m4SummarySamples: measured,
+		m4TypingSamples: measured,
 		m3DefinitionSamples: measured,
 		m3ReferenceSamples: measured,
-		operation: 'project-replace',
+		operation: 'multi-operation',
+		operations: refactorOperations,
 		summarySamples: measured,
 		typingCompositorSettles
 	};
@@ -5736,6 +6193,146 @@ async function measureRefactorCommitSamples(target: RefactorFixtureTarget) {
 		String(samples['refactor.atomicCommitMs']?.length ?? 0)
 	);
 	if (diagnostics.refactor) diagnostics.refactor.commitSamples = 10;
+}
+
+async function measureM4DiagnosticFixCommitSamples(
+	target: M4DiagnosticFixFixtureTarget
+) {
+	for (let index = 0; index < 10; index++) {
+		const running = await launchFixture();
+		try {
+			const before = await snapshot(running.page);
+			const beforeRevision = await currentRevision(running.page);
+			const planning = await running.page.evaluate(async target => {
+				const harness = (window as any).twinePerformance;
+				return harness.refactor.planDiagnosticFixes(target.storyId, {
+					selection: {excludedDiagnosticIds: [], type: target.selection},
+					storyId: target.storyId
+				});
+			}, target);
+			assertInvariant(
+				`refactor-m4-all-safe-commit-${index}-plan-complete`,
+				planning.type === 'complete' &&
+					planning.summary.changeCount === target.expectedChangeCount,
+				JSON.stringify(planning)
+			);
+			if (planning.type !== 'complete') continue;
+			const commit = await running.page.evaluate(
+				async ({index, storyId, summary}) => {
+					const startedAt = performance.now();
+					const operation = (
+						window as any
+					).twinePerformance.refactor.applyModelCommit(
+						storyId,
+						{
+							expectedProjectRevision: summary.projectRevision,
+							planId: summary.planId,
+							selection: {type: 'all'}
+						},
+						`refactor-m4-all-safe-commit-${index}-worker-response`
+					);
+					const [result] = await Promise.all([
+						operation.result,
+						operation.workerResponseCheckpoint
+					]);
+					return {
+						durationMs: performance.now() - startedAt,
+						result:
+							result.type === 'applied'
+								? {
+										patchCount: result.batch.patches.length,
+										type: result.type
+									}
+								: {failure: result.failure, type: result.type}
+					};
+				},
+				{index, storyId: target.storyId, summary: planning.summary}
+			);
+			const appliedRevision = await waitForRevisionAfter(
+				running.page,
+				beforeRevision
+			);
+			const afterApply = await snapshot(running.page);
+			const appliedEvents = afterApply.renderer.events.slice(
+				before.renderer.events.length
+			);
+			const persistenceEvents = new Set([
+				'persistence-save-queued',
+				'persistence-save-started',
+				'persistence-save-completed',
+				'persistence-save-notified',
+				'persistence-save-failed',
+				'save-acknowledgement-start',
+				'save-acknowledgement-complete',
+				'save-acknowledgement-failed'
+			]);
+			assertInvariant(
+				`refactor-m4-all-safe-commit-${index}-one-atomic-model-transaction`,
+				commit.result.type === 'applied' &&
+					commit.result.patchCount === target.expectedChangeCount + 1 &&
+					appliedRevision === beforeRevision + 1 &&
+					appliedEvents.filter(
+						event =>
+							event.name === 'renderer-patch-stages' &&
+							event.detail?.revision === appliedRevision
+					).length === 1 &&
+					appliedEvents.some(
+						event =>
+							event.name === 'renderer-patch-stages' &&
+							event.detail?.revision === appliedRevision &&
+							event.detail?.documentUpdates === target.expectedChangeCount &&
+							event.detail?.storyActions === target.expectedChangeCount
+					) &&
+					appliedEvents.every(
+						event =>
+							!persistenceEvents.has(event.name) ||
+							event.detail?.revision !== appliedRevision
+					),
+				JSON.stringify({
+					appliedEvents,
+					appliedRevision,
+					beforeRevision,
+					commit
+				})
+			);
+			addSample('refactor.m4.allSafe.atomicCommitMs', commit.durationMs);
+			await running.page.evaluate(
+				storyId => (window as any).twinePerformance.review.closeReview(storyId),
+				target.storyId
+			);
+			await running.page.evaluate(
+				storyId =>
+					(window as any).twinePerformance.refactor.undoModelCommit(storyId),
+				target.storyId
+			);
+			const undoRevision = await waitForRevisionAfter(
+				running.page,
+				appliedRevision
+			);
+			const restored = await running.page.evaluate(async target => {
+				const harness = (window as any).twinePerformance;
+				return harness.refactor.planDiagnosticFixes(target.storyId, {
+					selection: {excludedDiagnosticIds: [], type: target.selection},
+					storyId: target.storyId
+				});
+			}, target);
+			assertInvariant(
+				`refactor-m4-all-safe-commit-${index}-undo-restores-full-batch`,
+				undoRevision === appliedRevision + 1 &&
+					restored.type === 'complete' &&
+					restored.summary.changeCount === target.expectedChangeCount,
+				JSON.stringify({appliedRevision, restored, undoRevision})
+			);
+		} finally {
+			await closeFixture(running);
+		}
+	}
+	assertInvariant(
+		'refactor-m4-all-safe-atomic-commit-samples-complete',
+		(samples['refactor.m4.allSafe.atomicCommitMs']?.length ?? 0) === 10,
+		String(samples['refactor.m4.allSafe.atomicCommitMs']?.length ?? 0)
+	);
+	if (diagnostics.refactor) diagnostics.refactor.m4CommitSamples = 10;
 }
 
 function captureMemoryDetailCheckpoints(current: PerformanceSnapshot) {
@@ -6396,6 +6993,9 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 		}
 	}
 	attempts.push(attempt);
+	const measuredRefactorOperations = diagnostics.refactor
+		? refactorOperations
+		: undefined;
 
 	await writeFile(
 		reportPath,
@@ -6414,7 +7014,12 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 								})
 							: undefined,
 					refactor:
-						phase === 'refactor' ? {operation: 'project-replace'} : undefined
+						phase === 'refactor' && measuredRefactorOperations
+							? {
+									operation: 'multi-operation',
+									operations: measuredRefactorOperations
+								}
+							: undefined
 				},
 				createdAt: new Date().toISOString(),
 				diagnostics,
@@ -6433,8 +7038,14 @@ async function writeRawPerformanceReport(testInfo: TestInfo) {
 									refactorAtomicCommit: 1,
 									atomicCommitOperation:
 										'model-commit-renderer-reconciliation-no-persistence',
+									refactorM4DiagnosticFixes: 3,
 									refactorMemory: 3,
-									refactorOperation: 'project-replace'
+									...(measuredRefactorOperations
+										? {
+												refactorOperation: 'multi-operation',
+												refactorOperations: measuredRefactorOperations
+											}
+										: {})
 								}
 							: {}),
 						...(footprintEnabled ? {memoryFootprint: 1} : {}),
@@ -6547,17 +7158,20 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 				'utf8'
 			)
 		) as {
+			linkCounts?: {broken?: number};
 			m3QueryTarget?: M3QueryFixtureTarget;
+			m4DiagnosticFixTarget?: M4DiagnosticFixFixtureTarget;
 			performanceFixtureMeasurementContractVersion?: number;
 			refactorTarget?: RefactorFixtureTarget;
 		};
 		assertInvariant(
 			'refactor-fixture-measurement-contract-current',
-			fixtureManifest.performanceFixtureMeasurementContractVersion === 3,
+			fixtureManifest.performanceFixtureMeasurementContractVersion === 4,
 			String(fixtureManifest.performanceFixtureMeasurementContractVersion)
 		);
 		const target = fixtureManifest.refactorTarget;
 		const m3QueryTarget = fixtureManifest.m3QueryTarget;
+		const m4Target = fixtureManifest.m4DiagnosticFixTarget;
 		assertInvariant(
 			'refactor-fixture-target-present',
 			!!target &&
@@ -6579,6 +7193,17 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 		);
 		if (!m3QueryTarget)
 			throw new Error('Fixture lacks the deterministic M3 query target.');
+		assertInvariant(
+			'refactor-fixture-m4-diagnostic-fix-target-present',
+			!!m4Target &&
+				m4Target.storyId === target.storyId &&
+				m4Target.selection === 'allSafe' &&
+				m4Target.expectedChangeCount === fixtureManifest.linkCounts?.broken &&
+				m4Target.expectedChangeCount > 0,
+			JSON.stringify(m4Target)
+		);
+		if (!m4Target)
+			throw new Error('Fixture lacks the deterministic M4 diagnostic target.');
 		const running = await launchFixture();
 		try {
 			if (refactorProbeOnly) {
@@ -6594,7 +7219,18 @@ test(`measures the production Electron ${phase ?? 'unknown'} phase`, async () =>
 		} finally {
 			await closeFixture(running);
 		}
-		if (!refactorProbeOnly) await measureRefactorCommitSamples(target);
+		if (!refactorProbeOnly) {
+			// M4 owns a fresh fixture process and worker session so its baseline cannot
+			// inherit project-replace plan-store or renderer ownership high water.
+			const m4Running = await launchFixture();
+			try {
+				await measureM4DiagnosticFixes(m4Running.page, m4Target);
+			} finally {
+				await closeFixture(m4Running);
+			}
+			await measureRefactorCommitSamples(target);
+			await measureM4DiagnosticFixCommitSamples(m4Target);
+		}
 	}
 
 	if (phase === 'startup') {

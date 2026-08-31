@@ -1,6 +1,7 @@
 import classNames from 'classnames';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
+import {useNavigate} from 'react-router';
 import {
 	Badge,
 	Button,
@@ -21,7 +22,6 @@ import {
 	useCoreSourceDocument
 } from '../../core';
 import type {CoreStoryIndex, WorkbenchSelection} from '../../core';
-import {quickFixActionsForDiagnostic} from '../../core/quick-fix-registry';
 import {Passage, Story, storyPassageTags} from '../../store/stories';
 import {defaults, usePrefsContext} from '../../store/prefs';
 import {useStoryFormatsContext} from '../../store/story-formats';
@@ -38,6 +38,10 @@ import {
 import {useNativeEditorSession} from '../../util/story-format';
 import type {EditorWindowSpec} from './editor-window-spec';
 import {StoryFormatToolbar} from './story-format-toolbar';
+import {
+	contextualDiagnosticQuickFixes,
+	diagnosticFixReviewNavigationState
+} from '../diagnostics/diagnostic-fix-navigation';
 
 export interface EditorWindowProps {
 	active: boolean;
@@ -244,6 +248,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		testPassagePendingId
 	} = props;
 	const {t} = useTranslation();
+	const navigate = useNavigate();
 	const coreProjectHost = useCoreProjectHost();
 	const {dispatch: prefsDispatch, prefs} = usePrefsContext();
 	const {dispatch: storyFormatsDispatch} = useStoryFormatsContext();
@@ -369,14 +374,8 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		[index.diagnostics, passage]
 	);
 	const inlineQuickFixes = React.useMemo(
-		() =>
-			inlineDiagnostics
-				.flatMap(diagnostic =>
-					quickFixActionsForDiagnostic(coreProjectHost, story, diagnostic)
-				)
-				.filter(action => action.enabled)
-				.slice(0, 3),
-		[coreProjectHost, inlineDiagnostics, story]
+		() => contextualDiagnosticQuickFixes(inlineDiagnostics).slice(0, 3),
+		[inlineDiagnostics]
 	);
 	const passageTags = React.useMemo(() => storyPassageTags(story), [story]);
 
@@ -1246,17 +1245,32 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 					<TablerIcon icon="alert-octagon" />
 					<strong>{t('routes.storyEdit.workspace.brokenLinks')}</strong>
 					<span>{brokenLinks.join(', ')}</span>
-					{inlineQuickFixes.map(action => (
-						<Button
-							icon="wand"
-							key={action.command}
-							onClick={action.apply}
-							size="sm"
-							variant="ghost"
-						>
-							{action.title}
-						</Button>
-					))}
+					{inlineQuickFixes.map(({action, diagnostic}) =>
+						action.applicability === 'automatic' ? (
+							<Button
+								icon="wand"
+								key={`${diagnostic.sourceId}:${diagnostic.start}:${action.command}`}
+								onClick={() =>
+									navigate(`/stories/${story.id}/diagnostics`, {
+										state: diagnosticFixReviewNavigationState(
+											diagnostic,
+											action.command
+										)
+									})
+								}
+								size="sm"
+								variant="ghost"
+							>
+								Review {action.title}
+							</Button>
+						) : (
+							<span
+								key={`${diagnostic.sourceId}:${diagnostic.start}:${action.command}`}
+							>
+								Manual: {action.title}
+							</span>
+						)
+					)}
 					{outgoingPassages.length > 0 && onSelectPassage && (
 						<Button
 							icon="arrow-up-right"

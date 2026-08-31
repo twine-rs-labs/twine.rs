@@ -109,6 +109,7 @@ test('a fresh install can create and test a project offline', async ({
 	context,
 	page
 }) => {
+	test.setTimeout(90_000);
 	const failedAppRequests: string[] = [];
 	const storyFormatCallbackRequests: string[] = [];
 	const appOrigin = new URL(appUrl).origin;
@@ -220,6 +221,40 @@ test('a fresh install can create and test a project offline', async ({
 	await replaceReview.getByRole('button', {name: 'Apply Replacement'}).click();
 	await expect(replaceReview).toHaveCount(0);
 	const replacedMarker = marker.replace('Fresh-install', 'Offline-reviewed');
+	await setPassageText(
+		page,
+		`${replacedMarker} [[Next]] [[Again->Next]] [[Offline Missing]].`
+	);
+	const offlineMissing = page
+		.getByRole('listitem')
+		.filter({has: page.getByText('Offline Missing', {exact: true})})
+		.getByRole('button');
+	await expect(offlineMissing).toBeVisible();
+	await offlineMissing.click();
+	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
+	await page.getByRole('button', {name: 'Delete', exact: true}).click();
+	await page.getByTitle('Diagnostics').click();
+	await expect(page.getByText('broken-link').first()).toBeVisible();
+	await page.getByRole('button', {name: 'Fix All Safe'}).click();
+	const diagnosticFixReview = page.getByRole('dialog', {
+		name: 'Review Diagnostic Fixes'
+	});
+	await expect(diagnosticFixReview.getByText('Add passage')).toBeVisible();
+	await expect(
+		diagnosticFixReview.getByText('Offline Missing', {exact: true})
+	).toBeVisible();
+	await diagnosticFixReview.getByRole('button', {name: 'Apply Fixes'}).click();
+	await expect(diagnosticFixReview).toHaveCount(0);
+	await page.getByTitle('Contents').click();
+	await expect(
+		page.getByText('Offline Missing', {exact: true}).first()
+	).toBeVisible();
+	await page.getByTitle('Workbench').click();
+	await page
+		.getByRole('listitem')
+		.filter({has: page.getByText('Offline Start', {exact: true})})
+		.getByRole('button')
+		.click();
 
 	const [testPage] = await Promise.all([
 		context.waitForEvent('page'),

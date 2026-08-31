@@ -30,7 +30,11 @@ The vertical workspace rail is the primary way to move between screens:
 - _Assets_ manages project assets.
 - _Play_ launches the current story.
 - _Build & Export_ opens build and export workflows.
-- _Diagnostics_ shows project diagnostics.
+- _Diagnostics_ shows project diagnostics. Deterministic fixes open a review
+  before changing the project. _Fix All Safe_ reviews one combined plan for all
+  non-dismissed safe fixes and applies it as one undoable transaction; it does
+  not depend on the current search, filter, or loaded page. Fixes that need a
+  name, target, file, or other input stay labelled as manual actions.
 - _Story Formats_ manages installed formats and editor compatibility.
 - _Settings_ opens application and platform settings.
 - _New Project_ starts the project-creation workflow.

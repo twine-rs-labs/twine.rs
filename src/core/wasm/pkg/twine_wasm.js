@@ -227,6 +227,17 @@ export class TwineWasmProjectSession {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * @param {any} request
+     * @returns {any}
+     */
+    plan_diagnostic_fixes(request) {
+        const ret = wasm.twinewasmprojectsession_plan_diagnostic_fixes(this.__wbg_ptr, request);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * @param {string} story_id
      * @param {any} query
      * @returns {any}

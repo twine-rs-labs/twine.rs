@@ -72,6 +72,7 @@ import {workbenchBufferCoordinator} from '../../util/workbench-buffer-coordinato
 import * as rendererPerformance from '../../util/performance';
 import {rendererQuitQuiescence} from '../../util/renderer-quit-quiescence';
 import {MAX_PASSAGE_RENAME_REQUEST_STRING_BYTES_V1} from '../refactor-limits';
+import type {PlanDiagnosticFixesRequest} from '../bindings/PlanDiagnosticFixesRequest';
 
 describe('StoreCoreProjectHost asset commands', () => {
 	function batch(patches: PatchBatch['patches'], label = 'Rust Command') {
@@ -138,6 +139,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 				})
 			),
 			applyRefactorPlan: jest.fn(),
+			planDiagnosticFixes: jest.fn(),
 			beginPassageRenamePlan: jest.fn(),
 			beginProjectReplacePlan: jest.fn(),
 			beginProjectBootstrap: jest.fn(),
@@ -372,6 +374,137 @@ describe('StoreCoreProjectHost asset commands', () => {
 		} finally {
 			unregister();
 		}
+	});
+
+	it('plans diagnostic fixes only after stable runtime synchronization', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const request: PlanDiagnosticFixesRequest = {
+			selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+			storyId: context.story.id
+		};
+		const onWorkerMetric = jest.fn();
+		wasmClient.syncRefactorRuntime.mockResolvedValue(7);
+		wasmClient.planDiagnosticFixes.mockResolvedValue({
+			summary: {planId: 'diagnostic-plan'},
+			type: 'complete'
+		});
+
+		await expect(
+			context.host.planDiagnosticFixes(
+				context.story.id,
+				{...request, ignoredUnknown: 'not forwarded'} as any,
+				{onWorkerMetric}
+			)
+		).resolves.toEqual({
+			summary: {planId: 'diagnostic-plan'},
+			type: 'complete'
+		});
+		expect(wasmClient.syncRefactorRuntime).toHaveBeenCalledWith(
+			'library',
+			expect.objectContaining({projectRevision: 1}),
+			1
+		);
+		expect(wasmClient.planDiagnosticFixes).toHaveBeenCalledWith(
+			'library',
+			request,
+			7,
+			1,
+			{onWorkerMetric}
+		);
+	});
+
+	it('reopens editor admission while diagnostic materialization remains queued in the worker', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const order: string[] = [];
+		let resolvePlan!: (result: any) => void;
+		wasmClient.syncRefactorRuntime.mockResolvedValue(7);
+		wasmClient.planDiagnosticFixes.mockReturnValue(
+			new Promise(resolve => (resolvePlan = resolve))
+		);
+		const unregister = workbenchBufferCoordinator.register({
+			bufferId: 'passage:start',
+			closeAdmission: () => {
+				order.push('close');
+			},
+			flush: () => {
+				order.push('flush');
+			},
+			hasPendingChanges: () => false,
+			reopenAdmission: () => {
+				order.push('reopen');
+			},
+			revision: () => 1,
+			storyId: context.story.id
+		});
+
+		try {
+			const planning = context.host.planDiagnosticFixes(
+				context.story.id,
+				{
+					selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+					storyId: context.story.id
+				},
+				{onPlanningStarted: () => order.push('started')}
+			);
+
+			await waitFor(() =>
+				expect(wasmClient.planDiagnosticFixes).toHaveBeenCalledTimes(1)
+			);
+			expect(order).toEqual(['close', 'flush', 'reopen', 'started']);
+			const mutation = context.host.applyStoryCommand(
+				updatePassageTextCommand(
+					context.story.id,
+					context.start.id,
+					'accepted while planning'
+				)
+			);
+			expect(wasmClient.apply).not.toHaveBeenCalled();
+			resolvePlan({summary: {planId: 'diagnostic-plan'}, type: 'complete'});
+			await planning;
+			await mutation;
+			expect(wasmClient.apply).toHaveBeenCalledTimes(1);
+		} finally {
+			unregister();
+		}
+	});
+
+	it('rejects diagnostic-fix planning when buffers change or the Rust boundary is unavailable', async () => {
+		let bufferRevision = 1;
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const request: PlanDiagnosticFixesRequest = {
+			selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+			storyId: context.story.id
+		};
+		wasmClient.syncRefactorRuntime.mockImplementation(async () => {
+			bufferRevision++;
+			return 1;
+		});
+		const unregister = workbenchBufferCoordinator.register({
+			bufferId: 'passage:start',
+			closeAdmission: jest.fn(),
+			flush: jest.fn(),
+			hasPendingChanges: () => false,
+			reopenAdmission: jest.fn(),
+			revision: () => bufferRevision,
+			storyId: context.story.id
+		});
+
+		try {
+			await expect(
+				context.host.planDiagnosticFixes(context.story.id, request)
+			).resolves.toMatchObject({failure: {code: 'buffer-changed'}});
+			expect(wasmClient.planDiagnosticFixes).not.toHaveBeenCalled();
+		} finally {
+			unregister();
+		}
+
+		(wasmClient as any).planDiagnosticFixes = undefined;
+		await expect(
+			context.host.planDiagnosticFixes(context.story.id, request)
+		).rejects.toThrow('Rust diagnostic-fix planning boundary is unavailable');
 	});
 
 	it('returns cancelled when an abort follows a pending plan chunk and an unrelated mutation', async () => {
@@ -1550,7 +1683,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 		}
 	});
 
-	it('applies a performance model commit without scheduling persistence', async () => {
+	it('applies and undoes a performance model commit without scheduling persistence', async () => {
 		const wasmClient = fakeWasmClient(async () => batch([]));
 		const context = hostWithStory({wasmClient});
 		const onWorkerMetric = jest.fn();
@@ -1626,6 +1759,43 @@ describe('StoreCoreProjectHost asset commands', () => {
 			expect.any(Number),
 			expect.any(Number),
 			{onWorkerMetric}
+		);
+
+		context.dispatch.mockClear();
+		wasmClient.undo.mockResolvedValue({
+			batch: batch([
+				{
+					changes: {
+						layout: null,
+						name: null,
+						tags: null,
+						text: 'Start'
+					},
+					passage_id: context.start.id,
+					story_id: context.story.id,
+					type: 'passageUpdated'
+				}
+			]),
+			revision: 3,
+			status: {
+				canRedo: true,
+				canUndo: false,
+				dirty: true,
+				redoKind: 'refactor',
+				revision: 3,
+				undoKind: null
+			}
+		});
+
+		await expect(context.host.undoModelCommit()).resolves.toBeDefined();
+		expect(context.dispatch).toHaveBeenCalledWith(
+			expect.objectContaining({
+				persistence: 'skip',
+				persistenceToken: undefined,
+				revision: 3,
+				type: 'applyCorePatchBatch'
+			}),
+			undefined
 		);
 	});
 
@@ -3537,7 +3707,20 @@ describe('StoreCoreProjectHost asset commands', () => {
 		const plan = jest
 			.spyOn(storeHost, 'planPassageRename')
 			.mockResolvedValue({type: 'cancelled'} as any);
+		const diagnosticPlan = jest
+			.spyOn(storeHost, 'planDiagnosticFixes')
+			.mockResolvedValue({
+				summary: {planId: 'diagnostic'},
+				type: 'complete'
+			} as any);
 		const detail = jest.spyOn(storeHost, 'queryRefactorPlanDetailAsync');
+		await expect(
+			host.planDiagnosticFixes(story.id, {
+				selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+				storyId: 'another-story'
+			})
+		).resolves.toMatchObject({failure: {code: 'invalid-plan'}});
+		expect(diagnosticPlan).not.toHaveBeenCalled();
 		const recovery = host.recoverFromSnapshot(story.id, [story] as any, []);
 
 		await waitFor(() => expect(recover).toHaveBeenCalledTimes(1));
@@ -3549,6 +3732,12 @@ describe('StoreCoreProjectHost asset commands', () => {
 			})
 		).resolves.toEqual({type: 'cancelled'});
 		await expect(
+			host.planDiagnosticFixes(story.id, {
+				selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+				storyId: story.id
+			})
+		).resolves.toMatchObject({failure: {code: 'plan-evicted'}});
+		await expect(
 			host.queryRefactorPlanDetailAsync(story.id, {
 				planDigest: 'd',
 				planId: 'p',
@@ -3556,6 +3745,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 			})
 		).resolves.toMatchObject({failure: {code: 'plan-evicted'}});
 		expect(plan).not.toHaveBeenCalled();
+		expect(diagnosticPlan).not.toHaveBeenCalled();
 		expect(detail).not.toHaveBeenCalled();
 
 		releaseRecovery();
@@ -3565,7 +3755,12 @@ describe('StoreCoreProjectHost asset commands', () => {
 			passageId: 'p',
 			storyId: story.id
 		});
+		await host.planDiagnosticFixes(story.id, {
+			selection: {excludedDiagnosticIds: [], type: 'allSafe'},
+			storyId: story.id
+		});
 		expect(plan).toHaveBeenCalledTimes(1);
+		expect(diagnosticPlan).toHaveBeenCalledTimes(1);
 		expect((host as any).replacementGateOwners.size).toBe(0);
 		host.dispose();
 	});

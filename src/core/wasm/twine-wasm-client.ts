@@ -41,10 +41,13 @@ import type {PlanPassageRenameResult} from '../bindings/PlanPassageRenameResult'
 import type {PlanProjectReplaceRequest} from '../bindings/PlanProjectReplaceRequest';
 import type {PlanProjectReplaceBeginResult} from '../bindings/PlanProjectReplaceBeginResult';
 import type {PlanProjectReplaceResult} from '../bindings/PlanProjectReplaceResult';
+import type {PlanDiagnosticFixesRequest} from '../bindings/PlanDiagnosticFixesRequest';
+import type {PlanDiagnosticFixesResult} from '../bindings/PlanDiagnosticFixesResult';
 import type {RefactorPlanningTaskHandle} from '../bindings/RefactorPlanningTaskHandle';
 import {
 	isPassageRenameRequestTooLarge,
-	isProjectReplaceRequestTooLarge
+	isProjectReplaceRequestTooLarge,
+	validateDiagnosticFixesRequest
 } from '../refactor-limits';
 import {recordPerformanceHarnessEvent} from '../../util/performance';
 import {recordCoreBridgeMetric} from './performance';
@@ -82,6 +85,7 @@ type SessionMutationKind =
 	| 'acknowledgeSaved'
 	| 'apply'
 	| 'applyRefactorPlan'
+	| 'planDiagnosticFixes'
 	| 'syncRefactorRuntime'
 	| 'beginProjectBootstrap'
 	| 'appendProjectBootstrap'
@@ -644,6 +648,42 @@ export class WasmCoreWorkerClient {
 			this.clearQueryCaches(sessionId);
 			this.readyRevisions.set(sessionId, response.result.revision);
 		}
+		return response.result;
+	}
+
+	async planDiagnosticFixes(
+		sessionId: string,
+		request: PlanDiagnosticFixesRequest,
+		refactorRuntimeEpoch: number,
+		revision: number,
+		options?: {onWorkerMetric?: (metric: CoreBridgeMetric) => void}
+	): Promise<PlanDiagnosticFixesResult> {
+		const validation = validateDiagnosticFixesRequest(request);
+		if (!validation.valid)
+			return {
+				failure: {
+					code: validation.code,
+					message:
+						validation.code === 'selection-too-large'
+							? 'Diagnostic fix selection exceeds the 50,000 ID or 4 MiB limit.'
+							: 'Diagnostic fix request is invalid.'
+				},
+				type: 'failure'
+			};
+		await this.waitForMutations(sessionId);
+		const workerRequest = {
+			id: 0,
+			kind: 'planDiagnosticFixes',
+			refactorRuntimeEpoch,
+			request: validation.request,
+			revision,
+			sessionId
+		} as const;
+		const response = options
+			? await this.send(workerRequest, options)
+			: await this.send(workerRequest);
+		if (response.kind !== 'planDiagnosticFixes')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
 		return response.result;
 	}
 

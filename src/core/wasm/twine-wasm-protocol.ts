@@ -43,6 +43,8 @@ import type {PlanPassageRenameResult} from '../bindings/PlanPassageRenameResult'
 import type {PlanProjectReplaceRequest} from '../bindings/PlanProjectReplaceRequest';
 import type {PlanProjectReplaceBeginResult} from '../bindings/PlanProjectReplaceBeginResult';
 import type {PlanProjectReplaceResult} from '../bindings/PlanProjectReplaceResult';
+import type {PlanDiagnosticFixesRequest} from '../bindings/PlanDiagnosticFixesRequest';
+import type {PlanDiagnosticFixesResult} from '../bindings/PlanDiagnosticFixesResult';
 import type {RefactorPlanningTaskHandle} from '../bindings/RefactorPlanningTaskHandle';
 import type {CoreBridgeMetric} from './performance';
 
@@ -194,6 +196,14 @@ export type WasmWorkerRequest =
 			kind: 'cancelProjectReplacePlan';
 			sessionId: string;
 			task: RefactorPlanningTaskHandle;
+	  }
+	| {
+			id: number;
+			kind: 'planDiagnosticFixes';
+			request: PlanDiagnosticFixesRequest;
+			refactorRuntimeEpoch: number;
+			revision: number;
+			sessionId: string;
 	  }
 	| {
 			applyRequest: RefactorPlanApplyRequest;
@@ -502,6 +512,13 @@ export type WasmWorkerSuccess =
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: WasmWorkerRefactorApplyResult;
+	  }
+	| {
+			id: number;
+			kind: 'planDiagnosticFixes';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: PlanDiagnosticFixesResult;
 	  }
 	| {
 			id: number;
