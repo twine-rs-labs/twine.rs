@@ -314,6 +314,53 @@ test('reviews a passage rename before applying its standard-link edits atomicall
 	).toBeFocused();
 });
 
+test('reviews story-wide replacement, stale-retries, and applies compact exclusions atomically', async ({
+	page
+}) => {
+	await createProject(page, 'Reviewed project replacement smoke');
+	await setPassageText(page, 'alpha alpha');
+	await page.getByRole('tab', {name: 'Story', exact: true}).click();
+	await page.getByLabel('Find and Replace', {exact: true}).click();
+	const searchPanel = page.getByRole('region', {name: 'References'});
+	await expect(
+		searchPanel.getByRole('tab', {name: 'Find / Replace'})
+	).toHaveAttribute('aria-selected', 'true');
+	await searchPanel.getByRole('textbox', {name: 'Find'}).fill('alpha');
+	await searchPanel.getByRole('textbox', {name: 'Replace With'}).fill('beta');
+	await searchPanel.getByText('Include Passage Names', {exact: true}).click();
+	await searchPanel
+		.getByText('Include Story JavaScript', {exact: true})
+		.click();
+	await searchPanel
+		.getByText('Include Story Stylesheet', {exact: true})
+		.click();
+	await searchPanel
+		.getByRole('button', {name: 'Replace In Story Sources'})
+		.click();
+
+	const review = page.getByRole('dialog', {name: 'Review Project Replacement'});
+	await expect(review).toBeVisible();
+	await expect(review.getByText('2 changes')).toBeVisible();
+	await setPassageText(page, 'alpha alpha alpha');
+	await review.getByRole('button', {name: 'Apply Replacement'}).click();
+	await expect(review.getByRole('alert')).toContainText(
+		'stale-project-revision'
+	);
+	await review.getByRole('button', {name: 'Retry'}).click();
+	await expect(review.getByText('3 changes')).toBeVisible();
+	const changes = review.getByText('Include change', {exact: true});
+	await expect(changes).toHaveCount(3);
+	await changes.first().click();
+	await review.getByRole('button', {name: 'Apply Replacement'}).click();
+	await expect(review).toHaveCount(0);
+	await expect(sourceEditor(page)).toContainText('alpha beta beta');
+
+	await page.getByRole('button', {name: /^Undo /}).click();
+	await expect(sourceEditor(page)).toContainText('alpha alpha alpha');
+	await page.getByRole('button', {name: /^Redo /}).click();
+	await expect(sourceEditor(page)).toContainText('alpha beta beta');
+});
+
 test('keeps colliding passage IDs scoped to their projects', async ({page}) => {
 	await createProject(page, 'Passage collision first');
 	await page.getByRole('button', {name: 'New', exact: true}).click();

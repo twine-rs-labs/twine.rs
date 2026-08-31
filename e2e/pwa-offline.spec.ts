@@ -174,6 +174,30 @@ test('a fresh install can create and test a project offline', async ({
 	await expect(
 		page.getByRole('region', {name: 'Offline Start', exact: true})
 	).toBeVisible();
+	await page.getByRole('tab', {name: 'Story', exact: true}).click();
+	await page.getByLabel('Find and Replace', {exact: true}).click();
+	const searchPanel = page.getByRole('region', {name: 'References'});
+	await searchPanel.getByRole('textbox', {name: 'Find'}).fill('Fresh-install');
+	await searchPanel
+		.getByRole('textbox', {name: 'Replace With'})
+		.fill('Offline-reviewed');
+	await searchPanel.getByText('Include Passage Names', {exact: true}).click();
+	await searchPanel
+		.getByText('Include Story JavaScript', {exact: true})
+		.click();
+	await searchPanel
+		.getByText('Include Story Stylesheet', {exact: true})
+		.click();
+	await searchPanel
+		.getByRole('button', {name: 'Replace In Story Sources'})
+		.click();
+	const replaceReview = page.getByRole('dialog', {
+		name: 'Review Project Replacement'
+	});
+	await expect(replaceReview.getByText('1 change')).toBeVisible();
+	await replaceReview.getByRole('button', {name: 'Apply Replacement'}).click();
+	await expect(replaceReview).toHaveCount(0);
+	const replacedMarker = marker.replace('Fresh-install', 'Offline-reviewed');
 
 	const [testPage] = await Promise.all([
 		context.waitForEvent('page'),
@@ -187,7 +211,7 @@ test('a fresh install can create and test a project offline', async ({
 		testPage
 			.frameLocator('iframe[title="Story test preview"]')
 			.locator('tw-passage')
-	).toContainText(marker);
+	).toContainText(replacedMarker);
 	await expect(
 		testPage.getByText("Couldn't load story format properties")
 	).toHaveCount(0);

@@ -239,6 +239,20 @@ sampled locally, but only the first and terminal chunks cross the awaited native
 checkpoint boundary; this is an intentional near-boundary sampling limit, not
 permission to combine maxima from different responses.
 
+The refactor phase measures the reviewed `project-replace` consumer against one
+deterministic `Synthetic` passage-text match per fixture passage. It therefore
+exercises complete 10k/50k plans, paged review DTOs, compact default `all`
+selection, atomic commit, cancellation, and typing while replacement planning.
+Passage-rename correctness remains covered by its Rust, boundary, React, and
+browser acceptance suites.
+
+`refactor.atomicCommitMs` is the model-commit gate: it includes runtime
+synchronization, WASM application, receipt delivery, renderer reconciliation,
+history, and review closure, while intentionally skipping project-folder
+persistence. Durable project persistence and retry behavior remain separately
+covered by the product persistence tests; they are not part of this latency
+budget.
+
 For the passage text fast path, the diagnostic also requires `incremental` save
 mode and one touched project path. Its save-stage metrics distinguish native
 conflict checking, touched-file writes, baseline patching, and Rust save

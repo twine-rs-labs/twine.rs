@@ -6,6 +6,7 @@ describe('refactor review API boundary', () => {
 		for (const name of [
 			'StoreCoreProjectHost',
 			'ProjectScopedCoreProjectHost',
+			'applyModelCommit',
 			'refactorRuntimeState',
 			'recordRefactorExternalSession',
 			'clearRefactorExternalSession',

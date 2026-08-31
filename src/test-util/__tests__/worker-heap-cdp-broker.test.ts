@@ -1,3 +1,4 @@
+import {Agent, request as httpRequest} from 'node:http';
 import {
 	WorkerHeapCdpBroker,
 	type WorkerHeapCdpBrokerHttpResponse,
@@ -66,6 +67,29 @@ async function request(
 		response
 	);
 	return response;
+}
+
+async function keepAliveRequest(endpoint: string, token: string, agent: Agent) {
+	return await new Promise<{closed: Promise<void>; status: number}>(
+		(resolve, reject) => {
+			const request = httpRequest(endpoint, {
+				agent,
+				headers: {authorization: `Bearer ${token}`},
+				method: 'POST'
+			});
+			const closed = new Promise<void>(resolveClosed =>
+				request.once('socket', socket => socket.once('close', resolveClosed))
+			);
+			request.once('response', response => {
+				response.resume();
+				response.once('end', () =>
+					resolve({closed, status: response.statusCode!})
+				);
+			});
+			request.once('error', reject);
+			request.end();
+		}
+	);
 }
 
 function options(
@@ -260,5 +284,26 @@ describe('WorkerHeapCdpBroker', () => {
 			await broker.close();
 		}
 		expect(socket.closed).toBe(true);
+	});
+
+	it('destroys keep-alive HTTP connections during close and rejects later samples', async () => {
+		const socket = new FakeSocket();
+		respondToSample(socket);
+		const broker = new WorkerHeapCdpBroker(options(socket));
+		const agent = new Agent({keepAlive: true});
+		try {
+			const endpoint = await broker.start();
+			const response = await keepAliveRequest(endpoint, broker.token, agent);
+			expect(response.status).toBe(200);
+
+			await broker.close();
+			await expect(response.closed).resolves.toBe(false);
+			const later = await request(broker, broker.token);
+			expect(later.status).toBe(503);
+			expect(later.body).toContain('Worker heap broker is closed.');
+		} finally {
+			agent.destroy();
+			await broker.close();
+		}
 	});
 });

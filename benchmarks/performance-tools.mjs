@@ -856,14 +856,14 @@ export function evaluatePerformanceReport(report, budgets, baseline) {
 		}
 	}
 
-	// Passage-rename evidence is only eligible to pass when it can be
+	// Reviewed-refactor evidence is only eligible to pass when it can be
 	// attributed to one clean, identified worktree. This deliberately does not
 	// change diagnostic or historical non-refactor report policy.
 	if (hasRefactorEvidence(report)) {
 		checks.push({
 			blocking: true,
 			detail:
-				'Passage-rename refactor evidence requires a clean, identified Git worktree.',
+				'Reviewed-refactor evidence requires a clean, identified Git worktree.',
 			kind: 'provenance',
 			name: 'refactor-clean-git-provenance',
 			passed: hasCleanGitProvenance(report)

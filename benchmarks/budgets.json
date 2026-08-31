@@ -70,6 +70,7 @@
 			"targets": {"10000": 50, "50000": 100}
 		},
 		"refactor.atomicCommitMs": {
+			"baselineContract": "refactorAtomicCommit",
 			"category": "electron",
 			"enforceTarget": true,
 			"phases": ["refactor"],

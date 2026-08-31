@@ -1,6 +1,7 @@
 import {randomBytes} from 'node:crypto';
 import {createServer, type IncomingMessage, type Server} from 'node:http';
 import {appendFile, readFile} from 'node:fs/promises';
+import type {Socket} from 'node:net';
 import {join} from 'node:path';
 
 export interface WorkerHeapCdpBrokerSample {
@@ -71,6 +72,7 @@ function parseDevToolsActivePort(value: string) {
 export class WorkerHeapCdpBroker {
 	readonly token = randomBytes(32).toString('hex');
 	private readonly commandTimeoutMs: number;
+	private readonly connections = new Set<Socket>();
 	private server: Server | undefined;
 	private socket: BrokerSocket | undefined;
 	private nextId = 1;
@@ -97,6 +99,11 @@ export class WorkerHeapCdpBroker {
 		if (this.server) return this.endpoint();
 		this.server = createServer((request, response) => {
 			void this.handleNodeRequest(request, response);
+		});
+		this.server.on('connection', socket => {
+			this.connections.add(socket);
+			socket.once('close', () => this.connections.delete(socket));
+			if (this.closed) socket.destroy();
 		});
 		await new Promise<void>((resolve, reject) => {
 			this.server!.once('error', reject);
@@ -125,9 +132,23 @@ export class WorkerHeapCdpBroker {
 		const server = this.server;
 		this.server = undefined;
 		if (server) {
-			await new Promise<void>((resolve, reject) =>
-				server.close(error => (error ? reject(error) : resolve()))
+			const closed = new Promise<void>((resolve, reject) =>
+				server.close(error => {
+					if (
+						error &&
+						(error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING'
+					) {
+						reject(error);
+					} else {
+						resolve();
+					}
+				})
 			);
+			// close() does not reliably terminate idle keep-alive sockets on every
+			// supported Node runtime. Destroy them after close initiation so test
+			// teardown cannot wait for their timeout.
+			for (const connection of this.connections) connection.destroy();
+			await closed;
 		}
 		await this.traceWrites;
 	}

@@ -2,7 +2,7 @@
 
 Status: active
 Owner: core, product, and frontend maintainers
-Last verified: 2026-08-30
+Last verified: 2026-08-31
 Source of truth: Rust project-session queries and commands, workbench navigation,
 Diagnostics, Find/Replace, the existing application command registry, and
 unified undo/redo

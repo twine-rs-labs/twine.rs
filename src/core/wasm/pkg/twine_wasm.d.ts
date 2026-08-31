@@ -21,10 +21,13 @@ export class TwineWasmProjectSession {
     apply_external_delta(delta: any): any;
     apply_refactor_plan(request: any): any;
     begin_passage_rename_plan(request: any): any;
+    begin_project_replace_plan(request: any): any;
     can_redo(): boolean;
     can_undo(): boolean;
     cancel_passage_rename_plan(task: any): boolean;
+    cancel_project_replace_plan(task: any): boolean;
     continue_passage_rename_plan(task: any): any;
+    continue_project_replace_plan(task: any): any;
     ingest_external_delta(delta: any, force: boolean): any;
     constructor(snapshot: any);
     performance_diagnostics(): any;
@@ -74,10 +77,13 @@ export interface InitOutput {
     readonly twinewasmprojectsession_apply_external_delta: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_apply_refactor_plan: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_begin_passage_rename_plan: (a: number, b: any) => [number, number, number];
+    readonly twinewasmprojectsession_begin_project_replace_plan: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_can_redo: (a: number) => number;
     readonly twinewasmprojectsession_can_undo: (a: number) => number;
     readonly twinewasmprojectsession_cancel_passage_rename_plan: (a: number, b: any) => [number, number, number];
+    readonly twinewasmprojectsession_cancel_project_replace_plan: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_continue_passage_rename_plan: (a: number, b: any) => [number, number, number];
+    readonly twinewasmprojectsession_continue_project_replace_plan: (a: number, b: any) => [number, number, number];
     readonly twinewasmprojectsession_ingest_external_delta: (a: number, b: any, c: number) => [number, number, number];
     readonly twinewasmprojectsession_new: (a: any) => [number, number, number];
     readonly twinewasmprojectsession_performance_diagnostics: (a: number) => [number, number, number];

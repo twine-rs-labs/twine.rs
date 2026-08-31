@@ -34,8 +34,14 @@ import type {RefactorRuntimeState} from '../bindings/RefactorRuntimeState';
 import type {PlanPassageRenameRequest} from '../bindings/PlanPassageRenameRequest';
 import type {PlanPassageRenameBeginResult} from '../bindings/PlanPassageRenameBeginResult';
 import type {PlanPassageRenameResult} from '../bindings/PlanPassageRenameResult';
+import type {PlanProjectReplaceRequest} from '../bindings/PlanProjectReplaceRequest';
+import type {PlanProjectReplaceBeginResult} from '../bindings/PlanProjectReplaceBeginResult';
+import type {PlanProjectReplaceResult} from '../bindings/PlanProjectReplaceResult';
 import type {RefactorPlanningTaskHandle} from '../bindings/RefactorPlanningTaskHandle';
-import {isPassageRenameRequestTooLarge} from '../refactor-limits';
+import {
+	isPassageRenameRequestTooLarge,
+	isProjectReplaceRequestTooLarge
+} from '../refactor-limits';
 import {recordPerformanceHarnessEvent} from '../../util/performance';
 import {recordCoreBridgeMetric} from './performance';
 import type {CoreBridgeMetric, CoreBridgeMode} from './performance';
@@ -49,6 +55,7 @@ import type {
 } from './twine-wasm-protocol';
 
 type PendingRequest = {
+	onWorkerMetric?: (metric: CoreBridgeMetric) => void;
 	reject: (error: Error) => void;
 	requestedAt: number;
 	requestedAtEpochMs: number;
@@ -541,24 +548,87 @@ export class WasmCoreWorkerClient {
 		return response.result.cancelled;
 	}
 
+	async beginProjectReplacePlan(
+		sessionId: string,
+		request: PlanProjectReplaceRequest,
+		refactorRuntimeEpoch: number,
+		revision: number
+	): Promise<PlanProjectReplaceBeginResult> {
+		if (isProjectReplaceRequestTooLarge(request))
+			return {
+				type: 'failure',
+				failure: {
+					code: 'plan-too-large',
+					message: 'Project replace request strings exceed the 64 KiB limit.'
+				}
+			};
+		await this.waitForMutations(sessionId);
+		const response = await this.send({
+			id: 0,
+			kind: 'beginProjectReplacePlan',
+			sessionId,
+			request,
+			refactorRuntimeEpoch,
+			revision
+		});
+		if (response.kind !== 'beginProjectReplacePlan')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result;
+	}
+
+	async continueProjectReplacePlan(
+		sessionId: string,
+		task: RefactorPlanningTaskHandle
+	): Promise<PlanProjectReplaceResult> {
+		await this.waitForMutations(sessionId);
+		const response = await this.send({
+			id: 0,
+			kind: 'continueProjectReplacePlan',
+			sessionId,
+			task
+		});
+		if (response.kind !== 'continueProjectReplacePlan')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result;
+	}
+
+	async cancelProjectReplacePlan(
+		sessionId: string,
+		task: RefactorPlanningTaskHandle
+	): Promise<boolean> {
+		const response = await this.send({
+			id: 0,
+			kind: 'cancelProjectReplacePlan',
+			sessionId,
+			task
+		});
+		if (response.kind !== 'cancelProjectReplacePlan')
+			throw new Error(`Unexpected WASM response: ${response.kind}`);
+		return response.result.cancelled;
+	}
+
 	async applyRefactorPlan(
 		sessionId: string,
 		applyRequest: RefactorPlanApplyRequest,
 		refactorRuntimeEpoch: number,
-		revision: number
+		revision: number,
+		options: {onWorkerMetric?: (metric: CoreBridgeMetric) => void} = {}
 	) {
 		const response = await this.enqueueMutation(
 			sessionId,
 			'applyRefactorPlan',
 			() =>
-				this.send({
-					applyRequest,
-					id: 0,
-					kind: 'applyRefactorPlan',
-					refactorRuntimeEpoch,
-					revision,
-					sessionId
-				})
+				this.send(
+					{
+						applyRequest,
+						id: 0,
+						kind: 'applyRefactorPlan',
+						refactorRuntimeEpoch,
+						revision,
+						sessionId
+					},
+					options
+				)
 		);
 
 		if (response.kind !== 'applyRefactorPlan') {
@@ -1268,20 +1338,22 @@ export class WasmCoreWorkerClient {
 		this.pending.delete(response.id);
 
 		if (!response.ok) {
-			this.recordMetric(
+			const metric = this.recordMetric(
 				response,
 				pending.requestedAt,
 				pending.requestedAtEpochMs
 			);
+			if (metric) pending.onWorkerMetric?.(metric);
 			pending.reject(workerFailureError(response));
 			return;
 		}
 
-		this.recordMetric(
+		const metric = this.recordMetric(
 			response,
 			pending.requestedAt,
 			pending.requestedAtEpochMs
 		);
+		if (metric) pending.onWorkerMetric?.(metric);
 		pending.resolve(response);
 	}
 
@@ -1289,7 +1361,7 @@ export class WasmCoreWorkerClient {
 		response: WasmWorkerFailure | WasmWorkerSuccess,
 		requestedAt: number,
 		requestedAtEpochMs: number
-	) {
+	): CoreBridgeMetric | undefined {
 		const receivedAt = now();
 		const receivedAtEpochMs = epochNow();
 		const metrics = response.metrics;
@@ -1320,7 +1392,7 @@ export class WasmCoreWorkerClient {
 			this.lastReadModelDiagnostics = metrics.readModel;
 		}
 
-		recordCoreBridgeMetric({
+		const metric: CoreBridgeMetric = {
 			computeMs: metrics.computeMs,
 			computeFinishedAtEpochMs: metrics.computeFinishedAtEpochMs,
 			computeStartedAtEpochMs: metrics.computeStartedAtEpochMs,
@@ -1354,10 +1426,15 @@ export class WasmCoreWorkerClient {
 			workerJsHeapUsedBytes: metrics.workerJsHeapUsedBytes,
 			wasmMemoryBytes: metrics.wasmMemoryBytes,
 			workerRespondedAtEpochMs: metrics.workerRespondedAtEpochMs
-		});
+		};
+		recordCoreBridgeMetric(metric);
+		return metric;
 	}
 
-	private send(request: WasmWorkerRequest) {
+	private send(
+		request: WasmWorkerRequest,
+		metadata: {onWorkerMetric?: (metric: CoreBridgeMetric) => void} = {}
+	) {
 		if (!this.worker || this.disabledReason) {
 			return Promise.reject(
 				new Error(this.disabledReason ?? 'WASM core worker is unavailable.')
@@ -1371,6 +1448,7 @@ export class WasmCoreWorkerClient {
 
 		return new Promise<WasmWorkerSuccess>((resolve, reject) => {
 			this.pending.set(id, {
+				onWorkerMetric: metadata.onWorkerMetric,
 				reject,
 				requestedAt,
 				requestedAtEpochMs,

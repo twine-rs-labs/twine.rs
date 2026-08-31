@@ -124,6 +124,17 @@ export class TwineWasmProjectSession {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * @param {any} request
+     * @returns {any}
+     */
+    begin_project_replace_plan(request) {
+        const ret = wasm.twinewasmprojectsession_begin_project_replace_plan(this.__wbg_ptr, request);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * @returns {boolean}
      */
     can_redo() {
@@ -150,10 +161,32 @@ export class TwineWasmProjectSession {
     }
     /**
      * @param {any} task
+     * @returns {boolean}
+     */
+    cancel_project_replace_plan(task) {
+        const ret = wasm.twinewasmprojectsession_cancel_project_replace_plan(this.__wbg_ptr, task);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
+    }
+    /**
+     * @param {any} task
      * @returns {any}
      */
     continue_passage_rename_plan(task) {
         const ret = wasm.twinewasmprojectsession_continue_passage_rename_plan(this.__wbg_ptr, task);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * @param {any} task
+     * @returns {any}
+     */
+    continue_project_replace_plan(task) {
+        const ret = wasm.twinewasmprojectsession_continue_project_replace_plan(this.__wbg_ptr, task);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }

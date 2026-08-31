@@ -2061,6 +2061,34 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 		await expect(
 			searchPanel.getByRole('textbox', {name: 'Find'})
 		).toBeVisible();
+		await searchPanel.getByRole('textbox', {name: 'Find'}).fill('Packaged');
+		await searchPanel
+			.getByRole('textbox', {name: 'Replace With'})
+			.fill('Reviewed');
+		await searchPanel.getByText('Include Passage Names', {exact: true}).click();
+		await searchPanel
+			.getByText('Include Story JavaScript', {exact: true})
+			.click();
+		await searchPanel
+			.getByText('Include Story Stylesheet', {exact: true})
+			.click();
+		await searchPanel
+			.getByRole('button', {name: 'Replace In Story Sources'})
+			.click();
+		const replaceReview = page.getByRole('dialog', {
+			name: 'Review Project Replacement'
+		});
+		await expect(replaceReview.getByText('1 change')).toBeVisible();
+		await replaceReview
+			.getByRole('button', {name: 'Apply Replacement'})
+			.click();
+		await expect(replaceReview).toHaveCount(0);
+		await waitForSavedText(
+			running,
+			projectRoot,
+			'Reviewed save survived the native bridge.',
+			testInfo
+		);
 
 		await page.keyboard.press('Escape');
 		await page.getByTitle('New Project').click();
@@ -2125,7 +2153,7 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			.filter({hasText: /^Text$/})
 			.click();
 		await expect(sourceEditor(running.page)).toContainText(
-			'Packaged save survived the native bridge.'
+			'Reviewed save survived the native bridge.'
 		);
 		await running.page.evaluate(() => {
 			window.location.hash = '#/';

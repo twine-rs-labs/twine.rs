@@ -131,6 +131,24 @@
 				"unknown": "Coverage status unavailable"
 			}
 		},
+		"projectReplaceReview": {
+			"affectedEntities_one": "{{count}} affected entity",
+			"affectedEntities_other": "{{count}} affected entities",
+			"after": "After",
+			"apply": "Apply Replacement",
+			"before": "Before",
+			"changes_one": "{{count}} change",
+			"changes_other": "{{count}} changes",
+			"includeChange": "Include change",
+			"loadingChanges": "Loading changes…",
+			"planning": "Planning replacement…",
+			"planningProgress": "Planning replacement: {{scanned}} of {{total}} passages",
+			"previous": "Previous",
+			"requiredGroup": "Required grouped change",
+			"retry": "Retry",
+			"title": "Review Project Replacement",
+			"visibleChanges": "Showing changes {{start}}–{{end}} of {{total}}"
+		},
 		"renameStoryButton": {
 			"emptyName": "Please enter a name.",
 			"nameAlreadyUsed": "Another story has this name."
@@ -306,6 +324,9 @@
 			},
 			"find": "Find",
 			"includePassageNames": "Include Passage Names",
+			"includePassageText": "Include Passage Text",
+			"includeScript": "Include Story JavaScript",
+			"includeStylesheet": "Include Story Stylesheet",
 			"matchCase": "Match Case",
 			"matchCount_one": "{{count}} matching result",
 			"matchCount_other": "{{count}} matching results",

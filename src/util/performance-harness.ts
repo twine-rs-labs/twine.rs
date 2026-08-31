@@ -4,8 +4,8 @@ import {
 	coreProjectHostPerformanceSnapshot,
 	resetCoreBridgeMetrics
 } from '../core';
-import type {PlanPassageRenameRequest} from '../core/bindings/PlanPassageRenameRequest';
-import type {PlanPassageRenameResult} from '../core/bindings/PlanPassageRenameResult';
+import type {PlanProjectReplaceRequest} from '../core/bindings/PlanProjectReplaceRequest';
+import type {PlanProjectReplaceResult} from '../core/bindings/PlanProjectReplaceResult';
 import type {RefactorPlanApplyRequest} from '../core/bindings/RefactorPlanApplyRequest';
 import type {RefactorPlanApplyResult} from '../core/bindings/RefactorPlanApplyResult';
 import type {RefactorPlanCursor} from '../core/bindings/RefactorPlanCursor';
@@ -51,6 +51,16 @@ export interface TwinePerformanceSnapshot {
 	renderer: RendererPerformanceSnapshot;
 }
 
+export interface RefactorModelCommitOperation {
+	result: Promise<RefactorPlanApplyResult>;
+	workerResponseCheckpoint: Promise<void>;
+}
+
+export interface RefactorPlanOperation {
+	result: Promise<PlanProjectReplaceResult>;
+	terminalCheckpoint: Promise<void>;
+}
+
 export interface TwinePerformanceHarness {
 	checkpoint(name: string): Promise<void>;
 	collectRetainedMemory(name?: string): Promise<void>;
@@ -69,18 +79,23 @@ export interface TwinePerformanceHarness {
 			storyId: string,
 			request: RefactorPlanApplyRequest
 		): Promise<RefactorPlanApplyResult>;
+		applyModelCommit(
+			storyId: string,
+			request: RefactorPlanApplyRequest,
+			workerResponseCheckpointName: string
+		): RefactorModelCommitOperation;
 		detail(
 			storyId: string,
 			cursor: RefactorPlanCursor
 		): Promise<RefactorPlanDetailResult>;
 		plan(
 			storyId: string,
-			request: PlanPassageRenameRequest,
+			request: PlanProjectReplaceRequest,
 			options?: {
-				onProgress?: (result: PlanPassageRenameResult) => void | Promise<void>;
+				onProgress?: (result: PlanProjectReplaceResult) => void | Promise<void>;
 				signal?: AbortSignal;
 			}
-		): Promise<PlanPassageRenameResult>;
+		): RefactorPlanOperation;
 	};
 	worker: {
 		diagnostics(storyId: string): Promise<unknown>;
@@ -207,15 +222,100 @@ export function installPerformanceHarness() {
 		refactor: {
 			apply: (storyId, request) =>
 				coreProjectHostPerformanceHarness().applyRefactorPlan(storyId, request),
+			applyModelCommit: (storyId, request, workerResponseCheckpointName) => {
+				let workerResponseObserved = false;
+				let settleCheckpoint!: () => void;
+				let rejectCheckpoint!: (error: Error) => void;
+				const workerResponseCheckpoint = new Promise<void>(
+					(resolve, reject) => {
+						settleCheckpoint = resolve;
+						rejectCheckpoint = reject;
+					}
+				);
+				const result = coreProjectHostPerformanceHarness().applyModelCommit(
+					storyId,
+					request,
+					{
+						onWorkerMetric: metric => {
+							if (workerResponseObserved) {
+								rejectCheckpoint(
+									new Error(
+										`Worker response checkpoint "${workerResponseCheckpointName}" was observed more than once.`
+									)
+								);
+								return;
+							}
+							workerResponseObserved = true;
+							if (
+								typeof metric.workerRespondedAtEpochMs !== 'number' ||
+								typeof metric.wasmMemoryBytes !== 'number'
+							) {
+								rejectCheckpoint(
+									new Error(
+										`Worker response checkpoint "${workerResponseCheckpointName}" requires a response epoch and WASM memory tuple.`
+									)
+								);
+								return;
+							}
+							// Snapshot renderer owners in the response callback, before the
+							// model-commit promise continues into renderer reconciliation.
+							try {
+								const renderer = {
+									...rendererCheckpointSnapshot(),
+									workerResponseAtEpochMs: metric.workerRespondedAtEpochMs,
+									workerWasmMemoryBytes: metric.wasmMemoryBytes
+								};
+								// Do not await native sampling from the worker-response delivery
+								// path: its IPC/CDP work must not delay refactor reconciliation.
+								void native
+									.checkpoint(workerResponseCheckpointName, renderer)
+									.then(settleCheckpoint, rejectCheckpoint);
+							} catch (error) {
+								rejectCheckpoint(
+									error instanceof Error ? error : new Error(String(error))
+								);
+							}
+						}
+					}
+				);
+				void result.then(
+					() => {
+						if (!workerResponseObserved) {
+							rejectCheckpoint(
+								new Error(
+									`Worker response checkpoint "${workerResponseCheckpointName}" was never observed.`
+								)
+							);
+						}
+					},
+					() => {
+						if (!workerResponseObserved) {
+							rejectCheckpoint(
+								new Error(
+									`Worker response checkpoint "${workerResponseCheckpointName}" was never observed.`
+								)
+							);
+						}
+					}
+				);
+				return {result, workerResponseCheckpoint};
+			},
 			detail: (storyId, cursor) =>
 				coreProjectHostPerformanceHarness().queryRefactorPlanDetailAsync(
 					storyId,
 					cursor
 				),
-			plan: async (storyId, request, options) => {
+			plan: (storyId, request, options) => {
 				let pendingCount = 0;
 				let localHighWater: RendererCheckpointValues | undefined;
-				return coreProjectHostPerformanceHarness().planPassageRename(
+				let terminalCheckpointStarted = false;
+				let settleTerminalCheckpoint!: () => void;
+				let rejectTerminalCheckpoint!: (error: Error) => void;
+				const terminalCheckpoint = new Promise<void>((resolve, reject) => {
+					settleTerminalCheckpoint = resolve;
+					rejectTerminalCheckpoint = reject;
+				});
+				const result = coreProjectHostPerformanceHarness().planProjectReplace(
 					storyId,
 					request,
 					{
@@ -238,16 +338,38 @@ export function installPerformanceHarness() {
 									nativeRefactorPendingChunkObservations += 1;
 								}
 							} else if (progress.type === 'complete' && localHighWater) {
-								await native.checkpoint(
-									'refactor-plan-high-water',
-									localHighWater
-								);
-								nativeRefactorPendingChunkObservations += 1;
+								terminalCheckpointStarted = true;
+								// Preserve the terminal native/CDP observation, but do not make
+								// planning latency wait for its diagnostics. Callers explicitly
+								// await terminalCheckpoint before taking Node-side snapshots.
+								void native
+									.checkpoint('refactor-plan-high-water', localHighWater)
+									.then(
+										() => {
+											nativeRefactorPendingChunkObservations += 1;
+											settleTerminalCheckpoint();
+										},
+										error =>
+											rejectTerminalCheckpoint(
+												error instanceof Error
+													? error
+													: new Error(String(error))
+											)
+									);
 							}
 							await options?.onProgress?.(progress);
 						}
 					}
 				);
+				void result.then(
+					() => {
+						if (!terminalCheckpointStarted) settleTerminalCheckpoint();
+					},
+					() => {
+						if (!terminalCheckpointStarted) settleTerminalCheckpoint();
+					}
+				);
+				return {result, terminalCheckpoint};
 			}
 		},
 		async checkpoint(name: string) {

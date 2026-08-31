@@ -2,6 +2,7 @@ import * as React from 'react';
 import {useTranslation} from 'react-i18next';
 import {useNavigate} from 'react-router';
 import {Button, Checkbox} from '../../components/design-system';
+import {ProjectReplaceReview} from '../../components/story/project-replace-review';
 import {TagEditor} from '../../components/tag/tag-editor';
 import {StoryFormatSelect} from '../../components/story-format/story-format-select';
 import {
@@ -13,12 +14,15 @@ import {FormatLoader} from '../../store/format-loader';
 import {Color} from '../../util/color';
 import {
 	renamePassageTagCommand,
-	replaceAllTextCommand,
 	setStoryFormatCommand,
 	setStorySnapToGridCommand,
 	setStoryTagColorCommand,
 	type StoryCommand
 } from '../../core';
+import {
+	useProjectReplaceReview,
+	type ProjectReplaceReviewRequest
+} from './use-project-replace-review';
 import type {CoreContentsPage} from '../../core/bindings/CoreContentsPage';
 import type {CoreSearchHit} from '../../core/bindings/CoreSearchHit';
 import type {CoreSearchPage} from '../../core/bindings/CoreSearchPage';
@@ -90,10 +94,23 @@ export const FindReplaceWorkbenchPanel: React.FC<{
 	const [includePassageNames, setIncludePassageNames] = React.useState(
 		request?.includePassageNames ?? true
 	);
+	const [includePassageText, setIncludePassageText] = React.useState(true);
+	const [includeScript, setIncludeScript] = React.useState(true);
+	const [includeStylesheet, setIncludeStylesheet] = React.useState(true);
 	const [matchCase, setMatchCase] = React.useState(false);
 	const [useRegexes, setUseRegexes] = React.useState(false);
 	const [searchPage, setSearchPage] = React.useState<CoreSearchPage>();
 	const [patchVersion, refresh] = useProjectPatchVersion(host, story.id);
+	const [reviewRequest, setReviewRequest] =
+		React.useState<ProjectReplaceReviewRequest>();
+	const replaceTriggerRef = React.useRef<HTMLSpanElement>(null);
+	const reviewController = useProjectReplaceReview(host, reviewRequest, () => {
+		setReviewRequest(undefined);
+		refresh();
+		window.requestAnimationFrame(() =>
+			replaceTriggerRef.current?.querySelector('button')?.focus()
+		);
+	});
 
 	React.useEffect(() => {
 		if (request?.query !== undefined) {
@@ -109,9 +126,9 @@ export const FindReplaceWorkbenchPanel: React.FC<{
 		void host
 			.querySearchPageAsync(story.id, {
 				includePassageNames,
-				includePassageText: true,
-				includeScript: true,
-				includeStylesheet: true,
+				includePassageText,
+				includeScript,
+				includeStylesheet,
 				matchCase,
 				query: find,
 				replacement: replace,
@@ -125,6 +142,9 @@ export const FindReplaceWorkbenchPanel: React.FC<{
 		find,
 		host,
 		includePassageNames,
+		includePassageText,
+		includeScript,
+		includeStylesheet,
 		matchCase,
 		patchVersion,
 		replace,
@@ -155,9 +175,19 @@ export const FindReplaceWorkbenchPanel: React.FC<{
 		},
 		[]
 	);
-	const replaceableHits = hits.filter(hit =>
-		['passageName', 'passageText', 'script', 'stylesheet'].includes(hit.scope)
-	);
+	const canReviewReplace =
+		!!find &&
+		(includePassageNames ||
+			includePassageText ||
+			includeScript ||
+			includeStylesheet);
+	const closeReview = React.useCallback(() => {
+		reviewController.closeBoundary();
+		setReviewRequest(undefined);
+		window.requestAnimationFrame(() =>
+			replaceTriggerRef.current?.querySelector('button')?.focus()
+		);
+	}, [reviewController.closeBoundary]);
 	function selectResult(hit: CoreSearchHit) {
 		const target = sourceNavigationTargetFromSourceId(
 			hit.sourceId,
@@ -208,6 +238,21 @@ export const FindReplaceWorkbenchPanel: React.FC<{
 					onChange={setIncludePassageNames}
 				/>
 				<Checkbox
+					checked={includePassageText}
+					label={t('dialogs.storySearch.includePassageText')}
+					onChange={setIncludePassageText}
+				/>
+				<Checkbox
+					checked={includeScript}
+					label={t('dialogs.storySearch.includeScript')}
+					onChange={setIncludeScript}
+				/>
+				<Checkbox
+					checked={includeStylesheet}
+					label={t('dialogs.storySearch.includeStylesheet')}
+					onChange={setIncludeStylesheet}
+				/>
+				<Checkbox
 					checked={matchCase}
 					label={t('dialogs.storySearch.matchCase')}
 					onChange={setMatchCase}
@@ -219,24 +264,28 @@ export const FindReplaceWorkbenchPanel: React.FC<{
 				/>
 			</div>
 			<div className="search-results">
-				<Button
-					disabled={replaceableHits.length === 0}
-					icon="replace"
-					onClick={async () => {
-						await host.applyStoryCommand(
-							replaceAllTextCommand(story.id, find, replace, {
+				<span ref={replaceTriggerRef}>
+					<Button
+						disabled={!canReviewReplace}
+						icon="replace"
+						onClick={() =>
+							setReviewRequest({
+								storyId: story.id,
+								query: find,
+								replacement: replace,
 								includePassageNames,
+								includePassageText,
+								includeScript,
+								includeStylesheet,
 								matchCase,
 								useRegexes
-							}),
-							'undoChange.replaceAllText'
-						);
-						refresh();
-					}}
-					variant="danger"
-				>
-					{t('dialogs.storySearch.replaceAll')}
-				</Button>
+							})
+						}
+						variant="danger"
+					>
+						{t('dialogs.storySearch.replaceAll')}
+					</Button>
+				</span>
 				<span>
 					{find
 						? hits.length
@@ -275,6 +324,24 @@ export const FindReplaceWorkbenchPanel: React.FC<{
 						</li>
 					))}
 				</ol>
+			)}
+			{reviewRequest?.storyId === story.id && (
+				<ProjectReplaceReview
+					applying={reviewController.applying}
+					cursor={reviewController.cursor}
+					error={reviewController.error}
+					excludedChangeIds={reviewController.excludedChangeIds}
+					onApply={reviewController.handleApply}
+					onClose={closeReview}
+					onNextPage={reviewController.handleNextPage}
+					onPreviousPage={reviewController.handlePreviousPage}
+					onRetry={reviewController.handleRetry}
+					onToggleChange={reviewController.handleToggleChange}
+					page={reviewController.page}
+					progress={reviewController.progress}
+					showPreviousPage={reviewController.showPreviousPage}
+					summary={reviewController.summary}
+				/>
 			)}
 		</div>
 	);

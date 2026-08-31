@@ -6,9 +6,10 @@ use twine_core::{
     CoreDiagnosticsQuery, CoreDiagnosticsSummaryQuery, CoreDocumentQuery, CoreExternalDelta,
     CoreExternalIngestMode, CoreGraphProjectionOptions, CoreSearchQuery, CoreSourceKind,
     CoreStoryIndexOptions, PassageSnapshot, PlanPassageRenameBeginResult, PlanPassageRenameRequest,
-    ProjectSession, ProjectSnapshot, RefactorPlanApplyRequest, RefactorPlanApplyResult,
-    RefactorPlanCursor, RefactorPlanDetailResult, RefactorPlanningTaskHandle, RefactorRuntimeState,
-    StoryCommand, StorySnapshot,
+    PlanProjectReplaceBeginResult, PlanProjectReplaceRequest, ProjectSession, ProjectSnapshot,
+    RefactorPlanApplyRequest, RefactorPlanApplyResult, RefactorPlanCursor,
+    RefactorPlanDetailResult, RefactorPlanningTaskHandle, RefactorRuntimeState, StoryCommand,
+    StorySnapshot,
 };
 use twine_model::{
     GraphLayout, GraphPosition, LibraryMetadata, Passage, PassageId, PassageIndex, PassageLayout,
@@ -188,6 +189,30 @@ impl TwineWasmProjectSession {
     pub fn cancel_passage_rename_plan(&mut self, task: JsValue) -> Result<bool, JsValue> {
         let task = from_js::<RefactorPlanningTaskHandle>(task)?;
         Ok(self.session.cancel_passage_rename_plan(&task))
+    }
+
+    pub fn begin_project_replace_plan(&mut self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request = from_js::<PlanProjectReplaceRequest>(request)?;
+        let result = match self.refactor_runtime.clone() {
+            Some(runtime) => match self.session.begin_project_replace_plan(request, runtime) {
+                Ok(task) => PlanProjectReplaceBeginResult::Begun { task },
+                Err(failure) => PlanProjectReplaceBeginResult::Failure { failure },
+            },
+            None => PlanProjectReplaceBeginResult::Failure {
+                failure: missing_refactor_runtime_failure(),
+            },
+        };
+        to_js(&result)
+    }
+
+    pub fn continue_project_replace_plan(&mut self, task: JsValue) -> Result<JsValue, JsValue> {
+        let task = from_js::<RefactorPlanningTaskHandle>(task)?;
+        to_js(&self.session.continue_project_replace_plan(&task))
+    }
+
+    pub fn cancel_project_replace_plan(&mut self, task: JsValue) -> Result<bool, JsValue> {
+        let task = from_js::<RefactorPlanningTaskHandle>(task)?;
+        Ok(self.session.cancel_project_replace_plan(&task))
     }
 
     pub fn apply_refactor_plan(&mut self, request: JsValue) -> Result<JsValue, JsValue> {
@@ -676,6 +701,60 @@ mod tests {
                 .unwrap()
                 .name,
             "After"
+        );
+    }
+
+    #[test]
+    fn project_replace_boundary_uses_opaque_plan_and_compact_selection_types() {
+        let mut session = ProjectSession::new(project_from_snapshot(snapshot()));
+        let runtime = RefactorRuntimeState {
+            project_revision: 1,
+            buffers: Vec::new(),
+            external: None,
+            provider: None,
+        };
+        let task = session
+            .begin_project_replace_plan(
+                PlanProjectReplaceRequest {
+                    story_id: "story-1".into(),
+                    query: "Next".into(),
+                    replacement: "After".into(),
+                    include_passage_names: false,
+                    include_passage_text: true,
+                    include_script: false,
+                    include_stylesheet: false,
+                    match_case: true,
+                    use_regexes: false,
+                },
+                runtime.clone(),
+            )
+            .expect("project replace task");
+        let summary = loop {
+            match session.continue_project_replace_plan(&task) {
+                twine_core::PlanProjectReplaceResult::Pending { .. } => continue,
+                twine_core::PlanProjectReplaceResult::Complete { summary } => break summary,
+                result => panic!("unexpected project replace result: {result:?}"),
+            }
+        };
+        assert_eq!(summary.operation_kind, "project-replace");
+        let result = apply_refactor_plan_result(
+            &mut session,
+            &RefactorPlanApplyRequest {
+                plan_id: summary.plan_id,
+                expected_project_revision: 1,
+                selection: RefactorPlanSelection::All,
+            },
+            &runtime,
+        );
+
+        assert!(matches!(result, RefactorPlanApplyResult::Applied { .. }));
+        assert_eq!(session.revision(), 2);
+        assert_eq!(
+            session.project().stories[0]
+                .passage_by_id(&PassageId::new("start"))
+                .unwrap()
+                .text,
+            "[[After]]"
         );
     }
 }

@@ -139,11 +139,14 @@ describe('StoreCoreProjectHost asset commands', () => {
 			),
 			applyRefactorPlan: jest.fn(),
 			beginPassageRenamePlan: jest.fn(),
+			beginProjectReplacePlan: jest.fn(),
 			beginProjectBootstrap: jest.fn(),
 			appendProjectBootstrap: jest.fn(),
 			abortProjectBootstrap: jest.fn(),
 			cancelPassageRenamePlan: jest.fn(),
+			cancelProjectReplacePlan: jest.fn(),
 			continuePassageRenamePlan: jest.fn(),
+			continueProjectReplacePlan: jest.fn(),
 			syncRefactorRuntime: jest.fn(),
 			cachedGraphProjection: jest.fn(),
 			cachedStoryIndex: jest.fn(),
@@ -414,6 +417,55 @@ describe('StoreCoreProjectHost asset commands', () => {
 		expect(wasmClient.cancelPassageRenamePlan).toHaveBeenCalledWith('library', {
 			taskId: 'task-1'
 		});
+	});
+
+	it('plans project replace through the same cancellable runtime boundary and cancels once', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const controller = new AbortController();
+		const request = {
+			includePassageNames: false,
+			includePassageText: true,
+			includeScript: true,
+			includeStylesheet: true,
+			matchCase: false,
+			query: 'before',
+			replacement: 'after',
+			storyId: context.story.id,
+			useRegexes: false
+		};
+
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.beginProjectReplacePlan.mockResolvedValue({
+			task: {taskId: 'replace-task-1'},
+			type: 'begun'
+		});
+		wasmClient.continueProjectReplacePlan.mockResolvedValue({
+			progress: {scannedPassageCount: 128, totalPassageCount: 256},
+			task: {taskId: 'replace-task-1'},
+			type: 'pending'
+		});
+		wasmClient.cancelProjectReplacePlan.mockResolvedValue(true);
+
+		await expect(
+			context.host.planProjectReplace(context.story.id, request, {
+				onProgress: () => controller.abort(),
+				signal: controller.signal
+			})
+		).resolves.toEqual({type: 'cancelled'});
+		expect(wasmClient.beginProjectReplacePlan).toHaveBeenCalledWith(
+			'library',
+			request,
+			expect.any(Number),
+			1
+		);
+		expect(wasmClient.cancelProjectReplacePlan).toHaveBeenCalledTimes(1);
+		expect(wasmClient.cancelProjectReplacePlan).toHaveBeenCalledWith(
+			'library',
+			{
+				taskId: 'replace-task-1'
+			}
+		);
 	});
 
 	it('awaits pending planner backpressure, yields a task, then observes cancellation', async () => {
@@ -1445,6 +1497,7 @@ describe('StoreCoreProjectHost asset commands', () => {
 				})
 			).rejects.toThrow('manifest unavailable');
 			expect(wasmClient.applyRefactorPlan).toHaveBeenCalledTimes(1);
+			expect(wasmClient.applyRefactorPlan.mock.calls[0]).toHaveLength(4);
 			expect(
 				harness.stories[0].passages.find(passage => passage.id === target.id)
 			).toEqual(expect.objectContaining({name: 'Renamed'}));
@@ -1475,6 +1528,85 @@ describe('StoreCoreProjectHost asset commands', () => {
 		} finally {
 			harness.cleanup();
 		}
+	});
+
+	it('applies a performance model commit without scheduling persistence', async () => {
+		const wasmClient = fakeWasmClient(async () => batch([]));
+		const context = hostWithStory({wasmClient});
+		const onWorkerMetric = jest.fn();
+		wasmClient.syncRefactorRuntime.mockResolvedValue(1);
+		wasmClient.applyRefactorPlan.mockResolvedValue({
+			batch: batch([
+				{
+					changes: {
+						layout: null,
+						name: null,
+						tags: null,
+						text: 'model commit'
+					},
+					passage_id: context.start.id,
+					story_id: context.story.id,
+					type: 'passageUpdated'
+				}
+			]),
+			receipt: {textEdits: []},
+			revision: 2,
+			status: {
+				canRedo: false,
+				canUndo: true,
+				dirty: true,
+				redoKind: null,
+				revision: 2,
+				undoKind: 'refactor'
+			},
+			type: 'applied'
+		});
+
+		await expect(
+			context.host.applyModelCommit(
+				context.story.id,
+				{
+					expectedProjectRevision: 1,
+					planId: 'performance-plan',
+					selection: {type: 'all'}
+				},
+				{onWorkerMetric}
+			)
+		).resolves.toEqual(
+			expect.objectContaining({
+				receipt: {textEdits: []},
+				type: 'applied'
+			})
+		);
+
+		const action = context.dispatch.mock.calls
+			.map(([candidate]) => candidate)
+			.find(
+				candidate =>
+					typeof candidate !== 'function' &&
+					candidate.type === 'applyCorePatchBatch'
+			);
+		expect(action).toEqual(
+			expect.objectContaining({
+				actions: expect.any(Array),
+				persistence: 'skip',
+				persistenceToken: undefined,
+				revision: 2,
+				type: 'applyCorePatchBatch'
+			})
+		);
+		expect(wasmClient.applyRefactorPlan).toHaveBeenCalledTimes(1);
+		expect(wasmClient.applyRefactorPlan).toHaveBeenLastCalledWith(
+			expect.any(String),
+			{
+				expectedProjectRevision: 1,
+				planId: 'performance-plan',
+				selection: {type: 'all'}
+			},
+			expect.any(Number),
+			expect.any(Number),
+			{onWorkerMetric}
+		);
 	});
 
 	it('retries a committed refactor through the Electron persistence receipt without reapplying it', async () => {

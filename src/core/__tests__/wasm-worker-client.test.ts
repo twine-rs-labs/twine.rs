@@ -256,6 +256,88 @@ describe('WasmCoreWorkerClient', () => {
 		});
 	});
 
+	it('reports an apply response metric once before settling only the opted-in request', async () => {
+		const client = new WasmCoreWorkerClient();
+		const postMessage = jest.fn();
+		(client as unknown as {disabledReason: undefined}).disabledReason =
+			undefined;
+		(client as unknown as {worker: {postMessage: typeof postMessage}}).worker =
+			{
+				postMessage
+			};
+		const onWorkerMetric = jest.fn();
+		let settled = false;
+		const apply = client
+			.applyRefactorPlan(
+				'session-a',
+				{
+					expectedProjectRevision: 4,
+					planId: 'plan-1',
+					selection: {type: 'all'}
+				},
+				3,
+				4,
+				{onWorkerMetric}
+			)
+			.then(result => {
+				settled = true;
+				return result;
+			});
+
+		await Promise.resolve();
+		const request = postMessage.mock.calls[0][0] as WasmWorkerRequest;
+		const response = successfulResponse(request) as WasmWorkerSuccess;
+		response.metrics = {
+			...workerMetrics,
+			wasmMemoryBytes: 456,
+			workerRespondedAtEpochMs: 123
+		};
+		(
+			client as unknown as {
+				handleResponse(response: WasmWorkerSuccess): void;
+			}
+		).handleResponse(response);
+
+		expect(onWorkerMetric).toHaveBeenCalledTimes(1);
+		expect(onWorkerMetric).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: 'applyRefactorPlan',
+				wasmMemoryBytes: 456,
+				workerRespondedAtEpochMs: 123
+			})
+		);
+		expect(settled).toBe(false);
+		await apply;
+		expect(settled).toBe(true);
+
+		const normalApply = client.applyRefactorPlan(
+			'session-a',
+			{
+				expectedProjectRevision: 4,
+				planId: 'plan-2',
+				selection: {type: 'all'}
+			},
+			3,
+			4
+		);
+		await Promise.resolve();
+		expect(
+			[
+				...(
+					client as unknown as {pending: Map<number, unknown>}
+				).pending.values()
+			][0]
+		).toEqual(expect.not.objectContaining({onWorkerMetric: expect.anything()}));
+		const normalRequest = postMessage.mock.calls[1][0] as WasmWorkerRequest;
+		(
+			client as unknown as {
+				handleResponse(response: WasmWorkerSuccess): void;
+			}
+		).handleResponse(successfulResponse(normalRequest));
+		await normalApply;
+		expect(onWorkerMetric).toHaveBeenCalledTimes(1);
+	});
+
 	it('does not clear read-model diagnostics for metric-only worker responses', () => {
 		const client = new WasmCoreWorkerClient();
 		const record = (
@@ -454,6 +536,58 @@ describe('WasmCoreWorkerClient', () => {
 			)
 		).resolves.toMatchObject({type: 'begun'});
 		expect(send).toHaveBeenCalledTimes(1);
+	});
+
+	it('posts project-replace planner lifecycle requests without executable edits', async () => {
+		const client = new WasmCoreWorkerClient();
+		const send = jest.fn(async (request: WasmWorkerRequest) => {
+			const result =
+				request.kind === 'beginProjectReplacePlan'
+					? {task: {taskId: 'replace-task'}, type: 'begun'}
+					: request.kind === 'continueProjectReplacePlan'
+						? {
+								progress: {scannedPassageCount: 128, totalPassageCount: 256},
+								task: {taskId: 'replace-task'},
+								type: 'pending'
+							}
+						: {cancelled: true};
+			return {
+				id: request.id,
+				kind: request.kind,
+				metrics: workerMetrics,
+				ok: true,
+				result
+			} as WasmWorkerSuccess;
+		});
+		(client as unknown as TestableWasmCoreWorkerClient).send = send;
+		const request = {
+			includePassageNames: false,
+			includePassageText: true,
+			includeScript: true,
+			includeStylesheet: false,
+			matchCase: true,
+			query: 'before',
+			replacement: 'after',
+			storyId: 'story',
+			useRegexes: false
+		};
+		const task = {taskId: 'replace-task'};
+
+		await expect(
+			client.beginProjectReplacePlan('session-a', request, 2, 4)
+		).resolves.toMatchObject({type: 'begun'});
+		await expect(
+			client.continueProjectReplacePlan('session-a', task)
+		).resolves.toMatchObject({type: 'pending'});
+		await expect(
+			client.cancelProjectReplacePlan('session-a', task)
+		).resolves.toBe(true);
+		expect(send.mock.calls.map(([posted]) => posted.kind)).toEqual([
+			'beginProjectReplacePlan',
+			'continueProjectReplacePlan',
+			'cancelProjectReplacePlan'
+		]);
+		expect(send.mock.calls[0][0]).not.toHaveProperty('changes');
 	});
 
 	it('retains only the latest diagnostics summary dismissal-set cache entry', async () => {

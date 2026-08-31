@@ -36,6 +36,9 @@ import type {RefactorRuntimeState} from '../bindings/RefactorRuntimeState';
 import type {PlanPassageRenameRequest} from '../bindings/PlanPassageRenameRequest';
 import type {PlanPassageRenameBeginResult} from '../bindings/PlanPassageRenameBeginResult';
 import type {PlanPassageRenameResult} from '../bindings/PlanPassageRenameResult';
+import type {PlanProjectReplaceRequest} from '../bindings/PlanProjectReplaceRequest';
+import type {PlanProjectReplaceBeginResult} from '../bindings/PlanProjectReplaceBeginResult';
+import type {PlanProjectReplaceResult} from '../bindings/PlanProjectReplaceResult';
 import type {RefactorPlanningTaskHandle} from '../bindings/RefactorPlanningTaskHandle';
 import type {CoreBridgeMetric} from './performance';
 
@@ -165,6 +168,26 @@ export type WasmWorkerRequest =
 	| {
 			id: number;
 			kind: 'cancelPassageRenamePlan';
+			sessionId: string;
+			task: RefactorPlanningTaskHandle;
+	  }
+	| {
+			id: number;
+			kind: 'beginProjectReplacePlan';
+			request: PlanProjectReplaceRequest;
+			refactorRuntimeEpoch: number;
+			revision: number;
+			sessionId: string;
+	  }
+	| {
+			id: number;
+			kind: 'continueProjectReplacePlan';
+			sessionId: string;
+			task: RefactorPlanningTaskHandle;
+	  }
+	| {
+			id: number;
+			kind: 'cancelProjectReplacePlan';
 			sessionId: string;
 			task: RefactorPlanningTaskHandle;
 	  }
@@ -399,6 +422,27 @@ export type WasmWorkerSuccess =
 	| {
 			id: number;
 			kind: 'cancelPassageRenamePlan';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: {cancelled: boolean};
+	  }
+	| {
+			id: number;
+			kind: 'beginProjectReplacePlan';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: PlanProjectReplaceBeginResult;
+	  }
+	| {
+			id: number;
+			kind: 'continueProjectReplacePlan';
+			metrics: WasmWorkerMetricBase;
+			ok: true;
+			result: PlanProjectReplaceResult;
+	  }
+	| {
+			id: number;
+			kind: 'cancelProjectReplacePlan';
 			metrics: WasmWorkerMetricBase;
 			ok: true;
 			result: {cancelled: boolean};

@@ -976,7 +976,7 @@ test('blocks dirty refactor evidence while keeping dirty diagnostic reports usef
 		{
 			blocking: true,
 			detail:
-				'Passage-rename refactor evidence requires a clean, identified Git worktree.',
+				'Reviewed-refactor evidence requires a clean, identified Git worktree.',
 			kind: 'provenance',
 			name: 'refactor-clean-git-provenance',
 			passed: false

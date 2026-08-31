@@ -2,8 +2,4 @@
 import type { RefactorPlanCursor } from "./RefactorPlanCursor";
 import type { RefactorSelectionCapabilities } from "./RefactorSelectionCapabilities";
 
-export type RefactorPlanSummary = { planId: string, planDigest: string, projectRevision: number, operationKind: string, affectedEntityCount: number, changeCount: number, validationFailures: Array<string>, coverage: string, selectionCapabilities: RefactorSelectionCapabilities, firstDetailCursor: RefactorPlanCursor,
-/**
- * JavaScript-safe epoch milliseconds.
- */
-expiresAtEpochMs: number, };
+export type RefactorPlanSummary = { planId: string, planDigest: string, projectRevision: number, operationKind: string, affectedEntityCount: number, changeCount: number, validationFailures: Array<string>, coverage: string, selectionCapabilities: RefactorSelectionCapabilities, firstDetailCursor: RefactorPlanCursor, expiresAtEpochMs: number, };

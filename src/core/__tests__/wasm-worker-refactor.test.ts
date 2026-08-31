@@ -61,6 +61,24 @@ class TestSession {
 		return true;
 	}
 
+	begin_project_replace_plan() {
+		TestSession.beginCalls++;
+		return {task: {taskId: 'replace-task-1'}, type: 'begun'};
+	}
+
+	continue_project_replace_plan() {
+		return {
+			progress: {scannedPassageCount: 64, totalPassageCount: 129},
+			task: {taskId: 'replace-task-1'},
+			type: 'pending'
+		};
+	}
+
+	cancel_project_replace_plan() {
+		TestSession.lifecycleCalls.push('cancel-project-replace');
+		return true;
+	}
+
 	apply_refactor_plan() {
 		return {
 			failure: {code: 'invalid-selection', message: 'test failure'},
@@ -217,6 +235,84 @@ describe('WASM worker refactor cancellation', () => {
 				rustStartedAtEpochMs: expect.any(Number)
 			})
 		);
+	});
+
+	it('owns project-replace tasks and reports Rust timing through begin, continue, and cancel', async () => {
+		const request = (value: unknown) =>
+			handleWasmWorkerRequestForTest({
+				...(value as object),
+				id: 1
+			} as WasmWorkerRequest);
+		const sessionId = 'project-replace';
+		await request({
+			assets: [],
+			kind: 'replaceProject',
+			revision: 1,
+			sessionId,
+			snapshot: {stories: []}
+		});
+		const synced = await request({
+			kind: 'syncRefactorRuntime',
+			revision: 1,
+			runtime: {
+				buffers: [],
+				external: null,
+				projectRevision: 1,
+				provider: null
+			},
+			sessionId
+		});
+		const begun = await request({
+			kind: 'beginProjectReplacePlan',
+			refactorRuntimeEpoch: (synced as any).result.refactorRuntimeEpoch,
+			request: {
+				includePassageNames: false,
+				includePassageText: true,
+				includeScript: false,
+				includeStylesheet: false,
+				matchCase: true,
+				query: 'before',
+				replacement: 'after',
+				storyId: 'story',
+				useRegexes: false
+			},
+			revision: 1,
+			sessionId
+		});
+		expect(begun).toMatchObject({
+			metrics: {
+				rustFinishedAtEpochMs: expect.any(Number),
+				rustStartedAtEpochMs: expect.any(Number)
+			},
+			ok: true,
+			result: {type: 'begun'}
+		});
+		expect(refactorPlanningTaskOwnerCountForTest()).toBe(1);
+		const task = (begun as any).result.task;
+		const continued = await request({
+			kind: 'continueProjectReplacePlan',
+			sessionId,
+			task
+		});
+		expect(continued).toMatchObject({
+			metrics: {
+				rustFinishedAtEpochMs: expect.any(Number),
+				rustStartedAtEpochMs: expect.any(Number)
+			},
+			ok: true,
+			result: {type: 'pending'}
+		});
+		expect(
+			await request({kind: 'cancelProjectReplacePlan', sessionId, task})
+		).toMatchObject({
+			metrics: {
+				rustFinishedAtEpochMs: expect.any(Number),
+				rustStartedAtEpochMs: expect.any(Number)
+			},
+			ok: true,
+			result: {cancelled: true}
+		});
+		expect(refactorPlanningTaskOwnerCountForTest()).toBe(0);
 	});
 
 	it('keeps pending tasks session-owned across runtime sync and replacement', async () => {

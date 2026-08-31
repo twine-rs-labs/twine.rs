@@ -5,9 +5,13 @@
 //! selection expression.
 
 use crate::{PassageSnapshot, PatchBatch, StoryMetadataPatch, replace_link_content_target};
+use regex::{NoExpand, Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
+use std::io::{self, Write};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use ts_rs::TS;
 use twine_model::{Passage, PassageId, PassageIndex, PassageLayout, Project, Story, StoryId};
@@ -24,11 +28,17 @@ pub const MAX_REFACTOR_SUMMARY_BYTES: usize = 64 * 1024;
 pub const MAX_REFACTOR_PLANNING_TASKS: usize = 1;
 /// Versioned cross-boundary ceiling for passage-rename request strings.
 pub const MAX_PASSAGE_RENAME_REQUEST_STRING_BYTES_V1: usize = 64 * 1024;
-const RENAME_PLANNING_BATCH_PASSAGES: usize = 128;
+// 512 keeps each incremental call bounded while substantially reducing the
+// cross-boundary continuation overhead for 50k-passage project operations.
+const PROJECT_RENAME_PLANNING_BATCH_PASSAGES: usize = 512;
 const PLAN_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_PLAN_TOMBSTONES: usize = MAX_REFACTOR_PLANS * 4;
 static NEXT_REFACTOR_STORE_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_REFACTOR_TASK_STORE_ID: AtomicU64 = AtomicU64::new(1);
+#[cfg(test)]
+thread_local! {
+    static TEST_PLAN_STORE_BYTE_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
 
 /// The narrow public input for the Rust-owned passage rename operation.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, TS)]
@@ -38,6 +48,22 @@ pub struct PlanPassageRenameRequest {
     pub story_id: String,
     pub passage_id: String,
     pub after_name: String,
+}
+
+/// Narrow, non-executable input for a project-wide replacement plan.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub struct PlanProjectReplaceRequest {
+    pub story_id: String,
+    pub query: String,
+    pub replacement: String,
+    pub include_passage_names: bool,
+    pub include_passage_text: bool,
+    pub include_script: bool,
+    pub include_stylesheet: bool,
+    pub match_case: bool,
+    pub use_regexes: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -67,6 +93,31 @@ pub enum PlanPassageRenameBeginResult {
 #[serde(rename_all = "camelCase", tag = "type")]
 #[ts(export, export_to = "../../../src/core/bindings/")]
 pub enum PlanPassageRenameResult {
+    Pending {
+        task: RefactorPlanningTaskHandle,
+        progress: RefactorPlanningProgress,
+    },
+    Complete {
+        summary: RefactorPlanSummary,
+    },
+    Cancelled,
+    Failure {
+        failure: RefactorPlanFailure,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase", tag = "type")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum PlanProjectReplaceBeginResult {
+    Begun { task: RefactorPlanningTaskHandle },
+    Failure { failure: RefactorPlanFailure },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase", tag = "type")]
+#[ts(export, export_to = "../../../src/core/bindings/")]
+pub enum PlanProjectReplaceResult {
     Pending {
         task: RefactorPlanningTaskHandle,
         progress: RefactorPlanningProgress,
@@ -184,7 +235,6 @@ pub struct RefactorPlanSummary {
     pub coverage: String,
     pub selection_capabilities: RefactorSelectionCapabilities,
     pub first_detail_cursor: RefactorPlanCursor,
-    /// JavaScript-safe epoch milliseconds.
     pub expires_at_epoch_ms: f64,
 }
 
@@ -374,7 +424,7 @@ pub(crate) enum CanonicalSourceIdentity {
 }
 
 impl CanonicalSourceIdentity {
-    fn story_id(&self) -> &str {
+    pub(crate) fn story_id(&self) -> &str {
         match self {
             Self::Passage { story_id, .. }
             | Self::Script { story_id }
@@ -477,6 +527,14 @@ pub(crate) struct SparsePassageRefactorDelta {
     pub story_id: String,
 }
 
+/// A fully validated text-source mutation for the project-replace fast path.
+#[derive(Clone, Debug)]
+pub(crate) struct SparseProjectReplaceDelta {
+    pub source: CanonicalSourceIdentity,
+    pub before: String,
+    pub after: String,
+}
+
 impl CanonicalPlanChange {
     fn kind(&self) -> RefactorPlanChangeKind {
         match self {
@@ -550,23 +608,47 @@ impl CanonicalPlanChange {
         }
     }
 
-    fn detail(
+    fn text_edit_review_span(
         &self,
         project: &Project,
-        revision: u32,
-    ) -> Result<RefactorPlanDetail, RefactorPlanFailure> {
-        let (description, before, after, location) = match self {
+    ) -> Result<Option<RefactorSourceSpan>, RefactorPlanFailure> {
+        match self {
             Self::TextEdit {
                 source,
                 range,
                 expected_text,
-                replacement_text,
+                ..
             } => {
                 let source_text = source.source(project)?;
                 validate_text_range(source_text, range, expected_text)?;
-                let (source_kind, source_id) = source.review_identity();
                 let start = source_text[..range.start_utf8_byte].encode_utf16().count();
                 let end = source_text[..range.end_utf8_byte].encode_utf16().count();
+                Ok(Some(RefactorSourceSpan {
+                    encoding: RefactorRangeEncoding::Utf16CodeUnits,
+                    start,
+                    end,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn detail(
+        &self,
+        revision: u32,
+        text_edit_span: Option<&RefactorSourceSpan>,
+    ) -> Result<RefactorPlanDetail, RefactorPlanFailure> {
+        let (description, before, after, location) = match self {
+            Self::TextEdit {
+                source,
+                expected_text,
+                replacement_text,
+                ..
+            } => {
+                let (source_kind, source_id) = source.review_identity();
+                let span = text_edit_span
+                    .cloned()
+                    .ok_or_else(|| invalid_plan("Text edit is missing its stored review span."))?;
                 (
                     "Edit source text".into(),
                     Some(RefactorPlanValue::Text {
@@ -580,11 +662,7 @@ impl CanonicalPlanChange {
                         source_kind,
                         source_id,
                         revision,
-                        span: RefactorSourceSpan {
-                            encoding: RefactorRangeEncoding::Utf16CodeUnits,
-                            start,
-                            end,
-                        },
+                        span,
                     }),
                 )
             }
@@ -694,6 +772,31 @@ struct PassageRenamePlanningTask {
     preconditions: RefactorRuntimeState,
     changes: Vec<CanonicalPlanDraftChange>,
     estimated_bytes: usize,
+    replace: Option<ProjectReplacePlanningSpec>,
+}
+
+#[derive(Clone, Debug)]
+struct ProjectReplacePlanningSpec {
+    request: PlanProjectReplaceRequest,
+    matcher: Regex,
+    name_replacements: BTreeMap<String, ProjectReplaceNameReplacement>,
+}
+
+#[derive(Clone, Debug)]
+struct ProjectReplaceNameReplacement {
+    after_name: String,
+    group_key: String,
+    passage_id: String,
+    rename_key: String,
+}
+
+#[derive(Clone, Debug)]
+struct ProjectReplaceLinkEdit {
+    dependency_key: String,
+    expected_text: String,
+    group_key: String,
+    range: RefactorTextRange,
+    replacement_text: String,
 }
 
 #[derive(Clone, Debug)]
@@ -728,6 +831,21 @@ impl RefactorPlanningTaskStore {
                     .saturating_add(task.request.story_id.capacity())
                     .saturating_add(task.request.passage_id.capacity())
                     .saturating_add(task.request.after_name.capacity())
+                    .saturating_add(task.replace.as_ref().map_or(0, |replace| {
+                        replace
+                            .name_replacements
+                            .iter()
+                            .map(|(before_name, replacement)| {
+                                before_name.capacity()
+                                    + replacement.after_name.capacity()
+                                    + replacement.group_key.capacity()
+                                    + replacement.passage_id.capacity()
+                                    + replacement.rename_key.capacity()
+                            })
+                            .sum::<usize>()
+                            + replace.request.query.capacity()
+                            + replace.request.replacement.capacity()
+                    }))
                     .saturating_add(
                         task.changes
                             .capacity()
@@ -806,6 +924,147 @@ impl RefactorPlanningTaskStore {
                 next_passage_index: 0,
                 preconditions: runtime,
                 request,
+                replace: None,
+            },
+        );
+        Ok(RefactorPlanningTaskHandle { task_id })
+    }
+
+    pub(crate) fn begin_project_replace(
+        &mut self,
+        request: PlanProjectReplaceRequest,
+        mut runtime: RefactorRuntimeState,
+        project: &Project,
+    ) -> Result<RefactorPlanningTaskHandle, RefactorPlanFailure> {
+        if project_replace_request_string_bytes(&request)
+            > MAX_PASSAGE_RENAME_REQUEST_STRING_BYTES_V1
+        {
+            return Err(plan_too_large(
+                "Project replace request strings exceed the 64 KiB limit.",
+            ));
+        }
+        if self.tasks.len() >= MAX_REFACTOR_PLANNING_TASKS {
+            return Err(plan_too_large(
+                "Too many refactor planning tasks are active.",
+            ));
+        }
+        if request.query.is_empty() {
+            return Err(invalid_plan("Project replace query must not be empty."));
+        }
+        if !request.include_passage_names
+            && !request.include_passage_text
+            && !request.include_script
+            && !request.include_stylesheet
+        {
+            return Err(invalid_plan(
+                "Project replace must include at least one scope.",
+            ));
+        }
+        normalize_runtime_state(&mut runtime)?;
+        let story = project
+            .stories
+            .iter()
+            .find(|story| story.id.as_ref() == request.story_id)
+            .ok_or_else(|| invalid_plan("Project replace story does not exist."))?;
+        let pattern = if request.use_regexes {
+            request.query.clone()
+        } else {
+            regex::escape(&request.query)
+        };
+        let matcher = RegexBuilder::new(&pattern)
+            .case_insensitive(!request.match_case)
+            .build()
+            .map_err(|_| invalid_plan("Project replace regular expression is invalid."))?;
+        if matcher.find("").is_some() {
+            return Err(invalid_plan(
+                "Project replace query must not match zero-width text.",
+            ));
+        }
+        // Validate and index name replacements up front. Link discovery can then
+        // scan every passage once instead of rescanning the complete story for
+        // every matching passage name.
+        let mut name_replacements = BTreeMap::new();
+        let mut estimated_bytes = 1024usize;
+        if request.include_passage_names {
+            let mut all_names = BTreeSet::new();
+            let mut provisional_name_set_bytes = 0usize;
+            let max_bytes = plan_store_byte_limit(story.passages.len());
+            for (index, passage) in story.passages.iter().enumerate() {
+                let after_name = project_replace_text(
+                    &matcher,
+                    &passage.name,
+                    &request.replacement,
+                    request.use_regexes,
+                );
+                if after_name.trim().is_empty() || all_names.contains(&after_name) {
+                    return Err(invalid_plan(
+                        "Project replace would create an empty or duplicate passage name.",
+                    ));
+                }
+                // This set is transient, but it coexists with retained map
+                // entries while validation is in progress, so bound the peak.
+                let name_set_entry = 128usize.saturating_add(after_name.len());
+                let next_provisional_name_set_bytes =
+                    provisional_name_set_bytes.saturating_add(name_set_entry);
+                if estimated_bytes.saturating_add(next_provisional_name_set_bytes) > max_bytes {
+                    return Err(plan_too_large(
+                        "Project replace plan exceeds its planning budget.",
+                    ));
+                }
+                all_names.insert(after_name.clone());
+                if after_name != passage.name {
+                    // Conservative retained-task accounting: map key plus all
+                    // copied replacement/group/ID/key strings and collection
+                    // overhead. Check before retaining the provisional entry.
+                    let retained = 256usize
+                        .saturating_add(passage.name.len())
+                        .saturating_add(after_name.len())
+                        .saturating_add(passage.id.as_ref().len())
+                        .saturating_add("passage-name-00000000".len())
+                        .saturating_add("rename-passage-00000000".len());
+                    let next_estimated_bytes = estimated_bytes.saturating_add(retained);
+                    if next_estimated_bytes.saturating_add(next_provisional_name_set_bytes)
+                        > max_bytes
+                    {
+                        return Err(plan_too_large(
+                            "Project replace plan exceeds its planning budget.",
+                        ));
+                    }
+                    estimated_bytes = next_estimated_bytes;
+                    name_replacements.insert(
+                        passage.name.clone(),
+                        ProjectReplaceNameReplacement {
+                            after_name,
+                            group_key: format!("passage-name-{index:08}"),
+                            passage_id: passage.id.as_ref().to_owned(),
+                            rename_key: format!("rename-passage-{index:08}"),
+                        },
+                    );
+                }
+                provisional_name_set_bytes = next_provisional_name_set_bytes;
+            }
+        }
+        self.next_id = self.next_id.saturating_add(1);
+        let task_id = format!("rpt-{}-{:016x}", self.store_id, self.next_id);
+        self.tasks.insert(
+            task_id.clone(),
+            PassageRenamePlanningTask {
+                request: PlanPassageRenameRequest {
+                    story_id: request.story_id.clone(),
+                    passage_id: String::new(),
+                    after_name: String::new(),
+                },
+                before_name: String::new(),
+                next_passage_index: 0,
+                expected_revision: runtime.project_revision,
+                preconditions: runtime,
+                changes: Vec::new(),
+                estimated_bytes,
+                replace: Some(ProjectReplacePlanningSpec {
+                    request,
+                    matcher,
+                    name_replacements,
+                }),
             },
         );
         Ok(RefactorPlanningTaskHandle { task_id })
@@ -844,9 +1103,20 @@ impl RefactorPlanningTaskStore {
             };
         };
         let total_passage_count = story.passages.len();
+        if task.replace.is_some() {
+            return self.continue_project_replace_task(
+                task_id,
+                task,
+                story,
+                current_revision,
+                project,
+                plans,
+                clock,
+            );
+        }
         let end = task
             .next_passage_index
-            .saturating_add(RENAME_PLANNING_BATCH_PASSAGES)
+            .saturating_add(PROJECT_RENAME_PLANNING_BATCH_PASSAGES)
             .min(total_passage_count);
         let max_bytes = plan_store_byte_limit(total_passage_count);
         for passage in story
@@ -914,6 +1184,318 @@ impl RefactorPlanningTaskStore {
             Err(failure) => PlanPassageRenameResult::Failure { failure },
         }
     }
+
+    fn continue_project_replace_task(
+        &mut self,
+        task_id: &str,
+        mut task: PassageRenamePlanningTask,
+        story: &Story,
+        _current_revision: u32,
+        project: &Project,
+        plans: &mut RefactorPlanStore,
+        clock: RefactorPlanClock,
+    ) -> PlanPassageRenameResult {
+        let replace = task.replace.as_ref().expect("replace task").clone();
+        let total = story.passages.len();
+        let end = task
+            .next_passage_index
+            .saturating_add(PROJECT_RENAME_PLANNING_BATCH_PASSAGES)
+            .min(total);
+        let max_bytes = plan_store_byte_limit(total);
+        for passage in story
+            .passages
+            .iter()
+            .skip(task.next_passage_index)
+            .take(end - task.next_passage_index)
+        {
+            let mut link_edits = Vec::new();
+            if replace.request.include_passage_names {
+                if let Some(name_replacement) = replace.name_replacements.get(passage.name.as_str())
+                {
+                    let draft_bytes = 1024usize
+                        .saturating_add(name_replacement.rename_key.len())
+                        .saturating_add(name_replacement.group_key.len())
+                        .saturating_add(name_replacement.passage_id.len())
+                        .saturating_add(passage.name.len())
+                        .saturating_add(name_replacement.after_name.len());
+                    task.estimated_bytes = task.estimated_bytes.saturating_add(draft_bytes);
+                    if task.estimated_bytes > max_bytes {
+                        return PlanPassageRenameResult::Failure {
+                            failure: plan_too_large(
+                                "Project replace plan exceeds its planning budget.",
+                            ),
+                        };
+                    }
+                    task.changes.push(CanonicalPlanDraftChange {
+                        key: name_replacement.rename_key.clone(),
+                        group_key: Some(name_replacement.group_key.clone()),
+                        dependencies: Vec::new(),
+                        change: CanonicalPlanChange::RenamePassage {
+                            story_id: replace.request.story_id.clone(),
+                            passage_id: name_replacement.passage_id.clone(),
+                            before_name: passage.name.clone(),
+                            after_name: name_replacement.after_name.clone(),
+                        },
+                    });
+                }
+                // Resolve all renamed link targets during one scan of this source.
+                // Every link edit remains in the required group for its target rename.
+                link_edits = project_replace_link_edits(&passage.text, &replace.name_replacements);
+                for link_edit in &link_edits {
+                    task.estimated_bytes = task.estimated_bytes.saturating_add(
+                        1024 + link_edit.expected_text.len().saturating_mul(3)
+                            + link_edit.replacement_text.len().saturating_mul(3),
+                    );
+                    if task.estimated_bytes > max_bytes {
+                        return PlanPassageRenameResult::Failure {
+                            failure: plan_too_large(
+                                "Project replace plan exceeds its planning budget.",
+                            ),
+                        };
+                    }
+                    let link_key = format!("link-target-{:08}", task.changes.len());
+                    task.changes.push(CanonicalPlanDraftChange {
+                        key: link_key,
+                        group_key: Some(link_edit.group_key.clone()),
+                        dependencies: vec![link_edit.dependency_key.clone()],
+                        change: CanonicalPlanChange::TextEdit {
+                            source: CanonicalSourceIdentity::Passage {
+                                story_id: replace.request.story_id.clone(),
+                                passage_id: passage.id.as_ref().to_owned(),
+                            },
+                            range: link_edit.range.clone(),
+                            expected_text: link_edit.expected_text.clone(),
+                            replacement_text: link_edit.replacement_text.clone(),
+                        },
+                    });
+                }
+            }
+            if replace.request.include_passage_text {
+                if let Err(result) = append_replace_edits(
+                    &mut task,
+                    CanonicalSourceIdentity::Passage {
+                        story_id: replace.request.story_id.clone(),
+                        passage_id: passage.id.as_ref().to_owned(),
+                    },
+                    &passage.text,
+                    &replace.matcher,
+                    &replace.request.replacement,
+                    replace.request.use_regexes,
+                    &link_edits,
+                    max_bytes,
+                ) {
+                    return result;
+                }
+            }
+        }
+        // Story-level sources are planned once after all passage chunks.
+        task.next_passage_index = end;
+        if end < total {
+            let progress = RefactorPlanningProgress {
+                scanned_passage_count: end,
+                total_passage_count: total,
+            };
+            self.tasks.insert(task_id.into(), task);
+            return PlanPassageRenameResult::Pending {
+                task: RefactorPlanningTaskHandle {
+                    task_id: task_id.into(),
+                },
+                progress,
+            };
+        }
+        if replace.request.include_script {
+            if let Err(result) = append_replace_edits(
+                &mut task,
+                CanonicalSourceIdentity::Script {
+                    story_id: replace.request.story_id.clone(),
+                },
+                &story.script,
+                &replace.matcher,
+                &replace.request.replacement,
+                replace.request.use_regexes,
+                &[],
+                max_bytes,
+            ) {
+                return result;
+            }
+        }
+        if replace.request.include_stylesheet {
+            if let Err(result) = append_replace_edits(
+                &mut task,
+                CanonicalSourceIdentity::Stylesheet {
+                    story_id: replace.request.story_id.clone(),
+                },
+                &story.stylesheet,
+                &replace.matcher,
+                &replace.request.replacement,
+                replace.request.use_regexes,
+                &[],
+                max_bytes,
+            ) {
+                return result;
+            }
+        }
+        if task.changes.is_empty() {
+            return PlanPassageRenameResult::Failure {
+                failure: invalid_plan("Canonical plan produces no project mutation."),
+            };
+        }
+        match plans.insert(
+            CanonicalPlanDraft {
+                operation_kind: "project-replace".into(),
+                coverage: "selected-project-sources".into(),
+                preconditions: task.preconditions,
+                changes: task.changes,
+            },
+            project,
+            clock,
+        ) {
+            Ok(summary) => PlanPassageRenameResult::Complete { summary },
+            Err(failure) => PlanPassageRenameResult::Failure { failure },
+        }
+    }
+}
+
+fn append_replace_edits(
+    task: &mut PassageRenamePlanningTask,
+    source: CanonicalSourceIdentity,
+    text: &str,
+    matcher: &Regex,
+    replacement: &str,
+    expand_captures: bool,
+    existing_link_edits: &[ProjectReplaceLinkEdit],
+    max_bytes: usize,
+) -> Result<(), PlanPassageRenameResult> {
+    for capture in matcher.captures_iter(text) {
+        let matched = capture.get(0).expect("regex capture zero");
+        if matched.start() == matched.end() {
+            continue;
+        }
+        let replacement_text = if expand_captures {
+            let mut expanded = String::new();
+            capture.expand(replacement, &mut expanded);
+            expanded
+        } else {
+            replacement.to_owned()
+        };
+        if replacement_text == matched.as_str() {
+            continue;
+        }
+        if let Some(existing) = existing_link_edits.iter().find(|edit| {
+            edit.range.start_utf8_byte < matched.end() && matched.start() < edit.range.end_utf8_byte
+        }) {
+            if existing.range.start_utf8_byte == matched.start()
+                && existing.range.end_utf8_byte == matched.end()
+                && existing.expected_text == matched.as_str()
+                && existing.replacement_text == replacement_text
+            {
+                continue;
+            }
+            return Err(PlanPassageRenameResult::Failure {
+                failure: invalid_plan(
+                    "Project replace produces incompatible overlapping source edits.",
+                ),
+            });
+        }
+        task.estimated_bytes = task
+            .estimated_bytes
+            .saturating_add(1024 + matched.as_str().len() * 3 + replacement_text.len() * 3);
+        if task.estimated_bytes > max_bytes {
+            return Err(PlanPassageRenameResult::Failure {
+                failure: plan_too_large("Project replace plan exceeds its planning budget."),
+            });
+        }
+        task.changes.push(CanonicalPlanDraftChange {
+            key: format!("replace-{:08}", task.changes.len()),
+            group_key: None,
+            dependencies: Vec::new(),
+            change: CanonicalPlanChange::TextEdit {
+                source: source.clone(),
+                range: RefactorTextRange {
+                    start_utf8_byte: matched.start(),
+                    end_utf8_byte: matched.end(),
+                },
+                expected_text: matched.as_str().into(),
+                replacement_text,
+            },
+        });
+    }
+    Ok(())
+}
+
+fn project_replace_text(
+    matcher: &Regex,
+    text: &str,
+    replacement: &str,
+    expand_captures: bool,
+) -> String {
+    if expand_captures {
+        matcher.replace_all(text, replacement).into_owned()
+    } else {
+        matcher
+            .replace_all(text, NoExpand(replacement))
+            .into_owned()
+    }
+}
+
+fn project_replace_link_edits(
+    text: &str,
+    replacements: &BTreeMap<String, ProjectReplaceNameReplacement>,
+) -> Vec<ProjectReplaceLinkEdit> {
+    let mut edits = Vec::new();
+    let mut cursor = 0;
+    while let Some(open_offset) = text[cursor..].find("[[") {
+        let content_start = cursor + open_offset + 2;
+        let Some(close_offset) = text[content_start..].find("]]") else {
+            break;
+        };
+        let content_end = content_start + close_offset;
+        let content = &text[content_start..content_end];
+        let parsed = twine_parse::parse_standard_links(
+            &format!("[[{content}]]"),
+            twine_parse::LinkParseOptions {
+                internal_only: false,
+            },
+        );
+        if let Some(link) = parsed.first()
+            && let Some(name_replacement) = replacements.get(link.target.as_str())
+        {
+            let rewritten = replace_link_content_target(
+                content,
+                link.target.as_str(),
+                &name_replacement.after_name,
+            );
+            if rewritten != content {
+                let prefix = content
+                    .chars()
+                    .zip(rewritten.chars())
+                    .take_while(|(before, after)| before == after)
+                    .map(|(character, _)| character.len_utf8())
+                    .sum::<usize>();
+                let suffix = content[prefix..]
+                    .chars()
+                    .rev()
+                    .zip(rewritten[prefix..].chars().rev())
+                    .take_while(|(before, after)| before == after)
+                    .map(|(character, _)| character.len_utf8())
+                    .sum::<usize>();
+                let end = content.len() - suffix;
+                let replacement_end = rewritten.len() - suffix;
+                edits.push(ProjectReplaceLinkEdit {
+                    dependency_key: name_replacement.rename_key.clone(),
+                    expected_text: content[prefix..end].into(),
+                    group_key: name_replacement.group_key.clone(),
+                    range: RefactorTextRange {
+                        start_utf8_byte: content_start + prefix,
+                        end_utf8_byte: content_start + end,
+                    },
+                    replacement_text: rewritten[prefix..replacement_end].into(),
+                });
+            }
+        }
+        cursor = content_end + 2;
+    }
+    edits
 }
 
 pub fn passage_rename_request_string_bytes(request: &PlanPassageRenameRequest) -> usize {
@@ -922,6 +1504,14 @@ pub fn passage_rename_request_string_bytes(request: &PlanPassageRenameRequest) -
         .len()
         .saturating_add(request.passage_id.len())
         .saturating_add(request.after_name.len())
+}
+
+pub fn project_replace_request_string_bytes(request: &PlanProjectReplaceRequest) -> usize {
+    request
+        .story_id
+        .len()
+        .saturating_add(request.query.len())
+        .saturating_add(request.replacement.len())
 }
 
 fn passage_rename_link_edits(
@@ -983,7 +1573,21 @@ struct CanonicalPlanEntry {
     group_id: Option<String>,
     dependencies: Vec<String>,
     change: CanonicalPlanChange,
-    detail: RefactorPlanDetail,
+    /// Text-edit review positions must reflect the source at planning time,
+    /// even after the project changes or becomes stale. All other review data
+    /// is derived directly from the immutable executable change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text_edit_span: Option<RefactorSourceSpan>,
+}
+
+impl CanonicalPlanEntry {
+    fn detail(&self, revision: u32) -> Result<RefactorPlanDetail, RefactorPlanFailure> {
+        let mut detail = self.change.detail(revision, self.text_edit_span.as_ref())?;
+        detail.change_id = self.id.clone();
+        detail.group_id = self.group_id.clone();
+        detail.dependencies = self.dependencies.clone();
+        Ok(detail)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -996,8 +1600,13 @@ struct StoredPlanPayload {
 
 #[derive(Clone, Debug)]
 struct StoredPlan {
-    payload: StoredPlanPayload,
+    /// Immutable executable payloads may be shared by otherwise distinct live
+    /// plans. Per-plan accounting deliberately remains logical, not physical.
+    payload: Arc<StoredPlanPayload>,
     summary: RefactorPlanSummary,
+    /// Canonical payload digest captured at insertion. Detail cursor validation
+    /// compares this immutable value instead of serializing the full payload.
+    canonical_payload_digest: String,
     created: Instant,
     bytes: usize,
 }
@@ -1098,14 +1707,14 @@ impl RefactorPlanStore {
     ) -> Result<RefactorPlanSummary, RefactorPlanFailure> {
         self.prune(clock.instant);
         let payload = build_payload(draft, project)?;
-        let encoded = encode(&payload)?;
-        if encoded.len() > self.limits.max_bytes || self.limits.max_plans == 0 {
+        let (payload_bytes, plan_digest) = serialized_len_and_digest(&payload)?;
+        if payload_bytes > self.limits.max_bytes || self.limits.max_plans == 0 {
             return Err(plan_too_large("Plan exceeds the live plan-store limit."));
         }
+        let payload = self.reuse_payload_or_reject(payload, &plan_digest)?;
 
         self.next_id = self.next_id.saturating_add(1);
         let plan_id = format!("rp-{}-{:016x}", self.store_id, self.next_id);
-        let plan_digest = hex_digest(&encoded);
         let first_detail_cursor = RefactorPlanCursor {
             plan_id: plan_id.clone(),
             plan_digest: plan_digest.clone(),
@@ -1114,7 +1723,7 @@ impl RefactorPlanStore {
         let affected_entity_count = payload
             .entries
             .iter()
-            .map(|entry| entry.detail.affected_entity.clone())
+            .map(|entry| entry.change.entity())
             .collect::<BTreeSet<_>>()
             .len();
         let summary = RefactorPlanSummary {
@@ -1138,24 +1747,30 @@ impl RefactorPlanStore {
         if encode(&summary)?.len() > MAX_REFACTOR_SUMMARY_BYTES {
             return Err(plan_too_large("Plan summary exceeds 64 KiB."));
         }
-        validate_detail_page_sizes(&plan_id, &summary.plan_digest, &payload.entries)?;
+        validate_detail_page_sizes(
+            &plan_id,
+            &summary.plan_digest,
+            payload.preconditions.project_revision,
+            &payload.entries,
+        )?;
 
         while self.plans.len() >= self.limits.max_plans
-            || self.bytes.saturating_add(encoded.len()) > self.limits.max_bytes
+            || self.bytes.saturating_add(payload_bytes) > self.limits.max_bytes
         {
             if !self.evict_oldest(PlanTombstone::Evicted) {
                 return Err(plan_too_large("Plan cannot fit in the live plan store."));
             }
         }
-        self.bytes += encoded.len();
+        self.bytes += payload_bytes;
         self.touch(&plan_id);
         self.plans.insert(
             plan_id,
             StoredPlan {
                 payload,
                 summary: summary.clone(),
+                canonical_payload_digest: summary.plan_digest.clone(),
                 created: clock.instant,
-                bytes: encoded.len(),
+                bytes: payload_bytes,
             },
         );
         Ok(summary)
@@ -1167,7 +1782,7 @@ impl RefactorPlanStore {
         clock: RefactorPlanClock,
     ) -> Result<RefactorPlanDetailPage, RefactorPlanFailure> {
         self.prune(clock.instant);
-        self.verify_live_digest(&cursor.plan_id, &cursor.plan_digest)?;
+        self.verify_detail_cursor_digest(&cursor.plan_id, &cursor.plan_digest)?;
         let plan = self.live_plan(&cursor.plan_id)?;
         if cursor.position > plan.payload.entries.len() {
             return Err(fail(
@@ -1175,35 +1790,22 @@ impl RefactorPlanStore {
                 "Plan cursor position is invalid.",
             ));
         }
-        let mut changes = Vec::new();
-        for entry in plan
+        // Materialize the bounded review window once. Size probing borrows this
+        // vector and the returned DTO moves only its selected prefix.
+        let details = plan
             .payload
             .entries
             .iter()
             .skip(cursor.position)
             .take(MAX_REFACTOR_DETAIL_CHANGES)
-        {
-            let mut candidate = changes.clone();
-            candidate.push(entry.detail.clone());
-            let next_position = cursor.position + candidate.len();
-            let candidate_page = RefactorPlanDetailPage {
-                changes: candidate.clone(),
-                next_cursor: (next_position < plan.payload.entries.len()).then(|| {
-                    RefactorPlanCursor {
-                        plan_id: cursor.plan_id.clone(),
-                        plan_digest: cursor.plan_digest.clone(),
-                        position: next_position,
-                    }
-                }),
-            };
-            if encode(&candidate_page)?.len() > MAX_REFACTOR_DETAIL_BYTES {
-                break;
-            }
-            changes = candidate;
-        }
-        let next_position = cursor.position + changes.len();
+            .map(|entry| entry.detail(plan.payload.preconditions.project_revision))
+            .collect::<Result<Vec<_>, _>>()?;
+        let detail_refs = details.iter().collect::<Vec<_>>();
+        let change_count =
+            detail_page_change_count(&detail_refs, cursor, plan.payload.entries.len())?;
+        let next_position = cursor.position + change_count;
         let page = RefactorPlanDetailPage {
-            changes,
+            changes: details.into_iter().take(change_count).collect(),
             next_cursor: (next_position < plan.payload.entries.len()).then(|| RefactorPlanCursor {
                 plan_id: cursor.plan_id.clone(),
                 plan_digest: cursor.plan_digest.clone(),
@@ -1222,12 +1824,10 @@ impl RefactorPlanStore {
     ) -> Result<PreparedRefactorPlan, RefactorPlanFailure> {
         validate_selection_limits(&request.selection)?;
         self.prune(clock.instant);
-        let digest = self
-            .live_plan(&request.plan_id)?
-            .summary
-            .plan_digest
-            .clone();
-        self.verify_live_digest(&request.plan_id, &digest)?;
+        // Detail cursors rely on the insertion-time digest for O(1) checks.
+        // Application remains the integrity boundary and re-streams the whole
+        // immutable payload before examining executable plan contents.
+        self.verify_live_payload_digest(&request.plan_id)?;
         let plan = self.live_plan(&request.plan_id)?;
         validate_runtime_preconditions(
             &plan.payload.preconditions,
@@ -1283,20 +1883,57 @@ impl RefactorPlanStore {
         })
     }
 
-    fn verify_live_digest(
+    fn verify_detail_cursor_digest(
         &self,
         plan_id: &str,
         supplied_digest: &str,
     ) -> Result<(), RefactorPlanFailure> {
         let plan = self.live_plan(plan_id)?;
-        let actual = hex_digest(&encode(&plan.payload)?);
-        if actual != plan.summary.plan_digest || supplied_digest != actual {
+        if supplied_digest != plan.summary.plan_digest
+            || plan.summary.plan_digest != plan.canonical_payload_digest
+        {
             return Err(fail(
                 RefactorPlanFailureCode::DigestMismatch,
                 "Refactor plan digest does not match its immutable payload.",
             ));
         }
         Ok(())
+    }
+
+    fn verify_live_payload_digest(&self, plan_id: &str) -> Result<(), RefactorPlanFailure> {
+        let plan = self.live_plan(plan_id)?;
+        let (_, actual) = serialized_len_and_digest(plan.payload.as_ref())?;
+        if actual != plan.summary.plan_digest || actual != plan.canonical_payload_digest {
+            return Err(fail(
+                RefactorPlanFailureCode::DigestMismatch,
+                "Refactor plan digest does not match its immutable payload.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reuse only immutable payloads with both the same digest and complete
+    /// structural equality. A digest collision (or corrupted stored digest)
+    /// must not alias two different executable plans.
+    fn reuse_payload_or_reject(
+        &self,
+        candidate: StoredPlanPayload,
+        candidate_digest: &str,
+    ) -> Result<Arc<StoredPlanPayload>, RefactorPlanFailure> {
+        let mut shared = None;
+        for plan in self
+            .plans
+            .values()
+            .filter(|plan| plan.canonical_payload_digest == candidate_digest)
+        {
+            if plan.payload.as_ref() != &candidate {
+                return Err(invalid_plan(
+                    "Stored plan payload digest matches a different immutable payload.",
+                ));
+            }
+            shared = Some(Arc::clone(&plan.payload));
+        }
+        Ok(shared.unwrap_or_else(|| Arc::new(candidate)))
     }
 
     fn prune(&mut self, now: Instant) {
@@ -1338,11 +1975,34 @@ impl RefactorPlanStore {
 }
 
 fn plan_store_byte_limit(passage_count: usize) -> usize {
+    #[cfg(test)]
+    if let Some(limit) = TEST_PLAN_STORE_BYTE_LIMIT.with(|limit| limit.get()) {
+        return limit;
+    }
     if passage_count >= 50_000 {
         MAX_REFACTOR_PLAN_BYTES_50K
     } else {
         MAX_REFACTOR_PLAN_BYTES
     }
+}
+
+#[cfg(test)]
+pub(crate) struct TestPlanStoreByteLimitGuard(Option<usize>);
+
+#[cfg(test)]
+impl Drop for TestPlanStoreByteLimitGuard {
+    fn drop(&mut self) {
+        TEST_PLAN_STORE_BYTE_LIMIT.with(|value| value.set(self.0));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn scoped_test_plan_store_byte_limit(limit: usize) -> TestPlanStoreByteLimitGuard {
+    TestPlanStoreByteLimitGuard(TEST_PLAN_STORE_BYTE_LIMIT.with(|value| {
+        let previous = value.get();
+        value.set(Some(limit));
+        previous
+    }))
 }
 
 fn next_refactor_store_id() -> String {
@@ -1386,12 +2046,13 @@ fn build_payload(
             ));
         }
         let canonical = encode(&change.change)?;
-        if !canonical_hashes.insert(hex_digest(&canonical)) {
+        let canonical_hash = hex_digest(&canonical);
+        if !canonical_hashes.insert(canonical_hash.clone()) {
             return Err(invalid_plan("Plan contains a duplicate canonical change."));
         }
         ids_by_key.insert(
             change.key.clone(),
-            format!("change-{ordinal:08}-{}", short_digest(&canonical)),
+            format!("change-{ordinal:08}-{}", &canonical_hash[..16]),
         );
         if let Some(group_key) = &change.group_key {
             if group_key.trim().is_empty() {
@@ -1427,28 +2088,84 @@ fn build_payload(
             .as_ref()
             .and_then(|key| group_ids.get(key))
             .cloned();
-        let mut detail = draft_change
-            .change
-            .detail(project, draft.preconditions.project_revision)?;
-        detail.change_id = id.clone();
-        detail.group_id = group_id.clone();
-        detail.dependencies = dependencies.clone();
+        let text_edit_span = draft_change.change.text_edit_review_span(project)?;
         entries.push(CanonicalPlanEntry {
             id,
             group_id,
             dependencies,
             change: draft_change.change,
-            detail,
+            text_edit_span,
         });
     }
     validate_dependencies(&entries)?;
     validate_change_compatibility(&entries)?;
     let entries = topological_entries(entries)?;
-    let complete_changes = entries
+    if entries
         .iter()
-        .map(|entry| entry.change.clone())
-        .collect::<Vec<_>>();
-    apply_canonical_changes(project, &complete_changes)?;
+        .all(|entry| matches!(entry.change, CanonicalPlanChange::TextEdit { .. }))
+    {
+        // Every text edit has already verified its source and exact UTF-8
+        // range while its review span was captured above; compatibility has
+        // also rejected overlapping or order-dependent edits. Preserve the
+        // generic path's remaining no-op validation without cloning Project.
+        if entries.iter().any(|entry| {
+            matches!(
+                &entry.change,
+                CanonicalPlanChange::TextEdit {
+                    expected_text,
+                    replacement_text,
+                    ..
+                } if expected_text == replacement_text
+            )
+        }) {
+            return Err(invalid_plan("Canonical text edits must change the source."));
+        }
+        let mut edits_by_source =
+            BTreeMap::<CanonicalSourceIdentity, Vec<(&RefactorTextRange, &str)>>::new();
+        for entry in &entries {
+            let CanonicalPlanChange::TextEdit {
+                source,
+                range,
+                replacement_text,
+                ..
+            } = &entry.change
+            else {
+                unreachable!("all-text fast path checked above");
+            };
+            edits_by_source
+                .entry(source.clone())
+                .or_default()
+                .push((range, replacement_text));
+        }
+        let mut changes_project = false;
+        for (source, edits) in edits_by_source {
+            if edits.len() == 1 {
+                changes_project = true;
+                continue;
+            }
+            let mut rewritten = source.source(project)?.to_owned();
+            let mut descending = edits;
+            descending.sort_by_key(|(range, _)| {
+                std::cmp::Reverse((range.start_utf8_byte, range.end_utf8_byte))
+            });
+            for (range, replacement) in descending {
+                rewritten.replace_range(range.start_utf8_byte..range.end_utf8_byte, replacement);
+            }
+            changes_project |= rewritten != source.source(project)?;
+        }
+        if !changes_project {
+            return Err(invalid_plan("Canonical plan produces no project mutation."));
+        }
+    } else {
+        // Structural or mixed plans retain the generic candidate-project
+        // validation because their interactions are not independently proven
+        // by the text-edit checks above.
+        let complete_changes = entries
+            .iter()
+            .map(|entry| &entry.change)
+            .collect::<Vec<_>>();
+        apply_canonical_change_refs(project, &complete_changes)?;
+    }
     Ok(StoredPlanPayload {
         operation_kind: draft.operation_kind,
         coverage: draft.coverage,
@@ -1488,27 +2205,51 @@ fn validate_dependencies(entries: &[CanonicalPlanEntry]) -> Result<(), RefactorP
     }) {
         return Err(invalid_plan("Plan contains an invalid dependency."));
     }
-    topological_entries(entries.to_vec()).map(|_| ())
+    Ok(())
 }
 
 fn topological_entries(
     entries: Vec<CanonicalPlanEntry>,
 ) -> Result<Vec<CanonicalPlanEntry>, RefactorPlanFailure> {
-    let mut remaining = entries;
-    let mut emitted = BTreeSet::new();
-    let mut ordered = Vec::with_capacity(remaining.len());
-    while !remaining.is_empty() {
-        let Some(index) = remaining.iter().position(|entry| {
-            entry
-                .dependencies
-                .iter()
-                .all(|dependency| emitted.contains(dependency))
-        }) else {
-            return Err(invalid_plan("Plan dependencies contain a cycle."));
-        };
-        let entry = remaining.remove(index);
-        emitted.insert(entry.id.clone());
-        ordered.push(entry);
+    let entry_indices = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut in_degrees = vec![0usize; entries.len()];
+    let mut dependents = vec![Vec::new(); entries.len()];
+    for (entry_index, entry) in entries.iter().enumerate() {
+        for dependency in &entry.dependencies {
+            let Some(&dependency_index) = entry_indices.get(dependency.as_str()) else {
+                return Err(invalid_plan("Plan contains an invalid dependency."));
+            };
+            in_degrees[entry_index] += 1;
+            dependents[dependency_index].push(entry_index);
+        }
+    }
+
+    // Choose the original draft order whenever several changes are ready. This
+    // preserves the canonical digest and review ordering while avoiding the
+    // repeated scan-and-remove behavior of the previous traversal.
+    let mut ready = BinaryHeap::new();
+    for (index, in_degree) in in_degrees.iter().enumerate() {
+        if *in_degree == 0 {
+            ready.push(Reverse(index));
+        }
+    }
+    let mut entries = entries.into_iter().map(Some).collect::<Vec<_>>();
+    let mut ordered = Vec::with_capacity(entries.len());
+    while let Some(Reverse(index)) = ready.pop() {
+        ordered.push(entries[index].take().expect("entry emitted only once"));
+        for &dependent_index in &dependents[index] {
+            in_degrees[dependent_index] -= 1;
+            if in_degrees[dependent_index] == 0 {
+                ready.push(Reverse(dependent_index));
+            }
+        }
+    }
+    if ordered.len() != entries.len() {
+        return Err(invalid_plan("Plan dependencies contain a cycle."));
     }
     Ok(ordered)
 }
@@ -1518,6 +2259,7 @@ fn validate_change_compatibility(
 ) -> Result<(), RefactorPlanFailure> {
     let mut text_ranges = BTreeMap::<CanonicalSourceIdentity, Vec<&RefactorTextRange>>::new();
     let mut passage_structural = BTreeSet::<(String, String)>::new();
+    let mut removed_passage_sources = BTreeSet::<(String, String)>::new();
     let mut start_stories = BTreeSet::new();
     let mut metadata_stories = BTreeSet::new();
     let mut project_fields = BTreeSet::new();
@@ -1552,6 +2294,10 @@ fn validate_change_compatibility(
                         "Plan contains incompatible changes for one passage.",
                     ));
                 }
+                if matches!(&entry.change, CanonicalPlanChange::RemovePassage { .. }) {
+                    removed_passage_sources
+                        .insert((story_id.clone(), passage_id.as_ref().to_owned()));
+                }
             }
             CanonicalPlanChange::SetStartPassage { story_id, .. } => {
                 if !start_stories.insert(story_id) {
@@ -1579,10 +2325,7 @@ fn validate_change_compatibility(
         for pair in ranges.windows(2) {
             let left = pair[0];
             let right = pair[1];
-            if left.end_utf8_byte > right.start_utf8_byte
-                || (left.start_utf8_byte == left.end_utf8_byte
-                    && left.start_utf8_byte == right.start_utf8_byte)
-            {
+            if left.end_utf8_byte > right.start_utf8_byte {
                 return Err(invalid_plan(
                     "Plan contains overlapping or order-dependent text edits.",
                 ));
@@ -1595,16 +2338,7 @@ fn validate_change_compatibility(
             story_id,
             passage_id,
         } = source
-            && entries.iter().any(|entry| {
-                matches!(
-                    &entry.change,
-                    CanonicalPlanChange::RemovePassage {
-                        story_id: removed_story_id,
-                        passage,
-                        ..
-                    } if removed_story_id == &story_id && passage.id.as_ref() == passage_id
-                )
-            })
+            && removed_passage_sources.contains(&(story_id, passage_id))
         {
             return Err(invalid_plan(
                 "A plan cannot both edit and remove the same passage source.",
@@ -1779,9 +2513,89 @@ pub(crate) fn sparse_passage_rename_delta(
     Ok(Some(deltas.into_values().collect()))
 }
 
+/// Recognize the text-only project-replace shape. Every source and range is
+/// validated against the immutable project before callers take ownership of it.
+pub(crate) fn sparse_project_replace_delta(
+    project: &Project,
+    operation_kind: &str,
+    changes: &[CanonicalPlanChange],
+    injected_failure_child: Option<usize>,
+) -> Result<Option<Vec<SparseProjectReplaceDelta>>, RefactorPlanFailure> {
+    if operation_kind != "project-replace"
+        || !changes
+            .iter()
+            .all(|change| matches!(change, CanonicalPlanChange::TextEdit { .. }))
+    {
+        return Ok(None);
+    }
+    let mut edits =
+        BTreeMap::<CanonicalSourceIdentity, Vec<(&RefactorTextRange, &str, &str)>>::new();
+    for change in changes {
+        let CanonicalPlanChange::TextEdit {
+            source,
+            range,
+            expected_text,
+            replacement_text,
+        } = change
+        else {
+            unreachable!("all-text shape checked above");
+        };
+        if expected_text == replacement_text {
+            return Err(invalid_plan("Canonical text edits must change the source."));
+        }
+        edits
+            .entry(source.clone())
+            .or_default()
+            .push((range, expected_text, replacement_text));
+    }
+    let mut deltas = Vec::with_capacity(edits.len());
+    for (source, source_edits) in edits {
+        let before = source.source(project)?.to_owned();
+        for (range, expected, _) in &source_edits {
+            validate_text_range(&before, range, expected)?;
+        }
+        let mut after = before.clone();
+        let mut descending = source_edits;
+        descending.sort_by_key(|(range, _, _)| {
+            std::cmp::Reverse((range.start_utf8_byte, range.end_utf8_byte))
+        });
+        for (range, _, replacement) in descending {
+            after.replace_range(range.start_utf8_byte..range.end_utf8_byte, replacement);
+        }
+        deltas.push(SparseProjectReplaceDelta {
+            source,
+            before,
+            after,
+        });
+    }
+    if deltas.iter().all(|delta| delta.before == delta.after) {
+        return Err(invalid_plan("Canonical plan produces no project mutation."));
+    }
+    if injected_failure_child.is_some_and(|index| index < changes.len()) {
+        return Err(invalid_plan("Injected canonical child-change failure."));
+    }
+    Ok(Some(deltas))
+}
+
 pub(crate) fn apply_canonical_changes_with_injected_child(
     project: &Project,
     changes: &[CanonicalPlanChange],
+    injected_failure_child: Option<usize>,
+) -> Result<Project, RefactorPlanFailure> {
+    let change_refs = changes.iter().collect::<Vec<_>>();
+    apply_canonical_change_refs_with_injected_child(project, &change_refs, injected_failure_child)
+}
+
+fn apply_canonical_change_refs(
+    project: &Project,
+    changes: &[&CanonicalPlanChange],
+) -> Result<Project, RefactorPlanFailure> {
+    apply_canonical_change_refs_with_injected_child(project, changes, None)
+}
+
+fn apply_canonical_change_refs_with_injected_child(
+    project: &Project,
+    changes: &[&CanonicalPlanChange],
     injected_failure_child: Option<usize>,
 ) -> Result<Project, RefactorPlanFailure> {
     let mut candidate = project.clone();
@@ -2359,11 +3173,21 @@ fn select_entries<'a>(
 fn validate_detail_page_sizes(
     plan_id: &str,
     digest: &str,
+    revision: u32,
     entries: &[CanonicalPlanEntry],
 ) -> Result<(), RefactorPlanFailure> {
     for (position, entry) in entries.iter().enumerate() {
+        let detail = entry.detail(revision)?;
+        if !detail_page_size_requires_exact_encoding(
+            &detail,
+            plan_id,
+            digest,
+            position + 1 < entries.len(),
+        ) {
+            continue;
+        }
         let page = RefactorPlanDetailPage {
-            changes: vec![entry.detail.clone()],
+            changes: vec![detail],
             next_cursor: (position + 1 < entries.len()).then(|| RefactorPlanCursor {
                 plan_id: plan_id.into(),
                 plan_digest: digest.into(),
@@ -2379,8 +3203,412 @@ fn validate_detail_page_sizes(
     Ok(())
 }
 
+/// Uses serde_json's escaping rules to cheaply rule out oversized single-detail
+/// pages. It intentionally overestimates control-character escaping and number
+/// widths; exact encoding remains the decision path for every possible overflow.
+fn detail_page_size_requires_exact_encoding(
+    detail: &RefactorPlanDetail,
+    plan_id: &str,
+    digest: &str,
+    has_next_cursor: bool,
+) -> bool {
+    detail_page_json_upper_bound(detail, plan_id, digest, has_next_cursor)
+        > MAX_REFACTOR_DETAIL_BYTES
+}
+
+fn detail_page_json_upper_bound(
+    detail: &RefactorPlanDetail,
+    plan_id: &str,
+    digest: &str,
+    has_next_cursor: bool,
+) -> usize {
+    let next_cursor = has_next_cursor.then(|| {
+        json_object_upper_bound([
+            (
+                json_string_upper_bound("planId"),
+                json_string_upper_bound(plan_id),
+            ),
+            (
+                json_string_upper_bound("planDigest"),
+                json_string_upper_bound(digest),
+            ),
+            (json_string_upper_bound("position"), JSON_USIZE_UPPER_BOUND),
+        ])
+    });
+    json_object_upper_bound([
+        (
+            json_string_upper_bound("changes"),
+            json_array_upper_bound([detail_json_upper_bound(detail)]),
+        ),
+        (
+            json_string_upper_bound("nextCursor"),
+            next_cursor.unwrap_or(JSON_NULL_BYTES),
+        ),
+    ])
+}
+
+const JSON_NULL_BYTES: usize = 4;
+const JSON_BOOL_BYTES: usize = 5;
+const JSON_U32_UPPER_BOUND: usize = 10;
+const JSON_USIZE_UPPER_BOUND: usize = 20;
+const JSON_F64_UPPER_BOUND: usize = 32;
+const JSON_ENUM_UPPER_BOUND: usize = 32;
+
+fn json_string_upper_bound(value: &str) -> usize {
+    value.chars().fold(2, |bound, character| {
+        let escaped_bytes = match character {
+            '"' | '\\' => 2,
+            '\u{0000}'..='\u{001f}' => 6,
+            _ => character.len_utf8(),
+        };
+        bound.saturating_add(escaped_bytes)
+    })
+}
+
+fn json_array_upper_bound(values: impl IntoIterator<Item = usize>) -> usize {
+    let mut bound: usize = 2;
+    let mut first = true;
+    for value in values {
+        if !first {
+            bound = bound.saturating_add(1);
+        }
+        first = false;
+        bound = bound.saturating_add(value);
+    }
+    bound
+}
+
+fn json_object_upper_bound(fields: impl IntoIterator<Item = (usize, usize)>) -> usize {
+    let mut bound: usize = 2;
+    let mut first = true;
+    for (key, value) in fields {
+        if !first {
+            bound = bound.saturating_add(1);
+        }
+        first = false;
+        bound = bound
+            .saturating_add(key)
+            .saturating_add(1)
+            .saturating_add(value);
+    }
+    bound
+}
+
+fn json_optional_string_upper_bound(value: &Option<String>) -> usize {
+    value
+        .as_deref()
+        .map(json_string_upper_bound)
+        .unwrap_or(JSON_NULL_BYTES)
+}
+
+fn json_optional_value_upper_bound(value: &Option<RefactorPlanValue>) -> usize {
+    value
+        .as_ref()
+        .map(refactor_plan_value_json_upper_bound)
+        .unwrap_or(JSON_NULL_BYTES)
+}
+
+fn detail_json_upper_bound(detail: &RefactorPlanDetail) -> usize {
+    json_object_upper_bound([
+        (
+            json_string_upper_bound("changeId"),
+            json_string_upper_bound(&detail.change_id),
+        ),
+        (
+            json_string_upper_bound("groupId"),
+            json_optional_string_upper_bound(&detail.group_id),
+        ),
+        (json_string_upper_bound("kind"), JSON_ENUM_UPPER_BOUND),
+        (
+            json_string_upper_bound("affectedEntity"),
+            affected_entity_json_upper_bound(&detail.affected_entity),
+        ),
+        (
+            json_string_upper_bound("description"),
+            json_string_upper_bound(&detail.description),
+        ),
+        (
+            json_string_upper_bound("before"),
+            json_optional_value_upper_bound(&detail.before),
+        ),
+        (
+            json_string_upper_bound("after"),
+            json_optional_value_upper_bound(&detail.after),
+        ),
+        (
+            json_string_upper_bound("dependencies"),
+            json_array_upper_bound(
+                detail
+                    .dependencies
+                    .iter()
+                    .map(|dependency| json_string_upper_bound(dependency)),
+            ),
+        ),
+        (
+            json_string_upper_bound("location"),
+            detail
+                .location
+                .as_ref()
+                .map(source_location_json_upper_bound)
+                .unwrap_or(JSON_NULL_BYTES),
+        ),
+    ])
+}
+
+fn affected_entity_json_upper_bound(entity: &RefactorAffectedEntity) -> usize {
+    json_object_upper_bound([
+        (json_string_upper_bound("kind"), JSON_ENUM_UPPER_BOUND),
+        (
+            json_string_upper_bound("storyId"),
+            json_optional_string_upper_bound(&entity.story_id),
+        ),
+        (
+            json_string_upper_bound("entityId"),
+            json_string_upper_bound(&entity.entity_id),
+        ),
+    ])
+}
+
+fn source_location_json_upper_bound(location: &RefactorSourceLocation) -> usize {
+    json_object_upper_bound([
+        (
+            json_string_upper_bound("storyId"),
+            json_string_upper_bound(&location.story_id),
+        ),
+        (json_string_upper_bound("sourceKind"), JSON_ENUM_UPPER_BOUND),
+        (
+            json_string_upper_bound("sourceId"),
+            json_string_upper_bound(&location.source_id),
+        ),
+        (json_string_upper_bound("revision"), JSON_U32_UPPER_BOUND),
+        (
+            json_string_upper_bound("span"),
+            json_object_upper_bound([
+                (json_string_upper_bound("encoding"), JSON_ENUM_UPPER_BOUND),
+                (json_string_upper_bound("start"), JSON_USIZE_UPPER_BOUND),
+                (json_string_upper_bound("end"), JSON_USIZE_UPPER_BOUND),
+            ]),
+        ),
+    ])
+}
+
+fn refactor_plan_value_json_upper_bound(value: &RefactorPlanValue) -> usize {
+    let (field, value_bound) = match value {
+        RefactorPlanValue::Text { value }
+        | RefactorPlanValue::PassageName { value }
+        | RefactorPlanValue::PassageId { value }
+        | RefactorPlanValue::ProjectName { value } => ("value", json_string_upper_bound(value)),
+        RefactorPlanValue::Passage { passage } => {
+            ("passage", passage_snapshot_json_upper_bound(passage))
+        }
+        RefactorPlanValue::StoryMetadata { value } => {
+            ("value", story_metadata_json_upper_bound(value))
+        }
+    };
+    json_object_upper_bound([
+        (json_string_upper_bound("type"), JSON_ENUM_UPPER_BOUND),
+        (json_string_upper_bound(field), value_bound),
+    ])
+}
+
+fn passage_snapshot_json_upper_bound(passage: &PassageSnapshot) -> usize {
+    json_object_upper_bound([
+        (
+            json_string_upper_bound("id"),
+            json_string_upper_bound(&passage.id),
+        ),
+        (
+            json_string_upper_bound("layout"),
+            passage
+                .layout
+                .as_ref()
+                .map(core_rect_json_upper_bound)
+                .unwrap_or(JSON_NULL_BYTES),
+        ),
+        (
+            json_string_upper_bound("name"),
+            json_string_upper_bound(&passage.name),
+        ),
+        (
+            json_string_upper_bound("storyId"),
+            json_string_upper_bound(&passage.story_id),
+        ),
+        (
+            json_string_upper_bound("tags"),
+            json_array_upper_bound(passage.tags.iter().map(|tag| json_string_upper_bound(tag))),
+        ),
+        (
+            json_string_upper_bound("text"),
+            json_string_upper_bound(&passage.text),
+        ),
+    ])
+}
+
+fn core_rect_json_upper_bound(_bounds: &crate::CoreRect) -> usize {
+    json_object_upper_bound([
+        (json_string_upper_bound("height"), JSON_F64_UPPER_BOUND),
+        (json_string_upper_bound("left"), JSON_F64_UPPER_BOUND),
+        (json_string_upper_bound("top"), JSON_F64_UPPER_BOUND),
+        (json_string_upper_bound("width"), JSON_F64_UPPER_BOUND),
+    ])
+}
+
+fn story_metadata_json_upper_bound(metadata: &StoryMetadataPatch) -> usize {
+    json_object_upper_bound([
+        (
+            json_string_upper_bound("ifid"),
+            json_optional_string_upper_bound(&metadata.ifid),
+        ),
+        (
+            json_string_upper_bound("name"),
+            json_optional_string_upper_bound(&metadata.name),
+        ),
+        (
+            json_string_upper_bound("snapToGrid"),
+            metadata
+                .snap_to_grid
+                .map(|_| JSON_BOOL_BYTES)
+                .unwrap_or(JSON_NULL_BYTES),
+        ),
+        (
+            json_string_upper_bound("storyFormat"),
+            json_optional_string_upper_bound(&metadata.story_format),
+        ),
+        (
+            json_string_upper_bound("storyFormatVersion"),
+            json_optional_string_upper_bound(&metadata.story_format_version),
+        ),
+        (
+            json_string_upper_bound("tagColors"),
+            metadata
+                .tag_colors
+                .as_ref()
+                .map(|colors| {
+                    json_object_upper_bound(colors.iter().map(|(tag, color)| {
+                        (json_string_upper_bound(tag), json_string_upper_bound(color))
+                    }))
+                })
+                .unwrap_or(JSON_NULL_BYTES),
+        ),
+        (
+            json_string_upper_bound("tags"),
+            metadata
+                .tags
+                .as_ref()
+                .map(|tags| {
+                    json_array_upper_bound(tags.iter().map(|tag| json_string_upper_bound(tag)))
+                })
+                .unwrap_or(JSON_NULL_BYTES),
+        ),
+        (
+            json_string_upper_bound("zoom"),
+            metadata
+                .zoom
+                .map(|_| JSON_F64_UPPER_BOUND)
+                .unwrap_or(JSON_NULL_BYTES),
+        ),
+    ])
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BorrowedRefactorPlanDetailPage<'a> {
+    changes: &'a [&'a RefactorPlanDetail],
+    next_cursor: Option<RefactorPlanCursor>,
+}
+
+fn detail_page_change_count(
+    details: &[&RefactorPlanDetail],
+    cursor: &RefactorPlanCursor,
+    total_changes: usize,
+) -> Result<usize, RefactorPlanFailure> {
+    if details.is_empty() {
+        return Ok(0);
+    }
+    if detail_page_fits(details, cursor, total_changes)? {
+        return Ok(details.len());
+    }
+
+    // `validate_detail_page_sizes` checks every stored detail, so the first
+    // item fits. Search only the bounded 200-item review window and clone the
+    // selected details once for the returned DTO.
+    let mut lower = 1;
+    let mut upper = details.len() - 1;
+    while lower < upper {
+        let middle = lower + (upper - lower).div_ceil(2);
+        if detail_page_fits(&details[..middle], cursor, total_changes)? {
+            lower = middle;
+        } else {
+            upper = middle - 1;
+        }
+    }
+    Ok(lower)
+}
+
+fn detail_page_fits(
+    details: &[&RefactorPlanDetail],
+    cursor: &RefactorPlanCursor,
+    total_changes: usize,
+) -> Result<bool, RefactorPlanFailure> {
+    let next_position = cursor.position + details.len();
+    let page = BorrowedRefactorPlanDetailPage {
+        changes: details,
+        next_cursor: (next_position < total_changes).then(|| RefactorPlanCursor {
+            plan_id: cursor.plan_id.clone(),
+            plan_digest: cursor.plan_digest.clone(),
+            position: next_position,
+        }),
+    };
+    Ok(encode(&page)?.len() <= MAX_REFACTOR_DETAIL_BYTES)
+}
+
 fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, RefactorPlanFailure> {
     serde_json::to_vec(value).map_err(|_| invalid_plan("Plan value cannot be encoded."))
+}
+
+/// Serializes the immutable stored payload without allocating a second full
+/// JSON copy. The byte count and SHA-256 cover exactly the same bytes that
+/// `serde_json::to_vec` would have produced.
+struct CountingSha256Writer {
+    bytes: usize,
+    digest: Sha256,
+}
+
+impl CountingSha256Writer {
+    fn new() -> Self {
+        Self {
+            bytes: 0,
+            digest: Sha256::new(),
+        }
+    }
+
+    fn into_count_and_digest(self) -> (usize, String) {
+        (self.bytes, format!("{:x}", self.digest.finalize()))
+    }
+}
+
+impl Write for CountingSha256Writer {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.bytes = self
+            .bytes
+            .checked_add(buffer.len())
+            .ok_or_else(|| io::Error::other("Stored refactor payload is too large."))?;
+        self.digest.update(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_len_and_digest<T: Serialize>(
+    value: &T,
+) -> Result<(usize, String), RefactorPlanFailure> {
+    let mut writer = CountingSha256Writer::new();
+    serde_json::to_writer(&mut writer, value)
+        .map_err(|_| invalid_plan("Plan value cannot be encoded."))?;
+    Ok(writer.into_count_and_digest())
 }
 
 fn short_digest(bytes: &[u8]) -> String {
@@ -2505,6 +3733,33 @@ mod tests {
         }
     }
 
+    fn text_edit_review_detail(before: &str, after: &str) -> RefactorPlanDetail {
+        CanonicalPlanEntry {
+            id: "text-change".into(),
+            group_id: None,
+            dependencies: Vec::new(),
+            change: CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Passage {
+                    story_id: "story".into(),
+                    passage_id: "start".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 0,
+                    end_utf8_byte: before.len(),
+                },
+                expected_text: before.into(),
+                replacement_text: after.into(),
+            },
+            text_edit_span: Some(RefactorSourceSpan {
+                encoding: RefactorRangeEncoding::Utf16CodeUnits,
+                start: 0,
+                end: before.encode_utf16().count(),
+            }),
+        }
+        .detail(1)
+        .unwrap()
+    }
+
     fn clock(base: Instant, milliseconds: u64) -> RefactorPlanClock {
         RefactorPlanClock {
             instant: base + Duration::from_millis(milliseconds),
@@ -2535,7 +3790,9 @@ mod tests {
             &project,
         )
         .unwrap();
-        let detail = &payload.entries[0].detail;
+        let detail = payload.entries[0]
+            .detail(runtime().project_revision)
+            .unwrap();
         let span = &detail.location.as_ref().unwrap().span;
 
         assert_eq!(span.encoding, RefactorRangeEncoding::Utf16CodeUnits);
@@ -2552,6 +3809,371 @@ mod tests {
             Some(RefactorPlanValue::Text {
                 value: "😀É\nK".into(),
             })
+        );
+    }
+
+    #[test]
+    fn stored_text_edit_details_remain_stable_after_an_unrelated_project_mutation() {
+        let base = Instant::now();
+        let mut project = project();
+        let source = &project.stories[0].passages[0].text;
+        let expected = "😀e\u{301}\r\nК";
+        let start = source.find('😀').unwrap();
+        let end = start + expected.len();
+        let utf16_end = source[..end].encode_utf16().count();
+        let mut store = RefactorPlanStore::default();
+        let summary = store
+            .insert(
+                draft(CanonicalPlanChange::TextEdit {
+                    source: CanonicalSourceIdentity::Passage {
+                        story_id: "story".into(),
+                        passage_id: "start".into(),
+                    },
+                    range: RefactorTextRange {
+                        start_utf8_byte: start,
+                        end_utf8_byte: end,
+                    },
+                    expected_text: expected.into(),
+                    replacement_text: "replacement".into(),
+                }),
+                &project,
+                clock(base, 0),
+            )
+            .unwrap();
+        let before = store
+            .detail_page(&summary.first_detail_cursor, clock(base, 1))
+            .unwrap();
+
+        // Detail lookup intentionally has no project argument. A later project
+        // mutation must not alter the immutable planned review output.
+        project.manifest.name = "Unrelated project mutation".into();
+        project.stories[0].script = "changed independently".into();
+        let after = store
+            .detail_page(&summary.first_detail_cursor, clock(base, 2))
+            .unwrap();
+
+        assert_eq!(before, after);
+        assert_eq!(
+            before.changes[0].location.as_ref().unwrap().span,
+            RefactorSourceSpan {
+                encoding: RefactorRangeEncoding::Utf16CodeUnits,
+                start: 1,
+                end: utf16_end,
+            }
+        );
+    }
+
+    #[test]
+    fn detail_cursor_digest_requires_cursor_summary_and_canonical_digests_to_match() {
+        let base = Instant::now();
+        let project = project();
+
+        let mut cursor_store = RefactorPlanStore::default();
+        let cursor_summary = cursor_store
+            .insert(draft(rename("Cursor")), &project, clock(base, 0))
+            .unwrap();
+        let mut cursor = cursor_summary.first_detail_cursor.clone();
+        cursor.plan_digest.push('0');
+        assert_eq!(
+            cursor_store
+                .detail_page(&cursor, clock(base, 1))
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::DigestMismatch
+        );
+
+        let mut summary_store = RefactorPlanStore::default();
+        let summary = summary_store
+            .insert(draft(rename("Summary")), &project, clock(base, 0))
+            .unwrap();
+        summary_store
+            .plans
+            .get_mut(&summary.plan_id)
+            .unwrap()
+            .summary
+            .plan_digest
+            .push('0');
+        assert_eq!(
+            summary_store
+                .detail_page(&summary.first_detail_cursor, clock(base, 1))
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::DigestMismatch
+        );
+
+        let mut canonical_store = RefactorPlanStore::default();
+        let canonical = canonical_store
+            .insert(draft(rename("Canonical")), &project, clock(base, 0))
+            .unwrap();
+        canonical_store
+            .plans
+            .get_mut(&canonical.plan_id)
+            .unwrap()
+            .canonical_payload_digest
+            .push('0');
+        assert_eq!(
+            canonical_store
+                .detail_page(&canonical.first_detail_cursor, clock(base, 1))
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::DigestMismatch
+        );
+    }
+
+    #[test]
+    fn apply_streamed_payload_digest_rejects_internal_payload_tampering() {
+        let base = Instant::now();
+        let project = project();
+        let mut store = RefactorPlanStore::default();
+        let summary = store
+            .insert(
+                draft(CanonicalPlanChange::TextEdit {
+                    source: CanonicalSourceIdentity::Passage {
+                        story_id: "story".into(),
+                        passage_id: "start".into(),
+                    },
+                    range: RefactorTextRange {
+                        start_utf8_byte: 1,
+                        end_utf8_byte: 5,
+                    },
+                    expected_text: "😀".into(),
+                    replacement_text: "X".into(),
+                }),
+                &project,
+                clock(base, 0),
+            )
+            .unwrap();
+        Arc::make_mut(&mut store.plans.get_mut(&summary.plan_id).unwrap().payload).entries[0]
+            .text_edit_span
+            .as_mut()
+            .unwrap()
+            .end += 1;
+
+        // Detail cursor checks are O(1) against the insertion-time digest. The
+        // full canonical payload is deliberately re-streamed before apply.
+        assert!(
+            store
+                .detail_page(&summary.first_detail_cursor, clock(base, 1))
+                .is_ok()
+        );
+        assert_eq!(
+            store
+                .prepare_apply(
+                    &RefactorPlanApplyRequest {
+                        plan_id: summary.plan_id,
+                        expected_project_revision: 1,
+                        selection: RefactorPlanSelection::All,
+                    },
+                    &runtime(),
+                    clock(base, 2),
+                )
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::DigestMismatch
+        );
+    }
+
+    #[test]
+    fn streaming_payload_measurement_matches_json_encoding_exactly() {
+        let payload = build_payload(draft(rename("Renamed")), &project()).unwrap();
+        let encoded = encode(&payload).unwrap();
+        let (bytes, digest) = serialized_len_and_digest(&payload).unwrap();
+
+        assert_eq!(bytes, encoded.len());
+        assert_eq!(digest, hex_digest(&encoded));
+    }
+
+    #[test]
+    fn identical_live_plans_share_payload_but_keep_logical_accounting_and_lifecycle() {
+        let base = Instant::now();
+        let project = project();
+        let mut store = RefactorPlanStore::default();
+        let first = store
+            .insert(draft(rename("Shared")), &project, clock(base, 0))
+            .unwrap();
+        let second = store
+            .insert(draft(rename("Shared")), &project, clock(base, 1))
+            .unwrap();
+        let third = store
+            .insert(draft(rename("Shared")), &project, clock(base, 2))
+            .unwrap();
+        let payload_bytes = serialized_len_and_digest(
+            store
+                .plans
+                .get(&first.plan_id)
+                .expect("first plan")
+                .payload
+                .as_ref(),
+        )
+        .unwrap()
+        .0;
+
+        assert_ne!(first.plan_id, second.plan_id);
+        assert_ne!(
+            first.first_detail_cursor.plan_id,
+            second.first_detail_cursor.plan_id
+        );
+        assert!(Arc::ptr_eq(
+            &store.plans.get(&first.plan_id).unwrap().payload,
+            &store.plans.get(&second.plan_id).unwrap().payload,
+        ));
+        assert!(Arc::ptr_eq(
+            &store.plans.get(&second.plan_id).unwrap().payload,
+            &store.plans.get(&third.plan_id).unwrap().payload,
+        ));
+        assert_eq!(store.bytes, payload_bytes * 3);
+
+        store
+            .prepare_apply(
+                &RefactorPlanApplyRequest {
+                    plan_id: first.plan_id.clone(),
+                    expected_project_revision: 1,
+                    selection: RefactorPlanSelection::All,
+                },
+                &runtime(),
+                clock(base, 3),
+            )
+            .expect("applying one shared plan remains valid");
+        store.remove(&first.plan_id);
+        assert!(
+            store
+                .detail_page(&second.first_detail_cursor, clock(base, 4))
+                .is_ok()
+        );
+
+        let after_ttl = PLAN_TTL.as_millis() as u64 + 1;
+        assert_eq!(
+            store
+                .detail_page(&second.first_detail_cursor, clock(base, after_ttl))
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::PlanExpired
+        );
+        assert!(
+            store
+                .detail_page(&third.first_detail_cursor, clock(base, after_ttl))
+                .is_ok()
+        );
+        assert_eq!(store.diagnostics().0, 1);
+    }
+
+    #[test]
+    fn digest_match_with_unequal_payload_fails_without_aliasing() {
+        let base = Instant::now();
+        let project = project();
+        let mut store = RefactorPlanStore::default();
+        let stored = store
+            .insert(draft(rename("Stored")), &project, clock(base, 0))
+            .unwrap();
+        let candidate = build_payload(draft(rename("Candidate")), &project).unwrap();
+        let (_, candidate_digest) = serialized_len_and_digest(&candidate).unwrap();
+        store
+            .plans
+            .get_mut(&stored.plan_id)
+            .unwrap()
+            .canonical_payload_digest = candidate_digest;
+
+        assert_eq!(
+            store
+                .insert(draft(rename("Candidate")), &project, clock(base, 1))
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::InvalidPlan
+        );
+        assert_eq!(store.diagnostics().0, 1);
+    }
+
+    #[test]
+    fn compact_plan_payload_is_materially_smaller_than_full_stored_details() {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FullEntry<'a> {
+            id: &'a String,
+            group_id: &'a Option<String>,
+            dependencies: &'a Vec<String>,
+            change: &'a CanonicalPlanChange,
+            detail: RefactorPlanDetail,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FullPayload<'a> {
+            operation_kind: &'a String,
+            coverage: &'a String,
+            preconditions: &'a RefactorRuntimeState,
+            entries: Vec<FullEntry<'a>>,
+        }
+
+        let mut plan = draft(rename("unused"));
+        plan.changes = (0..100)
+            .map(|index| CanonicalPlanDraftChange {
+                key: format!("add-{index}"),
+                group_key: None,
+                dependencies: Vec::new(),
+                change: CanonicalPlanChange::AddPassage {
+                    story_id: "story".into(),
+                    passage: PassageSnapshot {
+                        id: format!("added-{index}"),
+                        layout: None,
+                        name: format!("Added {index}"),
+                        story_id: "story".into(),
+                        tags: vec!["review".into()],
+                        text: "x".repeat(2_048),
+                    }
+                    .into_passage(&StoryId::new("story")),
+                    layout: None,
+                },
+            })
+            .collect();
+        let payload = build_payload(plan, &project()).unwrap();
+        let full = FullPayload {
+            operation_kind: &payload.operation_kind,
+            coverage: &payload.coverage,
+            preconditions: &payload.preconditions,
+            entries: payload
+                .entries
+                .iter()
+                .map(|entry| FullEntry {
+                    id: &entry.id,
+                    group_id: &entry.group_id,
+                    dependencies: &entry.dependencies,
+                    change: &entry.change,
+                    detail: entry
+                        .detail(payload.preconditions.project_revision)
+                        .unwrap(),
+                })
+                .collect(),
+        };
+        let (compact_bytes, _) = serialized_len_and_digest(&payload).unwrap();
+        let full_bytes = encode(&full).unwrap().len();
+
+        assert!(compact_bytes * 3 < full_bytes * 2);
+    }
+
+    #[test]
+    fn compact_plan_store_retains_the_existing_eight_plan_limit_and_eviction() {
+        let base = Instant::now();
+        let mut store = RefactorPlanStore::default();
+        let summaries = (0..=MAX_REFACTOR_PLANS)
+            .map(|index| {
+                store
+                    .insert(
+                        draft(rename(&format!("Renamed {index}"))),
+                        &project(),
+                        clock(base, index as u64),
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let (count, bytes, _) = store.diagnostics();
+        assert_eq!(count, MAX_REFACTOR_PLANS);
+        assert!(bytes <= MAX_REFACTOR_PLAN_BYTES);
+        assert_eq!(
+            store
+                .detail_page(&summaries[0].first_detail_cursor, clock(base, 20))
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::PlanEvicted
         );
     }
 
@@ -2615,6 +4237,25 @@ mod tests {
             RefactorPlanFailureCode::InvalidPlan
         );
 
+        let missing_source = CanonicalPlanChange::TextEdit {
+            source: CanonicalSourceIdentity::Passage {
+                story_id: "story".into(),
+                passage_id: "missing".into(),
+            },
+            range: RefactorTextRange {
+                start_utf8_byte: 0,
+                end_utf8_byte: 0,
+            },
+            expected_text: String::new(),
+            replacement_text: "inserted".into(),
+        };
+        assert_eq!(
+            build_payload(draft(missing_source), &project)
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::InvalidPlan
+        );
+
         let source = &project.stories[0].passages[0].text;
         let mut overlapping = draft(CanonicalPlanChange::TextEdit {
             source: CanonicalSourceIdentity::Passage {
@@ -2649,6 +4290,231 @@ mod tests {
             build_payload(overlapping, &project).unwrap_err().code,
             RefactorPlanFailureCode::InvalidPlan
         );
+    }
+
+    #[test]
+    fn all_text_edit_payloads_validate_multiple_sources_without_candidate_clone() {
+        let project = project();
+        let passage_text = &project.stories[0].passages[0].text;
+        let cyrillic_start = passage_text.find('К').unwrap();
+        let mut plan = draft(CanonicalPlanChange::TextEdit {
+            source: CanonicalSourceIdentity::Passage {
+                story_id: "story".into(),
+                passage_id: "start".into(),
+            },
+            range: RefactorTextRange {
+                start_utf8_byte: 0,
+                end_utf8_byte: 1,
+            },
+            expected_text: "A".into(),
+            replacement_text: "Z".into(),
+        });
+        plan.changes.push(CanonicalPlanDraftChange {
+            key: "second-passage-edit".into(),
+            group_key: None,
+            dependencies: Vec::new(),
+            change: CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Passage {
+                    story_id: "story".into(),
+                    passage_id: "start".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: cyrillic_start,
+                    end_utf8_byte: cyrillic_start + 'К'.len_utf8(),
+                },
+                expected_text: "К".into(),
+                replacement_text: "Ж".into(),
+            },
+        });
+        plan.changes.push(CanonicalPlanDraftChange {
+            key: "script-edit".into(),
+            group_key: None,
+            dependencies: Vec::new(),
+            change: CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Script {
+                    story_id: "story".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 15,
+                    end_utf8_byte: 17,
+                },
+                expected_text: "42".into(),
+                replacement_text: "84".into(),
+            },
+        });
+
+        let payload = build_payload(plan, &project).expect("valid non-overlapping text edits");
+        let changes = payload
+            .entries
+            .iter()
+            .map(|entry| entry.change.clone())
+            .collect::<Vec<_>>();
+        let applied = apply_canonical_changes(&project, &changes).expect("edits still apply");
+
+        assert!(applied.stories[0].passages[0].text.starts_with('Z'));
+        assert!(applied.stories[0].passages[0].text.contains('Ж'));
+        assert_eq!(applied.stories[0].script, "const answer = 84;");
+    }
+
+    #[test]
+    fn all_text_edit_payloads_reject_noop_edits() {
+        let project = project();
+        let error = build_payload(
+            draft(CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Script {
+                    story_id: "story".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 15,
+                    end_utf8_byte: 17,
+                },
+                expected_text: "42".into(),
+                replacement_text: "42".into(),
+            }),
+            &project,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, RefactorPlanFailureCode::InvalidPlan);
+        assert_eq!(
+            error.message,
+            "Canonical text edits must change the source."
+        );
+    }
+
+    #[test]
+    fn all_text_edit_payloads_reject_compensating_edits() {
+        let project = project();
+        let mut plan = draft(CanonicalPlanChange::TextEdit {
+            source: CanonicalSourceIdentity::Script {
+                story_id: "story".into(),
+            },
+            range: RefactorTextRange {
+                start_utf8_byte: 6,
+                end_utf8_byte: 12,
+            },
+            expected_text: "answer".into(),
+            replacement_text: "result".into(),
+        });
+        plan.changes.push(CanonicalPlanDraftChange {
+            key: "restore-script".into(),
+            group_key: None,
+            dependencies: Vec::new(),
+            change: CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Script {
+                    story_id: "story".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 6,
+                    end_utf8_byte: 6,
+                },
+                expected_text: "".into(),
+                replacement_text: "answer".into(),
+            },
+        });
+        // The edits are non-overlapping and each changes its range, but their
+        // aggregate source result is intentionally unchanged.
+        plan.changes[0].change = CanonicalPlanChange::TextEdit {
+            source: CanonicalSourceIdentity::Script {
+                story_id: "story".into(),
+            },
+            range: RefactorTextRange {
+                start_utf8_byte: 6,
+                end_utf8_byte: 12,
+            },
+            expected_text: "answer".into(),
+            replacement_text: "".into(),
+        };
+        let base = Instant::now();
+        let mut store = RefactorPlanStore::default();
+        assert_eq!(
+            store
+                .insert(plan, &project, clock(base, 0))
+                .unwrap_err()
+                .message,
+            "Canonical plan produces no project mutation."
+        );
+        let (count, bytes, _) = store.diagnostics();
+        assert_eq!(count, 0);
+        assert_eq!(bytes, 0);
+    }
+
+    #[test]
+    fn sparse_project_replace_accepts_all_text_sources_and_rejects_mixed_plans() {
+        let project = project();
+        let changes = vec![
+            CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Passage {
+                    story_id: "story".into(),
+                    passage_id: "start".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 0,
+                    end_utf8_byte: 1,
+                },
+                expected_text: "A".into(),
+                replacement_text: "Z".into(),
+            },
+            CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Script {
+                    story_id: "story".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 15,
+                    end_utf8_byte: 17,
+                },
+                expected_text: "42".into(),
+                replacement_text: "84".into(),
+            },
+            CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Stylesheet {
+                    story_id: "story".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 0,
+                    end_utf8_byte: 4,
+                },
+                expected_text: "body".into(),
+                replacement_text: "html".into(),
+            },
+        ];
+        let sparse = sparse_project_replace_delta(&project, "project-replace", &changes, None)
+            .expect("valid all-text project replace")
+            .expect("project-replace sparse shape");
+        assert_eq!(sparse.len(), 3);
+        let mut mixed = changes;
+        mixed.push(rename("Renamed"));
+        assert!(
+            sparse_project_replace_delta(&project, "project-replace", &mixed, None)
+                .expect("mixed plan is valid for generic fallback")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn mixed_payloads_retain_generic_candidate_validation() {
+        let project = project();
+        let mut plan = draft(CanonicalPlanChange::TextEdit {
+            source: CanonicalSourceIdentity::Script {
+                story_id: "story".into(),
+            },
+            range: RefactorTextRange {
+                start_utf8_byte: 15,
+                end_utf8_byte: 17,
+            },
+            expected_text: "42".into(),
+            replacement_text: "84".into(),
+        });
+        plan.changes.push(CanonicalPlanDraftChange {
+            key: "rename".into(),
+            group_key: None,
+            dependencies: Vec::new(),
+            change: rename("Start"),
+        });
+
+        let error = build_payload(plan, &project).unwrap_err();
+        assert_eq!(error.code, RefactorPlanFailureCode::InvalidPlan);
+        assert_eq!(error.message, "Passage rename is empty or has no effect.");
     }
 
     #[test]
@@ -2888,6 +4754,103 @@ mod tests {
     }
 
     #[test]
+    fn topological_entries_preserve_stable_draft_order_when_dependencies_delay_changes() {
+        let mut plan = draft(rename("Renamed"));
+        plan.changes[0].dependencies = vec!["script".into()];
+        plan.changes.push(CanonicalPlanDraftChange {
+            key: "stylesheet".into(),
+            group_key: None,
+            dependencies: Vec::new(),
+            change: CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Stylesheet {
+                    story_id: "story".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 0,
+                    end_utf8_byte: 4,
+                },
+                expected_text: "body".into(),
+                replacement_text: "html".into(),
+            },
+        });
+        plan.changes.push(CanonicalPlanDraftChange {
+            key: "script".into(),
+            group_key: None,
+            dependencies: Vec::new(),
+            change: CanonicalPlanChange::TextEdit {
+                source: CanonicalSourceIdentity::Script {
+                    story_id: "story".into(),
+                },
+                range: RefactorTextRange {
+                    start_utf8_byte: 6,
+                    end_utf8_byte: 12,
+                },
+                expected_text: "answer".into(),
+                replacement_text: "result".into(),
+            },
+        });
+        plan.changes.push(CanonicalPlanDraftChange {
+            key: "start".into(),
+            group_key: None,
+            dependencies: vec!["first".into()],
+            change: CanonicalPlanChange::SetStartPassage {
+                story_id: "story".into(),
+                before_passage_id: "start".into(),
+                after_passage_id: "removed".into(),
+            },
+        });
+
+        let first = build_payload(plan.clone(), &project()).expect("valid plan");
+        let second = build_payload(plan, &project()).expect("same valid plan");
+        let order = first
+            .entries
+            .iter()
+            .map(|entry| entry.id.split('-').nth(1).expect("ordinal"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(order, ["00000001", "00000002", "00000000", "00000003"]);
+        assert_eq!(
+            first
+                .entries
+                .iter()
+                .map(|entry| &entry.id)
+                .collect::<Vec<_>>(),
+            second
+                .entries
+                .iter()
+                .map(|entry| &entry.id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn topological_entries_keep_a_large_independent_plan_in_input_order() {
+        let seed = build_payload(draft(rename("Renamed")), &project())
+            .expect("valid seed")
+            .entries
+            .into_iter()
+            .next()
+            .expect("one seed entry");
+        let entries = (0..10_000)
+            .map(|index| {
+                let mut entry = seed.clone();
+                entry.id = format!("change-{index:05}");
+                entry
+            })
+            .collect::<Vec<_>>();
+
+        let ordered = topological_entries(entries).expect("independent plan is acyclic");
+
+        assert_eq!(ordered.len(), 10_000);
+        assert!(
+            ordered
+                .iter()
+                .enumerate()
+                .all(|(index, entry)| entry.id == format!("change-{index:05}"))
+        );
+    }
+
+    #[test]
     fn dependency_cycles_and_oversize_review_values_are_rejected() {
         let project = project();
         let mut cycle = draft(rename("One"));
@@ -2917,7 +4880,7 @@ mod tests {
                 name: "Huge".into(),
                 story_id: "story".into(),
                 tags: Vec::new(),
-                text: "x".repeat(MAX_REFACTOR_DETAIL_BYTES),
+                text: "x".repeat(MAX_REFACTOR_DETAIL_BYTES + 1),
             }
             .into_passage(&StoryId::new("story")),
             layout: None,
@@ -2929,6 +4892,66 @@ mod tests {
                 .code,
             RefactorPlanFailureCode::PlanTooLarge
         );
+    }
+
+    #[test]
+    fn detail_size_upper_bound_covers_control_escaping_and_keeps_ordinary_text_fast() {
+        let control_text = "\u{0000}".repeat(50_000);
+        let escaped = text_edit_review_detail(&control_text, "");
+        let escaped_page = RefactorPlanDetailPage {
+            changes: vec![escaped.clone()],
+            next_cursor: None,
+        };
+        assert!(detail_page_size_requires_exact_encoding(
+            &escaped,
+            "rp-test",
+            "d".repeat(64).as_str(),
+            false,
+        ));
+        assert!(
+            detail_page_json_upper_bound(&escaped, "rp-test", "d".repeat(64).as_str(), false)
+                >= encode(&escaped_page).unwrap().len()
+        );
+        assert_eq!(
+            validate_detail_page_sizes(
+                "rp-test",
+                "d".repeat(64).as_str(),
+                1,
+                &[CanonicalPlanEntry {
+                    id: "control".into(),
+                    group_id: None,
+                    dependencies: Vec::new(),
+                    change: CanonicalPlanChange::TextEdit {
+                        source: CanonicalSourceIdentity::Passage {
+                            story_id: "story".into(),
+                            passage_id: "start".into(),
+                        },
+                        range: RefactorTextRange {
+                            start_utf8_byte: 0,
+                            end_utf8_byte: control_text.len(),
+                        },
+                        expected_text: control_text,
+                        replacement_text: String::new(),
+                    },
+                    text_edit_span: Some(RefactorSourceSpan {
+                        encoding: RefactorRangeEncoding::Utf16CodeUnits,
+                        start: 0,
+                        end: 50_000,
+                    }),
+                }],
+            )
+            .unwrap_err()
+            .code,
+            RefactorPlanFailureCode::PlanTooLarge
+        );
+
+        let ordinary = text_edit_review_detail(&"x".repeat(50_000), &"y".repeat(50_000));
+        assert!(!detail_page_size_requires_exact_encoding(
+            &ordinary,
+            "rp-test",
+            "d".repeat(64).as_str(),
+            false,
+        ));
     }
 
     #[test]
@@ -3011,17 +5034,22 @@ mod tests {
 
         assert_eq!(payload.entries.len(), 7);
         assert!(payload.entries.iter().all(|entry| {
-            !entry.detail.change_id.is_empty() && !entry.detail.description.is_empty()
+            let detail = entry.detail(runtime().project_revision).unwrap();
+            !detail.change_id.is_empty() && !detail.description.is_empty()
         }));
         assert!(
-            serde_json::to_string(&payload.entries[6].detail)
-                .unwrap()
-                .contains("utf16-code-units")
+            serde_json::to_string(
+                &payload.entries[6]
+                    .detail(runtime().project_revision)
+                    .unwrap(),
+            )
+            .unwrap()
+            .contains("utf16-code-units")
         );
     }
 
     #[test]
-    fn detail_pages_are_count_bounded_and_summary_size_is_enforced() {
+    fn detail_pages_return_exactly_200_results_with_the_following_cursor() {
         let base = Instant::now();
         let mut store = RefactorPlanStore::default();
         let mut plan = draft(rename("Renamed"));
@@ -3051,7 +5079,14 @@ mod tests {
             .unwrap();
         assert_eq!(page.changes.len(), MAX_REFACTOR_DETAIL_CHANGES);
         assert!(encode(&page).unwrap().len() <= MAX_REFACTOR_DETAIL_BYTES);
-        assert!(page.next_cursor.is_some());
+        assert_eq!(
+            page.next_cursor,
+            Some(RefactorPlanCursor {
+                plan_id: summary.plan_id.clone(),
+                plan_digest: summary.plan_digest.clone(),
+                position: MAX_REFACTOR_DETAIL_CHANGES,
+            })
+        );
 
         let mut oversize_summary = draft(rename("Again"));
         oversize_summary.operation_kind = "x".repeat(MAX_REFACTOR_SUMMARY_BYTES);
@@ -3061,6 +5096,62 @@ mod tests {
                 .unwrap_err()
                 .code,
             RefactorPlanFailureCode::PlanTooLarge
+        );
+    }
+
+    #[test]
+    fn detail_pages_use_a_smaller_byte_bounded_prefix_and_preserve_cursor_digest_checks() {
+        let base = Instant::now();
+        let mut store = RefactorPlanStore::default();
+        let mut plan = draft(rename("Renamed"));
+        plan.changes = (0..3)
+            .map(|index| CanonicalPlanDraftChange {
+                key: format!("large-add-{index}"),
+                group_key: None,
+                dependencies: Vec::new(),
+                change: CanonicalPlanChange::AddPassage {
+                    story_id: "story".into(),
+                    passage: PassageSnapshot {
+                        id: format!("large-added-{index}"),
+                        layout: None,
+                        name: format!("Large added {index}"),
+                        story_id: "story".into(),
+                        tags: Vec::new(),
+                        text: "x".repeat(MAX_REFACTOR_DETAIL_BYTES / 2),
+                    }
+                    .into_passage(&StoryId::new("story")),
+                    layout: None,
+                },
+            })
+            .collect();
+        let summary = store.insert(plan, &project(), clock(base, 0)).unwrap();
+        let page = store
+            .detail_page(&summary.first_detail_cursor, clock(base, 1))
+            .unwrap();
+        let next_cursor = page.next_cursor.clone().expect("smaller page cursor");
+
+        assert_eq!(page.changes.len(), 1);
+        assert!(encode(&page).unwrap().len() <= MAX_REFACTOR_DETAIL_BYTES);
+        assert_eq!(next_cursor.position, 1);
+        let next_page = store.detail_page(&next_cursor, clock(base, 2)).unwrap();
+        let two_details = RefactorPlanDetailPage {
+            changes: vec![page.changes[0].clone(), next_page.changes[0].clone()],
+            next_cursor: Some(RefactorPlanCursor {
+                plan_id: summary.plan_id.clone(),
+                plan_digest: summary.plan_digest.clone(),
+                position: 2,
+            }),
+        };
+        assert!(encode(&two_details).unwrap().len() > MAX_REFACTOR_DETAIL_BYTES);
+
+        let mut tampered = next_cursor;
+        tampered.plan_digest.push('0');
+        assert_eq!(
+            store
+                .detail_page(&tampered, clock(base, 3))
+                .unwrap_err()
+                .code,
+            RefactorPlanFailureCode::DigestMismatch
         );
     }
 

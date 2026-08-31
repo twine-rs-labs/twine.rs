@@ -5,7 +5,10 @@ import type {
 } from './twine-wasm-protocol';
 import type {TwineWasmProjectSession as TwineWasmProjectSessionType} from './pkg/twine_wasm';
 import type {TwineWasmProjectBootstrap as TwineWasmProjectBootstrapType} from './pkg/twine_wasm';
-import {isPassageRenameRequestTooLarge} from '../refactor-limits';
+import {
+	isPassageRenameRequestTooLarge,
+	isProjectReplaceRequestTooLarge
+} from '../refactor-limits';
 
 let wasmReady: Promise<void> | undefined;
 let SessionConstructor:
@@ -383,6 +386,56 @@ async function handleRequest(
 				rustStartedAtEpochMs = epochNow();
 				result = {
 					cancelled: entry.session.cancel_passage_rename_plan(request.task)
+				};
+				rustFinishedAtEpochMs = epochNow();
+				refactorPlanningTaskOwners.delete(request.task.taskId);
+				break;
+			}
+
+			case 'beginProjectReplacePlan': {
+				if (isProjectReplaceRequestTooLarge(request.request)) {
+					result = {
+						failure: {
+							code: 'plan-too-large',
+							message:
+								'Project replace request strings exceed the 64 KiB limit.'
+						},
+						type: 'failure'
+					};
+					break;
+				}
+				const entry = ensureSession(request.sessionId, request.revision);
+				ensureRefactorRuntimeEpoch(entry, request.refactorRuntimeEpoch);
+				rustStartedAtEpochMs = epochNow();
+				result = entry.session.begin_project_replace_plan(request.request);
+				if ((result as {type?: string}).type === 'begun')
+					refactorPlanningTaskOwners.set(
+						(result as {task: {taskId: string}}).task.taskId,
+						{instanceId: entry.instanceId, sessionId: request.sessionId}
+					);
+				rustFinishedAtEpochMs = epochNow();
+				break;
+			}
+			case 'continueProjectReplacePlan': {
+				const entry = taskSession(request.sessionId, request.task.taskId);
+				if (!entry) {
+					result = {type: 'cancelled'};
+					break;
+				}
+				rustStartedAtEpochMs = epochNow();
+				result = entry.session.continue_project_replace_plan(request.task);
+				rustFinishedAtEpochMs = epochNow();
+				if ((result as {type?: string}).type !== 'pending')
+					refactorPlanningTaskOwners.delete(request.task.taskId);
+				break;
+			}
+			case 'cancelProjectReplacePlan': {
+				const entry = taskSession(request.sessionId, request.task.taskId);
+				rustStartedAtEpochMs = epochNow();
+				result = {
+					cancelled: entry
+						? entry.session.cancel_project_replace_plan(request.task)
+						: false
 				};
 				rustFinishedAtEpochMs = epochNow();
 				refactorPlanningTaskOwners.delete(request.task.taskId);

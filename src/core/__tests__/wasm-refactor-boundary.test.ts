@@ -9,7 +9,7 @@ describe('generated WASM refactor boundary', () => {
 	it('plans multiple chunks then applies a compact Rust-produced passage rename batch', () => {
 		const story = fakeStory(0);
 		story.id = 'wasm-refactor-story';
-		story.passages = Array.from({length: 129}, (_, index) =>
+		story.passages = Array.from({length: 517}, (_, index) =>
 			fakePassage({
 				id: `passage-${index}`,
 				name: index === 0 ? 'Target' : `Passage ${index}`,

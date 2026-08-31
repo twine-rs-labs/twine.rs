@@ -35,6 +35,8 @@ import type {RefactorPlanCursor} from './bindings/RefactorPlanCursor';
 import type {RefactorPlanDetailResult} from './bindings/RefactorPlanDetailResult';
 import type {PlanPassageRenameRequest} from './bindings/PlanPassageRenameRequest';
 import type {PlanPassageRenameResult} from './bindings/PlanPassageRenameResult';
+import type {PlanProjectReplaceRequest} from './bindings/PlanProjectReplaceRequest';
+import type {PlanProjectReplaceResult} from './bindings/PlanProjectReplaceResult';
 import type {GraphProjectionQuery} from './graph-projection';
 import {
 	assetKindForPath,
@@ -68,7 +70,7 @@ import {
 	subscribeProjectStoryHydration
 } from '../store/project-hydration';
 import {normalizeStoryIndexOptions} from './story-index';
-import type {CoreBridgeMode} from './wasm/performance';
+import type {CoreBridgeMetric, CoreBridgeMode} from './wasm/performance';
 import {
 	CoreSessionMutationResult,
 	WasmCoreWorkerClient,
@@ -107,7 +109,10 @@ import {
 	RefactorReviewModel,
 	type RefactorReviewModelSnapshot
 } from './refactor-review-model';
-import {isPassageRenameRequestTooLarge} from './refactor-limits';
+import {
+	isPassageRenameRequestTooLarge,
+	isProjectReplaceRequestTooLarge
+} from './refactor-limits';
 import {RefactorRuntimeWriterContext} from './refactor-runtime-writer';
 import {
 	createPersistenceCompletion,
@@ -330,6 +335,14 @@ export interface CoreProjectHost {
 			signal?: AbortSignal;
 		}
 	): Promise<PlanPassageRenameResult>;
+	planProjectReplace(
+		storyId: string,
+		request: PlanProjectReplaceRequest,
+		options?: {
+			onProgress?: (result: PlanProjectReplaceResult) => void | Promise<void>;
+			signal?: AbortSignal;
+		}
+	): Promise<PlanProjectReplaceResult>;
 	retryStoryPersistence(target: CorePersistenceTarget): Promise<boolean>;
 	admitProjectStories(
 		stories: StoryWithDocuments[],
@@ -550,6 +563,9 @@ type CoreProjectSessionClient = Pick<
 	beginPassageRenamePlan?: WasmCoreWorkerClient['beginPassageRenamePlan'];
 	continuePassageRenamePlan?: WasmCoreWorkerClient['continuePassageRenamePlan'];
 	cancelPassageRenamePlan?: WasmCoreWorkerClient['cancelPassageRenamePlan'];
+	beginProjectReplacePlan?: WasmCoreWorkerClient['beginProjectReplacePlan'];
+	continueProjectReplacePlan?: WasmCoreWorkerClient['continueProjectReplacePlan'];
+	cancelProjectReplacePlan?: WasmCoreWorkerClient['cancelProjectReplacePlan'];
 	queryRefactorPlanDetail?: WasmCoreWorkerClient['queryRefactorPlanDetail'];
 	abortProjectBootstrap?: WasmCoreWorkerClient['abortProjectBootstrap'];
 	dispose?(): void;
@@ -1484,6 +1500,37 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 		storyId: string,
 		request: RefactorPlanApplyRequest
 	): Promise<RefactorPlanApplyResult> {
+		return this.applyRefactorPlanWithPersistence(
+			storyId,
+			request,
+			'save',
+			true
+		);
+	}
+
+	// Performance-only: preserve the model, runtime, receipt, renderer, history,
+	// and review path while excluding project-folder persistence from the metric.
+	async applyModelCommit(
+		storyId: string,
+		request: RefactorPlanApplyRequest,
+		options?: {onWorkerMetric?: (metric: CoreBridgeMetric) => void}
+	): Promise<RefactorPlanApplyResult> {
+		return this.applyRefactorPlanWithPersistence(
+			storyId,
+			request,
+			'skip',
+			false,
+			options
+		);
+	}
+
+	private async applyRefactorPlanWithPersistence(
+		storyId: string,
+		request: RefactorPlanApplyRequest,
+		persistenceMode: 'save' | 'skip',
+		persistenceBarrier: boolean,
+		options?: {onWorkerMetric?: (metric: CoreBridgeMetric) => void}
+	): Promise<RefactorPlanApplyResult> {
 		if (
 			!this.wasmClient.applyRefactorPlan ||
 			!this.wasmClient.syncRefactorRuntime
@@ -1505,7 +1552,7 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			};
 		}
 		const runtimeLease = await this.refactorRuntime.acquireLease();
-		let persistence: Promise<void> | undefined;
+		let persistenceCompletion: Promise<void> | undefined;
 		let appliedBatch: PatchBatch | undefined;
 		let result: RefactorPlanApplyResult;
 		try {
@@ -1517,12 +1564,20 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 				if ('failure' in synchronized)
 					return {failure: synchronized.failure, type: 'failure'};
 				const {epoch, revision} = synchronized;
-				const result = await this.wasmClient.applyRefactorPlan!(
-					this.sessionId,
-					request,
-					epoch,
-					revision
-				);
+				const result = await (options
+					? this.wasmClient.applyRefactorPlan!(
+							this.sessionId,
+							request,
+							epoch,
+							revision,
+							options
+						)
+					: this.wasmClient.applyRefactorPlan!(
+							this.sessionId,
+							request,
+							epoch,
+							revision
+						));
 
 				if (result.type === 'applied') {
 					const receiptEdits = result.receipt?.textEdits ?? [];
@@ -1560,8 +1615,8 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 								result.revision,
 								result.status,
 								undefined,
-								'save',
-								true
+								persistenceMode,
+								persistenceBarrier
 							);
 							throw new WorkbenchReceiptDeliveryError({
 								storyId: first.source.storyId,
@@ -1576,11 +1631,15 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 						result.revision,
 						result.status,
 						undefined,
-						'save',
-						true
+						persistenceMode,
+						persistenceBarrier
 					);
 					this.recordHistoryEffect(undefined);
-					persistence = this.awaitPersistenceCompletion(result.batch);
+					if (persistenceBarrier) {
+						persistenceCompletion = this.awaitPersistenceCompletion(
+							result.batch
+						);
+					}
 					appliedBatch = result.batch;
 					this.onRefactorCommitted?.(storyId);
 					return {
@@ -1596,9 +1655,9 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 			runtimeLease.release();
 		}
 		// The commit is visible and editor/runtime barriers are open before waiting.
-		if (persistence) {
+		if (persistenceCompletion) {
 			try {
-				await persistence;
+				await persistenceCompletion;
 				this.clearFailedPersistenceThrough(appliedBatch!);
 			} catch (error) {
 				// A refactor is one durable document transaction: retry every still-current
@@ -1712,6 +1771,107 @@ export class StoreCoreProjectHost implements CoreProjectHost {
 					await cancel();
 				} catch {
 					// Preserve the original planning/callback/yield failure.
+				}
+			}
+		}
+	}
+
+	async planProjectReplace(
+		storyId: string,
+		request: PlanProjectReplaceRequest,
+		options: {
+			onProgress?: (result: PlanProjectReplaceResult) => void | Promise<void>;
+			signal?: AbortSignal;
+		} = {}
+	): Promise<PlanProjectReplaceResult> {
+		if (request.storyId !== storyId)
+			return {
+				type: 'failure',
+				failure: {
+					code: 'invalid-plan',
+					message: 'Project replace request does not match its routed story.'
+				}
+			};
+		if (isProjectReplaceRequestTooLarge(request))
+			return {
+				type: 'failure',
+				failure: {
+					code: 'plan-too-large',
+					message:
+						'The project replace request exceeds the 64 KiB request limit.'
+				}
+			};
+		if (
+			!this.wasmClient.syncRefactorRuntime ||
+			!this.wasmClient.beginProjectReplacePlan ||
+			!this.wasmClient.continueProjectReplacePlan ||
+			!this.wasmClient.cancelProjectReplacePlan
+		)
+			throw new Error(
+				'The Rust project-replace planning boundary is unavailable.'
+			);
+		let barrier: WorkbenchStoryMutationBarrier;
+		try {
+			barrier = await workbenchBufferCoordinator.acquireStoriesMutationBarrier([
+				...this.sessionOwnedDocumentStories
+			]);
+		} catch {
+			return {
+				type: 'failure',
+				failure: {
+					code: 'buffer-changed',
+					message: 'Workbench buffers could not be flushed for refactoring.'
+				}
+			};
+		}
+		const runtimeLease = await this.refactorRuntime.acquireLease();
+		let task: {taskId: string} | undefined;
+		let cancellationAttempted = false;
+		try {
+			const begun = await this.enqueueMutation(async () => {
+				const synchronized = await this.syncStableRefactorRuntime(
+					storyId,
+					barrier
+				);
+				if ('failure' in synchronized)
+					return {type: 'failure', failure: synchronized.failure} as const;
+				return this.wasmClient.beginProjectReplacePlan!(
+					this.sessionId,
+					request,
+					synchronized.epoch,
+					synchronized.revision
+				);
+			});
+			if (begun.type !== 'begun')
+				return {type: 'failure', failure: begun.failure};
+			task = begun.task;
+		} finally {
+			barrier.release();
+			runtimeLease.release();
+		}
+		let completed = false;
+		try {
+			for (;;) {
+				if (options.signal?.aborted) {
+					cancellationAttempted = true;
+					await this.wasmClient.cancelProjectReplacePlan(this.sessionId, task!);
+					return {type: 'cancelled'};
+				}
+				const result = await this.wasmClient.continueProjectReplacePlan(
+					this.sessionId,
+					task!
+				);
+				if (result.type !== 'pending') completed = true;
+				await options.onProgress?.(result);
+				if (result.type !== 'pending') return result;
+				await yieldRefactorPlannerTask();
+			}
+		} finally {
+			if (task && !completed && !cancellationAttempted) {
+				try {
+					await this.wasmClient.cancelProjectReplacePlan(this.sessionId, task);
+				} catch {
+					/* preserve planning failure */
 				}
 			}
 		}
@@ -4161,6 +4321,26 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 	}
 
 	applyRefactorPlan(storyId: string, request: RefactorPlanApplyRequest) {
+		return this.applyRefactorPlanThroughHost(storyId, request, host =>
+			host.applyRefactorPlan(storyId, request)
+		);
+	}
+
+	applyModelCommit(
+		storyId: string,
+		request: RefactorPlanApplyRequest,
+		options?: {onWorkerMetric?: (metric: CoreBridgeMetric) => void}
+	) {
+		return this.applyRefactorPlanThroughHost(storyId, request, host =>
+			host.applyModelCommit(storyId, request, options)
+		);
+	}
+
+	private applyRefactorPlanThroughHost(
+		storyId: string,
+		request: RefactorPlanApplyRequest,
+		apply: (host: StoreCoreProjectHost) => Promise<RefactorPlanApplyResult>
+	) {
 		const evicted = (): RefactorPlanApplyResult => ({
 			failure: {
 				code: 'plan-evicted',
@@ -4211,7 +4391,7 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 		this.admittedRefactorApplies.add(operation);
 		void (async () => {
 			try {
-				const result = await host.applyRefactorPlan(storyId, request);
+				const result = await apply(host);
 				if (result.type === 'applied') this.closeRefactorReview(storyId);
 				resolve(result);
 			} catch (error) {
@@ -4346,6 +4526,60 @@ export class ProjectScopedCoreProjectHost implements CoreProjectHost {
 				if (result.type === 'complete') {
 					this.refactorReviewForStory(storyId).captureSummary(result.summary);
 				}
+			}
+		);
+	}
+
+	planProjectReplace(
+		storyId: string,
+		request: PlanProjectReplaceRequest,
+		options?: {
+			onProgress?: (result: PlanProjectReplaceResult) => void | Promise<void>;
+			signal?: AbortSignal;
+		}
+	) {
+		if (request.storyId !== storyId)
+			return Promise.resolve({
+				type: 'failure',
+				failure: {
+					code: 'invalid-plan',
+					message: 'Project replace request does not match its routed story.'
+				}
+			} satisfies PlanProjectReplaceResult);
+		if (isProjectReplaceRequestTooLarge(request))
+			return Promise.resolve({
+				type: 'failure',
+				failure: {
+					code: 'plan-too-large',
+					message:
+						'The project replace request exceeds the 64 KiB request limit.'
+				}
+			} satisfies PlanProjectReplaceResult);
+		const host = this.hostForStory(storyId);
+		if (
+			!host ||
+			this.replacementGateHeldForStory(storyId) ||
+			this.replacementGateHeld(host)
+		)
+			return Promise.resolve({type: 'cancelled'} as const);
+		return this.trackRefactorLifecycleOperation<PlanProjectReplaceResult>(
+			storyId,
+			host,
+			async signal => {
+				const combined = combineAbortSignals(signal, options?.signal);
+				try {
+					return await host.planProjectReplace(storyId, request, {
+						...options,
+						signal: combined.signal
+					});
+				} finally {
+					combined.dispose();
+				}
+			},
+			() => ({type: 'cancelled'}) as PlanProjectReplaceResult,
+			result => {
+				if (result.type === 'complete')
+					this.refactorReviewForStory(storyId).captureSummary(result.summary);
 			}
 		);
 	}
@@ -5554,6 +5788,11 @@ export function coreProjectHostPerformanceHarness() {
 	return {
 		applyRefactorPlan: (storyId: string, request: RefactorPlanApplyRequest) =>
 			performanceHarnessHost!.applyRefactorPlan(storyId, request),
+		applyModelCommit: (
+			storyId: string,
+			request: RefactorPlanApplyRequest,
+			options?: {onWorkerMetric?: (metric: CoreBridgeMetric) => void}
+		) => performanceHarnessHost!.applyModelCommit(storyId, request, options),
 		closeRefactorReview: (storyId: string) =>
 			performanceHarnessHost!.closeRefactorReview(storyId),
 		planPassageRename: (
@@ -5564,6 +5803,14 @@ export function coreProjectHostPerformanceHarness() {
 				signal?: AbortSignal;
 			}
 		) => performanceHarnessHost!.planPassageRename(storyId, request, options),
+		planProjectReplace: (
+			storyId: string,
+			request: PlanProjectReplaceRequest,
+			options?: {
+				onProgress?: (result: PlanProjectReplaceResult) => void | Promise<void>;
+				signal?: AbortSignal;
+			}
+		) => performanceHarnessHost!.planProjectReplace(storyId, request, options),
 		performanceProbeWorkerJs: (action: 'release' | 'retain', bytes?: number) =>
 			performanceHarnessHost!.performanceProbeWorkerJs(action, bytes),
 		queryDiagnosticsSummaryAsync: (
@@ -5615,6 +5862,7 @@ const coreProjectHostFacadeMethods: ReadonlyArray<keyof CoreProjectHost> = [
 	'initializeHydratedProject',
 	'isDirty',
 	'planPassageRename',
+	'planProjectReplace',
 	'queryAssetsPageAsync',
 	'queryBacklinksPageAsync',
 	'queryContentsPageAsync',
