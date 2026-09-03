@@ -2,7 +2,7 @@
 
 Status: active
 Owner: repository maintainers
-Last verified: 2026-08-30
+Last verified: 2026-09-03
 Source of truth: unfinished repository outcomes
 
 This directory contains only unfinished work. Completed implementation plans
@@ -17,14 +17,12 @@ belong in `../archive/completed-plans/`.
 ## Priority order
 
 1. [Performance](./performance.md)
-2. [Safe project-wide navigation and refactoring](./safe-project-refactoring.md)
-3. [Product depth and legacy retirement](./product.md)
-4. [Post-beta release validation](./release.md)
+2. [Product depth and legacy retirement](./product.md)
+3. [Post-beta release validation](./release.md)
 
 Performance is an active blocking track. Marginal budget misses are not
 normalized away: they remain failed regression evidence until a clean candidate
-passes, and evidence-selected owners receive bounded optimization work. Safe
-refactoring proceeds only while its own 10k/50k performance gates remain green.
+passes, and evidence-selected owners receive bounded optimization work.
 
 Release validation moves ahead of product work whenever a release candidate is
 being prepared. A current actionable dependency or security finding can also

@@ -10,34 +10,7 @@ import {
 } from '../../../../test-util';
 import {PassageActions, PassageActionsProps} from '../passage-actions';
 
-const mockCloseBoundary = jest.fn();
-
 jest.mock('../../../../components/passage/rename-passage-button');
-jest.mock('../../../../components/passage/passage-rename-review', () => ({
-	PassageRenameReview: ({
-		afterName,
-		onClose
-	}: {
-		afterName: string;
-		onClose: () => void;
-	}) => (
-		<div data-testid="passage-rename-review">
-			{afterName}
-			<button onClick={onClose}>close review</button>
-		</div>
-	)
-}));
-jest.mock('../use-passage-rename-review', () => ({
-	usePassageRenameReview: () => ({
-		applying: false,
-		closeBoundary: mockCloseBoundary,
-		handleApply: jest.fn(),
-		handleNextPage: jest.fn(),
-		handlePreviousPage: jest.fn(),
-		handleRetry: jest.fn(),
-		showPreviousPage: false
-	})
-}));
 
 const TestPassageActions: React.FC<Partial<PassageActionsProps>> = props => {
 	const {stories} = useStoriesContext();
@@ -47,6 +20,7 @@ const TestPassageActions: React.FC<Partial<PassageActionsProps>> = props => {
 			getCenter={() => ({left: 0, top: 0})}
 			onEditPassages={jest.fn()}
 			onOpenFuzzyFinder={jest.fn()}
+			onRenamePassage={jest.fn()}
 			story={stories[0]}
 			{...props}
 		/>
@@ -83,24 +57,28 @@ describe('<PassageActions>', () => {
 		).toBeInTheDocument();
 	});
 
-	it('opens a passage rename review instead of immediately renaming a passage', async () => {
+	it('forwards a passage rename intent without immediately renaming it', async () => {
 		const story = fakeStory(1);
+		const onRenamePassage = jest.fn();
 
 		story.passages[0].selected = true;
-		await renderComponent({story}, {stories: [story]});
+		await renderComponent({onRenamePassage, story}, {stories: [story]});
 		fireEvent.click(
 			screen.getByText(`mock-rename-passage-button-${story.passages[0].id}`)
 		);
-		expect(screen.getByTestId('passage-rename-review')).toHaveTextContent(
-			'mock-new-passage-name'
+		expect(onRenamePassage).toHaveBeenCalledWith(
+			'mock-new-passage-name',
+			story.passages[0],
+			expect.any(Function)
 		);
 		expect(
 			screen.getByTestId(`passage-${story.passages[0].id}`).dataset.name
 		).toBe(story.passages[0].name);
 	});
 
-	it('releases review ownership and restores focus after review closes', async () => {
+	it('provides route ownership with a callback that restores toolbar focus', async () => {
 		const story = fakeStory(1);
+		const onRenamePassage = jest.fn();
 		story.passages[0].selected = true;
 		const requestAnimationFrameSpy = jest
 			.spyOn(window, 'requestAnimationFrame')
@@ -108,13 +86,12 @@ describe('<PassageActions>', () => {
 				callback(0);
 				return 1;
 			});
-		await renderComponent({story}, {stories: [story]});
+		await renderComponent({onRenamePassage, story}, {stories: [story]});
 		const renameButton = screen.getByText(
 			`mock-rename-passage-button-${story.passages[0].id}`
 		);
 		fireEvent.click(renameButton);
-		fireEvent.click(screen.getByRole('button', {name: 'close review'}));
-		expect(mockCloseBoundary).toHaveBeenCalled();
+		(onRenamePassage.mock.calls[0][2] as () => void)();
 		expect(renameButton).toHaveFocus();
 		requestAnimationFrameSpy.mockRestore();
 	});

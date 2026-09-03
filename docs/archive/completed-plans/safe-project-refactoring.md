@@ -1,11 +1,26 @@
 # Safe project-wide navigation and refactoring
 
-Status: active
+Status: completed
 Owner: core, product, and frontend maintainers
-Last verified: 2026-08-31
+Last verified: 2026-09-03
 Source of truth: Rust project-session queries and commands, workbench navigation,
 Diagnostics, Find/Replace, the existing application command registry, and
 unified undo/redo
+Current behavior: [Current development status](../../status/current.md)
+Deferred semantic-provider work:
+[Product depth and legacy retirement](../../roadmap/product.md)
+
+Completion record: work orders 0 through 5 are implemented. The final
+contextual-command work landed with strengthened browser, PWA, and packaged
+Electron acceptance coverage. The existing clean 10k/50k refactor measurements
+remain the performance record because the later changes affected acceptance-test
+sources only, not the production application or performance harness; no
+performance rerun was performed for archival.
+
+Format-specific semantic reference and definition providers are not part of
+this completed scope. The shared contracts retain explicit capability and
+provenance boundaries for future providers, which are tracked as product-depth
+work rather than as another safe-refactoring milestone.
 
 ## Objective
 
@@ -298,8 +313,9 @@ precondition still holds.
 - Every location carries story and passage identity, revision, explicitly
   encoded source span, stable result key, and provider/capability provenance.
 - Passage targets come first. Variables, hooks, macros, and custom semantics
-  require exact provider contracts. Textual occurrence search remains available
-  but is not labelled a semantic reference query.
+  require exact provider contracts and belong to future product-depth work.
+  Textual occurrence search remains available but is not labelled a semantic
+  reference query.
 - Go to Passage remains the generic fallback. Go to Definition never guesses.
 
 ### 4. Plan-backed diagnostic fixes
@@ -404,6 +420,7 @@ precondition still holds.
 
 - Arbitrary evaluation or mutation in the Runtime Debugger.
 - Best-effort rewriting of unknown story-format syntax.
+- Implementing format-specific semantic reference or definition providers.
 - Per-source revision optimization in v1.
 - A language-server protocol or plugin API without a concrete second consumer.
 - Treating refactoring as a speculative fix for unattributed Electron memory.

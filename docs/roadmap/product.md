@@ -2,7 +2,7 @@
 
 Status: active
 Owner: product and frontend maintainers
-Last verified: 2026-08-24
+Last verified: 2026-09-03
 Source of truth: unfinished primary-product behavior
 
 ## Outcomes
@@ -12,6 +12,15 @@ Source of truth: unfinished primary-product behavior
 - Keep debugger controls for state mutation, arbitrary evaluation, and
   additional story-format development hooks outside the read-only protocol
   until each command has an explicit capability and lifecycle contract.
+
+### Story-format semantic tooling
+
+- Keep format-specific reference and definition support for variables, hooks,
+  macros, and custom syntax separate from the completed safe project-refactoring
+  infrastructure.
+- Add semantic navigation only through an exact-version provider with explicit
+  capability revision and provenance. Unsupported formats continue to report
+  bounded `standard-links-only` or `unsupported` outcomes rather than guessing.
 
 ### Build and export depth
 
@@ -43,6 +52,8 @@ Source of truth: unfinished primary-product behavior
 
 - Primary workflows do not open legacy editor or settings surfaces.
 - Preview/debug exposes the supported runtime inspection contract.
+- Format-specific semantic navigation is exact-version and capability-bound;
+  unsupported formats continue to report their limited coverage explicitly.
 - Desktop Build either embeds every supported referenced medium or reports why
   it remains external; browser mode cannot imply that capability.
 - Persisted product mutations pass the core-boundary guard.

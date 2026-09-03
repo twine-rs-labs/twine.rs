@@ -13,6 +13,7 @@ import {
 } from '../../components/design-system';
 import {VisibleWhitespace} from '../../components/visible-whitespace';
 import {PassageReferencesDialog} from '../../components/passage/passage-references-dialog';
+import {useAppCommandContribution} from '../../components/app-shell';
 import {
 	assetManagerViewModel,
 	contentsViewModel,
@@ -1387,6 +1388,9 @@ export const StoryWorkspaceShell: React.FC<
 	const [definitionStatus, setDefinitionStatus] = React.useState<string>();
 	const definitionRequestGeneration = React.useRef(0);
 	const referenceRevealGeneration = React.useRef(0);
+	const referenceFocusRestore = React.useRef<(() => void) | undefined>(
+		undefined
+	);
 	const semanticNavigationMounted = React.useRef(true);
 	const semanticNavigationStoryId = React.useRef(story.id);
 	const referenceTargetIdRef = React.useRef(referenceTargetId);
@@ -1425,6 +1429,7 @@ export const StoryWorkspaceShell: React.FC<
 	React.useEffect(() => {
 		setDefinitionStatus(undefined);
 		setReferenceTargetId(undefined);
+		referenceFocusRestore.current = undefined;
 	}, [story.id]);
 	const highlightExtensionPassages = React.useCallback(
 		(passageIds: string[]) => {
@@ -2085,6 +2090,9 @@ export const StoryWorkspaceShell: React.FC<
 		referenceRevealGeneration.current += 1;
 		referenceTargetIdRef.current = undefined;
 		setReferenceTargetId(undefined);
+		const restoreFocus = referenceFocusRestore.current;
+		referenceFocusRestore.current = undefined;
+		restoreFocus?.();
 	}
 
 	function handleLocalBufferChange() {
@@ -2164,6 +2172,28 @@ export const StoryWorkspaceShell: React.FC<
 	function handleRevealReferenceInGraph(location: CorePassageLocation) {
 		return revealReference(location, onRevealPassageInGraph);
 	}
+
+	useAppCommandContribution('story-edit.workspace', [
+		{
+			contextKey: `${story.id}:${selection.passage?.id ?? 'none'}:${coreProjectHost.sessionStatus(story.id).revision}`,
+			disabled: !selection.passage,
+			disabledReason: selection.passage
+				? undefined
+				: 'Select a passage to find references',
+			group: 'Toolbar',
+			icon: 'search',
+			id: 'story-edit.find-references',
+			label: 'Find References',
+			priority: 20,
+			run: context => {
+				if (selection.passage) {
+					referenceRevealGeneration.current += 1;
+					referenceFocusRestore.current = context?.restoreFocus;
+					setReferenceTargetId(selection.passage.id);
+				}
+			}
+		}
+	]);
 
 	function handleGoToDefinition(name: string) {
 		const generation = ++definitionRequestGeneration.current;
@@ -2418,6 +2448,7 @@ export const StoryWorkspaceShell: React.FC<
 						index={index}
 						onFindReferences={passage => {
 							referenceRevealGeneration.current += 1;
+							referenceFocusRestore.current = undefined;
 							setReferenceTargetId(passage.id);
 						}}
 						onGoToDefinition={handleGoToDefinition}

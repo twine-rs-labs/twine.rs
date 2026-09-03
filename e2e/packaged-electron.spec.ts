@@ -901,8 +901,46 @@ test('packaged desktop navigates definitions and applies reviewed diagnostic fix
 			.getByRole('button');
 		await expect(nextPassage).toBeVisible();
 		await nextPassage.click();
-		await page.getByRole('button', {name: 'Find References'}).click();
-		const references = page.getByRole('dialog', {name: 'References to Next'});
+		await page.getByRole('button', {name: 'Command'}).click();
+		let referenceCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(referenceCommandInput).toBeFocused();
+		await referenceCommandInput.fill('Find References');
+		await expect(
+			page.getByRole('option', {name: /Find References/})
+		).toHaveAttribute('aria-selected', 'true');
+		await referenceCommandInput.press('Enter');
+		let references = page.getByRole('dialog', {name: 'References to Next'});
+
+		await expect(
+			references.getByRole('heading', {name: 'References to Next'})
+		).toBeFocused();
+		const referencesBox = await references.boundingBox();
+		const referencesViewport = await page.evaluate(() => ({
+			height: window.innerHeight,
+			width: window.innerWidth
+		}));
+		expect(referencesBox).not.toBeNull();
+		expect(referencesBox!.x + referencesBox!.width).toBeLessThanOrEqual(
+			referencesViewport.width
+		);
+		expect(referencesBox!.y + referencesBox!.height).toBeLessThanOrEqual(
+			referencesViewport.height
+		);
+		await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(
+			2
+		);
+		await page.keyboard.press('Escape');
+		await expect(references).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+		await page.getByRole('button', {name: 'Command'}).click();
+		referenceCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(referenceCommandInput).toBeFocused();
+		await referenceCommandInput.fill('Find References');
+		await expect(
+			page.getByRole('option', {name: /Find References/})
+		).toHaveAttribute('aria-selected', 'true');
+		await referenceCommandInput.press('Enter');
+		references = page.getByRole('dialog', {name: 'References to Next'});
 
 		await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(
 			2
@@ -914,6 +952,7 @@ test('packaged desktop navigates definitions and applies reviewed diagnostic fix
 		await expect(
 			page.getByRole('region', {name: 'Start', exact: true})
 		).toBeVisible();
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
 		await expect(page).toHaveURL(/offset=\d+&end=\d+/);
 
 		const definition = page
@@ -932,20 +971,64 @@ test('packaged desktop navigates definitions and applies reviewed diagnostic fix
 			.getByRole('button');
 		await expect(missingPassage).toBeVisible();
 		await missingPassage.click();
+		await page.getByRole('tab', {name: 'Story', exact: true}).click();
+		await page.keyboard.press('Delete');
+		await expect(missingPassage).toBeVisible();
 		await page.getByRole('tab', {name: 'Passage', exact: true}).click();
-		await page.getByRole('button', {name: 'Delete', exact: true}).click();
+		await page.keyboard.press('Delete');
+		await expect(missingPassage).toHaveCount(0);
 		await page.getByTitle('Diagnostics').click();
 		await expect(page.getByText('broken-link').first()).toBeVisible();
-		await page.getByRole('button', {name: 'Fix All Safe'}).click();
+		await page.getByRole('button', {name: 'Command'}).click();
+		const fixCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(fixCommandInput).toBeFocused();
+		await fixCommandInput.fill('Fix All Safe');
+		await expect(
+			page.getByRole('option', {name: /Fix All Safe/})
+		).toHaveAttribute('aria-selected', 'true');
+		await fixCommandInput.press('Enter');
 		const fixReview = page.getByRole('dialog', {
 			name: 'Review Diagnostic Fixes'
 		});
+		await expect(
+			fixReview.getByRole('heading', {name: 'Review Diagnostic Fixes'})
+		).toBeFocused();
+		const fixReviewBox = await fixReview.boundingBox();
+		const fixReviewViewport = await page.evaluate(() => ({
+			height: window.innerHeight,
+			width: window.innerWidth
+		}));
+		expect(fixReviewBox).not.toBeNull();
+		expect(fixReviewBox!.x + fixReviewBox!.width).toBeLessThanOrEqual(
+			fixReviewViewport.width
+		);
+		expect(fixReviewBox!.y + fixReviewBox!.height).toBeLessThanOrEqual(
+			fixReviewViewport.height
+		);
 		await expect(fixReview.getByText('Add passage')).toBeVisible();
 		await expect(
 			fixReview.getByText('Packaged Missing', {exact: true})
 		).toBeVisible();
-		await fixReview.getByRole('button', {name: 'Apply Fixes'}).click();
+		await fixReview.getByRole('button', {name: 'Cancel'}).click();
 		await expect(fixReview).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+		await page.getByRole('button', {name: 'Command'}).click();
+		const applyFixCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(applyFixCommandInput).toBeFocused();
+		await applyFixCommandInput.fill('Fix All Safe');
+		await expect(
+			page.getByRole('option', {name: /Fix All Safe/})
+		).toHaveAttribute('aria-selected', 'true');
+		await applyFixCommandInput.press('Enter');
+		const applyFixReview = page.getByRole('dialog', {
+			name: 'Review Diagnostic Fixes'
+		});
+		await expect(
+			applyFixReview.getByRole('heading', {name: 'Review Diagnostic Fixes'})
+		).toBeFocused();
+		await applyFixReview.getByRole('button', {name: 'Apply Fixes'}).click();
+		await expect(applyFixReview).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
 		await page.getByTitle('Contents').click();
 		await expect(
 			page.getByText('Packaged Missing', {exact: true}).first()
@@ -1752,9 +1835,47 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 			'Packaged save survived the native bridge.',
 			testInfo
 		);
-		await tabWithText(page, 'Passage').click();
-		await page.getByRole('button', {name: 'Rename', exact: true}).click();
-		const renamePrompt = page.getByRole('dialog', {
+		await tabWithText(page, 'Story').click();
+		await page.getByRole('button', {name: 'Command'}).click();
+		let renameCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(renameCommandInput).toBeFocused();
+		await renameCommandInput.fill('Rename Active Passage');
+		await expect(
+			page.getByRole('option', {name: /Rename Active Passage/})
+		).toHaveAttribute('aria-selected', 'true');
+		await renameCommandInput.press('Enter');
+		let renamePrompt = page.getByRole('dialog', {
+			name: 'What should “Start” be renamed to?'
+		});
+		await expect(renamePrompt.getByRole('textbox')).toBeFocused();
+		const renamePromptBox = await renamePrompt.boundingBox();
+		const renameViewport = await page.evaluate(() => ({
+			height: window.innerHeight,
+			width: window.innerWidth
+		}));
+		expect(renamePromptBox).not.toBeNull();
+		expect(
+			Math.abs(
+				renamePromptBox!.x +
+					renamePromptBox!.width / 2 -
+					renameViewport.width / 2
+			)
+		).toBeLessThan(2);
+		await renamePrompt.getByRole('button', {name: 'Cancel'}).click();
+		await expect(renamePrompt).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+		await expect(
+			page.getByRole('region', {name: 'Start', exact: true})
+		).toBeVisible();
+		await page.getByRole('button', {name: 'Command'}).click();
+		renameCommandInput = page.getByRole('textbox', {name: 'Command'});
+		await expect(renameCommandInput).toBeFocused();
+		await renameCommandInput.fill('Rename Active Passage');
+		await expect(
+			page.getByRole('option', {name: /Rename Active Passage/})
+		).toHaveAttribute('aria-selected', 'true');
+		await renameCommandInput.press('Enter');
+		renamePrompt = page.getByRole('dialog', {
 			name: 'What should “Start” be renamed to?'
 		});
 		await renamePrompt.getByRole('textbox').fill('Packaged Start');
@@ -1762,9 +1883,13 @@ test('packaged app preserves sibling stories across full save, rename, and reope
 		const renameReview = page.getByRole('dialog', {
 			name: 'Review Passage Rename'
 		});
+		await expect(
+			renameReview.getByRole('heading', {name: 'Review Passage Rename'})
+		).toBeFocused();
 		await expect(renameReview.getByText('Rename passage')).toBeVisible();
 		await renameReview.getByRole('button', {name: 'Apply Rename'}).click();
 		await expect(renameReview).toHaveCount(0);
+		await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
 		await expect(
 			page.getByRole('region', {name: 'Packaged Start', exact: true})
 		).toBeVisible();

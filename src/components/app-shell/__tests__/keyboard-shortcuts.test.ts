@@ -1,4 +1,8 @@
-import {commandIdForKeyboardEvent, shortcutLabel} from '../keyboard-shortcuts';
+import {
+	commandIdForKeyboardEvent,
+	matchesKeyboardShortcut,
+	shortcutLabel
+} from '../keyboard-shortcuts';
 
 describe('keyboard shortcuts', () => {
 	it('labels default shortcuts with Command on macOS', () => {
@@ -64,5 +68,15 @@ describe('keyboard shortcuts', () => {
 				'mac'
 			)
 		).toBeUndefined();
+	});
+
+	it('matches contributed character keys case-insensitively', () => {
+		expect(
+			matchesKeyboardShortcut(
+				new KeyboardEvent('keydown', {key: 'k', metaKey: true}),
+				{key: 'K', primaryKey: true},
+				'mac'
+			)
+		).toBe(true);
 	});
 });

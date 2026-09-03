@@ -12,7 +12,7 @@ export type ShortcutCommandId =
 	| 'nav.new-project'
 	| 'nav.settings';
 
-interface KeyboardShortcut {
+export interface KeyboardShortcut {
 	altKey?: boolean;
 	ctrlKey?: boolean;
 	key: string;
@@ -20,6 +20,12 @@ interface KeyboardShortcut {
 	primaryKey?: boolean;
 	shiftKey?: boolean;
 }
+
+/** The shell-owned binding which opens and closes the command palette. */
+export const commandPaletteKeybinding: KeyboardShortcut = {
+	key: 'k',
+	primaryKey: true
+};
 
 const shortcuts: Record<
 	KeybindingPreset,
@@ -60,7 +66,7 @@ function currentPlatform(): Platform {
 		: 'other';
 }
 
-function editableTarget(target: EventTarget | null) {
+export function editableTarget(target: EventTarget | null) {
 	if (!(target instanceof HTMLElement)) {
 		return false;
 	}
@@ -70,6 +76,13 @@ function editableTarget(target: EventTarget | null) {
 		target.tagName === 'INPUT' ||
 		target.tagName === 'TEXTAREA' ||
 		target.tagName === 'SELECT'
+	);
+}
+
+export function dialogTarget(target: EventTarget | null) {
+	return (
+		target instanceof HTMLElement &&
+		Boolean(target.closest('[role="dialog"], [aria-modal="true"]'))
 	);
 }
 
@@ -99,17 +112,46 @@ function matchesModifier(
 	);
 }
 
-function matchesShortcut(
+export function matchesKeyboardShortcut(
 	event: KeyboardEvent,
+	shortcut: KeyboardShortcut,
+	platform = currentPlatform()
+) {
+	const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+	const shortcutKey =
+		shortcut.key.length === 1 ? shortcut.key.toLowerCase() : shortcut.key;
+
+	return key === shortcutKey && matchesModifier(event, shortcut, platform);
+}
+
+export function normalizedKeybinding(shortcut: KeyboardShortcut) {
+	const key = shortcut.key.toLocaleLowerCase();
+	const common = {
+		altKey: !!shortcut.altKey,
+		key,
+		shiftKey: !!shortcut.shiftKey
+	};
+
+	if (shortcut.primaryKey) {
+		return [
+			JSON.stringify({...common, ctrlKey: false, metaKey: true}),
+			JSON.stringify({...common, ctrlKey: true, metaKey: false})
+		];
+	}
+
+	return [
+		JSON.stringify({
+			...common,
+			ctrlKey: !!shortcut.ctrlKey,
+			metaKey: !!shortcut.metaKey
+		})
+	];
+}
+
+export function labelForShortcut(
 	shortcut: KeyboardShortcut,
 	platform: Platform
 ) {
-	const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-
-	return key === shortcut.key && matchesModifier(event, shortcut, platform);
-}
-
-function labelForShortcut(shortcut: KeyboardShortcut, platform: Platform) {
 	const modifiers: string[] = [];
 	const key =
 		shortcut.key.length === 1 ? shortcut.key.toUpperCase() : shortcut.key;
@@ -137,12 +179,19 @@ function labelForShortcut(shortcut: KeyboardShortcut, platform: Platform) {
 	return [...modifiers, key].join(' ');
 }
 
+export function keybindingForCommand(
+	commandId: ShortcutCommandId,
+	preset: KeybindingPreset
+) {
+	return shortcuts[preset][commandId];
+}
+
 export function shortcutLabel(
 	commandId: ShortcutCommandId,
 	preset: KeybindingPreset,
 	platform = currentPlatform()
 ) {
-	const shortcut = shortcuts[preset][commandId];
+	const shortcut = keybindingForCommand(commandId, preset);
 
 	return shortcut ? labelForShortcut(shortcut, platform) : undefined;
 }
@@ -152,12 +201,15 @@ export function commandIdForKeyboardEvent(
 	preset: KeybindingPreset,
 	platform = currentPlatform()
 ) {
+	if (event.isComposing) {
+		return undefined;
+	}
 	if (editableTarget(event.target)) {
 		return undefined;
 	}
 
 	for (const [commandId, shortcut] of Object.entries(shortcuts[preset])) {
-		if (shortcut && matchesShortcut(event, shortcut, platform)) {
+		if (shortcut && matchesKeyboardShortcut(event, shortcut, platform)) {
 			return commandId as ShortcutCommandId;
 		}
 	}

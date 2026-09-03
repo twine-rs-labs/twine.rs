@@ -1,4 +1,5 @@
 import * as React from 'react';
+import {useAppCommandContribution} from '../../components/app-shell';
 import {flushSync} from 'react-dom';
 import {
 	Navigate,
@@ -645,6 +646,52 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		},
 		[workspace]
 	);
+	const activePassage = story.passages.find(
+		passage => passage.id === workspace.selectedPassageId
+	);
+	const projectRevision = coreProjectHost.sessionStatus(story.id).revision;
+	useAppCommandContribution('story-edit.route', [
+		{
+			contextKey: `${story.id}:${projectRevision}`,
+			group: 'Toolbar',
+			icon: 'focus-2',
+			id: 'story-edit.go-to-passage',
+			label: 'Go to Passage',
+			priority: 20,
+			run: () => setFuzzyFinderOpen(true)
+		},
+		{
+			contextKey: `${story.id}:${projectRevision}`,
+			group: 'Toolbar',
+			icon: 'search',
+			id: 'story-edit.find-replace',
+			label: 'Find / Replace',
+			priority: 20,
+			run: () => openWorkbenchPanel('find-replace')
+		},
+		{
+			contextKey: `${story.id}:${activePassage?.id ?? 'none'}:${projectRevision}`,
+			disabled: !activePassage,
+			disabledReason: activePassage ? undefined : 'Select a passage to reveal',
+			group: 'Toolbar',
+			icon: 'file-text',
+			id: 'story-edit.reveal-active-source',
+			label: 'Reveal Active Passage in Source',
+			priority: 20,
+			run: () => activePassage && handleEditPassage(activePassage)
+		},
+		{
+			contextKey: `${story.id}:${activePassage?.id ?? 'none'}:${projectRevision}`,
+			disabled: !activePassage,
+			disabledReason: activePassage ? undefined : 'Select a passage to reveal',
+			group: 'Toolbar',
+			icon: 'binary-tree',
+			id: 'story-edit.reveal-active-graph',
+			label: 'Reveal Active Passage in Graph',
+			priority: 20,
+			run: () => activePassage && handleRevealPassageInGraph(activePassage)
+		}
+	]);
 	const bottomDrawerPanels = React.useMemo<StoryWorkbenchBottomDrawerPanel[]>(
 		() => [
 			{

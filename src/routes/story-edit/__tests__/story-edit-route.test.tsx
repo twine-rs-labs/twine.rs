@@ -1039,7 +1039,9 @@ describe('<StoryEditRoute>', () => {
 			await screen.findByTestId(`story-editor-window-${story.id}:stylesheet`)
 		).toBeInTheDocument();
 		expect(
-			screen.getByLabelText('routes.storyEdit.toolbar.stylesheet')
+			screen.getByRole('region', {
+				name: 'routes.storyEdit.toolbar.stylesheet'
+			})
 		).toBeInTheDocument();
 	});
 

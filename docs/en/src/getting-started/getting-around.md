@@ -17,8 +17,20 @@ The right side of the header can contain:
 - the _Command_ button, which opens the command palette.
 
 The command palette searches application, navigation, build, toolbar, and story
-commands. Disabled commands remain unavailable until their required story or
-selection exists.
+commands. Press <kbd>Ctrl</kbd>+<kbd>K</kbd> (or <kbd>Command</kbd>+<kbd>K</kbd>
+on macOS) to open it without leaving the focused editor. Active IME composition
+is not interrupted. While the palette is open, focus remains inside it and
+returns to the control or editor that opened it when it closes.
+
+Routes and tools contribute commands only for their mounted lifetime. The
+workbench contributes _Go to Passage_, _Find References_, _Rename Active
+Passage_, _Find / Replace_, source and graph reveals, and project _Undo_ and
+_Redo_. Diagnostics contributes source and graph reveals, _Fix All Safe_, and
+the automatic fixes that apply to the selected diagnostic. Commands that make
+sense on the current route but need another selection or capability remain
+visible with a reason; commands owned by another route are absent. If the
+story, passage, diagnostic, revision, or capability changes while the palette
+is open, the command is checked again before it can run.
 
 ## The Workspace Rail
 
@@ -49,8 +61,9 @@ Screens register only the action tabs that apply to their current context. For
 example, the workbench can expose story, passage, view, and build actions. A
 selected story or passage may enable additional controls in the active tab.
 
-The same registered actions are available to the command palette, so workflows
-do not depend on pointer access to the toolbar.
+The contextual actions listed above invoke the same review and execution flows
+as their visible controls, so those workflows do not depend on pointer access
+to the toolbar.
 
 ## The Workbench and Editor Dock
 

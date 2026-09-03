@@ -165,13 +165,48 @@ test('a fresh install can create and test a project offline', async ({
 		.getByRole('button');
 	await expect(nextPassage).toBeVisible();
 	await nextPassage.click();
-	await page.getByRole('button', {name: 'Find References'}).click();
-	const references = page.getByRole('dialog', {name: 'References to Next'});
+	await page.getByRole('button', {name: 'Command'}).click();
+	let referenceCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(referenceCommandInput).toBeFocused();
+	await referenceCommandInput.fill('Find References');
+	await expect(
+		page.getByRole('option', {name: /Find References/})
+	).toHaveAttribute('aria-selected', 'true');
+	await referenceCommandInput.press('Enter');
+	let references = page.getByRole('dialog', {name: 'References to Next'});
+	await expect(
+		references.getByRole('heading', {name: 'References to Next'})
+	).toBeFocused();
+	const referencesBox = await references.boundingBox();
+	const referencesViewport = page.viewportSize();
+	expect(referencesBox).not.toBeNull();
+	expect(referencesViewport).not.toBeNull();
+	expect(referencesBox!.x + referencesBox!.width).toBeLessThanOrEqual(
+		referencesViewport!.width
+	);
+	expect(referencesBox!.y + referencesBox!.height).toBeLessThanOrEqual(
+		referencesViewport!.height
+	);
+	await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(2);
+	await page.keyboard.press('Escape');
+	await expect(references).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await page.getByRole('button', {name: 'Command'}).click();
+	referenceCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(referenceCommandInput).toBeFocused();
+	await referenceCommandInput.fill('Find References');
+	await expect(
+		page.getByRole('option', {name: /Find References/})
+	).toHaveAttribute('aria-selected', 'true');
+	await referenceCommandInput.press('Enter');
+	references = page.getByRole('dialog', {name: 'References to Next'});
 	await expect(references.getByRole('heading', {name: 'Start'})).toHaveCount(2);
 	await references
 		.getByRole('button', {name: 'Reveal in Source'})
 		.first()
 		.click();
+	await expect(references).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
 	await expect(
 		page.getByRole('region', {name: 'Start', exact: true})
 	).toBeVisible();
@@ -181,19 +216,59 @@ test('a fresh install can create and test a project offline', async ({
 		.filter({has: page.getByText('Start', {exact: true})})
 		.getByRole('button')
 		.click();
-	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
-	await page.getByRole('button', {name: 'Rename', exact: true}).click();
+	await page.getByRole('tab', {name: 'Story', exact: true}).click();
+	await page.getByRole('button', {name: 'Command'}).click();
+	const renameCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(renameCommandInput).toBeFocused();
+	await renameCommandInput.fill('Rename Active Passage');
+	await expect(
+		page.getByRole('option', {name: /Rename Active Passage/})
+	).toHaveAttribute('aria-selected', 'true');
+	await renameCommandInput.press('Enter');
 	const renamePrompt = page.getByRole('dialog', {
 		name: 'What should “Start” be renamed to?'
 	});
-	await renamePrompt.getByRole('textbox').fill('Offline Start');
-	await renamePrompt.getByRole('button', {name: 'Save'}).click();
+	await expect(renamePrompt.getByRole('textbox')).toBeFocused();
+	const renamePromptBox = await renamePrompt.boundingBox();
+	const renameViewport = page.viewportSize();
+	expect(renamePromptBox).not.toBeNull();
+	expect(renameViewport).not.toBeNull();
+	expect(
+		Math.abs(
+			renamePromptBox!.x +
+				renamePromptBox!.width / 2 -
+				renameViewport!.width / 2
+		)
+	).toBeLessThan(2);
+	await renamePrompt.getByRole('button', {name: 'Cancel'}).click();
+	await expect(renamePrompt).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await expect(
+		page.getByRole('region', {name: 'Start', exact: true})
+	).toBeVisible();
+	await page.getByRole('button', {name: 'Command'}).click();
+	const applyRenameCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(applyRenameCommandInput).toBeFocused();
+	await applyRenameCommandInput.fill('Rename Active Passage');
+	await expect(
+		page.getByRole('option', {name: /Rename Active Passage/})
+	).toHaveAttribute('aria-selected', 'true');
+	await applyRenameCommandInput.press('Enter');
+	const applyRenamePrompt = page.getByRole('dialog', {
+		name: 'What should “Start” be renamed to?'
+	});
+	await applyRenamePrompt.getByRole('textbox').fill('Offline Start');
+	await applyRenamePrompt.getByRole('button', {name: 'Save'}).click();
 	const renameReview = page.getByRole('dialog', {
 		name: 'Review Passage Rename'
 	});
+	await expect(
+		renameReview.getByRole('heading', {name: 'Review Passage Rename'})
+	).toBeFocused();
 	await expect(renameReview.getByText('Rename passage')).toBeVisible();
 	await renameReview.getByRole('button', {name: 'Apply Rename'}).click();
 	await expect(renameReview).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
 	await expect(
 		page.getByRole('region', {name: 'Offline Start', exact: true})
 	).toBeVisible();
@@ -231,12 +306,52 @@ test('a fresh install can create and test a project offline', async ({
 		.getByRole('button');
 	await expect(offlineMissing).toBeVisible();
 	await offlineMissing.click();
+	await page.getByRole('tab', {name: 'Story', exact: true}).click();
+	await page.keyboard.press('Delete');
+	await expect(offlineMissing).toBeVisible();
 	await page.getByRole('tab', {name: 'Passage', exact: true}).click();
-	await page.getByRole('button', {name: 'Delete', exact: true}).click();
+	await page.keyboard.press('Delete');
+	await expect(offlineMissing).toHaveCount(0);
 	await page.getByTitle('Diagnostics').click();
 	await expect(page.getByText('broken-link').first()).toBeVisible();
-	await page.getByRole('button', {name: 'Fix All Safe'}).click();
-	const diagnosticFixReview = page.getByRole('dialog', {
+	await page.getByRole('button', {name: 'Command'}).click();
+	let diagnosticCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(diagnosticCommandInput).toBeFocused();
+	await diagnosticCommandInput.fill('Fix All Safe');
+	await expect(
+		page.getByRole('option', {name: /Fix All Safe/})
+	).toHaveAttribute('aria-selected', 'true');
+	await diagnosticCommandInput.press('Enter');
+	let diagnosticFixReview = page.getByRole('dialog', {
+		name: 'Review Diagnostic Fixes'
+	});
+	await expect(
+		diagnosticFixReview.getByRole('heading', {
+			name: 'Review Diagnostic Fixes'
+		})
+	).toBeFocused();
+	const diagnosticReviewBox = await diagnosticFixReview.boundingBox();
+	const diagnosticViewport = page.viewportSize();
+	expect(diagnosticReviewBox).not.toBeNull();
+	expect(diagnosticViewport).not.toBeNull();
+	expect(
+		diagnosticReviewBox!.x + diagnosticReviewBox!.width
+	).toBeLessThanOrEqual(diagnosticViewport!.width);
+	expect(
+		diagnosticReviewBox!.y + diagnosticReviewBox!.height
+	).toBeLessThanOrEqual(diagnosticViewport!.height);
+	await diagnosticFixReview.getByRole('button', {name: 'Cancel'}).click();
+	await expect(diagnosticFixReview).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
+	await page.getByRole('button', {name: 'Command'}).click();
+	diagnosticCommandInput = page.getByRole('textbox', {name: 'Command'});
+	await expect(diagnosticCommandInput).toBeFocused();
+	await diagnosticCommandInput.fill('Fix All Safe');
+	await expect(
+		page.getByRole('option', {name: /Fix All Safe/})
+	).toHaveAttribute('aria-selected', 'true');
+	await diagnosticCommandInput.press('Enter');
+	diagnosticFixReview = page.getByRole('dialog', {
 		name: 'Review Diagnostic Fixes'
 	});
 	await expect(diagnosticFixReview.getByText('Add passage')).toBeVisible();
@@ -245,6 +360,7 @@ test('a fresh install can create and test a project offline', async ({
 	).toBeVisible();
 	await diagnosticFixReview.getByRole('button', {name: 'Apply Fixes'}).click();
 	await expect(diagnosticFixReview).toHaveCount(0);
+	await expect(page.getByRole('button', {name: 'Command'})).toBeFocused();
 	await page.getByTitle('Contents').click();
 	await expect(
 		page.getByText('Offline Missing', {exact: true}).first()

@@ -2,7 +2,7 @@
 
 Status: current snapshot
 Owner: repository maintainers
-Last verified: 2026-08-31
+Last verified: 2026-09-03
 Source of truth: shipped code paths and passing local validation
 
 ## Practical assessment
@@ -13,8 +13,8 @@ and local release-mode Electron performance harness are implemented.
 
 `v0.2.0-beta.5` is the current tagged prerelease. The product remains prerelease
 software and still misses several large-project performance targets. The
-current phase prioritizes evidence-selected large-project performance work and
-safe project-wide refactoring, followed by product depth and release validation.
+current phase prioritizes evidence-selected large-project performance work,
+followed by product depth and release validation.
 
 ## Implemented foundations
 
@@ -69,6 +69,13 @@ safe project-wide refactoring, followed by product depth and release validation.
 - Entity-maintained Rust read-model caches for ordinary passage text, layout,
   tag, story-source, start-passage, undo/redo, and external text changes, with
   perf-only cache-build and touched-source attribution.
+- One typed application command registry with lifecycle-scoped route and tool
+  contributions. The palette exposes current passage navigation, references,
+  rename, project find/replace, applicable diagnostic fixes, source/graph
+  reveals, and project undo/redo through the same flows as their visible
+  controls. Commands revalidate live route, selection, revision, and capability
+  state before execution, explain disabled states, unregister on route disposal,
+  and keep modal focus, editor focus, and IME composition isolated.
 - CodeMirror 6 on every active editing surface, with a bounded per-editor
   adapter for compatible Chapbook legacy modes, commands, and toolbar
   descriptors. The exact bundled Harlowe 3.3.9 format has a lazy native CM6
@@ -163,8 +170,10 @@ The complete local 10k and 50k benchmark runs verify:
   and fails the whole request if a selected descriptor is stale, ambiguous, or
   cannot be materialized. Rename/relink, start-passage, asset, and other fixes
   that still require user or filesystem input remain visibly manual.
-  Format-specific definition/reference providers and consistent
-  command-palette exposure remain incomplete.
+- Format-specific definitions and references for variables, hooks, macros, and
+  custom syntax remain product-depth work. They require exact-version provider
+  contracts; unsupported formats continue to report bounded coverage rather
+  than guessing.
 - Some inherited compatibility UI remains outside the primary workbench.
 - Native Harlowe editing is intentionally exact-version: bundled Harlowe 1.2.4
   and 2.1.0, user-added Harlowe builds, and future Harlowe dialects use the
@@ -193,6 +202,5 @@ The complete local 10k and 50k benchmark runs verify:
 Only unfinished outcomes belong in the active roadmap:
 
 1. [`Performance`](../roadmap/performance.md)
-2. [`Safe project-wide navigation and refactoring`](../roadmap/safe-project-refactoring.md)
-3. [`Product-depth and legacy retirement`](../roadmap/product.md)
-4. [`Post-beta release validation`](../roadmap/release.md)
+2. [`Product-depth and legacy retirement`](../roadmap/product.md)
+3. [`Post-beta release validation`](../roadmap/release.md)

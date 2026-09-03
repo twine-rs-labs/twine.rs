@@ -1,8 +1,14 @@
 import classNames from 'classnames';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {useAppShellContext} from '../components/app-shell';
+import {
+	useAppCommandContribution,
+	useAppShellContext
+} from '../components/app-shell';
 import {IconButton, SegmentedControl} from '../components/design-system';
+import {PassageRenamePrompt} from '../components/passage/rename-passage-button';
+import {PassageRenameReview} from '../components/passage/passage-rename-review';
+import {useCoreProjectHost} from '../core';
 import {DialogsContextProvider} from '../dialogs';
 import {twineRsDocumentationUrl} from '../electron/shared';
 import {Passage, Story} from '../store/stories';
@@ -11,6 +17,7 @@ import {StoryEditMode} from '../routes/story-edit/workspace-state';
 import {AppActions} from './app-actions';
 import {BuildActions} from './build-actions';
 import {PassageActions} from './story-edit/passage/passage-actions';
+import {usePassageRenameReview} from './story-edit/passage/use-passage-rename-review';
 import {StoryActions} from './story-edit/story/story-actions';
 import {UndoRedoButtons} from './story-edit/undo-redo-buttons';
 import {ZoomButtons} from './story-edit/zoom-buttons';
@@ -59,6 +66,109 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 	} = props;
 	const {t} = useTranslation();
 	const appShell = useAppShellContext();
+	const coreProjectHost = useCoreProjectHost();
+	const [renamePromptPassageId, setRenamePromptPassageId] = React.useState<
+		string | undefined
+	>();
+	const [renameReview, setRenameReview] = React.useState<
+		| {
+				afterName: string;
+				passage: Passage;
+				passageId: string;
+				storyId: string;
+		  }
+		| undefined
+	>();
+	const renameFocusRestore = React.useRef<(() => void) | undefined>(undefined);
+	const selectedPassages = React.useMemo(
+		() => story.passages.filter(passage => passage.selected),
+		[story.passages]
+	);
+	const soloSelectedPassage = React.useMemo(
+		() => (selectedPassages.length === 1 ? selectedPassages[0] : undefined),
+		[selectedPassages]
+	);
+	const renamePromptPassage = React.useMemo(
+		() => story.passages.find(passage => passage.id === renamePromptPassageId),
+		[renamePromptPassageId, story.passages]
+	);
+	const restoreRenameFocus = React.useCallback(() => {
+		const restore = renameFocusRestore.current;
+		renameFocusRestore.current = undefined;
+		restore?.();
+	}, []);
+	const handleReviewApplied = React.useCallback(() => {
+		setRenameReview(undefined);
+		restoreRenameFocus();
+	}, [restoreRenameFocus]);
+	const reviewController = usePassageRenameReview(
+		renameReview,
+		handleReviewApplied
+	);
+	const closeRenameReview = React.useCallback(() => {
+		reviewController.closeBoundary();
+		setRenameReview(undefined);
+		restoreRenameFocus();
+	}, [restoreRenameFocus, reviewController.closeBoundary]);
+	const beginRenameReview = React.useCallback(
+		(name: string, passage: Passage, restoreFocus?: () => void) => {
+			if (restoreFocus) renameFocusRestore.current = restoreFocus;
+			setRenamePromptPassageId(undefined);
+			setRenameReview({
+				afterName: name,
+				passage,
+				passageId: passage.id,
+				storyId: story.id
+			});
+		},
+		[story.id]
+	);
+
+	React.useEffect(() => {
+		if (
+			(renamePromptPassageId !== undefined &&
+				renamePromptPassageId !== soloSelectedPassage?.id) ||
+			(renameReview &&
+				(renameReview.storyId !== story.id ||
+					renameReview.passage.id !== soloSelectedPassage?.id ||
+					!story.passages.some(
+						passage => passage.id === renameReview.passage.id
+					)))
+		) {
+			setRenamePromptPassageId(undefined);
+			if (renameReview) reviewController.closeBoundary();
+			setRenameReview(undefined);
+			renameFocusRestore.current = undefined;
+		}
+	}, [
+		renamePromptPassageId,
+		renameReview,
+		reviewController.closeBoundary,
+		soloSelectedPassage,
+		story.id,
+		story.passages
+	]);
+
+	useAppCommandContribution('story-edit.passage-commands', [
+		{
+			contextKey: `${story.id}:${soloSelectedPassage?.id ?? 'none'}:${coreProjectHost.sessionStatus(story.id).revision}`,
+			disabled: !soloSelectedPassage,
+			disabledReason: soloSelectedPassage
+				? undefined
+				: 'Select exactly one passage to rename',
+			group: 'Toolbar',
+			icon: 'pencil',
+			id: 'story-edit.rename-active-passage',
+			label: 'Rename Active Passage',
+			priority: 20,
+			run: context => {
+				if (soloSelectedPassage) {
+					renameFocusRestore.current = context?.restoreFocus;
+					setRenamePromptPassageId(soloSelectedPassage.id);
+				}
+			}
+		}
+	]);
 	const modeButtons = React.useMemo<
 		{
 			icon: string;
@@ -171,35 +281,53 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 		]
 	);
 	const tabs = React.useMemo(
-		() => ({
-			[t('common.passage')]: (
-				<PassageActions
-					getCenter={getCenter}
-					onEditPassages={onEditPassages}
-					onOpenFuzzyFinder={onOpenFuzzyFinder}
-					onTestPassage={onTestPassage}
-					story={story}
-					testPassagePending={testPassagePending}
-					testPassagePendingId={testPassagePendingId}
-				/>
-			),
-			[t('common.story')]: (
-				<StoryActions
-					onOpenEditorWindow={onOpenEditorWindow}
-					onOpenWorkbenchPanel={onOpenWorkbenchPanel}
-					story={story}
-				/>
-			),
-			[t('common.build')]: <BuildActions story={story} />,
+		() => [
+			{
+				content: (
+					<PassageActions
+						getCenter={getCenter}
+						onEditPassages={onEditPassages}
+						onOpenFuzzyFinder={onOpenFuzzyFinder}
+						onRenamePassage={beginRenameReview}
+						onTestPassage={onTestPassage}
+						story={story}
+						testPassagePending={testPassagePending}
+						testPassagePendingId={testPassagePendingId}
+					/>
+				),
+				id: 'passage',
+				label: t('common.passage')
+			},
+			{
+				content: (
+					<StoryActions
+						onOpenEditorWindow={onOpenEditorWindow}
+						onOpenWorkbenchPanel={onOpenWorkbenchPanel}
+						story={story}
+					/>
+				),
+				id: 'story',
+				label: t('common.story')
+			},
+			{
+				content: <BuildActions story={story} />,
+				id: 'build',
+				label: t('common.build')
+			},
 			// App-owned dialogs deliberately keep their own local dialog host. The
 			// story workbench no longer provides a dialog surface for project editing.
-			[t('common.appName')]: (
-				<DialogsContextProvider>
-					<AppActions />
-				</DialogsContextProvider>
-			)
-		}),
+			{
+				content: (
+					<DialogsContextProvider>
+						<AppActions />
+					</DialogsContextProvider>
+				),
+				id: 'app',
+				label: t('common.appName')
+			}
+		],
 		[
+			beginRenameReview,
 			getCenter,
 			onEditPassages,
 			onOpenEditorWindow,
@@ -227,5 +355,39 @@ export const StoryEditActions: React.FC<StoryEditActionsProps> = props => {
 		return () => appShell.setToolbar(undefined);
 	}, [appShell, pinnedControls, tabs]);
 
-	return null;
+	return (
+		<>
+			{renamePromptPassage && (
+				<PassageRenamePrompt
+					onCancel={() => {
+						setRenamePromptPassageId(undefined);
+						restoreRenameFocus();
+					}}
+					onRename={name => beginRenameReview(name, renamePromptPassage)}
+					open
+					passage={renamePromptPassage}
+					story={story}
+				/>
+			)}
+			{renameReview?.storyId === story.id && (
+				<PassageRenameReview
+					afterName={renameReview.afterName}
+					applying={reviewController.applying}
+					cursor={reviewController.cursor}
+					error={reviewController.error}
+					onApply={reviewController.handleApply}
+					onClose={closeRenameReview}
+					onNextPage={reviewController.handleNextPage}
+					onPreviousPage={reviewController.handlePreviousPage}
+					onRetry={reviewController.handleRetry}
+					page={reviewController.page}
+					passage={renameReview.passage}
+					progress={reviewController.progress}
+					showPreviousPage={reviewController.showPreviousPage}
+					story={story}
+					summary={reviewController.summary}
+				/>
+			)}
+		</>
+	);
 };
