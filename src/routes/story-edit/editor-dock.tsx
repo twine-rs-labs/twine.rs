@@ -11,6 +11,7 @@ import type {CoreStoryIndex, WorkbenchSelection} from '../../core';
 import {Passage, Story} from '../../store/stories';
 import {EditorWindow} from './editor-window';
 import {EditorWindowSpec, editorWindowId} from './editor-window-spec';
+import type {SourceNavigationFocusIntent} from './source-navigation';
 import type {EditorDockLayout} from './workspace-state';
 
 export interface EditorDockProps {
@@ -22,12 +23,27 @@ export interface EditorDockProps {
 	onClose: (spec: EditorWindowSpec) => void;
 	onFocus: (id: string) => void;
 	onLocalBufferChange?: () => void;
+	onRevealApplied?: (
+		editorId: string,
+		requestKey: number,
+		restoreToken?: string
+	) => void;
 	onOpen: (spec: EditorWindowSpec) => void;
 	onReorder: (from: number, to: number) => void;
 	onRevealPassageInGraph?: (passage: Passage) => void;
+	preserveFocusOnMount?: {editorId: string; token: string};
 	onSelectPassage?: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
-	revealRequests?: Map<string, {end?: number; key: number; position?: number}>;
+	revealRequests?: Map<
+		string,
+		{
+			end?: number;
+			focus?: SourceNavigationFocusIntent;
+			key: number;
+			position?: number;
+			restoreToken?: string;
+		}
+	>;
 	searchRequests?: Map<string, {key: number; query?: string}>;
 	selectedPassageId?: string;
 	selections: Map<string, WorkbenchSelection>;
@@ -70,9 +86,11 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 		onClose,
 		onFocus,
 		onLocalBufferChange,
+		onRevealApplied,
 		onOpen,
 		onReorder,
 		onRevealPassageInGraph,
+		preserveFocusOnMount,
 		onSelectPassage,
 		onTestPassage,
 		revealRequests,
@@ -252,7 +270,9 @@ export const EditorDock: React.FC<EditorDockProps> = props => {
 									}}
 									onFocus={() => onFocus(id)}
 									onLocalBufferChange={onLocalBufferChange}
+									onRevealApplied={onRevealApplied}
 									onRevealPassageInGraph={onRevealPassageInGraph}
+									preserveFocusOnMount={preserveFocusOnMount?.editorId === id}
 									onSelectPassage={onSelectPassage}
 									onTestPassage={onTestPassage}
 									revealRequest={revealRequests?.get(id)}

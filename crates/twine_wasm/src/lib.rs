@@ -235,7 +235,7 @@ impl TwineWasmProjectSession {
         to_js(&apply_refactor_plan_result(
             &mut self.session,
             &request,
-            &runtime,
+            runtime,
         ))
     }
 

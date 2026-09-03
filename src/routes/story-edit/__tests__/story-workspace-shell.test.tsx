@@ -7,7 +7,9 @@ import {
 	within
 } from '@testing-library/react';
 import * as React from 'react';
-import {MemoryRouter} from 'react-router';
+import {MemoryRouter, useNavigate} from 'react-router';
+import {AppShellContext} from '../../../components/app-shell/app-shell-context';
+import type {AppCommandContribution} from '../../../components/app-shell/command-registry';
 import {
 	CoreProjectHostProvider,
 	ProjectScopedCoreProjectHost,
@@ -33,10 +35,18 @@ jest.mock('../editor-dock', () => ({
 	EditorDock: ({
 		onClose,
 		onLocalBufferChange,
+		onRevealApplied,
+		revealRequests,
 		windows
 	}: {
 		onClose?: (spec: any) => void;
 		onLocalBufferChange?: () => void;
+		onRevealApplied?: (
+			editorId: string,
+			requestKey: number,
+			restoreToken?: string
+		) => void;
+		revealRequests?: Map<string, {key: number; restoreToken?: string}>;
 		windows: any[];
 	}) => (
 		<div data-testid="editor-dock">
@@ -61,12 +71,32 @@ jest.mock('../editor-dock', () => ({
 						{onClose && (
 							<button onClick={() => onClose(spec)}>close-{id}</button>
 						)}
+						{onRevealApplied && revealRequests?.get(id) && (
+							<button
+								onClick={() => {
+									const request = revealRequests.get(id)!;
+									onRevealApplied(id, request.key, request.restoreToken);
+								}}
+							>
+								ack-{id}-{revealRequests.get(id)!.key}
+							</button>
+						)}
 					</div>
 				);
 			})}
 		</div>
 	)
 }));
+
+const TestRouteNavigation: React.FC = () => {
+	const navigate = useNavigate();
+
+	return (
+		<button onClick={() => navigate('/superseded?mode=text')}>
+			navigate-test-route
+		</button>
+	);
+};
 
 function storyWithLinkedPassages() {
 	const story = fakeStory(0);
@@ -100,11 +130,27 @@ async function renderComponent(
 			story: ReturnType<typeof storyWithLinkedPassages>['story']
 		) => void;
 		deferWorkspaceQueries?: boolean;
+		commandRegistration?: (contribution: AppCommandContribution) => void;
 		onOpenFindReplace?: jest.Mock;
 		strictMode?: boolean;
 		storyDispatch?: jest.Mock;
 	}
 ) {
+	const {revealRequests: initialRevealRequests, ...shellProps} = props ?? {};
+	let replaceRevealRequests:
+		| ((
+				next: Map<
+					string,
+					{
+						end?: number;
+						focus?: 'editor' | 'preserve';
+						key: number;
+						position?: number;
+						restoreToken?: string;
+					}
+				>
+		  ) => void)
+		| undefined;
 	const queryBacklinks = jest.spyOn(
 		StoreCoreProjectHost.prototype,
 		'queryBacklinksPageAsync'
@@ -129,44 +175,75 @@ async function renderComponent(
 	const onOpenEditorWindow = jest.fn();
 	const onOpenFindReplace = context?.onOpenFindReplace ?? jest.fn();
 	const storyDispatch = context?.storyDispatch ?? jest.fn();
+	const appShellContext = {
+		inShell: true,
+		registerCommandContribution: (contribution: AppCommandContribution) => {
+			context?.commandRegistration?.(contribution);
+			return {
+				refresh: (commands: AppCommandContribution['commands']) =>
+					context?.commandRegistration?.({...contribution, commands}),
+				unregister: () => undefined
+			};
+		},
+		setDock: () => undefined,
+		setToolbar: () => undefined
+	};
 
 	context?.configureStory?.(story);
 
-	const tree = (
+	const WorkspaceHarness: React.FC = () => {
+		const [revealRequests, setRevealRequests] = React.useState(
+			() => initialRevealRequests ?? new Map()
+		);
+		replaceRevealRequests = next => setRevealRequests(new Map(next));
+
+		return (
+			<StoryWorkspaceShell
+				bottomDrawerOpen={false}
+				editorDockLayout="tile"
+				graphPanel={<div data-testid="graph-panel" />}
+				leftDockCollapsed={false}
+				mode={mode}
+				onChangeBottomDrawerOpen={jest.fn()}
+				onChangeEditorDockLayout={jest.fn()}
+				onChangeLeftDockCollapsed={jest.fn()}
+				onChangeRightDockCollapsed={jest.fn()}
+				onOpenEditorWindow={onOpenEditorWindow}
+				onOpenFindReplace={onOpenFindReplace}
+				onRevealPassageInGraph={onRevealPassageInGraph}
+				onSelectPassage={onSelectPassage}
+				revealRequests={revealRequests}
+				rightDockCollapsed={false}
+				selectedPassageId={start.id}
+				story={story}
+				{...shellProps}
+			/>
+		);
+	};
+	const createTree = () => (
 		<MemoryRouter>
-			<StoriesContext.Provider
-				value={{
-					dispatch: storyDispatch,
-					stories: [story]
-				}}
-			>
-				<CoreProjectHostProvider>
-					<StoryWorkspaceShell
-						bottomDrawerOpen={false}
-						editorDockLayout="tile"
-						graphPanel={<div data-testid="graph-panel" />}
-						leftDockCollapsed={false}
-						mode={mode}
-						onChangeBottomDrawerOpen={jest.fn()}
-						onChangeEditorDockLayout={jest.fn()}
-						onChangeLeftDockCollapsed={jest.fn()}
-						onChangeRightDockCollapsed={jest.fn()}
-						onOpenEditorWindow={onOpenEditorWindow}
-						onOpenFindReplace={onOpenFindReplace}
-						onRevealPassageInGraph={onRevealPassageInGraph}
-						onSelectPassage={onSelectPassage}
-						rightDockCollapsed={false}
-						selectedPassageId={start.id}
-						story={story}
-						{...props}
-					/>
-				</CoreProjectHostProvider>
-			</StoriesContext.Provider>
+			<AppShellContext.Provider value={appShellContext}>
+				<StoriesContext.Provider
+					value={{
+						dispatch: storyDispatch,
+						stories: [story]
+					}}
+				>
+					<CoreProjectHostProvider>
+						<WorkspaceHarness />
+					</CoreProjectHostProvider>
+				</StoriesContext.Provider>
+			</AppShellContext.Provider>
+			<TestRouteNavigation />
 			<LocationInspector />
 		</MemoryRouter>
 	);
 	const rendered = render(
-		context?.strictMode ? <React.StrictMode>{tree}</React.StrictMode> : tree
+		context?.strictMode ? (
+			<React.StrictMode>{createTree()}</React.StrictMode>
+		) : (
+			createTree()
+		)
 	);
 
 	const waitForQueries = async () => {
@@ -188,6 +265,9 @@ async function renderComponent(
 		story,
 		storyDispatch,
 		unmount: rendered.unmount,
+		replaceRevealRequests: (
+			next: Parameters<NonNullable<typeof replaceRevealRequests>>[0]
+		) => act(() => replaceRevealRequests?.(next)),
 		waitForQueries
 	};
 }
@@ -368,6 +448,196 @@ describe('<StoryWorkspaceShell>', () => {
 		expect(next.name).toBe('Next');
 	});
 
+	it('restores command focus only after one exact source reveal acknowledgement', async () => {
+		const requests = new Map<
+			string,
+			{
+				end?: number;
+				focus?: 'editor' | 'preserve';
+				key: number;
+				position?: number;
+				restoreToken?: string;
+			}
+		>();
+		const restoreFocus = jest.fn();
+		let findReferences: AppCommandContribution['commands'][number] | undefined;
+		const {replaceRevealRequests, start} = await renderComponent(
+			'text',
+			{
+				editorWindows: [{kind: 'passage', passageId: 'start'}],
+				revealRequests: requests,
+				selectedPassageId: 'next'
+			},
+			{
+				commandRegistration: contribution => {
+					findReferences = contribution.commands.find(
+						command => command.id === 'story-edit.find-references'
+					);
+				}
+			}
+		);
+
+		await waitFor(() => expect(findReferences).toBeDefined());
+		act(() => findReferences?.run({restoreFocus}));
+		fireEvent.click(
+			await screen.findByRole('button', {
+				name: 'components.passageReferences.revealInSource'
+			})
+		);
+
+		await waitFor(() =>
+			expect(
+				screen.queryByRole('dialog', {
+					name: 'components.passageReferences.title'
+				})
+			).not.toBeInTheDocument()
+		);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-search',
+				expect.stringContaining('restoreToken=')
+			)
+		);
+		expect(restoreFocus).not.toHaveBeenCalled();
+
+		const url = new URL(
+			`https://example.invalid${screen.getByTestId('location').getAttribute('data-pathname')}${screen.getByTestId('location').getAttribute('data-search')}`
+		);
+		const editorId = `passage:${start.id}`;
+		const position = Number(url.searchParams.get('offset'));
+		const end = Number(url.searchParams.get('end'));
+		const token = url.searchParams.get('restoreToken')!;
+
+		replaceRevealRequests(
+			new Map([
+				[
+					editorId,
+					{
+						end,
+						focus: 'preserve',
+						key: 1,
+						position,
+						restoreToken: 'stale-token'
+					}
+				]
+			])
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {name: `ack-${editorId}-1`})
+		);
+		expect(restoreFocus).not.toHaveBeenCalled();
+
+		replaceRevealRequests(
+			new Map([
+				[
+					editorId,
+					{
+						end,
+						focus: 'preserve',
+						key: 2,
+						position,
+						restoreToken: token
+					}
+				]
+			])
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {name: `ack-${editorId}-2`})
+		);
+		expect(restoreFocus).toHaveBeenCalledTimes(1);
+
+		replaceRevealRequests(
+			new Map([
+				[
+					editorId,
+					{
+						end,
+						focus: 'preserve',
+						key: 3,
+						position,
+						restoreToken: token
+					}
+				]
+			])
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {name: `ack-${editorId}-3`})
+		);
+		expect(restoreFocus).toHaveBeenCalledTimes(1);
+	});
+
+	it('releases pending command focus restoration when navigation supersedes the reveal', async () => {
+		const requests = new Map<
+			string,
+			{
+				end?: number;
+				focus?: 'editor' | 'preserve';
+				key: number;
+				position?: number;
+				restoreToken?: string;
+			}
+		>();
+		const restoreFocus = jest.fn();
+		let findReferences: AppCommandContribution['commands'][number] | undefined;
+		const {replaceRevealRequests, start} = await renderComponent(
+			'text',
+			{
+				editorWindows: [{kind: 'passage', passageId: 'start'}],
+				revealRequests: requests,
+				selectedPassageId: 'next'
+			},
+			{
+				commandRegistration: contribution => {
+					findReferences = contribution.commands.find(
+						command => command.id === 'story-edit.find-references'
+					);
+				}
+			}
+		);
+
+		await waitFor(() => expect(findReferences).toBeDefined());
+		act(() => findReferences?.run({restoreFocus}));
+		fireEvent.click(
+			await screen.findByRole('button', {
+				name: 'components.passageReferences.revealInSource'
+			})
+		);
+		await waitFor(() =>
+			expect(screen.getByTestId('location')).toHaveAttribute(
+				'data-search',
+				expect.stringContaining('restoreToken=')
+			)
+		);
+		expect(restoreFocus).not.toHaveBeenCalled();
+
+		const url = new URL(
+			`https://example.invalid${screen.getByTestId('location').getAttribute('data-pathname')}${screen.getByTestId('location').getAttribute('data-search')}`
+		);
+		const editorId = `passage:${start.id}`;
+		const token = url.searchParams.get('restoreToken')!;
+		fireEvent.click(screen.getByRole('button', {name: 'navigate-test-route'}));
+		await waitFor(() => expect(restoreFocus).toHaveBeenCalledTimes(1));
+
+		replaceRevealRequests(
+			new Map([
+				[
+					editorId,
+					{
+						end: Number(url.searchParams.get('end')),
+						focus: 'preserve',
+						key: 1,
+						position: Number(url.searchParams.get('offset')),
+						restoreToken: token
+					}
+				]
+			])
+		);
+		fireEvent.click(
+			await screen.findByRole('button', {name: `ack-${editorId}-1`})
+		);
+		expect(restoreFocus).toHaveBeenCalledTimes(1);
+	});
+
 	it('invalidates visible references as soon as a local editor changes', async () => {
 		await renderComponent('text', {selectedPassageId: 'next'});
 
@@ -425,6 +695,48 @@ describe('<StoryWorkspaceShell>', () => {
 				await screen.findByText('components.passageReferences.revealFailed')
 			).toBeInTheDocument();
 			expect(onSelectPassage).not.toHaveBeenCalled();
+		} finally {
+			unregister();
+		}
+	});
+
+	it('restores command focus once when a reference reveal fails before navigation', async () => {
+		const restoreFocus = jest.fn();
+		let findReferences: AppCommandContribution['commands'][number] | undefined;
+		const {story} = await renderComponent(
+			'text',
+			{selectedPassageId: 'next'},
+			{
+				commandRegistration: contribution => {
+					findReferences = contribution.commands.find(
+						command => command.id === 'story-edit.find-references'
+					);
+				}
+			}
+		);
+
+		await waitFor(() => expect(findReferences).toBeDefined());
+		act(() => findReferences?.run({restoreFocus}));
+		await screen.findByRole('button', {
+			name: 'components.passageReferences.revealInSource'
+		});
+		const unregister = workbenchBufferCoordinator.register({
+			bufferId: 'command-focus-failed-reveal',
+			flush: jest.fn(),
+			hasPendingChanges: () => true,
+			isComposing: () => true,
+			revision: () => 1,
+			storyId: story.id
+		});
+
+		try {
+			fireEvent.click(
+				screen.getByRole('button', {
+					name: 'components.passageReferences.revealInSource'
+				})
+			);
+			await screen.findByText('components.passageReferences.revealFailed');
+			expect(restoreFocus).toHaveBeenCalledTimes(1);
 		} finally {
 			unregister();
 		}

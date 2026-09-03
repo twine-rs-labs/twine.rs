@@ -92,6 +92,231 @@ describe('<SourceEditor>', () => {
 				{anchor: 3, head: 9}
 			])
 		);
+		expect(
+			screen.getByRole('textbox', {name: 'Reference source'})
+		).toHaveFocus();
+	});
+
+	it('preserves external focus while revealing an exact source range', async () => {
+		const editor = React.createRef<SourceEditorHandle>();
+
+		render(
+			<>
+				<button type="button">Command</button>
+				<SourceEditor
+					id="preserve-focus-range-editor"
+					label="Reference source"
+					onChange={jest.fn()}
+					ref={editor}
+					revealPosition={{
+						end: 9,
+						focus: 'preserve',
+						key: 1,
+						position: 3
+					}}
+					value="0123456789"
+				/>
+			</>
+		);
+
+		const command = screen.getByRole('button', {name: 'Command'});
+		command.focus();
+		await new Promise<void>(resolve => {
+			window.requestAnimationFrame(() => resolve());
+		});
+
+		await waitFor(() => {
+			expect(editor.current?.getSnapshot().selections).toEqual([
+				{anchor: 3, head: 9}
+			]);
+			expect(command).toHaveFocus();
+		});
+	});
+
+	it('does not steal focus on an intermediate mount guarded for a preserve reveal', async () => {
+		const editor = React.createRef<SourceEditorHandle>();
+		const onApplied = jest.fn();
+		const {rerender} = render(
+			<>
+				<button type="button">Command</button>
+				<SourceEditor
+					id="guarded-intermediate-mount-editor"
+					label="Guarded intermediate source"
+					onChange={jest.fn()}
+					preserveFocusOnMount
+					ref={editor}
+					value="0123456789"
+				/>
+			</>
+		);
+
+		const command = screen.getByRole('button', {name: 'Command'});
+		command.focus();
+		await new Promise<void>(resolve => {
+			window.requestAnimationFrame(() => resolve());
+		});
+		expect(command).toHaveFocus();
+
+		rerender(
+			<>
+				<button type="button">Command</button>
+				<SourceEditor
+					id="guarded-intermediate-mount-editor"
+					label="Guarded intermediate source"
+					onChange={jest.fn()}
+					preserveFocusOnMount
+					ref={editor}
+					revealPosition={{
+						end: 9,
+						focus: 'preserve',
+						key: 1,
+						onApplied,
+						position: 3
+					}}
+					value="0123456789"
+				/>
+			</>
+		);
+
+		await waitFor(() => {
+			expect(editor.current?.getSnapshot().selections).toEqual([
+				{anchor: 3, head: 9}
+			]);
+			expect(onApplied).toHaveBeenCalledTimes(1);
+			expect(command).toHaveFocus();
+		});
+	});
+
+	it('acknowledges a reveal only after applying its exact range', async () => {
+		const editor = React.createRef<SourceEditorHandle>();
+		let appliedSelection: {anchor: number; head: number}[] | undefined;
+		const onApplied = jest.fn(() => {
+			appliedSelection = editor.current?.getSnapshot().selections;
+		});
+
+		render(
+			<SourceEditor
+				id="acknowledged-range-editor"
+				label="Acknowledged source"
+				onChange={jest.fn()}
+				ref={editor}
+				revealPosition={{end: 9, key: 1, onApplied, position: 3}}
+				value="0123456789"
+			/>
+		);
+
+		await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+		expect(appliedSelection).toEqual([{anchor: 3, head: 9}]);
+	});
+
+	it('waits to acknowledge a preserve reveal until its exact range is available', async () => {
+		const editor = React.createRef<SourceEditorHandle>();
+		const onApplied = jest.fn();
+		const revealPosition = {
+			end: 5,
+			focus: 'preserve' as const,
+			key: 1,
+			onApplied,
+			position: 3
+		};
+		const {rerender} = render(
+			<SourceEditor
+				id="delayed-preserve-range-editor"
+				label="Delayed preserve source"
+				onChange={jest.fn()}
+				ref={editor}
+				revealPosition={revealPosition}
+				value="12"
+			/>
+		);
+
+		await new Promise<void>(resolve => {
+			window.requestAnimationFrame(() => resolve());
+		});
+		expect(onApplied).not.toHaveBeenCalled();
+
+		rerender(
+			<SourceEditor
+				id="delayed-preserve-range-editor"
+				label="Delayed preserve source"
+				onChange={jest.fn()}
+				ref={editor}
+				revealPosition={revealPosition}
+				value="0123456789"
+			/>
+		);
+
+		await waitFor(() => {
+			expect(editor.current?.getSnapshot().selections).toEqual([
+				{anchor: 3, head: 5}
+			]);
+			expect(onApplied).toHaveBeenCalledTimes(1);
+		});
+
+		rerender(
+			<SourceEditor
+				id="delayed-preserve-range-editor"
+				label="Delayed preserve source"
+				onChange={jest.fn()}
+				ref={editor}
+				revealPosition={revealPosition}
+				value="0123456789x"
+			/>
+		);
+
+		await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+	});
+
+	it('restores external focus after a preserve reveal arrives after editor mount', async () => {
+		const editor = React.createRef<SourceEditorHandle>();
+		const {rerender} = render(
+			<>
+				<button type="button">Command</button>
+				<SourceEditor
+					id="intermediate-mount-editor"
+					label="Intermediate source"
+					onChange={jest.fn()}
+					ref={editor}
+					value="0123456789"
+				/>
+			</>
+		);
+
+		const command = screen.getByRole('button', {name: 'Command'});
+		command.focus();
+		await new Promise<void>(resolve => {
+			window.requestAnimationFrame(() => resolve());
+		});
+		expect(
+			screen.getByRole('textbox', {name: 'Intermediate source'})
+		).toHaveFocus();
+
+		rerender(
+			<>
+				<button type="button">Command</button>
+				<SourceEditor
+					id="intermediate-mount-editor"
+					label="Intermediate source"
+					onChange={jest.fn()}
+					ref={editor}
+					revealPosition={{
+						end: 9,
+						focus: 'preserve',
+						key: 1,
+						onApplied: () => command.focus(),
+						position: 3
+					}}
+					value="0123456789"
+				/>
+			</>
+		);
+
+		await waitFor(() => {
+			expect(editor.current?.getSnapshot().selections).toEqual([
+				{anchor: 3, head: 9}
+			]);
+			expect(command).toHaveFocus();
+		});
 	});
 
 	it.each([

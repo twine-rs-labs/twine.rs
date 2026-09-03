@@ -36,7 +36,8 @@ import {
 	type LegacyStreamModeAdapter
 } from '../../util/story-format/legacy-editor/legacy-stream-mode';
 import {useNativeEditorSession} from '../../util/story-format';
-import type {EditorWindowSpec} from './editor-window-spec';
+import {editorWindowId, type EditorWindowSpec} from './editor-window-spec';
+import type {SourceNavigationFocusIntent} from './source-navigation';
 import {StoryFormatToolbar} from './story-format-toolbar';
 import {
 	contextualDiagnosticQuickFixes,
@@ -51,10 +52,22 @@ export interface EditorWindowProps {
 	onDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
 	onFocus: () => void;
 	onLocalBufferChange?: () => void;
+	onRevealApplied?: (
+		editorId: string,
+		requestKey: number,
+		restoreToken?: string
+	) => void;
 	onRevealPassageInGraph?: (passage: Passage) => void;
+	preserveFocusOnMount?: boolean;
 	onSelectPassage?: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
-	revealRequest?: {end?: number; key: number; position?: number};
+	revealRequest?: {
+		end?: number;
+		focus?: SourceNavigationFocusIntent;
+		key: number;
+		position?: number;
+		restoreToken?: string;
+	};
 	searchRequest?: {key: number; query?: string};
 	selection?: WorkbenchSelection;
 	spec: EditorWindowSpec;
@@ -236,6 +249,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 		onDragStart,
 		onFocus,
 		onLocalBufferChange,
+		onRevealApplied,
 		onRevealPassageInGraph,
 		onSelectPassage,
 		onTestPassage,
@@ -1183,6 +1197,7 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 							setAdapterFailure(error);
 						}}
 						placeholderText={t('dialogs.passageEdit.passageTextPlaceholder')}
+						preserveFocusOnMount={props.preserveFocusOnMount}
 						readOnly={quitReadOnly}
 						ref={handleEditorRef}
 						replaceGenericTwineSyntax={
@@ -1193,6 +1208,13 @@ export const EditorWindow: React.FC<EditorWindowProps> = props => {
 								? {
 										key: revealRequest.key,
 										end: revealRequest.end,
+										focus: revealRequest.focus,
+										onApplied: () =>
+											onRevealApplied?.(
+												editorWindowId(spec),
+												revealRequest.key,
+												revealRequest.restoreToken
+											),
 										position: revealRequest.position
 									}
 								: undefined

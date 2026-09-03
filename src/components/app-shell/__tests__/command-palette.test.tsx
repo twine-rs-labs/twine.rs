@@ -113,7 +113,7 @@ describe('<CommandPalette>', () => {
 		await waitFor(() => expect(successor).toHaveFocus());
 		expect(trigger).not.toHaveFocus();
 		restoreFocus?.();
-		await waitFor(() => expect(trigger).toHaveFocus());
+		expect(trigger).toHaveFocus();
 		trigger.remove();
 		successor.remove();
 	});

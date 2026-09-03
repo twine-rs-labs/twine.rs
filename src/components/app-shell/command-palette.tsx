@@ -85,11 +85,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 		void Promise.resolve(
 			command.run({
 				restoreFocus: () => {
-					window.requestAnimationFrame(() => {
-						window.requestAnimationFrame(() => {
-							if (focusOrigin?.isConnected) focusOrigin.focus();
-						});
-					});
+					if (focusOrigin?.isConnected) focusOrigin.focus();
 				}
 			})
 		);

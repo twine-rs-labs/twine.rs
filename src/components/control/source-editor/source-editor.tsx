@@ -148,9 +148,16 @@ export interface SourceEditorProps {
 	onChange: (value: string) => void;
 	onDynamicExtensionError?: (error: Error) => void;
 	placeholderText?: string;
+	preserveFocusOnMount?: boolean;
 	readOnly?: boolean;
 	replaceGenericTwineSyntax?: boolean;
-	revealPosition?: {end?: number; key: number; position: number};
+	revealPosition?: {
+		end?: number;
+		focus?: 'editor' | 'preserve';
+		key: number;
+		onApplied?: () => void;
+		position: number;
+	};
 	searchQuery?: string;
 	searchRequestKey?: number | string;
 	selfLinkName?: string;
@@ -938,6 +945,10 @@ export const SourceEditor = React.forwardRef<
 	const viewRef = React.useRef<EditorView | undefined>(undefined);
 	const documentRef = React.useRef(props.value);
 	const valueRef = React.useRef(props.value);
+	const revealFocusIntent = React.useRef(props.revealPosition?.focus);
+	const revealPosition = React.useRef(props.revealPosition?.position);
+	const appliedRevealKey = React.useRef<number | undefined>(undefined);
+	const preserveFocusOnMount = React.useRef(props.preserveFocusOnMount);
 	const onChange = React.useRef(props.onChange);
 	// This is intentionally independent of CodeMirror's read-only extension:
 	// imperative callers and legacy facades can dispatch transactions directly.
@@ -951,6 +962,9 @@ export const SourceEditor = React.forwardRef<
 		new Set<(change: SourceEditorDocumentChange) => void>()
 	).current;
 	valueRef.current = props.value;
+	revealFocusIntent.current = props.revealPosition?.focus;
+	revealPosition.current = props.revealPosition?.position;
+	preserveFocusOnMount.current = props.preserveFocusOnMount;
 	const {prefs} = usePrefsContext();
 	const appTheme = useComputedTheme();
 	const reportDynamicExtensionError = React.useCallback(
@@ -1235,17 +1249,26 @@ export const SourceEditor = React.forwardRef<
 				top: memory.scrollTop ?? 0
 			});
 
-			if (prefs.editorFocusPreference === 'passage-start') {
+			if (
+				prefs.editorFocusPreference === 'passage-start' &&
+				revealPosition.current === undefined &&
+				!preserveFocusOnMount.current
+			) {
 				view.dispatch({selection: {anchor: 0}});
 			}
 
-			if (prefs.editorFocusPreference !== 'none') {
+			if (
+				revealFocusIntent.current !== 'preserve' &&
+				!preserveFocusOnMount.current &&
+				prefs.editorFocusPreference !== 'none'
+			) {
 				view.focus();
 			}
 		});
 
 		return () => {
 			window.cancelAnimationFrame(focusFrame);
+			appliedRevealKey.current = undefined;
 			recordPerformanceHarnessEvent('source-editor-view-destroyed', {
 				editorId: props.id,
 				memoryKey: props.memoryKey ?? ''
@@ -1403,6 +1426,9 @@ export const SourceEditor = React.forwardRef<
 		if (!view || position === undefined) {
 			return;
 		}
+		if (appliedRevealKey.current === props.revealPosition?.key) {
+			return;
+		}
 
 		const clampedPosition = Math.max(
 			0,
@@ -1416,6 +1442,13 @@ export const SourceEditor = React.forwardRef<
 						clampedPosition,
 						Math.min(Math.trunc(requestedEnd), view.state.doc.length)
 					);
+		if (
+			props.revealPosition?.focus === 'preserve' &&
+			(position > view.state.doc.length ||
+				(requestedEnd !== undefined && requestedEnd > view.state.doc.length))
+		) {
+			return;
+		}
 
 		view.dispatch({
 			effects: EditorView.scrollIntoView(clampedPosition, {
@@ -1423,11 +1456,17 @@ export const SourceEditor = React.forwardRef<
 			}),
 			selection: {anchor: clampedPosition, head: clampedEnd}
 		});
-		view.focus();
+		if (props.revealPosition?.focus !== 'preserve') {
+			view.focus();
+		}
+		appliedRevealKey.current = props.revealPosition?.key;
+		props.revealPosition?.onApplied?.();
 	}, [
 		props.revealPosition?.end,
+		props.revealPosition?.focus,
 		props.revealPosition?.key,
-		props.revealPosition?.position
+		props.revealPosition?.position,
+		props.value
 	]);
 
 	const codeFont = (props.language ?? 'twine') !== 'twine';

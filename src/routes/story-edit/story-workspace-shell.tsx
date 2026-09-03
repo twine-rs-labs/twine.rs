@@ -1,7 +1,7 @@
 import classNames from 'classnames';
 import * as React from 'react';
 import {useTranslation} from 'react-i18next';
-import {useNavigate} from 'react-router';
+import {useLocation, useNavigate} from 'react-router';
 import {
 	Badge,
 	Button,
@@ -70,11 +70,14 @@ import {EditorDockLayout, StoryEditMode} from './workspace-state';
 import {EditorDock} from './editor-dock';
 import {EditorWindowSpec, editorWindowId} from './editor-window-spec';
 import {
+	allocateSourceNavigationFocusPreservationLease,
 	editorWindowSpecForSourceNavigationTarget,
+	releaseSourceNavigationFocusPreservationLease,
 	sourceNavigationTargetFromAssetReference,
 	sourceNavigationTargetFromContentsEntry,
 	sourceTarget
 } from './source-navigation';
+import type {SourceNavigationFocusIntent} from './source-navigation';
 import type {
 	StoryWorkbenchBottomDrawerPanel,
 	StoryWorkbenchExtensionContext,
@@ -110,7 +113,16 @@ export interface StoryWorkspaceShellProps {
 	onSelectPassage: (passage: Passage) => void;
 	onTestPassage?: (passage: Passage) => void;
 	overlay?: React.ReactNode;
-	revealRequests?: Map<string, {end?: number; key: number; position?: number}>;
+	revealRequests?: Map<
+		string,
+		{
+			end?: number;
+			focus?: SourceNavigationFocusIntent;
+			key: number;
+			position?: number;
+			restoreToken?: string;
+		}
+	>;
 	rightDockCollapsed: boolean;
 	searchRequests?: Map<string, {key: number; query?: string}>;
 	selectedPassageId?: string;
@@ -1380,6 +1392,7 @@ export const StoryWorkspaceShell: React.FC<
 		testPassagePendingId
 	} = props;
 	const coreProjectHost = useCoreProjectHost();
+	const location = useLocation();
 	const navigate = useNavigate();
 	const {dispatch: storiesDispatch, stories} = useStoriesContext();
 	const [patchVersion, setPatchVersion] = React.useState(0);
@@ -1391,6 +1404,23 @@ export const StoryWorkspaceShell: React.FC<
 	const referenceFocusRestore = React.useRef<(() => void) | undefined>(
 		undefined
 	);
+	const pendingReferenceFocusRestore = React.useRef<
+		| {
+				end: number;
+				editorId: string;
+				focus: 'preserve';
+				passageId: string;
+				previousKey: number;
+				restoreFocus: () => void;
+				storyId: string;
+				start: number;
+				token: string;
+		  }
+		| undefined
+	>(undefined);
+	const [preserveFocusOnMount, setPreserveFocusOnMount] = React.useState<
+		{editorId: string; token: string} | undefined
+	>();
 	const semanticNavigationMounted = React.useRef(true);
 	const semanticNavigationStoryId = React.useRef(story.id);
 	const referenceTargetIdRef = React.useRef(referenceTargetId);
@@ -1424,13 +1454,25 @@ export const StoryWorkspaceShell: React.FC<
 			semanticNavigationMounted.current = false;
 			definitionRequestGeneration.current += 1;
 			referenceRevealGeneration.current += 1;
+			releasePendingReferenceFocusRestore();
 		};
 	}, []);
 	React.useEffect(() => {
 		setDefinitionStatus(undefined);
 		setReferenceTargetId(undefined);
 		referenceFocusRestore.current = undefined;
+		releasePendingReferenceFocusRestore();
 	}, [story.id]);
+	React.useEffect(() => {
+		const pending = pendingReferenceFocusRestore.current;
+
+		if (
+			pending &&
+			new URLSearchParams(location.search).get('restoreToken') !== pending.token
+		) {
+			releasePendingReferenceFocusRestore({restore: true});
+		}
+	}, [location.key, location.pathname, location.search]);
 	const highlightExtensionPassages = React.useCallback(
 		(passageIds: string[]) => {
 			const currentStory = storiesRef.current.find(
@@ -2086,19 +2128,79 @@ export const StoryWorkspaceShell: React.FC<
 		);
 	}
 
-	function closePassageReferences() {
+	function releasePendingReferenceFocusRestore({
+		restore = false
+	}: {restore?: boolean} = {}) {
+		const pending = pendingReferenceFocusRestore.current;
+
+		if (!pending) {
+			return;
+		}
+
+		pendingReferenceFocusRestore.current = undefined;
+		if (semanticNavigationMounted.current) {
+			setPreserveFocusOnMount(current =>
+				current?.token === pending.token ? undefined : current
+			);
+		}
+		releaseSourceNavigationFocusPreservationLease(pending.token);
+		if (
+			restore &&
+			semanticNavigationMounted.current &&
+			semanticNavigationStoryId.current === pending.storyId
+		) {
+			pending.restoreFocus();
+		}
+	}
+
+	function closePassageReferences({
+		preservePendingFocusRestore = false
+	}: {preservePendingFocusRestore?: boolean} = {}) {
 		referenceRevealGeneration.current += 1;
 		referenceTargetIdRef.current = undefined;
 		setReferenceTargetId(undefined);
+		if (!preservePendingFocusRestore) {
+			releasePendingReferenceFocusRestore();
+		}
 		const restoreFocus = referenceFocusRestore.current;
 		referenceFocusRestore.current = undefined;
 		restoreFocus?.();
 	}
 
 	function handleLocalBufferChange() {
+		releasePendingReferenceFocusRestore();
 		if (referenceTargetIdRef.current) {
 			closePassageReferences();
 		}
+	}
+
+	function handleRevealApplied(
+		editorId: string,
+		requestKey: number,
+		restoreToken?: string
+	) {
+		const pending = pendingReferenceFocusRestore.current;
+		const request = revealRequests?.get(editorId);
+
+		if (
+			!pending ||
+			pending.storyId !== story.id ||
+			pending.editorId !== editorId ||
+			pending.editorId !==
+				editorWindowId({kind: 'passage', passageId: pending.passageId}) ||
+			request?.key !== requestKey ||
+			requestKey <= pending.previousKey ||
+			request.restoreToken !== pending.token ||
+			restoreToken !== pending.token ||
+			request.focus !== pending.focus ||
+			request.position !== pending.start ||
+			request.end !== pending.end
+		) {
+			return;
+		}
+
+		releasePendingReferenceFocusRestore();
+		pending.restoreFocus();
 	}
 
 	async function revealReference(
@@ -2141,8 +2243,14 @@ export const StoryWorkspaceShell: React.FC<
 			}
 
 			reveal(sourcePassages[0]);
-			closePassageReferences();
+			closePassageReferences({preservePendingFocusRestore: true});
 		} catch (reason) {
+			if (generation === referenceRevealGeneration.current) {
+				releasePendingReferenceFocusRestore({restore: true});
+				const restoreFocus = referenceFocusRestore.current;
+				referenceFocusRestore.current = undefined;
+				restoreFocus?.();
+			}
 			if (
 				reason instanceof Error &&
 				reason.message === t('routes.storyEdit.workspace.definitionStale')
@@ -2157,15 +2265,45 @@ export const StoryWorkspaceShell: React.FC<
 
 	function handleRevealReferenceInSource(location: CorePassageLocation) {
 		return revealReference(location, sourcePassage => {
-			onSelectPassage(sourcePassage);
-			onOpenEditorWindow?.({kind: 'passage', passageId: sourcePassage.id});
-			navigate(
-				sourceTarget(story, {
-					endOffset: location.span.end,
-					offset: location.span.start,
-					target: {kind: 'passage', passageId: sourcePassage.id}
-				})
-			);
+			const spec = {kind: 'passage' as const, passageId: sourcePassage.id};
+			const restoreFocus = referenceFocusRestore.current;
+			const editorId = editorWindowId(spec);
+			const options = {
+				endOffset: location.span.end,
+				offset: location.span.start,
+				target: {kind: 'passage' as const, passageId: sourcePassage.id}
+			};
+
+			if (restoreFocus) {
+				releasePendingReferenceFocusRestore();
+				const restoreToken = allocateSourceNavigationFocusPreservationLease();
+				pendingReferenceFocusRestore.current = {
+					end: location.span.end,
+					editorId,
+					focus: 'preserve',
+					passageId: sourcePassage.id,
+					previousKey: revealRequests?.get(editorId)?.key ?? 0,
+					restoreFocus,
+					storyId: story.id,
+					start: location.span.start,
+					token: restoreToken
+				};
+				setPreserveFocusOnMount({editorId, token: restoreToken});
+				referenceFocusRestore.current = undefined;
+				onSelectPassage(sourcePassage);
+				onOpenEditorWindow?.(spec);
+				navigate(
+					sourceTarget(story, {
+						...options,
+						focus: 'preserve',
+						restoreToken
+					})
+				);
+			} else {
+				onSelectPassage(sourcePassage);
+				onOpenEditorWindow?.(spec);
+				navigate(sourceTarget(story, options));
+			}
 		});
 	}
 
@@ -2188,6 +2326,7 @@ export const StoryWorkspaceShell: React.FC<
 			run: context => {
 				if (selection.passage) {
 					referenceRevealGeneration.current += 1;
+					releasePendingReferenceFocusRestore();
 					referenceFocusRestore.current = context?.restoreFocus;
 					setReferenceTargetId(selection.passage.id);
 				}
@@ -2411,9 +2550,11 @@ export const StoryWorkspaceShell: React.FC<
 						onClose={spec => onCloseEditorWindow?.(spec)}
 						onFocus={id => onFocusEditorWindow?.(id)}
 						onLocalBufferChange={handleLocalBufferChange}
+						onRevealApplied={handleRevealApplied}
 						onOpen={spec => onOpenEditorWindow?.(spec)}
 						onReorder={(from, to) => onReorderEditorWindows?.(from, to)}
 						onRevealPassageInGraph={onRevealPassageInGraph}
+						preserveFocusOnMount={preserveFocusOnMount}
 						onSelectPassage={onSelectPassage}
 						onTestPassage={onTestPassage}
 						revealRequests={revealRequests}
@@ -2449,6 +2590,7 @@ export const StoryWorkspaceShell: React.FC<
 						onFindReferences={passage => {
 							referenceRevealGeneration.current += 1;
 							referenceFocusRestore.current = undefined;
+							releasePendingReferenceFocusRestore();
 							setReferenceTargetId(passage.id);
 						}}
 						onGoToDefinition={handleGoToDefinition}

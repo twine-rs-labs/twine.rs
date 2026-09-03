@@ -509,6 +509,8 @@ pub(crate) struct RefactorTextRange {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CanonicalProjectMetadataField {
+    /// Retained as part of the canonical project-metadata update model.
+    #[allow(dead_code)]
     Name,
 }
 
@@ -533,21 +535,29 @@ pub(crate) enum CanonicalPlanChange {
         passage: Passage,
         layout: Option<PassageLayout>,
     },
+    /// Retained as part of the canonical structural-change model.
+    #[allow(dead_code)]
     RemovePassage {
         story_id: String,
         passage: Passage,
         layout: Option<PassageLayout>,
     },
+    /// Retained as part of the canonical story-state change model.
+    #[allow(dead_code)]
     SetStartPassage {
         story_id: String,
         before_passage_id: String,
         after_passage_id: String,
     },
+    /// Retained as part of the canonical story-metadata change model.
+    #[allow(dead_code)]
     UpdateStoryMetadata {
         story_id: String,
         before: StoryMetadataPatch,
         after: StoryMetadataPatch,
     },
+    /// Retained as part of the canonical project-metadata change model.
+    #[allow(dead_code)]
     UpdateProjectMetadata {
         story_id: String,
         field: CanonicalProjectMetadataField,
@@ -1144,15 +1154,7 @@ impl RefactorPlanningTaskStore {
         };
         let total_passage_count = story.passages.len();
         if task.replace.is_some() {
-            return self.continue_project_replace_task(
-                task_id,
-                task,
-                story,
-                current_revision,
-                project,
-                plans,
-                clock,
-            );
+            return self.continue_project_replace_task(task_id, task, story, project, plans, clock);
         }
         let end = task
             .next_passage_index
@@ -1230,7 +1232,6 @@ impl RefactorPlanningTaskStore {
         task_id: &str,
         mut task: PassageRenamePlanningTask,
         story: &Story,
-        _current_revision: u32,
         project: &Project,
         plans: &mut RefactorPlanStore,
         clock: RefactorPlanClock,
@@ -1311,20 +1312,23 @@ impl RefactorPlanningTaskStore {
                 }
             }
             if replace.request.include_passage_text {
-                if let Err(result) = append_replace_edits(
+                let context = ProjectReplaceEditContext {
+                    text: &passage.text,
+                    matcher: &replace.matcher,
+                    replacement: &replace.request.replacement,
+                    expand_captures: replace.request.use_regexes,
+                    existing_link_edits: &link_edits,
+                    max_bytes,
+                };
+                if let Err(failure) = append_replace_edits(
                     &mut task,
                     CanonicalSourceIdentity::Passage {
                         story_id: replace.request.story_id.clone(),
                         passage_id: passage.id.as_ref().to_owned(),
                     },
-                    &passage.text,
-                    &replace.matcher,
-                    &replace.request.replacement,
-                    replace.request.use_regexes,
-                    &link_edits,
-                    max_bytes,
+                    context,
                 ) {
-                    return result;
+                    return PlanPassageRenameResult::Failure { failure };
                 }
             }
         }
@@ -1344,35 +1348,41 @@ impl RefactorPlanningTaskStore {
             };
         }
         if replace.request.include_script {
-            if let Err(result) = append_replace_edits(
+            let context = ProjectReplaceEditContext {
+                text: &story.script,
+                matcher: &replace.matcher,
+                replacement: &replace.request.replacement,
+                expand_captures: replace.request.use_regexes,
+                existing_link_edits: &[],
+                max_bytes,
+            };
+            if let Err(failure) = append_replace_edits(
                 &mut task,
                 CanonicalSourceIdentity::Script {
                     story_id: replace.request.story_id.clone(),
                 },
-                &story.script,
-                &replace.matcher,
-                &replace.request.replacement,
-                replace.request.use_regexes,
-                &[],
-                max_bytes,
+                context,
             ) {
-                return result;
+                return PlanPassageRenameResult::Failure { failure };
             }
         }
         if replace.request.include_stylesheet {
-            if let Err(result) = append_replace_edits(
+            let context = ProjectReplaceEditContext {
+                text: &story.stylesheet,
+                matcher: &replace.matcher,
+                replacement: &replace.request.replacement,
+                expand_captures: replace.request.use_regexes,
+                existing_link_edits: &[],
+                max_bytes,
+            };
+            if let Err(failure) = append_replace_edits(
                 &mut task,
                 CanonicalSourceIdentity::Stylesheet {
                     story_id: replace.request.story_id.clone(),
                 },
-                &story.stylesheet,
-                &replace.matcher,
-                &replace.request.replacement,
-                replace.request.use_regexes,
-                &[],
-                max_bytes,
+                context,
             ) {
-                return result;
+                return PlanPassageRenameResult::Failure { failure };
             }
         }
         if task.changes.is_empty() {
@@ -1396,32 +1406,36 @@ impl RefactorPlanningTaskStore {
     }
 }
 
+struct ProjectReplaceEditContext<'a> {
+    text: &'a str,
+    matcher: &'a Regex,
+    replacement: &'a str,
+    expand_captures: bool,
+    existing_link_edits: &'a [ProjectReplaceLinkEdit],
+    max_bytes: usize,
+}
+
 fn append_replace_edits(
     task: &mut PassageRenamePlanningTask,
     source: CanonicalSourceIdentity,
-    text: &str,
-    matcher: &Regex,
-    replacement: &str,
-    expand_captures: bool,
-    existing_link_edits: &[ProjectReplaceLinkEdit],
-    max_bytes: usize,
-) -> Result<(), PlanPassageRenameResult> {
-    for capture in matcher.captures_iter(text) {
+    context: ProjectReplaceEditContext<'_>,
+) -> Result<(), RefactorPlanFailure> {
+    for capture in context.matcher.captures_iter(context.text) {
         let matched = capture.get(0).expect("regex capture zero");
         if matched.start() == matched.end() {
             continue;
         }
-        let replacement_text = if expand_captures {
+        let replacement_text = if context.expand_captures {
             let mut expanded = String::new();
-            capture.expand(replacement, &mut expanded);
+            capture.expand(context.replacement, &mut expanded);
             expanded
         } else {
-            replacement.to_owned()
+            context.replacement.to_owned()
         };
         if replacement_text == matched.as_str() {
             continue;
         }
-        if let Some(existing) = existing_link_edits.iter().find(|edit| {
+        if let Some(existing) = context.existing_link_edits.iter().find(|edit| {
             edit.range.start_utf8_byte < matched.end() && matched.start() < edit.range.end_utf8_byte
         }) {
             if existing.range.start_utf8_byte == matched.start()
@@ -1431,19 +1445,17 @@ fn append_replace_edits(
             {
                 continue;
             }
-            return Err(PlanPassageRenameResult::Failure {
-                failure: invalid_plan(
-                    "Project replace produces incompatible overlapping source edits.",
-                ),
-            });
+            return Err(invalid_plan(
+                "Project replace produces incompatible overlapping source edits.",
+            ));
         }
         task.estimated_bytes = task
             .estimated_bytes
             .saturating_add(1024 + matched.as_str().len() * 3 + replacement_text.len() * 3);
-        if task.estimated_bytes > max_bytes {
-            return Err(PlanPassageRenameResult::Failure {
-                failure: plan_too_large("Project replace plan exceeds its planning budget."),
-            });
+        if task.estimated_bytes > context.max_bytes {
+            return Err(plan_too_large(
+                "Project replace plan exceeds its planning budget.",
+            ));
         }
         task.changes.push(CanonicalPlanDraftChange {
             key: format!("replace-{:08}", task.changes.len()),
@@ -2388,6 +2400,7 @@ fn validate_change_compatibility(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn apply_canonical_changes(
     project: &Project,
     changes: &[CanonicalPlanChange],

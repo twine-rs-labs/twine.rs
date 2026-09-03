@@ -52,10 +52,13 @@ import {
 	useStoryEditWorkspace
 } from './workspace-state';
 import {
+	claimSourceNavigationFocusPreservationLease,
+	releaseSourceNavigationFocusPreservationLease,
 	resolveSourceNavigationTarget,
 	sourceNavigationTargetFromQuery,
 	type SourceNavigationTarget
 } from './source-navigation';
+import type {SourceNavigationFocusIntent} from './source-navigation';
 import {
 	hasStoryEditReveal,
 	isStoryEditRevealApplied,
@@ -299,7 +302,17 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		requestId: undefined as string | undefined
 	});
 	const [revealRequests, setRevealRequests] = React.useState(
-		() => new Map<string, {end?: number; key: number; position?: number}>()
+		() =>
+			new Map<
+				string,
+				{
+					end?: number;
+					focus: SourceNavigationFocusIntent;
+					key: number;
+					position?: number;
+					restoreToken?: string;
+				}
+			>()
 	);
 	const [searchRequests, setSearchRequests] = React.useState(
 		() => new Map<string, {key: number; query?: string}>()
@@ -317,6 +330,7 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		| undefined
 	>();
 	const activeRevealRequest = React.useRef<string | undefined>(undefined);
+	const activeSourceFocusLease = React.useRef<string | undefined>(undefined);
 	const revealTransaction = React.useRef<
 		| {
 				graphPersistenceRollback?: () => void;
@@ -458,6 +472,10 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		routeMounted.current = true;
 		return () => {
 			routeMounted.current = false;
+			releaseSourceNavigationFocusPreservationLease(
+				activeSourceFocusLease.current
+			);
+			activeSourceFocusLease.current = undefined;
 			const requestId = activeRevealRequest.current;
 
 			if (requestId) {
@@ -756,6 +774,10 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 		handledRevealLocation.current = locationIdentity;
 		const epoch = ++revealNavigationEpoch.current;
 		const isCurrentLocation = () => revealNavigationEpoch.current === epoch;
+		releaseSourceNavigationFocusPreservationLease(
+			activeSourceFocusLease.current
+		);
+		activeSourceFocusLease.current = undefined;
 		const previousRequest = activeRevealRequest.current;
 
 		if (previousRequest) {
@@ -774,6 +796,9 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 
 		const search = new URLSearchParams(location.search);
 		const mode = search.get('mode');
+		const requestedFocus: SourceNavigationFocusIntent =
+			search.get('focus') === 'preserve' ? 'preserve' : 'editor';
+		const requestedRestoreToken = search.get('restoreToken') || undefined;
 		const passageId = search.get('passage');
 		const suppliedRevealRequest = search.get('revealRequest');
 		// A reveal URL is a capability, not a normal deep link with extra
@@ -830,6 +855,17 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 			resolvedTarget?.kind === 'passage'
 				? parsedInteger(endValue, 0)
 				: undefined;
+		const focus: SourceNavigationFocusIntent =
+			requestedFocus === 'preserve' &&
+			revealPosition !== undefined &&
+			claimSourceNavigationFocusPreservationLease(requestedRestoreToken)
+				? 'preserve'
+				: 'editor';
+		const restoreToken =
+			focus === 'preserve' ? requestedRestoreToken : undefined;
+		if (restoreToken) {
+			activeSourceFocusLease.current = restoreToken;
+		}
 
 		const apply = async () => {
 			try {
@@ -1208,8 +1244,10 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 									revealEnd !== undefined && revealEnd >= revealPosition
 										? revealEnd
 										: undefined,
+								focus,
 								key: (previous?.key ?? 0) + 1,
-								position: revealPosition
+								position: revealPosition,
+								restoreToken
 							});
 							return next;
 						});
@@ -1247,8 +1285,10 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 										const previous = current.get(windowId);
 
 										next.set(windowId, {
+											focus,
 											key: (previous?.key ?? 0) + 1,
-											position
+											position,
+											restoreToken
 										});
 										return next;
 									});
@@ -1288,6 +1328,12 @@ const StoryEditRouteForStory: React.FC<{story: Story}> = ({story}) => {
 					throw new Error('The reveal request did not identify a passage.');
 				}
 			} catch (error) {
+				if (restoreToken) {
+					releaseSourceNavigationFocusPreservationLease(restoreToken);
+					if (activeSourceFocusLease.current === restoreToken) {
+						activeSourceFocusLease.current = undefined;
+					}
+				}
 				if (revealRequest) {
 					if (isCurrentLocation()) {
 						rejectStoryEditReveal(revealRequest, error as Error);
